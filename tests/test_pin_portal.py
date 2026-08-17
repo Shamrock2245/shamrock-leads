@@ -61,6 +61,7 @@ def test_verify_admin_pin_bypass():
         "signing_link": "https://sign.shamrockbailbonds.biz/s/abc123",
         "created_at": "2026-08-07",
     })
+    mock_packets.update_one = AsyncMock()
     with patch("dashboard.routers.pin_portal.get_collection", return_value=mock_packets), \
          patch("dashboard.routers.pin_portal._MASTER_PIN", "999888"):
         payload = {"phone": "2395550199", "pin": "999888"}
@@ -160,3 +161,114 @@ def test_no_twilio_imports_in_pin_portal():
     assert "TwilioService" not in content
     assert "OutreachSequencer" not in content
     assert "send_text" not in content
+
+
+def test_sanitize_client_fields_drops_staff_keys():
+    from dashboard.routers.pin_portal import _sanitize_client_fields
+    clean = _sanitize_client_fields({
+        "indemnitor_employer": "Publix",
+        "poa_number": "OSI-P3-116-26-0016",
+        "numeric_premium": "1500",
+        "defendant_name": "DOE, JOHN",
+        "indemnitor_relationship": "Mother",
+    })
+    assert clean == {
+        "indemnitor_employer": "Publix",
+        "indemnitor_relationship": "Mother",
+    }
+
+
+def test_portal_session_requires_token():
+    response = client.get("/api/portal/session")
+    assert response.status_code == 401
+
+
+def test_portal_session_returns_packet():
+    mock_pins = MagicMock()
+    mock_pins.find_one = AsyncMock(return_value={
+        "phone": "2395550100",
+        "session_token": "PORTAL-abc",
+        "verified": True,
+        "expires_at": "2099-01-01T00:00:00+00:00",
+        "id_extracted": {"full_name": "Jane Doe", "city": "Fort Myers", "state": "FL", "zip": "33901"},
+    })
+    mock_packets = MagicMock()
+    mock_packets.find_one = AsyncMock(return_value={
+        "packet_id": "PKT-1",
+        "defendant_name": "DOE, JOHN",
+        "status": "pending_signature",
+        "docuseal_submitters": [
+            {"role": "indemnitor", "sign_url": "https://sign.shamrockbailbonds.biz/s/ind"},
+        ],
+    })
+
+    def _col(name):
+        return mock_pins if name == "portal_pins" else mock_packets
+
+    with patch("dashboard.routers.pin_portal.get_collection", side_effect=_col):
+        response = client.get("/api/portal/session?token=PORTAL-abc")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert data["has_packet"] is True
+    assert data["signing_link"].endswith("/s/ind")
+    assert data["extracted"]["full_name"] == "Jane Doe"
+
+
+def test_remaining_fields_requires_session():
+    response = client.post(
+        "/api/portal/remaining-fields",
+        json={"session_token": "missing", "fields": {"indemnitor_employer": "Publix"}},
+    )
+    assert response.status_code == 401
+
+
+def test_remaining_fields_pushes_allowlisted_values():
+    mock_pins = MagicMock()
+    mock_pins.find_one = AsyncMock(return_value={
+        "phone": "2395550100",
+        "session_token": "PORTAL-abc",
+        "verified": True,
+        "expires_at": "2099-01-01T00:00:00+00:00",
+    })
+    mock_pins.update_one = AsyncMock()
+    mock_packets = MagicMock()
+    mock_packets.find_one = AsyncMock(return_value={
+        "packet_id": "PKT-1",
+        "defendant_name": "DOE, JOHN",
+        "status": "pending_signature",
+        "docuseal_submitters": [
+            {"id": 44, "role": "indemnitor", "sign_url": "https://sign.shamrockbailbonds.biz/s/ind"},
+        ],
+    })
+    mock_packets.update_one = AsyncMock()
+
+    def _col(name):
+        return mock_pins if name == "portal_pins" else mock_packets
+
+    mock_svc = MagicMock()
+    mock_svc.update_submitter = AsyncMock(return_value={"id": 44})
+
+    with patch("dashboard.routers.pin_portal.get_collection", side_effect=_col), \
+         patch("dashboard.services.docuseal_service.DocuSealService", return_value=mock_svc):
+        response = client.post("/api/portal/remaining-fields", json={
+            "session_token": "PORTAL-abc",
+            "address_confirmed": True,
+            "fields": {
+                "indemnitor_employer": "Publix",
+                "indemnitor_city": "Fort Myers",
+                "indemnitor_state": "FL",
+                "indemnitor_zip": "33901",
+                "poa_number": "SHOULD-DROP",
+            },
+        })
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["success"] is True
+    assert data["pushed_to_docuseal"] is True
+    assert data["field_count"] >= 3
+    mock_svc.update_submitter.assert_awaited()
+    sent_values = mock_svc.update_submitter.await_args.kwargs["values"]
+    assert "poa_number" not in sent_values
+    assert sent_values["indemnitor_employer"] == "Publix"
+    assert "Fort Myers" in sent_values["indemnitor_city_state_zip"]

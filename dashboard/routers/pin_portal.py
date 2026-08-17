@@ -323,12 +323,27 @@ async def verify_portal_pin(req: VerifyPinRequest):
     # Optional staff smoke bypass (env PORTAL_STAFF_MASTER_PIN only)
     if _MASTER_PIN and input_pin == _MASTER_PIN:
         import secrets as _secrets
+        session_token = f"PORTAL-ADMIN-{_secrets.token_urlsafe(24)}"
+        pins_col = get_collection("portal_pins")
+        now = datetime.now(timezone.utc)
+        await pins_col.update_one(
+            {"phone": clean_phone},
+            {"$set": {
+                "phone": clean_phone,
+                "pin": "ADMIN",
+                "verified": True,
+                "session_token": session_token,
+                "verified_at": now.isoformat(),
+                "expires_at": (now + timedelta(hours=4)).isoformat(),
+            }},
+            upsert=True,
+        )
         meta = await _resolve_packet_for_client(clean_phone)
         return {
             "success": True,
             "verified": True,
             "phone": clean_phone,
-            "session_token": f"PORTAL-ADMIN-{_secrets.token_urlsafe(24)}",
+            "session_token": session_token,
             "role": "indemnitor",
             "signing_link": meta.get("signing_link") or "",
             "has_packet": bool(meta.get("has_packet")),
@@ -404,6 +419,288 @@ async def verify_portal_pin(req: VerifyPinRequest):
         "parties": meta.get("parties") or [],
         "role": meta.get("role") or "",
         "message": meta.get("message") or "",
+    }
+
+
+# Client-writable DocuSeal keys only. Bond/POA/premium/charge fields stay staff-owned.
+_CLIENT_FIELD_ALLOWLIST = frozenset({
+    "indemnitor_name", "IndemnitorName", "IndName", "FullName",
+    "indemnitor_address", "indemnitor_city", "indemnitor_state", "indemnitor_zip",
+    "indemnitor_city_state_zip", "indemnitor_phone", "indemnitor_dl", "indemnitor_dob",
+    "indemnitor_ssn", "indemnitor_employer", "indemnitor_employer_phone",
+    "indemnitor_employer_address", "indemnitor_relationship", "indemnitor_work_phone",
+    "indemnitor_vehicle_make", "indemnitor_vehicle_model", "indemnitor_vehicle_year",
+    "indemnitor_vehicle_color", "indemnitor_mortgage_co", "indemnitor_mortgage_amount",
+    "indemnitor_spouse_name", "indemnitor_spouse_dl", "indemnitor_spouse_ssn",
+    "indemnitor_spouse_employer", "indemnitor_spouse_employer_address",
+    "indemnitor_spouse_phone", "indemnitor_spouse_work_phone",
+    "reference_1_name", "reference_1_relation", "reference_1_phone", "reference_1_address",
+    "reference_2_name", "reference_2_relation", "reference_2_phone", "reference_2_address",
+})
+
+
+class RemainingFieldsRequest(BaseModel):
+    session_token: str
+    fields: Dict[str, Any] = {}
+    address_confirmed: Optional[bool] = None
+
+
+def _sanitize_client_fields(raw: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    clean: Dict[str, str] = {}
+    if not isinstance(raw, dict):
+        return clean
+    for key, value in raw.items():
+        if key not in _CLIENT_FIELD_ALLOWLIST:
+            continue
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        if len(text) > 240:
+            text = text[:240]
+        clean[key] = text
+    return clean
+
+
+def _city_state_zip(fields: Dict[str, str]) -> str:
+    if fields.get("indemnitor_city_state_zip"):
+        return fields["indemnitor_city_state_zip"]
+    parts = [
+        fields.get("indemnitor_city") or "",
+        fields.get("indemnitor_state") or "",
+        fields.get("indemnitor_zip") or "",
+    ]
+    city = parts[0]
+    rest = " ".join(p for p in parts[1:] if p).strip()
+    if city and rest:
+        return f"{city}, {rest}"
+    return city or rest
+
+
+async def _load_verified_session(session_token: str) -> Optional[Dict[str, Any]]:
+    token = (session_token or "").strip()
+    if not token:
+        return None
+    pins_col = get_collection("portal_pins")
+    doc = await pins_col.find_one({"session_token": token, "verified": True})
+    if not doc:
+        return None
+    expires_at_str = doc.get("expires_at")
+    if expires_at_str:
+        try:
+            expires_at = datetime.fromisoformat(str(expires_at_str))
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) > expires_at:
+                return None
+        except ValueError:
+            pass
+    return doc
+
+
+def _session_payload(session: Dict[str, Any], meta: Dict[str, Any]) -> Dict[str, Any]:
+    extracted = session.get("id_extracted") if isinstance(session.get("id_extracted"), dict) else {}
+    return {
+        "success": True,
+        "verified": True,
+        "phone": session.get("phone") or "",
+        "session_token": session.get("session_token") or "",
+        "role": meta.get("role") or session.get("role") or "indemnitor",
+        "has_packet": bool(meta.get("has_packet")),
+        "packet_id": meta.get("packet_id") or "",
+        "defendant_name": meta.get("defendant_name") or "",
+        "packet_status": meta.get("status") or "",
+        "signing_link": meta.get("signing_link") or "",
+        "message": meta.get("message") or "",
+        "id_scanned": bool(extracted),
+        "address_confirmed": bool(session.get("address_confirmed")),
+        "fields_saved": bool(session.get("fields_saved")),
+        "selfie_captured": bool(session.get("selfie_captured_at")),
+        "extracted": {
+            "full_name": extracted.get("full_name") or "",
+            "address": extracted.get("address") or "",
+            "city": extracted.get("city") or "",
+            "state": extracted.get("state") or "",
+            "zip": extracted.get("zip") or "",
+            "dob": extracted.get("dob") or "",
+            "dl_number": extracted.get("dl_number") or "",
+        } if extracted else {},
+    }
+
+
+@pin_portal_router.api_route("/session", methods=["GET", "POST"])
+async def portal_session(request: Request):
+    token = (request.query_params.get("token") or request.query_params.get("session_token") or "").strip()
+    if not token and request.method == "POST":
+        try:
+            body = await request.json()
+            token = str((body or {}).get("session_token") or (body or {}).get("token") or "").strip()
+        except Exception:
+            token = ""
+    session = await _load_verified_session(token)
+    if not session:
+        return JSONResponse({"success": False, "error": "Session expired. Request a new PIN."}, status_code=401)
+    meta = await _resolve_packet_for_client(
+        session.get("phone") or "",
+        booking=session.get("booking_number") or "",
+        intake=session.get("intake_id") or "",
+    )
+    return _session_payload(session, meta)
+
+
+@pin_portal_router.post("/id-ocr")
+async def portal_id_ocr(request: Request):
+    """PIN-session ID scan. Does not create a packet."""
+    import base64
+
+    content_type = request.headers.get("content-type", "")
+    session_token = ""
+    image_bytes = b""
+    filename = "id_photo.jpg"
+
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        session_token = str(form.get("session_token") or form.get("token") or "").strip()
+        file_obj = form.get("file") or form.get("image") or form.get("id_photo")
+        if file_obj and hasattr(file_obj, "read"):
+            filename = getattr(file_obj, "filename", "") or filename
+            image_bytes = await file_obj.read()
+    else:
+        try:
+            body = (await request.json()) or {}
+        except Exception:
+            body = {}
+        session_token = str(body.get("session_token") or body.get("token") or "").strip()
+        raw_b64 = body.get("image_b64") or body.get("image") or ""
+        filename = body.get("filename") or filename
+        if raw_b64:
+            if "," in raw_b64:
+                raw_b64 = raw_b64.split(",", 1)[1]
+            try:
+                image_bytes = base64.b64decode(raw_b64)
+            except Exception:
+                image_bytes = b""
+
+    session = await _load_verified_session(session_token)
+    if not session:
+        return JSONResponse({"success": False, "error": "Session expired. Request a new PIN."}, status_code=401)
+    if not image_bytes:
+        return JSONResponse({"success": False, "error": "No ID image data provided"}, status_code=400)
+
+    from dashboard.services.id_scanner_service import IDScannerService
+
+    result = await IDScannerService.scan_id_image(image_bytes, filename=filename)
+    extracted = result.get("extracted") if isinstance(result.get("extracted"), dict) else {}
+    if result.get("success") and extracted:
+        pins_col = get_collection("portal_pins")
+        await pins_col.update_one(
+            {"session_token": session_token},
+            {"$set": {
+                "id_extracted": extracted,
+                "id_scanned_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+        logger.info("[PIN Portal] ID OCR stored for phone ...%s", str(session.get("phone") or "")[-4:])
+    return JSONResponse({
+        "success": bool(result.get("success") and extracted),
+        "extracted": extracted,
+        "error": result.get("error") if not extracted else None,
+        "portrait_jpeg_b64": result.get("portrait_jpeg_b64") or "",
+    })
+
+
+@pin_portal_router.post("/selfie")
+async def portal_selfie(request: Request):
+    """Mark selfie captured on the PIN session. Does not create a packet."""
+    try:
+        body = (await request.json()) or {}
+    except Exception:
+        body = {}
+    session = await _load_verified_session(str(body.get("session_token") or ""))
+    if not session:
+        return JSONResponse({"success": False, "error": "Session expired. Request a new PIN."}, status_code=401)
+    pins_col = get_collection("portal_pins")
+    await pins_col.update_one(
+        {"session_token": session.get("session_token")},
+        {"$set": {"selfie_captured_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return {"success": True}
+
+
+@pin_portal_router.post("/remaining-fields")
+async def portal_remaining_fields(req: RemainingFieldsRequest):
+    """
+    Save indemnitor-confirmable fields and push them onto the existing
+    DocuSeal indemnitor submitter. Never creates a packet.
+    """
+    session = await _load_verified_session(req.session_token)
+    if not session:
+        return JSONResponse({"success": False, "error": "Session expired. Request a new PIN."}, status_code=401)
+
+    fields = _sanitize_client_fields(req.fields)
+    csz = _city_state_zip(fields)
+    if csz:
+        fields["indemnitor_city_state_zip"] = csz
+
+    pins_col = get_collection("portal_pins")
+    await pins_col.update_one(
+        {"session_token": req.session_token},
+        {"$set": {
+            "client_fields": fields,
+            "address_confirmed": bool(req.address_confirmed) if req.address_confirmed is not None else True,
+            "fields_saved": True,
+            "fields_saved_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+
+    meta = await _resolve_packet_for_client(
+        session.get("phone") or "",
+        booking=session.get("booking_number") or "",
+        intake=session.get("intake_id") or "",
+    )
+    pushed = False
+    push_error = ""
+    packet_id = meta.get("packet_id") or ""
+    if packet_id and fields:
+        try:
+            packets = get_collection("paperwork_packets")
+            packet = await packets.find_one({"packet_id": packet_id})
+            submitters = list((packet or {}).get("docuseal_submitters") or [])
+            target = None
+            for item in submitters:
+                role = str((item or {}).get("role") or "").strip().lower()
+                if role == "indemnitor":
+                    target = item
+                    break
+            if not target and submitters:
+                target = submitters[0]
+            submitter_id = (target or {}).get("id")
+            if submitter_id:
+                from dashboard.services.docuseal_service import DocuSealService
+                svc = DocuSealService()
+                await svc.update_submitter(submitter_id, values=fields)
+                await packets.update_one(
+                    {"packet_id": packet_id},
+                    {"$set": {
+                        "client_fields": fields,
+                        "client_fields_updated_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                )
+                pushed = True
+        except Exception as exc:
+            push_error = "Could not update the signing packet. You can still sign — fill any blank fields on the document."
+            logger.warning("[PIN Portal] remaining-fields DocuSeal update failed: %s", type(exc).__name__)
+
+    return {
+        "success": True,
+        "saved": True,
+        "pushed_to_docuseal": pushed,
+        "field_count": len(fields),
+        "has_packet": bool(meta.get("has_packet")),
+        "packet_id": packet_id,
+        "signing_link": meta.get("signing_link") or "",
+        "message": push_error or meta.get("message") or "",
     }
 
 
