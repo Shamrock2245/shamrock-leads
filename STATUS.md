@@ -1,6 +1,6 @@
 # ShamrockLeads — True Status
 
-> **Last verified:** 2026-08-16
+> **Last verified:** 2026-08-18
 > **VPS:** Hetzner **CCX33** (8 dedicated vCPU / 32 GB RAM) as of 2026-08-13 — compose ceilings raised (`docs/runbooks/vps-ccx33-resize.md`). Root disk was **not** grown with the type change (still ~38 GB); grow to 160–240 GB in the Cloud Console.
 > **Repo:** `Shamrock2245/shamrock-leads` · branch `main`  
 > **Product URL:** `https://leads.shamrockbailbonds.biz`  
@@ -30,6 +30,12 @@
 | Remaining locked-spec gaps | Multi-indemnitor production walkthrough, staff second-PIN exception modal/audit, office kiosk walkthrough, dual-role FAQ initials, and collateral receipt serial OCR. No serial is inferred or invented. |
 
 Hetzner type is now **CCX33** (8 dedicated vCPU / 32 GB RAM). Compose ceilings for the scraper, dashboard, Obscura, OSINT, Postiz, Traccar, and OpenCut were raised in-repo and applied live (`docs/runbooks/vps-ccx33-resize.md`). `SCRAPER_MAX_CONCURRENT` stays **8** until one full cycle is green. **Root disk is still ~38 GB** — grow it to 160–240 GB in the Cloud Console (CPU/RAM resize does not grow the volume). Chromium launchers now share lean flags (`scrapers/chromium_flags.py`). Paperwork MVP: staff copy/send **indemnitor + defendant** branded links (`/sign/{packet}/{role}`). OSINT worker key is minted and live (worker `/status` 200); Toutatis has an Instagram session. SPECTRA uses Hudson Rock (free), not HIBP. Hunter.io is wired for attorney email finder.
+
+## Initial DocuSeal iMessage delivery configuration (2026-08-18)
+
+The narrowly scoped initial DocuSeal BlueBubbles iMessage exception is **enabled for indemnitors and co-indemnitors only**. The approved template is stored through the protected Automations editor and requires `{signing_link}`. Defendant delivery remains disabled with no defendant template. Delivery remains packet-bound, iMessage-only, one-time, and fail-closed; there is no generic-phone fallback, SMS fallback, auto-retry, or chase behavior. This configuration action sent **no client message** and does not satisfy the required B3/B5 or D2 human production smokes.
+
+Commits `97d3f17` and `8819625` deployed successfully through Hetzner workflows `32174712655` and `32174980615`. The focused DocuSeal and automation-control tests passed (**37**). The public Auto-CRM, DocuSeal, school, paperwork, Postiz `/auth`, and stable GAS health checks returned `200`. The strict local secrets check remains unable to pass in this clean checkout because production environment files are intentionally unavailable; no secrets were changed.
 
 ## Production audit update (2026-08-12)
 
