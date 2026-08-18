@@ -726,7 +726,15 @@ async function fetchPoaNumbers(surety, bondAmt, chargeList) {
 
   try {
     const count = chargeList.length;
-    const res = await fetch(`${API}/api/poa/next?surety=${surety}&bond_amount=${bondAmt}&count=${count}`);
+    const modalForAmts = window._bondModalData || {};
+    const leadForAmts = modalForAmts.lead || {};
+    const fallbackAmt = count > 0 ? (bondAmt / count) : bondAmt;
+    const amountParams = chargeList.map((_, i) => {
+      const row = (Array.isArray(leadForAmts.charge_details) && leadForAmts.charge_details[i]) || {};
+      const n = parseFloat(row.bond_amount || row.amount || row.bond || 0);
+      return (n > 0 ? n : fallbackAmt) || 0;
+    });
+    const res = await fetch(`${API}/api/poa/next?surety=${surety}&bond_amount=${bondAmt}&count=${count}&amounts=${amountParams.join(',')}`);
     const data = await res.json();
 
     if (data.error) throw new Error(data.error);
@@ -753,6 +761,10 @@ async function fetchPoaNumbers(surety, bondAmt, chargeList) {
       const poaFull = sug ? sug.poa_full : '';
       const poaNum  = sug ? sug.poa_number : '';
       const poaPfx  = sug ? sug.poa_prefix : prefix;
+      const rowDetail = (Array.isArray(lead.charge_details) && lead.charge_details[i]) || {};
+      const rowAmt = parseFloat(rowDetail.bond_amount || rowDetail.amount || rowDetail.bond || 0);
+      const amtVal = rowAmt > 0 ? rowAmt : (perChargeBond > 0 ? perChargeBond : '');
+      const existingPoa = rowDetail.poa_number || rowDetail.poa_full || rowDetail.suggested_poa || '';
       const fillDownBtn = (i === 0 && count > 1) ? `
         <button type="button" class="btn-export" style="font-size:10px;padding:2px 6px;margin-left:4px" onclick="fillDownCaseNumbers()" title="Copy Case #1 to all remaining charges">🔽 Fill All</button>
       ` : '';
@@ -782,7 +794,7 @@ async function fetchPoaNumbers(surety, bondAmt, chargeList) {
             </div>
             <div>
               <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">Charge Bond ($)</label>
-              <input type="number" id="chargeAmtInput_${i}" class="charge-amt-input" value="${perChargeBond > 0 ? perChargeBond : ''}" placeholder="Amount" style="padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px;font-weight:600;width:100%;box-sizing:border-box" oninput="onPoaInputChange(document.getElementById('poaInput_${i}'), ${i})" />
+              <input type="number" id="chargeAmtInput_${i}" class="charge-amt-input" value="${amtVal}" placeholder="Amount" style="padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px;font-weight:600;width:100%;box-sizing:border-box" oninput="onPoaInputChange(document.getElementById('poaInput_${i}'), ${i})" />
             </div>
             <div>
               <label style="font-size:10px;color:var(--muted);display:block;margin-bottom:2px">POA Serial #</label>
@@ -792,7 +804,7 @@ async function fetchPoaNumbers(surety, bondAmt, chargeList) {
                 data-charge-idx="${i}"
                 data-poa-prefix="${poaPfx}"
                 data-poa-number="${poaNum}"
-                value="${poaFull}"
+                value="${existingPoa || poaFull}"
                 placeholder="${prefix} ______"
                 style="padding:4px 6px;border-radius:4px;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:11px;font-family:monospace;width:100%;font-weight:700;box-sizing:border-box"
                 oninput="onPoaInputChange(this, ${i})"

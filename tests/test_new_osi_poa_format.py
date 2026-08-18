@@ -12,6 +12,7 @@ from dashboard.services.poa_service import (
     determine_surety_from_prefix,
     parse_max_bond_from_prefix,
     get_poa_tier_for_bond,
+    inventory_prefixes_for_tier,
 )
 from dashboard.routers.poa import poa_bp, parse_poa_receipt_text
 
@@ -46,6 +47,9 @@ def test_prefix_helper_functions():
     assert get_poa_tier_for_bond("osi", 5000.0) == "OSI-P6"
     assert get_poa_tier_for_bond("osi", 15000.0) == "OSI-P16"
     assert get_poa_tier_for_bond("osi", 50000.0) == "OSI-P51"
+    assert "OSI51" in inventory_prefixes_for_tier("OSI-P51")
+    assert "OSI-P51" in inventory_prefixes_for_tier("OSI51")
+    assert "PSC5" in inventory_prefixes_for_tier("PSC5")
 
 
 def test_parse_poa_receipt_text_exact_user_receipt():

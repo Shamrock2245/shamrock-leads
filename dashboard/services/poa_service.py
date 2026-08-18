@@ -60,6 +60,27 @@ def parse_max_bond_from_prefix(prefix: str) -> float:
     return 0.0
 
 
+def inventory_prefixes_for_tier(prefix: str) -> list[str]:
+    """Return every prefix spelling that may appear on inventory rows.
+
+    Tier helper returns ``OSI-P51``; live books are stored as ``OSI51``.
+    Palmetto prefixes (``PSC5``) are already the inventory key.
+    """
+    raw = str(prefix or "").strip()
+    if not raw:
+        return []
+    aliases = {raw, raw.upper()}
+    import re
+
+    m = re.fullmatch(r"OSI-P(\d+)", raw.upper())
+    if m:
+        aliases.add(f"OSI{m.group(1)}")
+    m = re.fullmatch(r"OSI(\d+)", raw.upper())
+    if m:
+        aliases.add(f"OSI-P{m.group(1)}")
+    return sorted(aliases)
+
+
 def get_poa_tier_for_bond(surety_id: str, bond_amount: float) -> str:
     """
     Return the smallest POA prefix that covers the bond amount for the given surety.
