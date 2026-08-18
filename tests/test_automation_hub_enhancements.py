@@ -101,3 +101,41 @@ def test_automation_parameters_rejects_bad_mode():
             json={"key": "speed_to_contact", "params": {"mode": "nuclear"}},
         )
     assert response.status_code == 400
+
+
+@patch("dashboard.routers.automation_control.get_db")
+def test_initial_docuseal_delivery_parameters_accept_bound_link_template(mock_get_db):
+    """Staff may configure the explicit exception only through the normal control plane."""
+    mock_db = MagicMock()
+    config_col = MagicMock()
+    config_col.find_one = AsyncMock(return_value={"type": "automation_master"})
+    config_col.update_one = AsyncMock(return_value=None)
+    mock_db.__getitem__.return_value = config_col
+    mock_get_db.return_value = mock_db
+
+    payload = {
+        "key": "docuseal_initial_delivery",
+        "params": {"indemnitor_message_template": "Please sign: {signing_link}"},
+    }
+    with patch("dashboard.routers.automation_control._staff_session_ok", return_value=True), patch(
+        "dashboard.routers.automation_control._actor_label",
+        return_value="test@shamrockbailbonds.biz",
+    ):
+        response = client.post("/api/automation/parameters", json=payload)
+
+    assert response.status_code == 200
+    assert response.json()["updated_params"] == payload["params"]
+
+
+def test_initial_docuseal_delivery_parameters_reject_template_without_link():
+    with patch("dashboard.routers.automation_control._staff_session_ok", return_value=True):
+        response = client.post(
+            "/api/automation/parameters",
+            json={
+                "key": "docuseal_initial_delivery",
+                "params": {"indemnitor_message_template": "Please sign your paperwork."},
+            },
+        )
+
+    assert response.status_code == 400
+    assert "signing_link" in response.json()["error"]

@@ -129,7 +129,7 @@ ALL_SERVICE_KEYS = {
     # Messaging / queue (must be toggleable — BB delivery depends on this)
     "outreach_queue",
     # Revenue Automation
-    "speed_to_contact", "paperwork_chase", "intake_recovery", "auto_reply",
+    "speed_to_contact", "paperwork_chase", "docuseal_initial_delivery", "intake_recovery", "auto_reply",
     "poa_low_stock", "surety_weekly_reports", "drip_scanner",
     # Lifecycle suite
     "forfeiture_scan", "docuseal_poller", "swipesimple_gmail_poll",
@@ -159,6 +159,7 @@ SERVICE_META = {
     "outreach_queue":      {"name": "Outreach Queue Drain", "icon": "📬", "category": "revenue",  "desc": "Every 30s: send queued iMessage/SMS via BlueBubbles (PIN, chase, outreach)"},
     "speed_to_contact":    {"name": "Speed-to-Contact",    "icon": "🚀", "category": "revenue",  "desc": "Queue hot-lead outreach for approval (review mode → full_auto)"},
     "paperwork_chase":     {"name": "Paperwork Chase",     "icon": "📋", "category": "revenue",  "desc": "Unsigned DocuSeal packet chase via BB (review/staff/full_auto)"},
+    "docuseal_initial_delivery": {"name": "Initial DocuSeal Notice", "icon": "✍️", "category": "revenue", "desc": "Disabled by default: one approved iMessage to each explicitly packet-bound signer"},
     "intake_recovery":     {"name": "Intake Recovery",     "icon": "🔄", "category": "revenue",  "desc": "Recover abandoned intakes (review by default)"},
     "drip_scanner":        {"name": "Drip Scanner",        "icon": "💧", "category": "revenue",  "desc": "Advance outreach drip sequences (day 0/1/3/7)"},
     "poa_low_stock":       {"name": "POA Low Stock",       "icon": "📕", "category": "revenue",  "desc": "Slack when POA inventory tiers run low"},
@@ -488,6 +489,30 @@ async def update_parameters(request: Request):
                 safe_params["min_lead_score"] = max(0, min(int(safe_params["min_lead_score"]), 100))
             except (TypeError, ValueError):
                 return JSONResponse({"success": False, "error": "min_lead_score must be int 0-100"}, status_code=400)
+        if key == "docuseal_initial_delivery":
+            allowed = {
+                "enabled", "include_defendant", "indemnitor_message_template",
+                "defendant_message_template",
+            }
+            unknown = sorted(set(safe_params) - allowed)
+            if unknown:
+                return JSONResponse(
+                    {"success": False, "error": f"unsupported initial-delivery parameter(s): {', '.join(unknown)}"},
+                    status_code=400,
+                )
+            for template_key in ("indemnitor_message_template", "defendant_message_template"):
+                if template_key not in safe_params:
+                    continue
+                template = str(safe_params[template_key] or "").strip()
+                if template and (len(template) > 1200 or "{signing_link}" not in template):
+                    return JSONResponse(
+                        {"success": False, "error": f"{template_key} must be 1–1200 characters and include {{signing_link}}"},
+                        status_code=400,
+                    )
+                safe_params[template_key] = template
+            for boolean_key in ("enabled", "include_defendant"):
+                if boolean_key in safe_params:
+                    safe_params[boolean_key] = bool(safe_params[boolean_key])
         if "max_per_cycle" in safe_params:
             try:
                 safe_params["max_per_cycle"] = max(1, min(int(safe_params["max_per_cycle"]), 200))

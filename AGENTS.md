@@ -308,7 +308,7 @@ Active bonds move through these statuses via drag-and-drop Kanban board:
 3. **Score Everything** — No record enters the DB without a lead score.
 4. **Fail Loudly** — Every scraper error fires a Slack alert. Silent failures are unacceptable.
 5. **Self-Heal First** — BaseScraper retries 3x, classifies errors, auto-disables. Fix root causes.
-6. **Human-in-the-Loop for Outreach** — No automated client contact without human approval.
+6. **Human-in-the-Loop for Outreach** — No automated client contact without human approval, except the narrowly documented initial DocuSeal notice in `docs/policies/signature-policy.md`. That exception is disabled by default and may send once only to an explicitly DocuSeal-bound signer with approved role-specific copy; it never authorizes chase, retry, SMS fallback, or outreach to any other contact.
 7. **PII is Sacred** — Never log PII to Slack or console in production.
 8. **Document Everything** — Every fix updates the relevant state registry and `docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md`. No silent fixes.
 9. **Know Your Surety** — Every bond case carries a `Surety_ID`. POAs come from surety-specific inventory.

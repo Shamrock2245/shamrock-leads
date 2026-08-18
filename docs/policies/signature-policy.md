@@ -79,12 +79,24 @@ Before sending a signing link:
 ## Delivery Channels
 
 Signing links may be delivered via:
-1. **SMS** (Twilio) — Primary
-2. **Telegram** — Via bot deep link
-3. **WhatsApp** (Twilio) — When available
-4. **Email** — Fallback
+1. **BlueBubbles iMessage** — Preferred client rail for an explicitly approved first packet notice.
+2. **SMS** (Twilio) — Primary fallback when separately selected by staff.
+3. **Telegram** — Via bot deep link.
+4. **WhatsApp** (Twilio) — When available.
+5. **Email** — Fallback.
 
-All delivery must log: channel used, timestamp, recipient identifier.
+### Explicit automatic-delivery exception: initial DocuSeal notice
+
+A finalized DocuSeal packet may trigger **one automatic BlueBubbles iMessage** to each explicitly packet-bound indemnitor or co-indemnitor when all of the following are true:
+
+- The packet is in `pending_signature`, is not voided, and has an active DocuSeal submission with `docuseal_status=sent`.
+- The target has matching DocuSeal `metadata.packet_id`, an `external_id` for that packet, a signer-specific DocuSeal link, and a validated phone returned for that signer.
+- The responsible automation is explicitly enabled and contains the approved indemnitor message template with the `{signing_link}` placeholder.
+- A defendant is included only after a separate explicit opt-in **and** a separately approved defendant message template.
+
+The exception is **iMessage-only**. It does not fall back to generic packet contact fields, SMS, automatic retries, chase sequences, or a changed/voided packet. Any missing binding, template, phone, signing link, BlueBubbles availability, or delivery result blocks that recipient and records a non-PII audit outcome. Manual resend remains the recovery path.
+
+All delivery must log: channel used, timestamp, recipient role, packet ID, and result state; logs and audit details must not contain phone numbers, emails, addresses, SSNs, or signing-link URLs.
 
 ---
 

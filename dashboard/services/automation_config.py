@@ -55,6 +55,17 @@ DEFAULT_CONFIG = {
         "provider": "docuseal",         # new packets; legacy signnow rows still chased if present
     },
 
+    # ── Initial DocuSeal Packet Delivery (explicit approved exception) ──
+    # This is intentionally disabled until staff supplies and approves both
+    # recipient-specific message templates.  It sends only to DocuSeal-bound
+    # recipients at packet finalization; it is not a retry or chase automation.
+    "docuseal_initial_delivery": {
+        "enabled": False,
+        "indemnitor_message_template": "",
+        "defendant_message_template": "",
+        "include_defendant": False,
+    },
+
     # ── Outreach queue drain (PIN OTP, chase, universal BB sends) ──
     "outreach_queue": {
         "enabled": True,
@@ -402,6 +413,7 @@ async def is_enabled(db, automation_key: str) -> bool:
 _FAIL_CLOSED_KEYS = frozenset({
     "speed_to_contact",
     "paperwork_chase",
+    "docuseal_initial_delivery",
     "intake_recovery",
     "auto_reply",
     "drip_scanner",

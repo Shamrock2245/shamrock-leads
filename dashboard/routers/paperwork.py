@@ -1,7 +1,7 @@
 from __future__ import annotations
 from fastapi.responses import JSONResponse
 from fastapi import APIRouter, Request
-from dashboard.deps import get_settings
+from dashboard.deps import get_settings, get_db
 import os
 """
 ShamrockLeads — Phase 6: Paperwork Generation API Blueprint
@@ -1505,6 +1505,40 @@ async def packet_builder_finalize(request: Request):
             )
         await packets_col.insert_one(packet_doc)
 
+        # Narrow, explicit exception: first-time DocuSeal link delivery may be
+        # automated only after the immutable packet exists.  The service is
+        # disabled by default and refuses anything other than DocuSeal-bound,
+        # pending signers with an approved recipient-specific template.
+        auto_delivery: dict = {}
+        try:
+            from dashboard.services.automation_config import get_automation_config
+            from dashboard.services.docuseal_initial_delivery import (
+                AUTOMATION_KEY as DOCUSEAL_INITIAL_DELIVERY_KEY,
+                deliver_initial_docuseal_links,
+            )
+
+            auto_delivery_config = await get_automation_config(get_db())
+            auto_delivery = await deliver_initial_docuseal_links(
+                packet=packet_doc,
+                config=auto_delivery_config.get(DOCUSEAL_INITIAL_DELIVERY_KEY) or {},
+            )
+            await packets_col.update_one(
+                {"packet_id": packet_id},
+                {"$set": {"auto_delivery": auto_delivery, "updated_at": datetime.now(timezone.utc)}},
+            )
+        except Exception:
+            logger.exception("DocuSeal initial delivery evaluation failed for packet %s", packet_id)
+            auto_delivery = {
+                "automation": "docuseal_initial_delivery",
+                "state": "blocked",
+                "reason": "delivery_evaluation_failed",
+                "recipients": [],
+            }
+            await packets_col.update_one(
+                {"packet_id": packet_id},
+                {"$set": {"auto_delivery": auto_delivery, "updated_at": datetime.now(timezone.utc)}},
+            )
+
         # Soft audit event
         try:
             await get_collection("audit_events").insert_one({
@@ -1514,6 +1548,8 @@ async def packet_builder_finalize(request: Request):
                 "provider": provider,
                 "self_indemnitor": bool(ctx.get("self_indemnitor")),
                 "hydration_score": audit.get("hydration_score"),
+                "auto_delivery_state": auto_delivery.get("state"),
+                "auto_delivery_sent_count": auto_delivery.get("sent_count", 0),
                 "actor": "packet_builder",
                 "timestamp": now,
             })
@@ -1530,6 +1566,7 @@ async def packet_builder_finalize(request: Request):
             "self_indemnitor": bool(ctx.get("self_indemnitor")),
             "signing_link": signing_link,
             "parties": (send_results.get("docuseal") or {}).get("parties") or [],
+            "auto_delivery": auto_delivery,
             "send_results": send_results,
             "flattened": bool(flat_bytes),
             "adobe_pdf_meta": adobe_pdf_meta,
