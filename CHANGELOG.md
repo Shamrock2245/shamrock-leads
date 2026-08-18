@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-18 (DocuSeal initial iMessage delivery gate)
+
+### Added
+- **Narrow initial DocuSeal delivery exception** — after a valid packet is persisted, the platform can send one **iMessage-only** signing notice to each explicitly DocuSeal-bound indemnitor or co-indemnitor. The exception is disabled by default and requires approved recipient-specific copy containing `{signing_link}`. A defendant requires a separate opt-in and separate approved copy.
+- **Fail-closed delivery binding** — the sender requires a non-voided `pending_signature` packet, active DocuSeal submission, exact packet metadata plus external-ID binding, a signer-specific link, and a validated signer phone. It never falls back to generic packet phones, SMS, retries, or chase automation.
+- **Auditable control path** — authorized staff can configure the narrowly allowed settings through the automation control surface; unsupported fields and templates without `{signing_link}` are rejected.
+
+### Verified
+- Commit `cda89f9` deployed successfully through Hetzner workflow `32146659635`.
+- Focused DocuSeal and automation-control tests passed (**36**). Public Auto-CRM health, DocuSeal, school, paperwork, and Postiz `/auth` each returned `200`; the established GAS deployment returned `success:true`, `V409`.
+- **No client message was sent** and the exception remains disabled pending approved copy. This is not a replacement for the staff-confirmed write-bond → paperwork (B3/B5) or outbound dashboard iMessage (D2) production smokes.
+
 ## [Unreleased] — 2026-08-16 (Legacy e-sign retirement and DocuSeal binding gate)
 
 ### Changed
