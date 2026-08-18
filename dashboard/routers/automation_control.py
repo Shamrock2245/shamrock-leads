@@ -512,14 +512,32 @@ async def update_parameters(request: Request):
                 safe_params[template_key] = template
             for boolean_key in ("enabled", "include_defendant"):
                 if boolean_key in safe_params:
-                    safe_params[boolean_key] = bool(safe_params[boolean_key])
+                    raw_value = safe_params[boolean_key]
+                    safe_params[boolean_key] = (
+                        raw_value if isinstance(raw_value, bool)
+                        else str(raw_value).strip().lower() in ("1", "true", "yes", "on")
+                    )
+            db = get_db()
+            current_config = await get_automation_config(db)
+            current_params = dict(current_config.get("docuseal_initial_delivery") or {})
+            effective = {**current_params, **safe_params}
+            if effective.get("enabled") and not effective.get("indemnitor_message_template"):
+                return JSONResponse(
+                    {"success": False, "error": "approved indemnitor_message_template is required before enabling"},
+                    status_code=400,
+                )
+            if effective.get("include_defendant") and not effective.get("defendant_message_template"):
+                return JSONResponse(
+                    {"success": False, "error": "approved defendant_message_template is required when defendant delivery is enabled"},
+                    status_code=400,
+                )
         if "max_per_cycle" in safe_params:
             try:
                 safe_params["max_per_cycle"] = max(1, min(int(safe_params["max_per_cycle"]), 200))
             except (TypeError, ValueError):
                 return JSONResponse({"success": False, "error": "max_per_cycle must be int 1-200"}, status_code=400)
 
-        db = get_db(request)
+        db = get_db()
         from dashboard.services.automation_config import update_automation_section_params
         new_cfg = await update_automation_section_params(
             db, key, safe_params, actor=_actor_label(request)

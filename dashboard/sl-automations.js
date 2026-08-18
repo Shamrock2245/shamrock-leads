@@ -57,6 +57,7 @@ const SLAutomations = {
       });
 
       this._last = automations;
+      this._config = data.config || {};
       this.render(automations);
       this._updateBadge(automations);
       this._updateNRStatusBar(data);
@@ -193,6 +194,7 @@ const SLAutomations = {
     const isNrOnly = !!(auto.nr_only);
     const isNrOrchestrated = !!(auto.nr_orchestrated);
     const hasTrigger = !!auto.has_trigger;
+    const isInitialDocuSealDelivery = auto.id === 'docuseal_initial_delivery';
 
     const statusColor = enabled ? 'var(--success,#22c55e)' : 'var(--muted)';
     const statusText  = enabled ? 'Active' : 'Disabled';
@@ -221,11 +223,15 @@ const SLAutomations = {
     // Toggle: locked for NR-only flows (they are managed in Node-RED, not Python)
     const toggleHtml = isNrOnly
       ? `<span class="auto-nr-lock" title="Managed in Node-RED — toggle from the NR editor">🔒</span>`
-      : `<label class="toggle-switch" title="${enabled ? 'Disable' : 'Enable'}">
-           <input type="checkbox" ${enabled ? 'checked' : ''}
-             onchange="SLAutomations.toggle('${auto.id}', this.checked)">
-           <span class="slider"></span>
-         </label>`;
+      : isInitialDocuSealDelivery
+        ? `<button type="button" class="sl-btn sl-btn-secondary sl-btn-sm"
+             onclick="SLAutomations.configureInitialDocuSealDelivery()"
+             title="Configure approved recipient copy and activation">Configure</button>`
+        : `<label class="toggle-switch" title="${enabled ? 'Disable' : 'Enable'}">
+             <input type="checkbox" ${enabled ? 'checked' : ''}
+               onchange="SLAutomations.toggle('${auto.id}', this.checked)">
+             <span class="slider"></span>
+           </label>`;
 
     const canRun = hasTrigger && !isNrOnly;
     const runTitle = isNrOnly ? 'Trigger from the Node-RED editor' : (hasTrigger ? 'Run this automation now' : 'No live trigger on this job');
@@ -263,9 +269,115 @@ const SLAutomations = {
       ${historyHtml}
       <div class="auto-card-footer">
         ${runBtn}
-        ${tuneBtn}
+        ${isInitialDocuSealDelivery ? '' : tuneBtn}
       </div>
     </div>`;
+  },
+
+  _ensureInitialDocuSealModal() {
+    if (document.getElementById('autoInitialDocuSealModal')) return;
+    const wrap = document.createElement('div');
+    wrap.id = 'autoInitialDocuSealModal';
+    wrap.className = 'modal-overlay auto-tune-overlay';
+    wrap.innerHTML = `
+      <div class="modal auto-tune-modal" role="dialog" aria-labelledby="autoInitialDocuSealTitle">
+        <div class="modal-header">
+          <h2 id="autoInitialDocuSealTitle">Initial DocuSeal notice</h2>
+          <button type="button" class="modal-close" onclick="SLAutomations.closeInitialDocuSealDelivery()" aria-label="Close">✕</button>
+        </div>
+        <div class="modal-body">
+          <p class="auto-tune-sub">One iMessage-only signing notice after a valid DocuSeal packet is finalized. No SMS fallback or automatic retry.</p>
+          <label class="auto-tune-label" for="autoInitialIndemnitorTemplate">Indemnitor / co-indemnitor copy</label>
+          <textarea id="autoInitialIndemnitorTemplate" class="sl-input" rows="7" style="resize:vertical;min-height:130px"></textarea>
+          <p class="auto-tune-sub">Required placeholder: <code>{signing_link}</code></p>
+          <label class="toggle-switch" title="Include only with separately approved copy" style="display:inline-flex;margin:8px 0">
+            <input type="checkbox" id="autoInitialIncludeDefendant">
+            <span class="slider"></span>
+          </label>
+          <span style="margin-left:8px">Also send to defendant</span>
+          <div id="autoInitialDefendantWrap" hidden>
+            <label class="auto-tune-label" for="autoInitialDefendantTemplate">Defendant copy</label>
+            <textarea id="autoInitialDefendantTemplate" class="sl-input" rows="6" style="resize:vertical;min-height:110px"></textarea>
+            <p class="auto-tune-sub">A distinct approved template with <code>{signing_link}</code> is required.</p>
+          </div>
+          <label class="toggle-switch" title="Enable only after approved copy is complete" style="display:inline-flex;margin:8px 0">
+            <input type="checkbox" id="autoInitialEnabled">
+            <span class="slider"></span>
+          </label>
+          <span style="margin-left:8px">Enable initial notice after saving</span>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="sl-btn sl-btn-ghost" onclick="SLAutomations.closeInitialDocuSealDelivery()">Cancel</button>
+          <button type="button" class="sl-btn sl-btn-primary" onclick="SLAutomations.saveInitialDocuSealDelivery()">Save protected setting</button>
+        </div>
+      </div>`;
+    wrap.addEventListener('click', (e) => { if (e.target === wrap) this.closeInitialDocuSealDelivery(); });
+    document.body.appendChild(wrap);
+  },
+
+  configureInitialDocuSealDelivery() {
+    this._ensureInitialDocuSealModal();
+    const cfg = (this._config && this._config.docuseal_initial_delivery) || {};
+    const modal = document.getElementById('autoInitialDocuSealModal');
+    const indemnitor = document.getElementById('autoInitialIndemnitorTemplate');
+    const defendant = document.getElementById('autoInitialDefendantTemplate');
+    const includeDefendant = document.getElementById('autoInitialIncludeDefendant');
+    const enabled = document.getElementById('autoInitialEnabled');
+    const defendantWrap = document.getElementById('autoInitialDefendantWrap');
+    if (indemnitor) indemnitor.value = cfg.indemnitor_message_template || '';
+    if (defendant) defendant.value = cfg.defendant_message_template || '';
+    if (includeDefendant) includeDefendant.checked = !!cfg.include_defendant;
+    if (enabled) enabled.checked = !!cfg.enabled;
+    if (defendantWrap) defendantWrap.hidden = !cfg.include_defendant;
+    if (includeDefendant) includeDefendant.onchange = () => {
+      if (defendantWrap) defendantWrap.hidden = !includeDefendant.checked;
+    };
+    if (modal) modal.classList.add('show');
+    setTimeout(() => indemnitor && indemnitor.focus(), 40);
+  },
+
+  closeInitialDocuSealDelivery() {
+    const modal = document.getElementById('autoInitialDocuSealModal');
+    if (modal) modal.classList.remove('show');
+  },
+
+  async saveInitialDocuSealDelivery() {
+    const indemnitor = (document.getElementById('autoInitialIndemnitorTemplate')?.value || '').trim();
+    const defendant = (document.getElementById('autoInitialDefendantTemplate')?.value || '').trim();
+    const includeDefendant = !!document.getElementById('autoInitialIncludeDefendant')?.checked;
+    const enabled = !!document.getElementById('autoInitialEnabled')?.checked;
+    if (!indemnitor || !indemnitor.includes('{signing_link}')) {
+      if (window.SL && SL.notify) SL.notify('Indemnitor copy must include {signing_link}.', 'error');
+      return;
+    }
+    if (includeDefendant && (!defendant || !defendant.includes('{signing_link}'))) {
+      if (window.SL && SL.notify) SL.notify('Defendant copy must include {signing_link}.', 'error');
+      return;
+    }
+    try {
+      const res = await fetch('/api/automation/parameters', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: 'docuseal_initial_delivery',
+          params: {
+            enabled,
+            include_defendant: includeDefendant,
+            indemnitor_message_template: indemnitor,
+            defendant_message_template: includeDefendant ? defendant : '',
+          },
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Update failed');
+      if (window.SL && SL.notify) SL.notify('Initial DocuSeal notice setting saved.', 'success');
+      this.closeInitialDocuSealDelivery();
+      this.load();
+    } catch (e) {
+      console.error(e);
+      if (window.SL && SL.notify) SL.notify('Failed to save initial notice: ' + e.message, 'error');
+    }
   },
 
   // ── Master Sweep Trigger ──────────────────────────────────────────────────
