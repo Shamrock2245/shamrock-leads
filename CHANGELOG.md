@@ -8,7 +8,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased] — 2026-08-18 (DocuSeal initial iMessage delivery gate)
 
 ### Changed
-- **Indemnitor/co-indemnitor delivery enabled** — the approved initial DocuSeal iMessage template is active for explicitly packet-bound indemnitors and co-indemnitors. Defendant delivery is explicitly disabled and has no stored template. The change was made through the protected Automations editor; it did not send a client message.
+- **Packet delivery hardened** — commit `cd74b00` requires trusted direct self-hosted DocuSeal signer URLs, exact packet/role/external-ID bindings, and one evaluation per packet. Manual iMessage delivery now requires an authenticated staff session, active DocuSeal submission, and the exact role-bound signer; it returns no signing link and retains no phone or URL in delivery audit details.
+- **Defendant delivery gated** — the approved defendant template is staged, but `include_defendant=false` remains live. A future defendant automatic notice also requires an immutable packet snapshot of a staff-recorded `verified_opt_in` authorization bound to the exact `Defendant_ID`; phone or generic-packet data cannot satisfy this gate.
+- **Indemnitor/co-indemnitor delivery enabled** — the approved initial DocuSeal iMessage template is active for explicitly packet-bound indemnitors and co-indemnitors. Defendant delivery is explicitly disabled; its approved template is staged but cannot send while the role switch is off. The change was made through the protected Automations editor; it did not send a client message.
 - **Protected editor delivered** — the Initial DocuSeal Notice card now exposes a role-specific configuration modal rather than a generic toggle. Activation is rejected without an approved `{signing_link}` template, and defendant inclusion is rejected without separately approved defendant copy.
 
 ### Added
@@ -18,8 +20,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Verified
 - Commits `cda89f9`, `97d3f17`, and `8819625` deployed successfully through Hetzner workflows `32146659635`, `32174712655`, and `32174980615`.
-- Focused DocuSeal and automation-control tests passed (**37**). Public Auto-CRM health, DocuSeal, school, paperwork, and Postiz `/auth` each returned `200`; the established GAS deployment returned `success:true`, `V409`.
-- **No client message was sent** during configuration. This is not a replacement for the staff-confirmed write-bond → paperwork (B3/B5) or outbound dashboard iMessage (D2) production smokes.
+- Focused DocuSeal, authorization, automation-control, paperwork, and portal tests passed (**62**). Public Auto-CRM health, DocuSeal, school, paperwork, and Postiz `/auth` each returned `200`; the established GAS deployment returned `success:true`, `V409`.
+- **No client message was sent** during configuration, hardening, or defendant-template staging. This is not a replacement for the staff-confirmed write-bond → paperwork (B3/B5) or outbound dashboard iMessage (D2) production smokes.
 
 ## [Unreleased] — 2026-08-16 (Legacy e-sign retirement and DocuSeal binding gate)
 

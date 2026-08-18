@@ -93,8 +93,12 @@ A finalized DocuSeal packet may trigger **one automatic BlueBubbles iMessage** t
 - The target has matching DocuSeal `metadata.packet_id`, an `external_id` for that packet, a signer-specific DocuSeal link, and a validated phone returned for that signer.
 - The responsible automation is explicitly enabled and contains the approved indemnitor message template with the `{signing_link}` placeholder.
 - A defendant is included only after a separate explicit opt-in **and** a separately approved defendant message template.
+- A defendant additionally requires a staff-recorded, non-PII `verified_opt_in` authorization on the authoritative active bond. The authorization records contact verification and iMessage opt-in without storing contact details in the audit evidence.
+- The new packet must snapshot that authorization with the exact `Defendant_ID`; the returned DocuSeal submitter must retain that same snapshot, role `defendant`, packet ID, exact defendant external ID, and a direct HTTPS signer URL on `sign.shamrockbailbonds.biz`.
 
-The exception is **iMessage-only**. It does not fall back to generic packet contact fields, SMS, automatic retries, chase sequences, or a changed/voided packet. Any missing binding, template, phone, signing link, BlueBubbles availability, or delivery result blocks that recipient and records a non-PII audit outcome. Manual resend remains the recovery path.
+The exception is **iMessage-only**. It does not fall back to generic packet contact fields, SMS, automatic retries, chase sequences, a changed/voided packet, an untrusted signing-link host, or a prior delivery evaluation. Any missing binding, template, phone, signing link, BlueBubbles availability, authorization snapshot, or delivery result blocks that recipient and records a non-PII audit outcome. Manual resend remains the recovery path.
+
+A staff-initiated manual delivery also requires an authenticated staff session, an active sent DocuSeal submission, an explicit recipient role, and that role's exact packet-bound DocuSeal signer. It cannot select an arbitrary phone, use a generic packet contact fallback, or return a signing link in its response.
 
 All delivery must log: channel used, timestamp, recipient role, packet ID, and result state; logs and audit details must not contain phone numbers, emails, addresses, SSNs, or signing-link URLs.
 
