@@ -16,12 +16,14 @@ def test_app():
     return app
 
 
+@patch("dashboard.services.docuseal_service.resolve_template_id_for_surety", return_value=1)
+@patch("dashboard.services.docuseal_service.get_docuseal_service")
 @patch("dashboard.deps.get_collection")
 @patch("dashboard.extensions.get_collection")
 @patch("dashboard.routers.paperwork.get_collection")
 @patch("dashboard.routers.pin_portal.get_collection")
 def test_instant_indemnitor_packet_fails_closed_without_validated_case(
-    mock_pin_col, mock_pw_col, mock_ext_col, mock_deps_col, mocker, test_app
+    mock_pin_col, mock_pw_col, mock_ext_col, mock_deps_col, mock_get_docuseal, mock_resolve_tmpl, test_app
 ):
     """An ID scan alone must never create a legal e-sign packet."""
     mock_packets = AsyncMock()
@@ -38,8 +40,7 @@ def test_instant_indemnitor_packet_fails_closed_without_validated_case(
     client = TestClient(test_app)
 
     # Mock DocuSeal service — real API often returns a LIST of submitters
-    mock_svc = mocker.patch("dashboard.services.docuseal_service.get_docuseal_service")
-    mock_inst = mocker.MagicMock()
+    mock_inst = MagicMock()
     mock_inst.is_configured = True
     mock_inst.public_url = "https://sign.shamrockbailbonds.biz"
     mock_inst.sign_url_for_slug = lambda slug: (
@@ -68,11 +69,7 @@ def test_instant_indemnitor_packet_fails_closed_without_validated_case(
     mock_inst.build_submitter = DocuSealService.build_submitter
     mock_inst.normalize_create_response = real.normalize_create_response
     mock_inst.normalize_submitter_record = real.normalize_submitter_record
-    mocker.patch(
-        "dashboard.services.docuseal_service.resolve_template_id_for_surety",
-        return_value=1,
-    )
-    mock_svc.return_value = mock_inst
+    mock_get_docuseal.return_value = mock_inst
 
     # Step 1: Create instant indemnitor packet after ID scan (no defendant attached)
     resp = client.post(

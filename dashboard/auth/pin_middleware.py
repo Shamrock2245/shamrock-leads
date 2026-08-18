@@ -190,14 +190,6 @@ class PinAuthMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        if not DASHBOARD_PIN:
-            env = (os.getenv("ENV") or os.getenv("ENVIRONMENT") or "").lower()
-            if env in ("production", "prod") or os.getenv("REQUIRE_DASHBOARD_PIN", "").lower() in (
-                "1", "true", "yes",
-            ):
-                return JSONResponse({"error": "Dashboard PIN not configured"}, status_code=503)
-            return await call_next(request)
-
         path = request.url.path
 
         # Indemnitor host: public root portal pages (not staff CRM)
@@ -211,6 +203,15 @@ class PinAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         if any(path.startswith(p) for p in OAUTH_PREFIXES):
+            return await call_next(request)
+
+        pin = (os.getenv("DASHBOARD_PIN") or DASHBOARD_PIN or "").strip()
+        if not pin:
+            env = (os.getenv("ENV") or os.getenv("ENVIRONMENT") or "").lower()
+            if env in ("production", "prod") or os.getenv("REQUIRE_DASHBOARD_PIN", "").lower() in (
+                "1", "true", "yes",
+            ):
+                return JSONResponse({"error": "Dashboard PIN not configured"}, status_code=503)
             return await call_next(request)
 
         cookie = request.cookies.get(COOKIE_NAME)
