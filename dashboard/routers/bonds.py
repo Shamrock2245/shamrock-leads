@@ -18,6 +18,7 @@ from starlette.responses import Response
 from fastapi.responses import JSONResponse
 from dashboard.extensions import get_collection, get_db
 from dashboard.services.risk_engine import compute_risk_score
+from dashboard.routers.automation_control import _actor_label, _require_control_auth
 
 bonds_bp = APIRouter(prefix="/api", tags=["bonds"])
 import asyncio
@@ -1767,6 +1768,80 @@ async def api_appearance_bonds_print_package(request: Request):
     except Exception as e:
         traceback.print_exc()
         return JSONResponse({"error": f"Print package failed: {e}"}, status_code=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /api/active-bonds/<booking_number>/defendant-delivery-authorization
+# Record staff-verified defendant contact + iMessage opt-in for a future packet.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@bonds_bp.post("/active-bonds/{booking_number}/defendant-delivery-authorization")
+async def record_defendant_delivery_authorization(request: Request, booking_number: str):
+    """Record a non-PII, staff-attested authorization for *future* defendant notices.
+
+    This endpoint cannot alter a packet, a recipient phone/email, DocuSeal metadata,
+    or the global initial-delivery switch.  Packet creation snapshots this evidence;
+    a correction or new packet requires fresh staff verification.
+    """
+    denied = _require_control_auth(request, allow_machine=False)
+    if denied:
+        return denied
+    try:
+        data = await request.json() or {}
+    except Exception:
+        data = {}
+    if data.get("confirmed") is not True:
+        return JSONResponse(
+            {"success": False, "error": "staff_confirmation_required"}, status_code=400
+        )
+    source = str(data.get("verification_source") or "").strip().lower()
+    allowed_sources = {"in_person", "inbound_imessage", "documented_verbal"}
+    if source not in allowed_sources:
+        return JSONResponse(
+            {"success": False, "error": "verification_source_required"}, status_code=400
+        )
+
+    active_bonds = get_collection("active_bonds")
+    bond = await active_bonds.find_one(
+        {"$or": [{"booking_number": booking_number}, {"Booking_Number": booking_number}]},
+        {"_id": 0, "defendant_id": 1, "Defendant_ID": 1, "bond_case_id": 1, "Bond_Case_ID": 1},
+    )
+    defendant_id = str((bond or {}).get("defendant_id") or (bond or {}).get("Defendant_ID") or "").strip()
+    if not bond or not defendant_id:
+        return JSONResponse(
+            {"success": False, "error": "authoritative_defendant_binding_required"},
+            status_code=409,
+        )
+
+    now = datetime.now(timezone.utc)
+    actor = _actor_label(request)
+    authorization = {
+        "status": "verified_opt_in",
+        "authorization_id": f"DDA-{uuid.uuid4().hex[:16].upper()}",
+        "defendant_id": defendant_id,
+        "contact_verified_at": now.isoformat(),
+        "contact_verified_by": actor,
+        "imessage_opt_in_at": now.isoformat(),
+        "imessage_opt_in_by": actor,
+        "verification_source": source,
+    }
+    await active_bonds.update_one(
+        {"$or": [{"booking_number": booking_number}, {"Booking_Number": booking_number}]},
+        {"$set": {"defendant_delivery_authorization": authorization, "updated_at": now}},
+    )
+    await get_collection("audit_events").insert_one({
+        "event_type": "defendant_initial_delivery_authorized",
+        "booking_number": booking_number,
+        "bond_case_id": (bond or {}).get("bond_case_id") or (bond or {}).get("Bond_Case_ID"),
+        "verification_source": source,
+        "actor": actor,
+        "timestamp": now,
+    })
+    return {
+        "success": True,
+        "defendant_initial_delivery_authorized": True,
+        "verification_source": source,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────

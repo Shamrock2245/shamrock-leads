@@ -44,6 +44,7 @@ from dashboard.services.bb_client import (
     normalize_bb_send_result,
     bb_send_accepted,
 )
+from dashboard.routers.automation_control import _actor_label, _require_control_auth
 
 logger = logging.getLogger(__name__)
 paperwork_bp = APIRouter(prefix="/api", tags=["paperwork"])
@@ -684,61 +685,50 @@ async def deliver_packet(request: Request, packet_id: str):
     Includes a geolocator link as required by project standards.
     """
     try:
+        denied = _require_control_auth(request, allow_machine=False)
+        if denied:
+            return denied
         try:
             data = (await request.json()) or {}
         except Exception:
             data = {}
         custom_message = data.get("message", "")
         include_geo = data.get("include_geo", True)
-        role = (data.get("role") or "").strip().lower() or None
+        role = (data.get("role") or "").strip().lower()
+        if not role:
+            return JSONResponse({"error": "recipient_role_required"}, status_code=400)
 
         packet = await _load_packet(packet_id)
         if not packet:
             return JSONResponse({"error": f"Packet {packet_id} not found"}, status_code=404)
 
-        from dashboard.services.paperwork_signers import (
-            party_signers_from_packet,
-            pick_party,
-            branded_sign_url,
-        )
+        from dashboard.services.paperwork_signers import party_signers_from_packet, normalize_role
 
+        if packet.get("voided") or packet.get("status") in {"voided", "cancelled", "canceled"}:
+            return JSONResponse({"error": "packet_not_deliverable"}, status_code=409)
+        if str(packet.get("docuseal_status") or "").lower() != "sent":
+            return JSONResponse({"error": "active_docuseal_submission_required"}, status_code=409)
+
+        wanted_role = normalize_role(role)
         parties = party_signers_from_packet(packet)
-        chosen = pick_party(parties, role=role, phone=data.get("phone"))
-        phone = (data.get("phone") or "").strip() or (chosen or {}).get("phone") or ""
-        if not phone:
-            phone = (packet.get("indemnitor_phone") or packet.get("defendant_phone") or "").strip()
-        phone = "".join(c for c in phone if c.isdigit())[-10:]
-        if not phone:
-            return JSONResponse(
-                {"error": "phone is required — add an indemnitor or defendant mobile first"},
-                status_code=400,
-            )
-
-        # Policy: recipient must match a known party on this packet (fail closed).
-        known_digits = {
-            "".join(c for c in str(p.get("phone") or "") if c.isdigit())[-10:]
-            for p in parties
-            if p.get("phone")
-        }
-        for key in ("indemnitor_phone", "defendant_phone"):
-            digits = "".join(c for c in str(packet.get(key) or "") if c.isdigit())[-10:]
-            if digits:
-                known_digits.add(digits)
-        if known_digits and phone not in known_digits:
-            logger.warning(
-                "[paperwork] deliver_packet: phone mismatch for packet %s role=%s — blocked",
-                packet_id,
-                (chosen or {}).get("role") or role or "",
-            )
-            return JSONResponse(
-                {"error": "Recipient phone does not match indemnitor or defendant on this packet"},
-                status_code=403,
-            )
+        chosen = next(
+            (party for party in parties if normalize_role(party.get("role")) == wanted_role),
+            None,
+        )
+        if not chosen or not chosen.get("phone") or not chosen.get("sign_url"):
+            return JSONResponse({"error": "bound_recipient_required"}, status_code=409)
+        expected_phone = "".join(c for c in str(chosen.get("phone") or "") if c.isdigit())[-10:]
+        requested_phone = "".join(c for c in str(data.get("phone") or "") if c.isdigit())[-10:]
+        if requested_phone and requested_phone != expected_phone:
+            return JSONResponse({"error": "recipient_binding_mismatch"}, status_code=403)
+        if not expected_phone:
+            return JSONResponse({"error": "bound_recipient_phone_required"}, status_code=409)
 
         defendant_name = packet.get("defendant_name", "your defendant")
         intake_id = packet.get("intake_id", "")
-        party_role = (chosen or {}).get("role") or role or "indemnitor"
-        magic_link = (chosen or {}).get("share_url") or branded_sign_url(packet_id, party_role)
+        party_role = wanted_role
+        phone = expected_phone
+        magic_link = str(chosen.get("sign_url") or "")
 
         # Build the message
         if custom_message:
@@ -779,9 +769,14 @@ async def deliver_packet(request: Request, packet_id: str):
             {"packet_id": packet_id},
             {"$set": {
                 "delivered_via": "imessage",
-                "delivered_to": phone,
                 "delivered_at": now,
-                "magic_link": magic_link,
+                "delivery": {
+                    "channel": "imessage",
+                    "recipient_role": party_role,
+                    "result": "sent",
+                    "actor": _actor_label(request),
+                    "at": now,
+                },
                 "status": "delivered",
                 "updated_at": now,
             }},
@@ -795,15 +790,22 @@ async def deliver_packet(request: Request, packet_id: str):
         )
 
         from dashboard.routers.helpers import mask_phone
-        logger.info("[paperwork] Packet %s delivered to %s", packet_id, mask_phone(phone))
+        await get_collection("audit_events").insert_one({
+            "event_type": "packet_manual_delivery",
+            "packet_id": packet_id,
+            "recipient_role": party_role,
+            "channel": "imessage",
+            "result": "sent",
+            "actor": _actor_label(request),
+            "timestamp": now,
+        })
+        logger.info("[paperwork] Packet %s delivered to bound role=%s", packet_id, party_role)
         return {
             "success": True,
             "packet_id": packet_id,
-            "delivered_to": mask_phone(phone),
-            "recipient": mask_phone(phone),
             "role": party_role,
-            "magic_link": magic_link,
-            "bb_result": result,
+            "channel": "imessage",
+            "result": "sent",
         }
 
     except Exception as exc:

@@ -190,6 +190,8 @@ _DELIVER_PACKET = {
     "indemnitor_phone": "2395550100",
     "defendant_phone": "2395550199",
     "intake_id": "INT-1",
+    "status": "pending_signature",
+    "docuseal_status": "sent",
     "docuseal_submitters": [
         {"role": "indemnitor", "sign_url": "https://sign.shamrockbailbonds.biz/s/ind", "phone": "2395550100"},
         {"role": "Defendant", "sign_url": "https://sign.shamrockbailbonds.biz/s/def", "phone": "2395550199"},
@@ -197,9 +199,10 @@ _DELIVER_PACKET = {
 }
 
 
+@patch("dashboard.routers.paperwork._require_control_auth", return_value=None)
 @patch("dashboard.routers.paperwork.get_bb_client")
 @patch("dashboard.routers.paperwork._load_packet", new_callable=AsyncMock)
-def test_deliver_rejects_unknown_phone(mock_load, mock_bb, test_app):
+def test_deliver_rejects_unknown_phone(mock_load, mock_bb, _mock_auth, test_app):
     mock_load.return_value = dict(_DELIVER_PACKET)
     client = TestClient(test_app)
     res = client.post(
@@ -210,10 +213,11 @@ def test_deliver_rejects_unknown_phone(mock_load, mock_bb, test_app):
     mock_bb.assert_not_called()
 
 
+@patch("dashboard.routers.paperwork._require_control_auth", return_value=None)
 @patch("dashboard.routers.paperwork.get_collection")
 @patch("dashboard.routers.paperwork.get_bb_client")
 @patch("dashboard.routers.paperwork._load_packet", new_callable=AsyncMock)
-def test_deliver_fails_closed_when_bb_fails(mock_load, mock_bb, mock_get_col, test_app):
+def test_deliver_fails_closed_when_bb_fails(mock_load, mock_bb, mock_get_col, _mock_auth, test_app):
     mock_load.return_value = dict(_DELIVER_PACKET)
     mock_bb.return_value.send_text = AsyncMock(return_value={"success": False, "error": "down"})
     packets = AsyncMock()
@@ -227,10 +231,11 @@ def test_deliver_fails_closed_when_bb_fails(mock_load, mock_bb, mock_get_col, te
     packets.update_one.assert_not_called()
 
 
+@patch("dashboard.routers.paperwork._require_control_auth", return_value=None)
 @patch("dashboard.routers.paperwork.get_collection")
 @patch("dashboard.routers.paperwork.get_bb_client")
 @patch("dashboard.routers.paperwork._load_packet", new_callable=AsyncMock)
-def test_deliver_defendant_uses_defendant_phone(mock_load, mock_bb, mock_get_col, test_app):
+def test_deliver_defendant_uses_defendant_phone(mock_load, mock_bb, mock_get_col, _mock_auth, test_app):
     mock_load.return_value = dict(_DELIVER_PACKET)
     mock_bb.return_value.send_text = AsyncMock(return_value={"success": True})
     mock_get_col.return_value = AsyncMock()
@@ -243,6 +248,8 @@ def test_deliver_defendant_uses_defendant_phone(mock_load, mock_bb, mock_get_col
     data = res.json()
     assert data["success"] is True
     assert data["role"] == "defendant"
-    assert data["magic_link"].endswith("/sign/PKT-DELIVER/defendant")
+    assert data["channel"] == "imessage"
+    assert data["result"] == "sent"
+    assert "magic_link" not in data
     sent_guid = mock_bb.return_value.send_text.call_args[0][0]
     assert sent_guid.endswith("2395550199")

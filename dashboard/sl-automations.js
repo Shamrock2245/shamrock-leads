@@ -290,16 +290,16 @@ const SLAutomations = {
           <label class="auto-tune-label" for="autoInitialIndemnitorTemplate">Indemnitor / co-indemnitor copy</label>
           <textarea id="autoInitialIndemnitorTemplate" class="sl-input" rows="7" style="resize:vertical;min-height:130px"></textarea>
           <p class="auto-tune-sub">Required placeholder: <code>{signing_link}</code></p>
-          <label class="toggle-switch" title="Include only with separately approved copy" style="display:inline-flex;margin:8px 0">
+          <div id="autoInitialDefendantWrap">
+            <label class="auto-tune-label" for="autoInitialDefendantTemplate">Defendant copy (staged)</label>
+            <textarea id="autoInitialDefendantTemplate" class="sl-input" rows="6" style="resize:vertical;min-height:110px"></textarea>
+            <p class="auto-tune-sub">Storing this copy does not enable delivery. A future defendant send additionally requires an exact packet binding plus staff-recorded contact verification and iMessage opt-in.</p>
+          </div>
+          <label class="toggle-switch" title="Enable only for separately authorized defendant records" style="display:inline-flex;margin:8px 0">
             <input type="checkbox" id="autoInitialIncludeDefendant">
             <span class="slider"></span>
           </label>
-          <span style="margin-left:8px">Also send to defendant</span>
-          <div id="autoInitialDefendantWrap" hidden>
-            <label class="auto-tune-label" for="autoInitialDefendantTemplate">Defendant copy</label>
-            <textarea id="autoInitialDefendantTemplate" class="sl-input" rows="6" style="resize:vertical;min-height:110px"></textarea>
-            <p class="auto-tune-sub">A distinct approved template with <code>{signing_link}</code> is required.</p>
-          </div>
+          <span style="margin-left:8px">Enable delivery to authorized defendants</span>
           <label class="toggle-switch" title="Enable only after approved copy is complete" style="display:inline-flex;margin:8px 0">
             <input type="checkbox" id="autoInitialEnabled">
             <span class="slider"></span>
@@ -328,10 +328,7 @@ const SLAutomations = {
     if (defendant) defendant.value = cfg.defendant_message_template || '';
     if (includeDefendant) includeDefendant.checked = !!cfg.include_defendant;
     if (enabled) enabled.checked = !!cfg.enabled;
-    if (defendantWrap) defendantWrap.hidden = !cfg.include_defendant;
-    if (includeDefendant) includeDefendant.onchange = () => {
-      if (defendantWrap) defendantWrap.hidden = !includeDefendant.checked;
-    };
+    if (defendantWrap) defendantWrap.hidden = false;
     if (modal) modal.classList.add('show');
     setTimeout(() => indemnitor && indemnitor.focus(), 40);
   },
@@ -350,6 +347,10 @@ const SLAutomations = {
       if (window.SL && SL.notify) SL.notify('Indemnitor copy must include {signing_link}.', 'error');
       return;
     }
+    if (defendant && !defendant.includes('{signing_link}')) {
+      if (window.SL && SL.notify) SL.notify('Staged defendant copy must include {signing_link}.', 'error');
+      return;
+    }
     if (includeDefendant && (!defendant || !defendant.includes('{signing_link}'))) {
       if (window.SL && SL.notify) SL.notify('Defendant copy must include {signing_link}.', 'error');
       return;
@@ -365,7 +366,7 @@ const SLAutomations = {
             enabled,
             include_defendant: includeDefendant,
             indemnitor_message_template: indemnitor,
-            defendant_message_template: includeDefendant ? defendant : '',
+            defendant_message_template: defendant,
           },
         }),
       });

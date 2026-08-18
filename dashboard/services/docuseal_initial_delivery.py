@@ -11,8 +11,12 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List
+from urllib.parse import urlparse
 
 from dashboard.services.bb_client import get_bb_client
+from dashboard.services.defendant_delivery_authorization import (
+    submitter_has_current_defendant_authorization,
+)
 from dashboard.services.paperwork_signers import normalize_role
 
 logger = logging.getLogger(__name__)
@@ -20,6 +24,7 @@ logger = logging.getLogger(__name__)
 AUTOMATION_KEY = "docuseal_initial_delivery"
 _ALLOWED_ROLES = frozenset({"indemnitor", "coindemnitor", "defendant"})
 _PENDING_PACKET_STATUSES = frozenset({"pending_signature"})
+_TRUSTED_DOCUSEAL_HOST = "sign.shamrockbailbonds.biz"
 
 
 def _phone_digits(value: Any) -> str:
@@ -34,16 +39,47 @@ def _packet_role(submitter: Dict[str, Any]) -> str:
     return normalize_role(metadata.get("party_role") or submitter.get("role"))
 
 
+def _trusted_signing_link(submitter: Dict[str, Any]) -> str:
+    """Return only a direct HTTPS link on the approved self-hosted DocuSeal host."""
+    raw = str(submitter.get("sign_url") or "").strip()
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return ""
+    parts = [part for part in parsed.path.split("/") if part]
+    if (
+        parsed.scheme != "https"
+        or (parsed.hostname or "").lower() != _TRUSTED_DOCUSEAL_HOST
+        or parsed.port not in (None, 443)
+        or len(parts) != 2
+        or parts[0] != "s"
+        or not parts[1]
+    ):
+        return ""
+    return raw
+
+
 def _is_bound_submitter(packet_id: str, submitter: Dict[str, Any]) -> bool:
-    """Require both DocuSeal packet metadata and a matching external ID."""
+    """Require exact packet metadata, external-ID role, and trusted signer link."""
     metadata = submitter.get("metadata")
     metadata = metadata if isinstance(metadata, dict) else {}
     external_id = str(submitter.get("external_id") or "")
+    role = _packet_role(submitter)
     expected_prefix = f"{packet_id}:"
-    return (
+    if role == "defendant":
+        expected_external_id = f"{packet_id}:defendant"
+        external_matches_role = external_id == expected_external_id
+    elif role == "indemnitor":
+        external_matches_role = external_id.startswith(f"{packet_id}:indemnitor:")
+    elif role == "coindemnitor":
+        external_matches_role = external_id.startswith(f"{packet_id}:indemnitor:")
+    else:
+        external_matches_role = False
+    return bool(
         metadata.get("packet_id") == packet_id
         and external_id.startswith(expected_prefix)
-        and bool(submitter.get("sign_url") or submitter.get("slug"))
+        and external_matches_role
+        and _trusted_signing_link(submitter)
     )
 
 
@@ -80,10 +116,13 @@ def _eligible_submitters(packet: Dict[str, Any], config: Dict[str, Any]) -> Iter
         role = _packet_role(raw)
         if role not in _ALLOWED_ROLES:
             continue
-        if role == "defendant" and not include_defendant:
-            continue
+        if role == "defendant":
+            if not include_defendant:
+                continue
+            if not submitter_has_current_defendant_authorization(packet=packet, submitter=raw):
+                continue
         phone = _phone_digits(raw.get("phone"))
-        sign_url = str(raw.get("sign_url") or "").strip()
+        sign_url = _trusted_signing_link(raw)
         if not phone or not sign_url:
             continue
         # A template may contain only one co-indemnitor role.  Phone+role is a
@@ -132,6 +171,10 @@ async def deliver_initial_docuseal_links(
 
     if not bool((config or {}).get("enabled", False)):
         outcome["reason"] = "disabled"
+        return outcome
+    previous = (packet or {}).get("auto_delivery")
+    if isinstance(previous, dict) and previous.get("automation") == AUTOMATION_KEY:
+        outcome["reason"] = "already_evaluated"
         return outcome
     if not _packet_is_eligible(packet):
         outcome["reason"] = "packet_not_eligible"

@@ -297,6 +297,13 @@ async def resolve_case_context(
         "match_status": match_status,
         "match_confidence": match_confidence,
         "defendant_id": defendant.get("Defendant_ID") or defendant.get("defendant_id") or defendant_id,
+        # This evidence may originate only from the authoritative active-bond / bond-case
+        # record, never an intake, arrest, packet, or packet-finalization body override.
+        "defendant_delivery_authorization": (
+            bond.get("defendant_delivery_authorization")
+            if isinstance(bond.get("defendant_delivery_authorization"), dict)
+            else {}
+        ),
         "indemnitor_id": indemnitor.get("Indemnitor_ID") or indemnitor.get("indemnitor_id"),
         "bond_case_id": bond.get("Bond_Case_ID") or bond.get("bond_case_id") or bond_case_id,
         "packet_id": packet.get("packet_id") or packet_id,

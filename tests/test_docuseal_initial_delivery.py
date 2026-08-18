@@ -10,6 +10,7 @@ _PACKET = {
     "voided": False,
     "docuseal_submission_id": "SUB-1",
     "docuseal_status": "sent",
+    "defendant_id": "DEF-1",
     "docuseal_submitters": [
         {
             "role": "indemnitor",
@@ -22,7 +23,15 @@ _PACKET = {
             "role": "defendant",
             "phone": "2395550102",
             "external_id": "PKT-AUTO-DELIVERY:defendant",
-            "metadata": {"packet_id": "PKT-AUTO-DELIVERY", "party_role": "defendant"},
+            "metadata": {
+                "packet_id": "PKT-AUTO-DELIVERY",
+                "party_role": "defendant",
+                "defendant_delivery_authorization": {
+                    "status": "verified_opt_in",
+                    "authorization_id": "DDA-1",
+                    "defendant_id": "DEF-1",
+                },
+            },
             "sign_url": "https://sign.shamrockbailbonds.biz/s/defendant",
         },
     ],
@@ -83,6 +92,55 @@ def test_initial_delivery_blocks_defendant_without_separately_approved_copy():
         for row in outcome["recipients"]
     )
     client.send_text.assert_awaited_once()
+
+
+def test_initial_delivery_blocks_defendant_without_authorization_snapshot():
+    client = type("Client", (), {"send_text": AsyncMock(return_value={"success": True})})()
+    unauthorized_defendant = {
+        **_PACKET["docuseal_submitters"][1],
+        "metadata": {"packet_id": "PKT-AUTO-DELIVERY", "party_role": "defendant"},
+    }
+    packet = {**_PACKET, "docuseal_submitters": [_PACKET["docuseal_submitters"][0], unauthorized_defendant]}
+    config = {
+        "enabled": True,
+        "include_defendant": True,
+        "indemnitor_message_template": "Please sign: {signing_link}",
+        "defendant_message_template": "Defendant: {signing_link}",
+    }
+
+    with patch("dashboard.services.docuseal_initial_delivery.get_bb_client", return_value=client):
+        outcome = _run(deliver_initial_docuseal_links(packet=packet, config=config))
+
+    assert outcome["sent_count"] == 1
+    assert outcome["recipients"] == [{"role": "indemnitor", "state": "sent", "channel": "imessage"}]
+    client.send_text.assert_awaited_once()
+
+
+def test_initial_delivery_rejects_untrusted_signing_link_and_repeated_evaluation():
+    client = type("Client", (), {"send_text": AsyncMock(return_value={"success": True})})()
+    config = {"enabled": True, "indemnitor_message_template": "Please sign: {signing_link}"}
+    untrusted = {
+        **_PACKET,
+        "docuseal_submitters": [{**_PACKET["docuseal_submitters"][0], "sign_url": "https://example.invalid/s/link"}],
+    }
+    malformed = {
+        **_PACKET,
+        "docuseal_submitters": [{**_PACKET["docuseal_submitters"][0], "sign_url": "https://sign.shamrockbailbonds.biz/s/"}],
+    }
+    already_evaluated = {
+        **_PACKET,
+        "auto_delivery": {"automation": "docuseal_initial_delivery", "state": "sent"},
+    }
+
+    with patch("dashboard.services.docuseal_initial_delivery.get_bb_client", return_value=client):
+        untrusted_outcome = _run(deliver_initial_docuseal_links(packet=untrusted, config=config))
+        malformed_outcome = _run(deliver_initial_docuseal_links(packet=malformed, config=config))
+        duplicate_outcome = _run(deliver_initial_docuseal_links(packet=already_evaluated, config=config))
+
+    assert untrusted_outcome["reason"] == "no_bound_recipients"
+    assert malformed_outcome["reason"] == "no_bound_recipients"
+    assert duplicate_outcome["reason"] == "already_evaluated"
+    client.send_text.assert_not_awaited()
 
 
 def test_initial_delivery_rejects_unbound_or_voided_packets():

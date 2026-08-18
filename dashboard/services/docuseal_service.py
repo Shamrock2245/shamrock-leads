@@ -27,6 +27,10 @@ from urllib.parse import urljoin
 
 import httpx
 
+from dashboard.services.defendant_delivery_authorization import (
+    authorized_defendant_delivery_snapshot,
+)
+
 logger = logging.getLogger(__name__)
 
 # Default public host for self-hosted DocuSeal
@@ -1222,6 +1226,10 @@ class DocuSealService:
             )
 
         if include_defendant:
+            # An automatic iMessage to the defendant remains blocked unless this
+            # immutable packet snapshot carries separately recorded contact
+            # verification and iMessage opt-in evidence from the active bond.
+            defendant_delivery_authorization = authorized_defendant_delivery_snapshot(bond_data)
             def_info = defendant if isinstance(defendant, dict) else (
                 bond_data.get("defendant") if isinstance(bond_data.get("defendant"), dict) else {}
             )
@@ -1252,6 +1260,7 @@ class DocuSealService:
                     metadata={
                         "packet_id": packet_id,
                         "party_role": "defendant",
+                        "defendant_delivery_authorization": defendant_delivery_authorization,
                     },
                     send_email=send_email,
                     fields=signer_fields,
