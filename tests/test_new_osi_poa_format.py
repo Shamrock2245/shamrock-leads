@@ -12,6 +12,7 @@ from dashboard.services.poa_service import (
     determine_surety_from_prefix,
     parse_max_bond_from_prefix,
     get_poa_tier_for_bond,
+    inventory_prefix_query,
     inventory_prefixes_for_tier,
 )
 from dashboard.routers.poa import poa_bp, parse_poa_receipt_text
@@ -50,6 +51,9 @@ def test_prefix_helper_functions():
     assert "OSI51" in inventory_prefixes_for_tier("OSI-P51")
     assert "OSI-P51" in inventory_prefixes_for_tier("OSI51")
     assert "PSC5" in inventory_prefixes_for_tier("PSC5")
+    query = inventory_prefix_query("OSI-P51")
+    assert "OSI51" in query["$or"][0]["poa_prefix"]["$in"]
+    assert query["$or"][1]["poa_prefix"]["$regex"].startswith("^(OSI")
 
 
 def test_parse_poa_receipt_text_exact_user_receipt():
@@ -207,3 +211,57 @@ def test_full_osi_receipt_stays_at_50():
 def test_bare_hyphen_phone_not_a_range():
     assert parse_poa_receipt_text("Call 239-224-5454") == []
     assert parse_poa_receipt_text("428 South Congress FL 33401") == []
+
+
+@patch("dashboard.routers.poa.get_collection")
+def test_api_poa_next_multi_charge_uses_per_charge_tiers(mock_get_col, client):
+    mock_inv = MagicMock()
+    mock_inv.find_one = AsyncMock(side_effect=[
+        {"poa_number": "OSI3-20134295", "poa_prefix": "OSI3", "poa_full": "OSI3-20134295"},
+        {"poa_number": "OSI51-20127651", "poa_prefix": "OSI51", "poa_full": "OSI51-20127651"},
+    ])
+    mock_inv.count_documents = AsyncMock(side_effect=[4, 12])
+    mock_get_col.return_value = mock_inv
+
+    res = client.get("/api/poa/next?surety=osi&bond_amount=53000&count=2&amounts=2500,50000")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["prefixes"] == ["OSI-P3", "OSI-P51"]
+    assert data["amounts"] == [2500.0, 50000.0]
+    assert data["suggested"][0]["poa_number"] == "OSI3-20134295"
+    assert data["suggested"][1]["poa_number"] == "OSI51-20127651"
+    assert data["available_in_tier"] == 4
+    assert data["available_total"] == 12
+
+    first_q = mock_inv.find_one.call_args_list[0].args[0]
+    assert first_q["surety_id"] == "osi"
+    assert first_q["status"] == "available"
+    first_aliases = first_q["$or"][0]["poa_prefix"]["$in"]
+    assert "OSI3" in first_aliases
+    assert "OSI-P3" in first_aliases
+
+    second_q = mock_inv.find_one.call_args_list[1].args[0]
+    second_aliases = second_q["$or"][0]["poa_prefix"]["$in"]
+    assert "OSI51" in second_aliases
+    assert second_q["poa_number"] == {"$nin": ["OSI3-20134295"]}
+
+
+@patch("dashboard.routers.poa.get_collection")
+def test_api_poa_next_marks_missing_tier(mock_get_col, client):
+    mock_inv = MagicMock()
+    mock_inv.find_one = AsyncMock(return_value=None)
+    mock_inv.count_documents = AsyncMock(return_value=0)
+    mock_get_col.return_value = mock_inv
+
+    res = client.get("/api/poa/next?surety=osi&bond_amount=50000&amounts=50000")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["suggested"][0]["missing"] is True
+    assert data["suggested"][0]["poa_prefix"] == "OSI-P51"
+    assert "no available POA" in data["warning"]
+
+
+def test_api_poa_next_rejects_unknown_surety(client):
+    res = client.get("/api/poa/next?surety=unknown&bond_amount=1000")
+    assert res.status_code == 400
+    assert "surety" in res.json()["error"]

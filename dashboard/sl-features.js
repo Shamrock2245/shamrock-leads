@@ -730,6 +730,8 @@ async function fetchPoaNumbers(surety, bondAmt, chargeList) {
     const leadForAmts = modalForAmts.lead || {};
     const fallbackAmt = count > 0 ? (bondAmt / count) : bondAmt;
     const amountParams = chargeList.map((_, i) => {
+      const liveN = parseFloat(document.getElementById(`chargeAmtInput_${i}`)?.value || 0);
+      if (liveN > 0) return liveN;
       const row = (Array.isArray(leadForAmts.charge_details) && leadForAmts.charge_details[i]) || {};
       const n = parseFloat(row.bond_amount || row.amount || row.bond || 0);
       return (n > 0 ? n : fallbackAmt) || 0;

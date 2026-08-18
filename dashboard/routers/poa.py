@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from dashboard.extensions import get_collection
 from dashboard.services.poa_service import (
     get_poa_tier_for_bond,
-    inventory_prefixes_for_tier,
+    inventory_prefix_query,
     parse_max_bond_from_prefix,
     determine_surety_from_prefix,
 )
@@ -61,14 +61,13 @@ async def api_poa_next(
     for amt in amt_list:
         prefix = get_poa_tier_for_bond(surety, amt)
         prefixes.append(prefix)
-        aliases = inventory_prefixes_for_tier(prefix)
         q = {
             "surety_id": surety,
-            "poa_prefix": {"$in": aliases},
             "status": "available",
+            **inventory_prefix_query(prefix),
         }
         if used_serials:
-            q["poa_number"] = {"$nin": used_serials}
+            q["poa_number"] = {"$nin": list(used_serials)}
         doc = await poa_inventory.find_one(
             q,
             {"poa_number": 1, "poa_prefix": 1, "poa_full": 1, "_id": 0},
@@ -83,9 +82,8 @@ async def api_poa_next(
             suggested.append({"poa_number": "", "poa_prefix": prefix, "poa_full": "", "missing": True})
 
     primary_prefix = prefixes[0] if prefixes else get_poa_tier_for_bond(surety, bond_amount)
-    primary_aliases = inventory_prefixes_for_tier(primary_prefix)
     total_available = await poa_inventory.count_documents(
-        {"surety_id": surety, "poa_prefix": {"$in": primary_aliases}, "status": "available"}
+        {"surety_id": surety, "status": "available", **inventory_prefix_query(primary_prefix)}
     )
     total_surety = await poa_inventory.count_documents(
         {"surety_id": surety, "status": "available"}
@@ -102,7 +100,10 @@ async def api_poa_next(
         "available_total": total_surety,
         "suggested": suggested,
         "warning": (
-            "Low inventory in this tier" if total_available <= 3
+            (
+                "Low inventory in this tier"
+                + ("; some charges have no available POA in tier" if missing else "")
+            ) if total_available <= 3
             else ("Some charges have no available POA in tier" if missing else None)
         ),
     }

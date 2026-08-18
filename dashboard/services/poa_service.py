@@ -81,6 +81,26 @@ def inventory_prefixes_for_tier(prefix: str) -> list[str]:
     return sorted(aliases)
 
 
+def inventory_prefix_query(prefix: str) -> dict:
+    """Mongo clause that matches every stored spelling of a POA tier.
+
+    Covers ``OSI51`` (live books), ``OSI-P51`` (tier helper), and longer
+    receipt stems such as ``OSI-P51-116-26-``.
+    """
+    import re
+
+    aliases = inventory_prefixes_for_tier(prefix)
+    if not aliases:
+        return {"poa_prefix": prefix}
+    escaped = "|".join(re.escape(alias) for alias in aliases)
+    return {
+        "$or": [
+            {"poa_prefix": {"$in": aliases}},
+            {"poa_prefix": {"$regex": f"^({escaped})([-_\\s]|$)", "$options": "i"}},
+        ]
+    }
+
+
 def get_poa_tier_for_bond(surety_id: str, bond_amount: float) -> str:
     """
     Return the smallest POA prefix that covers the bond amount for the given surety.
@@ -198,10 +218,7 @@ async def check_poa_inventory_thresholds(
             count = await db.poa_inventory.count_documents({
                 "surety_id": surety_id,
                 "status": {"$in": ["available", "Available", "AVAILABLE"]},
-                "$or": [
-                    {"poa_prefix": prefix},
-                    {"poa_prefix": {"$regex": f"^{prefix}", "$options": "i"}},
-                ],
+                **inventory_prefix_query(prefix),
             })
             if count <= threshold:
                 low_stock.append({
