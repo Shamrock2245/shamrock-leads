@@ -137,8 +137,8 @@ const SLPortal = {
       const data = await res.json();
       const el = document.getElementById('kpiPortalLinks');
       if (el) el.textContent = data.active_tokens ?? '—';
-      const elCheckins = document.getElementById('kpiPortalCheckins');
-      if (elCheckins) elCheckins.textContent = data.total_checkins ?? '—';
+      const elCheckins = document.getElementById('kpiCheckins');
+      if (elCheckins) elCheckins.textContent = data.checkins_7d ?? '—';
     } catch(e) { /* silent */ }
   },
 

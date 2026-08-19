@@ -19,7 +19,7 @@ Staff-only (session-authed):
 
 import os
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
@@ -282,11 +282,15 @@ async def portal_stats():
         {"expires_at": {"$gt": now}, "active": True}
     )
     checkins_col = get_collection("bond_checkins")
-    total_checkins = await checkins_col.count_documents({})
+    checkins_since = now - timedelta(days=7)
+    checkins_7d = await checkins_col.count_documents({
+        "checkin_at": {"$gte": checkins_since},
+        "status": "completed",
+    })
     total_all_time = await col.count_documents({})
     return {
         "active_tokens": total_active,
-        "total_checkins": total_checkins,
+        "checkins_7d": checkins_7d,
         "total_all_time": total_all_time,
     }
 

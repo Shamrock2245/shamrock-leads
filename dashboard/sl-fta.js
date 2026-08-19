@@ -50,8 +50,13 @@ const SLFTA = (() => {
       });
       const data = await res.json();
       if (data.success) {
-        const snMsg = data.signnow_sent ? ' · SignNow authorization sent to agent email.' : '';
-        _toast(`🆘 Surrender initiated (${data.surrender_id})${snMsg}`, 'error');
+        const reviewMsg = data.staff_document_required
+          ? ' · Staff document review required.'
+          : '';
+        const deliveryMsg = data.bb_sent
+          ? ' · Indemnitor iMessage delivered.'
+          : ' · No indemnitor iMessage was delivered.';
+        _toast(`🆘 Surrender initiated (${data.surrender_id})${reviewMsg}${deliveryMsg}`, 'error');
         await load();
       } else {
         _toast('Surrender failed: ' + (data.error || 'unknown'), 'error');
@@ -199,7 +204,7 @@ const SLFTA = (() => {
       overlay.innerHTML = `
         <div style="background:var(--panel,#1e293b);border:2px solid #dc2626;border-radius:14px;padding:24px;width:380px;max-width:90vw">
           <h3 style="margin:0 0 8px;font-size:1rem;color:#dc2626">🆘 Initiate Surrender</h3>
-          <p style="font-size:13px;color:var(--text);margin:0 0 16px">This will send a SignNow surrender authorization to the agent and notify the indemnitor via iMessage. This action cannot be undone.</p>
+          <p style="font-size:13px;color:var(--text);margin:0 0 16px">This marks the Level 3 FTA as surrender-pending. No e-sign packet is created; staff must complete the approved surrender documentation manually. The current indemnitor record is notified by iMessage only when delivery succeeds. This action cannot be undone.</p>
           <p style="font-size:12px;color:var(--muted);margin:0 0 16px">Booking: <strong>${bookingNumber}</strong></p>
           <div style="display:flex;gap:8px">
             <button id="_ftaSurrConfirm" style="flex:1;padding:10px;background:#dc2626;border:none;border-radius:8px;color:#fff;font-weight:700;cursor:pointer">🆘 Confirm Surrender</button>
