@@ -11,6 +11,7 @@ import os
 import re
 import random
 import logging
+import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional
 
@@ -37,6 +38,7 @@ class SendPinRequest(BaseModel):
     phone: str
     booking_number: Optional[str] = None
     intake_id: Optional[str] = None
+    role: Optional[str] = None
 
 
 class VerifyPinRequest(BaseModel):
@@ -221,6 +223,7 @@ async def send_portal_pin(req: SendPinRequest):
         "pin": otp_pin,
         "booking_number": req.booking_number or "",
         "intake_id": req.intake_id or "",
+        "role": _normalize_client_role(req.role),
         "created_at": now.isoformat(),
         "expires_at": expires_at,
         "verified": False,
@@ -241,7 +244,7 @@ async def send_portal_pin(req: SendPinRequest):
             bb_send_accepted,
         )
         msg = (
-            f"Your Shamrock Bail Bonds e-sign verification PIN is: {otp_pin}. "
+            f"Your Shamrock Bail Bonds secure intake verification PIN is: {otp_pin}. "
             f"Valid for 15 minutes."
         )
         raw = await send_message_universal(clean_phone, msg)
@@ -394,7 +397,11 @@ async def verify_portal_pin(req: VerifyPinRequest):
         booking=pin_doc.get("booking_number", "") or "",
         intake=pin_doc.get("intake_id", "") or "",
     )
-    session_role = (meta.get("role") or "").strip()
+    session_role = (
+        meta.get("role")
+        or pin_doc.get("role")
+        or ""
+    ).strip()
     session_set = {
         "verified": True,
         "session_token": session_token,
@@ -442,6 +449,7 @@ _CLIENT_FIELD_ALLOWLIST = frozenset({
     "indemnitor_spouse_phone", "indemnitor_spouse_work_phone",
     "reference_1_name", "reference_1_relation", "reference_1_phone", "reference_1_address",
     "reference_2_name", "reference_2_relation", "reference_2_phone", "reference_2_address",
+    "defendant_name", "DefName", "DefFirstName", "DefLastName",
     "defendant_address", "defendant_city", "defendant_state",
     "defendant_zip", "defendant_phone", "defendant_dl", "defendant_dob",
 })
@@ -450,7 +458,21 @@ _CLIENT_FIELD_ALLOWLIST = frozenset({
 class RemainingFieldsRequest(BaseModel):
     session_token: str
     fields: Dict[str, Any] = {}
+    role: Optional[str] = None
     address_confirmed: Optional[bool] = None
+    staff_review_acknowledged: Optional[bool] = None
+
+
+def _normalize_client_role(raw: Optional[str]) -> str:
+    """Normalize only the client roles accepted by the intake launchpad."""
+    value = str(raw or "").strip().lower().replace("-", "").replace("_", "")
+    if value in {"defendant", "def", "inmate"}:
+        return "defendant"
+    if value in {"coindemnitor", "co"}:
+        return "coindemnitor"
+    if value in {"indemnitor", "ind", "cosigner"}:
+        return "indemnitor"
+    return ""
 
 
 def _sanitize_client_fields(raw: Optional[Dict[str, Any]]) -> Dict[str, str]:
@@ -484,6 +506,163 @@ def _city_state_zip(fields: Dict[str, str]) -> str:
     if city and rest:
         return f"{city}, {rest}"
     return city or rest
+
+
+def _split_name(full_name: str) -> tuple[str, str]:
+    parts = [part for part in str(full_name or "").split() if part]
+    if not parts:
+        return "", ""
+    return parts[0], " ".join(parts[1:])
+
+
+async def _upsert_deferred_client_intake(
+    *,
+    session: Dict[str, Any],
+    role: str,
+    fields: Dict[str, str],
+    staff_review_acknowledged: bool,
+) -> str:
+    """Store one client-owned intake record without creating a case or packet.
+
+    Each indemnitor gets an independent queue record.  Staff may attach any
+    number of those records to a later bond; no defendant, amount, POA, or
+    DocuSeal packet is implied by this intake.
+    """
+    now = datetime.now(timezone.utc)
+    role = _normalize_client_role(role) or "indemnitor"
+    intake_id = str(session.get("client_intake_id") or f"WX-{uuid.uuid4().hex[:10].upper()}")
+    phone = _digits_phone(str(session.get("phone") or ""))
+    extracted = session.get("id_extracted") if isinstance(session.get("id_extracted"), dict) else {}
+
+    defendant = {
+        "name": "",
+        "firstName": "",
+        "lastName": "",
+        "dob": "",
+        "facility": "",
+        "county": "",
+        "bookingNumber": "",
+        "charges": "",
+        "bondAmount": "",
+        "street": "",
+        "city": "",
+        "state": "",
+        "zip": "",
+        "charge_details": [],
+    }
+    indemnitor = {
+        "firstName": "",
+        "middleName": "",
+        "lastName": "",
+        "relationship": "",
+        "dob": "",
+        "ssn": "",
+        "dl": "",
+        "dlState": "",
+        "phone": "",
+        "email": "",
+        "address": "",
+        "city": "",
+        "state": "",
+        "zip": "",
+        "employer": "",
+        "employerPhone": "",
+        "employerCity": "",
+        "employerState": "",
+        "supervisor": "",
+        "supervisorPhone": "",
+        "ref1Name": "",
+        "ref1Relation": "",
+        "ref1Phone": "",
+        "ref1Address": "",
+        "ref2Name": "",
+        "ref2Relation": "",
+        "ref2Phone": "",
+        "ref2Address": "",
+    }
+
+    if role == "defendant":
+        full_name = fields.get("defendant_name") or fields.get("DefName") or extracted.get("full_name") or ""
+        first_name, last_name = _split_name(full_name)
+        defendant.update({
+            "name": full_name,
+            "firstName": fields.get("DefFirstName") or first_name,
+            "lastName": fields.get("DefLastName") or last_name,
+            "dob": fields.get("defendant_dob") or extracted.get("dob") or "",
+            "street": fields.get("defendant_address") or extracted.get("address") or "",
+            "city": fields.get("defendant_city") or extracted.get("city") or "",
+            "state": fields.get("defendant_state") or extracted.get("state") or "",
+            "zip": fields.get("defendant_zip") or extracted.get("zip") or "",
+            "dl": fields.get("defendant_dl") or extracted.get("dl_number") or "",
+            "phone": phone,
+        })
+    else:
+        full_name = fields.get("indemnitor_name") or fields.get("IndemnitorName") or fields.get("IndName") or fields.get("FullName") or extracted.get("full_name") or ""
+        first_name, last_name = _split_name(full_name)
+        indemnitor.update({
+            "firstName": first_name,
+            "lastName": last_name,
+            "relationship": fields.get("indemnitor_relationship") or "",
+            "dob": fields.get("indemnitor_dob") or extracted.get("dob") or "",
+            "dl": fields.get("indemnitor_dl") or extracted.get("dl_number") or "",
+            "phone": phone,
+            "address": fields.get("indemnitor_address") or extracted.get("address") or "",
+            "city": fields.get("indemnitor_city") or extracted.get("city") or "",
+            "state": fields.get("indemnitor_state") or extracted.get("state") or "",
+            "zip": fields.get("indemnitor_zip") or extracted.get("zip") or "",
+            "employer": fields.get("indemnitor_employer") or "",
+            "employerPhone": fields.get("indemnitor_employer_phone") or fields.get("indemnitor_work_phone") or "",
+            "ref1Name": fields.get("reference_1_name") or "",
+            "ref1Phone": fields.get("reference_1_phone") or "",
+            "role": "coindemnitor" if role == "coindemnitor" else "primary",
+        })
+
+    doc = {
+        "intake_id": intake_id,
+        "source": "wix_portal",
+        "source_label": "Wix Portal",
+        "status": "pending",
+        "created_at": now,
+        "updated_at": now,
+        "indemnitor": indemnitor,
+        "indemnitor_name": " ".join(part for part in [indemnitor.get("firstName"), indemnitor.get("lastName")] if part),
+        "indemnitor_email": "",
+        "indemnitor_phone": indemnitor.get("phone") or "",
+        "defendant": defendant,
+        "defendant_name": defendant.get("name") or "",
+        "defendant_booking_number": "",
+        "defendant_county": "",
+        "defendant_facility": "",
+        "consent_given": bool(staff_review_acknowledged),
+        "consent_timestamp": now.isoformat(),
+        "role": role,
+        "id_scanned_at": session.get("id_scanned_at") or now.isoformat(),
+        "gas_sync_status": "pending",
+        "gas_sync_timestamp": None,
+        "matched_booking_number": None,
+        "matched_county": None,
+        "matched_defendant_id": None,
+        "match_confidence": 0,
+        "match_strategy": "staff_deferred",
+        "match_timestamp": None,
+        "surety_id": "osi",
+        "paperwork_packet_id": None,
+        "paperwork_status": "intake_complete",
+        "_raw": {
+            "source": "wix_portal",
+            "role": role,
+            "client_fields": fields,
+            "id_extracted": extracted,
+        },
+    }
+    collection = get_collection("intake_queue")
+    await collection.update_one({"intake_id": intake_id}, {"$set": doc}, upsert=True)
+    await get_collection("portal_pins").update_one(
+        {"session_token": session.get("session_token")},
+        {"$set": {"client_intake_id": intake_id, "role": role}},
+    )
+    logger.info("[PIN Portal] Deferred %s intake saved: %s", role, intake_id)
+    return intake_id
 
 
 async def _load_verified_session(session_token: str) -> Optional[Dict[str, Any]]:
@@ -638,17 +817,32 @@ async def portal_selfie(request: Request):
 
 @pin_portal_router.post("/remaining-fields")
 async def portal_remaining_fields(req: RemainingFieldsRequest):
-    """
-    Save party-confirmable fields and push them onto that party's DocuSeal
-    submitter. Never creates a packet. Role comes from the PIN session.
+    """Save a verified role-specific intake and update DocuSeal only if staff issued it.
+
+    A client may complete this step before staff knows the defendant, bond amount,
+    or final case.  In that normal pre-need state, one independent intake record
+    is saved for the client and no packet is created.  Existing staff-issued
+    DocuSeal packets retain the established field-update behavior.
     """
     session = await _load_verified_session(req.session_token)
     if not session:
         return JSONResponse({"success": False, "error": "Session expired. Request a new PIN."}, status_code=401)
 
+    role = _normalize_client_role(session.get("role")) or _normalize_client_role(req.role)
+    if not role:
+        return JSONResponse(
+            {"success": False, "error": "Choose whether you are the defendant or an indemnitor before saving."},
+            status_code=400,
+        )
+    if not req.staff_review_acknowledged:
+        return JSONResponse(
+            {"success": False, "error": "Staff-review acknowledgment is required before saving your intake."},
+            status_code=400,
+        )
+
     fields = _sanitize_client_fields(req.fields)
     csz = _city_state_zip(fields)
-    if csz:
+    if csz and role != "defendant":
         fields["indemnitor_city_state_zip"] = csz
 
     pins_col = get_collection("portal_pins")
@@ -656,11 +850,15 @@ async def portal_remaining_fields(req: RemainingFieldsRequest):
         {"session_token": req.session_token},
         {"$set": {
             "client_fields": fields,
+            "role": role,
             "address_confirmed": bool(req.address_confirmed) if req.address_confirmed is not None else True,
+            "staff_review_acknowledged": True,
+            "staff_review_acknowledged_at": datetime.now(timezone.utc).isoformat(),
             "fields_saved": True,
             "fields_saved_at": datetime.now(timezone.utc).isoformat(),
         }},
     )
+    session["role"] = role
 
     meta = await _resolve_packet_for_client(
         session.get("phone") or "",
@@ -670,6 +868,14 @@ async def portal_remaining_fields(req: RemainingFieldsRequest):
     pushed = False
     push_error = ""
     packet_id = meta.get("packet_id") or ""
+    deferred_intake_id = ""
+    if not packet_id:
+        deferred_intake_id = await _upsert_deferred_client_intake(
+            session=session,
+            role=role,
+            fields=fields,
+            staff_review_acknowledged=True,
+        )
     if packet_id and fields:
         try:
             from dashboard.services.paperwork_signers import normalize_role
@@ -714,10 +920,16 @@ async def portal_remaining_fields(req: RemainingFieldsRequest):
         "saved": True,
         "pushed_to_docuseal": pushed,
         "field_count": len(fields),
+        "role": role,
+        "intake_id": deferred_intake_id,
+        "deferred_for_staff_match": bool(deferred_intake_id),
         "has_packet": bool(meta.get("has_packet")),
         "packet_id": packet_id,
         "signing_link": meta.get("signing_link") or "",
-        "message": push_error or meta.get("message") or "",
+        "message": push_error or (
+            "Your information is securely with Shamrock. Staff will match the right people and case, then prepare final paperwork if needed."
+            if deferred_intake_id else (meta.get("message") or "")
+        ),
     }
 
 

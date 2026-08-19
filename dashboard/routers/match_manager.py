@@ -454,3 +454,118 @@ async def api_match_search(q: str = Query(default="")):
     except Exception as exc:
         logger.exception("api_match_search error")
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  POST /api/intakes/<intake_id>/attach-to-bond — Deferred client reconciliation
+# ─────────────────────────────────────────────────────────────────────────────
+@match_manager_bp.post("/intakes/{intake_id}/attach-to-bond")
+async def api_attach_client_intake_to_bond(request: Request, intake_id: str):
+    """Attach one verified client intake to a later, existing bond.
+
+    Client intake is deliberately separate from a final bond.  This endpoint is
+    for staff after they know the correct booking/case.  It can be called once
+    per indemnitor, so a bond may have any number of independently submitted
+    indemnitor records.  It never creates a DocuSeal packet or changes bond
+    financial data.
+    """
+    data = await request.json() or {}
+    booking_number = str(data.get("booking_number") or "").strip()
+    agent = str(data.get("agent") or "Dashboard").strip() or "Dashboard"
+    if not booking_number:
+        return JSONResponse({"success": False, "error": "booking_number is required"}, status_code=400)
+
+    try:
+        intakes = get_collection("intake_queue")
+        bonds = get_collection("active_bonds")
+        audits = get_collection("audit_events")
+        intake = await intakes.find_one({"intake_id": intake_id})
+        if not intake:
+            return JSONResponse({"success": False, "error": "Intake not found"}, status_code=404)
+        bond = await bonds.find_one({"booking_number": booking_number})
+        if not bond:
+            return JSONResponse(
+                {"success": False, "error": "Bond not found. Create or select the bond before attaching client intake."},
+                status_code=404,
+            )
+
+        now = datetime.now(timezone.utc)
+        role = str(intake.get("role") or "indemnitor").strip().lower()
+        update = {"updated_at": now}
+        bond_update = {"$set": update, "$addToSet": {"client_intake_ids": intake_id}}
+        attached_indemnitor = None
+
+        if role != "defendant":
+            raw = intake.get("indemnitor") or {}
+            full_name = str(
+                intake.get("indemnitor_name")
+                or " ".join(part for part in [raw.get("firstName"), raw.get("lastName")] if part)
+            ).strip()
+            if not full_name:
+                return JSONResponse(
+                    {"success": False, "error": "Indemnitor intake has no verified name"},
+                    status_code=409,
+                )
+            attached_indemnitor = {
+                "name": full_name,
+                "phone": str(raw.get("phone") or intake.get("indemnitor_phone") or ""),
+                "email": str(raw.get("email") or intake.get("indemnitor_email") or ""),
+                "relationship": str(raw.get("relationship") or ""),
+                "role": str(raw.get("role") or ("coindemnitor" if role == "coindemnitor" else "primary")),
+                "source_intake_id": intake_id,
+            }
+            primary = bond.get("indemnitor") or {}
+            existing = list(bond.get("indemnitors") or [])
+            already_attached = (
+                str(primary.get("source_intake_id") or "") == intake_id
+                or any(str((item or {}).get("source_intake_id") or "") == intake_id for item in existing)
+            )
+            if not already_attached:
+                if not (primary.get("name") or bond.get("indemnitor_name")):
+                    update.update({
+                        "indemnitor": attached_indemnitor,
+                        "indemnitor_name": attached_indemnitor["name"],
+                        "indemnitor_phone": attached_indemnitor["phone"],
+                        "indemnitor_email": attached_indemnitor["email"],
+                        "indemnitor_relationship": attached_indemnitor["relationship"],
+                    })
+                else:
+                    bond_update["$addToSet"]["indemnitors"] = attached_indemnitor
+
+        result = await bonds.update_one({"booking_number": booking_number}, bond_update)
+        if not result.matched_count:
+            return JSONResponse({"success": False, "error": "Bond was not updated"}, status_code=409)
+
+        await intakes.update_one(
+            {"intake_id": intake_id},
+            {"$set": {
+                "status": "matched",
+                "matched_booking_number": booking_number,
+                "matched_county": bond.get("county") or "",
+                "match_confidence": 100,
+                "match_strategy": "staff_attached",
+                "match_timestamp": now,
+                "matched_by": agent,
+                "updated_at": now,
+            }},
+        )
+        await audits.insert_one({
+            "event_id": str(uuid.uuid4()),
+            "event_type": "client_intake_attached_to_bond",
+            "booking_number": booking_number,
+            "intake_id": intake_id,
+            "actor": agent,
+            "timestamp": now.isoformat(),
+            "details": {"role": role, "indemnitor": attached_indemnitor or {}},
+        })
+        return {
+            "success": True,
+            "booking_number": booking_number,
+            "intake_id": intake_id,
+            "role": role,
+            "indemnitor": attached_indemnitor,
+            "message": "Client intake attached. Final paperwork remains staff-controlled.",
+        }
+    except Exception as exc:
+        logger.exception("api_attach_client_intake_to_bond error")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
