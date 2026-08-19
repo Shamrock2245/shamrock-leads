@@ -579,7 +579,7 @@ def assemble_manifest(
     categories: Dict[str, List[str]],
     *,
     surety_id: str = "osi",
-    include_payment_plan: bool = False,
+    include_payment_plan: bool = True,
     extra_catalog_keys: Optional[List[str]] = None,
     self_indemnitor: bool = False,
 ) -> List[Dict[str, Any]]:

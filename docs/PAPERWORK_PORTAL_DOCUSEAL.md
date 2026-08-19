@@ -310,7 +310,7 @@ Hydration reuses the existing field maps in:
 | **FAQ — Defendants** | `faq-defendants.pdf` | Indemnitor **and** defendant **initial** | Same dual-role initial requirement |
 | **Master waiver** | `master-waiver.pdf` | Every indemnitor **and** defendant **sign** | Multi-indemnitor: **each** indemnitor must sign |
 | **SSA release** | `ssa-release.pdf` | Every non-agent person on the bond | **Every indemnitor** + **defendant** (agents do **not** sign) |
-| **Payment plan** | `payment-plan.pdf` | Indemnitor (primary) | Include **only if balance remains** after down payment / premium schedule |
+| **Payment plan** | `payment-plan.pdf` | Defendant **and** indemnitor **sign** | **Always** in the packet (OSI template 1 + Palmetto template 3). Paid-in-full: down = premium, balance = $0, empty schedule. Financing: staff fills `payment_due_date_1–4` / `payment_amount_1–4` before send. No extra initials; no credit-card / wage-assignment add-ons. |
 
 ### 7.2 Surety-specific (folder selected by agent)
 

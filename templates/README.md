@@ -18,7 +18,7 @@ templates/
 │   ├── faq-defendants.pdf      # Both indemnitor + defendant initial
 │   ├── master-waiver.pdf       # Every indemnitor + defendant sign
 │   ├── ssa-release.pdf         # Every non-agent person (all indemnitors + defendant)
-│   └── payment-plan.pdf        # Only when balance remains on the bond
+│   └── payment-plan.pdf        # Always in packet (paid-in-full: down=premium, balance=0)
 ├── osi/                        # When surety_id = osi
 │   ├── Appearance Bond blank.pdf
 │   ├── indemnity-agreement.pdf
@@ -55,7 +55,7 @@ charge_details → issues portal PIN(s) → parties sign via paperwork portal.
 | `faq-defendants.pdf` | Same dual-role initials |
 | `master-waiver.pdf` | **Defendant + every indemnitor** sign (N indemnitors → N signature slots / copies) |
 | `ssa-release.pdf` | Signed by **every person involved except agents** — all indemnitors + defendant |
-| `payment-plan.pdf` | Include **only if** there is a remaining balance; send with packet |
+| `payment-plan.pdf` | **Always** include. Paid-in-full: down payment = premium, balance financed = $0, empty schedule. Financing: staff fills the four due-date / amount rows before send. Defendant + indemnitor sign; no extra initials. |
 
 ## Appearance bond procedure (jail — print / wet-ink)
 
