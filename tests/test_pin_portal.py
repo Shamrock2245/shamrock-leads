@@ -178,9 +178,12 @@ def test_sanitize_client_fields_drops_staff_keys():
         "numeric_premium": "1500",
         "defendant_name": "DOE, JOHN",
         "indemnitor_relationship": "Mother",
+        "bond_amount": "5000",
+        "charges": "Grand Theft",
     })
     assert clean == {
         "indemnitor_employer": "Publix",
+        "defendant_name": "DOE, JOHN",
         "indemnitor_relationship": "Mother",
     }
 
@@ -239,6 +242,7 @@ def test_remaining_fields_pushes_allowlisted_values():
         "phone": "2395550100",
         "session_token": "PORTAL-abc",
         "verified": True,
+        "role": "indemnitor",
         "expires_at": "2099-01-01T00:00:00+00:00",
     })
     mock_pins.update_one = AsyncMock()
@@ -263,6 +267,8 @@ def test_remaining_fields_pushes_allowlisted_values():
          patch("dashboard.services.docuseal_service.DocuSealService", return_value=mock_svc):
         response = client.post("/api/portal/remaining-fields", json={
             "session_token": "PORTAL-abc",
+            "role": "indemnitor",
+            "staff_review_acknowledged": True,
             "address_confirmed": True,
             "fields": {
                 "indemnitor_employer": "Publix",
@@ -316,6 +322,8 @@ def test_remaining_fields_targets_defendant_submitter():
          patch("dashboard.services.docuseal_service.DocuSealService", return_value=mock_svc):
         response = client.post("/api/portal/remaining-fields", json={
             "session_token": "PORTAL-def",
+            "role": "defendant",
+            "staff_review_acknowledged": True,
             "address_confirmed": True,
             "fields": {"defendant_city": "Fort Myers", "defendant_dl": "D1234567"},
         })
