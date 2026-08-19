@@ -1,6 +1,6 @@
 # ShamrockLeads — True Status
 
-> **Last verified:** 2026-08-18
+> **Last verified:** 2026-08-19
 > **VPS:** Hetzner **CCX33** (8 dedicated vCPU / 32 GB RAM) as of 2026-08-13 — compose ceilings raised (`docs/runbooks/vps-ccx33-resize.md`). Root disk was **not** grown with the type change (still ~38 GB); grow to 160–240 GB in the Cloud Console.
 > **Repo:** `Shamrock2245/shamrock-leads` · branch `main`  
 > **Product URL:** `https://leads.shamrockbailbonds.biz`  
@@ -38,6 +38,14 @@ The narrowly scoped initial DocuSeal BlueBubbles iMessage exception is **enabled
 Commit `cd74b00` deployed the hardening controls through Hetzner workflow `32177618588`. Automatic delivery is now packet-bound, iMessage-only, one-time, and fail-closed: it accepts only direct HTTPS DocuSeal signer links on `sign.shamrockbailbonds.biz`, exact role/external-ID metadata, and one delivery evaluation per packet. For a defendant, a future packet must also include an exact `Defendant_ID`-bound, staff-recorded contact-verification and iMessage-opt-in authorization snapshot. Manual delivery is now staff-session-only and requires an exact role-bound active DocuSeal signer; it does not fall back to generic packet phones or return signing links in responses. No client message was sent during hardening or template staging.
 
 Focused service, automation, paperwork, and portal tests passed (**62**). Public Auto-CRM, DocuSeal, school, paperwork, Postiz `/auth`, and stable GAS health checks returned `200`; the first shell GAS redirect timed out, but the same unchanged stable endpoint returned `success:true`, `V409` through the browser. The strict local secrets check remains unable to pass in this clean checkout because production environment files are intentionally unavailable; no secrets were changed. This work does not satisfy the required B3/B5 or D2 human production smokes.
+
+## Ohio source-contract guard deployment (2026-08-19)
+
+Commit `3b3bee0` deployed successfully through Hetzner workflow `32290521634`. Clermont, Clinton, and Huron County, Ohio are now visible as `fail_closed` source-contract guards in the dashboard registry. Each job stops before source access, scoring, persistence, alerts, outreach, matching, paperwork, signatures, payments, or bond-writing activity. Ohio is not asserted as an OSI or Palmetto writing footprint.
+
+Focused source-contract, scheduler, registry, source-key, and documentation tests passed (**32**, plus six subtests). Post-deploy public probes returned `200` for Auto-CRM `/health`, DocuSeal, Bail School, paperwork, and Postiz `/auth`. The stable GAS URL is intentionally unavailable in this clean checkout, so its `?action=health` check was not re-run locally. The strict local secrets check remains red because production `.env` files and sibling repositories are unavailable; no secrets were added, exposed, or changed. No person-level record, intake, bond, packet, signature, payment, or client contact was created.
+
+This release does not close B3/B5, C3, or D2, does not enable `full_auto` outreach, and does not mark the platform production-hardened.
 
 ## Dashboard completeness audit deployment (2026-08-19)
 
@@ -159,7 +167,8 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | **LA** | **13** | `scrapers/counties_la/` | Tangipahoa, St. Mary, and Bossier remain `verified_public`. Calcasieu, Orleans, and St. Tammany fail-closed 2026-08-15. East Baton Rouge, Jefferson, Lafayette, Ascension, Caddo, Livingston, and Ouachita fail-closed 2026-08-16. Per-parish Mongo/alert evidence remains pending. |
 | **MS** | **9** | `scrapers/counties_ms/` | Rankin is source-validated and deployed. DeSoto, Forrest, Harrison, Hinds, Jackson, Jones, Lauderdale, and Madison are deployed fail-closed guards; Adams, Lafayette, Lowndes, Oktibbeha, and Warren remain recon-only. Public service checks were healthy; per-county Mongo/alert evidence remains pending. |
 | **CT** | **6** | `scrapers/counties_ct/` | CT DOC fail-closed guard deployed 2026-08-14 after official BITS BOT rejection; public hosts are healthy and Statewide dockets plus municipal paths remain registered. |
-| **Total** | **358** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` · drives Scraper Health + Multi-State Ops UI |
+| **OH** | **3** | `scrapers/counties_oh/` | Clermont, Clinton, and Huron are deployed `fail_closed` source-contract guards. They emit no records and make no OSI/Palmetto or bond-writing assertion. |
+| **Total** | **361** | `dashboard/extensions.py` → `REGISTERED_COUNTIES` | Labels: `County (ST)` · drives Scraper Health + Multi-State Ops UI |
 
 **Identity rule:** non-FL job IDs are `scraper_<st>_<county>` (e.g. `scraper_nc_mecklenburg`, `scraper_tn_davidson`). FL keeps `scraper_lee` for dashboard compatibility. CLI: `python main.py tn_davidson` / `tx_bexar` / `la_orleans` / `ct_doc`.
 
@@ -171,13 +180,13 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 
 | Area | Status |
 |------|--------|
-| **357** registered scrapers (10 states), scoring, Slack, Mongo | ✅ Lee, Marshall, St. Clair, and Etowah AL, Tangipahoa and St. Mary LA, and Miami-Dade FL deployments with public host checks passed; per-scraper Mongo/Slack evidence remains pending |
+| **361** registered scopes (10 established states + 3 guarded OH pilots), scoring, Slack, Mongo | ✅ Ohio guards are deployed no-network/non-emitting; existing source-specific Mongo/Slack evidence remains pending and no Ohio source is claimed productive |
 | Multi-state `BaseScraper.state` + scheduler `_resolve_job_id` | ✅ |
 | Platform bases: Zuercher, Southern SW, P2C, JailTracker, New World, Kologik, Odyssey, **DCN**, **OCV** | ✅; shared Southern Software source-issued identity safeguard is deployed and public hosts are healthy. |
 | FastAPI Super CRM (tabs, lifecycle, intake, etc.) | ✅ |
-| **Multi-State Ops** tab + `/api/ops/*` (registry-first KPIs, live feed, all 10 states) | ✅ · live registry |
+| **Multi-State Ops** tab + `/api/ops/*` (registry-first KPIs, live feed, 10 established states + guarded OH labels) | ✅ · live registry |
 | **Bond Intelligence** tab + `/api/bond-intelligence`, multi-state stats | ✅ |
-| Lead Explorer **state** column + filter (all 10 states) | ✅ |
+| Lead Explorer **state** column + filter (10 established states + guarded OH labels) | ✅ |
 | Lead Explorer live sort (`scraped_at`) + auto-refresh + county labels | ✅ |
 | Scraper status multi-state join (`County (ST)` ↔ bare names) | ✅ |
 | **Scraper Health source-contract state** (`Verified public` / `Fail closed` / `Unverified` / `History only`) | ✅ deployed 2026-08-15 · independent of run health; guarded sources show no manual-run action |
@@ -270,6 +279,7 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 | LA (13 registered; Tangipahoa, St. Mary, Bossier `verified_public`; ten other registered parishes `fail_closed`) | ⏳ Obtain parish-specific Mongo/Slack telemetry for the three verified-public jobs |
 | MS (9 registered; registry reconciled; five assessed counties remain recon-only) | ⏳ Validate existing source telemetry and wait for a supported public roster/export before adding uncovered counties |
 | CT dockets + DOC | ⏳ CT DOC fail-closed guard deployed pending a supported booking-safe public source; do not claim CT DOC production writes or alerts. |
+| Ohio pilot | ⏳ Clermont, Clinton, and Huron are deployed `fail_closed` only. Obtain county-specific source authorization, field-retention approval, and a booking-safe broad-listing contract before considering a no-write observation; do not claim Ohio writes, alerts, surety, POA, or bond activity. |
 | BlueBubbles production reliability (office Mac + tunnel) | ✅ Live (frp + BB 1.9.9); keep watchdog |
 | `ENV=production` + strong `SECRET_KEY` + `DASHBOARD_PIN` on VPS | ✅ |
 | Atlas M0 512MB cap — oldest-first retention + hygiene tools | ✅ code 2026-08-04 · monitor growth |

@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-19 (Ohio source-contract guard pilot)
+
+### Added
+- **Ohio guarded pilot scopes** — registered Clermont, Clinton, and Huron under `scrapers/counties_oh/` with state-qualified scheduler IDs and dashboard labels. Each module is explicitly `fail_closed` and returns before source retrieval, scoring, persistence, alerts, outreach, matching, paperwork, signatures, payments, or bond-writing activity.
+- **Ohio contract and regression coverage** — added a non-PII source-contract record plus runtime, scheduler-key, registry, dashboard-state, and documentation tests. The separate Ohio guard inventory does not expand the existing ten-state 947-scope reconnaissance matrix or claim an OSI/Palmetto writing footprint.
+
+### Verified
+- Commit `3b3bee0` deployed successfully through Hetzner workflow `32290521634`.
+- Focused source-contract, scheduler, registry, source-key, and documentation tests passed (**32**, plus six subtests). Post-deploy public checks returned `200` for Auto-CRM `/health`, DocuSeal, Bail School, paperwork portal, and Postiz `/auth`.
+- The stable GAS URL was not available in the clean checkout, and the strict local secrets check remains red without production `.env` files and sibling repositories. Neither limitation is treated as green; no secret, person-level record, bond, packet, payment, signature, or client contact was created.
+- This release does **not** close B3/B5, C3, or D2, enable `full_auto` outreach, or mark the platform production-hardened.
+
 ## [Unreleased] — 2026-08-19 (Dashboard completeness audit)
 
 ### Fixed
