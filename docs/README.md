@@ -26,6 +26,7 @@
 | [API_REFERENCE.md](API_REFERENCE.md) | REST API endpoints (200+ across 61 modules) |
 | [SCHEMAS.md](SCHEMAS.md) | MongoDB collection field-level schemas |
 | [COUNTY_REGISTRY.md](COUNTY_REGISTRY.md) | All 67 FL counties: JMS vendor, scraper status, URLs |
+| [CURRENT_PAPERWORK_ARCHITECTURE_DOCUSEAL.md](CURRENT_PAPERWORK_ARCHITECTURE_DOCUSEAL.md) | Canonical DocuSeal paperwork architecture & client intake model |
 | [policies/gas-url-policy.md](policies/gas-url-policy.md) | Stable GAS Web App URL law |
 
 ---
@@ -59,6 +60,7 @@
 | [surety-policy.md](policies/surety-policy.md) | Bond writing, POA assignment, surety selection |
 | [matching-policy.md](policies/matching-policy.md) | Indemnitor → defendant matching logic |
 | [signature-policy.md](policies/signature-policy.md) | DocuSeal packet binding, signing workflow |
+| [current-paperwork-architecture-docuseal.md](policies/current-paperwork-architecture-docuseal.md) | Canonical DocuSeal paperwork architecture & deferred intake rules |
 
 ---
 
