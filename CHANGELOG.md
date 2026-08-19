@@ -5,6 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-19 (Dashboard completeness audit)
+
+### Fixed
+- **Client Portal check-in KPI completed** — the staff portal now renders the backed seven-day completed check-in count from `checkins_7d`; it no longer targets a nonexistent DOM node or leaves the card at a permanent placeholder value.
+- **FTA surrender guidance corrected** — the Level 3 surrender confirmation and result message no longer promise a retired SignNow authorization. They now state the actual path: `surrender_pending`, no e-sign packet, manual staff document review, and conditional iMessage delivery outcome.
+
+### Added
+- **Dashboard regression contracts** — focused API and source-contract coverage protects the seven-day portal metric and prevents the retired signature-provider copy from returning.
+
+### Verified
+- Commit `3c46234` deployed successfully through Hetzner workflow `32268562642`.
+- Focused dashboard, portal, and source-contract tests passed (**23**); updated JavaScript parsed successfully.
+- Post-deploy public checks returned `200` for Auto-CRM health, DocuSeal, Bail School, paperwork portal, and Postiz `/auth`.
+- This dashboard correction does **not** satisfy the still-open B3/B5, C3, or D2 human production gates.
+
 ## [Unreleased] — 2026-08-18 (DocuSeal initial iMessage delivery gate)
 
 ### Changed

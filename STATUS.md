@@ -39,6 +39,12 @@ Commit `cd74b00` deployed the hardening controls through Hetzner workflow `32177
 
 Focused service, automation, paperwork, and portal tests passed (**62**). Public Auto-CRM, DocuSeal, school, paperwork, Postiz `/auth`, and stable GAS health checks returned `200`; the first shell GAS redirect timed out, but the same unchanged stable endpoint returned `success:true`, `V409` through the browser. The strict local secrets check remains unable to pass in this clean checkout because production environment files are intentionally unavailable; no secrets were changed. This work does not satisfy the required B3/B5 or D2 human production smokes.
 
+## Dashboard completeness audit deployment (2026-08-19)
+
+Commit `3c46234` deployed successfully through Hetzner workflow `32268562642`. The staff Client Portal seven-day check-in card now uses the live `checkins_7d` metric and its rendered DOM target; it no longer remains blank because of the former identifier mismatch. The FTA Level 3 surrender interface no longer names the retired SignNow workflow and now truthfully states that no e-sign packet is created, staff documentation review is required, and an indemnitor iMessage is reported only when delivery succeeds. Focused dashboard/portal/source-contract tests passed (**23**) and updated JavaScript parsed cleanly. Post-deploy public checks returned `200` for Auto-CRM health, DocuSeal, Bail School, paperwork, and Postiz `/auth`.
+
+The required strict local secrets check remains unavailable in this clean checkout because production environment files and sibling production repositories are intentionally absent; it was not treated as green. No synthetic intake, bond, packet, signature, payment, or outbound client message was created. This dashboard correction does not close B3/B5, C3, or D2 and does not mark the platform production-hardened.
+
 ## Production audit update (2026-08-12)
 
 | Surface / gate | Verified state |
