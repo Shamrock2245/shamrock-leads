@@ -180,6 +180,7 @@
           <span style="font-size:1.3rem" title="Notifications">🔔</span>
           <span class="notif-badge" id="notifBadge" style="display:none;position:absolute;top:-4px;right:-6px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;min-width:16px;height:16px;border-radius:8px;display:flex;align-items:center;justify-content:center;padding:0 4px">0</span>
         </div>
+        <button class="sl-btn sl-btn-primary sl-btn-sm" onclick="SLHydrate.openModal()" title="Fast Ingest Booking / Bookmarklet (⌘+Shift+V)"><span style="margin-right:3px">🔖</span> Paste Booking</button>
         <button class="sl-btn sl-btn-secondary sl-btn-sm" onclick="SLCalc.open()" title="Premium Calculator">🧮 Calc</button>
         <button class="sl-btn sl-btn-ghost sl-btn-sm" onclick="SL.refresh()">↻</button>
         <div class="theme-toggle" onclick="SL.toggleTheme()" style="cursor:pointer;display:flex;align-items:center;gap:6px;font-size:14px;background:rgba(255,255,255,.05);padding:4px 8px;border-radius:12px">
@@ -747,7 +748,10 @@
   <div class="modal modal-lg" style="max-width:680px">
     <div class="modal-header">
       <h2>➕ Add Lead to Pipeline</h2>
-      <button class="modal-close" onclick="SLProspective.closeAddModal()">✕</button>
+      <div style="display:flex;align-items:center;gap:6px">
+        <button type="button" class="btn-export" style="font-size:11px;padding:4px 8px;background:rgba(16,185,129,0.15);color:#34d399;border:1px solid rgba(16,185,129,0.3)" onclick="SLHydrate.hydrateActiveModal()" title="Paste booking JSON from clipboard">📋 Fast Paste</button>
+        <button class="modal-close" onclick="SLProspective.closeAddModal()">✕</button>
+      </div>
     </div>
     <div class="modal-body">
       <!-- Source tabs -->
@@ -1367,7 +1371,13 @@
     <!-- Add Bond Modal -->
     <div class="modal-overlay" id="abAddBondModal" style="display:none">
       <div class="modal" style="max-width:600px;width:95%">
-        <div class="modal-header"><h2>➕ Add Active Bond</h2><button class="modal-close" onclick="SLActiveBonds.closeAddModal()">&#x2715;</button></div>
+        <div class="modal-header">
+          <h2>➕ Add Active Bond</h2>
+          <div style="display:flex;align-items:center;gap:6px">
+            <button type="button" class="btn-export" style="font-size:11px;padding:4px 8px;background:rgba(16,185,129,0.15);color:#34d399;border:1px solid rgba(16,185,129,0.3)" onclick="SLHydrate.hydrateActiveModal()" title="Paste booking JSON from clipboard">📋 Fast Paste</button>
+            <button class="modal-close" onclick="SLActiveBonds.closeAddModal()">&#x2715;</button>
+          </div>
+        </div>
         <div class="modal-body">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
             <label style="font-size:12px;color:var(--muted)">Defendant Name *
@@ -1886,7 +1896,10 @@
   <div class="modal modal-lg" style="max-width:820px">
     <div class="modal-header">
       <h2>✏️ Manual Intake Entry</h2>
-      <button class="modal-close" onclick="SLIntake.closeManualModal()">✕</button>
+      <div style="display:flex;align-items:center;gap:6px">
+        <button type="button" class="btn-export" style="font-size:11px;padding:4px 8px;background:rgba(16,185,129,0.15);color:#34d399;border:1px solid rgba(16,185,129,0.3)" onclick="SLHydrate.hydrateActiveModal()" title="Paste booking JSON from clipboard">📋 Fast Paste</button>
+        <button class="modal-close" onclick="SLIntake.closeManualModal()">✕</button>
+      </div>
     </div>
     <div class="modal-body">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
@@ -1942,7 +1955,13 @@
 <!-- ═══ WRITE BOND MODAL ═══ -->
 <div class="modal-overlay" id="bondModal">
   <div class="modal modal-lg">
-    <div class="modal-header"><h2>✍️ Write Bond</h2><button class="modal-close" onclick="SL.closeModal()">✕</button></div>
+    <div class="modal-header">
+      <h2>✍️ Write Bond</h2>
+      <div style="display:flex;align-items:center;gap:6px">
+        <button type="button" class="btn-export" style="font-size:11px;padding:4px 8px;background:rgba(16,185,129,0.15);color:#34d399;border:1px solid rgba(16,185,129,0.3)" onclick="SLHydrate.hydrateActiveModal()" title="Paste booking JSON from clipboard">📋 Fast Paste</button>
+        <button class="modal-close" onclick="SL.closeModal()">✕</button>
+      </div>
+    </div>
     <div class="modal-body" id="bondModalBody"></div>
     <div class="modal-footer">
       <button class="btn-cancel" onclick="SL.closeModal()">Cancel</button>
@@ -6330,5 +6349,6 @@
 <script defer src="/sl-help.js?v=3"></script>
 <script defer src="/sl-bond-intelligence.js?v=4"></script>
 <script defer src="/sl-multi-state.js?v=3"></script>
+<script defer src="/sl-hydrate.js?v=1"></script>
 </body>
 </html>

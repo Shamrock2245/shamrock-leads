@@ -144,18 +144,38 @@ def _extract_indemnitor(data: dict) -> dict:
 
 
 def _extract_defendant(data: dict) -> dict:
-    """Extract defendant fields from any source payload."""
+    """Extract defendant fields from any source payload (including bookmarklet)."""
     g = lambda *keys: next((str(data.get(k, "")).strip() for k in keys if data.get(k)), "")
+    
+    # Handle charges list vs string
+    charges_raw = data.get("charges") or data.get("charge_details") or data.get("DefCharges") or data.get("charges_raw") or ""
+    if isinstance(charges_raw, list):
+        charge_str = " | ".join(
+            (c.get("description") or c.get("charge") or str(c)) if isinstance(c, dict) else str(c)
+            for c in charges_raw
+        )
+    else:
+        charge_str = str(charges_raw).strip()
+
     return {
-        "name":          g("DefName", "defName", "defendantName", "defendant_name", "DefendantName"),
-        "firstName":     g("DefFirstName", "defFirstName", "defendant_first_name"),
-        "lastName":      g("DefLastName", "defLastName", "defendant_last_name"),
-        "dob":           g("DefDOB", "defDOB", "defendant_dob"),
+        "name":          g("defendantFullName", "DefName", "defName", "defendantName", "defendant_name", "DefendantName", "full_name"),
+        "firstName":     g("DefFirstName", "defFirstName", "defendant_first_name", "firstName"),
+        "lastName":      g("DefLastName", "defLastName", "defendant_last_name", "lastName"),
+        "dob":           g("defendantDOB", "DefDOB", "defDOB", "defendant_dob", "dob", "DOB"),
         "facility":      g("DefFacility", "defFacility", "jailFacility", "facility", "Facility"),
-        "county":        g("DefCounty", "defCounty", "county", "County"),
-        "bookingNumber": g("DefBookingNumber", "bookingNumber", "booking_number", "Booking_Number"),
-        "charges":       g("DefCharges", "defCharges", "charges", "Charges"),
-        "bondAmount":    g("DefBondAmount", "defBondAmount", "bondAmount", "bond_amount", "Bond_Amount"),
+        "county":        g("DefCounty", "defCounty", "county", "County") or "Lee",
+        "bookingNumber": g("defendantArrestNumber", "DefBookingNumber", "bookingNumber", "booking_number", "Booking_Number", "arrest_number"),
+        "charges":       charge_str,
+        "bondAmount":    g("DefBondAmount", "defBondAmount", "bondAmount", "bond_amount", "Bond_Amount", "totalBond"),
+        "race":          g("defendantRace", "race", "Race"),
+        "sex":           g("defendantSex", "sex", "Sex", "gender"),
+        "height":        g("defendantHeight", "height", "Height"),
+        "weight":        g("defendantWeight", "weight", "Weight"),
+        "street":        g("defendantStreetAddress", "street", "street_address", "address"),
+        "city":          g("defendantCity", "city"),
+        "state":         g("defendantState", "state") or "FL",
+        "zip":           g("defendantZip", "zip", "zip_code"),
+        "charge_details": charges_raw if isinstance(charges_raw, list) else [],
     }
 
 

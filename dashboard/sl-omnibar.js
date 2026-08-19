@@ -144,6 +144,8 @@ window.SLOmnibar = {
   
   renderCommands: function(cmdQuery) {
     const commands = [
+      { type: 'command', title: 'Paste Booking / Fast Fill', icon: '🔖', action: () => { if (window.SLHydrate) SLHydrate.pasteAndHydrate(); } },
+      { type: 'command', title: 'Bookmarklet Tools & Ingestion', icon: '📋', action: () => { if (window.SLHydrate) SLHydrate.openModal(); } },
       { type: 'command', title: 'New Intake', icon: '📝', action: () => { const b = document.querySelector('[data-tab="tabIntake"]'); if (b) SL.switchTab(b); } },
       { type: 'command', title: 'Active Bonds', icon: '📋', action: () => { const b = document.querySelector('[data-tab="tabActiveBonds"]'); if (b) { SL.switchTab(b); if (typeof loadActiveBonds === 'function') loadActiveBonds(); } } },
       { type: 'command', title: 'Lead Explorer', icon: '🔍', action: () => { const b = document.querySelector('[data-tab="tabLeads"]'); if (b) SL.switchTab(b); } },
