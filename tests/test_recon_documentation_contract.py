@@ -147,23 +147,24 @@ def test_connecticut_court_docket_counties_are_reported_as_fail_closed():
     assert "| CT | 009 | New Haven County | Palmetto | registered | fail_closed |" in matrix
 
 
-def test_active_docs_match_the_canonical_358_scraper_registry():
+def test_active_docs_match_the_canonical_registry_including_guarded_ohio_pilot():
     counts = _registered_counts()
-    assert sum(counts.values()) == 358
-    expected = {"AL": 16, "CT": 6, "FL": 67, "GA": 85, "LA": 13, "MS": 9, "NC": 60, "SC": 46, "TN": 22, "TX": 34}
+    assert sum(counts.values()) == 361
+    expected = {"AL": 16, "CT": 6, "FL": 67, "GA": 85, "LA": 13, "MS": 9, "NC": 60, "OH": 3, "SC": 46, "TN": 22, "TX": 34}
     assert counts == expected
 
     readme = README.read_text()
-    assert "358 registered county scrapers" in readme
-    assert "| **Total** | **358**" in readme
+    assert "361 registered scraper scopes" in readme
+    assert "| **Total** | **361**" in readme
     for state, count in expected.items():
         assert f"{state} {count}" in readme
 
-    assert "947-scope reconnaissance matrix" in readme
+    assert "947 scopes" in readme
     assert "947 rows total" in AGENTS.read_text()
-    assert "= **358**" in ROADMAP.read_text()
+    assert "= **361**" in ROADMAP.read_text()
     roadmap = ROADMAP.read_text()
     assert "947 rows total" in roadmap
     assert "20 county paths are explicitly `fail_closed`" in roadmap
     assert "TnCIS scope remains `unverified`" in roadmap
     assert "13 LA" in roadmap
+    assert "3 OH guarded pilot scopes" in roadmap

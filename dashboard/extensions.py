@@ -558,6 +558,10 @@ REGISTERED_COUNTIES = sorted([
     "Forrest (MS)",
     "Jones (MS)",
     "Madison (MS)",
+    # ── Ohio guarded source-contract pilot ──
+    "Clermont (OH)",
+    "Clinton (OH)",
+    "Huron (OH)",
 ])
 
 
@@ -661,6 +665,11 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     "Lauderdale (MS)": "fail_closed",
     "Madison (MS)": "fail_closed",
     "Sarasota (FL)": "fail_closed",
+    # Ohio pilot scopes are registered for truthful health visibility only.
+    # They remain blocked before source fetch until county-specific approval.
+    "Clermont (OH)": "fail_closed",
+    "Clinton (OH)": "fail_closed",
+    "Huron (OH)": "fail_closed",
 }
 
 
@@ -674,7 +683,7 @@ def scraper_source_state(label: str) -> str:
 
 
 # States we actively scrape / surface in the dashboard
-ACTIVE_STATE_CODES = ("FL", "GA", "SC", "NC", "TN", "TX", "LA", "AL", "CT", "MS")
+ACTIVE_STATE_CODES = ("FL", "GA", "SC", "NC", "TN", "TX", "LA", "AL", "CT", "MS", "OH")
 
 # SWFL core — never drop from schedule; UI must always show them as registered.
 # Lee is primary production; Sarasota is required coverage for the bond desk.

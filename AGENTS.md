@@ -12,7 +12,7 @@
 
 ShamrockLeads is a **multi-state arrest intelligence and bond Auto-CRM** platform (Palmetto surety footprint + OSI FL) that:
 
-1. **Scrapes** county jail rosters across **FL / GA / SC / NC / TN / TX / LA / AL / CT / MS** on scheduled intervals `[IMPLEMENTED — 358 registered scrapers · 67 FL · 85 GA · 60 NC · 46 SC · 34 TX · 22 TN · 16 AL · 13 LA · 9 MS · 6 CT]`. The complete source-contract worklist is documented in `docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md`: 942 Census county-equivalents plus five registered non-county scopes (947 rows total). Registration never proves that a source is record-emitting.
+1. **Scrapes** county jail rosters across **FL / GA / SC / NC / TN / TX / LA / AL / CT / MS**, with an **OH guarded pilot** on scheduled intervals `[IMPLEMENTED — 361 registered scopes · 67 FL · 85 GA · 60 NC · 46 SC · 34 TX · 22 TN · 16 AL · 13 LA · 9 MS · 6 CT · 3 OH fail-closed guards]`. The complete ten-state source-contract worklist is documented in `docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md` (**947 rows total**); the Ohio guard contracts are separate in `docs/recon/OHIO_PILOT_SOURCE_CONTRACTS.md`. Registration never proves that a source is record-emitting.
 2. **Normalizes** arrest data into a 39-column `ArrestRecord` schema (includes `State`) `[IMPLEMENTED]`
 3. **Scores** every arrestee as a bail bond lead (0–100, Hot/Warm/Cold/Disqualified) `[IMPLEMENTED]`
 4. **Alerts** bondsmen via Slack with real-time hot lead notifications `[IMPLEMENTED]`
@@ -51,8 +51,9 @@ ShamrockLeads is a **multi-state arrest intelligence and bond Auto-CRM** platfor
 | CT | `scrapers/counties_ct/` | `scraper_ct_*` | `python main.py ct_doc` / statewide key |
 | AL | `scrapers/counties_al/` | `scraper_al_<county>` | `python main.py al_jefferson` |
 | MS | `scrapers/counties_ms/` | `scraper_ms_<county>` | `python main.py ms_hinds` |
+| OH | `scrapers/counties_oh/` | `scraper_oh_<county>` | `python main.py oh_clermont` *(guarded; emits no records)* |
 
-- Dashboard labels use `County (ST)` in `REGISTERED_COUNTIES` (`dashboard/extensions.py`).
+- Dashboard labels use `County (ST)` in `REGISTERED_COUNTIES` (`dashboard/extensions.py`). Ohio pilot labels remain explicitly `fail_closed` until separately promoted.
 - Scheduler resolves bare names, `sc_lee`, and `Lee (FL)` via `_resolve_job_id`.
 - Never collapse same-name counties across states (Lee FL ≠ Lee SC ≠ Lee GA).
 

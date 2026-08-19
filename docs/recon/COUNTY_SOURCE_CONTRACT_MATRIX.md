@@ -3,6 +3,8 @@
 > **Scope:** All 942 Census county-equivalents in the Shamrock multi-state worklist plus five registered non-county runtime scopes. **Method:** passive, ordinary public-access source-contract review only. No person-level arrest records, images, profile pages, sequential identifiers, login, CAPTCHA bypass, or source-control workaround were used.
 >
 > **Interpretation:** `registered` is a code/scheduler-coverage fact; it is not evidence that a county source is valid or producing records. Only `verified_public` and `fail_closed` are copied from the explicit deployed `SCRAPER_SOURCE_STATES` registry. `candidate_productive` reflects a bounded passive listing observation and does **not** authorize a parser, alter a source state, or establish Mongo/alert telemetry. `recon_only` and `unverified` require county-specific validation before any record-emitting change.
+>
+> **Ohio exception:** The 947-scope worklist below remains limited to the ten established state footprints. Three Ohio pilot modules are registered as source-contract guards only and are excluded from these aggregate counts; their non-emitting contracts are documented separately in [`OHIO_PILOT_SOURCE_CONTRACTS.md`](./OHIO_PILOT_SOURCE_CONTRACTS.md).
 
 ## Jurisdiction scope
 

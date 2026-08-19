@@ -443,7 +443,7 @@ class ScraperScheduler:
         if not raw:
             return None
 
-        state_codes = {"fl", "ga", "sc", "nc", "tn", "tx", "ct", "la", "ms"}
+        state_codes = {"fl", "ga", "sc", "nc", "tn", "tx", "ct", "la", "al", "ms", "oh"}
 
         def _slug(s: str) -> str:
             return s.lower().replace(".", "").replace(" ", "_").replace("-", "_").strip("_")

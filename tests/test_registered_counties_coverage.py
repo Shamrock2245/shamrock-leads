@@ -38,10 +38,12 @@ def test_wave2_fl_counties_are_registered():
     assert not missing, f"Wave-2 FL counties missing from REGISTERED_COUNTIES: {sorted(missing)}"
 
 
-def test_fl_is_full_67_and_total_358():
+def test_fl_is_full_67_and_total_361_including_guarded_ohio_pilot():
     fl = [c for c in REGISTERED_COUNTIES if c.endswith("(FL)")]
+    ohio = [c for c in REGISTERED_COUNTIES if c.endswith("(OH)")]
     assert len(fl) == 67, f"Expected 67 FL counties, got {len(fl)}"
-    assert len(REGISTERED_COUNTIES) == 358, f"Expected 358 total, got {len(REGISTERED_COUNTIES)}"
+    assert sorted(ohio) == ["Clermont (OH)", "Clinton (OH)", "Huron (OH)"]
+    assert len(REGISTERED_COUNTIES) == 361, f"Expected 361 total, got {len(REGISTERED_COUNTIES)}"
 
 
 # Wave-3 NC/TN/TX metros (2026-07-26)

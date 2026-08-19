@@ -38,6 +38,7 @@ EXPECTED_COUNTS = {
     "LA": 13,
     "MS": 9,
     "NC": 60,
+    "OH": 3,
     "SC": 46,
     "TN": 22,
     "TX": 34,
@@ -54,6 +55,7 @@ DIRECTORY_BY_STATE = {
     "AL": "counties_al",
     "CT": "counties_ct",
     "MS": "counties_ms",
+    "OH": "counties_oh",
 }
 
 # These labels describe statewide/city scopes rather than a conventional county
@@ -104,7 +106,7 @@ def _registered_runtime_modules() -> set[str]:
 
 def test_registered_counties_have_one_unique_state_qualified_label():
     counts = Counter(_label_parts(label)[1] for label in REGISTERED_COUNTIES)
-    assert len(REGISTERED_COUNTIES) == sum(EXPECTED_COUNTS.values()) == 358
+    assert len(REGISTERED_COUNTIES) == sum(EXPECTED_COUNTS.values()) == 361
     assert counts == EXPECTED_COUNTS
     assert len(REGISTERED_COUNTIES) == len(set(REGISTERED_COUNTIES))
 

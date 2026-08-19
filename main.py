@@ -4,8 +4,9 @@ ShamrockLeads — Entry Point
 Initializes writers, registers scrapers, starts the APScheduler,
 and provides a simple CLI interface for testing.
 
-Supported states (Palmetto surety footprint):
-  FL (live), GA (live), SC (building out), then NC/TN/TX/CT/LA/MS.
+Supported states include FL, GA, SC, NC, TN, TX, CT, LA, AL, and MS.
+Ohio is registered only as a fail-closed source-contract pilot; it is not a surety,
+bond-writing, outreach, paperwork, signature, or payment authorization.
 """
 
 import sys
@@ -423,6 +424,11 @@ from scrapers.counties_ms.lauderdale import LauderdaleScraper as MS_LauderdaleSc
 from scrapers.counties_ms.forrest import ForrestScraper as MS_ForrestScraper
 from scrapers.counties_ms.jones import JonesScraper as MS_JonesScraper
 from scrapers.counties_ms.madison import MadisonMSScraper as MS_MadisonScraper
+
+# ── Ohio guarded source-contract pilot ──────────────────────────────────────
+from scrapers.counties_oh.clermont import ClermontScraper as OH_ClermontScraper
+from scrapers.counties_oh.clinton import ClintonScraper as OH_ClintonScraper
+from scrapers.counties_oh.huron import HuronScraper as OH_HuronScraper
 
 logging.basicConfig(
     level=logging.INFO,
@@ -862,6 +868,14 @@ def register_scrapers(sched):
     sched.register_scraper(MS_ForrestScraper(), interval_minutes=120)
     sched.register_scraper(MS_JonesScraper(), interval_minutes=120)
     sched.register_scraper(MS_MadisonScraper(), interval_minutes=120)
+
+    # ── Ohio guarded pilot ───────────────────────────────────────────────────
+    # These registrations remain source-contract fail closed. BaseScraper.run()
+    # stops before any source request, scoring, writer, broadcast, alert, or
+    # downstream workflow until a county-specific promotion is reviewed.
+    sched.register_scraper(OH_ClermontScraper(), interval_minutes=360)
+    sched.register_scraper(OH_ClintonScraper(), interval_minutes=360)
+    sched.register_scraper(OH_HuronScraper(), interval_minutes=360)
 
 def handle_shutdown(signum, frame):
     logger.info("Shutdown signal received")

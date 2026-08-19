@@ -2,8 +2,8 @@
 
 > Palmetto Surety licensed states: **FL, SC, NC, TN, TX, CT, LA, MS**  
 > Plus **GA** (adjacent market / existing build) and **AL** (adjacent).  
-> Last updated: 2026-08-14
-> **Registered (dashboard):** 67 FL · 85 GA · 60 NC · 46 SC · 34 TX · 22 TN · 16 AL · 13 LA · 9 MS · 6 CT = **358** — see root `STATUS.md`. Registration is not proof of a successful production scrape. The complete source-contract inventory is `docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md` (942 Census county-equivalents plus five registered non-county scopes; 947 rows total across all repository states).
+> Last updated: 2026-08-19
+> **Registry in code:** 67 FL · 85 GA · 60 NC · 46 SC · 34 TX · 22 TN · 16 AL · 13 LA · 9 MS · 6 CT · 3 OH guarded pilot scopes = **361**. The root `STATUS.md` remains the live-deployment truth and must not be updated until deployment proof exists. Registration is not proof of a successful production scrape. The complete ten-state source-contract inventory remains `docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md` (942 Census county-equivalents plus five registered non-county scopes; 947 rows total); separate Ohio guard requirements are in `docs/recon/OHIO_PILOT_SOURCE_CONTRACTS.md`.
 
 ## Why this order
 
@@ -16,6 +16,7 @@
 7. **LA → MS** — **13 LA** + **9 MS** registered; Tangipahoa and St. Mary are deployed, and Bossier is registered; per-source production telemetry remains required 🔄
 8. **CT** — **6 registered**. The five judicial-docket scopes (Statewide, Bridgeport, Hartford, New Haven, Stamford) are explicitly `fail_closed`: court docket numbers and hearing dates are not arrest booking identifiers or arrest times. CT DOC remains a separate source requiring its own source-contract proof and telemetry. 🔄
 9. **AL** — **16 registered** (Lee, Marshall, and St. Clair deployed; Etowah locally source-validated and pending deployment; per-source production telemetry remains required) 🔄
+10. **OH** — **3 registered source-contract guards** (Clermont, Clinton, Huron). They emit no records and have no bond-writing implication until county-specific source, privacy, operational, and business approvals are separately documented. 🔒
 
 ## Shared platform bases (leverage first)
 
@@ -38,7 +39,7 @@
 
 ## Identity rules (non-negotiable)
 
-- `scraper_id` includes state for non-FL: `scraper_sc_lee`, `scraper_ga_lee`  
+- `scraper_id` includes state for non-FL: `scraper_sc_lee`, `scraper_ga_lee`, `scraper_oh_clermont`
 - FL keeps legacy `scraper_lee` for dashboard compatibility  
 - One-shot CLI: `python main.py sc_jasper`  
 - Every `ArrestRecord.State` must match the scraper state  
@@ -103,6 +104,7 @@ scrapers/
   counties_la/       # LA (13)
   counties_ms/       # MS (9)
   counties_al/       # AL (16)
+  counties_oh/       # OH guarded pilot (3; fail closed)
   dcn_base.py        # NC DevExpress
   ocv_inmates_base.py
   *_base.py          # shared platforms

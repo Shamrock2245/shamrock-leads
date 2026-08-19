@@ -31,6 +31,9 @@ class DashboardSourceStateTests(unittest.TestCase):
         self.assertEqual(states["Forsyth (NC)"], "fail_closed")
         self.assertEqual(states["Madison (AL)"], "fail_closed")
         self.assertEqual(states["Mobile (AL)"], "fail_closed")
+        self.assertEqual(states["Clermont (OH)"], "fail_closed")
+        self.assertEqual(states["Clinton (OH)"], "fail_closed")
+        self.assertEqual(states["Huron (OH)"], "fail_closed")
 
     def test_omitted_registered_label_uses_the_documented_unverified_default(self) -> None:
         states = _source_states()
