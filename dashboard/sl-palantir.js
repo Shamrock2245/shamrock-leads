@@ -1,202 +1,326 @@
-/**
- * Palantir Intelligence Hub Workstation Controller v4.2 — ShamrockLeads
- * OpenPlanter Knowledge Graph · OSIRIS 3D Situation Room · SPECTRA Breach Matrix · Executive Dossiers
+/*
+ * Shamrock Palantir Command HUD Controller
+ * Read-only intelligence interactions backed by existing CRM endpoints.
+ * No bond, paperwork, signature, payment, outreach, or record mutation behavior exists here.
  */
 (function () {
   'use strict';
 
   const API = window.API || '';
   const ADMIN_KEY = window.OSINT_ADMIN_KEY || '';
-
-  // ── State ──────────────────────────────────────────────────────────
-  let _activeSubtab = 'graph';
-  let _currentGraph = null;
-  let _mapInstance = null;
-
-  // ── Public API ─────────────────────────────────────────────────────
-  window.SLPalantir = {
-    init,
-    switchSubtab,
-    resolveGraph,
-    toggleLayer,
-    runBreachLookup,
-    generateDossierPrompt,
-  };
-
-  // ── Helpers ────────────────────────────────────────────────────────
   const $ = id => document.getElementById(id);
-  const toast = (msg, type) => { if (window.SL?.toast) SL.toast(msg, type); else console.log(msg); };
+  const toast = (message, type) => { if (window.SL?.toast) SL.toast(message, type); };
   const headers = () => ({
     'Content-Type': 'application/json',
     ...(ADMIN_KEY ? { 'X-Admin-Key': ADMIN_KEY } : {}),
   });
 
+  let _activeSubtab = 'graph';
+  let _currentGraph = null;
+  let _selectedNodeId = null;
+  let _leafletMap = null;
+  let _mapReady = false;
+  let _mapMarkers = new Map();
+  let _osirisFeeds = [];
+
+  window.SLPalantir = {
+    init,
+    switchSubtab,
+    resolveGraph,
+    toggleLayer,
+    selectNode,
+    refreshOsiris,
+    focusOsirisFeed,
+    runBreachLookup,
+    generateDossierPrompt,
+  };
+
+  function _esc(value) {
+    if (value === null || value === undefined) return '';
+    const node = document.createElement('div');
+    node.textContent = String(value);
+    return node.innerHTML;
+  }
+
+  function _typeClass(type) {
+    const allowed = new Set(['company', 'property', 'indemnitor', 'phone', 'email', 'bond', 'relative', 'note', 'defendant']);
+    return allowed.has(type) ? `type-${type}` : 'type-record';
+  }
+
+  function _statePanel({ kicker, title, copy, state = '' }) {
+    return `
+      <div class="palantir-state-panel ${state ? `is-${state}` : ''}">
+        <div>
+          <span class="palantir-state-kicker">${_esc(kicker)}</span>
+          <h4 class="palantir-state-title">${_esc(title)}</h4>
+          <p class="palantir-state-copy">${_esc(copy)}</p>
+        </div>
+      </div>`;
+  }
+
+  function _setInspectorPrompt() {
+    const inspector = $('palantirNodeInspector');
+    if (!inspector) return;
+    inspector.innerHTML = `
+      <div class="palantir-inspector-orb">STANDBY</div>
+      <p class="palantir-inspector-hint">Resolve a subject, then select a reactor node to inspect its CRM-backed provenance and relationship confidence.</p>`;
+  }
+
   function init() {
-    switchSubtab(_activeSubtab);
-    const input = ($('palantirSubjectInput')?.value || '').trim();
-    if (input) {
-      resolveGraph();
-    } else {
+    switchSubtab(_activeSubtab, { skipDossierPrompt: true });
+    const input = $('palantirSubjectInput');
+    if (input && !input.dataset.palantirBound) {
+      input.addEventListener('keydown', event => {
+        if (event.key === 'Enter') resolveGraph();
+      });
+      input.dataset.palantirBound = 'true';
+    }
+
+    if (!_currentGraph) {
       const canvas = $('palantirGraphCanvas');
       if (canvas) {
-        canvas.innerHTML = `
-          <div style="padding:60px 20px;text-align:center;color:var(--palantir-muted);font-size:0.85rem">
-            <div style="font-size:2.5rem;margin-bottom:12px">🕸️</div>
-            <div style="font-weight:700;color:#fff;font-size:1rem;margin-bottom:6px">OpenPlanter Live Entity Resolution</div>
-            <div>Enter a defendant name, indemnitor name, or booking number above and click <strong>⚡ Resolve Knowledge Graph</strong> to view live relationship nodes.</div>
-          </div>
-        `;
+        canvas.innerHTML = `<div class="palantir-reactor-empty">${_statePanel({
+          kicker: 'Reactor // standby',
+          title: 'Acquire one verified CRM target',
+          copy: 'Enter an exact subject reference to render its recorded relationships as an interactive reactor.',
+        })}</div>`;
       }
+      _setInspectorPrompt();
     }
   }
 
-  // ── Subtab Switcher ────────────────────────────────────────────────
-  function switchSubtab(subtab) {
+  function switchSubtab(subtab, options = {}) {
     _activeSubtab = subtab;
-
-    document.querySelectorAll('.palantir-subtab-btn').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.subtab === subtab);
+    document.querySelectorAll('.palantir-subtab-btn').forEach(button => {
+      const active = button.dataset.subtab === subtab;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
     });
 
-    const subtabs = ['graph', 'osiris', 'spectra', 'dossier'];
-    subtabs.forEach(st => {
-      const view = $('palantirView' + st.charAt(0).toUpperCase() + st.slice(1));
-      if (view) {
-        view.classList.toggle('active', st === subtab);
-        view.style.display = st === subtab ? 'block' : 'none';
-      }
+    ['graph', 'osiris', 'spectra', 'dossier'].forEach(name => {
+      const view = $('palantirView' + name.charAt(0).toUpperCase() + name.slice(1));
+      if (!view) return;
+      const active = name === subtab;
+      view.classList.toggle('active', active);
+      view.style.display = active ? 'block' : 'none';
+      view.setAttribute('aria-hidden', String(!active));
     });
 
     if (subtab === 'osiris') {
       _initOsirisMap();
-      _loadOsirisFeeds();
-    } else if (subtab === 'dossier' && !_currentGraph) {
-      generateDossierPrompt();
+      refreshOsiris();
+    }
+    if (subtab === 'dossier' && !_currentGraph && !options.skipDossierPrompt) {
+      _renderDossierTargetPrompt();
     }
   }
 
-  // ── 1. OpenPlanter Knowledge Graph Engine ──────────────────────────
+  function _activeLayers() {
+    return {
+      company: $('palantirLayerLLC')?.checked !== false,
+      property: $('palantirLayerProperty')?.checked !== false,
+      relative: $('palantirLayerRelatives')?.checked !== false,
+    };
+  }
+
+  function _visibleNodes() {
+    if (!_currentGraph) return [];
+    const layers = _activeLayers();
+    return (_currentGraph.nodes || []).filter(node => {
+      if (node.type === 'company') return layers.company;
+      if (node.type === 'property') return layers.property;
+      if (node.type === 'relative') return layers.relative;
+      return true;
+    });
+  }
+
   async function resolveGraph() {
     const input = ($('palantirSubjectInput')?.value || '').trim();
-    const type = $('palantirSubjectType')?.value || 'defendant';
+    const subjectType = $('palantirSubjectType')?.value || 'defendant';
     const canvas = $('palantirGraphCanvas');
+    const stats = $('palantirGraphStats');
 
     if (!input) {
-      if (canvas) {
-        canvas.innerHTML = `<div style="padding:40px;text-align:center;color:var(--palantir-muted);font-size:0.8rem">Enter a subject name, booking number, or record ID to resolve a live CRM graph.</div>`;
-      }
-      toast('Enter a subject before resolving the graph', 'info');
+      if (canvas) canvas.innerHTML = `<div class="palantir-reactor-empty">${_statePanel({
+        kicker: 'Reactor // target required',
+        title: 'A subject reference is required',
+        copy: 'Enter an exact name, booking number, or CRM record ID. The reactor cannot create an identity from partial data.',
+      })}</div>`;
+      _setInspectorPrompt();
+      toast('Enter an exact subject reference before initializing the reactor', 'info');
       return;
     }
 
-    if (canvas) {
-      canvas.innerHTML = `<div style="padding:40px;text-align:center;color:var(--palantir-muted);font-size:0.8rem">⏳ Resolving live CRM graph (Mongo-backed only)…</div>`;
-    }
+    if (canvas) canvas.innerHTML = `<div class="palantir-reactor-empty">${_statePanel({
+      kicker: 'Reactor // resolving live CRM',
+      title: 'Mapping recorded relationships',
+      copy: 'Retrieving CRM-backed nodes and edges. Unverified or unavailable records will not be invented.',
+      state: 'loading',
+    })}</div>`;
+    if (stats) stats.textContent = 'RESOLVING';
 
     try {
-      const r = await fetch(`${API}/api/palantir/graph/${encodeURIComponent(input)}?subject_type=${type}`, {
+      const response = await fetch(`${API}/api/palantir/graph/${encodeURIComponent(input)}?subject_type=${encodeURIComponent(subjectType)}`, {
         headers: headers(),
         credentials: 'same-origin',
       });
-
-      if (!r.ok) {
-        if (canvas) canvas.innerHTML = `<div style="padding:40px;text-align:center;color:#f85149">Failed to load graph (${r.status})</div>`;
+      if (!response.ok) {
+        if (canvas) canvas.innerHTML = `<div class="palantir-reactor-empty">${_statePanel({
+          kicker: 'Reactor // request unavailable',
+          title: 'CRM relationship map unavailable',
+          copy: `The request returned status ${response.status}. No relationship has been inferred.`,
+          state: 'error',
+        })}</div>`;
+        if (stats) stats.textContent = `HTTP ${response.status}`;
+        _setInspectorPrompt();
         return;
       }
-
-      _currentGraph = await r.json();
-      _renderGraph(_currentGraph);
-    } catch (e) {
-      if (canvas) canvas.innerHTML = `<div style="padding:40px;text-align:center;color:#f85149">Network error resolving graph: ${e.message}</div>`;
+      _currentGraph = await response.json();
+      _selectedNodeId = (_currentGraph.nodes || []).find(node => String(node.id).startsWith('subj_'))?.id || _currentGraph.nodes?.[0]?.id || null;
+      _renderGraph();
+    } catch (error) {
+      if (canvas) canvas.innerHTML = `<div class="palantir-reactor-empty">${_statePanel({
+        kicker: 'Reactor // network interruption',
+        title: 'CRM relationship map unreachable',
+        copy: `Network error: ${error.message}`,
+        state: 'error',
+      })}</div>`;
+      if (stats) stats.textContent = 'OFFLINE';
+      _setInspectorPrompt();
     }
-  }
-
-  function _renderGraph(graph) {
-    const canvas = $('palantirGraphCanvas');
-    const stats = $('palantirGraphStats');
-    if (!canvas || !graph) return;
-
-    const nodes = graph.nodes || [];
-    const edges = graph.edges || [];
-    const warnings = graph.warnings || [];
-    const mode = graph.data_mode || (graph.subject_found ? 'live' : 'empty');
-
-    if (stats) {
-      const modeLabel = mode === 'live' ? 'LIVE' : mode === 'empty' ? 'NO MATCH' : String(mode).toUpperCase();
-      stats.textContent = `${nodes.length} Nodes · ${edges.length} Edges · ${modeLabel}`;
-    }
-
-    if (!nodes.length) {
-      const warn = warnings.length
-        ? warnings.map(w => `<div style="margin-top:8px;font-size:0.72rem;color:#fbbf24">${_esc(w)}</div>`).join('')
-        : '';
-      canvas.innerHTML = `
-        <div style="padding:40px;text-align:center;color:var(--palantir-muted)">
-          <div style="font-size:2rem;margin-bottom:8px">🕸️</div>
-          <div style="font-weight:700;color:#e2e8f0">No CRM graph for this subject</div>
-          <div style="font-size:0.75rem;margin-top:6px;max-width:420px;margin-left:auto;margin-right:auto;line-height:1.5">
-            Enter an exact defendant/indemnitor name, booking number, or Mongo ID. Shamrock does not invent property, LLC, or family links.
-          </div>
-          ${warn}
-        </div>`;
-      return;
-    }
-
-    // Render node cards with provenance badges
-    let html = `<div style="position:relative;width:100%;height:100%;padding:20px;box-sizing:border-box;display:flex;flex-wrap:wrap;gap:14px;align-content:flex-start">`;
-
-    if (warnings.length) {
-      html += `<div style="width:100%;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.35);border-radius:10px;padding:10px 12px;font-size:0.72rem;color:#fbbf24">
-        ${warnings.map(w => `⚠ ${_esc(w)}`).join('<br/>')}
-      </div>`;
-    }
-
-    nodes.forEach(node => {
-      let icon = '👤';
-      let borderCol = 'var(--palantir-border)';
-      if (node.type === 'company') { icon = '🏢'; borderCol = '#0284c7'; }
-      else if (node.type === 'property') { icon = '🏠'; borderCol = '#00c853'; }
-      else if (node.type === 'indemnitor') { icon = '🛡️'; borderCol = '#ff9100'; }
-      else if (node.type === 'phone') { icon = '📱'; borderCol = '#ab47bc'; }
-      else if (node.type === 'email') { icon = '✉️'; borderCol = '#7c3aed'; }
-      else if (node.type === 'bond') { icon = '📋'; borderCol = '#38bdf8'; }
-      else if (node.type === 'relative') { icon = '👨‍👩‍👧'; borderCol = '#f472b6'; }
-      else if (node.type === 'note') { icon = '📝'; borderCol = '#94a3b8'; }
-
-      const verified = node.verified !== false;
-      const badge = verified
-        ? '<span style="color:#34d399;font-size:0.58rem;font-weight:700;letter-spacing:0.04em">VERIFIED CRM</span>'
-        : '<span style="color:#fbbf24;font-size:0.58rem;font-weight:700;letter-spacing:0.04em">UNVERIFIED</span>';
-
-      html += `
-        <div style="background:#111723;border:2px solid ${borderCol};border-radius:10px;padding:12px;width:220px;box-shadow:0 4px 12px rgba(0,0,0,0.4);transition:transform 0.2s" onmouseover="this.style.transform='scale(1.03)'" onmouseout="this.style.transform='scale(1)'">
-          <div style="font-size:0.8rem;font-weight:700;color:#fff;display:flex;align-items:center;gap:6px">
-            <span>${icon}</span> ${_esc(node.label)}
-          </div>
-          <div style="font-size:0.68rem;color:var(--palantir-muted);margin-top:4px">${_esc(node.subtitle || node.type)}</div>
-          <div style="font-size:0.62rem;font-weight:700;color:#94a3b8;margin-top:6px;text-transform:uppercase;display:flex;justify-content:space-between;gap:6px">
-            <span>${_esc(node.type)}</span>${badge}
-          </div>
-        </div>
-      `;
-    });
-
-    html += `</div>`;
-    canvas.innerHTML = html;
   }
 
   function toggleLayer(layer) {
-    toast(`Toggled layer: ${layer}`, 'info');
-    if (_currentGraph) _renderGraph(_currentGraph);
+    if (!_currentGraph) {
+      toast(`The ${layer} layer will apply when a CRM target is resolved`, 'info');
+      return;
+    }
+    _renderGraph();
   }
 
-  // ── 2. OSIRIS Situation Room (3D Tactical Globe) ───────────────────
-  let _leafletMap = null;
-  let _mapMarkers = [];
+  function _layoutNodes(nodes) {
+    const root = nodes.find(node => String(node.id).startsWith('subj_')) || nodes[0];
+    const others = nodes.filter(node => node.id !== root?.id);
+    const positions = new Map();
+    if (root) positions.set(root.id, { x: 50, y: 50, root: true });
+    const count = others.length;
+    others.forEach((node, index) => {
+      const angle = (-Math.PI / 2) + ((Math.PI * 2 * index) / Math.max(count, 1));
+      const radiusX = count > 5 ? 39 : 34;
+      const radiusY = count > 5 ? 37 : 33;
+      positions.set(node.id, {
+        x: 50 + Math.cos(angle) * radiusX,
+        y: 50 + Math.sin(angle) * radiusY,
+        root: false,
+      });
+    });
+    return { root, positions };
+  }
+
+  function _renderGraph() {
+    const canvas = $('palantirGraphCanvas');
+    const stats = $('palantirGraphStats');
+    if (!canvas || !_currentGraph) return;
+
+    const allNodes = _currentGraph.nodes || [];
+    const nodes = _visibleNodes();
+    const edges = (_currentGraph.edges || []).filter(edge => nodes.some(node => node.id === edge.source) && nodes.some(node => node.id === edge.target));
+    const warnings = _currentGraph.warnings || [];
+    const mode = _currentGraph.data_mode || (_currentGraph.subject_found ? 'live' : 'empty');
+
+    if (stats) {
+      const label = mode === 'live' ? 'LIVE CRM' : mode === 'empty' ? 'NO MATCH' : String(mode).toUpperCase();
+      stats.textContent = `${nodes.length} NODES // ${edges.length} LINKS // ${label}`;
+    }
+
+    if (!nodes.length) {
+      const copy = allNodes.length
+        ? 'All available records are currently hidden by the selected signal-layer filters.'
+        : 'No matching CRM record was found. Enter an exact subject reference; the reactor will not infer an identity or relationship.';
+      canvas.innerHTML = `<div class="palantir-reactor-empty">${_statePanel({
+        kicker: allNodes.length ? 'Reactor // layers filtered' : 'Reactor // no verified target',
+        title: allNodes.length ? 'No visible signals in current layers' : 'No recorded CRM relationship map',
+        copy,
+      })}</div>`;
+      _setInspectorPrompt();
+      return;
+    }
+
+    const { root, positions } = _layoutNodes(nodes);
+    if (!positions.has(_selectedNodeId)) _selectedNodeId = root?.id || nodes[0].id;
+    const selected = nodes.find(node => node.id === _selectedNodeId) || root || nodes[0];
+    const warningMarkup = warnings.length
+      ? `<div class="palantir-graph-warning">${warnings.map(warning => _esc(warning)).join('<br>')}</div>`
+      : '';
+
+    const edgeMarkup = edges.map(edge => {
+      const source = positions.get(edge.source);
+      const target = positions.get(edge.target);
+      if (!source || !target) return '';
+      const selectedEdge = edge.source === selected.id || edge.target === selected.id;
+      return `<line class="${selectedEdge ? 'is-selected' : ''}" x1="${source.x}%" y1="${source.y}%" x2="${target.x}%" y2="${target.y}%"></line>`;
+    }).join('');
+
+    const nodeMarkup = nodes.filter(node => node.id !== root?.id).map(node => {
+      const position = positions.get(node.id);
+      const selectedClass = node.id === selected.id ? 'is-selected' : '';
+      return `
+        <button type="button" class="palantir-orbit-node ${_typeClass(node.type)} ${selectedClass}" style="left:${position.x}%;top:${position.y}%" onclick="SLPalantir.selectNode('${_esc(node.id)}')" aria-pressed="${node.id === selected.id}">
+          <span class="palantir-node-dot"></span>
+          <span class="palantir-node-copy"><span class="palantir-node-name">${_esc(node.label)}</span><span class="palantir-node-type">${_esc(node.type)} // ${node.verified === false ? 'unverified' : 'verified'}</span></span>
+        </button>`;
+    }).join('');
+
+    const coreLabel = root?.label || 'CRM SUBJECT';
+    canvas.innerHTML = `
+      ${warningMarkup}
+      <svg class="palantir-reactor-svg" aria-hidden="true" viewBox="0 0 100 100" preserveAspectRatio="none">${edgeMarkup}</svg>
+      <button type="button" class="palantir-reactor-core" onclick="SLPalantir.selectNode('${_esc(root?.id || selected.id)}')" aria-label="Inspect primary CRM subject">
+        <span class="palantir-reactor-core-text">${_esc(coreLabel)}<small>${_esc(root?.type || 'subject')} // ${root?.verified === false ? 'unverified' : 'verified'}</small></span>
+      </button>
+      ${nodeMarkup}`;
+    _renderInspector(selected, edges);
+  }
+
+  function selectNode(nodeId) {
+    if (!_currentGraph) return;
+    const visible = _visibleNodes();
+    const node = visible.find(item => item.id === nodeId);
+    if (!node) return;
+    _selectedNodeId = node.id;
+    _renderGraph();
+  }
+
+  function _renderInspector(node, edges) {
+    const inspector = $('palantirNodeInspector');
+    if (!inspector || !node) return;
+    const connected = edges.filter(edge => edge.source === node.id || edge.target === node.id);
+    const confidence = connected.length
+      ? `${Math.round((connected.reduce((total, edge) => total + Number(edge.confidence || 0), 0) / connected.length) * 100)}%`
+      : '—';
+    const metadata = node.metadata || {};
+    const allowedMeta = ['collection', 'booking_number', 'status', 'poa', 'surety', 'relationship', 'verified_deed'];
+    const metaRows = allowedMeta.filter(key => metadata[key] !== undefined && metadata[key] !== '').map(key => `
+      <div class="palantir-inspector-row"><span>${_esc(key.replaceAll('_', ' '))}</span><strong>${_esc(metadata[key])}</strong></div>`).join('');
+    const verified = node.verified !== false;
+
+    inspector.innerHTML = `
+      <div class="palantir-inspector-orb">${_esc(String(node.type || 'record').slice(0, 7).toUpperCase())}</div>
+      <h4 class="palantir-inspector-name">${_esc(node.label)}</h4>
+      <p class="palantir-inspector-subtitle">${_esc(node.subtitle || 'CRM record without additional display detail.')}</p>
+      <div class="palantir-inspector-rows">
+        <div class="palantir-inspector-row"><span>Record type</span><strong>${_esc(node.type || 'record')}</strong></div>
+        <div class="palantir-inspector-row"><span>Provenance</span><strong class="${verified ? 'is-verified' : 'is-unverified'}">${verified ? 'VERIFIED' : 'UNVERIFIED'} // ${_esc(node.source || 'unknown')}</strong></div>
+        <div class="palantir-inspector-row"><span>Risk state</span><strong>${_esc(node.risk_level || 'low')}</strong></div>
+        <div class="palantir-inspector-row"><span>Link confidence</span><strong>${confidence}</strong></div>
+        <div class="palantir-inspector-row"><span>Connected signals</span><strong>${connected.length}</strong></div>
+        ${metaRows}
+      </div>`;
+  }
 
   function _initOsirisMap() {
     const container = $('osirisMapContainer');
-    if (!container || _mapInstance) return;
+    if (!container || _mapReady) return;
 
     if (typeof L !== 'undefined') {
       container.innerHTML = '';
@@ -205,270 +329,238 @@
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
           maxZoom: 19,
           subdomains: 'abcd',
-          attribution: '© OpenStreetMap © CARTO'
+          attribution: '© OpenStreetMap © CARTO',
         }).addTo(_leafletMap);
-        _mapInstance = true;
-        setTimeout(() => { if (_leafletMap) _leafletMap.invalidateSize(); }, 300);
-      } catch (e) {
-        console.warn('Leaflet map init warning:', e);
+        _mapReady = true;
+        setTimeout(() => _leafletMap?.invalidateSize(), 300);
+      } catch (error) {
+        console.warn('OSIRIS map unavailable:', error);
       }
-    } else {
-      container.innerHTML = `
-        <div style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--palantir-muted)">
-          <div style="font-size:3rem;margin-bottom:10px">🌍</div>
-          <div style="font-size:0.9rem;font-weight:700;color:#ff9100">OSIRIS 3D Tactical Globe Surface Active</div>
-          <div style="font-size:0.75rem;margin-top:4px">SWFL Sector Grid (26.6406° N, 81.8723° W) · Live Flight &amp; Incident Overlays</div>
-        </div>
-      `;
-      _mapInstance = true;
-    }
-  }
-
-  async function _loadOsirisFeeds() {
-    const list = $('osirisFeedList');
-    if (!list) return;
-
-    try {
-      const r = await fetch(`${API}/api/palantir/situation-room/feeds`, {
-        headers: headers(),
-        credentials: 'same-origin',
-      });
-
-      if (!r.ok) return;
-      const feeds = await r.json();
-
-      if (!feeds.length) {
-        list.innerHTML = `<div class="palantir-empty"><div class="empty-icon">📡</div><div class="empty-text">No active OSIRIS threat alerts.</div></div>`;
-        return;
-      }
-
-      // Clear existing markers
-      if (_leafletMap && typeof L !== 'undefined') {
-        _mapMarkers.forEach(m => _leafletMap.removeLayer(m));
-        _mapMarkers = [];
-      }
-
-      list.innerHTML = feeds.map(f => {
-        const demoTag = f.demo ? ' · MAP REF ONLY' : ' · LIVE CRM';
-        let badge = 'INFO';
-        let cls = '';
-        let color = '#38bdf8';
-        if (f.severity === 'danger') { badge = 'HIGH SURGE'; cls = 'danger'; color = '#f85149'; }
-        else if (f.severity === 'warning') { badge = 'ALERT'; cls = 'warning'; color = '#ff9100'; }
-
-        // Add Leaflet Marker
-        if (_leafletMap && typeof L !== 'undefined' && f.lat && f.lng) {
-          const marker = L.circleMarker([f.lat, f.lng], {
-            radius: 8,
-            fillColor: color,
-            color: '#fff',
-            weight: 2,
-            opacity: 1,
-            fillOpacity: 0.8
-          }).addTo(_leafletMap);
-
-          marker.bindPopup(`
-            <div style="font-size:0.78rem;font-weight:700;color:${color}">${_esc(f.title)}</div>
-            <div style="font-size:0.7rem;color:#333;margin-top:4px">${_esc(f.description)}</div>
-            <div style="font-size:0.62rem;color:#666;margin-top:4px">Source: ${_esc(f.source)}</div>
-          `);
-          _mapMarkers.push(marker);
-        }
-
-        return `
-          <div class="palantir-feed-card ${cls}">
-            <div style="display:flex;justify-content:space-between;align-items:center">
-              <span style="font-size:0.78rem;font-weight:700;color:#fff">${_esc(f.title)}</span>
-              <span style="font-size:0.6rem;font-weight:700;padding:2px 6px;border-radius:6px;background:rgba(255,255,255,0.06);color:${color}">${badge}</span>
-            </div>
-            <div style="font-size:0.7rem;color:var(--palantir-muted);margin-top:4px">${_esc(f.description)}</div>
-            <div style="font-size:0.62rem;color:var(--palantir-blue);margin-top:4px;font-family:monospace">Source: ${_esc(f.source)}${demoTag} · (${Number(f.lat).toFixed(4)}, ${Number(f.lng).toFixed(4)})</div>
-          </div>
-        `;
-      }).join('');
-    } catch (e) {
-      console.warn('Failed to load OSIRIS feeds:', e);
-    }
-  }
-
-  // ── 3. SPECTRA Social Geotags & Data Breach Matrix ────────────────
-  async function runBreachLookup() {
-    const q = ($('spectraQueryInput')?.value || '').trim();
-    const box = $('spectraBreachResult');
-
-    if (!q) {
-      toast('Please enter an email, phone, or username', 'error');
       return;
     }
 
-    if (box) {
-      box.style.display = 'block';
-      box.innerHTML = `<div style="font-size:0.75rem;color:var(--palantir-muted)">⏳ Searching SPECTRA breach repositories for ${q}...</div>`;
-    }
+    container.innerHTML = `
+      <div class="palantir-map-fallback">
+        <div>
+          <span class="palantir-state-kicker">OSIRIS // map unavailable</span>
+          <h4 class="palantir-state-title">The map surface could not initialize</h4>
+          <p class="palantir-state-copy">The active signal stream remains available. No location signal is fabricated while the map library is unavailable.</p>
+        </div>
+      </div>`;
+    _mapReady = true;
+  }
+
+  async function refreshOsiris() {
+    const list = $('osirisFeedList');
+    const status = $('osirisFeedStatus');
+    const county = ($('osirisCountyFilter')?.value || '').trim();
+    if (!list) return;
+
+    list.innerHTML = '<div class="palantir-empty"><div class="empty-icon">REFRESHING FIELD GRID</div><div class="empty-text">Loading current CRM-backed signals.</div></div>';
+    if (status) status.textContent = 'Refreshing';
 
     try {
-      const isEmail = q.includes('@');
-      const isPhone = q.replace(/\D/g, '').length >= 10;
-
-      const payload = {
-        email: isEmail ? q : null,
-        phone: isPhone ? q : null,
-        username: (!isEmail && !isPhone) ? q : null,
-      };
-
-      const r = await fetch(`${API}/api/palantir/spectra/breach-lookup`, {
-        method: 'POST',
-        headers: headers(),
-        credentials: 'same-origin',
-        body: JSON.stringify(payload),
-      });
-
-      if (!r.ok) {
-        if (box) box.innerHTML = `<div style="color:#f85149">Breach lookup failed (${r.status})</div>`;
+      const query = county ? `?county=${encodeURIComponent(county)}` : '';
+      const response = await fetch(`${API}/api/palantir/situation-room/feeds${query}`, { headers: headers(), credentials: 'same-origin' });
+      if (!response.ok) {
+        list.innerHTML = `<div class="palantir-empty"><div class="empty-icon">FIELD GRID UNAVAILABLE</div><div class="empty-text">The request returned status ${response.status}. No field signal is inferred.</div></div>`;
+        if (status) status.textContent = `HTTP ${response.status}`;
         return;
       }
-
-      const res = await r.json();
-      if (!res.found || !res.breaches.length) {
-        const msg = res.message || `No known infostealer records for ${q}`;
-        const color = res.data_mode === 'unavailable' ? '#ff9100' : '#00e676';
-        box.innerHTML = `<div style="font-size:0.75rem;color:${color}">${res.data_mode === 'unavailable' ? '⚠' : '✅'} ${_esc(msg)}</div>`;
-        _renderGeotags(q);
-        return;
-      }
-
-      box.innerHTML = `
-        <div style="font-size:0.78rem;font-weight:700;color:#f85149;margin-bottom:6px">⚠️ Discovered ${res.total_breaches} Breach Compromises:</div>
-        ` + res.breaches.map(b => `
-          <div class="spectra-breach-card">
-            <div class="spectra-breach-title">
-              <span>${_esc(b.breach_name)} (${_esc(b.domain)})</span>
-              <span>Date: ${_esc(b.breach_date)}</span>
-            </div>
-            <div style="font-size:0.7rem;color:var(--palantir-muted);margin-top:4px">${_esc(b.description)}</div>
-            <div style="font-size:0.65rem;color:#ff9100;margin-top:4px">Exposed Fields: ${b.compromised_data.join(', ')}</div>
-          </div>
-        `).join('');
-
-      _renderGeotags(q);
-    } catch (e) {
-      if (box) box.innerHTML = `<div style="color:#f85149">Network error: ${e.message}</div>`;
+      _osirisFeeds = await response.json();
+      _renderOsirisFeeds();
+      if (status) status.textContent = `${_osirisFeeds.length} Signals`;
+    } catch (error) {
+      list.innerHTML = '<div class="palantir-empty"><div class="empty-icon">NETWORK INTERRUPTION</div><div class="empty-text">The field grid could not be reached. No signal is inferred.</div></div>';
+      if (status) status.textContent = 'Offline';
     }
   }
 
-  function _renderGeotags(query) {
-    const cluster = $('spectraGeotagCluster');
-    if (!cluster) return;
-    cluster.innerHTML = `<div class="palantir-empty"><div class="empty-icon">📍</div><div class="empty-text">No verified geotags for ${_esc(query)}. Run an OSINT Exif/Instaloader scan — SPECTRA will not invent locations.</div></div>`;
+  function _renderOsirisFeeds() {
+    const list = $('osirisFeedList');
+    if (!list) return;
+
+    if (_leafletMap && typeof L !== 'undefined') {
+      _mapMarkers.forEach(marker => _leafletMap.removeLayer(marker));
+      _mapMarkers = new Map();
+    }
+
+    if (!_osirisFeeds.length) {
+      list.innerHTML = '<div class="palantir-empty"><div class="empty-icon">NO ACTIVE SIGNALS</div><div class="empty-text">No CRM-backed OSIRIS signals are active for the selected field grid.</div></div>';
+      return;
+    }
+
+    list.innerHTML = _osirisFeeds.map(feed => {
+      const severity = ['danger', 'warning'].includes(feed.severity) ? feed.severity : '';
+      const badge = feed.severity === 'danger' ? 'HIGH' : feed.severity === 'warning' ? 'ALERT' : 'INFO';
+      const reference = feed.demo ? ' // MAP REFERENCE' : ' // LIVE CRM';
+      const markerColor = feed.severity === 'danger' ? '#ff5e7a' : feed.severity === 'warning' ? '#ffd166' : '#62e7ff';
+
+      if (_leafletMap && typeof L !== 'undefined' && Number.isFinite(Number(feed.lat)) && Number.isFinite(Number(feed.lng))) {
+        const marker = L.circleMarker([feed.lat, feed.lng], { radius: 8, fillColor: markerColor, color: '#ecfbff', weight: 2, opacity: 1, fillOpacity: .86 }).addTo(_leafletMap);
+        marker.bindPopup(`<div class="palantir-map-popup-title">${_esc(feed.title)}</div><div class="palantir-map-popup-copy">${_esc(feed.description)}</div><div class="palantir-map-popup-source">${_esc(feed.source)}${reference}</div>`);
+        _mapMarkers.set(feed.id, marker);
+      }
+
+      return `
+        <button type="button" class="palantir-feed-card ${severity}" data-feed-id="${_esc(feed.id)}" onclick="SLPalantir.focusOsirisFeed('${_esc(feed.id)}')">
+          <span class="palantir-feed-topline"><span class="palantir-feed-title">${_esc(feed.title)}</span><span class="palantir-feed-badge ${severity}">${badge}</span></span>
+          <span class="palantir-feed-description">${_esc(feed.description)}</span>
+          <span class="palantir-feed-source">${_esc(feed.source)}${reference}</span>
+        </button>`;
+    }).join('');
   }
 
-  // ── 4. Palantir Executive AI Dossier Generator ─────────────────────
+  function focusOsirisFeed(feedId) {
+    const feed = _osirisFeeds.find(item => item.id === feedId);
+    if (!feed) return;
+    document.querySelectorAll('#tabPalantir .palantir-feed-card').forEach(card => card.classList.toggle('is-focused', card.dataset.feedId === feedId));
+    const marker = _mapMarkers.get(feedId);
+    if (marker && _leafletMap) {
+      _leafletMap.flyTo(marker.getLatLng(), Math.max(_leafletMap.getZoom(), 11), { duration: .65 });
+      marker.openPopup();
+    }
+  }
+
+  function _setSpectraStatus({ level = 'wait', title, detail }) {
+    const target = $('spectraScanStatus');
+    if (!target) return;
+    const statusLabel = level === 'high' ? 'HIGH' : level === 'medium' ? 'MED' : level === 'low' ? 'LOW' : level === 'unavailable' ? 'GATED' : level === 'loading' ? 'SCAN' : 'WAIT';
+    const riskClass = ['low', 'medium', 'high'].includes(level) ? `is-${level}` : '';
+    target.innerHTML = `<div class="palantir-risk-dial ${riskClass}"><span>${statusLabel}</span></div><div class="palantir-scan-copy"><strong>${_esc(title)}</strong><small>${_esc(detail)}</small></div>`;
+  }
+
+  async function runBreachLookup() {
+    const query = ($('spectraQueryInput')?.value || '').trim();
+    const results = $('spectraBreachResult');
+    if (!query) {
+      toast('Enter an email address or username before running SPECTRA', 'info');
+      return;
+    }
+
+    if (results) {
+      results.style.display = 'block';
+      results.innerHTML = '<div class="palantir-result-note is-unavailable">Contacting the configured SPECTRA provider. Results remain unavailable until the provider responds.</div>';
+    }
+    _setSpectraStatus({ level: 'loading', title: 'Live scan in progress', detail: 'Querying the configured provider; no result is assumed.' });
+
+    try {
+      const isEmail = query.includes('@');
+      const isPhone = query.replace(/\D/g, '').length >= 10;
+      const payload = { email: isEmail ? query : null, phone: isPhone ? query : null, username: (!isEmail && !isPhone) ? query : null };
+      const response = await fetch(`${API}/api/palantir/spectra/breach-lookup`, { method: 'POST', headers: headers(), credentials: 'same-origin', body: JSON.stringify(payload) });
+      if (!response.ok) {
+        if (results) results.innerHTML = `<div class="palantir-result-note is-danger">The SPECTRA request returned status ${response.status}.</div>`;
+        _setSpectraStatus({ level: 'unavailable', title: 'Provider request unavailable', detail: `The provider returned status ${response.status}.` });
+        return;
+      }
+
+      const result = await response.json();
+      const providerUnavailable = result.data_mode === 'unavailable';
+      const riskLevel = result.found ? (result.risk_impact === 'high' ? 'high' : 'medium') : providerUnavailable ? 'unavailable' : 'low';
+      _setSpectraStatus({ level: riskLevel, title: result.found ? `${result.total_breaches} signal${Number(result.total_breaches) === 1 ? '' : 's'} returned` : providerUnavailable ? 'Provider unavailable' : 'No signal returned', detail: result.message || 'No additional provider detail returned.' });
+
+      if (!result.found || !(result.breaches || []).length) {
+        if (results) results.innerHTML = `<div class="palantir-result-note ${providerUnavailable ? 'is-unavailable' : ''}">${_esc(result.message || 'No known infostealer records were returned by the configured source.')}</div>`;
+        _renderGeotagEmpty();
+        return;
+      }
+
+      if (results) {
+        results.innerHTML = `
+          <div class="palantir-result-note is-danger">The provider returned ${_esc(result.total_breaches)} infostealer signal${Number(result.total_breaches) === 1 ? '' : 's'}.</div>
+          ${result.breaches.map(breach => `
+            <article class="spectra-breach-card">
+              <div class="spectra-breach-title"><span>${_esc(breach.breach_name)} (${_esc(breach.domain)})</span><span>${_esc(breach.breach_date)}</span></div>
+              <div class="palantir-result-copy">${_esc(breach.description)}</div>
+              <div class="palantir-breach-fields">Exposed fields: ${_esc((breach.compromised_data || []).join(', '))}</div>
+            </article>`).join('')}`;
+      }
+      _renderGeotagEmpty();
+    } catch (error) {
+      if (results) results.innerHTML = `<div class="palantir-result-note is-danger">Network error: ${_esc(error.message)}</div>`;
+      _setSpectraStatus({ level: 'unavailable', title: 'Provider network interruption', detail: 'No breach result was inferred after the network interruption.' });
+    }
+  }
+
+  function _renderGeotagEmpty() {
+    const cluster = $('spectraGeotagCluster');
+    if (!cluster) return;
+    cluster.innerHTML = '<div class="palantir-empty"><div class="empty-icon">NO VERIFIED GEOTAGS</div><div class="empty-text">The completed provider lookup did not return verified geotag data. SPECTRA does not infer locations.</div></div>';
+  }
+
+  function _renderDossierTargetPrompt() {
+    const container = $('palantirDossierContent');
+    if (!container) return;
+    container.innerHTML = _statePanel({
+      kicker: 'Intelligence brief // target required',
+      title: 'Resolve a CRM subject first',
+      copy: 'Select an exact defendant or indemnitor in the Entity Reactor before compiling a data-bounded intelligence brief.',
+    });
+  }
+
   async function generateDossierPrompt() {
     const input = ($('palantirSubjectInput')?.value || '').trim();
     const type = $('palantirSubjectType')?.value || 'defendant';
     const container = $('palantirDossierContent');
-
-    switchSubtab('dossier');
+    switchSubtab('dossier', { skipDossierPrompt: true });
 
     if (!input) {
-      if (container) {
-        container.innerHTML = `<div style="padding:40px;text-align:center;color:var(--palantir-muted);font-size:0.8rem">Enter a subject name or booking # in the graph panel, then generate a dossier.</div>`;
-      }
-      toast('Enter a subject before generating a dossier', 'info');
+      _renderDossierTargetPrompt();
+      toast('Resolve an exact CRM subject before compiling an intelligence brief', 'info');
       return;
     }
 
-    if (container) {
-      container.innerHTML = `<div style="padding:40px;text-align:center;color:var(--palantir-muted);font-size:0.8rem">⏳ Building live CRM dossier for ${_esc(input)}…</div>`;
-    }
+    if (container) container.innerHTML = _statePanel({
+      kicker: 'Intelligence brief // compiling',
+      title: 'Compiling CRM-bounded findings',
+      copy: 'The brief will explicitly preserve any missing, unavailable, or unverified data state.',
+      state: 'loading',
+    });
 
     try {
-      const r = await fetch(`${API}/api/palantir/dossier/generate`, {
-        method: 'POST',
-        headers: headers(),
-        credentials: 'same-origin',
-        body: JSON.stringify({ subject_id: input, subject_type: type }),
+      const response = await fetch(`${API}/api/palantir/dossier/generate`, {
+        method: 'POST', headers: headers(), credentials: 'same-origin', body: JSON.stringify({ subject_id: input, subject_type: type }),
       });
-
-      if (!r.ok) {
-        if (container) container.innerHTML = `<div style="padding:40px;text-align:center;color:#f85149">Failed to generate dossier (${r.status})</div>`;
+      if (!response.ok) {
+        if (container) container.innerHTML = _statePanel({ kicker: 'Intelligence brief // unavailable', title: 'CRM brief request failed', copy: `The request returned status ${response.status}. No finding was inferred.`, state: 'error' });
         return;
       }
-
-      const dossier = await r.json();
-      _renderDossier(dossier);
-    } catch (e) {
-      if (container) container.innerHTML = `<div style="padding:40px;text-align:center;color:#f85149">Network error: ${e.message}</div>`;
+      _renderDossier(await response.json());
+    } catch (error) {
+      if (container) container.innerHTML = _statePanel({ kicker: 'Intelligence brief // network interruption', title: 'CRM brief unreachable', copy: `Network error: ${error.message}`, state: 'error' });
     }
   }
 
-  function _renderDossier(dos) {
+  function _renderDossier(dossier) {
     const container = $('palantirDossierContent');
-    if (!container || !dos) return;
-
-    const score = dos.risk_score;
-    const scoreHtml = (score === null || score === undefined)
-      ? `<div style="font-size:1.1rem;font-weight:800;color:#94a3b8">N/A</div>
-         <div style="font-size:0.65rem;color:var(--palantir-muted);text-transform:uppercase;font-weight:700">INSUFFICIENT DATA</div>`
-      : `<div style="font-size:1.4rem;font-weight:800;color:${score > 70 ? '#f85149' : '#00e676'}">${score} / 100</div>
-         <div style="font-size:0.65rem;color:var(--palantir-muted);text-transform:uppercase;font-weight:700">CRM LINKAGE SCORE</div>`;
-
-    const findings = dos.key_findings || [];
-    const findingsHtml = findings.length
-      ? findings.map(f => `<li>${_esc(f)}</li>`).join('')
-      : '<li>No linked CRM findings yet.</li>';
-
-    const prox = dos.threat_proximity || [];
-    const proxHtml = prox.length
-      ? prox.map(t => `<div style="font-size:0.7rem;color:#fff;margin-bottom:4px">${_esc(t.name)}: <strong>${t.distance_miles} miles</strong></div>`).join('')
-      : `<div style="font-size:0.7rem;color:var(--palantir-muted)">No proximity intel attached (live map feeds are separate).</div>`;
-
-    const mode = dos.data_mode || (dos.subject_found ? 'live' : 'empty');
-    const warnHtml = (dos.warnings || []).length
-      ? `<div style="margin-top:12px;padding:10px;border-radius:8px;border:1px solid rgba(251,191,36,0.35);background:rgba(251,191,36,0.08);font-size:0.72rem;color:#fbbf24">${(dos.warnings || []).map(w => `⚠ ${_esc(w)}`).join('<br/>')}</div>`
-      : '';
+    if (!container || !dossier) return;
+    const score = dossier.risk_score;
+    const hasScore = score !== null && score !== undefined;
+    const scoreClass = !hasScore ? 'is-unknown' : score > 70 ? 'is-high-risk' : '';
+    const findings = dossier.key_findings || [];
+    const warnings = dossier.warnings || [];
+    const proximity = dossier.threat_proximity || [];
+    const mode = dossier.data_mode || (dossier.subject_found ? 'live' : 'empty');
 
     container.innerHTML = `
-      <div class="palantir-dossier-paper">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+      <article class="palantir-dossier-paper">
+        <div class="palantir-dossier-topline">
           <div>
-            <h3>PALANTIR EXECUTIVE INTELLIGENCE BRIEFING</h3>
-            <div style="font-size:0.85rem;font-weight:700;color:#fff">Subject: ${_esc(dos.subject_name)} (${_esc(dos.subject_id)})</div>
-            <div style="font-size:0.7rem;color:var(--palantir-muted);margin-top:2px">Dossier ID: ${_esc(dos.dossier_id)} · Generated: ${_esc(dos.generated_at)} · Mode: ${_esc(mode)}</div>
+            <span class="palantir-eyebrow">Shamrock // CRM-bounded intelligence brief</span>
+            <h3>Subject Intelligence Brief</h3>
+            <div class="palantir-subject-line">Subject: ${_esc(dossier.subject_name)} (${_esc(dossier.subject_id)})</div>
+            <div class="palantir-dossier-meta">BRIEF ${_esc(dossier.dossier_id)} // GENERATED ${_esc(dossier.generated_at)} // MODE ${_esc(mode)}</div>
           </div>
-          <div style="text-align:right">${scoreHtml}</div>
+          <div class="palantir-score"><div class="palantir-score-value ${scoreClass}">${hasScore ? `${_esc(score)} / 100` : 'N/A'}</div><div class="palantir-score-label">${hasScore ? 'CRM linkage score' : 'Insufficient data'}</div></div>
         </div>
-
-        <div style="margin-top:16px;padding:12px;background:rgba(255,109,0,0.1);border:1px solid rgba(255,109,0,0.3);border-radius:8px;font-size:0.78rem;line-height:1.5;color:#fff">
-          <strong>Executive Summary:</strong> ${_esc(dos.summary)}
-        </div>
-        ${warnHtml}
-
+        <div class="palantir-dossier-summary"><strong>Executive summary:</strong> ${_esc(dossier.summary)}</div>
+        ${warnings.length ? `<div class="palantir-dossier-warning">${warnings.map(warning => _esc(warning)).join('<br>')}</div>` : ''}
         <div class="palantir-dossier-grid">
-          <div class="palantir-dossier-box">
-            <div style="font-size:0.78rem;font-weight:700;color:#00e676;margin-bottom:8px">🔑 Key Findings (CRM)</div>
-            <ul style="margin:0;padding-left:18px;font-size:0.72rem;color:var(--palantir-muted);line-height:1.6">
-              ${findingsHtml}
-            </ul>
-          </div>
-
-          <div class="palantir-dossier-box">
-            <div style="font-size:0.78rem;font-weight:700;color:#0284c7;margin-bottom:8px">📍 Spatial Proximity</div>
-            ${proxHtml}
-          </div>
+          <section class="palantir-dossier-box"><div class="palantir-dossier-box-title is-green">Recorded findings</div><ul class="palantir-dossier-list">${findings.length ? findings.map(finding => `<li>${_esc(finding)}</li>`).join('') : '<li>No linked CRM findings yet.</li>'}</ul></section>
+          <section class="palantir-dossier-box"><div class="palantir-dossier-box-title">Spatial proximity</div>${proximity.length ? proximity.map(item => `<div class="palantir-proximity">${_esc(item.name)}: <strong>${_esc(item.distance_miles)} miles</strong></div>`).join('') : '<div class="palantir-proximity-empty">No proximity intelligence is attached. Live field-grid signals remain separate.</div>'}</section>
         </div>
-
-        <div style="margin-top:16px;padding:12px;background:rgba(0,200,83,0.1);border:1px solid rgba(0,200,83,0.3);border-radius:8px;font-size:0.78rem;font-weight:700;color:#00e676">
-          🛡️ Underwriting Recommendation: ${_esc(dos.recommendation)}
-        </div>
-      </div>
-    `;
-  }
-
-  function _esc(s) {
-    if (!s) return '';
-    const d = document.createElement('div');
-    d.textContent = String(s);
-    return d.innerHTML;
+        <div class="palantir-recommendation">Underwriting recommendation: ${_esc(dossier.recommendation)}</div>
+      </article>`;
   }
 })();

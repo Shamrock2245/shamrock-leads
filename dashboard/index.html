@@ -29,7 +29,7 @@
   <link rel="stylesheet" href="/sl-premium.css?v=2">
   <link rel="stylesheet" href="/sl-enrichment.css?v=1">
   <link rel="stylesheet" href="/sl-osint.css?v=4">
-  <link rel="stylesheet" href="/sl-palantir.css?v=3">
+  <link rel="stylesheet" href="/sl-palantir.css?v=5">
   <link rel="stylesheet" href="/sl-alpr.css?v=2">
   <link rel="stylesheet" href="/sl-bond-intelligence.css?v=4">
   <!-- PWA Manifest -->
@@ -5945,119 +5945,132 @@
      ═══════════════════════════════════════════════════════ -->
 <div class="tab-content" id="tabPalantir">
   <div class="palantir-workstation">
-    <!-- Header -->
-    <div class="palantir-header">
+    <header class="palantir-header">
       <div class="palantir-header-left">
-        <h2>🌐 Palantir Intelligence Hub</h2>
-        <p>OpenPlanter Knowledge Graph · OSIRIS 3D Tactical Situation Room · SPECTRA Breach Matrix · Executive Dossiers</p>
+        <span class="palantir-eyebrow">Shamrock Bail Bonds // intelligence systems</span>
+        <h2><span class="palantir-title-mark">ARC-01</span> Palantir Command HUD</h2>
+        <p>Interactive CRM intelligence. Every readout is grounded in recorded Shamrock data; unavailable or unverified signals remain visibly gated.</p>
       </div>
       <div class="palantir-header-right">
-        <span class="palantir-badge">⚡ Palantir Engine v4.2</span>
-        <button class="palantir-btn-primary" onclick="SLPalantir.generateDossierPrompt()">⚡ Generate Executive Dossier</button>
+        <div class="palantir-core-status" aria-label="Palantir core status"><strong>CORE ONLINE</strong><small>Read-only intelligence</small></div>
+        <button class="palantir-btn-primary" onclick="SLPalantir.generateDossierPrompt()">Compile Intelligence Brief</button>
       </div>
-    </div>
+    </header>
 
-    <!-- Sub-Tabs Navigation Bar -->
-    <div class="palantir-subtabs-bar">
-      <button class="palantir-subtab-btn active" data-subtab="graph" onclick="SLPalantir.switchSubtab('graph')">🕸️ OpenPlanter Knowledge Graph</button>
-      <button class="palantir-subtab-btn" data-subtab="osiris" onclick="SLPalantir.switchSubtab('osiris')">🌍 OSIRIS Situation Room (3D)</button>
-      <button class="palantir-subtab-btn" data-subtab="spectra" onclick="SLPalantir.switchSubtab('spectra')">🕵️ SPECTRA Social &amp; Breach Matrix</button>
-      <button class="palantir-subtab-btn" data-subtab="dossier" onclick="SLPalantir.switchSubtab('dossier')">⚡ Palantir Executive Dossier</button>
-    </div>
+    <nav class="palantir-subtabs-bar" aria-label="Palantir workspaces">
+      <button class="palantir-subtab-btn active" data-subtab="graph" onclick="SLPalantir.switchSubtab('graph')"><span class="palantir-nav-index">01</span> Entity Reactor</button>
+      <button class="palantir-subtab-btn" data-subtab="osiris" onclick="SLPalantir.switchSubtab('osiris')"><span class="palantir-nav-index">02</span> OSIRIS Field Grid</button>
+      <button class="palantir-subtab-btn" data-subtab="spectra" onclick="SLPalantir.switchSubtab('spectra')"><span class="palantir-nav-index">03</span> SPECTRA Scan</button>
+      <button class="palantir-subtab-btn" data-subtab="dossier" onclick="SLPalantir.switchSubtab('dossier')"><span class="palantir-nav-index">04</span> Intelligence Brief</button>
+    </nav>
 
-    <!-- Subtab 1: OpenPlanter Knowledge Graph -->
     <div class="palantir-subtab-view active" id="palantirViewGraph">
-      <div class="palantir-main-grid" style="grid-template-columns: 340px 1fr">
-        <!-- Controls & Entity Resolver -->
-        <div class="palantir-card">
-          <div class="palantir-card-title">🕸️ Entity Resolution &amp; Ingestion</div>
-          <p style="font-size:0.72rem;color:var(--palantir-muted);margin:0 0 12px">Ingest Sunbiz LLCs, property deeds, court cases, and indemnitors to auto-resolve relationship graphs.</p>
-          <div class="palantir-field" style="margin-bottom:10px">
-            <label>Target Subject ID / Name</label>
+      <div class="palantir-main-grid palantir-graph-grid">
+        <section class="palantir-hud-shell palantir-panel" aria-labelledby="palantirResolverHeading">
+          <div class="palantir-card-title"><span class="palantir-section-index">01.1</span><span id="palantirResolverHeading">Target acquisition</span><span class="palantir-card-meta">CRM only</span></div>
+          <p class="palantir-supporting-copy">Resolve one exact defendant or indemnitor by name, booking number, or record ID. No fuzzy identity creation or inferred relationships.</p>
+          <div class="palantir-field">
+            <label for="palantirSubjectInput">Subject reference</label>
             <input type="text" id="palantirSubjectInput" placeholder="Exact name, booking #, or record ID" value="" autocomplete="off" />
           </div>
-          <div class="palantir-field" style="margin-bottom:12px">
-            <label>Subject Type</label>
+          <div class="palantir-field">
+            <label for="palantirSubjectType">Record boundary</label>
             <select id="palantirSubjectType">
               <option value="defendant">Defendant</option>
               <option value="indemnitor">Indemnitor</option>
             </select>
           </div>
-          <button class="palantir-action-btn" onclick="SLPalantir.resolveGraph()">⚡ Resolve Knowledge Graph</button>
-          
-          <div style="margin-top:16px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.08)">
-            <div style="font-size:0.75rem;font-weight:700;color:#fff;margin-bottom:8px">Graph Filters &amp; Layers</div>
-            <label class="palantir-toggle"><input type="checkbox" id="palantirLayerLLC" checked onchange="SLPalantir.toggleLayer('llc')" /> Ingest FL LLC Filings (Sunbiz)</label>
-            <label class="palantir-toggle"><input type="checkbox" id="palantirLayerProperty" checked onchange="SLPalantir.toggleLayer('property')" /> Ingest Property Deeds &amp; Collateral</label>
-            <label class="palantir-toggle"><input type="checkbox" id="palantirLayerRelatives" checked onchange="SLPalantir.toggleLayer('relatives')" /> 1st/2nd Degree Relatives</label>
-          </div>
-        </div>
+          <button class="palantir-action-btn" onclick="SLPalantir.resolveGraph()">Initialize Entity Reactor</button>
 
-        <!-- Graph Explorer Area -->
-        <div class="palantir-card" style="display:flex;flex-direction:column">
-          <div class="palantir-card-title" style="display:flex;justify-content:space-between;align-items:center">
-            <span>🕸️ OpenPlanter Entity Relationship Canvas</span>
-            <span style="font-size:0.68rem;color:#00e676;font-family:monospace" id="palantirGraphStats">5 Nodes · 5 Edges Resolved</span>
+          <div class="palantir-layer-panel">
+            <div class="palantir-layer-title">Signal layers</div>
+            <label class="palantir-toggle"><input type="checkbox" id="palantirLayerLLC" checked onchange="SLPalantir.toggleLayer('llc')" /> CRM company links</label>
+            <label class="palantir-toggle"><input type="checkbox" id="palantirLayerProperty" checked onchange="SLPalantir.toggleLayer('property')" /> Address on file</label>
+            <label class="palantir-toggle"><input type="checkbox" id="palantirLayerRelatives" checked onchange="SLPalantir.toggleLayer('relatives')" /> Recorded relatives</label>
           </div>
-          <div id="palantirGraphCanvas" class="palantir-graph-canvas"></div>
-        </div>
+          <p class="palantir-hud-help">Click any rendered signal in the reactor to inspect its type, provenance, confidence, and safe metadata.</p>
+        </section>
+
+        <section class="palantir-hud-shell palantir-reactor-panel" aria-labelledby="palantirGraphHeading">
+          <div class="palantir-reactor-head">
+            <span class="palantir-section-index">01.2</span><span id="palantirGraphHeading" class="palantir-card-title" style="margin:0">Entity relationship reactor</span>
+            <span class="palantir-live-readout" id="palantirGraphStats" aria-live="polite">STANDBY</span>
+          </div>
+          <div id="palantirGraphCanvas" class="palantir-reactor-stage"></div>
+        </section>
+
+        <aside class="palantir-hud-shell palantir-inspector-panel" aria-labelledby="palantirInspectorHeading">
+          <div class="palantir-inspector-head"><div class="palantir-card-title" style="margin:0"><span class="palantir-section-index">01.3</span><span id="palantirInspectorHeading">Signal inspector</span></div></div>
+          <div id="palantirNodeInspector" class="palantir-inspector-body" aria-live="polite">
+            <div class="palantir-inspector-orb">STANDBY</div>
+            <p class="palantir-inspector-hint">Resolve a subject, then select a reactor node to examine its CRM-backed provenance.</p>
+          </div>
+        </aside>
       </div>
     </div><!-- end palantirViewGraph -->
 
-    <!-- Subtab 2: OSIRIS Situation Room -->
     <div class="palantir-subtab-view" id="palantirViewOsiris" style="display:none">
-      <div class="palantir-main-grid" style="grid-template-columns: 1fr 340px">
-        <!-- 3D Tactical Map Canvas -->
-        <div class="palantir-card" style="padding:0;overflow:hidden;position:relative;min-height:540px">
-          <div class="palantir-map-overlay-title">🌍 OSIRIS 3D Tactical Threat Globe · SWFL / FL Sector</div>
-          <div id="osirisMapContainer" style="width:100%;height:100%;min-height:540px;background:#090d16"></div>
-        </div>
-
-        <!-- Live Feeds Panel -->
-        <div class="palantir-card">
-          <div class="palantir-card-title">📡 Live Incident &amp; Threat Streams</div>
-          <div id="osirisFeedList" class="palantir-feed-list">
-            <div class="palantir-empty"><div class="empty-icon">📡</div><div class="empty-text">Loading live OSIRIS threat streams...</div></div>
+      <div class="palantir-main-grid palantir-osiris-grid">
+        <section class="palantir-hud-shell palantir-map-card" aria-label="OSIRIS CRM-backed field grid">
+          <div class="palantir-map-overlay-title">OSIRIS // live lead field grid</div>
+          <div class="palantir-map-controls">
+            <select id="osirisCountyFilter" aria-label="Filter OSIRIS feeds by county" onchange="SLPalantir.refreshOsiris()">
+              <option value="">All active counties</option>
+              <option value="Lee">Lee</option>
+              <option value="Collier">Collier</option>
+              <option value="Charlotte">Charlotte</option>
+              <option value="Sarasota">Sarasota</option>
+            </select>
+            <button type="button" onclick="SLPalantir.refreshOsiris()">Refresh</button>
           </div>
-        </div>
+          <div id="osirisMapContainer" class="palantir-map-container"></div>
+        </section>
+
+        <section class="palantir-hud-shell palantir-panel" aria-labelledby="osirisStreamHeading">
+          <div class="palantir-card-title"><span class="palantir-section-index">02.1</span><span id="osirisStreamHeading">Active signal stream</span><span class="palantir-card-meta" id="osirisFeedStatus">Loading</span></div>
+          <p class="palantir-supporting-copy">Select a stream item to focus the map. Map-reference pins are explicitly labeled and never presented as incidents.</p>
+          <div id="osirisFeedList" class="palantir-feed-list">
+            <div class="palantir-empty"><div class="empty-icon">SYSTEM LOADING</div><div class="empty-text">Loading CRM-backed OSIRIS signals.</div></div>
+          </div>
+        </section>
       </div>
     </div><!-- end palantirViewOsiris -->
 
-    <!-- Subtab 3: SPECTRA Social & Breach Matrix -->
     <div class="palantir-subtab-view" id="palantirViewSpectra" style="display:none">
-      <div class="palantir-main-grid" style="grid-template-columns: 360px 1fr">
-        <!-- Breach Query Tool -->
-        <div class="palantir-card">
-          <div class="palantir-card-title">🕵️ SPECTRA Infostealer Search</div>
-          <p style="font-size:0.72rem;color:var(--palantir-muted);margin:0 0 12px">Free Hudson Rock Cavalier lookup (email or username). No paid Have I Been Pwned. Never invents hits.</p>
-          <div class="palantir-field" style="margin-bottom:12px">
-            <label>Query Target (Email or Username)</label>
-            <input type="text" id="spectraQueryInput" placeholder="subject@email.com or jsmith239" />
+      <div class="palantir-main-grid palantir-spectra-grid">
+        <section class="palantir-hud-shell palantir-panel" aria-labelledby="spectraSearchHeading">
+          <div class="palantir-card-title"><span class="palantir-section-index">03.1</span><span id="spectraSearchHeading">Signal acquisition</span><span class="palantir-card-meta">Provider gated</span></div>
+          <p class="palantir-supporting-copy">Run a direct email or username check against the configured SPECTRA provider. Phone numbers return an explicit capability limit; the system never substitutes or guesses.</p>
+          <div class="palantir-field">
+            <label for="spectraQueryInput">Email or username</label>
+            <input type="text" id="spectraQueryInput" placeholder="name@example.com or username" autocomplete="off" />
           </div>
-          <button class="palantir-action-btn" onclick="SLPalantir.runBreachLookup()">🔍 Run SPECTRA Breach Scan</button>
-          <div id="spectraBreachResult" style="margin-top:14px;display:none"></div>
-        </div>
+          <button class="palantir-action-btn" onclick="SLPalantir.runBreachLookup()">Run Live SPECTRA Scan</button>
+          <div id="spectraScanStatus" class="palantir-spectra-console" aria-live="polite">
+            <div class="palantir-risk-dial"><span>WAIT</span></div>
+            <div class="palantir-scan-copy"><strong>Scan idle</strong><small>No provider query has been sent.</small></div>
+          </div>
+          <div id="spectraBreachResult" style="display:none" aria-live="polite"></div>
+        </section>
 
-        <!-- Social Geotag & Location Clustering -->
-        <div class="palantir-card">
-          <div class="palantir-card-title">📍 Social Geotags &amp; Posting Frequency Clusters</div>
-          <p style="font-size:0.72rem;color:var(--palantir-muted);margin:0 0 12px">Analyzes Instagram, Facebook, and X geotags to map subject travel patterns and high-frequency hubs.</p>
+        <section class="palantir-hud-shell palantir-panel" aria-labelledby="spectraGeoHeading">
+          <div class="palantir-card-title"><span class="palantir-section-index">03.2</span><span id="spectraGeoHeading">Verified location layer</span><span class="palantir-card-meta">No invention</span></div>
+          <p class="palantir-supporting-copy">This display only renders verified geotag data. A lack of source data stays a lack of source data.</p>
           <div id="spectraGeotagCluster">
-            <div class="palantir-empty"><div class="empty-icon">📍</div><div class="empty-text">Run a SPECTRA lookup or select a subject to plot geotags.</div></div>
+            <div class="palantir-empty"><div class="empty-icon">AWAITING VERIFIED DATA</div><div class="empty-text">SPECTRA has no verified geotag data to render for the current query.</div></div>
           </div>
-        </div>
+        </section>
       </div>
     </div><!-- end palantirViewSpectra -->
 
-    <!-- Subtab 4: Palantir AI Dossier Generator -->
     <div class="palantir-subtab-view" id="palantirViewDossier" style="display:none">
-      <div class="palantir-card">
-        <div class="palantir-card-title" style="display:flex;justify-content:space-between;align-items:center">
-          <span>⚡ Palantir AI Executive Dossier</span>
-          <button class="palantir-action-btn" onclick="window.print()" style="width:auto;padding:4px 12px;font-size:0.7rem">🖨️ Print / Export PDF</button>
+      <section class="palantir-hud-shell palantir-panel" aria-labelledby="palantirDossierHeading">
+        <div class="palantir-card-title">
+          <span class="palantir-section-index">04.1</span><span id="palantirDossierHeading">Compiled CRM intelligence brief</span><span class="palantir-card-meta">Evidence bounded</span>
+          <button class="palantir-action-btn" onclick="window.print()" style="width:auto;padding:7px 12px;margin-left:auto">Print / Export PDF</button>
         </div>
-        <div id="palantirDossierContent" style="margin-top:16px"></div>
-      </div>
+        <div id="palantirDossierContent" style="margin-top:16px" aria-live="polite"></div>
+      </section>
     </div><!-- end palantirViewDossier -->
   </div>
 </div><!-- end tabPalantir -->
@@ -6281,7 +6294,7 @@
 <script defer src="/sl-enrichment.js?v=1"></script>
 <script defer src="/sl-tasks.js?v=2"></script>
 <script defer src="/sl-osint.js?v=7"></script>
-<script defer src="/sl-palantir.js?v=3"></script>
+<script defer src="/sl-palantir.js?v=5"></script>
 <script defer src="/sl-alpr.js?v=2"></script>
 <script defer src="/sl-paperwork.js?v=4"></script>
 <script defer src="/sl-automations.js?v=4"></script>
