@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-20 (Palantir Command HUD)
+
+### Added
+- **Palantir reactor HUD** — rebuilt the intelligence workspace as an interactive, read-only holographic command surface with exact CRM entity resolution, selectable relationship nodes, provenance and confidence inspection, and visual-layer filtering.
+- **Operational intelligence controls** — added OSIRIS county filtering, feed refresh, and stream-to-map focus; SPECTRA scan state rendering that distinguishes no result, provider unavailability, and absent verified geotags; and a CRM-bounded dossier command surface.
+
+### Verified
+- Commit `913d4ce` deployed successfully through Hetzner workflow [`32397812988`](https://github.com/Shamrock2245/shamrock-leads/actions/runs/32397812988). The v5 Palantir CSS and JavaScript assets returned `200`; final `/health`, DocuSeal, Bail School, paperwork, and Postiz `/auth` probes returned `200`.
+- The focused Palantir fail-closed suite passed (**6**); JavaScript syntax and diff checks passed. The stable GAS URL is unavailable in this clean checkout, so GAS health was not re-probed. The strict local secrets check remains red without production environment files and sibling repositories; it is not treated as green.
+- This user-interface release does **not** close B3/B5, C3, or D2, enable `full_auto` outreach, or mark the platform production-hardened. No person-level record, intake, bond, packet, signature, payment, or client contact was created during implementation or validation.
+
 ## [Unreleased] — 2026-08-19 (Ohio source-contract guard pilot)
 
 ### Added

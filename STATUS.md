@@ -1,6 +1,6 @@
 # ShamrockLeads — True Status
 
-> **Last verified:** 2026-08-19
+> **Last verified:** 2026-08-20
 > **VPS:** Hetzner **CCX33** (8 dedicated vCPU / 32 GB RAM) as of 2026-08-13 — compose ceilings raised (`docs/runbooks/vps-ccx33-resize.md`). Root disk was **not** grown with the type change (still ~38 GB); grow to 160–240 GB in the Cloud Console.
 > **Repo:** `Shamrock2245/shamrock-leads` · branch `main`  
 > **Product URL:** `https://leads.shamrockbailbonds.biz`  
@@ -15,6 +15,14 @@
 > **All hosts:** [`docs/SUBDOMAINS.md`](./docs/SUBDOMAINS.md) · `config/subdomains.py` · `python scripts/check_subdomains.py --live`
 
 ---
+
+## Palantir Command HUD deployment (2026-08-20)
+
+Commit `913d4ce` deployed successfully through the Hetzner workflow [`32397812988`](https://github.com/Shamrock2245/shamrock-leads/actions/runs/32397812988). The Palantir workspace now serves a reactor-style, read-only command HUD: exact CRM entity resolution with node inspection and visual layer filters; OSIRIS county-filtered feed refresh and stream-to-map focus; SPECTRA provider-gated scan states; and a CRM-bounded dossier view. The existing Palantir endpoints and their fail-closed server behavior were retained; no bond, paperwork, signature, payment, outreach, surety, or GAS workflow changed.
+
+Focused Palantir fail-closed tests passed (**6**); the controller parsed successfully; and `git diff --check` was clean. A post-deployment `/health` probe returned `{"status":"ok","engine":"fastapi","total_arrests":31802}`. The deployed v5 Palantir CSS and JavaScript assets returned `200`; DocuSeal, Bail School, paperwork, and Postiz `/auth` also returned `200`. The stable GAS URL remains intentionally unavailable in this clean checkout, so `?action=health` was not re-probed. The strict local secrets check remains red because production environment files and sibling repositories are intentionally absent; it is not treated as green.
+
+This release does **not** close B3/B5, C3, or D2, does not enable `full_auto` outreach, and does not mark the platform production-hardened. No person-level record, intake, bond, packet, signature, payment, or client contact was created during implementation or verification.
 
 ## VPS resize (2026-08-13)
 
