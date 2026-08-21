@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-21 (Confirmed Lee booking intake)
+
+### Added
+- **Staff-confirmed Lee booking intake** — Palantir now accepts one official HTTPS Lee County booking URL, projects a minimized public booking preview, and requires staff acknowledgement plus exact booking-number re-entry before it creates or refreshes an **ArrestLead only**.
+- **Fail-closed source and write controls** — the route allows only the official Lee host and numeric booking ID, expires previews after 15 minutes, uses a server-side preview ID, protects the canonical booking/county/state identity, stops cross-jurisdiction collisions, and refuses protected downstream records.
+- **Data-minimization and audit controls** — the booking path removes address, DOB, phone, email, relative, household, raw-response, and enrichment data. It records only non-PII confirmation metadata and never starts an OSINT, bond, paperwork, signature, payment, outreach, surety, or POA flow.
+
+### Verified
+- Commits [`f1a151c`](https://github.com/Shamrock2245/shamrock-leads/commit/f1a151c1a1e297ddfecfb6cf41023213d96a4b01) and cache-safe asset revision [`bb1a1a8`](https://github.com/Shamrock2245/shamrock-leads/commit/bb1a1a83b0e478ee1773e774f306b04f3e15aef0) deployed successfully through Hetzner workflows [`32487310626`](https://github.com/Shamrock2245/shamrock-leads/actions/runs/32487310626) and [`32487698386`](https://github.com/Shamrock2245/shamrock-leads/actions/runs/32487698386).
+- Focused confirmed-booking and Palantir fail-closed tests passed (**11**); JavaScript syntax and diff checks passed. Final probes returned `200` for Auto-CRM `/health`, cache-safe Palantir v6 CSS/JavaScript, DocuSeal, Bail School, paperwork, and Postiz `/auth`.
+- The stable GAS URL is unavailable in this clean checkout, so GAS health was not re-probed. The strict local secrets check remains red without production environment files and sibling repositories; it is not treated as green. No real booking record, CRM record, bond, packet, signature, payment, or client message was created during implementation or validation.
+- This release does **not** close B3/B5, C3, or D2, enable `full_auto` outreach, or mark the platform production-hardened.
+
 ## [Unreleased] — 2026-08-20 (Palantir Command HUD)
 
 ### Added

@@ -1,6 +1,6 @@
 # ShamrockLeads — True Status
 
-> **Last verified:** 2026-08-20
+> **Last verified:** 2026-08-21
 > **VPS:** Hetzner **CCX33** (8 dedicated vCPU / 32 GB RAM) as of 2026-08-13 — compose ceilings raised (`docs/runbooks/vps-ccx33-resize.md`). Root disk was **not** grown with the type change (still ~38 GB); grow to 160–240 GB in the Cloud Console.
 > **Repo:** `Shamrock2245/shamrock-leads` · branch `main`  
 > **Product URL:** `https://leads.shamrockbailbonds.biz`  
@@ -15,6 +15,16 @@
 > **All hosts:** [`docs/SUBDOMAINS.md`](./docs/SUBDOMAINS.md) · `config/subdomains.py` · `python scripts/check_subdomains.py --live`
 
 ---
+
+## Confirmed Lee booking intake deployment (2026-08-21)
+
+Commits [`f1a151c`](https://github.com/Shamrock2245/shamrock-leads/commit/f1a151c1a1e297ddfecfb6cf41023213d96a4b01) and cache-safe follow-up [`bb1a1a8`](https://github.com/Shamrock2245/shamrock-leads/commit/bb1a1a83b0e478ee1773e774f306b04f3e15aef0) deployed successfully through Hetzner workflows [`32487310626`](https://github.com/Shamrock2245/shamrock-leads/actions/runs/32487310626) and [`32487698386`](https://github.com/Shamrock2245/shamrock-leads/actions/runs/32487698386). Palantir now has a staff-gated **Confirmed Booking Intake** workspace for one official HTTPS Lee County booking URL. It projects only published booking facts into a 15-minute server-side preview, requires staff acknowledgement plus exact booking-number re-entry, and then creates or refreshes an **ArrestLead only**.
+
+The endpoint accepts only the official Lee host and numeric booking ID, strips address, DOB, contact, relative, household, raw-response, and enrichment data, and fails closed for unsupported URLs, mismatched source booking numbers, expired/consumed previews, cross-jurisdiction booking collisions, unavailable canonical deduplication guards, and protected downstream records. It does not create a Defendant, Indemnitor, Match, BondCase, Packet, Signature, Payment, surety/POA action, client contact, or `full_auto` behavior.
+
+Focused booking-intake and existing Palantir tests passed (**11**); JavaScript syntax and diff checks passed. Final probes returned `200` for Auto-CRM `/health`, Palantir JavaScript and CSS with cache-safe `v=6` references, DocuSeal, Bail School, paperwork, and Postiz `/auth`. The stable GAS URL remains unavailable in this clean checkout, so `?action=health` was not re-probed. The strict local secrets check remains red because production environment files and sibling repositories are intentionally absent; it is not treated as green. No real booking record, CRM record, bond, paperwork, signature, payment, or client message was created during implementation or verification.
+
+This release does **not** close B3/B5, C3, or D2, does not mark the platform production-hardened, and does not alter the production checklist's human-gated items.
 
 ## Palantir Command HUD deployment (2026-08-20)
 
