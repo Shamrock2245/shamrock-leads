@@ -532,3 +532,104 @@
   #tabPalantir::before,#tabPalantir .palantir-header-right,#tabPalantir .palantir-subtabs-bar { display:none !important; }
   #tabPalantir .palantir-hud-shell,#tabPalantir .palantir-card,#tabPalantir .palantir-dossier-paper { color:#071923; background:#fff; box-shadow:none; border-color:#91a9b6; }
 }
+
+/* ── Provenance-first command surfaces ─────────────────────────────────── */
+#tabPalantir .palantir-contract-badge { display:grid; gap:2px; min-width:138px; padding:9px 12px; color:var(--hud-text); background:linear-gradient(135deg,rgba(11,67,83,.32),rgba(10,23,38,.7)); border:1px solid rgba(98,231,255,.38); border-radius:2px 11px 2px 11px; box-shadow:inset 0 0 18px rgba(98,231,255,.07); }
+#tabPalantir .palantir-contract-badge span,#tabPalantir .palantir-contract-badge small { color:var(--hud-muted); font:700 .48rem/1.2 var(--hud-mono); letter-spacing:.1em; text-transform:uppercase; }
+#tabPalantir .palantir-contract-badge strong { color:var(--hud-cyan); font:800 .64rem/1.25 var(--hud-mono); letter-spacing:.06em; }
+#tabPalantir .palantir-relationship-focus { margin-top:14px; padding:11px; background:rgba(2,13,22,.55); border:1px solid var(--hud-line); border-radius:2px 12px 2px 12px; }
+#tabPalantir .palantir-relationship-focus label { display:block; margin-bottom:7px; color:var(--hud-cyan); font:700 .53rem/1.2 var(--hud-mono); letter-spacing:.1em; text-transform:uppercase; }
+#tabPalantir .palantir-relationship-focus select { width:100%; }
+#tabPalantir .palantir-evidence-matrix { margin-top:13px; padding:12px; color:var(--hud-muted); background:linear-gradient(145deg,rgba(4,22,34,.76),rgba(2,10,18,.88)); border:1px solid rgba(98,231,255,.23); border-radius:2px 14px 2px 14px; box-shadow:inset 3px 0 0 rgba(98,231,255,.4); }
+#tabPalantir .palantir-matrix-head,#tabPalantir .palantir-ledger-head { display:flex; align-items:center; justify-content:space-between; gap:10px; color:var(--hud-cyan); font:800 .55rem/1.2 var(--hud-mono); letter-spacing:.09em; text-transform:uppercase; }
+#tabPalantir .palantir-matrix-head small,#tabPalantir .palantir-ledger-head small { color:var(--hud-muted); font:600 .46rem/1.2 var(--hud-mono); letter-spacing:.07em; }
+#tabPalantir .palantir-evidence-matrix p { margin:9px 0 0; color:var(--hud-muted); font:500 .61rem/1.45 var(--hud-sans); }
+#tabPalantir .palantir-matrix-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:6px; margin-top:11px; }
+#tabPalantir .palantir-matrix-grid div { padding:7px 5px; text-align:center; background:rgba(4,31,46,.5); border:1px solid rgba(98,231,255,.12); }
+#tabPalantir .palantir-matrix-grid span { display:block; color:var(--hud-muted); font:600 .43rem/1.2 var(--hud-mono); letter-spacing:.06em; text-transform:uppercase; }
+#tabPalantir .palantir-matrix-grid strong { display:block; margin-top:4px; color:var(--hud-text); font:800 .85rem/1 var(--hud-sans); }
+#tabPalantir .palantir-matrix-sources { display:flex; flex-wrap:wrap; gap:5px; margin-top:9px; }
+#tabPalantir .palantir-matrix-sources span { padding:3px 5px; color:var(--hud-green); background:rgba(24,87,72,.17); border:1px solid rgba(64,228,164,.22); font:700 .45rem/1.2 var(--hud-mono); letter-spacing:.06em; }
+#tabPalantir .palantir-ledger-panel { margin-top:14px; padding-top:13px; border-top:1px solid var(--hud-line); }
+#tabPalantir .palantir-session-ledger { display:grid; gap:5px; margin-top:9px; }
+#tabPalantir .palantir-ledger-empty { padding:9px; color:var(--hud-muted); background:rgba(3,13,22,.48); border:1px dashed rgba(98,231,255,.2); font:500 .58rem/1.4 var(--hud-sans); }
+#tabPalantir .palantir-ledger-entry { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:7px 8px; background:rgba(3,16,27,.64); border-left:2px solid var(--hud-cyan); }
+#tabPalantir .palantir-ledger-entry.is-empty,#tabPalantir .palantir-ledger-entry.is-filtered { border-left-color:var(--hud-amber); }
+#tabPalantir .palantir-ledger-entry.is-unavailable { border-left-color:var(--hud-danger); }
+#tabPalantir .palantir-ledger-entry.is-reference { border-left-color:var(--hud-muted); }
+#tabPalantir .palantir-ledger-entry div { min-width:0; }
+#tabPalantir .palantir-ledger-entry strong,#tabPalantir .palantir-ledger-entry span { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#tabPalantir .palantir-ledger-entry strong { color:var(--hud-text); font:700 .58rem/1.25 var(--hud-sans); }
+#tabPalantir .palantir-ledger-entry span,#tabPalantir .palantir-ledger-entry time { color:var(--hud-muted); font:600 .46rem/1.25 var(--hud-mono); }
+#tabPalantir .palantir-ledger-entry time { flex:0 0 auto; }
+#tabPalantir .palantir-osiris-telemetry { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; margin-top:12px; }
+#tabPalantir .palantir-osiris-telemetry span { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:7px 8px; color:var(--hud-muted); background:rgba(4,25,38,.52); border:1px solid rgba(98,231,255,.14); font:600 .5rem/1.25 var(--hud-mono); text-transform:uppercase; }
+#tabPalantir .palantir-osiris-telemetry strong { color:var(--hud-cyan); font-size:.62rem; }
+#tabPalantir .palantir-provider-contract { display:grid; gap:4px; margin:13px 0; padding:10px 11px; background:rgba(13,41,57,.42); border:1px solid rgba(98,231,255,.28); border-radius:2px 12px 2px 12px; }
+#tabPalantir .palantir-provider-contract span,#tabPalantir .palantir-provider-contract small { color:var(--hud-muted); font:600 .48rem/1.3 var(--hud-mono); letter-spacing:.07em; text-transform:uppercase; }
+#tabPalantir .palantir-provider-contract strong { color:var(--hud-cyan); font:800 .6rem/1.3 var(--hud-mono); letter-spacing:.06em; }
+#tabPalantir .palantir-dossier-manifest { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:1px; margin-top:14px; overflow:hidden; background:var(--hud-line); border:1px solid var(--hud-line-bright); border-radius:2px 12px 2px 12px; }
+#tabPalantir .palantir-dossier-manifest > div:not(.palantir-dossier-box-title) { display:grid; gap:5px; padding:9px; background:rgba(3,18,29,.9); }
+#tabPalantir .palantir-dossier-manifest span { color:var(--hud-muted); font:600 .45rem/1.15 var(--hud-mono); letter-spacing:.06em; text-transform:uppercase; }
+#tabPalantir .palantir-dossier-manifest strong { color:var(--hud-text); font:800 .62rem/1.25 var(--hud-mono); overflow-wrap:anywhere; }
+#tabPalantir .palantir-dossier-manifest .palantir-dossier-box-title { grid-column:1 / -1; margin:0; padding:9px; background:rgba(6,34,48,.92); }
+#tabPalantir .palantir-dossier-manifest p { grid-column:1 / -1; margin:0; padding:9px; color:var(--hud-muted); background:rgba(3,18,29,.9); font:500 .59rem/1.4 var(--hud-sans); }
+@media (max-width: 700px) {
+  #tabPalantir .palantir-contract-badge { min-width:0; }
+  #tabPalantir .palantir-matrix-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  #tabPalantir .palantir-dossier-manifest { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media print {
+  #tabPalantir .palantir-contract-badge,#tabPalantir .palantir-evidence-matrix,#tabPalantir .palantir-ledger-panel,#tabPalantir .palantir-provider-contract,#tabPalantir .palantir-osiris-telemetry { display:none !important; }
+}
+
+
+/* ── Staff-confirmed booking intake ─────────────────────────────────────── */
+#tabPalantir .palantir-booking-intake-grid { grid-template-columns:minmax(285px,.8fr) minmax(460px,1.2fr); align-items:start; }
+#tabPalantir .palantir-booking-boundary { display:grid; gap:4px; margin:14px 0; padding:11px; background:linear-gradient(135deg,rgba(9,61,74,.36),rgba(5,18,28,.72)); border:1px solid rgba(98,231,255,.28); border-radius:2px 12px 2px 12px; }
+#tabPalantir .palantir-booking-boundary span,#tabPalantir .palantir-booking-boundary small { color:var(--hud-muted); font:600 .48rem/1.3 var(--hud-mono); letter-spacing:.08em; text-transform:uppercase; }
+#tabPalantir .palantir-booking-boundary strong { color:var(--hud-cyan); font:800 .61rem/1.35 var(--hud-mono); letter-spacing:.04em; }
+#tabPalantir .palantir-booking-preview-panel { min-height:432px; }
+#tabPalantir .palantir-booking-preview { min-height:338px; margin-top:14px; }
+#tabPalantir .palantir-booking-state { display:grid; min-height:300px; align-content:center; gap:8px; padding:25px; text-align:center; background:radial-gradient(circle at center,rgba(98,231,255,.12),transparent 14rem),rgba(2,13,22,.6); border:1px dashed rgba(98,231,255,.24); }
+#tabPalantir .palantir-booking-state.is-loading { border-color:rgba(98,231,255,.5); }
+#tabPalantir .palantir-booking-state.is-error { background:radial-gradient(circle at center,rgba(255,94,122,.08),transparent 14rem),rgba(28,8,16,.55); border-color:rgba(255,94,122,.38); }
+#tabPalantir .palantir-booking-state span { color:var(--hud-cyan); font:700 .54rem/1.25 var(--hud-mono); letter-spacing:.1em; text-transform:uppercase; }
+#tabPalantir .palantir-booking-state.is-error span { color:var(--hud-danger); }
+#tabPalantir .palantir-booking-state h4 { margin:0; color:var(--hud-text); font:700 1rem/1.3 var(--hud-sans); }
+#tabPalantir .palantir-booking-state p { max-width:430px; margin:0 auto; color:var(--hud-muted); font:500 .67rem/1.55 var(--hud-sans); }
+#tabPalantir .palantir-booking-provenance { display:grid; gap:4px; padding:10px 12px; background:rgba(13,62,74,.32); border:1px solid rgba(98,231,255,.29); border-radius:2px 12px 2px 12px; }
+#tabPalantir .palantir-booking-provenance span,#tabPalantir .palantir-booking-provenance small { color:var(--hud-muted); font:600 .47rem/1.3 var(--hud-mono); letter-spacing:.07em; text-transform:uppercase; }
+#tabPalantir .palantir-booking-provenance strong { color:var(--hud-green); font:800 .59rem/1.3 var(--hud-mono); letter-spacing:.05em; }
+#tabPalantir .palantir-booking-subject { margin-top:12px; padding:13px; background:rgba(4,20,31,.75); border-left:3px solid var(--hud-cyan); }
+#tabPalantir .palantir-booking-subject h3 { margin:0; color:var(--hud-text); font:800 1rem/1.25 var(--hud-sans); }
+#tabPalantir .palantir-booking-subject p { margin:5px 0 0; color:var(--hud-muted); font:600 .58rem/1.4 var(--hud-mono); }
+#tabPalantir .palantir-booking-subject p strong { color:var(--hud-cyan); }
+#tabPalantir .palantir-booking-facts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; margin-top:12px; }
+#tabPalantir .palantir-booking-fact { padding:8px 9px; background:rgba(3,15,25,.65); border:1px solid var(--hud-line); }
+#tabPalantir .palantir-booking-fact span { display:block; color:var(--hud-muted); font:600 .45rem/1.2 var(--hud-mono); letter-spacing:.07em; text-transform:uppercase; }
+#tabPalantir .palantir-booking-fact strong { display:block; margin-top:4px; color:var(--hud-text); font:700 .63rem/1.35 var(--hud-sans); overflow-wrap:anywhere; }
+#tabPalantir .palantir-booking-charges { display:grid; gap:6px; margin-top:12px; padding:11px; background:rgba(3,14,24,.63); border:1px solid var(--hud-line); }
+#tabPalantir .palantir-booking-charges > span { color:var(--hud-amber); font:700 .49rem/1.2 var(--hud-mono); letter-spacing:.09em; text-transform:uppercase; }
+#tabPalantir .palantir-booking-charges > div { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:8px; align-items:center; padding:7px 0; border-top:1px solid rgba(98,231,255,.1); }
+#tabPalantir .palantir-booking-charges b { color:var(--hud-cyan); font:700 .55rem/1 var(--hud-mono); }
+#tabPalantir .palantir-booking-charges strong { color:var(--hud-text); font:600 .63rem/1.35 var(--hud-sans); }
+#tabPalantir .palantir-booking-charges small { color:var(--hud-green); font:700 .51rem/1 var(--hud-mono); }
+#tabPalantir .palantir-booking-charges p { margin:0; color:var(--hud-muted); font:500 .62rem/1.45 var(--hud-sans); }
+#tabPalantir .palantir-booking-confirmation { display:grid; gap:9px; margin-top:12px; padding:12px; background:rgba(39,31,10,.32); border:1px solid rgba(255,209,102,.35); border-radius:2px 13px 2px 13px; }
+#tabPalantir .palantir-booking-check { display:flex; align-items:flex-start; gap:8px; color:var(--hud-text); font:600 .63rem/1.42 var(--hud-sans); cursor:pointer; }
+#tabPalantir .palantir-booking-check input { margin-top:2px; accent-color:var(--hud-cyan); }
+#tabPalantir .palantir-booking-confirmation > label:not(.palantir-booking-check) { color:var(--hud-amber); font:700 .5rem/1.3 var(--hud-mono); letter-spacing:.07em; text-transform:uppercase; }
+#tabPalantir .palantir-booking-confirmation > label strong { color:var(--hud-text); }
+#tabPalantir .palantir-booking-confirmation .palantir-action-btn[disabled] { cursor:not-allowed; opacity:.45; filter:saturate(.45); }
+@media (max-width: 900px) {
+  #tabPalantir .palantir-booking-intake-grid { grid-template-columns:1fr !important; }
+}
+@media (max-width: 560px) {
+  #tabPalantir .palantir-booking-facts { grid-template-columns:1fr; }
+  #tabPalantir .palantir-booking-charges > div { grid-template-columns:auto 1fr; }
+  #tabPalantir .palantir-booking-charges small { grid-column:2; }
+}
+@media print {
+  #tabPalantir .palantir-booking-boundary,#tabPalantir .palantir-booking-confirmation { display:none !important; }
+}

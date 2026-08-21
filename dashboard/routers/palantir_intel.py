@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 import secrets
 from datetime import datetime, timezone
@@ -18,10 +19,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from bson import ObjectId
 from bson.errors import InvalidId
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 
+from dashboard.auth.pin_middleware import get_session_from_request, session_is_admin
 from dashboard.deps import get_collection, get_db
 from dashboard.models.palantir import (
+    BookingIntakeConfirmRequest,
+    BookingIntakePreviewRequest,
     BreachLookupItem,
     BreachLookupRequest,
     BreachLookupResponse,
@@ -47,6 +51,27 @@ _SWFL_LNG = -81.8723
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+BOOKING_INTAKE_ADMIN_KEY = os.getenv("BOOKING_INTAKE_ADMIN_KEY") or os.getenv("OSINT_ADMIN_KEY") or os.getenv("DASHBOARD_PIN", "")
+DASHBOARD_PIN = os.getenv("DASHBOARD_PIN", "")
+
+
+def _require_booking_intake_staff(
+    request: Request,
+    x_admin_key: Optional[str] = None,
+    x_admin_token: Optional[str] = None,
+) -> None:
+    """Require an existing staff session or dashboard key for booking intake writes."""
+    if get_session_from_request(request) or session_is_admin(request):
+        return
+    if BOOKING_INTAKE_ADMIN_KEY and x_admin_key and secrets.compare_digest(x_admin_key, BOOKING_INTAKE_ADMIN_KEY):
+        return
+    if DASHBOARD_PIN and x_admin_token and secrets.compare_digest(x_admin_token, DASHBOARD_PIN):
+        return
+    if not BOOKING_INTAKE_ADMIN_KEY and not DASHBOARD_PIN:
+        return  # Development only; production configuration must provide a staff gate.
+    raise HTTPException(status_code=403, detail="Confirmed booking intake requires an authenticated staff session.")
 
 
 def _stable_id(*parts: str) -> str:
@@ -851,3 +876,46 @@ async def generate_dossier(req: DossierGenerateRequest):
         data_mode="live",
         warnings=list(graph.warnings),
     )
+
+
+# ── 5. Staff-confirmed Lee booking intake ────────────────────────────────────
+
+@palantir_router.post("/booking-intake/preview")
+async def booking_intake_preview(
+    req: BookingIntakePreviewRequest,
+    request: Request,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
+):
+    """Create a 15-minute, minimized preview from one allowlisted Lee booking URL."""
+    _require_booking_intake_staff(request, x_admin_key, x_admin_token)
+    from dashboard.services.confirmed_booking_intake import BookingIntakeError, build_preview
+
+    try:
+        return await build_preview(req.url, get_collection("booking_intake_previews"))
+    except BookingIntakeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@palantir_router.post("/booking-intake/confirm")
+async def booking_intake_confirm(
+    req: BookingIntakeConfirmRequest,
+    request: Request,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
+):
+    """Consume one exact-match preview and create or refresh a single ArrestLead."""
+    _require_booking_intake_staff(request, x_admin_key, x_admin_token)
+    from dashboard.services.confirmed_booking_intake import BookingIntakeError, confirm_preview
+
+    try:
+        return await confirm_preview(
+            preview_id=req.preview_id,
+            confirmed_booking_number=req.confirmed_booking_number,
+            exact_match_confirmed=req.exact_match_confirmed,
+            preview_collection=get_collection("booking_intake_previews"),
+            arrests_collection=get_collection("arrests"),
+            audit_collection=get_collection("audit_events"),
+        )
+    except BookingIntakeError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc

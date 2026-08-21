@@ -5953,6 +5953,7 @@
       </div>
       <div class="palantir-header-right">
         <div class="palantir-core-status" aria-label="Palantir core status"><strong>CORE ONLINE</strong><small>Read-only intelligence</small></div>
+        <div class="palantir-contract-badge" aria-label="Palantir data contract"><span>DATA CONTRACT</span><strong>CRM + CONFIRMED BOOKING</strong><small>No external discovery</small></div>
         <button class="palantir-btn-primary" onclick="SLPalantir.generateDossierPrompt()">Compile Intelligence Brief</button>
       </div>
     </header>
@@ -5961,7 +5962,8 @@
       <button class="palantir-subtab-btn active" data-subtab="graph" onclick="SLPalantir.switchSubtab('graph')"><span class="palantir-nav-index">01</span> Entity Reactor</button>
       <button class="palantir-subtab-btn" data-subtab="osiris" onclick="SLPalantir.switchSubtab('osiris')"><span class="palantir-nav-index">02</span> OSIRIS Field Grid</button>
       <button class="palantir-subtab-btn" data-subtab="spectra" onclick="SLPalantir.switchSubtab('spectra')"><span class="palantir-nav-index">03</span> SPECTRA Scan</button>
-      <button class="palantir-subtab-btn" data-subtab="dossier" onclick="SLPalantir.switchSubtab('dossier')"><span class="palantir-nav-index">04</span> Intelligence Brief</button>
+      <button class="palantir-subtab-btn" data-subtab="bookingIntake" onclick="SLPalantir.switchSubtab('bookingIntake')"><span class="palantir-nav-index">04</span> Confirmed Booking Intake</button>
+      <button class="palantir-subtab-btn" data-subtab="dossier" onclick="SLPalantir.switchSubtab('dossier')"><span class="palantir-nav-index">05</span> Intelligence Brief</button>
     </nav>
 
     <div class="palantir-subtab-view active" id="palantirViewGraph">
@@ -5988,6 +5990,23 @@
             <label class="palantir-toggle"><input type="checkbox" id="palantirLayerProperty" checked onchange="SLPalantir.toggleLayer('property')" /> Address on file</label>
             <label class="palantir-toggle"><input type="checkbox" id="palantirLayerRelatives" checked onchange="SLPalantir.toggleLayer('relatives')" /> Recorded relatives</label>
           </div>
+          <div class="palantir-relationship-focus">
+            <label for="palantirRelationshipFocus">Relationship focus</label>
+            <select id="palantirRelationshipFocus" onchange="SLPalantir.setRelationshipFocus(this.value)">
+              <option value="all">All recorded links</option>
+              <option value="active_bond">Active bond</option>
+              <option value="indemnified_by">Indemnitor</option>
+              <option value="family_member">Recorded relative</option>
+              <option value="same_address">Address on file</option>
+              <option value="associated_phone">Phone on file</option>
+              <option value="associated_email">Email on file</option>
+              <option value="related_arrest">Paperwork record</option>
+            </select>
+          </div>
+          <div id="palantirEvidenceMatrix" class="palantir-evidence-matrix" aria-live="polite">
+            <div class="palantir-matrix-head"><span>Evidence matrix</span><small>Awaiting exact CRM target</small></div>
+            <p>Source, relationship, and verification telemetry appears after an exact subject resolves.</p>
+          </div>
           <p class="palantir-hud-help">Click any rendered signal in the reactor to inspect its type, provenance, confidence, and safe metadata.</p>
         </section>
 
@@ -6004,6 +6023,10 @@
           <div id="palantirNodeInspector" class="palantir-inspector-body" aria-live="polite">
             <div class="palantir-inspector-orb">STANDBY</div>
             <p class="palantir-inspector-hint">Resolve a subject, then select a reactor node to examine its CRM-backed provenance.</p>
+          </div>
+          <div class="palantir-ledger-panel" aria-labelledby="palantirLedgerHeading">
+            <div class="palantir-ledger-head"><span id="palantirLedgerHeading">Session operation ledger</span><small>Local only</small></div>
+            <div id="palantirSessionLedger" class="palantir-session-ledger" role="log" aria-live="polite"><div class="palantir-ledger-empty">No Palantir operation recorded in this browser session.</div></div>
           </div>
         </aside>
       </div>
@@ -6032,6 +6055,7 @@
           <div id="osirisFeedList" class="palantir-feed-list">
             <div class="palantir-empty"><div class="empty-icon">SYSTEM LOADING</div><div class="empty-text">Loading CRM-backed OSIRIS signals.</div></div>
           </div>
+          <div id="osirisTelemetry" class="palantir-osiris-telemetry" aria-live="polite"><span>CRM signals —</span><span>Map references —</span><span>Focused —</span></div>
         </section>
       </div>
     </div><!-- end palantirViewOsiris -->
@@ -6041,6 +6065,7 @@
         <section class="palantir-hud-shell palantir-panel" aria-labelledby="spectraSearchHeading">
           <div class="palantir-card-title"><span class="palantir-section-index">03.1</span><span id="spectraSearchHeading">Signal acquisition</span><span class="palantir-card-meta">Provider gated</span></div>
           <p class="palantir-supporting-copy">Run a direct email or username check against the configured SPECTRA provider. Phone numbers return an explicit capability limit; the system never substitutes or guesses.</p>
+          <div class="palantir-provider-contract" role="status"><span>Provider boundary</span><strong>HUDSON ROCK // EMAIL OR USERNAME</strong><small>Results are transient. The query is not attached to the CRM brief.</small></div>
           <div class="palantir-field">
             <label for="spectraQueryInput">Email or username</label>
             <input type="text" id="spectraQueryInput" placeholder="name@example.com or username" autocomplete="off" />
@@ -6062,6 +6087,29 @@
         </section>
       </div>
     </div><!-- end palantirViewSpectra -->
+
+    <div class="palantir-subtab-view" id="palantirViewBookingIntake" style="display:none">
+      <div class="palantir-main-grid palantir-booking-intake-grid">
+        <section class="palantir-hud-shell palantir-panel" aria-labelledby="bookingIntakeHeading">
+          <div class="palantir-card-title"><span class="palantir-section-index">04.1</span><span id="bookingIntakeHeading">Lee County booking intake</span><span class="palantir-card-meta">Staff confirmation required</span></div>
+          <p class="palantir-supporting-copy">Paste one official Lee County booking link. The system fetches only published booking facts, creates a temporary review preview, and never performs contact, address, relative, household, or external-person enrichment.</p>
+          <div class="palantir-booking-boundary" role="status"><span>Accepted source</span><strong>HTTPS // sheriffleefl.org // booking id</strong><small>Lee, FL only. Unsupported hosts are rejected before any request.</small></div>
+          <div class="palantir-field">
+            <label for="palantirBookingUrl">Official booking page URL</label>
+            <input type="url" id="palantirBookingUrl" placeholder="https://www.sheriffleefl.org/booking/?id=…" autocomplete="off" />
+          </div>
+          <button class="palantir-action-btn" onclick="SLPalantir.previewBookingIntake()">Preview Published Booking Facts</button>
+          <p class="palantir-hud-help">A preview expires in 15 minutes and is not an arrest lead. Staff must acknowledge the exact booking and re-enter its number before any CRM write is allowed.</p>
+        </section>
+
+        <section class="palantir-hud-shell palantir-panel palantir-booking-preview-panel" aria-labelledby="bookingPreviewHeading">
+          <div class="palantir-card-title"><span class="palantir-section-index">04.2</span><span id="bookingPreviewHeading">Exact-match review</span><span class="palantir-card-meta" id="palantirBookingPreviewStatus">Standby</span></div>
+          <div id="palantirBookingPreview" class="palantir-booking-preview" aria-live="polite">
+            <div class="palantir-empty"><div class="empty-icon">NO BOOKING PREVIEW</div><div class="empty-text">Paste one supported official booking URL to inspect its minimized published facts before confirming an arrest-lead intake.</div></div>
+          </div>
+        </section>
+      </div>
+    </div><!-- end palantirViewBookingIntake -->
 
     <div class="palantir-subtab-view" id="palantirViewDossier" style="display:none">
       <section class="palantir-hud-shell palantir-panel" aria-labelledby="palantirDossierHeading">

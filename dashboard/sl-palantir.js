@@ -22,16 +22,23 @@
   let _mapReady = false;
   let _mapMarkers = new Map();
   let _osirisFeeds = [];
+  let _osirisFocusedId = null;
+  let _sessionLedger = [];
+  let _bookingPreview = null;
 
   window.SLPalantir = {
     init,
     switchSubtab,
     resolveGraph,
     toggleLayer,
+    setRelationshipFocus,
     selectNode,
     refreshOsiris,
     focusOsirisFeed,
     runBreachLookup,
+    previewBookingIntake,
+    updateBookingConfirmState,
+    confirmBookingIntake,
     generateDossierPrompt,
   };
 
@@ -66,6 +73,63 @@
       <p class="palantir-inspector-hint">Resolve a subject, then select a reactor node to inspect its CRM-backed provenance and relationship confidence.</p>`;
   }
 
+  function _sessionTime() {
+    return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  function _recordOperation(label, outcome, source) {
+    _sessionLedger.unshift({ label, outcome, source, time: _sessionTime() });
+    _sessionLedger = _sessionLedger.slice(0, 6);
+    _renderSessionLedger();
+  }
+
+  function _renderSessionLedger() {
+    const ledger = $('palantirSessionLedger');
+    if (!ledger) return;
+    if (!_sessionLedger.length) {
+      ledger.innerHTML = '<div class="palantir-ledger-empty">No Palantir operation recorded in this browser session.</div>';
+      return;
+    }
+    ledger.innerHTML = _sessionLedger.map(entry => `
+      <div class="palantir-ledger-entry is-${_esc(entry.outcome).toLowerCase()}">
+        <div><strong>${_esc(entry.label)}</strong><span>${_esc(entry.source)}</span></div>
+        <time>${_esc(entry.time)}</time>
+      </div>`).join('');
+  }
+
+  function _relationshipFocus() {
+    return $('palantirRelationshipFocus')?.value || 'all';
+  }
+
+  function _renderEvidenceMatrix(allNodes, visibleNodes, edges, mode, relationshipFocus) {
+    const matrix = $('palantirEvidenceMatrix');
+    if (!matrix) return;
+    if (!allNodes.length) {
+      matrix.innerHTML = '<div class="palantir-matrix-head"><span>Evidence matrix</span><small>No CRM target</small></div><p>No evidence telemetry exists until an exact CRM subject resolves.</p>';
+      return;
+    }
+    const verified = visibleNodes.filter(node => node.verified !== false).length;
+    const unverified = Math.max(0, visibleNodes.length - verified);
+    const sources = [...new Set(visibleNodes.map(node => String(node.source || 'unknown').toUpperCase()))].slice(0, 3);
+    const typeCounts = visibleNodes.reduce((counts, node) => {
+      const key = String(node.type || 'record').replace(/_/g, ' ');
+      counts[key] = (counts[key] || 0) + 1;
+      return counts;
+    }, {});
+    const typeSummary = Object.entries(typeCounts).slice(0, 4).map(([type, count]) => `${count} ${type}`).join(' · ') || 'No visible signals';
+    const focusLabel = relationshipFocus === 'all' ? 'All link types' : relationshipFocus.replace(/_/g, ' ');
+    matrix.innerHTML = `
+      <div class="palantir-matrix-head"><span>Evidence matrix</span><small>${_esc(String(mode || 'unknown').toUpperCase())} // ${_esc(focusLabel)}</small></div>
+      <div class="palantir-matrix-grid">
+        <div><span>Visible</span><strong>${visibleNodes.length}</strong></div>
+        <div><span>Links</span><strong>${edges.length}</strong></div>
+        <div><span>Verified</span><strong>${verified}</strong></div>
+        <div><span>Unverified</span><strong>${unverified}</strong></div>
+      </div>
+      <p>${_esc(typeSummary)}</p>
+      <div class="palantir-matrix-sources">${sources.length ? sources.map(source => `<span>${_esc(source)}</span>`).join('') : '<span>NO SOURCE LABEL</span>'}</div>`;
+  }
+
   function init() {
     switchSubtab(_activeSubtab, { skipDossierPrompt: true });
     const input = $('palantirSubjectInput');
@@ -87,6 +151,7 @@
       }
       _setInspectorPrompt();
     }
+    _renderSessionLedger();
   }
 
   function switchSubtab(subtab, options = {}) {
@@ -97,7 +162,7 @@
       button.setAttribute('aria-pressed', String(active));
     });
 
-    ['graph', 'osiris', 'spectra', 'dossier'].forEach(name => {
+    ['graph', 'osiris', 'spectra', 'bookingIntake', 'dossier'].forEach(name => {
       const view = $('palantirView' + name.charAt(0).toUpperCase() + name.slice(1));
       if (!view) return;
       const active = name === subtab;
@@ -173,10 +238,12 @@
         })}</div>`;
         if (stats) stats.textContent = `HTTP ${response.status}`;
         _setInspectorPrompt();
+        _recordOperation('Entity reactor', 'unavailable', 'CRM graph request');
         return;
       }
       _currentGraph = await response.json();
       _selectedNodeId = (_currentGraph.nodes || []).find(node => String(node.id).startsWith('subj_'))?.id || _currentGraph.nodes?.[0]?.id || null;
+      _recordOperation('Entity reactor', _currentGraph.subject_found ? 'live' : 'empty', 'CRM graph response');
       _renderGraph();
     } catch (error) {
       if (canvas) canvas.innerHTML = `<div class="palantir-reactor-empty">${_statePanel({
@@ -187,6 +254,7 @@
       })}</div>`;
       if (stats) stats.textContent = 'OFFLINE';
       _setInspectorPrompt();
+      _recordOperation('Entity reactor', 'unavailable', 'CRM network');
     }
   }
 
@@ -195,6 +263,16 @@
       toast(`The ${layer} layer will apply when a CRM target is resolved`, 'info');
       return;
     }
+    _recordOperation('Signal layer', 'filtered', 'Session-local graph view');
+    _renderGraph();
+  }
+
+  function setRelationshipFocus() {
+    if (!_currentGraph) {
+      toast('Relationship focus will apply when a CRM target is resolved', 'info');
+      return;
+    }
+    _recordOperation('Relationship focus', 'filtered', 'Session-local graph view');
     _renderGraph();
   }
 
@@ -224,7 +302,12 @@
 
     const allNodes = _currentGraph.nodes || [];
     const nodes = _visibleNodes();
-    const edges = (_currentGraph.edges || []).filter(edge => nodes.some(node => node.id === edge.source) && nodes.some(node => node.id === edge.target));
+    const relationshipFocus = _relationshipFocus();
+    const edges = (_currentGraph.edges || []).filter(edge => (
+      nodes.some(node => node.id === edge.source) &&
+      nodes.some(node => node.id === edge.target) &&
+      (relationshipFocus === 'all' || edge.relation === relationshipFocus)
+    ));
     const warnings = _currentGraph.warnings || [];
     const mode = _currentGraph.data_mode || (_currentGraph.subject_found ? 'live' : 'empty');
 
@@ -234,6 +317,7 @@
     }
 
     if (!nodes.length) {
+      _renderEvidenceMatrix(allNodes, nodes, edges, mode, relationshipFocus);
       const copy = allNodes.length
         ? 'All available records are currently hidden by the selected signal-layer filters.'
         : 'No matching CRM record was found. Enter an exact subject reference; the reactor will not infer an identity or relationship.';
@@ -280,6 +364,7 @@
       </button>
       ${nodeMarkup}`;
     _renderInspector(selected, edges);
+    _renderEvidenceMatrix(allNodes, nodes, edges, mode, relationshipFocus);
   }
 
   function selectNode(nodeId) {
@@ -288,6 +373,7 @@
     const node = visible.find(item => item.id === nodeId);
     if (!node) return;
     _selectedNodeId = node.id;
+    _recordOperation('Signal inspector', 'focused', 'CRM graph node');
     _renderGraph();
   }
 
@@ -365,15 +451,32 @@
       if (!response.ok) {
         list.innerHTML = `<div class="palantir-empty"><div class="empty-icon">FIELD GRID UNAVAILABLE</div><div class="empty-text">The request returned status ${response.status}. No field signal is inferred.</div></div>`;
         if (status) status.textContent = `HTTP ${response.status}`;
+        _recordOperation('OSIRIS refresh', 'unavailable', 'CRM field grid');
         return;
       }
       _osirisFeeds = await response.json();
+      _osirisFocusedId = null;
       _renderOsirisFeeds();
       if (status) status.textContent = `${_osirisFeeds.length} Signals`;
+      _recordOperation('OSIRIS refresh', 'live', county ? 'County-filtered CRM feed' : 'CRM field grid');
     } catch (error) {
       list.innerHTML = '<div class="palantir-empty"><div class="empty-icon">NETWORK INTERRUPTION</div><div class="empty-text">The field grid could not be reached. No signal is inferred.</div></div>';
       if (status) status.textContent = 'Offline';
+      _recordOperation('OSIRIS refresh', 'unavailable', 'CRM network');
     }
+  }
+
+  function _renderOsirisTelemetry() {
+    const telemetry = $('osirisTelemetry');
+    if (!telemetry) return;
+    const crmCount = _osirisFeeds.filter(feed => !feed.demo).length;
+    const referenceCount = _osirisFeeds.filter(feed => feed.demo).length;
+    const alertCount = _osirisFeeds.filter(feed => ['danger', 'warning'].includes(feed.severity)).length;
+    telemetry.innerHTML = `
+      <span>CRM signals <strong>${crmCount}</strong></span>
+      <span>Map references <strong>${referenceCount}</strong></span>
+      <span>Alert level <strong>${alertCount}</strong></span>
+      <span>Focused <strong>${_osirisFocusedId ? 'YES' : 'NO'}</strong></span>`;
   }
 
   function _renderOsirisFeeds() {
@@ -387,6 +490,7 @@
 
     if (!_osirisFeeds.length) {
       list.innerHTML = '<div class="palantir-empty"><div class="empty-icon">NO ACTIVE SIGNALS</div><div class="empty-text">No CRM-backed OSIRIS signals are active for the selected field grid.</div></div>';
+      _renderOsirisTelemetry();
       return;
     }
 
@@ -409,16 +513,140 @@
           <span class="palantir-feed-source">${_esc(feed.source)}${reference}</span>
         </button>`;
     }).join('');
+    _renderOsirisTelemetry();
   }
 
   function focusOsirisFeed(feedId) {
     const feed = _osirisFeeds.find(item => item.id === feedId);
     if (!feed) return;
+    _osirisFocusedId = feedId;
     document.querySelectorAll('#tabPalantir .palantir-feed-card').forEach(card => card.classList.toggle('is-focused', card.dataset.feedId === feedId));
+    _renderOsirisTelemetry();
+    _recordOperation('OSIRIS map focus', feed.demo ? 'reference' : 'live', feed.demo ? 'Map reference' : 'CRM signal');
     const marker = _mapMarkers.get(feedId);
     if (marker && _leafletMap) {
       _leafletMap.flyTo(marker.getLatLng(), Math.max(_leafletMap.getZoom(), 11), { duration: .65 });
       marker.openPopup();
+    }
+  }
+
+  function _bookingPreviewPanel({ kicker, title, copy, state = '' }) {
+    const panel = $('palantirBookingPreview');
+    if (!panel) return;
+    panel.innerHTML = `<div class="palantir-booking-state ${state ? `is-${state}` : ''}"><span>${_esc(kicker)}</span><h4>${_esc(title)}</h4><p>${_esc(copy)}</p></div>`;
+  }
+
+  function _bookingFactRow(label, value) {
+    if (value === null || value === undefined || value === '') return '';
+    return `<div class="palantir-booking-fact"><span>${_esc(label)}</span><strong>${_esc(value)}</strong></div>`;
+  }
+
+  function _renderBookingPreview(payload) {
+    const panel = $('palantirBookingPreview');
+    const status = $('palantirBookingPreviewStatus');
+    if (!panel || !payload?.preview) return;
+    const facts = payload.preview;
+    const charges = Array.isArray(facts.charge_details) ? facts.charge_details : [];
+    const expires = payload.expires_at ? new Date(payload.expires_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'soon';
+    if (status) status.textContent = 'Review required';
+    panel.innerHTML = `
+      <div class="palantir-booking-provenance"><span>PUBLIC BOOKING PREVIEW</span><strong>${_esc(facts.parse_method || 'source parser').toUpperCase()}</strong><small>Expires ${_esc(expires)} · No address, contacts, relatives, household, DOB, or enrichment data.</small></div>
+      <div class="palantir-booking-subject"><h3>${_esc(facts.full_name)}</h3><p>Booking <strong>${_esc(facts.booking_number)}</strong> · ${_esc(facts.county)}, ${_esc(facts.state)}</p></div>
+      <div class="palantir-booking-facts">
+        ${_bookingFactRow('Facility', facts.facility)}
+        ${_bookingFactRow('Custody status', facts.custody_status || 'Not returned')}
+        ${_bookingFactRow('Bond amount', Number(facts.bond_amount || 0) > 0 ? `$${Number(facts.bond_amount).toLocaleString()}` : 'Not returned')}
+        ${_bookingFactRow('Bond type', facts.bond_type)}
+        ${_bookingFactRow('Case number', facts.case_number)}
+        ${_bookingFactRow('Court', [facts.court_date, facts.court_time, facts.court_location].filter(Boolean).join(' · ') || 'Not returned')}
+      </div>
+      <div class="palantir-booking-charges"><span>Published charges</span>${charges.length ? charges.map((charge, index) => `<div><b>${index + 1}</b><strong>${_esc(charge.charge)}</strong>${charge.bond_amount ? `<small>$${Number(charge.bond_amount).toLocaleString()}</small>` : ''}</div>`).join('') : '<p>No charges were returned by the official source.</p>'}</div>
+      <div class="palantir-booking-confirmation">
+        <label class="palantir-booking-check"><input type="checkbox" id="palantirBookingExactAck" onchange="SLPalantir.updateBookingConfirmState()" /> I confirm this is the exact published booking record I intend to create or refresh.</label>
+        <label for="palantirBookingConfirmNumber">Re-enter booking number <strong>${_esc(facts.booking_number)}</strong></label>
+        <input type="text" id="palantirBookingConfirmNumber" inputmode="numeric" autocomplete="off" oninput="SLPalantir.updateBookingConfirmState()" placeholder="Exact booking number" />
+        <button type="button" class="palantir-action-btn" id="palantirConfirmBookingBtn" onclick="SLPalantir.confirmBookingIntake()" disabled>Confirm Arrest Lead Intake</button>
+      </div>`;
+  }
+
+  async function previewBookingIntake() {
+    const url = ($('palantirBookingUrl')?.value || '').trim();
+    const status = $('palantirBookingPreviewStatus');
+    if (!url) {
+      toast('Paste one official Lee County booking URL before previewing', 'info');
+      return;
+    }
+    _bookingPreview = null;
+    if (status) status.textContent = 'Fetching';
+    _bookingPreviewPanel({ kicker: 'Booking intake // source review', title: 'Retrieving minimized booking facts', copy: 'Only the official Lee booking source is allowed. No person enrichment is performed.', state: 'loading' });
+    try {
+      const response = await fetch(`${API}/api/palantir/booking-intake/preview`, {
+        method: 'POST', headers: headers(), credentials: 'same-origin', body: JSON.stringify({ url }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const detail = payload.detail || 'The booking preview request was rejected. No data was stored.';
+        _bookingPreviewPanel({ kicker: 'Booking intake // unavailable', title: 'No confirmable booking preview', copy: detail, state: 'error' });
+        if (status) status.textContent = `HTTP ${response.status}`;
+        _recordOperation('Booking preview', 'unavailable', 'Lee booking source');
+        return;
+      }
+      _bookingPreview = payload;
+      _recordOperation('Booking preview', 'live', 'Minimized Lee booking facts');
+      _renderBookingPreview(payload);
+    } catch (error) {
+      _bookingPreviewPanel({ kicker: 'Booking intake // network interruption', title: 'Booking preview unreachable', copy: 'No record was created and no booking facts were retained by the dashboard.', state: 'error' });
+      if (status) status.textContent = 'Offline';
+      _recordOperation('Booking preview', 'unavailable', 'Lee booking network');
+    }
+  }
+
+  function updateBookingConfirmState() {
+    const button = $('palantirConfirmBookingBtn');
+    const acknowledged = Boolean($('palantirBookingExactAck')?.checked);
+    const entered = ($('palantirBookingConfirmNumber')?.value || '').trim();
+    const expected = _bookingPreview?.preview?.booking_number || '';
+    if (button) button.disabled = !(acknowledged && expected && entered === expected);
+  }
+
+  async function confirmBookingIntake() {
+    const status = $('palantirBookingPreviewStatus');
+    const facts = _bookingPreview?.preview;
+    const entered = ($('palantirBookingConfirmNumber')?.value || '').trim();
+    const acknowledged = Boolean($('palantirBookingExactAck')?.checked);
+    if (!facts || !acknowledged || entered !== facts.booking_number) {
+      toast('A current preview, acknowledgement, and exact booking-number re-entry are required', 'info');
+      return;
+    }
+    if (status) status.textContent = 'Confirming';
+    const button = $('palantirConfirmBookingBtn');
+    if (button) button.disabled = true;
+    try {
+      const response = await fetch(`${API}/api/palantir/booking-intake/confirm`, {
+        method: 'POST', headers: headers(), credentials: 'same-origin', body: JSON.stringify({
+          preview_id: _bookingPreview.preview_id,
+          confirmed_booking_number: entered,
+          exact_match_confirmed: true,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload.outcome === 'requires_staff_review') {
+        const detail = payload.detail || payload.message || 'The confirmed booking requires staff review. No record was changed.';
+        _bookingPreviewPanel({ kicker: 'Booking intake // staff review', title: 'No automatic CRM change', copy: detail, state: 'error' });
+        if (status) status.textContent = 'Review required';
+        _recordOperation('Booking confirmation', 'unavailable', 'CRM staff review');
+        return;
+      }
+      const outcome = payload.outcome === 'refreshed' ? 'refreshed' : 'created';
+      _bookingPreviewPanel({ kicker: `Booking intake // ${outcome}`, title: outcome === 'created' ? 'Arrest lead created' : 'Arrest lead refreshed', copy: 'The confirmed Lee booking is now an arrest lead only. It has not started a bond, paperwork, signature, payment, outreach, or enrichment workflow.' });
+      if (status) status.textContent = outcome.toUpperCase();
+      _recordOperation('Booking confirmation', outcome, 'CRM ArrestLead only');
+      _bookingPreview = null;
+    } catch (error) {
+      _bookingPreviewPanel({ kicker: 'Booking intake // network interruption', title: 'Confirmation unavailable', copy: 'No confirmation result was received. Review the CRM before retrying; the preview remains subject to its expiry.', state: 'error' });
+      if (status) status.textContent = 'Offline';
+      _recordOperation('Booking confirmation', 'unavailable', 'CRM network');
+      updateBookingConfirmState();
     }
   }
 
@@ -452,6 +680,7 @@
       if (!response.ok) {
         if (results) results.innerHTML = `<div class="palantir-result-note is-danger">The SPECTRA request returned status ${response.status}.</div>`;
         _setSpectraStatus({ level: 'unavailable', title: 'Provider request unavailable', detail: `The provider returned status ${response.status}.` });
+        _recordOperation('SPECTRA scan', 'unavailable', 'Hudson Rock provider');
         return;
       }
 
@@ -459,6 +688,7 @@
       const providerUnavailable = result.data_mode === 'unavailable';
       const riskLevel = result.found ? (result.risk_impact === 'high' ? 'high' : 'medium') : providerUnavailable ? 'unavailable' : 'low';
       _setSpectraStatus({ level: riskLevel, title: result.found ? `${result.total_breaches} signal${Number(result.total_breaches) === 1 ? '' : 's'} returned` : providerUnavailable ? 'Provider unavailable' : 'No signal returned', detail: result.message || 'No additional provider detail returned.' });
+      _recordOperation('SPECTRA scan', providerUnavailable ? 'unavailable' : result.found ? 'signal' : 'empty', 'Hudson Rock provider');
 
       if (!result.found || !(result.breaches || []).length) {
         if (results) results.innerHTML = `<div class="palantir-result-note ${providerUnavailable ? 'is-unavailable' : ''}">${_esc(result.message || 'No known infostealer records were returned by the configured source.')}</div>`;
@@ -480,6 +710,7 @@
     } catch (error) {
       if (results) results.innerHTML = `<div class="palantir-result-note is-danger">Network error: ${_esc(error.message)}</div>`;
       _setSpectraStatus({ level: 'unavailable', title: 'Provider network interruption', detail: 'No breach result was inferred after the network interruption.' });
+      _recordOperation('SPECTRA scan', 'unavailable', 'Hudson Rock network');
     }
   }
 
@@ -524,11 +755,15 @@
       });
       if (!response.ok) {
         if (container) container.innerHTML = _statePanel({ kicker: 'Intelligence brief // unavailable', title: 'CRM brief request failed', copy: `The request returned status ${response.status}. No finding was inferred.`, state: 'error' });
+        _recordOperation('Intelligence brief', 'unavailable', 'CRM dossier');
         return;
       }
-      _renderDossier(await response.json());
+      const dossier = await response.json();
+      _recordOperation('Intelligence brief', dossier.subject_found ? 'live' : 'empty', 'CRM dossier');
+      _renderDossier(dossier);
     } catch (error) {
       if (container) container.innerHTML = _statePanel({ kicker: 'Intelligence brief // network interruption', title: 'CRM brief unreachable', copy: `Network error: ${error.message}`, state: 'error' });
+      _recordOperation('Intelligence brief', 'unavailable', 'CRM network');
     }
   }
 
@@ -542,6 +777,8 @@
     const warnings = dossier.warnings || [];
     const proximity = dossier.threat_proximity || [];
     const mode = dossier.data_mode || (dossier.subject_found ? 'live' : 'empty');
+    const graphSummary = dossier.graph_summary || {};
+    const breachSummary = dossier.breach_summary || {};
 
     container.innerHTML = `
       <article class="palantir-dossier-paper">
@@ -556,6 +793,15 @@
         </div>
         <div class="palantir-dossier-summary"><strong>Executive summary:</strong> ${_esc(dossier.summary)}</div>
         ${warnings.length ? `<div class="palantir-dossier-warning">${warnings.map(warning => _esc(warning)).join('<br>')}</div>` : ''}
+        <section class="palantir-dossier-manifest" aria-label="Brief evidence manifest">
+          <div class="palantir-dossier-box-title">Evidence manifest</div>
+          <div><span>Graph mode</span><strong>${_esc(String(mode).toUpperCase())}</strong></div>
+          <div><span>CRM nodes</span><strong>${_esc(graphSummary.total_nodes ?? 0)}</strong></div>
+          <div><span>CRM links</span><strong>${_esc(graphSummary.total_edges ?? 0)}</strong></div>
+          <div><span>Verified links</span><strong>${_esc(graphSummary.verified_links ?? 0)}</strong></div>
+          <div><span>SPECTRA scope</span><strong>NOT ATTACHED</strong></div>
+          <p>Any SPECTRA result remains a separate, transient provider response unless a future audited workflow explicitly attaches it.</p>
+        </section>
         <div class="palantir-dossier-grid">
           <section class="palantir-dossier-box"><div class="palantir-dossier-box-title is-green">Recorded findings</div><ul class="palantir-dossier-list">${findings.length ? findings.map(finding => `<li>${_esc(finding)}</li>`).join('') : '<li>No linked CRM findings yet.</li>'}</ul></section>
           <section class="palantir-dossier-box"><div class="palantir-dossier-box-title">Spatial proximity</div>${proximity.length ? proximity.map(item => `<div class="palantir-proximity">${_esc(item.name)}: <strong>${_esc(item.distance_miles)} miles</strong></div>`).join('') : '<div class="palantir-proximity-empty">No proximity intelligence is attached. Live field-grid signals remain separate.</div>'}</section>

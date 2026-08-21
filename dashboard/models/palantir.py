@@ -158,3 +158,13 @@ class PalantirDossier(BaseModel):
 class GraphResolveRequest(BaseModel):
     target: str = Field(..., min_length=1, description="Name, booking #, or subject id")
     subject_type: str = Field("defendant", description="defendant or indemnitor")
+
+
+class BookingIntakePreviewRequest(BaseModel):
+    url: str = Field(..., min_length=12, max_length=2048, description="Supported public booking URL")
+
+
+class BookingIntakeConfirmRequest(BaseModel):
+    preview_id: str = Field(..., min_length=12, max_length=160)
+    confirmed_booking_number: str = Field(..., min_length=1, max_length=80)
+    exact_match_confirmed: bool = Field(False, description="Staff confirms the preview is the exact booking record")
