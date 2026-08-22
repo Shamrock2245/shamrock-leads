@@ -53,7 +53,7 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 |---|------|-------|------|
 | B1 | VPS: `ENV=production`, strong `SECRET_KEY`, `DASHBOARD_PIN` set | Ops | [x] *2026-07-23* — `SECRET_KEY`+`ENV=production` on VPS; CRM health `secret_key:true` |
 | B2 | `MONGODB_URI` / `MONGODB_DB_NAME` healthy; dashboard loads | Ops | [x] *2026-07-23* — `/health` ok · ~128k arrests · CRM collections reachable |
-| B3 | `GAS_WEB_APP_URL` + `GAS_API_KEY` forward write-bond / paperwork events | Ops | [ ] **Human-gated smoke pending** — GAS `action=health` returned V409 on 2026-08-12; one staff-confirmed write-bond → paperwork event is still required. |
+| B3 | `GAS_WEB_APP_URL` + `GAS_API_KEY` forward write-bond / paperwork events | Ops | [ ] **Human-gated smoke pending** — Preflight probe & runbook ready (`docs/runbooks/B3_WRITE_BOND_FORWARD_SMOKE_RUNBOOK.md`); GAS `action=health` returned V409; one staff-confirmed write-bond → paperwork event is still required. |
 | B4 | `WIX_WEBHOOK_SECRET` set; portal intake → leads intake fails closed without it | Ops | [x] *config* — secret present + CRM `wix_webhook_auth:true`; live Wix post still staff-confirm |
 | B5 | DocuSeal env (`DOCUSEAL_*`) valid; OSI and Palmetto templates resolve from the DocuSeal account | Ops | [ ] **Human-gated smoke pending** — confirm the two live templates (`DOCUSEAL_TEMPLATE_ID_OSI`, `DOCUSEAL_TEMPLATE_ID_PALMETTO`) and send one staff-approved packet. |
 | B6 | SwipeSimple pay-link path works for indemnitor premium | Ops | [x] *2026-08-04* — staff-confirmed live; SwipeSimple Retriever shows **Bail Bond Payment - Shamrock Bail Bonds** ACTIVE (74 sales) + school $199/$649 links; site popups surface correct pay links |

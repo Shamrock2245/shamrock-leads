@@ -2852,3 +2852,80 @@ async def generate_post_release_remedy_doc(request: Request):
     except Exception as exc:
         logger.exception("remedy-doc error: %s", exc)
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# WRITE-BOND → GAS FORWARDING PREFLIGHT & EXECUTION (B3 SMOKE PATH)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@paperwork_bp.api_route("/paperwork/write-bond-forward/preflight", methods=["GET", "POST"])
+async def write_bond_forward_preflight(request: Request):
+    """
+    Staff-gated preflight probe for write-bond paperwork event forwarding.
+    Evaluates Match, Case Number, Surety, POA Tier, and GAS Configuration.
+    Returns safe, non-PII eligibility state.
+    """
+    denied = _require_control_auth(request, allow_machine=True)
+    if denied:
+        return denied
+
+    body = {}
+    if request.method == "POST":
+        try:
+            body = (await request.json()) or {}
+        except Exception:
+            body = {}
+
+    bond_case_id = body.get("bond_case_id") or request.query_params.get("bond_case_id")
+    booking_number = body.get("booking_number") or request.query_params.get("booking_number")
+    correlation_id = body.get("correlation_id") or request.query_params.get("correlation_id")
+
+    from dashboard.services.write_bond_forward_service import preflight_write_bond_forward
+
+    res = await preflight_write_bond_forward(
+        bond_case_id=bond_case_id,
+        booking_number=booking_number,
+        correlation_id=correlation_id,
+    )
+    status_code = 200 if res.get("success") else 422
+    return JSONResponse(res, status_code=status_code)
+
+
+@paperwork_bp.post("/paperwork/write-bond-forward/execute")
+async def write_bond_forward_execute(request: Request):
+    """
+    Staff-approved execution of write-bond paperwork event forwarding to central GAS.
+    Requires staff session or control auth, confirmed=True, and valid correlation_id.
+    """
+    denied = _require_control_auth(request, allow_machine=True)
+    if denied:
+        return denied
+
+    try:
+        body = (await request.json()) or {}
+    except Exception:
+        return JSONResponse({"success": False, "error": "invalid_json_body"}, status_code=400)
+
+    bond_case_id = body.get("bond_case_id")
+    if not bond_case_id:
+        return JSONResponse(
+            {"success": False, "error": "bond_case_id_required", "message": "bond_case_id is required"},
+            status_code=400,
+        )
+
+    confirmed = bool(body.get("confirmed"))
+    dry_run = bool(body.get("dry_run"))
+    correlation_id = body.get("correlation_id") or ""
+    staff_actor = body.get("staff_actor") or _actor_label(request) or "staff"
+
+    from dashboard.services.write_bond_forward_service import execute_staff_approved_write_bond_forward
+
+    res = await execute_staff_approved_write_bond_forward(
+        bond_case_id=bond_case_id,
+        staff_actor=staff_actor,
+        correlation_id=correlation_id,
+        confirmed=confirmed,
+        dry_run=dry_run,
+    )
+    status_code = 200 if res.get("success") else (422 if res.get("state") == "blocked" else 502)
+    return JSONResponse(res, status_code=status_code)
