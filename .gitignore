@@ -1,6 +1,17 @@
 # .env
 .env
 *.env
+.env.*
+.env.local
+.env.*.local
+
+# Certificates & Private Keys
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
 
 # Credentials
 creds/

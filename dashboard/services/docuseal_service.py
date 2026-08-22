@@ -305,8 +305,22 @@ class DocuSealService:
                 params=params,
             )
         except httpx.RequestError as exc:
-            logger.error("[docuseal] %s %s network error: %s", method, path, exc)
-            raise RuntimeError(f"DocuSeal unreachable: {exc}") from exc
+            if self.base_url != self.public_url and self.public_url:
+                try:
+                    fallback_url = f"{self.public_url}{p}"
+                    resp = await client.request(
+                        method,
+                        fallback_url,
+                        headers=self._headers(),
+                        json=json,
+                        params=params,
+                    )
+                except httpx.RequestError as fb_exc:
+                    logger.error("[docuseal] %s %s network error (fallback failed): %s", method, path, fb_exc)
+                    raise RuntimeError(f"DocuSeal unreachable: {fb_exc}") from fb_exc
+            else:
+                logger.error("[docuseal] %s %s network error: %s", method, path, exc)
+                raise RuntimeError(f"DocuSeal unreachable: {exc}") from exc
 
         if resp.status_code >= 400:
             body = (resp.text or "")[:500]
@@ -1108,6 +1122,8 @@ class DocuSealService:
         defendant: optional override; falls back to bond_data defendant fields.
         """
         bond_data = dict(bond_data or {})
+        if template_id is None or str(template_id).strip() in ("", "0", "null", "none"):
+            raise DocuSealPacketValidationError("DocuSeal packet blocked: a valid template_id is required.")
         validate_docuseal_packet_binding(
             packet_id=packet_id,
             bond_data=bond_data,

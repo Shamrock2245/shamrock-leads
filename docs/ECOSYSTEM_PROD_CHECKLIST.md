@@ -66,7 +66,7 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 |---|------|-------|------|
 | C1 | Wix Secrets: `GAS_WEB_APP_URL` / `GAS_WEBHOOK_URL` = **central portal/CRM stable factory** `…CvP-Z/exec` | Human | [x] *2026-08-11* — Wix portal, Telegram shared client, and central CRM paths use `…CvP-Z/exec`. Bail School is the approved exception and uses its dedicated stable school factory `…Qa_DMg`. Human confirmation of current Wix Secrets Manager values remains required if the dashboard has been changed manually. |
 | C2 | Public Bail School marketing shows **$649** (not $699) after embed redeploy + Wix publish | Ops | [x] **verified live 2026-08-12** — public page source JSON-LD lists the 120-hour course at `$649`; no retired “The Agent Path” or `$699` string was found in the live page source. |
-| C3 | Secret rotation complete if any keys ever lived in git (`SECRETS_ROTATION_GUIDE.md`) | Ops | [ ] |
+| C3 | Secret rotation complete if any keys ever lived in git (`SECRETS_ROTATION_GUIDE.md`) | Ops | [ ] **Human-gated open** — Approval package and inventory ready (`docs/ops/C3_SECRET_ROTATION_APPROVAL_PACKAGE.md`); awaiting Brendan's vendor-by-vendor authorization. |
 | C4 | GAS health `?action=health` success on production deployment | Ops | [x] *2026-08-11* — `{"success":true,"version":"V409"}` on stable factory; redeployed **@461** (Shannon surety_id) |
 
 ### D. BlueBubbles / iMessage (preferred consumer rail)
@@ -74,7 +74,7 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 | # | Item | Owner | Done |
 |---|------|-------|------|
 | D1 | Office Mac BlueBubbles running; tunnel URL in `BLUEBUBBLES_URL_0178` | Ops | [x] *2026-07-23* — BB 1.9.9 on iMac; frp `:12434` + health check; also ngrok path when active |
-| D2 | Dashboard iMessage send succeeds to a test number | Ops | [ ] **Human-gated smoke pending** — prior status showed BlueBubbles connected with `private_api`; one staff-approved outbound dashboard iMessage remains required. |
+| D2 | Dashboard iMessage send succeeds to a test number | Ops | [ ] **Human-gated smoke pending** — Diagnostic tool ready (`docs/runbooks/D2_IMESSAGE_SMOKE_RUNBOOK.md`); live probe identified `unavailable_tunnel` (office iMac unreachable); staff-approved test message pending tunnel restoration. |
 | D3 | Revenue automations stay **`review`** until D1–D2 green for 7 days | Product | [x] *policy* — keep `review` until 7 clean days post-2026-07-23 |
 
 ### E. Telegram mini-apps
