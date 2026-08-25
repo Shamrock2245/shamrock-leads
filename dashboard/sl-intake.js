@@ -263,7 +263,7 @@ const SLIntake = (() => {
         : '<span style="color:var(--muted);font-size:11px">—</span>';
       const statusBadge = STATUS_BADGES[item.Status] || item.Status;
 
-      const isLee = (item.County || '').toLowerCase().includes('lee');
+      const isLee = window._isLeeFlorida ? window._isLeeFlorida(item.County, item.State || item.state) : false;
       const bkEsc = _esc(item.BookingNumber || '');
       const fetchBtn = bkEsc ? `
         <button class="btn-sm" style="background:rgba(234,179,8,0.25);color:#fde047;border:1px solid rgba(234,179,8,0.5);font-size:11px;padding:3px 8px;font-weight:700" onclick="event.stopPropagation();refreshDefendantFromSource('${bkEsc}', this)" title="Re-fetch updated bond info from county source">⚡ Fetch Bond</button>

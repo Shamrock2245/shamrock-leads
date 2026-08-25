@@ -66,14 +66,15 @@
       let county = g('county', 'County', 'defCounty');
       if (!county) {
         const facility = g('facility', 'DefFacility', 'jailFacility');
-        if (facility.toLowerCase().includes('lee')) county = 'Lee';
-        else if (facility.toLowerCase().includes('collier')) county = 'Collier';
-        else if (facility.toLowerCase().includes('charlotte')) county = 'Charlotte';
-        else if (facility.toLowerCase().includes('sarasota')) county = 'Sarasota';
-        else if (facility.toLowerCase().includes('manatee')) county = 'Manatee';
-        else if (facility.toLowerCase().includes('hendry')) county = 'Hendry';
-        else if (facility.toLowerCase().includes('desoto')) county = 'DeSoto';
-        else county = 'Lee'; // Default FL operational anchor
+        const fac = (facility || '').toLowerCase();
+        const otherState = /\b(ga|georgia|sc|nc|al|tn|tx|ms|la)\b/.test(fac);
+        if (/\blee county\b/.test(fac) && !otherState) county = 'Lee';
+        else if (fac.includes('collier')) county = 'Collier';
+        else if (fac.includes('charlotte')) county = 'Charlotte';
+        else if (fac.includes('sarasota')) county = 'Sarasota';
+        else if (fac.includes('manatee')) county = 'Manatee';
+        else if (fac.includes('hendry')) county = 'Hendry';
+        else if (fac.includes('desoto') || fac.includes('de soto')) county = 'DeSoto';
       }
 
       // 4. DOB (normalize YYYY-MM-DD or MM/DD/YYYY)

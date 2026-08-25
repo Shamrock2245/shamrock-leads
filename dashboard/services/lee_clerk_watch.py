@@ -21,7 +21,8 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from dashboard.deps import get_collection
-from dashboard.services.packet_builder_service import is_lee_county, lee_clerk_search_url
+from dashboard.services.packet_builder_service import lee_clerk_search_url
+from dashboard.services.place_identity import is_lee_florida, mongo_place_clause
 
 logger = logging.getLogger(__name__)
 
@@ -212,12 +213,7 @@ def _written_anchor(doc: Dict[str, Any]) -> Any:
 
 
 def _lee_county_clause() -> Dict[str, Any]:
-    return {
-        "$or": [
-            {"county": {"$regex": r"^Lee(?:\s+County)?$", "$options": "i"}},
-            {"County": {"$regex": r"^Lee(?:\s+County)?$", "$options": "i"}},
-        ]
-    }
+    return mongo_place_clause("Lee", "FL")
 
 
 async def _collect_inflight_bookings(limit: int) -> List[str]:
@@ -242,11 +238,12 @@ async def _collect_inflight_bookings(limit: int) -> List[str]:
         ("prospective_bonds", _lee_county_clause()),
         ("intake_queue", {
             "matched_booking_number": {"$exists": True, "$nin": [None, ""]},
-            "$or": [
-                {"matched_county": {"$regex": r"^Lee(?:\s+County)?$", "$options": "i"}},
-                {"defendant_county": {"$regex": r"^Lee(?:\s+County)?$", "$options": "i"}},
-                {"county": {"$regex": r"^Lee(?:\s+County)?$", "$options": "i"}},
-            ],
+            **mongo_place_clause(
+                "Lee",
+                "FL",
+                county_fields=("matched_county", "defendant_county", "county"),
+                state_fields=("matched_state", "defendant_state", "state"),
+            ),
         }),
     ]
     for name, filt in queries:
@@ -304,7 +301,7 @@ async def run_lee_clerk_watch(
             continue
         county = doc.get("county") or doc.get("County") or "Lee"
         state = doc.get("state") or doc.get("State") or "FL"
-        if not is_lee_county(county, state):
+        if not is_lee_florida(county, state):
             continue
         stats["scanned"] += 1
         elapsed = hours_since(_written_anchor(doc), now)

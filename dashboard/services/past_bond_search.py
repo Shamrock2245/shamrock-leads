@@ -337,11 +337,16 @@ def _search_filter(query_str: str, county: str = "") -> Dict[str, Any]:
             clauses.append({field: regex})
     filt: Dict[str, Any] = {"$or": clauses}
     if county:
-        name = county.split("(")[0].strip()
-        name = re.sub(r"\s+County$", "", name, flags=re.I)
-        if name:
-            county_re = {"$regex": f"^{re.escape(name)}(?:\\s+County)?$", "$options": "i"}
-            filt = {"$and": [filt, {"$or": [{field: county_re} for field in _COUNTY_FIELDS]}]}
+        from dashboard.services.place_identity import mongo_place_clause, parse_place
+        _name, _st = parse_place(county)
+        place = mongo_place_clause(
+            county,
+            _st or "FL",
+            county_fields=_COUNTY_FIELDS,
+            state_fields=("state", "State"),
+        )
+        if place:
+            filt = {"$and": [filt, place]}
     return filt
 
 

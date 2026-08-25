@@ -189,6 +189,9 @@ def select_returning_indemnitor_match(
     indemnitor_name: str,
     prior_bonds: list,
     live_arrests: list,
+    *,
+    preferred_county: str = "",
+    preferred_state: str = "",
 ) -> dict:
     """Map a returning indemnitor onto a unique live booking of a prior defendant.
 
@@ -230,8 +233,17 @@ def select_returning_indemnitor_match(
         if def_name:
             prior_defendants.append(def_name)
 
+    from dashboard.services.place_identity import places_match
+
     scored = []
     for arrest in live_arrests or []:
+        if preferred_county and not places_match(
+            preferred_county,
+            preferred_state,
+            arrest.get("county"),
+            arrest.get("state"),
+        ):
+            continue
         arrest_name = arrest.get("full_name") or ""
         for prior_name in prior_defendants:
             if not names_likely_same_person(prior_name, arrest_name, min_sim=0.85):
@@ -332,6 +344,13 @@ class MatchingEngine:
     def intake_queue(self):
         return self.db["intake_queue"]
 
+    def _arrest_place_query(self, county: str, state: str = "") -> dict:
+        from dashboard.services.place_identity import mongo_place_clause, parse_place
+        if not county:
+            return {}
+        _name, st = parse_place(county, state)
+        return mongo_place_clause(county, st or state or "FL")
+
     # ─────────────────────────────────────────────────────────────────────────
     #  Primary entry point
     # ─────────────────────────────────────────────────────────────────────────
@@ -355,6 +374,13 @@ class MatchingEngine:
         county = (
             defendant.get("county")
             or intake_doc.get("defendant_county")
+            or intake_doc.get("matched_county")
+            or ""
+        ).strip()
+        state = (
+            defendant.get("state")
+            or intake_doc.get("defendant_state")
+            or intake_doc.get("state")
             or ""
         ).strip()
         booking_number = (
@@ -371,21 +397,25 @@ class MatchingEngine:
 
         candidates: list[MatchResult] = []
 
-        # ── Strategy 1: Exact booking number (+ county when present) ───────
+        # ── Strategy 1: Exact booking number in the correct county/state ───
         if booking_number:
+            from dashboard.services.place_identity import mongo_place_clause, parse_place, places_match
+            _cname, _st = parse_place(county, state)
             doc = None
+            place = mongo_place_clause(county, _st or state) if county else {}
             if county:
-                doc = await self.arrests.find_one(
-                    {"county": {"$regex": f"^{re.escape(county)}$", "$options": "i"},
-                     "booking_number": booking_number},
-                    {"_id": 0},
-                )
+                q = {"booking_number": booking_number}
+                if place:
+                    q = {"$and": [q, place]}
+                else:
+                    q["county"] = {"$regex": f"^{re.escape(_cname or county)}(?:\\s+County)?$", "$options": "i"}
+                doc = await self.arrests.find_one(q, {"_id": 0})
             if not doc:
                 unique = []
                 try:
                     cursor = self.arrests.find(
                         {"booking_number": booking_number}, {"_id": 0}
-                    ).limit(3)
+                    ).limit(5)
                     async for row in cursor:
                         unique.append(row)
                 except TypeError:
@@ -394,13 +424,13 @@ class MatchingEngine:
                     )
                     if found:
                         unique = [found]
+                if county:
+                    unique = [
+                        row for row in unique
+                        if places_match(county, _st or state, row.get("county"), row.get("state"))
+                    ]
                 if len(unique) == 1:
                     doc = unique[0]
-                elif county:
-                    for row in unique:
-                        if str(row.get("county") or "").lower().startswith(county.lower()):
-                            doc = row
-                            break
             if doc:
                 candidates.append(MatchResult(doc, 100, "exact_booking"))
 
@@ -408,9 +438,7 @@ class MatchingEngine:
         if def_name and def_dob and not candidates:
             norm_dob = _norm_dob(def_dob)
             norm_name = _norm(def_name)
-            query: dict = {}
-            if county:
-                query["county"] = {"$regex": f"^{re.escape(county)}$", "$options": "i"}
+            query: dict = self._arrest_place_query(county, state)
 
             cursor = self.arrests.find(query, {"_id": 0}).limit(500)
             async for doc in cursor:
@@ -424,9 +452,7 @@ class MatchingEngine:
         if def_name and def_dob and not candidates:
             norm_dob = _norm_dob(def_dob)
             norm_name = _norm(def_name)
-            query = {}
-            if county:
-                query["county"] = {"$regex": f"^{re.escape(county)}$", "$options": "i"}
+            query = self._arrest_place_query(county, state)
 
             cursor = self.arrests.find(query, {"_id": 0}).limit(1000)
             best_score = 0
@@ -446,9 +472,7 @@ class MatchingEngine:
         # ── Strategy 3.5: Phonetic name match + DOB (jellyfish) ──────────
         if def_name and def_dob and not candidates and _HAS_JELLYFISH:
             norm_dob = _norm_dob(def_dob)
-            query = {}
-            if county:
-                query["county"] = {"$regex": f"^{re.escape(county)}$", "$options": "i"}
+            query = self._arrest_place_query(county, state)
 
             cursor = self.arrests.find(query, {"_id": 0}).limit(500)
             best_score = 0
@@ -469,9 +493,7 @@ class MatchingEngine:
         # ── Strategy 4: Name only (weak) ───────────────────────────────────
         if def_name and not candidates:
             norm_name = _norm(def_name)
-            query = {}
-            if county:
-                query["county"] = {"$regex": f"^{re.escape(county)}$", "$options": "i"}
+            query = self._arrest_place_query(county, state)
 
             cursor = self.arrests.find(query, {"_id": 0}).limit(500)
             best_score = 0
@@ -487,7 +509,7 @@ class MatchingEngine:
 
         # ── Strategy 5: Returning indemnitor → last defendant → live booking ─
         returning = await self._returning_indemnitor_candidates(
-            intake_doc, prior_bonds=prior_bonds
+            intake_doc, prior_bonds=prior_bonds, county=county, state=state
         )
         for item in returning:
             booking = item.booking_number
@@ -545,6 +567,8 @@ class MatchingEngine:
         intake_doc: dict,
         *,
         prior_bonds=None,
+        county: str = "",
+        state: str = "",
     ) -> list:
         ind_name = indemnitor_name_from_intake(intake_doc)
         if len(_norm(ind_name)) < 3:
@@ -570,8 +594,19 @@ class MatchingEngine:
                 def_name = def_name or bond["defendant"].get("name") or ""
             if def_name:
                 prior_defendants.append(def_name)
-        live = await self._live_arrests_for_names(prior_defendants)
-        picked = select_returning_indemnitor_match(ind_name, bonds, live)
+        if not county:
+            from dashboard.services.place_identity import place_from_doc
+            places = {place_from_doc(bond) for bond in bonds or [] if place_from_doc(bond)[0]}
+            if len(places) == 1:
+                county, state = places.pop()
+        live = await self._live_arrests_for_names(prior_defendants, county=county, state=state)
+        picked = select_returning_indemnitor_match(
+            ind_name,
+            bonds,
+            live,
+            preferred_county=county,
+            preferred_state=state,
+        )
         results = []
         for arrest in picked.get("candidates") or []:
             conf = picked.get("confidence") or 0
@@ -594,19 +629,22 @@ class MatchingEngine:
             )
         return results
 
-    async def _live_arrests_for_names(self, names: list) -> list:
+    async def _live_arrests_for_names(self, names: list, county: str = "", state: str = "") -> list:
         out = []
         seen = set()
+        place = self._arrest_place_query(county, state)
         for name in names or []:
             _first, last = _person_last_first(name)
             if len(last) < 2:
                 continue
-            query = {
+            query: dict = {
                 "$or": [
                     {"full_name": {"$regex": re.escape(last), "$options": "i"}},
                     {"last_name": {"$regex": f"^{re.escape(last)}$", "$options": "i"}},
                 ]
             }
+            if place:
+                query = {"$and": [query, place]}
             try:
                 cursor = self.arrests.find(query, {"_id": 0}).limit(25)
                 async for doc in cursor:
@@ -634,11 +672,13 @@ class MatchingEngine:
         now = datetime.now(timezone.utc)
         booking_number = arrest_doc.get("booking_number", "")
         county = arrest_doc.get("county", "")
+        state = arrest_doc.get("state") or arrest_doc.get("State") or ""
         defendant_id = arrest_doc.get("defendant_id", "")
 
         update = {
             "matched_booking_number": booking_number,
             "matched_county": county,
+            "matched_state": state,
             "match_confidence": confidence,
             "match_strategy": strategy,
             "match_timestamp": now,
@@ -672,11 +712,11 @@ class MatchingEngine:
         Manually confirm a match between an intake record and an arrest record.
         Used when staff reviews candidates and selects the correct one.
         """
-        arrest_doc = await self.arrests.find_one(
-            {"booking_number": booking_number,
-             "county": {"$regex": f"^{re.escape(county)}$", "$options": "i"}},
-            {"_id": 0},
-        )
+        place = self._arrest_place_query(county)
+        q: dict = {"booking_number": booking_number}
+        if place:
+            q = {"$and": [q, place]}
+        arrest_doc = await self.arrests.find_one(q, {"_id": 0})
         if not arrest_doc:
             return {"success": False, "error": f"Arrest not found: {county}/{booking_number}"}
 

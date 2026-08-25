@@ -1828,10 +1828,12 @@ async def hydrate_from_booking(request: Request):
         resolve_template_id_for_surety,
     )
 
-    county = str(body.get("county") or "Lee").strip() or "Lee"
+    county = str(body.get("county") or "").strip()
+    state = str(body.get("state") or "").strip()
     ctx = await resolve_case_context(
         booking_number=booking,
         county=county,
+        state=state,
         defendant_id=body.get("defendant_id"),
         intake_id=body.get("intake_id"),
         bond_case_id=body.get("bond_case_id"),

@@ -1,5 +1,16 @@
 /* ShamrockLeads — Defendants, Health, Bond Modal, Export, Init */
 
+function _isLeeFlorida(county, state) {
+  const raw = String(county || '').trim();
+  const labeled = raw.match(/^(.+?)\s*\(([A-Za-z]{2})\)$/);
+  let name = labeled ? labeled[1] : raw;
+  let st = String(state || (labeled ? labeled[2] : '') || '').trim().toUpperCase();
+  name = name.toLowerCase().replace(/\s+county$/, '').trim();
+  if (name !== 'lee') return false;
+  return !st || st === 'FL' || st === 'FLORIDA';
+}
+window._isLeeFlorida = _isLeeFlorida;
+
 /** Shared safe-fetch: returns parsed JSON or null if response is invalid */
 async function _safeFetch(url, opts) {
   const r = await fetch(url, opts);
@@ -70,7 +81,7 @@ async function loadDefendants() {
       const pastBondFacts = isPastBond
         ? `<div class="def-row"><div class="def-field"><span class="def-label">POA</span><span class="def-value">${l.poa_number||'\u2014'}</span></div><div class="def-field"><span class="def-label">Case</span><span class="def-value">${l.case_number||'\u2014'}</span></div><div class="def-field"><span class="def-label">Premium</span><span class="def-value">${l.premium_amount ? '$'+Number(l.premium_amount).toLocaleString() : '\u2014'}</span></div><div class="def-field"><span class="def-label">Indemnitor</span><span class="def-value">${l.indemnitor_name||'\u2014'}</span></div></div>`
         : '';
-      const isLeeDef = (l.county || '').toLowerCase().includes('lee');
+      const isLeeDef = _isLeeFlorida(l.county, l.state);
       const isNoBondDef = bond === 0 || (l.bond_type || '').toUpperCase().includes('NO BOND') || (l.bond_type || '').toUpperCase().includes('HOLD');
       const leeBadgeDef = (isLeeDef && isNoBondDef)
         ? `<div style="margin-top:4px"><span style="background:rgba(239,68,68,0.2);color:#fca5a5;border:1px solid rgba(239,68,68,0.5);border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;display:inline-block;cursor:pointer" title="Lee County First Appearance: 10:00 AM Weekdays / 8:30 AM Weekends & Holidays (Re-check court & leeclerk.org)" onclick="event.stopPropagation();refreshDefendantFromSource('${bkEscD}',this)">⏰ 1st App Watch</span></div>`
@@ -1968,7 +1979,8 @@ async function hydrateDefendantPacket(bookingNumber) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         booking_number: bookingNumber,
-        county: lead.county || 'Lee',
+        county: lead.county || '',
+        state: lead.state || '',
         surety_id: lead.surety_id || 'osi',
         defendant_id: lead.defendant_id || lead.Defendant_ID || '',
       }),
@@ -2005,7 +2017,8 @@ async function hydrateDefendantPacket(bookingNumber) {
       court_type: ctx.court_type || lead.court_type,
       poa_number: ctx.poa_number || lead.poa_number || '',
       surety_id: d.surety_id || 'osi',
-      county: ctx.county || lead.county || 'Lee',
+      county: ctx.county || lead.county || '',
+      state: ctx.state || lead.state || '',
       booking_number: bookingNumber,
       facility: ctx.facility || lead.facility,
       clerk_bond_posted: !!d.clerk_bond_posted,
@@ -2041,7 +2054,7 @@ function applyPoaClerkLock(lead) {
   const banner = document.getElementById('poaClerkBanner');
   if (!banner) return;
   const locked = !!(lead && lead.poa_locked);
-  const lee = !!(lead && (lead.lee_county || String(lead.county || '').toLowerCase().includes('lee')));
+  const lee = !!(lead && (lead.lee_county || _isLeeFlorida(lead.county, lead.state)));
   const clerkUrl = (lead && lead.lee_clerk_url) || '';
   const posted = !!(lead && lead.clerk_bond_posted);
   banner.style.display = 'block';

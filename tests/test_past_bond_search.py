@@ -87,10 +87,10 @@ def test_search_filter_matches_name_poa_and_amount():
 
 def test_search_filter_county_is_anded():
     filt = _search_filter("smith", county="Lee (FL)")
+    blob = str(filt)
     assert "$and" in filt
-    assert filt["$and"][0]["$or"]
-    county_or = filt["$and"][1]["$or"]
-    assert any("Lee" in str(c) for c in county_or)
+    assert "Lee" in blob
+    assert "FL" in blob or "Florida" in blob
 
 
 def test_merge_does_not_bury_live_jail_card():

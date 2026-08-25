@@ -216,7 +216,7 @@ window.SLProspective = (function () {
       ? '<button class="cqa-btn cqa-advance" title="Advance to ' + stageLabel(ns) + '" onclick="event.stopPropagation();SLProspective.quickAdvance(\'' + bk + '\',\'' + ns + '\')">→ ' + ns.charAt(0).toUpperCase() + ns.slice(1) + '</button>'
       : '<button class="cqa-btn cqa-officialize" onclick="event.stopPropagation();SLProspective.officialize(\'' + bk + '\')">☘️ Officialize</button>';
 
-    var isLee = (b.county || '').toLowerCase().includes('lee');
+    var isLee = window._isLeeFlorida ? window._isLeeFlorida(b.county, b.state) : false;
     var isNoBond = !b.bond_amount || Number(b.bond_amount) === 0;
     var isDismissedView = ($('prospStatusFilter') && $('prospStatusFilter').value === 'dismissed') || !!b.desk_dismissed;
     var fetchBondBtn = '<button class="cqa-btn cqa-refresh-bond" style="background:rgba(234,179,8,0.25);color:#fde047;border:1px solid rgba(234,179,8,0.5);font-weight:700" title="Re-fetch updated bond info from county source" onclick="event.stopPropagation();refreshDefendantFromSource(\'' + bk + '\',this)">⚡ Fetch Bond</button>';

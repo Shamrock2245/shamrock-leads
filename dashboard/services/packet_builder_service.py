@@ -121,13 +121,8 @@ def _split_name(full: str) -> Tuple[str, str, str]:
 
 def is_lee_county(county: Any, state: Any = "") -> bool:
     """Lee County, Florida only — not Lee GA, Lehigh, Leesburg, etc."""
-    st = str(state or "").strip().upper()
-    if st and st not in ("FL", "FLORIDA"):
-        return False
-    name = str(county or "").strip().lower()
-    name = re.sub(r"\s*\([^)]*\)\s*$", "", name).strip()
-    name = re.sub(r"\s+", " ", name)
-    return name in {"lee", "lee county"}
+    from dashboard.services.place_identity import is_lee_florida
+    return is_lee_florida(county, state)
 
 
 def lee_clerk_search_url(case_number: str = "", booking_number: str = "") -> str:
@@ -211,6 +206,7 @@ async def resolve_case_context(
     defendant_id: Optional[str] = None,
     booking_number: Optional[str] = None,
     county: Optional[str] = None,
+    state: Optional[str] = None,
     bond_case_id: Optional[str] = None,
     packet_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -291,12 +287,11 @@ async def resolve_case_context(
             ]
         }
         if county:
-            q = {
-                "$and": [
-                    q,
-                    {"$or": [{"County": county}, {"county": county}, {"County": {"$regex": f"^{re.escape(county)}", "$options": "i"}}]},
-                ]
-            }
+            from dashboard.services.place_identity import mongo_place_clause, parse_place
+            _name, _st = parse_place(county, state)
+            place = mongo_place_clause(county, _st or state or "FL")
+            if place:
+                q = {"$and": [q, place]}
         arrest = await get_collection("arrests").find_one(q, {"_id": 0}) or {}
         if arrest:
             sources.append("arrest")
@@ -399,11 +394,17 @@ async def resolve_case_context(
             packet.get("booking_number"),
         ),
         "county": _first(
-            county, defendant.get("County"), def_nested.get("county"),
-            arrest.get("County"), intake.get("defendant_county"), packet.get("defendant_county"),
+            county, defendant.get("County"), defendant.get("county"),
+            def_nested.get("county"), arrest.get("county"), arrest.get("County"),
+            bond.get("county"), bond.get("County"),
+            intake.get("defendant_county"), packet.get("defendant_county"),
         ),
         "state": _first(
-            arrest.get("State"), defendant.get("State"), bond.get("State"), "FL",
+            arrest.get("state"), arrest.get("State"),
+            defendant.get("state"), defendant.get("State"),
+            bond.get("state"), bond.get("State"),
+            def_nested.get("state"),
+            state,
         ) or "FL",
         "facility": _first(
             def_nested.get("facility"), arrest.get("Facility"),
