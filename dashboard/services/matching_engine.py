@@ -399,16 +399,14 @@ class MatchingEngine:
 
         # ── Strategy 1: Exact booking number in the correct county/state ───
         if booking_number:
-            from dashboard.services.place_identity import mongo_place_clause, parse_place, places_match
+            from dashboard.services.place_identity import parse_place, places_match
             _cname, _st = parse_place(county, state)
             doc = None
-            place = mongo_place_clause(county, _st or state) if county else {}
+            place = self._arrest_place_query(county, state)
             if county:
                 q = {"booking_number": booking_number}
                 if place:
                     q = {"$and": [q, place]}
-                else:
-                    q["county"] = {"$regex": f"^{re.escape(_cname or county)}(?:\\s+County)?$", "$options": "i"}
                 doc = await self.arrests.find_one(q, {"_id": 0})
             if not doc:
                 unique = []
