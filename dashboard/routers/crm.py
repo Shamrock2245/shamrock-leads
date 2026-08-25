@@ -199,7 +199,7 @@ async def crm_pipeline():
 async def crm_search(q: str = Query(default="", min_length=0)):
     """
     Unified Super CRM search for omnibar and mobile.
-    Covers: active_bonds, arrests, prospective, indemnitors, intake, tasks.
+    Covers: active_bonds, historical bonds, arrests, prospective, indemnitors, intake, tasks.
     """
     q = (q or "").strip()
     if len(q) < 2:
@@ -239,6 +239,32 @@ async def crm_search(q: str = Query(default="", min_length=0)):
             doc["source"] = "active_bonds"
             doc["type"] = "bond"
             results.append(doc)
+
+        # Historical / GAS / OCR past bonds (skip active_bonds — already listed)
+        try:
+            from dashboard.services.past_bond_search import search_past_bonds
+            past = await search_past_bonds(q, limit=10)
+            for lead in past:
+                if lead.get("bond_source") == "active_bonds":
+                    continue
+                results.append(
+                    {
+                        "source": lead.get("bond_source") or "historical_bonds",
+                        "type": "past_bond",
+                        "defendant_name": lead.get("full_name") or "",
+                        "booking_number": lead.get("booking_number") or lead.get("poa_number") or "",
+                        "county": lead.get("county") or "",
+                        "bond_amount": lead.get("bond_amount") or 0,
+                        "premium_amount": lead.get("premium_amount") or 0,
+                        "poa_number": lead.get("poa_number") or "",
+                        "case_number": lead.get("case_number") or "",
+                        "charges": lead.get("charges") or "",
+                        "indemnitor_name": lead.get("indemnitor_name") or "",
+                        "status": lead.get("status") or "Past Bond",
+                    }
+                )
+        except Exception:
+            logger.debug("crm past-bond search skipped", exc_info=True)
 
         # Arrests / leads
         arrests_col = get_collection("arrests")

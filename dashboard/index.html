@@ -454,7 +454,7 @@
 
     <!-- Defendant Filters & Sort -->
     <div class="filters">
-      <input type="text" id="defSearch" placeholder="🔍 Search defendants..." style="flex:1;min-width:200px" oninput="SL.debounceDefSearch()">
+      <input type="text" id="defSearch" placeholder="🔍 Search defendants, past bonds, POA, case #, amount..." style="flex:1;min-width:200px" oninput="SL.debounceDefSearch()">
 
       <select id="defSort" onchange="if(window.SL_STATE){SL_STATE.defSort=this.value;}SL.loadDefendants()">
         <option value="scraped_at">Sort: Just Scraped (Newest)</option>
@@ -3733,7 +3733,7 @@
 <script src="/sl-staff.js?v=1"></script>
 <script src="/sl-rearrest.js?v=5"></script>
 <script src="/sl-data.js?v=7"></script>
-<script src="/sl-features.js?v=16"></script>
+<script src="/sl-features.js?v=17"></script>
 <!-- ═══ ADDRESS OVERRIDE AUTH MODAL ═══ -->
 <div id="addressOverrideModal" class="modal-overlay" style="display:none">
   <div class="modal-box" style="max-width:400px;text-align:center">
@@ -3758,7 +3758,7 @@
 <script src="/sl-active-bonds.js?v=6"></script>
 <script src="/sl-active-bonds-ext.js?v=4"></script>
 <script src="/sl-notifications.js?v=4"></script>
-<script src="/sl-omnibar.js?v=2"></script>
+<script src="/sl-omnibar.js?v=3"></script>
 <!-- Non-critical modules + heavy CDNs: defer so Lead Explorer paints first -->
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
 <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>

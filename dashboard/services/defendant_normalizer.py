@@ -292,6 +292,42 @@ class DefendantNormalizationService:
         async for doc in cursor:
             results.append(_serialize_doc(doc))
 
+        if query_str and len(query_str.strip()) >= 2:
+            try:
+                from dashboard.services.past_bond_search import (
+                    merge_leads_with_past_bonds,
+                    search_past_bonds,
+                    unique_past_count,
+                )
+                past = await search_past_bonds(query_str, county=county, limit=limit)
+                past_as_defendants = []
+                for lead in past:
+                    past_as_defendants.append({
+                        "full_name": lead.get("full_name"),
+                        "first_name": lead.get("first_name"),
+                        "last_name": lead.get("last_name"),
+                        "dob": lead.get("dob"),
+                        "address": lead.get("address"),
+                        "counties": [lead["county"]] if lead.get("county") else [],
+                        "bond_amount": lead.get("bond_amount") or 0,
+                        "premium_amount": lead.get("premium_amount") or 0,
+                        "booking_number": lead.get("booking_number"),
+                        "case_number": lead.get("case_number"),
+                        "poa_number": lead.get("poa_number"),
+                        "charges": lead.get("charges"),
+                        "indemnitor_name": lead.get("indemnitor_name"),
+                        "status": lead.get("status") or "Past Bond",
+                        "is_past_bond": True,
+                        "bond_source": lead.get("bond_source"),
+                        "total_arrests": 0,
+                        "active": True,
+                    })
+                added = unique_past_count(results, past_as_defendants)
+                results = merge_leads_with_past_bonds(results, past_as_defendants, limit=limit)
+                total = total + added
+            except Exception:
+                logger.debug("past-bond defendant search skipped", exc_info=True)
+
         # ── Enrich with detail_url from the latest arrest record ─────────
         # The defendants collection is person-level and doesn't store
         # detail_url (which is per-booking). Batch-fetch from arrests.

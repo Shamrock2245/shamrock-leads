@@ -63,6 +63,13 @@ async function loadDefendants() {
       const slotId = 'defIdSlots_' + String(l.booking_number || '').replace(/[^a-zA-Z0-9_-]/g, '_');
       const bondEditId = 'defBondAmt_' + String(l.booking_number || '').replace(/[^a-zA-Z0-9_-]/g, '_');
       const bondPillLabel = bond > 0 ? ('$' + bond.toLocaleString()) : '$0 — set bond';
+      const isPastBond = !!(l.is_past_bond || l.lead_status === 'past_bond' || l.bond_source);
+      const pastBondBadge = isPastBond
+        ? `<div style="margin-top:4px"><span style="background:rgba(16,185,129,0.18);color:#6ee7b7;border:1px solid rgba(16,185,129,0.4);border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;display:inline-block" title="Shamrock wrote this person before">☘️ Past Bond${l.poa_number ? ' · POA ' + l.poa_number : ''}${l.premium_amount ? ' · Prem $' + Number(l.premium_amount).toLocaleString() : ''}</span></div>`
+        : '';
+      const pastBondFacts = isPastBond
+        ? `<div class="def-row"><div class="def-field"><span class="def-label">POA</span><span class="def-value">${l.poa_number||'\u2014'}</span></div><div class="def-field"><span class="def-label">Case</span><span class="def-value">${l.case_number||'\u2014'}</span></div><div class="def-field"><span class="def-label">Premium</span><span class="def-value">${l.premium_amount ? '$'+Number(l.premium_amount).toLocaleString() : '\u2014'}</span></div><div class="def-field"><span class="def-label">Indemnitor</span><span class="def-value">${l.indemnitor_name||'\u2014'}</span></div></div>`
+        : '';
       const isLeeDef = (l.county || '').toLowerCase().includes('lee');
       const isNoBondDef = bond === 0 || (l.bond_type || '').toUpperCase().includes('NO BOND') || (l.bond_type || '').toUpperCase().includes('HOLD');
       const leeBadgeDef = (isLeeDef && isNoBondDef)
@@ -73,7 +80,7 @@ async function loadDefendants() {
         : '';
 
       return `<div class="def-card" data-booking="${bkEscD}">
-        <div class="def-card-header"><div><div class="def-name ld-clickable" title="Open lead detail" onclick="event.stopPropagation();SLProspective&&SLProspective.openDetail('${bkSafe}')">${l.full_name||'Unknown'}</div><div class="def-booking">${l.booking_number||'\u2014'} ${leeBadgeDef}</div></div>
+        <div class="def-card-header"><div><div class="def-name ld-clickable" title="Open lead detail" onclick="event.stopPropagation();SLProspective&&SLProspective.openDetail('${bkSafe}')">${l.full_name||'Unknown'}</div><div class="def-booking">${l.booking_number||'\u2014'} ${leeBadgeDef}${pastBondBadge}</div></div>
           <div class="def-bond-edit-wrap" onclick="event.stopPropagation()">
             <div class="def-bond-pill ${bc} ${bond<=0?'bond-zero':''}" title="Click amount to edit — scrapers often leave $0 until first appearance">${bondPillLabel}</div>
             <div class="def-bond-edit-row">
@@ -87,7 +94,7 @@ async function loadDefendants() {
           </div>
         </div>
         <div class="def-body">
-          <div class="def-section"><div class="def-section-title">📋 Details</div><div class="def-row"><div class="def-field"><span class="def-label">County</span><span class="def-value">${l.county||'\u2014'}</span></div><div class="def-field"><span class="def-label">DOB</span><span class="def-value">${l.dob||'\u2014'}</span></div><div class="def-field"><span class="def-label">Status</span>${custDrop}</div><div class="def-field"><span class="def-label">Score</span><span class="score-pill ${scoreCls}" id="defScore_${bondEditId}">${l.lead_score||0} ${l.lead_status||''}</span></div><div class="def-field"><span class="def-label">FTA Risk</span>${_ftaBadgeDef(l)||'<span style="font-size:11px;color:var(--text-muted)">—</span>'}</div></div></div>
+          <div class="def-section"><div class="def-section-title">📋 Details</div><div class="def-row"><div class="def-field"><span class="def-label">County</span><span class="def-value">${l.county||'\u2014'}</span></div><div class="def-field"><span class="def-label">DOB</span><span class="def-value">${l.dob||'\u2014'}</span></div><div class="def-field"><span class="def-label">Status</span>${custDrop}</div><div class="def-field"><span class="def-label">Score</span><span class="score-pill ${scoreCls}" id="defScore_${bondEditId}">${l.lead_score||0} ${l.lead_status||''}</span></div><div class="def-field"><span class="def-label">FTA Risk</span>${_ftaBadgeDef(l)||'<span style="font-size:11px;color:var(--text-muted)">—</span>'}</div></div>${pastBondFacts}</div>
           <div class="def-section"><div class="def-section-title" style="display:flex;justify-content:space-between;align-items:center"><span>⚖️ Charges</span><button type="button" class="btn-detail" style="font-size:10px;padding:2px 8px;background:rgba(168,85,247,0.2);color:#c084fc;border:1px solid rgba(168,85,247,0.4);border-radius:4px" onclick="event.stopPropagation();openChargeBondsModal('${bkEscD}')">⚖️ Per-Charge Bonds</button></div><div class="def-row wide"><div class="def-value" style="font-size:12px;white-space:normal">${l.charges||'\u2014'}</div></div></div>
           <div class="def-section" onclick="event.stopPropagation()">
             <div class="def-section-title">🪪 Driver License / ID &amp; Selfie</div>
@@ -98,10 +105,10 @@ async function loadDefendants() {
         </div>
         <div class="def-card-footer">
           <button class="btn-detail" onclick="event.stopPropagation(); if('${(l.detail_url||'').replace(/'/g,"\\'")}') window.open('${(l.detail_url||'').replace(/'/g,"\\'")}'); else toast('No source booking URL on this record','error')">🔗 Source</button>
-          <button class="btn-detail btn-refresh-source" id="btnRefresh_${bondEditId}"
+          ${isPastBond ? '' : `<button class="btn-detail btn-refresh-source" id="btnRefresh_${bondEditId}"
             style="${isNoBondDef ? 'background:rgba(234,179,8,0.25);color:#fde047;border:1px solid rgba(234,179,8,0.5);font-weight:700' : ''}"
             onclick="event.stopPropagation(); refreshDefendantFromSource('${bkEscD}', this)"
-            title="Re-fetch updated bond info from county booking sheet">⚡ Fetch Bond</button>
+            title="Re-fetch updated bond info from county booking sheet">⚡ Fetch Bond</button>`}
           ${leeClerkBtn}
           <button class="slc-notes-btn" onclick="openShamrockNotes('${bkEscD}')" title="Shamrock Notes">📝 Notes</button>
           <button class="btn-imessage-send" onclick="SLiMessage&&SLiMessage.openCompose('${bkEscD}','${(l.full_name||'').replace(/'/g,"\'")}')" title="Send iMessage">💬 iMsg</button>

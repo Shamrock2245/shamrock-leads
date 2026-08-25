@@ -473,13 +473,40 @@ async def api_leads(
                 leads_list.append(serialize_doc(doc))
             return leads_list
 
+        async def _fetch_past():
+            search = (query.search or "").strip()
+            if len(search) < 2:
+                return []
+            # History is search-only and belongs on page 1. Custody filters
+            # are jail-roster states that past bonds do not have.
+            if query.page and query.page > 1:
+                return []
+            if query.custody:
+                return []
+            from dashboard.services.past_bond_search import search_past_bonds
+            counties = [c.strip() for c in (query.county or "").split(",") if c.strip()]
+            county = counties[0] if len(counties) == 1 else ""
+            past = await search_past_bonds(search, county=county, limit=query.limit)
+            if query.min_bond:
+                past = [p for p in past if float(p.get("bond_amount") or 0) >= query.min_bond]
+            return past
+
         # Parallelize independent Mongo work so county filters feel snappy
-        total, leads_list, counties_list, scraped_last_hour = await asyncio.gather(
+        total, leads_list, counties_list, scraped_last_hour, past_bonds = await asyncio.gather(
             arrests.count_documents(mongo_query),
             _fetch_page(),
             _cached_counties_list(arrests),
             _cached_scraped_last_hour(arrests),
+            _fetch_past(),
         )
+        if past_bonds:
+            from dashboard.services.past_bond_search import (
+                merge_leads_with_past_bonds,
+                unique_past_count,
+            )
+            added = unique_past_count(leads_list, past_bonds)
+            leads_list = merge_leads_with_past_bonds(leads_list, past_bonds, limit=query.limit)
+            total = total + added
 
         return {
             "leads": leads_list, "total": total, "page": query.page, "limit": query.limit,

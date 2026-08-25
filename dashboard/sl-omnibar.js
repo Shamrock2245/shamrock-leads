@@ -183,6 +183,11 @@ window.SLOmnibar = {
       } else {
         title = item.defendant_name || item.title || 'Unknown';
         if (item.source === 'active_bonds') { icon = '🟢'; sub = `Active Bond • ${item.booking_number || ''} • $${item.bond_amount || 0}`; }
+        else if (item.type === 'past_bond' || item.source === 'HistoricalBonds' || item.source === 'historical_bonds' || item.source === 'bonds' || item.source === 'bond_cases') {
+          icon = '☘️';
+          const amt = Number(item.bond_amount || 0).toLocaleString();
+          sub = `Past Bond • ${item.county || ''} • $${amt}${item.poa_number ? ' • POA ' + item.poa_number : ''}${item.case_number ? ' • ' + item.case_number : ''}`;
+        }
         else if (item.source === 'arrests') { icon = '🚨'; sub = `Lead • ${item.booking_number || ''} • $${item.bond_amount || 0} • ${item.lead_status || ''}`; }
         else if (item.source === 'prospective_bonds') { icon = '🟡'; sub = `Outreach • ${item.booking_number || ''} • ${item.stage || ''}`; }
         else if (item.source === 'indemnitors') { icon = '🛡️'; sub = `Indemnitor • ${item.booking_number || ''} • ${item.stage || ''}`; }
@@ -226,6 +231,14 @@ window.SLOmnibar = {
       const b = document.querySelector('[data-tab="tabActiveBonds"]');
       if (b) SL.switchTab(b);
       if (typeof loadActiveBonds === 'function') loadActiveBonds();
+    } else if (item.type === 'past_bond' || src === 'HistoricalBonds' || src === 'historical_bonds' || src === 'bonds' || src === 'bond_cases') {
+      const b = document.querySelector('[data-tab="tabDefendants"]');
+      if (b && window.SL) SL.switchTab(b);
+      const search = document.getElementById('defSearch');
+      if (search) {
+        search.value = item.defendant_name || item.poa_number || item.booking_number || '';
+        if (typeof loadDefendants === 'function') loadDefendants();
+      }
     } else if (src === 'intake_queue' || item.type === 'intake') {
       const b = document.querySelector('[data-tab="tabIntake"]');
       if (b) SL.switchTab(b);
