@@ -761,6 +761,8 @@ const SLIndemnitor = (() => {
   // ── Add Indemnitor Modal ──
   let _smartSearchTimer = null;
   let _selectedPrior = null;
+  let _cameraStream = null;
+  let _cameraFacing = 'environment';
 
   function openAddModal() {
     const modal = $('addIndemnitorModal');
@@ -779,11 +781,15 @@ const SLIndemnitor = (() => {
     _selectedPrior = null;
     _scannedAddress = null;
     _pendingSaveBody = null;
-    const scanInput = $('indAddIdScanner');
-    if (scanInput) scanInput.value = '';
+    ['indAddIdScanner', 'indAddIdCapture', 'indAddIdUpload'].forEach(id => {
+      const scanInput = $(id);
+      if (scanInput) scanInput.value = '';
+    });
+    stopLiveCamera();
   }
 
   function closeAddModal() {
+    stopLiveCamera();
     const modal = $('addIndemnitorModal');
     if (modal) {
       modal.classList.remove('active');
@@ -871,6 +877,7 @@ const SLIndemnitor = (() => {
   }
 
   function backToSearch() {
+    stopLiveCamera();
     $('indAddStep1').style.display = '';
     $('indAddStep2').style.display = 'none';
   }
@@ -1017,23 +1024,123 @@ const SLIndemnitor = (() => {
   }
 
   function triggerScan() {
-    // Ensure we're on the form step (Scan ID lives in step 2)
     const step2 = $('indAddStep2');
     if (step2 && step2.style.display === 'none') {
       showNewForm();
     }
-    const input = $('indAddIdScanner');
-    if (!input) {
-      toast('❌ ID scanner control missing — refresh the page (hard reload).', 'error');
-      console.error('[SLIndemnitor] #indAddIdScanner not in DOM');
+    startLiveCamera();
+  }
+
+  function _setCameraStatus(msg, isError) {
+    const el = $('indCameraStatus');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.style.color = isError ? '#fca5a5' : '#86efac';
+  }
+
+  function stopLiveCamera() {
+    if (_cameraStream) {
+      try { _cameraStream.getTracks().forEach(t => t.stop()); } catch (_) {}
+      _cameraStream = null;
+    }
+    const video = $('indCameraVideo');
+    if (video) {
+      try { video.pause(); } catch (_) {}
+      video.srcObject = null;
+    }
+    const overlay = $('indCameraOverlay');
+    if (overlay) overlay.style.display = 'none';
+  }
+
+  function openIdPhotoPicker() {
+    const input = $('indAddIdCapture') || $('indAddIdScanner');
+    if (!input) { toast('Photo picker missing — hard-refresh the page.', 'error'); return; }
+    try { input.click(); } catch (err) {
+      toast('Could not open camera app: ' + (err.message || err), 'error');
+    }
+  }
+
+  function openIdFilePicker() {
+    const input = $('indAddIdUpload');
+    if (!input) { toast('Upload picker missing — hard-refresh the page.', 'error'); return; }
+    try { input.click(); } catch (err) {
+      toast('Could not open file picker: ' + (err.message || err), 'error');
+    }
+  }
+
+  async function startLiveCamera() {
+    const step2 = $('indAddStep2');
+    if (step2 && step2.style.display === 'none') showNewForm();
+    const overlay = $('indCameraOverlay');
+    const video = $('indCameraVideo');
+    if (!overlay || !video) {
+      openIdPhotoPicker();
       return;
     }
-    // Programmatic click must stay in the same user-gesture stack
-    try {
-      input.click();
-    } catch (err) {
-      toast('❌ Could not open camera/file picker: ' + (err.message || err), 'error');
+    overlay.style.display = 'block';
+    _setCameraStatus('Starting camera…');
+    if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      _setCameraStatus('Live camera needs HTTPS. Use Take a photo or Upload instead.', true);
+      return;
     }
+    stopLiveCamera();
+    overlay.style.display = 'block';
+    const facing = _cameraFacing === 'user' ? 'user' : 'environment';
+    const attempts = [
+      { audio: false, video: { facingMode: { ideal: facing }, width: { ideal: 1280 }, height: { ideal: 720 } } },
+      { audio: false, video: { facingMode: facing } },
+      { audio: false, video: true },
+    ];
+    let lastErr = null;
+    for (const constraints of attempts) {
+      try {
+        _cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    if (!_cameraStream) {
+      const name = (lastErr && lastErr.name) || '';
+      const msg = name === 'NotAllowedError'
+        ? 'Camera permission denied. Use Take a photo or Upload from device.'
+        : (name === 'NotFoundError'
+          ? 'No camera found. Use Take a photo or Upload from device.'
+          : 'Could not open live camera. Use Take a photo or Upload from device.');
+      _setCameraStatus(msg, true);
+      toast(msg, 'error');
+      return;
+    }
+    video.srcObject = _cameraStream;
+    video.setAttribute('playsinline', 'true');
+    video.muted = true;
+    try { await video.play(); } catch (_) {}
+    _setCameraStatus('Hold the ID in frame, then tap Capture.');
+  }
+
+  async function flipCamera() {
+    _cameraFacing = _cameraFacing === 'environment' ? 'user' : 'environment';
+    await startLiveCamera();
+  }
+
+  async function captureIdFrame() {
+    const video = $('indCameraVideo');
+    const canvas = $('indCameraCanvas');
+    if (!video || !canvas || !video.videoWidth) {
+      toast('Camera is not ready yet — wait a second and try again.', 'error');
+      return;
+    }
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) { toast('Could not capture this frame.', 'error'); return; }
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.92));
+    if (!blob) { toast('Capture failed — try Take a photo instead.', 'error'); return; }
+    stopLiveCamera();
+    const file = new File([blob], 'id-camera.jpg', { type: 'image/jpeg' });
+    await processAddModalScan(file);
   }
 
   /**
@@ -1391,6 +1498,8 @@ const SLIndemnitor = (() => {
     openAddModal, closeAddModal, smartSearch, selectSearchResult,
     showNewForm, backToSearch, submitAddForm,
     triggerScan, handleScanID, processAddModalScan, confirmAddressOverride,
+    startLiveCamera, stopLiveCamera, captureIdFrame, flipCamera,
+    openIdPhotoPicker, openIdFilePicker,
     // KYC Uploads + ID slots
     handleFileSelect, handleDrop, deleteUpload, uploadIdSlot,
     handleModalIdUpload, handleModalIdDrop,

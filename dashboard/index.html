@@ -3512,7 +3512,7 @@
       <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
         <input id="indSmartSearch" type="text" placeholder="Search name, phone, booking#…" style="flex:1;min-width:160px;padding:10px 14px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:14px" oninput="SLIndemnitor.smartSearch(this.value)">
         <button type="button" class="btn-primary" onclick="SLIndemnitor.showNewForm()" style="white-space:nowrap;font-size:13px;padding:10px 14px;min-height:44px">+ New Person</button>
-        <button type="button" class="btn-sm" onclick="SLIndemnitor.showNewForm(); setTimeout(function(){ SLIndemnitor.triggerScan(); }, 50)" style="white-space:nowrap;padding:10px 14px;min-height:44px;background:rgba(74,222,128,0.15);border:1px solid #4ade80;color:#4ade80;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;touch-action:manipulation">📸 Scan ID → New</button>
+        <button type="button" class="btn-sm" onclick="SLIndemnitor.showNewForm(); setTimeout(function(){ SLIndemnitor.startLiveCamera(); }, 50)" style="white-space:nowrap;padding:10px 14px;min-height:44px;background:rgba(74,222,128,0.15);border:1px solid #4ade80;color:#4ade80;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;touch-action:manipulation">📸 Scan ID → New</button>
       </div>
       <div id="indSearchResults" style="max-height:240px;overflow-y:auto"></div>
     </div>
@@ -3522,11 +3522,35 @@
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">
         <button type="button" onclick="SLIndemnitor.backToSearch()" style="background:none;border:none;color:var(--accent);cursor:pointer;font-size:13px">← Back to search</button>
         <span id="indFormTitle" style="font-weight:700;font-size:14px;color:var(--text-secondary)">New Indemnitor</span>
-        <!-- Label+input pattern: more reliable than JS .click() on iOS Safari -->
-        <input type="file" id="indAddIdScanner" accept="image/*,application/pdf" capture="environment" style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;z-index:-1" onchange="SLIndemnitor.handleScanID(event)">
-        <label for="indAddIdScanner" class="btn-sm" role="button" tabindex="0" style="margin-left:auto;padding:10px 14px;min-height:44px;display:inline-flex;align-items:center;gap:6px;background:rgba(74,222,128,0.15);border:1px solid #4ade80;color:#4ade80;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent;user-select:none">📸 Scan ID</label>
       </div>
-      <p style="font-size:12px;color:var(--muted);margin:-6px 0 12px">Scan or drop any US state DL/ID, passport, or foreign ID — any orientation. OCR fills legal name, address, DL/passport #, DOB, donor status, and portrait.</p>
+      <input type="file" id="indAddIdScanner" accept="image/*" capture="environment" style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden" onchange="SLIndemnitor.handleScanID(event)">
+      <input type="file" id="indAddIdCapture" accept="image/*" capture="environment" style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden" onchange="SLIndemnitor.handleScanID(event)">
+      <input type="file" id="indAddIdUpload" accept="image/*,application/pdf" style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden" onchange="SLIndemnitor.handleScanID(event)">
+      <div id="indScanChooser" style="margin-bottom:14px;padding:12px;border:1px solid rgba(74,222,128,0.35);border-radius:12px;background:rgba(6,78,59,0.2)">
+        <div style="font-size:13px;font-weight:700;color:#bbf7d0;margin-bottom:6px">Scan a driver license or ID</div>
+        <p style="margin:0 0 10px;font-size:12px;color:var(--muted);line-height:1.45">Camera is the default. If they do not want a live scan, take a photo or upload one from this device. Works on phone, tablet, and desktop.</p>
+        <div style="display:flex;flex-wrap:wrap;gap:8px">
+          <button type="button" class="btn-primary" onclick="SLIndemnitor.startLiveCamera()" style="flex:1;min-width:140px;min-height:44px;padding:10px 14px;font-size:13px;font-weight:800">📷 Open camera</button>
+          <button type="button" onclick="SLIndemnitor.openIdPhotoPicker()" style="flex:1;min-width:120px;min-height:44px;padding:10px 12px;background:var(--panel);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;cursor:pointer">📸 Take a photo</button>
+          <button type="button" onclick="SLIndemnitor.openIdFilePicker()" style="flex:1;min-width:120px;min-height:44px;padding:10px 12px;background:var(--panel);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;cursor:pointer">📁 Upload from device</button>
+        </div>
+      </div>
+      <div id="indCameraOverlay" style="display:none;margin-bottom:14px;border:1px solid rgba(74,222,128,0.4);border-radius:12px;overflow:hidden;background:#020617">
+        <video id="indCameraVideo" autoplay playsinline muted style="display:block;width:100%;max-height:min(52vh,420px);object-fit:cover;background:#000"></video>
+        <canvas id="indCameraCanvas" style="display:none"></canvas>
+        <div style="padding:10px 12px 12px">
+          <div id="indCameraStatus" style="font-size:12px;color:#86efac;margin-bottom:8px">Hold the ID in frame, then capture.</div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px">
+            <button type="button" class="btn-primary" onclick="SLIndemnitor.captureIdFrame()" style="flex:1;min-width:120px;min-height:48px;font-size:15px;font-weight:800">Capture ID</button>
+            <button type="button" onclick="SLIndemnitor.flipCamera()" style="min-height:48px;padding:0 14px;background:var(--panel);border:1px solid var(--border);border-radius:8px;color:var(--text);cursor:pointer">Flip</button>
+            <button type="button" onclick="SLIndemnitor.stopLiveCamera()" style="min-height:48px;padding:0 14px;background:var(--panel);border:1px solid var(--border);border-radius:8px;color:var(--text);cursor:pointer">Close</button>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">
+            <button type="button" onclick="SLIndemnitor.stopLiveCamera();SLIndemnitor.openIdPhotoPicker()" style="flex:1;min-height:40px;background:transparent;border:none;color:#93c5fd;cursor:pointer;font-size:12px">Use phone camera app instead</button>
+            <button type="button" onclick="SLIndemnitor.stopLiveCamera();SLIndemnitor.openIdFilePicker()" style="flex:1;min-height:40px;background:transparent;border:none;color:#93c5fd;cursor:pointer;font-size:12px">Upload a saved photo</button>
+          </div>
+        </div>
+      </div>
 
       <!-- Booking Number Selection -->
       <div style="margin-bottom:14px">
@@ -3748,7 +3772,7 @@
 <script defer src="/sl-service-control.js?v=1"></script>
 <script defer src="/sl-defendant-lifecycle.js?v=4"></script>
 <script defer src="/sl-premium.js?v=1"></script>
-<script defer src="/sl-indemnitor.js?v=10"></script>
+<script defer src="/sl-indemnitor.js?v=11"></script>
 <script defer src="/sl-inventory.js?v=6"></script>
 <script defer src="/sl-analytics.js?v=4"></script>
 <script defer src="/sl-analytics-apex.js?v=4"></script>
