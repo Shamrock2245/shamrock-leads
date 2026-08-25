@@ -110,6 +110,18 @@ def test_parse_ignorant_results_exists_only():
     assert accounts[0]["source"] == "ignorant"
     assert accounts[0]["profile_data"]["phone_registered"] is True
     assert any(e["type"] == "phone" for e in entities)
+    ctx = entities[0].get("context") or ""
+    assert "amazon" in ctx
+    accounts2, entities2 = parse_ignorant_results(
+        [
+            {"name": "snapchat", "domain": "snapchat.com", "rateLimit": True, "exists": False},
+            {"name": "instagram", "domain": "instagram.com", "rateLimit": False, "exists": True},
+        ],
+        country_code="1",
+        national="2395550100",
+    )
+    assert len(accounts2) == 1
+    assert "rate-limited: snapchat" not in (entities2[0].get("context") or "")
 
 
 def test_score_signals_phone_linked_social():

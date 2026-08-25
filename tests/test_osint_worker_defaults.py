@@ -13,10 +13,38 @@ sys.path.insert(0, str(WORKER))
 from defaults import (  # noqa: E402
     build_username_candidates,
     dedupe_accounts,
+    module_short_name,
     resolve_tool_flags,
     score_signals,
     assess_maigret_quality,
+    select_holehe_modules,
 )
+
+
+def test_holehe_first_pass_skips_rate_limit_bait():
+    class _Mod:
+        def __init__(self, name):
+            self.__name__ = name
+
+    mods = [
+        _Mod("instagram"),
+        _Mod("amazon"),
+        _Mod("voxmedia"),
+        _Mod("atlassian"),
+        _Mod("codecademy"),
+        _Mod("paypal"),
+    ]
+    quick = select_holehe_modules(mods, deep=False)
+    names = {module_short_name(m) for m in quick}
+    assert "instagram" in names
+    assert "paypal" in names
+    assert "voxmedia" not in names
+    assert "atlassian" not in names
+    deep = select_holehe_modules(mods, deep=True)
+    deep_names = {module_short_name(m) for m in deep}
+    assert "voxmedia" not in deep_names
+    assert "instagram" in deep_names
+    assert len(deep) >= len(quick)
 
 
 def test_maigret_default_on_blackbird_off():

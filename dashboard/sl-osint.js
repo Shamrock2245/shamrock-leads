@@ -18,7 +18,7 @@
   let _activeTab = 'summary';
   let _activeSubtab = 'scan';
   let _accountFilter = { source: 'all', category: 'all' };
-  let _selectedEngines = new Set(['maigret', 'tookie', 'sherlock']);
+  let _selectedEngines = new Set(['maigret']);
 
   // ── Public API ─────────────────────────────────────────────────────
   window.SLOSINT = {
@@ -310,13 +310,7 @@
       _updateEngineChips();
     }
 
-    // Auto-suggest Toutatis when usernames look like handles and session is ready
-    const unames = ($('osintUsernames')?.value || '').split(',').map(s => s.trim()).filter(Boolean);
-    const toutatisReady = _toolStatus?.toutatis?.available === true;
-    if (unames.length && toutatisReady && !_selectedEngines.has('toutatis')) {
-      _selectedEngines.add('toutatis');
-      _updateEngineChips();
-    }
+    // Toutatis hammers Instagram — only when staff explicitly enables it.
   }
 
   // ── Load Scans ─────────────────────────────────────────────────────

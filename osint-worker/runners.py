@@ -21,7 +21,10 @@ from defaults import (
     BLACKBIRD_TIMEOUT,
     HIBF_BASE_URL,
     HIBF_TIMEOUT,
+    HOLEHE_CONCURRENCY,
+    HOLEHE_GAP_S,
     HOLEHE_TIMEOUT,
+    IGNORANT_GAP_S,
     IGNORANT_TIMEOUT,
     MAIGRET_NO_AUTOUPDATE,
     MAIGRET_NO_RECURSION,
@@ -33,9 +36,11 @@ from defaults import (
     SPIDERFOOT_TIMEOUT,
     TOOKIE_TIMEOUT,
     TOUTATIS_TIMEOUT,
+    USERNAME_ENGINES,
     assess_maigret_quality,
     dedupe_accounts,
     maigret_site_args,
+    select_holehe_modules,
 )
 
 log = logging.getLogger("osint_worker.runners")
@@ -999,7 +1004,8 @@ def parse_ignorant_results(
         domain = str(item.get("domain") or f"{name}.com")
         checked.append(name)
         if item.get("rateLimit"):
-            rate_limited.append(name)
+            if name.lower() != "snapchat":
+                rate_limited.append(name)
             continue
         if not item.get("exists"):
             continue
@@ -2140,12 +2146,10 @@ async def run_ignorant(phone: str) -> Dict[str, Any]:
 
         async def _run() -> None:
             async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-                await asyncio.gather(
-                    *[
-                        launch_module(mod, national, country_code, client, out)
-                        for mod in websites
-                    ]
-                )
+                for mod in websites:
+                    await launch_module(mod, national, country_code, client, out)
+                    if IGNORANT_GAP_S > 0:
+                        await asyncio.sleep(IGNORANT_GAP_S)
 
         await asyncio.wait_for(_run(), timeout=float(IGNORANT_TIMEOUT))
 
@@ -2155,7 +2159,7 @@ async def run_ignorant(phone: str) -> Dict[str, Any]:
         # Ignore snapchat rateLimit flag because Snapchat deprecated the legacy xsrf endpoint (false alarm)
         rate_limited = [
             r for r in out
-            if isinstance(r, dict) and r.get("rateLimit") and r.get("name") != "snapchat"
+            if isinstance(r, dict) and r.get("rateLimit") and str(r.get("name") or "").lower() != "snapchat"
         ]
         result_meta.update({
             "ok": True,
@@ -2193,12 +2197,13 @@ def _valid_email(email: str) -> bool:
     return bool(local) and "." in domain and len(e) >= 6
 
 
-async def run_holehe(email: str) -> Dict[str, Any]:
+async def run_holehe(email: str, *, deep: bool = False) -> Dict[str, Any]:
     """
-    Run Holehe email-registration checks (120+ sites including Instagram).
+    Run Holehe email-registration checks.
 
+    First pass uses a small underwriting allowlist with bounded concurrency.
+    Deep scan still walks the full module set, never unbounded gather.
     Does **not** send mail or otherwise notify the target address.
-    Same megadose module API as Ignorant (httpx + launch_module).
     """
     result_meta: Dict[str, Any] = {
         "tool": "holehe",
@@ -2229,19 +2234,24 @@ async def run_holehe(email: str) -> Dict[str, Any]:
 
     try:
         modules = import_submodules("holehe.modules")
-        websites = get_functions(modules)
+        websites = select_holehe_modules(get_functions(modules), deep=deep)
         if not websites:
             result_meta["error"] = "holehe: no modules discovered"
             return result_meta
 
         out: List[Dict[str, Any]] = []
         timeout = httpx.Timeout(float(min(HOLEHE_TIMEOUT, 25)))
+        sem = asyncio.Semaphore(HOLEHE_CONCURRENCY)
+
+        async def _one(client: Any, mod: Any) -> None:
+            async with sem:
+                await launch_module(mod, addr, client, out)
+                if HOLEHE_GAP_S > 0:
+                    await asyncio.sleep(HOLEHE_GAP_S)
 
         async def _run() -> None:
             async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-                await asyncio.gather(
-                    *[launch_module(mod, addr, client, out) for mod in websites]
-                )
+                await asyncio.gather(*[_one(client, mod) for mod in websites])
 
         await asyncio.wait_for(_run(), timeout=float(HOLEHE_TIMEOUT))
 
@@ -2743,7 +2753,7 @@ async def execute_scan_v2(
                     progress[engine]["error"] = "No phone number for ignorant"
             elif engine == "holehe":
                 if email and str(email).strip():
-                    tasks.append(run_holehe(str(email).strip()))
+                    tasks.append(run_holehe(str(email).strip(), deep=deep_scan))
                     task_map.append(engine)
                 else:
                     progress[engine]["status"] = "skipped"
@@ -2781,9 +2791,31 @@ async def execute_scan_v2(
                 progress[engine]["status"] = "skipped"
                 progress[engine]["error"] = f"No valid input for {engine}"
 
-        # Execute all tasks concurrently
+        # First pass: do not slam the same sites from Maigret + Sherlock + Tookie
+        # at the same moment. Deep scans still run username engines together.
         if tasks:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            user_idx = [i for i, eng in enumerate(task_map) if eng in USERNAME_ENGINES]
+            other_idx = [i for i, eng in enumerate(task_map) if eng not in USERNAME_ENGINES]
+            results = [None] * len(tasks)
+            if other_idx:
+                other_raw = await asyncio.gather(
+                    *[tasks[i] for i in other_idx], return_exceptions=True
+                )
+                for slot, raw in zip(other_idx, other_raw):
+                    results[slot] = raw
+            if user_idx:
+                if deep_scan:
+                    user_raw = await asyncio.gather(
+                        *[tasks[i] for i in user_idx], return_exceptions=True
+                    )
+                    for slot, raw in zip(user_idx, user_raw):
+                        results[slot] = raw
+                else:
+                    for slot in user_idx:
+                        try:
+                            results[slot] = await tasks[slot]
+                        except Exception as exc:
+                            results[slot] = exc
         else:
             results = []
 

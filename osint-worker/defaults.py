@@ -24,10 +24,39 @@ MAX_TOUTATIS_USERNAMES = int(os.getenv("OSINT_MAX_TOUTATIS_USERNAMES", "3"))
 MAIGRET_SITE_TIMEOUT = int(os.getenv("OSINT_MAIGRET_SITE_TIMEOUT", "12"))
 
 # ── Quick vs deep site coverage ───────────────────────────────────────────────
-QUICK_TOP_SITES = int(os.getenv("OSINT_QUICK_TOP_SITES", "250"))
+# First-pass Maigret used to hit 250 sites while Holehe slammed 120+ modules
+# concurrently — that looks like a rate-limit storm on a single lookup.
+QUICK_TOP_SITES = int(os.getenv("OSINT_QUICK_TOP_SITES", "80"))
 DEEP_TOP_SITES = int(os.getenv("OSINT_DEEP_TOP_SITES", "800"))
 MAX_NAME_DERIVED_USERNAMES = int(os.getenv("OSINT_MAX_NAME_USERNAMES", "2"))
 MAX_MAIGRET_USERNAMES = int(os.getenv("OSINT_MAX_MAIGRET_USERNAMES", "2"))
+
+# Holehe: never fire 120 modules at once from one VPS IP.
+HOLEHE_CONCURRENCY = max(1, int(os.getenv("OSINT_HOLEHE_CONCURRENCY", "3")))
+HOLEHE_GAP_S = float(os.getenv("OSINT_HOLEHE_GAP_S", "0.25"))
+IGNORANT_GAP_S = float(os.getenv("OSINT_IGNORANT_GAP_S", "0.6"))
+
+# Underwriting-useful first-pass email checks. Deep scan still runs the rest.
+HOLEHE_QUICK_MODULES = frozenset(
+    os.getenv(
+        "OSINT_HOLEHE_QUICK_MODULES",
+        "instagram,facebook,twitter,x,google,microsoft,apple,amazon,paypal,"
+        "venmo,cashapp,snapchat,tiktok,linkedin,yahoo,protonmail,discord,"
+        "reddit,github,pinterest,ebay,uber,lyft,spotify,netflix,onlyfans,"
+        "twitch,skype,whatsapp,telegram,signal,wordpress,dropbox,adobe",
+    ).lower().replace(" ", "").split(",")
+) - {""}
+
+# Chronic first-hit rate-limiters with low bail-bond value.
+HOLEHE_SKIP_MODULES = frozenset(
+    os.getenv(
+        "OSINT_HOLEHE_SKIP_MODULES",
+        "voxmedia,atlassian,nimblr,teamleader,office365,envato,rambler,"
+        "seoclerks,freelancer,codecademy,codechef",
+    ).lower().replace(" ", "").split(",")
+) - {""}
+
+USERNAME_ENGINES = frozenset({"maigret", "tookie", "sherlock", "blackbird"})
 
 # Always disable Maigret recursion / ID permutation noise
 MAIGRET_NO_RECURSION = True
@@ -136,6 +165,25 @@ def maigret_site_args(deep_scan: bool) -> List[str]:
     if deep_scan:
         return ["--top-sites", str(DEEP_TOP_SITES)]
     return ["--top-sites", str(QUICK_TOP_SITES)]
+
+
+def module_short_name(mod: Any) -> str:
+    raw = getattr(mod, "__name__", "") or str(mod)
+    return str(raw).rsplit(".", 1)[-1].lower().strip()
+
+
+def select_holehe_modules(modules: List[Any], *, deep: bool = False) -> List[Any]:
+    """Drop junk rate-limit bait; on a first pass keep underwriting-useful sites."""
+    kept: List[Any] = []
+    for mod in modules or []:
+        name = module_short_name(mod)
+        if not name or name in HOLEHE_SKIP_MODULES:
+            continue
+        kept.append(mod)
+    if deep or not HOLEHE_QUICK_MODULES:
+        return kept
+    quick = [mod for mod in kept if module_short_name(mod) in HOLEHE_QUICK_MODULES]
+    return quick or kept
 
 
 def dedupe_accounts(accounts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
