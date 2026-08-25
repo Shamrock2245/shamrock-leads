@@ -1860,7 +1860,7 @@ async def hydrate_from_booking(request: Request):
             "required_for_send": True,
             "editable": not poa_locked,
         })
-    lee = is_lee_county(ctx.get("county") or county)
+    lee = is_lee_county(ctx.get("county") or county, ctx.get("state"))
     return {
         "success": True,
         "booking_number": booking,

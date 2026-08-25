@@ -59,6 +59,10 @@ def test_lee_charge_details_from_arrest_extra():
     assert rows[0]["bond_amount"] == 1000.0
     assert rows[1]["case_number"] == "26CF1"
     assert is_lee_county("Lee County")
+    assert is_lee_county("Lee")
+    assert is_lee_county("Lee (FL)")
+    assert not is_lee_county("Lehigh")
+    assert not is_lee_county("Lee", "GA")
     assert "leeclerk.org" in lee_clerk_search_url("26CF1", "1030001")
 
 

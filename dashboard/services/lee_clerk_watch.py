@@ -91,16 +91,16 @@ def jail_refresh_due(
 
 
 def clerk_page_indicates_posted(html: str, query: str) -> bool:
-    """Fail closed: SPA shells and missing query text never count as posted."""
+    """Fail closed: SPA shells and a bare 'posted' never lock a POA."""
     body = html or ""
     if len(body) < MIN_CLERK_HTML_BYTES:
         return False
     needle = (query or "").strip()
-    if needle and needle.lower() not in body.lower():
+    if not needle or needle.lower() not in body.lower():
         return False
     return bool(
         re.search(
-            r"\b(surety|appearance\s+bond|power of attorney|bond posted|posted bond|posted)\b",
+            r"\b(surety|appearance\s+bond|power of attorney|bond posted|posted bond)\b",
             body,
             re.I,
         )
@@ -200,13 +200,66 @@ async def _refresh_jail_source(arrest: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _written_anchor(doc: Dict[str, Any]) -> Any:
+    """Bond/packet timestamps only — never jail scrape time."""
     return (
         doc.get("packet_sent_at")
-        or doc.get("created_at")
-        or doc.get("posted_date")
         or doc.get("bond_date")
-        or doc.get("scraped_at")
+        or doc.get("written_at")
+        or doc.get("posted_date")
+        or doc.get("created_at")
+        or doc.get("match_timestamp")
     )
+
+
+def _lee_county_clause() -> Dict[str, Any]:
+    return {
+        "$or": [
+            {"county": {"$regex": r"^Lee(?:\s+County)?$", "$options": "i"}},
+            {"County": {"$regex": r"^Lee(?:\s+County)?$", "$options": "i"}},
+        ]
+    }
+
+
+async def _collect_inflight_bookings(limit: int) -> List[str]:
+    """Only Shamrock work-in-progress — not the public Lee jail roster."""
+    seen: List[str] = []
+    found: set[str] = set()
+
+    def _add(raw: Any) -> None:
+        booking = str(raw or "").strip()
+        if booking and booking not in found:
+            found.add(booking)
+            seen.append(booking)
+
+    queries = [
+        ("active_bonds", {**_lee_county_clause(), "clerk_bond_posted": {"$ne": True}}),
+        ("bond_cases", {**_lee_county_clause(), "clerk_bond_posted": {"$ne": True}}),
+        ("paperwork_packets", {
+            **_lee_county_clause(),
+            "clerk_bond_posted": {"$ne": True},
+            "voided": {"$ne": True},
+        }),
+        ("prospective_bonds", _lee_county_clause()),
+        ("intake_queue", {
+            "matched_booking_number": {"$exists": True, "$nin": [None, ""]},
+            "$or": [
+                {"matched_county": {"$regex": r"^Lee(?:\s+County)?$", "$options": "i"}},
+                {"defendant_county": {"$regex": r"^Lee(?:\s+County)?$", "$options": "i"}},
+                {"county": {"$regex": r"^Lee(?:\s+County)?$", "$options": "i"}},
+            ],
+        }),
+    ]
+    for name, filt in queries:
+        try:
+            col = get_collection(name)
+            cursor = col.find(filt, {"booking_number": 1, "Booking_Number": 1, "matched_booking_number": 1}).limit(limit)
+            async for doc in cursor:
+                _add(doc.get("booking_number") or doc.get("Booking_Number") or doc.get("matched_booking_number"))
+                if len(seen) >= limit:
+                    return seen
+        except Exception:
+            logger.debug("lee clerk watch skipped collection %s", name, exc_info=True)
+    return seen
 
 
 async def run_lee_clerk_watch(
@@ -215,24 +268,10 @@ async def run_lee_clerk_watch(
     limit: int = 25,
     http_client: Optional[httpx.AsyncClient] = None,
 ) -> Dict[str, Any]:
-    """Scan Lee bonds that are in-flight and apply jail/clerk follow-up."""
+    """Follow up only on Shamrock Lee cases that are already being written."""
     now = now or datetime.now(timezone.utc)
+    bookings = await _collect_inflight_bookings(limit)
     arrests = get_collection("arrests")
-    query = {
-        "$or": [
-            {"county": {"$regex": "^Lee", "$options": "i"}},
-            {"County": {"$regex": "^Lee", "$options": "i"}},
-        ],
-        "clerk_bond_posted": {"$ne": True},
-    }
-    watched: List[Dict[str, Any]] = []
-    cursor = arrests.find(query).sort("updated_at", -1).limit(limit * 2)
-    async for doc in cursor:
-        if is_lee_county(doc.get("county") or doc.get("County")):
-            watched.append(doc)
-        if len(watched) >= limit:
-            break
-
     stats = {
         "scanned": 0,
         "clerk_probed": 0,
@@ -240,12 +279,34 @@ async def run_lee_clerk_watch(
         "jail_refreshed": 0,
         "skipped_early": 0,
         "inconclusive": 0,
+        "inflight": len(bookings),
     }
-    for doc in watched:
-        stats["scanned"] += 1
-        booking = str(doc.get("booking_number") or "").strip()
-        if not booking:
+    for booking in bookings:
+        doc = await arrests.find_one({"booking_number": booking}) or {"booking_number": booking}
+        for coll_name in ("active_bonds", "paperwork_packets"):
+            try:
+                extra = await get_collection(coll_name).find_one(
+                    {"$or": [{"booking_number": booking}, {"Booking_Number": booking}]},
+                    {
+                        "packet_sent_at": 1, "bond_date": 1, "written_at": 1,
+                        "posted_date": 1, "created_at": 1, "case_number": 1,
+                        "poa_number": 1, "clerk_bond_posted": 1, "county": 1, "state": 1,
+                    },
+                ) or {}
+            except Exception:
+                extra = {}
+            for key, val in extra.items():
+                if key == "_id" or val in (None, ""):
+                    continue
+                if not doc.get(key):
+                    doc[key] = val
+        if doc.get("clerk_bond_posted"):
             continue
+        county = doc.get("county") or doc.get("County") or "Lee"
+        state = doc.get("state") or doc.get("State") or "FL"
+        if not is_lee_county(county, state):
+            continue
+        stats["scanned"] += 1
         elapsed = hours_since(_written_anchor(doc), now)
         if jail_refresh_due(
             last_refresh_at=doc.get("last_source_refresh_at"),
@@ -255,7 +316,10 @@ async def run_lee_clerk_watch(
             refresh = await _refresh_jail_source(doc)
             if refresh.get("updated"):
                 stats["jail_refreshed"] += 1
+                extra = await arrests.find_one({"booking_number": booking}) or {}
+                doc.update(extra)
 
+        query_text = str(doc.get("case_number") or doc.get("poa_number") or "").strip()
         if not clerk_check_due(
             written_at=_written_anchor(doc),
             now=now,
@@ -263,8 +327,10 @@ async def run_lee_clerk_watch(
         ):
             stats["skipped_early"] += 1
             continue
+        if not query_text:
+            stats["inconclusive"] += 1
+            continue
 
-        query_text = str(doc.get("case_number") or doc.get("poa_number") or booking).strip()
         probe = await probe_lee_clerk(query_text, client=http_client)
         stats["clerk_probed"] += 1
         if probe.get("posted"):

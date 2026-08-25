@@ -371,13 +371,36 @@ class MatchingEngine:
 
         candidates: list[MatchResult] = []
 
-        # ── Strategy 1: Exact booking number + county ──────────────────────
-        if county and booking_number:
-            doc = await self.arrests.find_one(
-                {"county": {"$regex": f"^{re.escape(county)}$", "$options": "i"},
-                 "booking_number": booking_number},
-                {"_id": 0},
-            )
+        # ── Strategy 1: Exact booking number (+ county when present) ───────
+        if booking_number:
+            doc = None
+            if county:
+                doc = await self.arrests.find_one(
+                    {"county": {"$regex": f"^{re.escape(county)}$", "$options": "i"},
+                     "booking_number": booking_number},
+                    {"_id": 0},
+                )
+            if not doc:
+                unique = []
+                try:
+                    cursor = self.arrests.find(
+                        {"booking_number": booking_number}, {"_id": 0}
+                    ).limit(3)
+                    async for row in cursor:
+                        unique.append(row)
+                except TypeError:
+                    found = await self.arrests.find_one(
+                        {"booking_number": booking_number}, {"_id": 0}
+                    )
+                    if found:
+                        unique = [found]
+                if len(unique) == 1:
+                    doc = unique[0]
+                elif county:
+                    for row in unique:
+                        if str(row.get("county") or "").lower().startswith(county.lower()):
+                            doc = row
+                            break
             if doc:
                 candidates.append(MatchResult(doc, 100, "exact_booking"))
 
@@ -625,11 +648,15 @@ class MatchingEngine:
         if defendant_id:
             update["matched_defendant_id"] = defendant_id
 
+        if not intake_id:
+            return False
         result = await self.intake_queue.update_one(
             {"intake_id": intake_id},
             {"$set": update},
         )
-        return result.modified_count > 0
+        matched = int(getattr(result, "matched_count", 0) or 0)
+        modified = int(getattr(result, "modified_count", 0) or 0)
+        return matched > 0 or modified > 0
 
     # ─────────────────────────────────────────────────────────────────────────
     #  Manual confirm link

@@ -119,8 +119,15 @@ def _split_name(full: str) -> Tuple[str, str, str]:
     return parts[0], " ".join(parts[1:-1]), parts[-1]
 
 
-def is_lee_county(county: Any) -> bool:
-    return "lee" in str(county or "").lower()
+def is_lee_county(county: Any, state: Any = "") -> bool:
+    """Lee County, Florida only — not Lee GA, Lehigh, Leesburg, etc."""
+    st = str(state or "").strip().upper()
+    if st and st not in ("FL", "FLORIDA"):
+        return False
+    name = str(county or "").strip().lower()
+    name = re.sub(r"\s*\([^)]*\)\s*$", "", name).strip()
+    name = re.sub(r"\s+", " ", name)
+    return name in {"lee", "lee county"}
 
 
 def lee_clerk_search_url(case_number: str = "", booking_number: str = "") -> str:
@@ -494,7 +501,7 @@ async def resolve_case_context(
     context["poa_locked"] = clerk_posted
     context["lee_clerk_url"] = (
         lee_clerk_search_url(context.get("case_number") or "", context.get("booking_number") or "")
-        if is_lee_county(context.get("county")) else ""
+        if is_lee_county(context.get("county"), context.get("state")) else ""
     )
 
     # Returning-client fast path: fill empty indemnitor / defendant PII from

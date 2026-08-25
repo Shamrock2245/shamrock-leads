@@ -40,3 +40,12 @@ def test_real_clerk_html_with_case_and_surety_marks_posted():
     )
     assert clerk_page_indicates_posted(html, "26CF123") is True
     assert clerk_page_indicates_posted(html, "99CF999") is False
+
+
+def test_bare_posted_word_does_not_lock_poa():
+    html = (
+        "<html><body>" + ("Search results were posted to the docket calendar. " * 40)
+        + "Booking 1030001"
+        + "</body></html>"
+    )
+    assert clerk_page_indicates_posted(html, "1030001") is False

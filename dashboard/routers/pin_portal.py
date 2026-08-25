@@ -569,7 +569,7 @@ async def _push_client_fields_to_issued_packet(
     meta = await _resolve_packet_for_client(
         session.get("phone") or "",
         booking=session.get("booking_number") or "",
-        intake=session.get("intake_id") or "",
+        intake=session.get("intake_id") or session.get("client_intake_id") or "",
     )
     packet_id = meta.get("packet_id") or ""
     if not packet_id:
@@ -591,8 +591,6 @@ async def _push_client_fields_to_issued_packet(
             if _digits_phone((item or {}).get("phone")) == session_phone:
                 target = item
                 break
-    if not target and submitters:
-        target = submitters[0]
     submitter_id = (target or {}).get("id")
     if not submitter_id:
         return False
@@ -604,10 +602,12 @@ async def _push_client_fields_to_issued_packet(
         values=fields,
         fields=submission_fields_from_values(fields, force_editable=True),
     )
+    existing_packet_fields = (packet or {}).get("client_fields") if isinstance((packet or {}).get("client_fields"), dict) else {}
+    merged = {**existing_packet_fields, **fields}
     await packets.update_one(
         {"packet_id": packet_id},
         {"$set": {
-            "client_fields": fields,
+            "client_fields": merged,
             "client_fields_updated_at": datetime.now(timezone.utc).isoformat(),
             "id_ocr_pushed_at": datetime.now(timezone.utc).isoformat(),
         }},
@@ -887,7 +887,7 @@ async def portal_session(request: Request):
     meta = await _resolve_packet_for_client(
         session.get("phone") or "",
         booking=session.get("booking_number") or "",
-        intake=session.get("intake_id") or "",
+        intake=session.get("intake_id") or session.get("client_intake_id") or "",
     )
     return _session_payload(session, meta)
 
@@ -1034,7 +1034,7 @@ async def portal_remaining_fields(req: RemainingFieldsRequest):
     meta = await _resolve_packet_for_client(
         session.get("phone") or "",
         booking=session.get("booking_number") or "",
-        intake=session.get("intake_id") or "",
+        intake=session.get("intake_id") or session.get("client_intake_id") or "",
     )
     pushed = False
     push_error = ""

@@ -571,7 +571,8 @@ async def find_prior_bond_for_defendant(
         if exclude and booking == exclude:
             continue
         score = _prior_score(lead, q, dob)
-        if score < 50:
+        # Last name alone is not enough — that would hydrate the wrong Smith.
+        if score < 70:
             continue
         ranked.append((score, lead))
     if not ranked:

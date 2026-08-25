@@ -181,8 +181,11 @@ def test_apply_prior_bond_fills_gaps_not_live_facts():
 
 def test_prior_score_requires_last_name():
     lead = {"full_name": "Smith, John", "dob": "1990-01-01", "indemnitor_name": "Mary", "bond_amount": 1000}
-    assert _prior_score(lead, "Smith, John", "1990-01-01") >= 50
+    assert _prior_score(lead, "Smith, John", "1990-01-01") >= 70
     assert _prior_score(lead, "Garcia, Ana", "") < 50
+    # Same last name, different person — must not hydrate.
+    other = {"full_name": "Smith, Robert", "bond_amount": 2500, "indemnitor_name": "Pat"}
+    assert _prior_score(other, "Smith, John", "") < 70
 
 
 def test_merge_respects_limit():
