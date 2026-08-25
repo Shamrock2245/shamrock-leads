@@ -496,6 +496,41 @@ async def resolve_case_context(
         lee_clerk_search_url(context.get("case_number") or "", context.get("booking_number") or "")
         if is_lee_county(context.get("county")) else ""
     )
+
+    # Returning-client fast path: fill empty indemnitor / defendant PII from
+    # the last Shamrock bond. Live booking, POA, case #, and amounts stay authoritative.
+    try:
+        from dashboard.services.past_bond_search import (
+            apply_prior_bond_gaps,
+            find_prior_bond_for_defendant,
+            suggest_surety_id,
+        )
+        def_name = (context.get("defendant") or {}).get("name") or ""
+        prior = None
+        if def_name:
+            prior = await find_prior_bond_for_defendant(
+                def_name,
+                dob=(context.get("defendant") or {}).get("dob") or "",
+                exclude_booking=context.get("booking_number") or "",
+            )
+        if prior:
+            context = apply_prior_bond_gaps(context, prior)
+        else:
+            suggested = suggest_surety_id(
+                context.get("state") or (context.get("defendant") or {}).get("state") or "",
+                "",
+            )
+            if (
+                suggested == "palmetto"
+                and (context.get("surety_id") or "osi") == "osi"
+                and "bond" not in sources
+                and "packet" not in sources
+            ):
+                context["surety_id"] = "palmetto"
+                context["surety_suggested_from"] = "out_of_state"
+    except Exception:
+        logger.debug("prior-bond hydrate skipped", exc_info=True)
+
     return context
 
 

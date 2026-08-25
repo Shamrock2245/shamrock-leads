@@ -423,6 +423,16 @@ function openBondModal(nameOrLead, bond, county, booking) {
         </div>
       </div>
     </div>
+    ${lead._priorBond && lead._priorBond.found ? `
+    <div class="wb-section" id="returningClientBanner" style="background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.35);border-radius:10px;padding:12px 14px">
+      <div class="wb-section-label" style="margin:0 0 6px">☘️ Returning Shamrock client</div>
+      <div style="font-size:12px;color:#bbf7d0;line-height:1.5">
+        Last bond ${lead._priorBond.county || ''} ${lead._priorBond.bond_amount ? '· $' + Number(lead._priorBond.bond_amount).toLocaleString() : ''}
+        ${lead._priorBond.surety_id ? '· ' + String(lead._priorBond.surety_id).toUpperCase() : ''}
+        ${lead._priorBond.posted_date ? '· ' + String(lead._priorBond.posted_date).slice(0,10) : ''}<br>
+        Indemnitor ${lead._priorBond.indemnitor_name || 'on file'} — empty paperwork fields filled from that file. Confirm and send.
+      </div>
+    </div>` : ''}
     <div class="wb-section">
       <div class="wb-section-label">Select Surety Company</div>
       <div class="insurer-selector">
@@ -595,6 +605,7 @@ function openBondModal(nameOrLead, bond, county, booking) {
     }));
   }
 
+  const initialSurety = (lead.surety_id || lead.surety || 'osi').toLowerCase() === 'palmetto' ? 'palmetto' : 'osi';
   window._bondModalData = {
     lead,
     name, bond: bondAmt, county: cnty, booking: bkNum,
@@ -602,13 +613,18 @@ function openBondModal(nameOrLead, bond, county, booking) {
     case_number: leadCase,
     court_date: leadCourt.date,
     court_time: leadCourt.time,
-    surety: 'osi',
+    surety: initialSurety,
     date: new Date().toLocaleDateString('en-US'),
     poaNumbers: [],  // will be populated by fetchPoaNumbers()
   };
 
-  // Auto-fetch POA numbers for the default surety (osi) and charge count
-  fetchPoaNumbers('osi', bondAmt, chargeList);
+  fetchPoaNumbers(initialSurety, bondAmt, chargeList);
+  if (initialSurety === 'palmetto') {
+    const osi = document.getElementById('suretyOSI');
+    const pal = document.getElementById('suretyPalmetto');
+    if (osi) osi.classList.remove('active');
+    if (pal) pal.classList.add('active');
+  }
 
   // Check BlueBubbles status + load outreach template + history
   checkBBStatus();
@@ -1999,6 +2015,8 @@ async function hydrateDefendantPacket(bookingNumber) {
       _hydratePrefill: d.prefill || {},
       _hydrateKeyCount: d.prefill_key_count || 0,
       _missingStaff: d.missing_staff || [],
+      _priorBond: d.prior_bond || {},
+      indemnitor_name: (d.prior_bond && d.prior_bond.indemnitor_name) || lead.indemnitor_name || '',
     };
     window._leadMap = window._leadMap || {};
     window._leadMap[bookingNumber] = enriched;
@@ -2009,7 +2027,11 @@ async function hydrateDefendantPacket(bookingNumber) {
     const poaNote = (enriched._missingStaff || []).some(m => m.key === 'poa_number')
       ? ' POA is still open — fill it before send, or come back after inventory assign.'
       : '';
-    toast(`Hydrated ${n} paperwork fields from ${enriched.county} booking.${poaNote}`, 'success');
+    const prior = enriched._priorBond || {};
+    const priorNote = prior.found
+      ? ` Repeat client — filled ${ (prior.filled_keys || []).length } gaps from last Shamrock bond.`
+      : '';
+    toast(`Hydrated ${n} paperwork fields from ${enriched.county} booking.${priorNote}${poaNote}`, 'success');
   } catch (e) {
     toast('Network error hydrating packet', 'error');
   }

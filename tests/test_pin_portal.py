@@ -332,3 +332,36 @@ def test_remaining_fields_targets_defendant_submitter():
     sent = mock_svc.update_submitter.await_args.kwargs["values"]
     assert sent["defendant_city"] == "Fort Myers"
     assert sent["defendant_dl"] == "D1234567"
+
+
+def test_id_ocr_maps_indemnitor_not_defendant():
+    from dashboard.routers.pin_portal import client_fields_from_id_ocr
+    fields = client_fields_from_id_ocr(
+        {
+            "full_name": "Mary Smith",
+            "first_name": "Mary",
+            "last_name": "Smith",
+            "address": "12 Pine St",
+            "city": "Fort Myers",
+            "state": "FL",
+            "zip": "33901",
+            "dob": "1988-02-02",
+            "dl_number": "S1234567",
+        },
+        "indemnitor",
+    )
+    assert fields["indemnitor_name"] == "Mary Smith"
+    assert fields["indemnitor_dl"] == "S1234567"
+    assert "defendant_name" not in fields
+    assert "poa_number" not in fields
+
+
+def test_id_ocr_defendant_role_does_not_overwrite_indemnitor():
+    from dashboard.routers.pin_portal import client_fields_from_id_ocr
+    fields = client_fields_from_id_ocr(
+        {"full_name": "John Inmate", "dl_number": "D999", "address": "Jail"},
+        "defendant",
+    )
+    assert fields["defendant_name"] == "John Inmate"
+    assert fields["defendant_dl"] == "D999"
+    assert "indemnitor_name" not in fields

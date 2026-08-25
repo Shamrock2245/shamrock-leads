@@ -1,9 +1,12 @@
 """Unit tests for mapping Mongo past bonds onto defendant lead cards."""
 from dashboard.services.past_bond_search import (
+    apply_prior_bond_gaps,
     bond_as_lead,
     defendant_name_from_bond,
     merge_leads_with_past_bonds,
+    suggest_surety_id,
     unique_past_count,
+    _prior_score,
     _search_filter,
 )
 
@@ -124,6 +127,62 @@ def test_unique_past_count_skips_live_collisions():
         {"full_name": "Old Client", "poa_number": "POA-99", "booking_number": "POA-99"},
     ]
     assert unique_past_count(live, past) == 1
+
+
+def test_suggest_surety_out_of_state_is_palmetto():
+    assert suggest_surety_id("GA", "osi") == "palmetto"
+    assert suggest_surety_id("Florida", "") == "osi"
+    assert suggest_surety_id("FL", "palmetto") == "palmetto"
+    assert suggest_surety_id("", "") == "osi"
+
+
+def test_apply_prior_bond_fills_gaps_not_live_facts():
+    ctx = {
+        "sources": ["arrest"],
+        "surety_id": "osi",
+        "poa_number": "",
+        "case_number": "26CF1",
+        "booking_number": "2026-NEW",
+        "bond_amount": 2500,
+        "state": "FL",
+        "defendant": {"name": "Jane Doe", "address": "", "employer": ""},
+        "indemnitor": {"name": ""},
+    }
+    prior = bond_as_lead(
+        {
+            "defendant_name": "Jane Doe",
+            "booking_number": "2019-OLD",
+            "bond_amount": 5000,
+            "poa_number": "OSI-999",
+            "case_number": "19CF9",
+            "surety_id": "osi",
+            "address": "100 Oak St",
+            "employer": "Lee Schools",
+            "indemnitor": {
+                "name": "Robert Doe",
+                "phone": "2395550100",
+                "relationship": "Spouse",
+            },
+        },
+        "HistoricalBonds",
+    )
+    out = apply_prior_bond_gaps(ctx, prior)
+    assert out["defendant"]["address"] == "100 Oak St"
+    assert out["defendant"]["employer"] == "Lee Schools"
+    assert out["indemnitor"]["name"] == "Robert Doe"
+    assert out["indemnitor"]["phone"] == "2395550100"
+    assert out["bond_amount"] == 2500
+    assert out["case_number"] == "26CF1"
+    assert out["booking_number"] == "2026-NEW"
+    assert out["poa_number"] == ""
+    assert out["prior_bond"]["found"] is True
+    assert "defendant.address" in out["prior_bond"]["filled_keys"]
+
+
+def test_prior_score_requires_last_name():
+    lead = {"full_name": "Smith, John", "dob": "1990-01-01", "indemnitor_name": "Mary", "bond_amount": 1000}
+    assert _prior_score(lead, "Smith, John", "1990-01-01") >= 50
+    assert _prior_score(lead, "Garcia, Ana", "") < 50
 
 
 def test_merge_respects_limit():

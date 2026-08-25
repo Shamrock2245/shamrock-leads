@@ -206,13 +206,23 @@ def bond_as_lead(doc: Dict[str, Any], source: str) -> Dict[str, Any]:
             bits = name.split()
             first = first or bits[0]
             last = last or bits[-1]
+    dob = _pick(doc, ("dob", "DOB", "date_of_birth")) or _pick(defendant, ("dob", "DOB"))
+    address = _pick(doc, ("address", "Address", "defendant_address")) or _pick(
+        defendant, ("address", "Address")
+    )
+    phone = _pick(doc, _PHONE_FIELDS) or _pick(defendant, ("phone", "Phone"))
+    indemnitor_name = _pick(doc, ("indemnitor_name", "IndemnitorName")) or _pick(
+        indemnitor, ("name", "full_name", "firstName")
+    )
+    state = _pick(doc, ("state", "State")) or _pick(defendant, ("state", "State")) or "FL"
+    surety = _pick(doc, ("surety_id", "Surety", "surety", "carrier")).lower()
     return {
         "full_name": name,
         "first_name": first,
         "last_name": last,
         "booking_number": identity,
         "county": county,
-        "state": _pick(doc, ("state", "State")) or _pick(defendant, ("state", "State")) or "FL",
+        "state": state,
         "charges": charges,
         "bond_amount": amount,
         "bond_type": _pick(doc, ("bond_type", "BondType")) or "SURETY",
@@ -224,20 +234,71 @@ def bond_as_lead(doc: Dict[str, Any], source: str) -> Dict[str, Any]:
         "court_date": _pick(doc, ("court_date", "CourtDate")) or "",
         "case_number": case_no,
         "poa_number": poa,
-        "dob": _pick(doc, ("dob", "DOB", "date_of_birth")) or _pick(defendant, ("dob", "DOB")),
-        "address": _pick(doc, ("address", "Address", "defendant_address"))
-        or _pick(defendant, ("address", "Address")),
-        "phone": _pick(doc, _PHONE_FIELDS) or _pick(defendant, ("phone", "Phone")),
+        "dob": dob,
+        "address": address,
+        "phone": phone,
         "scraped_at": when,
         "created_at": when,
         "is_past_bond": True,
         "bond_source": source,
-        "surety_id": _pick(doc, ("surety_id", "Surety", "surety", "carrier")),
-        "indemnitor_name": _pick(doc, ("indemnitor_name", "IndemnitorName"))
-        or _pick(indemnitor, ("name", "full_name", "firstName")),
+        "surety_id": surety if surety in ("osi", "palmetto") else "",
+        "indemnitor_name": indemnitor_name,
         "premium_amount": _money(
             doc.get("premium_amount") or doc.get("PremiumAmount") or doc.get("premium")
         ),
+        "defendant": {
+            "name": name,
+            "first_name": first,
+            "last_name": last,
+            "dob": dob,
+            "phone": phone,
+            "email": _pick(doc, ("email", "Email", "defendant_email"))
+            or _pick(defendant, ("email", "Email")),
+            "address": address,
+            "city": _pick(doc, ("city", "City")) or _pick(defendant, ("city", "City")),
+            "state": state,
+            "zip": _pick(doc, ("zip", "Zip", "zip_code")) or _pick(defendant, ("zip", "Zip")),
+            "dl": _pick(doc, ("dl", "DL", "dl_number", "defendant_dl"))
+            or _pick(defendant, ("dl", "DL", "dl_number")),
+            "dl_state": _pick(doc, ("dl_state", "DL_State")) or _pick(defendant, ("dl_state", "DL_State")),
+            "ssn": _pick(doc, ("ssn", "SSN")) or _pick(defendant, ("ssn", "SSN")),
+            "employer": _pick(doc, ("employer", "Employer", "EmployerInfo"))
+            or _pick(defendant, ("employer", "Employer")),
+        },
+        "indemnitor": {
+            "name": indemnitor_name,
+            "first_name": _pick(indemnitor, ("first_name", "firstName", "FirstName")),
+            "last_name": _pick(indemnitor, ("last_name", "lastName", "LastName")),
+            "phone": _pick(doc, ("indemnitor_phone", "IndemnitorPhone"))
+            or _pick(indemnitor, ("phone", "Phone")),
+            "email": _pick(doc, ("indemnitor_email", "IndemnitorEmail"))
+            or _pick(indemnitor, ("email", "Email")),
+            "address": _pick(doc, ("indemnitor_address", "IndemnitorAddress"))
+            or _pick(indemnitor, ("address", "Address")),
+            "city": _pick(indemnitor, ("city", "City")),
+            "state": _pick(indemnitor, ("state", "State")),
+            "zip": _pick(indemnitor, ("zip", "Zip")),
+            "dob": _pick(doc, ("indemnitor_dob", "IndemnitorDOB"))
+            or _pick(indemnitor, ("dob", "DOB")),
+            "dl": _pick(doc, ("indemnitor_dl", "IndemnitorDL"))
+            or _pick(indemnitor, ("dl", "DL", "dl_number")),
+            "dl_state": _pick(indemnitor, ("dl_state", "DL_State")),
+            "ssn": _pick(doc, ("indemnitor_ssn")) or _pick(indemnitor, ("ssn", "SSN")),
+            "employer": _pick(doc, ("indemnitor_employer")) or _pick(indemnitor, ("employer", "Employer")),
+            "employer_phone": _pick(indemnitor, ("employer_phone", "employerPhone")),
+            "relationship": _pick(doc, ("relationship", "Relationship"))
+            or _pick(indemnitor, ("relationship", "relation")),
+            "vehicle_year": _pick(indemnitor, ("vehicle_year", "year")),
+            "vehicle_make": _pick(indemnitor, ("vehicle_make", "make")),
+            "vehicle_model": _pick(indemnitor, ("vehicle_model", "model")),
+            "vehicle_color": _pick(indemnitor, ("vehicle_color", "color")),
+            "ref1Name": _pick(indemnitor, ("ref1Name", "reference_1_name")),
+            "ref1Phone": _pick(indemnitor, ("ref1Phone", "reference_1_phone")),
+            "ref1Address": _pick(indemnitor, ("ref1Address", "reference_1_address")),
+            "ref1Relation": _pick(indemnitor, ("ref1Relation", "reference_1_relation")),
+            "ref2Name": _pick(indemnitor, ("ref2Name", "reference_2_name")),
+            "ref2Phone": _pick(indemnitor, ("ref2Phone", "reference_2_phone")),
+        },
     }
 
 
@@ -371,3 +432,152 @@ def merge_leads_with_past_bonds(
         extra.append(row)
     out = extra + list(live)
     return out[:limit]
+
+
+_FILL_DEFENDANT_KEYS = (
+    "address", "city", "state", "zip", "phone", "email", "dl", "dl_state",
+    "ssn", "employer", "dob",
+)
+_FILL_INDEMNITOR_KEYS = (
+    "name", "first_name", "last_name", "phone", "email", "address", "city",
+    "state", "zip", "dob", "dl", "dl_state", "ssn", "employer", "relationship",
+    "employer_phone", "vehicle_year", "vehicle_make", "vehicle_model",
+    "vehicle_color", "ref1Name", "ref1Phone", "ref1Address", "ref1Relation",
+    "ref2Name", "ref2Phone",
+)
+
+
+def _norm_person_name(value: str) -> str:
+    text = re.sub(r"[^a-z0-9\s]", " ", (value or "").lower())
+    return " ".join(text.split())
+
+
+def suggest_surety_id(state: str = "", prior_surety: str = "") -> str:
+    """Staff still confirms. Palmetto for out-of-Florida; else last surety; else OSI."""
+    st = (state or "").strip().upper()
+    if st and st not in ("FL", "FLORIDA"):
+        return "palmetto"
+    prior = (prior_surety or "").strip().lower()
+    if prior in ("osi", "palmetto"):
+        return prior
+    return "osi"
+
+
+def apply_prior_bond_gaps(
+    context: Dict[str, Any],
+    prior: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Fill empty defendant/indemnitor keys from a prior Shamrock bond.
+
+    Never copies POA, case number, booking, bond amount, charges, or clerk flags.
+    Live booking facts always win.
+    """
+    ctx = dict(context or {})
+    def_ = dict(ctx.get("defendant") or {})
+    ind = dict(ctx.get("indemnitor") or {})
+    prior_def = prior.get("defendant") if isinstance(prior.get("defendant"), dict) else {}
+    prior_ind = prior.get("indemnitor") if isinstance(prior.get("indemnitor"), dict) else {}
+    filled: List[str] = []
+
+    for key in _FILL_DEFENDANT_KEYS:
+        if not _text(def_.get(key)) and _text(prior_def.get(key)):
+            def_[key] = prior_def[key]
+            filled.append(f"defendant.{key}")
+    for key in _FILL_INDEMNITOR_KEYS:
+        if not _text(ind.get(key)) and _text(prior_ind.get(key)):
+            ind[key] = prior_ind[key]
+            filled.append(f"indemnitor.{key}")
+
+    ctx["defendant"] = def_
+    ctx["indemnitor"] = ind
+    state = ctx.get("state") or def_.get("state") or prior.get("state") or "FL"
+    suggested = suggest_surety_id(state, prior.get("surety_id") or "")
+    sources = ctx.get("sources") or []
+    has_bound_surety = "bond" in sources or "packet" in sources
+    if not has_bound_surety and suggested in ("osi", "palmetto"):
+        if suggested == "palmetto" or not ctx.get("surety_id"):
+            ctx["surety_id"] = suggested
+            ctx["surety_suggested_from"] = (
+                "out_of_state" if suggested == "palmetto" and str(state).upper() not in ("FL", "FLORIDA", "")
+                else "prior_bond"
+            )
+    ctx["prior_bond"] = {
+        "found": True,
+        "source": prior.get("bond_source") or "",
+        "defendant_name": prior.get("full_name") or prior_def.get("name") or "",
+        "indemnitor_name": ind.get("name") or prior.get("indemnitor_name") or "",
+        "bond_amount": prior.get("bond_amount") or 0,
+        "surety_id": prior.get("surety_id") or "",
+        "county": prior.get("county") or "",
+        "posted_date": prior.get("arrest_date") or prior.get("booking_date") or "",
+        "filled_keys": filled,
+        "suggested_surety": suggested,
+    }
+    return ctx
+
+
+def _name_first_last(value: str) -> tuple[str, str]:
+    raw = (value or "").strip()
+    if "," in raw:
+        last, rest = [part.strip() for part in raw.split(",", 1)]
+        first = rest.split()[0] if rest else ""
+        return _norm_person_name(first), _norm_person_name(last)
+    parts = _norm_person_name(raw).split()
+    if not parts:
+        return "", ""
+    if len(parts) == 1:
+        return "", parts[0]
+    return parts[0], parts[-1]
+
+
+def _prior_score(lead: Dict[str, Any], name: str, dob: str) -> int:
+    score = 0
+    want_first, want_last = _name_first_last(name)
+    have_first, have_last = _name_first_last(lead.get("full_name") or "")
+    if not want_last or not have_last:
+        return 0
+    if want_last == have_last:
+        score += 50
+    if want_first and have_first and want_first == have_first:
+        score += 20
+    want_dob = re.sub(r"[^0-9]", "", dob or "")
+    have_dob = re.sub(r"[^0-9]", "", str(lead.get("dob") or (lead.get("defendant") or {}).get("dob") or ""))
+    if want_dob and have_dob and (want_dob == have_dob or want_dob[-8:] == have_dob[-8:]):
+        score += 30
+    if _text((lead.get("indemnitor") or {}).get("name") or lead.get("indemnitor_name")):
+        score += 10
+    if float(lead.get("bond_amount") or 0) > 0:
+        score += 5
+    return score
+
+
+async def find_prior_bond_for_defendant(
+    name: str,
+    *,
+    dob: str = "",
+    county: str = "",
+    exclude_booking: str = "",
+) -> Optional[Dict[str, Any]]:
+    """Best prior Shamrock bond for this defendant (name/DOB), excluding the current booking."""
+    q = (name or "").strip()
+    if len(q) < 2:
+        return None
+    # Search statewide — returning clients often reappear in a different county.
+    hits = await search_past_bonds(q, county="", limit=20)
+    exclude = str(exclude_booking or "").strip().lower()
+    ranked: List[tuple[int, Dict[str, Any]]] = []
+    for lead in hits:
+        booking = str(lead.get("booking_number") or "").strip().lower()
+        if exclude and booking == exclude:
+            continue
+        score = _prior_score(lead, q, dob)
+        if score < 50:
+            continue
+        ranked.append((score, lead))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda item: (
+        item[0],
+        str(item[1].get("scraped_at") or item[1].get("created_at") or ""),
+    ), reverse=True)
+    return ranked[0][1]

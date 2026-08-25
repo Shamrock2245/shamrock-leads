@@ -1881,6 +1881,9 @@ async def hydrate_from_booking(request: Request):
             lee_clerk_search_url(ctx.get("case_number") or "", booking) if lee else ""
         ),
         "can_send": bool(values.get("defendant_name") and ctx.get("poa_number")),
+        "prior_bond": ctx.get("prior_bond") or {},
+        "surety_suggested_from": ctx.get("surety_suggested_from") or "",
+        "returning_client": bool((ctx.get("prior_bond") or {}).get("found")),
     }
 
 

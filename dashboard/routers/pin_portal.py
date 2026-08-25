@@ -511,6 +511,110 @@ def _sanitize_client_fields(raw: Optional[Dict[str, Any]]) -> Dict[str, str]:
     return clean
 
 
+def client_fields_from_id_ocr(extracted: Optional[Dict[str, Any]], role: str) -> Dict[str, str]:
+    """Map a DL scan onto role-scoped client keys. Never mixes indemnitor ID onto defendant."""
+    extracted = extracted if isinstance(extracted, dict) else {}
+    full_name = str(
+        extracted.get("full_name")
+        or " ".join(p for p in (extracted.get("first_name"), extracted.get("last_name")) if p)
+        or ""
+    ).strip()
+    address = str(extracted.get("address") or "").strip()
+    city = str(extracted.get("city") or "").strip()
+    state = str(extracted.get("state") or extracted.get("dl_state") or "").strip()
+    zip_code = str(extracted.get("zip") or "").strip()
+    dob = str(extracted.get("dob") or "").strip()
+    dl_number = str(extracted.get("dl_number") or extracted.get("dl") or "").strip()
+    dl_state = str(extracted.get("dl_state") or extracted.get("state") or "").strip()
+    if role == "defendant":
+        raw = {
+            "defendant_name": full_name,
+            "DefName": full_name,
+            "DefFirstName": str(extracted.get("first_name") or "").strip(),
+            "DefLastName": str(extracted.get("last_name") or "").strip(),
+            "defendant_address": address,
+            "defendant_city": city,
+            "defendant_state": state,
+            "defendant_zip": zip_code,
+            "defendant_dob": dob,
+            "defendant_dl": dl_number,
+            "defendant_dl_state": dl_state,
+        }
+    else:
+        raw = {
+            "indemnitor_name": full_name,
+            "IndemnitorName": full_name,
+            "IndName": full_name,
+            "FullName": full_name,
+            "indemnitor_address": address,
+            "indemnitor_city": city,
+            "indemnitor_state": state,
+            "indemnitor_zip": zip_code,
+            "indemnitor_dob": dob,
+            "indemnitor_dl": dl_number,
+        }
+        if city or state or zip_code:
+            raw["indemnitor_city_state_zip"] = ", ".join(p for p in (city, f"{state} {zip_code}".strip()) if p)
+    return _sanitize_client_fields(raw)
+
+
+async def _push_client_fields_to_issued_packet(
+    *,
+    session: Dict[str, Any],
+    fields: Dict[str, str],
+) -> bool:
+    """PATCH a staff-issued DocuSeal submitter. No-op if no packet exists."""
+    if not fields:
+        return False
+    meta = await _resolve_packet_for_client(
+        session.get("phone") or "",
+        booking=session.get("booking_number") or "",
+        intake=session.get("intake_id") or "",
+    )
+    packet_id = meta.get("packet_id") or ""
+    if not packet_id:
+        return False
+    from dashboard.services.paperwork_signers import normalize_role
+    packets = get_collection("paperwork_packets")
+    packet = await packets.find_one({"packet_id": packet_id})
+    submitters = list((packet or {}).get("docuseal_submitters") or [])
+    want_role = normalize_role(session.get("role") or meta.get("role") or "")
+    session_phone = _digits_phone(session.get("phone") or "")
+    target = None
+    for item in submitters:
+        item_role = normalize_role((item or {}).get("role"))
+        if want_role and item_role == want_role:
+            target = item
+            break
+    if not target and session_phone:
+        for item in submitters:
+            if _digits_phone((item or {}).get("phone")) == session_phone:
+                target = item
+                break
+    if not target and submitters:
+        target = submitters[0]
+    submitter_id = (target or {}).get("id")
+    if not submitter_id:
+        return False
+    from dashboard.services.docuseal_service import DocuSealService
+    from dashboard.services.docuseal_signing_ux import submission_fields_from_values
+    svc = DocuSealService()
+    await svc.update_submitter(
+        submitter_id,
+        values=fields,
+        fields=submission_fields_from_values(fields, force_editable=True),
+    )
+    await packets.update_one(
+        {"packet_id": packet_id},
+        {"$set": {
+            "client_fields": fields,
+            "client_fields_updated_at": datetime.now(timezone.utc).isoformat(),
+            "id_ocr_pushed_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    return True
+
+
 def _city_state_zip(fields: Dict[str, str]) -> str:
     if fields.get("indemnitor_city_state_zip"):
         return fields["indemnitor_city_state_zip"]
@@ -797,21 +901,36 @@ async def portal_id_ocr(request: Request):
 
     result = await IDScannerService.scan_id_image(image_bytes, filename=filename)
     extracted = result.get("extracted") if isinstance(result.get("extracted"), dict) else {}
+    pushed = False
     if result.get("success") and extracted:
+        role = _normalize_client_role(session.get("role")) or "indemnitor"
+        ocr_fields = client_fields_from_id_ocr(extracted, role)
+        existing = session.get("client_fields") if isinstance(session.get("client_fields"), dict) else {}
+        merged_fields = {**existing, **ocr_fields}
         pins_col = get_collection("portal_pins")
         await pins_col.update_one(
             {"session_token": session_token},
             {"$set": {
                 "id_extracted": extracted,
                 "id_scanned_at": datetime.now(timezone.utc).isoformat(),
+                "role": role,
+                "client_fields": merged_fields,
             }},
         )
+        session["role"] = role
         logger.info("[PIN Portal] ID OCR stored for phone ...%s", str(session.get("phone") or "")[-4:])
+        try:
+            pushed = await _push_client_fields_to_issued_packet(session=session, fields=ocr_fields)
+        except Exception:
+            logger.warning("[PIN Portal] ID OCR DocuSeal update failed", exc_info=True)
+            pushed = False
     return JSONResponse({
         "success": bool(result.get("success") and extracted),
         "extracted": extracted,
         "error": result.get("error") if not extracted else None,
         "portrait_jpeg_b64": result.get("portrait_jpeg_b64") or "",
+        "pushed_to_docuseal": pushed,
+        "role": _normalize_client_role(session.get("role")) or "indemnitor",
     })
 
 
