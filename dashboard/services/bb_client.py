@@ -225,6 +225,14 @@ def bb_send_accepted(result: Optional[dict]) -> bool:
     return bool(n.get("sent") or n.get("queued") or n.get("success"))
 
 
+async def send_shannon_voice_text(phone: str, message: str) -> dict:
+    """Shannon mid-call texts. BlueBubbles only. Never Twilio."""
+    result = normalize_bb_send_result(await send_message_universal(phone, message))
+    result["rail"] = "bluebubbles"
+    result["success"] = bb_send_accepted(result)
+    return result
+
+
 async def send_message_universal(
     phone: str,
     message: str,

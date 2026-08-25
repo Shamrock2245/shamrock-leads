@@ -17,6 +17,7 @@ Endpoints:
   GET    /api/imessage/message-status/<guid>     — Delivery/read status
   GET    /api/imessage/findmy                   — FindMy device/friend locations
   POST   /api/imessage/send-effect              — Send with iMessage effect
+  POST   /api/imessage/shannon/send             — Shannon voice texts via BlueBubbles (never Twilio)
 
 Background:
   start_inbox_poller(app) — asyncio task polling BB every 30s for inbound messages
@@ -37,6 +38,8 @@ from dashboard.extensions import (
 )
 from dashboard.routers.bb_private_api import BlueBubblesClient, EFFECTS, REACTIONS
 from dashboard.routers.agent_brain import process_inbound
+from dashboard.routers.automation_control import _require_control_auth
+from dashboard.services.bb_client import send_shannon_voice_text
 
 logger = logging.getLogger(__name__)
 
@@ -601,6 +604,39 @@ async def findmy_locations(type_: str = Query(default="friends"), refresh: str =
         result = await client.findmy_friends()
 
     return result, 200 if result.get("success") else 502
+
+
+@imessage_auto_bp.post("/imessage/shannon/send")
+async def shannon_voice_send_text(request: Request):
+    """Shannon voice texts. BlueBubbles iMessage/SMS relay only. Never Twilio."""
+    denied = _require_control_auth(request, allow_machine=True)
+    if denied:
+        return denied
+
+    try:
+        body = await request.json() or {}
+    except Exception:
+        return JSONResponse({"success": False, "error": "invalid_json"}, status_code=400)
+
+    phone = str(body.get("phone") or body.get("to") or "").strip()
+    message = str(body.get("message") or body.get("body") or "").strip()
+    if not phone or not message:
+        return JSONResponse(
+            {"success": False, "error": "phone_and_message_required"},
+            status_code=400,
+        )
+    if len(message) > 1500:
+        message = message[:1500] + "..."
+
+    result = await send_shannon_voice_text(phone, message)
+    return {
+        "success": bool(result.get("success")),
+        "sent": bool(result.get("sent")),
+        "queued": bool(result.get("queued")),
+        "channel": result.get("channel") or "bluebubbles",
+        "rail": "bluebubbles",
+        "error": result.get("error"),
+    }
 
 
 @imessage_auto_bp.post("/imessage/send-effect")
