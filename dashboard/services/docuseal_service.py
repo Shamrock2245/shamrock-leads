@@ -780,6 +780,30 @@ class DocuSealService:
             )
             or ""
         ).strip()
+        coindemnitor_names: List[str] = []
+        raw_inds = bond_data.get("indemnitors")
+        if isinstance(raw_inds, list):
+            for extra in raw_inds[1:]:
+                extra_name = _text(
+                    extra.get("name") if isinstance(extra, dict) else "",
+                    extra.get("full_name") if isinstance(extra, dict) else "",
+                    " ".join(
+                        filter(
+                            None,
+                            [
+                                extra.get("first_name") if isinstance(extra, dict) else "",
+                                extra.get("last_name") if isinstance(extra, dict) else "",
+                            ],
+                        )
+                    ),
+                )
+                if extra_name and extra_name not in coindemnitor_names:
+                    coindemnitor_names.append(extra_name)
+        coindemnitor_name = _text(bond_data.get("coindemnitor_name"), *coindemnitor_names)
+        if coindemnitor_names and indemnitor_name:
+            indemnitor_header = indemnitor_name + " / " + " / ".join(coindemnitor_names)
+        else:
+            indemnitor_header = indemnitor_name or coindemnitor_name
 
         county = (
             bond_data.get("county")
@@ -981,9 +1005,10 @@ class DocuSealService:
             "defendant_name": defendant_name,
             "DefendantName": defendant_name,
             "FullName": indemnitor_name or defendant_name,
-            "indemnitor_name": indemnitor_name,
-            "IndemnitorName": indemnitor_name,
-            "IndName": indemnitor_name,
+            "indemnitor_name": indemnitor_header,
+            "IndemnitorName": indemnitor_header,
+            "IndName": indemnitor_header,
+            "coindemnitor_name": coindemnitor_name,
             "county": county,
             "County": county,
             "county_full": county_full,
@@ -1534,7 +1559,7 @@ class DocuSealService:
                     external_id=f"{packet_id}:bondsman",
                     values=payload_values,
                     metadata={"packet_id": packet_id, "party_role": "bondsman"},
-                    send_email=True,
+                    send_email=send_email,
                     fields=signer_fields,
                     completed_redirect_url=party_done,
                 )
