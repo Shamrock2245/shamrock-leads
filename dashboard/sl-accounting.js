@@ -6,7 +6,7 @@
 const SLAccounting = (() => {
   const API = window.API || '';
   const $ = id => document.getElementById(id);
-  const money = n => '$' + (parseFloat(n)||0).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0});
+  const money = n => '$' + (parseFloat(n)||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
   const toast = (msg,type) => { if(window.SL?.toast) SL.toast(msg,type); else if(window.showToast) showToast(msg,type); else alert(msg); };
 
   let _transactions = [];
@@ -161,13 +161,21 @@ const SLAccounting = (() => {
     tbody.innerHTML = _transactions.map(t => {
       const statusClass = t.status === 'completed' || t.status === 'settled' ? 'acct-status-ok' : t.status === 'voided' ? 'acct-status-void' : 'acct-status-pending';
       const attributed = t.booking_number ? true : false;
+      const isRefund = t.type === 'refund';
+      const payer = t.defendant_name || t.indemnitor_name || t.customer_name || '';
+      const when = (t.timestamp || '').replace('T', ' ').substring(0, 16);
+      const channel = t.channel && t.channel.toLowerCase() !== (t.method || '').toLowerCase()
+        ? ` <span style="color:var(--muted);font-size:11px">${t.channel}</span>` : '';
+      const last4 = t.card_last4 ? ` ••••${t.card_last4}` : '';
+      const amtColor = isRefund ? '#f87171' : 'var(--accent)';
+      const amtLabel = isRefund ? ('−' + money(t.amount)) : money(t.amount);
       return `<tr class="${t.status === 'voided' ? 'acct-voided' : ''}">
-        <td style="font-size:12px;color:var(--muted)">${(t.timestamp || '').substring(0,10)}</td>
-        <td><span class="acct-txn-id">${t.transaction_id || '—'}</span></td>
-        <td style="font-weight:600;color:var(--accent)">${money(t.amount)}</td>
-        <td>${methodIcon(t.method)} ${t.method || '—'}</td>
+        <td style="font-size:12px;color:var(--muted);white-space:nowrap">${when || '—'}</td>
+        <td><span class="acct-txn-id">${t.transaction_id || t.reference_id || '—'}</span></td>
+        <td style="font-weight:600;color:${amtColor}">${amtLabel}${isRefund ? ' <span style="font-size:10px;font-weight:700">REFUND</span>' : ''}</td>
+        <td>${methodIcon(t.method)} ${t.method || '—'}${channel}${last4}</td>
         <td><span class="acct-status ${statusClass}">${t.status || '—'}</span></td>
-        <td>${t.defendant_name || '<span style="color:var(--muted);font-style:italic">—</span>'}</td>
+        <td>${payer ? payer : '<span style="color:var(--muted);font-style:italic">—</span>'}${t.description ? '<div style="font-size:11px;color:var(--muted);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + t.description + '</div>' : ''}</td>
         <td>${attributed
           ? '<span style="color:var(--accent)">✓ ' + t.booking_number + '</span>'
           : '<button class="acct-attr-btn" onclick="SLAccounting.openAttribution(\'' + t.transaction_id + '\')">Link to Case</button>'

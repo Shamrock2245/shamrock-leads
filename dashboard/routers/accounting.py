@@ -20,6 +20,139 @@ from dashboard.extensions import get_collection
 
 logger = logging.getLogger(__name__)
 accounting_bp = APIRouter(prefix="/api", tags=["accounting"])
+
+
+def _parse_ss_timestamp(date_str: str, time_str: str = "") -> str:
+    combined = f"{date_str or ''} {time_str or ''}".strip()
+    for fmt in (
+        "%m/%d/%Y %I:%M %p",
+        "%m/%d/%Y %H:%M",
+        "%m/%d/%Y",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d",
+    ):
+        try:
+            dt = datetime.strptime(combined, fmt)
+            return dt.replace(tzinfo=timezone.utc).isoformat()
+        except ValueError:
+            continue
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _map_ss_method(method_raw: str) -> str:
+    m = (method_raw or "").strip().lower()
+    if m == "cash":
+        return "cash"
+    if m in ("check", "cheque"):
+        return "check"
+    if m in ("wire", "ach", "zelle"):
+        return "wire"
+    return "card"
+
+
+def parse_swipesimple_csv(raw: str) -> tuple[list[dict], list[str], int]:
+    """Parse a SwipeSimple Transactions export.
+
+    Skips declined/voided/zero rows. Keeps refunds as a separate type so a
+    sale and its refund that share a Transaction # both survive.
+    """
+    if not raw or not raw.strip():
+        return [], ["empty csv"], 0
+    lines = raw.splitlines()
+    header_idx = 0
+    for idx, line in enumerate(lines):
+        line_lower = line.lower()
+        if "total net card" in line_lower or "total net cash" in line_lower:
+            raise ValueError(
+                "You uploaded a Sales Summary report. Download the Transactions export instead."
+            )
+        if (
+            "transaction #" in line_lower
+            or "transaction id" in line_lower
+            or ("amount" in line_lower and "result" in line_lower)
+            or ("amount" in line_lower and "status" in line_lower)
+        ):
+            header_idx = idx
+            break
+    reader = csv.DictReader(io.StringIO("\n".join(lines[header_idx:])))
+    txns: list[dict] = []
+    errors: list[str] = []
+    skipped = 0
+    seen_keys: set[str] = set()
+    for i, row in enumerate(reader):
+        try:
+            row = {((k or "").strip()): v for k, v in row.items() if k is not None}
+            amount_str = str(row.get("Amount") or row.get("amount") or row.get("Total") or "0")
+            amount_str = amount_str.replace("$", "").replace(",", "").strip()
+            amount = abs(float(amount_str)) if amount_str else 0.0
+            if amount <= 0:
+                skipped += 1
+                continue
+            ss_status = (
+                row.get("Status") or row.get("status") or row.get("Result") or "completed"
+            ).strip().lower()
+            if ss_status in ("void", "voided", "declined", "failed"):
+                skipped += 1
+                continue
+            ss_type = (row.get("Type") or row.get("type") or "Sale").strip().lower()
+            txn_type = "refund" if "refund" in ss_type else "premium"
+            ss_txn_id = str(
+                row.get("Transaction #")
+                or row.get("Transaction ID")
+                or row.get("transaction_id")
+                or row.get("ID")
+                or ""
+            ).strip()
+            date_str = row.get("Date") or row.get("date") or row.get("Created") or ""
+            time_str = row.get("Time") or row.get("time") or ""
+            timestamp = _parse_ss_timestamp(date_str, time_str)
+            dedup_key = f"{ss_txn_id}|{txn_type}|{timestamp}"
+            if dedup_key in seen_keys:
+                skipped += 1
+                continue
+            seen_keys.add(dedup_key)
+            method_raw = row.get("Method") or row.get("method") or ""
+            card_type = row.get("Card Type") or row.get("card_type") or row.get("Brand") or ""
+            last4 = str(row.get("Last 4") or row.get("last_four") or "").strip()
+            customer = (
+                row.get("Cardholder Name")
+                or row.get("Customer Name")
+                or row.get("customer_name")
+                or row.get("Name")
+                or ""
+            ).strip()
+            desc = (
+                row.get("Reference Number")
+                or row.get("Description")
+                or row.get("description")
+                or row.get("Memo")
+                or ""
+            ).strip()
+            txns.append({
+                "amount": amount,
+                "method": _map_ss_method(method_raw),
+                "channel": (method_raw or "").strip(),
+                "card_type": card_type,
+                "card_last4": last4,
+                "type": txn_type,
+                "status": "completed" if ss_status in (
+                    "settled", "completed", "approved", "captured", ""
+                ) else ss_status,
+                "description": desc,
+                "customer_name": customer,
+                "indemnitor_name": customer,
+                "reference_id": ss_txn_id,
+                "auth_code": str(row.get("Auth Code") or "").strip(),
+                "merchant_account": str(row.get("Merchant Account") or "").strip(),
+                "taken_by": str(row.get("Taken By") or "").strip(),
+                "source": "swipesimple",
+                "dedup_key": dedup_key,
+                "timestamp": timestamp,
+            })
+        except Exception as exc:
+            errors.append(f"Row {i + 1}: {exc}")
+    return txns, errors, skipped
 # ═══════════════════════════════════════════════════════════════════════════════
 #  GET /api/accounting/dashboard — Revenue KPIs + summary
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -31,21 +164,24 @@ async def api_accounting_dashboard():
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     year_start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
 
+    signed_amount = {
+        "$cond": [{"$eq": ["$type", "refund"]}, {"$multiply": ["$amount", -1]}, "$amount"]
+    }
     pipeline_mtd = [
         {"$match": {"timestamp": {"$gte": month_start.isoformat()}, "status": {"$in": ["completed", "settled"]}}},
-        {"$group": {"_id": None, "total": {"$sum": "$amount"}, "count": {"$sum": 1}}},
+        {"$group": {"_id": None, "total": {"$sum": signed_amount}, "count": {"$sum": 1}}},
     ]
     pipeline_ytd = [
         {"$match": {"timestamp": {"$gte": year_start.isoformat()}, "status": {"$in": ["completed", "settled"]}}},
-        {"$group": {"_id": None, "total": {"$sum": "$amount"}, "count": {"$sum": 1}}},
+        {"$group": {"_id": None, "total": {"$sum": signed_amount}, "count": {"$sum": 1}}},
     ]
     pipeline_by_method = [
         {"$match": {"timestamp": {"$gte": year_start.isoformat()}, "status": {"$in": ["completed", "settled"]}}},
-        {"$group": {"_id": "$method", "total": {"$sum": "$amount"}, "count": {"$sum": 1}}},
+        {"$group": {"_id": "$method", "total": {"$sum": signed_amount}, "count": {"$sum": 1}}},
     ]
     pipeline_by_surety = [
         {"$match": {"timestamp": {"$gte": year_start.isoformat()}, "status": {"$in": ["completed", "settled"]}}},
-        {"$group": {"_id": "$surety", "total": {"$sum": "$amount"}, "count": {"$sum": 1}}},
+        {"$group": {"_id": "$surety", "total": {"$sum": signed_amount}, "count": {"$sum": 1}}},
     ]
     pipeline_outstanding = [
         {"$match": {"status": {"$in": ["pending", "partial"]}}},
@@ -103,6 +239,8 @@ async def api_accounting_transactions(page: int = Query(default=0), limit: int =
     if search:
         query["$or"] = [
             {"defendant_name": {"$regex": search, "$options": "i"}},
+            {"customer_name": {"$regex": search, "$options": "i"}},
+            {"indemnitor_name": {"$regex": search, "$options": "i"}},
             {"booking_number": {"$regex": search, "$options": "i"}},
             {"description": {"$regex": search, "$options": "i"}},
             {"reference_id": {"$regex": search, "$options": "i"}},
@@ -234,117 +372,68 @@ async def api_import_swipesimple(request: Request):
         else:
             raw = str(csv_file)
 
+    try:
+        parsed, parse_errors, skipped = parse_swipesimple_csv(raw)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
     txns = get_collection("transactions")
     imports = get_collection("accounting_imports")
     now = datetime.now(timezone.utc)
     batch_id = f"SS-{now.strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6].upper()}"
 
     imported = 0
-    skipped = 0
-    errors_list = []
-    
-    # Strip preamble (find true header row)
-    lines = raw.splitlines()
-    header_idx = 0
-    for idx, line in enumerate(lines):
-        line_lower = line.lower()
-        if "total net card" in line_lower or "total net cash" in line_lower:
-            return JSONResponse({"error": "You uploaded a Sales Summary report. Please go to the SwipeSimple Dashboard, click 'Transactions' on the left menu, and download the Transactions export instead."}, status_code=400)
-            
-        if "amount" in line_lower or "transaction id" in line_lower or "total" in line_lower or "status" in line_lower:
-            header_idx = idx
-            break
-            
-    csv_data = "\n".join(lines[header_idx:])
-    reader = csv.DictReader(io.StringIO(csv_data))
+    errors_list = list(parse_errors)
 
-    for i, row in enumerate(reader):
+    for parsed_txn in parsed:
         try:
-            # clean keys
-            row = {k.strip() if isinstance(k, str) else k: v for k, v in row.items()}
-            
-            # SwipeSimple CSV columns (flexible matching)
-            amount_str = row.get("Amount") or row.get("amount") or row.get("Total") or "0"
-            amount_str = amount_str.replace("$", "").replace(",", "").strip()
-            amount = abs(float(amount_str)) if amount_str else 0.0
-            if amount <= 0:
+            ss_txn_id = parsed_txn.get("reference_id") or ""
+            txn_type = parsed_txn.get("type") or "premium"
+            existing = None
+            if parsed_txn.get("dedup_key"):
+                existing = await txns.find_one({"dedup_key": parsed_txn["dedup_key"]})
+            if not existing and ss_txn_id:
+                existing = await txns.find_one({
+                    "source": "swipesimple",
+                    "reference_id": ss_txn_id,
+                    "type": txn_type,
+                })
+            if existing:
                 skipped += 1
                 continue
 
-            ss_txn_id = row.get("Transaction ID") or row.get("transaction_id") or row.get("ID") or row.get("Transaction #") or ""
-            ss_status = (row.get("Status") or row.get("status") or row.get("Result") or "completed").strip().lower()
-            if ss_status in ("void", "voided", "declined", "failed"):
-                skipped += 1
-                continue
-
-            # Dedup check
-            if ss_txn_id:
-                existing = await txns.find_one({"reference_id": ss_txn_id, "source": "swipesimple"})
-                if existing:
-                    skipped += 1
-                    continue
-
-            # Parse date
-            date_str = row.get("Date") or row.get("date") or row.get("Created") or ""
-            time_str = row.get("Time") or row.get("time") or ""
-            timestamp = now.isoformat()
-            if date_str:
-                try:
-                    dt = datetime.strptime(f"{date_str} {time_str}".strip(), "%m/%d/%Y %I:%M %p")
-                    timestamp = dt.replace(tzinfo=timezone.utc).isoformat()
-                except ValueError:
-                    try:
-                        dt = datetime.strptime(date_str.strip(), "%m/%d/%Y")
-                        timestamp = dt.replace(tzinfo=timezone.utc).isoformat()
-                    except ValueError:
-                        pass
-
-            card_type = row.get("Card Type") or row.get("card_type") or row.get("Brand") or ""
-            last4 = row.get("Last 4") or row.get("last_four") or ""
-            customer = row.get("Customer Name") or row.get("customer_name") or row.get("Name") or row.get("Cardholder Name") or ""
-            desc = row.get("Description") or row.get("description") or row.get("Memo") or row.get("Reference Number") or ""
-
+            amount = float(parsed_txn["amount"])
+            timestamp = parsed_txn["timestamp"]
             txn_doc = {
+                **parsed_txn,
                 "transaction_id": f"SS-{ss_txn_id}" if ss_txn_id else f"SS-{uuid.uuid4().hex[:10].upper()}",
-                "amount": amount,
-                "method": "card",
-                "card_type": card_type,
-                "card_last4": last4,
-                "type": "premium",
-                "status": "completed" if ss_status in ("settled", "completed", "approved", "captured") else ss_status,
-                "description": desc,
-                "customer_name": customer,
-                "reference_id": ss_txn_id,
-                "source": "swipesimple",
                 "import_batch": batch_id,
-                "booking_number": "",  # Needs manual attribution
+                "booking_number": "",
                 "defendant_name": "",
-                "timestamp": timestamp,
                 "created_at": now.isoformat(),
             }
+            if txn_type == "refund":
+                txn_doc["transaction_id"] = f"{txn_doc['transaction_id']}-R"
             await txns.insert_one(txn_doc)
-            
-            # Mirror to financial_ledger for the unified timeline modal
+
             try:
                 from dashboard.services.ledger_service import LedgerService
                 await LedgerService.add_entry({
-                    # Same identity as txn_doc — empty until staff manually attributes
-                    # (the previous locals() probe could bind an unrelated variable)
                     "booking_number": txn_doc["booking_number"],
-                    "type": "payment",
-                    "amount": -amount,  # payments reduce balance
+                    "type": "refund" if txn_type == "refund" else "payment",
+                    "amount": amount if txn_type == "refund" else -amount,
                     "category": "premium",
                     "timestamp": timestamp,
                     "actor": "SwipeSimple Import",
-                    "stripe_swipe_ref": ss_txn_id,
-                    "notes": desc or f"SwipeSimple {card_type} {last4}"
+                    "stripe_swipe_ref": parsed_txn.get("dedup_key") or ss_txn_id,
+                    "notes": parsed_txn.get("description") or f"SwipeSimple {parsed_txn.get('card_type')} {parsed_txn.get('card_last4')}"
                 })
             except Exception as e:
-                logger.warning(f"Failed to mirror SS txn {ss_txn_id} to ledger: {e}")
+                logger.warning("Failed to mirror SS txn to ledger: %s", type(e).__name__)
 
             imported += 1
         except Exception as e:
-            errors_list.append(f"Row {i+1}: {str(e)}")
+            errors_list.append(str(e)[:120])
 
     # Record import batch
     await imports.insert_one({
