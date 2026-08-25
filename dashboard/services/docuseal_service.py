@@ -254,6 +254,62 @@ def validate_docuseal_packet_binding(
             )
 
 
+def validate_shannon_voice_packet(
+    *,
+    packet_id: str,
+    bond_data: Dict[str, Any],
+    indemnitors: Optional[List[Dict[str, Any]]] = None,
+    defendant: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Shannon voice exception: email the indemnitor a signing packet.
+
+    Staff still matches surety/POA in Super CRM. Requires a real indemnitor
+    name + email and a defendant name. Never contacts the indemnitor unless
+    those fields are present. Does not require Match/BondCase/POA.
+    """
+    if not str(packet_id or "").strip():
+        raise DocuSealPacketValidationError("Shannon paperwork blocked: packet_id is required.")
+    data = bond_data or {}
+    surety = _required_text(data, "surety_id").lower() or "osi"
+    if surety not in ("osi", "palmetto"):
+        raise DocuSealPacketValidationError(
+            "Shannon paperwork blocked: surety_id must be osi or palmetto."
+        )
+    resolved_inds = indemnitors if indemnitors is not None else data.get("indemnitors")
+    primary: Dict[str, Any] = {}
+    if isinstance(resolved_inds, list):
+        for party in resolved_inds:
+            if _nonempty_party(party):
+                primary = party
+                break
+    if not primary:
+        primary = data.get("indemnitor") if isinstance(data.get("indemnitor"), dict) else {}
+    name = _required_text(primary, "name") or _required_text(primary, "full_name") or " ".join(
+        filter(None, (_required_text(primary, "first_name") or _required_text(primary, "firstName"),
+                      _required_text(primary, "last_name") or _required_text(primary, "lastName")))
+    )
+    email = _required_text(primary, "email") or _required_text(data, "indemnitor_email")
+    if not name or not email or "@" not in email or email.startswith("unsigned+"):
+        raise DocuSealPacketValidationError(
+            "Shannon paperwork blocked: indemnitor name and email are required before a signing email can be sent."
+        )
+    def_party = defendant if isinstance(defendant, dict) else (
+        data.get("defendant") if isinstance(data.get("defendant"), dict) else {}
+    )
+    def_name = (
+        _required_text(def_party, "name")
+        or _required_text(data, "defendant_name")
+        or " ".join(filter(None, (
+            _required_text(def_party, "first_name") or _required_text(def_party, "firstName"),
+            _required_text(def_party, "last_name") or _required_text(def_party, "lastName"),
+        )))
+    )
+    if not def_name:
+        raise DocuSealPacketValidationError(
+            "Shannon paperwork blocked: defendant name is required."
+        )
+
+
 class DocuSealService:
     """
     Thin async client for DocuSeal REST API + packet helpers.
@@ -1485,6 +1541,7 @@ class DocuSealService:
         order: str = "random",
         include_defendant: bool = True,
         completed_redirect_url: Optional[str] = None,
+        skip_bond_binding: bool = False,
     ) -> Dict[str, Any]:
         """
         Build multi-party submitters from bond/packet context and create submission.
@@ -1495,13 +1552,21 @@ class DocuSealService:
         bond_data = dict(bond_data or {})
         if template_id is None or str(template_id).strip() in ("", "0", "null", "none"):
             raise DocuSealPacketValidationError("DocuSeal packet blocked: a valid template_id is required.")
-        validate_docuseal_packet_binding(
-            packet_id=packet_id,
-            bond_data=bond_data,
-            indemnitors=indemnitors,
-            defendant=defendant,
-            include_defendant=include_defendant,
-        )
+        if skip_bond_binding:
+            validate_shannon_voice_packet(
+                packet_id=packet_id,
+                bond_data=bond_data,
+                indemnitors=indemnitors,
+                defendant=defendant,
+            )
+        else:
+            validate_docuseal_packet_binding(
+                packet_id=packet_id,
+                bond_data=bond_data,
+                indemnitors=indemnitors,
+                defendant=defendant,
+                include_defendant=include_defendant,
+            )
         raw_values = self.prefill_values_from_bond(bond_data)
 
         in_person = bool(bond_data.get("in_person") or bond_data.get("in_person_scan"))

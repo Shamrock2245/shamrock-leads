@@ -52,6 +52,8 @@ VALID_SOURCES = {
     "phone_call",
     "bookmarklet",
     "shamrock-leads-dashboard",
+    "elevenlabs_voice",
+    "shannon",
 }
 
 @intake_bp.get("/intake/by-booking/{booking_number}")
@@ -79,6 +81,8 @@ SOURCE_LABELS = {
     "phone_call": "📞 Phone Call",
     "bookmarklet": "🔖 Bookmarklet",
     "shamrock-leads-dashboard": "☘️ Dashboard",
+    "elevenlabs_voice": "🎙 Shannon Voice",
+    "shannon": "🎙 Shannon Voice",
 }
 def _normalize_source(raw: str) -> str:
     """Normalize source string to a canonical value."""
@@ -93,6 +97,8 @@ def _normalize_source(raw: str) -> str:
         return "walk_in"
     if "phone" in raw or "call" in raw:
         return "phone_call"
+    if "shannon" in raw or "elevenlabs" in raw or "voice" in raw:
+        return "elevenlabs_voice"
     if "bookmarklet" in raw or "lcso" in raw:
         return "bookmarklet"
     return "manual_entry"
@@ -228,6 +234,8 @@ async def intake_submit(request: Request):
         "wix_portal": "WX",
         "walk_in": "WI",
         "phone_call": "PC",
+        "elevenlabs_voice": "SH",
+        "shannon": "SH",
         "bookmarklet": "BK",
         "manual_entry": "ME",
         "shamrock-leads-dashboard": "SL",

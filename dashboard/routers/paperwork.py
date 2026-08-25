@@ -19,6 +19,7 @@ Endpoints:
   GET  /api/paperwork/<packet_id>                   — Get packet status + download links
   POST /api/paperwork/<packet_id>/deliver           — Deliver via BlueBubbles iMessage
   POST /api/paperwork/<packet_id>/docuseal          — Push existing packet to DocuSeal
+  POST /api/paperwork/shannon/email                 — Shannon voice: create DocuSeal packet + return indemnitor links
   POST /api/paperwork/<packet_id>/void              — Void a packet (policy Rule 3)
   GET  /api/paperwork/list/<intake_id>              — List all packets for an intake
   GET  /api/paperwork/docuseal/templates           — List the two DocuSeal templates
@@ -2460,6 +2461,194 @@ async def paperwork_docuseal_resend(packet_id: str, request: Request):
         "resent": len(updated),
         "updated": updated,
         "errors": errors,
+    }
+
+
+@paperwork_bp.post("/paperwork/shannon/email")
+async def shannon_email_indemnitor_paperwork(request: Request):
+    """
+    Shannon voice exception: create a DocuSeal packet from a voice intake
+    and return indemnitor signing + payment links for GAS to email.
+
+    Does not require Match/BondCase/POA. Staff still reviews in Super CRM.
+    Never emails the defendant. send_email is always false at DocuSeal.
+    """
+    denied = _require_control_auth(request, allow_machine=True)
+    if denied:
+        return denied
+
+    try:
+        body = await request.json() or {}
+    except Exception:
+        return JSONResponse({"success": False, "error": "invalid_json"}, status_code=400)
+
+    from dashboard.services.docuseal_service import (
+        DocuSealPacketValidationError,
+        get_docuseal_service,
+        resolve_template_id_for_surety,
+    )
+
+    caller_role = str(body.get("caller_role") or "indemnitor").strip().lower()
+    if caller_role in ("cosigner", "primary", "indemnitor"):
+        caller_role = "indemnitor"
+    if caller_role in ("co-indemnitor", "co_indemnitor", "additional"):
+        caller_role = "coindemnitor"
+
+    defendant = body.get("defendant") if isinstance(body.get("defendant"), dict) else {}
+    indemnitor = body.get("indemnitor") if isinstance(body.get("indemnitor"), dict) else {}
+    coindemnitor = body.get("coindemnitor") if isinstance(body.get("coindemnitor"), dict) else {}
+    indemnitors = body.get("indemnitors") if isinstance(body.get("indemnitors"), list) else []
+
+    def _party(src, name_key="name"):
+        if not isinstance(src, dict):
+            return {}
+        name = (
+            str(src.get("name") or src.get("full_name") or "").strip()
+            or " ".join(filter(None, [
+                str(src.get("first_name") or src.get("firstName") or "").strip(),
+                str(src.get("last_name") or src.get("lastName") or "").strip(),
+            ]))
+        )
+        extras = {
+            k: v for k, v in src.items()
+            if k not in ("name", "email", "phone", "first_name", "firstName", "last_name", "lastName", "full_name")
+        }
+        return {
+            "name": name,
+            "email": str(src.get("email") or "").strip(),
+            "phone": str(src.get("phone") or "").strip(),
+            "first_name": str(src.get("first_name") or src.get("firstName") or "").strip(),
+            "last_name": str(src.get("last_name") or src.get("lastName") or "").strip(),
+            **extras,
+        }
+
+    if not indemnitors:
+        if indemnitor:
+            indemnitors.append(_party(indemnitor))
+        if coindemnitor and (coindemnitor.get("name") or coindemnitor.get("email")):
+            indemnitors.append(_party(coindemnitor))
+
+    def_party = _party(defendant)
+    if not def_party.get("name"):
+        def_party["name"] = str(body.get("defendant_name") or "").strip()
+    if not def_party.get("email"):
+        def_party["email"] = str(body.get("defendant_email") or "").strip()
+    if not indemnitors:
+        indemnitors = [{
+            "name": str(body.get("indemnitor_name") or "").strip(),
+            "email": str(body.get("indemnitor_email") or "").strip(),
+            "phone": str(body.get("indemnitor_phone") or "").strip(),
+        }]
+
+    surety_id = str(body.get("surety_id") or "osi").strip().lower() or "osi"
+    packet_id = str(body.get("packet_id") or body.get("case_reference") or "").strip()
+    if not packet_id:
+        packet_id = f"SH-{uuid.uuid4().hex[:10].upper()}"
+
+    template_id = resolve_template_id_for_surety(surety_id)
+    if not template_id:
+        return JSONResponse(
+            {"success": False, "error": "no_template", "surety_id": surety_id},
+            status_code=422,
+        )
+
+    bond_data = {
+        "surety_id": surety_id,
+        "defendant_name": def_party.get("name") or body.get("defendant_name"),
+        "indemnitor_name": indemnitors[0].get("name") if indemnitors else body.get("indemnitor_name"),
+        "indemnitor_email": indemnitors[0].get("email") if indemnitors else body.get("indemnitor_email"),
+        "indemnitor_phone": indemnitors[0].get("phone") if indemnitors else body.get("indemnitor_phone"),
+        "defendant_email": def_party.get("email") or f"admin+shannon-def-{packet_id.lower()}@shamrockbailbonds.biz",
+        "county": body.get("county") or def_party.get("county") or "Lee",
+        "case_number": body.get("case_number") or "TBN",
+        "poa_number": body.get("poa_number") or "TBN",
+        "booking_number": body.get("booking_number") or def_party.get("bookingNumber") or "TBN",
+        "bond_amount": body.get("bond_amount") or def_party.get("bondAmount") or 0,
+        "charges": body.get("charges") or def_party.get("charges") or "",
+        "include_bondsman": True,
+        "defendant": {**def_party, "email": def_party.get("email") or f"admin+shannon-def-{packet_id.lower()}@shamrockbailbonds.biz"},
+        "indemnitor": indemnitors[0] if indemnitors else {},
+        "indemnitors": indemnitors,
+        "caller_role": caller_role,
+        "shannon_voice": True,
+    }
+    if not bond_data["defendant"]["email"]:
+        bond_data["defendant"]["email"] = f"admin+shannon-def-{packet_id.lower()}@shamrockbailbonds.biz"
+
+    ds = get_docuseal_service()
+    try:
+        submission = await ds.create_submission_for_packet(
+            template_id=template_id,
+            packet_id=packet_id,
+            bond_data=bond_data,
+            indemnitors=indemnitors,
+            defendant=bond_data["defendant"],
+            send_email=False,
+            include_defendant=True,
+            skip_bond_binding=True,
+        )
+    except DocuSealPacketValidationError as exc:
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=422)
+    except Exception as exc:
+        logger.exception("shannon docuseal create failed")
+        return JSONResponse({"success": False, "error": str(exc)}, status_code=502)
+
+    submitters = submission.get("submitters") or []
+    indemnitor_link = ""
+    coindemnitor_link = ""
+    defendant_link = ""
+    for s in submitters:
+        role = str((s or {}).get("role") or "").lower()
+        url = (s or {}).get("sign_url") or ""
+        if role == "indemnitor" and url:
+            indemnitor_link = url
+        elif role == "coindemnitor" and url:
+            coindemnitor_link = url
+        elif role == "defendant" and url:
+            defendant_link = url
+
+    payment_link = (
+        os.getenv("SWIPESIMPLE_BOND_PAYMENT_LINK")
+        or os.getenv("PAYMENT_LINK")
+        or "https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd"
+    )
+    portal_url = (os.getenv("PAPERWORK_PUBLIC_URL") or "https://paperwork.shamrockbailbonds.biz").rstrip("/")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    packet_doc = {
+        "packet_id": packet_id,
+        "source": "shannon_voice",
+        "pending_staff_match": True,
+        "surety_id": surety_id,
+        "esign_provider": "docuseal",
+        "docuseal_submission_id": submission.get("submission_id"),
+        "docuseal_status": "sent",
+        "docuseal_submitters": submitters,
+        "defendant_name": bond_data["defendant_name"],
+        "indemnitor_name": bond_data["indemnitor_name"],
+        "indemnitor_email": bond_data["indemnitor_email"],
+        "county": bond_data["county"],
+        "caller_role": caller_role,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+    try:
+        pkts = get_collection("paperwork_packets")
+        await pkts.update_one({"packet_id": packet_id}, {"$set": packet_doc}, upsert=True)
+    except Exception as exc:
+        logger.warning("shannon packet mongo upsert failed: %s", exc)
+
+    return {
+        "success": True,
+        "packet_id": packet_id,
+        "submission_id": submission.get("submission_id"),
+        "indemnitor_sign_url": indemnitor_link,
+        "coindemnitor_sign_url": coindemnitor_link,
+        "defendant_sign_url": defendant_link,
+        "payment_link": payment_link,
+        "portal_url": portal_url,
+        "surety_id": surety_id,
+        "pending_staff_match": True,
     }
 
 
