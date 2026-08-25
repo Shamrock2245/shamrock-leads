@@ -158,6 +158,14 @@ DEFAULT_CONFIG = {
         "interval_seconds": 3600,       # 1 hour
     },
 
+    # ── Lee Clerk first-post delay, then fast jail follow-up ──
+    "lee_clerk_watch": {
+        "enabled": True,
+        "interval_seconds": 900,        # 15 minutes
+        "first_check_hours": 20,        # clerk matrix lags ~1 day
+        "limit": 25,
+    },
+
     # ── Auto-Reply AI (BlueBubbles inbound message handler) ──
     "auto_reply": {
         "enabled": False,

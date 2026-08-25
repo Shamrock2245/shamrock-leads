@@ -660,6 +660,28 @@ async def _run_compliance_backfill():
         )
 
 
+async def _run_lee_clerk_watch():
+    from dashboard.services.lee_clerk_watch import run_lee_clerk_watch
+    from dashboard.services.automation_config import get_automation_config
+    from dashboard.extensions import get_db
+    from datetime import datetime, timezone
+    db = get_db()
+    cfg = (await get_automation_config(db)).get("lee_clerk_watch") or {}
+    limit = int(cfg.get("limit") or 25)
+    result = await run_lee_clerk_watch(limit=limit)
+    await db["automation_run_log"].insert_one({
+        "automation": "lee_clerk_watch",
+        "run_at": datetime.now(timezone.utc),
+        "result": result,
+    })
+    if result.get("clerk_posted") or result.get("jail_refreshed"):
+        logger.info(
+            "[LeeClerkWatch] scanned=%s posted=%s jail=%s early=%s",
+            result.get("scanned"), result.get("clerk_posted"),
+            result.get("jail_refreshed"), result.get("skipped_early"),
+        )
+
+
 async def _run_matching_backlog():
     from dashboard.services.lifecycle_automations import LifecycleAutomations
     from dashboard.services.automation_config import get_automation_config
@@ -718,6 +740,7 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("swipesimple_gmail_poll", "SwipeSimpleGmail", 300, 120, _run_swipesimple_gmail_poll, default_enabled=True),
     CronDef("compliance_backfill","ComplianceFill",    21600, 270, _run_compliance_backfill, default_enabled=True),
     CronDef("matching_backlog",   "MatchingBacklog",    3600, 240, _run_matching_backlog, default_enabled=True),
+    CronDef("lee_clerk_watch",    "LeeClerkWatch",      900, 180, _run_lee_clerk_watch, default_enabled=True),
 ]
 
 

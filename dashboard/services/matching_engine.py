@@ -145,6 +145,135 @@ def _name_similarity(a: str, b: str) -> float:
     return lev_score
 
 
+def indemnitor_name_from_intake(intake_doc: dict) -> str:
+    ind = intake_doc.get("indemnitor") if isinstance(intake_doc.get("indemnitor"), dict) else {}
+    return (
+        ind.get("name")
+        or f"{ind.get('firstName', '')} {ind.get('lastName', '')}".strip()
+        or intake_doc.get("indemnitor_name")
+        or ""
+    ).strip()
+
+
+def _person_last_first(name: str) -> tuple[str, str]:
+    raw = (name or "").strip()
+    if "," in raw:
+        last, rest = [part.strip() for part in raw.split(",", 1)]
+        first = rest.split()[0] if rest else ""
+        return _norm(first), _norm(last)
+    parts = _norm(raw).split()
+    if not parts:
+        return "", ""
+    if len(parts) == 1:
+        return "", parts[0]
+    return parts[0], parts[-1]
+
+
+def names_likely_same_person(a: str, b: str, *, min_sim: float = 0.85) -> bool:
+    if not a or not b:
+        return False
+    if _name_similarity(a, b) >= min_sim:
+        return True
+    a_first, a_last = _person_last_first(a)
+    b_first, b_last = _person_last_first(b)
+    if a_last and b_last and a_last == b_last and a_first and b_first:
+        if a_first == b_first:
+            return True
+        # Allow "J Smith" vs "John Smith" only when one side is an initial.
+        if (len(a_first) == 1 or len(b_first) == 1) and a_first[0] == b_first[0]:
+            return True
+    return False
+
+
+def select_returning_indemnitor_match(
+    indemnitor_name: str,
+    prior_bonds: list,
+    live_arrests: list,
+) -> dict:
+    """Map a returning indemnitor onto a unique live booking of a prior defendant.
+
+    Auto-link only when exactly one live booking matches. Two-plus bookings
+    stay proposed for staff (matching policy escalation).
+    """
+    empty = {
+        "auto_link": False,
+        "confidence": 0,
+        "strategy": "none",
+        "best": None,
+        "candidates": [],
+        "reason": "no_match",
+    }
+    if len(_norm(indemnitor_name)) < 3:
+        empty["reason"] = "indemnitor_name_too_short"
+        return empty
+
+    matched_priors = []
+    for bond in prior_bonds or []:
+        bond_ind = (
+            (bond.get("indemnitor") or {}).get("name")
+            if isinstance(bond.get("indemnitor"), dict)
+            else ""
+        ) or bond.get("indemnitor_name") or ""
+        if not bond_ind:
+            continue
+        if names_likely_same_person(indemnitor_name, bond_ind, min_sim=0.82):
+            matched_priors.append(bond)
+    if not matched_priors:
+        empty["reason"] = "no_prior_indemnitor_bond"
+        return empty
+
+    prior_defendants = []
+    for bond in matched_priors:
+        def_name = bond.get("full_name") or ""
+        if isinstance(bond.get("defendant"), dict):
+            def_name = def_name or bond["defendant"].get("name") or ""
+        if def_name:
+            prior_defendants.append(def_name)
+
+    scored = []
+    for arrest in live_arrests or []:
+        arrest_name = arrest.get("full_name") or ""
+        for prior_name in prior_defendants:
+            if not names_likely_same_person(prior_name, arrest_name, min_sim=0.85):
+                continue
+            sim = _name_similarity(prior_name, arrest_name)
+            confidence = 88 if sim >= 0.92 else 85
+            scored.append((confidence, arrest, prior_name))
+            break
+
+    by_key = {}
+    for confidence, arrest, prior_name in scored:
+        key = str(arrest.get("booking_number") or "").strip().lower() or _norm(arrest.get("full_name") or "")
+        if key not in by_key or confidence > by_key[key][0]:
+            by_key[key] = (confidence, arrest, prior_name)
+    unique = sorted(by_key.values(), key=lambda row: row[0], reverse=True)
+    if not unique:
+        empty["reason"] = "no_live_booking_for_prior_defendant"
+        return empty
+
+    best_conf, best_arrest, prior_name = unique[0]
+    candidates = [row[1] for row in unique]
+    if len(unique) > 1:
+        return {
+            "auto_link": False,
+            "confidence": min(75, best_conf),
+            "strategy": "returning_indemnitor_ambiguous",
+            "best": best_arrest,
+            "candidates": candidates,
+            "reason": "multiple_live_bookings",
+            "prior_defendant": prior_name,
+        }
+    return {
+        "auto_link": True,
+        "confidence": min(96, best_conf),
+        "strategy": "returning_indemnitor_live_booking",
+        "best": best_arrest,
+        "candidates": candidates,
+        "reason": "unique_live_booking",
+        "prior_defendant": prior_name,
+    }
+
+
 class MatchResult:
     """Represents a single match candidate."""
     def __init__(
@@ -206,7 +335,7 @@ class MatchingEngine:
     # ─────────────────────────────────────────────────────────────────────────
     #  Primary entry point
     # ─────────────────────────────────────────────────────────────────────────
-    async def match_intake(self, intake_doc: dict) -> dict:
+    async def match_intake(self, intake_doc: dict, *, prior_bonds=None) -> dict:
         """
         Attempt to match an intake record to existing arrest/defendant records.
 
@@ -333,28 +462,140 @@ class MatchingEngine:
             if best_doc:
                 candidates.append(MatchResult(best_doc, best_score, "name_only"))
 
+        # ── Strategy 5: Returning indemnitor → last defendant → live booking ─
+        returning = await self._returning_indemnitor_candidates(
+            intake_doc, prior_bonds=prior_bonds
+        )
+        for item in returning:
+            booking = item.booking_number
+            if booking and any(c.booking_number == booking for c in candidates):
+                if item.confidence > max(
+                    (c.confidence for c in candidates if c.booking_number == booking),
+                    default=0,
+                ):
+                    candidates = [c for c in candidates if c.booking_number != booking]
+                    candidates.append(item)
+                continue
+            candidates.append(item)
+
         # ── Sort by confidence ─────────────────────────────────────────────
         candidates.sort(key=lambda c: c.confidence, reverse=True)
         best = candidates[0] if candidates else None
 
         auto_linked = False
+        ambiguous = False
         if best and best.confidence >= AUTO_LINK_THRESHOLD:
-            auto_linked = await self._link_intake_to_arrest(
-                intake_id=intake_id,
-                arrest_doc=best.arrest_doc,
-                confidence=best.confidence,
-                strategy=best.strategy,
-            )
+            rival_bookings = {
+                c.booking_number
+                for c in candidates
+                if c.confidence >= 70
+                and c.booking_number
+                and c.booking_number != best.booking_number
+            }
+            # Exact booking / name+DOB always auto-link. Returning-indemnitor
+            # auto-links only when the live booking is unique.
+            if rival_bookings and best.strategy not in ("exact_booking", "name_dob_county"):
+                ambiguous = True
+            else:
+                auto_linked = await self._link_intake_to_arrest(
+                    intake_id=intake_id,
+                    arrest_doc=best.arrest_doc,
+                    confidence=best.confidence,
+                    strategy=best.strategy,
+                )
 
         return {
             "matched": bool(best),
             "auto_linked": auto_linked,
+            "ambiguous": ambiguous,
             "confidence": best.confidence if best else 0,
-            "strategy": best.strategy if best else "none",
+            "strategy": (
+                "ambiguous" if ambiguous else (best.strategy if best else "none")
+            ),
             "best_match": best.to_dict() if best else None,
             "candidates": [c.to_dict() for c in candidates[:5]],
             "intake_id": intake_id,
         }
+
+    async def _returning_indemnitor_candidates(
+        self,
+        intake_doc: dict,
+        *,
+        prior_bonds=None,
+    ) -> list:
+        ind_name = indemnitor_name_from_intake(intake_doc)
+        if len(_norm(ind_name)) < 3:
+            return []
+        bonds = prior_bonds
+        if bonds is None:
+            try:
+                from dashboard.services.past_bond_search import search_past_bonds
+                bonds = await search_past_bonds(ind_name, limit=20)
+            except Exception:
+                logger.debug("returning-indemnitor past-bond search skipped", exc_info=True)
+                bonds = []
+        prior_defendants = []
+        for bond in bonds or []:
+            bond_ind = ""
+            if isinstance(bond.get("indemnitor"), dict):
+                bond_ind = bond["indemnitor"].get("name") or ""
+            bond_ind = bond_ind or bond.get("indemnitor_name") or ""
+            if not names_likely_same_person(ind_name, bond_ind, min_sim=0.82):
+                continue
+            def_name = bond.get("full_name") or ""
+            if isinstance(bond.get("defendant"), dict):
+                def_name = def_name or bond["defendant"].get("name") or ""
+            if def_name:
+                prior_defendants.append(def_name)
+        live = await self._live_arrests_for_names(prior_defendants)
+        picked = select_returning_indemnitor_match(ind_name, bonds, live)
+        results = []
+        for arrest in picked.get("candidates") or []:
+            conf = picked.get("confidence") or 0
+            if arrest is picked.get("best"):
+                conf = picked.get("confidence") or 0
+            results.append(
+                MatchResult(
+                    arrest,
+                    conf if arrest is picked.get("best") else min(conf, 74),
+                    picked.get("strategy") or "returning_indemnitor_live_booking",
+                )
+            )
+        if picked.get("best") and not results:
+            results.append(
+                MatchResult(
+                    picked["best"],
+                    picked.get("confidence") or 0,
+                    picked.get("strategy") or "returning_indemnitor_live_booking",
+                )
+            )
+        return results
+
+    async def _live_arrests_for_names(self, names: list) -> list:
+        out = []
+        seen = set()
+        for name in names or []:
+            _first, last = _person_last_first(name)
+            if len(last) < 2:
+                continue
+            query = {
+                "$or": [
+                    {"full_name": {"$regex": re.escape(last), "$options": "i"}},
+                    {"last_name": {"$regex": f"^{re.escape(last)}$", "$options": "i"}},
+                ]
+            }
+            try:
+                cursor = self.arrests.find(query, {"_id": 0}).limit(25)
+                async for doc in cursor:
+                    key = str(doc.get("booking_number") or doc.get("full_name") or "")
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    out.append(doc)
+            except TypeError:
+                # Tests may stub find() as MagicMock without an async cursor.
+                continue
+        return out
 
     # ─────────────────────────────────────────────────────────────────────────
     #  Link intake → arrest record

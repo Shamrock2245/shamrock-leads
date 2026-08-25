@@ -13,6 +13,7 @@ from dashboard.services.matching_engine import (
     _levenshtein,
     _norm,
     _name_similarity,
+    select_returning_indemnitor_match,
 )
 
 
@@ -168,3 +169,47 @@ class TestMatchIntake:
 
         result = await engine.match_intake(intake_doc)
         assert result["confidence"] == 0 or result.get("strategy") == "no_match"
+
+
+class TestReturningIndemnitorMatch:
+    def test_unique_live_booking_auto_links(self):
+        prior = [{
+            "full_name": "DOE, JOHN",
+            "indemnitor_name": "Jane Doe",
+            "indemnitor": {"name": "Jane Doe"},
+            "bond_amount": 5000,
+        }]
+        live = [{
+            "full_name": "DOE, JOHN",
+            "booking_number": "26-888",
+            "county": "Lee",
+        }]
+        picked = select_returning_indemnitor_match("Jane Doe", prior, live)
+        assert picked["auto_link"] is True
+        assert picked["strategy"] == "returning_indemnitor_live_booking"
+        assert picked["best"]["booking_number"] == "26-888"
+        assert picked["confidence"] >= 85
+
+    def test_two_live_bookings_stay_human(self):
+        prior = [{
+            "full_name": "SMITH, JOHN",
+            "indemnitor_name": "Mary Smith",
+        }]
+        live = [
+            {"full_name": "SMITH, JOHN", "booking_number": "A-1", "county": "Lee"},
+            {"full_name": "SMITH, JOHN", "booking_number": "B-2", "county": "Collier"},
+        ]
+        picked = select_returning_indemnitor_match("Mary Smith", prior, live)
+        assert picked["auto_link"] is False
+        assert picked["strategy"] == "returning_indemnitor_ambiguous"
+        assert picked["confidence"] <= 75
+
+    def test_does_not_match_indemnitor_as_defendant(self):
+        prior = [{
+            "full_name": "DOE, JOHN",
+            "indemnitor_name": "Jane Doe",
+        }]
+        live = [{"full_name": "DOE, JANE", "booking_number": "X-1"}]
+        picked = select_returning_indemnitor_match("Jane Doe", prior, live)
+        assert picked["auto_link"] is False
+        assert picked["reason"] == "no_live_booking_for_prior_defendant"

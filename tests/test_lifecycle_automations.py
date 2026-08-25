@@ -44,6 +44,7 @@ class TestLifecycleConfigAndCron:
             "docuseal_poller",
             "compliance_backfill",
             "matching_backlog",
+            "lee_clerk_watch",
         ):
             assert key in DEFAULT_CONFIG
             assert DEFAULT_CONFIG[key]["enabled"] is True
@@ -55,6 +56,7 @@ class TestLifecycleConfigAndCron:
             "docuseal_poller",
             "compliance_backfill",
             "matching_backlog",
+            "lee_clerk_watch",
         ):
             assert key in names
             assert names[key].default_enabled is True

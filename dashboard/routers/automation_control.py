@@ -133,7 +133,7 @@ ALL_SERVICE_KEYS = {
     "poa_low_stock", "surety_weekly_reports", "drip_scanner",
     # Lifecycle suite
     "forfeiture_scan", "docuseal_poller", "swipesimple_gmail_poll",
-    "compliance_backfill", "matching_backlog", "overdue_tasks",
+    "compliance_backfill", "matching_backlog", "lee_clerk_watch", "overdue_tasks",
     # Intelligence Pipeline
     "alpha_engine", "docket_monitor", "court_intel", "nlp_enrichment",
     # Monitoring & Compliance
@@ -169,6 +169,7 @@ SERVICE_META = {
     "swipesimple_gmail_poll": {"name": "SwipeSimple Gmail", "icon": "💳", "category": "lifecycle", "desc": "Poll Gmail for SwipeSimple bond premium receipts"},
     "compliance_backfill": {"name": "Compliance Backfill", "icon": "✅", "category": "lifecycle", "desc": "Create missing check-in/court tasks"},
     "matching_backlog":    {"name": "Matching Backlog",    "icon": "🔗", "category": "lifecycle", "desc": "Batch-match intakes; human on ambiguity"},
+    "lee_clerk_watch":     {"name": "Lee Clerk Watch",     "icon": "🏛️", "category": "lifecycle", "desc": "Wait ~1 day for Lee Clerk catch-up, then apply jail/clerk updates immediately"},
     "overdue_tasks":       {"name": "Overdue Tasks",       "icon": "⏰", "category": "lifecycle", "desc": "Flag overdue staff tasks / SLA breaches"},
     "auto_reply":          {"name": "AI Auto-Reply",       "icon": "🤖", "category": "revenue",  "desc": "AI responds to inbound iMessages (Shannon)"},
     "alpha_engine":        {"name": "Alpha Engine",        "icon": "🧬", "category": "intel",    "desc": "Deep enrichment / ranking pass on hot inventory"},

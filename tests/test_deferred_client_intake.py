@@ -67,7 +67,7 @@ async def test_unassigned_indemnitor_intake_keeps_case_fields_blank_and_defers_m
     saved = intakes.update_one.await_args.args[1]["$set"]
     assert saved["role"] == "indemnitor"
     assert saved["status"] == "pending"
-    assert saved["match_strategy"] == "staff_deferred"
+    assert saved["match_strategy"] == "pending_auto"
     assert saved["paperwork_packet_id"] is None
     assert saved["paperwork_status"] == "intake_complete"
     assert saved["defendant_name"] == ""
@@ -75,6 +75,37 @@ async def test_unassigned_indemnitor_intake_keeps_case_fields_blank_and_defers_m
     assert saved["indemnitor_name"] == "Jamie Client"
     assert saved["indemnitor"]["dl"] == "D1234567"
     pins.update_one.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_deferred_intake_copies_session_booking_for_auto_match():
+    intakes = _Collection()
+    pins = _Collection()
+
+    def collection_for(name):
+        return {"intake_queue": intakes, "portal_pins": pins}[name]
+
+    session = {
+        "session_token": "PORTAL-book",
+        "phone": "2395550103",
+        "booking_number": "26-00123",
+        "county": "Lee",
+        "defendant_name": "DOE, JOHN",
+        "id_extracted": {"full_name": "Jamie Client", "dl_number": "D111"},
+    }
+    with patch("dashboard.routers.pin_portal.get_collection", side_effect=collection_for), \
+         patch("dashboard.services.matching_engine.MatchingEngine.match_intake", new_callable=AsyncMock):
+        await _upsert_deferred_client_intake(
+            session=session,
+            role="indemnitor",
+            fields={"indemnitor_name": "Jamie Client"},
+            staff_review_acknowledged=True,
+        )
+    saved = intakes.update_one.await_args.args[1]["$set"]
+    assert saved["defendant_booking_number"] == "26-00123"
+    assert saved["defendant_county"] == "Lee"
+    assert saved["defendant_name"] == "DOE, JOHN"
+    assert saved["defendant"]["bookingNumber"] == "26-00123"
 
 
 @pytest.mark.asyncio
@@ -113,7 +144,7 @@ async def test_defendant_intake_uses_defendant_fields_without_making_a_bond_matc
     assert saved["defendant"]["dl"] == "D7654321"
     assert saved["indemnitor_name"] == ""
     assert saved["matched_booking_number"] is None
-    assert saved["match_strategy"] == "staff_deferred"
+    assert saved["match_strategy"] == "pending_auto"
 
 
 class _Request:

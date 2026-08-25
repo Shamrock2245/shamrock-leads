@@ -703,6 +703,20 @@ async def _upsert_deferred_client_intake(
         "ref2Address": "",
     }
 
+    session_booking = str(session.get("booking_number") or fields.get("booking_number") or "").strip()
+    session_county = str(
+        session.get("county")
+        or fields.get("defendant_county")
+        or fields.get("county")
+        or ""
+    ).strip()
+    session_def_name = str(
+        session.get("defendant_name")
+        or fields.get("defendant_name")
+        or fields.get("DefName")
+        or ""
+    ).strip()
+
     if role == "defendant":
         full_name = fields.get("defendant_name") or fields.get("DefName") or extracted.get("full_name") or ""
         first_name, last_name = _split_name(full_name)
@@ -717,6 +731,8 @@ async def _upsert_deferred_client_intake(
             "zip": fields.get("defendant_zip") or extracted.get("zip") or "",
             "dl": fields.get("defendant_dl") or extracted.get("dl_number") or "",
             "phone": phone,
+            "bookingNumber": session_booking,
+            "county": session_county,
         })
     else:
         full_name = fields.get("indemnitor_name") or fields.get("IndemnitorName") or fields.get("IndName") or fields.get("FullName") or extracted.get("full_name") or ""
@@ -738,6 +754,18 @@ async def _upsert_deferred_client_intake(
             "ref1Phone": fields.get("reference_1_phone") or "",
             "role": "coindemnitor" if role == "coindemnitor" else "primary",
         })
+        if session_def_name:
+            def_first, def_last = _split_name(session_def_name)
+            defendant.update({
+                "name": session_def_name,
+                "firstName": def_first,
+                "lastName": def_last,
+                "bookingNumber": session_booking,
+                "county": session_county,
+            })
+        elif session_booking or session_county:
+            defendant["bookingNumber"] = session_booking
+            defendant["county"] = session_county
 
     doc = {
         "intake_id": intake_id,
@@ -752,8 +780,8 @@ async def _upsert_deferred_client_intake(
         "indemnitor_phone": indemnitor.get("phone") or "",
         "defendant": defendant,
         "defendant_name": defendant.get("name") or "",
-        "defendant_booking_number": "",
-        "defendant_county": "",
+        "defendant_booking_number": defendant.get("bookingNumber") or "",
+        "defendant_county": defendant.get("county") or "",
         "defendant_facility": "",
         "consent_given": bool(staff_review_acknowledged),
         "consent_timestamp": now.isoformat(),
@@ -765,7 +793,7 @@ async def _upsert_deferred_client_intake(
         "matched_county": None,
         "matched_defendant_id": None,
         "match_confidence": 0,
-        "match_strategy": "staff_deferred",
+        "match_strategy": "pending_auto",
         "match_timestamp": None,
         "surety_id": "osi",
         "paperwork_packet_id": None,
@@ -784,6 +812,12 @@ async def _upsert_deferred_client_intake(
         {"$set": {"client_intake_id": intake_id, "role": role}},
     )
     logger.info("[PIN Portal] Deferred %s intake saved: %s", role, intake_id)
+    try:
+        from dashboard.extensions import get_db
+        from dashboard.services.matching_engine import MatchingEngine
+        await MatchingEngine(get_db()).match_intake(doc)
+    except Exception:
+        logger.debug("[PIN Portal] auto-match skipped for %s", intake_id, exc_info=True)
     return intake_id
 
 
