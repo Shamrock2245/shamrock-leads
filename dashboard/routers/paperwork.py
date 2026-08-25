@@ -1800,6 +1800,130 @@ async def docuseal_health(surety_id: str = "osi"):
     return JSONResponse(result, status_code=code)
 
 
+@paperwork_bp.post("/paperwork/hydrate-from-booking")
+async def hydrate_from_booking(request: Request):
+    """Lee-first: pull county booking facts into the surety packet map.
+
+    Does not send DocuSeal and does not require a POA. POA stays staff-editable
+    until clerk_bond_posted is set.
+    """
+    try:
+        body = (await request.json()) or {}
+    except Exception:
+        body = {}
+    booking = str(body.get("booking_number") or body.get("booking") or "").strip()
+    if not booking:
+        return JSONResponse({"success": False, "error": "booking_number is required"}, status_code=400)
+
+    from dashboard.services.packet_builder_service import (
+        resolve_case_context,
+        build_adaptive_field_map,
+        hydration_score,
+        is_lee_county,
+        lee_clerk_search_url,
+    )
+    from dashboard.services.docuseal_service import (
+        DocuSealService,
+        build_bond_data_from_dashboard,
+        resolve_template_id_for_surety,
+    )
+
+    county = str(body.get("county") or "Lee").strip() or "Lee"
+    ctx = await resolve_case_context(
+        booking_number=booking,
+        county=county,
+        defendant_id=body.get("defendant_id"),
+        intake_id=body.get("intake_id"),
+        bond_case_id=body.get("bond_case_id"),
+        packet_id=body.get("packet_id"),
+    )
+    surety_id = (body.get("surety_id") or ctx.get("surety_id") or "osi").lower().strip()
+    if surety_id not in ("osi", "palmetto"):
+        surety_id = "osi"
+    ctx["surety_id"] = surety_id
+
+    bond_data = build_bond_data_from_dashboard(
+        ctx=ctx,
+        body={"charge_details": ctx.get("charge_details") or []},
+        surety_id=surety_id,
+    )
+    values = DocuSealService.prefill_values_from_bond(bond_data)
+    fields = build_adaptive_field_map(ctx)
+    audit = hydration_score(fields)
+    poa_locked = bool(ctx.get("poa_locked") or ctx.get("clerk_bond_posted"))
+    missing_staff = []
+    if not str(ctx.get("poa_number") or "").strip():
+        missing_staff.append({
+            "key": "poa_number",
+            "label": "POA number",
+            "required_for_hydrate": False,
+            "required_for_send": True,
+            "editable": not poa_locked,
+        })
+    lee = is_lee_county(ctx.get("county") or county)
+    return {
+        "success": True,
+        "booking_number": booking,
+        "county": ctx.get("county") or county,
+        "surety_id": surety_id,
+        "template_id": resolve_template_id_for_surety(surety_id),
+        "context": ctx,
+        "prefill": values,
+        "prefill_key_count": len(values),
+        "fields": fields,
+        "hydration": audit,
+        "charge_details": ctx.get("charge_details") or [],
+        "missing_staff": missing_staff,
+        "poa_locked": poa_locked,
+        "clerk_bond_posted": bool(ctx.get("clerk_bond_posted")),
+        "lee_county": lee,
+        "lee_clerk_url": ctx.get("lee_clerk_url") or (
+            lee_clerk_search_url(ctx.get("case_number") or "", booking) if lee else ""
+        ),
+        "can_send": bool(values.get("defendant_name") and ctx.get("poa_number")),
+    }
+
+
+@paperwork_bp.post("/paperwork/clerk-posted")
+async def mark_clerk_bond_posted(request: Request):
+    """Staff confirms the posted bond is visible at the county clerk (Lee first).
+
+    Once posted, POA on the bound case is locked except via the dedicated POA-change path.
+    """
+    try:
+        body = (await request.json()) or {}
+    except Exception:
+        body = {}
+    booking = str(body.get("booking_number") or "").strip()
+    if not booking:
+        return JSONResponse({"success": False, "error": "booking_number is required"}, status_code=400)
+    posted = bool(body.get("posted", True))
+    now = datetime.now(timezone.utc).isoformat()
+    patch = {
+        "clerk_bond_posted": posted,
+        "clerk_bond_posted_at": now if posted else None,
+        "clerk_bond_posted_county": str(body.get("county") or "Lee"),
+        "clerk_bond_posted_source": str(body.get("source") or "staff"),
+        "poa_locked": posted,
+        "updated_at": now,
+    }
+    lookup = {"$or": [{"booking_number": booking}, {"Booking_Number": booking}]}
+    updated = {}
+    for name in ("bond_cases", "active_bonds", "arrests", "defendants", "paperwork_packets"):
+        try:
+            result = await get_collection(name).update_many(lookup, {"$set": patch})
+            updated[name] = int(getattr(result, "matched_count", 0) or 0)
+        except Exception:
+            updated[name] = 0
+    return {
+        "success": True,
+        "booking_number": booking,
+        "clerk_bond_posted": posted,
+        "poa_locked": posted,
+        "updated": updated,
+    }
+
+
 @paperwork_bp.post("/paperwork/docuseal/prefill-preview")
 async def docuseal_prefill_preview(request: Request):
     """
@@ -2346,7 +2470,11 @@ async def paperwork_push_docuseal(packet_id: str, request: Request):
       defendant: optional {name, email, phone}
       bond_data: optional override fields for prefill
     """
-    from dashboard.services.docuseal_service import get_docuseal_service, resolve_template_id_for_surety
+    from dashboard.services.docuseal_service import (
+        build_bond_data_from_dashboard,
+        get_docuseal_service,
+        resolve_template_id_for_surety,
+    )
 
     packet = await _load_packet(packet_id)
     if not packet:
@@ -2369,7 +2497,8 @@ async def paperwork_push_docuseal(packet_id: str, request: Request):
             status_code=400,
         )
 
-    # Hydration source: explicit bond_data > packet > intake
+    # Hydration source: explicit bond_data > packet > intake, then the same
+    # dashboard merger used by finalize / prefill-preview.
     bond_data = dict(body.get("bond_data") or {})
     user = getattr(request.state, "user", {})
     if user.get("agent_name"):
@@ -2387,19 +2516,64 @@ async def paperwork_push_docuseal(packet_id: str, request: Request):
         "booking_number",
         "court_date",
         "surety_id",
+        "bond_case_id",
+        "match_id",
+        "match_status",
+        "defendant_id",
+        "indemnitor_id",
+        "bond_amount",
+        "premium_amount",
+        "charge_details",
+        "charges",
     ):
         if k not in bond_data and packet.get(k):
             bond_data[k] = packet.get(k)
 
-    if packet.get("intake_id") and not bond_data.get("defendant_name"):
+    intake = None
+    if packet.get("intake_id"):
         intake = await _load_intake(packet["intake_id"])
         if intake:
             bond_data.setdefault("defendant_name", intake.get("defendant_name"))
             bond_data.setdefault("indemnitor_name", intake.get("indemnitor_name"))
             bond_data.setdefault("indemnitor_email", intake.get("indemnitor_email"))
             bond_data.setdefault("indemnitor_phone", intake.get("indemnitor_phone"))
-            bond_data.setdefault("county", intake.get("county"))
-            bond_data.setdefault("booking_number", intake.get("booking_number"))
+            bond_data.setdefault("county", intake.get("county") or intake.get("defendant_county"))
+            bond_data.setdefault("booking_number", intake.get("booking_number") or intake.get("defendant_booking_number"))
+            if isinstance(intake.get("defendant"), dict) and not bond_data.get("defendant"):
+                bond_data["defendant"] = intake["defendant"]
+            if isinstance(intake.get("indemnitor"), dict) and not bond_data.get("indemnitor"):
+                bond_data["indemnitor"] = intake["indemnitor"]
+
+    bond_data = build_bond_data_from_dashboard(
+        ctx={
+            "defendant": bond_data.get("defendant") if isinstance(bond_data.get("defendant"), dict) else {},
+            "indemnitor": bond_data.get("indemnitor") if isinstance(bond_data.get("indemnitor"), dict) else {},
+            "indemnitors": bond_data.get("indemnitors"),
+            "defendant_name": bond_data.get("defendant_name"),
+            "indemnitor_name": bond_data.get("indemnitor_name"),
+            "county": bond_data.get("county"),
+            "case_number": bond_data.get("case_number"),
+            "poa_number": bond_data.get("poa_number"),
+            "poa_numbers": bond_data.get("poa_numbers"),
+            "booking_number": bond_data.get("booking_number"),
+            "court_date": bond_data.get("court_date"),
+            "bond_amount": bond_data.get("bond_amount"),
+            "premium_amount": bond_data.get("premium_amount"),
+            "charge_details": bond_data.get("charge_details"),
+            "charges": bond_data.get("charges"),
+            "bond_case_id": bond_data.get("bond_case_id"),
+            "match_id": bond_data.get("match_id"),
+            "match_status": bond_data.get("match_status"),
+            "defendant_id": bond_data.get("defendant_id"),
+            "indemnitor_id": bond_data.get("indemnitor_id"),
+            "surety_id": surety_for_template,
+            "agent_name": bond_data.get("agent_name") or bond_data.get("bondsman_name"),
+            "agent_license": bond_data.get("license_number") or bond_data.get("bondsman_license"),
+        },
+        intake_doc=intake or {},
+        body=bond_data,
+        surety_id=surety_for_template,
+    )
 
     svc = get_docuseal_service()
     if not svc.is_configured:

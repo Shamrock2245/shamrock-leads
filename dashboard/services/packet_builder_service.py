@@ -119,6 +119,75 @@ def _split_name(full: str) -> Tuple[str, str, str]:
     return parts[0], " ".join(parts[1:-1]), parts[-1]
 
 
+def is_lee_county(county: Any) -> bool:
+    return "lee" in str(county or "").lower()
+
+
+def lee_clerk_search_url(case_number: str = "", booking_number: str = "") -> str:
+    from urllib.parse import quote
+    query = (case_number or booking_number or "").strip()
+    return f"https://matrix.leeclerk.org/Home/Search?query={quote(query)}"
+
+
+def charge_details_from_sources(
+    *,
+    arrest: Optional[Dict[str, Any]] = None,
+    bond: Optional[Dict[str, Any]] = None,
+    charges_text: str = "",
+    default_case: str = "",
+    default_bond: float = 0.0,
+) -> List[Dict[str, Any]]:
+    """Lee (and later counties) store structured rows on arrest.extra.charge_details."""
+    arrest = arrest if isinstance(arrest, dict) else {}
+    bond = bond if isinstance(bond, dict) else {}
+    extra = arrest.get("extra") if isinstance(arrest.get("extra"), dict) else {}
+    raw = (
+        extra.get("charge_details")
+        or arrest.get("charge_details")
+        or bond.get("charge_details")
+        or bond.get("charge_list")
+        or []
+    )
+    rows: List[Dict[str, Any]] = []
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict):
+                desc = _first(item.get("charge"), item.get("description"), item.get("name"))
+                if not desc:
+                    continue
+                rows.append({
+                    "charge": desc,
+                    "description": desc,
+                    "bond_amount": _money(item.get("bond_amount") or item.get("amount") or item.get("bond")),
+                    "bond_type": _first(item.get("bond_type"), "SURETY"),
+                    "case_number": _first(item.get("case_number"), item.get("Case_Number"), default_case),
+                    "poa_number": _first(item.get("poa_number"), item.get("POA_Number")),
+                    "court_date": _first(item.get("court_date"), item.get("hearing_date")),
+                    "court_time": _first(item.get("court_time")),
+                })
+            elif item and str(item).strip():
+                rows.append({
+                    "charge": str(item).strip(),
+                    "description": str(item).strip(),
+                    "bond_amount": 0.0,
+                    "bond_type": "SURETY",
+                    "case_number": default_case,
+                    "poa_number": "",
+                })
+    if not rows and charges_text:
+        parts = [p.strip() for p in re.split(r"[|\n;]+", charges_text) if p.strip()]
+        for idx, part in enumerate(parts):
+            rows.append({
+                "charge": part,
+                "description": part,
+                "bond_amount": default_bond if idx == 0 else 0.0,
+                "bond_type": "SURETY",
+                "case_number": default_case,
+                "poa_number": "",
+            })
+    return rows[:8]
+
+
 def verify_self_indemnitor_pin(pin: str) -> bool:
     """Brendan discretion PIN for defendant-as-indemnitor on small bonds."""
     return (pin or "").strip() == SELF_INDEMNITOR_PIN
@@ -349,10 +418,10 @@ async def resolve_case_context(
             "dob": _first(defendant.get("DOB"), def_nested.get("dob"), arrest.get("DOB"), intake.get("defendant_dob")),
             "phone": _first(defendant.get("Phone"), def_nested.get("phone"), arrest.get("Phone")),
             "email": _first(defendant.get("Email"), def_nested.get("email")),
-            "address": _first(defendant.get("Address"), def_nested.get("address"), arrest.get("Address")),
-            "city": _first(defendant.get("City"), def_nested.get("city")),
-            "state": _first(defendant.get("State"), def_nested.get("state"), "FL"),
-            "zip": _first(defendant.get("Zip"), def_nested.get("zip")),
+            "address": _first(defendant.get("Address"), def_nested.get("address"), arrest.get("Address"), arrest.get("address")),
+            "city": _first(defendant.get("City"), def_nested.get("city"), arrest.get("City"), arrest.get("city")),
+            "state": _first(defendant.get("State"), def_nested.get("state"), arrest.get("State"), arrest.get("state"), "FL"),
+            "zip": _first(defendant.get("Zip"), def_nested.get("zip"), arrest.get("ZIP"), arrest.get("zip")),
             "dl": _first(defendant.get("DL"), def_nested.get("dl")),
             "dl_state": _first(defendant.get("DL_State"), def_nested.get("dlState"), "FL"),
             "ssn": _first(defendant.get("SSN"), def_nested.get("ssn")),
@@ -361,8 +430,8 @@ async def resolve_case_context(
             "weight": _first(defendant.get("Weight"), arrest.get("Weight")),
             "race": _first(defendant.get("Race"), arrest.get("Race")),
             "sex": _first(defendant.get("Sex"), arrest.get("Sex"), arrest.get("Gender")),
-            "hair": _first(defendant.get("Hair"), arrest.get("Hair")),
-            "eyes": _first(defendant.get("Eyes"), arrest.get("Eyes")),
+            "hair": _first(defendant.get("Hair"), arrest.get("Hair"), arrest.get("hair")),
+            "eyes": _first(defendant.get("Eyes"), arrest.get("Eyes"), arrest.get("eyes")),
         },
         "indemnitor": {
             "name": ind_name,
@@ -391,6 +460,42 @@ async def resolve_case_context(
             "has_bond": bool(bond),
         },
     }
+    charge_rows = charge_details_from_sources(
+        arrest=arrest,
+        bond=bond,
+        charges_text=context.get("charges") or "",
+        default_case=context.get("case_number") or "",
+        default_bond=bond_amount,
+    )
+    context["charge_details"] = charge_rows
+    context["court_date"] = _first(
+        bond.get("Court_Date"), bond.get("court_date"),
+        arrest.get("Court_Date"), arrest.get("court_date"), "TBN",
+    ) or "TBN"
+    context["court_time"] = _first(
+        bond.get("Court_Time"), bond.get("court_time"),
+        arrest.get("Court_Time"), arrest.get("court_time"),
+    )
+    context["court_location"] = _first(
+        bond.get("Court_Location"), bond.get("court_location"),
+        arrest.get("Court_Location"), arrest.get("court_location"),
+    )
+    context["court_type"] = _first(
+        bond.get("Court_Type"), bond.get("court_type"),
+        arrest.get("Court_Type"), arrest.get("court_type"), "County/Circuit",
+    )
+    clerk_posted = bool(
+        bond.get("clerk_bond_posted")
+        or packet.get("clerk_bond_posted")
+        or arrest.get("clerk_bond_posted")
+        or defendant.get("clerk_bond_posted")
+    )
+    context["clerk_bond_posted"] = clerk_posted
+    context["poa_locked"] = clerk_posted
+    context["lee_clerk_url"] = (
+        lee_clerk_search_url(context.get("case_number") or "", context.get("booking_number") or "")
+        if is_lee_county(context.get("county")) else ""
+    )
     return context
 
 
@@ -475,6 +580,13 @@ def build_adaptive_field_map(context: Dict[str, Any]) -> Dict[str, Any]:
         "DefDL": def_.get("dl") or "",
         "DefDLState": def_.get("dl_state") or "FL",
         "DefEmployer": def_.get("employer") or "",
+        "defendant_employer": def_.get("employer") or "",
+        "defendant_height": def_.get("height") or "",
+        "defendant_weight": def_.get("weight") or "",
+        "defendant_hair": def_.get("hair") or "",
+        "defendant_eyes": def_.get("eyes") or "",
+        "defendant_race": def_.get("race") or "",
+        "defendant_alias": def_.get("alias") or "",
         # Indemnitor
         "indemnitor_name": ind_name,
         "IndemnitorName": ind_name,
@@ -500,6 +612,18 @@ def build_adaptive_field_map(context: Dict[str, Any]) -> Dict[str, Any]:
         "indemnitor_email": ind.get("email") or "",
         "IndRelation": ind.get("relationship") or "",
         "IndEmployer": ind.get("employer") or "",
+        "indemnitor_employer": ind.get("employer") or "",
+        "indemnitor_employer_phone": ind.get("employer_phone") or "",
+        "indemnitor_vehicle_year": ind.get("vehicle_year") or "",
+        "indemnitor_vehicle_make": ind.get("vehicle_make") or "",
+        "indemnitor_vehicle_model": ind.get("vehicle_model") or "",
+        "indemnitor_vehicle_color": ind.get("vehicle_color") or "",
+        "reference_1_name": ind.get("ref1Name") or ind.get("reference_1_name") or "",
+        "reference_1_phone": ind.get("ref1Phone") or ind.get("reference_1_phone") or "",
+        "reference_1_address": ind.get("ref1Address") or ind.get("reference_1_address") or "",
+        "reference_1_relation": ind.get("ref1Relation") or ind.get("reference_1_relation") or "",
+        "reference_2_name": ind.get("ref2Name") or ind.get("reference_2_name") or "",
+        "reference_2_phone": ind.get("ref2Phone") or ind.get("reference_2_phone") or "",
         "FullName": ind_name,
         "Social": ind.get("ssn") or "",
         # Bond / case

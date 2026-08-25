@@ -438,8 +438,10 @@ async def verify_portal_pin(req: VerifyPinRequest):
 # Client-writable DocuSeal keys only. Bond/POA/premium/charge fields stay staff-owned.
 _CLIENT_FIELD_ALLOWLIST = frozenset({
     "indemnitor_name", "IndemnitorName", "IndName", "FullName",
+    "indemnitor_first_name", "indemnitor_middle_name",
     "indemnitor_address", "indemnitor_city", "indemnitor_state", "indemnitor_zip",
-    "indemnitor_city_state_zip", "indemnitor_phone", "indemnitor_dl", "indemnitor_dob",
+    "indemnitor_city_state_zip", "indemnitor_phone", "indemnitor_phone2",
+    "indemnitor_email", "indemnitor_dl", "indemnitor_dob",
     "indemnitor_ssn", "indemnitor_employer", "indemnitor_employer_phone",
     "indemnitor_employer_address", "indemnitor_relationship", "indemnitor_work_phone",
     "indemnitor_vehicle_make", "indemnitor_vehicle_model", "indemnitor_vehicle_year",
@@ -451,7 +453,23 @@ _CLIENT_FIELD_ALLOWLIST = frozenset({
     "reference_2_name", "reference_2_relation", "reference_2_phone", "reference_2_address",
     "defendant_name", "DefName", "DefFirstName", "DefLastName",
     "defendant_address", "defendant_city", "defendant_state",
-    "defendant_zip", "defendant_phone", "defendant_dl", "defendant_dob",
+    "defendant_zip", "defendant_phone", "defendant_email", "defendant_dl",
+    "defendant_dl_state", "defendant_dob", "defendant_ssn",
+    "defendant_employer", "defendant_employer_phone", "defendant_employer_address",
+    "defendant_employer_how_long", "defendant_height", "defendant_weight",
+    "defendant_hair", "defendant_eyes", "defendant_race", "defendant_alias",
+    "defendant_address_how_long", "defendant_former_address",
+    "defendant_former_address_how_long", "defendant_boss",
+    "defendant_previous_employment", "defendant_previous_employment_how_long",
+    "defendant_tattoos", "defendant_spouse_name", "defendant_spouse_phone",
+    "defendant_spouse_address", "defendant_spouse_employer",
+    "def_parent_name", "def_parent_phone", "def_parent_address",
+    "def_best_friend_name", "def_best_friend_phone", "def_best_friend_address",
+    "def_attorney_name", "def_attorney_phone", "def_attorney_address",
+    "def_vehicle_year", "def_vehicle_make", "def_vehicle_model", "def_vehicle_color",
+    "def_vehicle_plate", "def_facebook", "def_instagram",
+    "children_names_ages_1", "children_names_ages_2",
+    "children_school_1", "children_school_2",
 })
 
 
@@ -901,8 +919,13 @@ async def portal_remaining_fields(req: RemainingFieldsRequest):
             submitter_id = (target or {}).get("id")
             if submitter_id:
                 from dashboard.services.docuseal_service import DocuSealService
+                from dashboard.services.docuseal_signing_ux import submission_fields_from_values
                 svc = DocuSealService()
-                await svc.update_submitter(submitter_id, values=fields)
+                await svc.update_submitter(
+                    submitter_id,
+                    values=fields,
+                    fields=submission_fields_from_values(fields, force_editable=True),
+                )
                 await packets.update_one(
                     {"packet_id": packet_id},
                     {"$set": {

@@ -39,9 +39,9 @@ DEFAULT_DOCUSEAL_URL = "https://sign.shamrockbailbonds.biz"
 # Completed Bonds Drive folder (also COMPLETED_BONDS_FOLDER_ID / GOOGLE_DRIVE_OUTPUT_FOLDER_ID)
 DEFAULT_COMPLETED_BONDS_FOLDER = "1WnjwtxoaoXVW8_B6s-0ftdCPf_5WfKgs"
 
-# Role names MUST match DocuSeal template submitter names exactly
-# (live template 1 "shamrock-osi-paperwork-complete"):
-#   indemnitor | Defendant | Coindemnitor | Bondsman
+# Role names MUST match DocuSeal template submitter names exactly.
+# Live OSI (id 1) + Palmetto (id 3) + clone (id 4) all use lowercase:
+#   bondsman | indemnitor | defendant | coindemnitor
 ROLE_INDEMNITOR = "indemnitor"
 ROLE_DEFENDANT = "defendant"
 ROLE_CO_INDEMNITOR = "coindemnitor"
@@ -142,6 +142,42 @@ def _nonempty_party(p: Any) -> bool:
         if v is not None and str(v).strip():
             return True
     return False
+
+
+def _text(*vals: Any) -> str:
+    """First non-empty scalar as a stripped string."""
+    for val in vals:
+        if val is None or isinstance(val, (dict, list, tuple, set, bool)):
+            continue
+        text = str(val).strip()
+        if text and text.lower() not in ("none", "null", "n/a", "tbd"):
+            return text
+    return ""
+
+
+def _person_text(person: Any, *keys: str) -> str:
+    if not isinstance(person, dict):
+        return ""
+    return _text(*(person.get(key) for key in keys))
+
+
+def _split_full_name(name: str) -> tuple[str, str, str]:
+    """Return (first, middle, last) from 'DOE, JOHN A' or 'John A Doe'."""
+    raw = (name or "").strip()
+    if not raw:
+        return "", "", ""
+    if "," in raw:
+        last, rest = [part.strip() for part in raw.split(",", 1)]
+        parts = rest.split()
+        first = parts[0] if parts else ""
+        middle = " ".join(parts[1:]) if len(parts) > 1 else ""
+        return first, middle, last
+    parts = raw.split()
+    if len(parts) == 1:
+        return parts[0], "", ""
+    if len(parts) == 2:
+        return parts[0], "", parts[1]
+    return parts[0], " ".join(parts[1:-1]), parts[-1]
 
 
 class DocuSealPacketValidationError(ValueError):
@@ -548,6 +584,7 @@ class DocuSealService:
         send_sms: Optional[bool] = None,
         completed: Optional[bool] = None,
         values: Optional[Dict[str, Any]] = None,
+        fields: Optional[List[Dict[str, Any]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         external_id: Optional[str] = None,
         completed_redirect_url: Optional[str] = None,
@@ -573,6 +610,8 @@ class DocuSealService:
             body["completed"] = bool(completed)
         if values is not None:
             body["values"] = values
+        if fields is not None:
+            body["fields"] = fields
         if metadata is not None:
             body["metadata"] = metadata
         if external_id is not None:
@@ -1040,6 +1079,18 @@ class DocuSealService:
             "indemnitor_employer": bond_data.get("indemnitor_employer") or ind.get("employer") or "",
             "indemnitor_employer_phone": bond_data.get("indemnitor_employer_phone") or ind.get("employer_phone") or "",
             "indemnitor_employer_address": bond_data.get("indemnitor_employer_address") or ind.get("employer_address") or "",
+            "indemnitor_work_phone": (
+                bond_data.get("indemnitor_work_phone")
+                or ind.get("work_phone")
+                or ind.get("employer_phone")
+                or ""
+            ),
+            "indemnitor_phone2": (
+                bond_data.get("indemnitor_phone2")
+                or ind.get("phone2")
+                or ind.get("other_phone")
+                or ""
+            ),
             "AgencyName": "Shamrock Bail Bonds",
             "agency_name": "Shamrock Bail Bonds",
             "AgentName": bond_data.get("bondsman_name") or os.getenv("BOND_AGENT_NAME", "Brendan O'Neal"),
@@ -1049,6 +1100,301 @@ class DocuSealService:
             "bondsman_name": bond_data.get("bondsman_name") or os.getenv("BOND_AGENT_NAME", "Brendan O'Neal"),
             "bondsman_license": bond_data.get("bondsman_license") or os.getenv("BOND_AGENT_LICENSE", "P139768"),
         }
+
+        def_first, def_middle, def_last = _split_full_name(defendant_name)
+        ind_first, ind_middle, ind_last = _split_full_name(indemnitor_name)
+        def_first = _person_text(def_, "first_name", "firstName", "First_Name") or def_first
+        def_middle = _person_text(def_, "middle_name", "middleName", "Middle_Name") or def_middle
+        def_last = _person_text(def_, "last_name", "lastName", "Last_Name") or def_last
+        ind_first = _person_text(ind, "first_name", "firstName", "First_Name") or ind_first
+        ind_middle = _person_text(ind, "middle_name", "middleName", "Middle_Name") or ind_middle
+        ind_last = _person_text(ind, "last_name", "lastName", "Last_Name") or ind_last
+
+        if not values.get("indemnitor_city_state_zip"):
+            city = values.get("indemnitor_city") or ""
+            state = values.get("indemnitor_state") or ""
+            zipc = values.get("indemnitor_zip") or ""
+            rest = " ".join(p for p in (state, zipc) if p).strip()
+            if city and rest:
+                values["indemnitor_city_state_zip"] = f"{city}, {rest}"
+            elif city or rest:
+                values["indemnitor_city_state_zip"] = city or rest
+
+        # Live OSI + Palmetto template keys. If CRM/OCR/portal has it, prefill it.
+        values.update({
+            "DefFirstName": def_first,
+            "DefMiddleName": def_middle,
+            "DefLastName": def_last,
+            "indemnitor_first_name": ind_first,
+            "indemnitor_middle_name": ind_middle,
+            "defendant_employer": _text(
+                bond_data.get("defendant_employer"), _person_text(def_, "employer", "Employer")
+            ),
+            "defendant_employer_phone": _text(
+                bond_data.get("defendant_employer_phone"),
+                _person_text(def_, "employer_phone", "employerPhone"),
+            ),
+            "defendant_employer_address": _text(
+                bond_data.get("defendant_employer_address"),
+                _person_text(def_, "employer_address", "employerAddress"),
+            ),
+            "defendant_employer_how_long": _text(
+                bond_data.get("defendant_employer_how_long"),
+                _person_text(def_, "employer_how_long", "employerHowLong"),
+            ),
+            "defendant_height": _text(
+                bond_data.get("defendant_height"), _person_text(def_, "height", "Height")
+            ),
+            "defendant_weight": _text(
+                bond_data.get("defendant_weight"), _person_text(def_, "weight", "Weight")
+            ),
+            "defendant_hair": _text(
+                bond_data.get("defendant_hair"),
+                _person_text(def_, "hair", "hair_color", "Hair"),
+            ),
+            "defendant_eyes": _text(
+                bond_data.get("defendant_eyes"),
+                _person_text(def_, "eyes", "eye_color", "Eyes"),
+            ),
+            "defendant_race": _text(
+                bond_data.get("defendant_race"), _person_text(def_, "race", "Race")
+            ),
+            "defendant_tattoos": _text(
+                bond_data.get("defendant_tattoos"), _person_text(def_, "tattoos", "Tattoos")
+            ),
+            "defendant_alias": _text(
+                bond_data.get("defendant_alias"), _person_text(def_, "alias", "Alias")
+            ),
+            "defendant_address_how_long": _text(
+                bond_data.get("defendant_address_how_long"),
+                _person_text(def_, "address_how_long", "how_long"),
+            ),
+            "defendant_former_address": _text(
+                bond_data.get("defendant_former_address"),
+                _person_text(def_, "former_address"),
+            ),
+            "defendant_former_address_how_long": _text(
+                bond_data.get("defendant_former_address_how_long"),
+                _person_text(def_, "former_address_how_long"),
+            ),
+            "defendant_boss": _text(bond_data.get("defendant_boss"), _person_text(def_, "boss", "supervisor")),
+            "defendant_previous_employment": _text(
+                bond_data.get("defendant_previous_employment"),
+                _person_text(def_, "previous_employment"),
+            ),
+            "defendant_previous_employment_how_long": _text(
+                bond_data.get("defendant_previous_employment_how_long"),
+                _person_text(def_, "previous_employment_how_long"),
+            ),
+            "DefHeight": _text(bond_data.get("defendant_height"), _person_text(def_, "height", "Height")),
+            "DefWeight": _text(bond_data.get("defendant_weight"), _person_text(def_, "weight", "Weight")),
+            "DefRace": _text(bond_data.get("defendant_race"), _person_text(def_, "race", "Race")),
+            "DefHair": _text(bond_data.get("defendant_hair"), _person_text(def_, "hair", "hair_color", "Hair")),
+            "DefEyes": _text(bond_data.get("defendant_eyes"), _person_text(def_, "eyes", "eye_color", "Eyes")),
+            "DefSex": _text(bond_data.get("defendant_sex"), _person_text(def_, "sex", "gender", "Sex")),
+            "DefEmployer": _text(bond_data.get("defendant_employer"), _person_text(def_, "employer")),
+            "DefPhone": _text(bond_data.get("defendant_phone"), _person_text(def_, "phone")),
+            "DefDOB": _text(bond_data.get("defendant_dob"), _person_text(def_, "dob", "date_of_birth")),
+            "DefDL": _text(bond_data.get("defendant_dl"), _person_text(def_, "dl", "dl_number")),
+            "DefDLState": _text(bond_data.get("defendant_dl_state"), _person_text(def_, "dl_state"), "FL"),
+            "indemnitor_vehicle_year": _text(
+                bond_data.get("indemnitor_vehicle_year"), _person_text(ind, "vehicle_year")
+            ),
+            "indemnitor_vehicle_make": _text(
+                bond_data.get("indemnitor_vehicle_make"), _person_text(ind, "vehicle_make")
+            ),
+            "indemnitor_vehicle_model": _text(
+                bond_data.get("indemnitor_vehicle_model"), _person_text(ind, "vehicle_model")
+            ),
+            "indemnitor_vehicle_color": _text(
+                bond_data.get("indemnitor_vehicle_color"), _person_text(ind, "vehicle_color")
+            ),
+            "indemnitor_mortgage_co": _text(
+                bond_data.get("indemnitor_mortgage_co"), _person_text(ind, "mortgage_co")
+            ),
+            "indemnitor_mortgage_amount": _text(
+                bond_data.get("indemnitor_mortgage_amount"), _person_text(ind, "mortgage_amount")
+            ),
+            "indemnitor_spouse_name": _text(
+                bond_data.get("indemnitor_spouse_name"), _person_text(ind, "spouse_name")
+            ),
+            "indemnitor_spouse_dl": _text(
+                bond_data.get("indemnitor_spouse_dl"), _person_text(ind, "spouse_dl")
+            ),
+            "indemnitor_spouse_ssn": _text(
+                bond_data.get("indemnitor_spouse_ssn"), _person_text(ind, "spouse_ssn")
+            ),
+            "indemnitor_spouse_employer": _text(
+                bond_data.get("indemnitor_spouse_employer"), _person_text(ind, "spouse_employer")
+            ),
+            "indemnitor_spouse_employer_address": _text(
+                bond_data.get("indemnitor_spouse_employer_address"),
+                _person_text(ind, "spouse_employer_address"),
+            ),
+            "indemnitor_spouse_phone": _text(
+                bond_data.get("indemnitor_spouse_phone"), _person_text(ind, "spouse_phone")
+            ),
+            "indemnitor_spouse_work_phone": _text(
+                bond_data.get("indemnitor_spouse_work_phone"), _person_text(ind, "spouse_work_phone")
+            ),
+            "reference_1_name": _text(
+                bond_data.get("reference_1_name"), _person_text(ind, "ref1Name", "reference_1_name")
+            ),
+            "reference_1_phone": _text(
+                bond_data.get("reference_1_phone"), _person_text(ind, "ref1Phone", "reference_1_phone")
+            ),
+            "reference_1_address": _text(
+                bond_data.get("reference_1_address"), _person_text(ind, "ref1Address", "reference_1_address")
+            ),
+            "reference_1_relation": _text(
+                bond_data.get("reference_1_relation"),
+                _person_text(ind, "ref1Relation", "reference_1_relation"),
+            ),
+            "reference_2_name": _text(
+                bond_data.get("reference_2_name"), _person_text(ind, "ref2Name", "reference_2_name")
+            ),
+            "reference_2_phone": _text(
+                bond_data.get("reference_2_phone"), _person_text(ind, "ref2Phone", "reference_2_phone")
+            ),
+            "reference_2_address": _text(
+                bond_data.get("reference_2_address"), _person_text(ind, "ref2Address", "reference_2_address")
+            ),
+            "reference_2_relation": _text(
+                bond_data.get("reference_2_relation"),
+                _person_text(ind, "ref2Relation", "reference_2_relation"),
+            ),
+            "def_parent_name": _text(bond_data.get("def_parent_name"), _person_text(def_, "parent_name")),
+            "def_parent_phone": _text(bond_data.get("def_parent_phone"), _person_text(def_, "parent_phone")),
+            "def_parent_address": _text(
+                bond_data.get("def_parent_address"), _person_text(def_, "parent_address")
+            ),
+            "def_spouse_parent_name": _text(
+                bond_data.get("def_spouse_parent_name"),
+                bond_data.get("defendant_spouse_name"),
+                _person_text(def_, "spouse_name"),
+            ),
+            "def_spouse_parent_phone": _text(
+                bond_data.get("def_spouse_parent_phone"),
+                bond_data.get("defendant_spouse_phone"),
+                _person_text(def_, "spouse_phone"),
+            ),
+            "def_spouse_parent_address": _text(
+                bond_data.get("def_spouse_parent_address"),
+                bond_data.get("defendant_spouse_address"),
+                _person_text(def_, "spouse_address"),
+            ),
+            "defendant_spouse_name": _text(
+                bond_data.get("defendant_spouse_name"), _person_text(def_, "spouse_name")
+            ),
+            "defendant_spouse_phone": _text(
+                bond_data.get("defendant_spouse_phone"), _person_text(def_, "spouse_phone")
+            ),
+            "defendant_spouse_address": _text(
+                bond_data.get("defendant_spouse_address"), _person_text(def_, "spouse_address")
+            ),
+            "defendant_spouse_employer": _text(
+                bond_data.get("defendant_spouse_employer"), _person_text(def_, "spouse_employer")
+            ),
+            "def_best_friend_name": _text(
+                bond_data.get("def_best_friend_name"), _person_text(def_, "best_friend_name")
+            ),
+            "def_best_friend_phone": _text(
+                bond_data.get("def_best_friend_phone"), _person_text(def_, "best_friend_phone")
+            ),
+            "def_best_friend_address": _text(
+                bond_data.get("def_best_friend_address"), _person_text(def_, "best_friend_address")
+            ),
+            "def_attorney_name": _text(
+                bond_data.get("def_attorney_name"), _person_text(def_, "attorney_name")
+            ),
+            "def_attorney_phone": _text(
+                bond_data.get("def_attorney_phone"), _person_text(def_, "attorney_phone")
+            ),
+            "def_attorney_address": _text(
+                bond_data.get("def_attorney_address"), _person_text(def_, "attorney_address")
+            ),
+            "def_vehicle_year": _text(bond_data.get("def_vehicle_year"), _person_text(def_, "vehicle_year")),
+            "def_vehicle_make": _text(bond_data.get("def_vehicle_make"), _person_text(def_, "vehicle_make")),
+            "def_vehicle_model": _text(bond_data.get("def_vehicle_model"), _person_text(def_, "vehicle_model")),
+            "def_vehicle_color": _text(bond_data.get("def_vehicle_color"), _person_text(def_, "vehicle_color")),
+            "def_vehicle_plate": _text(bond_data.get("def_vehicle_plate"), _person_text(def_, "vehicle_plate")),
+            "def_vehicle_lender": _text(
+                bond_data.get("def_vehicle_lender"), _person_text(def_, "vehicle_lender")
+            ),
+            "def_vehicle_amount_owed": _text(
+                bond_data.get("def_vehicle_amount_owed"), _person_text(def_, "vehicle_amount_owed")
+            ),
+            "def_vehicle_purchase_location": _text(
+                bond_data.get("def_vehicle_purchase_location"),
+                _person_text(def_, "vehicle_purchase_location"),
+            ),
+            "def_facebook": _text(bond_data.get("def_facebook"), _person_text(def_, "facebook")),
+            "def_instagram": _text(bond_data.get("def_instagram"), _person_text(def_, "instagram")),
+            "def_prior_arrests": _text(
+                bond_data.get("def_prior_arrests"), _person_text(def_, "prior_arrests")
+            ),
+            "def_prior_convicted": _text(
+                bond_data.get("def_prior_convicted"), _person_text(def_, "prior_convicted")
+            ),
+            "def_prior_offense": _text(
+                bond_data.get("def_prior_offense"), _person_text(def_, "prior_offense")
+            ),
+            "def_remarks": _text(bond_data.get("def_remarks"), _person_text(def_, "remarks")),
+            "def_sibling_1_name": _text(
+                bond_data.get("def_sibling_1_name"), _person_text(def_, "sibling_1_name")
+            ),
+            "def_sibling_1_phone": _text(
+                bond_data.get("def_sibling_1_phone"), _person_text(def_, "sibling_1_phone")
+            ),
+            "def_sibling_1_address": _text(
+                bond_data.get("def_sibling_1_address"), _person_text(def_, "sibling_1_address")
+            ),
+            "def_sibling_2_name": _text(
+                bond_data.get("def_sibling_2_name"), _person_text(def_, "sibling_2_name")
+            ),
+            "def_sibling_2_phone": _text(
+                bond_data.get("def_sibling_2_phone"), _person_text(def_, "sibling_2_phone")
+            ),
+            "def_sibling_2_address": _text(
+                bond_data.get("def_sibling_2_address"), _person_text(def_, "sibling_2_address")
+            ),
+            "def_sibling_3_name": _text(
+                bond_data.get("def_sibling_3_name"), _person_text(def_, "sibling_3_name")
+            ),
+            "def_sibling_3_phone": _text(
+                bond_data.get("def_sibling_3_phone"), _person_text(def_, "sibling_3_phone")
+            ),
+            "def_sibling_3_address": _text(
+                bond_data.get("def_sibling_3_address"), _person_text(def_, "sibling_3_address")
+            ),
+            "agency_phone": os.getenv("BOND_AGENT_PHONE", "(239) 332-2245"),
+            "agency_address": os.getenv("BOND_AGENCY_ADDRESS", "1528 Broadway, Fort Myers, FL 33901"),
+            "premium_down_payment_numeric": _text(
+                bond_data.get("premium_down_payment_numeric"),
+                bond_data.get("down_payment_amount"),
+                bond_data.get("down_payment"),
+            ),
+            "premium_down_payment_written": _text(
+                bond_data.get("premium_down_payment_written"),
+                _amount_to_words(bond_data.get("down_payment_amount") or bond_data.get("down_payment")),
+            ),
+            "numeric_downpayment": _text(
+                bond_data.get("numeric_downpayment"),
+                bond_data.get("down_payment_amount"),
+                bond_data.get("down_payment"),
+            ),
+            "numeric_balance_due": _text(
+                bond_data.get("numeric_balance_due"),
+                bond_data.get("balance_financed_amount"),
+                bond_data.get("balance_financed"),
+            ),
+            "defendant_date_1": today_slash,
+            "defendant_date_5": today_slash,
+            "indemnitor_date_1": today_slash,
+            "indemnitor_date_5": today_slash,
+            "agent_date_1": today_slash,
+            "coindemnitor_date_1": today_slash,
+        })
         # Drop empty strings so DocuSeal doesn't overwrite blank required fields with ""
         return {k: v for k, v in values.items() if v is not None and str(v).strip() != ""}
 
@@ -1134,20 +1480,7 @@ class DocuSealService:
         raw_values = self.prefill_values_from_bond(bond_data)
 
         in_person = bool(bond_data.get("in_person") or bond_data.get("in_person_scan"))
-        if in_person:
-            # When scanning ID in-person, make these fields read-only
-            readonly_keys = {
-                "indemnitor_name", "IndemnitorName", "IndName", "FullName",
-                "indemnitor_dob", "indemnitor_dl", "indemnitor_address",
-                "indemnitor_city", "indemnitor_state", "indemnitor_zip",
-                "indemnitor_city_state_zip"
-            }
-            payload_values: Union[Dict[str, Any], List[Dict[str, Any]]] = [
-                {"name": k, "value": v, "readonly": (k in readonly_keys)}
-                for k, v in raw_values.items()
-            ]
-        else:
-            payload_values = raw_values
+        payload_values: Dict[str, Any] = raw_values
 
         # Collect indemnitors (primary + co-indemnitors)
         inds: List[Dict[str, Any]] = []
@@ -1166,12 +1499,17 @@ class DocuSealService:
 
         submitters: List[Dict[str, Any]] = []
         from dashboard.services.docuseal_signing_ux import (
-            friendly_fields_for_values,
+            IDENTITY_READONLY_FIELD_NAMES,
             paperwork_done_url,
+            submission_fields_from_values,
         )
 
-        # OpenAPI: field titles shown on the signing form instead of raw keys.
-        signer_fields = friendly_fields_for_values(payload_values)
+        extra_readonly = IDENTITY_READONLY_FIELD_NAMES if in_person else set()
+        # OpenAPI: default_value hydrates Prefillable boxes; readonly locks staff facts.
+        signer_fields = submission_fields_from_values(
+            payload_values,
+            extra_readonly=extra_readonly,
+        )
         # Per-submitter redirect after that person finishes (not the whole packet).
         party_done = completed_redirect_url or paperwork_done_url()
 
@@ -1559,6 +1897,16 @@ def build_bond_data_from_dashboard(
         "defendant_dl": def_.get("dl") or "",
         "defendant_dl_state": def_.get("dl_state") or "FL",
         "defendant_ssn": def_.get("ssn") or "",
+        "defendant_employer": def_.get("employer") or "",
+        "defendant_employer_phone": def_.get("employer_phone") or def_.get("employerPhone") or "",
+        "defendant_employer_address": def_.get("employer_address") or "",
+        "defendant_height": def_.get("height") or "",
+        "defendant_weight": def_.get("weight") or "",
+        "defendant_hair": def_.get("hair") or def_.get("hair_color") or "",
+        "defendant_eyes": def_.get("eyes") or def_.get("eye_color") or "",
+        "defendant_race": def_.get("race") or "",
+        "defendant_sex": def_.get("sex") or def_.get("gender") or "",
+        "defendant_alias": def_.get("alias") or "",
         "indemnitor_name": ind.get("name")
             or intake_doc.get("indemnitor_name")
             or "",
@@ -1571,6 +1919,21 @@ def build_bond_data_from_dashboard(
         "indemnitor_city": ind.get("city") or "",
         "indemnitor_state": ind.get("state") or "FL",
         "indemnitor_zip": ind.get("zip") or "",
+        "indemnitor_employer": ind.get("employer") or "",
+        "indemnitor_employer_phone": ind.get("employer_phone") or ind.get("employerPhone") or "",
+        "indemnitor_employer_address": ind.get("employer_address") or "",
+        "indemnitor_vehicle_year": ind.get("vehicle_year") or "",
+        "indemnitor_vehicle_make": ind.get("vehicle_make") or "",
+        "indemnitor_vehicle_model": ind.get("vehicle_model") or "",
+        "indemnitor_vehicle_color": ind.get("vehicle_color") or "",
+        "reference_1_name": ind.get("ref1Name") or ind.get("reference_1_name") or "",
+        "reference_1_phone": ind.get("ref1Phone") or ind.get("reference_1_phone") or "",
+        "reference_1_address": ind.get("ref1Address") or ind.get("reference_1_address") or "",
+        "reference_1_relation": ind.get("ref1Relation") or ind.get("reference_1_relation") or "",
+        "reference_2_name": ind.get("ref2Name") or ind.get("reference_2_name") or "",
+        "reference_2_phone": ind.get("ref2Phone") or ind.get("reference_2_phone") or "",
+        "reference_2_address": ind.get("ref2Address") or ind.get("reference_2_address") or "",
+        "reference_2_relation": ind.get("ref2Relation") or ind.get("reference_2_relation") or "",
         "relationship": ind.get("relationship") or "",
         "county": ctx.get("county") or intake_doc.get("defendant_county") or intake_doc.get("county") or "",
         "case_number": ctx.get("case_number") or intake_doc.get("case_number") or "",

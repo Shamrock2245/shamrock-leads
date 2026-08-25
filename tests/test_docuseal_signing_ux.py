@@ -5,6 +5,7 @@ from dashboard.services.docuseal_signing_ux import (
     friendly_fields_for_values,
     role_copy,
     sign_host,
+    submission_fields_from_values,
 )
 
 
@@ -40,6 +41,25 @@ def test_friendly_titles_from_prefill_keys():
     assert "poa_number" not in names
     titles = {f["name"]: f["title"] for f in fields}
     assert titles["indemnitor_name"] == "Your full legal name"
+
+
+def test_submission_fields_prefill_and_lock_staff_facts():
+    fields = submission_fields_from_values({
+        "defendant_name": "Jane Doe",
+        "indemnitor_employer": "Publix",
+        "bond_amount_1": "1,000.00",
+        "poa_number": "OSI3-1",
+        "defendant_signature_1": "should-skip",
+        "indemnitor_initials_1": "skip",
+    })
+    by_name = {f["name"]: f for f in fields}
+    assert by_name["defendant_name"]["default_value"] == "Jane Doe"
+    assert by_name["defendant_name"]["readonly"] is False
+    assert by_name["indemnitor_employer"]["default_value"] == "Publix"
+    assert by_name["bond_amount_1"]["readonly"] is True
+    assert by_name["poa_number"]["readonly"] is True
+    assert "defendant_signature_1" not in by_name
+    assert "indemnitor_initials_1" not in by_name
 
 
 def test_role_copy_covers_all_parties():

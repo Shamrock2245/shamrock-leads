@@ -107,6 +107,8 @@ async function loadDefendants() {
           <button class="btn-imessage-send" onclick="SLiMessage&&SLiMessage.openCompose('${bkEscD}','${(l.full_name||'').replace(/'/g,"\'")}')" title="Send iMessage">💬 iMsg</button>
           <button class="btn-contact-indem" onclick="SLContact.openModal('${bkSafe}','${(l.full_name||'').replace(/'/g,"\\\\'")}',' ${l.county||''}',${bond},'${String(l.booking_number||'')}')">📞 Contact</button>
           <button class="btn-track-lead" id="trackBtn_${bkEscD}" onclick="SLProspective.trackLead('${bkSafe}','${(l.full_name||'').replace(/'/g,"\\\\'")}','${l.county||''}',${bond},'${(l.charges||'').replace(/'/g,"\\\\'")}',${l.lead_score||0},'${l.lead_status||''}')">☘️ Track</button>
+            <button class="btn-write-bond" title="Hydrate county booking data into OSI/Palmetto paperwork. POA stays editable until the bond is on the clerk site."
+              onclick="event.stopPropagation();hydrateDefendantPacket('${bkSafe}')">☘️ Packet</button>
             <button class="btn-write-bond" onclick="openBondModal(window._leadMap['${bkSafe}'] || {full_name:'${(l.full_name||'').replace(/'/g,"\\'")}'}, ${bond}, '${l.county||''}', '${bkSafe}')">✍️ Bond</button>
           <button class="btn-lifecycle" onclick="SLLifecycle&&SLLifecycle.open('${bkSafe}',{defendantName:'${(l.full_name||'').replace(/'/g,"\\'")}'})" title="Full bond lifecycle timeline">☘️ Life</button>
           <button class="btn-detail" style="background:rgba(239,68,68,.2);color:#fca5a5;border:1px solid rgba(239,68,68,.45)"
@@ -460,6 +462,7 @@ function openBondModal(nameOrLead, bond, county, booking) {
     </div>
     <div class="wb-section" id="poaSection">
       <div class="wb-section-label">Power of Attorney (POA) Numbers</div>
+      <div id="poaClerkBanner" style="display:none;margin:0 0 10px;padding:10px 12px;border-radius:8px;font-size:12px;line-height:1.45"></div>
       <div id="poaLoadingMsg" style="color:var(--muted);font-size:12px;padding:8px 0">⏳ Looking up available powers from inventory...</div>
       <div id="poaAssignmentArea" style="display:none">
         <div id="poaChargeList" style="display:flex;flex-direction:column;gap:8px"></div>
@@ -840,6 +843,8 @@ async function fetchPoaNumbers(surety, bondAmt, chargeList) {
 
     loadEl.style.display = 'none';
     if (areaEl) areaEl.style.display = 'block';
+    const leadLock = (window._bondModalData && window._bondModalData.lead) || {};
+    if (typeof applyPoaClerkLock === 'function') applyPoaClerkLock(leadLock);
 
   } catch(e) {
     loadEl.style.display = 'none';
@@ -1929,6 +1934,138 @@ async function _pollSourceRefresh(triggerId, bookingNumber, btn, prevLabel) {
   }
 }
 
+async function hydrateDefendantPacket(bookingNumber) {
+  if (!bookingNumber) { toast('Select a defendant with a booking number', 'error'); return; }
+  const lead = (window._leadMap && window._leadMap[bookingNumber]) || {};
+  toast('Hydrating county booking into paperwork…', 'info');
+  try {
+    const r = await fetch(`${API}/api/paperwork/hydrate-from-booking`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        booking_number: bookingNumber,
+        county: lead.county || 'Lee',
+        surety_id: lead.surety_id || 'osi',
+        defendant_id: lead.defendant_id || lead.Defendant_ID || '',
+      }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.success === false) {
+      toast(d.error || 'Hydrate failed', 'error');
+      return;
+    }
+    const ctx = d.context || {};
+    const defn = ctx.defendant || {};
+    const enriched = {
+      ...lead,
+      full_name: defn.name || lead.full_name,
+      defendant_name: defn.name || lead.full_name,
+      dob: defn.dob || lead.dob,
+      address: defn.address || lead.address,
+      city: defn.city || lead.city,
+      state: defn.state || lead.state || 'FL',
+      zip: defn.zip || lead.zip,
+      race: defn.race || lead.race,
+      sex: defn.sex || lead.sex,
+      height: defn.height || lead.height,
+      weight: defn.weight || lead.weight,
+      hair: defn.hair || lead.hair,
+      eyes: defn.eyes || lead.eyes,
+      charges: ctx.charges || lead.charges,
+      charge_details: d.charge_details || ctx.charge_details || lead.charge_details || [],
+      bond_amount: ctx.bond_amount || lead.bond_amount || 0,
+      case_number: ctx.case_number || lead.case_number,
+      court_date: ctx.court_date || lead.court_date || 'TBN',
+      court_time: ctx.court_time || lead.court_time,
+      court_location: ctx.court_location || lead.court_location,
+      court_type: ctx.court_type || lead.court_type,
+      poa_number: ctx.poa_number || lead.poa_number || '',
+      surety_id: d.surety_id || 'osi',
+      county: ctx.county || lead.county || 'Lee',
+      booking_number: bookingNumber,
+      facility: ctx.facility || lead.facility,
+      clerk_bond_posted: !!d.clerk_bond_posted,
+      poa_locked: !!d.poa_locked,
+      lee_clerk_url: d.lee_clerk_url || '',
+      lee_county: !!d.lee_county,
+      _hydratePrefill: d.prefill || {},
+      _hydrateKeyCount: d.prefill_key_count || 0,
+      _missingStaff: d.missing_staff || [],
+    };
+    window._leadMap = window._leadMap || {};
+    window._leadMap[bookingNumber] = enriched;
+    openBondModal(enriched);
+    if (typeof selectSurety === 'function') selectSurety(enriched.surety_id || 'osi');
+    setTimeout(() => applyPoaClerkLock(enriched), 120);
+    const n = enriched._hydrateKeyCount;
+    const poaNote = (enriched._missingStaff || []).some(m => m.key === 'poa_number')
+      ? ' POA is still open — fill it before send, or come back after inventory assign.'
+      : '';
+    toast(`Hydrated ${n} paperwork fields from ${enriched.county} booking.${poaNote}`, 'success');
+  } catch (e) {
+    toast('Network error hydrating packet', 'error');
+  }
+}
+
+function applyPoaClerkLock(lead) {
+  const banner = document.getElementById('poaClerkBanner');
+  if (!banner) return;
+  const locked = !!(lead && lead.poa_locked);
+  const lee = !!(lead && (lead.lee_county || String(lead.county || '').toLowerCase().includes('lee')));
+  const clerkUrl = (lead && lead.lee_clerk_url) || '';
+  const posted = !!(lead && lead.clerk_bond_posted);
+  banner.style.display = 'block';
+  if (locked || posted) {
+    banner.style.background = 'rgba(16,185,129,0.12)';
+    banner.style.border = '1px solid rgba(16,185,129,0.35)';
+    banner.style.color = '#bbf7d0';
+    banner.innerHTML = `<strong>POA locked.</strong> Bond is marked posted at the clerk.`
+      + (clerkUrl ? ` <a href="${clerkUrl}" target="_blank" rel="noopener" style="color:#93c5fd">Open Lee Clerk</a>` : '');
+    document.querySelectorAll('#poaAssignmentArea input, #poaChargeList input').forEach(el => {
+      el.disabled = true;
+      el.title = 'POA locked after clerk posting. Use the POA change path to replace a voided power.';
+    });
+    return;
+  }
+  banner.style.background = 'rgba(245,158,11,0.12)';
+  banner.style.border = '1px solid rgba(245,158,11,0.35)';
+  banner.style.color = '#fde68a';
+  const bk = (lead && (lead.booking_number || lead.booking)) || '';
+  banner.innerHTML = `<strong>POA stays editable</strong> until this bond shows on the Lee County Clerk site.`
+    + (clerkUrl ? ` <a href="${clerkUrl}" target="_blank" rel="noopener" style="color:#93c5fd;font-weight:700">Check Lee Clerk</a>` : '')
+    + (lee && bk ? ` <label style="display:inline-flex;align-items:center;gap:6px;margin-left:10px;cursor:pointer">`
+      + `<input type="checkbox" id="clerkPostedCheck" onchange="markClerkBondPosted('${String(bk).replace(/'/g, "\\'")}', this.checked)"> Bond is on the clerk site</label>` : '');
+}
+
+async function markClerkBondPosted(bookingNumber, posted) {
+  try {
+    const r = await fetch(`${API}/api/paperwork/clerk-posted`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ booking_number: bookingNumber, posted: !!posted, county: 'Lee', source: 'staff' }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.success === false) {
+      toast(d.error || 'Could not save clerk status', 'error');
+      return;
+    }
+    const lead = (window._leadMap && window._leadMap[bookingNumber]) || {};
+    lead.clerk_bond_posted = !!posted;
+    lead.poa_locked = !!posted;
+    if (window._leadMap) window._leadMap[bookingNumber] = lead;
+    if (window._bondModalData && window._bondModalData.lead) {
+      window._bondModalData.lead.clerk_bond_posted = !!posted;
+      window._bondModalData.lead.poa_locked = !!posted;
+    }
+    applyPoaClerkLock(lead);
+    toast(posted ? 'POA locked — bond marked posted at Lee Clerk' : 'POA unlocked', 'success');
+  } catch (e) {
+    toast('Network error saving clerk status', 'error');
+  }
+}
+
 // ── openWriteBond ──
 // Pre-populate the Write Bond modal from an intake record.
 // Called by SLIntake.writeBondFromIntake() when staff clicks 'Write Bond' in the Intake Queue.
@@ -2460,10 +2597,11 @@ window.SL = { toggleTheme, switchTab, toggleNavGroup, restoreNavGroups, toggleCo
   toggleDefCountyDropdown, toggleDefCounty, filterDefCountyOptions, applyDefCountyPreset,
   buildDefCountyOptions, updateDefCountyLabel,
   applyPreset, setDays, setBond, setDefBond, sortBy, debounceSearch, debounceDefSearch, applyFilters,
-  goPage, goDefPage, openBondModal, openWriteBond, selectSurety, closeModal, submitBond, exportCSV, copyToSlack,
+  goPage, goDefPage, openBondModal, openWriteBond, hydrateDefendantPacket, selectSurety, closeModal, submitBond, exportCSV, copyToSlack,
   clearAll, refresh, toast, loadDefendants, downloadBond, downloadAllBonds, printAppearanceBondPackage, registerActiveBond,
   sendOutreach, loadOutreachHistory, checkBBStatus, updateCustody, updateBondAmount,
   onWriteBondAmountChange, saveWriteBondAmount, refreshDefendantFromSource,
+  applyPoaClerkLock, markClerkBondPosted,
   triggerSignNowPhase1, triggerSignNowPhase2,
   triggerCustodyRecheck, closeRecheckBanner,
   saveCurrentView, loadSavedView, populateSavedViews };
@@ -2802,6 +2940,9 @@ async function triggerDocuSealPacket() {
   }
 }
 window.triggerDocuSealPacket = triggerDocuSealPacket;
+window.hydrateDefendantPacket = hydrateDefendantPacket;
+window.applyPoaClerkLock = applyPoaClerkLock;
+window.markClerkBondPosted = markClerkBondPosted;
 
 async function triggerSignNowPacket() {
   const data = window._bondModalData;

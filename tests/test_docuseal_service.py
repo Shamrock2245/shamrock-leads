@@ -59,6 +59,45 @@ def test_prefill_values_from_bond():
     assert vals["ssa_release_reason"]
 
 
+def test_prefill_hydrates_nested_person_and_template_keys():
+    svc = DocuSealService(base_url="https://sign.example", api_key="test")
+    vals = svc.prefill_values_from_bond(
+        {
+            "defendant_name": "DOE, JANE ANN",
+            "indemnitor_name": "John Cosigner",
+            "defendant": {
+                "height": "5-06",
+                "weight": "140",
+                "hair": "BRO",
+                "eyes": "GRN",
+                "race": "W",
+                "employer": "Lee Health",
+                "parent_name": "Mary Doe",
+            },
+            "indemnitor": {
+                "employer": "Publix",
+                "vehicle_make": "Toyota",
+                "vehicle_year": "2018",
+                "ref1Name": "Pat Friend",
+                "ref1Phone": "2395550100",
+                "city": "Fort Myers",
+                "state": "FL",
+                "zip": "33901",
+            },
+        }
+    )
+    assert vals["defendant_height"] == "5-06"
+    assert vals["DefHair"] == "BRO"
+    assert vals["defendant_employer"] == "Lee Health"
+    assert vals["def_parent_name"] == "Mary Doe"
+    assert vals["indemnitor_employer"] == "Publix"
+    assert vals["indemnitor_vehicle_make"] == "Toyota"
+    assert vals["reference_1_name"] == "Pat Friend"
+    assert "Fort Myers" in vals["indemnitor_city_state_zip"]
+    assert vals["indemnitor_first_name"]
+    assert vals["DefLastName"] == "DOE"
+
+
 def test_safe_money_edge_cases():
     assert _safe_money(None) == 0.0
     assert _safe_money("") == 0.0
@@ -249,6 +288,12 @@ async def test_create_submission_for_packet_calls_api():
         assert ROLE_DEFENDANT in roles
         assert all("order" not in s for s in kwargs["submitters"])
         assert any(s.get("fields") for s in kwargs["submitters"])
+        prefill_fields = kwargs["submitters"][0]["fields"]
+        by_name = {f["name"]: f for f in prefill_fields}
+        assert by_name["defendant_name"]["default_value"] == "Def"
+        assert by_name["case_number"]["readonly"] is True
+        assert isinstance(kwargs["submitters"][0]["values"], dict)
+        assert kwargs["submitters"][0]["values"]["defendant_name"] == "Def"
         assert result["submission_id"] == 500
         assert len(result["submitters"]) == 2
 

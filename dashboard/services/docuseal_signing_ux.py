@@ -46,17 +46,156 @@ FIELD_TITLES: Dict[str, Dict[str, str]] = {
     "indemnitor_vehicle_make": {"title": "Vehicle make"},
     "indemnitor_vehicle_model": {"title": "Vehicle model"},
     "indemnitor_vehicle_color": {"title": "Vehicle color"},
+    "indemnitor_phone2": {"title": "Other phone number"},
+    "indemnitor_email": {"title": "Email"},
+    "indemnitor_ssn": {"title": "Social Security number"},
+    "indemnitor_first_name": {"title": "First name"},
+    "indemnitor_middle_name": {"title": "Middle name"},
+    "indemnitor_spouse_name": {"title": "Spouse's name"},
+    "indemnitor_spouse_phone": {"title": "Spouse's phone"},
+    "indemnitor_spouse_employer": {"title": "Spouse's employer"},
     "reference_1_name": {"title": "Reference name"},
     "reference_1_phone": {"title": "Reference phone"},
+    "reference_1_address": {"title": "Reference address"},
+    "reference_1_relation": {"title": "How you know them"},
+    "reference_2_name": {"title": "Second reference name"},
+    "reference_2_phone": {"title": "Second reference phone"},
+    "reference_2_address": {"title": "Second reference address"},
+    "reference_2_relation": {"title": "How you know them"},
     "defendant_name": {"title": "Defendant's full legal name", "description": "The person this bond is for."},
     "defendant_address": {"title": "Street address"},
     "defendant_city": {"title": "City"},
     "defendant_state": {"title": "State"},
     "defendant_zip": {"title": "ZIP code"},
     "defendant_phone": {"title": "Mobile number"},
+    "defendant_email": {"title": "Email"},
     "defendant_dl": {"title": "Driver license or ID number"},
+    "defendant_dl_state": {"title": "ID state"},
     "defendant_dob": {"title": "Date of birth"},
+    "defendant_employer": {"title": "Employer"},
+    "defendant_employer_phone": {"title": "Work phone"},
+    "defendant_employer_address": {"title": "Employer address"},
+    "defendant_height": {"title": "Height"},
+    "defendant_weight": {"title": "Weight"},
+    "defendant_hair": {"title": "Hair color"},
+    "defendant_eyes": {"title": "Eye color"},
+    "defendant_race": {"title": "Race"},
+    "defendant_alias": {"title": "Alias / nickname"},
 }
+
+# Staff-owned legal facts. Prefill + lock so families never retype the bond.
+STAFF_READONLY_FIELD_NAMES = frozenset({
+    "offense_1", "offense_2", "offense_3", "offense_4",
+    "charge_1", "charge_2", "charge_3", "charge_4",
+    "case_number", "case_number_1", "case_number_2", "case_number_3", "case_number_4",
+    "case_1", "case_2", "case_3", "case_4", "CaseNum",
+    "poa_number", "poa_number_1", "poa_number_2", "poa_number_3", "poa_number_4",
+    "poa_1", "poa_2", "poa_3", "poa_4", "PowerNum",
+    "all_poa_numbers", "poa_numbers", "bond_numbers", "BondNumbers",
+    "bond_amount", "bond_amount_1", "bond_amount_2", "bond_amount_3", "bond_amount_4",
+    "numeric_bond_amount_1", "numeric_bond_amount_2", "numeric_bond_amount_3", "numeric_bond_amount_4",
+    "numeric_full_bond_amount", "numeric_full_bond_amount_dollar", "bond_amount_numeric",
+    "bond_amount_words", "bond_amount_written", "full_bond_amount_words",
+    "numeric_premium", "numeric_premium_dollar", "premium_amount", "premium_numeric",
+    "premium_words", "premium_written", "written_premium",
+    "premium_down_payment_numeric", "premium_down_payment_written",
+    "numeric_downpayment", "numeric_balance_due", "numeric_misc_charges", "numeric_total_charges",
+    "charges_summary", "charges", "court_type", "CourtType",
+    "county", "County", "county_full",
+    "booking_number", "collateral_receipt_number", "premium_receipt_number",
+    "agent_name", "AgentName", "agency_name", "AgencyName",
+    "agent_license", "AgentLicense", "bondsman_name", "bondsman_license",
+    "bond_date_written", "date_written_out", "formatted_date",
+    "today_date", "today_date_long", "today_day", "today_month", "today_year_2digit",
+    "bond_date_day", "bond_date_month", "bond_date_year_2digit",
+    "date", "Date",
+    "ssa_release_reason", "ssa_other_records_text",
+    "down_payment_amount", "balance_financed_amount", "number_of_payments",
+    "payment_amount", "first_payment_due_date", "final_payment_due_date",
+    "payment_amount_1", "payment_amount_2", "payment_amount_3", "payment_amount_4",
+    "payment_due_date_1", "payment_due_date_2", "payment_due_date_3", "payment_due_date_4",
+    "state", "State",
+})
+
+# Verified ID-scan identity — lock after in-person / OCR confirmation.
+IDENTITY_READONLY_FIELD_NAMES = frozenset({
+    "indemnitor_name", "IndemnitorName", "IndName", "FullName",
+    "indemnitor_first_name", "indemnitor_middle_name",
+    "indemnitor_dob", "indemnitor_dl", "indemnitor_address",
+    "indemnitor_city", "indemnitor_state", "indemnitor_zip", "indemnitor_city_state_zip",
+    "defendant_name", "DefendantName", "DefName",
+    "defendant_dob", "defendant_dl", "defendant_dl_state",
+    "defendant_address", "defendant_city", "defendant_state", "defendant_zip",
+    "defendant_height", "defendant_weight", "defendant_hair", "defendant_eyes",
+    "defendant_race", "DefHeight", "DefWeight", "DefRace", "DefHair", "DefEyes",
+    "DefDOB", "DefDL", "DefAddress",
+})
+
+
+def _is_act_field(name: str) -> bool:
+    """Signatures, initials, and unnamed boxes are acts — never prefill them."""
+    key = (name or "").strip().lower()
+    if not key:
+        return True
+    return (
+        "signature" in key
+        or "initials" in key
+        or key.endswith("_checkbox")
+        or key.endswith("_check")
+    )
+
+
+def submission_fields_from_values(
+    values: Optional[Any],
+    *,
+    extra_readonly: Optional[set] = None,
+    force_editable: bool = False,
+) -> List[Dict[str, Any]]:
+    """OpenAPI submitters[].fields[] with default_value so Prefillable boxes fill.
+
+    DocuSeal matches on field name. Sending both `values` and `fields.default_value`
+    is the reliable way to hydrate every role's copy of the same named field.
+    """
+    items: List[tuple[str, Any, bool]] = []
+    if isinstance(values, dict):
+        for key, val in values.items():
+            readonly = False
+            items.append((str(key), val, readonly))
+    elif isinstance(values, list):
+        for item in values:
+            if not isinstance(item, dict) or not item.get("name"):
+                continue
+            items.append((
+                str(item["name"]),
+                item.get("default_value", item.get("value")),
+                bool(item.get("readonly")),
+            ))
+
+    extra = extra_readonly or set()
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for key, val, flagged_readonly in items:
+        if key in seen or _is_act_field(key):
+            continue
+        if val is None or str(val).strip() == "":
+            continue
+        seen.add(key)
+        readonly = False if force_editable else (
+            flagged_readonly or key in STAFF_READONLY_FIELD_NAMES or key in extra
+        )
+        row: Dict[str, Any] = {
+            "name": key,
+            "default_value": val,
+            "readonly": readonly,
+        }
+        meta = FIELD_TITLES.get(key)
+        if meta:
+            row["title"] = meta["title"]
+            if meta.get("description"):
+                row["description"] = meta["description"]
+        out.append(row)
+    return out
+
 
 # Official <docuseal-form> i18n keys (submission_form/i18n.js). Keep short —
 # stressed callers should never see vendor jargon.

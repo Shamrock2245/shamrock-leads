@@ -5,7 +5,10 @@ from dashboard.services.packet_builder_service import (
     apply_self_indemnitor,
     assemble_manifest,
     build_adaptive_field_map,
+    charge_details_from_sources,
     hydration_score,
+    is_lee_county,
+    lee_clerk_search_url,
     template_slug_for_catalog_key,
     verify_self_indemnitor_pin,
 )
@@ -36,6 +39,27 @@ def test_apply_self_indemnitor_copies_defendant():
     assert out["indemnitor"]["relationship"] == "Self"
     with pytest.raises(PermissionError):
         apply_self_indemnitor(ctx, "000000")
+
+
+def test_lee_charge_details_from_arrest_extra():
+    rows = charge_details_from_sources(
+        arrest={
+            "extra": {
+                "charge_details": [
+                    {"charge": "BATTERY", "bond_amount": 1000, "case_number": "26CF1"},
+                    {"charge": "RESIST", "bond_amount": 500, "case_number": "26CF1"},
+                ]
+            }
+        },
+        default_case="FALLBACK",
+        default_bond=999,
+    )
+    assert len(rows) == 2
+    assert rows[0]["charge"] == "BATTERY"
+    assert rows[0]["bond_amount"] == 1000.0
+    assert rows[1]["case_number"] == "26CF1"
+    assert is_lee_county("Lee County")
+    assert "leeclerk.org" in lee_clerk_search_url("26CF1", "1030001")
 
 
 def test_adaptive_field_map_and_hydration():
