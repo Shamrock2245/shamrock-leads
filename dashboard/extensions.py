@@ -81,8 +81,8 @@ def init_bluebubbles():
         if not url and suffix == "0178":
             url = _BB_URL_OVERRIDES.get("0178", "") or os.getenv("BLUEBUBBLES_URL", "").rstrip("/")
             pw = pw or os.getenv("BLUEBUBBLES_PASSWORD", "")
-        # Prefer Tailscale direct for primary BB server when mesh is up
-        if suffix == "0178" and not _BB_URL_OVERRIDES.get(suffix):
+        # Prefer Tailscale direct for primary BB even if Firebase/ngrok overrode
+        if suffix == "0178":
             try:
                 from config.tailscale import ts_config
                 preferred = ts_config.get_bb_url_with_fallback(url)

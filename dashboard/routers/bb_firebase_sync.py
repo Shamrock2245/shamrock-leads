@@ -161,6 +161,18 @@ async def poll_firebase_for_bb_url() -> None:
             url = await loop.run_in_executor(None, _fetch_bb_url_from_firestore)
 
             if url and url != _last_known_url:
+                if "ngrok" in url.lower():
+                    try:
+                        from config.tailscale import ts_config
+                        if ts_config.enabled and ts_config.is_imac_reachable():
+                            logger.info(
+                                "Firebase URL sync: ignoring ngrok URL because Tailscale is up"
+                            )
+                            _last_known_url = url
+                            await asyncio.sleep(_POLL_INTERVAL)
+                            continue
+                    except Exception:
+                        pass
                 from dashboard.extensions import update_bb_url, BB_SERVERS
                 update_bb_url("0178", url)
                 logger.info(
