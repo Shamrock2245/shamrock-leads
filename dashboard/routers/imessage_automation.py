@@ -18,6 +18,7 @@ Endpoints:
   GET    /api/imessage/findmy                   — FindMy device/friend locations
   POST   /api/imessage/send-effect              — Send with iMessage effect
   POST   /api/imessage/shannon/send             — Shannon voice texts via BlueBubbles (never Twilio)
+  POST   /api/imessage/wix/send                 — Wix clipboard texts via BlueBubbles (machine auth, never Twilio)
 
 Background:
   start_inbox_poller(app) — asyncio task polling BB every 30s for inbound messages
@@ -39,7 +40,7 @@ from dashboard.extensions import (
 from dashboard.routers.bb_private_api import BlueBubblesClient, EFFECTS, REACTIONS
 from dashboard.routers.agent_brain import process_inbound
 from dashboard.routers.automation_control import _require_control_auth
-from dashboard.services.bb_client import send_shannon_voice_text
+from dashboard.services.bb_client import send_shannon_voice_text, send_wix_clipboard_text
 
 logger = logging.getLogger(__name__)
 
@@ -635,6 +636,40 @@ async def shannon_voice_send_text(request: Request):
         "queued": bool(result.get("queued")),
         "channel": result.get("channel") or "bluebubbles",
         "rail": "bluebubbles",
+        "error": result.get("error"),
+    }
+
+
+@imessage_auto_bp.post("/imessage/wix/send")
+async def wix_clipboard_send_text(request: Request):
+    """Wix clipboard iMessage. Super CRM → Tailscale/frp BlueBubbles. Never Twilio. Never bb.shamrockbailbonds.biz."""
+    denied = _require_control_auth(request, allow_machine=True)
+    if denied:
+        return denied
+
+    try:
+        body = await request.json() or {}
+    except Exception:
+        return JSONResponse({"success": False, "error": "invalid_json"}, status_code=400)
+
+    phone = str(body.get("phone") or body.get("to") or "").strip()
+    message = str(body.get("message") or body.get("text") or body.get("body") or "").strip()
+    if not phone or not message:
+        return JSONResponse(
+            {"success": False, "error": "phone_and_message_required"},
+            status_code=400,
+        )
+    if len(message) > 1500:
+        message = message[:1500] + "..."
+
+    result = await send_wix_clipboard_text(phone, message)
+    return {
+        "success": bool(result.get("success")),
+        "sent": bool(result.get("sent")),
+        "queued": bool(result.get("queued")),
+        "channel": result.get("channel") or "bluebubbles",
+        "rail": "bluebubbles",
+        "source": "wix_clipboard",
         "error": result.get("error"),
     }
 

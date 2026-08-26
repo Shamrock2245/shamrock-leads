@@ -60,6 +60,7 @@ def test_shannon_machine_routes_bypass_pin_middleware():
         "/api/agent-brain/memory/lookup",
         "/api/agent-brain/memory/status",
         "/api/imessage/shannon/send",
+        "/api/imessage/wix/send",
         "/api/paperwork/shannon/email",
     ):
         assert any(path.startswith(p) for p in OPEN_PREFIXES), path

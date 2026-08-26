@@ -233,6 +233,15 @@ async def send_shannon_voice_text(phone: str, message: str) -> dict:
     return result
 
 
+async def send_wix_clipboard_text(phone: str, message: str) -> dict:
+    """Wix clipboard receipts / recovery texts. BlueBubbles only. Never Twilio."""
+    result = normalize_bb_send_result(await send_message_universal(phone, message))
+    result["rail"] = "bluebubbles"
+    result["source"] = "wix_clipboard"
+    result["success"] = bb_send_accepted(result)
+    return result
+
+
 async def send_message_universal(
     phone: str,
     message: str,

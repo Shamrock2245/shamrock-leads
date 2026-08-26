@@ -9,10 +9,21 @@ Office iMac (`shamrockbailoffice@gmail.com`, **239-955-0178**), BlueBubbles **v1
 | Super CRM on Hetzner | **Tailscale** `http://100.102.10.86:1234` |
 | Super CRM if mesh down | **frp** `http://178.156.179.237:12434` |
 | Shannon / Node-RED | Super CRM `/api/imessage/*` (never Twilio SMS) |
-| Wix site | Super CRM relay (GAS `sendBlueBubblesRelay`). Do not point CRM at `bb.shamrockbailbonds.biz` |
+| Wix site | Super CRM `/api/imessage/wix/send` (machine auth `GAS_API_KEY`). Fallback `/api/imessage/shannon/send`. Do not POST `bb.shamrockbailbonds.biz` |
 | Scrapers needing a home IP | **Warren** / Tailscale exit node — not BlueBubbles |
 
 Health: `GET https://leads.shamrockbailbonds.biz/api/imessage/status` → `connected` + `path_in_use: tailscale`.
+
+### Same Apple ID, second number (239-955-0301)
+
+`shamrockbailoffice@gmail.com` also has **(239) 955-0301** (Spanish/bilingual marketing line). That is the **same** Messages.app / **same** BlueBubbles instance on the office iMac — not a second server.
+
+Do **not**:
+- Add `BLUEBUBBLES_URL_0301` or a second BlueBubbles.app
+- Change CRM `from_number` off `2399550178`
+- Confuse 0301 with `0314` (`admin@shamrockbailbonds.biz`, a different Apple ID stub)
+
+Optional on the iMac (Messages → Settings → iMessage): keep **Start new conversations from** = 0178; leave 0301 enabled for receive if you want inbound to that number in the same inbox. Outbound CRM/Shannon/Wix stays 0178.
 
 ### Migration history (do not revive as primary)
 - **v1** (2025): Cloudflare quick tunnels (`trycloudflare.com`) — URLs rotated

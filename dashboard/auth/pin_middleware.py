@@ -76,9 +76,10 @@ OPEN_PREFIXES = (
     "/traccar/setup/",
     "/api/traccar/device-status/",
     "/track/",  # Trape skip-trace lure (captures IP, then redirects)
-    # Shannon voice machine routes: pin skip, then route-level GAS_API_KEY / LEADS_INTERNAL_TOKEN
+    # Shannon / Wix clipboard machine routes: pin skip, then route-level GAS_API_KEY / LEADS_INTERNAL_TOKEN
     "/api/agent-brain/memory/",
     "/api/imessage/shannon/",
+    "/api/imessage/wix/",
     "/api/paperwork/shannon/",
 )
 

@@ -11,7 +11,7 @@ BlueBubbles (BB) on the office M1 iMac experiences periodic crashes and disconne
 | **frp** | Hetzner `frps` + iMac `frpc` | Backup if the mesh is down. BB on VPS `:12434` |
 | **Warren** | Hetzner hub `:8000` | **Not a tunnel.** Residential egress for scrapers only |
 | **ngrok** | Built into BlueBubbles.app | Do not select for CRM. Firebase must not overwrite Tailscale |
-| **`bb.shamrockbailbonds.biz`** | Cloudflare named tunnel | Do not use as CRM URL (MagicDNS shadows `*.shamrockbailbonds.biz` on-mesh). Optional for off-mesh Wix only |
+| **`bb.shamrockbailbonds.biz`** | Cloudflare named tunnel | Do not use as CRM URL or Wix URL (MagicDNS shadows `*.shamrockbailbonds.biz` on-mesh). Off-mesh Wix uses Super CRM `/api/imessage/wix/send` |
 
 Full runbooks: **`docs/TAILSCALE_INTEGRATION.md`**, **`docs/FRP_TUNNEL.md`**.
 
