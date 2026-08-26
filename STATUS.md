@@ -273,7 +273,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | `GET /api/crm/health` | ✅ **ok** |
 | Integrations (GAS, Wix, DocuSeal, Twilio, Slack, BB, PIN, SECRET_KEY) | ✅ all true |
 | GAS `?action=health` | ✅ `success` · version V409 |
-| BlueBubbles frp `:12434` + `/api/imessage/status` | ✅ connected · private_api · 1.9.9 |
+| BlueBubbles Tailscale `100.102.10.86:1234` + `/api/imessage/status` | ✅ connected · `path_in_use: tailscale` · private_api · 1.9.9 · frp `:12434` backup |
 | Monroe one-shot scrape (post-deploy) | ✅ 80 records |
 | Hillsborough one-shot (post-deploy) | ✅ 7 records |
 | DocuSeal template validation | ⏳ confirm OSI + Palmetto templates in production |
@@ -298,7 +298,7 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 | MS (9 registered; registry reconciled; five assessed counties remain recon-only) | ⏳ Validate existing source telemetry and wait for a supported public roster/export before adding uncovered counties |
 | CT dockets + DOC | ⏳ CT DOC fail-closed guard deployed pending a supported booking-safe public source; do not claim CT DOC production writes or alerts. |
 | Ohio pilot | ⏳ Clermont, Clinton, and Huron are deployed `fail_closed` only. Obtain county-specific source authorization, field-retention approval, and a booking-safe broad-listing contract before considering a no-write observation; do not claim Ohio writes, alerts, surety, POA, or bond activity. |
-| BlueBubbles production reliability (office Mac + tunnel) | ✅ Live (frp + BB 1.9.9); keep watchdog |
+| BlueBubbles production reliability (office Mac + mesh) | ✅ Live (Tailscale primary, frp backup, BB 1.9.9, watchdog) |
 | `ENV=production` + strong `SECRET_KEY` + `DASHBOARD_PIN` on VPS | ✅ |
 | Atlas M0 512MB cap — oldest-first retention + hygiene tools | ✅ code 2026-08-04 · monitor growth |
 | Gmail discharge / GCal / Drive OAuth | Env-gated (tokens present; exercise live paths) |

@@ -220,7 +220,7 @@ IP-based location tracking, MaxMind GeoLite2, risk scoring (0–100), Twilio SMS
 - `dashboard/api/bb_health_monitor.py` — Server health + Slack alerts
 - `dashboard/api/bb_firebase_sync.py` — Firebase Firestore URL auto-sync
 - `dashboard/sl-imessage.js` + `sl-imessage.css` — Full iMessage dashboard tab
-- ngrok permanent tunnel (static domain) for stable connectivity
+- Tailscale mesh primary + frp backup for BlueBubbles (not ngrok, not Warren)
 
 ---
 

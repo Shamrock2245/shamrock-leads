@@ -17,8 +17,8 @@ DNS for `shamrockbailbonds.biz` is **Wix**. Do not mint Cloudflare nameservers f
 | `paperwork.shamrockbailbonds.biz` | Indemnitor / defendant PIN portal | VPS nginx | dashboard `:8088` (`/api/portal/portal-ui`) | `nginx/paperwork…conf` |
 | `social.shamrockbailbonds.biz` | Postiz + MCP | VPS nginx | `:5200` | `nginx/social…conf` |
 | `edit.shamrockbailbonds.biz` | **OpenCut** video editor | VPS nginx → **Docker** | `:5320` | `nginx/edit…conf` |
-| `bb.shamrockbailbonds.biz` | BlueBubbles | Cloudflare tunnel | iMac `:1234` | optional `nginx/bb…conf` |
-| `imac.shamrockbailbonds.biz` | iMac SSH | Cloudflare tunnel | iMac `:22` | — |
+| `bb.shamrockbailbonds.biz` | BlueBubbles (legacy public name) | **Do not use for CRM.** Tailscale `100.102.10.86:1234` is primary; frp `:12434` is backup. MagicDNS on tailnet `shamrockbailbonds.biz` shadows this host. | iMac `:1234` | optional nginx → frp |
+| `imac.shamrockbailbonds.biz` | iMac SSH (legacy) | Use `ssh shamrockbailbonds@shamrocksimac` or LAN `10.1.10.52` | iMac `:22` | — |
 | `trape.shamrockbailbonds.biz` | Trape OSINT (on-demand) | VPS nginx | `:8099` | `nginx/trape…conf` |
 
 ## `edit` — OpenCut on the VPS

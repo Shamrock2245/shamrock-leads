@@ -73,7 +73,7 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 
 | # | Item | Owner | Done |
 |---|------|-------|------|
-| D1 | Office Mac BlueBubbles running; tunnel URL in `BLUEBUBBLES_URL_0178` | Ops | [x] *2026-07-23* — BB 1.9.9 on iMac; frp `:12434` + health check; also ngrok path when active |
+| D1 | Office Mac BlueBubbles running; Tailscale URL in `BLUEBUBBLES_URL_0178` | Ops | [x] *2026-08-26* — BB 1.9.9; Tailscale `100.102.10.86:1234` primary; frp `:12434` backup; ngrok not selected for CRM |
 | D2 | Dashboard iMessage send succeeds to a test number | Ops | [ ] **Human-gated smoke pending** — Diagnostic tool ready (`docs/runbooks/D2_IMESSAGE_SMOKE_RUNBOOK.md`); live probe identified `unavailable_tunnel` (office iMac unreachable); staff-approved test message pending tunnel restoration. |
 | D3 | Revenue automations stay **`review`** until D1–D2 green for 7 days | Product | [x] *policy* — keep `review` until 7 clean days post-2026-07-23 |
 

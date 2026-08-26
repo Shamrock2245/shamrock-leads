@@ -1,37 +1,39 @@
-# BlueBubbles Tunnel — Permanent ngrok Static Domain
+# BlueBubbles connectivity — Tailscale + frp
 
-## Status: ✅ FULLY OPERATIONAL (May 8, 2026)
+## Status: live (2026-08-26)
 
-The BlueBubbles iMessage bridge on the office iMac (`shamrockbailoffice@gmail.com`, phone `239-955-0178`)
-is running on a **permanent ngrok static domain**.
+Office iMac (`shamrockbailoffice@gmail.com`, **239-955-0178**), BlueBubbles **v1.9.9**, Private API on.
 
-### All Checks Passing ✅
-- ngrok tunnel: stable connection to `pseudospherical-etta-untactually.ngrok-free.dev` ✅
-- BB Server: v1.9.6 running on iMac port 1234 (macOS 14.4.1) ✅
-- Local API: `curl localhost:1234/api/v1/server/info?password=2245Bail` works ✅
-- Remote API: `curl -H "ngrok-skip-browser-warning: true" https://pseudospherical-etta-untactually.ngrok-free.dev/api/v1/server/info?password=2245Bail` works ✅
-- Private API: enabled, helper_connected: true ✅
+| Client | Use |
+|--------|-----|
+| Super CRM on Hetzner | **Tailscale** `http://100.102.10.86:1234` |
+| Super CRM if mesh down | **frp** `http://178.156.179.237:12434` |
+| Shannon / Node-RED | Super CRM `/api/imessage/*` (never Twilio SMS) |
+| Wix site | Super CRM relay (GAS `sendBlueBubblesRelay`). Do not point CRM at `bb.shamrockbailbonds.biz` |
+| Scrapers needing a home IP | **Warren** / Tailscale exit node — not BlueBubbles |
 
-### Migration History
-- **v1** (2025): Cloudflare quick tunnels (`trycloudflare.com`) — random URLs, rotated on every restart
-- **v2** (Late 2025): Attempted Cloudflare named tunnel (`bb.shamrockbailbonds.biz`) — DNS propagation issues, Wix-hosted zone conflicts with Cloudflare NS requirements
-- **v3** (May 2026): **ngrok permanent static domain** — `pseudospherical-etta-untactually.ngrok-free.dev` — **stable, permanent, working**
+Health: `GET https://leads.shamrockbailbonds.biz/api/imessage/status` → `connected` + `path_in_use: tailscale`.
+
+### Migration history (do not revive as primary)
+- **v1** (2025): Cloudflare quick tunnels (`trycloudflare.com`) — URLs rotated
+- **v2**: Named tunnel `bb.shamrockbailbonds.biz` — Wix DNS + MagicDNS conflict (`shamrockbailbonds.biz` is the tailnet)
+- **v3** (May 2026): ngrok static domain — worked, not OSS; Firebase kept overwriting the mesh URL
+- **v4**: Tailscale mesh — **current primary**
+- **v5** (July 2026): frp on the VPS — **current backup**
 
 ---
 
-## Permanent Tunnel URL
+## URLs (do not put ngrok in `BLUEBUBBLES_URL_*`)
 
 ```
-https://pseudospherical-etta-untactually.ngrok-free.dev
+# Primary (VPS .env)
+BLUEBUBBLES_URL_0178=http://100.102.10.86:1234
+
+# Backup
+BLUEBUBBLES_FRP_URL=http://178.156.179.237:12434
 ```
 
-This is a **permanent ngrok static domain** — it never changes, even after ngrok restarts.
-
-**Important:** All machine-to-machine API calls MUST include the header:
-```
-ngrok-skip-browser-warning: true
-```
-Without this header, ngrok returns an HTML interstitial page instead of the API response.
+Dashboard `init_bluebubbles()` prefers Tailscale when `100.102.10.86:1234` answers. Firebase ngrok URLs are ignored while the mesh is up.
 
 ---
 
@@ -44,82 +46,45 @@ Without this header, ngrok returns an HTML interstitial page instead of the API 
 - **Tailscale Remote SSH Command**: `ssh shamrockbailbonds@100.102.10.86` or `ssh shamrockbailbonds@shamrocksimac`
 - **Local LAN IP**: `10.1.10.52`
 - **Public WAN IP**: `96.79.229.158`
-- **Hostname**: `imac.shamrockbailbonds.biz`
-- **Local SSH Command**: `ssh shamrockbailbonds@10.1.10.52`
-- **Remote SSH Command (via WAN IP)**: `ssh shamrockbailbonds@96.79.229.158` (requires router port forward 22 → 10.1.10.52:22)
-
-### Quick Start
-```bash
-# Install ngrok
-brew install ngrok
-
-# Authenticate with ngrok account
-ngrok config add-authtoken <your-ngrok-authtoken>
-
-# Start tunnel to BlueBubbles port 1234 with static domain
-ngrok http 1234 --domain=pseudospherical-etta-untactually.ngrok-free.dev
-```
-
-### Auto-Start on Boot (LaunchAgent)
-
-Create `~/Library/LaunchAgents/com.ngrok.bluebubbles.plist`:
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.ngrok.bluebubbles</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/opt/homebrew/bin/ngrok</string>
-        <string>http</string>
-        <string>1234</string>
-        <string>--domain=pseudospherical-etta-untactually.ngrok-free.dev</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>/tmp/ngrok-bb.log</string>
-    <key>StandardErrorPath</key>
-    <string>/tmp/ngrok-bb-err.log</string>
-</dict>
-</plist>
-```
-
-Load it:
-```bash
-launchctl load ~/Library/LaunchAgents/com.ngrok.bluebubbles.plist
-```
+- **LAN SSH**: `ssh shamrockbailbonds@10.1.10.52` (Host `imac` in laptop `~/.ssh/config`)
 
 ### Verify
 ```bash
-curl -s -H "ngrok-skip-browser-warning: true" \
-  'https://bb.shamrockbailbonds.biz/api/v1/server/info?password=2245Bail' \
-  | python3 -m json.tool | grep -E 'private_api|helper_connected'
+# From the VPS or any tailnet device
+curl -sS -m 8 "http://100.102.10.86:1234/api/v1/ping?password=$BLUEBUBBLES_PASSWORD"
+curl -sS "https://leads.shamrockbailbonds.biz/api/imessage/status"
+
+# frp backup
+curl -sS -m 8 "http://178.156.179.237:12434/api/v1/ping?password=$BLUEBUBBLES_PASSWORD"
 ```
-Expected: `"private_api": true`, `"helper_connected": true`
+
+Expected: ping `pong`; status `connected: true`, `path_in_use: tailscale`, `private_api: true`.
+
+Passwords live in VPS `.env` (`BLUEBUBBLES_PASSWORD_0178`) and iMac LaunchAgent env — not in git.
+
+### iMac keep-alives
+- BlueBubbles.app (v1.9.9) + Messages.app logged in
+- Tailscale.app on, hostname `shamrocksimac`, IP `100.102.10.86`
+- `com.shamrock.frpc` LaunchAgent (backup)
+- `com.shamrock.bb-watchdog` LaunchAgent (restart BB if `:1234` dies)
+
+See `scripts/imac/` and `docs/FRP_TUNNEL.md`.
 
 ---
 
 ## VPS `.env` Values
 
 ```env
-# Primary methods: Tailscale direct, Cloudflare Named Tunnel, or frp
-BLUEBUBBLES_URL_0178=https://bb.shamrockbailbonds.biz
-BLUEBUBBLES_URL=https://bb.shamrockbailbonds.biz
-BLUEBUBBLES_PASSWORD_0178=2245Bail
-BLUEBUBBLES_PASSWORD=2245Bail
+BLUEBUBBLES_URL_0178=http://100.102.10.86:1234
+BLUEBUBBLES_URL=http://100.102.10.86:1234
+BLUEBUBBLES_FRP_URL=http://178.156.179.237:12434
+BLUEBUBBLES_PASSWORD_0178=<script property / VPS env only>
 BB_WEBHOOK_PUBLIC_URL=https://leads.shamrockbailbonds.biz
-BB_WEBHOOK_SECRET=f44694bd92293fe5b27c4a68adaf6991911ba067fcb813926bd6653bcd556754
-BB_CONFIG_API_KEY=shamrock-bb-sync-2245
 ```
 
 ---
 
-## Architecture (v3 — ngrok Static Domain)
+## Historical diagram (v3 ngrok — not current)
 
 ```
 Office iMac (BlueBubbles Server, port 1234)

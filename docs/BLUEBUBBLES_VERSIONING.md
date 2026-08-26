@@ -1,7 +1,7 @@
 # BlueBubbles Versioning — ShamrockLeads
 
-> **Last updated:** 2026-07-26  
-> **Office server (live):** BlueBubbles **Server v1.9.9** · Private API connected · Ngrok tunnel  
+> **Last updated:** 2026-08-26  
+> **Office server (live):** BlueBubbles **Server v1.9.9** · Private API connected · Tailscale primary · frp backup  
 > **Do not confuse App releases with Server releases.**
 
 ---

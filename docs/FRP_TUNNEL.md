@@ -1,6 +1,8 @@
-# frp Tunnel — Replace Cloudflare Tunnel & ngrok
+# frp Tunnel — BlueBubbles backup (OSS)
 
-**Goal:** Office iMac (BlueBubbles) connects **outbound** to Hetzner. No inbound ports on the iMac. No Cloudflare / ngrok dependency.
+**Role:** Self-hosted backup if **Tailscale** is down. Super CRM primary is still `http://100.102.10.86:1234`. Warren is **not** this path (scrapers only).
+
+**Goal:** Office iMac (BlueBubbles) connects **outbound** to Hetzner. No inbound ports on the iMac. No ngrok dependency.
 
 | Piece | Role | Host |
 |-------|------|------|

@@ -91,7 +91,7 @@ Cross-repo: keep `GAS_API_KEY` identical on leads VPS, portal GAS/Wix, and bail-
 | **Domain** | `leads.shamrockbailbonds.biz` → Nginx → `localhost:8088` |
 | **Host inventory** | `docs/SUBDOMAINS.md` — includes `sign` · `paperwork` · `social` · `edit` · `bb` · `trape` |
 | **OpenCut** | `edit.shamrockbailbonds.biz` → Nginx → Docker `127.0.0.1:5320` |
-| **iMessage tunnel** | Tailscale mesh / Cloudflare tunnel (`bb.shamrockbailbonds.biz`) / frp → office iMac :1234 |
+| **iMessage tunnel** | Tailscale `100.102.10.86:1234` (primary) · frp VPS `:12434` (backup). Warren is scraper egress only. |
 | **Docker networking** | Services communicate via `shamrock-net` bridge (internal only) |
 | **DNS** | Custom DNS (8.8.8.8, 1.1.1.1) to bypass VPS resolver issues |
 | **MongoDB** | Atlas network access list (currently 0.0.0.0/0 — restrict in production) |

@@ -363,7 +363,7 @@ Escalate immediately if:
 | `SLACK_WEBHOOK_ARRESTS` | ✅ | #new-arrests channel |
 | `SLACK_WEBHOOK_LEADS` | ✅ | #leads channel (hot leads) |
 | `SLACK_WEBHOOK_ERRORS` | ✅ | #scraper-errors channel |
-| `BLUEBUBBLES_URL_0178` | ✅ | Tailscale direct (`http://100.102.10.86:1234`), Cloudflare tunnel (`https://bb.shamrockbailbonds.biz`), or frp (`http://178.156.179.237:12434`) |
+| `BLUEBUBBLES_URL_0178` | ✅ | Tailscale primary `http://100.102.10.86:1234`; frp backup `http://178.156.179.237:12434`. Not ngrok, not Warren, not `bb.shamrockbailbonds.biz` |
 | `BLUEBUBBLES_PASSWORD_0178` | ✅ | BlueBubbles API password |
 | `DOCUSEAL_URL` | ✅ | DocuSeal public URL (`https://sign.shamrockbailbonds.biz`) |
 | `DOCUSEAL_API_KEY` | ✅ | DocuSeal API key |

@@ -3,22 +3,22 @@
 ## The Problem
 BlueBubbles (BB) on the office M1 iMac experiences periodic crashes and disconnects. Historically this used **ngrok** or **Cloudflare quick/named tunnels** (`*.trycloudflare.com` / `bb.shamrockbailbonds.biz`). Those tunnels fail when DNS or the tunnel agent dies — the VPS then logs `BB [0178] DNS FAILED`.
 
-## Current standard: **frp** (self-hosted)
+## Current standard: **Tailscale first, frp backup** (both OSS)
 
-We **replace Cloudflare Tunnel and ngrok** with [frp](https://github.com/fatedier/frp):
+| Path | Where | Purpose |
+|------|--------|---------|
+| **Tailscale** | VPS + office iMac on tailnet `shamrockbailbonds.biz` | Primary. Super CRM uses `http://100.102.10.86:1234` |
+| **frp** | Hetzner `frps` + iMac `frpc` | Backup if the mesh is down. BB on VPS `:12434` |
+| **Warren** | Hetzner hub `:8000` | **Not a tunnel.** Residential egress for scrapers only |
+| **ngrok** | Built into BlueBubbles.app | Do not select for CRM. Firebase must not overwrite Tailscale |
+| **`bb.shamrockbailbonds.biz`** | Cloudflare named tunnel | Do not use as CRM URL (MagicDNS shadows `*.shamrockbailbonds.biz` on-mesh). Optional for off-mesh Wix only |
 
-| Component | Where | Purpose |
-|-----------|--------|---------|
-| **frps** | Hetzner Docker (`profile: tunnel`) | Accepts outbound frpc; exposes BB on `:12434` |
-| **frpc** | Office iMac LaunchDaemon | Outbound-only tunnel from BB `localhost:1234` |
-| **Dashboard** | `BLUEBUBBLES_URL_*` | Points at VPS frp endpoint (or nginx TLS front) |
+Full runbooks: **`docs/TAILSCALE_INTEGRATION.md`**, **`docs/FRP_TUNNEL.md`**.
 
-Full runbook: **`docs/FRP_TUNNEL.md`**.
-
-### Why not Cloudflare / ngrok anymore
-- Quick tunnels rotate hostnames and break DNS.
-- Named tunnels still depend on Cloudflare control plane + `cloudflared` agent health.
-- frp keeps the control plane on **our** VPS; iMac only needs outbound TCP 7000.
+### Why not ngrok / Cloudflare as CRM primary
+- ngrok is not OSS, adds an interstitial, and Firebase used to clobber the mesh URL.
+- Named tunnel `bb.shamrockbailbonds.biz` fights Tailscale MagicDNS because the tailnet domain is the same zone.
+- frp keeps a self-hosted backup on **our** VPS; iMac only needs outbound TCP 7001.
 
 ### Optional later: Pangolin
 [fosrl/pangolin](https://github.com/fosrl/pangolin) is a WireGuard zero-trust alternative if we need SSO/dashboard for many services. Start with frp for BB.

@@ -15,17 +15,29 @@ description: "iMessage outreach via BlueBubbles bridge. Covers REST API, Private
 
 ## Infrastructure
 - **Office iMac:** `shamrockbailoffice@gmail.com` / Apple ID paired with `239-955-0178`
-- **BB Server:** Electron app on iMac, port 1234 (v1.9.9, Private API enabled, macOS 14.4.1)
-- **M1 Crash Fix:** `sudo nvram boot-args=-arm64e_preview_abi` applied (prevents Messages.app crashes on Apple Silicon)
-- **BB Password:** `2245Bail`
-- **Permanent URL:** `https://bb.shamrockbailbonds.biz` (Cloudflare Named Tunnel — ✅ verified 2026-05-08)
-- **SSH Access:** `ssh imac` via `imac.shamrockbailbonds.biz` (Cloudflare tunnel)
-- **Env vars:** `BLUEBUBBLES_URL` (on VPS `.env`), `BLUEBUBBLES_PASSWORD`
-- **Private API:** Requires SIP disabled + helper bundle on the iMac
-- **iMac Local IP:** `10.1.10.225` (office LAN)
-- **Office Public IP:** `96.79.229.158`
+- **BB Server:** Electron app on iMac, port 1234 (v1.9.9, Private API enabled)
+- **M1 Crash Fix:** `sudo nvram boot-args=-arm64e_preview_abi` (Messages.app on Apple Silicon)
+- **CRM URL (primary):** `http://100.102.10.86:1234` via Tailscale (`shamrocksimac`)
+- **CRM URL (backup):** `http://178.156.179.237:12434` via self-hosted frp
+- **SSH:** `ssh imac` (LAN `10.1.10.52`) or `ssh shamrockbailbonds@shamrocksimac`
+- **Env:** `BLUEBUBBLES_URL_0178`, `BLUEBUBBLES_PASSWORD_0178`, `BLUEBUBBLES_FRP_URL` on VPS `.env` — never commit passwords
+- **Private API:** SIP disabled + helper bundle on the iMac
+- **Not this path:** Warren (scraper egress only). ngrok (do not put in CRM env). `bb.shamrockbailbonds.biz` (MagicDNS shadows it on the tailnet)
+- **Health:** `GET https://leads.shamrockbailbonds.biz/api/imessage/status`
 
-## Tunnel Architecture (Cloudflare Named Tunnel)
+## Tunnel architecture (Tailscale + frp)
+
+```
+Super CRM (Hetzner, on tailnet)
+  → Tailscale http://100.102.10.86:1234   (primary)
+  → frp       http://178.156.179.237:12434 (if mesh down)
+       → iMac BlueBubbles :1234
+Shannon / Node-RED / Wix → Super CRM /api/imessage/*  (never Twilio SMS, never Warren)
+```
+
+Cloudflare named-tunnel notes below are **legacy**. Do not set them as `BLUEBUBBLES_URL_*`.
+
+## Legacy: Cloudflare named tunnel (off-mesh only)
 
 **Tunnel UUID:** `bd9101bf-39a5-4b7a-97a8-d024c973c769`
 **Tunnel Name:** `bluebubbles`
@@ -110,7 +122,7 @@ sudo reboot  # Required for arm64e fix
 ### Health Check Commands (iMac)
 ```bash
 # Is BlueBubbles running?
-curl "http://localhost:1234/api/v1/server/info?password=2245Bail" | python3 -m json.tool
+curl "http://localhost:1234/api/v1/server/info?password=$BLUEBUBBLES_PASSWORD" | python3 -m json.tool
 
 # Is cloudflared running (LaunchDaemon — system level)?
 sudo launchctl list | grep shamrock.cloudflared

@@ -71,12 +71,13 @@ Tailscale provides a zero-config WireGuard mesh that replaces the previous patch
 The system maintains **graceful degradation** — if Tailscale is down, it falls back to legacy paths automatically:
 
 ```
-BlueBubbles Connection Priority:
-  1. Tailscale direct  → http://shamrocksimac:1234    (preferred)
-  2. ngrok static      → https://pseudospherical-etta-untactually.ngrok-free.dev
-  3. frp TCP           → http://178.156.179.237:12434 (legacy)
+BlueBubbles Connection Priority (inbound to iMac :1234):
+  1. Tailscale direct  → http://100.102.10.86:1234    (preferred; Super CRM on the mesh)
+  2. frp TCP           → http://178.156.179.237:12434 (self-hosted backup)
+  3. Do not use ngrok for CRM. Do not use Warren for inbound BlueBubbles.
+  4. `bb.shamrockbailbonds.biz` is not a CRM URL: the tailnet is `shamrockbailbonds.biz`, so MagicDNS shadows it on-mesh.
 
-Proxy/Residential IP Priority:
+Proxy/Residential IP Priority (outbound scrapers only):
   1. Tailscale SOCKS   → socks5://shamrocksimac:1080  (residential exit)
   2. Warren Hub        → socks5://178.156.179.237:8000
   3. Direct            → no proxy (datacenter IP)

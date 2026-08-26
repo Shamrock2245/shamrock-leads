@@ -192,7 +192,7 @@ See [DATA_MODEL.md](../DATA_MODEL.md) for full schemas and [SCHEMAS.md](SCHEMAS.
 | **PII Protection** | Never logged to Slack/console. MongoDB encryption at rest. |
 | **Audit Trail** | Immutable `audit_events` collection for all state changes |
 | **Network** | Nginx reverse proxy with SSL (`leads.shamrockbailbonds.biz`) |
-| **iMessage Tunnel** | ngrok permanent tunnel with static domain |
+| **iMessage Tunnel** | Tailscale `100.102.10.86:1234` (primary) · frp `:12434` (backup) |
 | **API Keys** | Rotated via environment variables. Never in source code. |
 
 ---

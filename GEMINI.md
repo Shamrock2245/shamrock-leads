@@ -25,7 +25,7 @@ plus **Georgia** — **357 registered scrapers** across 10 states (see `STATUS.m
 - **Production VPS:** `178.156.179.237` (Hetzner, root access)
 - **Dashboard URL:** `http://178.156.179.237:8088/` (internal: FastAPI on `:5050`)
 - **Public Domain:** `https://leads.shamrockbailbonds.biz` (Nginx reverse proxy → `:8088`)
-- **iMessage Bridge:** Tailscale mesh / Cloudflare tunnel (`bb.shamrockbailbonds.biz`) / frp → office iMac BlueBubbles (port 1234)
+- **iMessage Bridge:** Tailscale `http://100.102.10.86:1234` (primary) · frp `:12434` (backup) · office iMac BlueBubbles. Warren is scraper egress only.
 - **DocuSeal Portal:** `https://sign.shamrockbailbonds.biz` (Primary e-signature engine · Template 1 OSI)
 - **Postiz Social & MCP:** `https://social.shamrockbailbonds.biz` (`/api/mcp` SSE stream · 5 channels live)
 - **OpenCut Editor:** `https://edit.shamrockbailbonds.biz` (VPS Docker `shamrock-opencut` · nginx → `:5320` — not Postiz, not the laptop)
@@ -42,7 +42,7 @@ Hetzner VPS (Docker Compose)
   node-red           → Ops dashboard (port 1880)
 
 MongoDB Atlas        → Primary database: ShamrockBailDB (all entities)
-BlueBubbles          → iMessage bridge (office iMac via Tailscale / Cloudflare tunnel / frp)
+BlueBubbles          → iMessage bridge (office iMac via Tailscale, frp backup)
 DocuSeal             → E-signature backbone (https://sign.shamrockbailbonds.biz · 14-doc OSI/Palmetto)
 SwipeSimple          → Bond premium payment collection
 Slack                → Real-time operational alerts (12+ channels)
@@ -189,7 +189,7 @@ Active → Monitoring → Alert → Exonerated / Forfeited / Surrendered → Rei
 | Database | MongoDB Atlas (motor, async) — DB: `ShamrockBailDB` |
 | Dashboard API | FastAPI — 61 API modules, 36 services |
 | Frontend | Vanilla JS + CSS — 32 modules, ~25,700 LOC |
-| iMessage | BlueBubbles API via Tailscale / Cloudflare tunnel / frp |
+| iMessage | BlueBubbles API via Tailscale (primary) / frp (backup) |
 | AI | OpenAI GPT-4o (auto-reply, lead enrichment) |
 | Signatures | SignNow API (14-doc packet orchestration) |
 | Payments | SwipeSimple (premium collection) |
