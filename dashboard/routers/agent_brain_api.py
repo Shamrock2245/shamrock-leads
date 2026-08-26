@@ -9,6 +9,8 @@ lead summaries, objection handling, and batch rescoring for the Prospective
 Bond Pipeline's AI feature bar.
 
 Endpoints:
+  GET    /api/agent-brain/memory/status   — Mem0 config (no secrets)
+  POST   /api/agent-brain/memory/lookup   — Shannon voice: Mem0 facts by phone (machine auth)
   POST   /api/agent-brain/opener          — Generate a personalized first-contact message
   POST   /api/agent-brain/suggest         — Generate follow-up / objection / general suggestions
   POST   /api/agent-brain/summary         — Generate a lead intelligence summary
@@ -176,6 +178,51 @@ async def api_agent_brain_memory_status():
         return {"success": True, "mem0": status_snapshot()}
     except Exception as exc:
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+@agent_brain_api_bp.post("/agent-brain/memory/lookup")
+async def api_agent_brain_memory_lookup(request: Request):
+    """Shannon voice: fetch Mem0 facts for a caller. Last-10 user_id. Machine auth."""
+    from dashboard.routers.automation_control import _require_control_auth
+    from dashboard.services.mem0_service import search_facts
+
+    denied = _require_control_auth(request, allow_machine=True)
+    if denied:
+        return denied
+
+    try:
+        body = await request.json() or {}
+    except Exception:
+        return JSONResponse({"success": False, "error": "invalid_json"}, status_code=400)
+
+    phone = str(body.get("phone") or body.get("caller_id") or "").strip()
+    query = str(body.get("query") or "prior bail bond conversation").strip()
+    if not phone:
+        return JSONResponse({"success": False, "error": "phone_required"}, status_code=400)
+
+    try:
+        facts = await search_facts(phone, query, limit=6)
+    except Exception as exc:
+        logger.warning("Mem0 lookup failed (fail-open): %s", exc)
+        facts = []
+    blob = " ".join(facts)
+    known_defendant = ""
+    lower = blob.lower()
+    marker = "regarding:"
+    if marker in lower:
+        try:
+            idx = lower.find(marker)
+            rest = blob[idx + len(marker):]
+            known_defendant = rest.split(".", 1)[0].strip()[:80]
+        except Exception:
+            known_defendant = ""
+
+    return {
+        "success": True,
+        "returning_client": "yes" if facts else "no",
+        "known_defendant": known_defendant,
+        "prior_notes": "; ".join(facts)[:800],
+    }
 
 
 @agent_brain_api_bp.post("/agent-brain/opener")
