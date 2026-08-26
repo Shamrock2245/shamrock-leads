@@ -59,6 +59,7 @@ async def _ensure_core_indexes_async():
         await packets.create_index("indemnitor_phone")
         await packets.create_index("unassigned_defendant")
         await packets.create_index([("created_at", -1)])
+        await packets.create_index("shannon_id_token", sparse=True)
 
         # Portal PIN OTPs
         pins = get_collection("portal_pins")

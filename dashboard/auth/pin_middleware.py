@@ -46,6 +46,7 @@ COOKIE_MAX_AGE = 60 * 60 * 24 * 7  # 7 days
 OPEN_PATHS = frozenset({
     "/done", "/paperwork", "/login", "/health", "/health/live", "/api/stats",
     "/api/imessage/status",
+    "/api/ops/shannon-health",
     "/docs", "/redoc", "/openapi.json",
     "/manifest.json", "/favicon.ico", "/favicon.png", "/apple-touch-icon.png", "/shamrock-logo.png",
 })
@@ -81,6 +82,7 @@ OPEN_PREFIXES = (
     "/api/imessage/shannon/",
     "/api/imessage/wix/",
     "/api/paperwork/shannon/",
+    "/paperwork/shannon/",
 )
 
 # OAuth popup paths

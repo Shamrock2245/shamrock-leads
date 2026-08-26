@@ -1,0 +1,31 @@
+name: Shannon path watchdog
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+jobs:
+  probe:
+    name: Voice / GAS / BB / Mem0
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe public health endpoints
+        run: |
+          set -e
+          echo "CRM health"
+          curl -sS -m 15 -o /tmp/h.json -w "HTTP %{http_code}\n" https://leads.shamrockbailbonds.biz/health
+          python3 -c "import json; d=json.load(open('/tmp/h.json')); assert d.get('status')=='ok'"
+          echo "BB status"
+          curl -sS -m 15 -o /tmp/bb.json https://leads.shamrockbailbonds.biz/api/imessage/status
+          python3 -c "import json; d=json.load(open('/tmp/bb.json')); assert d.get('connected') is True"
+          echo "Shannon aggregate"
+          curl -sS -m 25 -o /tmp/sh.json -w "HTTP %{http_code}\n" https://leads.shamrockbailbonds.biz/api/ops/shannon-health
+          python3 -c "import json; d=json.load(open('/tmp/sh.json')); assert 'checks' in d"
+          echo "Unsigned voice must 403"
+          code=$(curl -sS -m 15 -o /dev/null -w "%{http_code}" -X POST https://shamrock-telegram.netlify.app/api/twilio-voice)
+          test "$code" = "403"
+          echo "Mem0 status path"
+          curl -sS -m 15 -o /tmp/m.json https://leads.shamrockbailbonds.biz/api/agent-brain/memory/status
+          python3 -c "import json; json.load(open('/tmp/m.json'))"
