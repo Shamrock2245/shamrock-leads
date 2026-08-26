@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -12,7 +13,9 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from dashboard.extensions import get_collection
 from dashboard.routers.automation_control import _require_control_auth
+from dashboard.routers.pin_portal import client_fields_from_id_ocr
 from dashboard.services.identity_media_service import save_upload_file, merge_id_photos_field
+from dashboard.services.id_scanner_service import IDScannerService
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +46,15 @@ def _slot(raw: str) -> str:
     return _SLOT_ALIASES.get(key, "govt_id_front")
 
 
+def _looks_like_call_sid(value: str) -> bool:
+    s = str(value or "").strip()
+    return bool(
+        re.match(r"^(CA|SM|MM|NO|PN)[0-9a-f]{32}$", s, re.I)
+        or s.lower().startswith("conv_")
+        or s.lower().startswith("tlcal_")
+    )
+
+
 async def _packet_by_token(token: str) -> dict[str, Any] | None:
     if not token:
         return None
@@ -61,6 +73,55 @@ async def _packet_by_token(token: str) -> dict[str, Any] | None:
     return doc
 
 
+def _ocr_spoken(fields: dict[str, Any]) -> str:
+    name = str(fields.get("indemnitor_name") or fields.get("defendant_name") or "").strip()
+    addr = str(fields.get("indemnitor_address") or fields.get("defendant_address") or "").strip()
+    city = str(fields.get("indemnitor_city") or fields.get("defendant_city") or "").strip()
+    parts = [p for p in (name, addr, city) if p]
+    if not parts:
+        return ""
+    return "I read " + ", ".join(parts) + " off the ID."
+
+
+async def _ocr_upload_into_packet(
+    packet_id: str,
+    role: str,
+    raw: bytes,
+    filename: str,
+    existing: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Role-scoped DL OCR onto the Shannon packet. Indemnitor ID never overwrites defendant."""
+    try:
+        scan = await IDScannerService.scan_id_image(raw, filename or "")
+    except Exception as exc:
+        logger.warning("shannon id ocr failed: %s", type(exc).__name__)
+        return dict((existing or {}).get("id_ocr_fields") or {})
+    extracted = scan.get("extracted") if isinstance(scan, dict) else {}
+    if not isinstance(extracted, dict) or not extracted:
+        return dict((existing or {}).get("id_ocr_fields") or {})
+    role_key = "defendant" if str(role or "").lower() == "defendant" else "indemnitor"
+    fresh = client_fields_from_id_ocr(extracted, role_key)
+    prior = dict((existing or {}).get("id_ocr_fields") or {})
+    fields = {**prior, **{k: v for k, v in fresh.items() if v}}
+    set_fields: dict[str, Any] = {
+        "id_ocr": extracted,
+        "id_ocr_fields": fields,
+        "id_ocr_role": role_key,
+        "id_ocr_at": _now().isoformat(),
+    }
+    for key, val in fields.items():
+        if not val:
+            continue
+        if role_key == "indemnitor" and str(key).lower().startswith("defendant"):
+            continue
+        if role_key == "defendant" and str(key).lower().startswith("indemnitor"):
+            continue
+        set_fields[key] = val
+    pkts = get_collection("paperwork_packets")
+    await pkts.update_one({"packet_id": packet_id}, {"$set": set_fields})
+    return fields
+
+
 @shannon_id_api.post("/paperwork/shannon/id-link")
 async def shannon_id_link(request: Request):
     """Mint a public ID-upload URL for a Shannon case. Machine auth."""
@@ -73,7 +134,7 @@ async def shannon_id_link(request: Request):
         return JSONResponse({"success": False, "error": "invalid_json"}, status_code=400)
 
     packet_id = str(body.get("packet_id") or body.get("case_reference") or "").strip()
-    if not packet_id:
+    if not packet_id or _looks_like_call_sid(packet_id):
         packet_id = f"SH-{secrets.token_hex(5).upper()}"
     role = str(body.get("caller_role") or body.get("role") or "indemnitor").strip().lower()
     if role in ("cosigner", "primary"):
@@ -148,6 +209,12 @@ async def shannon_id_upload(
         },
     )
     slots = {k: bool(id_photos.get(k)) for k in ("govt_id_front", "govt_id_back")}
+    ocr_fields: dict[str, Any] = {}
+    if doc_type in ("govt_id_front", "govt_id_back"):
+        role = str(doc.get("shannon_id_role") or "indemnitor")
+        ocr_fields = await _ocr_upload_into_packet(
+            packet_id, role, raw, file.filename or "", doc,
+        )
     try:
         import httpx
         hook = (os.getenv("SLACK_WEBHOOK_LEADS") or os.getenv("SLACK_WEBHOOK_URL") or "").strip()
@@ -159,7 +226,48 @@ async def shannon_id_upload(
             )
     except Exception:
         pass
-    return {"success": True, "packet_id": packet_id, "slot": doc_type, "slots": slots}
+    return {
+        "success": True,
+        "packet_id": packet_id,
+        "slot": doc_type,
+        "slots": slots,
+        "ocr": {k: v for k, v in ocr_fields.items() if v} if ocr_fields else {},
+        "spoken": _ocr_spoken(ocr_fields),
+    }
+
+
+@shannon_id_api.post("/paperwork/shannon/id-status")
+async def shannon_id_status(request: Request):
+    """Machine-auth poll: whether Shannon ID photos landed and what OCR read."""
+    denied = _require_control_auth(request, allow_machine=True)
+    if denied:
+        return denied
+    try:
+        body = await request.json() or {}
+    except Exception:
+        return JSONResponse({"success": False, "error": "invalid_json"}, status_code=400)
+    packet_id = str(body.get("packet_id") or body.get("case_reference") or "").strip()
+    if not packet_id:
+        return JSONResponse({"success": False, "error": "missing_packet_id"}, status_code=400)
+    pkts = get_collection("paperwork_packets")
+    doc = await pkts.find_one({"packet_id": packet_id}, {"_id": 0})
+    if not doc:
+        return {"success": True, "received": False, "slots": {"govt_id_front": False, "govt_id_back": False}, "ocr": {}, "spoken": "I do not have an ID photo yet."}
+    photos = doc.get("id_photos") or {}
+    slots = {k: bool(photos.get(k)) for k in ("govt_id_front", "govt_id_back")}
+    ocr = {k: v for k, v in (doc.get("id_ocr_fields") or {}).items() if v}
+    received = bool(slots.get("govt_id_front") or slots.get("govt_id_back"))
+    spoken = _ocr_spoken(ocr) if received else "I do not have an ID photo yet."
+    if received and not spoken:
+        spoken = "I have the ID photo, but I could not read the print. Ask them to confirm their name as it appears on the license."
+    return {
+        "success": True,
+        "received": received,
+        "packet_id": packet_id,
+        "slots": slots,
+        "ocr": ocr,
+        "spoken": spoken,
+    }
 
 
 @shannon_id_pages.get("/paperwork/shannon/id/{token}")

@@ -2575,6 +2575,35 @@ async def shannon_email_indemnitor_paperwork(request: Request):
     if not bond_data["defendant"]["email"]:
         bond_data["defendant"]["email"] = f"admin+shannon-def-{packet_id.lower()}@shamrockbailbonds.biz"
 
+    try:
+        pkt = await get_collection("paperwork_packets").find_one({"packet_id": packet_id}, {"_id": 0})
+    except Exception:
+        pkt = None
+    if isinstance(pkt, dict):
+        ocr_fields = pkt.get("id_ocr_fields") if isinstance(pkt.get("id_ocr_fields"), dict) else {}
+        ocr_role = str(pkt.get("id_ocr_role") or pkt.get("shannon_id_role") or caller_role).lower()
+        if ocr_role == "defendant":
+            for key in ("defendant_name", "defendant_address", "defendant_city", "defendant_state", "defendant_zip", "defendant_dob", "defendant_dl"):
+                if ocr_fields.get(key):
+                    bond_data[key] = ocr_fields[key]
+            if ocr_fields.get("defendant_name"):
+                bond_data["defendant"]["name"] = ocr_fields["defendant_name"]
+                def_party["name"] = ocr_fields["defendant_name"]
+        else:
+            ind = indemnitors[0] if indemnitors else {}
+            if ocr_fields.get("indemnitor_name"):
+                ind["name"] = ocr_fields["indemnitor_name"]
+                bond_data["indemnitor_name"] = ocr_fields["indemnitor_name"]
+            for key in ("indemnitor_address", "indemnitor_city", "indemnitor_state", "indemnitor_zip", "indemnitor_dob", "indemnitor_dl"):
+                if ocr_fields.get(key):
+                    bond_data[key] = ocr_fields[key]
+                    short = key.replace("indemnitor_", "")
+                    ind[short] = ocr_fields[key]
+            if indemnitors:
+                indemnitors[0] = ind
+            bond_data["indemnitor"] = ind
+            bond_data["indemnitors"] = indemnitors
+
     ds = get_docuseal_service()
     try:
         submission = await ds.create_submission_for_packet(

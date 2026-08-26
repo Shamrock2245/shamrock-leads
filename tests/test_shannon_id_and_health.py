@@ -54,6 +54,52 @@ def test_shannon_id_link_mints_url(monkeypatch):
     assert update["$set"]["defendant_name"] == "Jane Doe"
 
 
+def test_shannon_id_link_rejects_twilio_call_sid(monkeypatch):
+    from dashboard.routers import shannon_id
+
+    col = MagicMock()
+    col.update_one = AsyncMock()
+    monkeypatch.setattr(shannon_id, "_require_control_auth", lambda *a, **k: None)
+    monkeypatch.setattr(shannon_id, "get_collection", lambda name: col)
+
+    class Req:
+        async def json(self):
+            return {"packet_id": "CAd28b4dd55bba44c17003ee3d18521392", "defendant_name": "Ashley Ortiz"}
+
+    result = asyncio.run(shannon_id.shannon_id_link(Req()))
+    assert result["success"] is True
+    assert result["packet_id"].startswith("SH-")
+    assert not result["packet_id"].startswith("CA")
+
+
+def test_looks_like_call_sid_and_ocr_spoken():
+    from dashboard.routers.shannon_id import _looks_like_call_sid, _ocr_spoken
+
+    assert _looks_like_call_sid("CAd28b4dd55bba44c17003ee3d18521392") is True
+    assert _looks_like_call_sid("SH-2397849365-ORTIZ") is False
+    spoken = _ocr_spoken({"indemnitor_name": "Brendan O'Neal", "indemnitor_city": "Fort Myers"})
+    assert "Brendan" in spoken
+    assert "Fort Myers" in spoken
+
+
+def test_shannon_id_status_requires_auth(monkeypatch):
+    from dashboard.routers import shannon_id
+
+    monkeypatch.setattr(
+        shannon_id,
+        "_require_control_auth",
+        lambda *a, **k: JSONResponse({"success": False, "error": "Authentication required"}, status_code=401),
+    )
+
+    class Req:
+        async def json(self):
+            return {"packet_id": "SH-TEST"}
+
+    result = asyncio.run(shannon_id.shannon_id_status(Req()))
+    assert isinstance(result, JSONResponse)
+    assert result.status_code == 401
+
+
 def test_shannon_id_link_does_not_blank_defendant_name(monkeypatch):
     from dashboard.routers import shannon_id
 
