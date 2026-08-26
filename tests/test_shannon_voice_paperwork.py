@@ -53,6 +53,18 @@ def test_shannon_voice_text_uses_bluebubbles_never_twilio(monkeypatch):
     assert "twilio" not in str(result).lower()
 
 
+def test_shannon_machine_routes_bypass_pin_middleware():
+    from dashboard.auth.pin_middleware import OPEN_PREFIXES
+
+    for path in (
+        "/api/agent-brain/memory/lookup",
+        "/api/agent-brain/memory/status",
+        "/api/imessage/shannon/send",
+        "/api/paperwork/shannon/email",
+    ):
+        assert any(path.startswith(p) for p in OPEN_PREFIXES), path
+
+
 def test_mem0_lookup_returns_returning_client(monkeypatch):
     from dashboard.routers import agent_brain_api
 
