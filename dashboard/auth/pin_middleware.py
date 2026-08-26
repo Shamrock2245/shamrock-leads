@@ -45,6 +45,7 @@ COOKIE_MAX_AGE = 60 * 60 * 24 * 7  # 7 days
 # Indemnitor portal host (paperwork.*) is handled host-aware in dispatch().
 OPEN_PATHS = frozenset({
     "/done", "/paperwork", "/login", "/health", "/health/live", "/api/stats",
+    "/api/imessage/status",
     "/docs", "/redoc", "/openapi.json",
     "/manifest.json", "/favicon.ico", "/favicon.png", "/apple-touch-icon.png", "/shamrock-logo.png",
 })
