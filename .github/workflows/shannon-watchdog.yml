@@ -26,6 +26,13 @@ jobs:
           echo "Unsigned voice must 403"
           code=$(curl -sS -m 15 -o /dev/null -w "%{http_code}" -X POST https://shamrock-telegram.netlify.app/api/twilio-voice)
           test "$code" = "403"
-          echo "Mem0 status path"
+          echo "Mem0 status path (must not leak key_prefix)"
           curl -sS -m 15 -o /tmp/m.json https://leads.shamrockbailbonds.biz/api/agent-brain/memory/status
-          python3 -c "import json; json.load(open('/tmp/m.json'))"
+          python3 -c "
+import json
+d=json.load(open('/tmp/m.json'))
+blob=json.dumps(d)
+assert d.get('success') is True
+assert 'key_prefix' not in blob
+assert (d.get('mem0') or {}).get('configured') is True
+"

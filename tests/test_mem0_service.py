@@ -140,5 +140,7 @@ def test_status_snapshot_no_key_leak(monkeypatch):
     monkeypatch.setenv("MEMO_API_KEY", "m0-supersecret")
     snap = m0.status_snapshot()
     assert snap["configured"] is True
+    assert "key_prefix" not in snap
     assert "supersecret" not in str(snap)
+    assert "m0-sup" not in str(snap)
     assert snap["user_id_scheme"] == "last10_digits_gas_compatible"

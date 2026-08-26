@@ -81,20 +81,23 @@ async def shannon_id_link(request: Request):
     token = secrets.token_urlsafe(18)
     now = _now()
     exp = now + timedelta(hours=_TOKEN_TTL_HOURS)
+    set_fields = {
+        "packet_id": packet_id,
+        "source": "shannon_voice",
+        "shannon_id_token": token,
+        "shannon_id_token_exp": exp.isoformat(),
+        "shannon_id_role": role,
+        "pending_staff_match": True,
+        "updated_at": now.isoformat(),
+    }
+    defendant_name = str(body.get("defendant_name") or "").strip()
+    if defendant_name:
+        set_fields["defendant_name"] = defendant_name
     pkts = get_collection("paperwork_packets")
     await pkts.update_one(
         {"packet_id": packet_id},
         {
-            "$set": {
-                "packet_id": packet_id,
-                "source": "shannon_voice",
-                "shannon_id_token": token,
-                "shannon_id_token_exp": exp.isoformat(),
-                "shannon_id_role": role,
-                "defendant_name": str(body.get("defendant_name") or ""),
-                "pending_staff_match": True,
-                "updated_at": now.isoformat(),
-            },
+            "$set": set_fields,
             "$setOnInsert": {"created_at": now.isoformat(), "kyc_uploads": [], "id_photos": {}},
         },
         upsert=True,

@@ -319,12 +319,11 @@ async def get_memory_block(phone: str, query: str) -> str:
 
 
 def status_snapshot() -> Dict[str, Any]:
-    """Non-secret status for health endpoints."""
+    """Non-secret status for health endpoints. Never include key fragments."""
     key = _api_key()
     return {
         "enabled": is_enabled(),
         "configured": bool(key),
-        "key_prefix": (key[:6] + "…") if len(key) >= 6 else ("set" if key else ""),
         "api_base": MEM0_BASE,
         "search_limit": DEFAULT_SEARCH_LIMIT,
         "timeout_seconds": DEFAULT_TIMEOUT,

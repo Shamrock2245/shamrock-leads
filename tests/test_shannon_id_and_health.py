@@ -50,6 +50,26 @@ def test_shannon_id_link_mints_url(monkeypatch):
     assert result["packet_id"] == "SH-TEST"
     assert "/paperwork/shannon/id/" in result["upload_url"]
     assert col.update_one.await_count == 1
+    update = col.update_one.await_args.args[1]
+    assert update["$set"]["defendant_name"] == "Jane Doe"
+
+
+def test_shannon_id_link_does_not_blank_defendant_name(monkeypatch):
+    from dashboard.routers import shannon_id
+
+    col = MagicMock()
+    col.update_one = AsyncMock()
+    monkeypatch.setattr(shannon_id, "_require_control_auth", lambda *a, **k: None)
+    monkeypatch.setattr(shannon_id, "get_collection", lambda name: col)
+
+    class Req:
+        async def json(self):
+            return {"packet_id": "SH-EXISTING"}
+
+    result = asyncio.run(shannon_id.shannon_id_link(Req()))
+    assert result["success"] is True
+    update = col.update_one.await_args.args[1]
+    assert "defendant_name" not in update["$set"]
 
 
 def test_invalid_id_token_is_404(monkeypatch):
