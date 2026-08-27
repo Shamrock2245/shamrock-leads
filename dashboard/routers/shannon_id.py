@@ -86,6 +86,31 @@ def _packet_confirmed_name(doc: dict[str, Any] | None, role_key: str) -> str:
     )
 
 
+async def _confirmed_name_for_ocr(packet_id: str, existing: dict[str, Any] | None, role_key: str) -> str:
+    """Prefer packet spelling, then the Shannon intake_queue row from create_intake."""
+    confirmed = _packet_confirmed_name(existing, role_key)
+    if confirmed:
+        return confirmed
+    if not packet_id:
+        return ""
+    try:
+        doc = await get_collection("intake_queue").find_one(
+            {"intake_id": packet_id},
+            {"_id": 0, "indemnitor_name": 1, "defendant_name": 1, "indemnitor": 1},
+        )
+    except Exception:
+        return ""
+    if not isinstance(doc, dict):
+        return ""
+    if role_key == "defendant":
+        return normalize_person_name(doc.get("defendant_name") or "")
+    name = str(doc.get("indemnitor_name") or "").strip()
+    ind = doc.get("indemnitor") if isinstance(doc.get("indemnitor"), dict) else {}
+    if not name and ind:
+        name = " ".join(p for p in (ind.get("firstName"), ind.get("lastName")) if p)
+    return normalize_person_name(name)
+
+
 def _ocr_spoken(fields: dict[str, Any], conflict: dict[str, Any] | None = None) -> str:
     name = str(fields.get("indemnitor_name") or fields.get("defendant_name") or "").strip()
     addr = str(fields.get("indemnitor_address") or fields.get("defendant_address") or "").strip()
@@ -131,7 +156,7 @@ async def _ocr_upload_into_packet(
     if not isinstance(extracted, dict) or not extracted:
         return dict((existing or {}).get("id_ocr_fields") or {}), None
     role_key = "defendant" if str(role or "").lower() == "defendant" else "indemnitor"
-    confirmed = _packet_confirmed_name(existing, role_key)
+    confirmed = await _confirmed_name_for_ocr(packet_id, existing, role_key)
     ocr_full = normalize_person_name(
         extracted.get("full_name")
         or " ".join(p for p in (extracted.get("first_name"), extracted.get("last_name")) if p)

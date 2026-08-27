@@ -138,6 +138,39 @@ def test_shannon_id_link_does_not_blank_defendant_name(monkeypatch):
     assert "defendant_name" not in update["$set"]
 
 
+def test_ocr_upload_uses_intake_queue_oneal_when_packet_blank(monkeypatch):
+    from dashboard.routers import shannon_id
+
+    async def fake_scan(raw, filename=""):
+        return {
+            "success": True,
+            "extracted": {
+                "full_name": "Brendan John O'Neill",
+                "first_name": "Brendan",
+                "last_name": "O'Neill",
+            },
+        }
+
+    class IntakeCol:
+        async def find_one(self, *a, **k):
+            return {"indemnitor_name": "Brendan O'Neal"}
+
+    class PacketsCol:
+        update_one = AsyncMock()
+
+    def fake_collection(name):
+        return IntakeCol() if name == "intake_queue" else PacketsCol()
+
+    monkeypatch.setattr(shannon_id, "get_collection", fake_collection)
+    monkeypatch.setattr(shannon_id.IDScannerService, "scan_id_image", fake_scan)
+
+    fields, conflict = asyncio.run(
+        shannon_id._ocr_upload_into_packet("SH-TEST", "indemnitor", b"img", "front.jpg", {})
+    )
+    assert fields["indemnitor_name"] == "Brendan John O'Neal"
+    assert conflict["kind"] == "confusable_surname"
+
+
 def test_ocr_upload_keeps_confirmed_oneal(monkeypatch):
     from dashboard.routers import shannon_id
 
