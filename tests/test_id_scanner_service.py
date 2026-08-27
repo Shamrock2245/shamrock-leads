@@ -92,6 +92,25 @@ def test_id_scanner_front_line_o_neill():
     assert "O'Neill" in (res["full_name"] or "")
 
 
+def test_id_scanner_front_line_o_neal():
+    raw = "FLORIDA DRIVER LICENSE\n1 O'NEAL\n2 BRENDAN JOHN\n8 1528 BROADWAY\nFORT MYERS FL 33901"
+    res = IDScannerService.parse_raw_text(raw)
+    assert res["last_name"] == "O'Neal"
+    assert res["first_name"] == "Brendan"
+    assert "O'Neal" in (res["full_name"] or "")
+    assert "O'Neill" not in (res["full_name"] or "")
+
+
+def test_vision_prompt_forbids_surname_autocorrect():
+    from dashboard.services.id_scanner_service import VISION_SYSTEM_PROMPT
+
+    low = VISION_SYSTEM_PROMPT.lower()
+    assert "do not autocorrect" in low
+    assert "o'neal" in low
+    assert "o'neill" in low
+    assert "never o'neill" in low or "never o'neill" in VISION_SYSTEM_PROMPT.lower()
+
+
 def test_id_scanner_normalize_fields():
     raw_parsed = {
         "first_name": "Jane",

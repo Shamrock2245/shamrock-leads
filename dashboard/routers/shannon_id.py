@@ -15,6 +15,7 @@ from dashboard.extensions import get_collection
 from dashboard.routers.automation_control import _require_control_auth
 from dashboard.routers.pin_portal import client_fields_from_id_ocr
 from dashboard.services.identity_media_service import save_upload_file, merge_id_photos_field
+from dashboard.services.id_ocr_service import last_name_token, normalize_person_name, resolve_legal_name
 from dashboard.services.id_scanner_service import IDScannerService
 
 logger = logging.getLogger(__name__)
@@ -73,10 +74,40 @@ async def _packet_by_token(token: str) -> dict[str, Any] | None:
     return doc
 
 
-def _ocr_spoken(fields: dict[str, Any]) -> str:
+def _packet_confirmed_name(doc: dict[str, Any] | None, role_key: str) -> str:
+    existing = doc if isinstance(doc, dict) else {}
+    confirmed = str(existing.get("shannon_confirmed_name") or "").strip()
+    if confirmed:
+        return normalize_person_name(confirmed)
+    if role_key == "defendant":
+        return normalize_person_name(existing.get("defendant_name") or existing.get("caller_name") or "")
+    return normalize_person_name(
+        existing.get("indemnitor_name") or existing.get("caller_name") or existing.get("FullName") or ""
+    )
+
+
+def _ocr_spoken(fields: dict[str, Any], conflict: dict[str, Any] | None = None) -> str:
     name = str(fields.get("indemnitor_name") or fields.get("defendant_name") or "").strip()
     addr = str(fields.get("indemnitor_address") or fields.get("defendant_address") or "").strip()
     city = str(fields.get("indemnitor_city") or fields.get("defendant_city") or "").strip()
+    if isinstance(conflict, dict) and conflict.get("kind") == "confusable_surname":
+        ocr_last = str(conflict.get("ocr_last") or last_name_token(conflict.get("ocr") or "") or "").strip()
+        said_last = str(
+            conflict.get("confirmed_last") or last_name_token(conflict.get("confirmed") or "") or ""
+        ).strip()
+        if ocr_last and said_last:
+            return (
+                f"I have the ID. I read the last name as {ocr_last}. You said {said_last}. "
+                "Spell the last name on the license for me."
+            )
+    if isinstance(conflict, dict) and conflict.get("kind") == "name_mismatch":
+        ocr_name = str(conflict.get("ocr") or name).strip()
+        said = str(conflict.get("confirmed") or "").strip()
+        if ocr_name and said:
+            return (
+                f"I have the ID. I read {ocr_name}. You said {said}. "
+                "Confirm the name as it appears on the license."
+            )
     parts = [p for p in (name, addr, city) if p]
     if not parts:
         return ""
@@ -89,18 +120,25 @@ async def _ocr_upload_into_packet(
     raw: bytes,
     filename: str,
     existing: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Role-scoped DL OCR onto the Shannon packet. Indemnitor ID never overwrites defendant."""
     try:
         scan = await IDScannerService.scan_id_image(raw, filename or "")
     except Exception as exc:
         logger.warning("shannon id ocr failed: %s", type(exc).__name__)
-        return dict((existing or {}).get("id_ocr_fields") or {})
+        return dict((existing or {}).get("id_ocr_fields") or {}), None
     extracted = scan.get("extracted") if isinstance(scan, dict) else {}
     if not isinstance(extracted, dict) or not extracted:
-        return dict((existing or {}).get("id_ocr_fields") or {})
+        return dict((existing or {}).get("id_ocr_fields") or {}), None
     role_key = "defendant" if str(role or "").lower() == "defendant" else "indemnitor"
-    fresh = client_fields_from_id_ocr(extracted, role_key)
+    confirmed = _packet_confirmed_name(existing, role_key)
+    ocr_full = normalize_person_name(
+        extracted.get("full_name")
+        or " ".join(p for p in (extracted.get("first_name"), extracted.get("last_name")) if p)
+        or ""
+    )
+    resolution = resolve_legal_name(ocr_full, confirmed)
+    fresh = client_fields_from_id_ocr(extracted, role_key, confirmed_name=confirmed)
     prior = dict((existing or {}).get("id_ocr_fields") or {})
     fields = {**prior, **{k: v for k, v in fresh.items() if v}}
     set_fields: dict[str, Any] = {
@@ -108,6 +146,9 @@ async def _ocr_upload_into_packet(
         "id_ocr_fields": fields,
         "id_ocr_role": role_key,
         "id_ocr_at": _now().isoformat(),
+        "id_ocr_raw_name": resolution.get("ocr_name") or ocr_full,
+        "id_ocr_name_source": resolution.get("source") or "ocr",
+        "id_ocr_name_conflict": resolution.get("conflict"),
     }
     for key, val in fields.items():
         if not val:
@@ -119,7 +160,8 @@ async def _ocr_upload_into_packet(
         set_fields[key] = val
     pkts = get_collection("paperwork_packets")
     await pkts.update_one({"packet_id": packet_id}, {"$set": set_fields})
-    return fields
+    conflict = resolution.get("conflict") if isinstance(resolution.get("conflict"), dict) else None
+    return fields, conflict
 
 
 @shannon_id_api.post("/paperwork/shannon/id-link")
@@ -154,6 +196,14 @@ async def shannon_id_link(request: Request):
     defendant_name = str(body.get("defendant_name") or "").strip()
     if defendant_name:
         set_fields["defendant_name"] = defendant_name
+    caller_name = str(body.get("caller_name") or body.get("indemnitor_name") or "").strip()
+    if caller_name:
+        set_fields["shannon_confirmed_name"] = caller_name
+        set_fields["caller_name"] = caller_name
+        if role != "defendant":
+            set_fields["indemnitor_name"] = caller_name
+        elif not defendant_name:
+            set_fields["defendant_name"] = caller_name
     pkts = get_collection("paperwork_packets")
     await pkts.update_one(
         {"packet_id": packet_id},
@@ -210,9 +260,10 @@ async def shannon_id_upload(
     )
     slots = {k: bool(id_photos.get(k)) for k in ("govt_id_front", "govt_id_back")}
     ocr_fields: dict[str, Any] = {}
+    name_conflict: dict[str, Any] | None = None
     if doc_type in ("govt_id_front", "govt_id_back"):
         role = str(doc.get("shannon_id_role") or "indemnitor")
-        ocr_fields = await _ocr_upload_into_packet(
+        ocr_fields, name_conflict = await _ocr_upload_into_packet(
             packet_id, role, raw, file.filename or "", doc,
         )
     try:
@@ -232,7 +283,8 @@ async def shannon_id_upload(
         "slot": doc_type,
         "slots": slots,
         "ocr": {k: v for k, v in ocr_fields.items() if v} if ocr_fields else {},
-        "spoken": _ocr_spoken(ocr_fields),
+        "spoken": _ocr_spoken(ocr_fields, name_conflict),
+        "name_conflict": name_conflict,
     }
 
 
@@ -257,7 +309,8 @@ async def shannon_id_status(request: Request):
     slots = {k: bool(photos.get(k)) for k in ("govt_id_front", "govt_id_back")}
     ocr = {k: v for k, v in (doc.get("id_ocr_fields") or {}).items() if v}
     received = bool(slots.get("govt_id_front") or slots.get("govt_id_back"))
-    spoken = _ocr_spoken(ocr) if received else "I do not have an ID photo yet."
+    conflict = doc.get("id_ocr_name_conflict") if isinstance(doc.get("id_ocr_name_conflict"), dict) else None
+    spoken = _ocr_spoken(ocr, conflict) if received else "I do not have an ID photo yet."
     if received and not spoken:
         spoken = "I have the ID photo, but I could not read the print. Ask them to confirm their name as it appears on the license."
     return {
@@ -267,6 +320,8 @@ async def shannon_id_status(request: Request):
         "slots": slots,
         "ocr": ocr,
         "spoken": spoken,
+        "name_conflict": conflict,
+        "name_source": doc.get("id_ocr_name_source") or "",
     }
 
 

@@ -71,6 +71,22 @@ def test_parse_dl_barcode_apostrophe_and_hyphen_names():
     assert res.get("first_name") == "Brendan"
     assert res.get("full_name") == "Brendan John O'Neill"
 
+    oneal = """
+    ANSI 636000080002DL
+    DAQD1234567
+    DCSO'NEAL
+    DACBRENDAN
+    DADJOHN
+    DBB19851130
+    DAG1528 BROADWAY
+    DAIFORT MYERS
+    DAJFL
+    DAK33901
+    """
+    neal = IDOCRService.parse_dl_text(oneal)
+    assert neal.get("last_name") == "O'Neal"
+    assert neal.get("full_name") == "Brendan John O'Neal"
+
     hyphen = """
     ANSI 636000080002DL
     DAQCA999
@@ -91,10 +107,45 @@ def test_normalize_person_name_hard_cases():
 
     assert normalize_person_name("O'NEILL") == "O'Neill"
     assert normalize_person_name("O’NEILL") == "O'Neill"
+    assert normalize_person_name("O'NEAL") == "O'Neal"
+    assert normalize_person_name("O’NEAL") == "O'Neal"
     assert normalize_person_name("d'angelo") == "D'Angelo"
     assert normalize_person_name("SMITH-JONES") == "Smith-Jones"
     assert normalize_person_name("mcdonald") == "McDonald"
     assert normalize_person_name("VAN DYKE") == "Van Dyke"
+
+
+def test_resolve_legal_name_keeps_oneal_when_ocr_reads_oneill():
+    from dashboard.services.id_ocr_service import resolve_legal_name
+
+    hit = resolve_legal_name("Brendan John O'Neill", "Brendan O'Neal")
+    assert hit["name"] == "Brendan John O'Neal"
+    assert hit["source"] == "confirmed_confusable"
+    assert hit["conflict"]["kind"] == "confusable_surname"
+    assert hit["conflict"]["ocr_last"] == "O'Neill"
+    assert hit["conflict"]["confirmed_last"] == "O'Neal"
+
+    last_only = resolve_legal_name("Brendan John O'Neill", "O'Neal")
+    assert last_only["name"] == "Brendan John O'Neal"
+
+    curly = resolve_legal_name("BRENDAN JOHN O’NEILL", "Brendan O’Neal")
+    assert curly["name"] == "Brendan John O'Neal"
+
+
+def test_resolve_legal_name_does_not_globally_rewrite_oneill():
+    from dashboard.services.id_ocr_service import resolve_legal_name
+
+    ocr_only = resolve_legal_name("Brendan John O'Neill", "")
+    assert ocr_only["name"] == "Brendan John O'Neill"
+    assert ocr_only["conflict"] is None
+
+    matching = resolve_legal_name("Brendan O'Neill", "Brendan O'Neill")
+    assert matching["name"] == "Brendan O'Neill"
+    assert matching["conflict"] is None
+
+    other = resolve_legal_name("Mary Smith", "Brendan O'Neal")
+    assert other["name"] == "Mary Smith"
+    assert other["conflict"]["kind"] == "name_mismatch"
 
 
 def test_extract_indemnitor_data():

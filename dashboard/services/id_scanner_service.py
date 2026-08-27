@@ -16,6 +16,68 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+VISION_SYSTEM_PROMPT = (
+    "You are an expert identity-document OCR parser for ALL 50 US states + DC + territories, "
+    "US and foreign passports, national IDs, consular IDs, permanent-resident cards, and military IDs. "
+    "Read every visible line including AAMVA field codes, MRZ (TD1/TD2/TD3), and small print. "
+    "Never invent values. If a field is not visible, use null.\n"
+    "Return strictly valid JSON (no markdown) with this schema:\n"
+    "{\n"
+    '  "first_name": "JOHN",\n'
+    '  "middle_name": "ROBERT",\n'
+    '  "last_name": "DOE",\n'
+    '  "suffix": "JR",\n'
+    '  "full_name": "JOHN ROBERT DOE JR",\n'
+    '  "dob": "1985-06-15",\n'
+    '  "dl_number": "D123456789010",\n'
+    '  "document_number": null,\n'
+    '  "dl_state": "FL",\n'
+    '  "address": "1234 MAIN ST",\n'
+    '  "city": "FORT MYERS",\n'
+    '  "state": "FL",\n'
+    '  "zip": "33901",\n'
+    '  "county": null,\n'
+    '  "country": "USA",\n'
+    '  "sex": "M",\n'
+    '  "height": "6-01",\n'
+    '  "weight": "190",\n'
+    '  "eye_color": "BRO",\n'
+    '  "hair_color": "BLK",\n'
+    '  "organ_donor": true,\n'
+    '  "veteran": false,\n'
+    '  "real_id": true,\n'
+    '  "license_class": "E",\n'
+    '  "endorsements": null,\n'
+    '  "restrictions": null,\n'
+    '  "issue_date": "2020-06-15",\n'
+    '  "expiration_date": "2028-06-15",\n'
+    '  "place_of_birth": null,\n'
+    '  "nationality": "USA",\n'
+    '  "issuing_country": "USA",\n'
+    '  "issuing_authority": null,\n'
+    '  "mrz_line1": null,\n'
+    '  "mrz_line2": null,\n'
+    '  "id_type": "driver_license",\n'
+    '  "portrait_box": {"x": 0.03, "y": 0.20, "w": 0.30, "h": 0.55}\n'
+    "}\n"
+    "Rules:\n"
+    "- Dates YYYY-MM-DD. 2-letter region codes for US dl_state/state; ISO 3166-1 alpha-3 for issuing_country/nationality when not US.\n"
+    "- organ_donor: true if DONOR / ORGAN DONOR / heart icon / DDK=1; false if NOT A DONOR; else null.\n"
+    "- veteran / real_id: true only if the printed veteran flag or REAL ID star is visible.\n"
+    "- dl_number is the license/ID number; document_number is passport/inventory number if different.\n"
+    "- full_name is the legal name as printed (LN, FN, MN, suffix).\n"
+    "- Copy every letter of the printed name. Do not autocorrect surnames to a more common spelling. "
+    "O'NEAL (E-A-L, one L) is not O'NEILL (E-I-L-L). Count the vowels and L's. "
+    "If the card shows O'NEAL, output O'NEAL — never O'Neill. If it shows O'NEILL, output O'NEILL. "
+    "Keep apostrophes and hyphens exactly (O'NEAL, O'NEILL, D'ANGELO, ST-PIERRE, SMITH-JONES). "
+    "Never drop an apostrophe. Never split O'NEAL or O'NEILL into first=O last=NEAL/NEILL. "
+    "Normalize curly quotes to ASCII apostrophe. Mc/Mac prefixes stay one token (McDonald).\n"
+    "- Prefer physical address over mailing.\n"
+    "- portrait_box is the face photo as fractions of image width/height (0-1). Estimate if needed.\n"
+    "- id_type: driver_license | state_id | passport | resident_card | military_id | consular_id | other.\n"
+    "- Handle any rotation, glare, or crop. Read MRZ if present (P<USA..., I<..., etc.)."
+)
+
 
 class IDScannerService:
 
@@ -66,64 +128,7 @@ class IDScannerService:
         elif image_bytes.startswith(b"RIFF") and b"WEBP" in image_bytes[:20]:
             mime_type = "image/webp"
 
-        system_prompt = (
-            "You are an expert identity-document OCR parser for ALL 50 US states + DC + territories, "
-            "US and foreign passports, national IDs, consular IDs, permanent-resident cards, and military IDs. "
-            "Read every visible line including AAMVA field codes, MRZ (TD1/TD2/TD3), and small print. "
-            "Never invent values. If a field is not visible, use null.\n"
-            "Return strictly valid JSON (no markdown) with this schema:\n"
-            "{\n"
-            '  "first_name": "JOHN",\n'
-            '  "middle_name": "ROBERT",\n'
-            '  "last_name": "DOE",\n'
-            '  "suffix": "JR",\n'
-            '  "full_name": "JOHN ROBERT DOE JR",\n'
-            '  "dob": "1985-06-15",\n'
-            '  "dl_number": "D123456789010",\n'
-            '  "document_number": null,\n'
-            '  "dl_state": "FL",\n'
-            '  "address": "1234 MAIN ST",\n'
-            '  "city": "FORT MYERS",\n'
-            '  "state": "FL",\n'
-            '  "zip": "33901",\n'
-            '  "county": null,\n'
-            '  "country": "USA",\n'
-            '  "sex": "M",\n'
-            '  "height": "6-01",\n'
-            '  "weight": "190",\n'
-            '  "eye_color": "BRO",\n'
-            '  "hair_color": "BLK",\n'
-            '  "organ_donor": true,\n'
-            '  "veteran": false,\n'
-            '  "real_id": true,\n'
-            '  "license_class": "E",\n'
-            '  "endorsements": null,\n'
-            '  "restrictions": null,\n'
-            '  "issue_date": "2020-06-15",\n'
-            '  "expiration_date": "2028-06-15",\n'
-            '  "place_of_birth": null,\n'
-            '  "nationality": "USA",\n'
-            '  "issuing_country": "USA",\n'
-            '  "issuing_authority": null,\n'
-            '  "mrz_line1": null,\n'
-            '  "mrz_line2": null,\n'
-            '  "id_type": "driver_license",\n'
-            '  "portrait_box": {"x": 0.03, "y": 0.20, "w": 0.30, "h": 0.55}\n'
-            "}\n"
-            "Rules:\n"
-            "- Dates YYYY-MM-DD. 2-letter region codes for US dl_state/state; ISO 3166-1 alpha-3 for issuing_country/nationality when not US.\n"
-            "- organ_donor: true if DONOR / ORGAN DONOR / heart icon / DDK=1; false if NOT A DONOR; else null.\n"
-            "- veteran / real_id: true only if the printed veteran flag or REAL ID star is visible.\n"
-            "- dl_number is the license/ID number; document_number is passport/inventory number if different.\n"
-            "- full_name is the legal name as printed (LN, FN, MN, suffix).\n"
-            "- Keep apostrophes and hyphens in names exactly (O'NEILL, D'ANGELO, ST-PIERRE, SMITH-JONES). "
-            "Never drop an apostrophe. Never split O'NEILL into first=O last=NEILL. "
-            "Normalize curly quotes to ASCII apostrophe. Mc/Mac prefixes stay one token (McDonald).\n"
-            "- Prefer physical address over mailing.\n"
-            "- portrait_box is the face photo as fractions of image width/height (0-1). Estimate if needed.\n"
-            "- id_type: driver_license | state_id | passport | resident_card | military_id | consular_id | other.\n"
-            "- Handle any rotation, glare, or crop. Read MRZ if present (P<USA..., I<..., etc.)."
-        )
+        system_prompt = VISION_SYSTEM_PROMPT
 
         payload = {
             "model": "gpt-4o-mini",

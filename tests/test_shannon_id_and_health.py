@@ -43,7 +43,12 @@ def test_shannon_id_link_mints_url(monkeypatch):
 
     class Req:
         async def json(self):
-            return {"packet_id": "SH-TEST", "caller_role": "indemnitor", "defendant_name": "Jane Doe"}
+            return {
+                "packet_id": "SH-TEST",
+                "caller_role": "indemnitor",
+                "defendant_name": "Jane Doe",
+                "caller_name": "Brendan O'Neal",
+            }
 
     result = asyncio.run(shannon_id.shannon_id_link(Req()))
     assert result["success"] is True
@@ -52,6 +57,8 @@ def test_shannon_id_link_mints_url(monkeypatch):
     assert col.update_one.await_count == 1
     update = col.update_one.await_args.args[1]
     assert update["$set"]["defendant_name"] == "Jane Doe"
+    assert update["$set"]["shannon_confirmed_name"] == "Brendan O'Neal"
+    assert update["$set"]["indemnitor_name"] == "Brendan O'Neal"
 
 
 def test_shannon_id_link_rejects_twilio_call_sid(monkeypatch):
@@ -80,6 +87,19 @@ def test_looks_like_call_sid_and_ocr_spoken():
     spoken = _ocr_spoken({"indemnitor_name": "Brendan O'Neal", "indemnitor_city": "Fort Myers"})
     assert "Brendan" in spoken
     assert "Fort Myers" in spoken
+    conflict_spoken = _ocr_spoken(
+        {"indemnitor_name": "Brendan John O'Neal"},
+        {
+            "kind": "confusable_surname",
+            "ocr": "Brendan John O'Neill",
+            "confirmed": "Brendan O'Neal",
+            "ocr_last": "O'Neill",
+            "confirmed_last": "O'Neal",
+        },
+    )
+    assert "O'Neill" in conflict_spoken
+    assert "O'Neal" in conflict_spoken
+    assert "spell" in conflict_spoken.lower()
 
 
 def test_shannon_id_status_requires_auth(monkeypatch):
@@ -116,6 +136,42 @@ def test_shannon_id_link_does_not_blank_defendant_name(monkeypatch):
     assert result["success"] is True
     update = col.update_one.await_args.args[1]
     assert "defendant_name" not in update["$set"]
+
+
+def test_ocr_upload_keeps_confirmed_oneal(monkeypatch):
+    from dashboard.routers import shannon_id
+
+    async def fake_scan(raw, filename=""):
+        return {
+            "success": True,
+            "extracted": {
+                "full_name": "Brendan John O'Neill",
+                "first_name": "Brendan",
+                "last_name": "O'Neill",
+                "address": "1528 Broadway",
+                "city": "Fort Myers",
+            },
+        }
+
+    col = MagicMock()
+    col.update_one = AsyncMock()
+    monkeypatch.setattr(shannon_id, "get_collection", lambda name: col)
+    monkeypatch.setattr(shannon_id.IDScannerService, "scan_id_image", fake_scan)
+
+    fields, conflict = asyncio.run(
+        shannon_id._ocr_upload_into_packet(
+            "SH-TEST",
+            "indemnitor",
+            b"img",
+            "front.jpg",
+            {"shannon_confirmed_name": "Brendan O'Neal", "indemnitor_name": "Brendan O'Neal"},
+        )
+    )
+    assert fields["indemnitor_name"] == "Brendan John O'Neal"
+    assert conflict["kind"] == "confusable_surname"
+    saved = col.update_one.await_args.args[1]["$set"]
+    assert saved["indemnitor_name"] == "Brendan John O'Neal"
+    assert saved["id_ocr_name_source"] == "confirmed_confusable"
 
 
 def test_invalid_id_token_is_404(monkeypatch):

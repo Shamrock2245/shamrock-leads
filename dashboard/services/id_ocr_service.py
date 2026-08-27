@@ -26,7 +26,7 @@ US_STATES = {
     "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY"
 }
 
-# Apostrophe / hyphen legal names (O'Neill, D'Angelo, St-Pierre).
+# Apostrophe / hyphen legal names (O'Neal, O'Neill, D'Angelo, St-Pierre).
 _APOSTROPHE_CHARS = dict.fromkeys("`'´’‘ʻʼ", "'")
 _AAMVA_NAME = r"([A-Za-z][A-Za-z'\-. ]*?)"
 _AAMVA_STOP = (
@@ -45,6 +45,114 @@ def normalize_person_name(value: Any) -> str:
     if not s:
         return ""
     return " ".join(_title_name_token(tok) for tok in s.split(" ") if tok)
+
+
+def name_letters_key(value: Any) -> str:
+    """Lowercase letters only — used to compare names, not to rewrite them."""
+    return re.sub(r"[^a-z]", "", normalize_person_name(value).lower())
+
+
+def last_name_token(value: Any) -> str:
+    parts = normalize_person_name(value).split()
+    return parts[-1] if parts else ""
+
+
+def first_name_token(value: Any) -> str:
+    parts = normalize_person_name(value).split()
+    return parts[0] if parts else ""
+
+
+def collapse_confusable_surname(value: Any) -> str:
+    """Compare-only collapse of Irish Neal/Neil/Neill OCR mixups.
+
+    Never use this to rewrite a stored name. O'Neal and O'Neill are both legal.
+    """
+    letters = name_letters_key(value)
+    letters = re.sub(r"eill$", "eal", letters)
+    letters = re.sub(r"eil$", "eal", letters)
+    return letters
+
+
+def surnames_are_confusable(left: Any, right: Any) -> bool:
+    """True when last names are the same person-family but different letters (O'Neal vs O'Neill)."""
+    a = last_name_token(left)
+    b = last_name_token(right)
+    if not a or not b:
+        return False
+    if name_letters_key(a) == name_letters_key(b):
+        return False
+    return collapse_confusable_surname(a) == collapse_confusable_surname(b)
+
+
+def replace_last_name(full_name: Any, new_last: Any) -> str:
+    full = normalize_person_name(full_name)
+    last = last_name_token(new_last) or normalize_person_name(new_last)
+    if not full:
+        return last
+    if not last:
+        return full
+    parts = full.split()
+    parts[-1] = last
+    return " ".join(parts)
+
+
+def resolve_legal_name(ocr_name: Any, confirmed_name: Any = "") -> Dict[str, Any]:
+    """Prefer a caller-confirmed spelling on confusable OCR surnames.
+
+    Does **not** globally map O'Neill → O'Neal. If the card and the caller
+    agree, or there is no confirmed name, OCR is kept as copied.
+    """
+    ocr = normalize_person_name(ocr_name)
+    confirmed = normalize_person_name(confirmed_name)
+    base: Dict[str, Any] = {
+        "name": ocr or confirmed,
+        "source": "ocr" if ocr else ("confirmed" if confirmed else ""),
+        "conflict": None,
+        "ocr_name": ocr,
+        "confirmed_name": confirmed,
+    }
+    if not ocr:
+        return {**base, "name": confirmed, "source": "confirmed" if confirmed else ""}
+    if not confirmed:
+        return {**base, "name": ocr, "source": "ocr"}
+    if name_letters_key(ocr) == name_letters_key(confirmed):
+        return {**base, "name": ocr, "source": "ocr"}
+
+    ocr_last = last_name_token(ocr)
+    conf_last = last_name_token(confirmed)
+    ocr_first = first_name_token(ocr)
+    conf_parts = confirmed.split()
+    conf_first = first_name_token(confirmed)
+    firsts_ok = (
+        len(conf_parts) == 1
+        or not ocr_first
+        or not conf_first
+        or name_letters_key(ocr_first) == name_letters_key(conf_first)
+    )
+    if surnames_are_confusable(ocr_last, conf_last) and firsts_ok:
+        resolved = replace_last_name(ocr, conf_last)
+        return {
+            **base,
+            "name": resolved,
+            "source": "confirmed_confusable",
+            "conflict": {
+                "kind": "confusable_surname",
+                "ocr": ocr,
+                "confirmed": confirmed,
+                "ocr_last": ocr_last,
+                "confirmed_last": conf_last,
+            },
+        }
+    return {
+        **base,
+        "name": ocr,
+        "source": "ocr",
+        "conflict": {
+            "kind": "name_mismatch",
+            "ocr": ocr,
+            "confirmed": confirmed,
+        },
+    }
 
 
 def _simple_cap(token: str) -> str:

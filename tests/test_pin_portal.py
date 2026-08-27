@@ -366,6 +366,17 @@ def test_id_ocr_maps_apostrophe_indemnitor_name():
     assert "defendant_name" not in fields
 
 
+def test_id_ocr_prefers_confirmed_oneal_over_ocr_oneill():
+    from dashboard.routers.pin_portal import client_fields_from_id_ocr
+    fields = client_fields_from_id_ocr(
+        {"full_name": "BRENDAN JOHN O’NEILL", "first_name": "BRENDAN", "last_name": "O’NEILL", "dl_number": "O123"},
+        "indemnitor",
+        confirmed_name="Brendan O'Neal",
+    )
+    assert fields["indemnitor_name"] == "Brendan John O'Neal"
+    assert "O'Neill" not in fields["indemnitor_name"]
+
+
 def test_id_ocr_defendant_role_does_not_overwrite_indemnitor():
     from dashboard.routers.pin_portal import client_fields_from_id_ocr
     fields = client_fields_from_id_ocr(

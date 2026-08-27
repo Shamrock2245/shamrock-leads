@@ -511,9 +511,17 @@ def _sanitize_client_fields(raw: Optional[Dict[str, Any]]) -> Dict[str, str]:
     return clean
 
 
-def client_fields_from_id_ocr(extracted: Optional[Dict[str, Any]], role: str) -> Dict[str, str]:
+def client_fields_from_id_ocr(
+    extracted: Optional[Dict[str, Any]],
+    role: str,
+    confirmed_name: str = "",
+) -> Dict[str, str]:
     """Map a DL scan onto role-scoped client keys. Never mixes indemnitor ID onto defendant."""
-    from dashboard.services.id_ocr_service import normalize_person_name
+    from dashboard.services.id_ocr_service import (
+        last_name_token,
+        normalize_person_name,
+        resolve_legal_name,
+    )
 
     extracted = extracted if isinstance(extracted, dict) else {}
     full_name = normalize_person_name(
@@ -523,6 +531,11 @@ def client_fields_from_id_ocr(extracted: Optional[Dict[str, Any]], role: str) ->
     )
     first_name = normalize_person_name(extracted.get("first_name") or "")
     last_name = normalize_person_name(extracted.get("last_name") or "")
+    resolved = resolve_legal_name(full_name, confirmed_name)
+    if resolved.get("name"):
+        full_name = str(resolved["name"])
+        if resolved.get("source") == "confirmed_confusable":
+            last_name = last_name_token(full_name) or last_name
     address = str(extracted.get("address") or "").strip()
     city = str(extracted.get("city") or "").strip()
     state = str(extracted.get("state") or extracted.get("dl_state") or "").strip()
@@ -942,8 +955,18 @@ async def portal_id_ocr(request: Request):
     pushed = False
     if result.get("success") and extracted:
         role = _normalize_client_role(session.get("role")) or "indemnitor"
-        ocr_fields = client_fields_from_id_ocr(extracted, role)
         existing = session.get("client_fields") if isinstance(session.get("client_fields"), dict) else {}
+        if role == "defendant":
+            confirmed_name = str(existing.get("defendant_name") or session.get("defendant_name") or "")
+        else:
+            confirmed_name = str(
+                existing.get("indemnitor_name")
+                or existing.get("FullName")
+                or session.get("indemnitor_name")
+                or session.get("caller_name")
+                or ""
+            )
+        ocr_fields = client_fields_from_id_ocr(extracted, role, confirmed_name=confirmed_name)
         merged_fields = {**existing, **ocr_fields}
         pins_col = get_collection("portal_pins")
         await pins_col.update_one(
