@@ -112,7 +112,7 @@ def _extract_indemnitor(data: dict) -> dict:
     """
     g = lambda *keys: next((str(data.get(k, "")).strip() for k in keys if data.get(k)), "")
 
-    return {
+    out = {
         # Personal
         "firstName":    g("IndFirstName", "indFirstName", "indemnitorFirstName", "firstName", "first_name", "FirstName"),
         "middleName":   g("IndMiddleName", "indemnitorMiddleName", "middleName", "middle_name"),
@@ -147,6 +147,23 @@ def _extract_indemnitor(data: dict) -> dict:
         "ref2Phone":    g("Ref2Phone", "ref2Phone", "reference2Phone"),
         "ref2Address":  g("Ref2Address", "ref2Address", "reference2Address"),
     }
+    full = g(
+        "indemnitorName",
+        "indemnitor_name",
+        "IndemnitorName",
+        "caller_name",
+        "callerName",
+        "FullName",
+    )
+    if full and not out["firstName"] and not out["lastName"]:
+        parts = [p for p in full.split() if p]
+        if parts:
+            out["firstName"] = parts[0]
+            if len(parts) > 1:
+                out["lastName"] = parts[-1]
+            if len(parts) > 2:
+                out["middleName"] = " ".join(parts[1:-1])
+    return out
 
 
 def _extract_defendant(data: dict) -> dict:
@@ -224,7 +241,16 @@ async def intake_submit(request: Request):
     defendant = _extract_defendant(data)
 
     # Build a full name for display
-    ind_full_name = " ".join(filter(None, [indemnitor["firstName"], indemnitor["lastName"]])) or "Unknown"
+    ind_full_name = (
+        " ".join(
+            filter(
+                None,
+                [indemnitor.get("firstName"), indemnitor.get("middleName"), indemnitor.get("lastName")],
+            )
+        )
+        or str(data.get("indemnitorName") or data.get("indemnitor_name") or data.get("caller_name") or "").strip()
+        or "Unknown"
+    )
     def_full_name = defendant["name"] or " ".join(filter(None, [defendant["firstName"], defendant["lastName"]])) or "Unknown"
 
     # Generate unique intake ID (TG- prefix for Telegram, WX- for Wix, IN- for others)
@@ -311,21 +337,24 @@ async def intake_submit(request: Request):
         )
         logger.info(f"[intake] New intake stored: {intake_id} | source={source} | defendant={def_full_name}")
 
-        # ── Phase 4: Auto-trigger matching engine ─────────────────────────
+        # Shannon's create_intake webhook has a short ElevenLabs deadline.
+        # Matching can run later from the desk; do not block the voice turn.
         match_result = None
-        try:
-            from dashboard.services.matching_engine import MatchingEngine
-            engine = MatchingEngine(get_db())
-            match_result = await engine.match_intake(doc)
-            logger.info(
-                "[intake] Auto-match for %s: confidence=%s strategy=%s auto_linked=%s",
-                intake_id,
-                match_result.get("confidence"),
-                match_result.get("strategy"),
-                match_result.get("auto_linked"),
-            )
-        except Exception as match_err:
-            logger.warning("[intake] Auto-match failed for %s: %s", intake_id, match_err)
+        skip_match = bool(data.get("skip_match")) or source in ("elevenlabs_voice", "shannon")
+        if not skip_match:
+            try:
+                from dashboard.services.matching_engine import MatchingEngine
+                engine = MatchingEngine(get_db())
+                match_result = await engine.match_intake(doc)
+                logger.info(
+                    "[intake] Auto-match for %s: confidence=%s strategy=%s auto_linked=%s",
+                    intake_id,
+                    match_result.get("confidence"),
+                    match_result.get("strategy"),
+                    match_result.get("auto_linked"),
+                )
+            except Exception as match_err:
+                logger.warning("[intake] Auto-match failed for %s: %s", intake_id, match_err)
 
         return {
             "success": True,
