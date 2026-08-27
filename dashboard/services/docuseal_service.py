@@ -293,6 +293,11 @@ def validate_shannon_voice_packet(
         raise DocuSealPacketValidationError(
             "Shannon paperwork blocked: indemnitor name and email are required before a signing email can be sent."
         )
+    email_l = email.lower()
+    if any(token in email_l for token in ("jail", "sheriff", "corrections", "inmate", "detention")):
+        raise DocuSealPacketValidationError(
+            "Shannon paperwork blocked: never email the jail. Use the MAIN indemnitor email."
+        )
     def_party = defendant if isinstance(defendant, dict) else (
         data.get("defendant") if isinstance(data.get("defendant"), dict) else {}
     )

@@ -49,6 +49,7 @@ jobs:
         env:
           FIREBASE_ADMINSDK_B64: ${{ secrets.FIREBASE_ADMINSDK_B64 }}
           FIREBASE_GOOGLE_SERVICES_B64: ${{ secrets.FIREBASE_GOOGLE_SERVICES_B64 }}
+          GITHUB_SHA: ${{ github.sha }}
         with:
           host: 178.156.179.237
           username: root
@@ -58,7 +59,7 @@ jobs:
           # observed on 2026-08-12 exceeded 30m before restart verification.
           command_timeout: 40m
           timeout: 60s
-          envs: FIREBASE_ADMINSDK_B64,FIREBASE_GOOGLE_SERVICES_B64
+          envs: FIREBASE_ADMINSDK_B64,FIREBASE_GOOGLE_SERVICES_B64,GITHUB_SHA
           script: |
             set -e
             trap 'echo "❌ Deploy failed at line $LINENO (exit code $?)"; exit 1' ERR
@@ -93,15 +94,23 @@ jobs:
               echo "   ⚠️  FIREBASE_GOOGLE_SERVICES_B64 secret not set — skipping"
             fi
 
-            # ── Pull latest code ──────────────────────────────────
+            # ── Pull the exact GitHub Actions SHA. Fail closed. ──
             echo ""
-            echo "📥 Pulling latest from GitHub..."
-            git pull origin main || git fetch origin main || git fetch --all || true
-            git reset --hard origin/main || git reset --hard HEAD || true
-
-            echo ""
-            echo "📋 Latest commit:"
+            echo "📥 Fetching GitHub SHA ${GITHUB_SHA:-origin/main}..."
+            git fetch origin main
+            if [ -n "${GITHUB_SHA:-}" ]; then
+              git fetch origin "${GITHUB_SHA}" || git fetch origin main
+              git reset --hard "${GITHUB_SHA}"
+            else
+              git reset --hard origin/main
+            fi
+            ACTUAL=$(git rev-parse HEAD)
+            echo "📋 VPS HEAD: $ACTUAL"
             git log --oneline -1
+            if [ -n "${GITHUB_SHA:-}" ] && [ "$ACTUAL" != "$GITHUB_SHA" ]; then
+              echo "::error::VPS HEAD $ACTUAL != GITHUB_SHA $GITHUB_SHA — refusing to rebuild stale code"
+              exit 1
+            fi
 
             # OSINT worker fail-closes without a shared key. Mint once if empty;
             # never overwrite a live key. Recreate worker later so it picks .env up.

@@ -54,9 +54,15 @@ def get_bb_client(phone: Optional[str] = None):
         if not ext.BB_SERVERS:
             ext.init_bluebubbles()
 
+        # Recipient last-4 is not a FROM line. Only use a named BB host when
+        # the number is a configured server key (e.g. 2399550178). Otherwise
+        # staff texts to 9365/7008/0301 must go out the default 0178 server.
+        server = None
         if phone:
-            server = ext.get_bb_server(phone)
-        else:
+            digits = "".join(ch for ch in str(phone) if ch.isdigit())
+            last10 = digits[-10:] if len(digits) >= 10 else digits
+            server = ext.BB_SERVERS.get(last10) or ext.BB_SERVERS.get(digits)
+        if not server:
             server = next(iter(ext.BB_SERVERS.values()), None)
 
         if not server:
@@ -226,7 +232,17 @@ def bb_send_accepted(result: Optional[dict]) -> bool:
 
 
 async def send_shannon_voice_text(phone: str, message: str) -> dict:
-    """Shannon mid-call texts. BlueBubbles only. Never Twilio."""
+    """Shannon mid-call texts. BlueBubbles only. Never Twilio. Never 727."""
+    digits = "".join(ch for ch in str(phone or "") if ch.isdigit())
+    last10 = digits[-10:] if len(digits) >= 10 else digits
+    if last10 == "7272952245":
+        return {
+            "success": False,
+            "sent": False,
+            "queued": False,
+            "rail": "bluebubbles",
+            "error": "shannon_public_line_blocked",
+        }
     result = normalize_bb_send_result(await send_message_universal(phone, message))
     result["rail"] = "bluebubbles"
     result["success"] = bb_send_accepted(result)

@@ -48,6 +48,16 @@ from dashboard.services.bb_client import (
 from dashboard.routers.automation_control import _actor_label, _require_control_auth
 
 logger = logging.getLogger(__name__)
+
+
+def rewrite_shannon_packet_id(packet_id: str) -> str:
+    """Never use a Twilio CallSid as a Super CRM packet id."""
+    pid = str(packet_id or "").strip()
+    if not pid:
+        return f"SH-{uuid.uuid4().hex[:10].upper()}"
+    if pid.upper().startswith("CA") and len(pid) >= 34:
+        return f"SH-{uuid.uuid4().hex[:10].upper()}"
+    return pid
 paperwork_bp = APIRouter(prefix="/api", tags=["paperwork"])
 
 
@@ -2541,9 +2551,9 @@ async def shannon_email_indemnitor_paperwork(request: Request):
         }]
 
     surety_id = str(body.get("surety_id") or "osi").strip().lower() or "osi"
-    packet_id = str(body.get("packet_id") or body.get("case_reference") or "").strip()
-    if not packet_id:
-        packet_id = f"SH-{uuid.uuid4().hex[:10].upper()}"
+    packet_id = rewrite_shannon_packet_id(
+        str(body.get("packet_id") or body.get("case_reference") or "").strip()
+    )
 
     template_id = resolve_template_id_for_surety(surety_id)
     if not template_id:

@@ -2,7 +2,6 @@ import logging
 import os
 import httpx
 import asyncio
-from datetime import datetime, timezone
 from writers.slack_notifier import SlackNotifier
 
 logger = logging.getLogger(__name__)
@@ -33,7 +32,7 @@ class WatchdogService:
         except Exception as e:
             results["errors"].append(f"API Health check failed: {e}")
 
-        # Shannon path: Netlify voice 403, fallback Dial 332, GAS, BlueBubbles, Mem0
+        # Shannon path: Netlify voice 403, fallback Dial 0301 then 332, GAS, BB, Mem0
         try:
             from dashboard.routers.shannon_health import collect_shannon_path_checks
             shannon = await collect_shannon_path_checks()
@@ -70,7 +69,7 @@ class WatchdogService:
                 msg += f"• {err}\n"
             try:
                 await asyncio.to_thread(self.slack._post, self.slack.webhook_errors, {"text": msg})
-            except Exception:
-                pass
+            except Exception as slack_exc:
+                logger.warning("[Watchdog] Slack alert failed: %s", slack_exc)
                 
         return results
