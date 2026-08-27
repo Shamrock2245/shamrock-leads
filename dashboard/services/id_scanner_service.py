@@ -116,6 +116,9 @@ class IDScannerService:
             "- veteran / real_id: true only if the printed veteran flag or REAL ID star is visible.\n"
             "- dl_number is the license/ID number; document_number is passport/inventory number if different.\n"
             "- full_name is the legal name as printed (LN, FN, MN, suffix).\n"
+            "- Keep apostrophes and hyphens in names exactly (O'NEILL, D'ANGELO, ST-PIERRE, SMITH-JONES). "
+            "Never drop an apostrophe. Never split O'NEILL into first=O last=NEILL. "
+            "Normalize curly quotes to ASCII apostrophe. Mc/Mac prefixes stay one token (McDonald).\n"
             "- Prefer physical address over mailing.\n"
             "- portrait_box is the face photo as fractions of image width/height (0-1). Estimate if needed.\n"
             "- id_type: driver_license | state_id | passport | resident_card | military_id | consular_id | other.\n"
@@ -136,7 +139,10 @@ class IDScannerService:
                         {"type": "text", "text": "Extract all identity details from this Driver License / ID / Passport."},
                         {
                             "type": "image_url",
-                            "image_url": {"url": f"data:{mime_type};base64,{b64_img}"},
+                            "image_url": {
+                                "url": f"data:{mime_type};base64,{b64_img}",
+                                "detail": "high",
+                            },
                         },
                     ],
                 },
@@ -155,7 +161,7 @@ class IDScannerService:
                 "https://api.openai.com/v1/chat/completions",
                 json=payload,
                 headers=headers,
-                timeout=aiohttp.ClientTimeout(total=30),
+                timeout=aiohttp.ClientTimeout(total=12),
             ) as resp:
                 if resp.status != 200:
                     text = await resp.text()
@@ -445,10 +451,11 @@ class IDScannerService:
             res["nationality"] = m_pass.group(1)
             parts = [p for p in m_pass.group(2).split("<") if p]
             if len(parts) >= 2:
-                res["last_name"] = parts[0]
-                res["first_name"] = parts[1]
+                from dashboard.services.id_ocr_service import normalize_person_name
+                res["last_name"] = normalize_person_name(parts[0])
+                res["first_name"] = normalize_person_name(parts[1])
                 if len(parts) > 2:
-                    res["middle_name"] = " ".join(parts[2:])
+                    res["middle_name"] = normalize_person_name(" ".join(parts[2:]))
                 res["full_name"] = " ".join(filter(None, [res["first_name"], res.get("middle_name"), res["last_name"]]))
 
         if re.search(r"\bORGAN\s*DONOR\b|\bDONOR\b", text, re.I) and not re.search(r"\bNOT\s+A\s+DONOR\b", text, re.I):
@@ -506,13 +513,15 @@ class IDScannerService:
         # Name + street heuristics from numbered AAMVA-style front lines
         for i, line in enumerate(lines):
             if re.search(r"^1\s+([A-Z\s\-']+)$", line):
-                res["last_name"] = line.split(maxsplit=1)[1].strip()
+                from dashboard.services.id_ocr_service import normalize_person_name
+                res["last_name"] = normalize_person_name(line.split(maxsplit=1)[1])
             elif re.search(r"^2\s+([A-Z\s\-']+)$", line):
+                from dashboard.services.id_ocr_service import normalize_person_name
                 parts = line.split(maxsplit=1)[1].strip().split()
                 if parts:
-                    res["first_name"] = parts[0]
+                    res["first_name"] = normalize_person_name(parts[0])
                     if len(parts) > 1:
-                        res["middle_name"] = " ".join(parts[1:])
+                        res["middle_name"] = normalize_person_name(" ".join(parts[1:]))
             elif re.search(r"^8\s+", line):
                 res["address"] = re.sub(r"^8\s+", "", line).strip()
             elif re.search(r"^(?:ADD|ADDR|ADDRESS)[:\s]+(.+)$", line, re.I):
@@ -532,18 +541,21 @@ class IDScannerService:
                 res["address"] = f"{res['address']}, {tail}"
 
         if res["first_name"] or res["last_name"]:
+            from dashboard.services.id_ocr_service import normalize_person_name
             full = f"{res['first_name'] or ''} {res['middle_name'] or ''} {res['last_name'] or ''}".strip()
-            res["full_name"] = " ".join(full.split())
+            res["full_name"] = normalize_person_name(" ".join(full.split()))
 
         return res
 
     @staticmethod
     def _normalize_extracted_fields(parsed: dict[str, Any]) -> dict[str, Any]:
         """Map raw AI/OCR extracted output into standardized indemnitor intake keys."""
-        first = str(parsed.get("first_name") or "").strip()
-        middle = str(parsed.get("middle_name") or "").strip()
-        last = str(parsed.get("last_name") or "").strip()
-        full = str(parsed.get("full_name") or "").strip()
+        from dashboard.services.id_ocr_service import normalize_person_name
+
+        first = normalize_person_name(parsed.get("first_name") or "")
+        middle = normalize_person_name(parsed.get("middle_name") or "")
+        last = normalize_person_name(parsed.get("last_name") or "")
+        full = normalize_person_name(parsed.get("full_name") or "")
 
         if not full and (first or last):
             full = " ".join(filter(None, [first, middle, last]))

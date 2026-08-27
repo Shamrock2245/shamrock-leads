@@ -40,9 +40,9 @@ def test_id_scanner_raw_text_parsing():
     res = IDScannerService.parse_raw_text(raw_text)
     assert res["dl_number"] == "D123456789010"
     assert res["dob"] == "1985-06-15"
-    assert res["last_name"] == "DOE"
-    assert res["first_name"] == "JOHN"
-    assert res["middle_name"] == "ROBERT"
+    assert res["last_name"] == "Doe"
+    assert res["first_name"] == "John"
+    assert res["middle_name"] == "Robert"
     assert res["sex"] == "M"
     assert res["zip"] == "33901"
     assert res["expiration_date"] == "2028-06-15"
@@ -71,6 +71,25 @@ def test_id_scanner_prepare_applies_exif_and_downscales():
     prepared = Image.open(BytesIO(out))
     assert max(prepared.size) <= 2000
     assert "oriented" in note
+
+
+def test_id_scanner_normalize_preserves_apostrophe_last_names():
+    extracted = IDScannerService._normalize_extracted_fields({
+        "first_name": "BRENDAN",
+        "middle_name": "JOHN",
+        "last_name": "O’NEILL",
+        "full_name": "BRENDAN JOHN O’NEILL",
+    })
+    assert extracted["last_name"] == "O'Neill"
+    assert extracted["full_name"] == "Brendan John O'Neill"
+
+
+def test_id_scanner_front_line_o_neill():
+    raw = "FLORIDA DRIVER LICENSE\n1 O'NEILL\n2 BRENDAN JOHN\n8 1528 BROADWAY\nFORT MYERS FL 33901"
+    res = IDScannerService.parse_raw_text(raw)
+    assert res["last_name"] == "O'Neill"
+    assert res["first_name"] == "Brendan"
+    assert "O'Neill" in (res["full_name"] or "")
 
 
 def test_id_scanner_normalize_fields():
@@ -107,8 +126,8 @@ def test_id_scanner_foreign_passport_mrz():
     res = IDScannerService.parse_raw_text(raw)
     assert res["id_type"] == "passport"
     assert res["issuing_country"] == "UTO"
-    assert res["last_name"] == "ERIKSSON"
-    assert res["first_name"] == "ANNA"
+    assert res["last_name"] == "Eriksson"
+    assert res["first_name"] == "Anna"
 
 
 def test_id_scanner_organ_donor_and_physicals():

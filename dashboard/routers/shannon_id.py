@@ -302,13 +302,13 @@ button{{width:100%;margin-top:10px;padding:12px;border:0;border-radius:10px;back
 <p>Photograph the <strong>front</strong> and <strong>back</strong> of your driver license or state ID.</p>
 <div class="card">
 <label>Front {('<span class=ok>received</span>' if photos.get('govt_id_front') else '')}</label>
-<input id="front" type="file" accept="image/*" capture="environment">
-<button type="button" onclick="send('front')">Upload front</button>
+<input id="front" type="file" accept="image/*" capture="environment" onchange="send('front')">
+<button type="button" onclick="document.getElementById('front').click()">Photograph front</button>
 </div>
 <div class="card">
 <label>Back {('<span class=ok>received</span>' if photos.get('govt_id_back') else '')}</label>
-<input id="back" type="file" accept="image/*" capture="environment">
-<button type="button" onclick="send('back')">Upload back</button>
+<input id="back" type="file" accept="image/*" capture="environment" onchange="send('back')">
+<button type="button" onclick="document.getElementById('back').click()">Photograph back</button>
 </div>
 <p id="msg"></p>
 <p class="foot">Packet {packet_id}. Questions: (239) 332-2245.</p>
@@ -317,14 +317,16 @@ button{{width:100%;margin-top:10px;padding:12px;border:0;border-radius:10px;back
 async function send(slot){{
   const input = document.getElementById(slot);
   const msg = document.getElementById('msg');
-  if(!input.files.length){{ msg.textContent='Choose a photo first.'; return; }}
+  if(!input.files.length){{ return; }}
   const fd = new FormData();
   fd.append('slot', slot);
   fd.append('file', input.files[0]);
-  msg.textContent='Uploading…';
+  msg.textContent='Reading ID…';
   const r = await fetch('/api/paperwork/shannon/id/{token}', {{ method:'POST', body: fd }});
   const d = await r.json();
-  msg.textContent = d.success ? ('Saved '+slot+'. Thank you.') : (d.error || 'Upload failed');
+  if(!d.success){{ msg.textContent = d.error || 'Upload failed'; return; }}
+  const name = (d.ocr && (d.ocr.indemnitor_name || d.ocr.defendant_name)) || '';
+  msg.textContent = name ? ('Saved '+slot+'. We read '+name+'.') : ('Saved '+slot+'.');
 }}
 </script></body></html>"""
     return HTMLResponse(html)

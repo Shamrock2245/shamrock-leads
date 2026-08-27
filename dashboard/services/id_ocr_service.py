@@ -13,7 +13,7 @@ Extracted fields:
 """
 import re
 import logging
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,48 @@ US_STATES = {
     "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
     "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY"
 }
+
+# Apostrophe / hyphen legal names (O'Neill, D'Angelo, St-Pierre).
+_APOSTROPHE_CHARS = dict.fromkeys("`'´’‘ʻʼ", "'")
+_AAMVA_NAME = r"([A-Za-z][A-Za-z'\-. ]*?)"
+_AAMVA_STOP = (
+    r"(?=\s*(?:DAC|DCT|DCS|DAB|DAD|DCU|DAQ|DBB|DBA|DBD|DAG|DAI|DAJ|"
+    r"DAK|DBC|DAH|DCA|DAU|DAY|DAZ|DDK|DDA|DDB|DCK)|\r|\n|$)"
+)
+
+
+def normalize_person_name(value: Any) -> str:
+    """Preserve apostrophes and hyphens; title-case Irish/Scottish/compound names."""
+    s = str(value or "").strip()
+    if not s:
+        return ""
+    s = "".join(_APOSTROPHE_CHARS.get(ch, ch) for ch in s)
+    s = re.sub(r"\s+", " ", s).strip(" -")
+    if not s:
+        return ""
+    return " ".join(_title_name_token(tok) for tok in s.split(" ") if tok)
+
+
+def _simple_cap(token: str) -> str:
+    if not token:
+        return ""
+    return token[0].upper() + token[1:].lower()
+
+
+def _title_name_token(token: str) -> str:
+    if not token:
+        return ""
+    if "-" in token:
+        return "-".join(_title_name_token(part) for part in token.split("-"))
+    if "'" in token:
+        left, right = token.split("'", 1)
+        return _simple_cap(left) + "'" + _simple_cap(right)
+    low = token.lower()
+    if low.startswith("mc") and len(token) > 3 and token[2].isalpha():
+        return "Mc" + _simple_cap(token[2:])
+    if low.startswith("mac") and len(token) > 4 and token[3].isalpha():
+        return "Mac" + _simple_cap(token[3:])
+    return _simple_cap(token)
 
 
 class IDOCRService:
@@ -58,16 +100,16 @@ class IDOCRService:
         # ── AAMVA PDF417 Barcode Format (Back of DL) ──────────────────────
         if "ANSI " in text or "DL" in text or "DAQ" in text:
             # First Name (DAC or DCT) & Last Name (DCS or DAB)
-            m_fn = re.search(r"(?:DAC|DCT)\s*([A-Za-z\-]+)", text)
-            m_ln = re.search(r"(?:DCS|DAB)\s*([A-Za-z\-]+)", text)
-            m_mn = re.search(r"DAD\s*([A-Za-z\-]+)", text)
+            m_fn = re.search(r"(?:DAC|DCT)\s*" + _AAMVA_NAME + _AAMVA_STOP, text)
+            m_ln = re.search(r"(?:DCS|DAB)\s*" + _AAMVA_NAME + _AAMVA_STOP, text)
+            m_mn = re.search(r"DAD\s*" + _AAMVA_NAME + _AAMVA_STOP, text)
             m_suf = re.search(r"DCU\s*([A-Za-z0-9\-]+)", text)
             if m_fn:
-                out["first_name"] = m_fn.group(1).title()
+                out["first_name"] = normalize_person_name(m_fn.group(1).strip())
             if m_ln:
-                out["last_name"] = m_ln.group(1).title()
+                out["last_name"] = normalize_person_name(m_ln.group(1).strip())
             if m_mn:
-                out["middle_name"] = m_mn.group(1).title()
+                out["middle_name"] = normalize_person_name(m_mn.group(1).strip())
             if m_suf:
                 out["suffix"] = m_suf.group(1).upper()
             if out["first_name"] and out["last_name"]:
@@ -172,9 +214,9 @@ class IDOCRService:
                 out["zip"] = z
 
         # Name extraction heuristic (LN, FN)
-        m_name = re.search(r"(?:FN|LN|NAME)[:\s]*([A-Za-z\s,]+)", text, re.IGNORECASE)
+        m_name = re.search(r"(?:FN|LN|NAME)[:\s]*([A-Za-z'\-\s,]+)", text, re.IGNORECASE)
         if m_name:
-            out["full_name"] = m_name.group(1).strip().title()
+            out["full_name"] = normalize_person_name(m_name.group(1).replace(",", " "))
 
         return {k: v for k, v in out.items() if v}
 
@@ -191,7 +233,9 @@ class IDOCRService:
 
         # Build indemnitor field dict ready for bond prefill
         return {
-            "indemnitor_name": merged.get("full_name") or f"{merged.get('first_name', '')} {merged.get('last_name', '')}".strip(),
+            "indemnitor_name": normalize_person_name(
+                merged.get("full_name") or f"{merged.get('first_name', '')} {merged.get('last_name', '')}"
+            ),
             "indemnitor_dob": merged.get("dob", ""),
             "indemnitor_dl": merged.get("dl_number", ""),
             "indemnitor_dl_state": merged.get("dl_state", "FL"),

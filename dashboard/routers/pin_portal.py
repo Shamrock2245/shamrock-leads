@@ -513,12 +513,16 @@ def _sanitize_client_fields(raw: Optional[Dict[str, Any]]) -> Dict[str, str]:
 
 def client_fields_from_id_ocr(extracted: Optional[Dict[str, Any]], role: str) -> Dict[str, str]:
     """Map a DL scan onto role-scoped client keys. Never mixes indemnitor ID onto defendant."""
+    from dashboard.services.id_ocr_service import normalize_person_name
+
     extracted = extracted if isinstance(extracted, dict) else {}
-    full_name = str(
+    full_name = normalize_person_name(
         extracted.get("full_name")
         or " ".join(p for p in (extracted.get("first_name"), extracted.get("last_name")) if p)
         or ""
-    ).strip()
+    )
+    first_name = normalize_person_name(extracted.get("first_name") or "")
+    last_name = normalize_person_name(extracted.get("last_name") or "")
     address = str(extracted.get("address") or "").strip()
     city = str(extracted.get("city") or "").strip()
     state = str(extracted.get("state") or extracted.get("dl_state") or "").strip()
@@ -530,8 +534,8 @@ def client_fields_from_id_ocr(extracted: Optional[Dict[str, Any]], role: str) ->
         raw = {
             "defendant_name": full_name,
             "DefName": full_name,
-            "DefFirstName": str(extracted.get("first_name") or "").strip(),
-            "DefLastName": str(extracted.get("last_name") or "").strip(),
+            "DefFirstName": first_name,
+            "DefLastName": last_name,
             "defendant_address": address,
             "defendant_city": city,
             "defendant_state": state,
