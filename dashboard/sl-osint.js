@@ -154,11 +154,14 @@
     const authOk = _toolStatus.worker_auth_ok === true;
     const ready = _toolStatus.ready_for_scans === true;
     const trape = _toolStatus.trape || {};
-    const engines = ['maigret', 'tookie', 'sherlock', 'blackbird', 'spiderfoot', 'ignorant', 'holehe', 'hibf', 'toutatis', 'instaloader', 'exiftool'];
+    const engines = ['maigret', 'tookie', 'sherlock', 'blackbird', 'spiderfoot', 'ignorant', 'holehe', 'hibf', 'toutatis', 'instaloader', 'exiftool', 'ghunt', 'h8mail'];
     const live = engines.filter(id => _engineAvailable(_toolStatus[id]));
     const pending = [];
     if ((_toolStatus.toutatis || {}).package_installed && !_engineAvailable(_toolStatus.toutatis)) {
       pending.push('Toutatis needs INSTAGRAM_SESSION_ID');
+    }
+    if ((_toolStatus.ghunt || {}).package_installed && !_engineAvailable(_toolStatus.ghunt)) {
+      pending.push('GHunt needs worker login (ghunt login)');
     }
     if ((_toolStatus.holehe || {}).error && !_engineAvailable(_toolStatus.holehe)) {
       pending.push('Holehe not installed');
@@ -199,15 +202,16 @@
     const container = $('osintEnginePills');
     if (!container || !_toolStatus) return;
 
-    const engines = ['maigret', 'tookie', 'sherlock', 'blackbird', 'spiderfoot', 'ignorant', 'holehe', 'hibf', 'toutatis', 'instaloader', 'exiftool'];
+    const engines = ['maigret', 'tookie', 'sherlock', 'blackbird', 'spiderfoot', 'ignorant', 'holehe', 'hibf', 'toutatis', 'instaloader', 'exiftool', 'ghunt', 'h8mail'];
     container.innerHTML = engines.map(eng => {
       const info = _toolStatus[eng] || {};
       const available = _engineAvailable(info);
-      const needsSession = eng === 'toutatis' && info.session_configured === false;
+      const needsSession = (eng === 'toutatis' && info.session_configured === false)
+        || (eng === 'ghunt' && info.creds_configured === false);
       const cls = available ? 'available' : (needsSession ? 'needs-config' : 'unavailable');
       const version = info.version ? ` v${info.version}` : '';
       const note = info.note ? ` — ${info.note}` : '';
-      const sess = needsSession ? ' — needs INSTAGRAM_SESSION_ID' : '';
+      const sess = needsSession ? (eng === 'ghunt' ? ' — needs ghunt login' : ' — needs INSTAGRAM_SESSION_ID') : '';
       const label = eng === 'tookie' ? '🚀 Tookie-OSINT' : eng.charAt(0).toUpperCase() + eng.slice(1);
       return `<span class="osint-engine-pill ${cls}" title="${eng}${version}${info.error ? ' — ' + info.error : ''}${note}${sess}">
         <span class="dot"></span>${label}${version}
@@ -236,6 +240,8 @@
       { id: 'spiderfoot', name: '🕷️ SpiderFoot', rank: 'OSINT Suite', desc: 'Multi-source entity correlation & OSINT footprinting' },
       { id: 'ignorant', name: '📱 Ignorant', rank: 'Phone Check', desc: 'Passive phone registration checks on Instagram, Snapchat, Amazon (no target SMS)' },
       { id: 'holehe', name: '✉️ Holehe', rank: 'Email Check', desc: 'Passive email registration across 120+ sites including Instagram (no target email)' },
+      { id: 'ghunt', name: '🔎 GHunt', rank: 'Google Account', desc: 'Gmail/Google email → GAIA id, Maps reviews, photos, linked services. Needs ghunt login on the worker. Not a phone ping.' },
+      { id: 'h8mail', name: '🕳️ h8mail', rank: 'Breach Hunt', desc: 'Email → breach/dump sources. Optional local files + Hunter.io key. Does not email the target.' },
       { id: 'hibf', name: '🚘 HIBF', rank: 'Plate Audit', desc: 'Public Flock LE search audit logs via Have I Been Flocked (FOIA data — not a live camera hit)' },
       { id: 'toutatis', name: '📸 Toutatis', rank: 'IG Enrichment', desc: 'Instagram handle → recovers public & obfuscated email, phone number & WhatsApp links' },
       { id: 'instaloader', name: '🖼️ Instaloader', rank: 'IG Media', desc: 'Extracts Instagram bio text, HD avatars, external profile links & follower counts' },
@@ -246,13 +252,14 @@
     matrixEl.innerHTML = engineMeta.map(item => {
       const info = _toolStatus[item.id] || {};
       const avail = _engineAvailable(info);
-      const needsCfg = item.id === 'toutatis' && info.session_configured === false && info.package_installed;
+      const needsCfg = (item.id === 'toutatis' && info.session_configured === false && info.package_installed)
+        || (item.id === 'ghunt' && info.creds_configured === false && info.package_installed);
       const isTop = item.id === 'tookie';
       const badgeCls = isTop && avail ? 'top-rank' : (avail ? 'ready' : (needsCfg ? 'needs-config' : 'offline'));
-      const badgeText = isTop && avail ? '🚀 Rank #1 (Top)' : (avail ? 'ACTIVE' : (needsCfg ? 'NEEDS COOKIE' : (_toolStatus.worker_auth_ok === false ? 'NOT AUTHENTICATED' : 'UNAVAILABLE')));
+      const badgeText = isTop && avail ? '🚀 Rank #1 (Top)' : (avail ? 'ACTIVE' : (needsCfg ? (item.id === 'ghunt' ? 'NEEDS LOGIN' : 'NEEDS COOKIE') : (_toolStatus.worker_auth_ok === false ? 'NOT AUTHENTICATED' : 'UNAVAILABLE')));
       const pathText = item.id === 'trape'
         ? (info.server_url || 'https://leads.shamrockbailbonds.biz') + '/track/{session}'
-        : (info.path || (needsCfg ? 'Installed — set INSTAGRAM_SESSION_ID' : (_toolStatus.worker_auth_ok === false ? 'Worker not authenticated' : 'Not installed')));
+        : (info.path || (needsCfg ? (item.id === 'ghunt' ? 'Installed — run ghunt login on worker' : 'Installed — set INSTAGRAM_SESSION_ID') : (_toolStatus.worker_auth_ok === false ? 'Worker not authenticated' : 'Not installed')));
 
       return `<div class="osint-matrix-card ${isTop ? 'ranked-top' : ''}">
         <div class="matrix-header">
@@ -299,9 +306,17 @@
     }
 
     const email = ($('osintEmail')?.value || '').trim();
-    if (email && email.includes('@') && !_selectedEngines.has('holehe')) {
-      _selectedEngines.add('holehe');
-      _updateEngineChips();
+    if (email && email.includes('@')) {
+      let changed = false;
+      const extras = ['holehe', 'h8mail'];
+      if (_engineAvailable(_toolStatus && _toolStatus.ghunt)) extras.push('ghunt');
+      for (const eng of extras) {
+        if (!_selectedEngines.has(eng)) {
+          _selectedEngines.add(eng);
+          changed = true;
+        }
+      }
+      if (changed) _updateEngineChips();
     }
 
     const plate = ($('osintPlate')?.value || '').trim();
@@ -977,7 +992,7 @@
         full_name: 'Test Subject',
         usernames: (!isPhone && !isUrl && !isEmail && !isPlate) ? [target] : null,
         phone: (isPhone || engine === 'ignorant') ? target : null,
-        email: (isEmail || isUrl || engine === 'holehe' || engine === 'exiftool') ? target : null,
+        email: (isEmail || isUrl || engine === 'holehe' || engine === 'ghunt' || engine === 'h8mail' || engine === 'exiftool') ? target : null,
         license_plate: (isPlate || engine === 'hibf') ? target : null,
         engines: [engine],
         deep_scan: false,

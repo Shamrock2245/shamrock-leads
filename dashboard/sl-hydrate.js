@@ -609,9 +609,11 @@
             charges: lead.charges || norm.chargesRaw || '',
           });
         }
-        if (typeof switchTab === 'function') switchTab('tabDefendants');
         const created = d.created ? 'Created arrest · ' : 'Merged ';
         this.showToast('☘️ ' + created + (d.charge_count || 0) + ' charge(s) · $' + Number(d.total_bond || 0).toLocaleString());
+        const searchEl = document.getElementById('defSearch');
+        if (searchEl && booking) searchEl.value = booking;
+        if (typeof switchTab === 'function') switchTab('tabDefendants');
         if (typeof openDefendantWritePrint === 'function' && booking) {
           await openDefendantWritePrint(booking);
         } else {
@@ -937,10 +939,24 @@
     /**
      * Initialize Global Listeners & Keyboard Shortcuts
      */
+    applyDeepLink: function() {
+      try {
+        const q = new URLSearchParams(location.search || '');
+        const tab = (q.get('tab') || '').trim();
+        if (tab && typeof switchTab === 'function') {
+          const id = tab.indexOf('tab') === 0
+            ? tab
+            : 'tab' + tab.charAt(0).toUpperCase() + tab.slice(1);
+          switchTab(id);
+        }
+      } catch (e) { /* ignore */ }
+    },
+
     init: function() {
       this.injectModalHtml();
       this.captureExtractFromUrl();
       this.listenForExtractMessages();
+      this.applyDeepLink();
 
       // Keyboard Shortcut: Cmd+Shift+V or Ctrl+Shift+V
       document.addEventListener('keydown', (e) => {

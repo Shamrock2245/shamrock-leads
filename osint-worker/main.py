@@ -31,7 +31,7 @@ WORKER_KEY = os.getenv("OSINT_WORKER_KEY", "").strip()
 
 app = FastAPI(
     title="Shamrock OSINT Worker",
-    version="2.2.0",
+    version="2.6.0",
     docs_url=None,
     redoc_url=None,
 )
@@ -59,7 +59,7 @@ class ScanRequestV2(BaseModel):
     engines: List[str] = Field(
         default_factory=lambda: ["maigret", "tookie", "sherlock"],
         description=(
-            "Engines: maigret, tookie, sherlock, blackbird, spiderfoot, ignorant, holehe, hibf, toutatis, instaloader, exiftool"
+            "Engines: maigret, tookie, sherlock, blackbird, spiderfoot, ignorant, holehe, hibf, toutatis, instaloader, exiftool, ghunt, h8mail"
         ),
     )
     second_opinion: bool = False
@@ -81,7 +81,7 @@ def _check_key(x_worker_key: Optional[str]) -> None:
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "osint-worker", "version": "2.2.0"}
+    return {"status": "ok", "service": "osint-worker", "version": "2.6.0"}
 
 
 @app.get("/status")
@@ -146,6 +146,8 @@ async def scan_v2(
         "toutatis",
         "instaloader",
         "exiftool",
+        "ghunt",
+        "h8mail",
     }
     engines = [e for e in body.engines if e in valid_engines]
     if not engines:

@@ -1,12 +1,12 @@
 # ============================================
 # ShamrockLeads — OSINT Worker v2
-# Writable FS: Maigret · Sherlock · Blackbird · SpiderFoot · Ignorant · Holehe · Toutatis
+# Writable FS: Maigret · Sherlock · Blackbird · SpiderFoot · Ignorant · Holehe · Toutatis · GHunt · h8mail
 # Internal network only (no published ports)
 # ============================================
 FROM python:3.12-slim
 
 LABEL maintainer="Shamrock Active Software"
-LABEL description="ShamrockLeads OSINT Worker v2 (Maigret + Sherlock + Blackbird + SpiderFoot + Ignorant + Holehe + Toutatis)"
+LABEL description="ShamrockLeads OSINT Worker v2 (Maigret + Sherlock + Blackbird + SpiderFoot + Ignorant + Holehe + Toutatis + GHunt + h8mail)"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -65,6 +65,14 @@ RUN pip install --no-cache-dir "toutatis>=1.31" phonenumbers pycountry \
 RUN pip install --no-cache-dir instaloader \
     && python -c "import instaloader"
 
+# ── GHunt (Google account OSINT) — package required; runtime needs `ghunt login` ──
+RUN pip install --no-cache-dir "ghunt>=2.3.0" \
+    && python -c "import ghunt"
+
+# ── h8mail (email breach hunter) — does not email the target ──
+RUN pip install --no-cache-dir "h8mail>=2.5.0" \
+    && python -c "import h8mail"
+
 # ── Blackbird ─────────────────────────────────────────────────────────
 RUN git clone --depth 1 https://github.com/p1ngul1n0/blackbird /opt/blackbird \
     && pip install --no-cache-dir -r /opt/blackbird/requirements.txt \
@@ -79,21 +87,25 @@ COPY osint-worker/ /app/
 
 # Final import smoke (catches COPY overwriting nothing; packages must resolve)
 RUN python -c "\
-import ignorant, toutatis, holehe; \
-from runners import resolve_ignorant, resolve_toutatis, resolve_holehe, probe_tools; \
+import ignorant, toutatis, holehe, ghunt, h8mail; \
+from runners import resolve_ignorant, resolve_toutatis, resolve_holehe, resolve_ghunt, resolve_h8mail, probe_tools; \
 assert resolve_ignorant(), 'ignorant not resolvable'; \
 assert resolve_toutatis(), 'toutatis not resolvable'; \
 assert resolve_holehe(), 'holehe not resolvable'; \
+assert resolve_ghunt(), 'ghunt not resolvable'; \
+assert resolve_h8mail(), 'h8mail not resolvable'; \
 p = probe_tools(); \
 assert p['ignorant']['available'] is True, p['ignorant']; \
 assert p['toutatis']['package_installed'] is True, p['toutatis']; \
 assert p['holehe']['available'] is True, p['holehe']; \
+assert p['ghunt']['package_installed'] is True, p['ghunt']; \
+assert p['h8mail']['available'] is True, p['h8mail']; \
 print('OSINT engines OK:', p['version'])"
 
 RUN groupadd -r appuser && \
     useradd -r -g appuser -s /sbin/nologin -m -d /home/appuser appuser && \
-    mkdir -p /opt/spiderfoot && \
-    chown -R appuser:appuser /app /home/appuser /opt/blackbird /opt/spiderfoot
+    mkdir -p /opt/spiderfoot /home/appuser/.malfrats/ghunt /opt/h8mail-breaches && \
+    chown -R appuser:appuser /app /home/appuser /opt/blackbird /opt/spiderfoot /opt/h8mail-breaches
 
 USER appuser
 

@@ -1,7 +1,8 @@
 # ShamrockLeads OSINT Worker
 
 Internal service that runs **Maigret**, **Sherlock**, **Blackbird**, **SpiderFoot**,
-**Ignorant**, **Holehe**, and **Toutatis** on a **writable** filesystem.
+**Ignorant**, **Holehe**, **Toutatis**, **GHunt**, and **h8mail** on a **writable**
+filesystem.
 
 The dashboard (`shamrock-dashboard`) stays read-only and calls this worker over
 the Docker network. No host ports are published.
@@ -18,6 +19,8 @@ the Docker network. No host ports are published.
 | **Holehe** | **email** | Passive email registration on 120+ sites incl. Instagram ([megadose/holehe](https://github.com/megadose/holehe)) |
 | **HIBF** | **plate** | Public Flock LE search audit logs ([haveibeenflocked.com](https://haveibeenflocked.com)) — not live camera hits |
 | **Toutatis** | **username** | Instagram enrichment: public/obfuscated email & phone ([megadose/toutatis](https://github.com/megadose/toutatis)) |
+| **GHunt** | **email** | Google account: GAIA, Maps reviews, photos, services ([mxrch/GHunt](https://github.com/mxrch/GHunt)). Needs worker login. Not a phone ping. |
+| **h8mail** | **email** | Breach/dump sources ([khast3x/h8mail](https://github.com/khast3x/h8mail)). Optional local files + Hunter.io. Does not email the target. |
 
 ### Ignorant notes
 
@@ -44,6 +47,35 @@ TOUTATIS_SESSION_ID=...
 Without the cookie, the Toutatis status pill is unavailable and scans fail closed.
 Rotate the cookie if it leaks; do not log it.
 
+### GHunt notes
+
+Does **not** ping phones or convert IPs to street addresses. Email hunt can
+surface Google Maps review locations when the Google account has public reviews.
+
+One-time login (Companion paste — option 2; the listener is not Docker-compatible):
+
+```bash
+docker exec -it shamrock-osint-worker ghunt login
+```
+
+Creds persist on volume `osint-ghunt-creds` (`/home/appuser/.malfrats`).
+Without login, GHunt is `package_installed` but not `available` (fail closed).
+
+### h8mail notes
+
+Does **not** email the target. Passwords are never written to application logs;
+staff see source names on the finding, full dump lines only on the raw report.
+
+Optional:
+
+| Env / volume | Purpose |
+|--------------|---------|
+| `HUNTER_API_KEY` | Uses the existing Hunter.io key if set |
+| `H8MAIL_HIBP_KEY` | Have I Been Pwned key (optional) |
+| volume `osint-h8mail-breaches` → `/opt/h8mail-breaches` | Local dump files you are allowed to use |
+
+Auto-selected when an email is present (same as Holehe).
+
 ## Defaults (policy)
 
 | Setting | Default |
@@ -55,6 +87,8 @@ Rotate the cookie if it leaks; do not log it.
 | SpiderFoot | **OFF** unless selected |
 | Ignorant | **OFF** unless selected; UI auto-selects when a 10+ digit phone is entered |
 | Holehe | **OFF** unless selected; UI auto-selects when an email is entered |
+| GHunt | **OFF** unless selected; UI auto-selects when an email is entered (needs login) |
+| h8mail | **OFF** unless selected; UI auto-selects when an email is entered |
 | HIBF | **OFF** unless selected; UI auto-selects when a license plate is entered |
 | Toutatis | **OFF** unless selected; UI auto-selects when usernames present **and** session configured |
 | Recursion | **Disabled** (noise control) |

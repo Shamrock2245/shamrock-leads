@@ -20,6 +20,8 @@ HOLEHE_TIMEOUT = int(os.getenv("OSINT_HOLEHE_TIMEOUT", "90"))
 HIBF_TIMEOUT = int(os.getenv("OSINT_HIBF_TIMEOUT", "20"))
 HIBF_BASE_URL = os.getenv("OSINT_HIBF_BASE_URL", "https://haveibeenflocked.com").rstrip("/")
 TOUTATIS_TIMEOUT = int(os.getenv("OSINT_TOUTATIS_TIMEOUT", "60"))
+GHUNT_TIMEOUT = int(os.getenv("OSINT_GHUNT_TIMEOUT", "90"))
+H8MAIL_TIMEOUT = int(os.getenv("OSINT_H8MAIL_TIMEOUT", "90"))
 MAX_TOUTATIS_USERNAMES = int(os.getenv("OSINT_MAX_TOUTATIS_USERNAMES", "3"))
 MAIGRET_SITE_TIMEOUT = int(os.getenv("OSINT_MAIGRET_SITE_TIMEOUT", "12"))
 
@@ -327,6 +329,40 @@ def score_signals(accounts: List[Dict], subject_type: str = "defendant") -> Tupl
                 f"({', '.join(sorted(set(pii_hits)))}) on {len(toutatis_hits)} profile(s)."
             ),
             "source": "toutatis",
+        })
+
+    ghunt_locs = [
+        a for a in accounts
+        if str(a.get("source") or "") == "ghunt"
+        and (a.get("profile_data") or {}).get("has_location")
+    ]
+    if ghunt_locs:
+        score += min(16, 6 + 2 * len(ghunt_locs))
+        signals.append({
+            "signal_type": "google_maps_footprint",
+            "severity": "high",
+            "detail": (
+                f"GHunt recovered Google Maps/review location footprint "
+                "from the Google account (not a phone ping)."
+            ),
+            "source": "ghunt",
+        })
+
+    h8mail_hits = [
+        a for a in accounts
+        if str(a.get("source") or "") == "h8mail"
+        and (a.get("profile_data") or {}).get("pwned")
+    ]
+    if h8mail_hits:
+        score += min(14, 4 + 2 * len(h8mail_hits))
+        signals.append({
+            "signal_type": "email_breach_exposure",
+            "severity": "high" if len(h8mail_hits) >= 3 else "medium",
+            "detail": (
+                f"h8mail found this email in {len(h8mail_hits)} breach source(s). "
+                "Passwords are not logged; open the raw report for staff review."
+            ),
+            "source": "h8mail",
         })
 
     legal_keywords = {"arrest", "mugshot", "inmate", "offender", "warrant", "felony", "conviction"}

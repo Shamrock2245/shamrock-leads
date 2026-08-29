@@ -307,6 +307,10 @@ const SLBondIntel = (() => {
   }
 
   function writeBond(name, bond, county, booking) {
+    if (typeof openDefendantWritePrint === 'function' && booking) {
+      openDefendantWritePrint(booking);
+      return;
+    }
     if (typeof openBondModal === 'function') {
       openBondModal(name, parseFloat(bond) || 0, county, booking);
     }

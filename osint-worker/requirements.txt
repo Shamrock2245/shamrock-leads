@@ -16,5 +16,9 @@ toutatis>=1.31
 phonenumbers>=8.13.0
 pycountry>=22.0.0
 requests>=2.28.0
+# Google-account OSINT (email → GAIA, Maps reviews, services). Needs `ghunt login` creds.
+ghunt>=2.3.0
+# Breach/email dump hunter. Optional local files + existing Hunter.io key. Does not email the target.
+h8mail>=2.5.0
 # SpiderFoot is optional — no usable spiderfoot>=4 on PyPI (only a stub).
 # runners.py already degrades when missing. Install later only if needed.

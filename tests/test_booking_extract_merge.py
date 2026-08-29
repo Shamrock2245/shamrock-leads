@@ -132,6 +132,17 @@ def collections():
         yield cols
 
 
+def test_login_redirect_preserves_defendants_deep_link():
+    from dashboard.auth.pin_middleware import login_redirect_location, _LOGIN_HTML
+    loc = login_redirect_location("/", "tab=defendants&write=1")
+    assert loc.startswith("/login?next=")
+    assert "tab%3Ddefendants" in loc or "tab=defendants" in loc
+    assert "sl-booking-extract" in _LOGIN_HTML
+    assert "sl_booking_extract" in _LOGIN_HTML
+    assert login_redirect_location("/login") == "/login"
+    assert login_redirect_location("//evil.example") == "/login?next=%2F"
+
+
 def test_router_exposes_merge_endpoint():
     from dashboard.routers.booking_extract import router
     paths = [getattr(route, "path", "") for route in router.routes]

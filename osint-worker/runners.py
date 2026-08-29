@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import tempfile
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import httpx
@@ -21,6 +22,8 @@ from defaults import (
     BLACKBIRD_TIMEOUT,
     HIBF_BASE_URL,
     HIBF_TIMEOUT,
+    GHUNT_TIMEOUT,
+    H8MAIL_TIMEOUT,
     HOLEHE_CONCURRENCY,
     HOLEHE_GAP_S,
     HOLEHE_TIMEOUT,
@@ -250,6 +253,67 @@ def resolve_exiftool() -> Optional[str]:
     for c in candidates:
         if c and os.path.isfile(c):
             return c
+    return None
+
+
+def resolve_ghunt() -> Optional[str]:
+    """Resolve GHunt CLI / python module."""
+    candidates = [
+        os.getenv("GHUNT_PATH", "").strip(),
+        shutil.which("ghunt") or "",
+        "/usr/local/bin/ghunt",
+    ]
+    for c in candidates:
+        if c and os.path.isfile(c):
+            return c
+    try:
+        import importlib.util
+        if importlib.util.find_spec("ghunt") is not None:
+            return "python-module"
+    except Exception:
+        pass
+    return None
+
+
+def ghunt_creds_present() -> bool:
+    """True when a GHunt login file exists (fail closed otherwise)."""
+    env_path = (os.getenv("GHUNT_CREDS_PATH") or "").strip()
+    roots = []
+    if env_path:
+        roots.append(Path(env_path))
+    user_home = Path(os.environ.get("HOME") or "/home/appuser")
+    roots.extend([
+        user_home / ".malfrats" / "ghunt" / "creds.m",
+        user_home / ".malfrats" / "ghunt" / "accounts",
+        user_home / ".config" / "ghunt",
+    ])
+    for p in roots:
+        try:
+            if p.is_file() and p.stat().st_size > 20:
+                return True
+            if p.is_dir() and any(p.iterdir()):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def resolve_h8mail() -> Optional[str]:
+    """Resolve h8mail CLI / python module."""
+    candidates = [
+        os.getenv("H8MAIL_PATH", "").strip(),
+        shutil.which("h8mail") or "",
+        "/usr/local/bin/h8mail",
+    ]
+    for c in candidates:
+        if c and os.path.isfile(c):
+            return c
+    try:
+        import importlib.util
+        if importlib.util.find_spec("h8mail") is not None:
+            return "python-module"
+    except Exception:
+        pass
     return None
 
 
@@ -532,6 +596,60 @@ def probe_tools() -> Dict[str, Any]:
     exiftool_version = "installed" if exiftool_ok else None
     exiftool_error = None if exiftool_ok else "not found — install with apt-get install -y exiftool"
 
+    ghunt_cmd = resolve_ghunt()
+    ghunt_pkg = False
+    ghunt_version = None
+    ghunt_error = None
+    ghunt_path = None
+    if ghunt_cmd == "python-module":
+        try:
+            import ghunt as _gh  # noqa: F401
+            ghunt_pkg = True
+            ghunt_version = getattr(_gh, "__version__", "installed")
+            ghunt_path = f"{PYTHON_CMD} -m ghunt"
+        except Exception as e:
+            ghunt_error = str(e)[:200]
+    elif ghunt_cmd:
+        ghunt_pkg = True
+        ghunt_path = ghunt_cmd
+        ghunt_version = "cli"
+    else:
+        ghunt_error = "not found — install with: pip install ghunt"
+    ghunt_creds_ok = ghunt_creds_present()
+    ghunt_ok = ghunt_pkg and ghunt_creds_ok
+    if ghunt_pkg and not ghunt_creds_ok:
+        ghunt_error = (
+            "run `docker exec -it shamrock-osint-worker ghunt login` "
+            "and paste GHunt Companion cookies (option 2)"
+        )
+
+    h8mail_cmd = resolve_h8mail()
+    h8mail_ok = False
+    h8mail_version = None
+    h8mail_error = None
+    h8mail_path = None
+    if h8mail_cmd == "python-module":
+        try:
+            import h8mail as _h8  # noqa: F401
+            h8mail_ok = True
+            h8mail_version = getattr(_h8, "__version__", "installed")
+            h8mail_path = f"{PYTHON_CMD} -m h8mail"
+        except Exception:
+            try:
+                import importlib.util
+                if importlib.util.find_spec("h8mail") is not None:
+                    h8mail_ok = True
+                    h8mail_version = "installed"
+                    h8mail_path = f"{PYTHON_CMD} -m h8mail"
+            except Exception as e2:
+                h8mail_error = str(e2)[:200]
+    elif h8mail_cmd:
+        h8mail_ok = True
+        h8mail_path = h8mail_cmd
+        h8mail_version = "cli"
+    else:
+        h8mail_error = "not found — install with: pip install h8mail"
+
     return {
         "maigret": {
             "available": maigret_ok,
@@ -618,6 +736,30 @@ def probe_tools() -> Dict[str, Any]:
             "error": exiftool_error,
             "note": "Image URL/file → EXIF metadata, camera fingerprinting & GPS reverse geocoding.",
         },
+        "ghunt": {
+            "available": ghunt_ok,
+            "package_installed": ghunt_pkg,
+            "creds_configured": ghunt_creds_ok,
+            "path": ghunt_path or "not found",
+            "version": ghunt_version,
+            "error": ghunt_error,
+            "note": (
+                "Google email → GAIA, Maps reviews, linked services. "
+                "Requires `docker exec -it shamrock-osint-worker ghunt login` (Companion paste). "
+                "Not a phone ping."
+            ),
+        },
+        "h8mail": {
+            "available": h8mail_ok,
+            "path": h8mail_path or "not found",
+            "version": h8mail_version,
+            "error": h8mail_error,
+            "local_breach_dir": bool((os.getenv("H8MAIL_LOCAL_BREACH_DIR") or "").strip()),
+            "note": (
+                "Email → breach/dump sources. Optional H8MAIL_LOCAL_BREACH_DIR and Hunter.io key. "
+                "Does not email the target. Passwords are not written to logs."
+            ),
+        },
         "ready_for_scans": (
             maigret_ok
             or tookie_ok
@@ -629,9 +771,11 @@ def probe_tools() -> Dict[str, Any]:
             or toutatis_ok
             or instaloader_ok
             or exiftool_ok
+            or ghunt_ok
+            or h8mail_ok
         ),
         "worker": True,
-        "version": "2.5.0",
+        "version": "2.6.0",
         "defaults": {
             "maigret_default": True,
             "tookie_default": True,
@@ -643,6 +787,8 @@ def probe_tools() -> Dict[str, Any]:
             "toutatis_default": False,
             "blackbird_on_email": True,
             "holehe_on_email": True,
+            "ghunt_on_email": True,
+            "h8mail_on_email": True,
             "hibf_on_plate": True,
             "spiderfoot_on_phone": True,
             "ignorant_on_phone": True,
@@ -1109,6 +1255,227 @@ def parse_holehe_results(raw: Any, *, email: str = "") -> Tuple[List[Dict], List
                 + (f"; registered on {len(accounts)}" if accounts else "")
                 + (f"; rate-limited: {', '.join(rate_limited[:8])}" if rate_limited else "")
             ),
+            "relevance": "unreviewed",
+        })
+    return accounts, entities
+
+
+def parse_ghunt_email_json(raw: Any) -> Tuple[List[Dict], List[Dict]]:
+    """Pull accounts/entities from `ghunt email --json` without logging PII."""
+    accounts: List[Dict] = []
+    entities: List[Dict] = []
+    if not isinstance(raw, dict) or not raw:
+        return accounts, entities
+
+    emails: List[str] = []
+    names: List[str] = []
+    phones: List[str] = []
+    addresses: List[str] = []
+    gaia_ids: List[str] = []
+    photos = 0
+    services: List[str] = []
+
+    def _walk(obj: Any) -> None:
+        nonlocal photos
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                lk = str(k).lower()
+                if lk in ("email", "emails") and isinstance(v, str) and "@" in v:
+                    emails.append(v.strip())
+                elif lk in ("fullname", "full_name", "displayname", "display_name") and isinstance(v, str) and len(v) > 2:
+                    names.append(v.strip())
+                elif lk in ("phone", "phonenumber", "phone_number") and isinstance(v, str) and len(re.sub(r"\D", "", v)) >= 7:
+                    phones.append(v.strip())
+                elif lk in ("address", "formattedaddress", "formatted_address") and isinstance(v, str) and len(v) > 6:
+                    addresses.append(v.strip())
+                elif lk in ("gaiaid", "gaia_id", "personid", "person_id") and isinstance(v, str) and v.strip():
+                    gaia_ids.append(v.strip())
+                elif lk in ("profilephoto", "profile_photo", "photo", "url") and isinstance(v, str) and "googleusercontent" in v:
+                    photos += 1
+                elif lk in ("app", "service", "servicename") and isinstance(v, str) and 2 < len(v) < 40:
+                    services.append(v.strip())
+                if isinstance(v, dict) and "value" in v and isinstance(v.get("value"), str):
+                    val = v["value"].strip()
+                    if "@" in val:
+                        emails.append(val)
+                    elif "name" in lk and len(val) > 2:
+                        names.append(val)
+                _walk(v)
+        elif isinstance(obj, list):
+            for item in obj:
+                _walk(item)
+
+    _walk(raw)
+
+    def _uniq(seq: List[str]) -> List[str]:
+        seen = set()
+        out = []
+        for x in seq:
+            k = x.lower()
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(x)
+        return out
+
+    emails = _uniq(emails)
+    names = _uniq(names)
+    phones = _uniq(phones)
+    addresses = _uniq(addresses)
+    gaia_ids = _uniq(gaia_ids)
+    services = _uniq(services)
+
+    pd: Dict[str, Any] = {
+        "google_account": True,
+        "has_location": bool(addresses),
+        "photo_count": photos,
+        "service_count": len(services),
+        "maps_review_locations": len(addresses),
+    }
+    if names:
+        pd["display_name"] = names[0]
+    if gaia_ids:
+        pd["gaia_id"] = gaia_ids[0]
+    accounts.append({
+        "platform": "Google",
+        "url": "",
+        "username": emails[0] if emails else "",
+        "profile_data": pd,
+        "source": "ghunt",
+        "confidence": "found",
+        "category": "professional",
+        "relevance": "unreviewed",
+    })
+    if addresses:
+        accounts.append({
+            "platform": "Google Maps",
+            "url": "",
+            "username": "",
+            "profile_data": {
+                "has_location": True,
+                "location_count": len(addresses),
+                "addresses": addresses[:12],
+            },
+            "source": "ghunt",
+            "confidence": "likely",
+            "category": "other",
+            "relevance": "unreviewed",
+        })
+    for addr in addresses[:12]:
+        entities.append({
+            "type": "address",
+            "value": addr,
+            "source": "ghunt",
+            "module": "maps",
+            "confidence": "medium",
+            "relevance": "unreviewed",
+        })
+    for em in emails[:6]:
+        entities.append({
+            "type": "email",
+            "value": em,
+            "source": "ghunt",
+            "module": "people",
+            "confidence": "high",
+            "relevance": "unreviewed",
+        })
+    for ph in phones[:6]:
+        entities.append({
+            "type": "phone",
+            "value": ph,
+            "source": "ghunt",
+            "module": "people",
+            "confidence": "medium",
+            "relevance": "unreviewed",
+        })
+    for nm in names[:3]:
+        entities.append({
+            "type": "name",
+            "value": nm,
+            "source": "ghunt",
+            "module": "people",
+            "confidence": "medium",
+            "relevance": "unreviewed",
+        })
+    return accounts, entities
+
+
+def parse_h8mail_json(raw: Any, *, email: str = "") -> Tuple[List[Dict], List[Dict]]:
+    """Parse h8mail JSON. Passwords stay out of accounts; only pwned flags + source names."""
+    accounts: List[Dict] = []
+    entities: List[Dict] = []
+    if not raw:
+        return accounts, entities
+
+    targets: Dict[str, Any] = {}
+    if isinstance(raw, dict):
+        targets = raw.get("targets") or raw.get("data") or {}
+        if not isinstance(targets, dict):
+            targets = {}
+        if not targets and any(isinstance(v, dict) and "data" in v for v in raw.values()):
+            targets = {k: v for k, v in raw.items() if isinstance(v, dict)}
+    if not isinstance(targets, dict):
+        return accounts, entities
+
+    seen_sources: set = set()
+    pwned = 0
+    for _target, blob in targets.items():
+        if not isinstance(blob, dict):
+            continue
+        rows = blob.get("data") or blob.get("leaks") or []
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            source = ""
+            payload = ""
+            if isinstance(row, (list, tuple)) and row:
+                source = str(row[0] or "").strip()
+                payload = str(row[1] if len(row) > 1 else "")
+            elif isinstance(row, dict):
+                source = str(row.get("source") or row.get("name") or "").strip()
+                payload = str(row.get("data") or row.get("line") or "")
+            elif isinstance(row, str):
+                source = row.strip()
+            if not source:
+                continue
+            key = source.lower()
+            if key in seen_sources:
+                continue
+            seen_sources.add(key)
+            pwned += 1
+            has_password = bool(payload and ":" in payload)
+            accounts.append({
+                "platform": f"Breach:{source}",
+                "url": "",
+                "username": "",
+                "profile_data": {
+                    "pwned": True,
+                    "has_password": has_password,
+                    "source": source,
+                },
+                "source": "h8mail",
+                "confidence": "found",
+                "category": "other",
+                "relevance": "unreviewed",
+            })
+            entities.append({
+                "type": "breach",
+                "value": source,
+                "source": "h8mail",
+                "module": "breach",
+                "confidence": "high",
+                "relevance": "unreviewed",
+            })
+    if email and "@" in email:
+        local, _, domain = email.partition("@")
+        redacted = f"{local[:1]}***@{domain}" if local else "***"
+        entities.insert(0, {
+            "type": "email",
+            "value": redacted,
+            "source": "h8mail",
+            "module": "target",
+            "confidence": "high" if pwned else "medium",
+            "context": f"{pwned} breach source(s)",
             "relevance": "unreviewed",
         })
     return accounts, entities
@@ -2301,6 +2668,199 @@ async def run_holehe(email: str, *, deep: bool = False) -> Dict[str, Any]:
     return result_meta
 
 
+def _ghunt_cmd() -> List[str]:
+    """GHunt has no ``python -m ghunt`` entry; use the console script."""
+    resolved = resolve_ghunt()
+    if resolved and resolved != "python-module":
+        return [resolved]
+    which = shutil.which("ghunt")
+    if which:
+        return [which]
+    return []
+
+
+def _h8mail_cmd() -> List[str]:
+    resolved = resolve_h8mail()
+    if resolved == "python-module":
+        return [PYTHON_CMD, "-m", "h8mail"]
+    if resolved:
+        return [resolved]
+    return []
+
+
+def _write_h8mail_config(path: str) -> bool:
+    """Optional Hunter.io / HIBP keys. Never logs the keys."""
+    hunter = (os.getenv("HUNTER_API_KEY") or os.getenv("H8MAIL_HUNTER_KEY") or "").strip()
+    hibp = (os.getenv("H8MAIL_HIBP_KEY") or os.getenv("HIBP_API_KEY") or "").strip()
+    if not hunter and not hibp:
+        return False
+    lines = ["[h8mail]"]
+    if hunter:
+        lines.append(f"hunterio = {hunter}")
+    if hibp:
+        lines.append(f"hibp = {hibp}")
+    Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return True
+
+
+async def run_ghunt(email: str) -> Dict[str, Any]:
+    """GHunt email module. Fail closed without login creds. Does not contact the target."""
+    result_meta: Dict[str, Any] = {
+        "tool": "ghunt", "ok": False, "error": None,
+        "warning": None, "raw": {}, "accounts": [], "entities": [],
+    }
+    addr = (email or "").strip()
+    if not _valid_email(addr):
+        result_meta["error"] = "invalid or empty email"
+        return result_meta
+    cmd = _ghunt_cmd()
+    if not cmd:
+        result_meta["error"] = "ghunt not installed"
+        return result_meta
+    if not ghunt_creds_present():
+        result_meta["error"] = (
+            "ghunt not logged in — docker exec -it shamrock-osint-worker ghunt login"
+        )
+        return result_meta
+
+    local, _, domain = addr.partition("@")
+    log.info("GHunt email check local=%s domain=%s", _redact(local), domain)
+
+    with tempfile.TemporaryDirectory(prefix="sl_ghunt_") as tmpdir:
+        out_json = os.path.join(tmpdir, "ghunt.json")
+        full = cmd + ["email", addr, "--json", out_json]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *full,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=float(GHUNT_TIMEOUT))
+        except asyncio.TimeoutError:
+            result_meta["error"] = f"ghunt timed out after {GHUNT_TIMEOUT}s"
+            return result_meta
+        except FileNotFoundError:
+            result_meta["error"] = "ghunt executable not found"
+            return result_meta
+        except Exception as exc:
+            result_meta["error"] = f"ghunt error: {exc}"
+            return result_meta
+
+        raw: Dict[str, Any] = {}
+        if os.path.isfile(out_json) and os.path.getsize(out_json) > 2:
+            try:
+                with open(out_json, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+            except Exception as exc:
+                result_meta["warning"] = f"ghunt json parse: {exc}"
+        if not raw and proc.returncode not in (0, None):
+            err = (stderr_b or b"").decode("utf-8", "replace")[:200]
+            result_meta["error"] = f"ghunt failed (exit {proc.returncode}): {err or 'no output'}"
+            return result_meta
+
+        accounts, entities = parse_ghunt_email_json(raw)
+        # Strip bulky photo blobs from persisted raw
+        safe_raw = {
+            "keys": list(raw.keys())[:20] if isinstance(raw, dict) else [],
+            "account_count": len(accounts),
+            "entity_count": len(entities),
+            "found": bool(accounts),
+        }
+        result_meta.update({
+            "ok": True,
+            "raw": safe_raw,
+            "accounts": accounts,
+            "entities": entities,
+        })
+        if not accounts:
+            result_meta["warning"] = "ghunt returned no Google profile"
+        return result_meta
+
+
+async def run_h8mail(email: str) -> Dict[str, Any]:
+    """h8mail breach search. Does not email the target. Passwords never logged."""
+    result_meta: Dict[str, Any] = {
+        "tool": "h8mail", "ok": False, "error": None,
+        "warning": None, "raw": {}, "accounts": [], "entities": [],
+    }
+    addr = (email or "").strip()
+    if not _valid_email(addr):
+        result_meta["error"] = "invalid or empty email"
+        return result_meta
+    cmd = _h8mail_cmd()
+    if not cmd:
+        result_meta["error"] = "h8mail not installed"
+        return result_meta
+
+    local, _, domain = addr.partition("@")
+    log.info("h8mail email check local=%s domain=%s", _redact(local), domain)
+
+    with tempfile.TemporaryDirectory(prefix="sl_h8mail_") as tmpdir:
+        out_json = os.path.join(tmpdir, "h8mail.json")
+        cfg_path = os.path.join(tmpdir, "h8mail.ini")
+        full = cmd + ["-t", addr, "-j", out_json]
+        if _write_h8mail_config(cfg_path):
+            full.extend(["-c", cfg_path])
+        local_dir = (os.getenv("H8MAIL_LOCAL_BREACH_DIR") or "").strip()
+        if local_dir and os.path.isdir(local_dir):
+            full.extend(["-lb", local_dir])
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *full,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=float(H8MAIL_TIMEOUT))
+        except asyncio.TimeoutError:
+            result_meta["error"] = f"h8mail timed out after {H8MAIL_TIMEOUT}s"
+            return result_meta
+        except FileNotFoundError:
+            result_meta["error"] = "h8mail executable not found"
+            return result_meta
+        except Exception as exc:
+            result_meta["error"] = f"h8mail error: {exc}"
+            return result_meta
+
+        raw: Any = {}
+        if os.path.isfile(out_json) and os.path.getsize(out_json) > 2:
+            try:
+                with open(out_json, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+            except Exception as exc:
+                result_meta["warning"] = f"h8mail json parse: {exc}"
+        if not raw:
+            stdout_s = (stdout_b or b"").decode("utf-8", "replace")
+            try:
+                if stdout_s.strip().startswith("{"):
+                    raw = json.loads(stdout_s)
+            except Exception:
+                raw = {}
+        if not raw and proc.returncode not in (0, None):
+            err = (stderr_b or b"").decode("utf-8", "replace")[:200]
+            result_meta["error"] = f"h8mail failed (exit {proc.returncode}): {err or 'no output'}"
+            return result_meta
+
+        accounts, entities = parse_h8mail_json(raw, email=addr)
+        result_meta.update({
+            "ok": True,
+            "raw": {
+                "sources": [
+                    (a.get("profile_data") or {}).get("source")
+                    for a in accounts
+                ],
+                "pwned_count": len(accounts),
+                "used_local_files": bool(local_dir and os.path.isdir(local_dir)),
+            },
+            "accounts": accounts,
+            "entities": entities,
+        })
+        if not accounts:
+            result_meta["warning"] = (
+                "h8mail found no breach hits (add H8MAIL_LOCAL_BREACH_DIR or API keys for more coverage)"
+            )
+        return result_meta
+
+
 def normalize_plate(plate: str) -> Optional[str]:
     raw = (plate or "").strip().upper().replace(" ", "")
     if not raw or not re.fullmatch(r"[A-Z0-9-]{2,10}", raw):
@@ -2758,6 +3318,20 @@ async def execute_scan_v2(
                 else:
                     progress[engine]["status"] = "skipped"
                     progress[engine]["error"] = "No email for holehe"
+            elif engine == "ghunt":
+                if email and str(email).strip():
+                    tasks.append(run_ghunt(str(email).strip()))
+                    task_map.append(engine)
+                else:
+                    progress[engine]["status"] = "skipped"
+                    progress[engine]["error"] = "No email for ghunt"
+            elif engine == "h8mail":
+                if email and str(email).strip():
+                    tasks.append(run_h8mail(str(email).strip()))
+                    task_map.append(engine)
+                else:
+                    progress[engine]["status"] = "skipped"
+                    progress[engine]["error"] = "No email for h8mail"
             elif engine == "hibf":
                 if license_plate and str(license_plate).strip():
                     tasks.append(run_hibf(str(license_plate).strip()))

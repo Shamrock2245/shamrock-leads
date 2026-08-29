@@ -459,6 +459,7 @@ async def api_leads(
             "court_location": 1, "case_number": 1, "dob": 1, "sex": 1,
             "race": 1, "address": 1, "detail_url": 1, "facility": 1,
             "mugshot_url": 1, "scraped_at": 1, "created_at": 1, "charge_details": 1,
+            "poa_number": 1,
         }
 
         async def _fetch_page():

@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import time
 from typing import Any, Callable
+from urllib.parse import quote
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -254,7 +255,21 @@ class PinAuthMiddleware(BaseHTTPMiddleware):
         # Not authenticated
         if path.startswith("/api/"):
             return JSONResponse({"error": "Authentication required"}, status_code=401)
-        return RedirectResponse("/login", status_code=302)
+        return RedirectResponse(login_redirect_location(path, request.url.query), status_code=302)
+
+
+def login_redirect_location(path: str, query: str = "") -> str:
+    """Preserve the original path+query on PIN login so bookmarklet ingest survives.
+
+    Hash fragments never reach the server; the login page stashes those via postMessage.
+    """
+    raw_path = str(path or "/")
+    if raw_path == "/login" or raw_path.startswith("/login"):
+        return "/login"
+    nxt = f"{raw_path}?{query}" if query else raw_path
+    if not nxt.startswith("/") or nxt.startswith("//"):
+        nxt = "/"
+    return "/login?next=" + quote(nxt, safe="")
 
 
 # ── Login Routes ──────────────────────────────────────────────────────────────
@@ -329,6 +344,27 @@ function switchLoginMode(m) {
     : 'Sub-Agent login requires whitelisted name and FL license number.';
 }
 (function(){
+  function stashExtract(payload){
+    try{
+      var raw = typeof payload === 'string' ? payload : JSON.stringify(payload);
+      if(raw && raw.length > 8) sessionStorage.setItem('sl_booking_extract', raw);
+    }catch(e){}
+  }
+  try{
+    var h=String(location.hash||'');
+    var hm=h.match(/(?:^|#|&)booking-extract=([^&]*)/);
+    if(hm&&hm[1]){
+      stashExtract(decodeURIComponent(hm[1]));
+      history.replaceState(null,'',location.pathname+location.search);
+    }
+  }catch(e){}
+  window.addEventListener('message',function(e){
+    var d=e.data;
+    if(!d||d.type!=='sl-booking-extract'||!d.payload)return;
+    var host=String(e.origin||'').replace(/^https?:\\/\\//,'');
+    if(!/sheriffleefl\\.org$/i.test(host)&&e.origin!==location.origin)return;
+    stashExtract(d.payload);
+  });
   const q=new URLSearchParams(location.search);
   if(q.get('reason')==='session_expired'){
     document.getElementById('err').textContent='Session expired — please log in again.';
@@ -346,7 +382,18 @@ function switchLoginMode(m) {
     const r=await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},
       credentials:'same-origin',
       body:JSON.stringify(payload)});
-    if(r.ok){window.location=next}
+    if(r.ok){
+      let dest=next;
+      try{
+        if(sessionStorage.getItem('sl_booking_extract')){
+          const u=new URL(dest, location.origin);
+          u.searchParams.set('tab','defendants');
+          u.searchParams.set('write','1');
+          dest=u.pathname+u.search;
+        }
+      }catch(err){}
+      window.location=dest;
+    }
     else{const j=await r.json().catch(()=>({}));
       document.getElementById('err').textContent=j.error||'Invalid credentials';
       document.getElementById('pin').value=''}

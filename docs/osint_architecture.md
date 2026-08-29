@@ -12,6 +12,8 @@ Expansion of the OSINT Intelligence tab from 2-engine (Maigret + Blackbird) to a
 | Blackbird | Username, Email          | Social accounts (WhatsMyName) | CLI in worker |
 | Sherlock  | Usernames                | Social accounts (400+ sites)  | Docker sidecar|
 | SpiderFoot| Email, Phone, Name, Domain| Entities (addresses, emails, phones, social, DNS) | Docker sidecar|
+| GHunt     | Email                    | Google account, Maps reviews, GAIA                | CLI in worker |
+| h8mail    | Email                    | Breach/dump sources (no target email)             | CLI in worker |
 
 ## Mongo Schema (`osint_scans` collection — replaces `osint_profiles`)
 

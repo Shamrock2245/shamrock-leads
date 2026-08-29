@@ -33,6 +33,8 @@ class EngineType(str, Enum):
     toutatis = "toutatis"
     instaloader = "instaloader"
     exiftool = "exiftool"
+    ghunt = "ghunt"
+    h8mail = "h8mail"
 
 
 class ScanStatus(str, Enum):
@@ -74,6 +76,8 @@ class EntityType(str, Enum):
     social_profile = "social_profile"
     organization = "organization"
     other = "other"
+    breach = "breach"
+    location = "location"
 
 
 # ── Request Models ────────────────────────────────────────────────────────────
@@ -95,7 +99,7 @@ class OSINTScanRequest(BaseModel):
         ),
     )
     email: Optional[str] = Field(
-        None, description="Known email address (for Holehe, Blackbird, SpiderFoot)"
+        None, description="Known email address (for Holehe, h8mail, GHunt, Blackbird, SpiderFoot)"
     )
     phone: Optional[str] = Field(
         None,
@@ -112,7 +116,7 @@ class OSINTScanRequest(BaseModel):
         default_factory=lambda: [EngineType.maigret, EngineType.tookie, EngineType.sherlock],
         description=(
             "Engines to run. Default: [maigret, tookie, sherlock]. "
-            "Options: maigret, tookie, sherlock, blackbird, spiderfoot, ignorant, holehe, hibf, toutatis, instaloader, exiftool"
+            "Options: maigret, tookie, sherlock, blackbird, spiderfoot, ignorant, holehe, hibf, toutatis, instaloader, exiftool, ghunt, h8mail"
         ),
     )
 

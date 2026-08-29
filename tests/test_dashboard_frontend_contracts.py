@@ -33,6 +33,11 @@ def test_defendant_card_write_print_is_the_primary_desk():
     assert "onclick=\"openBondModal(window._leadMap[" not in source
 
 
+def test_bond_intelligence_write_uses_write_print_desk():
+    source = (ROOT / "dashboard" / "sl-bond-intelligence.js").read_text()
+    assert "openDefendantWritePrint" in source
+
+
 def test_lee_bookmarklet_opens_dashboard_extract_hash():
     source = (ROOT / "dashboard" / "sl-hydrate.js").read_text()
 

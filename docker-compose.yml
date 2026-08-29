@@ -128,6 +128,14 @@ services:
       # Instagram session cookie for Toutatis (never log; rotate if leaked)
       - INSTAGRAM_SESSION_ID=${INSTAGRAM_SESSION_ID:-}
       - TOUTATIS_SESSION_ID=${TOUTATIS_SESSION_ID:-}
+      - OSINT_GHUNT_TIMEOUT=${OSINT_GHUNT_TIMEOUT:-90}
+      - OSINT_H8MAIL_TIMEOUT=${OSINT_H8MAIL_TIMEOUT:-90}
+      - HUNTER_API_KEY=${HUNTER_API_KEY:-}
+      - H8MAIL_HIBP_KEY=${H8MAIL_HIBP_KEY:-}
+      - H8MAIL_LOCAL_BREACH_DIR=/opt/h8mail-breaches
+    volumes:
+      - osint-ghunt-creds:/home/appuser/.malfrats
+      - osint-h8mail-breaches:/opt/h8mail-breaches
     expose:
       - "5065"                            # Internal only — no host port
     networks:
@@ -867,4 +875,8 @@ volumes:
   docuseal-postgres-data:
     driver: local
   opencut-postgres-data:
+    driver: local
+  osint-ghunt-creds:
+    driver: local
+  osint-h8mail-breaches:
     driver: local

@@ -56,6 +56,8 @@ _ENGINE_KEYS = (
     "toutatis",
     "instaloader",
     "exiftool",
+    "ghunt",
+    "h8mail",
 )
 
 
@@ -220,6 +222,8 @@ class OSINTService:
                 engines_list.append("ignorant")
             if req.email and "@" in str(req.email) and "holehe" not in engines_list:
                 engines_list.append("holehe")
+            if req.email and "@" in str(req.email) and "h8mail" not in engines_list:
+                engines_list.append("h8mail")
             if req.license_plate and str(req.license_plate).strip() and "hibf" not in engines_list:
                 engines_list.append("hibf")
             if usernames and "toutatis" not in engines_list:
@@ -230,9 +234,13 @@ class OSINTService:
         if req.phone and str(req.phone).strip() and "ignorant" not in engines_list:
             engines_list.append("ignorant")
 
-        # Email present → Holehe (email analog of Ignorant)
-        if req.email and "@" in str(req.email) and "holehe" not in engines_list:
-            engines_list.append("holehe")
+        # Email present → Holehe + h8mail. GHunt is opt-in until worker login exists
+        # (UI auto-selects GHunt when creds_configured).
+        if req.email and "@" in str(req.email):
+            if "holehe" not in engines_list:
+                engines_list.append("holehe")
+            if "h8mail" not in engines_list:
+                engines_list.append("h8mail")
 
         if req.license_plate and str(req.license_plate).strip() and "hibf" not in engines_list:
             engines_list.append("hibf")
