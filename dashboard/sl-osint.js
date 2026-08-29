@@ -45,6 +45,7 @@
     markIrrelevant,
     deleteScan,
     clearAllScans,
+    saveGhuntLogin,
   };
 
   // ── Helpers ────────────────────────────────────────────────────────
@@ -261,6 +262,20 @@
         ? (info.server_url || 'https://leads.shamrockbailbonds.biz') + '/track/{session}'
         : (info.path || (needsCfg ? (item.id === 'ghunt' ? 'Installed — run ghunt login on worker' : 'Installed — set INSTAGRAM_SESSION_ID') : (_toolStatus.worker_auth_ok === false ? 'Worker not authenticated' : 'Not installed')));
 
+      const ghuntLogin = (item.id === 'ghunt' && needsCfg) ? `
+        <div class="ghunt-login" style="margin-top:12px;padding:12px;border:1px dashed rgba(245,158,11,0.45);border-radius:8px;background:rgba(245,158,11,0.06)">
+          <div style="font-size:12px;font-weight:700;color:#fcd34d;margin-bottom:8px">GHunt worker login (one-time)</div>
+          <ol style="margin:0 0 10px 18px;padding:0;font-size:12px;color:var(--muted,#94a3b8);line-height:1.55">
+            <li>Install <a href="https://chrome.google.com/webstore/detail/ghunt-companion/dpdcofblfbmmnikcbmmiakkclocadjab" target="_blank" rel="noopener">GHunt Companion</a> (Chrome / Edge) or the <a href="https://addons.mozilla.org/en-US/firefox/addon/ghunt-companion/" target="_blank" rel="noopener">Firefox add-on</a>.</li>
+            <li>In that browser, sign into a <strong>dedicated research Google account</strong> (not a skip’s Gmail, not the office inbox if you can avoid it).</li>
+            <li>Open any Google page (gmail.com or accounts.google.com), click the Companion icon, choose <strong>Method 2</strong> — copy encoded credentials.</li>
+            <li>Paste the blob below and save. Do not paste it into Slack or chat.</li>
+          </ol>
+          <textarea id="ghuntCompanionBlob" rows="3" placeholder="Paste Companion Method 2 blob here…" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:11px;padding:8px;border-radius:6px;border:1px solid var(--border,#334155);background:var(--panel,#0f172a);color:var(--text,#e2e8f0)"></textarea>
+          <button type="button" class="osint-btn" style="margin-top:8px" onclick="SLOSINT.saveGhuntLogin()">Save GHunt session</button>
+          <div id="ghuntLoginStatus" style="font-size:12px;margin-top:6px;color:var(--muted)"></div>
+        </div>` : '';
+
       return `<div class="osint-matrix-card ${isTop ? 'ranked-top' : ''}">
         <div class="matrix-header">
           <div class="matrix-title">${item.name}</div>
@@ -268,11 +283,44 @@
         </div>
         <div class="matrix-desc">${item.desc}</div>
         <div class="matrix-path">Path: ${_esc(pathText)} ${info.version ? '· ' + _esc(info.version) : ''}</div>
+        ${ghuntLogin}
       </div>`;
     }).join('');
   }
 
   // ── Engine Toggle ──────────────────────────────────────────────────
+  async function saveGhuntLogin() {
+    const box = $('ghuntCompanionBlob');
+    const status = $('ghuntLoginStatus');
+    const blob = (box && box.value || '').trim();
+    if (!blob) {
+      if (status) status.textContent = 'Paste the Companion Method 2 blob first.';
+      return;
+    }
+    if (status) status.textContent = 'Saving GHunt session to the worker…';
+    try {
+      const r = await fetch(`${API}/api/osint/ghunt/login`, {
+        method: 'POST',
+        headers: headers(),
+        credentials: 'same-origin',
+        body: JSON.stringify({ companion_b64: blob }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.success === false) {
+        const err = d.detail || d.error || r.statusText;
+        if (status) status.textContent = 'Login failed: ' + err;
+        return;
+      }
+      if (box) box.value = '';
+      const who = d.account_email ? (' as ' + d.account_email) : '';
+      if (status) status.textContent = 'GHunt session saved' + who + '. Refreshing engines…';
+      await _checkToolStatus();
+      await load();
+    } catch (e) {
+      if (status) status.textContent = 'Network error saving GHunt session.';
+    }
+  }
+
   function toggleEngine(engine) {
     if (_selectedEngines.has(engine)) {
       if (_selectedEngines.size > 1) _selectedEngines.delete(engine);

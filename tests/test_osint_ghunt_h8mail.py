@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT / "osint-worker"))
 from defaults import score_signals  # noqa: E402
 from runners import (  # noqa: E402
     ghunt_creds_present,
+    parse_ghunt_companion_blob,
     parse_ghunt_email_json,
     parse_h8mail_json,
 )
@@ -41,6 +42,22 @@ def test_parse_ghunt_extracts_maps_address_and_name():
     addr_ents = [e for e in entities if e["type"] == "address"]
     assert any("Fort Myers" in e["value"] for e in addr_ents)
     assert any(e["type"] == "email" for e in entities)
+
+
+def test_parse_ghunt_companion_blob_from_b64():
+    import base64, json
+    blob = base64.b64encode(json.dumps({"oauth_token": "oauth2_4/abc"}).encode()).decode()
+    assert parse_ghunt_companion_blob(blob) == "oauth2_4/abc"
+
+
+def test_parse_ghunt_companion_blob_raw_oauth():
+    assert parse_ghunt_companion_blob("oauth2_4/xyz") == "oauth2_4/xyz"
+
+
+def test_parse_ghunt_companion_blob_rejects_junk():
+    import pytest
+    with pytest.raises(ValueError):
+        parse_ghunt_companion_blob("not-valid")
 
 
 def test_parse_ghunt_empty():

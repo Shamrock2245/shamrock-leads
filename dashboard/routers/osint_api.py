@@ -92,6 +92,26 @@ async def osint_status(
     return tools
 
 
+@router.post("/ghunt/login", summary="Save GHunt Companion session onto the OSINT worker")
+async def ghunt_login(
+    request: Request,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key"),
+    x_admin_token: Optional[str] = Header(None, alias="X-Admin-Token"),
+):
+    """Staff pastes GHunt Companion Method 2 blob. Worker exchanges it for creds.m."""
+    _require_admin(request, x_admin_key, x_admin_token)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    blob = str((body or {}).get("companion_b64") or (body or {}).get("blob") or "").strip()
+    svc = get_osint_service()
+    result = await svc.save_ghunt_login(blob, actor="admin")
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "GHunt login failed")
+    return result
+
+
 # ── Scan Endpoints ────────────────────────────────────────────────────────────
 
 @router.post("/scan", summary="Initiate multi-engine OSINT scan")

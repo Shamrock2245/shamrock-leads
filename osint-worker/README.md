@@ -52,13 +52,18 @@ Rotate the cookie if it leaks; do not log it.
 Does **not** ping phones or convert IPs to street addresses. Email hunt can
 surface Google Maps review locations when the Google account has public reviews.
 
-One-time login (Companion paste — option 2; the listener is not Docker-compatible):
+One-time login — **do this from the dashboard**, not `docker exec`:
 
-```bash
-docker exec -it shamrock-osint-worker ghunt login
-```
+1. Chrome/Edge: install [GHunt Companion](https://chrome.google.com/webstore/detail/ghunt-companion/dpdcofblfbmmnikcbmmiakkclocadjab)
+   (Firefox: [add-on](https://addons.mozilla.org/en-US/firefox/addon/ghunt-companion/)).
+2. Sign into a **dedicated research Google account** in that browser.
+3. Open gmail.com or accounts.google.com, click the Companion icon, choose **Method 2** (copy encoded credentials).
+4. ShamrockLeads → OSINT → Engines → GHunt card → paste the blob → **Save GHunt session**.
 
-Creds persist on volume `osint-ghunt-creds` (`/home/appuser/.malfrats`).
+The worker exchanges that blob for `creds.m` on volume `osint-ghunt-creds`. Method 1 (listener on port 60067) does **not** work in Docker.
+
+Alternate: put the blob in `.env` as `GHUNT_COMPANION_B64=...` and restart `osint-worker`.
+
 Without login, GHunt is `package_installed` but not `available` (fail closed).
 
 ### h8mail notes

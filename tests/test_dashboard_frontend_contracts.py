@@ -38,6 +38,14 @@ def test_bond_intelligence_write_uses_write_print_desk():
     assert "openDefendantWritePrint" in source
 
 
+def test_osint_ui_has_ghunt_companion_login():
+    source = (ROOT / "dashboard" / "sl-osint.js").read_text()
+    assert "saveGhuntLogin" in source
+    assert "ghuntCompanionBlob" in source
+    assert "Method 2" in source
+    assert "/api/osint/ghunt/login" in source
+
+
 def test_lee_bookmarklet_opens_dashboard_extract_hash():
     source = (ROOT / "dashboard" / "sl-hydrate.js").read_text()
 

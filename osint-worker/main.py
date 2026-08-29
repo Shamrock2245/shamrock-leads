@@ -21,20 +21,45 @@ from typing import List, Optional
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
+from contextlib import asynccontextmanager
+
 from defaults import build_username_candidates, resolve_tool_flags
-from runners import execute_scan, execute_scan_v2, probe_tools
+from runners import (
+    bootstrap_ghunt_from_env,
+    complete_ghunt_login,
+    execute_scan,
+    execute_scan_v2,
+    probe_tools,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("osint_worker")
 
 WORKER_KEY = os.getenv("OSINT_WORKER_KEY", "").strip()
 
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    try:
+        await bootstrap_ghunt_from_env()
+    except Exception:
+        log.warning("GHunt startup login skipped")
+    yield
+
+
 app = FastAPI(
     title="Shamrock OSINT Worker",
     version="2.6.0",
     docs_url=None,
     redoc_url=None,
+    lifespan=_lifespan,
 )
+
+
+class GHuntLoginBody(BaseModel):
+    companion_b64: Optional[str] = None
+    oauth_token: Optional[str] = None
+    master_token: Optional[str] = None
 
 
 class ScanRequest(BaseModel):
@@ -82,6 +107,27 @@ def _check_key(x_worker_key: Optional[str]) -> None:
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "osint-worker", "version": "2.6.0"}
+
+
+@app.post("/v1/ghunt/login")
+async def ghunt_login(
+    body: GHuntLoginBody,
+    x_worker_key: Optional[str] = Header(None, alias="X-Worker-Key"),
+):
+    """Persist a GHunt session from Companion Method 2 / oauth / master token."""
+    _check_key(x_worker_key)
+    try:
+        result = await complete_ghunt_login(
+            companion_b64=body.companion_b64 or "",
+            oauth_token=body.oauth_token or "",
+            master_token=body.master_token or "",
+        )
+        return {"success": True, **result}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        log.warning("GHunt login failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="GHunt login failed") from exc
 
 
 @app.get("/status")

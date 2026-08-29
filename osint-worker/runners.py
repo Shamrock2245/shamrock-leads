@@ -5,6 +5,7 @@ CLI runners for Maigret, Sherlock, Blackbird, SpiderFoot, Ignorant, Holehe, Tout
 from __future__ import annotations
 
 import asyncio
+import base64
 import csv
 import hashlib
 import json
@@ -273,6 +274,112 @@ def resolve_ghunt() -> Optional[str]:
     except Exception:
         pass
     return None
+
+
+def parse_ghunt_companion_blob(raw: str) -> str:
+    """Turn Companion Method-2 clipboard (or raw oauth2_4/ token) into an oauth_token.
+
+    Never logs the blob. Raises ValueError on junk input.
+    """
+    s = str(raw or "").strip().strip('"').strip("'").strip()
+    if not s:
+        raise ValueError("empty GHunt companion blob")
+    if s.startswith("oauth2_4/") or s.startswith("oauth2_"):
+        return s
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, dict) and parsed.get("oauth_token"):
+            tok = str(parsed.get("oauth_token") or "").strip()
+            if tok:
+                return tok
+    except Exception:
+        pass
+    compact = "".join(s.split())
+    pad = "=" * ((4 - len(compact) % 4) % 4)
+    try:
+        decoded = base64.b64decode(compact + pad)
+        data = json.loads(decoded.decode("utf-8"))
+    except Exception as exc:
+        raise ValueError("not valid GHunt Companion Method 2 base64") from exc
+    if not isinstance(data, dict):
+        raise ValueError("companion blob JSON is not an object")
+    tok = str(data.get("oauth_token") or data.get("oauth") or "").strip()
+    if not tok:
+        raise ValueError("companion blob has no oauth_token")
+    return tok
+
+
+async def complete_ghunt_login(
+    *,
+    oauth_token: str = "",
+    master_token: str = "",
+    companion_b64: str = "",
+) -> Dict[str, Any]:
+    """Exchange Companion/oauth material for a persisted GHunt creds.m session.
+
+    Does not log tokens. Returns owner email of the *research* Google account.
+    """
+    token = (oauth_token or "").strip()
+    master = (master_token or "").strip()
+    if not token and companion_b64:
+        token = parse_ghunt_companion_blob(companion_b64)
+    if not token and not master:
+        raise ValueError("oauth_token, master_token, or companion_b64 is required")
+
+    try:
+        from ghunt.helpers import auth
+        from ghunt.helpers.utils import get_httpx_client
+        from ghunt.objects.base import GHuntCreds
+    except ImportError as exc:
+        raise RuntimeError("ghunt is not installed on the worker") from exc
+
+    as_client = get_httpx_client()
+    owner_email = ""
+    owner_name = ""
+    try:
+        creds = GHuntCreds()
+        creds.android.authorization_tokens = {}
+        if token:
+            master, _services, owner_email, owner_name = await auth.android_master_auth(
+                as_client, token
+            )
+        creds.android.master_token = master
+        creds.cookies = {"a": "a"}
+        creds.osids = {"a": "a"}
+        await auth.gen_cookies_and_osids(as_client, creds)
+        creds.save_creds(silent=True)
+    finally:
+        try:
+            await as_client.aclose()
+        except Exception:
+            pass
+
+    ok = ghunt_creds_present()
+    log.info("GHunt session saved creds_present=%s", ok)
+    return {
+        "ok": ok,
+        "creds_configured": ok,
+        "account_email": owner_email or None,
+        "account_name": owner_name or None,
+    }
+
+
+async def bootstrap_ghunt_from_env() -> Optional[Dict[str, Any]]:
+    """If GHUNT_COMPANION_B64 / GHUNT_OAUTH_TOKEN is set and no creds file, log in."""
+    if ghunt_creds_present():
+        return None
+    b64 = (os.getenv("GHUNT_COMPANION_B64") or "").strip()
+    oauth = (os.getenv("GHUNT_OAUTH_TOKEN") or "").strip()
+    master = (os.getenv("GHUNT_MASTER_TOKEN") or "").strip()
+    if not (b64 or oauth or master):
+        return None
+    try:
+        return await complete_ghunt_login(
+            companion_b64=b64, oauth_token=oauth, master_token=master
+        )
+    except Exception as exc:
+        log.warning("GHunt env bootstrap failed: %s", type(exc).__name__)
+        return {"ok": False, "error": str(exc)[:200]}
 
 
 def ghunt_creds_present() -> bool:
@@ -2718,10 +2825,14 @@ async def run_ghunt(email: str) -> Dict[str, Any]:
         result_meta["error"] = "ghunt not installed"
         return result_meta
     if not ghunt_creds_present():
-        result_meta["error"] = (
-            "ghunt not logged in — docker exec -it shamrock-osint-worker ghunt login"
-        )
-        return result_meta
+        boot = await bootstrap_ghunt_from_env()
+        if not ghunt_creds_present():
+            result_meta["error"] = (
+                boot.get("error")
+                if isinstance(boot, dict) and boot.get("error")
+                else "ghunt not logged in — paste Companion Method 2 on the OSINT Engines tab"
+            )
+            return result_meta
 
     local, _, domain = addr.partition("@")
     log.info("GHunt email check local=%s domain=%s", _redact(local), domain)

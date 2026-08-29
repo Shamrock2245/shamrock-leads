@@ -190,6 +190,39 @@ class OSINTService:
                 worker_auth_ok=False,
             )
 
+    async def save_ghunt_login(self, companion_b64: str, actor: str = "admin") -> Dict[str, Any]:
+        """Forward Companion Method 2 blob to the worker. Never log the blob."""
+        blob = (companion_b64 or "").strip()
+        if not blob:
+            return {"success": False, "error": "Paste the GHunt Companion Method 2 blob first"}
+        try:
+            async with httpx.AsyncClient(timeout=90.0) as client:
+                r = await client.post(
+                    f"{OSINT_WORKER_URL}/v1/ghunt/login",
+                    headers=_worker_headers(),
+                    json={"companion_b64": blob},
+                )
+            data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+            if r.status_code >= 400:
+                detail = data.get("detail") if isinstance(data, dict) else None
+                return {
+                    "success": False,
+                    "error": str(detail or f"worker HTTP {r.status_code}")[:300],
+                }
+            await AuditService.log_event(
+                entity_type="osint",
+                entity_id="ghunt",
+                action="ghunt_login",
+                details={"ok": True, "account_email": data.get("account_email")},
+                actor=actor,
+                actor_type="admin",
+                event_context="osint_intelligence",
+            )
+            return {"success": True, **{k: v for k, v in data.items() if k != "companion_b64"}}
+        except Exception as exc:
+            log.warning("GHunt login proxy failed: %s", type(exc).__name__)
+            return {"success": False, "error": "Could not reach OSINT worker to save GHunt session"}
+
     async def get_queue_info(self) -> Dict[str, Any]:
         """Get current queue depth (running/queued scans)."""
         col = self._scans_col

@@ -133,6 +133,8 @@ services:
       - HUNTER_API_KEY=${HUNTER_API_KEY:-}
       - H8MAIL_HIBP_KEY=${H8MAIL_HIBP_KEY:-}
       - H8MAIL_LOCAL_BREACH_DIR=/opt/h8mail-breaches
+      - GHUNT_COMPANION_B64=${GHUNT_COMPANION_B64:-}
+      - GHUNT_OAUTH_TOKEN=${GHUNT_OAUTH_TOKEN:-}
     volumes:
       - osint-ghunt-creds:/home/appuser/.malfrats
       - osint-h8mail-breaches:/opt/h8mail-breaches
