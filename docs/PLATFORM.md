@@ -1,7 +1,7 @@
 # Shamrock’s Platform
 
 > **North star:** Become the **authoritative bail brand expert** in Florida — and the model operators elsewhere in the U.S. copy.  
-> **Last Updated:** 2026-08-12  
+> **Last Updated:** 2026-08-28  
 > **Production cutover:** [`ECOSYSTEM_PROD_CHECKLIST.md`](./ECOSYSTEM_PROD_CHECKLIST.md)  
 > **Repo harmony:** [`ECOSYSTEM.md`](./ECOSYSTEM.md) · **Brand:** [`../BRAND.md`](../BRAND.md)
 
@@ -66,7 +66,7 @@ When someone in Florida (and later multi-state via Palmetto) asks “who runs ba
 | Stage | Meaning | Where we are |
 |-------|---------|----------------|
 | **1 · Built** | Code on `main` for core funnels | ✅ Bond chain Phases 1–17 · School LMS · Portal · NR · Telegram |
-| **2 · Production-hardened** | Live E2E, secrets, no mock certs, BB reliable | 🔲 **Not yet earned** (audit 2026-08-12). C2 public pricing is now verified at $649; remaining gates are C3 historical secret rotation plus staff-confirmed write-bond → DocuSeal paperwork and outbound iMessage smokes. |
+| **2 · Production-hardened** | Live E2E, secrets, no mock certs, BB reliable | 🔲 **Not yet earned**. D2 iMessage is staff-confirmed (2026-08-28). C3 rotation is owner-deferred (not a formal blocker). Remaining live gates: B3 on a real BondCase, B5 one staff-approved DocuSeal packet. |
 | **3 · Authoritative FL brand** | Statewide coverage quality, education + ops reputation, SOC-minded | 🔲 After Stage 2 |
 | **4 · U.S. reference model** | Palmetto multi-state depth, playbooks others adopt | 🔲 After Stage 3 |
 

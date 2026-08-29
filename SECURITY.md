@@ -1,6 +1,6 @@
 # SECURITY.md — ShamrockLeads Security Policy
 
-> **Last Updated:** 2026-05-15
+> **Last Updated:** 2026-08-28
 > **Compliance Target:** SOC II Type II readiness
 > **Contact:** `admin@shamrockbailbonds.biz`
 
@@ -20,7 +20,7 @@ If you discover a security vulnerability, please email `admin@shamrockbailbonds.
 | **Docker** | `env_file: .env` in docker-compose.yml | Container runtime only |
 | **GitHub Actions** | Repository secrets | CI/CD pipeline only |
 | **MongoDB Atlas** | Connection string in `.env` | Authenticated connections only |
-| **SignNow** | Bearer token + Basic Auth in `.env` | Server-side API calls only |
+| **DocuSeal** | API token in `.env` (`DOCUSEAL_*`) against `https://sign.shamrockbailbonds.biz` | Server-side packet create only from Super CRM |
 
 ### Rules
 
@@ -76,7 +76,7 @@ Cross-repo: keep `GAS_API_KEY` identical on leads VPS, portal GAS/Wix, and bail-
 | **Dashboard** | PIN-based authentication + encrypted session cookie |
 | **Session** | `SECRET_KEY` env var for cookie signing (persists across restarts) |
 | **MongoDB** | Authenticated connection string (username + password) |
-| **SignNow** | ROPC OAuth2 flow (Basic Auth + username/password) |
+| **DocuSeal** | API token; staff-gated packet create in Super CRM only |
 | **BlueBubbles** | API password via `BLUEBUBBLES_PASSWORD_0178` |
 | **Twilio** | Account SID + Auth Token |
 | **Gmail/GCal** | OAuth2 refresh token flow |

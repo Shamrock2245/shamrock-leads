@@ -1,7 +1,7 @@
 # Staff Runbook: D2 Dashboard iMessage Smoke & BlueBubbles Diagnostics
 
 > **Target Checklist Item:** [`ECOSYSTEM_PROD_CHECKLIST.md`](../ECOSYSTEM_PROD_CHECKLIST.md) §D2 (Dashboard iMessage send succeeds to a test number)  
-> **Status:** 🔲 **Human-Gated — Open** (Diagnostic Preflight Tools Ready · Live Tunnel Reachability Pending)  
+> **Status:** ✅ **Closed 2026-08-28** — Brendan confirmed dashboard iMessage send is working. Keep automations in `review` for 7 days (D3).  
 > **Policy Guard:** **D3 Review-First Mode is strictly enforced.** All automations remain in `review` mode with zero automatic retries or `full_auto` transitions.
 
 ---

@@ -1,7 +1,7 @@
 # Staff Runbook: B3 Write-Bond → Paperwork Event Forwarding Smoke
 
 > **Target Checklist Item:** [`ECOSYSTEM_PROD_CHECKLIST.md`](../ECOSYSTEM_PROD_CHECKLIST.md) §B3 (`GAS_WEB_APP_URL` + `GAS_API_KEY` forward write-bond / paperwork events)  
-> **Status:** 🔲 **Human-Gated — Open** (Code & Preflight Tooling Ready · Awaiting Staff-Authorized Live Smoke)  
+> **Status:** 🔲 **Open — awaiting a real BondCase** (Operator reports the path has worked; no live case is available yet for the documented smoke.)  
 > **Execution Rule:** **Do not run or simulate this smoke without an authorized staff member supplying an exact, pre-existing validated BondCase and approving the action in the active session.**
 
 ---

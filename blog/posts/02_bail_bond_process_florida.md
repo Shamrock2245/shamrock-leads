@@ -97,10 +97,10 @@ The bail bond remains active until the case is **resolved** — whether by trial
 Traditional bail bond companies make you drive to an office, fill out paper forms, and wait. We don't.
 
 - **24/7 availability** — our AI intake agent Shannon handles after-hours calls
-- **Digital paperwork** — sign everything from your phone via SignNow
+- **Digital paperwork** — sign everything from your phone via DocuSeal
 - **Real-time monitoring** — we know about arrests before families do
 - **Payment plans available** — because emergencies don't wait for payday
 
 ## Need Help Right Now?
 
-If someone you care about has been arrested in Southwest Florida, **call Shamrock Bail Bonds at (239) 552-1349** or start the process online. We'll have them home as fast as legally possible.
+If someone you care about has been arrested in Southwest Florida, **call Shamrock Bail Bonds at (239) 332-2245** or start the process online. We'll have them home as fast as legally possible.

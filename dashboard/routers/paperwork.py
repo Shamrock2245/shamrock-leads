@@ -49,6 +49,13 @@ from dashboard.routers.automation_control import _actor_label, _require_control_
 
 logger = logging.getLogger(__name__)
 
+# Fallback when paperwork_rules.drag_drop_rules is not seeded.
+DEFAULT_DOC_RULES_CATEGORIES = {
+    "required": [],
+    "optional": [],
+    "conditional": [],
+}
+
 
 def rewrite_shannon_packet_id(packet_id: str) -> str:
     """Never use a Twilio CallSid as a Super CRM packet id."""

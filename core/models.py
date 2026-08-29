@@ -46,7 +46,7 @@ class SuretyConfig:
     poa_tiers: List[POATier]
     surety_rate_per_100: float       # Dollars owed to surety per $100 premium
     buf_rate_per_100: float          # Dollars owed to BUF per $100 premium
-    template_set_id: str = ""        # SignNow template group (Phase 6)
+    template_set_id: str = ""        # Historical template group id (read-only; active packets are DocuSeal)
     active: bool = True
 
     def calculate_split(self, bond_amount: float, premium_rate: float = 0.10) -> Dict[str, float]:

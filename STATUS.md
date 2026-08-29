@@ -1,6 +1,6 @@
 # ShamrockLeads — True Status
 
-> **Last verified:** 2026-08-21
+> **Last verified:** 2026-08-28
 > **VPS:** Hetzner **CCX33** (8 dedicated vCPU / 32 GB RAM) as of 2026-08-13 — compose ceilings raised (`docs/runbooks/vps-ccx33-resize.md`). Root disk was **not** grown with the type change (still ~38 GB); grow to 160–240 GB in the Cloud Console.
 > **Repo:** `Shamrock2245/shamrock-leads` · branch `main`  
 > **Product URL:** `https://leads.shamrockbailbonds.biz`  
@@ -15,6 +15,19 @@
 > **All hosts:** [`docs/SUBDOMAINS.md`](./docs/SUBDOMAINS.md) · `config/subdomains.py` · `python scripts/check_subdomains.py --live`
 
 ---
+
+## Gate update (2026-08-28, operator)
+
+- **D2 closed:** Brendan confirmed Super CRM dashboard iMessage send is working.
+- **C3 deferred:** historical secret rotation is not being treated as a formal blocker; rotation will happen shortly. Still `[ ]` until keys actually turn.
+- **B3 open:** path is believed to work; no real BondCase is available yet for the documented smoke. Re-run when the next validated case exists.
+- **B5 still open.** Stage 2 production-hardened is **not** claimed. Automations stay `review` for 7 days after D2 (clock starts 2026-08-28).
+
+## Clipboard / docs alignment (2026-08-28)
+
+Sibling `shamrock-bail-portal-site` staff case lightbox no longer calls retired Wix packet-create. Super CRM remains the only DocuSeal issuer. `SECURITY.md` and public blog copy no longer describe SignNow as the active signing path. `docs/ECOSYSTEM_PROD_CHECKLIST.md` C4 now records the portal factory as **V468 / @468**.
+
+This does **not** close B3/B5, C3, or D2 and does not mark Stage 2 production-hardened.
 
 ## Confirmed Lee booking intake deployment (2026-08-21)
 

@@ -5,6 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-08-28 (P0 gate update)
+
+### Changed
+- **D2** marked staff-confirmed working (dashboard iMessage).
+- **C3** recorded as owner-deferred, not a formal Stage 2 blocker; rotation still pending.
+- **B3** remains open until a real BondCase smoke is logged. Operator reports the path has worked.
+- D3 7-day `review` clock starts 2026-08-28. Do not enable `full_auto`.
+
+## [Unreleased] — 2026-08-28 (Clipboard / docs alignment)
+
+### Changed
+- **Docs:** `SECURITY.md` now lists DocuSeal (not SignNow) as the active e-sign secret and auth path. Public blog copy no longer names SignNow or the retired (239) 552-1349 CTA; voice NAP is (239) 332-2245.
+- **Platform truth:** `docs/PLATFORM.md` and `docs/ECOSYSTEM_PROD_CHECKLIST.md` C4 record the sibling portal factory as **V468 / @468**. Wix remains a non-issuing clipboard; Super CRM is the only packet authority.
+- This does **not** close B3/B5, C3, or D2, or mark Stage 2 production-hardened.
+
 ## [Unreleased] — 2026-08-21 (Confirmed Lee booking intake)
 
 ### Added

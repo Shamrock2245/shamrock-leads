@@ -909,6 +909,146 @@ async def portal_session(request: Request):
     return _session_payload(session, meta)
 
 
+@pin_portal_router.post("/kiosk-id-ocr")
+async def kiosk_id_ocr(request: Request):
+    """Lobby kiosk: scan indemnitor ID onto a staff-issued packet. Never writes defendant identity."""
+    import base64
+
+    content_type = request.headers.get("content-type", "")
+    packet_id = ""
+    role = "indemnitor"
+    image_bytes = b""
+    filename = "id_photo.jpg"
+
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        packet_id = str(form.get("packet_id") or "").strip()
+        role = _normalize_client_role(form.get("role") or "indemnitor") or "indemnitor"
+        file_obj = form.get("file") or form.get("image") or form.get("id_photo")
+        if file_obj and hasattr(file_obj, "read"):
+            filename = getattr(file_obj, "filename", "") or filename
+            image_bytes = await file_obj.read()
+    else:
+        try:
+            body = (await request.json()) or {}
+        except Exception:
+            body = {}
+        packet_id = str(body.get("packet_id") or "").strip()
+        role = _normalize_client_role(body.get("role") or "indemnitor") or "indemnitor"
+        raw_b64 = body.get("image_b64") or body.get("image") or ""
+        if raw_b64:
+            if "," in raw_b64:
+                raw_b64 = raw_b64.split(",", 1)[1]
+            try:
+                image_bytes = base64.b64decode(raw_b64)
+            except Exception:
+                image_bytes = b""
+
+    if role == "defendant":
+        return JSONResponse(
+            {"success": False, "error": "Kiosk ID scan is for the indemnitor. Defendant identity stays on the booking record."},
+            status_code=400,
+        )
+    if not packet_id:
+        return JSONResponse({"success": False, "error": "Missing packet_id"}, status_code=400)
+    if not image_bytes:
+        return JSONResponse({"success": False, "error": "No ID image data provided"}, status_code=400)
+
+    packets = get_collection("paperwork_packets")
+    packet = await packets.find_one({"packet_id": packet_id})
+    if not packet or packet.get("voided") or packet.get("status") in ("voided", "cancelled", "canceled"):
+        return JSONResponse({"success": False, "error": "Packet not found or no longer active."}, status_code=404)
+
+    from dashboard.services.id_scanner_service import IDScannerService
+    from dashboard.services.paperwork_signers import normalize_role
+    from dashboard.services.docuseal_service import DocuSealService
+    from dashboard.services.docuseal_signing_ux import submission_fields_from_values, IDENTITY_READONLY_FIELD_NAMES
+
+    result = await IDScannerService.scan_id_image(image_bytes, filename=filename)
+    extracted = result.get("extracted") if isinstance(result.get("extracted"), dict) else {}
+    if not result.get("success") or not extracted:
+        return JSONResponse({
+            "success": False,
+            "error": result.get("error") or "Could not read ID photo. Try a clearer photo.",
+        }, status_code=422)
+
+    ocr_fields = client_fields_from_id_ocr(extracted, "indemnitor")
+    submitters = list(packet.get("docuseal_submitters") or [])
+    target = None
+    want = normalize_role(role)
+    for item in submitters:
+        if normalize_role((item or {}).get("role")) == want:
+            target = item
+            break
+    if not target:
+        for item in submitters:
+            if normalize_role((item or {}).get("role")) == "indemnitor":
+                target = item
+                break
+    submitter_id = (target or {}).get("id")
+    pushed = False
+    if submitter_id:
+        try:
+            svc = DocuSealService()
+            await svc.update_submitter(
+                submitter_id,
+                name=ocr_fields.get("indemnitor_name") or None,
+                values=ocr_fields,
+                fields=submission_fields_from_values(
+                    ocr_fields,
+                    extra_readonly=IDENTITY_READONLY_FIELD_NAMES,
+                ),
+                send_email=False,
+                metadata={"kiosk_id_scan": True, "packet_id": packet_id, "party_role": "indemnitor"},
+            )
+            pushed = True
+        except Exception:
+            logger.warning("[Kiosk] DocuSeal indemnitor update failed for %s", packet_id, exc_info=True)
+
+    ind_id = packet.get("indemnitor_id")
+    if ind_id:
+        try:
+            await get_collection("indemnitors").update_one(
+                {"$or": [{"indemnitor_id": ind_id}, {"Indemnitor_ID": ind_id}]},
+                {"$set": {
+                    "name": ocr_fields.get("indemnitor_name") or "Indemnitor",
+                    "firstName": (extracted.get("first_name") or "").strip(),
+                    "lastName": (extracted.get("last_name") or "").strip(),
+                    "dob": ocr_fields.get("indemnitor_dob") or "",
+                    "dl": ocr_fields.get("indemnitor_dl") or "",
+                    "address": ocr_fields.get("indemnitor_address") or "",
+                    "city": ocr_fields.get("indemnitor_city") or "",
+                    "state": ocr_fields.get("indemnitor_state") or "",
+                    "zip": ocr_fields.get("indemnitor_zip") or "",
+                    "pending_real_party": False,
+                    "source": "kiosk_id_scan",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }},
+            )
+        except Exception:
+            logger.warning("[Kiosk] indemnitor CRM update failed", exc_info=True)
+
+    existing_fields = packet.get("client_fields") if isinstance(packet.get("client_fields"), dict) else {}
+    await packets.update_one(
+        {"packet_id": packet_id},
+        {"$set": {
+            "client_fields": {**existing_fields, **ocr_fields},
+            "kiosk_ready": True,
+            "in_person": True,
+            "pending_staff_indemnitor": False,
+            "id_ocr_pushed_at": datetime.now(timezone.utc).isoformat(),
+            "client_fields_updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    return JSONResponse({
+        "success": True,
+        "extracted": extracted,
+        "pushed_to_docuseal": pushed,
+        "role": "indemnitor",
+        "portrait_jpeg_b64": result.get("portrait_jpeg_b64") or "",
+    })
+
+
 @pin_portal_router.post("/id-ocr")
 async def portal_id_ocr(request: Request):
     """PIN-session ID scan. Does not create a packet."""
@@ -1142,6 +1282,8 @@ def _branded_sign_page(
     role: str = "",
     party_name: str = "",
     defendant_name: str = "",
+    packet_id: str = "",
+    kiosk: bool = False,
 ) -> str:
     """Self-hosted <docuseal-form> wrapper (official embed, not a 302 to raw UI)."""
     from dashboard.services.docuseal_signing_ux import (
@@ -1162,6 +1304,73 @@ def _branded_sign_page(
     safe_name = html_lib.escape(party_name or "")
     case_line = f"Bond packet for {safe_def}" if safe_def else "Bond packet"
     cfg_json = json.dumps(cfg)
+    kiosk_meta = json.dumps({"packet_id": packet_id or "", "role": normalize_role(role) or "indemnitor"})
+    show_kiosk_scan = bool(kiosk and packet_id and normalize_role(role) in ("indemnitor", "coindemnitor"))
+    kiosk_panel = ""
+    if show_kiosk_scan:
+        kiosk_panel = f"""
+    <div id="kioskScan" class="kiosk">
+        <h2>Scan your driver license</h2>
+        <p>Stand at the kiosk. Photograph the <strong>front</strong> of your ID. We fill your name, address, DOB, and license. The person in jail and the bond amount stay locked.</p>
+        <label class="kiosk-btn">Open camera / choose photo
+            <input id="kioskIdFile" type="file" accept="image/*" capture="environment" hidden>
+        </label>
+        <div id="kioskScanStatus"></div>
+        <button type="button" class="kiosk-skip" id="kioskSkip">Skip scan — fill by hand</button>
+    </div>
+    <style>
+        .kiosk {{ max-width:640px; margin:0 auto 16px; padding:16px; background:var(--card); border-radius:16px; }}
+        .kiosk h2 {{ margin:0 0 8px; font-size:1.2rem; }}
+        .kiosk p {{ color:var(--muted); line-height:1.45; }}
+        .kiosk-btn {{ display:flex; align-items:center; justify-content:center; min-height:48px; background:var(--accent); color:#052e16; font-weight:800; border-radius:12px; cursor:pointer; }}
+        .kiosk-skip {{ margin-top:12px; min-height:44px; width:100%; background:transparent; color:var(--accent); border:1px solid rgba(34,197,94,.35); border-radius:12px; font-weight:700; }}
+        #docuseal-mount.waiting {{ display:none; }}
+    </style>
+    <script>
+        const KIOSK = {kiosk_meta};
+        function showKioskStatus(html) {{
+            const el = document.getElementById('kioskScanStatus');
+            if (el) el.innerHTML = html;
+        }}
+        function revealSigning() {{
+            const scan = document.getElementById('kioskScan');
+            if (scan) scan.style.display = 'none';
+            const mount = document.getElementById('docuseal-mount');
+            if (mount) mount.classList.remove('waiting');
+            if (typeof mountForm === 'function') mountForm();
+        }}
+        async function kioskScanFile(file) {{
+            if (!file) return;
+            showKioskStatus('<p>Scanning ID…</p>');
+            const fd = new FormData();
+            fd.append('file', file);
+            fd.append('packet_id', KIOSK.packet_id);
+            fd.append('role', KIOSK.role);
+            try {{
+                const r = await fetch('/api/portal/kiosk-id-ocr', {{ method: 'POST', body: fd }});
+                const d = await r.json();
+                if (!d.success) {{
+                    showKioskStatus('<p>' + (d.error || 'Could not read ID. Try again or skip.') + '</p>');
+                    return;
+                }}
+                const ext = d.extracted || {{}};
+                const name = ext.full_name || 'ID captured';
+                showKioskStatus('<p><strong>' + name + '</strong> loaded. Opening your paperwork…</p>');
+                setTimeout(revealSigning, 600);
+            }} catch (err) {{
+                showKioskStatus('<p>Scan failed. Try again or skip.</p>');
+            }}
+        }}
+        document.addEventListener('DOMContentLoaded', function () {{
+            const mount = document.getElementById('docuseal-mount');
+            if (mount) mount.classList.add('waiting');
+            const input = document.getElementById('kioskIdFile');
+            if (input) input.addEventListener('change', function () {{ kioskScanFile(input.files && input.files[0]); }});
+            const skip = document.getElementById('kioskSkip');
+            if (skip) skip.addEventListener('click', revealSigning);
+        }});
+    </script>
+"""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1203,6 +1412,7 @@ def _branded_sign_page(
         <p>{case_line}{(' · ' + safe_name) if safe_name else ''}</p>
         <p>{safe_hint}</p>
     </div>
+    {kiosk_panel}
     <div id="docuseal-mount"></div>
     <p class="foot">Questions? <a href="tel:+12393322245">(239) 332-2245</a></p>
     <script>
@@ -1223,10 +1433,12 @@ def _branded_sign_page(
             mount.innerHTML = '';
             mount.appendChild(form);
         }}
-        if (document.readyState === 'loading') {{
-            document.addEventListener('DOMContentLoaded', function () {{ setTimeout(mountForm, 0); }});
-        }} else {{
-            setTimeout(mountForm, 0);
+        if (!{str(show_kiosk_scan).lower()}) {{
+            if (document.readyState === 'loading') {{
+                document.addEventListener('DOMContentLoaded', function () {{ setTimeout(mountForm, 0); }});
+            }} else {{
+                setTimeout(mountForm, 0);
+            }}
         }}
     </script>
 </body>
@@ -1238,6 +1450,7 @@ async def _redirect_to_party_sign(
     role: Optional[str] = None,
     *,
     raw_redirect: bool = False,
+    kiosk: bool = False,
 ):
     """Branded embed by default; ?raw=1 302s to the live /s/{{slug}}."""
     from fastapi.responses import RedirectResponse
@@ -1289,6 +1502,8 @@ async def _redirect_to_party_sign(
             role=(chosen or {}).get("role") or role or "",
             party_name=(chosen or {}).get("name") or "",
             defendant_name=defendant,
+            packet_id=packet_id,
+            kiosk=kiosk,
         )
     )
 
@@ -1298,7 +1513,9 @@ async def _redirect_to_party_sign(
 async def public_sign_redirect(request: Request, packet_id: str, role: Optional[str] = None):
     """Branded Shamrock embed of the party's /s/{slug}. ?raw=1 keeps a 302."""
     raw = (request.query_params.get("raw") or "").strip() in ("1", "true", "yes")
-    return await _redirect_to_party_sign(packet_id, role, raw_redirect=raw)
+    mode = (request.query_params.get("mode") or request.query_params.get("kiosk") or "").strip().lower()
+    kiosk = mode in ("kiosk", "ipad", "inperson", "1", "true") or request.query_params.get("inperson") == "1"
+    return await _redirect_to_party_sign(packet_id, role, raw_redirect=raw, kiosk=kiosk)
 
 
 def _is_paperwork_host(request: Request) -> bool:
