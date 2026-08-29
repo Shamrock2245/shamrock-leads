@@ -172,10 +172,9 @@ async def alpr_status(
     """Probe ALPR worker health & active camera stream counts."""
     _require_staff(request, x_admin_key, x_admin_token)
 
-    from services.alpr_engine import probe_alpr_deps
     from services.alpr_cameras import enabled_cameras, load_camera_registry
 
-    deps = probe_alpr_deps()
+    # Engine lives on alpr-worker, not the dashboard image. Do not probe local pip.
     registry = load_camera_registry()
     enabled = enabled_cameras(registry)
 
@@ -220,10 +219,17 @@ async def alpr_status(
             "cameras_connected": sum(1 for s in stream_list if s.get("connected")),
         }
 
+    worker_ready = bool(worker_doc.get("engine_ready"))
     return {
         "ok": True,
         "service": "alpr",
-        "deps": deps,
+        "deps": {
+            "opencv": worker_ready,
+            "fast_alpr": worker_ready,
+            "engine_ready": worker_ready,
+            "error": worker_doc.get("engine_error"),
+            "source": "alpr-worker",
+        },
         "cameras_registered": len(registry),
         "cameras_enabled": len(enabled),
         "cameras_connected": streams_out.get("cameras_connected"),
@@ -232,6 +238,7 @@ async def alpr_status(
             "engine_error": worker_doc.get("engine_error"),
             "cycle": worker_doc.get("cycle"),
             "hits_total": worker_doc.get("hits_total"),
+            "ocr_reads": worker_doc.get("ocr_reads"),
             "updated_at": worker_doc.get("updated_at"),
             "last_error": worker_doc.get("last_error"),
             "streams": streams_out,
@@ -462,36 +469,45 @@ async def scan_image(
     """Ad-hoc: scan an uploaded vehicle photo for plates."""
     _require_staff(request, x_admin_key, x_admin_token)
 
-    from services.alpr_engine import get_alpr_engine, probe_alpr_deps
-
-    deps = probe_alpr_deps()
-    if not deps.get("engine_ready"):
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "ALPR vision stack not available on this host. "
-                f"opencv={deps.get('opencv')} fast_alpr={deps.get('fast_alpr')} "
-                f"error={deps.get('error')}. Use the alpr-worker image or install deps."
-            ),
-        )
-
     data = await file.read()
     if not data:
         raise HTTPException(400, detail="Empty upload")
     if len(data) > 15 * 1024 * 1024:
         raise HTTPException(400, detail="Image too large (max 15MB)")
 
-    engine = get_alpr_engine()
-    if not engine.ready:
-        raise HTTPException(
-            503,
-            detail=f"ALPR engine failed to load: {engine.load_error}",
-        )
+    worker_url = (os.getenv("ALPR_WORKER_URL") or "http://alpr-worker:8090").rstrip("/")
+    try:
+        import httpx
 
-    detections = engine.detect_bytes(data)
-    return {
-        "ok": True,
-        "filename": file.filename,
-        "count": len(detections),
-        "detections": [d.to_dict() for d in detections],
-    }
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            r = await client.post(
+                f"{worker_url}/scan",
+                content=data,
+                headers={"Content-Type": file.content_type or "application/octet-stream"},
+            )
+        payload = r.json() if "application/json" in (r.headers.get("content-type") or "") else {}
+        if r.status_code >= 400:
+            raise HTTPException(
+                status_code=503,
+                detail=payload.get("error") or (
+                    "ALPR worker not ready. Start it with: "
+                    "docker compose --profile alpr up -d --build alpr-worker"
+                ),
+            )
+        return {
+            "ok": True,
+            "filename": file.filename,
+            "count": payload.get("count", 0),
+            "detections": payload.get("detections") or [],
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.warning("ALPR scan proxy failed: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "ALPR worker unreachable. Start it with: "
+                "docker compose --profile alpr up -d --build alpr-worker"
+            ),
+        ) from exc

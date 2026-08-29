@@ -54,6 +54,7 @@ def _worker_status_doc(
     engine_error: Optional[str],
     cycle: int,
     hits_total: int,
+    ocr_reads: int = 0,
     last_error: Optional[str] = None,
 ) -> Dict[str, Any]:
     return {
@@ -63,6 +64,7 @@ def _worker_status_doc(
         "engine_ready": engine_ready,
         "engine_error": engine_error,
         "hits_total": hits_total,
+        "ocr_reads": ocr_reads,
         "last_error": last_error,
         "streams": stream_status,
         "pid": os.getpid(),
@@ -82,18 +84,23 @@ def run_forever() -> None:
 
     deps = probe_alpr_deps()
     logger.info("ALPR deps: %s", deps)
-    if not deps.get("engine_ready"):
+    engine = ALPREngine()
+    if not engine.ready:
         logger.error(
             "Vision stack incomplete (opencv=%s fast_alpr=%s). "
-            "Install worker deps or run alpr-worker image. Error: %s",
+            "Rebuild alpr-worker with fast-alpr[onnx]. Error: %s",
             deps.get("opencv"),
             deps.get("fast_alpr"),
-            deps.get("error"),
+            engine.load_error or deps.get("error"),
         )
-        # Stay alive so orchestrators see a running container; health shows not ready
-        engine = ALPREngine()
     else:
-        engine = ALPREngine()
+        logger.info("Fast-ALPR engine loaded")
+
+    try:
+        from services.alpr_http import start_http_server
+        start_http_server(engine)
+    except Exception as exc:
+        logger.warning("ALPR HTTP API not started: %s", exc)
 
     try:
         matcher = ALPRMatcher()
@@ -112,6 +119,7 @@ def run_forever() -> None:
     streams = ALPRStreamManager()
     cycle = 0
     hits_total = 0
+    ocr_reads = 0
     last_error: Optional[str] = None
 
     # Heartbeat collection for dashboard status probe
@@ -133,6 +141,7 @@ def run_forever() -> None:
                 if not engine.ready:
                     continue
                 detections = engine.detect_bgr(frame)
+                ocr_reads += len(detections)
                 cam_meta = {
                     "id": state.camera_id,
                     "name": state.name,
@@ -174,6 +183,7 @@ def run_forever() -> None:
                         engine_error=engine.load_error,
                         cycle=cycle,
                         hits_total=hits_total,
+                        ocr_reads=ocr_reads,
                         last_error=last_error,
                     )
                 },

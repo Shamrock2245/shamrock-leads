@@ -231,6 +231,46 @@ class ALPREngine:
             return None
         if isinstance(item, PlateDetection):
             return item
+
+        # fast-alpr ALPRResult: .ocr.text / .ocr.confidence / .detection.bounding_box
+        ocr = getattr(item, "ocr", None)
+        detection = getattr(item, "detection", None)
+        if ocr is not None or detection is not None:
+            text = ""
+            conf_val: Any = 0.0
+            if ocr is not None:
+                text = str(getattr(ocr, "text", None) or getattr(ocr, "prediction", None) or "")
+                conf_val = getattr(ocr, "confidence", None)
+                if isinstance(conf_val, (list, tuple)):
+                    nums = [_to_float(x) for x in conf_val]
+                    conf_val = (sum(nums) / len(nums)) if nums else 0.0
+            region = ""
+            if ocr is not None:
+                region = str(getattr(ocr, "region", None) or "")
+            bbox = None
+            if detection is not None:
+                bb = getattr(detection, "bounding_box", None)
+                if bb is not None:
+                    if hasattr(bb, "x1"):
+                        bbox = [
+                            float(getattr(bb, "x1", 0) or 0),
+                            float(getattr(bb, "y1", 0) or 0),
+                            float(getattr(bb, "x2", 0) or 0),
+                            float(getattr(bb, "y2", 0) or 0),
+                        ]
+                    elif hasattr(bb, "__iter__"):
+                        bbox = list(bb)
+            plate = normalize_plate(text)
+            if not plate:
+                return None
+            return PlateDetection(
+                plate_text=plate,
+                confidence=_to_float(conf_val),
+                state=(region[:4].upper() if region else "FL"),
+                bounding_box=bbox,
+                raw={},
+            )
+
         if isinstance(item, dict):
             text = (
                 item.get("plate")

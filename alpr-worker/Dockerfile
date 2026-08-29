@@ -26,17 +26,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Core runtime deps (keep lean — vision stack next)
+# Vision stack — Fast-ALPR requires the [onnx] extra (CPU). Do not silently drop it.
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir \
     pymongo \
     python-dotenv \
     requests \
     numpy \
-    "opencv-python-headless>=4.8.0" \
-    "onnxruntime>=1.16.0" \
-    "fast-alpr>=0.4.0" \
-    || pip install --no-cache-dir pymongo python-dotenv requests numpy opencv-python-headless onnxruntime
+    "opencv-python-headless>=4.9.0.80" \
+    "fast-alpr[onnx]>=0.4.0"
 
 # Application code
 COPY services/ /app/services/
@@ -49,7 +47,12 @@ COPY config/__init__.py /app/config/__init__.py
 
 RUN mkdir -p /app/scrapers /data/alpr_crops \
     && printf '' > /app/scrapers/__init__.py \
-    && python -c "from services.alpr_engine import probe_alpr_deps; print(probe_alpr_deps())"
+    && python -c "\
+from services.alpr_engine import probe_alpr_deps; \
+p = probe_alpr_deps(); \
+assert p.get('fast_alpr') is True, p; \
+assert p.get('opencv') is True, p; \
+print('ALPR deps OK', p)"
 
 ENV HOME=/home/appuser
 

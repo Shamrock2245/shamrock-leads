@@ -136,7 +136,7 @@
     if (!el || !_status) return;
     const w = _status.worker || {};
     const deps = _status.deps || {};
-    const engOk = w.engine_ready === true || deps.engine_ready === true;
+    const engOk = w.engine_ready === true;
     const engCls = engOk ? 'ok' : 'warn';
     const streams = w.streams || {};
     const connected = streams.cameras_connected ?? '—';
@@ -147,7 +147,7 @@
         <div class="alpr-kpi">
           <div class="alpr-kpi-label">Worker engine</div>
           <div class="alpr-kpi-value ${engCls}">${engOk ? 'Ready' : 'Not ready'}</div>
-          <div class="alpr-kpi-sub">${esc(w.engine_error || deps.error || 'Fast-ALPR + OpenCV')}</div>
+          <div class="alpr-kpi-sub">${esc(w.engine_error || (engOk ? 'Fast-ALPR + OpenCV on alpr-worker' : 'Rebuild worker: docker compose --profile alpr up -d --build alpr-worker'))}</div>
         </div>
         <div class="alpr-kpi">
           <div class="alpr-kpi-label">Cameras</div>
@@ -157,7 +157,7 @@
         <div class="alpr-kpi">
           <div class="alpr-kpi-label">Hits (24h)</div>
           <div class="alpr-kpi-value">${esc(_status.hits_last_24h ?? 0)}</div>
-          <div class="alpr-kpi-sub">matched watchlist</div>
+          <div class="alpr-kpi-sub">matched watchlist · ${esc(w.ocr_reads ?? 0)} plates read</div>
         </div>
         <div class="alpr-kpi">
           <div class="alpr-kpi-label">Watchlist</div>

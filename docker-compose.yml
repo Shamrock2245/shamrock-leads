@@ -184,13 +184,17 @@ services:
       - ALPR_STORE_ALL_HITS=${ALPR_STORE_ALL_HITS:-false}
       - ALPR_CROPS_DIR=/data/alpr_crops
       - ALPR_CAMERAS_FILE=/app/config/alpr_cameras.json
+      - ALPR_HTTP_PORT=8090
       - MONGODB_URI=${MONGODB_URI}
       - MONGODB_DB_NAME=${MONGODB_DB_NAME:-ShamrockBailDB}
       - SLACK_WEBHOOK_LEADS=${SLACK_WEBHOOK_LEADS:-}
       - SLACK_WEBHOOK_ALPR=${SLACK_WEBHOOK_ALPR:-}
     volumes:
       - alpr-crops:/data/alpr_crops
+      - alpr-models:/home/appuser/.cache
       - ./config/alpr_cameras.json:/app/config/alpr_cameras.json:ro
+    expose:
+      - "8090"
     networks:
       - shamrock-net
     security_opt:
@@ -221,6 +225,7 @@ services:
       - PYTHONDONTWRITEBYTECODE=1
       - PYTHONUNBUFFERED=1
       - OSINT_WORKER_URL=http://osint-worker:5065
+      - ALPR_WORKER_URL=http://alpr-worker:8090
       - OSINT_WORKER_KEY=${OSINT_WORKER_KEY:-}
       - OSINT_WORKER_TIMEOUT=${OSINT_WORKER_TIMEOUT:-300}
       - TRAPE_SERVER_URL=${TRAPE_SERVER_URL:-https://leads.shamrockbailbonds.biz}
@@ -857,6 +862,8 @@ volumes:
   dashboard-uploads:
     driver: local
   alpr-crops:
+    driver: local
+  alpr-models:
     driver: local
   traccar-data:
     driver: local

@@ -37,6 +37,35 @@ def test_probe_alpr_deps_structure():
     assert "engine_ready" in p
 
 
+def test_engine_parse_fast_alpr_result_object():
+    """fast-alpr returns ALPRResult with nested ocr.text + list confidence."""
+    eng = ALPREngine(min_confidence=0.5)
+    eng._alpr = object()
+    eng._load_error = None
+
+    class _BBox:
+        x1, y1, x2, y2 = 1, 2, 40, 20
+
+    class _Det:
+        bounding_box = _BBox()
+
+    class _Ocr:
+        text = "ABC123"
+        confidence = [0.9, 0.95, 0.8]
+        region = "FL"
+
+    class _Result:
+        detection = _Det()
+        ocr = _Ocr()
+
+    eng._predict = lambda img: [_Result()]  # type: ignore
+    dets = eng.detect_bgr(object())
+    assert len(dets) == 1
+    assert dets[0].plate_text == "ABC123"
+    assert dets[0].confidence > 0.8
+    assert dets[0].state == "FL"
+
+
 def test_engine_parse_dict_results():
     eng = ALPREngine(min_confidence=0.5)
     eng._alpr = object()  # pretend loaded
