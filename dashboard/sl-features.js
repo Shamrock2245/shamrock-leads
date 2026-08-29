@@ -11,6 +11,56 @@ function _isLeeFlorida(county, state) {
 }
 window._isLeeFlorida = _isLeeFlorida;
 
+function appearanceBondReadiness(lead) {
+  lead = lead || {};
+  const details = Array.isArray(lead.charge_details) ? lead.charge_details : [];
+  const booking = String(lead.booking_number || '');
+  const bond = Number(lead.bond_amount || 0);
+  const realCase = (val) => {
+    const c = String(val || '').trim();
+    return !!(c && c !== booking);
+  };
+  const hasCase = details.some((d) => realCase(d && (d.case_number || d.caseNumber)))
+    || realCase(lead.case_number);
+  const hasPoa = details.some((d) => d && String(d.poa_number || d.poa_full || '').trim())
+    || !!String(lead.poa_number || '').trim();
+  const missing = [];
+  if (bond <= 0) missing.push('amount');
+  if (!hasCase) missing.push('case');
+  if (!hasPoa) missing.push('poa');
+  let label, title, cls;
+  if (!missing.length) {
+    label = 'Ready to print';
+    title = 'Case #, amount, and POA are on file. Open Write / Print — appearance bonds stay unsigned (wet-ink).';
+    cls = 'ready';
+  } else if (missing.length === 1 && missing[0] === 'poa') {
+    label = 'Need POA';
+    title = 'Case # and amount are on file. Assign one POA per charge in Write / Print before the jail form is complete.';
+    cls = 'poa';
+  } else {
+    const bits = [];
+    if (missing.includes('amount')) bits.push('bond $');
+    if (missing.includes('case')) bits.push('case #');
+    if (missing.includes('poa')) bits.push('POA');
+    label = 'Need ' + bits.join(' · ');
+    title = 'Open Write / Print to fill gaps. On Lee records, Import booking then run the Lee bookmarklet to pull case #s from the sheriff page.';
+    cls = 'need';
+  }
+  return { ready: missing.length === 0, missing, label, title, cls, bond };
+}
+window.appearanceBondReadiness = appearanceBondReadiness;
+
+function readinessChipHtml(lead) {
+  const r = appearanceBondReadiness(lead);
+  const colors = {
+    ready: 'background:rgba(16,185,129,0.18);color:#6ee7b7;border:1px solid rgba(16,185,129,0.45)',
+    poa: 'background:rgba(59,130,246,0.18);color:#93c5fd;border:1px solid rgba(59,130,246,0.45)',
+    need: 'background:rgba(245,158,11,0.18);color:#fcd34d;border:1px solid rgba(245,158,11,0.45)',
+  };
+  const title = String(r.title || '').replace(/"/g, '&quot;');
+  return `<span class="def-ready-chip def-ready-${r.cls}" data-readiness="1" style="${colors[r.cls] || colors.need};border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;display:inline-block;margin-top:4px;margin-right:4px" title="${title}">${r.label}</span>`;
+}
+
 /** Shared safe-fetch: returns parsed JSON or null if response is invalid */
 async function _safeFetch(url, opts) {
   const r = await fetch(url, opts);
@@ -86,12 +136,13 @@ async function loadDefendants() {
       const leeBadgeDef = (isLeeDef && isNoBondDef)
         ? `<div style="margin-top:4px"><span style="background:rgba(239,68,68,0.2);color:#fca5a5;border:1px solid rgba(239,68,68,0.5);border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;display:inline-block;cursor:pointer" title="Lee County First Appearance: 10:00 AM Weekdays / 8:30 AM Weekends & Holidays (Re-check court & leeclerk.org)" onclick="event.stopPropagation();refreshDefendantFromSource('${bkEscD}',this)">⏰ 1st App Watch</span></div>`
         : '';
+      const readyChip = `<div style="margin-top:4px">${readinessChipHtml(l)}</div>`;
       const leeClerkBtn = isLeeDef
         ? `<button class="btn-detail" style="background:rgba(59,130,246,0.2);color:#93c5fd;border:1px solid rgba(59,130,246,0.4)" onclick="event.stopPropagation();window.open('https://matrix.leeclerk.org/Home/Search?query=${encodeURIComponent(l.case_number || l.booking_number || '')}','_blank')" title="Search Lee County Clerk of Court (leeclerk.org)">🏛️ LeeClerk</button>`
         : '';
 
       return `<div class="def-card" data-booking="${bkEscD}">
-        <div class="def-card-header"><div><div class="def-name ld-clickable" title="Open lead detail" onclick="event.stopPropagation();SLProspective&&SLProspective.openDetail('${bkSafe}')">${l.full_name||'Unknown'}</div><div class="def-booking">${l.booking_number||'\u2014'} ${leeBadgeDef}${pastBondBadge}</div></div>
+        <div class="def-card-header"><div><div class="def-name ld-clickable" title="Open lead detail" onclick="event.stopPropagation();SLProspective&&SLProspective.openDetail('${bkSafe}')">${l.full_name||'Unknown'}</div><div class="def-booking">${l.booking_number||'\u2014'} ${readyChip}${leeBadgeDef}${pastBondBadge}</div></div>
           <div class="def-bond-edit-wrap" onclick="event.stopPropagation()">
             <div class="def-bond-pill ${bc} ${bond<=0?'bond-zero':''}" title="Click amount to edit — scrapers often leave $0 until first appearance">${bondPillLabel}</div>
             <div class="def-bond-edit-row">
@@ -121,13 +172,13 @@ async function loadDefendants() {
             onclick="event.stopPropagation(); refreshDefendantFromSource('${bkEscD}', this)"
             title="Re-fetch updated bond info from county booking sheet">⚡ Fetch Bond</button>`}
           ${leeClerkBtn}
+          ${isLeeDef ? `<button class="btn-detail" style="background:rgba(16,185,129,0.12);color:#6ee7b7;border:1px solid rgba(16,185,129,0.35)" onclick="event.stopPropagation();openLeeBookingImport('${bkSafe}')" title="Open the live Lee booking page, then click the Lee bookmarklet to merge case #s and charges onto this record">🔖 Import booking</button>` : ''}
           <button class="slc-notes-btn" onclick="openShamrockNotes('${bkEscD}')" title="Shamrock Notes">📝 Notes</button>
           <button class="btn-imessage-send" onclick="SLiMessage&&SLiMessage.openCompose('${bkEscD}','${(l.full_name||'').replace(/'/g,"\'")}')" title="Send iMessage">💬 iMsg</button>
           <button class="btn-contact-indem" onclick="SLContact.openModal('${bkSafe}','${(l.full_name||'').replace(/'/g,"\\\\'")}',' ${l.county||''}',${bond},'${String(l.booking_number||'')}')">📞 Contact</button>
           <button class="btn-track-lead" id="trackBtn_${bkEscD}" onclick="SLProspective.trackLead('${bkSafe}','${(l.full_name||'').replace(/'/g,"\\\\'")}','${l.county||''}',${bond},'${(l.charges||'').replace(/'/g,"\\\\'")}',${l.lead_score||0},'${l.lead_status||''}')">☘️ Track</button>
-            <button class="btn-write-bond" title="Hydrate county booking data into OSI/Palmetto paperwork. POA stays editable until the bond is on the clerk site."
-              onclick="event.stopPropagation();hydrateDefendantPacket('${bkSafe}')">☘️ Packet</button>
-            <button class="btn-write-bond" onclick="openBondModal(window._leadMap['${bkSafe}'] || {full_name:'${(l.full_name||'').replace(/'/g,"\\'")}'}, ${bond}, '${l.county||''}', '${bkSafe}')">✍️ Bond</button>
+          <button class="btn-write-bond" title="Hydrate this arrest, pick surety, assign one POA per charge, then print unsigned appearance bonds. DocuSeal stays a separate e-sign track."
+            onclick="event.stopPropagation();openDefendantWritePrint('${bkSafe}')">☘️ Write / Print</button>
           <button class="btn-lifecycle" onclick="SLLifecycle&&SLLifecycle.open('${bkSafe}',{defendantName:'${(l.full_name||'').replace(/'/g,"\\'")}'})" title="Full bond lifecycle timeline">☘️ Life</button>
           <button class="btn-detail" style="background:rgba(239,68,68,.2);color:#fca5a5;border:1px solid rgba(239,68,68,.45)"
             onclick="event.stopPropagation();SLAdminHygiene&&SLAdminHygiene.deleteFromCard('${bkEscD}','${(l.full_name||'').replace(/'/g,"\\'")}','${(l.county||'').replace(/'/g,"\\'")}','${(l.state||'').replace(/'/g,"\\'")}')"
@@ -1969,7 +2020,7 @@ async function _pollSourceRefresh(triggerId, bookingNumber, btn, prevLabel) {
 }
 
 async function hydrateDefendantPacket(bookingNumber) {
-  if (!bookingNumber) { toast('Select a defendant with a booking number', 'error'); return; }
+  if (!bookingNumber) { toast('Select a defendant with a booking number', 'error'); return false; }
   const lead = (window._leadMap && window._leadMap[bookingNumber]) || {};
   toast('Hydrating county booking into paperwork…', 'info');
   try {
@@ -1988,7 +2039,7 @@ async function hydrateDefendantPacket(bookingNumber) {
     const d = await r.json().catch(() => ({}));
     if (!r.ok || d.success === false) {
       toast(d.error || 'Hydrate failed', 'error');
-      return;
+      return false;
     }
     const ctx = d.context || {};
     const defn = ctx.defendant || {};
@@ -2045,10 +2096,34 @@ async function hydrateDefendantPacket(bookingNumber) {
       ? ` Repeat client — filled ${ (prior.filled_keys || []).length } gaps from last Shamrock bond.`
       : '';
     toast(`Hydrated ${n} paperwork fields from ${enriched.county} booking.${priorNote}${poaNote}`, 'success');
+    return true;
   } catch (e) {
     toast('Network error hydrating packet', 'error');
+    return false;
   }
 }
+
+async function openDefendantWritePrint(bookingNumber) {
+  if (!bookingNumber) { toast('Select a defendant with a booking number', 'error'); return; }
+  const lead = (window._leadMap && window._leadMap[bookingNumber]) || {};
+  const ok = await hydrateDefendantPacket(bookingNumber);
+  if (!ok && typeof openBondModal === 'function') {
+    openBondModal(lead, lead.bond_amount, lead.county, bookingNumber);
+  }
+}
+window.openDefendantWritePrint = openDefendantWritePrint;
+
+function openLeeBookingImport(bookingNumber) {
+  const lead = (window._leadMap && window._leadMap[bookingNumber]) || {};
+  const url = String(lead.detail_url || '').trim();
+  if (url) {
+    try { window.open(url, '_blank', 'noopener'); } catch (e) { /* popup blocked */ }
+  } else {
+    try { window.open('https://www.sheriffleefl.org/arrest-search/', '_blank', 'noopener'); } catch (e) { /* popup blocked */ }
+  }
+  toast('On the Lee booking page, click the Lee bookmarklet. It merges charges onto this defendant and reopens Write / Print.', 'info');
+}
+window.openLeeBookingImport = openLeeBookingImport;
 
 function applyPoaClerkLock(lead) {
   const banner = document.getElementById('poaClerkBanner');
@@ -2639,7 +2714,7 @@ window.SL = { toggleTheme, switchTab, toggleNavGroup, restoreNavGroups, toggleCo
   toggleDefCountyDropdown, toggleDefCounty, filterDefCountyOptions, applyDefCountyPreset,
   buildDefCountyOptions, updateDefCountyLabel,
   applyPreset, setDays, setBond, setDefBond, sortBy, debounceSearch, debounceDefSearch, applyFilters,
-  goPage, goDefPage, openBondModal, openWriteBond, hydrateDefendantPacket, selectSurety, closeModal, submitBond, exportCSV, copyToSlack,
+  goPage, goDefPage, openBondModal, openWriteBond, openDefendantWritePrint, hydrateDefendantPacket, selectSurety, closeModal, submitBond, exportCSV, copyToSlack,
   clearAll, refresh, toast, loadDefendants, downloadBond, downloadAllBonds, printAppearanceBondPackage, registerActiveBond,
   sendOutreach, loadOutreachHistory, checkBBStatus, updateCustody, updateBondAmount,
   onWriteBondAmountChange, saveWriteBondAmount, refreshDefendantFromSource,
@@ -2705,6 +2780,13 @@ function _applyFullLeadToCard(bookingNumber, lead) {
     const scoreEl = card.querySelector('[id^="defScore_"]');
     if (scoreEl && lead.lead_score != null) {
       scoreEl.textContent = `${lead.lead_score} ${lead.lead_status || ''}`.trim();
+    }
+    const chip = card.querySelector('[data-readiness]');
+    if (chip && typeof readinessChipHtml === 'function') {
+      const mapped = (window._leadMap && window._leadMap[bookingNumber]) || lead;
+      const wrap = document.createElement('div');
+      wrap.innerHTML = readinessChipHtml(mapped);
+      if (wrap.firstElementChild) chip.replaceWith(wrap.firstElementChild);
     }
   });
 }

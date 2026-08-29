@@ -455,7 +455,7 @@ async def api_leads(
             "_id": 0, "full_name": 1, "first_name": 1, "last_name": 1,
             "booking_number": 1, "county": 1, "state": 1, "charges": 1, "bond_amount": 1,
             "bond_type": 1, "lead_score": 1, "lead_status": 1, "status": 1,
-            "arrest_date": 1, "booking_date": 1, "court_date": 1,
+            "arrest_date": 1, "booking_date": 1, "court_date": 1, "court_time": 1,
             "court_location": 1, "case_number": 1, "dob": 1, "sex": 1,
             "race": 1, "address": 1, "detail_url": 1, "facility": 1,
             "mugshot_url": 1, "scraped_at": 1, "created_at": 1, "charge_details": 1,

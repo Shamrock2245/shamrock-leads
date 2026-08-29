@@ -12,6 +12,15 @@
 (function() {
   'use strict';
 
+  try {
+    const h = String(location.hash || '');
+    const m = h.match(/(?:^|#|&)booking-extract=([^&]*)/);
+    if (m && m[1]) {
+      sessionStorage.setItem('sl_booking_extract', decodeURIComponent(m[1]));
+      history.replaceState(null, '', location.pathname + location.search);
+    }
+  } catch (e) { /* ignore */ }
+
   const SLHydrate = {
     modalId: 'slHydrateModal',
     parsedCache: null,
@@ -514,11 +523,107 @@
       if (clipText) {
         const norm = this.normalizeBookingData(clipText);
         if (norm && (norm.name || norm.bookingNumber)) {
-          this.hydrateActiveModal(norm);
+          await this.ingestExtract(clipText);
           return;
         }
       }
       this.openModal(clipText || '');
+    },
+
+    captureExtractFromUrl: function() {
+      try {
+        const h = String(location.hash || '');
+        const m = h.match(/(?:^|#|&)booking-extract=([^&]*)/);
+        if (m && m[1]) {
+          sessionStorage.setItem('sl_booking_extract', decodeURIComponent(m[1]));
+          history.replaceState(null, '', location.pathname + location.search);
+        }
+      } catch (e) { /* ignore */ }
+    },
+
+    listenForExtractMessages: function() {
+      if (this._msgBound) return;
+      this._msgBound = true;
+      window.addEventListener('message', (e) => {
+        const d = e.data;
+        if (!d || d.type !== 'sl-booking-extract' || !d.payload) return;
+        const host = String(e.origin || '').replace(/^https?:\/\//, '');
+        const allowed = /sheriffleefl\.org$/i.test(host) || e.origin === location.origin;
+        if (!allowed) return;
+        this.ingestExtract(d.payload);
+      });
+    },
+
+    consumePendingExtract: async function() {
+      let raw = null;
+      try { raw = sessionStorage.getItem('sl_booking_extract'); } catch (e) { raw = null; }
+      if (!raw) return;
+      try { sessionStorage.removeItem('sl_booking_extract'); } catch (e) { /* ignore */ }
+      let data = raw;
+      try { data = JSON.parse(raw); } catch (e) { /* keep string */ }
+      await this.ingestExtract(data);
+    },
+
+    ingestExtract: async function(raw) {
+      if (!raw) return;
+      if (this._ingestLock) return;
+      this._ingestLock = true;
+      try {
+        const norm = this.normalizeBookingData(raw);
+        if (!norm || (!norm.name && !norm.bookingNumber)) {
+          this.openModal(typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2));
+          return;
+        }
+        const key = String(norm.bookingNumber || norm.name || '');
+        if (key && this._ingestedKey === key) return;
+        this._ingestedKey = key;
+
+        let payload = raw;
+        if (typeof raw === 'string') {
+          try { payload = JSON.parse(raw); } catch (e) { payload = norm; }
+        }
+
+        const res = await fetch((typeof API === 'string' ? API : '') + '/api/leads/merge-booking-extract', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const d = await res.json().catch(() => ({}));
+        if (res.status === 401) {
+          this.showToast('Session expired — log in, then run the Lee bookmarklet again');
+          return;
+        }
+        if (!res.ok || d.success === false) {
+          this.showToast('⚠️ ' + (d.error || 'Merge failed') + ' — opening Write / Print from extract only');
+          this.hydrateBondModal(norm);
+          return;
+        }
+
+        const lead = d.lead || {};
+        const booking = String(lead.booking_number || norm.bookingNumber || '');
+        window._leadMap = window._leadMap || {};
+        if (booking) {
+          window._leadMap[booking] = Object.assign({}, window._leadMap[booking] || {}, lead, {
+            charge_details: lead.charge_details || norm.charge_details || norm.charges || [],
+            charges: lead.charges || norm.chargesRaw || '',
+          });
+        }
+        if (typeof switchTab === 'function') switchTab('tabDefendants');
+        const created = d.created ? 'Created arrest · ' : 'Merged ';
+        this.showToast('☘️ ' + created + (d.charge_count || 0) + ' charge(s) · $' + Number(d.total_bond || 0).toLocaleString());
+        if (typeof openDefendantWritePrint === 'function' && booking) {
+          await openDefendantWritePrint(booking);
+        } else {
+          this.hydrateBondModal(norm);
+        }
+      } catch (e) {
+        const norm = this.normalizeBookingData(raw);
+        if (norm && (norm.name || norm.bookingNumber)) this.hydrateBondModal(norm);
+        this.showToast('Network error merging extract — opened Write Bond from page data');
+      } finally {
+        this._ingestLock = false;
+      }
     },
 
     /**
@@ -625,11 +730,12 @@
       }
 
       const norm = this.parsedCache;
+      const raw = (document.getElementById('slHydrateTextarea')?.value || '').trim();
       this.closeModal();
 
       if (targetType === 'write_bond' || targetType === 'appearance_bond') {
-        this.hydrateBondModal(norm);
-        this.showToast(`☘️ Opened Appearance Bond & Write Bond for ${norm.name}`);
+        this.ingestExtract(raw || norm);
+        return;
       } else if (targetType === 'pipeline') {
         this.hydrateAddLeadModal(norm);
         this.showToast(`☘️ Hydrated Pipeline Lead for ${norm.name}`);
@@ -643,12 +749,21 @@
     },
 
     /**
+     * Lee County bookmarklet: extract booking page → open dashboard with
+     * #booking-extract= JSON (and postMessage). Super CRM merges onto the arrest.
+     */
+    buildLeeBookmarklet: function(origin) {
+      const dash = JSON.stringify(origin || 'https://leads.shamrockbailbonds.biz');
+      return 'javascript:(function(){var DASH=' + dash + ';try{if(!location.href.includes("sheriffleefl.org")){if(!confirm("Run Lee County booking scraper?"))return;}var text=(document.body&&document.body.innerText||"").trim();if(!text){alert("Couldn\'t read page. Try scrolling once.");return;}var lines=text.split("\\n").map(function(l){return l.trim();}).filter(Boolean);function getAfter(label){for(var i=0;i<lines.length-1;i++){if(lines[i].replace(/:$/,"").toLowerCase()===label.toLowerCase()){return lines[i+1];}}return "";}var name=getAfter("Name");var arrestNum=getAfter("Number")||getAfter("Booking Number");var dob=getAfter("DOB");var race=getAfter("Race");var sex=getAfter("Sex");var height=getAfter("Height");var weight=(getAfter("Weight")||"").replace(/lbs?/i,"").trim();var addr=getAfter("Address");function parseAddress(s){var out={street:"",city:"",state:"FL",zip:""};if(!s)return out;var m=s.match(/\\s([A-Z]{2})\\s(\\d{5}(?:-\\d{4})?)$/);if(!m){out.street=s;return out;}out.state=m[1];out.zip=m[2];var left=s.slice(0,m.index).trim();var parts=left.split(/\\s+/);if(!/^\\d+/.test(left)){out.street=left;return out;}var stTypes=["ST","STREET","AVE","AVENUE","RD","ROAD","DR","DRIVE","LN","LANE","WAY","BLVD","BOULEVARD","CT","COURT","CIR","CIRCLE","TER","TERRACE","PKWY","PARKWAY","HWY","HIGHWAY","PL","PLACE","TRL","TRAIL","RUN","LOOP"];var endIdx=-1;for(var i=2;i<=parts.length;i++){var last=parts[i-1].toUpperCase().replace(/\\.$/,"");if(stTypes.indexOf(last)>-1){endIdx=i;}}if(endIdx===-1){out.street=left;return out;}out.street=parts.slice(0,endIdx).join(" ");out.city=parts.slice(endIdx).join(" ");return out;}var ap=parseAddress(addr);if(dob){var p=dob.split("/");if(p.length===3){var mm=(""+p[0]).padStart(2,"0");var dd=(""+p[1]).padStart(2,"0");var yy=(""+p[2]).replace(/\\s.*$/,"");if(yy.length===2)yy=(parseInt(yy)>30?"19":"20")+yy;dob=yy+"-"+mm+"-"+dd;}}function looksLikeChargeHeader(s){if(!s||s.length<5)return false;if(/^#/.test(s))return false;if(/\\d{1,2}\\/\\d{1,2}\\/\\d{2,4}/.test(s))return false;if(/^(CASH|SURETY|CASH \\/ SURETY|NO BOND|ROR)$/i.test(s))return false;var letters=s.replace(/[^A-Za-z]/g,"");if(!letters)return false;return s===s.toUpperCase();}var charges=[];var i=lines.indexOf("Charges");if(i>-1){for(i=i+1;i<lines.length;i++){var line=lines[i];if(looksLikeChargeHeader(line)){var desc=line,bondAmt="",bondType="",caseNum="",hearing="",courtLoc="";for(var j=i+1;j<Math.min(i+40,lines.length);j++){var lj=lines[j];if(looksLikeChargeHeader(lj)&&lj!==desc){break;}if(lj==="Type"&&j<lines.length-1){bondType=lines[j+1];}else if(lj==="Amount"&&j<lines.length-1){bondAmt=(lines[j+1]||"").replace(/[^0-9.]/g,"");}else if(lj==="Case#"&&j<lines.length-1){caseNum=(lines[j+1]||"").replace("#","").trim();}else if(lj==="Hearing"&&j<lines.length-1){hearing=lines[j+1];}else if(lj==="Location"&&j<lines.length-1){courtLoc=lines[j+1];}}if(desc&&(caseNum||bondAmt||bondType||courtLoc||hearing)){charges.push({description:desc,bondAmount:bondAmt,bondType:bondType,caseNumber:caseNum,hearing:hearing,courtLocation:courtLoc});}i=j-1;}}}var data={county:"Lee",facility:"Lee County Jail",defendantFullName:name,defendantArrestNumber:arrestNum,bookingNumber:arrestNum,defendantDOB:dob,defendantRace:race,defendantSex:sex,defendantHeight:height,defendantWeight:weight,defendantStreetAddress:ap.street,defendantCity:ap.city,defendantState:ap.state,defendantZip:ap.zip,sourceUrl:location.href,charges:charges};var json=JSON.stringify(data);try{navigator.clipboard.writeText(json);}catch(err){}var w=window.open(DASH+"/?tab=defendants&write=1#booking-extract="+encodeURIComponent(json),"shamrockleads");var n=0;var t=setInterval(function(){n++;try{if(w)w.postMessage({type:"sl-booking-extract",payload:data},DASH);}catch(err){}if(n>16)clearInterval(t);},500);alert("☘️ Sent to ShamrockLeads\\n\\n"+(name||"(missing)")+"\\nArrest # "+(arrestNum||"(missing)")+"\\n"+charges.length+" charge(s)\\n\\nKeep this jail tab open until Write / Print opens.");}catch(e){alert("Error: "+(e&&e.message?e.message:e));}})();';
+    },
+
+    /**
      * Copy bookmarklet code directly to clipboard.
      */
     copyBookmarklet: function(codeType) {
       let code = '';
       if (codeType === 'lee') {
-        code = `javascript:(function(){try{if(!location.href.includes("sheriffleefl.org")){if(!confirm("Run Lee County booking scraper?"))return;}var text=(document.body&&document.body.innerText||"").trim();if(!text){alert("Couldn't read page. Try scrolling once.");return;}var lines=text.split("\\n").map(function(l){return l.trim();}).filter(Boolean);function getAfter(label){for(var i=0;i<lines.length-1;i++){if(lines[i].replace(/:$/,"").toLowerCase()===label.toLowerCase()){return lines[i+1];}}return "";}var name=getAfter("Name");var arrestNum=getAfter("Number")||getAfter("Booking Number");var dob=getAfter("DOB");var race=getAfter("Race");var sex=getAfter("Sex");var height=getAfter("Height");var weight=(getAfter("Weight")||"").replace(/lbs?/i,"").trim();var addr=getAfter("Address");function parseAddress(s){var out={street:"",city:"",state:"FL",zip:""};if(!s)return out;var m=s.match(/\\s([A-Z]{2})\\s(\\d{5}(?:-\\d{4})?)$/);if(!m){out.street=s;return out;}out.state=m[1];out.zip=m[2];var left=s.slice(0,m.index).trim();var parts=left.split(/\\s+/);if(!/^\\d+/.test(left)){out.street=left;return out;}var stTypes=["ST","STREET","AVE","AVENUE","RD","ROAD","DR","DRIVE","LN","LANE","WAY","BLVD","BOULEVARD","CT","COURT","CIR","CIRCLE","TER","TERRACE","PKWY","PARKWAY","HWY","HIGHWAY","PL","PLACE","TRL","TRAIL","RUN","LOOP"];var endIdx=-1;for(var i=2;i<=parts.length;i++){var last=parts[i-1].toUpperCase().replace(/\\.$/,"");if(stTypes.indexOf(last)>-1){endIdx=i;}}if(endIdx===-1){out.street=left;return out;}out.street=parts.slice(0,endIdx).join(" ");out.city=parts.slice(endIdx).join(" ");return out;}var ap=parseAddress(addr);if(dob){var p=dob.split("/");if(p.length===3){var mm=(""+p[0]).padStart(2,"0");var dd=(""+p[1]).padStart(2,"0");var yy=(""+p[2]).replace(/\\s.*$/,"");if(yy.length===2)yy=(parseInt(yy)>30?"19":"20")+yy;dob=yy+"-"+mm+"-"+dd;}}function looksLikeChargeHeader(s){if(!s||s.length<5)return false;if(/^#/.test(s))return false;if(/\\d{1,2}\\/\\d{1,2}\\/\\d{2,4}/.test(s))return false;if(/^(CASH|SURETY|CASH \\/ SURETY|NO BOND|ROR)$/i.test(s))return false;var letters=s.replace(/[^A-Za-z]/g,"");if(!letters)return false;return s===s.toUpperCase();}var charges=[];var i=lines.indexOf("Charges");if(i>-1){for(i=i+1;i<lines.length;i++){var line=lines[i];if(looksLikeChargeHeader(line)){var desc=line,bondAmt="",bondType="",caseNum="",hearing="",courtLoc="";for(var j=i+1;j<Math.min(i+40,lines.length);j++){var lj=lines[j];if(looksLikeChargeHeader(lj)&&lj!==desc){break;}if(lj==="Type"&&j<lines.length-1){bondType=lines[j+1];}else if(lj==="Amount"&&j<lines.length-1){bondAmt=(lines[j+1]||"").replace(/[^0-9.]/g,"");}else if(lj==="Case#"&&j<lines.length-1){caseNum=(lines[j+1]||"").replace("#","").trim();}else if(lj==="Hearing"&&j<lines.length-1){hearing=lines[j+1];}else if(lj==="Location"&&j<lines.length-1){courtLoc=lines[j+1];}}if(desc&&(caseNum||bondAmt||bondType||courtLoc||hearing)){charges.push({description:desc,bondAmount:bondAmt,bondType:bondType,caseNumber:caseNum,hearing:hearing,courtLocation:courtLoc});}i=j-1;}}}var data={county:"Lee",facility:"Lee County Jail",defendantFullName:name,defendantArrestNumber:arrestNum,bookingNumber:arrestNum,defendantDOB:dob,defendantRace:race,defendantSex:sex,defendantHeight:height,defendantWeight:weight,defendantStreetAddress:ap.street,defendantCity:ap.city,defendantState:ap.state,defendantZip:ap.zip,charges:charges};var json=JSON.stringify(data);navigator.clipboard.writeText(json).then(function(){alert("☘️ Booking Data Extracted!\\n\\nDefendant: "+(name||"(missing)")+"\\nArrest #: "+(arrestNum||"(missing)")+"\\nDOB: "+(dob||"(missing)")+"\\nAddress: "+[ap.street,ap.city,ap.state,ap.zip].filter(Boolean).join(", ")+"\\n\\n"+charges.length+" charge(s) copied to clipboard.\\n\\nNow go to ShamrockLeads and click 'Paste Booking'.");}).catch(function(){prompt("Copy JSON manually:",json);});}catch(e){alert("Error: "+(e&&e.message?e.message:e));}})();`;
+        code = this.buildLeeBookmarklet((location && location.origin) || 'https://leads.shamrockbailbonds.biz');
       } else if (codeType === 'universal') {
         code = `javascript:(function(){try{var text=(document.body&&document.body.innerText||"").trim();if(!text){alert("No text found.");return;}var lines=text.split("\\n").map(function(l){return l.trim();}).filter(Boolean);function findVal(regexes){for(var i=0;i<lines.length-1;i++){for(var r=0;r<regexes.length;r++){if(regexes[r].test(lines[i])){return lines[i+1];}}}return "";}var name=findVal([/^name:?$/i,/^inmate name:?$/i,/^defendant:?$/i]);var booking=findVal([/^booking\\s*(#|no|number):?$/i,/^arrest\\s*(#|no|number):?$/i,/^number:?$/i]);var dob=findVal([/^dob:?$/i,/^date of birth:?$/i]);var race=findVal([/^race:?$/i]);var sex=findVal([/^sex:?$/i,/^gender:?$/i]);var addr=findVal([/^address:?$/i,/^street:?$/i]);var host=location.hostname.toLowerCase();var cnty="Lee";if(host.includes("collier"))cnty="Collier";else if(host.includes("charlotte"))cnty="Charlotte";else if(host.includes("sarasota"))cnty="Sarasota";else if(host.includes("manatee"))cnty="Manatee";else if(host.includes("orange"))cnty="Orange";else if(host.includes("hillsborough"))cnty="Hillsborough";else if(host.includes("broward"))cnty="Broward";else if(host.includes("miamidade")||host.includes("miami-dade"))cnty="Miami-Dade";var data={county:cnty,defendantFullName:name,defendantArrestNumber:booking,bookingNumber:booking,defendantDOB:dob,defendantRace:race,defendantSex:sex,defendantStreetAddress:addr,charges:[]};var json=JSON.stringify(data);navigator.clipboard.writeText(json).then(function(){alert("☘️ [Universal Jail Roster] Data Extracted!\\n\\nDefendant: "+(name||"(missing)")+"\\nBooking: "+(booking||"(missing)")+"\\nCounty: "+cnty+"\\n\\nCopied to clipboard. Go to ShamrockLeads and click 'Paste Booking'.");}).catch(function(){prompt("Copy JSON:",json);});}catch(e){alert("Error: "+e);}})();`;
       } else if (codeType === 'dashboard_fill') {
@@ -705,7 +820,7 @@
               <span style="font-size:1.5rem">🔖</span>
               <div>
                 <h2 style="margin:0;font-size:18px;font-weight:800;color:var(--text,#f1f5f9)">Fast Ingest & Form Hydration</h2>
-                <div style="font-size:11px;color:var(--muted,#64748b)">Extract from jail rosters · fill Appearance Bond PDFs or Lead Pipeline</div>
+                <div style="font-size:11px;color:var(--muted,#64748b)">Lee bookmarklet merges onto the arrest · Write / Print fills appearance bonds</div>
               </div>
             </div>
             <button type="button" class="modal-close" onclick="SLHydrate.closeModal()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer">✕</button>
@@ -765,7 +880,7 @@
                 <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:var(--panel);border-radius:8px;border:1px solid var(--border)">
                   <div>
                     <div style="font-weight:700;font-size:12px;color:#34d399">📌 Lee County Sheriff Bookmarklet</div>
-                    <div style="font-size:11px;color:var(--muted)">Extracts defendant, charges, case #s, bond amounts from sheriffleefl.org/booking</div>
+                    <div style="font-size:11px;color:var(--muted)">On sheriffleefl.org/booking — merges charges into Super CRM and opens Write / Print. Replace the old clipboard bookmarklet with this one.</div>
                   </div>
                   <button type="button" class="btn-export" style="font-size:11px;padding:5px 10px" onclick="SLHydrate.copyBookmarklet('lee')">📋 Copy Code</button>
                 </div>
@@ -780,8 +895,8 @@
 
                 <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:var(--panel);border-radius:8px;border:1px solid var(--border)">
                   <div>
-                    <div style="font-weight:700;font-size:12px;color:#a78bfa">⚡ 1-Click Dashboard Filler Bookmarklet</div>
-                    <div style="font-size:11px;color:var(--muted)">Click on ShamrockLeads to instantly paste and hydrate active form</div>
+                    <div style="font-weight:700;font-size:12px;color:#a78bfa">⚡ Dashboard paste fallback</div>
+                    <div style="font-size:11px;color:var(--muted)">If the jail extract is already on the clipboard, click this on ShamrockLeads to merge and open Write / Print</div>
                   </div>
                   <button type="button" class="btn-export" style="font-size:11px;padding:5px 10px" onclick="SLHydrate.copyBookmarklet('dashboard_fill')">📋 Copy Code</button>
                 </div>
@@ -824,6 +939,8 @@
      */
     init: function() {
       this.injectModalHtml();
+      this.captureExtractFromUrl();
+      this.listenForExtractMessages();
 
       // Keyboard Shortcut: Cmd+Shift+V or Ctrl+Shift+V
       document.addEventListener('keydown', (e) => {
@@ -832,6 +949,8 @@
           this.pasteAndHydrate();
         }
       });
+
+      setTimeout(() => { this.consumePendingExtract(); }, 250);
     }
   };
 

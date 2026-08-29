@@ -20,3 +20,24 @@ def test_fta_ui_does_not_promise_a_retired_signature_provider():
     assert "SignNow" not in source
     assert "No e-sign packet is created" in source
     assert "data.staff_document_required" in source
+
+
+def test_defendant_card_write_print_is_the_primary_desk():
+    source = (ROOT / "dashboard" / "sl-features.js").read_text()
+
+    assert "openDefendantWritePrint" in source
+    assert "Write / Print" in source
+    assert "appearanceBondReadiness" in source
+    assert "openLeeBookingImport" in source
+    assert "hydrateDefendantPacket('${bkSafe}')" not in source
+    assert "onclick=\"openBondModal(window._leadMap[" not in source
+
+
+def test_lee_bookmarklet_opens_dashboard_extract_hash():
+    source = (ROOT / "dashboard" / "sl-hydrate.js").read_text()
+
+    assert "booking-extract=" in source
+    assert "/api/leads/merge-booking-extract" in source
+    assert "sl-booking-extract" in source
+    assert "buildLeeBookmarklet" in source
+    assert "ingestExtract" in source

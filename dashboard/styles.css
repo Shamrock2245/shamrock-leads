@@ -391,6 +391,7 @@ th[data-sort].sort-desc::after{content:'▼';opacity:.8;color:var(--accent)}
 /* ── Write Bond Button ── */
 .btn-write-bond{background:linear-gradient(135deg,var(--accent),#059669);color:#fff;border:none;padding:6px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;transition:var(--transition);display:inline-flex;align-items:center;gap:4px}
 .btn-write-bond:hover{transform:translateY(-1px);box-shadow:0 4px 12px rgba(16,185,129,.3)}
+.def-ready-chip{letter-spacing:.2px;white-space:nowrap}
 
 /* ── Insurer Selector ── */
 .insurer-selector{display:flex;gap:12px;margin-top:8px}

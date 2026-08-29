@@ -210,7 +210,7 @@ async function loadDashboard() {
           <td style="color:var(--success);font-weight:600">$${prem.toLocaleString()}</td>
           <td><span class="score-pill ${{'hot':'score-hot','warm':'score-warm','cold':'score-cold','disqualified':'score-disq'}[(l.lead_status||'').toLowerCase()]||'score-warm'}">${l.lead_score||0}</span></td>
           <td title="${(l.charges||'').replace(/"/g,'&quot;')}" style="font-size:11px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${charges}</td>
-          <td><button class="btn-write-bond" onclick="openBondModal('${(l.full_name||'').replace(/'/g,"\\'")}',${bond},'${l.county||''}','${l.booking_number||''}')">✍️ Write</button></td>
+          <td><button class="btn-write-bond" onclick="typeof openDefendantWritePrint==='function'&&'${l.booking_number||''}'?openDefendantWritePrint('${(l.booking_number||'').replace(/'/g,"\\'")}'):openBondModal('${(l.full_name||'').replace(/'/g,"\\'")}',${bond},'${l.county||''}','${l.booking_number||''}')">☘️ Write / Print</button></td>
         </tr>`;
       }).join('') : '<tr><td colspan="7" class="loading">No bond-ready defendants</td></tr>';
 

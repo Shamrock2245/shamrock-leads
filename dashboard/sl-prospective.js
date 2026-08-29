@@ -683,7 +683,7 @@ window.SLProspective = (function () {
           '</div>'
         ) : '') +
         '<div class="ld-actions">' +
-          '<button type="button" class="ld-btn ld-btn-primary" data-ld-act="write">✍️ Write Bond</button>' +
+          '<button type="button" class="ld-btn ld-btn-primary" data-ld-act="write">☘️ Write / Print</button>' +
           (inPipeline
             ? '<button type="button" class="ld-btn" data-ld-act="pipeline">📂 Open Pipeline</button>'
             : '<button type="button" class="ld-btn ld-btn-accent" data-ld-act="track">☘️ Track Lead</button>') +
@@ -716,8 +716,12 @@ window.SLProspective = (function () {
     root.querySelectorAll('[data-ld-act]').forEach(function(btn) {
       btn.addEventListener('click', function() {
         var act = btn.getAttribute('data-ld-act');
-        if (act === 'write' && typeof openBondModal === 'function') {
-          openBondModal(ctx.name, ctx.bondAmt, ctx.county, ctx.booking);
+        if (act === 'write') {
+          if (typeof openDefendantWritePrint === 'function' && ctx.booking) {
+            openDefendantWritePrint(ctx.booking);
+          } else if (typeof openBondModal === 'function') {
+            openBondModal(ctx.name, ctx.bondAmt, ctx.county, ctx.booking);
+          }
         } else if (act === 'track') {
           trackLead(ctx.booking, ctx.name, ctx.county, ctx.bondAmt);
         } else if (act === 'pipeline') {
