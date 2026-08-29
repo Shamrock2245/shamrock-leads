@@ -42,7 +42,8 @@ def test_osint_ui_has_ghunt_companion_login():
     source = (ROOT / "dashboard" / "sl-osint.js").read_text()
     assert "saveGhuntLogin" in source
     assert "ghuntCompanionBlob" in source
-    assert "Method 2" in source
+    assert "Load unpacked" in source
+    assert "tools/ghunt-companion" in source
     assert "/api/osint/ghunt/login" in source
 
 

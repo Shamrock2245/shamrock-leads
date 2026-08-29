@@ -54,11 +54,11 @@ surface Google Maps review locations when the Google account has public reviews.
 
 One-time login — **do this from the dashboard**, not `docker exec`:
 
-1. Chrome/Edge: install [GHunt Companion](https://chrome.google.com/webstore/detail/ghunt-companion/dpdcofblfbmmnikcbmmiakkclocadjab)
-   (Firefox: [add-on](https://addons.mozilla.org/en-US/firefox/addon/ghunt-companion/)).
-2. Sign into a **dedicated research Google account** in that browser.
-3. Open gmail.com or accounts.google.com, click the Companion icon, choose **Method 2** (copy encoded credentials).
-4. ShamrockLeads → OSINT → Engines → GHunt card → paste the blob → **Save GHunt session**.
+1. Chrome → `chrome://extensions` → Developer mode → **Load unpacked** →
+   `tools/ghunt-companion` in this repo (MV3; Chrome Web Store listing is gone).
+2. Sign into a **dedicated research Google account** in that Chrome profile.
+3. Click the Companion icon → **Synchronize to GHunt** → finish Google sign-in → **Copy blob**.
+4. ShamrockLeads → OSINT → Engines → GHunt card → paste → **Save GHunt session**.
 
 The worker exchanges that blob for `creds.m` on volume `osint-ghunt-creds`. Method 1 (listener on port 60067) does **not** work in Docker.
 

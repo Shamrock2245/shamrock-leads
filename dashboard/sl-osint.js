@@ -266,10 +266,10 @@
         <div class="ghunt-login" style="margin-top:12px;padding:12px;border:1px dashed rgba(245,158,11,0.45);border-radius:8px;background:rgba(245,158,11,0.06)">
           <div style="font-size:12px;font-weight:700;color:#fcd34d;margin-bottom:8px">GHunt worker login (one-time)</div>
           <ol style="margin:0 0 10px 18px;padding:0;font-size:12px;color:var(--muted,#94a3b8);line-height:1.55">
-            <li>Install <a href="https://chrome.google.com/webstore/detail/ghunt-companion/dpdcofblfbmmnikcbmmiakkclocadjab" target="_blank" rel="noopener">GHunt Companion</a> (Chrome / Edge) or the <a href="https://addons.mozilla.org/en-US/firefox/addon/ghunt-companion/" target="_blank" rel="noopener">Firefox add-on</a>.</li>
-            <li>In that browser, sign into a <strong>dedicated research Google account</strong> (not a skip’s Gmail, not the office inbox if you can avoid it).</li>
-            <li>Open any Google page (gmail.com or accounts.google.com), click the Companion icon, choose <strong>Method 2</strong> — copy encoded credentials.</li>
-            <li>Paste the blob below and save. Do not paste it into Slack or chat.</li>
+            <li>Chrome → <code>chrome://extensions</code> → Developer mode → <strong>Load unpacked</strong> → folder <code>tools/ghunt-companion</code> in this repo (Chrome Web Store listing is gone).</li>
+            <li>Sign into a <strong>dedicated research Google account</strong> in that Chrome profile.</li>
+            <li>Click the Companion icon → <strong>Synchronize to GHunt</strong> → finish Google sign-in → <strong>Copy blob</strong> (Method 2).</li>
+            <li>Paste the blob below and save. Do not paste it into Slack.</li>
           </ol>
           <textarea id="ghuntCompanionBlob" rows="3" placeholder="Paste Companion Method 2 blob here…" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:11px;padding:8px;border-radius:6px;border:1px solid var(--border,#334155);background:var(--panel,#0f172a);color:var(--text,#e2e8f0)"></textarea>
           <button type="button" class="osint-btn" style="margin-top:8px" onclick="SLOSINT.saveGhuntLogin()">Save GHunt session</button>

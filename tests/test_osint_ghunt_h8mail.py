@@ -44,6 +44,25 @@ def test_parse_ghunt_extracts_maps_address_and_name():
     assert any(e["type"] == "email" for e in entities)
 
 
+def test_unpacked_companion_is_mv3():
+    import json
+    manifest = json.loads((ROOT / "tools" / "ghunt-companion" / "manifest.json").read_text())
+    assert manifest["manifest_version"] == 3
+    assert "service_worker" in manifest["background"]
+    assert "cookies" in manifest["permissions"]
+
+
+def test_js_style_companion_blob_roundtrip():
+    """Matches tools/ghunt-companion encodeCookies: {cookies, oauth_token} base64."""
+    import base64, json
+    payload = {
+        "cookies": {"SID": "x", "SSID": "y"},
+        "oauth_token": "oauth2_4/from-unpacked-ext",
+    }
+    blob = base64.b64encode(json.dumps(payload).encode()).decode()
+    assert parse_ghunt_companion_blob(blob) == "oauth2_4/from-unpacked-ext"
+
+
 def test_parse_ghunt_companion_blob_from_b64():
     import base64, json
     blob = base64.b64encode(json.dumps({"oauth_token": "oauth2_4/abc"}).encode()).decode()
