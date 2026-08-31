@@ -38,3 +38,23 @@ export async function checkSession(details) {
   }
   return { is_connected: false };
 }
+
+export async function getStoredOrLiveBlob() {
+  const stored = await chrome.storage.local.get("ghunt");
+  if (stored.ghunt && stored.ghunt.ready) {
+    return { ok: true, blob: encodeCookies(stored.ghunt.cookies) };
+  }
+  const raw = await chrome.cookies.getAll({ domain: "google.com" });
+  const wanted = [
+    "SID", "SSID", "APISID", "SAPISID", "HSID", "LSID",
+    "__Secure-3PSID", "oauth_token",
+  ];
+  const ghunt_cookies = Object.fromEntries(
+    raw.filter((c) => wanted.includes(c.name)).map((c) => [c.name, c.value])
+  );
+  if (ghunt_cookies.oauth_token) {
+    return { ok: true, blob: encodeCookies(ghunt_cookies), cookies: ghunt_cookies };
+  }
+  return { ok: false, missing: wanted.filter((w) => !ghunt_cookies[w]), found: Object.keys(ghunt_cookies) };
+}
+

@@ -11,8 +11,10 @@
 </head>
 <body>
   <img src="../assets/ghunt_full_light.png" alt="GHunt">
-  <button id="start_sync" type="button">Synchronize to GHunt</button>
-  <p>Sign into a research Google account first. After Google finishes, this tab opens Method 2 (copy blob).</p>
+  <button id="start_sync" type="button">1. Synchronize to GHunt (Google Sign-in)</button>
+  <button id="copy_now" type="button" style="margin-top:8px;background:rgba(52,211,153,0.15);border:1px solid #10b981;color:#34d399">2. Copy Method 2 Blob Now</button>
+  <div id="popup_status" style="font-size:11px;margin-top:8px;line-height:1.4"></div>
+  <p style="font-size:10px;color:#94a3b8;margin-top:8px;line-height:1.4">Tip: If Google hangs on "One moment please...", use a clean Chrome profile with <strong>only 1 Google account</strong> signed in (multi-account profiles can block android auth).</p>
   <script type="module" src="popup.js"></script>
 </body>
 </html>
