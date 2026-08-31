@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "GHunt Companion (Shamrock unpacked)",
+  "version": "2.1.0",
+  "description": "Capture Google oauth_token for GHunt. Unpacked MV3 fork of mxrch/ghunt_companion (Chrome Web Store listing is gone).",
+  "icons": {
+    "48": "assets/ghunt_square.png"
+  },
+  "action": {
+    "default_icon": "assets/ghunt_square.png",
+    "default_title": "GHunt Companion",
+    "default_popup": "popup/interface.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": [
+    "cookies",
+    "storage",
+    "tabs",
+    "webRequest",
+    "clipboardWrite"
+  ],
+  "host_permissions": [
+    "https://*.google.com/*"
+  ]
+}

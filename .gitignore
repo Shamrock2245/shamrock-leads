@@ -20,6 +20,7 @@ config/google-services.json
 *.json
 !counties.json
 !dashboard/manifest.json
+!tools/ghunt-companion/manifest.json
 !package.json
 !package-lock.json
 !config/alpr_cameras.json
