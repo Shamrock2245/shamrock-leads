@@ -9,7 +9,12 @@ import logging
 from typing import Optional
 from social.models import PostResult, Platform
 from social.platforms.base import PlatformAdapter
-from social.postiz_client import get_public_postiz_client
+from social.postiz_client import (
+    PostizPublicClient,
+    PostizClient,
+    get_public_postiz_client,
+    get_postiz_client,
+)
 
 
 logger = logging.getLogger("social.platforms.postiz")

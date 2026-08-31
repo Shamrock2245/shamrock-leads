@@ -266,3 +266,9 @@ def get_public_postiz_client() -> PostizPublicClient:
     if _public_client is None:
         _public_client = PostizPublicClient()
     return _public_client
+
+
+# Backward-compatibility aliases
+PostizClient = PostizPublicClient
+get_postiz_client = get_public_postiz_client
+
