@@ -9,9 +9,23 @@ import logging
 from typing import Dict, List, Optional
 from datetime import datetime, timezone
 
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.interval import IntervalTrigger
-from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
+try:
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from apscheduler.triggers.interval import IntervalTrigger
+    from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
+except ImportError:  # pragma: no cover
+    class BackgroundScheduler:  # type: ignore[no-redef]
+        def __init__(self, *args, **kwargs): pass
+        def add_job(self, *args, **kwargs): pass
+        def add_listener(self, *args, **kwargs): pass
+        def start(self): pass
+        def shutdown(self, *args, **kwargs): pass
+        def get_jobs(self): return []
+    class IntervalTrigger:  # type: ignore[no-redef]
+        def __init__(self, *args, **kwargs): pass
+    EVENT_JOB_ERROR = 1  # type: ignore[assignment]
+    EVENT_JOB_EXECUTED = 2  # type: ignore[assignment]
+
 from datetime import timedelta
 
 from scrapers.base_scraper import BaseScraper
