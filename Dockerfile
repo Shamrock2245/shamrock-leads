@@ -4,7 +4,7 @@
 # + Chromium for DrissionPage + patchright (Charlotte) + nodriver (Seminole, Lake)
 # + OSINT Tools: Maigret (3000+ site recon), Blackbird (email/username recon)
 # ============================================
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # Labels
 LABEL maintainer="Shamrock Active Software"
