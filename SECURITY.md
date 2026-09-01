@@ -1,6 +1,6 @@
 # SECURITY.md — ShamrockLeads Security Policy
 
-> **Last Updated:** 2026-08-28
+> **Last Updated:** 2026-08-31
 > **Compliance Target:** SOC II Type II readiness
 > **Contact:** `admin@shamrockbailbonds.biz`
 
@@ -15,7 +15,7 @@ If you discover a security vulnerability, please email `admin@shamrockbailbonds.
 ## Secrets Management
 
 | Environment | Storage | Access |
-|-------------|---------|--------|
+|-------------|---------|
 | **Local dev** | `.env` file (git-ignored) | Developer machine only |
 | **Docker** | `env_file: .env` in docker-compose.yml | Container runtime only |
 | **GitHub Actions** | Repository secrets | CI/CD pipeline only |
@@ -148,3 +148,27 @@ Cross-repo: keep `GAS_API_KEY` identical on leads VPS, portal GAS/Wix, and bail-
 ---
 
 *Maintained by: Brendan / Shamrock Active Software LLC*
+
+---
+
+## Production hardening backlog (2026-08-31)
+
+These items are documented so Stage 2 cannot be claimed while they are open.
+
+| Item | Risk | Owner action |
+|------|------|----------------|
+| MongoDB Atlas network access `0.0.0.0/0` | Any leaked URI is globally usable | Restrict to VPS egress + GitHub Actions NAT if needed; pair with C3 rotation |
+| Dashboard PIN published in git history / older README copies | Staff-auth bypass if PIN unchanged | PIN lives only in `DASHBOARD_PIN`; rotate if it was ever committed |
+| `main` auto-deploys without a required CI check | Broken contract tests ship to the VPS | Branch protection: require workflow `CI` |
+| VPS root disk ~38 GB after CCX33 resize | Image/Chromium fill-up takes production down | Grow volume 160–240 GB in Hetzner Cloud Console |
+| Historical secrets in git | Compromised until rotated | C3 package — do not mint a new GAS `/exec` URL |
+
+### Authentication note
+
+God-Admin and Sub-Agent PINs are **environment secrets**. Never document live PIN values in README, AGENTS, blog copy, or commit messages.
+
+### Recommended GitHub settings
+
+1. Protect `main`: no force-push, required PR or at least required status check `CI`.
+2. Keep `Deploy to Hetzner` on `main` only after CI is green.
+3. Dependabot PRs must pass CI before merge.
