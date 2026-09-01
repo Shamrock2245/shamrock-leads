@@ -46,7 +46,7 @@ class TestLeeCountyMaster(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Lee County Jail (Ortiz Ave)", msg_bond)
         self.assertIn("$5,000", msg_bond)
         self.assertIn("$250", msg_bond)  # 5% down
-        self.assertIn("https://shamrockbailbonds.biz/portal-start?booking=26-00123&county=Lee", msg_bond)
+        self.assertIn("https://paperwork.shamrockbailbonds.biz?booking=26-00123&county=Lee", msg_bond)
 
         msg_fa = generate_family_outreach_message(
             defendant_first_name="Mark",

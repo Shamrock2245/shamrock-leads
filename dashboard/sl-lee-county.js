@@ -332,7 +332,7 @@
 
               <!-- 1-Click Launchpads -->
               <div style="display:flex; gap:10px; border-top:1px solid rgba(255,255,255,0.08); padding-top:16px;">
-                <button class="lee-btn lee-btn-secondary" style="background:#0284c7; color:#fff;" onclick="window.open('https://shamrockbailbonds.biz/portal-start?booking=${lead.booking_number}&county=Lee','_blank')">
+                <button class="lee-btn lee-btn-secondary" style="background:#0284c7; color:#fff;" onclick="window.open('https://paperwork.shamrockbailbonds.biz/?booking=${lead.booking_number}&county=Lee','_blank')">
                   📄 Open DocuSeal Launchpad ↗
                 </button>
                 <button class="lee-btn lee-btn-secondary" style="background:#7c3aed; color:#fff;" onclick="alert('Routing call to on-call Fort Myers bondsman at (239) 955-0301...')">

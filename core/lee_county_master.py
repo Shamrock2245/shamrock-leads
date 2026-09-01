@@ -87,7 +87,7 @@ def generate_family_outreach_message(
     prem = terms["statutory_premium"]
     down = terms["down_payment"]
 
-    link = f"https://shamrockbailbonds.biz/portal-start"
+    link = f"https://paperwork.shamrockbailbonds.biz"
     if booking_number:
         link += f"?booking={booking_number}&county=Lee"
 
