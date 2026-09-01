@@ -1,6 +1,6 @@
-# ==============================================================================
+# ===============================================================================
 # ShamrockLeads — PR / main CI (no deploy, no live clients, no secrets)
-# ==============================================================================
+# ===============================================================================
 # Deploy remains .github/workflows/deploy-hetzner.yml on push to main.
 # This workflow is the missing production gate: syntax + contract tests
 # must pass before a human merges to main.
@@ -28,6 +28,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -40,7 +42,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install pytest
           # Project imports used by contract tests; keep this list bounded.
-          pip install python-dotenv pymongo fastapi httpx pydantic
+          # 2026-08-31 first run failed collection on missing requests + motor.
+          pip install python-dotenv pymongo motor fastapi httpx pydantic requests
 
       - name: Byte-compile application packages
         run: |
