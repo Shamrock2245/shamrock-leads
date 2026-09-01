@@ -1420,18 +1420,26 @@ def _branded_sign_page(
         function mountForm() {{
             const mount = document.getElementById('docuseal-mount');
             if (!mount) return;
-            if (!window.customElements || !customElements.get('docuseal-form')) {{
-                setTimeout(mountForm, 50);
-                return;
-            }}
-            const form = document.createElement('docuseal-form');
-            Object.keys(CFG).forEach(function (key) {{ form.setAttribute(key, CFG[key]); }});
-            form.id = 'embeddedDocuSeal';
-            form.addEventListener('completed', function () {{
-                window.location.href = CFG['data-completed-redirect-url'] || '/done';
-            }});
             mount.innerHTML = '';
-            mount.appendChild(form);
+            const iframe = document.createElement('iframe');
+            let src = CFG['data-src'] || '';
+            if (src && !src.startsWith('http')) {{
+                src = 'https://sign.shamrockbailbonds.biz' + (src.startsWith('/') ? src : '/' + src);
+            }}
+            iframe.src = src;
+            iframe.id = 'embeddedDocuSeal';
+            iframe.style.width = '100%';
+            iframe.style.minHeight = '85vh';
+            iframe.style.border = 'none';
+            iframe.style.borderRadius = '12px';
+            iframe.style.background = '#ffffff';
+            iframe.setAttribute('allow', 'camera; microphone; geolocation');
+            mount.appendChild(iframe);
+            window.addEventListener('message', function (e) {{
+                if (e.data && (e.data.event === 'completed' || e.data.type === 'docuseal:completed')) {{
+                    window.location.href = CFG['data-completed-redirect-url'] || '/done';
+                }}
+            }});
         }}
         if (!{str(show_kiosk_scan).lower()}) {{
             if (document.readyState === 'loading') {{
@@ -2279,56 +2287,28 @@ async def get_portal_ui(request: Request):
                 document.body.classList.add('signing-mode');
             }
 
-            const dsForm = document.createElement('docuseal-form');
-            // Official self-hosted embed: data-src=/s/{slug} + data-host (not cloud CDN).
-            const embedCfg = {
-                'data-src': signUrl,
-                'data-host': 'sign.shamrockbailbonds.biz',
-                'data-expand': 'true',
-                'data-minimize': 'false',
-                'data-go-to-last': 'true',
-                'data-autoscroll-fields': 'true',
-                'data-order-as-on-page': 'true',
-                'data-only-required-fields': 'true',
-                'data-with-complete-button': 'true',
-                'data-with-title': 'false',
-                'data-with-field-names': 'false',
-                'data-with-field-placeholder': 'true',
-                'data-remember-signature': 'true',
-                'data-reuse-signature': 'true',
-                'data-send-copy-email': 'false',
-                'data-allow-typed-signature': 'true',
-                'data-completed-message-title': 'You are done',
-                'data-completed-message-body': 'Thank you. Shamrock has your signature. Call (239) 332-2245 if you need anything else.',
-                'data-completed-button-title': 'All set',
-                'data-completed-redirect-url': '/done',
-                'data-completed-button-url': '/done',
-                'data-custom-css': '.submit-form-button,.expand-form-button,.start-form-submit-button,.completed-form-completed-button{background-color:#16a34a;border:0;border-radius:12px;color:#052e16;min-height:48px;font-weight:700;font-size:16px}.draw-canvas{border-radius:12px;min-height:140px;background:#fff}.field-area-active{border-color:#16a34a;outline-color:#22c55e}.field-area-active-label{background-color:#16a34a;color:#052e16}',
-                'data-i18n': '{"submit":"Continue","complete":"Finish signing","next":"Next","type":"Type name","draw":"Draw signature","upload":"Upload","clear":"Clear"}'
-            };
-            if (opts.email) embedCfg['data-email'] = opts.email;
-            if (opts.name) embedCfg['data-name'] = opts.name;
-            if (opts.role) embedCfg['data-role'] = opts.role;
-            Object.keys(embedCfg).forEach(function (key) { dsForm.setAttribute(key, embedCfg[key]); });
-            dsForm.id = 'embeddedDocuSeal';
-            // Allow stylus / multi-touch on the host element
-            dsForm.style.touchAction = 'auto';
-            dsForm.style.minHeight = '100%';
-            mount.appendChild(dsForm);
+            let directUrl = signUrl || '';
+            if (directUrl && !directUrl.startsWith('http')) {
+                directUrl = 'https://sign.shamrockbailbonds.biz' + (directUrl.startsWith('/') ? directUrl : '/' + directUrl);
+            }
+
+            const iframe = document.createElement('iframe');
+            iframe.src = directUrl;
+            iframe.id = 'embeddedDocuSeal';
+            iframe.style.width = '100%';
+            iframe.style.minHeight = '85vh';
+            iframe.style.border = 'none';
+            iframe.style.borderRadius = '12px';
+            iframe.style.background = '#ffffff';
+            iframe.setAttribute('allow', 'camera; microphone; geolocation');
+            mount.appendChild(iframe);
 
             const title = document.getElementById('esignTitleText');
             if (title) title.textContent = opts.title || 'Bond Agreement Packet — Sign with finger or Apple Pencil';
 
-            dsForm.addEventListener('completed', function () {
-                window.location.href = '/done';
-            });
-            // Some DocuSeal builds emit load errors without crashing
-            dsForm.addEventListener('error', function () {
-                const statusEl = document.getElementById('status');
-                if (statusEl) {
-                    if (auth) auth.style.display = 'block';
-                    statusEl.className = 'status error';
-                    statusEl.textContent = 'Could not load signing form. Check the link or call (239) 332-2245.';
+            window.addEventListener('message', function (e) {
+                if (e.data && (e.data.event === 'completed' || e.data.type === 'docuseal:completed')) {
+                    window.location.href = '/done';
                 }
             });
 
