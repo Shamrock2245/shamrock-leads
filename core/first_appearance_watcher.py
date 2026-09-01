@@ -68,17 +68,107 @@ WATCH_MAX_BATCH     = int(os.getenv("WATCH_MAX_BATCH",     "50"))
 _NO_BOND_TYPES = {"NO BOND", "HOLD", "NONE", "DETAINER", "ICE HOLD", "IMMIGRATION"}
 
 # ── County Court Windows (Eastern Time) ───────────────────────────────────────
-# First appearance hearing schedules by county.
+# First appearance hearing schedules by county across Florida circuits.
 # Format: { county: { day_range: (start_hour, start_min, end_hour, end_min) } }
 # "weekday" = Mon-Fri, "weekend" = Sat-Sun
 #
-# Lee County First Appearance: Mon-Fri 10:00 AM ET, Sat-Sun & Holidays 8:30 AM ET
+# Hearings usually run for 1-2 hours; we extend the watch window to +2.5 hours
+# after hearing start to allow the clerk and jail desk time to enter the set bonds.
 _ET = ZoneInfo("America/New_York")
 
 _COURT_WINDOWS: Dict[str, Dict[str, Tuple[int, int, int, int]]] = {
+    # 20th Circuit (SWFL Core)
     "Lee": {
-        "weekday": (10, 0, 11, 30),   # Mon-Fri 10:00 AM ET
-        "weekend": (8, 30, 10, 30),   # Sat-Sun & Holidays 8:30 AM ET
+        "weekday": (10, 0, 13, 0),    # Hearing 10:00 AM ET (check window until 1:00 PM)
+        "weekend": (8, 30, 11, 30),   # Sat-Sun 8:30 AM ET
+    },
+    "Collier": {
+        "weekday": (13, 0, 16, 0),    # Hearing 1:00 PM ET
+        "weekend": (9, 0, 12, 0),
+    },
+    "Charlotte": {
+        "weekday": (13, 30, 16, 30),  # Hearing 1:30 PM ET
+        "weekend": (9, 0, 12, 0),
+    },
+    "Hendry": {
+        "weekday": (9, 0, 12, 30),    # Zoom hearing 9:00 AM ET
+        "weekend": (8, 30, 11, 30),
+    },
+    "DeSoto": {
+        "weekday": (9, 0, 12, 30),
+        "weekend": (8, 30, 11, 30),
+    },
+    "Glades": {
+        "weekday": (9, 0, 12, 30),
+        "weekend": (8, 30, 11, 30),
+    },
+
+    # 13th & 6th Circuits (Tampa Bay / Pinellas)
+    "Hillsborough": {
+        "weekday": (13, 30, 17, 0),   # Hearing 1:30 PM ET
+        "weekend": (9, 0, 12, 30),
+    },
+    "Pinellas": {
+        "weekday": (8, 30, 16, 30),   # Sessions 8:30 AM & 1:30 PM ET
+        "weekend": (9, 0, 12, 30),
+    },
+    "Pasco": {
+        "weekday": (8, 30, 16, 0),
+        "weekend": (8, 30, 11, 30),
+    },
+
+    # 9th & 18th Circuits (Orlando / Central FL / Space Coast)
+    "Orange": {
+        "weekday": (8, 30, 16, 30),   # 9th Circuit: 8:30 AM & 1:00 PM ET
+        "weekend": (9, 0, 12, 30),
+    },
+    "Osceola": {
+        "weekday": (8, 30, 16, 0),
+        "weekend": (8, 30, 11, 30),
+    },
+    "Seminole": {
+        "weekday": (8, 30, 16, 0),
+        "weekend": (8, 30, 11, 30),
+    },
+    "Brevard": {
+        "weekday": (9, 0, 16, 30),    # 9:00 AM & 1:15 PM ET
+        "weekend": (8, 30, 11, 30),
+    },
+
+    # 17th, 11th & 15th Circuits (South Florida Metro)
+    "Broward": {
+        "weekday": (8, 30, 17, 0),    # 8:30 AM & 1:30 PM ET
+        "weekend": (8, 30, 12, 30),
+    },
+    "Miami-Dade": {
+        "weekday": (9, 0, 17, 0),     # 9:00 AM & 1:30 PM ET
+        "weekend": (9, 0, 12, 30),
+    },
+    "Palm Beach": {
+        "weekday": (8, 30, 16, 30),   # 8:30 AM & 1:00 PM ET
+        "weekend": (8, 30, 11, 30),
+    },
+
+    # 4th, 7th & 10th Circuits (Jacksonville, Daytona, Polk)
+    "Duval": {
+        "weekday": (9, 0, 16, 0),     # 9:00 AM & 1:00 PM ET
+        "weekend": (9, 0, 12, 0),
+    },
+    "Polk": {
+        "weekday": (8, 30, 16, 0),
+        "weekend": (8, 30, 11, 30),
+    },
+    "Volusia": {
+        "weekday": (8, 30, 16, 30),
+        "weekend": (8, 30, 11, 30),
+    },
+    "Sarasota": {
+        "weekday": (13, 0, 16, 0),
+        "weekend": (9, 0, 12, 0),
+    },
+    "Manatee": {
+        "weekday": (8, 30, 16, 0),
+        "weekend": (8, 30, 11, 30),
     },
 }
 
@@ -107,6 +197,7 @@ def _is_in_court_window(county: str) -> bool:
     end_minutes = end_h * 60 + end_m
 
     return start_minutes <= current_minutes <= end_minutes
+
 
 
 def _is_no_bond(record_doc: Dict[str, Any]) -> bool:
@@ -203,11 +294,9 @@ class FirstAppearanceWatcher:
 
         cutoff = datetime.now(timezone.utc) - timedelta(days=WATCH_WINDOW_DAYS)
 
-        TARGET_COUNTIES = [c.strip() for c in os.getenv("WATCH_COUNTIES", "Lee,Collier,Charlotte,Sarasota,Manatee,Hendry,DeSoto").split(",") if c.strip()]
-
-        query = {
-            # Target key active counties to avoid system overhead
-            "county": {"$in": TARGET_COUNTIES},
+        raw_counties = os.getenv("WATCH_COUNTIES", "Lee,Collier,Charlotte,Sarasota,Manatee,Hendry,DeSoto,Hillsborough,Orange,Broward,Palm Beach,Miami-Dade,Pinellas,Duval,Polk,Brevard,Volusia,Seminole,Pasco,Osceola,Lake,Marion,Escambia,Alachua,St. Lucie,Clay,St. Johns").strip()
+        
+        query: Dict[str, Any] = {
             # Must still be in custody
             "status": {"$regex": "in.custody|incustody", "$options": "i"},
             # Bond must be zero (or missing)
@@ -218,11 +307,18 @@ class FirstAppearanceWatcher:
             ],
             # Must have a detail URL to re-fetch
             "detail_url": {"$exists": True, "$ne": ""},
-            # Must be within the watch window
-            "created_at": {"$gte": cutoff},
-            # Skip records already graduated to Hot/Warm with real bond
-            "lead_status": {"$nin": []},  # We'll filter in Python for flexibility
         }
+
+        if raw_counties != "*":
+            target_counties = [c.strip() for c in raw_counties.split(",") if c.strip()]
+            # Support both bare name and "(FL)" suffix in MongoDB
+            query_counties = []
+            for c in target_counties:
+                query_counties.extend([c, f"{c} (FL)", f"{c} County", f"{c} County (FL)"])
+            query["county"] = {"$in": query_counties}
+
+        query["created_at"] = {"$gte": cutoff}
+
 
         try:
             docs = list(

@@ -1253,3 +1253,38 @@ async def osint_hot_leads_sweep(request: Request, api_key: str = ""):
         dry_run,
     )
     return result
+
+
+@automation_bp.post("/first-appearance-watcher")
+async def first_appearance_watcher_endpoint(request: Request, api_key: str = ""):
+    """
+    Trigger FirstAppearanceWatcher to re-check pending No-Bond bookings against
+    live jail rosters during and following scheduled first-appearance court sessions.
+    Elevates records to Hot/Warm when a judge sets a bond.
+    Auth: GAS_API_KEY.
+    """
+    if not _authorized(request, api_key):
+        return _unauthorized()
+
+    from core.first_appearance_watcher import FirstAppearanceWatcher
+
+    try:
+        watcher = FirstAppearanceWatcher()
+        stats = watcher.run()
+        return {
+            "ok": True,
+            "action": "first_appearance_watcher",
+            "scanned": stats.get("scanned", 0),
+            "updated": stats.get("updated", 0),
+            "bonds_set": stats.get("bond_set", 0),
+            "hot_leads": stats.get("hot_leads", 0),
+            "promoted": stats.get("promoted_leads", []),
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as exc:
+        logger.exception("[automation] first-appearance-watcher failed: %s", exc)
+        return JSONResponse(
+            {"ok": False, "error": str(exc)[:400], "action": "first_appearance_watcher"},
+            status_code=500,
+        )
+
