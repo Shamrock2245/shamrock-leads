@@ -1,5 +1,6 @@
-                    """
+"""
 Automation Sweeps — Node-RED / service orchestration endpoints
+
 
 Machine-authenticated (GAS_API_KEY or X-API-Key) sweeps that power:
   1. Lead qualification (score hot/warm arrests, surface high-value bonds)
