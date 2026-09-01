@@ -24,7 +24,7 @@ google-auth>=2.25.0
 google-auth-oauthlib>=0.8.0
 
 # Env loading
-python-dotenv>=1.0.0
+python-dotenv>=1.2.3
 
 # Data models
 pydantic>=2.5.0
