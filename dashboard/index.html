@@ -32,6 +32,7 @@
   <link rel="stylesheet" href="/sl-palantir.css?v=6">
   <link rel="stylesheet" href="/sl-alpr.css?v=2">
   <link rel="stylesheet" href="/sl-bond-intelligence.css?v=4">
+  <link rel="stylesheet" href="/sl-lee-county.css?v=1">
   <!-- PWA Manifest -->
   <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#0f172a">
@@ -113,6 +114,7 @@
       <!-- Bond Desk first — Twenty-style primary objects for daily ops -->
       <div class="sidebar-group-label">Bond Desk</div>
       <button class="sidebar-btn active" data-tab="tabCommand" onclick="SL.switchTab(this)"><span class="sidebar-btn-icon">⚡</span> Today</button>
+      <button class="sidebar-btn" data-tab="tabLeeCounty" onclick="SL.switchTab(this);SLLeeCounty.init()" title="Lee County HQ: Real-time Ortiz Ave jail bookings, family discovery & auto-pilot outreach"><span class="sidebar-btn-icon">🏛️</span> Lee County HQ <span class="badge" id="leeCountyBadge" style="background:#10b981;color:#000;font-weight:700;">—</span></button>
       <button class="sidebar-btn" data-tab="tabLeads" onclick="SL.switchTab(this)"><span class="sidebar-btn-icon">🔥</span> Hot Leads <span class="badge" id="leadsBadge">—</span></button>
       <button class="sidebar-btn sidebar-btn-primary" data-tab="tabIntake" onclick="SL.switchTab(this);SLIntake.load()" title="Write the bond: match indemnitor → paperwork → promote"><span class="sidebar-btn-icon">☘️</span> Bond Desk <span class="badge" id="intakeBadge">—</span></button>
       <button class="sidebar-btn" data-tab="tabActiveBonds" onclick="SL.switchTab(this);loadActiveBonds()" title="Posted bonds only — after paperwork is complete"><span class="sidebar-btn-icon">📋</span> Active Bonds <span class="badge" id="activeBondsBadge">—</span></button>
@@ -312,6 +314,96 @@
         <div id="cmdRecentActivity"></div>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     TAB: LEE COUNTY MASTER COMMAND CENTER (HOME COUNTY HQ)
+     ═══════════════════════════════════════════════════════ -->
+<div class="tab-content" id="tabLeeCounty" style="display:none;">
+  <div class="lee-hq-container">
+    
+    <!-- Hero Banner & Auto-Pilot Toggle -->
+    <div class="lee-hero-card">
+      <div class="lee-hero-title">
+        <div class="lee-hero-icon">🏛️</div>
+        <div>
+          <h1>Lee County Master Command <span>· Fort Myers HQ</span></h1>
+          <p>Ortiz Ave Core Facility Docket · Automated Family Discovery · Speed-to-Contact Auto-Pilot Engine</p>
+        </div>
+      </div>
+
+      <div class="lee-autopilot-bar">
+        <div class="lee-pulse-dot" id="leePulseDot"></div>
+        <div style="display:flex; flex-direction:column; gap:2px;">
+          <span id="leeAutopilotLabel" style="font-size:13px; font-weight:700; color:#f8fafc;">Auto-Pilot Active</span>
+          <span style="font-size:11px; color:#94a3b8;">Auto-texts verified family members within 60s of scoring ≥ 70</span>
+        </div>
+        <label class="lee-switch" title="Toggle Auto-Pilot">
+          <input type="checkbox" id="leeAutopilotToggle" onchange="SLLeeCounty.toggleAutopilot(this)">
+          <span class="lee-slider"></span>
+        </label>
+        <button class="lee-btn lee-btn-secondary" style="font-size:11px; padding:6px 10px;" onclick="SLLeeCounty.triggerSweepNow()" title="Trigger immediate sweep now">
+          ⚡ Sweep Now
+        </button>
+      </div>
+    </div>
+
+    <!-- KPI Metrics Grid -->
+    <div class="lee-kpi-grid">
+      <div class="lee-kpi-card">
+        <div class="lee-kpi-label">24h Ortiz Ave Bookings <span style="font-size:14px">📥</span></div>
+        <div class="lee-kpi-value" id="leeBookings24h">—</div>
+        <div class="lee-kpi-sub">Total arrests scraped in last 24h</div>
+      </div>
+
+      <div class="lee-kpi-card">
+        <div class="lee-kpi-label">Bond-Ready Qualified <span style="font-size:14px">⚡</span></div>
+        <div class="lee-kpi-value" id="leeBondReady" style="color:#10b981;">—</div>
+        <div class="lee-kpi-sub">Score ≥ 70 · Bond > $0 · Release Ready</div>
+      </div>
+
+      <div class="lee-kpi-card">
+        <div class="lee-kpi-label">10:00 AM First Appearance <span style="font-size:14px">⏳</span></div>
+        <div class="lee-kpi-value" id="leeFirstAppearance" style="color:#f59e0b;">—</div>
+        <div class="lee-kpi-sub">No-bond / felony review pending judge</div>
+      </div>
+
+      <div class="lee-kpi-card">
+        <div class="lee-kpi-label">Active Bond Pool <span style="font-size:14px">💰</span></div>
+        <div class="lee-kpi-value" id="leePoolValue">—</div>
+        <div class="lee-kpi-sub">Est. Premium: <strong id="leeCommissionPool" style="color:#a7f3d0">—</strong></div>
+      </div>
+
+      <div class="lee-kpi-card">
+        <div class="lee-kpi-label">Family Outreach Sent <span style="font-size:14px">💬</span></div>
+        <div class="lee-kpi-value" id="leeOutreachSent" style="color:#38bdf8;">—</div>
+        <div class="lee-kpi-sub">Automated &amp; 1-click contacts logged</div>
+      </div>
+    </div>
+
+    <!-- Filter & Search Toolbar -->
+    <div class="lee-toolbar">
+      <div class="lee-filter-group">
+        <button class="lee-filter-btn active" onclick="SLLeeCounty.setFilter(this, 'all')">📋 All Bookings</button>
+        <button class="lee-filter-btn" onclick="SLLeeCounty.setFilter(this, 'bond_ready')">⚡ Bond-Ready (Score ≥ 60)</button>
+        <button class="lee-filter-btn" onclick="SLLeeCounty.setFilter(this, 'hot')">🔥 Hot Priority (Score ≥ 75)</button>
+        <button class="lee-filter-btn" onclick="SLLeeCounty.setFilter(this, 'first_appearance')">⏳ First Appearance (10 AM)</button>
+        <button class="lee-filter-btn" onclick="SLLeeCounty.setFilter(this, 'high_value')">💎 High Value (≥ $2.5K)</button>
+        <button class="lee-filter-btn" onclick="SLLeeCounty.setFilter(this, 'contacted')">📩 Outreach Sent</button>
+      </div>
+
+      <div class="lee-search-box">
+        <span>🔍</span>
+        <input type="text" placeholder="Search Lee County defendant, booking #, charge..." oninput="SLLeeCounty.handleSearch(this)">
+      </div>
+    </div>
+
+    <!-- Live Leads Cards Stream -->
+    <div class="lee-leads-grid" id="leeLeadsContainer">
+      <!-- Dynamic Leads Rendered by sl-lee-county.js -->
+    </div>
+
   </div>
 </div>
 
@@ -6437,5 +6529,6 @@
 <script defer src="/sl-bond-intelligence.js?v=5"></script>
 <script defer src="/sl-multi-state.js?v=3"></script>
 <script defer src="/sl-hydrate.js?v=3"></script>
+<script defer src="/sl-lee-county.js?v=1"></script>
 </body>
 </html>

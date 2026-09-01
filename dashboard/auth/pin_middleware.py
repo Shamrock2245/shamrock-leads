@@ -84,6 +84,7 @@ OPEN_PREFIXES = (
     "/api/imessage/wix/",
     "/api/paperwork/shannon/",
     "/paperwork/shannon/",
+    "/api/lee-county/",
 )
 
 # OAuth popup paths
