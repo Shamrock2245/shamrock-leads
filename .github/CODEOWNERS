@@ -1,0 +1,9 @@
+# Default owner for production-facing paths.
+* @Shamrock2245
+
+# Money / trust paths — extra review expected.
+docs/ECOSYSTEM_PROD_CHECKLIST.md @Shamrock2245
+docs/PLATFORM.md @Shamrock2245
+SECURITY.md @Shamrock2245
+STATUS.md @Shamrock2245
+.github/workflows/ @Shamrock2245

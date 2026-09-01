@@ -1,0 +1,65 @@
+# ==============================================================================
+# ShamrockLeads — PR / main CI (no deploy, no live clients, no secrets)
+# ==============================================================================
+# Deploy remains .github/workflows/deploy-hetzner.yml on push to main.
+# This workflow is the missing production gate: syntax + contract tests
+# must pass before a human merges to main.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Syntax + contract suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install test runtime
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          # Project imports used by contract tests; keep this list bounded.
+          pip install python-dotenv pymongo fastapi httpx pydantic
+
+      - name: Byte-compile application packages
+        run: |
+          python -m compileall -q \
+            api core scoring services models scrapers dashboard config \
+            writers scripts cron.py main.py
+
+      - name: Focused fail-closed / contract tests
+        env:
+          ENV: test
+          SECRET_KEY: ci-not-a-real-secret
+        run: |
+          pytest -q \
+            tests/test_secret_scanner.py \
+            tests/test_source_contract_run_guard.py \
+            tests/test_source_booking_identity_guard.py \
+            tests/test_registered_counties_coverage.py \
+            tests/test_recon_documentation_contract.py \
+            tests/test_recon_evidence_contract.py \
+            tests/test_subdomains.py \
+            tests/test_unhandled_exception_privacy.py \
+            --tb=short
