@@ -29,7 +29,7 @@ ddddocr>=1.4.0
 pdfplumber>=0.10.0
 
 # FastAPI dashboard
-fastapi>=0.115.0,<0.120.0
+fastapi>=0.141.1,<0.142.0
 starlette>=0.37.0,<0.41.0
 uvicorn[standard]>=0.30.0
 sse-starlette>=2.1.0

@@ -2,7 +2,7 @@
 # Keep lean — this service does content gen + posting, not scraping.
 
 # Web framework
-fastapi>=0.115.0
+fastapi>=0.141.1
 uvicorn[standard]>=0.30.0
 
 # MongoDB (async)
