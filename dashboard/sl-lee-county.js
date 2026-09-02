@@ -20,6 +20,47 @@
       this.startAutoRefresh();
     },
 
+    formatDateTime(dateStr, timeStr) {
+      if (!dateStr) return '<span style="color:#10b981; font-weight:700;">Today</span>';
+      let cleanDate = String(dateStr).trim();
+      if (cleanDate.includes('T')) cleanDate = cleanDate.split('T')[0];
+
+      // Local date calculation without UTC timezone shift
+      const now = new Date();
+      const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayIso = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
+
+      let timeFormatted = '';
+      if (timeStr) {
+        const parts = String(timeStr).split(':');
+        if (parts.length >= 2) {
+          let h = parseInt(parts[0], 10);
+          const m = parts[1];
+          const ampm = h >= 12 ? 'PM' : 'AM';
+          h = h % 12 || 12;
+          timeFormatted = ` · ${h}:${m} ${ampm}`;
+        }
+      }
+
+      if (cleanDate === todayIso) {
+        return `<span style="color:#10b981; font-weight:700;">Today</span>${timeFormatted}`;
+      } else if (cleanDate === yesterdayIso) {
+        return `<span>Yesterday</span>${timeFormatted}`;
+      } else {
+        const parts = cleanDate.split('-');
+        if (parts.length === 3) {
+          const [y, m, d] = parts;
+          const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+          const mon = months[parseInt(m, 10) - 1] || m;
+          return `<span>${mon} ${parseInt(d, 10)}, ${y}</span>${timeFormatted}`;
+        }
+        return `<span>${cleanDate}</span>${timeFormatted}`;
+      }
+    },
+
     startAutoRefresh() {
       if (this._refreshTimer) clearInterval(this._refreshTimer);
       // Auto-refresh every 30 seconds for live updates
@@ -153,7 +194,7 @@
               <div class="lee-def-info">
                 <div class="lee-def-name">${l.full_name}</div>
                 <div class="lee-booking-meta">
-                  Booking #${l.booking_number || 'PENDING'} · ${l.booking_date ? new Date(l.booking_date).toLocaleDateString() : 'Today'}${courtMeta ? ` · ${courtMeta}` : ''}
+                  Booking #${l.booking_number || 'PENDING'} · ${this.formatDateTime(l.booking_date, l.booking_time)}${courtMeta ? ` · ${courtMeta}` : ''}
                 </div>
               </div>
               <div class="lee-score-badge ${scoreClass}">

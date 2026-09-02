@@ -304,6 +304,7 @@ async def get_lee_county_leads(
             "county": "Lee",
             "facility": doc.get("facility") or LEE_FACILITY_NAME,
             "booking_date": doc.get("booking_date") or doc.get("scraped_at") or "",
+            "booking_time": doc.get("booking_time") or "",
             "total_bond": total_bond,
             "lead_score": lead_score,
             "status": doc.get("status") or "In Custody",
