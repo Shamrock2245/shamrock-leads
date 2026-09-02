@@ -898,7 +898,9 @@ def fill_palmetto_bond(data: dict) -> bytes:
     font_sizes = {
         "defendantNameField": 11,
         "DefendantAddress": 8.5,
-        "writtenPremiumAmount": 8.5,
+        "writtenPremiumAmount": 8.0,
+        "whoSignedField": 8.5,
+        "chargesField1": 9.0,
     }
 
     _apply_field_values(page, field_values, font_sizes)
