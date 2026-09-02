@@ -103,6 +103,63 @@ async def test_graph_live_from_defendant_record():
     assert "Mary Ann Smith" not in labels
 
 
+@pytest.mark.asyncio
+async def test_graph_includes_vehicle_and_case_from_defendant_record():
+    defendant = {
+        "_id": "veh123",
+        "name": "Jane Doe",
+        "booking_number": "BK-99",
+        "county": "Lee",
+        "case_number": "25CF015873",
+        "warrant_status": "Active warrant — FTA",
+        "vehicles": [
+            {"plate": "92EUIZ", "description": "2024 Black Hyundai Elantra SEL"},
+        ],
+    }
+
+    empty_cursor = MagicMock()
+    empty_cursor.__aiter__ = lambda self: _async_iter([])
+
+    mock_bonds = MagicMock()
+    mock_bonds.find = MagicMock(return_value=empty_cursor)
+
+    mock_packets = MagicMock()
+    mock_packets.find = MagicMock(return_value=MagicMock(sort=MagicMock(return_value=empty_cursor)))
+
+    mock_fam = MagicMock()
+    mock_fam.find_one = AsyncMock(return_value=None)
+
+    def _col(name):
+        if name == "defendants":
+            c = MagicMock()
+            c.find_one = AsyncMock(return_value=defendant)
+            return c
+        if name == "active_bonds":
+            return mock_bonds
+        if name == "paperwork_packets":
+            return mock_packets
+        if name == "family_trees":
+            return mock_fam
+        if name == "arrests":
+            c = MagicMock()
+            c.find_one = AsyncMock(return_value=None)
+            return c
+        c = MagicMock()
+        c.find_one = AsyncMock(return_value=None)
+        return c
+
+    with patch("dashboard.routers.palantir_intel.get_collection", side_effect=_col):
+        graph = await _build_live_graph("Jane Doe", "defendant")
+
+    types = {n.type for n in graph.nodes}
+    assert NodeType.vehicle in types
+    assert NodeType.court_case in types
+    vehicle = next(n for n in graph.nodes if n.type == NodeType.vehicle)
+    assert "92EUIZ" in vehicle.label
+    case = next(n for n in graph.nodes if n.type == NodeType.court_case)
+    assert "25CF015873" in case.label
+
+
 def test_api_routes_load():
     app = FastAPI()
     app.include_router(palantir_router)

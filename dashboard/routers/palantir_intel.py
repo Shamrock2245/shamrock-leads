@@ -325,6 +325,54 @@ async def _build_live_graph(subject_id: str, subject_type: str) -> KnowledgeGrap
             _edge(root_id, prop_id, EdgeRelation.same_address, label="Address on file", confidence=0.85)
         )
 
+    # Vehicles — only plates/descriptions already stored on the CRM record
+    vehicles = doc.get("vehicles") if isinstance(doc.get("vehicles"), list) else []
+    if not vehicles:
+        plate = _safe_str(doc.get("license_plate") or doc.get("plate") or doc.get("vehicle_plate"))
+        veh = _safe_str(doc.get("vehicle") or doc.get("vehicle_description"))
+        if plate or veh:
+            vehicles = [{"plate": plate, "description": veh}]
+    for i, veh in enumerate(vehicles[:4]):
+        if not isinstance(veh, dict):
+            continue
+        plate = _safe_str(veh.get("plate") or veh.get("license_plate") or veh.get("tag"))
+        desc = _safe_str(veh.get("description") or veh.get("make_model") or veh.get("label"))
+        if not plate and not desc:
+            continue
+        vid = f"veh_{_stable_id(root_id, plate or desc, str(i))}"
+        label = (f"{desc} · {plate}" if desc and plate else (plate or desc))[:100]
+        nodes.append(
+            _node(
+                vid,
+                NodeType.vehicle,
+                label,
+                subtitle="Vehicle on file (not a live camera hit)",
+                risk="medium",
+                metadata={"plate": plate},
+            )
+        )
+        edges.append(
+            _edge(root_id, vid, EdgeRelation.registered_vehicle, label="Vehicle on file", confidence=0.85)
+        )
+
+    case_no = _safe_str(doc.get("case_number") or doc.get("Case_Number"))
+    if case_no:
+        cid = f"case_{_stable_id(root_id, case_no)}"
+        warrant = _safe_str(doc.get("warrant_status"))
+        nodes.append(
+            _node(
+                cid,
+                NodeType.court_case,
+                f"Case {case_no}",
+                subtitle=warrant or "Court case on file",
+                risk="high" if "warrant" in warrant.lower() or "fta" in warrant.lower() else "medium",
+                metadata={"case_number": case_no, "warrant_status": warrant},
+            )
+        )
+        edges.append(
+            _edge(root_id, cid, EdgeRelation.related_arrest, label="Court case", confidence=0.95)
+        )
+
     booking = _safe_str(doc.get("booking_number") or doc.get("Booking_Number"))
     name_for_links = subj_name
 
