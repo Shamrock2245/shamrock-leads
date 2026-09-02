@@ -14,6 +14,7 @@ import logging
 import os
 import re
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -190,7 +191,7 @@ async def get_lee_county_overview(db) -> Dict[str, Any]:
         "ok": True,
         "county": "Lee",
         "facility": LEE_FACILITY_NAME,
-        "local_time_fort_myers": datetime.now(timezone(timedelta(hours=-4))).strftime("%I:%M %p EDT"),
+        "local_time_fort_myers": datetime.now(ZoneInfo("America/New_York")).strftime("%I:%M %p %Z"),
         "metrics": {
             "bookings_24h": total_24h,
             "in_custody": in_custody_count,
