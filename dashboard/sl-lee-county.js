@@ -17,6 +17,19 @@
       console.log('🏛️ Initializing Lee County Master Command Center...');
       await this.loadOverview();
       await this.loadLeads();
+      this.startAutoRefresh();
+    },
+
+    startAutoRefresh() {
+      if (this._refreshTimer) clearInterval(this._refreshTimer);
+      // Auto-refresh every 30 seconds for live updates
+      this._refreshTimer = setInterval(() => {
+        const tab = document.getElementById('tabLeeCounty');
+        if (tab && tab.classList.contains('active') && !this.isLoading) {
+          this.loadOverview();
+          this.loadLeads(true);
+        }
+      }, 30000);
     },
 
     async loadOverview() {
@@ -70,30 +83,34 @@
       }
     },
 
-    async loadLeads() {
+    async loadLeads(silent = false) {
       const container = document.getElementById('leeLeadsContainer');
       if (!container) return;
 
       this.isLoading = true;
-      container.innerHTML = `
-        <div style="grid-column: 1/-1; text-align:center; padding: 40px; color:#94a3b8;">
-          <div class="spinner" style="margin: 0 auto 12px; width:30px; height:30px; border:3px solid rgba(16,185,129,0.2); border-top-color:#10b981; border-radius:50%; animation: spin 0.8s linear infinite;"></div>
-          Scanning Lee County Ortiz Ave Jail Roster & Scored Dossiers...
-        </div>
-      `;
+      if (!silent) {
+        container.innerHTML = `
+          <div style="grid-column: 1/-1; text-align:center; padding: 40px; color:#94a3b8;">
+            <div class="spinner" style="margin: 0 auto 12px; width:30px; height:30px; border:3px solid rgba(16,185,129,0.2); border-top-color:#10b981; border-radius:50%; animation: spin 0.8s linear infinite;"></div>
+            Scanning Lee County Ortiz Ave Jail Roster & Scored Dossiers...
+          </div>
+        `;
+      }
 
       try {
-        const url = `/api/lee-county/leads?filter=${encodeURIComponent(this.currentFilter)}&search=${encodeURIComponent(this.searchQuery)}&limit=60`;
+        const url = `/api/lee-county/leads?filter=${encodeURIComponent(this.currentFilter)}&search=${encodeURIComponent(this.searchQuery)}&limit=100`;
         const res = await fetch(url);
         const data = await res.json();
 
         if (data && data.ok) {
           this.renderLeads(data.leads || []);
-        } else {
+        } else if (!silent) {
           container.innerHTML = `<div style="grid-column:1/-1; text-align:center; padding:30px; color:#ef4444;">❌ Error loading Lee County leads: ${data.error || 'Unknown error'}</div>`;
         }
       } catch (err) {
-        container.innerHTML = `<div style="grid-column:1/-1; text-align:center; padding:30px; color:#ef4444;">❌ Network error loading leads: ${err.message}</div>`;
+        if (!silent) {
+          container.innerHTML = `<div style="grid-column:1/-1; text-align:center; padding:30px; color:#ef4444;">❌ Network error loading leads: ${err.message}</div>`;
+        }
       } finally {
         this.isLoading = false;
       }
@@ -123,6 +140,12 @@
         const terms = l.terms || {};
         const isContacted = l.outreach && l.outreach.status === 'sent';
         const chargesText = (l.charges || []).map(c => typeof c === 'string' ? c : (c.charge || c.description || 'Charge')).join(' · ') || 'Charges pending booking verification';
+        const courtMeta = [
+          l.case_number ? `Case #${l.case_number}` : '',
+          l.court_location || '',
+          l.court_date ? `Court: ${l.court_date}` : ''
+        ].filter(Boolean).join(' · ');
+        const clerkQuery = encodeURIComponent(l.case_number || l.booking_number || '');
 
         return `
           <div class="lee-lead-card" data-booking="${l.booking_number}">
@@ -130,7 +153,7 @@
               <div class="lee-def-info">
                 <div class="lee-def-name">${l.full_name}</div>
                 <div class="lee-booking-meta">
-                  Booking #${l.booking_number || 'PENDING'} · ${l.booking_date ? new Date(l.booking_date).toLocaleDateString() : 'Today'}
+                  Booking #${l.booking_number || 'PENDING'} · ${l.booking_date ? new Date(l.booking_date).toLocaleDateString() : 'Today'}${courtMeta ? ` · ${courtMeta}` : ''}
                 </div>
               </div>
               <div class="lee-score-badge ${scoreClass}">
@@ -174,6 +197,11 @@
               <button class="lee-btn lee-btn-secondary" onclick="SLLeeCounty.quickFamilyCheck('${l.booking_number}', '${encodeURIComponent(l.full_name)}')">
                 👪 Family (${l.booking_number ? 'Scan' : '—'})
               </button>
+              ${clerkQuery ? `
+                <a href="https://matrix.leeclerk.org/Home/Search?query=${clerkQuery}" target="_blank" class="lee-btn lee-btn-secondary" style="text-decoration:none; display:inline-flex; align-items:center; gap:4px; font-size:11px;" title="Search Lee County Clerk docket">
+                  🏛️ LeeClerk
+                </a>
+              ` : ''}
             </div>
           </div>
         `;
@@ -396,4 +424,12 @@
   };
 
   window.SLLeeCounty = SLLeeCounty;
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const tab = document.getElementById('tabLeeCounty');
+    if (tab && (tab.classList.contains('active') || window.location.search.includes('tab=tabLeeCounty'))) {
+      SLLeeCounty.init();
+    }
+  });
 })(window);
+

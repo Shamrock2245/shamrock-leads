@@ -151,7 +151,10 @@ async def get_lee_county_overview(db) -> Dict[str, Any]:
     bond_ready_count = await arrests_col.count_documents({
         "$and": [
             lee_filter,
-            {"total_bond": {"$gte": min_bond}},
+            {"$or": [
+                {"total_bond": {"$gte": min_bond}},
+                {"bond_amount": {"$gte": min_bond}},
+            ]},
             {"lead_score": {"$gte": min_score}},
         ]
     })
@@ -161,8 +164,10 @@ async def get_lee_county_overview(db) -> Dict[str, Any]:
         "$and": [
             lee_filter,
             {"$or": [
-                {"total_bond": {"$in": [0, 0.0, None]}},
-                {"total_bond": {"$exists": False}},
+                {"$and": [
+                    {"$or": [{"total_bond": {"$in": [0, 0.0, None]}}, {"total_bond": {"$exists": False}}]},
+                    {"$or": [{"bond_amount": {"$in": [0, 0.0, None]}}, {"bond_amount": {"$exists": False}}]},
+                ]},
                 {"charges.bond": {"$in": [0, "0", "NO BOND", "No Bond", "None"]}},
             ]}
         ]
@@ -171,7 +176,7 @@ async def get_lee_county_overview(db) -> Dict[str, Any]:
     # Sum of active bond pool
     pipeline = [
         {"$match": lee_filter},
-        {"$group": {"_id": None, "total_pool": {"$sum": "$total_bond"}}}
+        {"$group": {"_id": None, "total_pool": {"$sum": {"$ifNull": ["$total_bond", "$bond_amount", 0]}}}}
     ]
     cursor = arrests_col.aggregate(pipeline)
     pool_docs = await cursor.to_list(length=1)
@@ -222,17 +227,17 @@ async def get_lee_county_leads(
     match_clauses: List[Dict[str, Any]] = [lee_filter]
 
     if filter_type == "bond_ready":
-        match_clauses.append({"total_bond": {"$gt": 0}})
+        match_clauses.append({"$or": [{"total_bond": {"$gt": 0}}, {"bond_amount": {"$gt": 0}}]})
         match_clauses.append({"lead_score": {"$gte": 60}})
     elif filter_type == "hot":
         match_clauses.append({"lead_score": {"$gte": 75}})
     elif filter_type == "first_appearance":
-        match_clauses.append({"$or": [
-            {"total_bond": {"$in": [0, 0.0, None]}},
-            {"total_bond": {"$exists": False}},
+        match_clauses.append({"$and": [
+            {"$or": [{"total_bond": {"$in": [0, 0.0, None]}}, {"total_bond": {"$exists": False}}]},
+            {"$or": [{"bond_amount": {"$in": [0, 0.0, None]}}, {"bond_amount": {"$exists": False}}]},
         ]})
     elif filter_type == "high_value":
-        match_clauses.append({"total_bond": {"$gte": 2500}})
+        match_clauses.append({"$or": [{"total_bond": {"$gte": 2500}}, {"bond_amount": {"$gte": 2500}}]})
     elif filter_type == "contacted":
         match_clauses.append({"lee_outreach.status": "sent"})
 
@@ -244,13 +249,14 @@ async def get_lee_county_leads(
                 {"last_name": {"$regex": s, "$options": "i"}},
                 {"booking_number": {"$regex": s, "$options": "i"}},
                 {"charges.charge": {"$regex": s, "$options": "i"}},
+                {"charges": {"$regex": s, "$options": "i"}},
             ]
         })
 
     query = {"$and": match_clauses} if len(match_clauses) > 1 else match_clauses[0]
     total = await arrests_col.count_documents(query)
 
-    cursor = arrests_col.find(query).sort([("scraped_at", -1), ("booking_date", -1)]).skip(skip).limit(limit)
+    cursor = arrests_col.find(query).sort([("booking_date", -1), ("booking_time", -1), ("_id", -1)]).skip(skip).limit(limit)
     raw_leads = await cursor.to_list(length=limit)
 
     leads = []
@@ -259,10 +265,20 @@ async def get_lee_county_leads(
         booking_no = str(doc.get("booking_number") or doc.get("booking_no") or "")
         first_name = doc.get("first_name") or ""
         last_name = doc.get("last_name") or ""
-        full_name = f"{first_name} {last_name}".strip() or doc.get("defendant_name") or "Unknown"
-        total_bond = float(doc.get("total_bond") or 0.0)
+        full_name = f"{first_name} {last_name}".strip() or doc.get("defendant_name") or doc.get("full_name") or "Unknown"
+        total_bond = float(doc.get("total_bond") or doc.get("bond_amount") or 0.0)
         lead_score = int(doc.get("lead_score") or doc.get("score") or 50)
-        charges = doc.get("charges") or []
+
+        charges_raw = doc.get("charges") or []
+        if isinstance(charges_raw, str):
+            charges = [{"charge": c.strip()} for c in charges_raw.split("|") if c.strip()]
+        elif isinstance(charges_raw, list):
+            charges = [
+                c if isinstance(c, dict) else {"charge": str(c)}
+                for c in charges_raw
+            ]
+        else:
+            charges = []
 
         # Calculate terms
         terms = calculate_make_it_work_terms(total_bond)
@@ -286,7 +302,7 @@ async def get_lee_county_leads(
             "first_name": first_name,
             "last_name": last_name,
             "county": "Lee",
-            "facility": LEE_FACILITY_NAME,
+            "facility": doc.get("facility") or LEE_FACILITY_NAME,
             "booking_date": doc.get("booking_date") or doc.get("scraped_at") or "",
             "total_bond": total_bond,
             "lead_score": lead_score,
@@ -295,6 +311,9 @@ async def get_lee_county_leads(
             "terms": terms,
             "outreach": outreach_info,
             "mugshot_url": doc.get("mugshot_url") or doc.get("image_url") or "",
+            "case_number": doc.get("case_number") or "",
+            "court_date": doc.get("court_date") or "",
+            "court_location": doc.get("court_location") or "",
         })
 
     return {

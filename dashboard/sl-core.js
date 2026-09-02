@@ -296,6 +296,7 @@ function switchTab(btn) {
   if (tabId === 'tabHealth') renderHealth();
   if (tabId === 'tabAnalytics') { if (typeof SLAnalytics !== 'undefined') SLAnalytics.load(); }
   if (tabId === 'tabCalendar') { if (typeof SLCalendar !== 'undefined') SLCalendar.load(); }
+  if (tabId === 'tabLeeCounty') { if (typeof SLLeeCounty !== 'undefined') SLLeeCounty.init(); }
 
   // Re-trigger GSAP counter animation for Multi-State Ops state-card metrics
   // when the tab becomes visible (metrics are injected dynamically after init).
