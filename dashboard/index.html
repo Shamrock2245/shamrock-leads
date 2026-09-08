@@ -2,7 +2,7 @@
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
   <title>ShamrockLeads — Intelligence Dashboard</title>
   <!-- Shamrock Fine Bail Bonds Crest Favicon & Touch Icon -->
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
@@ -3968,7 +3968,7 @@
 /* ── Generate Modal ── */
 .portal-modal-overlay {
   position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:10002;
-  display:flex; align-items:center; justify-content:center; backdrop-filter:blur(4px);
+  display:flex; align-items:center; justify-content:center; -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px);
 }
 .portal-modal {
   background:var(--bg-card,#1e293b); border:1px solid var(--border,#334155);
@@ -4390,7 +4390,7 @@
 #acctPagination{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-top:1px solid var(--border)}
 
 /* Modals */
-.acct-modal{display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);backdrop-filter:blur(8px);align-items:center;justify-content:center;padding:20px}
+.acct-modal{display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);align-items:center;justify-content:center;padding:20px}
 .acct-modal-box{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:28px;width:100%;max-width:520px;max-height:85vh;overflow-y:auto;box-shadow:0 24px 48px rgba(0,0,0,.4)}
 .acct-modal-title{font-size:18px;font-weight:700;color:var(--text);margin-bottom:20px;display:flex;align-items:center;gap:8px}
 .acct-field{margin-bottom:14px}
@@ -5249,7 +5249,7 @@
           <div class="inv-modal-body">
             <div style="background:rgba(15,23,42,0.8);border:1px solid rgba(56,189,248,0.3);border-radius:8px;padding:14px;margin-bottom:16px;text-align:center;">
               <div style="font-size:12px;color:#94a3b8">Online Payment Link</div>
-              <a href="https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd" target="_blank" style="font-family:monospace;font-size:12px;color:#38bdf8;word-break:break-all;display:block;margin:6px 0;">https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd</a>
+              <a href="https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd" target="_blank" rel="noopener noreferrer" style="font-family:monospace;font-size:12px;color:#38bdf8;word-break:break-all;display:block;margin:6px 0;">https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd</a>
               <div style="font-size:11px;color:#94a3b8">Send this payment link directly to indemnitor / defendant</div>
             </div>
 
@@ -5276,7 +5276,7 @@
             </div>
           </div>
           <div class="inv-modal-footer" style="display:flex;justify-content:space-between;gap:10px">
-            <a href="https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd" target="_blank" class="btn btn-secondary">Open Terminal Page</a>
+            <a href="https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd" target="_blank" rel="noopener noreferrer" class="btn btn-secondary">Open Terminal Page</a>
             <button type="button" class="btn btn-primary" onclick="SLPaperwork.sendSwipeSimpleLink()">📱📧 Send Payment Request</button>
           </div>
         </div>
@@ -6424,7 +6424,7 @@
 </div>
 
 <!-- ═══ OMNIBAR (COMMAND PALETTE) ═══ -->
-<div id="omnibarOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10002;align-items:flex-start;justify-content:center;padding-top:10vh;backdrop-filter:blur(4px)">
+<div id="omnibarOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:10002;align-items:flex-start;justify-content:center;padding-top:10vh;-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)">
   <div style="background:var(--bg-card,#1e293b);width:600px;max-width:90vw;border-radius:12px;border:1px solid var(--border,#334155);box-shadow:0 20px 60px rgba(0,0,0,0.5);overflow:hidden;display:flex;flex-direction:column">
     <div style="padding:16px;border-bottom:1px solid var(--border,#334155);display:flex;align-items:center;gap:12px">
       <span style="font-size:1.2rem;color:var(--text-muted,#94a3b8)">🔍</span>
