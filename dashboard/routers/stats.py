@@ -593,7 +593,15 @@ async def api_overview_stats():
     total = await arrests.count_documents({})
     counties = await arrests.distinct("county")
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    today_count = await arrests.count_documents({"created_at": {"$gte": today_start}})
+    today_str_iso = today_start.strftime("%Y-%m-%d")
+    today_str_us = today_start.strftime("%m/%d/%Y")
+    today_count = await arrests.count_documents({
+        "$or": [
+            {"first_seen_at": {"$gte": today_start}},
+            {"booking_date": {"$in": [today_str_iso, today_str_us]}},
+            {"arrest_date": {"$in": [today_str_iso, today_str_us]}},
+        ]
+    })
     bond_stats = []
     async for r in arrests.aggregate([
         {"$match": {"bond_amount": {"$gt": 0}}},

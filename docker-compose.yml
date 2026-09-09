@@ -235,7 +235,7 @@ services:
       - TRACCAR_OSMAND_URL=${TRACCAR_OSMAND_URL:-http://traccar:5055}
       - TRACCAR_PUBLIC_HOST=${TRACCAR_PUBLIC_HOST:-leads.shamrockbailbonds.biz}
     ports:
-      - "8088:5050"                     # Dashboard UI (external 8088)
+      - "127.0.0.1:8088:5050"           # Dashboard UI (proxied by local Nginx)
     depends_on:
       - shamrock-leads
       - osint-worker
@@ -279,7 +279,7 @@ services:
       - traccar-logs:/opt/traccar/logs         # Server logs
       - ./config/traccar/traccar.xml:/opt/traccar/conf/traccar.xml:ro  # Custom config
     ports:
-      - "8082:8082"                            # Traccar REST API + Web UI
+      - "127.0.0.1:8082:8082"                  # Traccar REST API + Web UI (local / proxied only)
       - "5055:5055"                            # OsmAnd protocol (phone app tracking)
       - "5055:5055/udp"                        # OsmAnd UDP
       - "5001:5001"                            # GPS103/TK103 (vehicle trackers)
@@ -317,7 +317,7 @@ services:
     volumes:
       - node-red-data:/data             # Persistent flows + config
     ports:
-      - "1880:1880"                     # Node-RED dashboard
+      - "127.0.0.1:1880:1880"           # Node-RED dashboard (local / SSH / Tailscale only)
     networks:
       - shamrock-net
     healthcheck:
@@ -360,7 +360,7 @@ services:
     volumes:
       - ./creds:/app/creds:ro             # GCP service account (Gmail scanner)
     ports:
-      - "8089:5060"                       # Social Engine API (external 8089)
+      - "127.0.0.1:8089:5060"             # Social Engine API (proxied by local Nginx)
     depends_on:
       - dashboard
     healthcheck:
@@ -437,7 +437,7 @@ services:
       TIKTOK_CLIENT_ID: "${TIKTOK_CLIENT_ID:-}"
       TIKTOK_CLIENT_SECRET: "${TIKTOK_CLIENT_SECRET:-}"
     ports:
-      - "5200:5000"                       # Postiz UI + API (external 5200)
+      - "127.0.0.1:5200:5000"             # Postiz UI + API (proxied by local Nginx)
     volumes:
       - postiz-config:/config
       - postiz-uploads:/uploads
@@ -488,7 +488,7 @@ services:
     ports:
       - "7001:7001"                       # frpc control plane (7000 = APE Warren)
       - "7500:7500"                       # frps dashboard (restrict via firewall)
-      - "12434:12434"                     # BlueBubbles TCP (or bind 127.0.0.1 only)
+      - "127.0.0.1:12434:12434"           # BlueBubbles TCP (bind 127.0.0.1 only)
       - "12222:12222"                     # Office iMac SSH via frpc
     networks:
       - shamrock-net
@@ -662,7 +662,7 @@ services:
       FORCE_SSL: "true"
       # Optional branding: configure in DocuSeal admin after first login
     ports:
-      - "5300:3000"
+      - "127.0.0.1:5300:3000"             # DocuSeal (proxied by local Nginx)
     volumes:
       - docuseal-data:/data/docuseal
     depends_on:
@@ -751,7 +751,7 @@ services:
       FREESOUND_CLIENT_ID: "${FREESOUND_CLIENT_ID:-unused}"
       FREESOUND_API_KEY: "${FREESOUND_API_KEY:-unused}"
     ports:
-      - "5320:3000"
+      - "127.0.0.1:5320:3000"             # OpenCut (proxied by local Nginx)
     depends_on:
       opencut-postgres:
         condition: service_healthy

@@ -144,6 +144,12 @@ class MongoWriter:
         )
         self._safe_create_index(
             self.arrests,
+            [("first_seen_at", ASCENDING)],
+            name="idx_first_seen_at",
+            sparse=True,
+        )
+        self._safe_create_index(
+            self.arrests,
             [("scraped_at", DESCENDING)],
             name="idx_scraped_at",
             sparse=True,
@@ -268,6 +274,10 @@ class MongoWriter:
                 if extra.get("ml_score") is not None:
                     doc["ml_score"] = extra["ml_score"]
 
+            # Ensure created_at / first_seen_at are NEVER overwritten in $set
+            doc.pop("created_at", None)
+            doc.pop("first_seen_at", None)
+
             operations.append(
                 UpdateOne(
                     {
@@ -280,6 +290,7 @@ class MongoWriter:
                         "$set": doc,
                         "$setOnInsert": {
                             "created_at": now,
+                            "first_seen_at": now,
                         },
                     },
                     upsert=True,

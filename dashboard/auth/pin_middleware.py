@@ -45,11 +45,16 @@ COOKIE_MAX_AGE = 60 * 60 * 24 * 7  # 7 days
 # NOTE: "/" is NOT open by default — staff dashboard requires PIN.
 # Indemnitor portal host (paperwork.*) is handled host-aware in dispatch().
 OPEN_PATHS = frozenset({
-    "/done", "/paperwork", "/login", "/health", "/health/live", "/api/stats",
-    "/api/imessage/status",
-    "/api/ops/shannon-health",
-    "/docs", "/redoc", "/openapi.json",
-    "/manifest.json", "/favicon.ico", "/favicon.png", "/apple-touch-icon.png", "/shamrock-logo.png",
+    "/done",
+    "/paperwork",
+    "/login",
+    "/health",
+    "/health/live",
+    "/manifest.json",
+    "/favicon.ico",
+    "/favicon.png",
+    "/apple-touch-icon.png",
+    "/shamrock-logo.png",
 })
 
 # Hostnames that serve the public indemnitor PIN portal (not staff CRM)
@@ -61,13 +66,11 @@ PAPERWORK_HOST_MARKERS = (
 # File extensions that are always public (static assets)
 _STATIC_EXTENSIONS = (
     ".js", ".css", ".ico", ".png", ".jpg", ".jpeg", ".svg", ".woff", ".woff2",
-    ".ttf", ".eot", ".webp", ".gif", ".json",
+    ".ttf", ".eot", ".webp", ".gif",
 )
 
 # Prefixes that bypass auth
 OPEN_PREFIXES = (
-    "/api/webhooks/",
-    "/api/automation/",
     "/g/",
     "/c/",
     "/sign/",
@@ -183,6 +186,31 @@ def session_is_god_admin(request: Request) -> bool:
 
 # ── Middleware ─────────────────────────────────────────────────────────────────
 
+def is_machine_auth_valid(request: Request) -> bool:
+    """Verify machine request against GAS_API_KEY or LEADS_INTERNAL_TOKEN."""
+    gas = (os.getenv("GAS_API_KEY") or "").strip()
+    internal = (
+        os.getenv("LEADS_INTERNAL_TOKEN")
+        or os.getenv("INTERNAL_API_TOKEN")
+        or ""
+    ).strip()
+    provided = (
+        request.headers.get("X-API-Key")
+        or request.headers.get("X-Api-Key")
+        or request.headers.get("X-Internal-Token")
+        or request.query_params.get("api_key")
+        or ""
+    ).strip()
+    if not provided:
+        return False
+    import secrets
+    if gas and secrets.compare_digest(provided, gas):
+        return True
+    if internal and secrets.compare_digest(provided, internal):
+        return True
+    return False
+
+
 def _is_paperwork_host(request: Request) -> bool:
     """True when request is for the public indemnitor portal host."""
     host = (request.headers.get("host") or request.url.hostname or "").lower()
@@ -204,6 +232,21 @@ class PinAuthMiddleware(BaseHTTPMiddleware):
 
         # Indemnitor host: public root portal pages (not staff CRM)
         if path == "/" and _is_paperwork_host(request):
+            return await call_next(request)
+
+        # Webhooks: incoming POST/PUT/PATCH webhooks (DocuSeal, Twilio, BlueBubbles, Stripe)
+        # stay public, but PIN-gate GET/HEAD/DELETE under /api/webhooks/ (e.g. /status or /history)
+        if path.startswith("/api/webhooks/"):
+            if request.method in ("GET", "HEAD", "DELETE") and (
+                path.endswith("/status") or path.endswith("/history")
+            ):
+                pass  # Fall through to staff session check below
+            elif request.method in ("POST", "PUT", "PATCH"):
+                return await call_next(request)
+
+        # Machine routes (Node-RED, Shannon, external crons, automation sweeps):
+        # Allow requests with valid GAS_API_KEY or LEADS_INTERNAL_TOKEN
+        if is_machine_auth_valid(request):
             return await call_next(request)
 
         if path in OPEN_PATHS or any(path.startswith(p) for p in OPEN_PREFIXES):
@@ -254,7 +297,7 @@ class PinAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Not authenticated
-        if path.startswith("/api/"):
+        if path.startswith("/api/") or path == "/openapi.json":
             return JSONResponse({"error": "Authentication required"}, status_code=401)
         return RedirectResponse(login_redirect_location(path, request.url.query), status_code=302)
 
