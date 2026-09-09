@@ -114,11 +114,14 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
 
     now = datetime.now(timezone.utc)
 
-    # -- 1. HMAC signature validation (optional -- skip if secret not set) -----
+    # -- 1. HMAC signature validation / Auth check ---------------------------
     webhook_secret = os.getenv("SWIPESIMPLE_WEBHOOK_SECRET", "")
     if webhook_secret:
         raw_body = await request.body()
         sig_header = request.headers.get("X-SwipeSimple-Signature", "")
+        if not sig_header:
+            logger.warning("[payment_webhook] Missing SwipeSimple signature — rejecting")
+            return JSONResponse({"error": "Missing signature header"}, status_code=401)
         expected_sig = hmac.new(
             webhook_secret.encode(),
             raw_body,
@@ -127,10 +130,28 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         if not hmac.compare_digest(expected_sig, sig_header):
             logger.warning("[payment_webhook] Invalid SwipeSimple signature — rejecting")
             return JSONResponse({"error": "Invalid signature"}, status_code=401)
+    elif os.getenv("ENVIRONMENT") == "production":
+        logger.warning("[payment_webhook] Rejected — SWIPESIMPLE_WEBHOOK_SECRET not configured")
+        return JSONResponse({"error": "Webhook secret not configured"}, status_code=503)
 
-    data = await request.json() or {}
+    # -- 2. Payload validation (fail closed on empty or invalid payload) -------
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid or empty JSON body"}, status_code=400)
 
-    # -- 2. Parse booking number -----------------------------------------------
+    if not data or not isinstance(data, dict):
+        return JSONResponse({"error": "Empty payload"}, status_code=400)
+
+    event_type = data.get("event_type")
+    transaction_id = data.get("transaction_id")
+    if not event_type or not transaction_id:
+        return JSONResponse(
+            {"error": "Missing required fields: event_type and transaction_id"},
+            status_code=400,
+        )
+
+    # -- 3. Parse booking number -----------------------------------------------
     custom_fields = data.get("custom_fields", {})
     booking_number = (
         custom_fields.get("booking_number")
@@ -259,7 +280,14 @@ async def wix_intake_webhook(request: Request, api_key: str = Query(default=""))
         logger.warning("[wix_intake_webhook] Unauthorized — invalid secret")
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
 
-    data = await request.json() or {}
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid or empty JSON body"}, status_code=400)
+
+    if not data or not isinstance(data, dict):
+        return JSONResponse({"error": "Empty or invalid JSON body"}, status_code=400)
+
     now_iso = datetime.now(timezone.utc).isoformat()
 
     audit_events = get_collection("audit_events")

@@ -202,6 +202,99 @@ def _extract_defendant(data: dict) -> dict:
     }
 
 
+async def _normalize_intake(data: dict, source: str = "wix_webhook") -> tuple[str, dict]:
+    """
+    Normalize and persist an intake record from any source dictionary.
+    Returns (intake_id, intake_doc).
+    """
+    source_canonical = _normalize_source(source)
+    indemnitor = _extract_indemnitor(data)
+    defendant = _extract_defendant(data)
+
+    ind_full_name = (
+        " ".join(
+            filter(
+                None,
+                [indemnitor.get("firstName"), indemnitor.get("middleName"), indemnitor.get("lastName")],
+            )
+        )
+        or str(data.get("indemnitorName") or data.get("indemnitor_name") or data.get("caller_name") or "").strip()
+        or "Unknown"
+    )
+    def_full_name = defendant["name"] or " ".join(filter(None, [defendant["firstName"], defendant["lastName"]])) or "Unknown"
+
+    prefix_map = {
+        "telegram": "TG",
+        "telegram_mini_app": "TG",
+        "wix_portal": "WX",
+        "wix_webhook": "WX",
+        "walk_in": "WI",
+        "phone_call": "PC",
+        "elevenlabs_voice": "SH",
+        "shannon": "SH",
+        "bookmarklet": "BK",
+        "manual_entry": "ME",
+        "shamrock-leads-dashboard": "SL",
+    }
+    prefix = prefix_map.get(source_canonical, "IN")
+    intake_id = (
+        data.get("intakeId")
+        or data.get("caseId")
+        or data.get("intake_id")
+        or f"{prefix}-{uuid.uuid4().hex[:10].upper()}"
+    )
+
+    now = datetime.now(timezone.utc)
+
+    doc = {
+        "intake_id": intake_id,
+        "source": source_canonical,
+        "source_label": SOURCE_LABELS.get(source_canonical, source_canonical),
+        "status": "pending",
+        "created_at": now,
+        "updated_at": now,
+        "indemnitor": indemnitor,
+        "indemnitor_name": ind_full_name,
+        "indemnitor_email": indemnitor.get("email", ""),
+        "indemnitor_phone": indemnitor.get("phone", ""),
+        "defendant": defendant,
+        "defendant_name": def_full_name,
+        "defendant_booking_number": defendant.get("bookingNumber", ""),
+        "defendant_county": defendant.get("county", ""),
+        "defendant_facility": defendant.get("facility", ""),
+        "consent_given": bool(data.get("consent") or data.get("consentGiven")),
+        "consent_timestamp": data.get("consentTimestamp", now.isoformat()),
+        "telegram_user_id": data.get("telegramUserId", ""),
+        "telegram_username": data.get("telegramUsername", ""),
+        "gps_latitude": data.get("gpsLatitude"),
+        "gps_longitude": data.get("gpsLongitude"),
+        "manual_location": data.get("manualLocation"),
+        "ai_risk": "",
+        "ai_score": None,
+        "ai_rationale": "",
+        "gas_sync_status": "pending",
+        "gas_sync_timestamp": None,
+        "matched_booking_number": None,
+        "matched_county": None,
+        "matched_defendant_id": None,
+        "match_confidence": None,
+        "match_strategy": None,
+        "match_timestamp": None,
+        "surety_id": (data.get("surety_id") or data.get("SuretyID") or "osi").lower().strip(),
+        "paperwork_packet_id": None,
+        "paperwork_status": None,
+        "_raw": data,
+    }
+
+    intake_queue = get_collection("intake_queue")
+    await intake_queue.update_one(
+        {"intake_id": intake_id},
+        {"$set": doc},
+        upsert=True,
+    )
+    return intake_id, doc
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  POST /api/intake/submit
 #  Accept a new indemnitor intake from any source

@@ -35,9 +35,6 @@ async def api_traccar_device_status(device_id: str):
         
         if device:
             last_seen = device.get("last_seen") or device.get("updated_at")
-            last_pos = device.get("last_position") or {}
-            lat = last_pos.get("lat")
-            lng = last_pos.get("lng")
             if last_seen:
                 online = True
 
@@ -46,8 +43,6 @@ async def api_traccar_device_status(device_id: str):
             "device_id": device_id,
             "connected": online,
             "last_seen": last_seen,
-            "lat": lat,
-            "lng": lng,
         }
     except Exception as e:
         logger.error("Failed to check device status: %s", e)

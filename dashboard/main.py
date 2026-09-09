@@ -232,8 +232,8 @@ async def health():
     from dashboard.routers import FAILED_ROUTER_MODULES
     try:
         arrests = get_collection("arrests")
-        total = await arrests.estimated_document_count()
-        body = {"status": "ok", "engine": "fastapi", "total_arrests": total}
+        await arrests.database.command("ping")
+        body = {"status": "ok", "engine": "fastapi", "database": "connected"}
         if FAILED_ROUTER_MODULES:
             # A failed router module silently removes its endpoint group —
             # degrade health so ops sees the gap instead of a green check.
@@ -242,7 +242,7 @@ async def health():
             return JSONResponse(body, status_code=503)
         return body
     except Exception:
-        return JSONResponse({"status": "degraded", "engine": "fastapi"}, status_code=503)
+        return JSONResponse({"status": "degraded", "engine": "fastapi", "database": "unreachable"}, status_code=503)
 
 
 @app.get("/health/live", tags=["infra"])

@@ -282,10 +282,6 @@ services:
       - "127.0.0.1:8082:8082"                  # Traccar REST API + Web UI (local / proxied only)
       - "5055:5055"                            # OsmAnd protocol (phone app tracking)
       - "5055:5055/udp"                        # OsmAnd UDP
-      - "5001:5001"                            # GPS103/TK103 (vehicle trackers)
-      - "5013:5013"                            # H02 (personal/ankle trackers)
-      - "5023:5023"                            # GT06 (OBD2 vehicle)
-      - "5027:5027"                            # Teltonika (professional fleet)
     networks:
       - shamrock-net
     healthcheck:

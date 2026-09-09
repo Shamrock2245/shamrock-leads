@@ -162,3 +162,65 @@ def test_mongo_writer_strictly_sets_created_at_on_insert():
     assert "first_seen_at" not in set_doc
     assert "created_at" in set_on_insert
     assert "first_seen_at" in set_on_insert
+
+
+def test_traccar_device_status_requires_pin():
+    """GET /api/traccar/device-status/{id} must be gated and return 401 without auth."""
+    resp = client.get("/api/traccar/device-status/12345")
+    assert resp.status_code == 401
+    assert resp.json().get("error") == "Authentication required"
+
+
+def test_health_endpoint_drops_total_arrests():
+    """GET /health must verify connectivity but not publish total_arrests publicly."""
+    with patch("dashboard.main.get_collection") as mock_get_col:
+        mock_col = MagicMock()
+        mock_db = MagicMock()
+        mock_db.command = AsyncMock(return_value={"ok": 1})
+        mock_col.database = mock_db
+        mock_get_col.return_value = mock_col
+
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data.get("status") == "ok"
+        assert "total_arrests" not in data
+        assert data.get("database") == "connected"
+
+
+def test_payment_webhook_rejects_empty_and_invalid_payload():
+    """POST /api/webhooks/payment must fail closed on empty/invalid payload."""
+    # Empty body -> 400
+    resp = client.post("/api/webhooks/payment", json={})
+    assert resp.status_code == 400
+    assert "payload" in resp.json().get("error", "").lower()
+
+    # Dummy body missing event_type / transaction_id -> 400
+    resp = client.post("/api/webhooks/payment", json={"hello": "world"})
+    assert resp.status_code == 400
+    assert "Missing required fields" in resp.json().get("error", "")
+
+
+def test_payment_webhook_validates_signature_when_configured():
+    """POST /api/webhooks/payment must enforce signature when secret is set."""
+    with patch.dict(os.environ, {"SWIPESIMPLE_WEBHOOK_SECRET": "supersecretkey"}):
+        # Missing signature
+        resp = client.post(
+            "/api/webhooks/payment",
+            json={"event_type": "payment.completed", "transaction_id": "tx_123"},
+        )
+        assert resp.status_code == 401
+        assert "signature" in resp.json().get("error", "").lower()
+
+
+def test_wix_intake_webhook_rejects_empty_payload():
+    """POST /api/webhooks/wix-intake with valid key but empty body must return 400."""
+    with patch.dict(os.environ, {"WIX_WEBHOOK_SECRET": "wix-sec-123"}):
+        resp = client.post(
+            "/api/webhooks/wix-intake",
+            headers={"X-Wix-Webhook-Secret": "wix-sec-123"},
+            json={},
+        )
+        assert resp.status_code == 400
+        assert "empty" in resp.json().get("error", "").lower()
+

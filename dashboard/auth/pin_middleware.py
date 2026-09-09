@@ -79,7 +79,6 @@ OPEN_PREFIXES = (
     "/paperwork",
     "/api/config/bluebubbles-url",
     "/traccar/setup/",
-    "/api/traccar/device-status/",
     "/track/",  # Trape skip-trace lure (captures IP, then redirects)
     # Shannon / Wix clipboard machine routes: pin skip, then route-level GAS_API_KEY / LEADS_INTERNAL_TOKEN
     "/api/agent-brain/memory/",
