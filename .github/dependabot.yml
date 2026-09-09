@@ -21,3 +21,6 @@ updates:
     open-pull-requests-limit: 3
     labels:
       - dependencies
+    ignore:
+      - dependency-name: "python"
+
