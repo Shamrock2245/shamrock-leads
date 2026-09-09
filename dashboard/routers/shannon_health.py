@@ -83,7 +83,7 @@ async def collect_shannon_path_checks() -> dict:
     gas = (os.getenv("GAS_WEB_APP_URL") or "").rstrip("/")
     if gas:
         try:
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
                 r = await client.get(gas, params={"action": "health"})
             checks["gas_health"] = {"ok": r.status_code < 500, "status": r.status_code}
             ok = ok and checks["gas_health"]["ok"]
