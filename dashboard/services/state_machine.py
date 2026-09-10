@@ -172,6 +172,13 @@ class BondStateMachine:
                 from dashboard.services.task_engine import TaskEngine
                 await TaskEngine.schedule_compliance_tasks(booking_number)
 
+            if new_status in ("active", "monitoring"):
+                try:
+                    from dashboard.services.auto_osint_trigger import trigger_auto_osint_profiling
+                    await trigger_auto_osint_profiling(current_bond, actor=actor)
+                except Exception as exc:
+                    logger.warning("[transition_bond] Auto-OSINT trigger error: %s", exc)
+
             from dashboard.routers.events import publish_event
             await publish_event("bond_status_changed", {
                 "booking_number": booking_number,

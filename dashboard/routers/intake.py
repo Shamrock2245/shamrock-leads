@@ -198,6 +198,21 @@ def _extract_defendant(data: dict) -> dict:
         "city":          g("defendantCity", "city"),
         "state":         g("defendantState", "state") or "FL",
         "zip":           g("defendantZip", "zip", "zip_code"),
+        "phone":         g("defendantPhone", "DefPhone", "defPhone", "phone"),
+        "email":         g("defendantEmail", "DefEmail", "defEmail", "email"),
+        # Secondary Anchors & Skip Trace Metadata
+        "employer":      g("defendantEmployer", "DefEmployer", "defEmployer", "employer"),
+        "employerPhone": g("defendantEmployerPhone", "DefEmployerPhone", "defEmployerPhone", "employerPhone"),
+        "employerAddress": g("defendantEmployerAddress", "DefEmployerAddress", "defEmployerAddress", "employerAddress"),
+        "vehicleMake":   g("defendantVehicleMake", "vehicleMake", "vehicle_make", "make"),
+        "vehicleModel":  g("defendantVehicleModel", "vehicleModel", "vehicle_model", "model"),
+        "vehicleYear":   g("defendantVehicleYear", "vehicleYear", "vehicle_year", "year"),
+        "vehicleColor":  g("defendantVehicleColor", "vehicleColor", "vehicle_color", "color"),
+        "vehiclePlate":  g("defendantVehiclePlate", "vehiclePlate", "vehicle_plate", "plate", "licensePlate", "license_plate"),
+        "vehicleVIN":    g("defendantVehicleVIN", "vehicleVIN", "vehicle_vin", "vin", "VIN"),
+        "emergencyName": g("defendantEmergencyName", "emergencyContactName", "emergency_contact_name", "emergencyName"),
+        "emergencyPhone": g("defendantEmergencyPhone", "emergencyContactPhone", "emergency_contact_phone", "emergencyPhone"),
+        "emergencyRelation": g("defendantEmergencyRelation", "emergencyContactRelation", "emergency_contact_relation", "emergencyRelation"),
         "charge_details": charges_raw if isinstance(charges_raw, list) else [],
     }
 
@@ -990,6 +1005,21 @@ async def intake_promote(request: Request, intake_id: str):
         "indemnitor_phone": intake_doc.get("indemnitor_phone", ind.get("phone", "")),
         "indemnitor_email": intake_doc.get("indemnitor_email", ind.get("email", "")),
         "indemnitor_relationship": ind.get("relationship", ""),
+        # Defendant contact & secondary anchors
+        "defendant_phone": def_.get("phone") or "",
+        "defendant_email": def_.get("email") or "",
+        "employer_name": def_.get("employer") or "",
+        "employer_phone": def_.get("employerPhone") or "",
+        "employer_address": def_.get("employerAddress") or "",
+        "vehicle_make": def_.get("vehicleMake") or "",
+        "vehicle_model": def_.get("vehicleModel") or "",
+        "vehicle_year": def_.get("vehicleYear") or "",
+        "vehicle_color": def_.get("vehicleColor") or "",
+        "vehicle_plate": def_.get("vehiclePlate") or "",
+        "vehicle_vin": def_.get("vehicleVIN") or "",
+        "emergency_contact_name": def_.get("emergencyName") or "",
+        "emergency_contact_phone": def_.get("emergencyPhone") or "",
+        "emergency_contact_relation": def_.get("emergencyRelation") or "",
         # Matching metadata
         "match_confidence": match_confidence,
         "match_strategy": intake_doc.get("match_strategy"),
@@ -1012,6 +1042,35 @@ async def intake_promote(request: Request, intake_id: str):
         "[intake] PROMOTED %s → active bond: %s (%s, %s, $%.2f, POA %s)",
         intake_id, matched_booking, defendant_name, surety.upper(), bond_amount, poa_number,
     )
+
+    # ── 7b. Register Vehicle Watch if vehicle plate is provided ──────────────
+    if bond_doc.get("vehicle_plate"):
+        try:
+            from dashboard.services.geo_intelligence import GeoIntelligenceService
+            geo_svc = GeoIntelligenceService()
+            vehicle_info = {
+                "make": bond_doc.get("vehicle_make", ""),
+                "model": bond_doc.get("vehicle_model", ""),
+                "year": bond_doc.get("vehicle_year", ""),
+                "color": bond_doc.get("vehicle_color", ""),
+                "plate": bond_doc.get("vehicle_plate", ""),
+                "vin": bond_doc.get("vehicle_vin", ""),
+            }
+            await geo_svc.add_vehicle_watch(
+                booking_number=matched_booking,
+                vehicle_info=vehicle_info,
+                reason="Intake secondary anchor registration",
+            )
+            logger.info("[intake] Auto-registered vehicle watch for %s (%s)", matched_booking, bond_doc.get("vehicle_plate"))
+        except Exception as v_err:
+            logger.warning("[intake] Failed to auto-register vehicle watch: %s", v_err)
+
+    # ── 7c. Trigger Auto-OSINT Footprint Scan (Holehe, Ignorant, etc.) ────────
+    try:
+        from dashboard.services.auto_osint_trigger import trigger_auto_osint_profiling
+        trigger_auto_osint_profiling(bond_doc, actor="intake_promotion")
+    except Exception as osint_err:
+        logger.warning("[intake] Failed to dispatch auto-OSINT scan: %s", osint_err)
 
     # ── 8. Mark POA as assigned ──────────────────────────────────────────────
     await poa_inventory.update_one(

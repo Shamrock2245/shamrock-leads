@@ -48,8 +48,8 @@ DASHBOARD_DIR = os.path.dirname(os.path.dirname(__file__))
 # ══════════════════════════════════════════════════════════════════════════════
 
 @portal_bp.get("/c/{token}", response_class=HTMLResponse)
-async def portal_page(token: str):
-    """Serve the client portal HTML page."""
+async def portal_page(request: Request, token: str):
+    """Serve the client portal HTML page and record device footprint."""
     token_data = await validate_token(token)
     if not token_data:
         return HTMLResponse(
@@ -64,6 +64,43 @@ async def portal_page(token: str):
             await _error_page("Portal temporarily unavailable."),
             status_code=500,
         )
+
+    # ── Record client device footprint for lawful skip tracing / risk mitigation ──
+    try:
+        booking_number = token_data.get("booking_number")
+        if booking_number:
+            client_ip = (
+                request.headers.get("CF-Connecting-IP")
+                or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+                or request.client.host
+                if request.client
+                else "unknown"
+            )
+            user_agent = request.headers.get("User-Agent", "Unknown")
+            now_iso = datetime.now(timezone.utc).isoformat()
+            footprint_entry = {
+                "ip": client_ip,
+                "user_agent": user_agent,
+                "accessed_at": now_iso,
+                "role": token_data.get("role", "unknown"),
+                "token_id": token_data.get("token_id", ""),
+            }
+            active_bonds = get_collection("active_bonds")
+            await active_bonds.update_one(
+                {"booking_number": booking_number},
+                {
+                    "$push": {"device_footprints": {"$each": [footprint_entry], "$slice": -50}},
+                    "$set": {
+                        "last_seen_device": {
+                            "ip": client_ip,
+                            "user_agent": user_agent,
+                            "timestamp": now_iso,
+                        }
+                    },
+                },
+            )
+    except Exception as fp_err:
+        logger.warning("[portal] Failed to record device footprint: %s", fp_err)
 
     with open(portal_path, "r", encoding="utf-8") as f:
         html = f.read()

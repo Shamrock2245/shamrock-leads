@@ -307,13 +307,18 @@ async def api_record_bond(request: Request):
             "booking_number": booking_number,
             "defendant_name": defendant_name,
             "county": county,
-            "bond_amount": bond_amount,
             "premium": premium,
             "surety": surety.upper(),
             "poa_number": poa_number,
         })
     except Exception:
         pass
+
+    try:
+        from dashboard.services.auto_osint_trigger import trigger_auto_osint_profiling
+        await trigger_auto_osint_profiling(bond_doc, actor="record_bond")
+    except Exception as osint_err:
+        logger.warning("[record-bond] Auto-OSINT trigger warning: %s", osint_err)
 
     return {
         "success": True,
@@ -953,20 +958,65 @@ async def api_active_bonds_process_missed():
         overdue = await cursor.to_list(length=500)
         alerts = get_collection("bond_alerts")
         alert_docs = []
+        emails_sent = 0
+
         for bond in overdue:
+            b_num = bond["booking_number"]
             alert_docs.append({
-                "booking_number": bond["booking_number"],
+                "booking_number": b_num,
                 "alert_type": "missed_checkin",
                 "severity": "high",
                 "message": f"Missed check-in — due {bond.get('next_checkin_due')}",
                 "created_at": now,
             })
+
+            # Check if email fallback can be sent (if defendant or indemnitor email exists)
+            recipient_email = bond.get("defendant_email") or bond.get("indemnitor_email")
+            if recipient_email and "@" in recipient_email:
+                try:
+                    from dashboard.services.client_portal_service import generate_portal_token
+                    from dashboard.services.gmail_reader import GmailReader
+                    token_info = await generate_portal_token(b_num, role="defendant", ttl_days=3, created_by="missed_checkin_monitor")
+                    portal_url = token_info.get("url", "")
+                    def_name = bond.get("defendant_name", "Client")
+                    subject = f"URGENT: Required Bond Check-In Notice — {def_name}"
+                    body_text = (
+                        f"Hello {def_name},\n\n"
+                        f"Our records indicate that your required check-in for case #{b_num} is overdue.\n\n"
+                        f"Please use the following secure link immediately from your current device to complete your check-in:\n"
+                        f"{portal_url}\n\n"
+                        f"If you are having technical difficulties, contact Shamrock Bail Bonds immediately at (239) 334-2245.\n\n"
+                        f"Shamrock Bail Bonds Compliance Department"
+                    )
+                    body_html = f"""
+                    <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
+                        <h2 style="color: #c0392b; margin-top: 0;">URGENT: Mandatory Check-In Notice</h2>
+                        <p>Hello <strong>{def_name}</strong>,</p>
+                        <p>Our records indicate that your required bond check-in for case <code>{b_num}</code> is currently <strong>OVERDUE</strong>.</p>
+                        <p>Please click the button below from your smartphone, tablet, or computer to complete your verified check-in immediately:</p>
+                        <div style="text-align: center; margin: 30px 0;">
+                            <a href="{portal_url}" style="background-color: #00875A; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Complete Mandatory Check-In</a>
+                        </div>
+                        <p style="font-size: 13px; color: #666;">Or copy and paste this secure link into your browser:<br><a href="{portal_url}" style="color: #00875A;">{portal_url}</a></p>
+                        <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+                        <p style="font-size: 12px; color: #888;">If you are experiencing device or technical difficulties, you must contact our office immediately at <strong>(239) 334-2245</strong>.</p>
+                    </div>
+                    """
+                    gmail = GmailReader()
+                    res = gmail.send_email(to=recipient_email, subject=subject, body_text=body_text, body_html=body_html)
+                    if res.get("success"):
+                        emails_sent += 1
+                        logger.info("[bonds] Sent overdue check-in email fallback to %s for %s", recipient_email, b_num)
+                except Exception as mail_err:
+                    logger.warning("[bonds] Failed to send overdue check-in email for %s: %s", b_num, mail_err)
+
         if alert_docs:
             await alerts.insert_many(alert_docs)
         return {
             "success": True,
             "overdue_count": len(overdue),
             "alerts_created": len(alert_docs),
+            "emails_sent": emails_sent,
         }
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
