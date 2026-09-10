@@ -234,6 +234,8 @@ services:
       - TRACCAR_URL=${TRACCAR_URL:-http://traccar:8082}
       - TRACCAR_OSMAND_URL=${TRACCAR_OSMAND_URL:-http://traccar:5055}
       - TRACCAR_PUBLIC_HOST=${TRACCAR_PUBLIC_HOST:-leads.shamrockbailbonds.biz}
+      - TRACCAR_WEBHOOK_SECRET=${TRACCAR_WEBHOOK_SECRET:-}
+      - REQUIRE_TRACCAR_WEBHOOK_SECRET=${REQUIRE_TRACCAR_WEBHOOK_SECRET:-}
     ports:
       - "127.0.0.1:8088:5050"           # Dashboard UI (proxied by local Nginx)
     depends_on:
@@ -275,8 +277,13 @@ services:
     restart: unless-stopped
     hostname: traccar
     environment:
-      # Injected as forward.header; dashboard verifies TRACCAR_WEBHOOK_SECRET.
-      - CONFIG_FORWARD_HEADER=X-Traccar-Webhook-Secret: ${TRACCAR_WEBHOOK_SECRET:-}
+      # Quoted: an unquoted value with ": " is parsed as a YAML map and dropped.
+      # CONFIG_USE_ENVIRONMENT_VARIABLES is required for Traccar to honor CONFIG_* overlays.
+      - CONFIG_USE_ENVIRONMENT_VARIABLES=true
+      - CONFIG_FORWARD_ENABLE=true
+      - CONFIG_FORWARD_JSON=true
+      - CONFIG_FORWARD_URL=http://shamrock-dashboard:5050/api/traccar/webhook
+      - "CONFIG_FORWARD_HEADER=X-Traccar-Webhook-Secret: ${TRACCAR_WEBHOOK_SECRET:-}"
     volumes:
       - traccar-data:/opt/traccar/data        # H2 database (persistent)
       - traccar-logs:/opt/traccar/logs         # Server logs

@@ -30,6 +30,34 @@ def test_generate_traccar_config():
     assert config["setup_url"].endswith("/traccar/setup/shamrock-LEE-2026-00123")
 
 
+def test_compose_forward_header_is_quoted_yaml():
+    """Unquoted 'Header: value' is parsed as a YAML map and docker compose config fails."""
+    from pathlib import Path
+    main = Path("docker-compose.yml").read_text()
+    overlay = Path("traccar/docker-compose.traccar.yml").read_text()
+    assert '"CONFIG_FORWARD_HEADER=X-Traccar-Webhook-Secret:' in main
+    assert '"CONFIG_FORWARD_HEADER=X-Traccar-Webhook-Secret:' in overlay
+    assert "CONFIG_USE_ENVIRONMENT_VARIABLES=true" in main
+
+
+def test_device_status_token_fail_closed_without_secret(monkeypatch):
+    from dashboard.routers.traccar_setup_api import make_device_status_token, verify_device_status_token
+    monkeypatch.delenv("SECRET_KEY", raising=False)
+    monkeypatch.delenv("TRACCAR_STATUS_TOKEN_SECRET", raising=False)
+    with pytest.raises(RuntimeError):
+        make_device_status_token("12345")
+    assert verify_device_status_token("12345", "deadbeef") is False
+
+
+def test_device_status_token_rejects_length_mismatch(monkeypatch):
+    from dashboard.routers.traccar_setup_api import make_device_status_token, verify_device_status_token
+    monkeypatch.setenv("SECRET_KEY", "unit-test-secret")
+    token = make_device_status_token("dev-1")
+    assert verify_device_status_token("dev-1", token) is True
+    assert verify_device_status_token("dev-1", "short") is False
+    assert verify_device_status_token("dev-1", "") is False
+
+
 @pytest.mark.asyncio
 async def test_traccar_health_check_fallback():
     from dashboard.services.traccar_client import TraccarClient

@@ -21,18 +21,27 @@ logger = logging.getLogger(__name__)
 traccar_setup_router = APIRouter(tags=["traccar_setup"])
 
 
+def _device_status_secret() -> bytes:
+    secret = (os.getenv("SECRET_KEY") or os.getenv("TRACCAR_STATUS_TOKEN_SECRET") or "").strip()
+    if not secret:
+        raise RuntimeError("SECRET_KEY is required to sign Traccar device-status tokens")
+    return secret.encode()
+
+
 def make_device_status_token(device_id: str) -> str:
     """Generate a tamper-proof HMAC token for 1-click setup page polling."""
-    secret = (os.getenv("SECRET_KEY") or "shamrock-device-status-salt").encode()
-    return hmac.new(secret, f"status:{device_id}".encode(), hashlib.sha256).hexdigest()[:32]
+    return hmac.new(_device_status_secret(), f"status:{device_id}".encode(), hashlib.sha256).hexdigest()[:32]
 
 
 def verify_device_status_token(device_id: str, token: str) -> bool:
     """Verify that a status poll token matches the given device_id."""
     if not token or not device_id:
         return False
-    expected = make_device_status_token(device_id)
-    return hmac.compare_digest(expected, token)
+    try:
+        expected = make_device_status_token(device_id)
+        return hmac.compare_digest(expected, token)
+    except (ValueError, RuntimeError, TypeError):
+        return False
 
 
 @traccar_setup_router.get("/api/traccar/device-status/{device_id}")
@@ -72,7 +81,10 @@ async def traccar_setup_page(request: Request, device_id: str):
     """
     public_host = os.getenv("TRACCAR_PUBLIC_HOST", "leads.shamrockbailbonds.biz")
     server_url = f"http://{public_host}:5055"
-    status_token = make_device_status_token(device_id)
+    try:
+        status_token = make_device_status_token(device_id)
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail="Device status tokens not configured")
     
     # Traccar Client deep link parameters
     params = {
