@@ -114,6 +114,11 @@ async def api_record_bond(request: Request):
     payment_method = (data.get("payment_method") or "cash").strip()
     agent_name = (data.get("agent_name") or "Brendan O'Neal").strip()
     notes = (data.get("notes") or "").strip()
+    defendant_phone = (data.get("defendant_phone") or "").strip()
+    defendant_email = (data.get("defendant_email") or "").strip().lower()
+    defendant_address = (data.get("defendant_address") or "").strip()
+    defendant_dob = (data.get("defendant_dob") or "").strip()
+    vehicle_plate = (data.get("vehicle_plate") or data.get("license_plate") or "").strip().upper()
 
     now = datetime.now(timezone.utc)
 
@@ -169,6 +174,11 @@ async def api_record_bond(request: Request):
         "indemnitor_relationship": indemnitor_relationship,
         "payment_method": payment_method,
         "notes": notes,
+        "defendant_phone": defendant_phone,
+        "defendant_email": defendant_email,
+        "defendant_address": defendant_address,
+        "defendant_dob": defendant_dob,
+        "vehicle_plate": vehicle_plate,
         "check_in_required": False,
         "fta_risk_score": fta_risk_score,
         "fta_risk_level": fta_risk_level,
@@ -656,6 +666,7 @@ async def api_active_bonds_create(request: Request):
         "indemnitor_phone": data.get("indemnitor_phone", ""),
         "indemnitor_email": data.get("indemnitor_email", ""),
         "indemnitor_relationship": data.get("indemnitor_relationship", ""),
+        "defendant_email": data.get("defendant_email", ""),
         "ref1_name": data.get("ref1_name", ""),
         "ref1_phone": data.get("ref1_phone", ""),
         "ref2_name": data.get("ref2_name", ""),
@@ -944,6 +955,75 @@ async def api_active_bond_status_history(booking_number):
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
+async def _maybe_send_overdue_checkin_email(bond: dict, now: datetime) -> bool:
+    """Send a defendant check-in link by email only as a phone-missing fallback.
+
+    Never uses indemnitor_email. Never sends when a defendant phone is on file
+    (staff Send check-in link remains the phone path). Send-once via
+    checkin_email_fallback_sent_at. Returns True only after a successful send.
+    """
+    b_num = (bond.get("booking_number") or "").strip()
+    recipient_email = (bond.get("defendant_email") or "").strip()
+    if not b_num or not recipient_email or "@" not in recipient_email:
+        return False
+    if (bond.get("defendant_phone") or "").strip():
+        return False
+    if bond.get("checkin_email_fallback_sent_at"):
+        return False
+
+    from dashboard.services.client_portal_service import generate_portal_token
+    from dashboard.services.gmail_reader import GmailReaderService
+
+    token_info = await generate_portal_token(
+        b_num, role="defendant", ttl_days=3, created_by="missed_checkin_monitor",
+    )
+    if not token_info.get("success"):
+        logger.warning("[bonds] Check-in email fallback skipped — token failed for %s", b_num)
+        return False
+    portal_url = (token_info.get("url") or "").strip()
+    if not portal_url:
+        logger.warning("[bonds] Check-in email fallback skipped — empty portal url for %s", b_num)
+        return False
+
+    def_name = bond.get("defendant_name") or "Client"
+    subject = f"URGENT: Required Bond Check-In Notice — {def_name}"
+    body_text = (
+        f"Hello {def_name},\n\n"
+        f"Our records indicate that your required check-in for case #{b_num} is overdue.\n\n"
+        f"Please use the following secure link immediately from your current device to complete your check-in:\n"
+        f"{portal_url}\n\n"
+        f"If you are having technical difficulties, contact Shamrock Bail Bonds immediately at (239) 334-2245.\n\n"
+        f"Shamrock Bail Bonds Compliance Department"
+    )
+    body_html = f"""
+                    <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
+                        <h2 style="color: #c0392b; margin-top: 0;">URGENT: Mandatory Check-In Notice</h2>
+                        <p>Hello <strong>{def_name}</strong>,</p>
+                        <p>Our records indicate that your required bond check-in for case <code>{b_num}</code> is currently <strong>OVERDUE</strong>.</p>
+                        <p>Please click the button below from your smartphone, tablet, or computer to complete your verified check-in immediately:</p>
+                        <div style="text-align: center; margin: 30px 0;">
+                            <a href="{portal_url}" style="background-color: #00875A; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Complete Mandatory Check-In</a>
+                        </div>
+                        <p style="font-size: 13px; color: #666;">Or copy and paste this secure link into your browser:<br><a href="{portal_url}" style="color: #00875A;">{portal_url}</a></p>
+                        <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+                        <p style="font-size: 12px; color: #888;">If you are experiencing device or technical difficulties, you must contact our office immediately at <strong>(239) 334-2245</strong>.</p>
+                    </div>
+                    """
+    res = GmailReaderService().send_email(
+        to=recipient_email, subject=subject, body_text=body_text, body_html=body_html,
+    )
+    if not res.get("success"):
+        logger.warning("[bonds] Check-in email fallback send failed for %s", b_num)
+        return False
+
+    await get_collection("active_bonds").update_one(
+        {"booking_number": b_num},
+        {"$set": {"checkin_email_fallback_sent_at": now, "updated_at": now}},
+    )
+    logger.info("[bonds] Sent overdue check-in email fallback for %s", b_num)
+    return True
+
+
 @bonds_bp.post("/active-bonds/missed-checkins")
 async def api_active_bonds_process_missed():
     """Scan for missed check-ins and create alerts."""
@@ -969,46 +1049,11 @@ async def api_active_bonds_process_missed():
                 "message": f"Missed check-in — due {bond.get('next_checkin_due')}",
                 "created_at": now,
             })
-
-            # Check if email fallback can be sent (if defendant or indemnitor email exists)
-            recipient_email = bond.get("defendant_email") or bond.get("indemnitor_email")
-            if recipient_email and "@" in recipient_email:
-                try:
-                    from dashboard.services.client_portal_service import generate_portal_token
-                    from dashboard.services.gmail_reader import GmailReader
-                    token_info = await generate_portal_token(b_num, role="defendant", ttl_days=3, created_by="missed_checkin_monitor")
-                    portal_url = token_info.get("url", "")
-                    def_name = bond.get("defendant_name", "Client")
-                    subject = f"URGENT: Required Bond Check-In Notice — {def_name}"
-                    body_text = (
-                        f"Hello {def_name},\n\n"
-                        f"Our records indicate that your required check-in for case #{b_num} is overdue.\n\n"
-                        f"Please use the following secure link immediately from your current device to complete your check-in:\n"
-                        f"{portal_url}\n\n"
-                        f"If you are having technical difficulties, contact Shamrock Bail Bonds immediately at (239) 334-2245.\n\n"
-                        f"Shamrock Bail Bonds Compliance Department"
-                    )
-                    body_html = f"""
-                    <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
-                        <h2 style="color: #c0392b; margin-top: 0;">URGENT: Mandatory Check-In Notice</h2>
-                        <p>Hello <strong>{def_name}</strong>,</p>
-                        <p>Our records indicate that your required bond check-in for case <code>{b_num}</code> is currently <strong>OVERDUE</strong>.</p>
-                        <p>Please click the button below from your smartphone, tablet, or computer to complete your verified check-in immediately:</p>
-                        <div style="text-align: center; margin: 30px 0;">
-                            <a href="{portal_url}" style="background-color: #00875A; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">Complete Mandatory Check-In</a>
-                        </div>
-                        <p style="font-size: 13px; color: #666;">Or copy and paste this secure link into your browser:<br><a href="{portal_url}" style="color: #00875A;">{portal_url}</a></p>
-                        <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
-                        <p style="font-size: 12px; color: #888;">If you are experiencing device or technical difficulties, you must contact our office immediately at <strong>(239) 334-2245</strong>.</p>
-                    </div>
-                    """
-                    gmail = GmailReader()
-                    res = gmail.send_email(to=recipient_email, subject=subject, body_text=body_text, body_html=body_html)
-                    if res.get("success"):
-                        emails_sent += 1
-                        logger.info("[bonds] Sent overdue check-in email fallback to %s for %s", recipient_email, b_num)
-                except Exception as mail_err:
-                    logger.warning("[bonds] Failed to send overdue check-in email for %s: %s", b_num, mail_err)
+            try:
+                if await _maybe_send_overdue_checkin_email(bond, now):
+                    emails_sent += 1
+            except Exception as mail_err:
+                logger.warning("[bonds] Failed to send overdue check-in email for %s: %s", b_num, mail_err)
 
         if alert_docs:
             await alerts.insert_many(alert_docs)

@@ -42,22 +42,27 @@ async def trigger_auto_osint_profiling(
         logger.debug("[auto_osint] No booking_number provided — skipping")
         return None
 
+    nested = bond_data.get("defendant") if isinstance(bond_data.get("defendant"), dict) else {}
+
+    # Defendant-only anchors. Never fall back to generic email/phone or indemnitor_* —
+    # those keys are the cosigner on intake and record-bond payloads.
     email = (
         bond_data.get("defendant_email")
-        or bond_data.get("email")
+        or nested.get("email")
         or ""
     ).strip().lower()
 
     phone = (
         bond_data.get("defendant_phone")
-        or bond_data.get("phone")
+        or nested.get("phone")
         or ""
     ).strip()
 
     plate = (
         bond_data.get("vehicle_plate")
         or bond_data.get("license_plate")
-        or bond_data.get("plate")
+        or nested.get("vehiclePlate")
+        or nested.get("vehicle_plate")
         or ""
     ).strip().upper()
 
@@ -149,6 +154,8 @@ async def _execute_auto_osint(
         # Poll scan completion with timeout (max 3 minutes)
         max_wait = 180
         waited = 0
+        scan_doc = None
+        status = None
         while waited < max_wait:
             await asyncio.sleep(5)
             waited += 5
@@ -159,9 +166,44 @@ async def _execute_auto_osint(
             if status in ("completed", "partial", "failed"):
                 break
 
-        # Attach findings directly to active_bonds record
-        attached = await osint_svc.attach_to_subject(scan_id, actor=actor)
-        if attached:
-            logger.info("[auto_osint] Successfully attached OSINT profile to bond %s", booking_number)
+        if not scan_doc or status not in ("completed", "partial"):
+            logger.warning(
+                "[auto_osint] Scan %s for %s ended without attachable results (status=%s)",
+                scan_id, booking_number, (scan_doc or {}).get("status"),
+            )
+            return
+
+        extracted = osint_svc.extract_importable_fields(scan_doc)
+        now = datetime.now(timezone.utc)
+        summary = {
+            "osint_scan_id": scan_id,
+            "osint_date": scan_doc.get("completed_at") or scan_doc.get("created_at") or now,
+            "osint_engines": scan_doc.get("engines_requested", [e.value for e in engines]),
+            "osint_accounts_found": scan_doc.get("total_accounts", 0),
+            "osint_entities_found": scan_doc.get("total_entities", 0),
+            "osint_risk_score": scan_doc.get("osint_risk_score", 0),
+            "osint_platforms": scan_doc.get("platforms_found", []),
+            "osint_summary": scan_doc.get("ai_summary") or (
+                f"{scan_doc.get('total_accounts', 0)} accounts found across "
+                f"{len(scan_doc.get('platforms_found') or [])} platforms"
+            ),
+            "social_profiles": extracted.get("social_profiles") or {},
+            "usernames": extracted.get("usernames") or [],
+        }
+        result = await get_collection("active_bonds").update_one(
+            {"booking_number": booking_number},
+            {"$set": {
+                "osint_intel": summary,
+                "osint_last_scanned_at": now,
+                "osint_scan_id": scan_id,
+            }},
+        )
+        if result.matched_count == 0:
+            logger.error(
+                "[auto_osint] No active_bonds row for %s — OSINT attach skipped",
+                booking_number,
+            )
+            return
+        logger.info("[auto_osint] Successfully attached OSINT profile to bond %s", booking_number)
     except Exception as exc:
         logger.error("[auto_osint] Background profiling error for %s: %s", booking_number, exc)

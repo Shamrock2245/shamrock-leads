@@ -8,10 +8,12 @@ Exposes device management, geofencing, position sync, vehicle watch,
 compliance metrics, and Traccar webhook ingestion.
 
 All endpoints prefixed with /api/geo-intel/
-Traccar webhook at /api/traccar/webhook (no auth — Docker-internal only)
+Traccar webhook at /api/traccar/webhook (shared secret; PIN-exempt for Docker forward)
 """
 
 import logging
+import os
+import secrets
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Query, Request
@@ -469,6 +471,41 @@ async def photo_checkin(request: Request):
 # TRACCAR WEBHOOK — Ingests real-time position/event data from Traccar
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _provided_traccar_webhook_secret(request: Request) -> str:
+    auth = (request.headers.get("Authorization") or "").strip()
+    bearer = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    return (
+        (request.headers.get("X-Traccar-Webhook-Secret") or "").strip()
+        or bearer
+        or (request.query_params.get("token") or "").strip()
+    )
+
+
+def traccar_webhook_auth_failure(request: Request) -> tuple[int, str] | None:
+    """Return (status, error) if the webhook request must be rejected."""
+    expected = (os.getenv("TRACCAR_WEBHOOK_SECRET") or "").strip()
+    env = (os.getenv("ENV") or os.getenv("ENVIRONMENT") or "").lower()
+    require = os.getenv("REQUIRE_TRACCAR_WEBHOOK_SECRET", "").lower() in ("1", "true", "yes")
+    is_prod = env in ("production", "prod") or require
+    if not expected:
+        if is_prod:
+            logger.warning("[traccar_webhook] TRACCAR_WEBHOOK_SECRET unset — rejecting")
+            return 503, "Webhook secret not configured"
+        return None
+    provided = _provided_traccar_webhook_secret(request)
+    if not provided:
+        logger.warning("[traccar_webhook] missing secret header — rejecting")
+        return 401, "Missing webhook secret"
+    try:
+        ok = secrets.compare_digest(provided, expected)
+    except ValueError:
+        ok = False
+    if not ok:
+        logger.warning("[traccar_webhook] invalid secret — rejecting")
+        return 401, "Invalid webhook secret"
+    return None
+
+
 @traccar_webhook_bp.post("/webhook")
 async def traccar_webhook(request: Request):
     """Receive forwarded position/event data from Traccar.
@@ -476,7 +513,13 @@ async def traccar_webhook(request: Request):
     Path: POST /api/traccar/webhook (matches config/traccar/traccar.xml forward.url)
     Traccar sends JSON with device + position on every update.
     Format: {device: {...}, position: {latitude, longitude, ...}}
+    Authenticated with TRACCAR_WEBHOOK_SECRET (header / Bearer / query token).
     """
+    denied = traccar_webhook_auth_failure(request)
+    if denied:
+        status, msg = denied
+        return JSONResponse({"error": msg}, status_code=status)
+
     data = await request.json()
     if not data:
         return JSONResponse({"error": "No data"}, status_code=400)

@@ -274,6 +274,9 @@ services:
     container_name: shamrock-traccar
     restart: unless-stopped
     hostname: traccar
+    environment:
+      # Injected as forward.header; dashboard verifies TRACCAR_WEBHOOK_SECRET.
+      - CONFIG_FORWARD_HEADER=X-Traccar-Webhook-Secret: ${TRACCAR_WEBHOOK_SECRET:-}
     volumes:
       - traccar-data:/opt/traccar/data        # H2 database (persistent)
       - traccar-logs:/opt/traccar/logs         # Server logs

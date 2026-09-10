@@ -189,14 +189,46 @@ def test_traccar_device_status_requires_pin_or_token():
 
 
 def test_traccar_webhook_allowed_without_pin():
-    """POST /api/traccar/webhook must accept Traccar events without staff session PIN."""
-    resp = client.post(
-        "/api/traccar/webhook",
-        json={"event": {"type": "deviceOnline", "deviceId": 1}},
-    )
+    """POST /api/traccar/webhook is PIN-exempt; authenticity is the webhook secret."""
+    with patch.dict(os.environ, {"TRACCAR_WEBHOOK_SECRET": "traccar-secret", "ENV": "test"}):
+        resp = client.post(
+            "/api/traccar/webhook",
+            headers={"X-Traccar-Webhook-Secret": "traccar-secret"},
+            json={"event": {"type": "deviceOnline", "deviceId": 1}},
+        )
     assert resp.status_code == 200
     assert resp.json().get("ok") is True
     assert resp.json().get("type") == "event_only"
+
+
+def test_traccar_webhook_rejects_missing_or_wrong_secret():
+    with patch.dict(os.environ, {"TRACCAR_WEBHOOK_SECRET": "traccar-secret", "ENV": "test"}):
+        missing = client.post(
+            "/api/traccar/webhook",
+            json={"event": {"type": "deviceOnline", "deviceId": 1}},
+        )
+        wrong = client.post(
+            "/api/traccar/webhook",
+            headers={"X-Traccar-Webhook-Secret": "nope"},
+            json={"event": {"type": "deviceOnline", "deviceId": 1}},
+        )
+    assert missing.status_code == 401
+    assert wrong.status_code == 401
+
+
+def test_traccar_webhook_fail_closed_when_secret_unset_in_production():
+    with patch.dict(os.environ, {
+        "TRACCAR_WEBHOOK_SECRET": "",
+        "ENV": "production",
+        "ENVIRONMENT": "production",
+        "REQUIRE_TRACCAR_WEBHOOK_SECRET": "",
+    }, clear=False):
+        resp = client.post(
+            "/api/traccar/webhook",
+            json={"event": {"type": "deviceOnline", "deviceId": 1}},
+        )
+    assert resp.status_code == 503
+    assert "secret" in resp.json().get("error", "").lower()
 
 
 def test_health_endpoint_drops_total_arrests():

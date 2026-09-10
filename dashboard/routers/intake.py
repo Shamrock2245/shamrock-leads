@@ -198,18 +198,19 @@ def _extract_defendant(data: dict) -> dict:
         "city":          g("defendantCity", "city"),
         "state":         g("defendantState", "state") or "FL",
         "zip":           g("defendantZip", "zip", "zip_code"),
-        "phone":         g("defendantPhone", "DefPhone", "defPhone", "phone"),
-        "email":         g("defendantEmail", "DefEmail", "defEmail", "email"),
-        # Secondary Anchors & Skip Trace Metadata
-        "employer":      g("defendantEmployer", "DefEmployer", "defEmployer", "employer"),
-        "employerPhone": g("defendantEmployerPhone", "DefEmployerPhone", "defEmployerPhone", "employerPhone"),
-        "employerAddress": g("defendantEmployerAddress", "DefEmployerAddress", "defEmployerAddress", "employerAddress"),
-        "vehicleMake":   g("defendantVehicleMake", "vehicleMake", "vehicle_make", "make"),
-        "vehicleModel":  g("defendantVehicleModel", "vehicleModel", "vehicle_model", "model"),
-        "vehicleYear":   g("defendantVehicleYear", "vehicleYear", "vehicle_year", "year"),
-        "vehicleColor":  g("defendantVehicleColor", "vehicleColor", "vehicle_color", "color"),
-        "vehiclePlate":  g("defendantVehiclePlate", "vehiclePlate", "vehicle_plate", "plate", "licensePlate", "license_plate"),
-        "vehicleVIN":    g("defendantVehicleVIN", "vehicleVIN", "vehicle_vin", "vin", "VIN"),
+        "phone":         g("defendantPhone", "DefPhone", "defPhone", "defendant_phone"),
+        "email":         g("defendantEmail", "DefEmail", "defEmail", "defendant_email"),
+        # Secondary anchors — defendant-prefixed / vehicle-prefixed keys only.
+        # Bare phone/email/employer/make/plate collide with indemnitor fields on Wix payloads.
+        "employer":      g("defendantEmployer", "DefEmployer", "defEmployer", "defendant_employer"),
+        "employerPhone": g("defendantEmployerPhone", "DefEmployerPhone", "defEmployerPhone", "defendant_employer_phone"),
+        "employerAddress": g("defendantEmployerAddress", "DefEmployerAddress", "defEmployerAddress", "defendant_employer_address"),
+        "vehicleMake":   g("defendantVehicleMake", "vehicleMake", "vehicle_make"),
+        "vehicleModel":  g("defendantVehicleModel", "vehicleModel", "vehicle_model"),
+        "vehicleYear":   g("defendantVehicleYear", "vehicleYear", "vehicle_year"),
+        "vehicleColor":  g("defendantVehicleColor", "vehicleColor", "vehicle_color"),
+        "vehiclePlate":  g("defendantVehiclePlate", "vehiclePlate", "vehicle_plate", "licensePlate", "license_plate"),
+        "vehicleVIN":    g("defendantVehicleVIN", "vehicleVIN", "vehicle_vin"),
         "emergencyName": g("defendantEmergencyName", "emergencyContactName", "emergency_contact_name", "emergencyName"),
         "emergencyPhone": g("defendantEmergencyPhone", "emergencyContactPhone", "emergency_contact_phone", "emergencyPhone"),
         "emergencyRelation": g("defendantEmergencyRelation", "emergencyContactRelation", "emergency_contact_relation", "emergencyRelation"),
@@ -1068,7 +1069,7 @@ async def intake_promote(request: Request, intake_id: str):
     # ── 7c. Trigger Auto-OSINT Footprint Scan (Holehe, Ignorant, etc.) ────────
     try:
         from dashboard.services.auto_osint_trigger import trigger_auto_osint_profiling
-        trigger_auto_osint_profiling(bond_doc, actor="intake_promotion")
+        await trigger_auto_osint_profiling(bond_doc, actor="intake_promotion")
     except Exception as osint_err:
         logger.warning("[intake] Failed to dispatch auto-OSINT scan: %s", osint_err)
 

@@ -29,6 +29,7 @@ services:
       - ./traccar/traccar.xml:/opt/traccar/conf/traccar.xml:ro
     environment:
       - TZ=America/New_York
+      - CONFIG_FORWARD_HEADER=X-Traccar-Webhook-Secret: ${TRACCAR_WEBHOOK_SECRET:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8082/api/server"]
       interval: 30s
