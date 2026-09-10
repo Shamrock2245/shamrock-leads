@@ -164,11 +164,39 @@ def test_mongo_writer_strictly_sets_created_at_on_insert():
     assert "first_seen_at" in set_on_insert
 
 
-def test_traccar_device_status_requires_pin():
-    """GET /api/traccar/device-status/{id} must be gated and return 401 without auth."""
+def test_traccar_device_status_requires_pin_or_token():
+    """GET /api/traccar/device-status/{id} must be gated and return 401 without valid auth or token."""
+    from dashboard.routers.traccar_setup_api import make_device_status_token
+    
+    # 1. No token, no session -> 401
     resp = client.get("/api/traccar/device-status/12345")
     assert resp.status_code == 401
     assert resp.json().get("error") == "Authentication required"
+
+    # 2. Invalid token -> 401
+    resp_invalid = client.get("/api/traccar/device-status/12345?token=bogus_token")
+    assert resp_invalid.status_code == 401
+
+    # 3. Valid HMAC token for that device_id -> 200 (device status accessible to setup page)
+    valid_token = make_device_status_token("12345")
+    with patch("dashboard.routers.traccar_setup_api.get_collection") as mock_get_col:
+        mock_col = MagicMock()
+        mock_col.find_one = AsyncMock(return_value={"unique_id": "12345", "last_seen": "2026-09-10T12:00:00Z"})
+        mock_get_col.return_value = mock_col
+        resp_valid = client.get(f"/api/traccar/device-status/12345?token={valid_token}")
+        assert resp_valid.status_code == 200
+        assert resp_valid.json().get("connected") is True
+
+
+def test_traccar_webhook_allowed_without_pin():
+    """POST /api/traccar/webhook must accept Traccar events without staff session PIN."""
+    resp = client.post(
+        "/api/traccar/webhook",
+        json={"event": {"type": "deviceOnline", "deviceId": 1}},
+    )
+    assert resp.status_code == 200
+    assert resp.json().get("ok") is True
+    assert resp.json().get("type") == "event_only"
 
 
 def test_health_endpoint_drops_total_arrests():

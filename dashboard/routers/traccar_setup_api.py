@@ -6,6 +6,8 @@ deep links, QR codes, and live connection status API.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import os
 import urllib.parse
@@ -17,6 +19,20 @@ from dashboard.extensions import get_collection
 logger = logging.getLogger(__name__)
 
 traccar_setup_router = APIRouter(tags=["traccar_setup"])
+
+
+def make_device_status_token(device_id: str) -> str:
+    """Generate a tamper-proof HMAC token for 1-click setup page polling."""
+    secret = (os.getenv("SECRET_KEY") or "shamrock-device-status-salt").encode()
+    return hmac.new(secret, f"status:{device_id}".encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def verify_device_status_token(device_id: str, token: str) -> bool:
+    """Verify that a status poll token matches the given device_id."""
+    if not token or not device_id:
+        return False
+    expected = make_device_status_token(device_id)
+    return hmac.compare_digest(expected, token)
 
 
 @traccar_setup_router.get("/api/traccar/device-status/{device_id}")
@@ -56,6 +72,7 @@ async def traccar_setup_page(request: Request, device_id: str):
     """
     public_host = os.getenv("TRACCAR_PUBLIC_HOST", "leads.shamrockbailbonds.biz")
     server_url = f"http://{public_host}:5055"
+    status_token = make_device_status_token(device_id)
     
     # Traccar Client deep link parameters
     params = {
@@ -195,7 +212,7 @@ async def traccar_setup_page(request: Request, device_id: str):
 
     async function checkStatus() {{
       try {{
-        const r = await fetch('/api/traccar/device-status/{device_id}');
+        const r = await fetch('/api/traccar/device-status/{device_id}?token={status_token}');
         const data = await r.json();
         const badge = document.getElementById('statusBadge');
         const text = document.getElementById('statusText');

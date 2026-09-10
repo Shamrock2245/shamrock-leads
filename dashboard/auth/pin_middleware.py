@@ -233,15 +233,24 @@ class PinAuthMiddleware(BaseHTTPMiddleware):
         if path == "/" and _is_paperwork_host(request):
             return await call_next(request)
 
-        # Webhooks: incoming POST/PUT/PATCH webhooks (DocuSeal, Twilio, BlueBubbles, Stripe)
+        # Webhooks: incoming POST/PUT/PATCH webhooks (DocuSeal, Twilio, BlueBubbles, Stripe, Traccar)
         # stay public, but PIN-gate GET/HEAD/DELETE under /api/webhooks/ (e.g. /status or /history)
-        if path.startswith("/api/webhooks/"):
+        if path.startswith("/api/webhooks/") or path == "/api/traccar/webhook":
             if request.method in ("GET", "HEAD", "DELETE") and (
                 path.endswith("/status") or path.endswith("/history")
             ):
                 pass  # Fall through to staff session check below
             elif request.method in ("POST", "PUT", "PATCH"):
                 return await call_next(request)
+
+        # Device status check: allow if signed status token matches the device_id
+        if path.startswith("/api/traccar/device-status/"):
+            device_id = path.removeprefix("/api/traccar/device-status/").strip("/")
+            token = request.query_params.get("token", "").strip()
+            if device_id and token:
+                from dashboard.routers.traccar_setup_api import verify_device_status_token
+                if verify_device_status_token(device_id, token):
+                    return await call_next(request)
 
         # Machine routes (Node-RED, Shannon, external crons, automation sweeps):
         # Allow requests with valid GAS_API_KEY or LEADS_INTERNAL_TOKEN
