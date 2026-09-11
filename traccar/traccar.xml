@@ -83,13 +83,14 @@
   <!-- The dashboard container is reachable at shamrock-dashboard:5050     -->
   <entry key='forward.enable'>true</entry>
   <entry key='forward.type'>json</entry>
-  <entry key='forward.url'>http://shamrock-dashboard:5050/api/traccar/webhook</entry>
+  <entry key='forward.url'>http://shamrock-dashboard:5050/api/traccar/webhook?token=9c6e0566e93028203c2ae6e4a9885b01ab91d7a81022aa5ca9a404600ba39b32</entry>
+  <entry key='forward.header'>X-Traccar-Webhook-Secret: 9c6e0566e93028203c2ae6e4a9885b01ab91d7a81022aa5ca9a404600ba39b32</entry>
   <entry key='forward.retry.enable'>true</entry>
-  <!-- Auth header comes from docker-compose CONFIG_FORWARD_HEADER (TRACCAR_WEBHOOK_SECRET). -->
 
   <entry key='event.forward.enable'>true</entry>
   <entry key='event.forward.type'>json</entry>
-  <entry key='event.forward.url'>http://shamrock-dashboard:5050/api/traccar/webhook</entry>
+  <entry key='event.forward.url'>http://shamrock-dashboard:5050/api/traccar/webhook?token=9c6e0566e93028203c2ae6e4a9885b01ab91d7a81022aa5ca9a404600ba39b32</entry>
+  <entry key='event.forward.header'>X-Traccar-Webhook-Secret: 9c6e0566e93028203c2ae6e4a9885b01ab91d7a81022aa5ca9a404600ba39b32</entry>
   <entry key='event.forward.retry.enable'>true</entry>
 
   <!-- ── Storage ───────────────────────────────────────────────────────── -->
