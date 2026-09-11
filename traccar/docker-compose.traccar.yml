@@ -31,8 +31,8 @@ services:
       - TZ=America/New_York
       - CONFIG_USE_ENVIRONMENT_VARIABLES=true
       - CONFIG_FORWARD_ENABLE=true
-      - CONFIG_FORWARD_JSON=true
-      - CONFIG_FORWARD_URL=http://shamrock-dashboard:5050/api/traccar/webhook
+      - CONFIG_FORWARD_TYPE=json
+      - "CONFIG_FORWARD_URL=http://shamrock-dashboard:5050/api/traccar/webhook?token=${TRACCAR_WEBHOOK_SECRET:-}"
       - "CONFIG_FORWARD_HEADER=X-Traccar-Webhook-Secret: ${TRACCAR_WEBHOOK_SECRET:-}"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8082/api/server"]

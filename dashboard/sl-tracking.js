@@ -218,16 +218,22 @@ const SLTracking = (() => {
     const loc = d.latest_location || {};
     const ts = loc.ts || loc.timestamp || '';
     const bkSafe = esc(d.booking_number);
-    return '<div style="font-family:var(--font,sans-serif);min-width:220px">' +
+    const dev = d.device_info || {};
+    const attrs = loc.attributes || {};
+    const batt = dev.battery ?? attrs.batt ?? attrs.batteryLevel;
+    const acc = dev.accuracy ?? loc.accuracy;
+    return '<div style="font-family:var(--font,sans-serif);min-width:230px">' +
       '<div style="font-weight:700;font-size:14px;margin-bottom:4px">' + escH(d.defendant_name || '—') + '</div>' +
       '<div style="font-size:11px;color:#94a3b8;margin-bottom:8px">' + escH(d.booking_number || '') + ' · ' + escH(d.county || '—') + '</div>' +
       '<div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">' +
         '<span style="background:' + riskColor(d.risk_score || 0) + ';color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700">' + riskLabel(d.risk_score || 0) + '</span>' +
         '<span style="background:' + statusColor(d.status) + ';color:#fff;padding:2px 8px;border-radius:10px;font-size:11px">' + escH((d.status || '').toUpperCase()) + '</span>' +
         (d.check_in_overdue ? '<span style="background:#ef4444;color:#fff;padding:2px 8px;border-radius:10px;font-size:11px">OVERDUE</span>' : '') +
+        (batt !== undefined && batt !== null ? '<span style="background:rgba(16,185,129,0.2);color:#10b981;border:1px solid rgba(16,185,129,0.4);padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600">🔋 ' + batt + '%</span>' : '') +
       '</div>' +
-      '<div style="font-size:12px;margin-bottom:4px">Last ping: ' + (ts ? timeAgo(ts) : 'unknown') + '</div>' +
-      '<div style="font-size:12px;margin-bottom:4px">Bond: $' + (d.bond_amount || 0).toLocaleString() + '</div>' +
+      '<div style="font-size:12px;margin-bottom:4px">Last ping: <strong>' + (ts ? timeAgo(ts) : 'unknown') + '</strong>' + (acc ? ' <span style="color:#94a3b8">(±' + Math.round(acc) + 'm)</span>' : '') + '</div>' +
+      (d.bond_amount ? '<div style="font-size:12px;margin-bottom:4px">Bond: $' + (d.bond_amount || 0).toLocaleString() + '</div>' : '') +
+      (dev.unique_id ? '<div style="font-size:11px;color:#38bdf8;margin-bottom:6px">📡 ' + escH(dev.unique_id) + '</div>' : '') +
       '<div style="font-size:12px;margin-bottom:8px">' + (d.location_count || 0) + ' total pings</div>' +
       '<button onclick="SLTracking.openDetail(\'' + bkSafe + '\')" ' +
         'style="width:100%;padding:6px;background:#22c55e;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600">' +
@@ -422,6 +428,33 @@ const SLTracking = (() => {
             (data.exonerated_at ? '<div style="font-size:11px;color:var(--accent);margin-top:6px;font-weight:600">✅ Exonerated ' + fmtDate(data.exonerated_at) + ' via ' + escH(data.exoneration_source || '—') + '</div>' : '') +
           '</div>' +
         '</div>' +
+
+        // Hardware GPS Device info
+        (data.device_info ? (function() {
+          const dev = data.device_info;
+          const batt = dev.battery;
+          const battColor = (batt !== undefined && batt !== null) ? (batt > 50 ? '#22c55e' : (batt > 20 ? '#f59e0b' : '#ef4444')) : '#94a3b8';
+          const setupUrl = 'https://leads.shamrockbailbonds.biz/traccar/setup/' + encodeURIComponent(dev.unique_id || bookingNumber);
+          return '<div class="panel" style="padding:14px;margin-bottom:18px;border:1px solid rgba(16,185,129,0.3);background:rgba(16,185,129,0.02)">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">' +
+              '<div class="panel-title" style="margin:0;display:flex;align-items:center;gap:8px">' +
+                '<span>🛰️ Active GPS Hardware & Telemetry</span>' +
+                '<span style="background:rgba(16,185,129,0.2);color:#10b981;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:700">ONLINE</span>' +
+              '</div>' +
+              '<div style="display:flex;gap:6px">' +
+                '<button class="btn-sm" style="background:#1e293b;color:#fff;border:1px solid var(--border);padding:4px 8px;border-radius:4px;cursor:pointer;font-size:11px" onclick="navigator.clipboard.writeText(\'' + esc(setupUrl) + '\');SL.toast(\'Setup link copied!\',\'success\')">🔗 Copy Setup Link</button>' +
+                '<a href="' + setupUrl + '" target="_blank" class="btn-sm" style="background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.4);padding:4px 8px;border-radius:4px;text-decoration:none;font-size:11px;font-weight:600">⚡ Open Setup Page</a>' +
+              '</div>' +
+            '</div>' +
+            '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">' +
+              '<div style="background:var(--input-bg);padding:10px;border-radius:6px"><div style="font-size:11px;color:var(--muted)">Device Identifier</div><div style="font-weight:700;font-size:13px;color:#38bdf8">' + escH(dev.unique_id || '—') + '</div></div>' +
+              '<div style="background:var(--input-bg);padding:10px;border-radius:6px"><div style="font-size:11px;color:var(--muted)">Battery Level</div><div style="font-weight:700;font-size:13px;color:' + battColor + '">' + (batt !== undefined && batt !== null ? '🔋 ' + batt + '%' : '—') + '</div></div>' +
+              '<div style="background:var(--input-bg);padding:10px;border-radius:6px"><div style="font-size:11px;color:var(--muted)">GPS Accuracy</div><div style="font-weight:700;font-size:13px;color:var(--text)">' + (dev.accuracy ? '🎯 ±' + Math.round(dev.accuracy) + 'm' : 'High') + '</div></div>' +
+              '<div style="background:var(--input-bg);padding:10px;border-radius:6px"><div style="font-size:11px;color:var(--muted)">Speed / Altitude</div><div style="font-weight:700;font-size:13px;color:var(--text)">' + Math.round(dev.speed || 0) + ' mph • ' + Math.round(dev.altitude || 0) + 'm</div></div>' +
+              '<div style="background:var(--input-bg);padding:10px;border-radius:6px"><div style="font-size:11px;color:var(--muted)">Phone Number</div><div style="font-weight:700;font-size:13px;color:var(--text)">' + escH(dev.phone || '—') + '</div></div>' +
+            '</div>' +
+          '</div>';
+        })() : '') +
 
         // Location history
         '<div class="panel" style="padding:14px;margin-bottom:18px">' +
@@ -731,6 +764,21 @@ const SLTracking = (() => {
     '</div>';
   }
 
+  function focusDevice(lat, lng, name) {
+    showView('map');
+    const mapEl = document.getElementById('trkMap');
+    if (mapEl) mapEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (_map && lat && lng) {
+      _map.setView([lat, lng], 15);
+      Object.values(_markers).forEach(m => {
+        const ll = m.getLatLng();
+        if (Math.abs(ll.lat - lat) < 0.001 && Math.abs(ll.lng - lng) < 0.001) {
+          m.openPopup();
+        }
+      });
+    }
+  }
+
   // ── Public API ────────────────────────────────────────────────────────────
   return {
     init,
@@ -746,5 +794,6 @@ const SLTracking = (() => {
     discoverContacts,
     onBondWritten,
     onBondExonerated,
+    focusDevice,
   };
 })();

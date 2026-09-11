@@ -58,6 +58,11 @@ async def list_devices(booking_number: str | None = Query(default=None)):
     booking = booking_number
     svc = _get_service()
     devices = await svc.list_devices(booking)
+    public_host = os.getenv("TRACCAR_PUBLIC_HOST", "leads.shamrockbailbonds.biz")
+    for d in devices:
+        uid = d.get("unique_id")
+        if uid:
+            d["setup_url"] = f"https://{public_host}/traccar/setup/{uid}"
     return {"devices": devices, "count": len(devices)}
 
 

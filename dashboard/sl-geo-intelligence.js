@@ -146,19 +146,148 @@ const SLGeoIntel = (() => {
     }
     el.innerHTML = _devices.map(d => {
       const typeIcon = {phone_app:'📱',vehicle_tracker:'🚗',personal_tracker:'📍',ankle_monitor:'⌚'}[d.device_type]||'📡';
-      const stale = d.last_seen && (Date.now() - new Date(d.last_seen).getTime()) > 4*3600000;
-      return `<div class="stat-card" style="padding:12px;display:flex;align-items:center;gap:12px;border-left:3px solid ${d.status==='active'?(stale?'var(--gold)':'var(--success)'):'var(--muted)'}">
-        <span style="font-size:20px">${typeIcon}</span>
-        <div style="flex:1;min-width:0">
-          <div style="font-weight:600;font-size:13px">${escH(d.label||d.device_type)}</div>
-          <div style="font-size:11px;color:var(--muted)">${escH(d.booking_number)} • ${escH(d.county||'')}</div>
-          ${d.last_seen?`<div style="font-size:11px;color:${stale?'var(--gold)':'var(--muted)'}">Last seen: ${timeAgo(d.last_seen)}</div>`:'<div style="font-size:11px;color:var(--gold)">No signal yet</div>'}
+      const lp = d.last_position || {};
+      const attrs = lp.attributes || {};
+      const batt = attrs.batt ?? attrs.batteryLevel ?? lp.battery;
+      const battColor = (batt !== undefined && batt !== null) ? (batt > 50 ? '#10b981' : (batt > 20 ? '#f59e0b' : '#ef4444')) : '#94a3b8';
+      
+      const nowMs = Date.now();
+      const lastSeenMs = d.last_seen ? new Date(d.last_seen).getTime() : 0;
+      const diffMin = lastSeenMs ? Math.floor((nowMs - lastSeenMs) / 60000) : 999999;
+      
+      let statusColor = 'var(--muted)';
+      let statusText = 'OFFLINE / NO FIX';
+      if (d.status === 'active') {
+        if (diffMin < 15) {
+          statusColor = 'var(--success)';
+          statusText = 'ONLINE · LIVE';
+        } else if (diffMin < 240) {
+          statusColor = 'var(--gold)';
+          statusText = 'STANDBY';
+        } else {
+          statusColor = '#64748b';
+          statusText = 'STALE';
+        }
+      } else {
+        statusText = 'INACTIVE';
+      }
+
+      const hasCoords = lp.lat != null && lp.lng != null;
+      const coordsStr = hasCoords ? `${parseFloat(lp.lat).toFixed(5)}, ${parseFloat(lp.lng).toFixed(5)}` : null;
+      const mapsUrl = hasCoords ? `https://maps.google.com/?q=${lp.lat},${lp.lng}` : null;
+      const setupUrl = d.setup_url || `https://leads.shamrockbailbonds.biz/traccar/setup/${encodeURIComponent(d.unique_id || d.booking_number)}`;
+      const safeLabel = esc(d.label || d.booking_number || 'Device');
+
+      return `
+        <div class="stat-card" style="padding:16px;border-left:4px solid ${statusColor};margin-bottom:12px;background:var(--card-bg,#151c2c);border-radius:var(--radius-sm,8px)">
+          <!-- Top Row: Device Info & Status -->
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span style="font-size:24px;padding:8px;background:rgba(255,255,255,0.04);border-radius:8px">${typeIcon}</span>
+              <div>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                  <span style="font-weight:700;font-size:15px;color:var(--text)">${escH(d.label || d.device_type)}</span>
+                  <span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:12px;background:${statusColor}20;color:${statusColor};border:1px solid ${statusColor}40">
+                    ● ${statusText}
+                  </span>
+                  ${batt !== undefined && batt !== null ? `
+                    <span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:12px;background:${battColor}18;color:${battColor};border:1px solid ${battColor}35">
+                      🔋 ${batt}%
+                    </span>` : ''}
+                </div>
+                <div style="font-size:12px;color:var(--muted);margin-top:4px;display:flex;gap:12px;flex-wrap:wrap">
+                  <span>ID: <strong style="color:#38bdf8">${escH(d.unique_id || '—')}</strong></span>
+                  <span>Booking: <strong>${escH(d.booking_number || '—')}</strong></span>
+                  <span>County: <strong>${escH(d.county || 'Lee')}</strong></span>
+                  ${d.phone ? `<span>Phone: <strong style="color:var(--text)">${escH(d.phone)}</strong></span>` : ''}
+                  ${d.traccar_device_id ? `<span>Traccar ID: <strong style="color:var(--muted)">#${escH(String(d.traccar_device_id))}</strong></span>` : ''}
+                </div>
+              </div>
+            </div>
+
+            <!-- Action buttons -->
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+              ${hasCoords ? `
+                <button onclick="SLGeoIntel.showOnMap(${lp.lat}, ${lp.lng}, '${safeLabel}')" class="btn-sm" style="background:#0ea5e9;color:#fff;border:none;border-radius:6px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer">
+                  🗺️ Map
+                </button>` : ''}
+              <button onclick="SLGeoIntel.copySetupLink('${esc(setupUrl)}')" class="btn-sm" style="background:#1e293b;color:#cbd5e1;border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer" title="Copy 1-Click Setup Link">
+                🔗 Copy Link
+              </button>
+              ${d.phone ? `
+                <button onclick="SLGeoIntel.sendSetupSms('${esc(d.phone)}', '${esc(setupUrl)}')" class="btn-sm" style="background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.4);border-radius:6px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer">
+                  💬 Send Link
+                </button>` : ''}
+              <button onclick="SLGeoIntel.toggleTelemetry('${d.device_id}')" class="btn-sm" style="background:#1e293b;color:#94a3b8;border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:11px;cursor:pointer" title="Telemetry Inspector">
+                🔍 Raw
+              </button>
+              ${d.status === 'active' ? `
+                <button onclick="SLGeoIntel.deactivateDevice('${d.device_id}')" class="btn-sm" style="background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.4);border-radius:6px;padding:5px 8px;font-size:11px;cursor:pointer" title="Deactivate">✕</button>` : ''}
+            </div>
+          </div>
+
+          <!-- Middle Row: Telemetry Chips -->
+          ${hasCoords ? `
+            <div style="display:flex;align-items:center;gap:12px;margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06);font-size:12px;color:var(--text);flex-wrap:wrap">
+              <a href="${mapsUrl}" target="_blank" style="color:var(--accent);text-decoration:none;font-weight:600;display:inline-flex;align-items:center;gap:4px">
+                📍 ${coordsStr} ↗
+              </a>
+              ${lp.accuracy ? `<span style="color:var(--muted)">Accuracy: <strong style="color:var(--text)">±${Math.round(lp.accuracy)}m</strong></span>` : ''}
+              ${lp.speed != null ? `<span style="color:var(--muted)">Speed: <strong style="color:var(--text)">${Math.round(lp.speed)} mph</strong></span>` : ''}
+              ${lp.altitude != null ? `<span style="color:var(--muted)">Altitude: <strong style="color:var(--text)">${Math.round(lp.altitude)}m</strong></span>` : ''}
+              <span style="color:var(--muted);margin-left:auto">Last fix: <strong>${timeAgo(d.last_seen || lp.timestamp)}</strong> (${d.last_seen ? new Date(d.last_seen).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '—'})</span>
+            </div>` : `
+            <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.06);font-size:12px;color:var(--gold)">
+              ⚠️ No position fix received yet. Send the setup link to the defendant to activate tracking.
+            </div>`}
+
+          <!-- Collapsible Raw Telemetry Drawer -->
+          <div id="raw-telemetry-${d.device_id}" style="display:none;margin-top:12px;padding:12px;background:#0b0f19;border-radius:8px;border:1px solid var(--border);font-family:monospace;font-size:11px;color:#94a3b8;max-height:220px;overflow:auto">
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px;color:var(--text);font-weight:700">
+              <span>Fix Telemetry & Attributes</span>
+              <span style="color:var(--accent)">Traccar Device ID: ${d.traccar_device_id || '—'}</span>
+            </div>
+            <pre style="margin:0;white-space:pre-wrap">${escH(JSON.stringify({ last_position: lp, last_seen: d.last_seen, attributes: attrs }, null, 2))}</pre>
+          </div>
         </div>
-        <div style="display:flex;gap:6px">
-          ${d.status==='active'?`<button onclick="SLGeoIntel.deactivateDevice('${d.device_id}')" class="btn-sm" style="font-size:11px;padding:4px 8px;background:var(--danger);color:#fff;border:none;border-radius:4px;cursor:pointer" title="Deactivate">✕</button>`:''}
-        </div>
-      </div>`;
+      `;
     }).join('');
+  }
+
+  function copySetupLink(url) {
+    navigator.clipboard.writeText(url).then(() => {
+      toast('✅ 1-Click Setup Link copied to clipboard!', 'success');
+    }).catch(() => {
+      window.prompt('Copy setup URL:', url);
+    });
+  }
+
+  async function sendSetupSms(phone, url) {
+    if (!phone) { toast('No phone number attached to device', 'error'); return; }
+    if (!confirm(`Send 1-click GPS setup link to ${phone} via BlueBubbles iMessage?`)) return;
+    toast(`📡 Sending setup message to ${phone}...`, 'info');
+    try {
+      const msg = `Shamrock Bail Bonds - Please tap this link to activate your required GPS monitoring: ${url}`;
+      await _post('/api/bb/send', { recipient: phone, message: msg });
+      toast(`✅ Setup link sent via BlueBubbles to ${phone}!`, 'success');
+    } catch (e) {
+      toast('Failed to send message: ' + e.message, 'error');
+    }
+  }
+
+  function showOnMap(lat, lng, label) {
+    if (window.SLTracking?.focusDevice) {
+      SLTracking.focusDevice(lat, lng, label);
+    } else {
+      window.open(`https://maps.google.com/?q=${lat},${lng}`, '_blank');
+    }
+  }
+
+  function toggleTelemetry(deviceId) {
+    const el = document.getElementById(`raw-telemetry-${deviceId}`);
+    if (el) {
+      el.style.display = el.style.display === 'none' ? 'block' : 'none';
+    }
   }
 
   async function registerDevice() {
@@ -373,5 +502,9 @@ const SLGeoIntel = (() => {
     createZone, deleteZone,
     ackViolation,
     addVehicle,
+    copySetupLink,
+    sendSetupSms,
+    showOnMap,
+    toggleTelemetry,
   };
 })();

@@ -99,6 +99,30 @@ async def _merge_location_history(booking_number: str) -> list:
                 "notes": ci.get("notes"),
             })
 
+    # Source 4: geo_devices collection (Traccar hardware & phone app GPS)
+    geo_devices_col = get_collection("geo_devices")
+    async for gd in geo_devices_col.find(
+        {"$or": [{"booking_number": booking_number}, {"unique_id": booking_number}], "last_position": {"$exists": True, "$ne": None}},
+        {"last_position": 1, "device_type": 1, "unique_id": 1, "_id": 0}
+    ):
+        lp = gd.get("last_position") or {}
+        lat = lp.get("lat")
+        lng = lp.get("lng")
+        if lat is not None and lng is not None:
+            ts = lp.get("timestamp") or lp.get("ts") or ""
+            key = f"{lat},{lng},{ts}"
+            if key not in seen_ts:
+                seen_ts.add(key)
+                merged.append({
+                    "lat": lat,
+                    "lng": lng,
+                    "accuracy": lp.get("accuracy"),
+                    "source": f"traccar_{gd.get('device_type', 'phone_app')}",
+                    "timestamp": ts,
+                    "county": None,
+                    "attributes": lp.get("attributes", {}),
+                })
+
     merged.sort(key=lambda e: e.get("timestamp") or "", reverse=True)
     return merged[:200]
 
@@ -180,6 +204,53 @@ async def tracking_map_data():
                 "check_in_frequency_days": bond.get("check_in_frequency_days", 30),
             })
 
+        # Also include active devices from geo_devices not already in active_bonds
+        existing_bookings = {d["booking_number"] for d in defendants if d.get("booking_number")}
+        geo_devices = get_collection("geo_devices")
+        async for gd in geo_devices.find({"status": "active", "last_position": {"$exists": True, "$ne": None}}):
+            bk = gd.get("booking_number") or gd.get("unique_id")
+            if bk not in existing_bookings:
+                existing_bookings.add(bk)
+                total_active += 1
+                lp = gd.get("last_position") or {}
+                attrs = lp.get("attributes") or {}
+                batt = attrs.get("batt") or attrs.get("batteryLevel")
+                defendants.append({
+                    "booking_number": bk,
+                    "defendant_name": gd.get("label") or gd.get("unique_id") or "Tracked Device",
+                    "county": gd.get("county") or "Lee",
+                    "bond_amount": 0,
+                    "premium": 0,
+                    "case_number": gd.get("unique_id"),
+                    "status": "active",
+                    "risk_score": 25,
+                    "last_check_in": gd.get("last_seen"),
+                    "next_check_in_due": "",
+                    "check_in_overdue": False,
+                    "latest_location": lp,
+                    "location_history": [lp],
+                    "location_count": 1,
+                    "missed_check_ins": 0,
+                    "out_of_area_count": 0,
+                    "alerts_count": 0,
+                    "alerts": [],
+                    "indemnitor_name": gd.get("phone") or "",
+                    "indemnitor_phone": gd.get("phone") or "",
+                    "geofence": None,
+                    "bond_date": gd.get("created_at"),
+                    "check_in_required": False,
+                    "check_in_frequency_days": 30,
+                    "device_info": {
+                        "unique_id": gd.get("unique_id"),
+                        "device_type": gd.get("device_type"),
+                        "phone": gd.get("phone"),
+                        "battery": batt,
+                        "accuracy": lp.get("accuracy"),
+                        "speed": lp.get("speed"),
+                        "traccar_device_id": gd.get("traccar_device_id"),
+                    }
+                })
+
         return {
             "defendants": defendants,
             "summary": {
@@ -249,7 +320,51 @@ async def tracking_history(booking_number):
             {"booking_number": booking_number}, {"_id": 0}
         )
         if not bond:
+            geo_devices = get_collection("geo_devices")
+            gd = await geo_devices.find_one({
+                "$or": [{"booking_number": booking_number}, {"unique_id": booking_number}],
+                "status": "active",
+            })
+            if gd:
+                full_history = await _merge_location_history(booking_number)
+                lp = gd.get("last_position") or {}
+                if not full_history and lp:
+                    full_history = [lp]
+                attrs = lp.get("attributes") or {}
+                batt = attrs.get("batt") or attrs.get("batteryLevel")
+                return {
+                    "booking_number": booking_number,
+                    "defendant_name": gd.get("label") or gd.get("unique_id") or "Tracked Device",
+                    "status": "active",
+                    "bond_amount": 0,
+                    "county": gd.get("county", "Lee"),
+                    "case_number": gd.get("unique_id"),
+                    "indemnitor_name": gd.get("phone", ""),
+                    "indemnitor_phone": gd.get("phone", ""),
+                    "risk_score": 25,
+                    "geofence": None,
+                    "check_in_required": False,
+                    "check_in_frequency_days": 30,
+                    "last_check_in": gd.get("last_seen"),
+                    "next_check_in_due": "",
+                    "location_history": full_history,
+                    "location_count": len(full_history),
+                    "alerts": [],
+                    "court_dates": [],
+                    "device_info": {
+                        "unique_id": gd.get("unique_id"),
+                        "device_type": gd.get("device_type"),
+                        "phone": gd.get("phone"),
+                        "battery": batt,
+                        "accuracy": lp.get("accuracy"),
+                        "speed": lp.get("speed"),
+                        "altitude": lp.get("altitude"),
+                        "traccar_device_id": gd.get("traccar_device_id"),
+                        "last_seen": gd.get("last_seen"),
+                    },
+                }
             return JSONResponse({"error": "Bond not found"}, status_code=404)
+
         for k, v in list(bond.items()):
             if isinstance(v, datetime):
                 bond[k] = v.isoformat()
@@ -265,6 +380,27 @@ async def tracking_history(booking_number):
                 if isinstance(v, datetime):
                     rem[k] = v.isoformat()
             court_dates.append(rem)
+
+        # Attach hardware device info if registered
+        geo_dev = await get_collection("geo_devices").find_one({
+            "$or": [{"booking_number": booking_number}, {"unique_id": booking_number}],
+            "status": "active",
+        })
+        dev_info = None
+        if geo_dev:
+            lp = geo_dev.get("last_position") or {}
+            attrs = lp.get("attributes") or {}
+            dev_info = {
+                "unique_id": geo_dev.get("unique_id"),
+                "device_type": geo_dev.get("device_type"),
+                "phone": geo_dev.get("phone"),
+                "battery": attrs.get("batt") or attrs.get("batteryLevel"),
+                "accuracy": lp.get("accuracy"),
+                "speed": lp.get("speed"),
+                "altitude": lp.get("altitude"),
+                "traccar_device_id": geo_dev.get("traccar_device_id"),
+                "last_seen": geo_dev.get("last_seen"),
+            }
 
         return {
             "booking_number": booking_number,
