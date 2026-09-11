@@ -536,6 +536,9 @@ async def traccar_webhook(request: Request):
     if not traccar_device_id:
         return JSONResponse({"error": "Missing device.id"}, status_code=400)
 
+    unique_id = device.get("uniqueId", "")
+    logger.info("[traccar_webhook] Position received for device id=%s uniqueId=%s lat=%s lon=%s", traccar_device_id, unique_id, position.get("latitude"), position.get("longitude"))
+
     svc = _get_service()
     result = await svc.sync_position(
         traccar_device_id=traccar_device_id,
@@ -548,9 +551,11 @@ async def traccar_webhook(request: Request):
         address=position.get("address", ""),
         timestamp=position.get("fixTime", ""),
         attributes=position.get("attributes", {}),
+        unique_id=unique_id,
     )
 
     if result:
         return {"ok": True, "synced": True}
     else:
+        logger.warning("[traccar_webhook] No active device matching traccar_device_id=%s unique_id=%s", traccar_device_id, unique_id)
         return {"ok": True, "synced": False, "reason": "No matching device binding"}

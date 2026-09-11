@@ -149,6 +149,7 @@ class GeoIntelligenceService:
         address: str = "",
         timestamp: str = "",
         attributes: dict | None = None,
+        unique_id: str = "",
     ) -> dict | None:
         """Process a position update from Traccar and sync to MongoDB.
 
@@ -158,11 +159,18 @@ class GeoIntelligenceService:
         now = datetime.now(timezone.utc).isoformat()
         ts = timestamp or now
 
-        # Find the device binding
-        device = await self.geo_devices.find_one({
-            "traccar_device_id": traccar_device_id,
+        # Find the device binding (by numeric ID, string ID, or unique_id)
+        query: dict = {
+            "$or": [
+                {"traccar_device_id": traccar_device_id},
+                {"traccar_device_id": str(traccar_device_id)},
+            ],
             "status": "active",
-        })
+        }
+        if unique_id:
+            query["$or"].append({"unique_id": unique_id})
+
+        device = await self.geo_devices.find_one(query)
         if not device:
             return None
 

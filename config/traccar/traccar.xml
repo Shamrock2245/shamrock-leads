@@ -81,9 +81,15 @@
   <!-- Traccar forwards every position update + event to our Flask API     -->
   <!-- The dashboard container is reachable at shamrock-dashboard:5050     -->
   <entry key='forward.enable'>true</entry>
+  <entry key='forward.type'>json</entry>
   <entry key='forward.url'>http://shamrock-dashboard:5050/api/traccar/webhook</entry>
-  <entry key='forward.json'>true</entry>
+  <entry key='forward.retry.enable'>true</entry>
   <!-- Auth header comes from docker-compose CONFIG_FORWARD_HEADER (TRACCAR_WEBHOOK_SECRET). -->
+
+  <entry key='event.forward.enable'>true</entry>
+  <entry key='event.forward.type'>json</entry>
+  <entry key='event.forward.url'>http://shamrock-dashboard:5050/api/traccar/webhook</entry>
+  <entry key='event.forward.retry.enable'>true</entry>
 
   <!-- ── Storage ───────────────────────────────────────────────────────── -->
   <!-- Keep position history for 90 days -->

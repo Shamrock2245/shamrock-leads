@@ -56,11 +56,19 @@ async def api_traccar_device_status(device_id: str):
         last_seen = None
         lat = None
         lng = None
+        accuracy = None
+        battery = None
         online = False
         
         if device:
-            last_seen = device.get("last_seen") or device.get("updated_at")
-            if last_seen:
+            last_pos = device.get("last_position") or {}
+            last_seen = device.get("last_seen") or last_pos.get("timestamp")
+            lat = last_pos.get("lat")
+            lng = last_pos.get("lng")
+            accuracy = last_pos.get("accuracy")
+            attrs = last_pos.get("attributes") or {}
+            battery = attrs.get("batt") or attrs.get("batteryLevel") or attrs.get("battery")
+            if last_pos.get("lat") is not None or device.get("last_seen"):
                 online = True
 
         return {
@@ -68,6 +76,10 @@ async def api_traccar_device_status(device_id: str):
             "device_id": device_id,
             "connected": online,
             "last_seen": last_seen,
+            "lat": lat,
+            "lng": lng,
+            "accuracy": accuracy,
+            "battery": battery,
         }
     except Exception as e:
         logger.error("Failed to check device status: %s", e)
@@ -154,6 +166,14 @@ async def traccar_setup_page(request: Request, device_id: str):
         <div class="pulse-dot"></div>
         <span id="statusText">Waiting for connection...</span>
       </div>
+      <div id="statusDetail" style="margin-top: 8px; font-size: 13px; color: var(--accent); display: none;"></div>
+    </div>
+
+    <!-- Success Confirmation Banner (hidden until connected) -->
+    <div id="successBanner" class="card" style="display: none; background: rgba(0, 230, 118, 0.12); border-color: var(--accent); text-align: center; padding: 20px;">
+      <div style="font-size: 28px; margin-bottom: 8px;">✅</div>
+      <h3 style="color: #fff; font-size: 18px; margin-bottom: 6px;">Tracking Active & Verified</h3>
+      <p style="color: var(--text); font-size: 14px; line-height: 1.5;">Your device is successfully reporting live location to Shamrock Bail Bonds. Please leave the Traccar Client app running in the background.</p>
     </div>
 
     <!-- Step 1: Download App -->
@@ -232,13 +252,30 @@ async def traccar_setup_page(request: Request, device_id: str):
         const data = await r.json();
         const badge = document.getElementById('statusBadge');
         const text = document.getElementById('statusText');
+        const detail = document.getElementById('statusDetail');
+        const banner = document.getElementById('successBanner');
         
         if (data.connected) {{
           badge.classList.add('online');
           text.textContent = '✅ Connected & Active';
+          banner.style.display = 'block';
+          
+          let parts = [];
+          if (data.battery !== undefined && data.battery !== null) {{
+            parts.push('🔋 Battery: ' + data.battery + '%');
+          }}
+          if (data.accuracy) {{
+            parts.push('🎯 Accuracy: ±' + Math.round(data.accuracy) + 'm');
+          }}
+          if (parts.length > 0) {{
+            detail.textContent = parts.join(' • ');
+            detail.style.display = 'block';
+          }}
         }} else {{
           badge.classList.remove('online');
           text.textContent = 'Waiting for connection...';
+          banner.style.display = 'none';
+          detail.style.display = 'none';
         }}
       }} catch (e) {{
         console.warn('Status poll error:', e);
