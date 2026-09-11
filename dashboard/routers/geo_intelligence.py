@@ -55,7 +55,7 @@ async def traccar_health():
 @geo_intel_bp.get("/devices")
 async def list_devices(booking_number: str | None = Query(default=None)):
     """List all registered tracking devices, optionally by booking number."""
-    booking = booking_number
+    booking = booking_number if isinstance(booking_number, str) else None
     svc = _get_service()
     devices = await svc.list_devices(booking)
     public_host = os.getenv("TRACCAR_PUBLIC_HOST", "leads.shamrockbailbonds.biz")
