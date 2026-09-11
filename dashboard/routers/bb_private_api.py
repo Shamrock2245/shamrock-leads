@@ -180,7 +180,14 @@ class BlueBubblesClient:
             body["subject"] = subject
         if selected_message_guid:
             body["selectedMessageGuid"] = selected_message_guid
-        return await self._request("POST", "/api/v1/message/text", json_body=body)
+        res = await self._request("POST", "/api/v1/message/text", json_body=body)
+        # Auto-fallback: If private-api encounters an uninitialized chat (500 Chat does not exist),
+        # automatically fallback to apple-script which triggers native Messages creation.
+        if not res.get("success") and method == "private-api":
+            body["method"] = "apple-script"
+            logger.info("[bb] private-api send error on %s, falling back to apple-script method", chat_guid)
+            return await self._request("POST", "/api/v1/message/text", json_body=body)
+        return res
 
     async def get_messages(self, after: int | None = None,
                            limit: int = 50, sort: str = "DESC") -> dict:
