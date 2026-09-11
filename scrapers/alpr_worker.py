@@ -135,6 +135,9 @@ def run_forever() -> None:
         cycle += 1
         t0 = time.time()
         try:
+            if not engine.ready and cycle % 10 == 0:
+                logger.info("Attempting ALPR engine reload (cycle %d)...", cycle)
+                engine.reload()
             matcher.maybe_reload(every_s=60.0)
             due = streams.iter_due_frames()
             for state, frame in due:

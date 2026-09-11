@@ -367,7 +367,7 @@ async def _ingest_lee_county_api(booking_id: str, source_url: str) -> Optional[d
         "middle_name": middle,
         "last_name": last,
         "charges": charges_str,
-        "bond_amount": str(round(total_bond, 2)) if total_bond > 0 else "0",
+        "bond_amount": round(total_bond, 2) if total_bond > 0 else 0.0,
         "bond_type": " / ".join(bond_types) if bond_types else "Surety",
         "case_number": ", ".join(case_numbers) if case_numbers else "",
         "court_date": court_date_val,
@@ -442,7 +442,7 @@ async def _ingest_lee_from_mongo(booking_id: str, source_url: str) -> Optional[d
             "booking_number": booking_id,
             "full_name": _first_str(doc.get("full_name"), doc.get("Full_Name")),
             "charges": charges,
-            "bond_amount": str(bond_f) if bond_f else "0",
+            "bond_amount": round(bond_f, 2) if bond_f else 0.0,
             "case_number": _first_str(doc.get("case_number"), doc.get("Case_Number")),
             "court_date": _first_str(doc.get("court_date"), doc.get("Court_Date")) or "TBN",
             "court_location": _first_str(doc.get("court_location"), doc.get("Court_Location")),
@@ -591,12 +591,12 @@ def _normalize(data):
         data["full_name"] = f"{_title_case_name(parts[1])} {_title_case_name(parts[0])}"
     elif name.isupper():
         data["full_name"] = _title_case_name(name)
-    ba = data.get("bond_amount", "")
-    if ba:
+    ba = data.get("bond_amount", 0)
+    if ba is not None:
         try:
-            data["bond_amount"] = str(float(str(ba).replace(",", "").replace("$", "")))
+            data["bond_amount"] = float(str(ba).replace(",", "").replace("$", "").strip() or 0)
         except (ValueError, TypeError):
-            pass
+            data["bond_amount"] = 0.0
     for k in data:
         if isinstance(data[k], str):
             data[k] = " ".join(data[k].split())

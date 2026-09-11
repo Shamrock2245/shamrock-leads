@@ -1046,26 +1046,44 @@ async def api_bond_intelligence(
         match_stage["state"] = state.upper()
     if county:
         match_stage["county"] = {"$regex": county, "$options": "i"}
+
+    safe_bond_fields = {
+        "$addFields": {
+            "_safe_bond": {
+                "$convert": {
+                    "input": "$bond_amount",
+                    "to": "double",
+                    "onError": 0.0,
+                    "onNull": 0.0,
+                }
+            },
+            "_custody_str": {
+                "$ifNull": ["$status", {"$ifNull": ["$custody_status", ""]}]
+            },
+        }
+    }
+
     try:
         summary_result = {}
         async for doc in arrests.aggregate([
             {"$match": match_stage},
+            safe_bond_fields,
             {"$group": {
                 "_id": None,
                 "total_arrests": {"$sum": 1},
-                "total_bond_value": {"$sum": {"$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", 0]}},
-                "avg_bond": {"$avg": {"$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", None]}},
-                "max_bond": {"$max": "$bond_amount"},
-                "with_bond": {"$sum": {"$cond": [{"$gt": ["$bond_amount", 0]}, 1, 0]}},
-                "no_bond": {"$sum": {"$cond": [{"$lte": ["$bond_amount", 0]}, 1, 0]}},
+                "total_bond_value": {"$sum": "$_safe_bond"},
+                "avg_bond": {"$avg": {"$cond": [{"$gt": ["$_safe_bond", 0]}, "$_safe_bond", None]}},
+                "max_bond": {"$max": "$_safe_bond"},
+                "with_bond": {"$sum": {"$cond": [{"$gt": ["$_safe_bond", 0]}, 1, 0]}},
+                "no_bond": {"$sum": {"$cond": [{"$lte": ["$_safe_bond", 0]}, 1, 0]}},
                 "in_custody": {"$sum": {"$cond": [
-                    {"$regexMatch": {"input": {"$ifNull": ["$custody_status", ""]}, "regex": "custody|confined|held|booked", "options": "i"}},
+                    {"$regexMatch": {"input": "$_custody_str", "regex": "custody|confined|held|booked", "options": "i"}},
                     1, 0,
                 ]}},
                 "writable": {"$sum": {"$cond": [
                     {"$and": [
-                        {"$gt": ["$bond_amount", 0]},
-                        {"$regexMatch": {"input": {"$ifNull": ["$custody_status", ""]}, "regex": "custody|confined|held|booked", "options": "i"}},
+                        {"$gt": ["$_safe_bond", 0]},
+                        {"$regexMatch": {"input": "$_custody_str", "regex": "custody|confined|held|booked", "options": "i"}},
                     ]},
                     1, 0,
                 ]}},
@@ -1074,9 +1092,9 @@ async def api_bond_intelligence(
                     1, 0,
                 ]}},
                 "est_premium": {"$sum": {"$cond": [
-                    {"$gt": ["$bond_amount", 0]},
-                    {"$max": [100, {"$multiply": ["$bond_amount", 0.10]}]},
-                    0,
+                    {"$gt": ["$_safe_bond", 0]},
+                    {"$max": [100.0, {"$multiply": ["$_safe_bond", 0.10]}]},
+                    0.0,
                 ]}},
             }},
         ], allowDiskUse=True):
@@ -1085,17 +1103,18 @@ async def api_bond_intelligence(
         by_state = []
         async for doc in arrests.aggregate([
             {"$match": match_stage},
+            safe_bond_fields,
             {"$group": {
                 "_id": "$state",
                 "total_arrests": {"$sum": 1},
-                "total_bond": {"$sum": {"$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", 0]}},
-                "avg_bond": {"$avg": {"$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", None]}},
-                "max_bond": {"$max": "$bond_amount"},
-                "with_bond": {"$sum": {"$cond": [{"$gt": ["$bond_amount", 0]}, 1, 0]}},
+                "total_bond": {"$sum": "$_safe_bond"},
+                "avg_bond": {"$avg": {"$cond": [{"$gt": ["$_safe_bond", 0]}, "$_safe_bond", None]}},
+                "max_bond": {"$max": "$_safe_bond"},
+                "with_bond": {"$sum": {"$cond": [{"$gt": ["$_safe_bond", 0]}, 1, 0]}},
                 "est_premium": {"$sum": {"$cond": [
-                    {"$gt": ["$bond_amount", 0]},
-                    {"$max": [100, {"$multiply": ["$bond_amount", 0.10]}]},
-                    0,
+                    {"$gt": ["$_safe_bond", 0]},
+                    {"$max": [100.0, {"$multiply": ["$_safe_bond", 0.10]}]},
+                    0.0,
                 ]}},
             }},
             {"$sort": {"est_premium": -1}},
@@ -1113,17 +1132,18 @@ async def api_bond_intelligence(
         by_county = []
         async for doc in arrests.aggregate([
             {"$match": match_stage},
+            safe_bond_fields,
             {"$group": {
                 "_id": {"county": "$county", "state": "$state"},
                 "total_arrests": {"$sum": 1},
-                "total_bond": {"$sum": {"$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", 0]}},
-                "avg_bond": {"$avg": {"$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", None]}},
-                "max_bond": {"$max": "$bond_amount"},
-                "with_bond": {"$sum": {"$cond": [{"$gt": ["$bond_amount", 0]}, 1, 0]}},
+                "total_bond": {"$sum": "$_safe_bond"},
+                "avg_bond": {"$avg": {"$cond": [{"$gt": ["$_safe_bond", 0]}, "$_safe_bond", None]}},
+                "max_bond": {"$max": "$_safe_bond"},
+                "with_bond": {"$sum": {"$cond": [{"$gt": ["$_safe_bond", 0]}, 1, 0]}},
                 "writable": {"$sum": {"$cond": [
                     {"$and": [
-                        {"$gt": ["$bond_amount", 0]},
-                        {"$regexMatch": {"input": {"$ifNull": ["$custody_status", ""]}, "regex": "custody|confined|held|booked", "options": "i"}},
+                        {"$gt": ["$_safe_bond", 0]},
+                        {"$regexMatch": {"input": "$_custody_str", "regex": "custody|confined|held|booked", "options": "i"}},
                     ]},
                     1, 0,
                 ]}},
@@ -1132,9 +1152,9 @@ async def api_bond_intelligence(
                     1, 0,
                 ]}},
                 "est_premium": {"$sum": {"$cond": [
-                    {"$gt": ["$bond_amount", 0]},
-                    {"$max": [100, {"$multiply": ["$bond_amount", 0.10]}]},
-                    0,
+                    {"$gt": ["$_safe_bond", 0]},
+                    {"$max": [100.0, {"$multiply": ["$_safe_bond", 0.10]}]},
+                    0.0,
                 ]}},
             }},
             {"$sort": {"est_premium": -1}},
@@ -1159,12 +1179,14 @@ async def api_bond_intelligence(
                          50000: "$50K\u2013$99.9K", 100000: "$100K\u2013$499.9K", 500000: "$500K+"}
         try:
             async for doc in arrests.aggregate([
-                {"$match": {**match_stage, "bond_amount": {"$gt": 0}}},
+                {"$match": match_stage},
+                safe_bond_fields,
+                {"$match": {"_safe_bond": {"$gt": 0}}},
                 {"$bucket": {
-                    "groupBy": "$bond_amount",
+                    "groupBy": "$_safe_bond",
                     "boundaries": [1, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000, 500000, 9999999],
                     "default": "Other",
-                    "output": {"count": {"$sum": 1}, "total": {"$sum": "$bond_amount"}},
+                    "output": {"count": {"$sum": 1}, "total": {"$sum": "$_safe_bond"}},
                 }},
             ]):
                 distribution.append({
@@ -1178,10 +1200,12 @@ async def api_bond_intelligence(
         top_charges = []
         try:
             async for doc in arrests.aggregate([
-                {"$match": {**match_stage, "bond_amount": {"$gt": 0}}},
+                {"$match": match_stage},
+                safe_bond_fields,
+                {"$match": {"_safe_bond": {"$gt": 0}}},
                 {"$unwind": {"path": "$charges", "preserveNullAndEmptyArrays": False}},
                 {"$group": {"_id": "$charges", "count": {"$sum": 1},
-                            "total_bond": {"$sum": "$bond_amount"}, "avg_bond": {"$avg": "$bond_amount"}}},
+                            "total_bond": {"$sum": "$_safe_bond"}, "avg_bond": {"$avg": "$_safe_bond"}}},
                 {"$sort": {"total_bond": -1}},
                 {"$limit": 20},
             ]):
@@ -1198,6 +1222,7 @@ async def api_bond_intelligence(
         try:
             async for doc in arrests.aggregate([
                 {"$match": match_stage},
+                safe_bond_fields,
                 {"$addFields": {"_parsed_date": {
                     "$cond": [
                         {"$eq": [{"$type": "$scraped_at"}, "date"]},
@@ -1213,8 +1238,8 @@ async def api_bond_intelligence(
                 {"$match": {"_parsed_date": {"$ne": None}}},
                 {"$addFields": {"date_str": {"$dateToString": {"format": "%Y-%m-%d", "date": "$_parsed_date"}}}},
                 {"$group": {"_id": "$date_str", "arrests": {"$sum": 1},
-                            "bond_total": {"$sum": {"$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", 0]}},
-                            "avg_bond": {"$avg": {"$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", None]}}}},
+                            "bond_total": {"$sum": "$_safe_bond"},
+                            "avg_bond": {"$avg": {"$cond": [{"$gt": ["$_safe_bond", 0]}, "$_safe_bond", None]}}}},
                 {"$sort": {"_id": 1}},
                 {"$limit": 30},
             ]):
@@ -1263,21 +1288,26 @@ async def api_arrests_recent(
     arrests = get_collection("arrests")
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(hours=hours)
-    query: dict = {"$or": [
+    time_or = [
         {"scraped_at": {"$gte": cutoff.isoformat()}},
         {"scraped_at": {"$gte": cutoff}},
         {"created_at": {"$gte": cutoff.isoformat()}},
-    ]}
+    ]
+    and_clauses: list[dict] = [{"$or": time_or}]
     if state:
-        query["state"] = state.upper()
+        and_clauses.append({"state": state.upper()})
     if county:
-        query["county"] = {"$regex": county, "$options": "i"}
+        and_clauses.append({"county": {"$regex": county, "$options": "i"}})
     if min_bond > 0:
-        query["bond_amount"] = {"$gte": min_bond}
+        and_clauses.append({"bond_amount": {"$gte": min_bond}})
     if min_score > 0:
-        query["lead_score"] = {"$gte": min_score}
+        and_clauses.append({"lead_score": {"$gte": min_score}})
     if in_custody:
-        query["custody_status"] = {"$regex": "custody|confined|held|booked", "$options": "i"}
+        and_clauses.append({"$or": [
+            {"status": {"$regex": "custody|confined|held|booked", "$options": "i"}},
+            {"custody_status": {"$regex": "custody|confined|held|booked", "$options": "i"}},
+        ]})
+    query: dict = {"$and": and_clauses} if len(and_clauses) > 1 else and_clauses[0]
     total = await arrests.count_documents(query)
     results = []
     async for doc in arrests.find(query, {"_id": 0}).sort("scraped_at", -1).limit(limit):

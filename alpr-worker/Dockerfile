@@ -58,8 +58,10 @@ ENV HOME=/home/appuser
 
 # Non-root
 RUN groupadd -r appuser && useradd -r -g appuser -s /sbin/nologin -m -d /home/appuser appuser \
+    && mkdir -p /home/appuser/.cache/open-image-models /data/alpr_crops \
     && chown -R appuser:appuser /app /data /home/appuser
 USER appuser
+RUN python -c "from fast_alpr import ALPR; ALPR()"
 
 HEALTHCHECK --interval=60s --timeout=10s --start-period=40s --retries=3 \
     CMD python -c "import os,sys; sys.exit(0 if os.getenv('ALPR_ENABLED','true') else 0)"
