@@ -102,6 +102,10 @@ async def traccar_setup_page(request: Request, device_id: str):
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Shamrock GPS Setup</title>
+  <meta property="og:title" content="☘️ Shamrock GPS Monitoring Setup">
+  <meta property="og:description" content="Tap to auto-configure Traccar Client for Shamrock Bail Bonds GPS monitoring.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://{public_host}/traccar/setup/{device_id}">
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
   <style>
     :root {{
