@@ -18,6 +18,7 @@ COUNTY_URL_PATTERNS = {
     r"desotosheriff\.com": "DeSoto", r"manateesheriff\.com": "Manatee",
     r"sarasotasheriff\.org": "Sarasota", r"hillsboroughcounty\.org": "Hillsborough",
     r"pcsoweb\.com": "Pinellas", r"inmatelookup\.mcso\.org": "Marion",
+    r"pbso\.org": "Palm Beach",
 }
 
 FL_COUNTIES_UPPER = {

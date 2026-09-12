@@ -643,6 +643,8 @@ window.SLProspective = (function () {
         '<div class="ld-mug ld-mug-fallback" style="display:none">' + esc(initials) + '</div>'
       : '<div class="ld-mug ld-mug-fallback">' + esc(initials) + '</div>';
 
+    var writeEligible = pickLeadField(lead, bond, ['write_eligible'], false);
+
     body.innerHTML =
       '<div class="ld-workspace">' +
         '<div class="ld-hero">' + heroPhoto +
@@ -650,6 +652,7 @@ window.SLProspective = (function () {
             '<div class="ld-name">' + esc(name) + '</div>' +
             '<div class="ld-booking mono">' + esc(booking) + (county ? ' · ' + esc(county) : '') + (state ? ' (' + esc(String(state).toUpperCase()) + ')' : '') + '</div>' +
             '<div class="ld-pill-row">' +
+              (writeEligible ? '<span class="ld-pill" style="background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.4);font-weight:700">☘️ WRITE BOOK</span>' : '<span class="ld-pill ld-pill-muted">INTEL ONLY</span>') +
               '<span class="score-pill ' + scoreCls + '">' + esc(score) + (status ? ' · ' + esc(status) : '') + '</span>' +
               (custody ? '<span class="ld-pill ' + custCls + '">' + esc(custody) + '</span>' : '') +
               (bondType ? '<span class="ld-pill ld-pill-muted">' + esc(bondType) + '</span>' : '') +

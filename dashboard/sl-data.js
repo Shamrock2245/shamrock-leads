@@ -109,10 +109,11 @@ function renderLeads() {
     const stColor = stateColors[st] || '#64748b';
     const scrapedRel = _relTime(l.scraped_at);
     const arrestDisp = fmtDate(l.arrest_date || l.booking_date);
+    const writeBadge = l.write_eligible ? `<span class="write-eligible-pill" title="Shamrock Write-Eligible Book" style="display:inline-block;margin-left:4px;padding:1px 5px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.4);border-radius:4px;font-size:10px;font-weight:700">WRITE</span>` : '';
     return `<tr class="ld-clickable" title="Open lead detail" onclick="if(!event.target.closest('select,a,button,input'))SLProspective&&SLProspective.openDetail('${bkJs}')">
       <td><strong>${l.full_name||'Unknown'}</strong><br><span style="color:var(--muted);font-size:11px">${[l.sex,l.race,l.dob].filter(Boolean).join(' · ')}</span></td>
       <td><span style="background:${stColor}22;color:${stColor};border:1px solid ${stColor}44;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:700">${st}</span></td>
-      <td>${(l.county&&l.county!=='—')?`<span class="county-badge" data-county="${l.county}">${l.county}</span>`:'—'}</td>
+      <td>${(l.county&&l.county!=='—')?`<span class="county-badge" data-county="${l.county}">${l.county}</span>${writeBadge}`:'—'}</td>
       <td title="${(l.charges||'').replace(/"/g,'&quot;')}">${charges}</td>
       <td class="${bc}">$${bond.toLocaleString()}</td>
       <td><span class="score-pill ${scoreCls}">${l.lead_score||0} ${statusLabel}</span></td>
@@ -203,9 +204,10 @@ async function loadDashboard() {
         const bc = bond>=10000?'bond-high':bond>=2500?'bond-mid':'bond-low';
         const charges = (l.charges||'').length > 60 ? (l.charges||'').slice(0,57)+'…' : (l.charges||'—');
         const bkJs = String(l.booking_number||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+        const writeBadge = l.write_eligible ? `<span class="write-eligible-pill" title="Shamrock Write-Eligible Book" style="display:inline-block;margin-left:4px;padding:1px 5px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.4);border-radius:4px;font-size:10px;font-weight:700">WRITE</span>` : '';
         return `<tr class="ld-clickable" title="Open lead detail" onclick="if(!event.target.closest('button,select,a,input'))SLProspective&&SLProspective.openDetail('${bkJs}')">
           <td><strong>${l.full_name||'?'}</strong><br><span style="color:var(--muted);font-size:11px">${l.dob||''} · ${l.booking_number||''}</span></td>
-          <td>${(l.county&&l.county!=='—')?`<span class="county-badge" data-county="${l.county}">${l.county}</span>`:'—'}</td>
+          <td>${(l.county&&l.county!=='—')?`<span class="county-badge" data-county="${l.county}">${l.county}</span>${writeBadge}`:'—'}</td>
           <td class="${bc}">$${bond.toLocaleString()}</td>
           <td style="color:var(--success);font-weight:600">$${prem.toLocaleString()}</td>
           <td><span class="score-pill ${{'hot':'score-hot','warm':'score-warm','cold':'score-cold','disqualified':'score-disq'}[(l.lead_status||'').toLowerCase()]||'score-warm'}">${l.lead_score||0}</span></td>

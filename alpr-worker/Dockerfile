@@ -39,11 +39,9 @@ RUN pip install --no-cache-dir \
 # Application code
 COPY services/ /app/services/
 COPY scrapers/alpr_worker.py /app/scrapers/alpr_worker.py
-COPY config/alpr_cameras.json /app/config/alpr_cameras.json
+COPY config/ /app/config/
 COPY writers/ /app/writers/
 COPY core/ /app/core/
-COPY config/settings.py /app/config/settings.py
-COPY config/__init__.py /app/config/__init__.py
 
 RUN mkdir -p /app/scrapers /data/alpr_crops \
     && printf '' > /app/scrapers/__init__.py \
