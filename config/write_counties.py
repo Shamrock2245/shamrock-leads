@@ -32,3 +32,14 @@ def fa_watch_counties() -> list[str]:
             seen.add(key)
             out.append(name)
     return out
+
+
+def is_write_eligible(county: str, state: str = "FL") -> bool:
+    """Return True if county is in Shamrock's active write-eligible list."""
+    if not county:
+        return False
+    if state and state.upper() != "FL":
+        return False
+    bare = county.split("(")[0].replace("County", "").strip().casefold()
+    return any(bare == c.casefold() for c in WRITE_ELIGIBLE_COUNTIES)
+

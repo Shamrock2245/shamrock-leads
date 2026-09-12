@@ -916,7 +916,8 @@ def _ensure_key_fl_counties_enabled():
         client = MongoClient(settings.MONGODB_URI, serverSelectionTimeoutMS=5000)
         db = client[settings.MONGODB_DB_NAME]
         col = db["scraper_config"]
-        key = ("Lee", "Sarasota", "Collier", "Charlotte", "Manatee", "DeSoto", "Hendry")
+        from config.write_counties import fa_watch_counties
+        key = tuple(fa_watch_counties())
         now = datetime.now(timezone.utc)
         for bare in key:
             label = f"{bare} (FL)"

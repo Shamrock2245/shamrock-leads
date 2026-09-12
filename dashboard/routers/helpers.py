@@ -38,13 +38,19 @@ def serialize_doc(doc: dict) -> dict:
     - ObjectId  → hex string
     - booking_number (int/float) → string  (prevents JS .replace() TypeError)
     """
-    for k, v in doc.items():
+    for k, v in list(doc.items()):
         if isinstance(v, datetime):
             doc[k] = v.isoformat()
         elif isinstance(v, ObjectId):
             doc[k] = str(v)
         elif k == "booking_number" and not isinstance(v, str):
             doc[k] = str(v) if v is not None else ""
+    if "county" in doc and "write_eligible" not in doc:
+        try:
+            from config.write_counties import is_write_eligible
+            doc["write_eligible"] = is_write_eligible(doc.get("county"), doc.get("state", "FL"))
+        except Exception:
+            pass
     return doc
 
 
