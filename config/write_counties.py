@@ -125,3 +125,50 @@ def is_write_eligible(county: str, state: Optional[str] = "FL") -> bool:
     if resolved != "FL":
         return False
     return any(bare.casefold() == c.casefold() for c in WRITE_ELIGIBLE_COUNTIES)
+
+
+WRITE_BOOK_OVERRIDE_MIN_REASON = 8
+
+
+def evaluate_write_book(
+    county: str,
+    state: Optional[str] = None,
+    *,
+    override: bool = False,
+    override_reason: str = "",
+) -> dict:
+    """Decide whether a write-book action may proceed.
+
+    Eligible Florida write-book counties pass. Others require an explicit
+    staff override plus a reason of at least WRITE_BOOK_OVERRIDE_MIN_REASON
+    characters.
+    """
+    eligible = is_write_eligible(county, state)
+    reason = (override_reason or "").strip()
+    if eligible:
+        return {
+            "allowed": True,
+            "eligible": True,
+            "override_applied": False,
+            "error": None,
+        }
+    if override and len(reason) >= WRITE_BOOK_OVERRIDE_MIN_REASON:
+        return {
+            "allowed": True,
+            "eligible": False,
+            "override_applied": True,
+            "error": None,
+        }
+    if override:
+        return {
+            "allowed": False,
+            "eligible": False,
+            "override_applied": False,
+            "error": "write_book_override_reason must be at least 8 characters",
+        }
+    return {
+        "allowed": False,
+        "eligible": False,
+        "override_applied": False,
+        "error": "not_write_eligible",
+    }

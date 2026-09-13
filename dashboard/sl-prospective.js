@@ -643,7 +643,12 @@ window.SLProspective = (function () {
         '<div class="ld-mug ld-mug-fallback" style="display:none">' + esc(initials) + '</div>'
       : '<div class="ld-mug ld-mug-fallback">' + esc(initials) + '</div>';
 
-    var writeEligible = pickLeadField(lead, bond, ['write_eligible'], false);
+    var writeEligible = (lead && lead.write_eligible === true) || (bond && bond.write_eligible === true);
+    var writeKnown = (lead && Object.prototype.hasOwnProperty.call(lead, 'write_eligible'))
+      || (bond && Object.prototype.hasOwnProperty.call(bond, 'write_eligible'));
+    var writePill = writeEligible
+      ? '<span class="ld-pill" style="background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.4);font-weight:700">☘️ WRITE BOOK</span>'
+      : (writeKnown ? '<span class="ld-pill ld-pill-muted">INTEL ONLY</span>' : '');
 
     body.innerHTML =
       '<div class="ld-workspace">' +
@@ -652,7 +657,7 @@ window.SLProspective = (function () {
             '<div class="ld-name">' + esc(name) + '</div>' +
             '<div class="ld-booking mono">' + esc(booking) + (county ? ' · ' + esc(county) : '') + (state ? ' (' + esc(String(state).toUpperCase()) + ')' : '') + '</div>' +
             '<div class="ld-pill-row">' +
-              (writeEligible ? '<span class="ld-pill" style="background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.4);font-weight:700">☘️ WRITE BOOK</span>' : '<span class="ld-pill ld-pill-muted">INTEL ONLY</span>') +
+              writePill +
               '<span class="score-pill ' + scoreCls + '">' + esc(score) + (status ? ' · ' + esc(status) : '') + '</span>' +
               (custody ? '<span class="ld-pill ' + custCls + '">' + esc(custody) + '</span>' : '') +
               (bondType ? '<span class="ld-pill ld-pill-muted">' + esc(bondType) + '</span>' : '') +
@@ -1255,16 +1260,33 @@ window.SLProspective = (function () {
     if (!bond) return;
     if (!confirm('Officialize bond for ' + (bond.defendant_name || bk) + '?\n\nThis will create the bond record and open the DocuSeal paperwork workflow.')) return;
     try {
+      var body = { agent: 'Brendan' };
       var r = await fetch(API + '/api/prospective-bonds/' + encodeURIComponent(bk) + '/officialize', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agent: 'Brendan' })
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
       });
       var d = await r.json();
+      if (r.status === 403 && d && d.error === 'not_write_eligible') {
+        var reason = prompt(
+          (d.message || 'This county is not on the Shamrock write book.') +
+          '\n\nEnter an override reason (8+ characters), or cancel.'
+        );
+        if (!reason || reason.trim().length < 8) {
+          toast('Write-book override cancelled', 'error');
+          return;
+        }
+        body.write_book_override = true;
+        body.write_book_override_reason = reason.trim();
+        r = await fetch(API + '/api/prospective-bonds/' + encodeURIComponent(bk) + '/officialize', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+        });
+        d = await r.json();
+      }
       if (d.success) {
         toast('Bond officialized! Paperwork workflow started.', 'success');
         closeDetail();
         load();
         if (window.SLActiveBonds && window.SLActiveBonds.load) setTimeout(SLActiveBonds.load, 1000);
-      } else toast(d.error || 'Failed', 'error');
+      } else toast(d.error || d.message || 'Failed', 'error');
     } catch (e) { toast('Error: ' + e.message, 'error'); }
   }
 

@@ -3,9 +3,13 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 import math
 from datetime import datetime
 from bson import ObjectId
+from fastapi.responses import JSONResponse
+
+logger = logging.getLogger(__name__)
 
 
 def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -45,13 +49,96 @@ def serialize_doc(doc: dict) -> dict:
             doc[k] = str(v)
         elif k == "booking_number" and not isinstance(v, str):
             doc[k] = str(v) if v is not None else ""
+    return attach_write_eligible(doc)
+
+
+def attach_write_eligible(doc: dict) -> dict:
+    """Set write_eligible when county is present and the flag is missing."""
+    if not isinstance(doc, dict):
+        return doc
     if "county" in doc and "write_eligible" not in doc:
-        try:
-            from config.write_counties import is_write_eligible
-            doc["write_eligible"] = is_write_eligible(doc.get("county"), doc.get("state"))
-        except Exception:
-            pass
+        from config.write_counties import is_write_eligible
+        doc["write_eligible"] = is_write_eligible(doc.get("county"), doc.get("state"))
     return doc
+
+
+def _truthy_override(value) -> bool:
+    if value is True:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes")
+    return value in (1,)
+
+
+async def reject_unless_write_book(
+    *,
+    county: str,
+    state: str | None = None,
+    body: dict | None = None,
+    action: str,
+    entity_id: str = "",
+    actor: str = "dashboard",
+) -> JSONResponse | None:
+    """Return a 403/400 response when the county is off the write book.
+
+    Staff may proceed with write_book_override=true and a reason of 8+ chars.
+    Override is written to audit_events.
+    """
+    from config.write_counties import evaluate_write_book
+
+    body = body or {}
+    override = _truthy_override(body.get("write_book_override"))
+    reason = str(body.get("write_book_override_reason") or "").strip()
+    result = evaluate_write_book(
+        county, state, override=override, override_reason=reason,
+    )
+    if result["allowed"]:
+        if result["override_applied"]:
+            try:
+                from dashboard.services.audit_service import AuditService
+                await AuditService.log_event(
+                    entity_type="bond_case",
+                    entity_id=str(entity_id or county or "unknown"),
+                    action="write_book_override",
+                    details={
+                        "county": county or "",
+                        "state": state or "",
+                        "reason": reason,
+                        "gate": action,
+                    },
+                    actor=actor or "dashboard",
+                    actor_type="staff",
+                    event_context=action,
+                )
+            except Exception as exc:
+                logger.warning("write_book_override audit failed: %s", exc)
+        return None
+
+    if result["error"] == "not_write_eligible":
+        label = county or "(missing county)"
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "not_write_eligible",
+                "message": (
+                    f"{label} is not on the Shamrock Florida write book. "
+                    "Pass write_book_override=true and write_book_override_reason "
+                    "(8+ characters) to proceed."
+                ),
+                "county": county or "",
+                "state": state or "",
+                "write_eligible": False,
+            },
+            status_code=403,
+        )
+    return JSONResponse(
+        {
+            "success": False,
+            "error": result["error"],
+            "write_eligible": False,
+        },
+        status_code=400,
+    )
 
 
 async def async_csv_streamer(cursor, fieldnames: list[str]):

@@ -1159,6 +1159,10 @@ async function printAppearanceBondPackage(opts = {}) {
     copies,
     dry_run: dryRun,
   };
+  if (data.lead && data.lead.write_book_override) {
+    payload.write_book_override = true;
+    payload.write_book_override_reason = data.lead.write_book_override_reason || '';
+  }
 
   if (statusEl) {
     statusEl.textContent = dryRun
@@ -1176,12 +1180,34 @@ async function printAppearanceBondPackage(opts = {}) {
   }
 
   try {
-    const res = await fetch(`${API}/api/appearance-bonds/print-package`, {
+    let res = await fetch(`${API}/api/appearance-bonds/print-package`, {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+
+    if (res.status === 403) {
+      const blocked = await res.json().catch(function() { return {}; });
+      if (blocked.error !== 'not_write_eligible') {
+        throw new Error(blocked.message || blocked.error || 'HTTP 403');
+      }
+      const reason = prompt(
+        (blocked.message || 'This county is not on the Shamrock write book.') +
+        '\n\nEnter an override reason (8+ characters), or cancel.'
+      );
+      if (!reason || reason.trim().length < 8) {
+        throw new Error('Write-book override cancelled');
+      }
+      payload.write_book_override = true;
+      payload.write_book_override_reason = reason.trim();
+      res = await fetch(`${API}/api/appearance-bonds/print-package`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    }
 
     if (dryRun) {
       const plan = await res.json();

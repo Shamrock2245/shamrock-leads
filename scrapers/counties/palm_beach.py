@@ -25,13 +25,20 @@ from datetime import datetime, timedelta, timezone
 from typing import List
 
 from scrapers.base_scraper import BaseScraper
+from scrapers.pbso_parse import (
+    BLOTTER_URL,
+    COUNTY,
+    FACILITY,
+    extract_pbso_booking_id,
+    is_pbso_index_only,
+    parse_name,
+    parse_pbso_card_text,
+    parse_pbso_html,
+)
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
-BLOTTER_URL = "https://www3.pbso.org/blotter/index.cfm"
-FACILITY = "Palm Beach County Jail"
-COUNTY = "Palm Beach"
 DAYS_BACK = 2  # Search today + yesterday
 
 
@@ -59,34 +66,7 @@ class PalmBeachCountyScraper(BaseScraper):
                 rows = self._search_and_collect(page, target_date, max_pages=50)
 
                 for row in rows:
-                    records.append(ArrestRecord(
-                        County=COUNTY,
-                        State="FL",
-                        Facility=row.get("facility", FACILITY),
-                        Agency=row.get("agency", "PBSO"),
-                        Full_Name=row.get("full_name", ""),
-                        First_Name=row.get("first_name", ""),
-                        Middle_Name=row.get("middle_name", ""),
-                        Last_Name=row.get("last_name", ""),
-                        Booking_Number=row.get("booking_num", ""),
-                        Person_ID=row.get("jacket_num", ""),
-                        DOB=row.get("dob", ""),
-                        Race=row.get("race", ""),
-                        Sex=row.get("sex", ""),
-                        Booking_Date=row.get("booking_date", ""),
-                        Booking_Time=row.get("booking_time", ""),
-                        Arrest_Date=row.get("booking_date", ""),
-                        Arrest_Time=row.get("booking_time", ""),
-                        Status=row.get("status", "In Custody"),
-                        Release_Date=row.get("release_date", ""),
-                        Charges=row.get("charges", ""),
-                        Bond_Amount=row.get("bond_amount", "0"),
-                        Mugshot_URL=row.get("mug_url", ""),
-                        Detail_URL=BLOTTER_URL,
-                        Scrape_Timestamp=datetime.now(timezone.utc).isoformat(),
-                        LastChecked=datetime.now(timezone.utc).isoformat(),
-                        LastCheckedMode="scrape",
-                    ))
+                    records.append(self._row_to_arrest_record(row, mode="scrape"))
 
         except Exception as e:
             logger.error(f"Palm Beach: scraper error — {e}")
@@ -187,80 +167,23 @@ class PalmBeachCountyScraper(BaseScraper):
     # ── Result Card Parsing ────────────────────────────────────────────────
 
     def _parse_result_card(self, card) -> dict:
-        """Parse a single booking result card (div[id^='allresults_']).
-
-        Structure from recon:
-        ┌─────────────────────────────────────────────────────┐
-        │ [Mugshot]  Name: SENGELMANN, MICHAEL                │
-        │            Race: White   Gender: Male               │
-        │            Facility:     OBTS Number: N/A           │
-        │            Arresting Agency: 01-PBSO                │
-        │            Booking Date/Time: 05/15/2026 10:34      │
-        │            Release Date: N/A                        │
-        │            Holds For Other Agencies: No             │
-        │            Jacket Number: 0428603                   │
-        ├─────────────────────────────────────────────────────┤
-        │ Booking Number: 2026012709                          │
-        │ Charges | Original Bond | Current Bond              │
-        │ 0003  BOOKED - COMMIT     $0.00         $0.00       │
-        └─────────────────────────────────────────────────────┘
-        """
-        data = {
-            "full_name": "", "first_name": "", "middle_name": "", "last_name": "",
-            "booking_num": "", "jacket_num": "", "race": "", "sex": "",
-            "dob": "", "facility": FACILITY, "agency": "PBSO",
-            "booking_date": "", "booking_time": "", "status": "In Custody",
-            "release_date": "", "charges": "", "bond_amount": "0", "mug_url": "",
-        }
-
-        card_text = card.text or ""
-
-        # ── Extract labeled fields ─────────────────────────────────────────
-        def _extract(label):
-            """Extract value after 'Label:' in the card text."""
-            pattern = rf'{label}\s*:\s*(.+?)(?:\n|$)'
-            m = re.search(pattern, card_text, re.I)
-            return m.group(1).strip() if m else ""
-
-        data["full_name"] = _extract("Name")
-        data["race"] = _extract("Race")
-        data["sex"] = _extract("Gender")
-        data["dob"] = _extract("DOB") or _extract("Date of Birth")
-        data["agency"] = _extract("Arresting Agency") or "PBSO"
-        data["jacket_num"] = _extract("Jacket Number")
-        release_raw = _extract("Release Date")
-
-        # Booking Date/Time: "05/15/2026 10:34"
-        booking_dt_raw = _extract("Booking Date/Time")
-        if booking_dt_raw:
-            try:
-                dt = datetime.strptime(booking_dt_raw.strip(), "%m/%d/%Y %H:%M")
-                data["booking_date"] = dt.strftime("%Y-%m-%d")
-                data["booking_time"] = dt.strftime("%H:%M:00")
-            except ValueError:
-                data["booking_date"] = booking_dt_raw.strip()
-
-        # Release date / Status
-        if release_raw and "N/A" not in release_raw and release_raw.strip():
-            data["status"] = "Released"
-            data["release_date"] = release_raw.strip()
-
-        # ── Booking Number (from the charges section link) ─────────────────
-        booking_num_m = re.search(r'Booking\s*Number\s*:\s*(\d+)', card_text, re.I)
-        if booking_num_m:
-            data["booking_num"] = booking_num_m.group(1)
-        else:
-            # Try link text
+        """Parse a single booking result card (div[id^='allresults_'])."""
+        text = card.text or ""
+        data = parse_pbso_card_text(text)
+        if not data:
+            booking_from_link = ""
             try:
                 link = card.ele("css:a")
                 if link:
-                    link_text = link.text.strip()
-                    if link_text and link_text.isdigit():
-                        data["booking_num"] = link_text
-            except:
+                    link_text = (link.text or "").strip()
+                    if link_text.isdigit() and len(link_text) >= 6:
+                        booking_from_link = link_text
+            except Exception:
                 pass
-
-        # ── Mugshot URL ────────────────────────────────────────────────────
+            if booking_from_link:
+                data = parse_pbso_card_text(text + f"\nBooking Number: {booking_from_link}\n")
+            if not data:
+                return {}
         try:
             img = card.ele("css:img")
             if img:
@@ -269,59 +192,84 @@ class PalmBeachCountyScraper(BaseScraper):
                     if not src.startswith("http"):
                         src = f"https://www3.pbso.org{src}"
                     data["mug_url"] = src
-        except:
+        except Exception:
             pass
-
-        # ── Charges & Bond ─────────────────────────────────────────────────
-        charges = []
-        total_bond = 0.0
-
-        # Find charge descriptions — pattern: statute code + charge description
-        charge_matches = re.findall(
-            r'(\d{3}\.\d+\s+\S.*?)(?:Original Bond|Current Bond|Bond Information|$)',
-            card_text, re.I
-        )
-        for ch in charge_matches:
-            clean_ch = " ".join(ch.strip().split())
-            if clean_ch and len(clean_ch) > 3:
-                charges.append(clean_ch)
-
-        # Fallback: find lines with charge-like patterns
-        if not charges:
-            for line in card_text.split("\n"):
-                line = line.strip()
-                # Match lines like "0003 BOOKED - COMMIT" or "322.34 2C (FT) MOVING TRAFFIC VIOL..."
-                if re.match(r'^\d{3,4}', line) and not re.match(r'^\d{4}[\-/]', line):
-                    # Skip lines that are dates or booking numbers
-                    if "Bond" not in line and "Booking" not in line:
-                        charges.append(" ".join(line.split()))
-
-        # Bond amounts — "Current Bond: $X,XXX.XX"
-        bond_matches = re.findall(r'Current\s+Bond\s*:\s*\$([0-9,]+(?:\.\d{2})?)', card_text, re.I)
-        for amt_str in bond_matches:
-            try:
-                total_bond += float(amt_str.replace(",", ""))
-            except (ValueError, TypeError):
-                pass
-
-        # Fallback: "Original Bond: $X"
-        if total_bond == 0:
-            orig_bonds = re.findall(r'Original\s+Bond\s*:\s*\$([0-9,]+(?:\.\d{2})?)', card_text, re.I)
-            for amt_str in orig_bonds:
-                try:
-                    total_bond += float(amt_str.replace(",", ""))
-                except (ValueError, TypeError):
-                    pass
-
-        data["charges"] = " | ".join(charges) if charges else ""
-        data["bond_amount"] = f"{total_bond:.2f}" if total_bond > 0 else "0"
-
-        # ── Parse Name ─────────────────────────────────────────────────────
-        fn = data["full_name"]
-        if fn:
-            data["first_name"], data["middle_name"], data["last_name"] = self._parse_name(fn)
-
         return data
+
+    def _row_to_arrest_record(self, row: dict, mode: str = "scrape") -> ArrestRecord:
+        booking = str(row.get("booking_num") or "")
+        detail = f"{BLOTTER_URL}?booking={booking}" if booking else BLOTTER_URL
+        return ArrestRecord(
+            County=COUNTY,
+            State="FL",
+            Facility=row.get("facility", FACILITY),
+            Agency=row.get("agency", "PBSO"),
+            Full_Name=row.get("full_name", ""),
+            First_Name=row.get("first_name", ""),
+            Middle_Name=row.get("middle_name", ""),
+            Last_Name=row.get("last_name", ""),
+            Booking_Number=booking,
+            Person_ID=row.get("jacket_num", ""),
+            DOB=row.get("dob", ""),
+            Race=row.get("race", ""),
+            Sex=row.get("sex", ""),
+            Booking_Date=row.get("booking_date", ""),
+            Booking_Time=row.get("booking_time", ""),
+            Arrest_Date=row.get("booking_date", ""),
+            Arrest_Time=row.get("booking_time", ""),
+            Status=row.get("status", "In Custody"),
+            Release_Date=row.get("release_date", ""),
+            Charges=row.get("charges", ""),
+            Bond_Amount=row.get("bond_amount", "0"),
+            Mugshot_URL=row.get("mug_url", ""),
+            Detail_URL=detail,
+            Scrape_Timestamp=datetime.now(timezone.utc).isoformat(),
+            LastChecked=datetime.now(timezone.utc).isoformat(),
+            LastCheckedMode=mode,
+        )
+
+    def _fetch_single_booking(self, booking_id: str, detail_url: str):
+        """Re-fetch one PBSO booking from a booking-tagged public URL.
+
+        The blotter search form is not a per-inmate page. Index-only URLs
+        are not fetched (no generic GET, no browser, no unpublished probe).
+        Returns None when the HTML has no matching name+booking card.
+        """
+        if not booking_id:
+            return None
+        url = (detail_url or "").strip() or BLOTTER_URL
+        tagged = extract_pbso_booking_id(url)
+        if is_pbso_index_only(url) and not tagged:
+            return None
+        if tagged and tagged != str(booking_id).strip():
+            return None
+        try:
+            import requests
+            resp = requests.get(
+                url,
+                timeout=15,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/120.0.0.0 Safari/537.36"
+                    ),
+                    "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+                },
+            )
+            if resp is None or resp.status_code != 200:
+                return None
+            rows = parse_pbso_html(resp.text)
+            wanted = str(booking_id).strip()
+            matches = [r for r in rows if str(r.get("booking_num") or "") == wanted]
+            if len(matches) != 1:
+                return None
+            record = self._row_to_arrest_record(matches[0], mode="UPDATE")
+            record.LastCheckedMode = "UPDATE"
+            return record
+        except Exception as e:
+            logger.warning("Palm Beach _fetch_single_booking error (%s): %s", booking_id, e)
+            return None
 
     # ── Pagination ─────────────────────────────────────────────────────────
 
@@ -361,20 +309,4 @@ class PalmBeachCountyScraper(BaseScraper):
 
     @staticmethod
     def _parse_name(name):
-        """Parse 'LAST, FIRST MIDDLE' into components."""
-        if not name:
-            return "", "", ""
-        name = " ".join(name.strip().split())
-        if "," in name:
-            parts = name.split(",", 1)
-            last = parts[0].strip()
-            remainder = parts[1].strip().split()
-            first = remainder[0] if remainder else ""
-            middle = " ".join(remainder[1:]) if len(remainder) > 1 else ""
-            return first, middle, last
-        parts = name.split()
-        if len(parts) >= 3:
-            return parts[0], " ".join(parts[1:-1]), parts[-1]
-        if len(parts) == 2:
-            return parts[0], "", parts[1]
-        return name, "", ""
+        return parse_name(name)

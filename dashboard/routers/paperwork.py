@@ -1068,6 +1068,23 @@ async def packet_builder_finalize(request: Request):
         if user.get("license_number"):
             ctx["license_number"] = user.get("license_number")
 
+        from dashboard.routers.helpers import reject_unless_write_book
+        blocked = await reject_unless_write_book(
+            county=ctx.get("county") or body.get("county") or "",
+            state=ctx.get("state") or body.get("state"),
+            body=body,
+            action="paperwork_finalize",
+            entity_id=str(
+                ctx.get("bond_case_id")
+                or ctx.get("booking_number")
+                or body.get("booking_number")
+                or ""
+            ),
+            actor=str(ctx.get("agent_name") or user.get("agent_name") or "dashboard"),
+        )
+        if blocked:
+            return blocked
+
         if body.get("self_indemnitor"):
             pin = body.get("authorization_pin") or body.get("pin") or ""
             try:

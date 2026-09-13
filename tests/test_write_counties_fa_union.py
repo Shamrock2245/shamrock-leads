@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 from config.write_counties import (
     WRITE_ELIGIBLE_COUNTIES,
     WATCH_ALSO,
+    evaluate_write_book,
     fa_query_county_values,
     fa_watch_counties,
     is_write_eligible,
@@ -12,7 +13,12 @@ from dashboard.services.automation_config import (
     DEFAULT_CONFIG,
     get_automation_config,
 )
-from dashboard.routers.helpers import serialize_doc
+from dashboard.routers.helpers import (
+    attach_write_eligible,
+    reject_unless_write_book,
+    serialize_doc,
+)
+from dashboard.extensions import KEY_FL_COUNTIES
 
 
 def test_write_counties_contract():
@@ -200,3 +206,99 @@ def test_watcher_skips_pbso_blotter_index():
         "booking_number": "123",
     })
     assert result is None
+
+
+def test_evaluate_write_book_gate():
+    ok = evaluate_write_book("Lee", "FL")
+    assert ok["allowed"] is True
+    assert ok["eligible"] is True
+    assert ok["override_applied"] is False
+
+    blocked = evaluate_write_book("Orange", "FL")
+    assert blocked["allowed"] is False
+    assert blocked["error"] == "not_write_eligible"
+
+    short = evaluate_write_book(
+        "Orange", "FL", override=True, override_reason="nope",
+    )
+    assert short["allowed"] is False
+
+    over = evaluate_write_book(
+        "Orange", "FL", override=True, override_reason="walk-in office client",
+    )
+    assert over["allowed"] is True
+    assert over["eligible"] is False
+    assert over["override_applied"] is True
+
+
+def test_attach_write_eligible_omits_when_no_county():
+    doc = {"booking_number": "1"}
+    attach_write_eligible(doc)
+    assert "write_eligible" not in doc
+
+
+def test_prospective_serialize_sets_write_eligible():
+    from dashboard.routers.prospective_bonds import _serialize
+    pb = _serialize({"county": "Palm Beach", "state": "FL", "booking_number": "1"})
+    assert pb["write_eligible"] is True
+    orange = _serialize({"county": "Orange", "state": "FL", "booking_number": "2"})
+    assert orange["write_eligible"] is False
+    unknown = _serialize({"booking_number": "3", "defendant_name": "X"})
+    assert "write_eligible" not in unknown
+
+
+def test_key_fl_excludes_palm_beach_and_startup_uses_it():
+    assert "Palm Beach" not in KEY_FL_COUNTIES
+    assert "Lee" in KEY_FL_COUNTIES
+    from pathlib import Path
+    src = Path("main.py").read_text()
+    assert "from dashboard.extensions import KEY_FL_COUNTIES" in src
+    assert "key = tuple(KEY_FL_COUNTIES)" in src
+    assert "fa_watch_counties()" not in src.split("def _ensure_key_fl_counties_enabled")[1].split("def main")[0]
+
+
+@pytest.mark.asyncio
+async def test_reject_unless_write_book_blocks_and_overrides(monkeypatch):
+    blocked = await reject_unless_write_book(
+        county="Orange",
+        state="FL",
+        body={},
+        action="officialize",
+        entity_id="bk-1",
+    )
+    assert blocked is not None
+    assert blocked.status_code == 403
+    assert blocked.body and b"not_write_eligible" in blocked.body
+
+    allowed = await reject_unless_write_book(
+        county="Lee",
+        state="FL",
+        body={},
+        action="officialize",
+        entity_id="bk-2",
+    )
+    assert allowed is None
+
+    logged = {}
+
+    async def fake_log(**kwargs):
+        logged.update(kwargs)
+
+    monkeypatch.setattr(
+        "dashboard.services.audit_service.AuditService.log_event",
+        fake_log,
+    )
+    over = await reject_unless_write_book(
+        county="Orange",
+        state="FL",
+        body={
+            "write_book_override": True,
+            "write_book_override_reason": "walk-in office client",
+        },
+        action="officialize",
+        entity_id="bk-3",
+        actor="Brendan",
+    )
+    assert over is None
+    assert logged.get("action") == "write_book_override"
+    assert logged.get("details", {}).get("reason") == "walk-in office client"

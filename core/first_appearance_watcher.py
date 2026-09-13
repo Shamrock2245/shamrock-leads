@@ -385,20 +385,33 @@ class FirstAppearanceWatcher:
         if not detail_url:
             return None
 
-        # PBSO blotter index is not a per-inmate page; generic GET cannot see bond updates.
+        # PBSO blotter index is not a per-inmate page. Never generic-GET the search form.
         detail_l = str(detail_url).lower()
-        if "pbso.org" in detail_l and "/blotter" in detail_l:
-            scraper = self._scrapers.get(county) or self._scrapers.get("Palm Beach")
-            if not (scraper and hasattr(scraper, "_fetch_single_booking")):
-                logger.debug(
-                    "FirstAppearanceWatcher: skip PBSO blotter index refetch (%s/%s)",
-                    county,
-                    booking_id,
-                )
-                return None
+        pbso_blotter = "pbso.org" in detail_l and "/blotter" in detail_l
+        scraper = self._scrapers.get(county) or (
+            self._scrapers.get("Palm Beach") if pbso_blotter else None
+        )
+        if pbso_blotter:
+            if scraper and hasattr(scraper, "_fetch_single_booking"):
+                try:
+                    record = scraper._fetch_single_booking(booking_id, detail_url)
+                    if record:
+                        record.LastCheckedMode = "UPDATE"
+                        record.LastChecked = datetime.now(timezone.utc).isoformat()
+                        return record
+                except Exception as e:
+                    logger.warning(
+                        f"FirstAppearanceWatcher: county scraper re-fetch failed "
+                        f"({county}/{booking_id}): {e}"
+                    )
+            logger.debug(
+                "FirstAppearanceWatcher: skip PBSO blotter generic refetch (%s/%s)",
+                county,
+                booking_id,
+            )
+            return None
 
         # ── Strategy 1: County scraper with _fetch_single_booking ────────────
-        scraper = self._scrapers.get(county)
         if scraper and hasattr(scraper, "_fetch_single_booking"):
             try:
                 record = scraper._fetch_single_booking(booking_id, detail_url)

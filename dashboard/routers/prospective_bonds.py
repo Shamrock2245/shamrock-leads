@@ -48,7 +48,8 @@ def _serialize(doc: dict) -> dict:
             out[k] = [_serialize(i) if isinstance(i, dict) else i for i in v]
         else:
             out[k] = v
-    return out
+    from dashboard.routers.helpers import attach_write_eligible
+    return attach_write_eligible(out)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -400,7 +401,7 @@ async def api_prospective_close(request: Request, booking_number: str):
 #  POST /api/prospective-bonds/<booking_number>/officialize
 # ─────────────────────────────────────────────────────────────────────────────
 @prospective_bonds_bp.post("/prospective-bonds/{booking_number}/officialize")
-async def api_prospective_officialize(booking_number: str):
+async def api_prospective_officialize(request: Request, booking_number: str):
     """Promote a prospective bond to an active bond.
 
     Marks the prospective record as 'promoted' and returns defendant + indemnitor
@@ -425,6 +426,22 @@ async def api_prospective_officialize(booking_number: str):
             return JSONResponse({
                 "error": "Cannot officialize: county is missing. Complete defendant details first.",
             }, status_code=400)
+        body = {}
+        try:
+            body = await request.json() or {}
+        except Exception:
+            body = {}
+        from dashboard.routers.helpers import reject_unless_write_book
+        blocked = await reject_unless_write_book(
+            county=county,
+            state=existing.get("state"),
+            body=body,
+            action="officialize",
+            entity_id=booking_number,
+            actor=str(body.get("agent") or "dashboard"),
+        )
+        if blocked:
+            return blocked
         indem = existing.get("indemnitor") or {}
         if not (indem.get("name") or indem.get("phone") or existing.get("indemnitor_name") or existing.get("indemnitor_phone")):
             # Also accept multi-cosigner array

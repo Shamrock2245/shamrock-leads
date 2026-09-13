@@ -391,6 +391,18 @@ async def finalize_bond_step2(request: Request, booking_number: str):
     if not arrest:
         return JSONResponse({"success": False, "error": "Defendant not found"}, status_code=404)
 
+    from dashboard.routers.helpers import reject_unless_write_book
+    blocked = await reject_unless_write_book(
+        county=arrest.get("county") or "",
+        state=arrest.get("state"),
+        body=body,
+        action="finalize_bond",
+        entity_id=booking_number,
+        actor=str(body.get("confirmed_by") or step1.get("agent") or "dashboard"),
+    )
+    if blocked:
+        return blocked
+
     finalized_at = _now()
     confirmed_by = body.get("confirmed_by", step1.get("agent", ""))
     poa_number = body.get("poa_number", step1.get("poa_number", ""))

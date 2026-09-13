@@ -1,7 +1,7 @@
 """
 URL Ingestion Service — ShamrockLeads
 Fetches a jail booking URL and extracts structured arrest data.
-Supports Lee County API, JailTracker, Odyssey, P2C, and generic HTML parsers.
+Supports Lee County API, PBSO blotter cards, JailTracker, Odyssey, P2C, and generic HTML parsers.
 """
 import re, logging
 from typing import Optional
@@ -143,6 +143,10 @@ async def ingest_url(url: str) -> dict:
                     "source_url": url,
                     "parse_method": "lee_mongo_arrest",
                 }
+
+    # ── Fast path: PBSO blotter (Palm Beach) ─────────────────────────────────
+    if "pbso.org" in url.lower():
+        return await _ingest_pbso(url)
 
     try:
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True,
@@ -465,6 +469,161 @@ async def _ingest_lee_from_mongo(booking_id: str, source_url: str) -> Optional[d
         }
     except Exception as e:
         log.warning("Lee Mongo fallback failed: %s", e)
+        return None
+
+
+async def _ingest_pbso(url: str) -> dict:
+    """Ingest a PBSO blotter URL. Fail closed unless one named booking card is identified.
+
+    Does not launch a browser or probe unpublished endpoints. Prefers a
+    Palm Beach Mongo match when the URL carries a booking number; otherwise
+    parses HTML cards from the staff-provided URL.
+    """
+    from scrapers.pbso_parse import (
+        extract_pbso_booking_id,
+        is_pbso_host,
+        parse_pbso_html,
+        pbso_html_is_js_shell,
+        row_to_ingest_dict,
+    )
+
+    if not is_pbso_host(url):
+        return {"success": False, "error": "Not a PBSO booking URL.", "url": url}
+
+    booking_id = extract_pbso_booking_id(url)
+    if booking_id:
+        mongo_data = await _ingest_pbso_from_mongo(booking_id, url)
+        if mongo_data and mongo_data.get("full_name"):
+            return {
+                "success": True,
+                "data": mongo_data,
+                "source_url": url,
+                "parse_method": "pbso_mongo_arrest",
+            }
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=30.0, follow_redirects=True,
+            headers={"User-Agent": UA}, verify=False,
+        ) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            html = resp.text
+    except httpx.TimeoutException:
+        return {"success": False, "error": "Request timed out.", "url": url}
+    except httpx.HTTPStatusError as e:
+        return {"success": False, "error": f"HTTP {e.response.status_code}", "url": url}
+    except Exception as e:
+        log.warning("PBSO ingest fetch failed: %s", e)
+        return {"success": False, "error": "Could not fetch PBSO blotter URL.", "url": url}
+
+    rows = parse_pbso_html(html)
+    if booking_id:
+        rows = [r for r in rows if str(r.get("booking_num") or "") == booking_id]
+        if len(rows) != 1:
+            return {
+                "success": False,
+                "error": (
+                    "PBSO blotter did not return exactly one card for this booking number. "
+                    "The search form is not a per-inmate page."
+                ),
+                "url": url,
+            }
+    elif len(rows) == 0:
+        msg = (
+            "PBSO blotter index is not a booking page. Include ?booking=<number> "
+            "or paste a rendered result-card URL."
+        )
+        if pbso_html_is_js_shell(html):
+            msg = (
+                "PBSO blotter requires JavaScript and cannot be parsed from this URL. "
+                "Include ?booking=<number> (uses a stored Palm Beach arrest when present)."
+            )
+        return {"success": False, "error": msg, "url": url}
+    elif len(rows) != 1:
+        return {
+            "success": False,
+            "error": "Multiple PBSO bookings on this page. Include ?booking=<number>.",
+            "url": url,
+        }
+
+    data = row_to_ingest_dict(rows[0], url)
+    if not data.get("full_name") or not data.get("booking_number"):
+        return {
+            "success": False,
+            "error": "PBSO card is missing name or booking number.",
+            "url": url,
+        }
+    data = _normalize(data)
+    data["source_url"] = url
+    data["ingestion_method"] = "url_ingest"
+    data["county"] = "Palm Beach"
+    data["state"] = "FL"
+    return {
+        "success": True,
+        "data": data,
+        "source_url": url,
+        "parse_method": "pbso_blotter",
+    }
+
+
+async def _ingest_pbso_from_mongo(booking_id: str, source_url: str) -> Optional[dict]:
+    """Use a stored Palm Beach arrest. Never collapses Lee (GA) or other counties."""
+    try:
+        from dashboard.extensions import get_db
+        db = get_db()
+        if db is None:
+            return None
+        doc = await db["arrests"].find_one(
+            {
+                "$and": [
+                    {"$or": [
+                        {"booking_number": booking_id},
+                        {"Booking_Number": booking_id},
+                    ]},
+                    {"$or": [
+                        {"county": "Palm Beach"},
+                        {"county": "Palm Beach (FL)"},
+                        {"County": "Palm Beach"},
+                        {"county": {"$regex": r"^Palm Beach(\s|\(|$)", "$options": "i"}},
+                    ]},
+                ]
+            },
+            sort=[("last_checked", -1), ("Last_Checked", -1)],
+        )
+        if not doc:
+            return None
+        st = str(doc.get("state") or doc.get("State") or "FL").strip().upper()
+        if st and st != "FL":
+            return None
+        dob_iso, dob_display = _normalize_dob(
+            _first_str(doc.get("dob"), doc.get("DOB"), doc.get("date_of_birth"))
+        )
+        charges = _first_str(doc.get("charges"), doc.get("Charges"))
+        bond = doc.get("bond_amount") or doc.get("Bond_Amount") or 0
+        try:
+            bond_f = float(str(bond).replace(",", "").replace("$", ""))
+        except (ValueError, TypeError):
+            bond_f = 0.0
+        from dashboard.services.premium import statutory_premium
+        return {
+            "booking_number": booking_id,
+            "full_name": _first_str(doc.get("full_name"), doc.get("Full_Name")),
+            "charges": charges,
+            "bond_amount": round(bond_f, 2) if bond_f else 0.0,
+            "county": "Palm Beach",
+            "state": "FL",
+            "facility": _first_str(doc.get("facility"), doc.get("Facility"), "Palm Beach County Jail"),
+            "status": _first_str(doc.get("status"), doc.get("Status"), "In Custody"),
+            "booking_date": _first_str(doc.get("booking_date"), doc.get("Booking_Date")),
+            "dob": dob_iso or dob_display,
+            "source_url": source_url,
+            "detail_url": _first_str(doc.get("detail_url"), doc.get("Detail_URL"), source_url),
+            "ingestion_method": "pbso_mongo_arrest",
+            "premium": statutory_premium(bond_f),
+        }
+    except Exception as e:
+        log.warning("PBSO Mongo fallback failed: %s", e)
         return None
 
 

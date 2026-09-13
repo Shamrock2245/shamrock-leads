@@ -100,6 +100,17 @@ async def api_record_bond(request: Request):
         premium = 0.0
 
     county = (data.get("county") or "").strip()
+    from dashboard.routers.helpers import reject_unless_write_book
+    blocked = await reject_unless_write_book(
+        county=county,
+        state=data.get("state"),
+        body=data,
+        action="record_bond",
+        entity_id=booking_number,
+        actor=str(data.get("agent_name") or "dashboard"),
+    )
+    if blocked:
+        return blocked
     case_number = (data.get("case_number") or "").strip()
     court_date = (data.get("court_date") or "").strip()
     court_time = (data.get("court_time") or "").strip()
@@ -1255,6 +1266,17 @@ async def api_appearance_bond_pdf(request: Request):
             d["charges"] = d["charge"]
 
         d = await _hydrate_appearance_bond_payload(d)
+        from dashboard.routers.helpers import reject_unless_write_book
+        blocked = await reject_unless_write_book(
+            county=d.get("county") or "",
+            state=d.get("state"),
+            body=d,
+            action="appearance_bond_pdf",
+            entity_id=str(d.get("booking_number") or d.get("booking") or ""),
+            actor=str(d.get("agent") or d.get("agent_name") or "dashboard"),
+        )
+        if blocked:
+            return blocked
         data, err = _build_appearance_bond_data(d)
         if err:
             return JSONResponse(
@@ -1343,6 +1365,17 @@ async def api_appearance_bond_batch(request: Request):
         )
         d = await request.json() or {}
         d = await _hydrate_appearance_bond_payload(d)
+        from dashboard.routers.helpers import reject_unless_write_book
+        blocked = await reject_unless_write_book(
+            county=d.get("county") or "",
+            state=d.get("state"),
+            body=d,
+            action="appearance_bond_batch",
+            entity_id=str(d.get("booking_number") or d.get("booking") or ""),
+            actor=str(d.get("agent") or d.get("agent_name") or "dashboard"),
+        )
+        if blocked:
+            return blocked
         b_data, err = _build_appearance_bond_data(d)
         if err:
             return JSONResponse({"error": err}, status_code=400)
@@ -1594,6 +1627,7 @@ async def _hydrate_appearance_bond_payload(d: dict) -> dict:
         out["name"] = _pick("name", "defendant_name", "Full_Name", "full_name", default=out.get("name", ""))
         out["defendant_name"] = out["name"]
         out["county"] = _pick("county", "County", default=out.get("county", ""))
+        out["state"] = _pick("state", "State", default=out.get("state", ""))
         out["address"] = _pick(
             "address", "defendant_address", "Address", "Home_Address",
             default=out.get("address", ""),
@@ -1733,6 +1767,17 @@ async def api_appearance_bonds_print_package(request: Request):
 
         d = await request.json() or {}
         d = await _hydrate_appearance_bond_payload(d)
+        from dashboard.routers.helpers import reject_unless_write_book
+        blocked = await reject_unless_write_book(
+            county=d.get("county") or "",
+            state=d.get("state"),
+            body=d,
+            action="appearance_bond_print_package",
+            entity_id=str(d.get("booking_number") or d.get("booking") or ""),
+            actor=str(d.get("agent") or d.get("agent_name") or "dashboard"),
+        )
+        if blocked:
+            return blocked
 
         try:
             copies = int(d.get("copies") or d.get("copies_per_charge") or 2)
