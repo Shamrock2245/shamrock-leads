@@ -39,6 +39,9 @@ Configuration (env vars)
 WATCH_WINDOW_DAYS       Days to watch a no-bond record (default: 3)
 WATCH_INTERVAL_MINUTES  How often the watcher runs (default: 30)
 WATCH_MAX_BATCH         Max records to re-check per run (default: 50)
+WATCH_COUNTIES          Ops override of the county filter. Unset = write-book
+                        union (fa_watch_counties + stored automation_config).
+                        ``*`` = all counties.
 """
 
 import logging
@@ -55,6 +58,7 @@ except ImportError:
 from pymongo import MongoClient, UpdateOne
 
 from config.settings import settings
+from config.write_counties import fa_query_county_values, resolve_fa_watch_counties
 from core.models import ArrestRecord
 from scoring.lead_scorer import LeadScorer
 
@@ -294,8 +298,6 @@ class FirstAppearanceWatcher:
 
         cutoff = datetime.now(timezone.utc) - timedelta(days=WATCH_WINDOW_DAYS)
 
-        raw_counties = os.getenv("WATCH_COUNTIES", "Lee,Collier,Charlotte,Sarasota,Manatee,Hendry,DeSoto,Hillsborough,Orange,Broward,Palm Beach,Miami-Dade,Pinellas,Duval,Polk,Brevard,Volusia,Seminole,Pasco,Osceola,Lake,Marion,Escambia,Alachua,St. Lucie,Clay,St. Johns").strip()
-        
         query: Dict[str, Any] = {
             # Must still be in custody
             "status": {"$regex": "in.custody|incustody", "$options": "i"},
@@ -309,13 +311,11 @@ class FirstAppearanceWatcher:
             "detail_url": {"$exists": True, "$ne": ""},
         }
 
-        if raw_counties != "*":
-            target_counties = [c.strip() for c in raw_counties.split(",") if c.strip()]
-            # Support both bare name and "(FL)" suffix in MongoDB
-            query_counties = []
-            for c in target_counties:
-                query_counties.extend([c, f"{c} (FL)", f"{c} County", f"{c} County (FL)"])
-            query["county"] = {"$in": query_counties}
+        target_counties = resolve_fa_watch_counties(
+            stored_targets=self._stored_fa_target_counties(),
+        )
+        if target_counties is not None:
+            query["county"] = {"$in": fa_query_county_values(target_counties)}
 
         query["created_at"] = {"$gte": cutoff}
 
@@ -341,6 +341,29 @@ class FirstAppearanceWatcher:
             logger.error(f"FirstAppearanceWatcher: query failed: {e}")
             return []
 
+    def _stored_fa_target_counties(self) -> Optional[List[str]]:
+        """Read first_appearance_watcher.target_counties from automation_config, if present."""
+        if self._db is None:
+            return None
+        try:
+            doc = self._db["automation_config"].find_one(
+                {"type": "automation_master"},
+                {"first_appearance_watcher.target_counties": 1},
+            )
+            if not doc:
+                return None
+            targets = (doc.get("first_appearance_watcher") or {}).get("target_counties")
+            if not isinstance(targets, list):
+                return None
+            cleaned = [str(c).strip() for c in targets if str(c).strip()]
+            return cleaned or None
+        except Exception as exc:
+            logger.warning(
+                "FirstAppearanceWatcher: could not read automation_config counties: %s",
+                exc,
+            )
+            return None
+
     # ── Detail Re-fetch ───────────────────────────────────────────────────────
 
     def _refetch_record(self, doc: Dict[str, Any]) -> Optional[ArrestRecord]:
@@ -361,6 +384,18 @@ class FirstAppearanceWatcher:
 
         if not detail_url:
             return None
+
+        # PBSO blotter index is not a per-inmate page; generic GET cannot see bond updates.
+        detail_l = str(detail_url).lower()
+        if "pbso.org" in detail_l and "/blotter" in detail_l:
+            scraper = self._scrapers.get(county) or self._scrapers.get("Palm Beach")
+            if not (scraper and hasattr(scraper, "_fetch_single_booking")):
+                logger.debug(
+                    "FirstAppearanceWatcher: skip PBSO blotter index refetch (%s/%s)",
+                    county,
+                    booking_id,
+                )
+                return None
 
         # ── Strategy 1: County scraper with _fetch_single_booking ────────────
         scraper = self._scrapers.get(county)

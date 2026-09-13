@@ -20,7 +20,7 @@ Automations controlled (see also dashboard/cron.py CRON_REGISTRY):
 """
 import logging
 from datetime import datetime, timezone
-from config.write_counties import WRITE_ELIGIBLE_COUNTIES, fa_watch_counties
+from config.write_counties import fa_watch_counties
 
 logger = logging.getLogger(__name__)
 

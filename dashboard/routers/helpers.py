@@ -48,7 +48,7 @@ def serialize_doc(doc: dict) -> dict:
     if "county" in doc and "write_eligible" not in doc:
         try:
             from config.write_counties import is_write_eligible
-            doc["write_eligible"] = is_write_eligible(doc.get("county"), doc.get("state", "FL"))
+            doc["write_eligible"] = is_write_eligible(doc.get("county"), doc.get("state"))
         except Exception:
             pass
     return doc

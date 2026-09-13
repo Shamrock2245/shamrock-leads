@@ -3,8 +3,10 @@ from unittest.mock import AsyncMock, MagicMock
 from config.write_counties import (
     WRITE_ELIGIBLE_COUNTIES,
     WATCH_ALSO,
+    fa_query_county_values,
     fa_watch_counties,
     is_write_eligible,
+    resolve_fa_watch_counties,
 )
 from dashboard.services.automation_config import (
     DEFAULT_CONFIG,
@@ -47,6 +49,46 @@ def test_is_write_eligible():
     assert is_write_eligible("") is False
     assert is_write_eligible(None) is False
     assert is_write_eligible("Lee", state="GA") is False
+
+
+def test_is_write_eligible_fail_closed_identity():
+    assert is_write_eligible("Lee (GA)") is False
+    assert is_write_eligible("Lee (AL)") is False
+    assert is_write_eligible("Lee (SC)") is False
+    assert is_write_eligible("Lee", state=None) is False
+    assert is_write_eligible("Lee", state="") is False
+    assert is_write_eligible("Lee (FL)", state="GA") is False
+    assert is_write_eligible("Lee (FL)", state="FL") is True
+    assert is_write_eligible("Lee", state="FL") is True
+
+
+def test_resolve_fa_watch_counties_default_is_write_book():
+    result = resolve_fa_watch_counties(env_watch_counties="", stored_targets=None)
+    assert result == fa_watch_counties()
+    assert "Palm Beach" in result
+    assert len(result) == 8
+
+
+def test_resolve_fa_watch_counties_unions_stored():
+    old = ["Lee", "Collier", "Charlotte", "Sarasota", "Manatee", "Hendry", "DeSoto"]
+    result = resolve_fa_watch_counties(env_watch_counties="", stored_targets=old)
+    assert "Palm Beach" in result
+    assert len(result) == 8
+    for c in old:
+        assert c in result
+
+
+def test_resolve_fa_watch_counties_env_override():
+    assert resolve_fa_watch_counties(env_watch_counties="Lee,Orange") == ["Lee", "Orange"]
+    assert resolve_fa_watch_counties(env_watch_counties="*") is None
+
+
+def test_fa_query_county_values_includes_label_variants():
+    values = fa_query_county_values(["Palm Beach", "Lee"])
+    assert "Palm Beach" in values
+    assert "Palm Beach (FL)" in values
+    assert "Lee" in values
+    assert "Lee (FL)" in values
 
 
 def test_default_config_fa_target_counties():
@@ -94,10 +136,67 @@ async def test_get_automation_config_union_logic():
 
 
 def test_serialize_doc_write_eligible():
-    doc = {"booking_number": "12345", "county": "Palm Beach", "bond_amount": 5000}
+    doc = {"booking_number": "12345", "county": "Palm Beach", "state": "FL", "bond_amount": 5000}
     serialized = serialize_doc(doc)
     assert serialized["write_eligible"] is True
 
-    doc2 = {"booking_number": "67890", "county": "Orange", "bond_amount": 5000}
+    doc2 = {"booking_number": "67890", "county": "Orange", "state": "FL", "bond_amount": 5000}
     serialized2 = serialize_doc(doc2)
     assert serialized2["write_eligible"] is False
+
+    ga_labeled = serialize_doc({"county": "Lee (GA)", "bond_amount": 5000})
+    assert ga_labeled["write_eligible"] is False
+
+    ga_state = serialize_doc({"county": "Lee", "state": "GA", "bond_amount": 5000})
+    assert ga_state["write_eligible"] is False
+
+    missing_state = serialize_doc({"county": "Palm Beach", "bond_amount": 5000})
+    assert missing_state["write_eligible"] is False
+
+
+def test_watcher_query_uses_fa_watch_counties(monkeypatch):
+    monkeypatch.delenv("WATCH_COUNTIES", raising=False)
+    from core.first_appearance_watcher import FirstAppearanceWatcher
+
+    captured = {}
+
+    class _Cursor:
+        def sort(self, *args, **kwargs):
+            return self
+
+        def limit(self, n):
+            return []
+
+    class _Coll:
+        def find(self, query):
+            captured["query"] = query
+            return _Cursor()
+
+    watcher = FirstAppearanceWatcher.__new__(FirstAppearanceWatcher)
+    watcher._arrests = _Coll()
+    watcher._db = None
+
+    watcher._query_candidates()
+
+    query = captured["query"]
+    assert "county" in query
+    values = query["county"]["$in"]
+    assert "Palm Beach" in values
+    assert "Palm Beach (FL)" in values
+    assert "Lee" in values
+    assert "Hendry" in values
+    assert "DeSoto" in values
+    assert len(resolve_fa_watch_counties(env_watch_counties="", stored_targets=None)) == 8
+
+
+def test_watcher_skips_pbso_blotter_index():
+    from core.first_appearance_watcher import FirstAppearanceWatcher
+
+    watcher = FirstAppearanceWatcher.__new__(FirstAppearanceWatcher)
+    watcher._scrapers = {}
+    result = watcher._refetch_record({
+        "county": "Palm Beach",
+        "detail_url": "https://www3.pbso.org/blotter/index.cfm",
+        "booking_number": "123",
+    })
+    assert result is None

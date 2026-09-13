@@ -29,6 +29,10 @@ creds/
 # Firebase/GCP secrets (mounted via config/ volume — but keep config/*.py!)
 config/firebase*.json
 config/google-services.json
+config/pdfservices-api-credentials.json
+config/adobe-pdf-services.json
+**/*_credentials.json
+config/traccar/
 
 # Python artifacts
 __pycache__/
