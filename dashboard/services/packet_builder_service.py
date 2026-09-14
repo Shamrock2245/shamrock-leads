@@ -399,13 +399,15 @@ async def resolve_case_context(
             bond.get("county"), bond.get("County"),
             intake.get("defendant_county"), packet.get("defendant_county"),
         ),
+        # Do not default identity state to FL — write-book and Lee FL ≠ Lee GA
+        # fail closed when state is missing. Form fields still default in the map.
         "state": _first(
             arrest.get("state"), arrest.get("State"),
             defendant.get("state"), defendant.get("State"),
             bond.get("state"), bond.get("State"),
             def_nested.get("state"),
             state,
-        ) or "FL",
+        ),
         "facility": _first(
             def_nested.get("facility"), arrest.get("Facility"),
             intake.get("defendant_facility"),

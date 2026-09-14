@@ -208,6 +208,14 @@ def test_watcher_skips_pbso_blotter_index():
     assert result is None
 
 
+def test_paperwork_context_state_does_not_default_fl():
+    import inspect
+    from dashboard.services import packet_builder_service as pbs
+    src = inspect.getsource(pbs.resolve_case_context)
+    chunk = src.split('"state": _first(')[1].split('"facility"')[0]
+    assert 'or "FL"' not in chunk
+
+
 def test_evaluate_write_book_gate():
     ok = evaluate_write_book("Lee", "FL")
     assert ok["allowed"] is True
