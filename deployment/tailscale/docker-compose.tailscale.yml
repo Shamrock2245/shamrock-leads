@@ -31,9 +31,12 @@ services:
     cap_add:
       - NET_ADMIN
       - SYS_MODULE
+      - NET_RAW
     environment:
       # Auth key — generate at https://login.tailscale.com/admin/settings/keys
       - TS_AUTHKEY=${TAILSCALE_AUTHKEY:-}
+      # Do not re-auth on restart once state volume is initialized
+      - TS_AUTH_ONCE=true
       # Hostname on the tailnet
       - TS_HOSTNAME=shamrock-vps
       # Accept DNS from tailnet (MagicDNS)
@@ -44,6 +47,9 @@ services:
       - TS_USERSPACE=false
       # State directory (persisted via volume)
       - TS_STATE_DIR=/var/lib/tailscale
+      # Native HTTP health check on port 9002 (/healthz)
+      - TS_ENABLE_HEALTH_CHECK=true
+      - TS_LOCAL_ADDR_PORT=[::]:9002
       # Extra flags: enable subnet router + accept routes from other nodes
       - TS_EXTRA_ARGS=--advertise-routes=172.18.0.0/16 --accept-routes --snat-subnet-routes=false
     volumes:
@@ -72,7 +78,7 @@ services:
 
   # ── SOCKS5 Proxy via Tailscale (replaces SSH -R tunnel) ──
   # Exposes a SOCKS5 proxy on port 1080 that routes through the iMac exit node
-  # This replaces the SSH reverse tunnel from iMac → VPS:1080
+  # for residential IP egress during scraping
   ts-proxy:
     image: tailscale/tailscale:latest
     container_name: shamrock-ts-proxy
@@ -80,10 +86,16 @@ services:
     restart: unless-stopped
     cap_add:
       - NET_ADMIN
+      - NET_RAW
     environment:
       - TS_AUTHKEY=${TAILSCALE_AUTHKEY:-}
+      - TS_AUTH_ONCE=true
       - TS_HOSTNAME=shamrock-ts-proxy
       - TS_STATE_DIR=/var/lib/tailscale
+      # Enable built-in SOCKS5 server listening on port 1080
+      - TS_SOCKS5_SERVER=:1080
+      - TS_ENABLE_HEALTH_CHECK=true
+      - TS_LOCAL_ADDR_PORT=[::]:9002
       # Route ALL traffic through iMac exit node for residential IP egress
       - TS_EXTRA_ARGS=--exit-node=${TAILSCALE_EXIT_NODE:-shamrocksimac} --exit-node-allow-lan-access
     volumes:
@@ -91,7 +103,7 @@ services:
       - /dev/net/tun:/dev/net/tun
     networks:
       - shamrock-net
-    # Expose SOCKS5 on the Docker network (same port as the old SSH tunnel)
+    # Expose SOCKS5 on the Docker network (port 1080)
     expose:
       - "1080"
     ports:

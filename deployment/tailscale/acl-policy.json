@@ -1,0 +1,50 @@
+{
+  // Shamrock Bail Bonds — Tailscale Tailnet ACL Policy
+  // Tailnet: shamrockbailbonds.biz
+  // Documentation: https://tailscale.com/kb/1018/acls
+  "tagOwners": {
+    "tag:server": ["autogroup:admin"],
+    "tag:office": ["autogroup:admin"],
+    "tag:admin": ["autogroup:admin"]
+  },
+  "acls": [
+    // Admins (dev/ops laptops) can access everything on the tailnet
+    {
+      "action": "accept",
+      "src": ["tag:admin"],
+      "dst": ["*:*"]
+    },
+    // Hetzner VPS (tag:server) accesses BlueBubbles, SOCKS proxy, and SSH on iMac (tag:office)
+    {
+      "action": "accept",
+      "src": ["tag:server"],
+      "dst": [
+        "tag:office:1234",
+        "tag:office:1080",
+        "tag:office:22"
+      ]
+    },
+    // Subnet routing: allow access to Docker bridge network (172.18.0.0/16)
+    {
+      "action": "accept",
+      "src": ["tag:admin", "tag:server"],
+      "dst": ["172.18.0.0/16:*"]
+    }
+  ],
+  // Auto-approvers for zero-touch route and exit node acceptance
+  "autoApprovers": {
+    "routes": {
+      "172.18.0.0/16": ["tag:server"]
+    },
+    "exitNode": ["tag:office"]
+  },
+  // Tailscale SSH: Admin users can SSH into VPS and office iMac without SSH keys
+  "ssh": [
+    {
+      "action": "accept",
+      "src": ["tag:admin"],
+      "dst": ["tag:server", "tag:office"],
+      "users": ["root", "shamrockbailbonds", "autogroup:nonroot"]
+    }
+  ]
+}

@@ -129,15 +129,27 @@ docker compose up -d
 
 ## Setup Guide
 
-### 1. VPS (Hetzner)
+### 1. VPS (Hetzner CCX33 — 178.156.179.237)
 
+#### A. Hetzner Cloud Console Firewall (Critical)
+Per official [Tailscale Hetzner Documentation](https://tailscale.com/docs/install/cloud/hetzner):
+1. **Inbound UDP 41641**: Allow from `0.0.0.0/0` and `::/0`.
+   - *Why:* WireGuard uses port 41641 for direct peer-to-peer tunnels (Easy NAT). Without this, traffic to the office iMac (`100.102.10.86`) is forced through Tailscale DERP relay servers, adding latency and jitter to BlueBubbles messaging.
+2. **Outbound UDP 3478**: Allow to `0.0.0.0/0` and `::/0` (STUN NAT discovery).
+3. **Inbound TCP 80 & 443**: Nginx reverse proxy for public domains.
+4. **SSH Lockdown (Port 22)**: Once `tailscale up --ssh` is verified, remove public port 22 ingress from the Hetzner firewall or restrict it to authorized IPs. SSH can then be conducted securely over Tailscale identity (`tailscale ssh root@shamrock-vps`).
+
+#### B. Host Installation & Network Performance
 ```bash
-# Run the setup script
+# Run the automated setup script
 bash deployment/tailscale/setup_vps.sh
 
 # Or manually:
 curl -fsSL https://tailscale.com/install.sh | sh
 tailscale up --hostname=shamrock-vps --advertise-routes=172.18.0.0/16 --accept-routes --ssh
+
+# Enable UDP GRO forwarding offload (Tailscale Linux performance guide)
+ethtool -K eth0 rx-udp-gro-forwarding on rx-gro-list off 2>/dev/null || true
 ```
 
 ### 2. Office iMac

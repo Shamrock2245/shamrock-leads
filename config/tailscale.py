@@ -109,29 +109,32 @@ class TailscaleConfig:
         except (socket.gaierror, OSError):
             return False
 
-    def get_bb_url_with_fallback(self, ngrok_url: str = "") -> str:
+    def get_bb_url_with_fallback(self, fallback_url: str = "") -> str:
         """
         Return the best BlueBubbles URL with automatic failover:
-          1. Tailscale direct (lowest latency, no relay)
-          2. ngrok static domain (public fallback)
-          3. frp TCP proxy (legacy fallback)
+          1. Tailscale direct (http://100.102.10.86:1234) — lowest latency, zero relay
+          2. frp TCP proxy (http://178.156.179.237:12434) — self-hosted backup
+          3. Optional configured fallback
         """
         if self.enabled and self.is_imac_reachable(timeout=2.0):
             logger.debug("BB URL: using Tailscale direct → %s", self.bb_url_tailscale)
             return self.bb_url_tailscale
 
-        if ngrok_url:
-            logger.info("BB URL: Tailscale unreachable, falling back to ngrok → %s", ngrok_url)
-            return ngrok_url
-
-        # Final fallback: frp TCP (if configured)
-        frp_url = os.getenv("BLUEBUBBLES_FRP_URL", "")
-        if frp_url:
-            logger.info("BB URL: falling back to frp → %s", frp_url)
+        # Primary backup: frp TCP proxy
+        frp_url = os.getenv("BLUEBUBBLES_FRP_URL", "http://178.156.179.237:12434")
+        if frp_url and self._tcp_probe("178.156.179.237", 12434, 2.0):
+            logger.info("BB URL: Tailscale unreachable, falling back to frp → %s", frp_url)
             return frp_url
 
-        logger.warning("BB URL: all paths failed, returning ngrok default")
-        return ngrok_url or ""
+        if fallback_url:
+            logger.info("BB URL: falling back to secondary configured URL → %s", fallback_url)
+            return fallback_url
+
+        if frp_url:
+            return frp_url
+
+        logger.warning("BB URL: all paths failed, returning empty default")
+        return fallback_url or ""
 
     def get_proxy_url_with_fallback(self, warren_url: str = "") -> Optional[str]:
         """

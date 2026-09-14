@@ -105,25 +105,9 @@ class TailscaleHealthMonitor:
         peer.last_check = time.time()
         host = peer.ip or peer.hostname
 
-        # Basic reachability (TCP probe on SSH port 22)
-        reachable = await asyncio.get_event_loop().run_in_executor(
-            None, self.config._tcp_probe, host, 22, 3.0
-        )
-        peer.reachable = reachable
-
-        if not reachable:
-            peer.consecutive_failures += 1
-            peer.services = {k: False for k in peer.services}
-            if peer.consecutive_failures == 3:
-                logger.warning(
-                    "🔴 Tailscale peer '%s' (%s) unreachable for %d checks",
-                    peer.hostname, peer.ip, peer.consecutive_failures
-                )
-            return
-
-        peer.consecutive_failures = 0
-
-        # Check individual services
+        # Check individual services (BlueBubbles 1234, SOCKS 1080, SSH 22)
+        # Note: Do NOT gate on SSH port 22 — macOS often has Remote Login disabled
+        # while BlueBubbles on port 1234 is completely healthy.
         if "bluebubbles" in peer.services:
             peer.services["bluebubbles"] = await asyncio.get_event_loop().run_in_executor(
                 None, self.config._tcp_probe, host, self.config.bb_port, 2.0
@@ -139,8 +123,33 @@ class TailscaleHealthMonitor:
                 None, self.config._tcp_probe, host, 22, 2.0
             )
 
-        # Measure latency (TCP connect time to SSH port)
-        peer.latency_ms = await self._measure_latency(host, 22)
+        # Peer is reachable if ANY service is responding
+        reachable = any(peer.services.values())
+        if not reachable:
+            # Also try a direct probe on bb_port or port 22 in case services dict was empty
+            reachable = await asyncio.get_event_loop().run_in_executor(
+                None, self.config._tcp_probe, host, self.config.bb_port, 2.0
+            )
+
+        peer.reachable = reachable
+
+        if not reachable:
+            peer.consecutive_failures += 1
+            if peer.consecutive_failures == 3:
+                logger.warning(
+                    "🔴 Tailscale peer '%s' (%s) unreachable for %d checks",
+                    peer.hostname, peer.ip, peer.consecutive_failures
+                )
+            peer.latency_ms = -1.0
+            return
+
+        peer.consecutive_failures = 0
+
+        # Measure latency against the primary active service port (prefer BlueBubbles 1234)
+        probe_port = self.config.bb_port if peer.services.get("bluebubbles") else (
+            self.config.socks_port if peer.services.get("socks") else 22
+        )
+        peer.latency_ms = await self._measure_latency(host, probe_port)
 
     async def _measure_latency(self, host: str, port: int) -> float:
         """Measure TCP connect latency in milliseconds."""
@@ -165,12 +174,10 @@ class TailscaleHealthMonitor:
         Return the best BlueBubbles URL with Tailscale-aware failover.
 
         Priority:
-          1. Tailscale direct (http://shamrocksimac:1234) — lowest latency
-          2. ngrok static domain — public fallback
-          3. frp TCP proxy — legacy fallback
+          1. Tailscale direct (http://100.102.10.86:1234) — lowest latency, zero relay
+          2. frp TCP proxy (http://178.156.179.237:12434) — self-hosted backup
+          3. Configured environment fallback
         """
-        ngrok_url = os.getenv("BLUEBUBBLES_URL_0178", "")
-
         if self.config.enabled and self.bb_via_tailscale:
             return self.config.bb_url_tailscale
 
@@ -178,7 +185,15 @@ class TailscaleHealthMonitor:
         if self.config.enabled and self.config.is_imac_reachable(timeout=2.0):
             return self.config.bb_url_tailscale
 
-        return ngrok_url
+        frp_url = os.getenv("BLUEBUBBLES_FRP_URL", "http://178.156.179.237:12434")
+        if frp_url and self.config._tcp_probe("178.156.179.237", 12434, 1.5):
+            return frp_url
+
+        fallback_url = os.getenv("BLUEBUBBLES_URL_0178") or os.getenv("BLUEBUBBLES_URL", "")
+        if fallback_url:
+            return fallback_url
+
+        return frp_url
 
     def get_best_proxy_url(self) -> Optional[str]:
         """
