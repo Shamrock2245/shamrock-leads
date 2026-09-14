@@ -6,18 +6,31 @@ import re
 from typing import Optional
 
 # Counties the agency will write paper in (OSI primary in Florida).
+# Covers Southwest Florida (SWFL Core & 20th Circuit) and South Florida (Gold Coast, Treasure Coast, Keys, Heartland).
 WRITE_ELIGIBLE_COUNTIES = [
+    # ── SWFL Core & 20th Judicial Circuit ───────────────────────────────────────
     "Lee",
     "Charlotte",
     "Collier",
     "Sarasota",
     "Manatee",
-    "Palm Beach",
-]
-
-WATCH_ALSO = [
     "Hendry",
     "DeSoto",
+    "Glades",
+    # ── South Florida / Gold Coast / Treasure Coast / Keys / Heartland ──────────
+    "Palm Beach",
+    "Broward",
+    "Miami-Dade",
+    "Monroe",
+    "Martin",
+    "St. Lucie",
+    "Indian River",
+    "Okeechobee",
+    "Highlands",
+    "Hardee",
+]
+
+WATCH_ALSO: list[str] = [
 ]
 
 _COUNTY_STATE_RE = re.compile(r"^(.+?)\s*\(([A-Za-z]{2})\)$")

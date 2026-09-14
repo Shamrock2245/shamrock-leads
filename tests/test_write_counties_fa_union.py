@@ -22,36 +22,74 @@ from dashboard.extensions import KEY_FL_COUNTIES
 
 
 def test_write_counties_contract():
-    expected_write = ["Lee", "Charlotte", "Collier", "Sarasota", "Manatee", "Palm Beach"]
+    expected_write = [
+        "Lee",
+        "Charlotte",
+        "Collier",
+        "Sarasota",
+        "Manatee",
+        "Hendry",
+        "DeSoto",
+        "Glades",
+        "Palm Beach",
+        "Broward",
+        "Miami-Dade",
+        "Monroe",
+        "Martin",
+        "St. Lucie",
+        "Indian River",
+        "Okeechobee",
+        "Highlands",
+        "Hardee",
+    ]
     assert WRITE_ELIGIBLE_COUNTIES == expected_write
-    assert "Hendry" in WATCH_ALSO
-    assert "DeSoto" in WATCH_ALSO
+    assert WATCH_ALSO == []
+    assert "Hendry" in WRITE_ELIGIBLE_COUNTIES
+    assert "DeSoto" in WRITE_ELIGIBLE_COUNTIES
+    assert "Glades" in WRITE_ELIGIBLE_COUNTIES
+    assert "Broward" in WRITE_ELIGIBLE_COUNTIES
+    assert "Miami-Dade" in WRITE_ELIGIBLE_COUNTIES
+    assert "Monroe" in WRITE_ELIGIBLE_COUNTIES
+    assert "Martin" in WRITE_ELIGIBLE_COUNTIES
 
     fa_list = fa_watch_counties()
     assert "Palm Beach" in fa_list
-    assert len(fa_list) == 8
+    assert len(fa_list) == len(expected_write)
     for c in expected_write:
         assert c in fa_list
-    assert "Hendry" in fa_list
-    assert "DeSoto" in fa_list
 
 
 def test_is_write_eligible():
-    assert is_write_eligible("Palm Beach") is True
-    assert is_write_eligible("palm beach") is True
-    assert is_write_eligible("Palm Beach (FL)") is True
+    # Core SWFL & 20th Circuit
     assert is_write_eligible("Lee") is True
     assert is_write_eligible("Lee (FL)") is True
     assert is_write_eligible("Charlotte County") is True
     assert is_write_eligible("Collier") is True
     assert is_write_eligible("Sarasota") is True
     assert is_write_eligible("Manatee") is True
+    assert is_write_eligible("Hendry") is True
+    assert is_write_eligible("DeSoto") is True
+    assert is_write_eligible("Glades") is True
 
-    # Scrape-only or watch-only counties
-    assert is_write_eligible("Hendry") is False
-    assert is_write_eligible("DeSoto") is False
+    # South Florida & Gold Coast / Treasure Coast / Keys / Heartland
+    assert is_write_eligible("Palm Beach") is True
+    assert is_write_eligible("palm beach") is True
+    assert is_write_eligible("Palm Beach (FL)") is True
+    assert is_write_eligible("Broward") is True
+    assert is_write_eligible("Miami-Dade") is True
+    assert is_write_eligible("Monroe") is True
+    assert is_write_eligible("Martin") is True
+    assert is_write_eligible("St. Lucie") is True
+    assert is_write_eligible("Indian River") is True
+    assert is_write_eligible("Okeechobee") is True
+    assert is_write_eligible("Highlands") is True
+    assert is_write_eligible("Hardee") is True
+
+    # Scrape-only / out-of-footprint counties remain intel-only
     assert is_write_eligible("Orange") is False
-    assert is_write_eligible("Broward") is False
+    assert is_write_eligible("Duval") is False
+    assert is_write_eligible("Polk") is False
+    assert is_write_eligible("Volusia") is False
     assert is_write_eligible("") is False
     assert is_write_eligible(None) is False
     assert is_write_eligible("Lee", state="GA") is False
@@ -72,14 +110,18 @@ def test_resolve_fa_watch_counties_default_is_write_book():
     result = resolve_fa_watch_counties(env_watch_counties="", stored_targets=None)
     assert result == fa_watch_counties()
     assert "Palm Beach" in result
-    assert len(result) == 8
+    assert "Broward" in result
+    assert "Miami-Dade" in result
+    assert len(result) == len(WRITE_ELIGIBLE_COUNTIES)
 
 
 def test_resolve_fa_watch_counties_unions_stored():
     old = ["Lee", "Collier", "Charlotte", "Sarasota", "Manatee", "Hendry", "DeSoto"]
     result = resolve_fa_watch_counties(env_watch_counties="", stored_targets=old)
     assert "Palm Beach" in result
-    assert len(result) == 8
+    assert "Glades" in result
+    assert "Broward" in result
+    assert len(result) == len(WRITE_ELIGIBLE_COUNTIES)
     for c in old:
         assert c in result
 
@@ -87,6 +129,16 @@ def test_resolve_fa_watch_counties_unions_stored():
 def test_resolve_fa_watch_counties_env_override():
     assert resolve_fa_watch_counties(env_watch_counties="Lee,Orange") == ["Lee", "Orange"]
     assert resolve_fa_watch_counties(env_watch_counties="*") is None
+
+
+def test_court_window_accepts_labeled_county():
+    from core.first_appearance_watcher import _COURT_WINDOWS, _is_in_court_window
+    assert "Monroe" in _COURT_WINDOWS
+    assert "St. Lucie" in _COURT_WINDOWS
+    assert "Hardee" in _COURT_WINDOWS
+    _is_in_court_window("Monroe (FL)")
+    _is_in_court_window("St. Lucie (FL)")
+    _is_in_court_window("Miami-Dade")
 
 
 def test_fa_query_county_values_includes_label_variants():
@@ -101,7 +153,9 @@ def test_default_config_fa_target_counties():
     target = DEFAULT_CONFIG["first_appearance_watcher"]["target_counties"]
     assert "Palm Beach" in target
     assert "Lee" in target
-    assert len(target) == 8
+    assert "Broward" in target
+    assert "Monroe" in target
+    assert len(target) == len(WRITE_ELIGIBLE_COUNTIES)
 
 
 @pytest.mark.asyncio
@@ -128,17 +182,22 @@ async def test_get_automation_config_union_logic():
 
     cfg = await get_automation_config(mock_db)
 
-    # Verify Palm Beach was unioned in
+    # Verify the current write book was unioned in
     updated_targets = cfg["first_appearance_watcher"]["target_counties"]
     assert "Palm Beach" in updated_targets
-    assert len(updated_targets) == 8
+    assert "Broward" in updated_targets
+    assert "Glades" in updated_targets
+    assert len(updated_targets) == len(WRITE_ELIGIBLE_COUNTIES)
 
     # Verify update_one was called to persist the unioned list back to Mongo
     assert mock_coll.update_one.called
     update_call = mock_coll.update_one.call_args
     assert update_call[0][0] == {"type": "automation_master"}
     assert "first_appearance_watcher.target_counties" in update_call[0][1]["$set"]
-    assert "Palm Beach" in update_call[0][1]["$set"]["first_appearance_watcher.target_counties"]
+    persisted = update_call[0][1]["$set"]["first_appearance_watcher.target_counties"]
+    assert "Palm Beach" in persisted
+    assert "Broward" in persisted
+    assert "Monroe" in persisted
 
 
 def test_serialize_doc_write_eligible():
@@ -149,6 +208,11 @@ def test_serialize_doc_write_eligible():
     doc2 = {"booking_number": "67890", "county": "Orange", "state": "FL", "bond_amount": 5000}
     serialized2 = serialize_doc(doc2)
     assert serialized2["write_eligible"] is False
+
+    broward = serialize_doc({"county": "Broward", "state": "FL", "booking_number": "b1"})
+    assert broward["write_eligible"] is True
+    dade = serialize_doc({"county": "Miami-Dade (FL)", "state": "FL", "booking_number": "b2"})
+    assert dade["write_eligible"] is True
 
     ga_labeled = serialize_doc({"county": "Lee (GA)", "bond_amount": 5000})
     assert ga_labeled["write_eligible"] is False
@@ -192,7 +256,11 @@ def test_watcher_query_uses_fa_watch_counties(monkeypatch):
     assert "Lee" in values
     assert "Hendry" in values
     assert "DeSoto" in values
-    assert len(resolve_fa_watch_counties(env_watch_counties="", stored_targets=None)) == 8
+    assert "Broward" in values
+    assert "Broward (FL)" in values
+    assert "Miami-Dade" in values
+    assert "St. Lucie" in values
+    assert len(resolve_fa_watch_counties(env_watch_counties="", stored_targets=None)) == len(WRITE_ELIGIBLE_COUNTIES)
 
 
 def test_watcher_skips_pbso_blotter_index():

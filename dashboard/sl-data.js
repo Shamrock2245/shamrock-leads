@@ -65,6 +65,9 @@ async function applyFilters() {
       if (SL_STATE.counties.length !== d.counties.length) buildCountyOptions(d.counties);
       else SL_STATE.counties = d.counties;
     }
+    if (d.write_counties && d.write_counties.length) {
+      SL_STATE.writeCounties = d.write_counties;
+    }
     const badge = document.getElementById('leadsBadge');
     if (badge) badge.textContent = SL_STATE.total.toLocaleString();
     const activity = d.activity || {};

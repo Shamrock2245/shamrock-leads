@@ -174,6 +174,40 @@ _COURT_WINDOWS: Dict[str, Dict[str, Tuple[int, int, int, int]]] = {
         "weekday": (8, 30, 16, 0),
         "weekend": (8, 30, 11, 30),
     },
+
+    # 16th Circuit (Florida Keys)
+    "Monroe": {
+        "weekday": (9, 0, 13, 0),     # 9:00 AM ET hearing
+        "weekend": (9, 0, 12, 0),
+    },
+
+    # 19th Circuit (Treasure Coast / Lake Okeechobee)
+    "Martin": {
+        "weekday": (8, 30, 13, 30),   # 8:30 AM ET hearing
+        "weekend": (8, 30, 12, 0),
+    },
+    "St. Lucie": {
+        "weekday": (8, 30, 13, 30),   # 8:30 AM ET hearing
+        "weekend": (8, 30, 12, 0),
+    },
+    "Indian River": {
+        "weekday": (8, 30, 13, 30),   # 8:30 AM ET hearing
+        "weekend": (8, 30, 12, 0),
+    },
+    "Okeechobee": {
+        "weekday": (8, 30, 13, 30),
+        "weekend": (8, 30, 12, 0),
+    },
+
+    # 10th Circuit (Heartland)
+    "Highlands": {
+        "weekday": (8, 30, 13, 0),
+        "weekend": (8, 30, 11, 30),
+    },
+    "Hardee": {
+        "weekday": (8, 30, 13, 0),
+        "weekend": (8, 30, 11, 30),
+    },
 }
 
 
@@ -184,7 +218,9 @@ def _is_in_court_window(county: str) -> bool:
       - County has no configured window (always eligible), OR
       - Current ET time is within the configured window.
     """
-    windows = _COURT_WINDOWS.get(county)
+    from config.write_counties import parse_county_state
+    bare, _st = parse_county_state(county or "", None)
+    windows = _COURT_WINDOWS.get(bare) or _COURT_WINDOWS.get(county)
     if not windows:
         return True  # No restriction — always eligible
 

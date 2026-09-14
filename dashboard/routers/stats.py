@@ -509,10 +509,12 @@ async def api_leads(
             leads_list = merge_leads_with_past_bonds(leads_list, past_bonds, limit=query.limit)
             total = total + added
 
+        from config.write_counties import WRITE_ELIGIBLE_COUNTIES
         return {
             "leads": leads_list, "total": total, "page": query.page, "limit": query.limit,
             "pages": max(1, (total + query.limit - 1) // query.limit),
             "counties": counties_list,
+            "write_counties": list(WRITE_ELIGIBLE_COUNTIES),
             "activity": {
                 "scraped_last_hour": scraped_last_hour,
             },

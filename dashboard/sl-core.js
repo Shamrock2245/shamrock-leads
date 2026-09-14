@@ -3,7 +3,7 @@
    sound alerts, activity feed auto-update, keyboard shortcuts
 */
 window.SL_STATE = {
-  counties: [], selectedCounties: [], days: 0, custody: '', status: '',
+  counties: [], writeCounties: [], selectedCounties: [], days: 0, custody: '', status: '',
   stateCode: '', minBond: 0, search: '', sort: 'scraped_at', order: 'desc',
   page: 1, limit: 50, leads: [], total: 0, pages: 1,
   defSort: 'bond_amount', defOrder: 'desc', defCustody: '', defCounty: '', defSelectedCounties: [], defBond: 0, defPage: 1, defLimit: 48,
@@ -87,8 +87,22 @@ const API = location.origin;
 const PRESETS = {
   swfl: ['Lee (FL)','Collier (FL)','Charlotte (FL)','DeSoto (FL)','Hendry (FL)','Sarasota (FL)','Manatee (FL)'],
   fl: null, // filled dynamically from SL_STATE.counties with (FL)
+  write_book: null, // filled from /api/leads write_counties
   all: [], none: []
 };
+
+function writeBookLabels() {
+  const names = (SL_STATE.writeCounties && SL_STATE.writeCounties.length)
+    ? SL_STATE.writeCounties
+    : ['Lee','Charlotte','Collier','Sarasota','Manatee','Hendry','DeSoto','Glades','Palm Beach','Broward','Miami-Dade','Monroe','Martin','St. Lucie','Indian River','Okeechobee','Highlands','Hardee'];
+  const counties = SL_STATE.counties || [];
+  return names.map(function(n) {
+    const labeled = n + ' (FL)';
+    if (counties.indexOf(labeled) !== -1) return labeled;
+    if (counties.indexOf(n) !== -1) return n;
+    return labeled;
+  });
+}
 const SWFL_COUNTIES_LIST = ['Lee', 'Collier', 'Charlotte', 'DeSoto', 'Hendry', 'Sarasota', 'Manatee'];
 /** Per-county cooldown so clicking the same county doesn't spam the trigger bus */
 const _scraperTriggerCooldownMs = 3 * 60 * 1000;
@@ -865,6 +879,12 @@ function applyDefCountyPreset(name) {
     SL_STATE.defSelectedCounties = [];
   } else if (name === 'fl') {
     SL_STATE.defSelectedCounties = counties.filter(c => /\(FL\)$/i.test(c));
+  } else if (name === 'write_book') {
+    SL_STATE.defSelectedCounties = writeBookLabels().filter(function(c) {
+      return counties.indexOf(c) !== -1 || counties.some(function(x) {
+        return String(x).toLowerCase().indexOf(c.split(' (')[0].toLowerCase()) === 0;
+      });
+    });
   } else if (name === 'swfl') {
     SL_STATE.defSelectedCounties = [...(PRESETS.swfl || [])].filter(c =>
       counties.includes(c) || counties.some(x => x.toLowerCase().startsWith(c.split(' (')[0].toLowerCase()))
@@ -987,6 +1007,8 @@ function applyPreset(name) {
     SL_STATE.selectedCounties = [];
   } else if (name === 'fl') {
     SL_STATE.selectedCounties = (SL_STATE.counties || []).filter(c => /\(FL\)$/i.test(c));
+  } else if (name === 'write_book') {
+    SL_STATE.selectedCounties = writeBookLabels();
   } else {
     SL_STATE.selectedCounties = [...(PRESETS[name] || [])];
   }
