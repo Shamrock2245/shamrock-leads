@@ -19,7 +19,7 @@ httpx>=0.27.0
 Pillow>=10.2.0
 
 # Gmail scanning (Grok email harvesting)
-google-api-python-client>=2.100.0
+google-api-python-client>=2.200.0
 google-auth>=2.25.0
 google-auth-oauthlib>=0.8.0
 
