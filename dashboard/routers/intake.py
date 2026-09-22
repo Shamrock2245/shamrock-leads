@@ -1044,6 +1044,54 @@ async def intake_promote(request: Request, intake_id: str):
         intake_id, matched_booking, defendant_name, surety.upper(), bond_amount, poa_number,
     )
 
+    # ── 7a. Auto payment link + court calendar seed (soft-fail) ───────────────
+    try:
+        from dashboard.services.packet_payment_link_service import (
+            maybe_send_packet_payment_link,
+        )
+
+        packet_id_for_pay = str(bond_doc.get("paperwork_packet_id") or "").strip()
+        pay_result = await maybe_send_packet_payment_link(
+            packet_id=packet_id_for_pay,
+            booking_number=matched_booking,
+            amount=bond_doc.get("premium") or (bond_amount * 0.10),
+            phone=bond_doc.get("indemnitor_phone") or "",
+            email=bond_doc.get("indemnitor_email") or "",
+            defendant_name=defendant_name,
+            bond_doc=bond_doc,
+            intake_doc=intake_doc,
+            source="intake_promote",
+        )
+        logger.info(
+            "[intake] payment_link auto-dispatch booking=%s skipped=%s delivered=%s reason=%s",
+            matched_booking,
+            pay_result.get("skipped"),
+            pay_result.get("delivered"),
+            pay_result.get("reason") or pay_result.get("error"),
+        )
+    except Exception as pay_exc:
+        logger.warning("[intake] payment_link auto-dispatch failed (non-fatal): %s", pay_exc)
+
+    try:
+        from dashboard.services.bond_court_seed_service import (
+            seed_court_calendar_for_bond,
+        )
+
+        seed_result = await seed_court_calendar_for_bond(
+            bond=bond_doc,
+            booking_number=matched_booking,
+            source="intake_promote",
+        )
+        logger.info(
+            "[intake] court seed booking=%s success=%s reason=%s gcal=%s",
+            matched_booking,
+            seed_result.get("success"),
+            seed_result.get("reason"),
+            (seed_result.get("gcal") or {}).get("status"),
+        )
+    except Exception as seed_exc:
+        logger.warning("[intake] court seed failed (non-fatal): %s", seed_exc)
+
     # ── 7b. Register Vehicle Watch if vehicle plate is provided ──────────────
     if bond_doc.get("vehicle_plate"):
         try:

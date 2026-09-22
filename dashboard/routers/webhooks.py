@@ -947,6 +947,54 @@ async def docuseal_webhook(request: Request):
         },
     )
 
+    # Auto-send SwipeSimple if unpaid / not yet sent (soft-fail)
+    try:
+        from dashboard.services.packet_payment_link_service import (
+            maybe_send_packet_payment_link,
+        )
+
+        pay_result = await maybe_send_packet_payment_link(
+            packet_id=packet_id,
+            booking_number=booking_number,
+            packet_doc=packet,
+            source="docuseal_submission_completed",
+        )
+        logger.info(
+            "[docuseal_webhook] payment_link auto-dispatch packet=%s skipped=%s delivered=%s reason=%s",
+            packet_id,
+            pay_result.get("skipped"),
+            pay_result.get("delivered"),
+            pay_result.get("reason") or pay_result.get("error"),
+        )
+    except Exception as pay_exc:
+        logger.warning(
+            "[docuseal_webhook] payment_link auto-dispatch failed (non-fatal): %s",
+            pay_exc,
+        )
+
+    # Seed Google Calendar + court reminders when bonded with court_date
+    if booking_number:
+        try:
+            from dashboard.services.bond_court_seed_service import (
+                seed_court_calendar_for_bond,
+            )
+
+            seed_result = await seed_court_calendar_for_bond(
+                booking_number=booking_number,
+                source="docuseal_submission_completed",
+            )
+            logger.info(
+                "[docuseal_webhook] court seed booking=%s success=%s reason=%s gcal=%s",
+                booking_number,
+                seed_result.get("success"),
+                seed_result.get("reason"),
+                (seed_result.get("gcal") or {}).get("status"),
+            )
+        except Exception as seed_exc:
+            logger.warning(
+                "[docuseal_webhook] court seed failed (non-fatal): %s", seed_exc
+            )
+
     # Slack (non-PII)
     try:
         import httpx
