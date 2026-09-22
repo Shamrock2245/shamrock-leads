@@ -1,8 +1,8 @@
 # Staff Runbook: B3 Write-Bond → Paperwork Event Forwarding Smoke
 
 > **Target Checklist Item:** [`ECOSYSTEM_PROD_CHECKLIST.md`](../ECOSYSTEM_PROD_CHECKLIST.md) §B3 (`GAS_WEB_APP_URL` + `GAS_API_KEY` forward write-bond / paperwork events)  
-> **Status:** 🔲 **Open — awaiting a real BondCase** (Operator reports the path has worked; no live case is available yet for the documented smoke.)  
-> **Execution Rule:** **Do not run or simulate this smoke without an authorized staff member supplying an exact, pre-existing validated BondCase and approving the action in the active session.**
+> **Status:** 🔲 **Open — staff-gated on Brendan's next live Write Bond / mid-deal BondCase ID** (Operator reports the path has worked; do not run the smoke until Brendan or CoS supplies the ID for the bond being written now.)
+> **Execution Rule:** **Run this smoke only when Brendan or CoS supplies the exact BondCase ID for the live bond being written now and an authorized staff member approves the action in the active session. Do not invent a case or hunt a random old BondCase. Until then, the paperwork desk is limited to hydrate-from-booking / prefill-preview.**
 
 ---
 
@@ -10,8 +10,8 @@
 
 Staff must confirm the following prerequisites in the system before proceeding:
 
-1. **Pre-Existing Authoritative BondCase Record:**
-   - A real, validated case already exists in `active_bonds` or `bond_cases` (no synthetic cases, no stubs).
+1. **Brendan/CoS-Supplied Live BondCase Record:**
+   - The exact BondCase ID supplied for the live bond being written now is a real, validated case in `active_bonds` or `bond_cases` (no synthetic cases, no stubs, and no random old-case selection).
    - `Bond_Case_ID` (or `Booking_Number`) is known.
    - `Case_Number` is present and non-empty (e.g. `26-CF-001234`).
    - `Surety_ID` is explicit (`osi` or `palmetto`).
@@ -45,7 +45,7 @@ Staff must confirm the following prerequisites in the system before proceeding:
 ## 3. Step-by-Step Staff Execution Procedure
 
 ### Step 1: Execute Read-Only Preflight Probe
-Run the non-modifying preflight probe against the candidate `bond_case_id` to verify all invariant gates fail closed or report eligibility:
+Run the non-modifying preflight probe against the Brendan/CoS-supplied live `bond_case_id` to verify all invariant gates fail closed or report eligibility:
 
 ```bash
 # Via cURL from authorized staff session:
@@ -53,7 +53,7 @@ curl -sS -X POST "https://leads.shamrockbailbonds.biz/api/paperwork/write-bond-f
   -H "Content-Type: application/json" \
   -H "X-API-Key: <GAS_API_KEY>" \
   -d '{
-    "bond_case_id": "STAFF_SELECTED_BOND_CASE_ID",
+    "bond_case_id": "BRENDAN_SUPPLIED_LIVE_BOND_CASE_ID",
     "correlation_id": "B3-SMOKE-PREFLIGHT-01"
   }'
 ```
@@ -66,7 +66,7 @@ curl -sS -X POST "https://leads.shamrockbailbonds.biz/api/paperwork/write-bond-f
   "correlation_id": "B3-SMOKE-PREFLIGHT-01",
   "block_reasons": [],
   "details": {
-    "bond_case_id": "STAFF_SELECTED_BOND_CASE_ID",
+    "bond_case_id": "BRENDAN_SUPPLIED_LIVE_BOND_CASE_ID",
     "booking_number": "REDACTED",
     "case_number": "REDACTED",
     "surety_id": "osi",
@@ -91,7 +91,7 @@ curl -sS -X POST "https://leads.shamrockbailbonds.biz/api/paperwork/write-bond-f
   -H "Content-Type: application/json" \
   -H "X-API-Key: <GAS_API_KEY>" \
   -d '{
-    "bond_case_id": "STAFF_SELECTED_BOND_CASE_ID",
+    "bond_case_id": "BRENDAN_SUPPLIED_LIVE_BOND_CASE_ID",
     "staff_actor": "admin@shamrockbailbonds.biz",
     "correlation_id": "B3-SMOKE-DRYRUN-01",
     "confirmed": true,
@@ -109,7 +109,7 @@ curl -sS -X POST "https://leads.shamrockbailbonds.biz/api/paperwork/write-bond-f
   -H "Content-Type: application/json" \
   -H "X-API-Key: <GAS_API_KEY>" \
   -d '{
-    "bond_case_id": "STAFF_SELECTED_BOND_CASE_ID",
+    "bond_case_id": "BRENDAN_SUPPLIED_LIVE_BOND_CASE_ID",
     "staff_actor": "admin@shamrockbailbonds.biz",
     "correlation_id": "B3-SMOKE-LIVE-01",
     "confirmed": true
@@ -122,7 +122,7 @@ curl -sS -X POST "https://leads.shamrockbailbonds.biz/api/paperwork/write-bond-f
   "success": true,
   "state": "forwarded",
   "correlation_id": "B3-SMOKE-LIVE-01",
-  "bond_case_id": "STAFF_SELECTED_BOND_CASE_ID",
+  "bond_case_id": "BRENDAN_SUPPLIED_LIVE_BOND_CASE_ID",
   "booking_number": "REDACTED",
   "case_number": "REDACTED",
   "surety_id": "osi",

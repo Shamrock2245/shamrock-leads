@@ -20,7 +20,7 @@
 
 - **D2 closed:** Brendan confirmed Super CRM dashboard iMessage send is working.
 - **C3 deferred:** historical secret rotation is not being treated as a formal blocker; rotation will happen shortly. Still `[ ]` until keys actually turn.
-- **B3 open:** path is believed to work; no real BondCase is available yet for the documented smoke. Re-run when the next validated case exists.
+- **B3 open:** path is believed to work; gated on Brendan's next live Write Bond / mid-deal BondCase ID. Do not invent a case or hunt a random old BondCase. Until then, the paperwork desk is limited to hydrate-from-booking / prefill-preview.
 - **B5 still open.** Stage 2 production-hardened is **not** claimed. Automations stay `review` for 7 days after D2 (clock starts 2026-08-28).
 
 ## Clipboard / docs alignment (2026-08-28)
