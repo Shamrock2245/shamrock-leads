@@ -10,12 +10,18 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _source_states() -> dict[str, str]:
-    """Load the literal UI state registry without importing optional DB clients."""
-    tree = ast.parse((ROOT / "dashboard" / "extensions.py").read_text())
+    """Load the literal UI state registry without importing optional DB clients.
+
+    Prefer ``scraper_source_states_data.py`` when present (Health label registry);
+    fall back to the inlined dict in ``extensions.py``.
+    """
+    data_path = ROOT / "dashboard" / "scraper_source_states_data.py"
+    path = data_path if data_path.exists() else ROOT / "dashboard" / "extensions.py"
+    tree = ast.parse(path.read_text())
     for node in tree.body:
         if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == "SCRAPER_SOURCE_STATES":
             return ast.literal_eval(node.value)
-    raise AssertionError("SCRAPER_SOURCE_STATES declaration not found")
+    raise AssertionError(f"SCRAPER_SOURCE_STATES declaration not found in {path.name}")
 
 
 class DashboardSourceStateTests(unittest.TestCase):
@@ -34,6 +40,21 @@ class DashboardSourceStateTests(unittest.TestCase):
         self.assertEqual(states["Clermont (OH)"], "fail_closed")
         self.assertEqual(states["Clinton (OH)"], "fail_closed")
         self.assertEqual(states["Huron (OH)"], "fail_closed")
+
+    def test_fl_broward_and_jailtracker_counties_are_fail_closed(self) -> None:
+        states = _source_states()
+        for label in (
+            "Broward (FL)",
+            "Baker (FL)",
+            "Calhoun (FL)",
+            "Gulf (FL)",
+            "Holmes (FL)",
+            "Levy (FL)",
+            "Wakulla (FL)",
+            "Washington (FL)",
+            "Sarasota (FL)",
+        ):
+            self.assertEqual(states[label], "fail_closed", label)
 
     def test_omitted_registered_label_uses_the_documented_unverified_default(self) -> None:
         states = _source_states()
