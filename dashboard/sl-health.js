@@ -17,6 +17,7 @@ const SLHealth = (() => {
     stale:     { label: '🟡 Stale',     cls: 'status-warn',  order: 2 },
     warning:   { label: '🟡 Warning',   cls: 'status-warn',  order: 3 },
     empty:     { label: '⚪ Empty',     cls: 'status-never', order: 4 },
+    fail_closed:{ label: '🛡 Fail closed', cls: 'status-warn', order: 4 },
     offline:   { label: '🔴 Offline',   cls: 'status-error', order: 5 },
     error:     { label: '🔴 Error',     cls: 'status-error', order: 6 },
     never_run: { label: '⏳ Never Run', cls: 'status-never', order: 7 },
@@ -35,7 +36,7 @@ const SLHealth = (() => {
   /** Productive = last run succeeded with records (not soft-empty / stubs). */
   function _isProductive(r) {
     const st = (r.status || '').toLowerCase();
-    if (st === 'empty' || st === 'error' || st === 'never_run' || st === 'disabled') return false;
+    if (st === 'empty' || st === 'fail_closed' || st === 'error' || st === 'never_run' || st === 'disabled') return false;
     if (st === 'healthy' || st === 'ok') return true;
     // stale/warning/offline only count if last run actually had rows
     const lastN = r.last_run_records != null ? r.last_run_records : r.records;

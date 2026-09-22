@@ -1,6 +1,6 @@
 # 🗺️ Florida County Registry — All 67 Counties
 > Master reference for every Florida county jail roster. Updated as scrapers are built and validated.
-> **Last Updated:** 2026-08-04 | **Active Scrapers:** **67 FL** (full state on `REGISTERED_COUNTIES` + scheduler) · multi-state total **269** — see root `STATUS.md`. **Architecture note:** FL uses custom scrapers + shared APE proxy / SmartWeb card parser — not wholesale multi-state platform wrappers.
+> **Last Updated:** 2026-08-04 | **Active Scrapers:** **67 FL** (full state on `REGISTERED_COUNTIES` + scheduler) · multi-state total **361** (FL **67**) — see root `STATUS.md`. **Architecture note:** FL uses custom scrapers + shared APE proxy / SmartWeb card parser — not wholesale multi-state platform wrappers.
 
 ---
 
@@ -59,7 +59,7 @@
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 22 | **Palm Beach** | DrissionPage — PBSO ColdFusion blotter | `palm_beach.py` | ✅ Active (fixed page.html 2026-07-10) | 120 min | 2026-07-10 |
 | 23 | **Broward** | Official BSO arrest search | `broward.py` | ⏳ Fail closed — deployed 2026-08-14; Turnstile-protected source with no verified booking-safe bulk contract | 60 min | Public production hosts healthy; no Broward writes or alerts expected from the safety guard |
-| 22 | **Martin** | Direct Tyler Technologies REST API | `martin.py` | ✅ Active | 120 min | 2026-05-24 |
+| 24 | **Martin** | Direct Tyler Technologies REST API | `martin.py` | ✅ Active | 120 min | 2026-05-24 |
 | 25 | **St. Lucie** | requests POST — PHP table | `st_lucie.py` | ✅ Active | 90 min | 2026-04-27 |
 | 26 | **Indian River** | requests GET — BS4 card list | `indian_river.py` | ✅ Active | 120 min | 2026-04-27 |
 | 27 | **Okeechobee** | Wix shell page — no public data source | `okeechobee.py` | 🔴 No public roster URL | 120 min | 2026-07-24 |

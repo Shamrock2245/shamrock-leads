@@ -665,6 +665,18 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     "Lauderdale (MS)": "fail_closed",
     "Madison (MS)": "fail_closed",
     "Sarasota (FL)": "fail_closed",
+    # Runtime-gated FL scopes aligned to Health Source Guards (SCRAPER_SOURCE_STATES).
+    # Broward: Turnstile / no verified booking-safe bulk contract.
+    # Baker/Calhoun/Gulf/Holmes/Levy/Wakulla/Washington: FL JailTracker wrappers
+    # gated by jailtracker_base.SOURCE_CONTRACT_VALIDATED=False.
+    "Broward (FL)": "fail_closed",
+    "Baker (FL)": "fail_closed",
+    "Calhoun (FL)": "fail_closed",
+    "Gulf (FL)": "fail_closed",
+    "Holmes (FL)": "fail_closed",
+    "Levy (FL)": "fail_closed",
+    "Wakulla (FL)": "fail_closed",
+    "Washington (FL)": "fail_closed",
     # Ohio pilot scopes are registered for truthful health visibility only.
     # They remain blocked before source fetch until county-specific approval.
     "Clermont (OH)": "fail_closed",

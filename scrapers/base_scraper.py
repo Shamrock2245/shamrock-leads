@@ -661,7 +661,7 @@ class BaseScraper(ABC):
                         cold=0,
                         disqualified=0,
                         duration=0,
-                        status="empty",
+                        status="fail_closed",
                     )
                 except Exception:
                     pass
