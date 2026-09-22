@@ -322,8 +322,23 @@ services:
     restart: unless-stopped
     profiles:
       - ops                             # Won't start by default
+    # Pass host .env into NR so morning prospecting / Slack subflows see
+    # SLACK_BOT_TOKEN (and channel / GAS / Mongo vars). Prefer env_file over hardcoding.
+    # Do NOT change GAS webhook URL values here — only forward vars if defined.
+    env_file:
+      - .env
     environment:
       - TZ=America/New_York
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
+      - SLACK_CHANNEL=${SLACK_CHANNEL:-#leads}
+      - SLACK_CHANNEL_PROSPECTING=${SLACK_CHANNEL_PROSPECTING:-#leads}
+      - SLACK_CHANNEL_LEADS=${SLACK_CHANNEL_LEADS:-#leads}
+      - GAS_WEBHOOK_URL=${GAS_WEBHOOK_URL:-}
+      - GAS_API_KEY=${GAS_API_KEY:-}
+      - MONGODB_URI=${MONGODB_URI:-}
+      - MONGODB_DB_NAME=${MONGODB_DB_NAME:-ShamrockBailDB}
+      - LEADS_PUBLIC_URL=${LEADS_PUBLIC_URL:-https://leads.shamrockbailbonds.biz}
+      - DASHBOARD_PUBLIC_URL=${DASHBOARD_PUBLIC_URL:-https://leads.shamrockbailbonds.biz}
     volumes:
       - node-red-data:/data             # Persistent flows + config
     ports:
