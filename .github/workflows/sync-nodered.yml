@@ -54,7 +54,6 @@ jobs:
             if [ -d /opt/shamrock-node-red/.git ]; then
               NR=/opt/shamrock-node-red
             else
-              echo "Cloning shamrock-node-red into /opt/shamrock-node-red"
               git clone https://github.com/Shamrock2245/shamrock-node-red.git /opt/shamrock-node-red
               NR=/opt/shamrock-node-red
             fi
@@ -73,20 +72,56 @@ jobs:
             print("OK tab_morning_prospect present; nodes=", len(flows))
             PY
 
-            if [ -x scripts/sync_nodered_volume.sh ]; then
-              bash scripts/sync_nodered_volume.sh || {
-                echo "sync script failed — docker volume fallback"
-                VOL=$(docker volume inspect shamrock-leads_node-red-data --format '{{.Mountpoint}}' 2>/dev/null || docker volume inspect shamrock-node-red_node-red-data --format '{{.Mountpoint}}' 2>/dev/null || true)
-                if [ -n "${VOL:-}" ] && [ -d "$VOL" ]; then
-                  cp -f node_red_data/flows.json "$VOL/flows.json"
-                  docker restart shamrock-node-red || docker compose -f /opt/shamrock-leads/docker-compose.yml --profile ops up -d node-red || true
-                else
-                  echo "WARN: no docker volume found"
-                fi
-              }
+            # Resolve live Docker volume (leads compose uses shamrock-leads_node-red-data)
+            VOL=""
+            for candidate in shamrock-leads_node-red-data shamrock-node-red_node-red-data; do
+              mp=$(docker volume inspect "$candidate" --format '{{.Mountpoint}}' 2>/dev/null || true)
+              if [ -n "$mp" ] && [ -d "$mp" ]; then
+                VOL="$mp"
+                echo "Using volume $candidate → $VOL"
+                break
+              fi
+            done
+            if [ -z "$VOL" ]; then
+              echo "ERROR: no node-red docker volume found"; docker volume ls; exit 1
             fi
 
+            cp -f node_red_data/flows.json "$VOL/flows.json"
+            if [ -f node_red_data/settings.js ]; then cp -f node_red_data/settings.js "$VOL/settings.js" || true; fi
+            echo "Copied flows.json → $VOL"
+
+            # Prefer live Admin API deploy; fall back to restart
+            DEPLOYED=0
+            if curl -sf --max-time 5 http://127.0.0.1:1880/ >/dev/null; then
+              if python3 - <<'PY'
+            import json, sys
+            try:
+              import requests
+            except ImportError:
+              sys.exit(2)
+            flows=json.load(open("node_red_data/flows.json"))
+            r=requests.post("http://127.0.0.1:1880/flows", json=flows, headers={"Content-Type":"application/json","Node-RED-Deployment-Type":"full"}, timeout=90)
+            print("Admin API deploy HTTP", r.status_code, r.text[:120])
+            sys.exit(0 if r.status_code < 400 else 1)
+            PY
+              then DEPLOYED=1; fi
+            fi
+
+            if [ "$DEPLOYED" != "1" ]; then
+              echo "Admin API deploy unavailable — restarting container to load volume flows"
+              docker restart shamrock-node-red || docker compose -f /opt/shamrock-leads/docker-compose.yml --profile ops up -d node-red
+            fi
+
+            echo "Waiting for Node-RED health..."
+            OK=0
+            for i in $(seq 1 36); do
+              if curl -sf --max-time 5 http://127.0.0.1:1880/ >/dev/null; then OK=1; break; fi
+              sleep 5
+            done
             docker ps --filter name=shamrock-node-red --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' || true
+            if [ "$OK" != "1" ]; then
+              echo "ERROR: Node-RED did not become healthy"; docker logs shamrock-node-red --tail 60; exit 1
+            fi
 
             echo ""
             echo "=== Quiet / Slack env (report only; no mutations) ==="
@@ -97,22 +132,20 @@ jobs:
               fi
             done
             echo "-- container env (shamrock-node-red) --"
-            docker inspect shamrock-node-red --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep -E '^(RESPECT_QUIET|QUIET_|SLACK_CHANNEL_PROSPECTING|SLACK_CHANNEL_LEADS|TZ)=' || echo "(no quiet/slack channel keys in container Env)"
+            docker inspect shamrock-node-red --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep -E '^(RESPECT_QUIET|QUIET_|SLACK_CHANNEL_PROSPECTING|SLACK_CHANNEL_LEADS|TZ)=' || echo "(no quiet/slack channel keys in container Env; Safe Cron default RESPECT_QUIET=false)"
 
             echo ""
             echo "=== Admin API check ==="
-            if curl -sf --max-time 10 http://127.0.0.1:1880/ >/dev/null; then
-              curl -sf --max-time 30 http://127.0.0.1:1880/flows | python3 -c 'import sys,json; f=json.load(sys.stdin); print("runtime nodes",len(f),"morning",any(n.get("id")=="tab_morning_prospect" for n in f))'
-            else
-              echo "WARN: Node-RED :1880 not responding"
-              docker logs shamrock-node-red --tail 40 2>&1 || true
-            fi
+            curl -sf --max-time 30 http://127.0.0.1:1880/flows | python3 -c 'import sys,json; f=json.load(sys.stdin); ok=any(n.get("id")=="tab_morning_prospect" for n in f); print("runtime nodes",len(f),"morning",ok); raise SystemExit(0 if ok else 1)'
 
             if [ "${DO_RUN_NOW:-false}" = "true" ]; then
               echo ""
               echo "=== Triggering Run Now (mp_inject_manual) ==="
               code=$(curl -s -o /tmp/nr_inject.txt -w '%{http_code}' -X POST http://127.0.0.1:1880/inject/mp_inject_manual -H 'Content-Type: application/json' -d '{}' || true)
               echo "inject HTTP $code body=$(head -c 200 /tmp/nr_inject.txt 2>/dev/null || true)"
+              sleep 8
+              echo "-- recent container log (post-inject) --"
+              docker logs shamrock-node-red --since 60s 2>&1 | tail -40 || true
             else
               echo "Run Now skipped (input run_now=false)"
             fi
