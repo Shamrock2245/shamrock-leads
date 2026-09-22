@@ -932,7 +932,12 @@ class DocuSealService:
                 if desc.strip():
                     charges_list.append(desc.strip())
         elif isinstance(charges_raw, str) and charges_raw.strip():
-            charges_list = [c.strip() for c in charges_raw.split(",") if c.strip()]
+            # Jail/booking extracts use " | " (and sometimes ;/newlines); commas alone
+            # also appear inside charge descriptions, so prefer roster delimiters first.
+            if re.search(r"[|\n;]", charges_raw):
+                charges_list = [c.strip() for c in re.split(r"[|\n;]+", charges_raw) if c.strip()]
+            else:
+                charges_list = [c.strip() for c in charges_raw.split(",") if c.strip()]
 
         # Primary case # from first structured charge if top-level missing
         if not case_number and isinstance(charges_raw, list):
@@ -1030,6 +1035,12 @@ class DocuSealService:
                 c_amt_str = f"{c_amt_float:,.2f}" if c_amt_float > 0 else ""
             elif isinstance(charge_obj, str) and charge_obj.strip():
                 c_desc = charge_obj.strip()
+                c_case = case_number
+                c_poa = poa_list[idx] if idx < len(poa_list) else poa
+                c_amt_str = bond_formatted if idx == 0 else ""
+            elif idx < len(charges_list):
+                # Pipe/newline-split booking charge strings (not only list charge_details)
+                c_desc = charges_list[idx]
                 c_case = case_number
                 c_poa = poa_list[idx] if idx < len(poa_list) else poa
                 c_amt_str = bond_formatted if idx == 0 else ""

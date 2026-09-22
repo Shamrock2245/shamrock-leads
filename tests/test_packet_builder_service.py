@@ -121,3 +121,150 @@ def test_catalog_to_template_and_manifest():
     assert ab["signature_mode"] == "wet_ink_live"
     assert ab["delivery"] == "print_and_jail"
     assert "wet" in ab["procedure"].lower() or "jail" in ab["procedure"].lower()
+
+
+def test_split_name_handles_jail_roster_comma_form():
+    from dashboard.services.packet_builder_service import _split_name
+
+    first, middle, last = _split_name("PERKINS, MICHAEL JAMES")
+    assert first == "MICHAEL"
+    assert middle == "JAMES"
+    assert last == "PERKINS"
+    first2, mid2, last2 = _split_name("Jane Ann Doe")
+    assert first2 == "Jane"
+    assert mid2 == "Ann"
+    assert last2 == "Doe"
+
+
+def test_adaptive_field_map_includes_write_bond_date_and_words_keys():
+    fields = build_adaptive_field_map(
+        {
+            "defendant": {"name": "John Doe"},
+            "indemnitor": {"name": "Mary Doe"},
+            "bond_amount": 5000,
+            "premium_amount": 500,
+            "county": "Lee",
+            "booking_number": "BK1",
+            "case_number": "CASE1",
+            "poa_number": "POA99",
+            "surety_id": "osi",
+        }
+    )
+    assert fields.get("today_day")
+    assert fields.get("today_month")
+    assert fields.get("today_year_2digit")
+    assert fields.get("bond_date_day") == fields.get("today_day")
+    assert "Thousand" in (fields.get("bond_amount_words") or "")
+
+
+@pytest.mark.asyncio
+async def test_resolve_case_context_reads_snake_case_arrest_from_bookmarklet():
+    """booking_extract_merge writes snake_case; hydrate must read those keys."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from dashboard.services.packet_builder_service import resolve_case_context
+
+    arrest_doc = {
+        "booking_number": "1029767",
+        "county": "Lee",
+        "state": "FL",
+        "full_name": "PERKINS, MICHAEL JAMES",
+        "first_name": "Michael",
+        "last_name": "Perkins",
+        "dob": "1985-04-12",
+        "address": "100 Oak St, Fort Myers, FL 33901",
+        "city": "Fort Myers",
+        "zip": "33901",
+        "height": "5-10",
+        "weight": "180",
+        "race": "W",
+        "sex": "M",
+        "facility": "Lee County Jail",
+        "charges": "BATTERY | RESIST OFFICER",
+        "charge_details": [
+            {"charge": "BATTERY", "bond_amount": 5000, "case_number": "26CF016741"},
+            {"charge": "RESIST OFFICER", "bond_amount": 1000, "case_number": "26CF016741"},
+        ],
+        "bond_amount": 6000,
+        "case_number": "26CF016741",
+        "court_date": "9/8/2026",
+        "court_time": "8:30 AM",
+    }
+
+    class _Cursor:
+        def __init__(self, docs):
+            self._docs = docs
+
+        async def to_list(self, length=3):
+            return self._docs[:length]
+
+    arrests = MagicMock()
+    arrests.find = MagicMock(return_value=_Cursor([arrest_doc]))
+    empty = MagicMock()
+    empty.find_one = AsyncMock(return_value=None)
+
+    def _get(name):
+        if name == "arrests":
+            return arrests
+        return empty
+
+    import sys
+    import types
+    fake_ext = types.ModuleType("dashboard.extensions")
+    fake_ext.get_collection = _get
+    with patch.dict(sys.modules, {"dashboard.extensions": fake_ext}):
+        ctx = await resolve_case_context(
+            booking_number="1029767",
+            county="Lee",
+            state="FL",
+        )
+
+    assert "arrest" in ctx["sources"]
+    assert ctx["defendant"]["name"] == "PERKINS, MICHAEL JAMES"
+    assert ctx["defendant"]["first_name"] == "Michael"
+    assert ctx["defendant"]["last_name"] == "Perkins"
+    assert ctx["defendant"]["dob"] == "1985-04-12"
+    assert ctx["defendant"]["height"] == "5-10"
+    assert ctx["defendant"]["race"] == "W"
+    assert ctx["facility"] == "Lee County Jail"
+    assert "BATTERY" in (ctx.get("charges") or "")
+    assert ctx["case_number"] == "26CF016741"
+    assert len(ctx["charge_details"]) == 2
+    assert ctx["bond_amount"] == 6000.0
+
+
+@pytest.mark.asyncio
+async def test_resolve_case_context_fail_closed_on_ambiguous_booking():
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from dashboard.services.packet_builder_service import resolve_case_context
+
+    class _Cursor:
+        def __init__(self, docs):
+            self._docs = docs
+
+        async def to_list(self, length=3):
+            return self._docs[:length]
+
+    hits = [
+        {"booking_number": "BK1", "county": "Lee", "full_name": "DOE, JOHN"},
+        {"booking_number": "BK1", "county": "Lee", "full_name": "DOE, JANE"},
+    ]
+    arrests = MagicMock()
+    arrests.find = MagicMock(return_value=_Cursor(hits))
+    empty = MagicMock()
+    empty.find_one = AsyncMock(return_value=None)
+
+    def _get(name):
+        return arrests if name == "arrests" else empty
+
+    import sys
+    import types
+    fake_ext = types.ModuleType("dashboard.extensions")
+    fake_ext.get_collection = _get
+    with patch.dict(sys.modules, {"dashboard.extensions": fake_ext}):
+        ctx = await resolve_case_context(booking_number="BK1", county="Lee", state="FL")
+
+    assert "arrest_ambiguous" in ctx["sources"]
+    assert "arrest" not in ctx["sources"]
+    assert not (ctx.get("defendant") or {}).get("name")
