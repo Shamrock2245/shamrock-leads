@@ -1,1 +1,1 @@
-@/workspace/pr-fl-health-labels/CONTENT_FOR_MCP.txt
+PLACEHOLDER_REPLACE_FROM_FILE
