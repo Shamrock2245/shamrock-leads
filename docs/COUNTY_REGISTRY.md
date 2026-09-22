@@ -1,6 +1,6 @@
 # 🗺️ Florida County Registry — All 67 Counties
 > Master reference for every Florida county jail roster. Updated as scrapers are built and validated.
-> **Last Updated:** 2026-08-04 | **Active Scrapers:** **67 FL** (full state on `REGISTERED_COUNTIES` + scheduler) · multi-state total **269** — see root `STATUS.md`. **Architecture note:** FL uses custom scrapers + shared APE proxy / SmartWeb card parser — not wholesale multi-state platform wrappers.
+> **Last Updated:** 2026-09-22 (SWFL source-contract queue notes) | Original body largely 2026-08-04 | **Active Scrapers:** **67 FL** (full state on `REGISTERED_COUNTIES` + scheduler) · multi-state total **361** (FL **67**) — see root `STATUS.md`. **Architecture note:** FL uses custom scrapers + shared APE proxy / SmartWeb card parser — not wholesale multi-state platform wrappers.
 
 ---
 
@@ -20,9 +20,9 @@
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 1 | **Lee** | curl_cffi GET + origin DNS pin (`lee_origin`) — sheriffleefl.org public-api | `lee.py` | ✅ Active | 30 min | 2026-08-04 |
 | 2 | **Collier** | Odyssey REST API | `collier.py` | ✅ Active | 15 min | 2026-04-27 |
-| 3 | **Charlotte** | Patchright + Warren APE (sticky) / office SOCKS — Revize CF; **exit-IP preflight** rejects Datacamp/VPN/NordVPN; APE Warren sticky or office SOCKS required | `charlotte.py` | ⚠️ Needs **US residential** exit (Warren APE sticky or office SOCKS) | 90 min | 2026-07-16 |
-| 4 | **Manatee** | Same as Charlotte | `manatee.py` | ⚠️ Needs **US residential** exit | 75 min | 2026-07-16 |
-| 5 | **Sarasota** | Official Sarasota booking-safe broad roster not verified through normal public access. Third-party mirror, CAPTCHA/JailTracker, proxy, profile, and sensitive-field paths are retired. | `sarasota.py` | ⏳ Fail closed — deployed 2026-08-14; official contract still pending | 90 min | Deployment run `31843789326` succeeded; deterministic tests and public leads `/health`, sign, school, paperwork, and social `/auth` returned healthy responses. No Sarasota write or alert claim. |
+| 3 | **Charlotte** | Patchright + Warren APE (sticky) / office SOCKS — Revize CF; **exit-IP preflight** rejects Datacamp/VPN/NordVPN; APE Warren sticky or office SOCKS required | `charlotte.py` | ⚠️ Contract **unverified** (Health default) — Revize roster may emit only with healthy US residential egress; **not** `verified_public`; reopen blocked pending Brendan residential smoke — see `docs/recon/SWFL_SOURCE_CONTRACT_QUEUE.md` | 90 min | Code last exercised 2026-07-16; 2026-09-22 recon: no new live validation this pass |
+| 4 | **Manatee** | Same as Charlotte (Revize + residential preflight; sticky `fl-manatee`) | `manatee.py` | ⚠️ Contract **unverified** (Health default) — same residential gate as Charlotte; **not** `verified_public`; do not treat Charlotte success as Manatee proof — see `docs/recon/SWFL_SOURCE_CONTRACT_QUEUE.md` | 75 min | Code last exercised 2026-07-16; 2026-09-22 recon: no new live validation this pass |
+| 5 | **Sarasota** | Official Sarasota booking-safe broad roster not verified through normal public access. Third-party mirror, CAPTCHA/JailTracker, proxy, profile, and sensitive-field paths are retired. | `sarasota.py` | ⏳ **Fail closed** (`SOURCE_CONTRACT_VALIDATED=False` + Health `fail_closed`) — reopen requires official broad roster with identity + source booking id + booking timestamp; see `docs/recon/SWFL_SOURCE_CONTRACT_QUEUE.md` | 90 min | Guard deployed 2026-08-14 (run `31843789326`); 2026-09-22 recon: still no verified official contract; no write/alert claim |
 | 6 | **DeSoto** | DevExpress grid (DrissionPage) — **not** JailTracker | `desoto.py` | ✅ Active | 60 min | 2026-07-16 |
 | 7 | **Hendry** | Official OCV S3 `inmates.json` | `hendry.py` | ✅ Active (v4 OCV) | 120 min | 2026-07-10 |
 
@@ -59,7 +59,7 @@
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 22 | **Palm Beach** | DrissionPage — PBSO ColdFusion blotter | `palm_beach.py` | ✅ Active (fixed page.html 2026-07-10) | 120 min | 2026-07-10 |
 | 23 | **Broward** | Official BSO arrest search | `broward.py` | ⏳ Fail closed — deployed 2026-08-14; Turnstile-protected source with no verified booking-safe bulk contract | 60 min | Public production hosts healthy; no Broward writes or alerts expected from the safety guard |
-| 22 | **Martin** | Direct Tyler Technologies REST API | `martin.py` | ✅ Active | 120 min | 2026-05-24 |
+| 24 | **Martin** | Direct Tyler Technologies REST API | `martin.py` | ✅ Active | 120 min | 2026-05-24 |
 | 25 | **St. Lucie** | requests POST — PHP table | `st_lucie.py` | ✅ Active | 90 min | 2026-04-27 |
 | 26 | **Indian River** | requests GET — BS4 card list | `indian_river.py` | ✅ Active | 120 min | 2026-04-27 |
 | 27 | **Okeechobee** | Wix shell page — no public data source | `okeechobee.py` | 🔴 No public roster URL | 120 min | 2026-07-24 |
@@ -183,7 +183,7 @@ Approach:   Query the anonymous FeatureServer directly with `ObjectId,GlobalID,B
 
 ### FL JailTracker `POST /Offender` 400 — Known Issue
 
-> **Do not re-probe FL JT agencies aggressively.** The captcha is solvable; the agency backend rejects the roster POST with an empty HTTP 400. Confirmed for `SARASOTA_COUNTY_FL`, `MANATEE_COUNTY_FL`, and `CHARLOTTE_COUNTY_FL`. SC/GA agencies (Greenwood ~210, Chester ~104) work correctly with the same flow. FL JT is kept as a fallback in `sarasota.py` — it will auto-recover if the agency backend is fixed.
+> **Do not re-probe FL JT agencies aggressively.** The captcha is solvable; the agency backend rejects the roster POST with an empty HTTP 400. Confirmed for `SARASOTA_COUNTY_FL`, `MANATEE_COUNTY_FL`, and `CHARLOTTE_COUNTY_FL`. SC/GA agencies (Greenwood ~210, Chester ~104) work correctly with the same flow. **`sarasota.py` no longer uses JailTracker as a fallback** — it fail-closes with `SOURCE_CONTRACT_VALIDATED=False` until an official booking-safe broad roster is validated. Charlotte/Manatee use Revize+residential, not JT.
 
 ---
 ## JMS Vendor Scraping Patterns
