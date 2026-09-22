@@ -163,7 +163,7 @@ Post-deploy public probes returned `200` for leads `/health`, DocuSeal, Bail Sch
 
 ## Scraper registry integrity deployment (2026-08-15)
 
-Commit `99547b7` deployed successfully through **Deploy to Hetzner** run `31897337465`. The canonical registry remains **358 state-qualified labels**, and static contract coverage now verifies that every registered label has both a local scraper module and a `main.register_scrapers` entry. The guard is intentionally source- and network-free; it does not claim that every registered county is producing records.
+Commit `99547b7` deployed successfully through **Deploy to Hetzner** run `31897337465`. The canonical registry remains **361 state-qualified labels**, and static contract coverage now verifies that every registered label has both a local scraper module and a `main.register_scrapers` entry. The guard is intentionally source- and network-free; it does not claim that every registered county is producing records.
 
 Hendry now drops OCV rows without the source-issued `inmateID`. Monroe now drops rows without an MNI, official offense number, or official CAD number, rather than hashing a name or date into a booking key. This keeps source rows that lack a valid immutable identifier out of the `County + Booking_Number` write path.
 
@@ -331,7 +331,7 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 | Multi-State Ops / Health / stats **registry-first** live KPIs | ✅ |
 | Mongo data-flow gaps + M0 oldest-first retention | ✅ |
 | Superadmin Data Hygiene (Jon Doe / test purge + mismatch repair) | ✅ |
-| Docs aligned to **269** fleet | ✅ this commit |
+| Docs aligned to **361** fleet | ✅ (registry length; superseded 269) |
 
 ---
 
