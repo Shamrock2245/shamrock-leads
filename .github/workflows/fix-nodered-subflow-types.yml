@@ -24,8 +24,8 @@ jobs:
             NR=/opt/shamrock-node-red
             VOL=$(docker volume inspect shamrock-leads_node-red-data --format '{{.Mountpoint}}')
             cd "$NR"
-            git fetch origin fix/morning-subflow-instance-types main
-            git checkout -B main origin/fix/morning-subflow-instance-types
+            git fetch origin main
+            git reset --hard origin/main
             echo "HEAD=$(git rev-parse --short HEAD) $(git log -1 --oneline)"
             python3 deploy_morning_prospecting.py
             python3 - <<'PY'
@@ -44,46 +44,57 @@ jobs:
                   node['type']=fixes[t]; n+=1
               path.write_text(json.dumps(data, indent=2)+'\n')
               print(path, 'fixed', n)
-              types=[node.get('type') for node in data if 'morning' in str(node.get('z','')) or node.get('id','').startswith('mp_')]
-              print(' mp types', sorted(set(node.get('type') for node in data if str(node.get('id','')).startswith('mp_'))))
+              print(' mp types', sorted({node.get('type') for node in data if str(node.get('id','')).startswith('mp_')}))
             PY
             cp -f node_red_data/flows.json "$VOL/flows.json"
-            # Live deploy
+            # Prefer Admin API; 401 → restart from volume
+            set +e
             python3 - <<'PY'
             import json,sys
-            import requests
+            try:
+              import requests
+            except ImportError:
+              sys.exit(2)
             flows=json.load(open('node_red_data/flows.json'))
             r=requests.post('http://127.0.0.1:1880/flows', json=flows, headers={'Content-Type':'application/json','Node-RED-Deployment-Type':'full'}, timeout=120)
             print('deploy', r.status_code, r.text[:100])
             sys.exit(0 if r.status_code < 400 else 1)
             PY
-            sleep 3
-            # If still waiting, restart to reload palette+flows
-            if docker logs shamrock-node-red --since 2m 2>&1 | grep -q 'Waiting for missing types'; then
-              echo 'still missing after API deploy — restart'
+            DEPLOY_RC=$?
+            set -e
+            if [ "$DEPLOY_RC" != 0 ]; then
+              echo "Admin API deploy failed (rc=$DEPLOY_RC) — restarting to load volume flows.json"
               docker restart shamrock-node-red
             fi
             OK=0
-            for i in $(seq 1 36); do
-              if docker logs shamrock-node-red --since 5m 2>&1 | grep -q 'Started flows'; then OK=1; break; fi
+            for i in $(seq 1 48); do
+              if docker logs shamrock-node-red --since 8m 2>&1 | grep -q 'Started flows'; then OK=1; break; fi
               sleep 5
             done
             echo '-- logs --'
-            docker logs shamrock-node-red --tail 40 2>&1
+            docker logs shamrock-node-red --tail 50 2>&1
             if [ "$OK" != 1 ]; then echo 'ERROR: flows not started'; exit 1; fi
             echo STARTED_FLOWS=yes
-            curl -sf http://127.0.0.1:1880/flows -o /tmp/f.json
-            python3 - <<'PY'
+            # GET /flows may also need auth; fall back to volume file
+            if curl -sf http://127.0.0.1:1880/flows -o /tmp/f.json; then
+              SRC=/tmp/f.json
+            else
+              SRC="$VOL/flows.json"
+              echo "Admin GET unauthorized — verifying volume file"
+            fi
+            python3 - <<PY
             import json
-            f=json.load(open('/tmp/f.json'))
+            f=json.load(open("$SRC"))
             print('nodes',len(f),'morning',any(n.get('id')=='tab_morning_prospect' for n in f))
             print('mp types', sorted({n.get('type') for n in f if str(n.get('id','')).startswith('mp_')}))
             print('cron', next((n.get('crontab') for n in f if n.get('id')=='mp_inject_0730'), None))
+            assert any(n.get('id')=='tab_morning_prospect' for n in f)
+            assert any(n.get('type')=='subflow:subflow-safe-cron' for n in f)
             PY
             code=$(curl -s -o /tmp/i.txt -w '%{http_code}' -X POST http://127.0.0.1:1880/inject/mp_inject_manual -H 'Content-Type: application/json' -d '{}' || true)
             echo "inject HTTP $code $(head -c 160 /tmp/i.txt)"
             sleep 8
-            docker logs shamrock-node-red --since 20s 2>&1 | tail -25 || true
+            docker logs shamrock-node-red --since 30s 2>&1 | tail -30 || true
             echo "=== Quiet env ==="
             docker inspect shamrock-node-red --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -E '^(RESPECT_QUIET|QUIET_|SLACK_CHANNEL|TZ)=' || true
             grep -Eh '^(RESPECT_QUIET|QUIET_|SLACK_CHANNEL)' /opt/shamrock-node-red/.env /opt/shamrock-leads/.env 2>/dev/null || echo 'no quiet keys'
