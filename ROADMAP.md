@@ -21,7 +21,7 @@
 | 5 | Bond Case + Surety + POA | ✅ Complete |
 | 6 | Paperwork Generation | ✅ Complete |
 | 7 | Signature Orchestration (DocuSeal) | ✅ Complete |
-| 8 | Payment Collection (SwipeSimple) | ✅ Complete |
+| 8 | Payment Collection (SwipeSimple) | ✅ Code · auto-send on packet/promote |
 | 9 | Contact Discovery (OSINT) | ✅ Complete |
 | 10 | Outreach Sequencing (iMessage / BlueBubbles) | ✅ Code · ⏳ BB office reliability ops |
 | 11 | Bond Tracker — Location Intelligence | ✅ Complete (separate repo) |
@@ -178,7 +178,7 @@ All intake sources handled natively in the FastAPI dashboard.
 
 - `dashboard/api/payments.py` — Payment log + history
 - `dashboard/api/payment_plans.py` — Payment plan management
-- SwipeSimple integration for one-click payment links
+- SwipeSimple integration for one-click payment links (static URL + premium in SMS/email; auto-send on packet finalize / DocuSeal complete / intake promote via `packet_payment_link_service`)
 
 ---
 

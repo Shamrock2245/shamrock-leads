@@ -2061,7 +2061,7 @@ async def api_active_bond_edit(request: Request, booking_number: str):
             })
         except Exception as _audit_err:
             logger.warning("[bonds] audit write failed for %s: %s", booking_number, _audit_err)
-        # If court_date was updated, reschedule the Court Reminder compliance task
+        # If court_date was updated, reschedule reminders + seed Google Calendar
         if "court_date" in updates:
             try:
                 from dashboard.services.task_engine import TaskEngine
@@ -2074,6 +2074,30 @@ async def api_active_bond_edit(request: Request, booking_number: str):
                 logger.warning(
                     "[bonds] TaskEngine.schedule_court_reminder failed for %s: %s",
                     booking_number, _te_err,
+                )
+            try:
+                from dashboard.services.bond_court_seed_service import (
+                    seed_court_calendar_for_bond,
+                )
+                # Clear fingerprint so a changed court_date re-seeds
+                bonds_col = get_collection("active_bonds")
+                await bonds_col.update_one(
+                    {"booking_number": booking_number},
+                    {"$unset": {"gcal_seed_fingerprint": "", "gcal_event_id": ""}},
+                )
+                seed_result = await seed_court_calendar_for_bond(
+                    booking_number=booking_number,
+                    source="bond_court_date_edit",
+                )
+                logger.info(
+                    "[bonds] court seed after edit booking=%s status=%s",
+                    booking_number,
+                    (seed_result.get("gcal") or {}).get("status") or seed_result.get("reason"),
+                )
+            except Exception as _seed_err:
+                logger.warning(
+                    "[bonds] court seed after edit failed for %s: %s",
+                    booking_number, _seed_err,
                 )
         return {"success": True, "booking_number": booking_number, "updated": list(updates.keys())}
     except Exception as e:

@@ -23,6 +23,9 @@ def client(test_app):
     return TestClient(test_app)
 
 
+_SVC = "dashboard.services.packet_payment_link_service"
+
+
 def test_swipesimple_dispatch_basic(client):
     mock_pkts = MagicMock()
     mock_pkts.find_one = AsyncMock(return_value=None)
@@ -39,10 +42,11 @@ def test_swipesimple_dispatch_basic(client):
         mock_generic = MagicMock()
         mock_generic.find_one = AsyncMock(return_value=None)
         mock_generic.insert_one = AsyncMock()
+        mock_generic.update_one = AsyncMock()
         return mock_generic
 
-    with patch("dashboard.routers.paperwork.get_collection", side_effect=get_col_mock), \
-         patch("dashboard.routers.paperwork.send_message_universal", new_callable=AsyncMock) as mock_bb_send, \
+    with patch(f"{_SVC}.get_collection", side_effect=get_col_mock), \
+         patch(f"{_SVC}.send_message_universal", new_callable=AsyncMock) as mock_bb_send, \
          patch("dashboard.services.gmail_reader.GmailReaderService.send_email") as mock_send_email, \
          patch("dashboard.services.gmail_reader.GmailReaderService.is_configured", True):
 
@@ -74,14 +78,12 @@ def test_swipesimple_dispatch_basic(client):
         assert data["email_delivered"] is True
         assert "swipesimple.com" in data["payment_link"]
 
-        # Verify BlueBubbles message content (send_message_universal path)
         mock_bb_send.assert_called_once()
         bb_args = mock_bb_send.call_args
         assert "2395550199" in str(bb_args[0][0])
         assert "$1,500.00" in bb_args[0][1]
         assert "Jane Doe" in bb_args[0][1]
 
-        # Verify Gmail email content
         mock_send_email.assert_called_once()
         email_kwargs = mock_send_email.call_args.kwargs
         assert email_kwargs["to"] == "test@example.com"
@@ -115,10 +117,11 @@ def test_swipesimple_dispatch_context_fallback(client):
         mock_generic = MagicMock()
         mock_generic.find_one = AsyncMock(return_value=None)
         mock_generic.insert_one = AsyncMock()
+        mock_generic.update_one = AsyncMock()
         return mock_generic
 
-    with patch("dashboard.routers.paperwork.get_collection", side_effect=get_col_mock), \
-         patch("dashboard.routers.paperwork.send_message_universal", new_callable=AsyncMock) as mock_bb_send, \
+    with patch(f"{_SVC}.get_collection", side_effect=get_col_mock), \
+         patch(f"{_SVC}.send_message_universal", new_callable=AsyncMock) as mock_bb_send, \
          patch("dashboard.services.gmail_reader.GmailReaderService.send_email") as mock_send_email, \
          patch("dashboard.services.gmail_reader.GmailReaderService.is_configured", True):
 
@@ -130,7 +133,6 @@ def test_swipesimple_dispatch_context_fallback(client):
         }
         mock_send_email.return_value = {"success": True, "id": "msg_456"}
 
-        # Omitting phone, email, amount, defendant_name — relying on DB lookup
         payload = {"packet_id": "PKT-CTX-200"}
 
         res = client.post("/api/paperwork/payment/swipesimple-link", json=payload)
@@ -142,7 +144,6 @@ def test_swipesimple_dispatch_context_fallback(client):
         assert data["recipient_phone"] == "2395550200"
         assert data["recipient_email"] == "indemnitor@example.com"
         assert data["defendant_name"] == "Bob Smith"
-        # Queued BB is still accepted (text_delivered True via bb_send_accepted)
         assert data["text_delivered"] is True
         assert data["text_queued"] is True
         assert data["email_delivered"] is True
@@ -164,10 +165,11 @@ def test_swipesimple_link_no_deliver(client):
         mock_generic = MagicMock()
         mock_generic.find_one = AsyncMock(return_value=None)
         mock_generic.insert_one = AsyncMock()
+        mock_generic.update_one = AsyncMock()
         return mock_generic
 
-    with patch("dashboard.routers.paperwork.get_collection", side_effect=get_col_mock), \
-         patch("dashboard.routers.paperwork.send_message_universal", new_callable=AsyncMock) as mock_bb_send, \
+    with patch(f"{_SVC}.get_collection", side_effect=get_col_mock), \
+         patch(f"{_SVC}.send_message_universal", new_callable=AsyncMock) as mock_bb_send, \
          patch("dashboard.services.gmail_reader.GmailReaderService.send_email") as mock_send_email:
 
         payload = {
