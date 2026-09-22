@@ -760,6 +760,12 @@ def _health_status_for_row(
         hours = (now - last_run).total_seconds() / 3600 if last_run else 999.0
         return "error", hours
 
+    # Source-contract guard run — not an empty roster; Health Source Guards KPI
+    # keys off source_state, but status must not map into Empty.
+    if raw in ("fail_closed", "source_guard", "guarded"):
+        hours = (now - last_run).total_seconds() / 3600 if last_run else 999.0
+        return "fail_closed", hours
+
     # Explicit empty / blocked soft-fail — never count as Active
     if raw in ("empty", "no_data", "blocked", "unavailable"):
         hours = (now - last_run).total_seconds() / 3600 if last_run else 999.0
