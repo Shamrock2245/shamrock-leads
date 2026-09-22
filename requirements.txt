@@ -10,7 +10,7 @@ APScheduler>=3.10.4
 gspread>=6.0.0
 google-auth>=2.25.0
 google-auth-oauthlib>=0.8.0
-google-api-python-client>=2.100.0
+google-api-python-client>=2.200.0
 
 # AI / Scoring (future)
 openai>=1.12.0
