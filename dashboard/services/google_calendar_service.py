@@ -305,8 +305,18 @@ class GoogleCalendarService:
                 logger.error("[Calendar] Event creation failed: %s", e)
                 return None
         else:
-            # Dry-run mode — return the event body as if created
-            logger.info("[Calendar] Dry-run: would create event: %s", title)
+            # Dry-run mode — OAuth missing. Mark clearly so bond-write seed can
+            # surface a staff-visible failure instead of silent success.
+            logger.error(
+                "[Calendar] OAuth not configured — DRY-RUN only. Would create event: %s "
+                "(dedup=%s). Set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / "
+                "GOOGLE_GMAIL_REFRESH_TOKEN to enable real Calendar writes.",
+                title,
+                dedup_key,
+            )
+            event_body["dry_run"] = True
+            event_body["oauth_configured"] = False
+            event_body["id"] = None
             return event_body
 
     def _parse_event_times(self, date_str: str, time_str: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
