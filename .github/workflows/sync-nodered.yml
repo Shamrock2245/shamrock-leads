@@ -1,0 +1,120 @@
+# Sync shamrock-node-red flows to VPS volume + Admin API (ops only).
+# Does NOT rebuild leads/dashboard. Does NOT touch trading bot / GAS URLs / client SMS.
+#
+# Secret: HETZNER_SSH_KEY (same as deploy-hetzner.yml)
+name: Sync Node-RED Flows
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_now:
+        description: "Trigger Morning Prospecting Run Now after sync (staff Slack #leads only)"
+        type: boolean
+        default: false
+      git_ref:
+        description: "shamrock-node-red git ref to sync"
+        type: string
+        default: "main"
+
+jobs:
+  sync:
+    name: Sync Node-RED on VPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Preflight SSH
+        run: |
+          set -e
+          for i in 1 2 3 4 5; do
+            if timeout 8 bash -c 'echo >/dev/tcp/178.156.179.237/22' 2>/dev/null; then
+              echo "SSH port open"; exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::VPS SSH unreachable"; exit 1
+
+      - name: Sync via SSH
+        uses: appleboy/ssh-action@v1
+        env:
+          NR_REF: ${{ inputs.git_ref }}
+          DO_RUN_NOW: ${{ inputs.run_now }}
+        with:
+          host: 178.156.179.237
+          username: root
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          port: 22
+          command_timeout: 10m
+          timeout: 60s
+          envs: NR_REF,DO_RUN_NOW
+          script: |
+            set -euo pipefail
+            echo "=== Node-RED morning-prospecting sync $(date '+%Y-%m-%d %H:%M:%S %Z') ==="
+            echo "ref=${NR_REF:-main} run_now=${DO_RUN_NOW:-false}"
+
+            if [ -d /opt/shamrock-node-red/.git ]; then
+              NR=/opt/shamrock-node-red
+            else
+              echo "Cloning shamrock-node-red into /opt/shamrock-node-red"
+              git clone https://github.com/Shamrock2245/shamrock-node-red.git /opt/shamrock-node-red
+              NR=/opt/shamrock-node-red
+            fi
+
+            cd "$NR"
+            git fetch origin "${NR_REF:-main}"
+            git checkout -B main "origin/${NR_REF:-main}" 2>/dev/null || git reset --hard "origin/${NR_REF:-main}"
+            echo "VPS node-red HEAD: $(git rev-parse --short HEAD) $(git log -1 --oneline)"
+
+            python3 deploy_morning_prospecting.py
+
+            python3 - <<'PY'
+            import json
+            flows=json.load(open("node_red_data/flows.json"))
+            assert any(n.get("id")=="tab_morning_prospect" for n in flows), "missing tab_morning_prospect"
+            print("OK tab_morning_prospect present; nodes=", len(flows))
+            PY
+
+            if [ -x scripts/sync_nodered_volume.sh ]; then
+              bash scripts/sync_nodered_volume.sh || {
+                echo "sync script failed — docker volume fallback"
+                VOL=$(docker volume inspect shamrock-leads_node-red-data --format '{{.Mountpoint}}' 2>/dev/null || docker volume inspect shamrock-node-red_node-red-data --format '{{.Mountpoint}}' 2>/dev/null || true)
+                if [ -n "${VOL:-}" ] && [ -d "$VOL" ]; then
+                  cp -f node_red_data/flows.json "$VOL/flows.json"
+                  docker restart shamrock-node-red || docker compose -f /opt/shamrock-leads/docker-compose.yml --profile ops up -d node-red || true
+                else
+                  echo "WARN: no docker volume found"
+                fi
+              }
+            fi
+
+            docker ps --filter name=shamrock-node-red --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' || true
+
+            echo ""
+            echo "=== Quiet / Slack env (report only; no mutations) ==="
+            for f in "$NR/.env" /opt/shamrock-leads/.env; do
+              if [ -f "$f" ]; then
+                echo "-- $f --"
+                grep -E '^(RESPECT_QUIET|QUIET_START|QUIET_END|SLACK_CHANNEL_PROSPECTING|SLACK_CHANNEL_LEADS|TZ)=' "$f" 2>/dev/null || echo "(no matching keys)"
+              fi
+            done
+            echo "-- container env (shamrock-node-red) --"
+            docker inspect shamrock-node-red --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep -E '^(RESPECT_QUIET|QUIET_|SLACK_CHANNEL_PROSPECTING|SLACK_CHANNEL_LEADS|TZ)=' || echo "(no quiet/slack channel keys in container Env)"
+
+            echo ""
+            echo "=== Admin API check ==="
+            if curl -sf --max-time 10 http://127.0.0.1:1880/ >/dev/null; then
+              curl -sf --max-time 30 http://127.0.0.1:1880/flows | python3 -c 'import sys,json; f=json.load(sys.stdin); print("runtime nodes",len(f),"morning",any(n.get("id")=="tab_morning_prospect" for n in f))'
+            else
+              echo "WARN: Node-RED :1880 not responding"
+              docker logs shamrock-node-red --tail 40 2>&1 || true
+            fi
+
+            if [ "${DO_RUN_NOW:-false}" = "true" ]; then
+              echo ""
+              echo "=== Triggering Run Now (mp_inject_manual) ==="
+              code=$(curl -s -o /tmp/nr_inject.txt -w '%{http_code}' -X POST http://127.0.0.1:1880/inject/mp_inject_manual -H 'Content-Type: application/json' -d '{}' || true)
+              echo "inject HTTP $code body=$(head -c 200 /tmp/nr_inject.txt 2>/dev/null || true)"
+            else
+              echo "Run Now skipped (input run_now=false)"
+            fi
+
+            echo "=== DONE ==="
