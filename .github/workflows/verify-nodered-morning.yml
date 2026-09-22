@@ -22,18 +22,13 @@ jobs:
             set -euo pipefail
             echo "=== VERIFY $(date -u) ==="
             docker ps --filter name=shamrock-node-red --format '{{.Names}} {{.Status}}'
-            echo "-- wait up to 90s for flows --"
-            for i in $(seq 1 18); do
-              if docker logs shamrock-node-red --since 5m 2>&1 | grep -q 'Started flows'; then echo "saw Started flows"; break; fi
-              sleep 5
-            done
-            echo "-- last 80 log lines --"
-            docker logs shamrock-node-red --tail 80 2>&1
-            echo "-- Admin API --"
-            curl -sf --max-time 20 http://127.0.0.1:1880/flows | python3 - <<'PY'
-            import sys,json
-            f=json.load(sys.stdin)
-            tabs=[n.get('label') for n in f if n.get('type')=='tab']
+            echo "-- last 100 log lines --"
+            docker logs shamrock-node-red --tail 100 2>&1
+            echo "-- Admin API flows dump --"
+            curl -sf --max-time 30 http://127.0.0.1:1880/flows -o /tmp/nr_flows.json
+            python3 - <<'PY'
+            import json
+            f=json.load(open('/tmp/nr_flows.json'))
             morning=any(n.get('id')=='tab_morning_prospect' for n in f)
             subdefs=[n.get('id') for n in f if n.get('type')=='subflow']
             inj=[n for n in f if n.get('id')=='mp_inject_manual']
@@ -42,19 +37,19 @@ jobs:
             print('has_safe_cron_def', 'subflow-safe-cron' in subdefs)
             print('has_slack_def', 'subflow-slack-notify' in subdefs)
             print('has_leads_api_def', 'subflow-leads-api' in subdefs)
-            print('inject', inj[0] if inj else None)
+            print('inject_id_present', bool(inj))
             print('cron', {k:cron[0].get(k) for k in ('crontab','name','type')} if cron else None)
             PY
-            echo "-- package.json modules in volume --"
+            echo "-- volume packages --"
             VOL=$(docker volume inspect shamrock-leads_node-red-data --format '{{.Mountpoint}}')
-            python3 -c "import json; p=json.load(open('$VOL/package.json')); print(sorted((p.get('dependencies') or {}).keys()))" 2>/dev/null || echo no package.json
-            ls "$VOL/node_modules" 2>/dev/null | head -40 || echo 'no node_modules'
-            echo "-- try inject variants --"
-            for path in /inject/mp_inject_manual /flow/mp_inject_manual /flows/mp_inject_manual; do
+            python3 -c "import json; p=json.load(open('$VOL/package.json')); print(sorted((p.get('dependencies') or {}).keys()))" 2>/dev/null || echo no_package_json
+            ls "$VOL/node_modules" 2>/dev/null | rg -n 'node-red-dashboard|@flowfuse|mongodb4|node-red-contrib' || ls "$VOL/node_modules" 2>/dev/null | head -30 || echo no_modules
+            echo "-- inject attempts --"
+            for path in /inject/mp_inject_manual; do
               code=$(curl -s -o /tmp/i.txt -w '%{http_code}' -X POST "http://127.0.0.1:1880$path" -H 'Content-Type: application/json' -d '{}' || true)
-              echo "$path -> $code $(head -c 80 /tmp/i.txt)"
+              echo "$path -> $code $(head -c 120 /tmp/i.txt)"
             done
             echo "-- quiet env --"
             docker inspect shamrock-node-red --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -E '^(RESPECT_QUIET|QUIET_|SLACK_CHANNEL|TZ)=' || true
-            grep -E '^(RESPECT_QUIET|QUIET_|SLACK_CHANNEL)' /opt/shamrock-node-red/.env /opt/shamrock-leads/.env 2>/dev/null || echo 'no quiet keys in env files'
+            grep -Eh '^(RESPECT_QUIET|QUIET_|SLACK_CHANNEL)' /opt/shamrock-node-red/.env /opt/shamrock-leads/.env 2>/dev/null || echo 'no quiet/slack-channel keys in env files'
             echo "=== DONE ==="
