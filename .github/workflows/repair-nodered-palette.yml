@@ -1,0 +1,94 @@
+# Repair Node-RED palette deps + confirm morning prospecting tab starts.
+name: Repair Node-RED Palette
+
+on:
+  workflow_dispatch:
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Repair via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: 178.156.179.237
+          username: root
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          port: 22
+          command_timeout: 15m
+          timeout: 60s
+          script: |
+            set -euo pipefail
+            echo "=== REPAIR $(date -u) ==="
+            NR=/opt/shamrock-node-red
+            VOL=$(docker volume inspect shamrock-leads_node-red-data --format '{{.Mountpoint}}')
+            echo "VOL=$VOL"
+            echo "-- before package.json --"
+            cat "$VOL/package.json" 2>/dev/null || echo missing
+
+            # Ensure flows include morning tab + kit subflows from git checkout
+            cd "$NR"
+            git fetch origin main && git reset --hard origin/main
+            python3 deploy_morning_prospecting.py
+            cp -f node_red_data/flows.json "$VOL/flows.json"
+            cp -f node_red_data/package.json "$VOL/package.json"
+            # mongodb4 type used by some flows — add if absent
+            python3 - <<'PY'
+            import json
+            from pathlib import Path
+            p=Path("/var/lib/docker/volumes/shamrock-leads_node-red-data/_data/package.json")
+            data=json.loads(p.read_text())
+            deps=data.setdefault("dependencies", {})
+            # FlowFuse dashboard provides ui-* nodes
+            deps.setdefault("@flowfuse/node-red-dashboard", "^1.30.2")
+            # mongodb4 node type
+            deps.setdefault("node-red-contrib-mongodb4", "^2.5.0")
+            # keep existing known deps from repo package.json if present
+            repo=json.loads(Path("/opt/shamrock-node-red/node_red_data/package.json").read_text())
+            for k,v in (repo.get("dependencies") or {}).items():
+              deps.setdefault(k,v)
+            p.write_text(json.dumps(data, indent=4)+"\n")
+            print("deps", sorted(deps))
+            PY
+
+            echo "-- npm install inside container userDir --"
+            docker exec shamrock-node-red sh -c 'cd /data && npm install --omit=dev --no-fund --no-audit' || {
+              echo "exec npm failed — install via temp node container"
+              docker run --rm -v shamrock-leads_node-red-data:/data -w /data node:24-bookworm-slim \
+                sh -c 'npm install --omit=dev --no-fund --no-audit'
+            }
+
+            echo "-- node_modules sample --"
+            ls "$VOL/node_modules" | head -40
+            ls "$VOL/node_modules/@flowfuse" 2>/dev/null || true
+            ls "$VOL/node_modules" | grep -i mongo || true
+
+            echo "-- restart --"
+            docker restart shamrock-node-red
+            OK=0
+            for i in $(seq 1 48); do
+              if docker logs shamrock-node-red --since 3m 2>&1 | grep -q 'Started flows'; then OK=1; break; fi
+              if ! curl -sf --max-time 3 http://127.0.0.1:1880/ >/dev/null; then sleep 5; continue; fi
+              sleep 5
+            done
+            echo "-- recent logs --"
+            docker logs shamrock-node-red --tail 60 2>&1
+            if [ "$OK" != 1 ]; then
+              echo "ERROR: flows did not start"
+              exit 1
+            fi
+            echo "STARTED_FLOWS=yes"
+            curl -sf http://127.0.0.1:1880/flows -o /tmp/nr_flows.json
+            python3 - <<'PY'
+            import json
+            f=json.load(open('/tmp/nr_flows.json'))
+            print('nodes',len(f),'morning',any(n.get('id')=='tab_morning_prospect' for n in f))
+            print('cron', next((n.get('crontab') for n in f if n.get('id')=='mp_inject_0730'), None))
+            PY
+            # Attempt Run Now now that flows started
+            code=$(curl -s -o /tmp/i.txt -w '%{http_code}' -X POST http://127.0.0.1:1880/inject/mp_inject_manual -H 'Content-Type: application/json' -d '{}' || true)
+            echo "inject HTTP $code $(head -c 120 /tmp/i.txt)"
+            sleep 6
+            docker logs shamrock-node-red --since 30s 2>&1 | tail -30 || true
+            echo "=== DONE ==="
