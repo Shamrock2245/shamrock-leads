@@ -109,7 +109,19 @@ def _digits_phone(p: str) -> str:
 
 
 def _split_name(full: str) -> Tuple[str, str, str]:
-    parts = [p for p in (full or "").strip().split() if p]
+    """Split FIRST MIDDLE LAST or LAST, FIRST MIDDLE (jail roster style)."""
+    raw = (full or "").strip()
+    if not raw:
+        return "", "", ""
+    if "," in raw:
+        last, rest = [p.strip() for p in raw.split(",", 1)]
+        parts = [p for p in rest.split() if p]
+        if not parts:
+            return "", "", last
+        if len(parts) == 1:
+            return parts[0], "", last
+        return parts[0], " ".join(parts[1:]), last
+    parts = [p for p in raw.split() if p]
     if not parts:
         return "", "", ""
     if len(parts) == 1:
@@ -292,9 +304,16 @@ async def resolve_case_context(
             place = mongo_place_clause(county, _st or state or "FL")
             if place:
                 q = {"$and": [q, place]}
-        arrest = await get_collection("arrests").find_one(q, {"_id": 0}) or {}
-        if arrest:
+        # Fail-closed: never pick an arbitrary arrest when booking identity is ambiguous.
+        arrest_hits = await get_collection("arrests").find(q, {"_id": 0}).to_list(length=3)
+        if len(arrest_hits) > 1:
+            sources.append("arrest_ambiguous")
+            arrest = {}
+        elif len(arrest_hits) == 1:
+            arrest = arrest_hits[0]
             sources.append("arrest")
+        else:
+            arrest = {}
 
     if bond_case_id or booking_number:
         bq: Dict[str, Any] = {}
@@ -320,8 +339,9 @@ async def resolve_case_context(
 
     def_name = _first(
         defendant.get("Full_Name"), defendant.get("full_name"), defendant.get("name"),
-        def_nested.get("name"), intake.get("defendant_name"), arrest.get("Full_Name"),
-        arrest.get("Name"), bond.get("defendant_name"), packet.get("defendant_name"),
+        def_nested.get("name"), intake.get("defendant_name"),
+        arrest.get("full_name"), arrest.get("Full_Name"), arrest.get("Name"),
+        bond.get("defendant_name"), packet.get("defendant_name"),
     )
     ind_name = _first(
         indemnitor.get("Full_Name"), indemnitor.get("full_name"), indemnitor.get("name"),
@@ -386,11 +406,13 @@ async def resolve_case_context(
         "case_number": _first(
             bond.get("Case_Number"), bond.get("case_number"),
             def_nested.get("caseNumber"), intake.get("case_number"),
-            arrest.get("Case_Number"), packet.get("case_number"),
+            arrest.get("case_number"), arrest.get("Case_Number"),
+            packet.get("case_number"),
         ),
         "booking_number": _first(
-            booking_number, defendant.get("Booking_Number"),
-            def_nested.get("bookingNumber"), arrest.get("Booking_Number"),
+            booking_number, defendant.get("Booking_Number"), defendant.get("booking_number"),
+            def_nested.get("bookingNumber"),
+            arrest.get("booking_number"), arrest.get("Booking_Number"),
             packet.get("booking_number"),
         ),
         "county": _first(
@@ -409,11 +431,13 @@ async def resolve_case_context(
             state,
         ),
         "facility": _first(
-            def_nested.get("facility"), arrest.get("Facility"),
+            def_nested.get("facility"),
+            arrest.get("facility"), arrest.get("Facility"),
             intake.get("defendant_facility"),
         ),
         "charges": _first(
-            def_nested.get("charges"), arrest.get("Charges"),
+            def_nested.get("charges"),
+            arrest.get("charges"), arrest.get("Charges"),
             arrest.get("Charge"), intake.get("charges"), bond.get("charges"),
         ),
         "bond_amount": bond_amount,
@@ -422,11 +446,25 @@ async def resolve_case_context(
         "small_bond_max": SMALL_BOND_MAX,
         "defendant": {
             "name": def_name,
-            "first_name": _first(defendant.get("First_Name"), def_nested.get("firstName"), _split_name(def_name)[0]),
-            "middle_name": _first(defendant.get("Middle_Name"), _split_name(def_name)[1]),
-            "last_name": _first(defendant.get("Last_Name"), def_nested.get("lastName"), _split_name(def_name)[2]),
-            "dob": _first(defendant.get("DOB"), def_nested.get("dob"), arrest.get("DOB"), intake.get("defendant_dob")),
-            "phone": _first(defendant.get("Phone"), def_nested.get("phone"), arrest.get("Phone")),
+            "first_name": _first(
+                defendant.get("First_Name"), defendant.get("first_name"),
+                def_nested.get("firstName"), arrest.get("first_name"),
+                _split_name(def_name)[0],
+            ),
+            "middle_name": _first(
+                defendant.get("Middle_Name"), defendant.get("middle_name"),
+                arrest.get("middle_name"), _split_name(def_name)[1],
+            ),
+            "last_name": _first(
+                defendant.get("Last_Name"), defendant.get("last_name"),
+                def_nested.get("lastName"), arrest.get("last_name"),
+                _split_name(def_name)[2],
+            ),
+            "dob": _first(
+                defendant.get("DOB"), defendant.get("dob"), def_nested.get("dob"),
+                arrest.get("dob"), arrest.get("DOB"), intake.get("defendant_dob"),
+            ),
+            "phone": _first(defendant.get("Phone"), def_nested.get("phone"), arrest.get("Phone"), arrest.get("phone")),
             "email": _first(defendant.get("Email"), def_nested.get("email")),
             "address": _first(defendant.get("Address"), def_nested.get("address"), arrest.get("Address"), arrest.get("address")),
             "city": _first(defendant.get("City"), def_nested.get("city"), arrest.get("City"), arrest.get("city")),
@@ -436,10 +474,13 @@ async def resolve_case_context(
             "dl_state": _first(defendant.get("DL_State"), def_nested.get("dlState"), "FL"),
             "ssn": _first(defendant.get("SSN"), def_nested.get("ssn")),
             "employer": _first(defendant.get("Employer"), def_nested.get("employer")),
-            "height": _first(defendant.get("Height"), arrest.get("Height")),
-            "weight": _first(defendant.get("Weight"), arrest.get("Weight")),
-            "race": _first(defendant.get("Race"), arrest.get("Race")),
-            "sex": _first(defendant.get("Sex"), arrest.get("Sex"), arrest.get("Gender")),
+            "height": _first(defendant.get("Height"), defendant.get("height"), arrest.get("height"), arrest.get("Height")),
+            "weight": _first(defendant.get("Weight"), defendant.get("weight"), arrest.get("weight"), arrest.get("Weight")),
+            "race": _first(defendant.get("Race"), defendant.get("race"), arrest.get("race"), arrest.get("Race")),
+            "sex": _first(
+                defendant.get("Sex"), defendant.get("sex"),
+                arrest.get("sex"), arrest.get("Sex"), arrest.get("Gender"), arrest.get("gender"),
+            ),
             "hair": _first(defendant.get("Hair"), arrest.get("Hair"), arrest.get("hair")),
             "eyes": _first(defendant.get("Eyes"), arrest.get("Eyes"), arrest.get("eyes")),
         },
@@ -592,7 +633,19 @@ def build_adaptive_field_map(context: Dict[str, Any]) -> Dict[str, Any]:
     ind_csz = ", ".join(filter(None, [ind.get("city"), ind.get("state")]))
     if ind.get("zip"):
         ind_csz = f"{ind_csz} {ind['zip']}".strip()
-    today = datetime.now(timezone.utc).strftime("%m/%d/%Y")
+    now = datetime.now(timezone.utc)
+    today = now.strftime("%m/%d/%Y")
+    today_long = now.strftime("%B %d, %Y").replace(" 0", " ")
+    today_day = str(now.day)
+    today_month = now.strftime("%B")
+    today_year_2digit = now.strftime("%y")
+    bond_words = ""
+    if bond_amount > 0:
+        try:
+            from dashboard.services.docuseal_service import _amount_to_words
+            bond_words = _amount_to_words(bond_amount)
+        except Exception:
+            bond_words = ""
 
     fields = {
         # Defendant
@@ -693,6 +746,17 @@ def build_adaptive_field_map(context: Dict[str, Any]) -> Dict[str, Any]:
         "date": today,
         "Date": today,
         "Today": today,
+        "today_date": today,
+        "today_date_long": today_long,
+        "today_day": today_day,
+        "today_month": today_month,
+        "today_year_2digit": today_year_2digit,
+        "bond_date_day": today_day,
+        "bond_date_month": today_month,
+        "bond_date_year_2digit": today_year_2digit,
+        "bond_amount_words": bond_words,
+        "bond_amount_written": bond_words,
+        "full_bond_amount_words": bond_words,
         "agent_name": os.getenv("AGENT_NAME", "Brendan O'Neal"),
         "agency_name": "Shamrock Bail Bonds",
         "agency_phone": "(239) 332-2245",

@@ -1909,6 +1909,26 @@ async def hydrate_from_booking(request: Request):
         bond_case_id=body.get("bond_case_id"),
         packet_id=body.get("packet_id"),
     )
+    sources = ctx.get("sources") or []
+    if "arrest_ambiguous" in sources:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "Multiple arrest records match this booking — will not hydrate",
+                "code": "ambiguous_identity",
+            },
+            status_code=409,
+        )
+    def_name = ((ctx.get("defendant") or {}).get("name") or "").strip()
+    if not def_name:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "No defendant identity found for this booking — will not invent fields",
+                "code": "missing_identity",
+            },
+            status_code=404,
+        )
     surety_id = (body.get("surety_id") or ctx.get("surety_id") or "osi").lower().strip()
     if surety_id not in ("osi", "palmetto"):
         surety_id = "osi"
@@ -2040,6 +2060,15 @@ async def docuseal_prefill_preview(request: Request):
         bond_case_id=body.get("bond_case_id"),
         packet_id=body.get("packet_id"),
     )
+    if "arrest_ambiguous" in (ctx.get("sources") or []):
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "Multiple arrest records match this booking — will not prefill",
+                "code": "ambiguous_identity",
+            },
+            status_code=409,
+        )
     if body.get("self_indemnitor"):
         pin = body.get("authorization_pin") or body.get("pin") or ""
         try:

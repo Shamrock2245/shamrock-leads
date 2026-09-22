@@ -477,3 +477,21 @@ async def test_default_esign_provider_is_docuseal():
     with patch.dict(os.environ, {"ALLOW_LEGACY_ESIGN": "true"}, clear=False):
         p4 = await resolve_client_esign_provider(preferred="signnow")
         assert p4 == "docuseal"
+
+
+def test_prefill_splits_pipe_delimited_booking_charges():
+    """Bookmarklet / arrest.charges uses ' | ' — must become offense_1 / offense_2."""
+    svc = DocuSealService(base_url="https://sign.example", api_key="test")
+    vals = svc.prefill_values_from_bond(
+        {
+            "defendant_name": "PERKINS, MICHAEL JAMES",
+            "county": "Lee",
+            "bond_amount": 6000,
+            "charges": "BATTERY | RESIST OFFICER",
+        }
+    )
+    assert vals["offense_1"] == "BATTERY"
+    assert vals["offense_2"] == "RESIST OFFICER"
+    assert "BATTERY" in vals["charges_summary"]
+    assert vals["today_day"]
+    assert vals["bond_amount_words"]
