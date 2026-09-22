@@ -12,7 +12,7 @@ python-dotenv>=1.0.0
 gspread>=6.0.0
 google-auth>=2.25.0
 google-auth-oauthlib>=0.8.0
-google-api-python-client>=2.100.0
+google-api-python-client>=2.200.0
 
 # AI (Shannon, ID scanner) — HTTP fallback exists; SDK used when present
 openai>=1.12.0
