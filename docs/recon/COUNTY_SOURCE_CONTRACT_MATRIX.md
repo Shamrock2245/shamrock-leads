@@ -21,7 +21,7 @@
 |---|---:|---:|---:|---:|---:|---:|---:|
 | AL | 67 | 16 | 4 | 0 | 0 | 52 | 11 |
 | CT | 12 | 6 | 0 | 0 | 6 | 1 | 5 |
-| FL | 67 | 67 | 0 | 0 | 66 | 0 | 1 |
+| FL | 67 | 67 | 0 | 0 | 58 | 0 | 9 |
 | GA | 159 | 85 | 0 | 0 | 159 | 0 | 0 |
 | LA | 64 | 13 | 3 | 1 | 4 | 46 | 10 |
 | MS | 82 | 9 | 1 | 0 | 4 | 69 | 8 |
@@ -30,7 +30,7 @@
 | TN | 96 | 22 | 1 | 0 | 74 | 1 | 20 |
 | TX | 254 | 34 | 1 | 0 | 0 | 253 | 0 |
 
-**Aggregate matrix counts:** verified public 10; candidate productive 1; recon only 313; unverified 543; fail closed 80.
+**Aggregate matrix counts:** verified public 10; candidate productive 1; recon only 305; unverified 543; fail closed 88.
 
 ## County matrix
 
@@ -122,7 +122,7 @@
 | FL | 009 | Brevard County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 011 | Broward County | OSI + Palmetto | registered | fail_closed | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 013 | Calhoun County | OSI + Palmetto | registered | fail_closed | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
-| FL | 015 | Charlotte County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
+| FL | 015 | Charlotte County | OSI + Palmetto | registered | recon_only | https://inmates.charlottecountyfl.revize.com/bookings | Revize CMS roster behind Cloudflare; scraper requires US residential egress (APE/Warren sticky / office SOCKS) with exit-IP preflight; datacenter/VPS exits refused by preflight | Candidate Revize roster table exists in-repo (`charlotte.py`) but is **not** `verified_public`. Health remains `unverified` (not labeled `fail_closed`) because runtime still attempts fetch when residential egress is healthy. Do not reopen as verified without Brendan-confirmed residential smoke. See `SWFL_SOURCE_CONTRACT_QUEUE.md`. |
 | FL | 017 | Citrus County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 019 | Clay County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 021 | Collier County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
@@ -154,7 +154,7 @@
 | FL | 075 | Levy County | OSI + Palmetto | registered | fail_closed | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 077 | Liberty County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 079 | Madison County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
-| FL | 081 | Manatee County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
+| FL | 081 | Manatee County | OSI + Palmetto | registered | recon_only | https://manatee-sheriff.revize.com/bookings | Revize CMS roster behind Cloudflare; same residential preflight as Charlotte; detail pages CF-blocked | Candidate Revize roster table exists in-repo (`manatee.py`) but is **not** `verified_public`. Health remains `unverified` (not labeled `fail_closed`) because runtime still attempts fetch when residential egress is healthy. Do not reopen as verified without Brendan-confirmed residential smoke. See `SWFL_SOURCE_CONTRACT_QUEUE.md`. |
 | FL | 083 | Marion County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 085 | Martin County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 086 | Miami-Dade County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
@@ -170,7 +170,7 @@
 | FL | 105 | Polk County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 107 | Putnam County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 113 | Santa Rosa County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
-| FL | 115 | Sarasota County | OSI + Palmetto | registered | fail_closed | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
+| FL | 115 | Sarasota County | OSI + Palmetto | registered | fail_closed | — (no verified official broad roster) | Fail closed in `sarasota.py` (`SOURCE_CONTRACT_VALIDATED=False`) and `SCRAPER_SOURCE_STATES`; no network fetch | Third-party mirror / JailTracker CAPTCHA / proxy / profile / DOB / mugshot paths retired. FL JailTracker `SARASOTA_COUNTY_FL` historically returned empty HTTP 400 on roster POST. Reopen only after official booking-safe broad roster with complete identity + source-issued booking id + booking timestamp is validated through normal public access. See `SWFL_SOURCE_CONTRACT_QUEUE.md`. |
 | FL | 117 | Seminole County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 109 | St. Johns County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 111 | St. Lucie County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
