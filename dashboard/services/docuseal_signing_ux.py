@@ -120,15 +120,19 @@ STAFF_READONLY_FIELD_NAMES = frozenset({
 # Verified ID-scan identity — lock after in-person / OCR confirmation.
 IDENTITY_READONLY_FIELD_NAMES = frozenset({
     "indemnitor_name", "IndemnitorName", "IndName", "FullName",
-    "indemnitor_first_name", "indemnitor_middle_name",
+    "indemnitor_first_name", "indemnitor_middle_name", "indemnitor_last_name",
+    "IndFirstName", "IndMiddleName", "IndLastName",
     "indemnitor_dob", "indemnitor_dl", "indemnitor_address",
     "indemnitor_city", "indemnitor_state", "indemnitor_zip", "indemnitor_city_state_zip",
+    "IndDOB", "IndDL", "IndAddress", "IndCity", "IndState", "IndZip", "IndCityStateZip",
     "defendant_name", "DefendantName", "DefName",
+    "DefFirstName", "DefMiddleName", "DefLastName",
     "defendant_dob", "defendant_dl", "defendant_dl_state",
     "defendant_address", "defendant_city", "defendant_state", "defendant_zip",
     "defendant_height", "defendant_weight", "defendant_hair", "defendant_eyes",
     "defendant_race", "DefHeight", "DefWeight", "DefRace", "DefHair", "DefEyes",
-    "DefDOB", "DefDL", "DefAddress",
+    "DefDOB", "DefDL", "DefDLState", "DefAddress", "DefCity", "DefState", "DefZip",
+    "DefPhone", "DefSex",
 })
 
 

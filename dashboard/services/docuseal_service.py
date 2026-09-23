@@ -40,13 +40,16 @@ DEFAULT_DOCUSEAL_URL = "https://sign.shamrockbailbonds.biz"
 DEFAULT_COMPLETED_BONDS_FOLDER = "1WnjwtxoaoXVW8_B6s-0ftdCPf_5WfKgs"
 
 # Role names MUST match DocuSeal template submitter names exactly.
-# Live OSI (id 1) + Palmetto (id 3) + clone (id 4) all use lowercase:
+# Live templates (OSI=1, Palmetto=5; OSI clone=4 still present) use lowercase submitter roles:
 #   bondsman | indemnitor | defendant | coindemnitor
+# Note: DocuSeal template *editor* UI may filter field ownership to "bondsman" only —
+# that is the field-assignment filter, NOT the submission recipient role list.
+# Multi-submitter create uses POST /api/submissions with submitters[].role matching these strings.
 ROLE_INDEMNITOR = "indemnitor"
 ROLE_DEFENDANT = "defendant"
 ROLE_CO_INDEMNITOR = "coindemnitor"
 ROLE_BONDSMAN = "bondsman"
-ROLE_INDEMNITOR_N = "coindemnitor"  # template only has one co-role; reuse Coindemnitor
+ROLE_INDEMNITOR_N = "coindemnitor"  # template only has one co-role; reuse coindemnitor
 
 
 def _safe_money(val: Any) -> float:
@@ -188,6 +191,25 @@ def _required_text(data: Dict[str, Any], key: str) -> str:
     return str((data or {}).get(key) or "").strip()
 
 
+
+_PLACEHOLDER_PARTY_NAMES = frozenset({
+    "to be named", "tbn", "tba", "unknown", "n/a", "na", "none", "test", "defendant", "indemnitor",
+})
+
+
+def _is_placeholder_party_name(name: str) -> bool:
+    """True when a party name is empty or a non-identity placeholder."""
+    cleaned = " ".join(str(name or "").strip().lower().split())
+    if not cleaned:
+        return True
+    if cleaned in _PLACEHOLDER_PARTY_NAMES:
+        return True
+    # Soft prefill default used when defendant_name is missing
+    if cleaned.startswith("to be named"):
+        return True
+    return False
+
+
 def validate_docuseal_packet_binding(
     *,
     packet_id: str,
@@ -248,7 +270,7 @@ def validate_docuseal_packet_binding(
                           _required_text(party, "last_name") or _required_text(party, "lastName")))
         )
         email = _required_text(party, "email")
-        if not name or not email or "@" not in email or email.startswith("unsigned+"):
+        if not name or _is_placeholder_party_name(name) or not email or "@" not in email or email.startswith("unsigned+"):
             raise DocuSealPacketValidationError(
                 f"DocuSeal packet blocked: validated {role} name and email are required before a signing link can exist."
             )
@@ -1224,6 +1246,24 @@ class DocuSealService:
             "DefLastName": def_last,
             "indemnitor_first_name": ind_first,
             "indemnitor_middle_name": ind_middle,
+            "indemnitor_last_name": ind_last,
+            # Master-dictionary / PDF-widget aliases (OSI+Palmetto naming variance)
+            "DefName": defendant_name,
+            "DefCity": values.get("defendant_city") or "",
+            "DefState": values.get("defendant_state") or "FL",
+            "DefZip": values.get("defendant_zip") or "",
+            "IndFirstName": ind_first,
+            "IndMiddleName": ind_middle,
+            "IndLastName": ind_last,
+            "IndAddress": values.get("indemnitor_address") or "",
+            "IndCity": values.get("indemnitor_city") or "",
+            "IndState": values.get("indemnitor_state") or "FL",
+            "IndZip": values.get("indemnitor_zip") or "",
+            "IndCityStateZip": values.get("indemnitor_city_state_zip") or "",
+            "IndDL": values.get("indemnitor_dl") or "",
+            "IndDOB": values.get("indemnitor_dob") or "",
+            "IndPhone": values.get("indemnitor_phone") or "",
+            "Ind2Name": values.get("coindemnitor_name") or "",
             "defendant_employer": _text(
                 bond_data.get("defendant_employer"), _person_text(def_, "employer", "Employer")
             ),
@@ -1620,10 +1660,15 @@ class DocuSealService:
         party_done = completed_redirect_url or paperwork_done_url()
 
         # Optional Bondsman / agent role (template may require signature block)
-        include_bondsman = bool(
-            bond_data.get("include_bondsman")
-            or os.getenv("DOCUSEAL_INCLUDE_BONDSMAN", "false").lower() in ("1", "true", "yes")
-        )
+        # Live OSI/Palmetto templates always define a bondsman submitter role (B5 smoke,
+        # template editor field ownership). Default ON; set include_bondsman=false or
+        # DOCUSEAL_INCLUDE_BONDSMAN=false only for explicit no-agent packets.
+        if "include_bondsman" in bond_data:
+            include_bondsman = bool(bond_data.get("include_bondsman"))
+        else:
+            include_bondsman = os.getenv("DOCUSEAL_INCLUDE_BONDSMAN", "true").lower() not in (
+                "0", "false", "no",
+            )
         if include_bondsman:
             agent_name = bond_data.get("bondsman_name") or os.getenv("BOND_AGENT_NAME", "Brendan O'Neal")
             agent_email = (
@@ -1886,6 +1931,9 @@ def resolve_template_id_for_surety(surety_id: str = "osi") -> Optional[str]:
     if surety == "palmetto":
         tid = (os.getenv("DOCUSEAL_TEMPLATE_ID_PALMETTO") or "").strip()
         return tid or None
+    if surety != "osi":
+        # Never silently map unknown surety labels onto the OSI template.
+        return None
     tid = (
         os.getenv("DOCUSEAL_TEMPLATE_ID_OSI")
         or os.getenv("DOCUSEAL_TEMPLATE_ID")

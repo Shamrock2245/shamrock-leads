@@ -677,6 +677,11 @@ def build_adaptive_field_map(context: Dict[str, Any]) -> Dict[str, Any]:
         "DefSex": def_.get("sex") or "",
         "DefDL": def_.get("dl") or "",
         "DefDLState": def_.get("dl_state") or "FL",
+        "defendant_dl": def_.get("dl") or "",
+        "defendant_address": def_.get("address") or "",
+        "defendant_city": def_.get("city") or "",
+        "defendant_state": def_.get("state") or "FL",
+        "defendant_zip": def_.get("zip") or "",
         "DefEmployer": def_.get("employer") or "",
         "defendant_employer": def_.get("employer") or "",
         "defendant_height": def_.get("height") or "",
@@ -705,6 +710,14 @@ def build_adaptive_field_map(context: Dict[str, Any]) -> Dict[str, Any]:
         "indemnitor_dl": ind.get("dl") or "",
         "IndDOB": ind.get("dob") or "",
         "indemnitor_dob": ind.get("dob") or "",
+        "IndFirstName": ind.get("first_name") or "",
+        "IndMiddleName": ind.get("middle_name") or "",
+        "IndLastName": ind.get("last_name") or "",
+        "indemnitor_first_name": ind.get("first_name") or "",
+        "indemnitor_middle_name": ind.get("middle_name") or "",
+        "indemnitor_last_name": ind.get("last_name") or "",
+        "coindemnitor_name": (context.get("coindemnitor") or {}).get("name")
+            if isinstance(context.get("coindemnitor"), dict) else (context.get("coindemnitor_name") or ""),
         "IndSSN": ind.get("ssn") or "",
         "indemnitor-email": ind.get("email") or "",
         "indemnitor_email": ind.get("email") or "",
@@ -742,6 +755,11 @@ def build_adaptive_field_map(context: Dict[str, Any]) -> Dict[str, Any]:
         "charges": context.get("charges") or "",
         "Charges": context.get("charges") or "",
         "facility": context.get("facility") or "",
+        # Charge grid aliases (DocuSeal prefill uses offense_1..4)
+        "offense_1": "",
+        "offense_2": "",
+        "offense_3": "",
+        "offense_4": "",
         "surety_id": context.get("surety_id") or "osi",
         "date": today,
         "Date": today,
@@ -762,6 +780,27 @@ def build_adaptive_field_map(context: Dict[str, Any]) -> Dict[str, Any]:
         "agency_phone": "(239) 332-2245",
         "self_indemnitor": "yes" if context.get("self_indemnitor") else "no",
     }
+    # Populate offense_1..4 from structured charges or pipe-delimited booking string
+    raw_charges = context.get("charge_details") or context.get("charge_list") or context.get("charges") or []
+    offense_list = []
+    if isinstance(raw_charges, list):
+        for c in raw_charges:
+            if isinstance(c, dict):
+                desc = (c.get("charge") or c.get("description") or c.get("name") or "").strip()
+            else:
+                desc = str(c or "").strip()
+            if desc:
+                offense_list.append(desc)
+    elif isinstance(raw_charges, str) and raw_charges.strip():
+        import re as _re
+        if _re.search(r"[|\n;]", raw_charges):
+            offense_list = [c.strip() for c in _re.split(r"[|\n;]+", raw_charges) if c.strip()]
+        else:
+            offense_list = [c.strip() for c in raw_charges.split(",") if c.strip()]
+    for i, desc in enumerate(offense_list[:4], start=1):
+        fields[f"offense_{i}"] = desc
+        fields[f"charge_{i}"] = desc
+
     # Drop empty values for cleaner audit
     return {k: v for k, v in fields.items() if v not in (None, "")}
 
