@@ -676,10 +676,9 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     "Madison (MS)": "fail_closed",
     "Sarasota (FL)": "fail_closed",
     # Runtime-gated FL scopes aligned to Health Source Guards (SCRAPER_SOURCE_STATES).
-    # Broward: Turnstile / no verified booking-safe bulk contract.
+    # Broward: cleared 2026-09-23 after Turnstile+prefix write smoke (action=arrest_search).
     # Baker/Calhoun/Gulf/Holmes/Levy/Wakulla/Washington: FL JailTracker wrappers
     # gated by jailtracker_base.SOURCE_CONTRACT_VALIDATED=False.
-    "Broward (FL)": "fail_closed",
     "Baker (FL)": "fail_closed",
     "Calhoun (FL)": "fail_closed",
     "Gulf (FL)": "fail_closed",

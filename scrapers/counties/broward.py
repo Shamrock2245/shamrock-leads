@@ -11,9 +11,10 @@ HISTORY:
       person-level probes without a booking-safe bulk roster.
 - v3 (current): Official Angular app exposes a real bulk grid after Turnstile.
       UI requires ≥2 letters of first or last name; we sweep last-name prefixes
-      (single-letter first — server may accept — then digraphs). Keep
-      SOURCE_CONTRACT_VALIDATED=False / Health fail_closed until a write smoke
-      proves the path. Requires env SOLVECAPTCHA_KEY.
+      (single-letter first — server may accept — then digraphs).
+      Mac write smoke 2026-09-23: prefix SM → 30 scraped / 30 new / status=ok
+      after passing Turnstile action=arrest_search to SolveCaptcha.
+      Requires env SOLVECAPTCHA_KEY.
 """
 from __future__ import annotations
 
@@ -55,12 +56,10 @@ PREFIX_PAUSE_SEC = float(os.getenv("BROWARD_PREFIX_PAUSE", "0.4"))
 class BrowardCountyScraper(BaseScraper):
     """Broward (FL) — Turnstile-gated Arrest Search bulk grid."""
 
-    # Stay fail-closed at the BaseScraper guard until a Mac/hotspot write smoke
-    # proves booking-safe emission; Health label in extensions.py matches.
-    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_VALIDATED = True
     SOURCE_CONTRACT_REASON = (
-        "Broward Turnstile + name-prefix roster path is implemented but not yet "
-        "smoke-proven; Health remains fail_closed until SOLVECAPTCHA_KEY smoke."
+        "Broward Arrest Search bulk grid after Turnstile (action=arrest_search); "
+        "Mac write smoke 2026-09-23: 30 new via prefix SM."
     )
 
     OFFICIAL_ARREST_SEARCH_URL = SEARCH_PAGE_URL
