@@ -179,14 +179,21 @@ def normalize_bb_send_result(result: Optional[dict]) -> dict:
             "error": "empty_result",
         }
 
-    channel = (result.get("channel") or result.get("status") or "").lower()
-    status = (result.get("status") or "").lower()
+    raw_channel = result.get("channel")
+    raw_status = result.get("status")
+    channel = str(raw_channel if raw_channel is not None else (raw_status if raw_status is not None else "")).lower()
+    status = str(raw_status if raw_status is not None else "").lower()
+    status_code = result.get("status_code")
+    is_200 = status in ("200", "success") or status_code in (200, 201) or raw_status == 200
+
     explicit_sent = bool(result.get("sent"))
     explicit_queued = bool(result.get("queued")) or status == "queued" or channel == "queued"
+    is_success = bool(result.get("success")) or is_200
+
     # Direct send success: success True without queued channel
     if explicit_sent or (
-        result.get("success")
-        and channel in ("imessage", "sms", "rcs")
+        is_success
+        and (channel in ("imessage", "sms", "rcs") or is_200)
         and not explicit_queued
     ):
         out_channel = channel if channel in ("imessage", "sms", "rcs") else "imessage"
@@ -197,7 +204,7 @@ def normalize_bb_send_result(result: Optional[dict]) -> dict:
             "queued": False,
             "channel": out_channel,
         }
-    if explicit_queued or (result.get("success") and channel == "queued"):
+    if explicit_queued or (is_success and channel == "queued"):
         return {
             **result,
             "success": True,
@@ -206,14 +213,14 @@ def normalize_bb_send_result(result: Optional[dict]) -> dict:
             "channel": "queued",
             "status": "queued",
         }
-    if result.get("success"):
+    if is_success:
         # Ambiguous success — treat as accepted (legacy callers)
         return {
             **result,
             "success": True,
             "sent": bool(result.get("sent", True)),
             "queued": bool(result.get("queued", False)),
-            "channel": channel or "imessage",
+            "channel": channel if channel and channel != "200" else "imessage",
         }
     return {
         **result,

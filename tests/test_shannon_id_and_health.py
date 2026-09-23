@@ -10,7 +10,8 @@ from fastapi.responses import JSONResponse
 def test_shannon_id_and_health_paths_are_open():
     from dashboard.auth.pin_middleware import OPEN_PATHS, OPEN_PREFIXES
 
-    assert "/api/ops/shannon-health" in OPEN_PATHS
+    # Protected API path (PIN or machine auth required per allowlist hardening)
+    assert "/api/ops/shannon-health" not in OPEN_PATHS
     assert any("/paperwork/shannon/id/token".startswith(p) for p in OPEN_PREFIXES)
     assert any("/api/paperwork/shannon/id-link".startswith(p) for p in OPEN_PREFIXES)
 

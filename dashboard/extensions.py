@@ -16,7 +16,17 @@ _mongo_db = None
 
 def get_mongo_client():
     """Lazy-init the Motor async MongoDB client."""
-    global _mongo_client
+    global _mongo_client, _mongo_db
+    if _mongo_client is not None:
+        try:
+            loop = getattr(_mongo_client, "get_io_loop", lambda: None)()
+            if loop is not None and loop.is_closed():
+                _mongo_client = None
+                _mongo_db = None
+        except Exception:
+            _mongo_client = None
+            _mongo_db = None
+
     if _mongo_client is None:
         uri = os.getenv("MONGODB_URI", "")
         if not uri:
@@ -28,8 +38,8 @@ def get_mongo_client():
 def get_db():
     """Return the database handle (Motor async)."""
     global _mongo_db
+    client = get_mongo_client()
     if _mongo_db is None:
-        client = get_mongo_client()
         db_name = os.getenv("MONGODB_DB_NAME", "ShamrockBailDB")
         _mongo_db = client[db_name]
     return _mongo_db

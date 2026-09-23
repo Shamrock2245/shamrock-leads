@@ -208,6 +208,14 @@ async def lead_qualification_sweep(request: Request, api_key: str = ""):
             disqualified += 1
             continue
 
+        phone = (
+            doc.get("phone")
+            or doc.get("phone_number")
+            or doc.get("contact_phone")
+            or doc.get("defendant_phone")
+            or doc.get("indemnitor_phone")
+            or ""
+        )
         summary = {
             "booking_number": doc.get("booking_number") or doc.get("bookingNumber"),
             "name": doc.get("full_name") or doc.get("name") or doc.get("defendant_name"),
@@ -216,6 +224,7 @@ async def lead_qualification_sweep(request: Request, api_key: str = ""):
             "lead_status": doc.get("lead_status"),
             "bond_amount": bond,
             "charges": (doc.get("charges") or "")[:200],
+            "phone": str(phone).strip() if phone else "",
         }
 
         if score >= min_hot:

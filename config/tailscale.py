@@ -130,8 +130,10 @@ class TailscaleConfig:
             logger.info("BB URL: falling back to secondary configured URL → %s", fallback_url)
             return fallback_url
 
-        if frp_url:
-            return frp_url
+        # Return frp only if explicitly configured in environment
+        explicit_frp = (os.getenv("BLUEBUBBLES_FRP_URL") or "").strip()
+        if explicit_frp:
+            return explicit_frp
 
         logger.warning("BB URL: all paths failed, returning empty default")
         return fallback_url or ""

@@ -72,8 +72,9 @@ def test_shannon_machine_routes_bypass_pin_middleware():
 def test_imessage_status_is_public_health_path():
     from dashboard.auth.pin_middleware import OPEN_PATHS
 
-    assert "/api/imessage/status" in OPEN_PATHS
-    assert "/api/ops/shannon-health" in OPEN_PATHS
+    # Both paths are secured from unauthenticated public traffic per allowlist hardening
+    assert "/api/imessage/status" not in OPEN_PATHS
+    assert "/api/ops/shannon-health" not in OPEN_PATHS
 
 
 def test_mem0_lookup_returns_returning_client(monkeypatch):

@@ -208,11 +208,7 @@ async def test_resolve_case_context_reads_snake_case_arrest_from_bookmarklet():
             return arrests
         return empty
 
-    import sys
-    import types
-    fake_ext = types.ModuleType("dashboard.extensions")
-    fake_ext.get_collection = _get
-    with patch.dict(sys.modules, {"dashboard.extensions": fake_ext}):
+    with patch("dashboard.extensions.get_collection", side_effect=_get):
         ctx = await resolve_case_context(
             booking_number="1029767",
             county="Lee",
@@ -258,11 +254,7 @@ async def test_resolve_case_context_fail_closed_on_ambiguous_booking():
     def _get(name):
         return arrests if name == "arrests" else empty
 
-    import sys
-    import types
-    fake_ext = types.ModuleType("dashboard.extensions")
-    fake_ext.get_collection = _get
-    with patch.dict(sys.modules, {"dashboard.extensions": fake_ext}):
+    with patch("dashboard.extensions.get_collection", side_effect=_get):
         ctx = await resolve_case_context(booking_number="BK1", county="Lee", state="FL")
 
     assert "arrest_ambiguous" in ctx["sources"]

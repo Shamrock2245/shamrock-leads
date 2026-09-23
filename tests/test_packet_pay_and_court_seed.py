@@ -301,3 +301,83 @@ async def test_promote_hook_calls_helpers():
         )
         assert seed["gcal"]["status"] == "created"
         assert seed["gcal_event_id"] == "gcal_1"
+
+
+@pytest.mark.asyncio
+async def test_payment_link_message_uses_official_shamrock_phone():
+    """Ensure payment link SMS and email use official phone (239) 332-2245, never PIN 224545."""
+    from dashboard.services.packet_payment_link_service import send_swipesimple_payment_link
+
+    sent_messages = []
+
+    async def fake_send(phone, msg):
+        sent_messages.append({"phone": phone, "msg": msg})
+        return {"status": 200, "message": "sent"}
+
+    with patch(
+        "dashboard.services.packet_payment_link_service.send_message_universal",
+        side_effect=fake_send,
+    ), patch(
+        "dashboard.services.packet_payment_link_service.get_collection",
+        return_value=MagicMock(update_one=AsyncMock(), insert_one=AsyncMock()),
+    ):
+        res = await send_swipesimple_payment_link(
+            phone="2395550199",
+            amount=500.0,
+            defendant_name="John Doe",
+            booking_number="BK123",
+            deliver_email=False,
+            deliver_text=True,
+        )
+        assert res["delivered"] is True
+        assert len(sent_messages) == 1
+        msg = sent_messages[0]["msg"]
+        assert "(239) 332-2245" in msg
+        assert "224-5454" not in msg
+        assert "224545" not in msg
+
+
+@pytest.mark.asyncio
+async def test_lead_qualification_sweep_projects_phone():
+    """Ensure lead_qualification_sweep retains phone numbers for Morning Prospecting."""
+    from dashboard.routers.automation_sweeps import lead_qualification_sweep
+    from fastapi import Request
+
+    dummy_doc = {
+        "booking_number": "BK999",
+        "full_name": "SMITH, BOB",
+        "county": "Lee",
+        "lead_score": 85,
+        "lead_status": "hot",
+        "bond_amount": 5000,
+        "charges": "GRAND THEFT",
+        "phone": "(239) 555-1234",
+        "scraped_at": datetime.now(timezone.utc),
+    }
+
+    class DummyCursor:
+        async def to_list(self, length=500):
+            return [dummy_doc]
+
+    mock_col = MagicMock()
+    mock_col.find.return_value.sort.return_value.limit.return_value = DummyCursor()
+
+    mock_req = MagicMock(spec=Request)
+    mock_req.headers = {"X-API-Key": "test-key"}
+    mock_req.query_params = {}
+    mock_req.json = AsyncMock(return_value={"hours_back": 24})
+
+    with patch(
+        "dashboard.routers.automation_sweeps.get_collection",
+        return_value=mock_col,
+    ), patch(
+        "dashboard.routers.automation_sweeps._authorized",
+        return_value=True,
+    ):
+        result = await lead_qualification_sweep(mock_req)
+        assert result["ok"] is True
+        assert len(result["hot"]) == 1
+        lead = result["hot"][0]
+        assert lead["phone"] == "(239) 555-1234"
+        assert lead["name"] == "SMITH, BOB"
+
