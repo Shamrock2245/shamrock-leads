@@ -108,17 +108,21 @@ class LeeCountyScraper(BaseScraper):
         start_time = time.time()
 
         try:
-            # Hard stop if Lee public-api /32 throttle is already tripped
+            # Hard stop if Lee public-api /32 throttle is already tripped.
+            # Raise (do NOT return []) so scraper_status becomes status=error
+            # with a clear message — silent status=empty + duration=0 was
+            # masking VPS /32 quota cooldowns as "no arrests".
             if is_cooled_down():
                 st = cooldown_status()
-                logger.error(
-                    "[Lee] ⛔ Skipping scrape — rate-limit cooldown "
-                    "(%.0fs / %.1fh remaining). detail=%s",
-                    st["seconds_remaining"],
-                    st["seconds_remaining"] / 3600.0,
-                    st.get("last_429_detail") or "",
+                detail = (st.get("last_429_detail") or "").strip()
+                msg = (
+                    f"Lee public-api rate-limit cooldown "
+                    f"({st['seconds_remaining']:.0f}s / "
+                    f"{st['seconds_remaining'] / 3600.0:.1f}h remaining)"
+                    + (f": {detail}" if detail else "")
                 )
-                return []
+                logger.error("[Lee] ⛔ Skipping scrape — %s", msg)
+                raise RuntimeError(msg)
 
             end_date = datetime.now(timezone.utc)
             start_date = end_date - timedelta(days=DAYS_BACK)

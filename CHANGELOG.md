@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-09-23
+
+### Fixed
+- **Broward County, FL** — Turnstile Arrest Search path live after Mac write smoke (30 new). Pass `action=arrest_search` to SolveCaptcha; Health fail_closed lifted; requires `SOLVECAPTCHA_KEY`.
+
 ## [Unreleased] — 2026-08-28 (P0 gate update)
 
 ### Changed
