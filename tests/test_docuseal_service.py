@@ -14,6 +14,7 @@ from dashboard.services.docuseal_service import (
     ROLE_INDEMNITOR,
     ROLE_DEFENDANT,
     ROLE_CO_INDEMNITOR,
+    ROLE_BONDSMAN,
     _safe_money,
     _amount_to_words,
     _number_to_words,
@@ -271,6 +272,7 @@ async def test_create_submission_for_packet_calls_api():
                 "poa_number": "OSI3-100",
                 "booking_number": "BK123",
                 "surety_id": "osi",
+                "include_bondsman": False,
                 "defendant_name": "Def",
                 "indemnitor_name": "Ind",
                 "indemnitor": {"name": "Ind", "email": "ind@example.com"},
@@ -321,6 +323,7 @@ async def test_multi_cosigner_roles():
                 "poa_number": "OSI3-200",
                 "booking_number": "BK200",
                 "surety_id": "osi",
+                "include_bondsman": False,
                 "defendant_name": "D",
                 "defendant": {"name": "D", "email": "d@x.com"},
                 "indemnitor": {"name": "A", "email": "a@x.com"},
@@ -409,7 +412,7 @@ def test_resolve_template_id_for_surety():
     ):
         assert resolve_template_id_for_surety("osi") == "11"
         assert resolve_template_id_for_surety("palmetto") == "22"
-        assert resolve_template_id_for_surety("unknown") == "11"
+        assert resolve_template_id_for_surety("unknown") is None  # fail-closed: never silent OSI
 
     # Palmetto must not silently use OSI template
     with patch.dict(
@@ -495,3 +498,92 @@ def test_prefill_splits_pipe_delimited_booking_charges():
     assert "BATTERY" in vals["charges_summary"]
     assert vals["today_day"]
     assert vals["bond_amount_words"]
+
+
+def test_prefill_includes_ind_last_and_master_aliases():
+    svc = DocuSealService(base_url="https://sign.example", api_key="test")
+    vals = svc.prefill_values_from_bond(
+        {
+            "defendant_name": "DOE, JANE ANN",
+            "indemnitor_name": "John Cosigner",
+            "indemnitor": {
+                "name": "John Cosigner",
+                "address": "1 Main St",
+                "city": "Fort Myers",
+                "state": "FL",
+                "zip": "33901",
+                "dob": "1990-01-02",
+                "dl": "D123",
+                "phone": "2395551212",
+            },
+            "defendant": {"city": "Naples", "state": "FL", "zip": "34102"},
+        }
+    )
+    assert vals["indemnitor_last_name"] == "Cosigner"
+    assert vals["IndLastName"] == "Cosigner"
+    assert vals["IndFirstName"] == "John"
+    assert vals["DefName"] == "DOE, JANE ANN"
+    assert vals["IndAddress"] == "1 Main St"
+    assert vals["IndDOB"] == "1990-01-02"
+    assert vals["IndDL"] == "D123"
+
+
+def test_validate_blocks_placeholder_party_names():
+    base = {
+        "bond_case_id": "BC-1",
+        "match_id": "M-1",
+        "defendant_id": "D-1",
+        "indemnitor_id": "I-1",
+        "case_number": "26CF1",
+        "poa_number": "POA1",
+        "booking_number": "B1",
+        "match_status": "validated",
+        "surety_id": "osi",
+        "indemnitor": {"name": "Alex Rivera", "email": "a@x.com"},
+        "defendant": {"name": "To Be Named", "email": "d@x.com"},
+    }
+    with pytest.raises(DocuSealPacketValidationError):
+        from dashboard.services.docuseal_service import validate_docuseal_packet_binding
+        validate_docuseal_packet_binding(packet_id="pkt1", bond_data=base)
+
+
+@pytest.mark.asyncio
+async def test_create_submission_includes_bondsman_by_default():
+    svc = DocuSealService(base_url="https://sign.example", api_key="k")
+    fake = [
+        {"id": 1, "submission_id": 9, "role": ROLE_BONDSMAN, "slug": "a", "email": "b@x.com"},
+        {"id": 2, "submission_id": 9, "role": ROLE_INDEMNITOR, "slug": "b", "email": "i@x.com"},
+        {"id": 3, "submission_id": 9, "role": ROLE_DEFENDANT, "slug": "c", "email": "d@x.com"},
+    ]
+    with patch.object(svc, "create_submission", new=AsyncMock(return_value=fake)) as m:
+        with patch.dict(os.environ, {"DOCUSEAL_INCLUDE_BONDSMAN": "true"}, clear=False):
+            result = await svc.create_submission_for_packet(
+                template_id=5,
+                packet_id="pkt-b",
+                bond_data={
+                    "bond_case_id": "BC",
+                    "match_id": "M",
+                    "match_status": "validated",
+                    "defendant_id": "D",
+                    "indemnitor_id": "I",
+                    "case_number": "C",
+                    "poa_number": "P",
+                    "booking_number": "B",
+                    "surety_id": "palmetto",
+                    "defendant_name": "Def Person",
+                    "indemnitor_name": "Ind Person",
+                    "bondsman_name": "Brendan O'Neal",
+                    "bondsman_email": "admin@shamrockbailbonds.biz",
+                    "indemnitor": {"name": "Ind Person", "email": "i@x.com"},
+                    "defendant": {"name": "Def Person", "email": "d@x.com"},
+                },
+                send_email=False,
+            )
+        kwargs = m.await_args.kwargs
+        roles = [s["role"] for s in kwargs["submitters"]]
+        assert ROLE_BONDSMAN in roles
+        assert ROLE_INDEMNITOR in roles
+        assert ROLE_DEFENDANT in roles
+        assert kwargs["send_email"] is False
+        assert result["submission_id"] == 9
+

@@ -260,3 +260,18 @@ async def test_resolve_case_context_fail_closed_on_ambiguous_booking():
     assert "arrest_ambiguous" in ctx["sources"]
     assert "arrest" not in ctx["sources"]
     assert not (ctx.get("defendant") or {}).get("name")
+
+
+def test_adaptive_map_includes_dl_and_offense_rows():
+    from dashboard.services.packet_builder_service import build_adaptive_field_map
+    fields = build_adaptive_field_map({
+        "defendant": {"name": "A B", "dl": "D9", "address": "1 St", "dob": "2000-01-01"},
+        "indemnitor": {"name": "C D", "dl": "I9", "dob": "1980-01-01", "last_name": "D", "first_name": "C"},
+        "charges": "BATTERY | RESIST",
+        "surety_id": "osi",
+        "bond_amount": 1000,
+    })
+    assert fields.get("defendant_dl") == "D9"
+    assert fields.get("IndLastName") == "D"
+    assert fields.get("offense_1") == "BATTERY"
+    assert fields.get("offense_2") == "RESIST"
