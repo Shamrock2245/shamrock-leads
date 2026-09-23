@@ -55,7 +55,7 @@ pdfplumber>=0.10.0
 fastapi>=0.115.0,<0.120.0
 starlette>=0.37.0,<0.41.0     # Pin with FastAPI — avoid Starlette 1.x on_startup breakage
 uvicorn[standard]>=0.30.0
-sse-starlette>=3.4.11          # Server-Sent Events for /api/events/stream
+sse-starlette>=2.1.0,<2.2      # Cap <2.2 — 2.2+ needs starlette>=0.41.3; 3.0.4+ needs >=0.49.1 (breaks FastAPI 0.115 pin)
 motor>=3.3.0                  # Async MongoDB driver
 httpx[socks]>=0.27.0            # Async HTTP client + SOCKS proxy (Hillsborough scraper)
 cryptography>=43.0.0          # Fernet symmetric encryption (OAuth token storage)
