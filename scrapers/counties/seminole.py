@@ -2,51 +2,46 @@
 Seminole County Arrest Scraper — NorthPointe Custody Portal
 Source: Seminole County Sheriff's Office
 URL: https://seminole.northpointesuite.com/custodyportal
-Method: nodriver (headless Chromium) for roster page → curl_cffi for detail pages
+Method: curl_cffi JSON DoSearch (A–Z last-name prefixes) → detail pages
 
-Architecture:
-1. nodriver loads the custody portal and clicks Search (no filters) → 500 inmates
-2. Parse goToDetails JSON from each searchDataRow → name, DOB, race, sex, personId
-3. For each inmate, fetch /Home/Details?data=<JSON> via curl_cffi → booking#, date, charges
-4. Date-gate: only process inmates whose detail page shows booking within DAYS_BACK
-
-Fix 2026-05-18: Replaced Selenium with nodriver + curl_cffi.
-                Roster is JS-rendered; detail pages are accessible via plain HTTP.
+HISTORY:
+- v1: Selenium roster click
+- v2: nodriver / Playwright empty Search → ~500 inmates, then detail fetch
+- v3 (current): Empty Search returns API error ("No response received").
+  Headless Chrome is IIS-blocked ("permission denied"). curl_cffi still
+  reaches DoSearch. Sweep LastName starts-with A–Z for current inmates,
+  sort by personId descending (newer bookings first), then fetch details.
 """
+from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
+import string
+import time
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from scrapers.base_scraper import BaseScraper
-from scrapers.chromium_flags import chromium_launch_args, playwright_launch_kwargs
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://seminole.northpointesuite.com"
 PORTAL_URL = f"{BASE_URL}/custodyportal"
-DETAIL_URL = f"{BASE_URL}/custodyportal/Home/Details"
+DOSEARCH_URL = f"{PORTAL_URL}/Home/DoSearch/"
+DETAIL_URL = f"{PORTAL_URL}/Home/Details"
 FACILITY = "John E Polk Correctional Facility"
-DAYS_BACK = 7
-MAX_DETAIL_FETCHES = 150  # Cap to avoid excessive bandwidth (each detail ~1.6MB)
+DAYS_BACK = 14
+# Detail pages are ~1.6 MB each — cap bandwidth; personId-desc prioritizes recent.
+MAX_DETAIL_FETCHES = 200
 IMPERSONATE = "chrome131"
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Referer": PORTAL_URL,
-}
+LETTER_PAUSE_SEC = 0.35
+DETAIL_PAUSE_SEC = 0.2
 
 
 class SeminoleCountyScraper(BaseScraper):
-    """Seminole County (FL) — NorthPointe Custody Portal (nodriver + curl_cffi)"""
+    """Seminole County (FL) — NorthPointe Custody Portal via DoSearch API."""
 
     @property
     def county(self) -> str:
@@ -55,142 +50,103 @@ class SeminoleCountyScraper(BaseScraper):
     def scrape(self) -> List[ArrestRecord]:
         try:
             from curl_cffi import requests as cf
-            from bs4 import BeautifulSoup  # noqa — imported in sub-methods
         except ImportError as e:
-            logger.error(f"Seminole: missing dependency: {e}")
+            logger.error("Seminole: missing curl_cffi: %s", e)
             raise
 
-        # Step 1: Load roster — nodriver preferred, Playwright fallback (Docker has both
-        # in requirements; local envs may only have one).
-        roster_html = self._load_roster_any()
-        if not roster_html:
-            logger.error("Seminole: failed to load roster (nodriver/playwright unavailable or failed)")
-            return []
+        session = cf.Session()
+        session.get(PORTAL_URL + "/", impersonate=IMPERSONATE, timeout=45)
 
-        # Step 2: Parse all goToDetails JSON objects from roster
-        inmates = self._parse_roster(roster_html)
-        logger.info(f"Seminole: {len(inmates)} inmates on roster")
+        inmates = self._roster_az(session)
+        logger.info("Seminole: %d unique current inmates from A–Z DoSearch", len(inmates))
         if not inmates:
             return []
 
-        # Step 3: Fetch detail pages for recent inmates via curl_cffi
+        # Newer personIds track newer bookings — fetch those first.
+        inmates.sort(key=lambda x: x.get("personId") or 0, reverse=True)
+
         cutoff = datetime.now() - timedelta(days=DAYS_BACK)
-        session = cf.Session()
-        records = []
-        seen: set = set()
+        records: List[ArrestRecord] = []
+        seen_people: set = set()
         fetched = 0
 
         for inmate in inmates:
             if fetched >= MAX_DETAIL_FETCHES:
                 break
             person_id = inmate.get("personId")
-            if not person_id or person_id in seen:
+            if not person_id or person_id in seen_people:
                 continue
             try:
                 record = self._fetch_detail(session, inmate, cutoff)
+                fetched += 1
+                seen_people.add(person_id)
                 if record:
-                    seen.add(person_id)
                     records.append(record)
-                    fetched += 1
             except Exception as e:
-                logger.debug(f"Seminole detail error for {inmate.get('lastName')}: {e}")
+                logger.debug(
+                    "Seminole detail error for %s: %s", inmate.get("lastName"), e
+                )
+            time.sleep(DETAIL_PAUSE_SEC)
 
-        logger.info(f"Seminole: {len(records)} records within {DAYS_BACK} days")
+        logger.info(
+            "Seminole: %d records within %d days (details fetched=%d)",
+            len(records),
+            DAYS_BACK,
+            fetched,
+        )
         return records
 
-    def _load_roster_any(self) -> Optional[str]:
-        """Try nodriver first, then Playwright (sync)."""
-        try:
-            import nodriver as uc
-            html = asyncio.run(self._load_roster(uc))
-            if html and ("searchDataRow" in html or "goToDetails" in html):
-                return html
-        except ImportError:
-            logger.warning("Seminole: nodriver not installed — trying Playwright")
-        except Exception as e:
-            logger.warning(f"Seminole: nodriver path failed: {e}")
-
-        try:
-            return self._load_roster_playwright()
-        except ImportError:
-            logger.error("Seminole: neither nodriver nor playwright available")
-            return None
-        except Exception as e:
-            logger.error(f"Seminole: playwright roster failed: {e}")
-            return None
-
-    def _load_roster_playwright(self) -> Optional[str]:
-        """Playwright headless Chromium fallback for NorthPointe portal."""
-        from playwright.sync_api import sync_playwright
-
-        with sync_playwright() as p:
-            browser = p.chromium.launch(**playwright_launch_kwargs())
+    def _roster_az(self, session) -> List[dict]:
+        """A–Z LastName starts-with sweep of current inmates via DoSearch."""
+        seen: set = set()
+        out: List[dict] = []
+        base_params = {
+            "LastName": "",
+            "Age": "",
+            "FirstName": "",
+            "Race": "",
+            "MiddleName": "",
+            "Gender": "",
+            "BookingNumber": "",
+            "SearchCriteria": "current",
+        }
+        for letter in string.ascii_uppercase:
+            params = {**base_params, "LastName": letter}
+            query = f"&filter=LastName%3Asw%3A{letter}&inmatestatus=current"
             try:
-                page = browser.new_page()
-                page.goto(PORTAL_URL, wait_until="domcontentloaded", timeout=60000)
-                page.wait_for_timeout(3000)
-                # Click Search with no filters
-                btn = page.locator("#searchBtn")
-                if btn.count() == 0:
-                    btn = page.get_by_role("button", name=re.compile(r"search", re.I))
-                btn.first.click(timeout=15000)
-                page.wait_for_timeout(8000)
-                html = page.content()
-                return html
-            finally:
-                browser.close()
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    async def _load_roster(self, uc) -> Optional[str]:
-        """Use nodriver to load the custody portal and click Search."""
-        browser = None
-        try:
-            browser = await uc.start(
-                browser_executable_path="/usr/bin/chromium",
-                headless=True,
-                browser_args=chromium_launch_args(),
-            )
-            page = await browser.get(PORTAL_URL)
-            await asyncio.sleep(5)
-
-            # Click Search with no filters to get all current inmates
-            search_btn = await page.find("#searchBtn", timeout=10)
-            await search_btn.click()
-            await asyncio.sleep(8)
-
-            return await page.get_content()
-
-        except Exception as e:
-            logger.error(f"Seminole nodriver error: {e}")
-            return None
-        finally:
-            if browser:
-                try:
-                    browser.stop()
-                except Exception:
-                    pass
-
-    def _parse_roster(self, html: str) -> List[dict]:
-        """Parse goToDetails JSON from each searchDataRow div."""
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(html, "html.parser")
-        inmates = []
-        for row in soup.find_all("div", class_="searchDataRow"):
-            link = row.find("a", href=re.compile(r"goToDetails"))
-            if not link:
-                continue
-            href = link.get("href", "")
-            json_match = re.search(r"goToDetails\((\{[^)]+\})\)", href)
-            if not json_match:
-                continue
-            try:
-                inmates.append(json.loads(json_match.group(1)))
-            except (json.JSONDecodeError, ValueError):
-                continue
-        return inmates
+                r = session.get(
+                    DOSEARCH_URL,
+                    params={
+                        "searchParams": json.dumps(params),
+                        "query": query,
+                    },
+                    impersonate=IMPERSONATE,
+                    timeout=120,
+                )
+                r.raise_for_status()
+                data = r.json()
+                err = (data.get("error") or {}).get("errorStatus")
+                sd = data.get("searchData") or {}
+                arr = sd.get("resultArray") or []
+                new = 0
+                for row in arr:
+                    pid = row.get("personId")
+                    if pid and pid not in seen:
+                        seen.add(pid)
+                        out.append(row)
+                        new += 1
+                logger.info(
+                    "Seminole DoSearch %s: %s (+%d unique, limited=%s)%s",
+                    letter,
+                    sd.get("resultCount"),
+                    new,
+                    sd.get("resultCountWasLimited"),
+                    f" err={err}" if err else "",
+                )
+            except Exception as e:
+                logger.warning("Seminole DoSearch %s failed: %s", letter, e)
+            time.sleep(LETTER_PAUSE_SEC)
+        return out
 
     def _fetch_detail(
         self, session, inmate: dict, cutoff: datetime
@@ -203,8 +159,16 @@ class SeminoleCountyScraper(BaseScraper):
             r = session.get(
                 DETAIL_URL,
                 params={"data": data_param},
-                headers=HEADERS,
-                timeout=45,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/131.0.0.0 Safari/537.36"
+                    ),
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Referer": PORTAL_URL,
+                },
+                timeout=60,
                 impersonate=IMPERSONATE,
             )
             r.raise_for_status()
@@ -213,17 +177,15 @@ class SeminoleCountyScraper(BaseScraper):
 
         soup = BeautifulSoup(r.text, "html.parser")
 
-        # Booking number from "Booking - 202600003587" header
         booking_header = soup.find("div", class_="bookingHeader")
         if not booking_header:
             return None
         bk_match = re.search(r"Booking\s*-\s*(\d+)", booking_header.get_text())
         booking_num = bk_match.group(1) if bk_match else ""
+        if not booking_num:
+            return None
 
-        # Booking date
         booking_date = self._label_next(soup, r"^Booking Date$")
-
-        # Date gate — skip if older than cutoff
         if booking_date:
             try:
                 bd = datetime.strptime(booking_date, "%m/%d/%Y")
@@ -232,32 +194,28 @@ class SeminoleCountyScraper(BaseScraper):
             except ValueError:
                 pass
 
-        # Other fields
         status = self._label_next(soup, r"^Status$") or "In Custody"
         bond = self._label_next(soup, r"^Total Bond$") or "0"
         release_date = self._label_next(soup, r"^Projected Release Date$") or ""
 
-        # Charges
         charges = []
         for div in soup.find_all("div", class_=re.compile(r"chargeRow|chargeData", re.I)):
             text = div.get_text(separator=" ", strip=True)
             if text:
                 charges.append(text)
 
-        # Name components
-        first = inmate.get("firstName", "")
-        last = inmate.get("lastName", "")
+        first = inmate.get("firstName", "") or ""
+        last = inmate.get("lastName", "") or ""
         middle = inmate.get("middleName") or ""
         full_name = f"{last}, {first}" + (f" {middle}" if middle else "")
 
-        # DOB
-        dob_raw = inmate.get("dateOfBirth", "")
+        dob_raw = inmate.get("dateOfBirth", "") or ""
         dob = ""
         if dob_raw:
             try:
-                dob = datetime.fromisoformat(dob_raw.replace("T00:00:00", "")).strftime(
-                    "%m/%d/%Y"
-                )
+                dob = datetime.fromisoformat(
+                    dob_raw.replace("T00:00:00", "")
+                ).strftime("%m/%d/%Y")
             except ValueError:
                 dob = dob_raw[:10]
 
@@ -277,10 +235,11 @@ class SeminoleCountyScraper(BaseScraper):
             Release_Date=release_date,
             Charges=" | ".join(charges),
             Bond_Amount=str(self._parse_bond(bond)),
-            Race=inmate.get("race", ""),
-            Sex=inmate.get("gender", ""),
-            Height=inmate.get("height", ""),
-            Weight=inmate.get("weight", ""),
+            Race=inmate.get("race", "") or "",
+            Sex=inmate.get("gender", "") or "",
+            Height=inmate.get("height", "") or "",
+            Weight=inmate.get("weight", "") or "",
+            Person_ID=str(inmate.get("personId") or ""),
             Detail_URL=f"{DETAIL_URL}?data={data_param}",
             Scrape_Timestamp=datetime.now(timezone.utc).isoformat(),
             LastChecked=datetime.now(timezone.utc).isoformat(),
