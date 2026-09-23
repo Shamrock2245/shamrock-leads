@@ -222,11 +222,11 @@ Active work targets DocuSeal only using the OSI and Palmetto templates in the Do
 
 ## 5.6 DocuSeal REST API Reference & Multi-User Support Manual
 
-### 1. API Endpoints Overview (`https://sign.shamrockbailbonds.biz/api/v1`)
+### 1. API Endpoints Overview (`https://sign.shamrockbailbonds.biz/api`)
 - **Authorization**: Header `X-Auth-Token: <DOCUSEAL_API_KEY>` or `Authorization: Bearer <DOCUSEAL_API_KEY>`.
-- **`GET /api/v1/templates`**: List active templates. `DOCUSEAL_TEMPLATE_ID_OSI` (1) for OSI, `DOCUSEAL_TEMPLATE_ID_PALMETTO` for Palmetto.
-- **`POST /api/v1/submissions`**: Create signing submission with submitters list and prefill values.
-- **`PUT /api/v1/submitters/{id}`**: Update prefill field values (`values` / `fields`), change email/phone, or request email/SMS re-send.
+- **`GET /api/templates`**: List active templates. `DOCUSEAL_TEMPLATE_ID_OSI` (1) for OSI, `DOCUSEAL_TEMPLATE_ID_PALMETTO` (5 as of 2026-09-22) for Palmetto.
+- **`POST /api/submissions`**: Create signing submission with submitters list and prefill values.
+- **`PUT /api/submitters/{id}`**: Update prefill field values (`values` / `fields`), change email/phone, or request email/SMS re-send.
 - **`POST /api/webhooks/docuseal`**: Receives `form.started`, `form.viewed`, and `form.completed`. Signed PDFs are auto-formatted as `<LastName>_<MMDDYY>_<SURETY>.pdf` and archived to Google Drive `Completed Bonds/{surety}/{date}/`.
 
 ### 2. Employee Guidance (Bondsmen, Staff, God-Admin)
@@ -310,7 +310,7 @@ Hydration reuses the existing field maps in:
 | **FAQ — Defendants** | `faq-defendants.pdf` | Indemnitor **and** defendant **initial** | Same dual-role initial requirement |
 | **Master waiver** | `master-waiver.pdf` | Every indemnitor **and** defendant **sign** | Multi-indemnitor: **each** indemnitor must sign |
 | **SSA release** | `ssa-release.pdf` | Every non-agent person on the bond | **Every indemnitor** + **defendant** (agents do **not** sign) |
-| **Payment plan** | `payment-plan.pdf` | Defendant **and** indemnitor **sign** | **Always** in the packet (OSI template 1 + Palmetto template 3). Paid-in-full: down = premium, balance = $0, empty schedule. Financing: staff fills `payment_due_date_1–4` / `payment_amount_1–4` before send. No extra initials; no credit-card / wage-assignment add-ons. |
+| **Payment plan** | `payment-plan.pdf` | Defendant **and** indemnitor **sign** | **Always** in the packet (OSI template 1 + Palmetto template 5). Paid-in-full: down = premium, balance = $0, empty schedule. Financing: staff fills `payment_due_date_1–4` / `payment_amount_1–4` before send. No extra initials; no credit-card / wage-assignment add-ons. |
 
 ### 7.2 Surety-specific (folder selected by agent)
 
