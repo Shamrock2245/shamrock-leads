@@ -16,6 +16,11 @@ logger = logging.getLogger(__name__)
 
 
 class AllendaleScraper(BaseScraper):
+
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "Scaffold only — no public portal/parser; source retrieval is not permitted."
+    )
     @property
     def county(self) -> str:
         return "Allendale"
