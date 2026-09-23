@@ -192,6 +192,9 @@ class BrowardCountyScraper(BaseScraper):
                     "method": "turnstile",
                     "sitekey": TURNSTILE_SITEKEY,
                     "pageurl": SEARCH_PAGE_URL,
+                    # Widget declares data-action="arrest_search"; token is
+                    # rejected (CAPTCHA_FAILED) without matching action.
+                    "action": "arrest_search",
                     "json": "1",
                 },
                 timeout=30,
