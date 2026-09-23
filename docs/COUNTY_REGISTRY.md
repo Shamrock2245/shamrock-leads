@@ -18,7 +18,7 @@
 ## Tier 1 — SWFL Core (7 Counties)
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
-| 1 | **Lee** | curl_cffi GET + origin DNS pin (`lee_origin`) — sheriffleefl.org public-api | `lee.py` | ✅ Active | 30 min | 2026-08-04 |
+| 1 | **Lee** | curl_cffi GET + origin DNS pin (`lee_origin`) + durable cooldown + honest empty/error — sheriffleefl.org public-api | `lee.py` | ✅ Active | 30 min | 2026-09-23 (Mac write smoke 53 ok; self-heal branch) |
 | 2 | **Collier** | Odyssey REST API | `collier.py` | ✅ Active | 15 min | 2026-04-27 |
 | 3 | **Charlotte** | Patchright + Warren APE (sticky) / office SOCKS — Revize CF; **exit-IP preflight** rejects Datacamp/VPN/NordVPN; APE Warren sticky or office SOCKS required | `charlotte.py` | ⚠️ Contract **unverified** (Health default) — Revize roster may emit only with healthy US residential egress; **not** `verified_public`; reopen blocked pending Brendan residential smoke — see `docs/recon/SWFL_SOURCE_CONTRACT_QUEUE.md` | 90 min | Code last exercised 2026-07-16; 2026-09-22 recon: no new live validation this pass |
 | 4 | **Manatee** | Same as Charlotte (Revize + residential preflight; sticky `fl-manatee`) | `manatee.py` | ⚠️ Contract **unverified** (Health default) — same residential gate as Charlotte; **not** `verified_public`; do not treat Charlotte success as Manatee proof — see `docs/recon/SWFL_SOURCE_CONTRACT_QUEUE.md` | 75 min | Code last exercised 2026-07-16; 2026-09-22 recon: no new live validation this pass |
