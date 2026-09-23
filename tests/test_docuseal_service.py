@@ -371,14 +371,29 @@ def test_prefill_never_raises_on_garbage():
 
 def test_verify_docuseal_signature():
     from dashboard.routers.webhooks import verify_docuseal_signature
+    import time
 
-    secret = "test-secret"
+    secret = "whsec_test-secret"
     body = b'{"event_type":"submission.completed"}'
     with patch.dict(os.environ, {"DOCUSEAL_WEBHOOK_SECRET": secret, "DEBUG": "false", "ENV": "production"}):
-        sig = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-        assert verify_docuseal_signature(body, sig) is True
+        # DocuSeal canonical: "{ts}.{HMAC(ts.body)}"
+        ts = int(time.time())
+        expected = hmac.new(
+            secret.encode(), f"{ts}.".encode() + body, hashlib.sha256
+        ).hexdigest()
+        assert verify_docuseal_signature(body, f"{ts}.{expected}") is True
+        assert verify_docuseal_signature(body, f"{ts}.deadbeef") is False
+        # Stale timestamp (>5min) rejected
+        stale = ts - 301
+        stale_sig = hmac.new(
+            secret.encode(), f"{stale}.".encode() + body, hashlib.sha256
+        ).hexdigest()
+        assert verify_docuseal_signature(body, f"{stale}.{stale_sig}") is False
+        # Legacy raw-body hex / sha256= still accepted
+        legacy = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+        assert verify_docuseal_signature(body, legacy) is True
+        assert verify_docuseal_signature(body, f"sha256={legacy}") is True
         assert verify_docuseal_signature(body, "deadbeef") is False
-        assert verify_docuseal_signature(body, f"sha256={sig}") is True
 
 
 def test_verify_docuseal_signature_fail_closed_without_secret():
