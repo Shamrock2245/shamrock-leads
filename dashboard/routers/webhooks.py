@@ -580,12 +580,20 @@ async def adobe_pdf_services_webhook(request: Request):
 
 def verify_docuseal_signature(payload: bytes, signature: str) -> bool:
     """
-    Verify DocuSeal webhook HMAC.
+    Verify DocuSeal webhook HMAC (self-hosted / OSS).
+
+    DocuSeal (lib/webhook_urls/signatures.rb) sends header X-Docuseal-Signature as:
+        "{unix_ts}.{hex}" where hex = HMAC-SHA256(secret, "{unix_ts}.{raw_body}")
+    Secret is the auto-generated hmac_secret from DocuSeal SECURITY → HMAC
+    (typically prefixed whsec_…). Custom SECURITY "Secret" headers are unrelated.
 
     Fail-closed unless DEBUG=true:
       - missing DOCUSEAL_WEBHOOK_SECRET → reject (except DEBUG)
       - missing/invalid signature → reject
+      - timestamp outside ±5 minutes → reject (DocuSeal TOLERANCE)
     """
+    import time
+
     secret = os.getenv("DOCUSEAL_WEBHOOK_SECRET", "").strip()
     debug = os.getenv("DEBUG", "false").lower() in ("1", "true", "yes")
     env = (os.getenv("ENV") or os.getenv("ENVIRONMENT") or "").lower()
@@ -607,12 +615,37 @@ def verify_docuseal_signature(payload: bytes, signature: str) -> bool:
         logger.warning("[docuseal_webhook] missing signature header — rejecting")
         return False
 
-    expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
-    # Accept hex or sha256=hex forms
-    sig = signature.strip().lower()
-    if sig.startswith("sha256="):
-        sig = sig[7:]
-    ok = hmac.compare_digest(expected, sig)
+    sig = signature.strip()
+    # DocuSeal canonical: "{unix_ts}.{hmac_hex}" over "{ts}.{body}"
+    if "." in sig:
+        ts_str, _, provided = sig.partition(".")
+        try:
+            ts = int(ts_str)
+        except ValueError:
+            ts = None
+        if ts is not None and provided:
+            now = int(time.time())
+            # Match DocuSeal WebhookUrls::Signatures::TOLERANCE (5 minutes)
+            if abs(now - ts) > 300:
+                logger.warning(
+                    "[docuseal_webhook] signature timestamp outside tolerance "
+                    "(skew=%ss) — rejecting",
+                    now - ts,
+                )
+                return False
+            signed = f"{ts}.".encode("utf-8") + payload
+            expected = hmac.new(secret.encode("utf-8"), signed, hashlib.sha256).hexdigest()
+            if hmac.compare_digest(expected, provided.lower()):
+                return True
+            logger.warning("[docuseal_webhook] invalid DocuSeal timestamp.hmac signature — rejecting")
+            return False
+
+    # Legacy / non-DocuSeal hex or sha256=hex over raw body only
+    legacy = sig.lower()
+    if legacy.startswith("sha256="):
+        legacy = legacy[7:]
+    expected_legacy = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+    ok = hmac.compare_digest(expected_legacy, legacy)
     if not ok:
         logger.warning("[docuseal_webhook] invalid signature — rejecting")
     return ok
