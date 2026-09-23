@@ -45,3 +45,18 @@ def test_clear_cooldown():
     assert rl.is_cooled_down()
     rl.clear_cooldown()
     assert not rl.is_cooled_down()
+
+
+def test_scrape_raises_during_cooldown_instead_of_empty():
+    """Cooldown skips must surface as errors, not silent status=empty."""
+    from scrapers.counties.lee import LeeCountyScraper
+
+    rl.record_429("unit-test throttle", cooldown_s=120)
+    try:
+        try:
+            LeeCountyScraper().scrape()
+            assert False, "expected RuntimeError during cooldown"
+        except RuntimeError as exc:
+            assert "rate-limit cooldown" in str(exc)
+    finally:
+        rl.clear_cooldown()
