@@ -35,6 +35,15 @@ SECOND_CHARS = string.ascii_lowercase + string.digits
 
 
 class RichlandSCScraper(BaseScraper):
+    # 2026-09-23 smoke: JMSOnline returns maintenance page only; list view also
+    # invents RIC_{last}_{date}_{age} keys (not source-issued). Hold until portal
+    # returns a real Inmate/Booking # on the broad list.
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "Richland JMSOnline under maintenance (2026-09-23); list view has no "
+        "source-issued booking key (synthetic RIC_ keys forbidden)."
+    )
+
     @property
     def county(self) -> str:
         return "Richland"
