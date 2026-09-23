@@ -94,6 +94,10 @@ class LeeCountyScraper(BaseScraper):
         super().__init__()
         # Lazy StealthSession; sticky IP across pagination/enrichment
         self._stealth = None  # None=uninit, False=unavailable, else session
+        # Per-run fetch telemetry — distinguishes true empty vs blocked/failed
+        self._fetch_ok_pages = 0
+        self._fetch_errors: List[str] = []
+        self._fetch_rate_limited = False
 
     @property
     def county(self) -> str:
@@ -104,8 +108,47 @@ class LeeCountyScraper(BaseScraper):
         return "FL"
 
     def scrape(self) -> List[ArrestRecord]:
-        """Main scrape pipeline: fetch bookings → enrich with charges → return records."""
+        """Main scrape pipeline with transient outer retries.
+
+        Cooldown / 429 always raise immediately (status=error) — never retry
+        into a hot throttle. Other fetch failures back off and retry so VPS
+        transient CF/connect blips self-recover within one scheduled run.
+        """
+        last_exc: Optional[BaseException] = None
+        attempts = RETRY_LIMIT + 1
+        for attempt in range(attempts):
+            try:
+                return self._scrape_once()
+            except RuntimeError as exc:
+                last_exc = exc
+                msg = str(exc).lower()
+                # Never retry into an active /32 cooldown or hard 429.
+                if "rate-limit cooldown" in msg or "http 429" in msg:
+                    raise
+                if attempt >= attempts - 1:
+                    raise
+                sleep_s = BACKOFF_BASE_S * (2 ** attempt) + random.uniform(0, BACKOFF_BASE_S)
+                logger.warning(
+                    "[Lee] transient scrape failure (attempt %s/%s) — retry in %.1fs: %s",
+                    attempt + 1,
+                    attempts,
+                    sleep_s,
+                    exc,
+                )
+                invalidate_lee_origin_cache()
+                self._cleanup()
+                time.sleep(sleep_s)
+            except Exception:
+                raise
+        assert last_exc is not None
+        raise last_exc
+
+    def _scrape_once(self) -> List[ArrestRecord]:
+        """Single scrape attempt: fetch bookings → enrich → return records."""
         start_time = time.time()
+        self._fetch_ok_pages = 0
+        self._fetch_errors = []
+        self._fetch_rate_limited = False
 
         try:
             # Hard stop if Lee public-api /32 throttle is already tripped.
@@ -141,6 +184,25 @@ class LeeCountyScraper(BaseScraper):
             logger.info(f"📥 Total fetched: {len(raw_arrests)}")
 
             if not raw_arrests:
+                # Honest empty: only when at least one 200 OK page landed.
+                # Fetch-all-failed / mid-run cooldown / 429 → status=error.
+                if self._fetch_rate_limited or is_cooled_down():
+                    st = cooldown_status()
+                    raise RuntimeError(
+                        "Lee public-api rate-limit tripped mid-fetch "
+                        f"({st['seconds_remaining']:.0f}s remaining); "
+                        "no bookings recovered"
+                    )
+                if self._fetch_ok_pages == 0:
+                    detail = "; ".join(self._fetch_errors[:5]) or "no response"
+                    raise RuntimeError(
+                        f"Lee public-api fetch failed (no successful pages): {detail}"
+                    )
+                logger.info(
+                    "[Lee] True empty roster (ok_pages=%s, errors=%s)",
+                    self._fetch_ok_pages,
+                    len(self._fetch_errors),
+                )
                 return []
 
             # Prefer highest booking numbers first (newest) for enrichment budget
@@ -240,12 +302,17 @@ class LeeCountyScraper(BaseScraper):
     def _fetch_with_pagination(
         self, params: Dict[str, str]
     ) -> List[Dict[str, Any]]:
-        """Paginate through the API until exhausted (or rate-limited)."""
+        """Paginate through the API until exhausted (or rate-limited).
+
+        Updates ``_fetch_ok_pages`` / ``_fetch_errors`` / ``_fetch_rate_limited``
+        so ``_scrape_once`` can tell true empty roster from a failed scrape.
+        """
         all_records: List[Dict[str, Any]] = []
         offset = 0
 
         for page in range(MAX_PAGES):
             if is_cooled_down():
+                self._fetch_rate_limited = True
                 logger.error(
                     "[Lee] Aborting pagination — rate-limit cooldown "
                     "(%.0fs left)",
@@ -263,22 +330,29 @@ class LeeCountyScraper(BaseScraper):
 
             resp = self._http_fetch(url, params=query)
             if resp is None:
+                self._fetch_errors.append(f"page{page + 1}:no_response")
                 logger.warning("⚠️ API returned no response")
                 break
             if note_response(resp):
+                self._fetch_rate_limited = True
+                self._fetch_errors.append(f"page{page + 1}:HTTP_429")
                 logger.error("[Lee] HTTP 429 — stopping pagination to protect quota")
                 break
             if resp.status_code != 200:
                 code = resp.status_code
+                self._fetch_errors.append(f"page{page + 1}:HTTP_{code}")
                 logger.warning(f"⚠️ API returned status {code}")
                 break
 
             try:
                 data = resp.json()
             except ValueError:
+                self._fetch_errors.append(f"page{page + 1}:bad_json")
                 logger.warning("⚠️ Failed to parse JSON (likely HTML error page)")
                 break
 
+            # Successful HTTP+JSON page (even if the roster slice is empty).
+            self._fetch_ok_pages += 1
             records = self._extract_records(data)
             if not records:
                 logger.info(f"ℹ️ No more records at page {page + 1}")
