@@ -3,7 +3,7 @@ ShamrockLeads — SwipeSimple Invoice Service (Option 2 — locked HTTP contract
 ==============================================================================
 Production path:
   1) POST form-urlencoded https://swipesimple.com/invoices  (Rails create draft)
-  2) Resolve invoice_id after 302 (best-effort)
+  2) Resolve invoice_id after 302 (best-effort; prefer /api/v4/invoices?reference_id=)
   3) POST /api/v4/invoices/{id}/copy_link → web payment URL
 
 Playwright (`swipesimple_playwright_bootstrap.py`) = session/CSRF refresh ONLY.
@@ -15,8 +15,10 @@ HARD RULES (fail-closed):
   - never invent premiums or payment links
   - never log/echo session cookies, CSRF tokens, or other secrets
   - LIVE HTTP gated by SWIPESIMPLE_LIVE=1 (default OFF)
+  - Customer dispatch gated by SWIPESIMPLE_DISPATCH_LIVE=1 (default OFF / dry-run)
 
-See dashboard/services/SWIPESIMPLE_INVOICE_CONTRACT.md for the locked capture.
+See dashboard/services/SWIPESIMPLE_INVOICE_CONTRACT.md and
+dashboard/services/SWIPESIMPLE_PRODUCTION_CHECKLIST.md.
 """
 from __future__ import annotations
 
@@ -26,7 +28,7 @@ import re
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Dict, List, Literal, Optional, Tuple
-from urllib.parse import urlencode, urljoin
+from urllib.parse import quote, urlencode, urljoin
 
 from dashboard.extensions import get_collection
 
@@ -48,9 +50,10 @@ _DEFAULT_BASE_URL = "https://swipesimple.com"
 _DEFAULT_MERCHANT_ACCOUNT_ID = "acc_bd9fed047bd6f7c6"
 _DEFAULT_CATALOG_ITEM_ID = "im_bae23df0a0cb4e01a688bdd6bf1"
 _DEFAULT_CATALOG_ITEM_NAME = "Bail Bond Premium"
-# Rails common path for authenticity_token; confirm in prod if CSRF fetch fails.
-_NEW_INVOICE_PATH = "/invoices/new"
+# Rails common path for authenticity_token; overridable via env.
+_DEFAULT_NEW_INVOICE_PATH = "/invoices/new"
 _CREATE_INVOICE_PATH = "/invoices"
+_LIST_INVOICES_API = "/api/v4/invoices"
 _COPY_LINK_PATH_TMPL = "/api/v4/invoices/{invoice_id}/copy_link"
 _AMOUNT_TOLERANCE = Decimal("0.01")
 
@@ -95,6 +98,32 @@ def _require_live() -> None:
         )
 
 
+def dispatch_live_enabled() -> bool:
+    """
+    Gate for outbound BlueBubbles / email customer messages from dispatch_invoice.
+    Default OFF: dry-run builds payload and logs intent only.
+    Set SWIPESIMPLE_DISPATCH_LIVE=1 only after Brendan go-ahead (separate from HTTP LIVE).
+    """
+    raw = (os.getenv("SWIPESIMPLE_DISPATCH_LIVE") or "").strip().lower()
+    return raw in _LIVE_TRUTHY
+
+
+def new_invoice_path() -> str:
+    """GET path for CSRF / authenticity_token HTML (env SWIPESIMPLE_NEW_INVOICE_PATH)."""
+    raw = (os.getenv("SWIPESIMPLE_NEW_INVOICE_PATH") or "").strip()
+    if not raw:
+        return _DEFAULT_NEW_INVOICE_PATH
+    if not raw.startswith("/"):
+        raw = "/" + raw
+    return raw.rstrip("/") or _DEFAULT_NEW_INVOICE_PATH
+
+
+def share_invoice_on_promote_enabled() -> bool:
+    """Opt-in hook for intake promote → Share Invoice (default OFF)."""
+    raw = (os.getenv("SWIPESIMPLE_SHARE_INVOICE_ON_PROMOTE") or "").strip().lower()
+    return raw in _LIVE_TRUTHY
+
+
 def load_swipesimple_session_config() -> Dict[str, Any]:
     """
     Load session-shaped config for HTTP replay.
@@ -105,7 +134,10 @@ def load_swipesimple_session_config() -> Dict[str, Any]:
       SWIPESIMPLE_MERCHANT_ID                        (optional; default locked merchant)
       SWIPESIMPLE_CATALOG_ITEM_ID / _NAME            (optional; default Bail Bond Premium)
       SWIPESIMPLE_BASE_URL                           (optional; default https://swipesimple.com)
+      SWIPESIMPLE_NEW_INVOICE_PATH                   (optional; default /invoices/new)
       SWIPESIMPLE_LIVE                               (must be 1/true for outbound HTTP)
+      SWIPESIMPLE_DISPATCH_LIVE                      (must be 1/true to send BB/email)
+      SWIPESIMPLE_SHARE_INVOICE_ON_PROMOTE           (opt-in intake promote hook)
 
     Returns metadata only (presence flags + non-secret base URL / IDs).
     """
@@ -118,10 +150,13 @@ def load_swipesimple_session_config() -> Dict[str, Any]:
         (os.getenv("SWIPESIMPLE_CATALOG_ITEM_NAME") or "").strip() or _DEFAULT_CATALOG_ITEM_NAME
     )
     base_url = (os.getenv("SWIPESIMPLE_BASE_URL") or _DEFAULT_BASE_URL).strip().rstrip("/")
+    csrf_path = new_invoice_path()
 
     cfg = {
         "base_url": base_url,
+        "new_invoice_path": csrf_path,
         "live_enabled": live_http_enabled(),
+        "dispatch_live_enabled": dispatch_live_enabled(),
         "has_session": bool(session),
         "has_cookie_jar": bool(cookie_jar),
         "has_csrf": bool(csrf),
@@ -134,10 +169,13 @@ def load_swipesimple_session_config() -> Dict[str, Any]:
         "_csrf": csrf or None,
     }
     logger.info(
-        "[ss_invoice] session config loaded base_url=%s live=%s has_session=%s "
-        "has_cookie_jar=%s has_csrf=%s merchant_id_set=%s catalog_item_id_set=%s",
+        "[ss_invoice] session config loaded base_url=%s new_invoice_path=%s live=%s "
+        "dispatch_live=%s has_session=%s has_cookie_jar=%s has_csrf=%s "
+        "merchant_id_set=%s catalog_item_id_set=%s",
         base_url,
+        csrf_path,
         cfg["live_enabled"],
+        cfg["dispatch_live_enabled"],
         cfg["has_session"],
         cfg["has_cookie_jar"],
         cfg["has_csrf"],
@@ -220,6 +258,7 @@ async def _load_bond_by_id(bond_id: str) -> Optional[Dict[str, Any]]:
     clauses: list[dict] = [
         {"bond_case_id": bond_id},
         {"bond_id": bond_id},
+        {"booking_number": bond_id},
     ]
     try:
         from bson import ObjectId
@@ -258,13 +297,20 @@ def _bond_booking(bond: Dict[str, Any]) -> str:
 
 
 def _bond_customer_fields(bond: Dict[str, Any]) -> Dict[str, str]:
-    """Map BondCase → SwipeSimple customer form fields (no secrets)."""
+    """
+    Map BondCase → SwipeSimple customer form fields (no secrets).
+
+    Prefer indemnitor (payer) name/phone/email; fall back to defendant.
+    Empty customer_id is OK: SwipeSimple accepts new-customer create via
+    nested name/email/phone when invoice[customer][id] is blank (DevTools
+    capture used a known cus_* id when one already existed).
+    """
     name = (
         str(
-            bond.get("defendant_name")
-            or bond.get("Defendant_Name")
-            or bond.get("indemnitor_name")
+            bond.get("indemnitor_name")
             or bond.get("Indemnitor_Name")
+            or bond.get("defendant_name")
+            or bond.get("Defendant_Name")
             or ""
         ).strip()
     )
@@ -272,12 +318,14 @@ def _bond_customer_fields(bond: Dict[str, Any]) -> Dict[str, str]:
         bond.get("indemnitor_email")
         or bond.get("Indemnitor_Email")
         or bond.get("defendant_email")
+        or bond.get("Defendant_Email")
         or ""
     ).strip()
     phone = str(
         bond.get("indemnitor_phone")
         or bond.get("Indemnitor_Phone")
         or bond.get("defendant_phone")
+        or bond.get("Defendant_Phone")
         or ""
     ).strip()
     customer_id = str(
@@ -289,7 +337,7 @@ def _bond_customer_fields(bond: Dict[str, Any]) -> Dict[str, str]:
         "name": name,
         "email": email,
         "phone": phone,
-        "customer_id": customer_id,
+        "customer_id": customer_id,  # empty string OK for new customer
     }
 
 
@@ -325,6 +373,7 @@ def build_create_invoice_form(
     """
     Build Rails form-urlencoded field list matching the locked DevTools capture.
     Amounts are integer cents. Does not include secret logging.
+    Empty customer_id is intentional for new customers (name/email/phone still sent).
     """
     cust_id = (customer.get("customer_id") or "").strip()
     name = (customer.get("name") or "").strip()
@@ -355,24 +404,38 @@ def build_create_invoice_form(
     ]
 
 
-_AUTH_TOKEN_RE = re.compile(
-    r'name=["\']authenticity_token["\'][^>]*value=["\']([^"\']+)["\']'
-    r'|value=["\']([^"\']+)["\'][^>]*name=["\']authenticity_token["\']'
-    r'|name=["\']csrf-token["\'][^>]*content=["\']([^"\']+)["\']'
-    r'|content=["\']([^"\']+)["\'][^>]*name=["\']csrf-token["\']',
-    re.IGNORECASE,
+_AUTH_TOKEN_PATTERNS = (
+    re.compile(
+        r'<input[^>]*name=["\']authenticity_token["\'][^>]*value=["\']([^"\']+)["\']',
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r'<input[^>]*value=["\']([^"\']+)["\'][^>]*name=["\']authenticity_token["\']',
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r'<meta[^>]*name=["\']csrf-token["\'][^>]*content=["\']([^"\']+)["\']',
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r'<meta[^>]*content=["\']([^"\']+)["\'][^>]*name=["\']csrf-token["\']',
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r'["\']authenticity_token["\']\s*[:=]\s*["\']([^"\']+)["\']',
+        re.IGNORECASE,
+    ),
 )
 
 
 def _parse_authenticity_token(html: str) -> Optional[str]:
+    """Extract Rails authenticity_token or meta csrf-token from HTML (never log value)."""
     if not html:
         return None
-    m = _AUTH_TOKEN_RE.search(html)
-    if not m:
-        return None
-    for g in m.groups():
-        if g:
-            return g
+    for pat in _AUTH_TOKEN_PATTERNS:
+        m = pat.search(html)
+        if m and m.group(1):
+            return m.group(1)
     return None
 
 
@@ -382,10 +445,9 @@ async def _fetch_csrf(cfg: Dict[str, Any]) -> str:
 
     Order:
       1. Cached SWIPESIMPLE_CSRF_TOKEN from env (bootstrap may refresh it)
-      2. GET {base}/invoices/new with Cookie — parse HTML
+      2. GET {base}{SWIPESIMPLE_NEW_INVOICE_PATH|/invoices/new} with Cookie — parse HTML
 
-    TODO: confirm _NEW_INVOICE_PATH if production uses a non-Rails path
-    (e.g. SPA route). Cookie header is always wired from SESSION / COOKIE_JAR.
+    Cookie header is always wired from SESSION / COOKIE_JAR. Never log token.
     """
     cached = (_secret_value(cfg, "_csrf") or "").strip()
     if cached:
@@ -397,16 +459,16 @@ async def _fetch_csrf(cfg: Dict[str, Any]) -> str:
     if not cookie:
         raise SwipeSimpleInvoiceError("swipesimple_session_not_configured")
 
-    # Lazy import so default-OFF import path never pulls httpx until needed.
     import httpx
 
-    url = urljoin(cfg["base_url"] + "/", _NEW_INVOICE_PATH.lstrip("/"))
+    csrf_path = str(cfg.get("new_invoice_path") or new_invoice_path())
+    url = urljoin(cfg["base_url"] + "/", csrf_path.lstrip("/"))
     headers = {
         "Accept": "text/html,application/xhtml+xml",
         "Cookie": cookie,
         "User-Agent": "ShamrockLeads-SwipeSimpleInvoice/1.0",
     }
-    logger.info("[ss_invoice] CSRF fetch GET path=%s (cookie present, not logged)", _NEW_INVOICE_PATH)
+    logger.info("[ss_invoice] CSRF fetch GET path=%s (cookie present, not logged)", csrf_path)
     async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
         resp = await client.get(url, headers=headers)
     if resp.status_code >= 400:
@@ -435,12 +497,13 @@ async def _http_create_invoice(
 
     url = urljoin(cfg["base_url"] + "/", _CREATE_INVOICE_PATH.lstrip("/"))
     body = urlencode(form_fields)
+    csrf_path = str(cfg.get("new_invoice_path") or new_invoice_path())
     headers = {
         "Accept": "text/html,application/xhtml+xml",
         "Content-Type": "application/x-www-form-urlencoded",
         "Cookie": cookie,
         "Origin": cfg["base_url"],
-        "Referer": urljoin(cfg["base_url"] + "/", _NEW_INVOICE_PATH.lstrip("/")),
+        "Referer": urljoin(cfg["base_url"] + "/", csrf_path.lstrip("/")),
         "User-Agent": "ShamrockLeads-SwipeSimpleInvoice/1.0",
     }
     logger.info(
@@ -458,8 +521,6 @@ async def _http_create_invoice(
         bool(location),
     )
     if resp.status_code not in (302, 303, 301):
-        # Some stacks may 200 the index after PRG; treat non-3xx as soft continue
-        # only when body hints success — otherwise fail-closed.
         if resp.status_code >= 400:
             raise SwipeSimpleInvoiceError(f"create_invoice_http_{resp.status_code}")
         logger.warning(
@@ -473,6 +534,66 @@ async def _http_create_invoice(
     }
 
 
+def _extract_invoice_id_from_text(text: str, booking_number: str) -> Optional[str]:
+    """Parse vendor invoice id near reference_id / booking # from HTML or JSON text."""
+    if not text or not booking_number:
+        return None
+    booked = re.escape(booking_number)
+    patterns = (
+        rf'"id"\s*:\s*"([A-Za-z0-9_-]+)"[^}}]{{0,400}}"reference_id"\s*:\s*"{booked}"',
+        rf'"reference_id"\s*:\s*"{booked}"[^}}]{{0,400}}"id"\s*:\s*"([A-Za-z0-9_-]+)"',
+        rf'"invoice_id"\s*:\s*"([A-Za-z0-9_-]+)"[^}}]{{0,400}}"reference_id"\s*:\s*"{booked}"',
+        rf'data-invoice-id=["\']([A-Za-z0-9_-]+)["\'][^>]{{0,200}}{booked}',
+        rf'/invoices/([A-Za-z0-9_-]+)[^"\']*["\'][^>]*>\s*{booked}',
+        rf'/api/v4/invoices/([A-Za-z0-9_-]+)',
+    )
+    skip = {"new", "edit", "index", "search", ""}
+    for pat in patterns:
+        mm = re.search(pat, text, re.IGNORECASE | re.DOTALL)
+        if mm:
+            cand = mm.group(1)
+            if cand not in skip:
+                return cand
+    return None
+
+
+def _extract_invoice_id_from_json(payload: Any, booking_number: str) -> Optional[str]:
+    """Walk JSON list/dict for invoice whose reference_id matches booking #."""
+    booked = str(booking_number or "").strip()
+    if not booked:
+        return None
+
+    def _walk(node: Any) -> Optional[str]:
+        if isinstance(node, dict):
+            ref = str(
+                node.get("reference_id")
+                or node.get("referenceId")
+                or node.get("invoice_number")
+                or node.get("number")
+                or ""
+            ).strip()
+            inv_id = str(
+                node.get("id")
+                or node.get("invoice_id")
+                or node.get("invoiceId")
+                or ""
+            ).strip()
+            if ref == booked and inv_id and inv_id not in ("new", "edit"):
+                return inv_id
+            for v in node.values():
+                found = _walk(v)
+                if found:
+                    return found
+        elif isinstance(node, list):
+            for item in node:
+                found = _walk(item)
+                if found:
+                    return found
+        return None
+
+    return _walk(payload)
+
+
 async def _resolve_invoice_id_after_create(
     *,
     booking_number: str,
@@ -480,15 +601,16 @@ async def _resolve_invoice_id_after_create(
     cfg: Dict[str, Any],
 ) -> str:
     """
-    Best-effort invoice_id after create 302 (no JSON body).
+    Resolve vendor invoice_id after create 302 (often no JSON body / no id in Location).
 
-    Strategy:
-      1. Parse Location for /invoices/<id> if present
-      2. Parse create response HTML for invoice id tokens
-      3. GET /invoices (or /api/v4/invoices) and match reference_id / booking #
+    Strategy (fail-closed — never invent an id):
+      1. Parse Location for /invoices/<id> if present (create uses follow_redirects=False)
+      2. Parse create response body for id near booking #
+      3. Prefer GET /api/v4/invoices?reference_id=<booking#> (JSON walk)
+      4. Fallback GET /api/v4/invoices?q=… then HTML /invoices list parse
 
-    OPEN GAP: production may only list invoices in HTML/SPA without a stable
-    id in the 302 Location. If unresolved, raise — do not invent an id.
+    If unresolved: raise invoice_id_unresolved_after_create_302.
+    Caller MUST mark bond pending and MUST NOT create a duplicate draft.
     """
     location = str(create_result.get("location") or "")
     m = re.search(r"/invoices/([A-Za-z0-9_-]+)", location)
@@ -497,19 +619,11 @@ async def _resolve_invoice_id_after_create(
         return m.group(1)
 
     body = str(create_result.get("body") or "")
-    # Prefer ids near the booking/reference we just created.
-    for pat in (
-        rf'data-invoice-id=["\']([A-Za-z0-9_-]+)["\'][^>]*>[^<]*{re.escape(booking_number)}',
-        rf'/invoices/([A-Za-z0-9_-]+)[^"]*"[^>]*>\s*{re.escape(booking_number)}',
-        rf'"id"\s*:\s*"([A-Za-z0-9_-]+)"[^}}]*"reference_id"\s*:\s*"{re.escape(booking_number)}"',
-        rf'"reference_id"\s*:\s*"{re.escape(booking_number)}"[^}}]*"id"\s*:\s*"([A-Za-z0-9_-]+)"',
-    ):
-        mm = re.search(pat, body, re.IGNORECASE | re.DOTALL)
-        if mm:
-            logger.info("[ss_invoice] invoice_id from create body pattern")
-            return mm.group(1)
+    found = _extract_invoice_id_from_text(body, booking_number)
+    if found:
+        logger.info("[ss_invoice] invoice_id from create body pattern")
+        return found
 
-    # Live list/search fallback (gated).
     _require_live()
     cookie = _cookie_header(cfg)
     if not cookie:
@@ -518,40 +632,54 @@ async def _resolve_invoice_id_after_create(
     import httpx
 
     headers = {
-        "Accept": "text/html,application/json",
+        "Accept": "application/json, text/html",
         "Cookie": cookie,
         "User-Agent": "ShamrockLeads-SwipeSimpleInvoice/1.0",
     }
+    q = quote(booking_number, safe="")
     list_paths = (
-        f"/api/v4/invoices?reference_id={booking_number}",
-        f"/api/v4/invoices?q={booking_number}",
+        f"{_LIST_INVOICES_API}?reference_id={q}",
+        f"{_LIST_INVOICES_API}?q={q}",
+        f"{_LIST_INVOICES_API}?search={q}",
         "/invoices",
     )
     async with httpx.AsyncClient(follow_redirects=True, timeout=45.0) as client:
         for path in list_paths:
             url = urljoin(cfg["base_url"] + "/", path.lstrip("/"))
-            logger.info("[ss_invoice] resolve invoice_id via GET path=%s", path.split("?")[0])
+            logger.info(
+                "[ss_invoice] resolve invoice_id via GET path=%s",
+                path.split("?")[0],
+            )
             try:
                 resp = await client.get(url, headers=headers)
             except Exception as exc:
-                logger.warning("[ss_invoice] list fetch failed path=%s err=%s", path.split("?")[0], exc)
+                logger.warning(
+                    "[ss_invoice] list fetch failed path=%s err=%s",
+                    path.split("?")[0],
+                    exc,
+                )
                 continue
-            text = resp.text or ""
-            for pat in (
-                rf'"id"\s*:\s*"([A-Za-z0-9_-]+)"[^}}]*"reference_id"\s*:\s*"{re.escape(booking_number)}"',
-                rf'"reference_id"\s*:\s*"{re.escape(booking_number)}"[^}}]*"id"\s*:\s*"([A-Za-z0-9_-]+)"',
-                rf'/invoices/([A-Za-z0-9_-]+)[^"]*"[^>]*>\s*{re.escape(booking_number)}',
-                rf'data-invoice-id=["\']([A-Za-z0-9_-]+)["\'][^>]*>[^<]*{re.escape(booking_number)}',
-            ):
-                mm = re.search(pat, text, re.IGNORECASE | re.DOTALL)
-                if mm:
-                    logger.info("[ss_invoice] invoice_id from list/search")
-                    return mm.group(1)
+            ctype = (resp.headers.get("content-type") or "").lower()
+            raw = resp.text or ""
+            if "json" in ctype or raw.lstrip().startswith(("{", "[")):
+                try:
+                    data = resp.json()
+                    jid = _extract_invoice_id_from_json(data, booking_number)
+                    if jid:
+                        logger.info("[ss_invoice] invoice_id from API JSON reference_id match")
+                        return jid
+                except Exception:
+                    pass
+            tid = _extract_invoice_id_from_text(raw, booking_number)
+            if tid:
+                logger.info("[ss_invoice] invoice_id from list/search text")
+                return tid
 
     raise SwipeSimpleInvoiceError(
         "invoice_id_unresolved_after_create_302 — "
-        "create likely succeeded (draft) but copy_link needs vendor id; "
-        "follow-up: harden list/API parse or capture Location from production"
+        "create likely succeeded (draft may already exist for this booking #); "
+        "do NOT create another invoice. Mark pending + resolve id via "
+        "/api/v4/invoices?reference_id= or ops list scrape before copy_link."
     )
 
 
@@ -605,7 +733,6 @@ async def _http_copy_link(*, invoice_id: str, cfg: Dict[str, Any]) -> str:
             link = text.split()[0].strip().strip('"')
 
     if not link.startswith("http"):
-        # Last resort: bare URL in body
         m = re.search(r"https?://[^\s\"'<>]+", resp.text or "")
         if m:
             link = m.group(0)
@@ -654,7 +781,6 @@ async def _share_invoice_http(
     )
     payment_link = await _http_copy_link(invoice_id=invoice_id, cfg=cfg)
 
-    # Dollars for callers / mismatch checks (BondCase space).
     return {
         "payment_link": payment_link,
         "invoice_id": invoice_id,
@@ -663,6 +789,18 @@ async def _share_invoice_http(
         "amount_cents": cents,
         "bond_id": bond_id,
         "create_status": create_result.get("status_code"),
+    }
+
+
+def _bond_update_filter(bond: Dict[str, Any], bond_id: str, booking_number: str) -> Dict[str, Any]:
+    booking = _bond_booking(bond) or booking_number
+    return {
+        "$or": [
+            {"booking_number": booking},
+            {"bond_case_id": bond_id},
+            {"bond_id": bond_id},
+            {"swipesimple_invoice_number": booking_number},
+        ]
     }
 
 
@@ -682,18 +820,44 @@ async def _persist_invoice_fields(
         "swipesimple_payment_link": payment_link,
         "swipesimple_invoice_created_at": now_iso,
         "swipesimple_invoice_bond_id": bond_id,
+        "swipesimple_invoice_unresolved": False,
         "payment_status": bond.get("payment_status") or "sent",
         "updated_at": now_iso,
     }
-    booking = _bond_booking(bond) or booking_number
-    filt: Dict[str, Any] = {
-        "$or": [{"booking_number": booking}, {"bond_case_id": bond_id}, {"bond_id": bond_id}]
-    }
+    filt = _bond_update_filter(bond, bond_id, booking_number)
     for coll_name in ("bond_cases", "active_bonds"):
         try:
             await get_collection(coll_name).update_one(filt, {"$set": patch})
         except Exception as exc:
             logger.warning("[ss_invoice] persist on %s failed: %s", coll_name, exc)
+
+
+async def _persist_unresolved_create(
+    bond: Dict[str, Any],
+    *,
+    bond_id: str,
+    booking_number: str,
+    create_status: Any = None,
+) -> None:
+    """
+    Fail-closed marker after create likely succeeded but invoice_id unresolved.
+    Prevents duplicate draft create on retry until ops / API resolve the id.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    patch = {
+        "swipesimple_invoice_number": booking_number,
+        "swipesimple_invoice_bond_id": bond_id,
+        "swipesimple_invoice_unresolved": True,
+        "swipesimple_invoice_unresolved_at": now_iso,
+        "swipesimple_invoice_create_status": create_status,
+        "updated_at": now_iso,
+    }
+    filt = _bond_update_filter(bond, bond_id, booking_number)
+    for coll_name in ("bond_cases", "active_bonds"):
+        try:
+            await get_collection(coll_name).update_one(filt, {"$set": patch})
+        except Exception as exc:
+            logger.warning("[ss_invoice] unresolved persist on %s failed: %s", coll_name, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -713,6 +877,9 @@ async def create_locked_invoice(bond_id: str) -> Dict[str, Any]:
 
     Idempotent: if swipesimple_payment_link already stored for this bond_id,
     return the existing link without another HTTP create.
+
+    If a prior create left swipesimple_invoice_unresolved=True for this booking,
+    fail-closed (do not create a duplicate draft).
     """
     bond_id = str(bond_id or "").strip()
     if not bond_id:
@@ -726,7 +893,6 @@ async def create_locked_invoice(bond_id: str) -> Dict[str, Any]:
     premium = _bond_premium(bond)
     if premium is None:
         raise SwipeSimpleInvoiceError("premium_missing_on_bondcase")
-    # Validate cents conversion early (even before live gate / idempotent miss).
     _ = premium_dollars_to_cents(premium)
 
     existing = _existing_payment_link(bond)
@@ -751,15 +917,57 @@ async def create_locked_invoice(bond_id: str) -> Dict[str, Any]:
             "swipesimple_invoice_id": bond.get("swipesimple_invoice_id"),
         }
 
+    if bond.get("swipesimple_invoice_unresolved") is True and (
+        str(bond.get("swipesimple_invoice_number") or "") == booking_number
+        or str(bond.get("swipesimple_invoice_bond_id") or "") == bond_id
+    ):
+        raise SwipeSimpleInvoiceError(
+            "invoice_create_pending_id_resolution — "
+            "a prior create likely left a draft for this booking #; "
+            "resolve swipesimple_invoice_id (API reference_id lookup) before retrying create"
+        )
+
+    vendor_id_existing = str(bond.get("swipesimple_invoice_id") or "").strip()
+    if vendor_id_existing and not existing:
+        cfg = load_swipesimple_session_config()
+        payment_link = await _http_copy_link(invoice_id=vendor_id_existing, cfg=cfg)
+        await _persist_invoice_fields(
+            bond,
+            bond_id=bond_id,
+            booking_number=booking_number,
+            payment_link=payment_link,
+            invoice_id=vendor_id_existing,
+        )
+        return {
+            "ok": True,
+            "idempotent": False,
+            "copy_link_only": True,
+            "bond_id": bond_id,
+            "booking_number": booking_number,
+            "invoice_number": booking_number,
+            "premium_amount": float(premium),
+            "payment_link": payment_link,
+            "swipesimple_invoice_id": vendor_id_existing,
+        }
+
     cfg = load_swipesimple_session_config()
 
-    http_result = await _share_invoice_http(
-        booking_number=booking_number,
-        premium=premium,
-        bond_id=bond_id,
-        bond=bond,
-        cfg=cfg,
-    )
+    try:
+        http_result = await _share_invoice_http(
+            booking_number=booking_number,
+            premium=premium,
+            bond_id=bond_id,
+            bond=bond,
+            cfg=cfg,
+        )
+    except SwipeSimpleInvoiceError as exc:
+        if "invoice_id_unresolved_after_create_302" in str(exc):
+            await _persist_unresolved_create(
+                bond,
+                bond_id=bond_id,
+                booking_number=booking_number,
+            )
+        raise
 
     payment_link = str(http_result.get("payment_link") or "").strip()
     if not payment_link.startswith("http"):
@@ -790,6 +998,50 @@ async def create_locked_invoice(bond_id: str) -> Dict[str, Any]:
     }
 
 
+def build_dispatch_payload(
+    bond: Dict[str, Any],
+    *,
+    payment_link: str,
+    booking_number: str,
+    premium: Decimal,
+    channel: Channel,
+) -> Dict[str, Any]:
+    """Build BlueBubbles / email payload without sending (safe for dry-run / tests)."""
+    defendant = str(
+        bond.get("defendant_name") or bond.get("Defendant_Name") or ""
+    ).strip()
+    phone = str(
+        bond.get("indemnitor_phone")
+        or bond.get("Indemnitor_Phone")
+        or bond.get("defendant_phone")
+        or ""
+    ).strip()
+    email = str(
+        bond.get("indemnitor_email")
+        or bond.get("Indemnitor_Email")
+        or bond.get("defendant_email")
+        or ""
+    ).strip()
+    body = (
+        f"Shamrock Bail Bonds — premium payment for {defendant or 'your bond'} "
+        f"(booking {booking_number}). Amount due: ${premium:,.2f}.\n"
+        f"Pay Online via SwipeSimple:\n{payment_link}\n"
+    )
+    subject = (
+        f"Shamrock Bail Bonds — Pay premium online "
+        f"(booking {booking_number}, ${premium:,.2f})"
+    )
+    return {
+        "channel": channel,
+        "phone": phone,
+        "email": email,
+        "subject": subject,
+        "body": body,
+        "defendant_name": defendant,
+        "has_recipient": bool(phone if channel == "imessage" else email),
+    }
+
+
 async def dispatch_invoice(
     bond_id: str,
     channel: Channel = "imessage",
@@ -798,8 +1050,9 @@ async def dispatch_invoice(
     Dispatch stored payment link via BlueBubbles (imessage) or email.
 
     Only runs after create_locked_invoice succeeded / link is stored.
-    STUB: does not send — builds payload and returns without calling BB/Gmail.
-    Prefer web payment link; no dual SwipeSimple SMS unless asked later.
+    Default: dry-run — builds payload, logs intent, does NOT send.
+    Live send requires SWIPESIMPLE_DISPATCH_LIVE=1 (separate from HTTP LIVE).
+    Prefer web payment link; no dual SwipeSimple SMS.
     """
     if channel not in ("imessage", "email"):
         raise SwipeSimpleInvoiceError("invalid_channel")
@@ -817,53 +1070,129 @@ async def dispatch_invoice(
     if premium is None:
         raise SwipeSimpleInvoiceError("premium_missing_on_bondcase")
 
-    defendant = (
-        bond.get("defendant_name")
-        or bond.get("Defendant_Name")
-        or ""
-    )
-    phone = (
-        bond.get("indemnitor_phone")
-        or bond.get("Indemnitor_Phone")
-        or ""
-    )
-    email = (
-        bond.get("indemnitor_email")
-        or bond.get("Indemnitor_Email")
-        or ""
+    payload = build_dispatch_payload(
+        bond,
+        payment_link=payment_link,
+        booking_number=booking_number,
+        premium=premium,
+        channel=channel,
     )
 
-    body = (
-        f"Shamrock Bail Bonds — premium payment for {defendant or 'your bond'} "
-        f"(booking {booking_number}). Amount due: ${premium:,.2f}.\n"
-        f"Pay Online via SwipeSimple:\n{payment_link}\n"
-    )
-
+    live = dispatch_live_enabled()
     logger.info(
-        "[ss_invoice] dispatch STUB channel=%s bond_id=%s booking=%s "
-        "has_phone=%s has_email=%s (not sending)",
+        "[ss_invoice] dispatch channel=%s bond_id=%s booking=%s "
+        "has_phone=%s has_email=%s live=%s",
         channel,
         bond_id,
         booking_number,
-        bool(str(phone).strip()),
-        bool(str(email).strip()),
+        bool(payload["phone"]),
+        bool(payload["email"]),
+        live,
     )
 
-    # TODO: wire send_message_universal / GmailReaderService.send_email after
-    # create path is live. Do not send from this stub.
+    if not live:
+        return {
+            "ok": True,
+            "sent": False,
+            "dry_run": True,
+            "stub": True,
+            "channel": channel,
+            "bond_id": bond_id,
+            "booking_number": booking_number,
+            "payment_link": payment_link,
+            "premium_amount": float(premium),
+            "has_recipient": payload["has_recipient"],
+            "preview_body_chars": len(payload["body"]),
+            "payload": {
+                "channel": channel,
+                "has_phone": bool(payload["phone"]),
+                "has_email": bool(payload["email"]),
+                "subject": payload["subject"],
+                "body_chars": len(payload["body"]),
+            },
+            "message": "dispatch dry-run — set SWIPESIMPLE_DISPATCH_LIVE=1 to send",
+        }
+
+    if not payload["has_recipient"]:
+        raise SwipeSimpleInvoiceError("dispatch_missing_recipient")
+
+    sent = False
+    if channel == "imessage":
+        from dashboard.services.bb_client import (
+            bb_send_accepted,
+            normalize_bb_send_result,
+            send_message_universal,
+        )
+
+        raw = await send_message_universal(payload["phone"], payload["body"])
+        send_result = normalize_bb_send_result(raw)
+        sent = bb_send_accepted(send_result)
+    else:
+        from dashboard.services.gmail_reader import GmailReaderService
+
+        gmail = GmailReaderService()
+        if not gmail.is_configured:
+            raise SwipeSimpleInvoiceError("gmail_not_configured")
+        send_result = gmail.send_email(
+            to=payload["email"],
+            subject=payload["subject"],
+            body_text=payload["body"],
+            body_html=payload["body"].replace("\n", "<br>\n"),
+        )
+        sent = bool(send_result.get("success"))
+
     return {
         "ok": True,
-        "sent": False,
-        "stub": True,
+        "sent": bool(sent),
+        "dry_run": False,
+        "stub": False,
         "channel": channel,
         "bond_id": bond_id,
         "booking_number": booking_number,
         "payment_link": payment_link,
         "premium_amount": float(premium),
-        "has_recipient": bool(str(phone).strip() if channel == "imessage" else str(email).strip()),
-        "preview_body_chars": len(body),
-        "message": "dispatch stub — BlueBubbles/email not invoked",
+        "has_recipient": True,
+        "send_result_ok": bool(sent),
+        "message": "dispatch live send attempted" if sent else "dispatch live send failed",
     }
+
+
+async def _find_bond_for_reconcile(booking: str, receipt: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Match bond by booking # / invoice # / reference_id (fail-closed if none)."""
+    ref = str(
+        receipt.get("reference_id")
+        or receipt.get("invoice_number")
+        or receipt.get("swipesimple_invoice_number")
+        or booking
+        or ""
+    ).strip()
+    clauses = [
+        {"booking_number": booking},
+        {"swipesimple_invoice_number": booking},
+        {"bond_case_id": booking},
+    ]
+    if ref and ref != booking:
+        clauses.extend(
+            [
+                {"booking_number": ref},
+                {"swipesimple_invoice_number": ref},
+                {"bond_case_id": ref},
+            ]
+        )
+    vendor_inv = str(receipt.get("invoice_id") or receipt.get("swipesimple_invoice_id") or "").strip()
+    if vendor_inv:
+        clauses.append({"swipesimple_invoice_id": vendor_inv})
+
+    query = {"$or": clauses}
+    for coll_name in ("bond_cases", "active_bonds"):
+        try:
+            doc = await get_collection(coll_name).find_one(query)
+            if doc:
+                doc["_collection"] = coll_name
+                return doc
+        except Exception as exc:
+            logger.warning("[ss_invoice] reconcile lookup %s failed: %s", coll_name, exc)
+    return None
 
 
 async def reconcile_payment(
@@ -871,22 +1200,26 @@ async def reconcile_payment(
     receipt: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
-    Match a paid SwipeSimple receipt → bond PAID + ledger stub.
+    Match a paid SwipeSimple receipt → bond PAID + LedgerService entry.
 
     Idempotent if bond already PAID / payment_status=paid.
-    Prefer matching on booking_number (= invoice #). Receipt dict may carry
-    amount / transaction_id from Gmail poller or webhook.
+    Match on booking_number (= invoice # / reference_id), stored
+    swipesimple_invoice_number, or vendor invoice_id when present.
+
+    Safe without live SwipeSimple polling — callers pass a receipt dict from
+    Gmail poller / webhook / CSV. Optional live poll remains out of scope
+    unless a separately gated helper is added later.
     """
     receipt = receipt or {}
     booking = validate_booking_number(
-        booking_number or receipt.get("booking_number") or ""
+        booking_number
+        or receipt.get("booking_number")
+        or receipt.get("reference_id")
+        or receipt.get("invoice_number")
+        or ""
     )
 
-    bonds_col = get_collection("bond_cases")
-    active_col = get_collection("active_bonds")
-    bond = await bonds_col.find_one({"booking_number": booking})
-    if not bond:
-        bond = await active_col.find_one({"booking_number": booking})
+    bond = await _find_bond_for_reconcile(booking, receipt)
     if not bond:
         raise SwipeSimpleInvoiceError("bond_not_found_for_booking")
 
@@ -906,14 +1239,15 @@ async def reconcile_payment(
 
     now_iso = datetime.now(timezone.utc).isoformat()
     txn = str(receipt.get("transaction_id") or "").strip() or f"SS-RECON-{booking}"
+    paid_amount = float(amount) if amount is not None else (
+        float(expected) if expected is not None else None
+    )
 
     payment_update = {
         "payment_status": "paid",
         "premium_paid": True,
         "payment_received": True,
-        "last_payment_amount": float(amount) if amount is not None else (
-            float(expected) if expected is not None else None
-        ),
+        "last_payment_amount": paid_amount,
         "last_payment_at": now_iso,
         "last_payment_status": "paid",
         "last_transaction_id": txn,
@@ -921,8 +1255,18 @@ async def reconcile_payment(
         "updated_at": now_iso,
     }
 
-    await bonds_col.update_one({"booking_number": booking}, {"$set": payment_update})
-    await active_col.update_one({"booking_number": booking}, {"$set": payment_update})
+    filt = {
+        "$or": [
+            {"booking_number": booking},
+            {"swipesimple_invoice_number": booking},
+            {"bond_case_id": booking},
+        ]
+    }
+    for coll_name in ("bond_cases", "active_bonds"):
+        try:
+            await get_collection(coll_name).update_one(filt, {"$set": payment_update})
+        except Exception as exc:
+            logger.warning("[ss_invoice] reconcile update %s failed: %s", coll_name, exc)
 
     ledger_txn = None
     try:
@@ -933,14 +1277,14 @@ async def reconcile_payment(
                 "booking_number": booking,
                 "type": "payment",
                 "category": "premium",
-                "amount": payment_update["last_payment_amount"] or 0,
+                "amount": paid_amount or 0,
                 "actor": "SwipeSimpleInvoiceService",
-                "notes": "reconcile_payment stub",
+                "notes": "swipesimple reconcile_payment (reference_id=booking #)",
                 "stripe_swipe_ref": txn,
             }
         )
     except Exception as exc:
-        logger.warning("[ss_invoice] ledger stub failed booking=%s: %s", booking, exc)
+        logger.warning("[ss_invoice] ledger entry failed booking=%s: %s", booking, exc)
 
     logger.info(
         "[ss_invoice] reconcile PAID booking=%s ledger_txn=%s",
@@ -954,7 +1298,63 @@ async def reconcile_payment(
         "payment_status": "paid",
         "transaction_id": txn,
         "ledger_transaction_id": ledger_txn,
+        "matched_collection": bond.get("_collection"),
     }
+
+
+async def maybe_issue_share_invoice_for_bond(
+    bond_id: str,
+    *,
+    channel: Channel = "imessage",
+    dispatch: bool = True,
+    source: str = "manual",
+) -> Dict[str, Any]:
+    """
+    Thin integration entrypoint: create_locked_invoice then optional dispatch.
+
+    Fail-closed + idempotent via create_locked_invoice.
+    Call from:
+      - Bond Desk / Paperwork Desk after paperwork-complete (recommended)
+      - intake promote when SWIPESIMPLE_SHARE_INVOICE_ON_PROMOTE=1
+      - Leads Ops manual / queue worker
+
+    Does not invent premiums or links. Live HTTP still requires SWIPESIMPLE_LIVE;
+    customer messages require SWIPESIMPLE_DISPATCH_LIVE.
+    """
+    bond_id = str(bond_id or "").strip()
+    if not bond_id:
+        raise SwipeSimpleInvoiceError("missing_bond_id")
+
+    logger.info(
+        "[ss_invoice] maybe_issue source=%s bond_id=%s dispatch=%s",
+        source,
+        bond_id,
+        dispatch,
+    )
+    create_result = await create_locked_invoice(bond_id)
+    out: Dict[str, Any] = {
+        "ok": True,
+        "source": source,
+        "create": create_result,
+        "dispatch": None,
+    }
+    if not dispatch:
+        return out
+    try:
+        out["dispatch"] = await dispatch_invoice(bond_id, channel=channel)
+    except Exception as exc:
+        logger.warning(
+            "[ss_invoice] dispatch after create failed source=%s bond_id=%s err=%s",
+            source,
+            bond_id,
+            exc,
+        )
+        out["dispatch"] = {
+            "ok": False,
+            "sent": False,
+            "error": str(exc),
+        }
+    return out
 
 
 def assert_premium_matches_bondcase(

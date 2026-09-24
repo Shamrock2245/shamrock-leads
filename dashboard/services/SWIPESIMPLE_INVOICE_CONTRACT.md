@@ -41,7 +41,7 @@
 |----------|----------------|
 | `authenticity_token` | CSRF from new-invoice page (or cached `SWIPESIMPLE_CSRF_TOKEN`) |
 | `invoice[merchant_account_id]` | `acc_bd9fed047bd6f7c6` (default; overridable via env) |
-| `invoice[customer][id]` | Existing SwipeSimple customer id when known; else empty |
+| `invoice[customer][id]` | Existing SwipeSimple customer id when known; **empty OK** for new customer (name/email/phone still sent) |
 | `invoice[customer][name]` | Defendant / indemnitor display name from BondCase |
 | `customer-proxy` | Same as customer id when known |
 | `invoice[email]` | Top-level email (often empty when nested set) |
@@ -81,7 +81,8 @@ BondCase stores premium in **dollars**. Conversion must yield an **exact integer
 3. Parse `authenticity_token` from HTML (`input[name=authenticity_token]` or meta `csrf-token`).
 4. Include token in create form body. Never log the token value.
 
-If the exact new-invoice path differs in production, update `_NEW_INVOICE_PATH` in the service (TODO marked in code).
+Path is configurable via env `SWIPESIMPLE_NEW_INVOICE_PATH` (default `/invoices/new`).
+HTML parse covers `input[name=authenticity_token]` and meta `csrf-token`.
 
 ---
 
@@ -100,7 +101,8 @@ Returns the web payment link we persist and dispatch (BlueBubbles / email).
 
 Create responds `302 Found` → `/invoices` with **no JSON body** and typically **no invoice id in Location**.  
 Service implements best-effort resolution (Location parse → list/search by `reference_id` = booking #).  
-**Open gap:** if list/search cannot resolve id, `copy_link` cannot run — follow-up may need a list API parse or UI scrape via Playwright refresh path (still not primary create).
+Resolution order: Location → create body → **prefer** `GET /api/v4/invoices?reference_id=<booking#>` (JSON walk) → q/search → HTML `/invoices` list.
+**Fail-closed:** if unresolved, raise and set `swipesimple_invoice_unresolved=true` on the bond — **do not create a duplicate draft**. Ops/API must resolve vendor id before `copy_link` / retry create.
 
 ---
 
@@ -115,6 +117,9 @@ Service implements best-effort resolution (Location parse → list/search by `re
 | `SWIPESIMPLE_CATALOG_ITEM_ID` | Optional; default Bail Bond Premium id above |
 | `SWIPESIMPLE_CATALOG_ITEM_NAME` | Optional; default `Bail Bond Premium` |
 | `SWIPESIMPLE_BASE_URL` | Optional; default `https://swipesimple.com` |
+| `SWIPESIMPLE_NEW_INVOICE_PATH` | Optional; default `/invoices/new` |
+| `SWIPESIMPLE_DISPATCH_LIVE` | **`1` / `true` to send BB/email.** Default off — dry-run only. |
+| `SWIPESIMPLE_SHARE_INVOICE_ON_PROMOTE` | Opt-in intake promote → Share Invoice (default off) |
 | `SWIPESIMPLE_USERNAME` / `SWIPESIMPLE_PASSWORD` | Playwright bootstrap login only |
 
 ---
@@ -139,7 +144,8 @@ Related on reconcile: `payment_status`, `premium_paid`, `last_payment_*`, ledger
 
 | Module | Role |
 |--------|------|
-| `swipesimple_invoice_service.py` | Form create + copy_link; `create_locked_invoice` / `dispatch_invoice` / `reconcile_payment` |
+| `swipesimple_invoice_service.py` | Form create + copy_link; `create_locked_invoice` / `dispatch_invoice` / `reconcile_payment` / `maybe_issue_share_invoice_for_bond` |
+| `SWIPESIMPLE_PRODUCTION_CHECKLIST.md` | Human go-live steps (secrets, smoke, merge, deploy) |
 | `swipesimple_playwright_bootstrap.py` | Session / CSRF refresh only |
 | `scripts/swipesimple_session_refresh.py` | CLI wrapper for bootstrap |
 | `packet_payment_link_service.py` | Existing **static** pay-link dispatch (pre–Share Invoice) |
@@ -155,5 +161,9 @@ Related on reconcile: `payment_status`, `premium_paid`, `last_payment_*`, ledger
 - [x] One invoice per bond_id (idempotent)
 - [x] Live HTTP gated by `SWIPESIMPLE_LIVE`
 - [x] Secrets never logged
-- [ ] invoice_id resolution after 302 hardened against production list HTML/API (best-effort stub today)
+- [x] invoice_id resolution: Location → body → `/api/v4/invoices?reference_id=` → list HTML; unresolved marks pending (no duplicate)
+- [x] Dispatch dry-run by default (`SWIPESIMPLE_DISPATCH_LIVE`)
+- [x] Customer mapping; empty customer id OK for new customers
+- [x] Entrypoint `maybe_issue_share_invoice_for_bond` (+ optional promote hook)
 - [ ] Brendan go-ahead before setting `SWIPESIMPLE_LIVE=1` in production
+- [ ] Brendan go-ahead before setting `SWIPESIMPLE_DISPATCH_LIVE=1`
