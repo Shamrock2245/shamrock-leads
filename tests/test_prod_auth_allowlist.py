@@ -249,21 +249,21 @@ def test_health_endpoint_drops_total_arrests():
 
 
 def test_payment_webhook_rejects_empty_and_invalid_payload():
-    """POST /api/webhooks/payment must fail closed on empty/invalid payload."""
-    # Empty body -> 400
-    resp = client.post("/api/webhooks/payment", json={})
-    assert resp.status_code == 400
-    assert "payload" in resp.json().get("error", "").lower()
+    """POST /api/webhooks/payment must fail closed on empty/invalid payload (non-prod)."""
+    # Non-production + no secret: payload validation still applies (dev path).
+    with patch.dict(os.environ, {"ENV": "test", "ENVIRONMENT": "", "SWIPESIMPLE_WEBHOOK_SECRET": ""}, clear=False):
+        resp = client.post("/api/webhooks/payment", json={})
+        assert resp.status_code == 400
+        assert "payload" in resp.json().get("error", "").lower()
 
-    # Dummy body missing event_type / transaction_id -> 400
-    resp = client.post("/api/webhooks/payment", json={"hello": "world"})
-    assert resp.status_code == 400
-    assert "Missing required fields" in resp.json().get("error", "")
+        resp = client.post("/api/webhooks/payment", json={"hello": "world"})
+        assert resp.status_code == 400
+        assert "Missing required fields" in resp.json().get("error", "")
 
 
 def test_payment_webhook_validates_signature_when_configured():
     """POST /api/webhooks/payment must enforce signature when secret is set."""
-    with patch.dict(os.environ, {"SWIPESIMPLE_WEBHOOK_SECRET": "supersecretkey"}):
+    with patch.dict(os.environ, {"SWIPESIMPLE_WEBHOOK_SECRET": "supersecretkey", "ENV": "production"}):
         # Missing signature
         resp = client.post(
             "/api/webhooks/payment",
@@ -271,6 +271,38 @@ def test_payment_webhook_validates_signature_when_configured():
         )
         assert resp.status_code == 401
         assert "signature" in resp.json().get("error", "").lower()
+
+
+def test_payment_webhook_production_requires_secret_via_env():
+    """ENV=production (VPS convention) must 503 when SWIPESIMPLE_WEBHOOK_SECRET unset."""
+    with patch.dict(
+        os.environ,
+        {"ENV": "production", "ENVIRONMENT": "", "SWIPESIMPLE_WEBHOOK_SECRET": ""},
+        clear=False,
+    ):
+        os.environ.pop("SWIPESIMPLE_WEBHOOK_SECRET", None)
+        os.environ["ENV"] = "production"
+        os.environ.pop("ENVIRONMENT", None)
+        resp = client.post(
+            "/api/webhooks/payment",
+            json={"event_type": "payment.completed", "transaction_id": "tx_should_not_run"},
+        )
+        assert resp.status_code == 503
+        assert "not configured" in resp.json().get("error", "").lower()
+
+
+def test_payment_webhook_production_via_environment_alias():
+    """ENVIRONMENT=production alone must also fail closed (alias of ENV)."""
+    with patch.dict(
+        os.environ,
+        {"ENV": "", "ENVIRONMENT": "production", "SWIPESIMPLE_WEBHOOK_SECRET": ""},
+        clear=False,
+    ):
+        os.environ.pop("SWIPESIMPLE_WEBHOOK_SECRET", None)
+        os.environ.pop("ENV", None)
+        os.environ["ENVIRONMENT"] = "production"
+        resp = client.post("/api/webhooks/payment", json={"event_type": "x", "transaction_id": "y"})
+        assert resp.status_code == 503
 
 
 def test_wix_intake_webhook_rejects_empty_payload():
