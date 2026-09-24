@@ -4,16 +4,17 @@ ShamrockLeads — SwipeSimple Playwright session refresh / bootstrap
 PURPOSE: session refresh + cookie/CSRF capture ONLY.
 
 This module is NOT the primary invoice-create path.
-Production create = Option 2 captured Share Invoice HTTP replay in
-`swipesimple_invoice_service.py`.
+Production create = locked Rails form POST /invoices + copy_link in
+`swipesimple_invoice_service.py` (see SWIPESIMPLE_INVOICE_CONTRACT.md).
 
 Use this stub to:
   - log into SwipeSimple (headful/headless as ops policy allows)
-  - navigate toward Share Invoice (Web Link) UI solely to refresh session
+  - navigate toward invoice UI solely to refresh session / authenticity_token
   - write refreshed cookies / session material into the env/secret-store
     shape expected by `load_swipesimple_session_config()`:
       SWIPESIMPLE_SESSION or SWIPESIMPLE_COOKIE_JAR
       optional SWIPESIMPLE_CSRF_TOKEN, SWIPESIMPLE_MERCHANT_ID
+  - never set SWIPESIMPLE_LIVE; that gate stays ops-controlled
 
 MUST NOT create customer invoices from this stub.
 MUST NOT invent payment links.
@@ -28,7 +29,7 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_BASE_URL = "https://app.swipesimple.com"
+_DEFAULT_BASE_URL = "https://swipesimple.com"
 
 
 class SwipeSimpleBootstrapError(Exception):
@@ -120,8 +121,8 @@ async def capture_share_invoice_curl_hints() -> Dict[str, Any]:
         "contract_path": "dashboard/services/SWIPESIMPLE_INVOICE_CONTRACT.md",
         "secret_keys": secret_store_shape(),
         "note": (
-            "Paste Brendan DevTools cURL into the contract (URL/method/header names/"
-            "JSON keys only in git; secrets stay in env)."
+            "Create + copy_link contract is locked in SWIPESIMPLE_INVOICE_CONTRACT.md. "
+            "This helper remains for ops session refresh — secrets stay in env)."
         ),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
