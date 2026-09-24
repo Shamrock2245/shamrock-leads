@@ -228,21 +228,20 @@ class DCNBaseScraper(BaseScraper):
             # Bond amount usually near end of charge row.
             # Prefer per-$ token sums so "$2,000 $55,000" does not become 200055000.
             for cell in cells:
-                if "$" not in cell:
-                    continue
-                amounts = re.findall(r"\$\s*([\d,]+(?:\.\d+)?)", cell)
-                if amounts:
-                    for raw in amounts:
+                if "$" in cell:
+                    amounts = re.findall(r"\$\s*([\d,]+(?:\.\d+)?)", cell)
+                    if amounts:
+                        for raw in amounts:
+                            try:
+                                total_bond += float(raw.replace(",", ""))
+                            except ValueError:
+                                pass
+                    else:
+                        cleaned = re.sub(r"[^\d.]", "", cell.replace(",", ""))
                         try:
-                            total_bond += float(raw.replace(",", ""))
+                            total_bond += float(cleaned)
                         except ValueError:
                             pass
-                    continue
-                cleaned = re.sub(r"[^\d.]", "", cell.replace(",", ""))
-                try:
-                    total_bond += float(cleaned)
-                except ValueError:
-                    pass
                 elif not bond_type and any(
                     k in cell.upper() for k in ("SECURED", "UNSECURED", "CASH", "BOND", "ROR")
                 ):
