@@ -148,6 +148,8 @@ Related on reconcile: `payment_status`, `premium_paid`, `last_payment_*`, ledger
 | `SWIPESIMPLE_PRODUCTION_CHECKLIST.md` | Human go-live steps (secrets, smoke, merge, deploy) |
 | `swipesimple_playwright_bootstrap.py` | Session / CSRF refresh only |
 | `scripts/swipesimple_session_refresh.py` | CLI wrapper for bootstrap |
+| `scripts/swipesimple_smoke_create.py` | Brendan $0.01 draft smoke (LIVE-gated; no BondCase; no dispatch) |
+| `smoke_create_one_cent_draft` | Service helper used by smoke CLI |
 | `packet_payment_link_service.py` | Existing **static** pay-link dispatch (pre–Share Invoice) |
 | `swipesimple_receipt_poller.py` / `swipesimple_reconciliation_service.py` | Existing receipt → payment paths |
 
@@ -165,5 +167,5 @@ Related on reconcile: `payment_status`, `premium_paid`, `last_payment_*`, ledger
 - [x] Dispatch dry-run by default (`SWIPESIMPLE_DISPATCH_LIVE`)
 - [x] Customer mapping; empty customer id OK for new customers
 - [x] Entrypoint `maybe_issue_share_invoice_for_bond` (+ optional promote hook)
-- [ ] Brendan go-ahead before setting `SWIPESIMPLE_LIVE=1` in production
+- [x] Brendan authorized $0.01 smoke (DISPATCH off); production `SWIPESIMPLE_LIVE` still needs post-smoke go-ahead
 - [ ] Brendan go-ahead before setting `SWIPESIMPLE_DISPATCH_LIVE=1`

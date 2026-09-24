@@ -18,12 +18,14 @@ from dashboard.services.swipesimple_invoice_service import (
     build_create_invoice_form,
     build_dispatch_payload,
     create_locked_invoice,
+    default_smoke_reference_id,
     dispatch_invoice,
     dispatch_live_enabled,
     live_http_enabled,
     money_to_decimal,
     new_invoice_path,
     premium_dollars_to_cents,
+    smoke_create_one_cent_draft,
     _parse_authenticity_token,
 )
 
@@ -228,3 +230,54 @@ def test_amounts_equal_and_money_to_decimal():
     assert amounts_equal("100.00", Decimal("100"))
     assert money_to_decimal("$1,250.50") == Decimal("1250.50")
     assert money_to_decimal("nope") is None
+
+
+def test_default_smoke_reference_id_shape():
+    ref = default_smoke_reference_id()
+    assert ref.startswith("SMOKE-")
+    assert len(ref) >= len("SMOKE-YYYYMMDD-HHMM")
+
+
+@pytest.mark.asyncio
+async def test_smoke_check_only_no_http(monkeypatch):
+    monkeypatch.delenv("SWIPESIMPLE_LIVE", raising=False)
+    monkeypatch.delenv("SWIPESIMPLE_SESSION", raising=False)
+    with patch(
+        "dashboard.services.swipesimple_invoice_service._share_invoice_http",
+        new_callable=AsyncMock,
+    ) as share:
+        result = await smoke_create_one_cent_draft(check_only=True)
+        assert result["ok"] is True
+        assert result["check_only"] is True
+        assert result["ready"] is False
+        assert result["gates"]["live_enabled"] is False
+        share.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_smoke_live_gate_blocks_without_live():
+    with patch(
+        "dashboard.services.swipesimple_invoice_service._share_invoice_http",
+        new_callable=AsyncMock,
+    ) as share:
+        with pytest.raises((SwipeSimpleLiveDisabled, SwipeSimpleInvoiceError)):
+            await smoke_create_one_cent_draft(reference_id="SMOKE-20260924-1317")
+        share.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_smoke_rejects_non_smoke_reference():
+    with pytest.raises(SwipeSimpleInvoiceError, match="smoke_reference_id_must_start_with_SMOKE"):
+        await smoke_create_one_cent_draft(reference_id="LEE-REAL-BOOKING")
+
+
+@pytest.mark.asyncio
+async def test_smoke_requires_session_when_live(monkeypatch):
+    monkeypatch.setenv("SWIPESIMPLE_LIVE", "1")
+    with patch(
+        "dashboard.services.swipesimple_invoice_service._share_invoice_http",
+        new_callable=AsyncMock,
+    ) as share:
+        with pytest.raises(SwipeSimpleInvoiceError, match="session_not_configured"):
+            await smoke_create_one_cent_draft(reference_id="SMOKE-20260924-1317")
+        share.assert_not_called()

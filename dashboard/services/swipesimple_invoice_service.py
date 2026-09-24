@@ -17,6 +17,13 @@ HARD RULES (fail-closed):
   - LIVE HTTP gated by SWIPESIMPLE_LIVE=1 (default OFF)
   - Customer dispatch gated by SWIPESIMPLE_DISPATCH_LIVE=1 (default OFF / dry-run)
 
+Paperwork Desk one-liner:
+  from dashboard.services.swipesimple_invoice_service import maybe_issue_share_invoice_for_bond
+  await maybe_issue_share_invoice_for_bond(bond_id, channel="imessage", source="paperwork_desk")
+
+Brendan $0.01 smoke (no BondCase / no dispatch):
+  python scripts/swipesimple_smoke_create.py
+
 See dashboard/services/SWIPESIMPLE_INVOICE_CONTRACT.md and
 dashboard/services/SWIPESIMPLE_PRODUCTION_CHECKLIST.md.
 """
@@ -1118,17 +1125,31 @@ async def dispatch_invoice(
 
     sent = False
     if channel == "imessage":
-        from dashboard.services.bb_client import (
-            bb_send_accepted,
-            normalize_bb_send_result,
-            send_message_universal,
-        )
+        try:
+            from dashboard.services.bb_client import (
+                bb_send_accepted,
+                normalize_bb_send_result,
+                send_message_universal,
+            )
+        except ImportError as exc:
+            raise SwipeSimpleInvoiceError(
+                "dispatch_bb_client_import_failed — "
+                "dashboard.services.bb_client is required for imessage channel "
+                f"({exc})"
+            ) from exc
 
         raw = await send_message_universal(payload["phone"], payload["body"])
         send_result = normalize_bb_send_result(raw)
         sent = bb_send_accepted(send_result)
     else:
-        from dashboard.services.gmail_reader import GmailReaderService
+        try:
+            from dashboard.services.gmail_reader import GmailReaderService
+        except ImportError as exc:
+            raise SwipeSimpleInvoiceError(
+                "dispatch_gmail_reader_import_failed — "
+                "dashboard.services.gmail_reader is required for email channel "
+                f"({exc})"
+            ) from exc
 
         gmail = GmailReaderService()
         if not gmail.is_configured:
@@ -1354,6 +1375,132 @@ async def maybe_issue_share_invoice_for_bond(
             "sent": False,
             "error": str(exc),
         }
+    return out
+
+
+
+# ---------------------------------------------------------------------------
+# Brendan $0.01 smoke (no BondCase, no dispatch, no Mongo writes)
+# ---------------------------------------------------------------------------
+
+SMOKE_AMOUNT_CENTS = 1  # locked $0.01 draft
+_SMOKE_CUSTOMER_NAME_DEFAULT = "SMOKE TEST DO NOT PAY"
+
+
+def default_smoke_reference_id() -> str:
+    """Non-customer test reference_id: SMOKE-YYYYMMDD-HHMM (local box TZ)."""
+    return datetime.now().strftime("SMOKE-%Y%m%d-%H%M")
+
+
+async def smoke_create_one_cent_draft(
+    *,
+    reference_id: Optional[str] = None,
+    customer_name: str = _SMOKE_CUSTOMER_NAME_DEFAULT,
+    check_only: bool = False,
+) -> Dict[str, Any]:
+    """
+    Brendan-approved $0.01 Share Invoice smoke: draft create + copy_link only.
+
+    - Requires SWIPESIMPLE_LIVE=1 (and session cookie / jar in env).
+    - Does NOT invent or touch BondCase / Mongo.
+    - Does NOT dispatch BlueBubbles / email (even if SWIPESIMPLE_DISPATCH_LIVE=1).
+    - Never logs or prints cookies, CSRF, or passwords.
+    - reference_id defaults to SMOKE-YYYYMMDD-HHMM (override for retries).
+
+    Ops: ``python scripts/swipesimple_smoke_create.py`` after SESSION is set.
+    """
+    ref = str(reference_id or default_smoke_reference_id()).strip()
+    if not ref:
+        raise SwipeSimpleInvoiceError("smoke_missing_reference_id")
+    if not ref.upper().startswith("SMOKE"):
+        raise SwipeSimpleInvoiceError(
+            "smoke_reference_id_must_start_with_SMOKE — refuse non-smoke booking #"
+        )
+
+    name = str(customer_name or _SMOKE_CUSTOMER_NAME_DEFAULT).strip() or _SMOKE_CUSTOMER_NAME_DEFAULT
+    cfg = load_swipesimple_session_config()
+    gates = {
+        "live_enabled": live_http_enabled(),
+        "dispatch_live_enabled": dispatch_live_enabled(),
+        "has_session": bool(cfg.get("has_session") or cfg.get("has_cookie_jar")),
+        "has_csrf": bool(cfg.get("has_csrf")),
+        "reference_id": ref,
+        "amount_cents": SMOKE_AMOUNT_CENTS,
+        "amount_dollars": "0.01",
+    }
+    logger.info(
+        "[ss_invoice] smoke gates live=%s dispatch_live=%s has_session=%s "
+        "has_csrf=%s reference_id=%s check_only=%s",
+        gates["live_enabled"],
+        gates["dispatch_live_enabled"],
+        gates["has_session"],
+        gates["has_csrf"],
+        ref,
+        check_only,
+    )
+
+    if check_only:
+        return {
+            "ok": True,
+            "check_only": True,
+            "ready": bool(gates["live_enabled"] and gates["has_session"]),
+            "gates": gates,
+            "message": (
+                "smoke check-only — set SWIPESIMPLE_LIVE=1 and SWIPESIMPLE_SESSION "
+                "(or COOKIE_JAR), then re-run without --check-only"
+            ),
+        }
+
+    _require_live()
+    if not (cfg.get("has_session") or cfg.get("has_cookie_jar")):
+        raise SwipeSimpleInvoiceError(
+            "swipesimple_session_not_configured — waiting on SWIPESIMPLE_SESSION "
+            "(or SWIPESIMPLE_COOKIE_JAR) before $0.01 smoke"
+        )
+
+    # Synthetic customer only — never written to BondCase / Mongo.
+    synthetic_bond = {
+        "indemnitor_name": name,
+        "indemnitor_email": "",
+        "indemnitor_phone": "",
+        "swipesimple_customer_id": "",
+    }
+    premium = Decimal("0.01")
+    result = await _share_invoice_http(
+        booking_number=ref,
+        premium=premium,
+        bond_id=f"smoke:{ref}",
+        bond=synthetic_bond,
+        cfg=cfg,
+    )
+    # Intentionally omit secrets; payment_link is the smoke artifact to verify.
+    out = {
+        "ok": True,
+        "smoke": True,
+        "dispatch": False,
+        "bondcase_touched": False,
+        "reference_id": ref,
+        "invoice_number": ref,
+        "invoice_id": result.get("invoice_id"),
+        "payment_link": result.get("payment_link"),
+        "amount_cents": SMOKE_AMOUNT_CENTS,
+        "amount_dollars": 0.01,
+        "create_status": result.get("create_status"),
+        "message": (
+            "smoke draft created + copy_link — verify in SwipeSimple UI; "
+            "DISPATCH remains off for this script"
+        ),
+    }
+    if dispatch_live_enabled():
+        out["warning"] = (
+            "SWIPESIMPLE_DISPATCH_LIVE is set but smoke script never dispatches"
+        )
+    logger.info(
+        "[ss_invoice] smoke ok reference_id=%s invoice_id_len=%s has_link=%s",
+        ref,
+        len(str(out.get("invoice_id") or "")),
+        bool(out.get("payment_link")),
+    )
     return out
 
 

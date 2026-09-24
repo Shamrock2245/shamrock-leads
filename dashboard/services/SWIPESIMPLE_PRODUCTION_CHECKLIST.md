@@ -21,6 +21,8 @@ Related: `SWIPESIMPLE_INVOICE_CONTRACT.md`, `swipesimple_invoice_service.py`,
 - [x] Entrypoint: `maybe_issue_share_invoice_for_bond` (+ optional intake promote hook)
 - [x] `reconcile_payment` matches booking / reference_id / stored invoice # → PAID + LedgerService
 - [x] Offline unit tests (no network)
+- [x] Smoke CLI: `scripts/swipesimple_smoke_create.py` ($0.01, SMOKE-* reference, no BondCase/dispatch)
+- [x] `.env.example` lists Share Invoice env **names** (no values)
 
 ---
 
@@ -42,15 +44,19 @@ Related: `SWIPESIMPLE_INVOICE_CONTRACT.md`, `swipesimple_invoice_service.py`,
 - [ ] GmailReaderService OAuth has `gmail.send` for email channel (if used)
 - [ ] Keep `SWIPESIMPLE_DISPATCH_LIVE` **unset** until smoke approved
 
-### 3. Brendan smoke ($0.01) — approval required
+### 3. Brendan smoke ($0.01) — approved; waiting on session
 
-- [ ] Brendan authorizes a **$0.01** draft smoke on a non-customer test booking #
+- [x] Brendan authorized a **$0.01** draft smoke (DISPATCH stays **off**)
+- [ ] Leads Ops: inject `SWIPESIMPLE_SESSION` **or** `SWIPESIMPLE_COOKIE_JAR` (blocker)
+- [ ] Gate check (no HTTP): `python scripts/swipesimple_smoke_create.py --check-only`
 - [ ] Temporarily set `SWIPESIMPLE_LIVE=1` in a controlled env **only** for that smoke
-- [ ] Verify: draft appears, `reference_id` = booking #, `copy_link` returns a real URL
+- [ ] Run: `python scripts/swipesimple_smoke_create.py`  
+      (uses `reference_id=SMOKE-YYYYMMDD-HHMM`, **no BondCase**, **no dispatch**)
+- [ ] Verify: draft appears, `reference_id` starts with `SMOKE-`, `copy_link` returns a real URL
 - [ ] Verify: invoice_id resolution via Location and/or `/api/v4/invoices?reference_id=`
-- [ ] If id unresolved: confirm fail-closed marker (no duplicate draft) then harden parse
+- [ ] If id unresolved: confirm fail-closed behavior then harden parse (do not re-smoke blindly)
 - [ ] **Unset** `SWIPESIMPLE_LIVE` after smoke unless go-live is approved the same day
-- [ ] Do **not** enable `SWIPESIMPLE_DISPATCH_LIVE` during first smoke (no customer messages)
+- [ ] Keep `SWIPESIMPLE_DISPATCH_LIVE` **unset** during smoke (script never dispatches anyway)
 
 ### 4. Paperwork Desk / Bond Desk integration
 
@@ -91,7 +97,13 @@ Related: `SWIPESIMPLE_INVOICE_CONTRACT.md`, `swipesimple_invoice_service.py`,
 
 | Owner | Blocker |
 |-------|---------|
-| Brendan | $0.01 smoke approval + go-live for `SWIPESIMPLE_LIVE` |
-| Leads Ops | Cookie jar / CSRF refresh secrets in prod |
-| Leads Ops | BlueBubbles (+ optional Gmail) creds for dispatch |
+| Leads Ops | **`SWIPESIMPLE_SESSION` / `SWIPESIMPLE_COOKIE_JAR`** — required before smoke script can hit LIVE |
+| Brendan / Leads Ops | Run `scripts/swipesimple_smoke_create.py` once SESSION is set; then decide go-live for `SWIPESIMPLE_LIVE` |
+| Leads Ops | BlueBubbles (+ optional Gmail) creds before enabling `SWIPESIMPLE_DISPATCH_LIVE` |
 | Paperwork Desk | Call `maybe_issue_share_invoice_for_bond` when bond is ready (or enable promote hook) |
+
+### Coordination status (2026-09-24)
+
+- Code path + offline tests + smoke CLI are on PR `#51` (do **not** merge until smoke + checklist green).
+- Brendan: **$0.01 smoke approved**; **DISPATCH off**.
+- Next human step: put session cookie in secret store → `--check-only` → LIVE smoke → unset LIVE.
