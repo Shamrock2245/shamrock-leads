@@ -5,17 +5,17 @@ Platform: Custom ASP.NET inmate search with Google reCAPTCHA v2
 URL: https://inmatesearch.charlestoncounty.gov/
 Results: ASP.NET ListView cards on results.aspx (not a GridView table)
 
-Contract (validated 2026-09-23 non-writing Patchright smoke + live write):
+Contract (2026-09-23 ListView fixture + reCAPTCHA path):
 - name: ``MainContent_ListViewMaster_lblfullname_N``
 - source key: ``MainContent_ListViewMaster_lblInmateNumber_N`` (Inmate #)
 - booking datetime: ``Label1_N`` (MM/DD/YYYY) + ``Label2_N`` (HH:MM)
-- pagination: ``dpListView`` page submits (default 10/page)
+- pagination: default 10/page + ``dpListView`` page submits
 
 Plain ``requests`` POSTs never clear reCAPTCHA and return an empty form — that
 is why Health showed 0 Mongo writes. Synthetic ``CHS_<md5>`` keys are removed;
-rows without a source Inmate # are dropped.
-
-NOTE: changing ``ddnRcrdsPerPage`` postbacks wipe the result set (2026-09-23).
+rows without a source Inmate # are dropped. A captcha or navigation failure
+raises so the run is ``status=error``. A loaded results page with zero Inmate #
+rows is the only true empty.
 """
 from __future__ import annotations
 
@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 PORTAL_URL = "https://inmatesearch.charlestoncounty.gov/"
 SEARCH_DAYS = 7
+# PAGE_SIZE postback clears results — default 10/page + pager walk.
 MAX_PAGES = 25
 
 
@@ -55,11 +56,9 @@ class CharlestonScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         start_time = time.time()
-        try:
-            html_pages = self._fetch_result_pages()
-        except Exception as e:
-            logger.error("Charleston scrape failed: %s", e)
-            return []
+        # Do not swallow failures into []. BaseScraper marks a bare [] as
+        # status=empty; captcha/navigation errors must surface as status=error.
+        html_pages = self._fetch_result_pages()
 
         seen: Set[str] = set()
         records: List[ArrestRecord] = []
@@ -129,22 +128,20 @@ class CharlestonScraper(BaseScraper):
 
                 solver = RecaptchaAudioSolver(page)
                 if not solver.solve():
-                    logger.warning(
-                        "Charleston: reCAPTCHA solve failed — returning empty "
+                    raise RuntimeError(
+                        "Charleston reCAPTCHA solve failed "
                         "(needs Patchright + pydub/SpeechRecognition/ffmpeg)"
                     )
-                    return []
 
                 page.click("#MainContent_btnSearch")
                 page.wait_for_load_state("domcontentloaded")
                 page.wait_for_timeout(3000)
 
                 if "results.aspx" not in (page.url or "").lower():
-                    logger.warning(
-                        "Charleston: search did not reach results.aspx (url=%s)",
-                        page.url,
+                    raise RuntimeError(
+                        "Charleston search did not reach results.aspx "
+                        f"(url={page.url})"
                     )
-                    return []
 
                 # NOTE: changing ddnRcrdsPerPage postbacks wipe the result set
                 # (2026-09-23 smoke). Stay on default 10/page and walk dpListView.
@@ -272,7 +269,7 @@ class CharlestonScraper(BaseScraper):
             )
         )
         descriptions: List[str] = []
-        bonds: List[float] = []
+        charge_bonds: List[float] = []
         for ul in charge_uls:
             text = ul.get_text(" ", strip=True)
             m_desc = re.search(r"Charge Description:\s*(.+?)(?:\s*$)", text, re.I)
@@ -282,10 +279,11 @@ class CharlestonScraper(BaseScraper):
                 descriptions.append(text[:200])
             for bm in re.finditer(r"Bond Amount:\s*\$?\s*([\d,]+(?:\.\d+)?)", text, re.I):
                 try:
-                    bonds.append(float(bm.group(1).replace(",", "")))
+                    charge_bonds.append(float(bm.group(1).replace(",", "")))
                 except ValueError:
                     pass
 
+        total_bond: float | None = None
         tot = soup.find(
             id=f"MainContent_ListViewMaster_lstviewchargedet_{idx}_lblbondamttot_{idx}"
         )
@@ -293,12 +291,19 @@ class CharlestonScraper(BaseScraper):
             tm = re.search(r"([\d,]+(?:\.\d+)?)", tot.get_text(" ", strip=True))
             if tm:
                 try:
-                    bonds.append(float(tm.group(1).replace(",", "")))
+                    total_bond = float(tm.group(1).replace(",", ""))
                 except ValueError:
-                    pass
+                    total_bond = None
 
+        # Prefer the source total. Otherwise sum per-charge bonds so a
+        # multi-charge booking is not scored on the single largest charge.
+        bond_value = 0.0
+        if total_bond is not None:
+            bond_value = total_bond
+        elif charge_bonds:
+            bond_value = sum(charge_bonds)
         bond_str = "0"
-        if bonds:
-            bond_str = f"{max(bonds):.2f}".rstrip("0").rstrip(".")
+        if bond_value:
+            bond_str = f"{bond_value:.2f}".rstrip("0").rstrip(".")
         charges = "; ".join(descriptions) if descriptions else ""
         return charges, bond_str
