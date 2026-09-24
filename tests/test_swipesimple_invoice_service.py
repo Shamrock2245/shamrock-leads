@@ -77,9 +77,9 @@ def test_build_create_invoice_form_shape_and_empty_customer_id():
     assert as_dict["authenticity_token"] == "TOKEN"
     assert as_dict["invoice[merchant_account_id]"] == "acc_bd9fed047bd6f7c6"
     assert as_dict["invoice[customer][id]"] == ""
-    assert as_dict["customer-proxy"] == ""
+    assert as_dict["customer-proxy"] == "-Pat Indemnitor"  # select2 createTag for new customer
     assert as_dict["invoice[reference_id]"] == "LEE-2026-0001"
-    assert as_dict["invoice[items][][id]"] == "im_bae23df0a0cb4e01a688bdd6bf1"
+    assert as_dict["invoice[items][][id]"] == "im_bae23df0a0cb4e01a688bdd75cc96bf1"
     assert as_dict["invoice[items][][name]"] == 'Bail Bond Premium'
     assert as_dict["invoice[items][][quantity]"] == "1"
     assert as_dict["invoice[items][][price]"] == "150000"

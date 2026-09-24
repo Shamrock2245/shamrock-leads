@@ -35,7 +35,7 @@ Related: `SWIPESIMPLE_INVOICE_CONTRACT.md`, `swipesimple_invoice_service.py`,
 - [ ] Confirm Playwright bootstrap credentials: `SWIPESIMPLE_USERNAME` / `SWIPESIMPLE_PASSWORD` (refresh **only** — never create invoices)
 - [ ] Confirm merchant / catalog defaults still match production:
   - Merchant `acc_bd9fed047bd6f7c6`
-  - Catalog item `im_bae23df0a0cb4e01a688bdd6bf1` — Bail Bond Premium
+  - Catalog item `im_bae23df0a0cb4e01a688bdd75cc96bf1` — Bail Bond Premium
 - [ ] If new-invoice HTML path differs in prod, set `SWIPESIMPLE_NEW_INVOICE_PATH`
 
 ### 2. BlueBubbles / email (Leads Ops)

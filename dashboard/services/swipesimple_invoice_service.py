@@ -55,7 +55,7 @@ INVOICE_LINK_FIELDS = (
 # Locked from DevTools create capture (2026-09-24). Host is swipesimple.com (not app.).
 _DEFAULT_BASE_URL = "https://swipesimple.com"
 _DEFAULT_MERCHANT_ACCOUNT_ID = "acc_bd9fed047bd6f7c6"
-_DEFAULT_CATALOG_ITEM_ID = "im_bae23df0a0cb4e01a688bdd6bf1"
+_DEFAULT_CATALOG_ITEM_ID = "im_bae23df0a0cb4e01a688bdd75cc96bf1"
 _DEFAULT_CATALOG_ITEM_NAME = "Bail Bond Premium"
 # Rails common path for authenticity_token; overridable via env.
 _DEFAULT_NEW_INVOICE_PATH = "/invoices/new"
@@ -393,7 +393,8 @@ def build_create_invoice_form(
         ("invoice[merchant_account_id]", merchant_account_id),
         ("invoice[customer][id]", cust_id),
         ("invoice[customer][name]", name),
-        ("customer-proxy", cust_id),
+        # Browser select2 "tags" mode: new customer => proxy value "-<Name>" (createTag); existing => cus_* id
+        ("customer-proxy", cust_id if cust_id else (f"-{name}" if name else "")),
         ("invoice[email]", email),
         ("invoice[customer][email]", email),
         ("invoice[phone]", phone),
@@ -1396,6 +1397,7 @@ async def smoke_create_one_cent_draft(
     *,
     reference_id: Optional[str] = None,
     customer_name: str = _SMOKE_CUSTOMER_NAME_DEFAULT,
+    customer_id: str = "",
     check_only: bool = False,
 ) -> Dict[str, Any]:
     """
@@ -1463,7 +1465,7 @@ async def smoke_create_one_cent_draft(
         "indemnitor_name": name,
         "indemnitor_email": "",
         "indemnitor_phone": "",
-        "swipesimple_customer_id": "",
+        "swipesimple_customer_id": str(customer_id or "").strip(),
     }
     premium = Decimal("0.01")
     result = await _share_invoice_http(

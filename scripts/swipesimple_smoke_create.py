@@ -78,6 +78,7 @@ async def _run(args: argparse.Namespace) -> int:
         result = await smoke_create_one_cent_draft(
             reference_id=ref,
             customer_name=args.customer_name,
+            customer_id=args.customer_id,
             check_only=args.check_only,
         )
     except SwipeSimpleLiveDisabled as exc:
@@ -136,6 +137,11 @@ def main() -> None:
         "--reference-id",
         default="",
         help="Override SMOKE-YYYYMMDD-HHMM (must start with SMOKE)",
+    )
+    parser.add_argument(
+        "--customer-id",
+        default="",
+        help="Existing SwipeSimple customer id (cus_*) for the smoke; blank = new customer",
     )
     parser.add_argument(
         "--customer-name",

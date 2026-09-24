@@ -49,7 +49,7 @@
 | `invoice[phone]` | Top-level phone |
 | `invoice[customer][phone]` | Customer phone |
 | `invoice[reference_id]` | **Booking #** (= invoice #) |
-| `invoice[items][][id]` | Catalog: `im_bae23df0a0cb4e01a688bdd6bf1` |
+| `invoice[items][][id]` | Catalog: `im_bae23df0a0cb4e01a688bdd75cc96bf1` |
 | `invoice[items][][name]` | `Bail Bond Premium` |
 | `invoice[items][][quantity]` | `1` |
 | `invoice[items][][price]` | Premium in **cents** (integer) |
@@ -69,7 +69,7 @@ BondCase stores premium in **dollars**. Conversion must yield an **exact integer
 | Constant | Value |
 |----------|-------|
 | Merchant account | `acc_bd9fed047bd6f7c6` |
-| Catalog item id | `im_bae23df0a0cb4e01a688bdd6bf1` |
+| Catalog item id | `im_bae23df0a0cb4e01a688bdd75cc96bf1` |
 | Catalog item name | `Bail Bond Premium` |
 
 ---
