@@ -408,7 +408,12 @@ def build_create_invoice_form(
         ("invoice[prompt_for_tip]", "0"),
         ("invoice[amount]", cents_s),
         ("invoice[unadjusted_amount]", cents_s),
-        ("invoice[save_as_draft]", "true"),
+        # Unpaid + web-link share: drafts have no payment URL. Never set
+        # invoice_email[email]/phone] here — we dispatch via BlueBubbles/email ourselves.
+        ("invoice[save_as_draft]", "false"),
+        ("invoice[invoice_email][cc_self]", "0"),
+        ("invoice[invoice_email][subject]", f"Invoice {booking_number} from SHAMROCK BAIL LLC"),
+        ("invoice[invoice_email][web_link]", "1"),
     ]
 
 
@@ -683,11 +688,43 @@ async def _resolve_invoice_id_after_create(
                 logger.info("[ss_invoice] invoice_id from list/search text")
                 return tid
 
+    # Legacy DataTables JSON (includes drafts/unpaid that /api/v4/invoices hides)
+    dt_headers = {
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Cookie": cookie,
+        "User-Agent": "ShamrockLeads-SwipeSimpleInvoice/1.0",
+        "X-Requested-With": "XMLHttpRequest",
+    }
+    dt_url = urljoin(cfg["base_url"] + "/", "invoices")
+    logger.info("[ss_invoice] resolve invoice_id via GET path=/invoices datatable")
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=45.0) as client:
+            resp = await client.get(
+                dt_url,
+                headers=dt_headers,
+                params={"sEcho": "1", "iDisplayStart": "0", "iDisplayLength": "50"},
+            )
+        if resp.status_code < 400:
+            data = resp.json()
+            needle = str(booking_number)
+            for row in data.get("aaData") or []:
+                if not isinstance(row, dict):
+                    continue
+                link = str(row.get("link_to_invoice") or "")
+                if needle not in link:
+                    continue
+                m = re.search(r"/invoices/(inv_[A-Za-z0-9]+)", link)
+                if m:
+                    logger.info("[ss_invoice] invoice_id from datatable link_to_invoice")
+                    return m.group(1)
+    except Exception as exc:
+        logger.warning("[ss_invoice] datatable resolve failed err=%s", exc)
+
     raise SwipeSimpleInvoiceError(
         "invoice_id_unresolved_after_create_302 — "
-        "create likely succeeded (draft may already exist for this booking #); "
+        "create likely succeeded (invoice may already exist for this booking #); "
         "do NOT create another invoice. Mark pending + resolve id via "
-        "/api/v4/invoices?reference_id= or ops list scrape before copy_link."
+        "datatable /invoices or /api/v4/invoices before copy_link."
     )
 
 
@@ -745,6 +782,32 @@ async def _http_copy_link(*, invoice_id: str, cfg: Dict[str, Any]) -> str:
         if m:
             link = m.group(0)
     if not link.startswith("http"):
+        # Known public payment path once invoice is unpaid (copy_link may 429).
+        show_url = urljoin(cfg["base_url"] + "/", f"invoices/{invoice_id}")
+        try:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+                show = await client.get(
+                    show_url,
+                    headers={
+                        "Accept": "text/html",
+                        "Cookie": cookie,
+                        "User-Agent": "ShamrockLeads-SwipeSimpleInvoice/1.0",
+                    },
+                )
+            m = re.search(
+                r'data-url="(https?://[^"]+/invoices/' + re.escape(invoice_id) + r'/payment)"',
+                show.text or "",
+            )
+            if m:
+                link = m.group(1)
+                logger.info("[ss_invoice] payment_link from invoice show data-url")
+        except Exception as exc:
+            logger.warning("[ss_invoice] show-page payment_link fallback failed err=%s", exc)
+    if not link.startswith("http"):
+        # Last resort only when create succeeded and id is known: vendor's public pay path.
+        link = urljoin(cfg["base_url"] + "/", f"invoices/{invoice_id}/payment")
+        logger.info("[ss_invoice] payment_link constructed from invoice_id (copy_link unavailable)")
+    if not link.startswith("http"):
         raise SwipeSimpleInvoiceError("copy_link_missing_payment_url")
     return link
 
@@ -769,6 +832,11 @@ async def _share_invoice_http(
 
     cents = premium_dollars_to_cents(premium)
     customer = _bond_customer_fields(bond)
+    if not (customer.get("email") or customer.get("phone")):
+        raise SwipeSimpleInvoiceError(
+            "swipesimple_contact_required — SwipeSimple rejects unpaid invoices "
+            "without email or phone even for web-link-only share"
+        )
     authenticity_token = await _fetch_csrf(cfg)
 
     form_fields = build_create_invoice_form(
@@ -1463,7 +1531,9 @@ async def smoke_create_one_cent_draft(
     # Synthetic customer only — never written to BondCase / Mongo.
     synthetic_bond = {
         "indemnitor_name": name,
-        "indemnitor_email": "",
+        # Contact required by SwipeSimple for unpaid/web-link invoices.
+        # Merchant login mailbox only — we never set invoice_email[email]/phone].
+        "indemnitor_email": "shamrockbail1528@gmail.com",
         "indemnitor_phone": "",
         "swipesimple_customer_id": str(customer_id or "").strip(),
     }

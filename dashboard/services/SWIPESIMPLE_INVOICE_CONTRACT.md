@@ -57,7 +57,10 @@
 | `invoice[prompt_for_tip]` | `0` |
 | `invoice[amount]` | Same cents total |
 | `invoice[unadjusted_amount]` | Same cents total |
-| `invoice[save_as_draft]` | `true` |
+| `invoice[save_as_draft]` | `false` (unpaid; drafts have no payment link) |
+| `invoice[invoice_email][web_link]` | `1` (share link ourselves; do **not** set invoice_email email/phone)
+| `invoice[invoice_email][cc_self]` | `0`
+| `invoice[invoice_email][subject]` | `Invoice {booking#} from SHAMROCK BAIL LLC`
 
 ### Amounts: cents
 

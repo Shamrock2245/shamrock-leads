@@ -85,7 +85,11 @@ def test_build_create_invoice_form_shape_and_empty_customer_id():
     assert as_dict["invoice[items][][price]"] == "150000"
     assert as_dict["invoice[amount]"] == "150000"
     assert as_dict["invoice[unadjusted_amount]"] == "150000"
-    assert as_dict["invoice[save_as_draft]"] == "true"
+    assert as_dict["invoice[save_as_draft]"] == "false"
+    assert as_dict["invoice[invoice_email][web_link]"] == "1"
+    assert as_dict["invoice[invoice_email][cc_self]"] == "0"
+    assert "invoice[invoice_email][email]" not in as_dict
+    assert "invoice[invoice_email][phone]" not in as_dict
     assert as_dict["invoice[customer][name]"] == "Pat Indemnitor"
     assert as_dict["invoice[customer][email]"] == "pat@example.com"
     assert as_dict["invoice[customer][phone]"] == "2395550100"
