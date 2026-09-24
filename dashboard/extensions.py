@@ -595,6 +595,10 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     "St. Clair (AL)": "verified_public",
     "Rankin (MS)": "verified_public",
     "Charleston (SC)": "verified_public",  # 2026-09-23 ListView+Inmate#+recaptcha write smoke
+    "Dorchester (SC)": "verified_public",  # 2026-09-24 SSW Citizen Connect write smoke (source BookingID)
+    "Chesterfield (SC)": "verified_public",  # 2026-09-24 SSW Citizen Connect write smoke (source BookingID)
+    "Aiken (SC)": "verified_public",  # 2026-09-24 DTNSearch Inmate ID# / qSO_NO write smoke
+    "Darlington (SC)": "verified_public",  # 2026-09-24 DCN HTTP bid write smoke
     # Deployed guards: no source fetches and no record emission pending revalidation.
     "Calcasieu (LA)": "fail_closed",
     "East Baton Rouge (LA)": "fail_closed",
