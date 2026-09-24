@@ -133,7 +133,7 @@ async def check_and_notify_rearrest(
             "fallback_needed": list[str],  # phones needing Twilio SMS
         }
     """
-    bonds_coll = get_collection("bonds")
+    bonds_coll = get_collection("active_bonds")
     notifications_coll = get_collection("rearrest_notifications")
 
     # ── 1. Find prior bonds for this defendant ──────────────────────────────
@@ -154,6 +154,9 @@ async def check_and_notify_rearrest(
         match_filter["$or"].append({"defendant_dob": dob})
 
     prior_bonds = await bonds_coll.find(match_filter, {"_id": 0}).to_list(length=20)
+    if not prior_bonds:
+        legacy_coll = get_collection("bonds")
+        prior_bonds = await legacy_coll.find(match_filter, {"_id": 0}).to_list(length=20)
 
     if not prior_bonds:
         logger.info("🔍 Re-arrest check: no prior bonds for %s", defendant_name)
@@ -532,3 +535,157 @@ async def api_rearrest_contacted(request: Request, notification_id):
     except Exception as e:
         logger.error("Rearrest contacted error: %s", e, exc_info=True)
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+@rearrest_bp.patch("/rearrest/{notification_id}/action")
+async def api_rearrest_action(request: Request, notification_id: str):
+    """
+    Execute comprehensive triage action on a re-arrest alert.
+
+    Supported actions:
+      - 'revoke' / 'surrender': Flag active bond for surrender/revocation; log audit event.
+      - 'second_bond': Mark as new bonding opportunity; return prefilled intake link.
+      - 'false_positive': Dismiss as false positive with reason.
+      - 'contacted': Record indemnitor contact note.
+      - 'dismiss': Standard review dismissal.
+    """
+    try:
+        data = await request.json() or {}
+        action = str(data.get("action") or "").lower().strip()
+        actor = data.get("actor") or data.get("reviewed_by") or "staff"
+        notes = data.get("notes") or ""
+
+        notifications_coll = get_collection("rearrest_notifications")
+        bonds_col = get_collection("active_bonds")
+        audit_col = get_collection("audit_events")
+
+        doc = await notifications_coll.find_one({"_id": ObjectId(notification_id)})
+        if not doc:
+            return JSONResponse({"success": False, "error": "Notification not found"}, status_code=404)
+
+        now = datetime.now(timezone.utc)
+        booking = doc.get("booking_number", "")
+        prior_bk = doc.get("prior_booking_number", "")
+        defendant_name = doc.get("defendant_name", "")
+        county = doc.get("county", "")
+
+        if action in ("revoke", "surrender"):
+            # Update notification
+            await notifications_coll.update_one(
+                {"_id": doc["_id"]},
+                {"$set": {
+                    "status": "revocation_initiated",
+                    "action_taken": "revoke",
+                    "action_by": actor,
+                    "action_at": now,
+                    "action_notes": notes,
+                    "updated_at": now,
+                }}
+            )
+            # Flag active bond record
+            if prior_bk:
+                await bonds_col.update_one(
+                    {"booking_number": prior_bk},
+                    {"$set": {
+                        "bond_revocation_flag": True,
+                        "revocation_initiated_at": now.isoformat(),
+                        "revocation_reason": f"New arrest on booking {booking} ({county}): {notes}",
+                        "status": "alert",
+                    }}
+                )
+            # Immutable audit event
+            await audit_col.insert_one({
+                "event_type": "bond_revocation_initiated_rearrest",
+                "entity_id": prior_bk or booking,
+                "defendant_name": defendant_name,
+                "new_booking_number": booking,
+                "new_county": county,
+                "actor": actor,
+                "notes": notes,
+                "timestamp": now,
+            })
+            logger.info("🚨 Bond revocation initiated for %s (prior bk: %s) by %s", defendant_name, prior_bk, actor)
+            return {
+                "success": True,
+                "action": "revoke",
+                "status": "revocation_initiated",
+                "prior_booking_number": prior_bk,
+            }
+
+        elif action in ("second_bond", "bond_second"):
+            await notifications_coll.update_one(
+                {"_id": doc["_id"]},
+                {"$set": {
+                    "status": "second_bond_opportunity",
+                    "action_taken": "second_bond",
+                    "action_by": actor,
+                    "action_at": now,
+                    "updated_at": now,
+                }}
+            )
+            intake_url = f"/api/portal?booking={booking}&county={county}&defendant={defendant_name}"
+            return {
+                "success": True,
+                "action": "second_bond",
+                "status": "second_bond_opportunity",
+                "new_booking_number": booking,
+                "county": county,
+                "intake_url": intake_url,
+            }
+
+        elif action in ("false_positive", "mismatch"):
+            await notifications_coll.update_one(
+                {"_id": doc["_id"]},
+                {"$set": {
+                    "status": "false_positive",
+                    "action_taken": "false_positive",
+                    "reviewed_by": actor,
+                    "reviewed_at": now,
+                    "false_positive_reason": notes,
+                    "updated_at": now,
+                }}
+            )
+            # Remove rearrest flag from bond if no other active alerts
+            if prior_bk:
+                await bonds_col.update_one(
+                    {"booking_number": prior_bk},
+                    {"$set": {"rearrest_detected": False}}
+                )
+            logger.info("Dismissed rearrest alert %s as false positive: %s", notification_id, notes)
+            return {"success": True, "action": "false_positive", "status": "false_positive"}
+
+        elif action == "contacted":
+            await notifications_coll.update_one(
+                {"_id": doc["_id"]},
+                {"$set": {
+                    "status": "contacted",
+                    "contacted_by": actor,
+                    "contacted_at": now,
+                    "contact_notes": notes,
+                    "updated_at": now,
+                }}
+            )
+            return {"success": True, "action": "contacted", "status": "contacted"}
+
+        elif action in ("dismiss", "reviewed"):
+            await notifications_coll.update_one(
+                {"_id": doc["_id"]},
+                {"$set": {
+                    "status": "reviewed",
+                    "reviewed_by": actor,
+                    "reviewed_at": now,
+                    "updated_at": now,
+                }}
+            )
+            return {"success": True, "action": "dismiss", "status": "reviewed"}
+
+        else:
+            return JSONResponse(
+                {"success": False, "error": f"Unknown action: {action}. Must be revoke, second_bond, false_positive, contacted, or dismiss."},
+                status_code=400
+            )
+
+    except Exception as e:
+        logger.error("Rearrest action error: %s", e, exc_info=True)
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+

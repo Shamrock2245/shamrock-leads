@@ -381,3 +381,38 @@ async def test_lead_qualification_sweep_projects_phone():
         assert lead["phone"] == "(239) 555-1234"
         assert lead["name"] == "SMITH, BOB"
 
+
+@pytest.mark.asyncio
+async def test_active_bonds_create_seeds_court_and_enrolls_watch():
+    from dashboard.routers.bonds import api_active_bonds_create
+    from fastapi import Request
+
+    payload = {
+        "booking_number": "BK-TEST-SEED-1",
+        "defendant_name": "Test Defendant",
+        "court_date": "2026-11-20",
+        "court_time": "09:00 AM",
+        "county": "Lee",
+    }
+    mock_req = MagicMock(spec=Request)
+    mock_req.json = AsyncMock(return_value=payload)
+
+    mock_bonds = MagicMock()
+    mock_bonds.update_one = AsyncMock()
+
+    with patch("dashboard.routers.bonds.get_collection", return_value=mock_bonds), patch(
+        "dashboard.services.bond_court_seed_service.seed_court_calendar_for_bond",
+        new_callable=AsyncMock,
+    ) as mock_seed:
+        res = await api_active_bonds_create(mock_req)
+        assert res["success"] is True
+        assert res["booking_number"] == "BK-TEST-SEED-1"
+        mock_seed.assert_awaited_once()
+
+        # Verify doc passed to update_one includes court_date and book_watch_enabled
+        update_args = mock_bonds.update_one.call_args[0]
+        set_doc = update_args[1]["$set"]
+        assert set_doc["court_date"] == "2026-11-20"
+        assert set_doc["book_watch_enabled"] is True
+
+

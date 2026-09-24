@@ -152,7 +152,7 @@ async def _run_delinquency():
 
 async def _run_rearrest():
     from dashboard.routers.rearrest_detector import scan_for_rearrests
-    result = await scan_for_rearrests(hours=3)
+    result = await scan_for_rearrests(hours=24)
     if result.get("detected", 0) > 0:
         logger.warning("🔄 RE-ARREST: %s match(es)!", result["detected"])
 
