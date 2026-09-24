@@ -194,6 +194,9 @@ async def api_record_bond(request: Request):
         "fta_risk_score": fta_risk_score,
         "fta_risk_level": fta_risk_level,
         "fta_risk_confidence": fta_risk_confidence,
+        "book_watch_enabled": True,
+        "book_watch_enrolled_at": now.isoformat(),
+        "book_watch_tier": "standard",
         "created_at": bond_date,
         "updated_at": now,
     }
@@ -340,6 +343,25 @@ async def api_record_bond(request: Request):
         await trigger_auto_osint_profiling(bond_doc, actor="record_bond")
     except Exception as osint_err:
         logger.warning("[record-bond] Auto-OSINT trigger warning: %s", osint_err)
+
+    # ── 6. Seed court calendar & reminders if court_date known ─────────────
+    if court_date:
+        try:
+            from dashboard.services.bond_court_seed_service import (
+                seed_court_calendar_for_bond,
+            )
+            seed_result = await seed_court_calendar_for_bond(
+                bond=bond_doc,
+                booking_number=booking_number,
+                source="bond_record_retroactive",
+            )
+            logger.info(
+                "[record-bond] court seed for %s: %s",
+                booking_number,
+                seed_result.get("gcal_seed_status") or seed_result.get("reason"),
+            )
+        except Exception as seed_err:
+            logger.warning("[record-bond] Court seed failed for %s: %s", booking_number, seed_err)
 
     return {
         "success": True,
@@ -699,6 +721,12 @@ async def api_active_bonds_create(request: Request):
         "fta_risk_score": data.get("fta_risk_score"),
         "fta_risk_level": data.get("fta_risk_level", ""),
         "fta_risk_confidence": data.get("fta_risk_confidence"),
+        "court_date": (data.get("court_date") or "").strip(),
+        "court_time": (data.get("court_time") or "").strip(),
+        "court_location": (data.get("court_location") or "").strip(),
+        "book_watch_enabled": True,
+        "book_watch_enrolled_at": now.isoformat(),
+        "book_watch_tier": "standard",
         "created_at": now,
         "updated_at": now,
     }
@@ -708,6 +736,18 @@ async def api_active_bonds_create(request: Request):
             {"$set": doc},
             upsert=True,
         )
+        if doc.get("court_date"):
+            try:
+                from dashboard.services.bond_court_seed_service import (
+                    seed_court_calendar_for_bond,
+                )
+                await seed_court_calendar_for_bond(
+                    bond=doc,
+                    booking_number=booking_number,
+                    source="active_bonds_create",
+                )
+            except Exception as _seed_err:
+                logger.warning("[active-bonds] court seed failed for %s: %s", booking_number, _seed_err)
         return {"success": True, "booking_number": booking_number}
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)

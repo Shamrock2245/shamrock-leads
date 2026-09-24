@@ -29,6 +29,18 @@ rearrest_bp = APIRouter(prefix="/api", tags=["rearrest"])
 SLACK_REARREST_WEBHOOK = os.getenv("SLACK_WEBHOOK_REARREST") or os.getenv("SLACK_WEBHOOK_ARRESTS", "")
 
 
+# High-frequency US surnames that require corroborating evidence (DOB, middle initial, county)
+COMMON_SURNAMES = frozenset({
+    "SMITH", "JOHNSON", "WILLIAMS", "BROWN", "JONES", "GARCIA", "MILLER", "DAVIS",
+    "RODRIGUEZ", "MARTINEZ", "HERNANDEZ", "LOPEZ", "GONZALEZ", "WILSON", "ANDERSON",
+    "THOMAS", "TAYLOR", "MOORE", "JACKSON", "MARTIN", "LEE", "PEREZ", "THOMPSON",
+    "WHITE", "HARRIS", "SANCHEZ", "CLARK", "RAMIREZ", "LEWIS", "ROBINSON", "WALKER",
+    "YOUNG", "ALLEN", "KING", "WRIGHT", "SCOTT", "TORRES", "NGUYEN", "HILL", "FLORES",
+    "GREEN", "ADAMS", "NELSON", "BAKER", "HALL", "RIVERA", "CAMPBELL", "MITCHELL",
+    "CARTER", "ROBERTS"
+})
+
+
 def _normalize_name(name: str) -> str:
     """Normalize a name for fuzzy matching: lowercase, strip suffixes, collapse whitespace."""
     if not name:
@@ -88,6 +100,56 @@ def _dob_matches(dob_a: str, dob_b: str) -> bool:
     return digits_a == digits_b
 
 
+def evaluate_match_confidence(
+    arrest_name: str,
+    bond_name: str,
+    arrest_dob: str = "",
+    bond_dob: str = "",
+    arrest_county: str = "",
+    bond_county: str = "",
+) -> tuple[str, str]:
+    """
+    Multi-factor confidence scoring for Active Book Watch re-arrest detection.
+    Returns (confidence_level, reason).
+    Levels:
+      - 'confirmed': Exact name + verified DOB match
+      - 'high': Exact name + same county/jurisdiction (non-generic surname or middle initial match)
+      - 'probable': Name matches + same county, or unique surname cross-county
+      - 'low': Common surname with missing DOB or cross-county match without DOB
+      - 'mismatch': Explicit conflict (e.g. conflicting verified DOBs)
+    """
+    if not _names_match(arrest_name, bond_name):
+        return ("mismatch", "name_mismatch")
+
+    last_a, first_a = _name_parts(arrest_name)
+    last_b, _ = _name_parts(bond_name)
+    surname = last_a.upper()
+    is_common_surname = surname in COMMON_SURNAMES
+
+    # 1. If both DOBs are present, DOB verification governs
+    if arrest_dob and bond_dob:
+        if _dob_matches(arrest_dob, bond_dob):
+            return ("confirmed", "dob_verified")
+        return ("mismatch", "dob_conflict")
+
+    # 2. DOB missing on one or both sides
+    same_county = (
+        bool(arrest_county and bond_county)
+        and (arrest_county.strip().lower() == bond_county.strip().lower())
+    )
+
+    if is_common_surname:
+        # Common surname like Smith / Johnson without DOB
+        if same_county and len(first_a) > 3:
+            return ("probable", "common_surname_same_county")
+        return ("low", "common_surname_unverified_dob")
+
+    # Unique / distinctive surname
+    if same_county:
+        return ("high", "unique_surname_same_county")
+    return ("probable", "unique_surname_cross_county")
+
+
 async def scan_for_rearrests(hours: int = 24) -> dict:
     """
     Scan recent arrests (last N hours) against active bonds.
@@ -103,9 +165,9 @@ async def scan_for_rearrests(hours: int = 24) -> dict:
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(hours=hours)).isoformat()
 
-    # Get all active bonds with defendant info
+    # Get all open liability bonds (active, monitoring, alert, reinstated)
     active_bonds = []
-    async for bond in bonds_col.find({"status": "active"}):
+    async for bond in bonds_col.find({"status": {"$in": ["active", "monitoring", "alert", "reinstated"]}}):
         active_bonds.append(bond)
 
     if not active_bonds:
@@ -121,24 +183,26 @@ async def scan_for_rearrests(hours: int = 24) -> dict:
     for arrest in recent_arrests:
         arrest_name = arrest.get("full_name", "") or arrest.get("defendant_name", "")
         arrest_dob = arrest.get("dob", "") or arrest.get("date_of_birth", "")
+        arrest_county = arrest.get("county", "")
 
         for bond in active_bonds:
             bond_name = bond.get("defendant_name", "") or bond.get("full_name", "")
             bond_dob = bond.get("dob", "") or bond.get("date_of_birth", "")
+            bond_county = bond.get("county", "")
 
-            if not _names_match(arrest_name, bond_name):
+            confidence, reason = evaluate_match_confidence(
+                arrest_name=arrest_name,
+                bond_name=bond_name,
+                arrest_dob=arrest_dob,
+                bond_dob=bond_dob,
+                arrest_county=arrest_county,
+                bond_county=bond_county,
+            )
+
+            if confidence == "mismatch":
                 continue
 
-            # Name matches — check DOB for confirmation (if available)
-            confidence = "probable"
-            if arrest_dob and bond_dob:
-                if _dob_matches(arrest_dob, bond_dob):
-                    confidence = "confirmed"
-                else:
-                    continue  # DOBs don't match, skip
-
             # Check if we already alerted on this
-            # Check both old field name (bond_id) and new schema (defendant_name_norm + booking_number)
             arrest_booking = arrest.get("booking_number", "")
             existing = await rearrest_col.find_one({
                 "$or": [
@@ -202,8 +266,12 @@ async def scan_for_rearrests(hours: int = 24) -> dict:
                 "original_case_number": bond.get("case_number", ""),
                 "original_poa": bond.get("poa_number", ""),
                 "confidence": confidence,
+                "confidence_reason": reason,
+                "prior_bond_status": bond.get("status", "active"),
+                "book_watch_monitored": True,
                 # Workflow state — matches what the UI queries
-                "status": "pending_review",
+                # 'low' confidence matches enter 'unconfirmed_triage' to prevent alert fatigue
+                "status": "unconfirmed_triage" if confidence == "low" else "pending_review",
                 "created_at": now,
                 "updated_at": now,
                 "detected_at": now.isoformat(),
@@ -229,6 +297,7 @@ async def scan_for_rearrests(hours: int = 24) -> dict:
                     "original_poa": bond.get("poa_number", ""),
                     "original_bond_amount": bond.get("bond_amount", 0),
                     "confidence": confidence,
+                    "confidence_reason": reason,
                 })
             except Exception:
                 pass
@@ -238,12 +307,13 @@ async def scan_for_rearrests(hours: int = 24) -> dict:
                 from dashboard.routers.notifications import create_notification
                 await create_notification(
                     notification_type="rearrest",
-                    title=f"🔄 RE-ARREST: {arrest_name}",
+                    title=f"🔄 RE-ARREST: {arrest_name} ({confidence})",
                     message=f"{arrest.get('county', '')} County — Active bond #{bond.get('poa_number', 'N/A')} (${bond.get('bond_amount', 0):,.0f})",
                     entity_id=arrest.get("booking_number", ""),
                     entity_type="rearrest",
                     metadata={
                         "confidence": confidence,
+                        "confidence_reason": reason,
                         "new_county": arrest.get("county"),
                         "original_poa": bond.get("poa_number"),
                     },
@@ -259,16 +329,18 @@ async def scan_for_rearrests(hours: int = 24) -> dict:
                         "rearrest_detected": True,
                         "rearrest_date": now.isoformat(),
                         "rearrest_booking": arrest.get("booking_number"),
+                        "rearrest_confidence": confidence,
                     }}
                 )
             except Exception:
                 pass
 
-            # Slack alert (SLACK_WEBHOOK_REARREST preferred, else SLACK_WEBHOOK_ARRESTS)
-            try:
-                await _post_rearrest_slack(alert)
-            except Exception as slack_exc:
-                logger.warning("rearrest slack failed: %s", slack_exc)
+            # Slack alert only for probable, high, or confirmed matches (avoids false-alarm noise)
+            if confidence in ("confirmed", "high", "probable"):
+                try:
+                    await _post_rearrest_slack(alert)
+                except Exception as slack_exc:
+                    logger.warning("rearrest slack failed: %s", slack_exc)
 
     return {
         "scanned_arrests": len(recent_arrests),
@@ -342,4 +414,55 @@ async def get_alerts(limit: int = Query(default=20)):
         results.append(doc)
 
     return {"alerts": results, "total": len(results)}
+
+
+@rearrest_bp.get("/rearrest/meter/stats")
+async def get_rearrest_meter_stats():
+    """
+    SaaS Usage Meter for Active Book Watch.
+    Returns counts of actively monitored defendants, scan throughput,
+    monthly alerts generated, and billable quota status for agency SaaS tiers.
+    """
+    bonds_col = get_collection("active_bonds")
+    rearrest_col = get_collection("rearrest_notifications")
+    arrests_col = get_collection("arrests")
+
+    # 1. Total watched defendants currently on open book
+    total_watched = await bonds_col.count_documents({
+        "status": {"$in": ["active", "monitoring", "alert", "reinstated"]}
+    })
+
+    # 2. Monthly alerts generated this calendar month
+    now = datetime.now(timezone.utc)
+    start_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    monthly_alerts = await rearrest_col.count_documents({
+        "created_at": {"$gte": start_of_month}
+    })
+
+    # 3. Scanned arrest records in last 24h
+    cutoff_24h = (now - timedelta(hours=24)).isoformat()
+    scanned_24h = await arrests_col.count_documents({"scraped_at": {"$gte": cutoff_24h}})
+
+    # 4. SaaS pricing model tiering
+    included_defendants = 50   # Base plan includes 50 active book defendants
+    overage_rate = 1.50        # $1.50/mo per defendant beyond base
+    billable_overage = max(0, total_watched - included_defendants)
+    estimated_monthly_meter = billable_overage * overage_rate
+
+    return {
+        "success": True,
+        "meter": {
+            "total_watched_defendants": total_watched,
+            "scanned_arrests_24h": scanned_24h,
+            "monthly_alerts_generated": monthly_alerts,
+            "included_defendants_quota": included_defendants,
+            "billable_overage_units": billable_overage,
+            "overage_rate_usd": overage_rate,
+            "estimated_monthly_meter_usd": round(estimated_monthly_meter, 2),
+            "plan_tier": "starter_50" if total_watched <= included_defendants else "scaled_metered",
+            "coverage_footprint": "10-state Palmetto/OSI footprint (357+ counties)",
+            "updated_at": now.isoformat(),
+        }
+    }
+
 
