@@ -47,35 +47,151 @@ def verify_gmail_pubsub_token(token: str, audience: str) -> dict:
     return claims
 
 
+def _twilio_form_params(form_data) -> dict[str, str]:
+    """Flatten Starlette form into Twilio-style string params (last value wins)."""
+    params: dict[str, str] = {}
+    for key, value in form_data.multi_items():
+        params[str(key)] = "" if value is None else str(value)
+    return params
+
+
+def _twilio_candidate_urls(request: Request) -> list[str]:
+    """URLs Twilio may have signed (exact console URL first, then proxy reconstructions)."""
+    candidates: list[str] = []
+    configured = (os.getenv("TWILIO_WEBHOOK_PUBLIC_URL") or "").strip()
+    if configured:
+        candidates.append(configured.rstrip("/"))
+        candidates.append(configured if configured.endswith("/") else configured + "/")
+
+    proto = (
+        (request.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip()
+        or request.url.scheme
+        or "https"
+    )
+    host = (
+        (request.headers.get("X-Forwarded-Host") or "").split(",")[0].strip()
+        or (request.headers.get("Host") or "").strip()
+        or request.url.netloc
+    )
+    path = request.url.path or "/api/webhooks/twilio"
+    query = request.url.query
+
+    if host:
+        base = f"{proto}://{host}{path}"
+        candidates.append(base)
+        if query:
+            candidates.append(f"{base}?{query}")
+        # Trailing-slash variants (Twilio docs: try with/without)
+        if path.endswith("/"):
+            trimmed = f"{proto}://{host}{path.rstrip('/')}"
+            candidates.append(trimmed)
+            if query:
+                candidates.append(f"{trimmed}?{query}")
+        else:
+            with_slash = f"{proto}://{host}{path}/"
+            candidates.append(with_slash)
+            if query:
+                candidates.append(f"{with_slash}?{query}")
+
+    # Final fallback: request.url as seen by the app
+    try:
+        raw = str(request.url)
+        candidates.append(raw.rstrip("/"))
+        candidates.append(raw if raw.endswith("/") else raw + "/")
+    except Exception:
+        pass
+
+    # Deduplicate preserving order
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for url in candidates:
+        if url and url not in seen:
+            seen.add(url)
+            ordered.append(url)
+    return ordered
+
+
+def verify_twilio_signature(
+    auth_token: str,
+    signature: str,
+    urls: list[str],
+    params: dict[str, str],
+) -> bool:
+    """
+    Validate X-Twilio-Signature (HMAC-SHA1 over URL + sorted form params, Base64).
+
+    No twilio SDK dependency — same algorithm as twilio.request_validator.RequestValidator.
+    """
+    import base64
+
+    if not auth_token or not signature:
+        return False
+    provided = signature.strip()
+    sorted_items = sorted((str(k), str(v)) for k, v in params.items())
+    param_suffix = "".join(k + v for k, v in sorted_items)
+
+    for url in urls:
+        data = (url + param_suffix).encode("utf-8")
+        digest = hmac.new(auth_token.encode("utf-8"), data, hashlib.sha1).digest()
+        expected = base64.b64encode(digest).decode("utf-8")
+        if hmac.compare_digest(expected, provided):
+            return True
+    return False
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Security helpers
 
 
 @webhooks_bp.post("/webhooks/twilio")
 async def twilio_webhook(request: Request):
-    """Handle inbound SMS from Twilio."""
+    """Handle inbound SMS from Twilio (signature required in production)."""
     from dashboard.routers.events import publish_event
+    from starlette.responses import Response as StarletteResponse
 
-    # Twilio sends form data
+    auth_token = (os.getenv("TWILIO_AUTH_TOKEN") or "").strip()
+    is_prod = _env_is_production()
+
+    if not auth_token:
+        if is_prod:
+            logger.error("[twilio_webhook] TWILIO_AUTH_TOKEN not configured — rejecting")
+            return JSONResponse(
+                {"error": "Webhook authentication not configured"},
+                status_code=503,
+            )
+        logger.warning(
+            "[twilio_webhook] TWILIO_AUTH_TOKEN unset — allowing in non-production only"
+        )
+
+    # Twilio sends application/x-www-form-urlencoded
     form_data = await request.form()
-    audit_events = get_collection("audit_events")
+    params = _twilio_form_params(form_data)
 
-    # Log to audit_events
+    if auth_token:
+        signature = (
+            request.headers.get("X-Twilio-Signature")
+            or request.headers.get("x-twilio-signature")
+            or ""
+        )
+        urls = _twilio_candidate_urls(request)
+        if not verify_twilio_signature(auth_token, signature, urls, params):
+            logger.warning("[twilio_webhook] Invalid or missing X-Twilio-Signature — rejecting")
+            return JSONResponse({"error": "Forbidden"}, status_code=403)
+
+    audit_events = get_collection("audit_events")
     audit_doc = {
         "source": "twilio_webhook",
         "event_type": "inbound_sms",
-        "payload": dict(form_data),
-        "timestamp": datetime.now(timezone.utc).isoformat()
+        "payload": params,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     await audit_events.insert_one(audit_doc)
 
-    # Publish SSE event
-    await publish_event('sms_received', {
-        "from": form_data.get('From'),
-        "body": form_data.get('Body')
+    await publish_event("sms_received", {
+        "from": params.get("From"),
+        "body": params.get("Body"),
     })
 
-    from starlette.responses import Response as StarletteResponse
     return StarletteResponse(
         content="<Response></Response>",
         status_code=200,
