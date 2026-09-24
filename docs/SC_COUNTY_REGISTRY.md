@@ -1,6 +1,6 @@
 # South Carolina County Registry
 
-> Last updated: 2026-07-14  
+> Last updated: 2026-09-24  
 > Goal: all **46** SC counties (Palmetto surety footprint)  
 > Code: `scrapers/counties_sc/` · Recon: `docs/SC_RECON_RESULTS.md`
 
@@ -9,7 +9,7 @@
 | Status | Count | Notes |
 |--------|------:|-------|
 | Registered in scheduler / dashboard | **46** (all SC counties) | `scraper_sc_*` job IDs · `County (SC)` labels |
-| Production HTML/XML/PDF source verified | 6+ | Beaufort (XML), Jasper (WP cards), Charleston, York, Florence, Horry, Richland, Newberry (dynamic official PDF) |
+| Production HTML/XML/PDF source verified | 6+ | Beaufort (XML), Jasper (WP cards), Charleston (ListView Inmate #, 2026-09-23), Florence, Newberry (dynamic official PDF). Richland and Sumter are fail closed. |
 | Platform thin wrappers | 16+ | Zuercher, JailTracker, Southern SW, P2C, SmartCOP, New World |
 | Scaffold / blocked | rest | No public portal, CAPTCHA, Cloudflare, or bad recon URL |
 | Missing module entirely | **0** | All 46 files present under `scrapers/counties_sc/` |
@@ -44,7 +44,7 @@ python main.py sc_lee      # not FL Lee
 | Beaufort | ✅ Live | XML feed | `mugshots.bcgov.net/jailrostera.xml` |
 | Berkeley | 🟡 Stub | Custom | Needs parser |
 | Calhoun | ❌ Blocked | — | Prior Kologik URL is **Calhoun FL** (FL0070000 / Blountstown) |
-| Charleston | ✅ Built | ASP.NET | 7-day booking search |
+| Charleston | ✅ Live | ASP.NET ListView | `inmatesearch.charlestoncounty.gov` Inmate # + name + booking date/time. reCAPTCHA via Patchright audio solver. Captcha/navigation failure is `status=error`. Health `verified_public` (2026-09-23). |
 | Cherokee | ⚠ Fail closed | Zuercher | No validated broad roster contract; see `SC_ZUERCHER_SOURCE_SAFETY.md` |
 | Chester | 🟡 Wrapper | JailTracker | CAPTCHA path |
 | Chesterfield | 🟡 Wrapper | Southern SW | |
@@ -68,9 +68,9 @@ python main.py sc_lee      # not FL Lee
 | Newberry | 🟡 Source verified | Dynamic official PDF | Current Sheriff-uploaded bookings PDF; source `SO` identifier required; deployed 2026-08-14; per-scraper scheduler telemetry still pending |
 | Oconee | 🟡 Wrapper | Zuercher | |
 | Pickens | 🟡 Wrapper | Zuercher | |
-| Richland | ✅ Live | ASP.NET JMSOnline | Captcha = `hidStrRandom` token. Digraph last-name walk (A–Z + digraphs when paged). List view: name/age/ht/wt/booked (no charges on list). |
+| Richland | ⚠ Fail closed | ASP.NET JMSOnline | 2026-09-23 portal is a maintenance page. List view has no source-issued booking key; synthetic `RIC_` keys are forbidden. `SOURCE_CONTRACT_VALIDATED=False`. |
 | Spartanburg | 🟡 Scaffold | — | Prior 72h URL 404 |
-| Sumter | 🟡 Wrapper | SmartCOP | |
+| Sumter | ⚠ Fail closed | SmartCOP | Booking number was synthesized from name+date. Fail closed until a source-issued key exists. |
 | Union | 🟡 Wrapper | Zuercher | |
 | York | ⚠ Fail closed | ASP.NET public roster | Parser maps official booking numbers and timestamps and refuses synthetic keys, but ordinary access to the configured roster timed out. `SOURCE_CONTRACT_VALIDATED = False`; Scraper Health reports `fail_closed`. Re-enable only after ordinary public access is revalidated. |
 
@@ -81,7 +81,7 @@ Abbeville, Allendale, Barnwell, Clarendon, Dillon, Edgefield, Fairfield, McCormi
 ## Next build priorities
 
 1. **Greenville** — revalidate only if the official source provides a supported public bulk roster; do not use proxy or access-control workarounds.
-2. **Richland** — optional charge/bond detail enrichment (list view is live)
+2. **Richland** — reopen only when JMSOnline returns a source Inmate/Booking # on the broad list. Do not invent `RIC_` keys.
 3. **Zuercher API hardening** — confirm SC portals return JSON; add DrissionPage fallback
 4. **JailTracker SC** — Chester/Greenwood with existing CAPTCHA cascade
 5. **Bamberg/Hampton family** — revalidate only when a supported direct public roster contract is available.
@@ -93,7 +93,7 @@ Abbeville, Allendale, Barnwell, Clarendon, Dillon, Edgefield, Fairfield, McCormi
 |-------|------------------:|----------|--------|
 | FL | 67 | `scrapers/counties/` | Primary — ~49 registered |
 | GA | 159 | `scrapers/counties_ga/` | Expanding — 74 registered + EAS batch |
-| SC | 46 | `scrapers/counties_sc/` | Building — 35 registered (Richland live) |
+| SC | 46 | `scrapers/counties_sc/` | 46 registered. Charleston ListView contract live; Richland and Sumter fail closed (2026-09-23). |
 | NC | 100 | `scrapers/counties_nc/` | Recon complete — see NC_RECON_RESULTS.md |
 | TN | 95 | `scrapers/counties_tn/` | Scaffold |
 | TX | 254 | `scrapers/counties_tx/` | Scaffold |

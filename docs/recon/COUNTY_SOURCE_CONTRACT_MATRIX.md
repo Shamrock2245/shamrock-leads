@@ -26,11 +26,11 @@
 | LA | 64 | 13 | 3 | 1 | 4 | 46 | 10 |
 | MS | 82 | 9 | 1 | 0 | 4 | 69 | 8 |
 | NC | 100 | 60 | 0 | 0 | 0 | 89 | 11 |
-| SC | 46 | 46 | 0 | 0 | 0 | 32 | 14 |
+| SC | 46 | 46 | 1 | 0 | 0 | 29 | 16 |
 | TN | 96 | 22 | 1 | 0 | 74 | 1 | 20 |
 | TX | 254 | 34 | 1 | 0 | 0 | 253 | 0 |
 
-**Aggregate matrix counts:** verified public 10; candidate productive 1; recon only 305; unverified 543; fail closed 88.
+**Aggregate matrix counts:** verified public 11; candidate productive 1; recon only 305; unverified 540; fail closed 90.
 
 ## County matrix
 
@@ -596,7 +596,7 @@
 | SC | 013 | Beaufort County | Palmetto | registered | fail_closed | https://www.beaufortcountysc.gov/detention-center/inmate-inquiry-system.html | Ordinary public landing page; no bypass used | Official Beaufort County government inmate-inquiry landing page; current inmates/recent bookings described, row schema and pagination not verified. |
 | SC | 015 | Berkeley County | Palmetto | registered | fail_closed | https://sheriff.berkeleycountysc.gov/report/inmate-lookup/ | Ordinary public landing page; no bypass used | Official Berkeley County Sheriff inmate-lookup page; public search is described, broad roster and row schema not verified. |
 | SC | 017 | Calhoun County | Palmetto | registered | unverified | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
-| SC | 019 | Charleston County | Palmetto | registered | unverified | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
+| SC | 019 | Charleston County | Palmetto | registered | verified_public | https://inmatesearch.charlestoncounty.gov/ | Public ASP.NET ListView; reCAPTCHA v2 via the existing audio solver; default 10/page pager because the page-size postback clears results | 2026-09-23: source Inmate #, name, booking date/time, and charges. Synthetic CHS_ keys removed. Captcha or navigation failure is status=error; a loaded results page with zero Inmate # rows is the only empty. |
 | SC | 021 | Cherokee County | Palmetto | registered | unverified | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
 | SC | 023 | Chester County | Palmetto | registered | unverified | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
 | SC | 025 | Chesterfield County | Palmetto | registered | unverified | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
@@ -626,10 +626,10 @@
 | SC | 073 | Oconee County | Palmetto | registered | unverified | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
 | SC | 075 | Orangeburg County | Palmetto | registered | unverified | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
 | SC | 077 | Pickens County | Palmetto | registered | unverified | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
-| SC | 079 | Richland County | Palmetto | registered | unverified | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
+| SC | 079 | Richland County | Palmetto | registered | fail_closed | https://www7.richlandcountysc.gov/JMSOnline/public/default.aspx | JMSOnline returned a maintenance page on 2026-09-23; list view has no source-issued booking key | Synthetic RIC_ keys are forbidden. SOURCE_CONTRACT_VALIDATED=False until the portal returns a real Inmate/Booking # on the broad list. |
 | SC | 081 | Saluda County | Palmetto | registered | fail_closed | https://saludacounty.sc.gov/departments/detention-center | Ordinary public landing page; no bypass used | Official Saluda County detention-center page; facility information only, no broad roster contract verified. |
 | SC | 083 | Spartanburg County | Palmetto | registered | unverified | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
-| SC | 085 | Sumter County | Palmetto | registered | unverified | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
+| SC | 085 | Sumter County | Palmetto | registered | fail_closed | https://portal.sumtercountysheriff.org/smartwebclient/jail.aspx | SmartCOP path | Booking number was synthesized from name+date. Fail closed until a source-issued key exists. |
 | SC | 087 | Union County | Palmetto | registered | fail_closed | https://union-so-sc.zuercherportal.com/ | Ordinary public landing page; no bypass used | Public-facing Union County Zuercher portal surfaced for inmate search; official sponsorship and broad row schema not independently verified. |
 | SC | 089 | Williamsburg County | Palmetto | registered | unverified | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
 | SC | 091 | York County | Palmetto | registered | fail_closed | https://inmatesinjail.yorkcountygov.com/detentioncenter/inmatesinjail.aspx | Ordinary public landing page; no bypass used | Official York County government inmate-listing domain; page accessible as a listing endpoint, row schema and pagination not verified. |

@@ -22,6 +22,7 @@ class DashboardSourceStateTests(unittest.TestCase):
     def test_known_verified_and_guarded_labels_are_explicit(self) -> None:
         states = _source_states()
         self.assertEqual(states["Rankin (MS)"], "verified_public")
+        self.assertEqual(states["Charleston (SC)"], "verified_public")
         self.assertEqual(states["Giles (TN)"], "fail_closed")
         self.assertEqual(states["Jefferson (AL)"], "fail_closed")
         self.assertEqual(states["East Baton Rouge (LA)"], "fail_closed")
@@ -39,6 +40,8 @@ class DashboardSourceStateTests(unittest.TestCase):
         self.assertEqual(states["Colleton (SC)"], "fail_closed")
         self.assertEqual(states["Greenwood (SC)"], "fail_closed")
         self.assertEqual(states["Lexington (SC)"], "fail_closed")
+        self.assertEqual(states["Richland (SC)"], "fail_closed")
+        self.assertEqual(states["Sumter (SC)"], "fail_closed")
 
     def test_omitted_registered_label_uses_the_documented_unverified_default(self) -> None:
         states = _source_states()

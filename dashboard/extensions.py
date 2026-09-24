@@ -594,6 +594,7 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     "Etowah (AL)": "verified_public",
     "St. Clair (AL)": "verified_public",
     "Rankin (MS)": "verified_public",
+    "Charleston (SC)": "verified_public",  # 2026-09-23 ListView+Inmate#+recaptcha write smoke
     # Deployed guards: no source fetches and no record emission pending revalidation.
     "Calcasieu (LA)": "fail_closed",
     "East Baton Rouge (LA)": "fail_closed",
@@ -630,6 +631,8 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     "Saluda (SC)": "fail_closed",
     "Union (SC)": "fail_closed",
     "York (SC)": "fail_closed",
+    "Sumter (SC)": "fail_closed",
+    "Richland (SC)": "fail_closed",
     "Caldwell (NC)": "fail_closed",
     "Chatham (NC)": "fail_closed",
     "Cumberland (NC)": "fail_closed",

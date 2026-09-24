@@ -56,12 +56,16 @@ class SouthernSWBaseScraper(BaseScraper):
 
         try:
             resp = session.get(index_url, timeout=25)
-            if resp.status_code != 200:
-                logger.error(f"{self.county}: index HTTP {resp.status_code}")
-                return []
-
-            soup = BeautifulSoup(resp.text, "html.parser")
-            jms = self._extract_jms_agency_id(soup)
+            jms = ""
+            if resp.status_code == 200:
+                soup = BeautifulSoup(resp.text, "html.parser")
+                jms = self._extract_jms_agency_id(soup)
+            else:
+                logger.warning(
+                    "%s: index HTTP %s — continuing with agency_id as JMS fallback",
+                    self.county,
+                    resp.status_code,
+                )
             if not jms:
                 logger.warning(f"{self.county}: no JMSAgencyID on index; trying agency_id alone")
                 jms = agency
@@ -192,8 +196,12 @@ class SouthernSWBaseScraper(BaseScraper):
             return m.group(1).strip() if m else ""
 
         booked = field(r"Booked:[ \t]*([^\n]+)")
+        if not booked:
+            booked = field(r"Booked:\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})")
         arrest_dt = field(r"Arrest Date/Time:\s*([^\n]+)")
         agency = field(r"Arresting Agency:\s*([^\n]+)")
+        if agency.lower().startswith(("arrest date", "booked", "bond", "demographics", "charges")):
+            agency = ""
         bond_total = field(r"Bond Total:\s*\$?\s*([\d,]+\.?\d*)")
         demo = field(r"Demographics:\s*([^\n]+)")
 
@@ -325,9 +333,13 @@ class SouthernSWBaseScraper(BaseScraper):
                 normalized = attr_name.lower().replace("_", "-")
                 if normalized in {
                     "data-booking-id",
+                    "data-bookingid",
                     "data-booking-number",
+                    "data-bookingnumber",
                     "data-inmate-id",
+                    "data-inmateid",
                     "data-inmate-number",
+                    "data-inmatenumber",
                 } and attr_value:
                     return str(attr_value).strip()
 
@@ -340,6 +352,12 @@ class SouthernSWBaseScraper(BaseScraper):
             )
             if match:
                 return match.group(1).strip()
+
+        # Citizen Connect mugshot debug comments: BookingID=10058420
+        html = str(card)
+        match = re.search(r"BookingID\s*=\s*([A-Za-z0-9-]+)", html, flags=re.I)
+        if match:
+            return match.group(1).strip()
         return ""
 
 

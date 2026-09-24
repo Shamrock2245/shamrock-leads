@@ -9,6 +9,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 - **Broward County, FL** — Turnstile Arrest Search path live after Mac write smoke (30 new). Pass `action=arrest_search` to SolveCaptcha; Health fail_closed lifted; requires `SOLVECAPTCHA_KEY`.
+- **Charleston County, SC** — ListView parser uses the source Inmate # (no `CHS_` hash keys). reCAPTCHA or navigation failure is `status=error`; only a loaded results page with zero Inmate # rows is empty. Health `verified_public`.
+- **Richland County, SC** and **Sumter County, SC** — fail closed. Richland JMSOnline is on a maintenance page and its list view has no source booking key. Sumter SmartCOP still synthesizes a booking number from name+date.
+- **Southern Software roster cards** — keep going when the index page is non-200 (agency id fallback), accept hyphen-less booking attributes and `BookingID=` comments, and drop agency text that is really the next field label.
 
 ## [Unreleased] — 2026-08-28 (P0 gate update)
 
