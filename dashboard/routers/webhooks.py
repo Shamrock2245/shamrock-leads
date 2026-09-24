@@ -30,6 +30,12 @@ logger = logging.getLogger(__name__)
 GMAIL_PUBSUB_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
 
 
+def _env_is_production() -> bool:
+    """True when ENV or ENVIRONMENT is production/prod (repo convention)."""
+    env = (os.getenv("ENV") or os.getenv("ENVIRONMENT") or "").lower()
+    return env in ("production", "prod")
+
+
 def verify_gmail_pubsub_token(token: str, audience: str) -> dict:
     """Verify a Google-signed Pub/Sub push OIDC token."""
     from google.auth.transport.requests import Request as GoogleAuthRequest
@@ -115,7 +121,8 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
     now = datetime.now(timezone.utc)
 
     # -- 1. HMAC signature validation / Auth check ---------------------------
-    webhook_secret = os.getenv("SWIPESIMPLE_WEBHOOK_SECRET", "")
+    # Production = ENV or ENVIRONMENT (VPS uses ENV=production per .env.example).
+    webhook_secret = (os.getenv("SWIPESIMPLE_WEBHOOK_SECRET") or "").strip()
     if webhook_secret:
         raw_body = await request.body()
         sig_header = request.headers.get("X-SwipeSimple-Signature", "")
@@ -130,9 +137,16 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         if not hmac.compare_digest(expected_sig, sig_header):
             logger.warning("[payment_webhook] Invalid SwipeSimple signature — rejecting")
             return JSONResponse({"error": "Invalid signature"}, status_code=401)
-    elif os.getenv("ENVIRONMENT") == "production":
-        logger.warning("[payment_webhook] Rejected — SWIPESIMPLE_WEBHOOK_SECRET not configured")
+    elif _env_is_production():
+        logger.warning(
+            "[payment_webhook] Rejected — SWIPESIMPLE_WEBHOOK_SECRET not configured "
+            "(receipt poller remains source of truth if SwipeSimple never sends webhooks)"
+        )
         return JSONResponse({"error": "Webhook secret not configured"}, status_code=503)
+    else:
+        logger.warning(
+            "[payment_webhook] SWIPESIMPLE_WEBHOOK_SECRET unset — allowing in non-production only"
+        )
 
     # -- 2. Payload validation (fail closed on empty or invalid payload) -------
     try:
