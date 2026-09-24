@@ -51,6 +51,8 @@ class DCNBaseScraper(BaseScraper):
     max_detail_fetches: int = 120
     detail_delay_s: float = 0.35
     enrich_details: bool = True
+    # When True, skip roster rows that lack a URL bid (no name/date hash keys).
+    require_source_bid: bool = False
 
     @property
     def county(self) -> str:
@@ -144,8 +146,10 @@ class DCNBaseScraper(BaseScraper):
             sex = cells[3] if len(cells) > 3 else ""
             admit = cells[4] if len(cells) > 4 else ""
 
+            if not bid and self.require_source_bid:
+                continue
             booking = bid or self._synthetic_booking(name, admit, age)
-            if booking in seen:
+            if not booking or booking in seen:
                 continue
             seen.add(booking)
 
@@ -221,14 +225,24 @@ class DCNBaseScraper(BaseScraper):
                 continue
             if charge not in charges:
                 charges.append(charge)
-            # Bond amount usually near end of charge row
+            # Bond amount usually near end of charge row.
+            # Prefer per-$ token sums so "$2,000 $55,000" does not become 200055000.
             for cell in cells:
-                if "$" in cell:
-                    cleaned = re.sub(r"[^\d.]", "", cell.replace(",", ""))
-                    try:
-                        total_bond += float(cleaned)
-                    except ValueError:
-                        pass
+                if "$" not in cell:
+                    continue
+                amounts = re.findall(r"\$\s*([\d,]+(?:\.\d+)?)", cell)
+                if amounts:
+                    for raw in amounts:
+                        try:
+                            total_bond += float(raw.replace(",", ""))
+                        except ValueError:
+                            pass
+                    continue
+                cleaned = re.sub(r"[^\d.]", "", cell.replace(",", ""))
+                try:
+                    total_bond += float(cleaned)
+                except ValueError:
+                    pass
                 elif not bond_type and any(
                     k in cell.upper() for k in ("SECURED", "UNSECURED", "CASH", "BOND", "ROR")
                 ):
