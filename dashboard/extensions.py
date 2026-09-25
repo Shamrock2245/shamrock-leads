@@ -598,7 +598,12 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     "Dorchester (SC)": "verified_public",  # 2026-09-24 SSW Citizen Connect write smoke (source BookingID)
     "Chesterfield (SC)": "verified_public",  # 2026-09-24 SSW Citizen Connect write smoke (source BookingID)
     "Aiken (SC)": "verified_public",  # 2026-09-24 DTNSearch Inmate ID# / qSO_NO write smoke
-    "Darlington (SC)": "verified_public",  # 2026-09-24 DCN HTTP bid write smoke
+    "Darlington (SC)": "verified_public",  # 2026-09-24 DCN HTTP bid write smoke; 2026-09-25 all pages (233) via DevExpress pager callback
+    # 2026-09-25 NC/TX gap queue Mac write smokes (docs/recon/GAP_QUEUE_NC_TX_SC_2026-09-25.md)
+    "Gaston (NC)": "verified_public",  # New World detail Booking # YYYY-NNNNNNNN; 45 new, status ok
+    "Pitt (NC)": "verified_public",  # Detainee Search GridView Booking Number (6 digits); 477 (164 new / 313 updated), ok
+    "Orange (NC)": "verified_public",  # OCSO daily confinement PDF Bk # (5 digits); 101 new, ok
+    "Denton (TX)": "verified_public",  # Denton PD Athena JailView bookno (8 digits; city jail only); 8 new, ok
     "Bay (FL)": "verified_public",  # 2026-09-25 baysomobile.org/is write smoke 940 new (source Booking # YYYY-NNNNNN)
     "Suwannee (FL)": "verified_public",  # 2026-09-25 SmartWEB JAIL View write smoke 44 new (source Booking No SCSO<YY>JBN<NNNNNN>)
     # Owner decision (Brendan 2026-09-25): Lake handled like Broward — SolveCaptcha

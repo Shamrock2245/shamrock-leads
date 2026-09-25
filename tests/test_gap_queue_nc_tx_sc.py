@@ -282,3 +282,10 @@ def test_rewritten_scrapers_are_plain_http_and_source_validated():
         src = inspect.getsource(mod)
         assert "create_stealth_session" not in src and "make_stealth_request" not in src
         assert "get_proxy" not in src and "impersonate" not in src
+
+
+def test_write_smoked_counties_are_verified_public_in_registry():
+    from dashboard.extensions import SCRAPER_SOURCE_STATES
+
+    for label in ("Gaston (NC)", "Pitt (NC)", "Orange (NC)", "Denton (TX)", "Darlington (SC)"):
+        assert SCRAPER_SOURCE_STATES.get(label) == "verified_public", label
