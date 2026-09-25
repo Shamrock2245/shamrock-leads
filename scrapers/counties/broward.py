@@ -30,6 +30,7 @@ from curl_cffi import requests as cffi_requests
 
 from core.models import ArrestRecord
 from scrapers.base_scraper import BaseScraper
+from scrapers.solvecaptcha import solve_turnstile
 
 logger = logging.getLogger(__name__)
 
@@ -182,57 +183,16 @@ class BrowardCountyScraper(BaseScraper):
     # ── Turnstile ──────────────────────────────────────────────────────────
 
     def _solve_turnstile(self, api_key: str) -> Optional[str]:
-        logger.info("[Broward] Solving Turnstile via SolveCaptcha...")
-        try:
-            submit = cffi_requests.post(
-                "https://api.solvecaptcha.com/in.php",
-                data={
-                    "key": api_key,
-                    "method": "turnstile",
-                    "sitekey": TURNSTILE_SITEKEY,
-                    "pageurl": SEARCH_PAGE_URL,
-                    # Widget declares data-action="arrest_search"; token is
-                    # rejected (CAPTCHA_FAILED) without matching action.
-                    "action": "arrest_search",
-                    "json": "1",
-                },
-                timeout=30,
-            )
-            submit_data = submit.json()
-            if submit_data.get("status") != 1:
-                logger.error("[Broward] SolveCaptcha submit failed: %s", submit_data)
-                return None
-            task_id = submit_data["request"]
-            logger.info("[Broward] SolveCaptcha task: %s", task_id)
-
-            for _ in range(40):
-                time.sleep(5)
-                try:
-                    result = cffi_requests.get(
-                        "https://api.solvecaptcha.com/res.php",
-                        params={
-                            "key": api_key,
-                            "action": "get",
-                            "id": task_id,
-                            "json": "1",
-                        },
-                        timeout=15,
-                    ).json()
-                except Exception as e:
-                    logger.warning("[Broward] SolveCaptcha poll error: %s", e)
-                    continue
-                if result.get("status") == 1:
-                    logger.info("[Broward] Turnstile solved")
-                    return result["request"]
-                if "CAPCHA_NOT_READY" in str(result.get("request", "")):
-                    continue
-                logger.error("[Broward] SolveCaptcha error: %s", result)
-                return None
-            logger.error("[Broward] SolveCaptcha timeout")
-            return None
-        except Exception as e:
-            logger.error("[Broward] SolveCaptcha exception: %s", e)
-            return None
+        # Widget declares data-action="arrest_search"; token is rejected
+        # (CAPTCHA_FAILED) without matching action. Shared helper: scrapers/solvecaptcha.py
+        return solve_turnstile(
+            api_key,
+            sitekey=TURNSTILE_SITEKEY,
+            pageurl=SEARCH_PAGE_URL,
+            action="arrest_search",
+            http=cffi_requests,
+            log_prefix="[Broward]",
+        )
 
     # ── Search session ─────────────────────────────────────────────────────
 

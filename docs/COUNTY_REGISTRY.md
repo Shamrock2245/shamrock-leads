@@ -36,7 +36,7 @@
 | 10 | **Seminole** | Custom | `seminole.py` | ✅ Active | 90 min | 2026-04-27 |
 | 11 | **Orange** | requests GET — getInmates API | `orange.py` | ✅ Active | 90 min | 2026-04-27 |
 | 12 | **Pasco** | DrissionPage — Cloudflare bypass | `pasco.py` | ✅ Active | 90 min | 2026-04-27 |
-| 13 | **Lake** | curl_cffi POST + reCAPTCHA v2 (SolveCaptcha) | `lake.py` | ✅ Active (needs SOLVECAPTCHA_KEY) | 90 min | 2026-07-24 |
+| 13 | **Lake** | requests POST `recent_data` + Turnstile token (SolveCaptcha, owner-approved; shared `scrapers/solvecaptcha.py`) | `lake.py` | ✅ `verified_public` (Mac write smoke 17 new; needs SOLVECAPTCHA_KEY) | 90 min | 2026-09-25 |
 | 14 | **Hernando** | Custom HTML | `hernando.py` | ✅ Active | 90 min | 2026-04-27 |
 | 15 | **Citrus** | JailTracker | `citrus.py` | ✅ Active | 120 min | 2026-04-27 |
 
