@@ -189,3 +189,50 @@ await maybe_issue_share_invoice_for_bond(bond_id, channel="imessage", dispatch=T
 - [x] Entrypoint `maybe_issue_share_invoice_for_bond` (+ optional promote hook)
 - [x] Brendan authorized $0.01 smoke (DISPATCH off); production `SWIPESIMPLE_LIVE` still needs post-smoke go-ahead
 - [ ] Brendan go-ahead before setting `SWIPESIMPLE_DISPATCH_LIVE=1`
+- [x] Atomic per-bond create claim (`swipesimple_invoice_claims`, unique `bond_id`) before any SwipeSimple HTTP create
+- [x] Once-only dispatch claim (`dispatch_status` `sending` → `sent`) before any BlueBubbles / email send
+- [x] Logs carry `bond_id` + flags only (no booking #, links, amounts, names, phone, email)
+
+---
+
+## Atomic per-bond claims (`swipesimple_invoice_claims`)
+
+Invoice link fields stay on `bond_cases` / `active_bonds` (unchanged data model).
+`swipesimple_invoice_claims` is a small **claim ledger** that serialises create + dispatch so
+concurrent callers (DocuSeal webhook + poller, intake promote, retries) cannot create two
+SwipeSimple invoices or message a customer twice.
+
+| Field | Meaning |
+|-------|---------|
+| `bond_id` | Canonical bond key (`bond_case_id` → `bond_id` → `_id`) — **unique index** `uniq_bond_id` |
+| `invoice_number` | Booking # (= reference_id) — **unique sparse index** `uniq_invoice_number` (backstop) |
+| `status` / `claim_id` / `claimed_at` / `attempts` / `error_code` | Create claim |
+| `dispatch_status` / `dispatch_claim_id` / `dispatch_claimed_at` / `dispatched_at` / `dispatch_channel` / `dispatch_error_code` / `dispatch_attempts` | Dispatch claim |
+
+Indexes are ensured lazily (idempotent `create_index`) on first use; if they cannot be ensured the
+service **fails closed** (`invoice_claim_index_unavailable`, no create / no send).
+
+**Create claim** (in `create_locked_invoice`, after the existing fail-closed checks and the
+`SWIPESIMPLE_LIVE` gate, before any SwipeSimple HTTP):
+
+| State | Set when | Next caller |
+|-------|----------|-------------|
+| *(no doc)* | — | `find_one_and_update(upsert, $setOnInsert)`; `BEFORE is None` ⇒ winner |
+| `claimed` (< 15 min) | winner holds the create | loser → `{ok, idempotent, in_progress: true}`, **no link, no HTTP** |
+| `claimed` (≥ 15 min, crashed worker) | — | **fail closed** `invoice_claim_stale_manual_review` — never auto-reclaimed |
+| `created` | invoice created + link persisted | idempotent (link read from BondCase) |
+| `failed` | failed **before** the create POST, or create POST rejected 4xx | may be re-claimed **only** via conditional update from `failed` (same `claim_id`) |
+| `needs_review` | create POST sent and outcome unknown (5xx / network / id unresolved / copy_link / premium mismatch) | **fail closed** `invoice_claim_needs_manual_review` |
+
+`DuplicateKeyError` on the claim = lost the race (in_progress, no HTTP).
+
+**Dispatch claim** (in `dispatch_invoice`, after the `SWIPESIMPLE_DISPATCH_LIVE` gate — dry-run
+takes no claim): conditional update matching `bond_id` + `dispatched_at` absent +
+`dispatch_status ∈ {absent, failed}` → `sending`. Only the winner sends. Success → `sent` +
+`dispatched_at` + `dispatch_channel`; failure / not accepted → `failed` + `dispatch_error_code`
+(retryable). Already `sent` → `{already_dispatched: true}`, no send. Stale `sending`
+(≥ 15 min) → **fail closed** `dispatch_claim_stale_manual_review` (message may have been delivered).
+
+Manual review: verify in SwipeSimple by `reference_id` (booking #) / check BlueBubbles history, then
+fix the claim doc by hand (e.g. set `status: created` with the real invoice id, or `failed` if
+SwipeSimple has no invoice).
