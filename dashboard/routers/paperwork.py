@@ -768,8 +768,24 @@ async def deliver_packet(request: Request, packet_id: str):
         if not bb:
             return JSONResponse({"error": "BlueBubbles server not configured"}, status_code=503)
         chat_guid = f"iMessage;-;{phone}"
-        result = await bb.send_text(chat_guid, message)
+        # Staff-triggered DocuSeal signing link (B3 BlueBubbles exception):
+        # allowed unless THIS recipient opted out (STOP/TCPA gate in the BB client).
+        result = await bb.send_text(chat_guid, message, purpose="docuseal_signing_link")
         sent_ok = bool(result and result.get("success"))
+        if not sent_ok and (result or {}).get("blocked"):
+            return JSONResponse(
+                {
+                    "success": False,
+                    "blocked": True,
+                    "error": (result or {}).get("reason") or "recipient_opted_out",
+                    "reason": (result or {}).get("reason") or "recipient_opted_out",
+                    "purpose": "docuseal_signing_link",
+                    "message": (result or {}).get("message") or "Recipient opted out of texts.",
+                    "packet_id": packet_id,
+                    "role": party_role,
+                },
+                status_code=409,
+            )
         if not sent_ok:
             return JSONResponse(
                 {
@@ -1021,6 +1037,31 @@ async def packet_builder_context(request: Request):
     except Exception as exc:
         logger.exception("packet_builder_context error")
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+async def _finalize_auto_payment_link(packet_id: str, packet_doc: dict) -> dict:
+    """Packet-finalize legacy payment-link auto send.
+
+    Behind DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK (DEFAULT OFF; any enabled
+    value — webhook-style or "all" — enables this path). Even when on, the
+    service sends only with a staff-confirmed premium, else
+    ``reason=premium_unconfirmed``. See legacy_payment_link_switch.
+    """
+    from dashboard.services.legacy_payment_link_switch import (
+        legacy_payment_link_enabled,
+    )
+
+    if not legacy_payment_link_enabled():
+        return {"skipped": True, "reason": "switch_off", "source": "packet_finalize"}
+    from dashboard.services.packet_payment_link_service import (
+        maybe_send_packet_payment_link,
+    )
+
+    return await maybe_send_packet_payment_link(
+        packet_id=packet_id,
+        packet_doc=packet_doc,
+        source="packet_finalize",
+    )
 
 
 @paperwork_bp.post("/paperwork/packet/finalize")
@@ -1577,18 +1618,14 @@ async def packet_builder_finalize(request: Request):
             )
 
         # Auto-send SwipeSimple payment link with premium in message copy.
+        # Behind the SAME owner switch as DocuSeal completion
+        # (DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK, DEFAULT OFF — any enabled
+        # value enables this path). Even when on, the service sends ONLY with a
+        # staff-confirmed premium (premium_confirmed_*) → else premium_unconfirmed.
         # Soft-fail: never blocks packet creation.
         payment_link_dispatch: dict = {}
         try:
-            from dashboard.services.packet_payment_link_service import (
-                maybe_send_packet_payment_link,
-            )
-
-            payment_link_dispatch = await maybe_send_packet_payment_link(
-                packet_id=packet_id,
-                packet_doc=packet_doc,
-                source="packet_finalize",
-            )
+            payment_link_dispatch = await _finalize_auto_payment_link(packet_id, packet_doc)
             if payment_link_dispatch:
                 await packets_col.update_one(
                     {"packet_id": packet_id},
@@ -2268,15 +2305,21 @@ async def paperwork_docuseal_status(packet_id: str):
             svc.normalize_submitter_record(s) for s in raw_submitters if isinstance(s, dict)
         ]
         now_iso = datetime.now(timezone.utc).isoformat()
+        status_set = {
+            "docuseal_remote_status": status or None,
+            "docuseal_submitters": submitters or packet.get("docuseal_submitters"),
+            "docuseal_polled_at": now_iso,
+        }
+        # Never persist a terminal "completed" here: docuseal_status=completed is
+        # owned by the shared completion handler (webhook/poller), and writing
+        # it from a staff refresh used to make the poller skip the packet
+        # forever (no signed status, no Drive filing). The live value is still
+        # returned below and stored as docuseal_remote_status.
+        if status not in ("completed", "complete", "signed"):
+            status_set["docuseal_status"] = status or packet.get("docuseal_status") or "pending"
         await get_collection("paperwork_packets").update_one(
             {"packet_id": packet_id},
-            {
-                "$set": {
-                    "docuseal_status": status or packet.get("docuseal_status") or "pending",
-                    "docuseal_submitters": submitters or packet.get("docuseal_submitters"),
-                    "docuseal_polled_at": now_iso,
-                }
-            },
+            {"$set": status_set},
         )
         return {
             "success": True,
@@ -2432,6 +2475,19 @@ async def bind_defendant_to_packet(request: Request, packet_id: str, req: BindDe
 
 
 
+async def _docuseal_sms_block_reason(submitter: dict) -> str:
+    """Return a block reason if DocuSeal must NOT text this submitter, else ''."""
+    from dashboard.services.sms_consent_ledger import check_send_allowed, phone_last10
+
+    phone = (submitter or {}).get("phone") or ""
+    if not phone_last10(phone):
+        return "sms_recipient_phone_unknown"
+    blocked = await check_send_allowed(phone, "docuseal_signing_link_sms")
+    if blocked:
+        return str(blocked.get("reason") or "recipient_opted_out")
+    return ""
+
+
 @paperwork_bp.post("/paperwork/{packet_id}/docuseal/resend")
 async def paperwork_docuseal_resend(packet_id: str, request: Request):
     """
@@ -2442,7 +2498,9 @@ async def paperwork_docuseal_resend(packet_id: str, request: Request):
       role: str — filter by role name
       email: str — update email before send (single target only)
       send_email: bool (default true)
-      send_sms: bool (default false)
+      send_sms: bool (default false) — suppressed per submitter when that
+        number opted out (STOP) or no submitter phone is on file; see
+        ``sms_blocked`` in the response.
     """
     from dashboard.services.docuseal_service import get_docuseal_service, resolve_template_id_for_surety
 
@@ -2517,11 +2575,27 @@ async def paperwork_docuseal_resend(packet_id: str, request: Request):
 
     updated = []
     errors = []
+    sms_blocked = []
     for s in targets:
         sid = s.get("id")
         try:
-            kwargs: dict = {"send_email": send_email, "send_sms": send_sms}
-            if new_email and (only_id is not None or len(targets) == 1):
+            sms_for_this = send_sms
+            if send_sms:
+                # STOP/TCPA gate applies to DocuSeal's own SMS too (owner decision:
+                # an opted-out number gets NO texts, DocuSeal links included).
+                # Per-signer: only this submitter's SMS is suppressed. Fail closed
+                # when the submitter phone is unknown (DocuSeal would text the
+                # number it has on file, which we cannot check).
+                sms_block_reason = await _docuseal_sms_block_reason(s)
+                if sms_block_reason:
+                    sms_for_this = False
+                    sms_blocked.append({"submitter_id": sid, "role": s.get("role"),
+                                        "reason": sms_block_reason})
+            email_change = bool(new_email and (only_id is not None or len(targets) == 1))
+            if not (send_email or sms_for_this or email_change):
+                continue  # nothing left to send for this signer
+            kwargs: dict = {"send_email": send_email, "send_sms": sms_for_this}
+            if email_change:
                 kwargs["email"] = str(new_email).strip()
             raw = await svc.update_submitter(sid, **kwargs)
             norm = svc.normalize_submitter_record(raw if isinstance(raw, dict) else s)
@@ -2559,6 +2633,7 @@ async def paperwork_docuseal_resend(packet_id: str, request: Request):
         "resent": len(updated),
         "updated": updated,
         "errors": errors,
+        "sms_blocked": sms_blocked,
     }
 
 

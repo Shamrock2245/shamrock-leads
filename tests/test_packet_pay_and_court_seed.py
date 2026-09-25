@@ -16,8 +16,38 @@ from dashboard.services.bond_court_seed_service import (
 )
 
 
+# Staff-confirmed premium marker (see packet_payment_link_service.confirmed_premium).
+def _confirmed(amount):
+    return {
+        "premium_confirmed_amount": amount,
+        "premium_confirmed_at": "2026-09-24T15:00:00+00:00",
+        "premium_confirmed_by": "staff-test",
+    }
+
+
+@pytest.fixture
+def switch_on(monkeypatch):
+    """Legacy auto-send switch is DEFAULT OFF; these helper tests exercise it ON."""
+    monkeypatch.setenv("DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK", "true")
+
+
+@pytest.fixture
+def send_once_ok():
+    """Atomic send-once claim is won (Mongo-free); see test_packet_payment_link_send_once.py."""
+    with patch(
+        "dashboard.services.packet_payment_link_service._claim_send_once",
+        new_callable=AsyncMock,
+        return_value={"claimed": True, "collection": "active_bonds",
+                      "filter": {"booking_number": "x"}, "claim_id": "c1"},
+    ) as claim, patch(
+        "dashboard.services.packet_payment_link_service._finish_send_once",
+        new_callable=AsyncMock,
+    ):
+        yield claim
+
+
 @pytest.mark.asyncio
-async def test_maybe_send_skips_when_recently_sent():
+async def test_maybe_send_skips_when_recently_sent(switch_on):
     packet = {
         "packet_id": "PKT-1",
         "premium_amount": 500,
@@ -50,7 +80,7 @@ async def test_maybe_send_skips_when_recently_sent():
 
 
 @pytest.mark.asyncio
-async def test_maybe_send_skips_when_paid():
+async def test_maybe_send_skips_when_paid(switch_on):
     bond = {
         "booking_number": "BK-2",
         "payment_received": True,
@@ -83,13 +113,14 @@ async def test_maybe_send_skips_when_paid():
 
 
 @pytest.mark.asyncio
-async def test_maybe_send_dispatches_when_eligible():
+async def test_maybe_send_dispatches_when_eligible(switch_on, send_once_ok):
     bond = {
         "booking_number": "BK-3",
         "premium": 250.0,
         "indemnitor_phone": "2395550199",
         "payment_status": "pending",
         "defendant_name": "Test Def",
+        **_confirmed(250.0),
     }
     with patch(
         "dashboard.services.packet_payment_link_service._load_context",
@@ -238,7 +269,7 @@ async def test_seed_court_idempotent_when_already_seeded():
 
 
 @pytest.mark.asyncio
-async def test_promote_hook_calls_helpers():
+async def test_promote_hook_calls_helpers(switch_on, send_once_ok):
     """Ensure intake promote soft-hooks invoke payment + court seed helpers."""
     # Import the module-level symbols used inside intake_promote via late import;
     # we verify the helpers themselves are callable with promote-shaped bond docs.
@@ -253,6 +284,7 @@ async def test_promote_hook_calls_helpers():
         "court_time": "10:00 AM",
         "case_number": "26-CF-9",
         "county": "Collier",
+        **_confirmed(150.0),
     }
 
     with patch(

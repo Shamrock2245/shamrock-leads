@@ -22,6 +22,9 @@ from dashboard.services.paperwork_signers import normalize_role
 logger = logging.getLogger(__name__)
 
 AUTOMATION_KEY = "docuseal_initial_delivery"
+# Send purpose label for the BlueBubbles STOP/TCPA gate (allowed unless the
+# specific recipient opted out — never a blanket deny of packet sends).
+SEND_PURPOSE = "docuseal_signing_link"
 _ALLOWED_ROLES = frozenset({"indemnitor", "coindemnitor", "defendant"})
 _PENDING_PACKET_STATUSES = frozenset({"pending_signature"})
 _TRUSTED_DOCUSEAL_HOST = "sign.shamrockbailbonds.biz"
@@ -200,7 +203,9 @@ async def deliver_initial_docuseal_links(
             continue
 
         try:
-            result = await client.send_text(f"iMessage;-;{candidate['phone']}", message)
+            result = await client.send_text(
+                f"iMessage;-;{candidate['phone']}", message, purpose=SEND_PURPOSE,
+            )
         except Exception:
             logger.exception("[docuseal_initial_delivery] BlueBubbles send exception for packet %s role=%s", packet.get("packet_id"), role)
             result = {"success": False}
@@ -208,6 +213,13 @@ async def deliver_initial_docuseal_links(
         if bool((result or {}).get("success")):
             dispatched += 1
             outcome["recipients"].append({"role": role, "state": "sent", "channel": "imessage"})
+        elif (result or {}).get("blocked"):
+            # Per-recipient STOP/TCPA gate: only THIS signer is skipped.
+            outcome["recipients"].append({
+                "role": role,
+                "state": "blocked",
+                "reason": (result or {}).get("reason") or "recipient_opted_out",
+            })
         else:
             outcome["recipients"].append({"role": role, "state": "failed", "reason": "bluebubbles_send_failed"})
 

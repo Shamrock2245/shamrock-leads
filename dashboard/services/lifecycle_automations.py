@@ -13,12 +13,18 @@ PII: never log full phones/emails; Slack uses names + booking only.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+async def _backfill_pause(seconds: float) -> None:
+    """Pause between Drive backfill uploads (rate limit). Separate for tests."""
+    await asyncio.sleep(seconds)
 
 # SignNow invite / document statuses that mean fully signed
 _SIGNED_STATUSES = frozenset({
@@ -197,7 +203,7 @@ class LifecycleAutomations:
                         f"• `{r['booking_number']}` {r['defendant']} — "
                         f"{r['tier']} ({(r.get('prob') or 0):.0%}) ${r.get('amount') or 0:,.0f}"
                     )
-                await post_slack("\n".join(lines), webhook_env="SLACK_WEBHOOK_ERRORS")
+                await post_slack("\n".join(lines), webhook_env="SLACK_WEBHOOK_ALERTS")
             except Exception as e:
                 logger.debug("[forfeiture] slack: %s", e)
 
@@ -208,13 +214,51 @@ class LifecycleAutomations:
     # ─────────────────────────────────────────────────────────────────────
     async def run_docuseal_poller(self, config: Optional[dict] = None) -> dict:
         """
-        Poll DocuSeal for open submissions; mark completed; file to Drive if needed.
+        Poll DocuSeal for open submissions and finish completions.
         Backup for missed webhooks (same spirit as SignNow poller).
+
+        Every completion goes through the SAME exactly-once handler as the
+        webhook (dashboard/services/docuseal_completion.py): atomic claim, then
+        Drive / packet status / bond_cases / SSE / legacy-link switch /
+        stage-only share invoice / court sync / Slack, each stamped once.
+
+        Three work sets (deduped, each capped by ``limit``):
+          1. retry  — packets the shared handler started but didn't finish
+                      (failed step, crashed run with expired lease, or a
+                      webhook-requested legacy link). No DocuSeal GET needed.
+          2. drive backfill — packets completed before the shared handler
+                      (status=signed, no completion record, or a record with
+                      preexisting_completion) that have NO Drive link and NO
+                      Drive file id. DRIVE-ONLY: every other step (bond_cases,
+                      SSE, legacy payment link, share invoice, court sync,
+                      Slack) is stamped skipped, never replayed — so no customer
+                      message, invoice, court sync or Slack post.
+                      Idempotent: dedup on Drive link AND file id (query + a
+                      pre-check + the handler's own check), atomic claim.
+                      Rate-limited: at most ``drive_backfill_batch`` (default
+                      10, max 50) per tick with ``drive_backfill_delay_seconds``
+                      (default 2.0, max 30) between them; the rest is deferred
+                      to the next tick. Kill switch: ``drive_backfill_legacy:
+                      false`` (or ``file_to_drive: false``). Each run logs a
+                      count summary (no PII).
+          3. open   — open packets: GET the submission; completed → handler.
+                      Note: no longer filters on docuseal_status, so packets a
+                      staff status refresh marked docuseal_status=completed
+                      (before that endpoint was fixed) are picked up again.
         """
         cfg = config or {}
         limit = min(int(cfg.get("limit") or 40), 100)
 
         from dashboard.services.docuseal_service import DocuSealService
+        from dashboard.services.docuseal_completion import (
+            SOURCE_POLLER,
+            drive_backfill_limits,
+            drive_record_reason,
+            handle_docuseal_completion,
+            is_backfill_packet,
+            poller_legacy_drive_query,
+            poller_retry_query,
+        )
 
         ds = DocuSealService()
         if not ds.is_configured:
@@ -226,15 +270,20 @@ class LifecycleAutomations:
             }
 
         packets = self.db["paperwork_packets"]
-        cursor = packets.find({
-            "esign_provider": "docuseal",
-            "status": {"$in": [
-                "pending_signature", "delivered", "sent", "pending", "open",
-                "pending_esign", "finalized",
-            ]},
-            "docuseal_submission_id": {"$exists": True, "$ne": None},
-            "docuseal_status": {"$nin": ["completed", "signed"]},
-        }).limit(limit)
+        file_to_drive = bool(cfg.get("file_to_drive", True))
+
+        backfill_enabled = file_to_drive and bool(cfg.get("drive_backfill_legacy", True))
+        bf_batch, bf_delay = drive_backfill_limits(cfg)
+        backfill = {
+            "enabled": backfill_enabled,
+            "batch": bf_batch,
+            "scanned": 0,
+            "uploaded": 0,
+            "skipped_existing": 0,
+            "failed": 0,
+            "deferred": 0,
+            "claim_busy": 0,
+        }
 
         results = {
             "ok": True,
@@ -243,121 +292,136 @@ class LifecycleAutomations:
             "still_pending": 0,
             "errors": 0,
             "filed_drive": 0,
+            "completion_retried": 0,
+            "claim_busy": 0,
             "signed_packets": [],
+            "drive_backfill": backfill,
         }
 
-        async for packet in cursor:
-            results["scanned"] += 1
+        work: list[tuple[str, dict]] = []
+        seen: set = set()
+
+        async def _collect(kind: str, query: dict, cap: int) -> None:
+            async for pkt in packets.find(query).limit(cap):
+                key = pkt.get("_id") if pkt.get("_id") is not None else pkt.get("packet_id")
+                if key in seen:
+                    continue
+                seen.add(key)
+                k = kind
+                if kind == "retry" and is_backfill_packet(pkt):
+                    # A pre-handler completion whose Drive upload is being
+                    # retried is still backfill: same batch/delay + kill switch.
+                    if not backfill_enabled:
+                        continue
+                    k = "backfill"
+                work.append((k, pkt))
+
+        await _collect("retry", poller_retry_query(), limit)
+        if backfill_enabled:
+            # Fetch one extra so "deferred" can be reported without a count query.
+            await _collect("backfill", poller_legacy_drive_query(), bf_batch + 1)
+        await _collect("open", {
+            "esign_provider": "docuseal",
+            "status": {"$in": [
+                "pending_signature", "delivered", "sent", "pending", "open",
+                "pending_esign", "finalized",
+            ]},
+            "docuseal_submission_id": {"$exists": True, "$ne": None},
+        }, limit)
+
+        def _get_col(name: str):
+            return self.db[name]
+
+        backfill_attempted = 0
+        for kind, packet in work:
             packet_id = packet.get("packet_id") or str(packet.get("_id", ""))
             sub_id = packet.get("docuseal_submission_id")
+            if kind == "backfill":
+                if backfill["scanned"] >= bf_batch:
+                    backfill["deferred"] += 1   # next tick
+                    continue
+                backfill["scanned"] += 1
+                if drive_record_reason(packet):
+                    backfill["skipped_existing"] += 1
+                    continue
+            results["scanned"] += 1
             if not sub_id:
                 continue
             try:
-                sub = await ds.get_submission(sub_id)
-                status = (sub.get("status") or "").lower()
-                if status in ("completed", "complete", "signed"):
-                    drive_url = packet.get("signed_pdf_drive_url") or packet.get("drive_link")
-                    if not drive_url and bool(cfg.get("file_to_drive", True)):
-                        try:
-                            pdf = await ds.download_combined_pdf(sub_id)
-                            filed = ds.file_signed_pdf_to_drive(
-                                pdf,
-                                defendant_name=packet.get("defendant_name") or "Unknown",
-                                surety_id=packet.get("surety_id") or "osi",
-                                packet_id=packet_id,
-                                booking_number=_booking(packet),
-                            )
-                            if filed.get("ok"):
-                                drive_url = filed.get("drive_url")
-                                results["filed_drive"] += 1
-                            else:
-                                logger.warning(
-                                    "[docuseal-poll] drive archive failed packet=%s code=%s err=%s",
-                                    packet_id,
-                                    filed.get("error_code"),
-                                    (filed.get("error") or "")[:200],
-                                )
-                                results.setdefault("drive_errors", []).append({
-                                    "packet_id": packet_id,
-                                    "error_code": filed.get("error_code"),
-                                    "error": (filed.get("error") or "")[:200],
-                                })
-                        except Exception as de:
-                            logger.warning("[docuseal-poll] drive %s: %s", packet_id, de)
+                if kind == "open":
+                    sub = await ds.get_submission(sub_id)
+                    status = (sub.get("status") or "").lower()
+                    if status not in ("completed", "complete", "signed"):
+                        await packets.update_one(
+                            {"_id": packet["_id"]},
+                            {"$set": {
+                                "docuseal_status": status or packet.get("docuseal_status") or "pending",
+                                "docuseal_polled_at": _now_iso(),
+                            }},
+                        )
+                        results["still_pending"] += 1
+                        continue
+                elif kind == "backfill":
+                    if backfill_attempted and bf_delay > 0:
+                        await _backfill_pause(bf_delay)
+                    backfill_attempted += 1
+                    results["completion_retried"] += 1
+                else:
+                    results["completion_retried"] += 1
 
-                    update = {
-                        "status": "signed",
-                        "docuseal_status": "completed",
-                        "signnow_status": "signed",
-                        "signed_at": _now_iso(),
-                        "docuseal_polled_at": _now_iso(),
-                    }
-                    if drive_url:
-                        update["signed_pdf_drive_url"] = drive_url
-                        update["drive_link"] = drive_url
-                    await packets.update_one({"_id": packet["_id"]}, {"$set": update})
+                res = await handle_docuseal_completion(
+                    packet,
+                    get_col=_get_col,
+                    source=SOURCE_POLLER,
+                    submission_id=sub_id,
+                    event_type="poller.completed",
+                    cfg=cfg,
+                )
+                if not res.get("claimed"):
+                    results["claim_busy"] += 1
+                    if kind == "backfill":
+                        backfill["claim_busy"] += 1
+                    continue
+                if res.get("filed_drive"):
+                    results["filed_drive"] += 1
+                if res.get("drive_error"):
+                    results.setdefault("drive_errors", []).append({
+                        "packet_id": packet_id,
+                        **res["drive_error"],
+                    })
+                if kind == "backfill":
+                    if res.get("filed_drive"):
+                        backfill["uploaded"] += 1
+                    elif res.get("drive_error"):
+                        backfill["failed"] += 1
+                    elif any(
+                        step == "drive_upload" and state == "skipped"
+                        for step, state in res.get("ran", [])
+                    ):
+                        backfill["skipped_existing"] += 1
+                if res.get("signed"):
                     results["signed"] += 1
                     results["signed_packets"].append({
                         "packet_id": packet_id,
                         "booking_number": _booking(packet),
                         "defendant": packet.get("defendant_name") or "Unknown",
                     })
-
-                    # Poller does NOT go through the DocuSeal webhook handler, so
-                    # mirror its stage-only Share Invoice call here (backup for
-                    # missed webhooks). dispatch=False is explicit (function
-                    # defaults to True). Idempotent via create_locked_invoice, so
-                    # webhook + poller for the same bond → one invoice. Soft-fail:
-                    # never affects signed/errors counts. Logs ONLY bond_id / ok /
-                    # idempotent (no links, amounts, names, contacts).
-                    share_bond_id = None
-                    try:
-                        from dashboard.services.docuseal_share_invoice import (
-                            resolve_share_invoice_bond_id,
-                        )
-                        from dashboard.services.swipesimple_invoice_service import (
-                            maybe_issue_share_invoice_for_bond,
-                        )
-
-                        share_bond_id, share_skip = resolve_share_invoice_bond_id(packet)
-                        if not share_bond_id:
-                            # Never guess a bond (no booking # / packet_id fallback).
-                            logger.info(
-                                "[docuseal-poll] share_invoice stage skipped reason=%s packet=%s",
-                                share_skip,
-                                packet_id,
-                            )
-                        else:
-                            share_result = await maybe_issue_share_invoice_for_bond(
-                                share_bond_id,
-                                channel="imessage",
-                                dispatch=False,
-                                source="docuseal_poller_completed",
-                            )
-                            logger.info(
-                                "[docuseal-poll] share_invoice staged bond_id=%s ok=%s idempotent=%s",
-                                share_bond_id,
-                                (share_result or {}).get("ok"),
-                                ((share_result or {}).get("create") or {}).get("idempotent"),
-                            )
-                    except Exception as share_exc:
-                        logger.warning(
-                            "[docuseal-poll] share_invoice stage failed (non-fatal) bond_id=%s err_type=%s",
-                            share_bond_id,
-                            type(share_exc).__name__,
-                        )
-                else:
-                    await packets.update_one(
-                        {"_id": packet["_id"]},
-                        {"$set": {
-                            "docuseal_status": status or packet.get("docuseal_status") or "pending",
-                            "docuseal_polled_at": _now_iso(),
-                        }},
-                    )
-                    results["still_pending"] += 1
             except Exception as e:
                 results["errors"] += 1
-                logger.warning("[docuseal-poll] packet %s: %s", packet_id, e)
+                if kind == "backfill":
+                    backfill["failed"] += 1
+                logger.warning("[docuseal-poll] packet %s: err_type=%s", packet_id, type(e).__name__)
+
+        # Per-run count summary for the Drive backfill (counts only — no PII).
+        if backfill_enabled:
+            logger.info(
+                "[docuseal-poll] drive_backfill summary scanned=%d uploaded=%d "
+                "skipped_existing=%d failed=%d deferred=%d claim_busy=%d batch=%d",
+                backfill["scanned"], backfill["uploaded"], backfill["skipped_existing"],
+                backfill["failed"], backfill["deferred"], backfill["claim_busy"], bf_batch,
+            )
+        else:
+            logger.info("[docuseal-poll] drive_backfill disabled (kill switch)")
 
         return results
 

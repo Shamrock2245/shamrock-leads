@@ -64,11 +64,16 @@ class WatchdogService:
 
         # Alert if anything is down
         if not results["api_health"] or not results["gas_bridge"] or not results["shannon_paths"]:
-            msg = "🚨 *WATCHDOG ALERT* 🚨\nOne or more critical systems are down!\n\n"
-            for err in results["errors"]:
-                msg += f"• {err}\n"
             try:
-                await asyncio.to_thread(self.slack._post, self.slack.webhook_errors, {"text": msg})
+                await asyncio.to_thread(
+                    self.slack.notify_watchdog_alert,
+                    failures=results["errors"] or ["Critical health check failed"],
+                    details={
+                        "api_health": results["api_health"],
+                        "gas_bridge": results["gas_bridge"],
+                        "shannon_paths": results["shannon_paths"],
+                    },
+                )
             except Exception as slack_exc:
                 logger.warning("[Watchdog] Slack alert failed: %s", slack_exc)
                 

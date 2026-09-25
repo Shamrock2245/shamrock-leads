@@ -64,4 +64,39 @@ jobs:
             tests/test_recon_evidence_contract.py \
             tests/test_subdomains.py \
             tests/test_unhandled_exception_privacy.py \
+            tests/test_dashboard_source_states.py \
+            tests/test_scraper_resilience.py \
+            tests/test_base_scraper_self_heal.py \
+            tests/test_source_state_drift.py \
+            tests/test_lee_rate_limit.py \
+            tests/test_swipesimple_invoice_service.py \
+            tests/test_confirmed_booking_intake.py \
+            tests/test_deferred_client_intake.py \
+            tests/test_intake_defendant_extract.py \
+            tests/test_intake_shannon.py \
+            tests/test_docuseal_completed_share_invoice.py \
+            tests/test_docuseal_completion_handler.py \
+            tests/test_docuseal_template_drift.py \
+            tests/test_packet_pay_and_court_seed.py \
+            tests/test_packet_payment_link_send_once.py \
+            tests/test_legacy_payment_link_call_sites.py \
+            tests/test_swipesimple_dispatch.py \
+            tests/test_tncis_fail_closed.py \
+            tests/test_bb_webhook_register_auth.py \
+            tests/test_bb_inbound_matching_outbound.py \
+            tests/test_bb_consent_ledger_gate.py \
+            tests/test_bb_consent_gate_merged_paths.py \
+            tests/test_bb_send_normalize.py \
+            tests/test_bb_diagnostic_smoke.py \
+            tests/test_bb_servers_init.py \
+            tests/test_outreach_queue.py \
+            tests/test_docuseal_initial_delivery.py \
+            tests/test_defendant_delivery_authorization.py \
+            tests/test_paperwork_hub.py \
+            tests/test_forfeiture_and_imessage_send.py \
+            tests/test_pin_portal.py \
+            tests/test_shannon_voice_paperwork.py \
+            tests/test_wix_imessage_send.py \
+            tests/test_swipesimple_invoice_claims.py \
+            tests/test_slack_alerts.py \
             --tb=short

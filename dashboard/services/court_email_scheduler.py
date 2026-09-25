@@ -33,7 +33,7 @@ class CourtEmailScheduler:
     # Slack webhooks for different event types
     SLACK_ROUTES = {
         "courtDate": "SLACK_WEBHOOK_ARRESTS",     # Court dates → #new-arrests
-        "forfeiture": "SLACK_WEBHOOK_ERRORS",      # Forfeitures → #scraper-errors (high priority)
+        "forfeiture": "SLACK_WEBHOOK_ALERTS",      # Forfeitures → #alerts (critical operational priority)
         "discharge": "SLACK_WEBHOOK_LEADS",        # Discharges → #leads
     }
 
@@ -636,6 +636,8 @@ class CourtEmailScheduler:
             return
 
         webhook_url = os.getenv(webhook_var, "")
+        if not webhook_url and webhook_var == "SLACK_WEBHOOK_ALERTS":
+            webhook_url = os.getenv("SLACK_WEBHOOK_ERRORS", "") or os.getenv("SLACK_WEBHOOK_URL", "")
         if not webhook_url:
             return
 

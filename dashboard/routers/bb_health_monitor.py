@@ -43,9 +43,9 @@ from datetime import timedelta
 logger = logging.getLogger(__name__)
 
 bb_health_bp = APIRouter(prefix="/api", tags=["bb_health_monitor"])
-# BB health alerts → #signing-errors (infrastructure/errors channel)
-_SLACK_WEBHOOK = os.getenv("SLACK_WEBHOOK_ERRORS") or os.getenv("SLACK_WEBHOOK_URL", "")
-_SLACK_CHANNEL = "#signing-errors"
+# BB health alerts → #alerts (infrastructure/health alerts channel)
+_SLACK_WEBHOOK = os.getenv("SLACK_WEBHOOK_ALERTS") or os.getenv("SLACK_WEBHOOK_ERRORS") or os.getenv("SLACK_WEBHOOK_URL", "")
+_SLACK_CHANNEL = os.getenv("SLACK_CHANNEL_ALERTS", "#alerts")
 
 # ── Sustained-offline tracking ────────────────────────────────────────────────
 # Prevents alert storms: only fires the "offline >30 min" Slack alert once per

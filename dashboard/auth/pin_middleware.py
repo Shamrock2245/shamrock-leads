@@ -89,6 +89,14 @@ OPEN_PREFIXES = (
     "/api/lee-county/",
 )
 
+# Management endpoints that live under /api/webhooks/ but are NOT inbound
+# provider deliveries.  They must never inherit the POST webhook exemption
+# (re-pointing BlueBubbles webhooks is an admin action) — they fall through to
+# the machine-key / staff-session checks below like any other /api route.
+WEBHOOK_MANAGEMENT_PATHS = frozenset({
+    "/api/webhooks/bluebubbles/register",
+})
+
 # OAuth popup paths
 OAUTH_PREFIXES = (
     "/api/social/oauth/google/",
@@ -235,7 +243,11 @@ class PinAuthMiddleware(BaseHTTPMiddleware):
 
         # Webhooks: incoming POST/PUT/PATCH webhooks (DocuSeal, Twilio, BlueBubbles, Stripe, Traccar)
         # stay public, but PIN-gate GET/HEAD/DELETE under /api/webhooks/ (e.g. /status or /history)
-        if path.startswith("/api/webhooks/") or path == "/api/traccar/webhook":
+        # Management paths (e.g. BlueBubbles /register) are never exempt.
+        # DELETE /api/webhooks/... already falls through to the staff check.
+        if (
+            path.startswith("/api/webhooks/") or path == "/api/traccar/webhook"
+        ) and path.rstrip("/") not in WEBHOOK_MANAGEMENT_PATHS:
             if request.method in ("GET", "HEAD", "DELETE") and (
                 path.endswith("/status") or path.endswith("/history")
             ):
