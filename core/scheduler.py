@@ -211,7 +211,9 @@ class ScraperScheduler:
                         {"$set": {"status": "running", "started_at": datetime.now(timezone.utc)}}
                     )
                     try:
-                        result = scraper.run(writers=self._writers)
+                        # Operator-requested: an auto-disabled scraper runs as a
+                        # canary (success with records re-enables it).
+                        result = scraper.run(writers=self._writers, force_canary=True)
                         col.update_one(
                             {"_id": doc["_id"]},
                             {"$set": {"status": "done", "completed_at": datetime.now(timezone.utc),
@@ -525,7 +527,7 @@ class ScraperScheduler:
             return None
 
         logger.info(f"⚡ Manual trigger: {county} → {job_id}")
-        return scraper.run(writers=self._writers)
+        return scraper.run(writers=self._writers, force_canary=True)
 
     def get_status(self) -> dict:
         """Return current scheduler status."""

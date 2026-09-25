@@ -21,6 +21,16 @@ PORTAL_URL = "https://marlborocountyjailsc.org/"
 
 
 class MarlboroScraper(BaseScraper):
+    # Hold (docs/recon/SC_WRITE_SMOKE_2026-09-24.md): marlborocountyjailsc.org answers HTTP 403 /
+    # Cloudflare to ordinary public access and the list path has no verified
+    # source-issued booking number. Fail closed before any fetch; do not reopen
+    # via residential proxy, SOCKS, Obscura, or any other WAF workaround.
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "Marlboro (SC) hold: portal returns 403/Cloudflare to ordinary public access; "
+        "no verified source booking key. Reopen only with a proven public contract."
+    )
+
     @property
     def county(self) -> str:
         return "Marlboro"

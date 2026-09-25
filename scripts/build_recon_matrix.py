@@ -17,6 +17,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 EXTENSIONS = ROOT / "dashboard" / "extensions.py"
+DEFAULT_INVENTORY = ROOT / "docs" / "recon" / "county_recon_inventory.json"
+DEFAULT_EVIDENCE = ROOT / "docs" / "recon" / "county_source_contract_evidence.json"
+DEFAULT_LIVE_EVIDENCE = ROOT / "docs" / "recon" / "live_emitter_evidence.json"
+DEFAULT_OUTPUT = ROOT / "docs" / "recon" / "COUNTY_SOURCE_CONTRACT_MATRIX.md"
 
 REQUIRED_COLUMNS = [
     "County",
@@ -70,6 +74,52 @@ def _runtime_source_states() -> dict[str, str]:
     raise RuntimeError("SCRAPER_SOURCE_STATES assignment not found")
 
 
+def _registered_labels() -> set[str]:
+    tree = ast.parse(EXTENSIONS.read_text())
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == "REGISTERED_COUNTIES" for t in node.targets):
+            continue
+        value = node.value
+        if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "sorted":
+            value = value.args[0]
+        return {
+            element.value
+            for element in getattr(value, "elts", [])
+            if isinstance(element, ast.Constant) and isinstance(element.value, str)
+        }
+    raise RuntimeError("REGISTERED_COUNTIES assignment not found")
+
+
+def _live_emitter_rows(path: Path | None, runtime_states: dict[str, str]) -> list[dict[str, str]]:
+    """Validate documented live-write / hold evidence against the deployed registry."""
+    if path is None or not path.exists():
+        return []
+    registered = _registered_labels()
+    rows = []
+    for raw in json.loads(path.read_text())["records"]:
+        label = str(raw["label"])
+        emitter = str(raw["emitter"])
+        state = runtime_states.get(label, "unverified")
+        if label not in registered:
+            raise RuntimeError(f"live evidence label is not registered: {label}")
+        if emitter == "live_write" and state == "fail_closed":
+            raise RuntimeError(f"{label} is documented live_write but SCRAPER_SOURCE_STATES says fail_closed")
+        if emitter == "hold" and state != "fail_closed":
+            raise RuntimeError(f"{label} is documented as a hold but SCRAPER_SOURCE_STATES says {state}")
+        if emitter not in {"live_write", "hold"}:
+            raise RuntimeError(f"unknown emitter status for {label}: {emitter}")
+        rows.append({
+            "label": label,
+            "state": state,
+            "emitter": emitter,
+            "evidence": str(raw["evidence"]),
+            "source": str(raw["source"]),
+        })
+    return rows
+
+
 def _matrix_status(passive_status: str, runtime_status: str) -> str:
     """Keep deployed source truth authoritative over passive reconnaissance."""
     if runtime_status in {"verified_public", "fail_closed"}:
@@ -87,10 +137,42 @@ def _escape(value: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("inventory", type=Path)
-    parser.add_argument("evidence_file", type=Path)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("inventory", type=Path, nargs="?", default=DEFAULT_INVENTORY)
+    parser.add_argument("evidence_file", type=Path, nargs="?", default=DEFAULT_EVIDENCE)
+    parser.add_argument("--live-evidence", type=Path, default=DEFAULT_LIVE_EVIDENCE)
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Do not write; exit 1 if the committed matrix differs from a fresh build (CI drift gate).",
+    )
     args = parser.parse_args()
+    text, summary = build_matrix(args.inventory, args.evidence_file, args.live_evidence)
+    if args.check:
+        current = args.output.read_text() if args.output.exists() else ""
+        if current != text:
+            print(
+                f"{args.output} is out of date with SCRAPER_SOURCE_STATES / evidence. "
+                "Run: python scripts/build_recon_matrix.py",
+                file=sys.stderr,
+            )
+            return 1
+        print(json.dumps({"check": "ok", **summary}, sort_keys=True))
+        return 0
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(text)
+    print(json.dumps(summary, sort_keys=True))
+    return 0
+
+
+def build_matrix(inventory_path: Path, evidence_path: Path, live_evidence_path: Path | None = DEFAULT_LIVE_EVIDENCE) -> tuple[str, dict]:
+    """Return ``(markdown, summary)`` for the canonical matrix (pure; no writes)."""
+
+    class _Args:  # keep the original body's variable names
+        inventory = inventory_path
+        evidence_file = evidence_path
+
+    args = _Args()
 
     payload = json.loads(args.inventory.read_text())
     records = payload["records"]
@@ -139,6 +221,10 @@ def main() -> int:
         "> **Scope:** All 942 Census county-equivalents in the Shamrock multi-state worklist plus five registered non-county runtime scopes. **Method:** passive, ordinary public-access source-contract review only. No person-level arrest records, images, profile pages, sequential identifiers, login, CAPTCHA bypass, or source-control workaround were used.",
         ">",
         "> **Interpretation:** `registered` is a code/scheduler-coverage fact; it is not evidence that a county source is valid or producing records. Only `verified_public` and `fail_closed` are copied from the explicit deployed `SCRAPER_SOURCE_STATES` registry. `candidate_productive` reflects a bounded passive listing observation and does **not** authorize a parser, alter a source state, or establish Mongo/alert telemetry. `recon_only` and `unverified` require county-specific validation before any record-emitting change.",
+        ">",
+        "> **Ohio exception:** The 947-scope worklist below remains limited to the ten established state footprints. Three Ohio pilot modules are registered as source-contract guards only and are excluded from these aggregate counts; their non-emitting contracts are documented separately in [`OHIO_PILOT_SOURCE_CONTRACTS.md`](./OHIO_PILOT_SOURCE_CONTRACTS.md).",
+        ">",
+        "> **Generated file — do not hand-edit.** Regenerate with `python scripts/build_recon_matrix.py`. CI (`tests/test_source_state_drift.py`) fails when this file drifts from `SCRAPER_SOURCE_STATES`, the versioned evidence JSON, or `live_emitter_evidence.json`, and when a scraper's code-level `SOURCE_CONTRACT_VALIDATED=False` is not mirrored as `fail_closed`.",
         "",
         "## Jurisdiction scope",
         "",
@@ -185,6 +271,21 @@ def main() -> int:
                 note=_escape(row["Evidence note"]),
             )
         )
+    live_rows = _live_emitter_rows(live_evidence_path, runtime_states)
+    if live_rows:
+        lines.extend([
+            "",
+            "## Live emitter evidence",
+            "",
+            "Documented live writes and holds for scopes named in the latest executive brief. This table is evidence only: `live_write` does **not** promote a Health source state (Pinellas, Seminole, and Lee stay `unverified` until a verified_public decision is documented). The builder refuses to run if a `live_write` scope is `fail_closed` or a `hold` scope is not `fail_closed`.",
+            "",
+            "| County (ST) | Health source state | Emitter | Evidence | Source |",
+            "|---|---|---|---|---|",
+        ])
+        for row in live_rows:
+            lines.append(
+                f"| {_escape(row['label'])} | {row['state']} | {row['emitter']} | {_escape(row['evidence'])} | `{_escape(row['source'])}` |"
+            )
     lines.extend([
         "",
         "## Operating rule",
@@ -202,12 +303,12 @@ def main() -> int:
         "7. `docs/recon/NORTH_CAROLINA_SOURCE_CONTRACT_VALIDATION_2026-08-15.md` — bounded metadata-only validation for the ten North Carolina guarded rows.",
         "8. `docs/recon/SOUTH_CAROLINA_SOURCE_CONTRACT_VALIDATION_2026-08-15.md` — bounded metadata-only validation for the fourteen South Carolina guarded rows.",
         "9. `docs/recon/CONNECTICUT_JUDICIAL_DOCKET_VALIDATION_2026-08-15.md` — court-docket versus arrest-source validation for the Connecticut docket fleet.",
+        "10. `docs/recon/SC_WRITE_SMOKE_2026-09-24.md` — Dorchester, Chesterfield, Aiken, Darlington write smokes and the Richland / Sumter / Hampton / Marlboro holds.",
+        "11. `docs/recon/PALMETTO_READ_WRITE_HEALTH_2026-09-23.md` and `docs/recon/SWFL_SOURCE_CONTRACT_QUEUE.md` — FL live-write evidence and the Charlotte / Manatee / Sarasota queue.",
+        "12. `docs/recon/live_emitter_evidence.json` — versioned live-write / hold evidence rendered in the Live emitter evidence table.",
         "",
     ])
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text("\n".join(lines))
-    print(json.dumps({"rows": len(records), "recommendations": dict(total_status)}, sort_keys=True))
-    return 0
+    return "\n".join(lines), {"rows": len(records), "recommendations": dict(total_status)}
 
 
 if __name__ == "__main__":

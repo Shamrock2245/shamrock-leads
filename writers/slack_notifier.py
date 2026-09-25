@@ -74,11 +74,15 @@ class SlackNotifier:
                 timeout=10,
             )
             if resp.status_code != 200:
-                logger.error(f"Slack returned {resp.status_code}: {resp.text}")
+                # Slack's error body is short (e.g. "invalid_token"); never log
+                # the webhook URL itself.
+                logger.error(f"Slack returned {resp.status_code}: {(resp.text or '')[:200]}")
                 return False
             return True
         except Exception as e:
-            logger.error(f"Slack notification failed: {e}")
+            # requests exceptions embed the full request URL (the webhook
+            # secret path) in str(e) — log the exception class only.
+            logger.error(f"Slack notification failed: {type(e).__name__}")
             return False
 
     # ── Arrest Alerts ──
@@ -222,14 +226,25 @@ class SlackNotifier:
             pass  # Dashboard may not be up — that's fine
 
     # ── Scraper Error ──
-    def notify_scraper_error(self, county: str, error: str) -> bool:
-        """Send a scraper error alert. PII is masked before posting."""
-        safe_error = _mask_pii(error)
+    def notify_scraper_error(
+        self,
+        county: str,
+        error: str,
+        error_class: Optional[str] = None,
+        consecutive_failures: Optional[int] = None,
+    ) -> bool:
+        """Send a scraper error alert to #scraper-errors. PII is masked before posting."""
+        safe_error = _mask_pii(error or "")
+        suffix = ""
+        if error_class:
+            suffix += f" [{error_class}]"
+        if consecutive_failures:
+            suffix += f" · {consecutive_failures} consecutive"
         return self._post(self.webhook_errors, {
             "blocks": [
                 {
                     "type": "header",
-                    "text": {"type": "plain_text", "text": f"🚨 Scraper Error — {county}"},
+                    "text": {"type": "plain_text", "text": f"🚨 Scraper Error — {county}{suffix}"[:150]},
                 },
                 {
                     "type": "section",
@@ -243,6 +258,75 @@ class SlackNotifier:
                     }],
                 },
             ]
+        })
+
+    # ── Parse / schema drift (fail loudly) ──
+    def notify_parse_drift(self, county: str, detail: str, severity: str = "total") -> bool:
+        """Immediate #scraper-errors alert when a parser no longer matches its source."""
+        safe = _mask_pii(detail or "")
+        return self._post(self.webhook_errors, {
+            "blocks": [
+                {
+                    "type": "header",
+                    "text": {"type": "plain_text", "text": f"🧬 Parse / schema drift — {county} ({severity})"[:150]},
+                },
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"```{safe[:1500]}```"},
+                },
+                {
+                    "type": "context",
+                    "elements": [{
+                        "type": "mrkdwn",
+                        "text": (
+                            "_error_class=parse_drift · the source changed shape; fix the parser — "
+                            "do not loosen booking-key guards · "
+                            f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}_"
+                        ),
+                    }],
+                },
+            ]
+        })
+
+    # ── Auto-disable / re-enable ──
+    def notify_scraper_auto_disabled(
+        self,
+        county: str,
+        failures: int,
+        error_class: str,
+        last_error: str = "",
+        exempt: bool = False,
+    ) -> bool:
+        """Alert when a scraper trips the consecutive-failure threshold."""
+        if exempt:
+            title = f"⚠️ {county} hit {failures} consecutive failures — KEY county, kept running"
+            action = "Exempt from auto-disable (SWFL core). Investigate now."
+        else:
+            title = f"⛔ Scraper auto-disabled — {county}"
+            action = (
+                "Re-enable: dashboard Health → Enable (or Run Now as a canary), "
+                "or `python scripts/scraper_reenable.py \"County (ST)\"`. "
+                "A scheduled canary also retries automatically."
+            )
+        safe = _mask_pii(last_error or "")
+        return self._post(self.webhook_errors, {
+            "blocks": [
+                {"type": "header", "text": {"type": "plain_text", "text": title[:150]}},
+                {
+                    "type": "section",
+                    "fields": [
+                        {"type": "mrkdwn", "text": f"*Consecutive failures:* {failures}"},
+                        {"type": "mrkdwn", "text": f"*Error class:* {error_class}"},
+                    ],
+                },
+                {"type": "section", "text": {"type": "mrkdwn", "text": f"```{safe[:1200]}```"}},
+                {"type": "context", "elements": [{"type": "mrkdwn", "text": f"_{action}_"}]},
+            ]
+        })
+
+    def notify_scraper_reenabled(self, county: str, how: str = "canary", records: int = 0) -> bool:
+        return self._post(self.webhook_errors, {
+            "text": f"✅ {county} re-enabled ({how}) — {records} records on recovery run",
         })
 
     # ── Bond Set Alert (First Appearance) ──

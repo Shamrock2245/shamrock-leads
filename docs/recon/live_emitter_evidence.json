@@ -1,0 +1,19 @@
+{
+  "as_of": "2026-09-25",
+  "description": "Documented live-write / hold evidence for scopes called out in the 2026-09-25 executive brief. Non-authoritative for source-contract state: SCRAPER_SOURCE_STATES stays the only source of verified_public / fail_closed. scripts/build_recon_matrix.py refuses to build if a live_write scope is fail_closed or a hold scope is not fail_closed.",
+  "records": [
+    {"label": "Charleston (SC)", "emitter": "live_write", "evidence": "2026-09-23 ListView Inmate # write smoke (#48); live per 2026-09-25 brief", "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"},
+    {"label": "Dorchester (SC)", "emitter": "live_write", "evidence": "2026-09-24 write smoke 331 new (Citizen Connect BookingID); live per 2026-09-25 brief", "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"},
+    {"label": "Chesterfield (SC)", "emitter": "live_write", "evidence": "2026-09-24 write smoke 128 new (Citizen Connect BookingID); live per 2026-09-25 brief", "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"},
+    {"label": "Aiken (SC)", "emitter": "live_write", "evidence": "2026-09-24 write smoke 392 new (Inmate ID# / qSO_NO); live per 2026-09-25 brief", "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"},
+    {"label": "Darlington (SC)", "emitter": "live_write", "evidence": "2026-09-24 write smoke 100 new (DCN bid, page 1 of ~233); live per 2026-09-25 brief", "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"},
+    {"label": "Broward (FL)", "emitter": "live_write", "evidence": "2026-09-23 BSO Arrest Search write smoke 30 new (JMS_NUMBER); live per 2026-09-25 brief", "source": "docs/COUNTY_REGISTRY.md"},
+    {"label": "Pinellas (FL)", "emitter": "live_write", "evidence": "48h Mongo write evidence 2026-09-23; Who's In Jail roster Mac smoke 149 ok; live per 2026-09-25 brief. Health stays unverified: no documented verified_public decision yet", "source": "docs/recon/PALMETTO_READ_WRITE_HEALTH_2026-09-23.md"},
+    {"label": "Seminole (FL)", "emitter": "live_write", "evidence": "48h Mongo write evidence 2026-09-23; DoSearch A-Z Mac smoke 60 new; live per 2026-09-25 brief. Health stays unverified: no documented verified_public decision yet", "source": "docs/recon/PALMETTO_READ_WRITE_HEALTH_2026-09-23.md"},
+    {"label": "Lee (FL)", "emitter": "live_write", "evidence": "48h Mongo write evidence 2026-09-23; KEY FL county with file-backed /32 cooldown; live per 2026-09-25 brief. Health stays unverified: no documented verified_public decision yet", "source": "docs/recon/LEE_SELF_HEALING_2026-09-23.md"},
+    {"label": "Richland (SC)", "emitter": "hold", "evidence": "JMSOnline maintenance; list view has no source booking key (synthetic RIC_ forbidden)", "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"},
+    {"label": "Sumter (SC)", "emitter": "hold", "evidence": "SmartCOP synthesizes LAST_YYYYMMDD booking keys", "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"},
+    {"label": "Hampton (SC)", "emitter": "hold", "evidence": "HTTP 403 / Cloudflare to ordinary public access", "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"},
+    {"label": "Marlboro (SC)", "emitter": "hold", "evidence": "HTTP 403 / Cloudflare to ordinary public access", "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"}
+  ]
+}
