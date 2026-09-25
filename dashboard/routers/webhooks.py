@@ -1135,6 +1135,49 @@ async def docuseal_webhook(request: Request):
             pay_exc,
         )
 
+    # Stage (NEVER dispatch) the SwipeSimple Share Invoice for this bond.
+    # dispatch=False is explicit — maybe_issue_share_invoice_for_bond defaults
+    # to dispatch=True. Idempotent via create_locked_invoice (one invoice per
+    # bond_id). Fails closed on missing booking # / premium mismatch; dry-run
+    # unless SWIPESIMPLE_LIVE. Soft-fail: never blocks or fails the webhook.
+    # Logs ONLY bond_id / ok / idempotent (no links, amounts, names, contacts).
+    share_bond_id = None
+    try:
+        from dashboard.services.docuseal_share_invoice import (
+            resolve_share_invoice_bond_id,
+        )
+        from dashboard.services.swipesimple_invoice_service import (
+            maybe_issue_share_invoice_for_bond,
+        )
+
+        share_bond_id, share_skip = resolve_share_invoice_bond_id(packet)
+        if not share_bond_id:
+            # Never guess a bond (no booking # / packet_id fallback) — skip.
+            logger.info(
+                "[docuseal_webhook] share_invoice stage skipped reason=%s packet=%s",
+                share_skip,
+                packet_id,
+            )
+        else:
+            share_result = await maybe_issue_share_invoice_for_bond(
+                share_bond_id,
+                channel="imessage",
+                dispatch=False,
+                source="docuseal_submission_completed",
+            )
+            logger.info(
+                "[docuseal_webhook] share_invoice staged bond_id=%s ok=%s idempotent=%s",
+                share_bond_id,
+                (share_result or {}).get("ok"),
+                ((share_result or {}).get("create") or {}).get("idempotent"),
+            )
+    except Exception as share_exc:
+        logger.warning(
+            "[docuseal_webhook] share_invoice stage failed (non-fatal) bond_id=%s err_type=%s",
+            share_bond_id,
+            type(share_exc).__name__,
+        )
+
     # Seed Google Calendar + court reminders when bonded with court_date
     if booking_number:
         try:
