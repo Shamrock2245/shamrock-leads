@@ -302,6 +302,50 @@ class LifecycleAutomations:
                         "booking_number": _booking(packet),
                         "defendant": packet.get("defendant_name") or "Unknown",
                     })
+
+                    # Poller does NOT go through the DocuSeal webhook handler, so
+                    # mirror its stage-only Share Invoice call here (backup for
+                    # missed webhooks). dispatch=False is explicit (function
+                    # defaults to True). Idempotent via create_locked_invoice, so
+                    # webhook + poller for the same bond → one invoice. Soft-fail:
+                    # never affects signed/errors counts. Logs ONLY bond_id / ok /
+                    # idempotent (no links, amounts, names, contacts).
+                    share_bond_id = None
+                    try:
+                        from dashboard.services.docuseal_share_invoice import (
+                            resolve_share_invoice_bond_id,
+                        )
+                        from dashboard.services.swipesimple_invoice_service import (
+                            maybe_issue_share_invoice_for_bond,
+                        )
+
+                        share_bond_id, share_skip = resolve_share_invoice_bond_id(packet)
+                        if not share_bond_id:
+                            # Never guess a bond (no booking # / packet_id fallback).
+                            logger.info(
+                                "[docuseal-poll] share_invoice stage skipped reason=%s packet=%s",
+                                share_skip,
+                                packet_id,
+                            )
+                        else:
+                            share_result = await maybe_issue_share_invoice_for_bond(
+                                share_bond_id,
+                                channel="imessage",
+                                dispatch=False,
+                                source="docuseal_poller_completed",
+                            )
+                            logger.info(
+                                "[docuseal-poll] share_invoice staged bond_id=%s ok=%s idempotent=%s",
+                                share_bond_id,
+                                (share_result or {}).get("ok"),
+                                ((share_result or {}).get("create") or {}).get("idempotent"),
+                            )
+                    except Exception as share_exc:
+                        logger.warning(
+                            "[docuseal-poll] share_invoice stage failed (non-fatal) bond_id=%s err_type=%s",
+                            share_bond_id,
+                            type(share_exc).__name__,
+                        )
                 else:
                     await packets.update_one(
                         {"_id": packet["_id"]},
