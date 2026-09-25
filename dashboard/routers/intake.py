@@ -1054,7 +1054,8 @@ async def intake_promote(request: Request, intake_id: str):
         pay_result = await maybe_send_packet_payment_link(
             packet_id=packet_id_for_pay,
             booking_number=matched_booking,
-            amount=bond_doc.get("premium") or (bond_amount * 0.10),
+            # Exact stored premium only — no bond_amount-derived fallback here.
+            amount=bond_doc.get("premium"),
             phone=bond_doc.get("indemnitor_phone") or "",
             email=bond_doc.get("indemnitor_email") or "",
             defendant_name=defendant_name,

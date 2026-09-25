@@ -250,7 +250,7 @@ async def _asgi_post(app, body: bytes, sig: str, order: List[str], on_response_b
 EXACTLY_ONCE = ("drive_upload", "share_invoice", "court_sync", "slack", "sse_event")
 
 
-def _assert_once(h: Harness, legacy: int = 1):
+def _assert_once(h: Harness, legacy: int = 0):
     for k in EXACTLY_ONCE:
         assert h.calls[k] == 1, f"{k} ran {h.calls[k]}x"
     assert h.calls["legacy_payment_link"] == legacy
@@ -261,9 +261,10 @@ def _assert_once(h: Harness, legacy: int = 1):
 # Claim / concurrency
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_concurrent_webhook_redeliveries_single_side_effects():
+@pytest.mark.parametrize("flag,legacy", [(None, 0), ("true", 1)])
+def test_concurrent_webhook_redeliveries_single_side_effects(flag, legacy):
     h = Harness(slow=0.02)
-    with h.patched():
+    with h.patched(env={dc.LEGACY_PAYMENT_LINK_ENV: flag}):
         async def go():
             app = h.app()
             body = _body()
@@ -276,7 +277,7 @@ def test_concurrent_webhook_redeliveries_single_side_effects():
     assert r1["status"] == r2["status"] == 200
     assert actions == ["completion_accepted", "completion_duplicate_ignored"]
     assert h.packets.claim_calls == 2
-    _assert_once(h)
+    _assert_once(h, legacy=legacy)
     doc = h.packet_doc()
     assert doc["status"] == "signed" and doc["docuseal_status"] == "completed"
     assert doc["signed_pdf_drive_url"] == DRIVE_URL
@@ -286,7 +287,7 @@ def test_concurrent_webhook_redeliveries_single_side_effects():
 
 def test_concurrent_webhook_and_poller_single_side_effects():
     h = Harness(slow=0.02)
-    with h.patched():
+    with h.patched(env={dc.LEGACY_PAYMENT_LINK_ENV: "true"}):
         async def go():
             app = h.app()
             body = _body()
@@ -301,18 +302,18 @@ def test_concurrent_webhook_and_poller_single_side_effects():
     assert won_webhook != bool(poll["signed"])
     if not won_webhook:
         assert poll["claim_busy"] == 0
-    # Webhook was received → legacy link fires exactly once whoever ran it
-    # (poller winner leaves it for the webhook-requested retry: see below).
+    # Flag on + webhook received → legacy link at most once (a poller winner
+    # leaves it for the webhook-requested retry: see the lease test below).
     for k in EXACTLY_ONCE:
         assert h.calls[k] == 1, f"{k} ran {h.calls[k]}x"
     assert h.calls["legacy_payment_link"] <= 1
 
 
-def test_poller_then_webhook_still_fires_legacy_link_once():
-    """Current prod: a webhook completion fires the legacy link even if the
-    poller finished the packet first. Preserved, and only once."""
+def test_flag_on_poller_then_webhook_fires_legacy_link_once():
+    """Flag on ("true" = previous prod behavior): a webhook completion fires the
+    legacy link even if the poller finished the packet first — only once."""
     h = Harness()
-    with h.patched():
+    with h.patched(env={dc.LEGACY_PAYMENT_LINK_ENV: "true"}):
         res = asyncio.run(h.run_poller())
         assert res["signed"] == 1
         assert h.calls["legacy_payment_link"] == 0          # poller-only: no legacy send
@@ -327,12 +328,12 @@ def test_poller_then_webhook_still_fires_legacy_link_once():
     _assert_once(h, legacy=1)
 
 
-def test_webhook_during_poller_lease_legacy_link_honored_by_next_poll_once():
+def test_flag_on_webhook_during_poller_lease_legacy_link_honored_by_next_poll_once():
     """Webhook arrives while the poller holds the lease (claim lost → 200
     duplicate_ignored). The webhook is still recorded, so the next poller run
-    sends the legacy link exactly once (current prod: webhook completion sends)."""
+    sends the legacy link exactly once (flag on)."""
     h = Harness()
-    with h.patched():
+    with h.patched(env={dc.LEGACY_PAYMENT_LINK_ENV: "true"}):
         async def go():
             claimed = await dc.claim_completion(h.packets, _packet(), source=dc.SOURCE_POLLER)
             body = _body()
@@ -382,7 +383,7 @@ def test_crashed_background_run_is_finished_by_poller_after_lease_expiry():
             return await h.run_poller()
         res = asyncio.run(go())
     assert res["signed"] == 1
-    _assert_once(h, legacy=1)   # webhook had been received → legacy honored once
+    _assert_once(h, legacy=0)   # default flag off → no legacy send even though a webhook arrived
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -475,7 +476,7 @@ def test_each_step_exactly_once_across_redelivery_and_poller():
     assert res1["scanned"] == 0 and res2["scanned"] == 0
     for step in dc.REQUIRED_STEPS:
         assert h.step(step).get("state") in dc.TERMINAL_STATES, step
-    assert h.step(dc.STEP_LEGACY)["state"] == "done"
+    assert h.step(dc.STEP_LEGACY)["state"] == "skipped"   # default OFF
 
 
 def test_failed_drive_upload_retried_by_poller_other_steps_not_replayed():
@@ -503,8 +504,9 @@ def test_failed_drive_upload_retried_by_poller_other_steps_not_replayed():
     assert h.calls["drive_upload"] == 2                      # 1 failure + 1 retry
     assert h.step(dc.STEP_DRIVE)["state"] == "done"
     assert doc["docuseal_completion"]["done_at"]
-    for k in ("share_invoice", "court_sync", "slack", "sse_event", "legacy_payment_link"):
+    for k in ("share_invoice", "court_sync", "slack", "sse_event"):
         assert h.calls[k] == 1, k
+    assert h.calls["legacy_payment_link"] == 0
     # bond_cases got the Drive link backfilled after the retry
     assert any(u[1]["$set"].get("signed_pdf_drive_url") == DRIVE_URL for u in h.bond_case_updates())
 
@@ -602,15 +604,43 @@ def test_stuck_status_refresh_packet_is_picked_up_by_poller():
 # Legacy payment link switch
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_legacy_switch_default_preserves_current_behavior():
-    assert dc.LEGACY_PAYMENT_LINK_DEFAULT == "webhook"
+def test_legacy_switch_default_off_zero_sends_on_completion():
+    """BEHAVIOR CHANGE: with the flag unset, neither the webhook nor the poller
+    sends the legacy static payment link on DocuSeal completion."""
+    assert dc.LEGACY_PAYMENT_LINK_DEFAULT == "off"
     assert dc.LEGACY_PAYMENT_LINK_ENV == "DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK"
     h = Harness()
     with h.patched():
-        assert dc._legacy_payment_link_mode() == "webhook"
+        assert os.environ.get(dc.LEGACY_PAYMENT_LINK_ENV) is None
+        assert dc._legacy_payment_link_mode() == "off"
+        client = TestClient(h.app())
         body = _body()
-        TestClient(h.app()).post("/api/webhooks/docuseal", content=body,
-                                 headers={"Content-Type": "application/json", "X-DocuSeal-Signature": _sig(body)})
+        for _ in range(2):
+            client.post("/api/webhooks/docuseal", content=body,
+                        headers={"Content-Type": "application/json", "X-DocuSeal-Signature": _sig(body)})
+        asyncio.run(h.run_poller())
+    h.pay.assert_not_awaited()
+    assert h.step(dc.STEP_LEGACY)["reason"] == "switch_off"
+    for k in EXACTLY_ONCE:
+        assert h.calls[k] == 1
+
+    hp = Harness()
+    with hp.patched():
+        asyncio.run(hp.run_poller())
+        asyncio.run(hp.run_poller())
+    hp.pay.assert_not_awaited()
+
+
+@pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on", "webhook"])
+def test_legacy_switch_truthy_enables_webhook_path_once(value):
+    h = Harness()
+    with h.patched(env={dc.LEGACY_PAYMENT_LINK_ENV: value}):
+        client = TestClient(h.app())
+        body = _body()
+        for _ in range(3):
+            client.post("/api/webhooks/docuseal", content=body,
+                        headers={"Content-Type": "application/json", "X-DocuSeal-Signature": _sig(body)})
+        asyncio.run(h.run_poller())
     h.pay.assert_awaited_once()
     kw = h.pay.await_args.kwargs
     assert kw["packet_id"] == PACKET_ID and kw["booking_number"] == BOOKING
@@ -618,9 +648,9 @@ def test_legacy_switch_default_preserves_current_behavior():
     assert kw["packet_doc"]["packet_id"] == PACKET_ID
 
     hp = Harness()
-    with hp.patched():
+    with hp.patched(env={dc.LEGACY_PAYMENT_LINK_ENV: value}):
         asyncio.run(hp.run_poller())
-    hp.pay.assert_not_awaited()          # poller path: unchanged (never called)
+    hp.pay.assert_not_awaited()          # "true" = webhook-received completions only
 
 
 @pytest.mark.parametrize("value", ["off", "OFF", "false", "0"])
@@ -637,13 +667,13 @@ def test_legacy_switch_off_prevents_call(value):
         assert h.calls[k] == 1
 
 
-def test_legacy_switch_off_via_module_constant_one_line_change():
+def test_legacy_switch_on_via_module_constant_one_line_change():
     h = Harness()
-    with h.patched(), patch.object(dc, "LEGACY_PAYMENT_LINK_DEFAULT", "off"):
+    with h.patched(), patch.object(dc, "LEGACY_PAYMENT_LINK_DEFAULT", "webhook"):
         body = _body()
         TestClient(h.app()).post("/api/webhooks/docuseal", content=body,
                                  headers={"Content-Type": "application/json", "X-DocuSeal-Signature": _sig(body)})
-    h.pay.assert_not_awaited()
+    h.pay.assert_awaited_once()
 
 
 def test_legacy_switch_all_fires_on_poller_once():
@@ -655,15 +685,16 @@ def test_legacy_switch_all_fires_on_poller_once():
     assert h.pay.await_args.kwargs["source"] == "docuseal_poller_completed"
 
 
-def test_legacy_switch_unknown_value_falls_back_to_default(caplog):
-    with patch.dict(os.environ, {dc.LEGACY_PAYMENT_LINK_ENV: "sometimes"}):
-        assert dc._legacy_payment_link_mode() == "webhook"
+@pytest.mark.parametrize("value", ["sometimes", "maybe", "2", " "])
+def test_legacy_switch_unknown_value_fails_closed_off(value):
+    with patch.dict(os.environ, {dc.LEGACY_PAYMENT_LINK_ENV: value}):
+        assert dc._legacy_payment_link_mode() == "off"
 
 
 def test_legacy_link_never_retried_after_exception():
     h = Harness()
     h.pay.side_effect = RuntimeError("bluebubbles down")
-    with h.patched():
+    with h.patched(env={dc.LEGACY_PAYMENT_LINK_ENV: "true"}):
         client = TestClient(h.app())
         body = _body()
         client.post("/api/webhooks/docuseal", content=body,

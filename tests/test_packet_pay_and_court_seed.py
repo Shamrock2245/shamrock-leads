@@ -16,6 +16,21 @@ from dashboard.services.bond_court_seed_service import (
 )
 
 
+@pytest.fixture
+def send_once_ok():
+    """Atomic send-once claim is won (Mongo-free); see test_packet_payment_link_send_once.py."""
+    with patch(
+        "dashboard.services.packet_payment_link_service._claim_send_once",
+        new_callable=AsyncMock,
+        return_value={"claimed": True, "collection": "active_bonds",
+                      "filter": {"booking_number": "x"}, "claim_id": "c1"},
+    ) as claim, patch(
+        "dashboard.services.packet_payment_link_service._finish_send_once",
+        new_callable=AsyncMock,
+    ):
+        yield claim
+
+
 @pytest.mark.asyncio
 async def test_maybe_send_skips_when_recently_sent():
     packet = {
@@ -83,7 +98,7 @@ async def test_maybe_send_skips_when_paid():
 
 
 @pytest.mark.asyncio
-async def test_maybe_send_dispatches_when_eligible():
+async def test_maybe_send_dispatches_when_eligible(send_once_ok):
     bond = {
         "booking_number": "BK-3",
         "premium": 250.0,
@@ -238,7 +253,7 @@ async def test_seed_court_idempotent_when_already_seeded():
 
 
 @pytest.mark.asyncio
-async def test_promote_hook_calls_helpers():
+async def test_promote_hook_calls_helpers(send_once_ok):
     """Ensure intake promote soft-hooks invoke payment + court seed helpers."""
     # Import the module-level symbols used inside intake_promote via late import;
     # we verify the helpers themselves are callable with promote-shaped bond docs.

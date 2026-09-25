@@ -33,21 +33,24 @@ Design
      court_sync     seed_court_calendar_for_bond
      slack          non-PII Slack post
 
-Legacy payment link switch (owner decision = one-line change)
--------------------------------------------------------------
+Legacy payment link switch — DEFAULT OFF (owner decision 2026-09-25)
+-------------------------------------------------------------------
 ``maybe_send_packet_payment_link`` auto-SENDS the static SwipeSimple link to
-the customer. Its internals are unchanged. This handler only calls it through
-``_legacy_payment_link_mode()``:
+the customer (BlueBubbles / Gmail). On DocuSeal completion it is now OFF by
+default: with ``DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK`` unset (or any
+unrecognized value) neither the webhook nor the poller calls it.
 
-  "webhook" (default) — current production behavior: fires when a DocuSeal
-            submission.completed WEBHOOK was received for the packet; a
-            poller-only completion does not fire it.
-  "off"     — never called from DocuSeal completion.
-  "all"     — webhook AND poller completions.
+  unset / "0" / "false" / "off" / unknown  → off (default; fail closed)
+  "1" / "true" / "yes" / "on" / "webhook"  → previous production behavior: fires
+            for packets where a submission.completed WEBHOOK was received;
+            poller-only completions do not fire it.
+  "all"     → webhook AND poller completions.
 
-Because the claim makes it at-most-once per packet (``started`` is stamped
-before the call and never retried), concurrent / repeated webhook deliveries no
-longer race into duplicate sends from THIS call site.
+Reversible with the env flag (or the one-line ``LEGACY_PAYMENT_LINK_DEFAULT``
+constant). When enabled, sends are send-once twice over: this handler stamps
+``started`` before the call (never retried), and the service itself claims
+``payment_link_send_once`` atomically BEFORE sending, so concurrent DocuSeal
+retries, the poller, packet finalize, or a >24h gap can never double-send.
 
 PII: logs carry packet_id / bond_id / step / reason / exception type only.
 """
@@ -63,12 +66,12 @@ logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # OWNER SWITCH — legacy static payment link on DocuSeal completion.
-# Default "webhook" preserves current production behavior exactly.
-# To gate it off, change this ONE line to "off" (or set the env var below).
-LEGACY_PAYMENT_LINK_DEFAULT = "webhook"
+# DEFAULT OFF: no automatic link on completion unless the env var below is an
+# explicit truthy value ("1"/"true"/"yes"/"on"/"webhook") or "all".
+LEGACY_PAYMENT_LINK_DEFAULT = "off"
 # ─────────────────────────────────────────────────────────────────────────────
 LEGACY_PAYMENT_LINK_ENV = "DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK"
-LEGACY_MODES = ("webhook", "off", "all")
+LEGACY_MODES = ("off", "webhook", "all")
 
 LEASE_SECONDS_DEFAULT = 900
 LEASE_ENV = "DOCUSEAL_COMPLETION_LEASE_SECONDS"
@@ -140,20 +143,23 @@ def _share_source(source: str) -> str:
     return "docuseal_submission_completed" if source == SOURCE_WEBHOOK else "docuseal_poller_completed"
 
 
+_LEGACY_TRUTHY = frozenset({"1", "true", "yes", "on", "enabled", "webhook"})
+_LEGACY_ALL = frozenset({"all", "both"})
+
+
 def _legacy_payment_link_mode() -> str:
-    raw = (os.getenv(LEGACY_PAYMENT_LINK_ENV) or LEGACY_PAYMENT_LINK_DEFAULT).strip().lower()
-    if raw in ("0", "false", "no", "disabled", "none"):
-        raw = "off"
-    if raw in ("both", "any"):
-        raw = "all"
-    if raw not in LEGACY_MODES:
+    """'off' (default) | 'webhook' | 'all'. Anything unrecognized → 'off' (fail closed)."""
+    raw = (os.getenv(LEGACY_PAYMENT_LINK_ENV) or LEGACY_PAYMENT_LINK_DEFAULT or "").strip().lower()
+    if raw in _LEGACY_ALL:
+        return "all"
+    if raw in _LEGACY_TRUTHY:
+        return "webhook"
+    if raw not in ("", "0", "false", "no", "off", "disabled", "none"):
         logger.warning(
-            "[docuseal_completion] unknown %s value — using default %r",
+            "[docuseal_completion] unrecognized %s value — treating as off",
             LEGACY_PAYMENT_LINK_ENV,
-            LEGACY_PAYMENT_LINK_DEFAULT,
         )
-        return LEGACY_PAYMENT_LINK_DEFAULT
-    return raw
+    return "off"
 
 
 def _lease_seconds() -> int:
@@ -616,7 +622,7 @@ class _Run:
         mode = self.mode
         if mode == "off":
             await self.stamp(STEP_LEGACY, "skipped", reason="switch_off")
-            logger.info("%s payment_link auto-dispatch disabled by %s=off packet=%s",
+            logger.info("%s payment_link auto-dispatch off (%s unset/off — default) packet=%s",
                         self.pfx, LEGACY_PAYMENT_LINK_ENV, self.packet_id)
             return
         webhook_seen = bool(_completion(self.doc).get("webhook_received_at")) or self.source == SOURCE_WEBHOOK
@@ -679,6 +685,8 @@ class _Run:
         from dashboard.services import swipesimple_invoice_service as _ss
 
         try:
+            # Stage only: ALWAYS pass dispatch=False explicitly — never rely on
+            # the function's default. No customer message from this path.
             share_result = await _ss.maybe_issue_share_invoice_for_bond(
                 share_bond_id,
                 channel="imessage",

@@ -169,11 +169,12 @@ def env_guard():
             "SWIPESIMPLE_LIVE",
             "SWIPESIMPLE_DISPATCH_LIVE",
             "DEBUG",
+            "DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK",
         )
     }
     os.environ["DOCUSEAL_WEBHOOK_SECRET"] = TEST_HMAC_SECRET
     for k in ("SLACK_WEBHOOK_LEADS", "SLACK_WEBHOOK_URL", "SWIPESIMPLE_LIVE",
-              "SWIPESIMPLE_DISPATCH_LIVE", "DEBUG"):
+              "SWIPESIMPLE_DISPATCH_LIVE", "DEBUG", "DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK"):
         os.environ.pop(k, None)
     yield
     for k, v in keep.items():
@@ -312,8 +313,9 @@ def test_webhook_calls_share_invoice_with_dispatch_false(webhook_env):
         dispatch=False,
         source="docuseal_submission_completed",
     )
-    # existing payment-link soft-fail call left intact
-    webhook_env["pay"].assert_awaited_once()
+    # legacy static payment link is OFF by default on completion
+    # (DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK unset → never called)
+    webhook_env["pay"].assert_not_awaited()
 
 
 def test_webhook_share_invoice_exception_is_soft_fail_no_pii(webhook_env, caplog):
