@@ -1,49 +1,65 @@
 import { NextRequest, NextResponse } from "next/server";
-import { BUNDLED_SFX, searchBundledSfx } from "@/media/bundled-catalog";
+import {
+	BUNDLED_SFX,
+	BUNDLED_LOGOS,
+	BUNDLED_ICONS,
+	BUNDLED_IMAGES,
+	BUNDLED_TEXT_PRESETS,
+	AI_AGENT_RECIPES,
+	searchBundledCatalog,
+} from "@/media/bundled-catalog";
 
 export async function GET(request: NextRequest) {
 	const { searchParams } = new URL(request.url);
-	const kind = searchParams.get("kind") || "sfx";
+	const kind = searchParams.get("kind") || "all";
 	const q = searchParams.get("q") || "";
 
-	if (kind !== "sfx") {
+	if (kind === "presets" || kind === "text") {
 		return NextResponse.json({
-			kind,
-			count: 0,
-			results: [],
-			note: "Only bundled sfx ships in this build. Music/LUT/sticker catalogs land next.",
+			kind: "text",
+			count: BUNDLED_TEXT_PRESETS.length,
+			results: BUNDLED_TEXT_PRESETS,
 		});
 	}
 
-	const results = searchBundledSfx(q).map((asset) => ({
+	if (kind === "recipes") {
+		return NextResponse.json({
+			kind: "recipes",
+			count: AI_AGENT_RECIPES.length,
+			results: AI_AGENT_RECIPES,
+		});
+	}
+
+	const results = searchBundledCatalog({ kind, query: q }).map((asset) => ({
 		id: asset.id,
+		slug: asset.slug,
+		kind: asset.kind,
 		name: asset.name,
 		description: asset.description,
 		url: asset.url,
 		previewUrl: asset.previewUrl,
 		downloadUrl: asset.url,
-		duration: asset.duration,
-		filesize: 0,
-		type: "mp3",
-		channels: 2,
-		bitrate: 128000,
-		bitdepth: 16,
-		samplerate: 44100,
-		username: asset.author,
+		duration: asset.duration || 0,
+		format: asset.format,
+		category: asset.category,
 		tags: asset.tags,
 		license: asset.license,
-		created: "2026-08-14",
-		downloads: 0,
-		rating: 5,
-		ratingCount: 1,
+		author: asset.author,
 		source: "bundled",
 	}));
 
 	return NextResponse.json({
-		kind: "sfx",
+		kind,
 		count: results.length,
-		next: null,
+		query: q || null,
 		results,
-		totalBundled: BUNDLED_SFX.length,
+		breakdown: {
+			sfx: BUNDLED_SFX.length,
+			logos: BUNDLED_LOGOS.length,
+			icons: BUNDLED_ICONS.length,
+			images: BUNDLED_IMAGES.length,
+			textPresets: BUNDLED_TEXT_PRESETS.length,
+			recipes: AI_AGENT_RECIPES.length,
+		},
 	});
 }
