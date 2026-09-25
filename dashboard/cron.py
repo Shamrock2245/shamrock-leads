@@ -796,6 +796,12 @@ async def _ensure_all_indexes():
         await _idx("outreach_sequences", [("status", 1)], name="idx_seq_status", background=True)
         await _idx("outreach_sequences", [("phone", 1), ("status", 1)], name="idx_phone_status", background=True)
         await _idx("outreach_messages", [("sequence_id", 1)], name="idx_msg_sequence_id", background=True)
+        # SMS consent (STOP/TCPA) ledger — append-only, no TTL (compliance record)
+        await _idx("sms_consent_ledger", [("phone_last10", 1), ("timestamp", -1)], name="idx_consent_phone_ts", background=True)
+        await _idx("sms_consent_ledger", [("source_message_guid", 1), ("event", 1)], name="idx_consent_guid_event", background=True, sparse=True)
+        # BlueBubbles thread attach / outbound dedup
+        await _idx("imessage_outreach", [("booking_numbers", 1)], name="idx_imsg_booking_numbers", background=True, sparse=True)
+        await _idx("imessage_outreach", [("temp_guid", 1)], name="idx_imsg_temp_guid", background=True, sparse=True)
         # Outreach Queue
         await _idx("outreach_queue", [("status", 1), ("next_attempt", 1)], name="idx_outreach_status_attempt", background=True)
         await _idx("outreach_queue", [("created_at", 1)], name="idx_outreach_ttl_30d", background=True, expireAfterSeconds=2592000)

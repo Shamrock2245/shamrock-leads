@@ -768,8 +768,24 @@ async def deliver_packet(request: Request, packet_id: str):
         if not bb:
             return JSONResponse({"error": "BlueBubbles server not configured"}, status_code=503)
         chat_guid = f"iMessage;-;{phone}"
-        result = await bb.send_text(chat_guid, message)
+        # Staff-triggered DocuSeal signing link (B3 BlueBubbles exception):
+        # allowed unless THIS recipient opted out (STOP/TCPA gate in the BB client).
+        result = await bb.send_text(chat_guid, message, purpose="docuseal_signing_link")
         sent_ok = bool(result and result.get("success"))
+        if not sent_ok and (result or {}).get("blocked"):
+            return JSONResponse(
+                {
+                    "success": False,
+                    "blocked": True,
+                    "error": (result or {}).get("reason") or "recipient_opted_out",
+                    "reason": (result or {}).get("reason") or "recipient_opted_out",
+                    "purpose": "docuseal_signing_link",
+                    "message": (result or {}).get("message") or "Recipient opted out of texts.",
+                    "packet_id": packet_id,
+                    "role": party_role,
+                },
+                status_code=409,
+            )
         if not sent_ok:
             return JSONResponse(
                 {
@@ -2459,6 +2475,19 @@ async def bind_defendant_to_packet(request: Request, packet_id: str, req: BindDe
 
 
 
+async def _docuseal_sms_block_reason(submitter: dict) -> str:
+    """Return a block reason if DocuSeal must NOT text this submitter, else ''."""
+    from dashboard.services.sms_consent_ledger import check_send_allowed, phone_last10
+
+    phone = (submitter or {}).get("phone") or ""
+    if not phone_last10(phone):
+        return "sms_recipient_phone_unknown"
+    blocked = await check_send_allowed(phone, "docuseal_signing_link_sms")
+    if blocked:
+        return str(blocked.get("reason") or "recipient_opted_out")
+    return ""
+
+
 @paperwork_bp.post("/paperwork/{packet_id}/docuseal/resend")
 async def paperwork_docuseal_resend(packet_id: str, request: Request):
     """
@@ -2469,7 +2498,9 @@ async def paperwork_docuseal_resend(packet_id: str, request: Request):
       role: str — filter by role name
       email: str — update email before send (single target only)
       send_email: bool (default true)
-      send_sms: bool (default false)
+      send_sms: bool (default false) — suppressed per submitter when that
+        number opted out (STOP) or no submitter phone is on file; see
+        ``sms_blocked`` in the response.
     """
     from dashboard.services.docuseal_service import get_docuseal_service, resolve_template_id_for_surety
 
@@ -2544,11 +2575,27 @@ async def paperwork_docuseal_resend(packet_id: str, request: Request):
 
     updated = []
     errors = []
+    sms_blocked = []
     for s in targets:
         sid = s.get("id")
         try:
-            kwargs: dict = {"send_email": send_email, "send_sms": send_sms}
-            if new_email and (only_id is not None or len(targets) == 1):
+            sms_for_this = send_sms
+            if send_sms:
+                # STOP/TCPA gate applies to DocuSeal's own SMS too (owner decision:
+                # an opted-out number gets NO texts, DocuSeal links included).
+                # Per-signer: only this submitter's SMS is suppressed. Fail closed
+                # when the submitter phone is unknown (DocuSeal would text the
+                # number it has on file, which we cannot check).
+                sms_block_reason = await _docuseal_sms_block_reason(s)
+                if sms_block_reason:
+                    sms_for_this = False
+                    sms_blocked.append({"submitter_id": sid, "role": s.get("role"),
+                                        "reason": sms_block_reason})
+            email_change = bool(new_email and (only_id is not None or len(targets) == 1))
+            if not (send_email or sms_for_this or email_change):
+                continue  # nothing left to send for this signer
+            kwargs: dict = {"send_email": send_email, "send_sms": sms_for_this}
+            if email_change:
                 kwargs["email"] = str(new_email).strip()
             raw = await svc.update_submitter(sid, **kwargs)
             norm = svc.normalize_submitter_record(raw if isinstance(raw, dict) else s)
@@ -2586,6 +2633,7 @@ async def paperwork_docuseal_resend(packet_id: str, request: Request):
         "resent": len(updated),
         "updated": updated,
         "errors": errors,
+        "sms_blocked": sms_blocked,
     }
 
 

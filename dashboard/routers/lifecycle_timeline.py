@@ -121,9 +121,14 @@ async def get_lifecycle(booking_number: str):
         ).sort("court_date", 1).limit(50)
         reminders = await reminders_cursor.to_list(50)
 
-        # Messages
+        # Messages — booking_numbers carries every case a BlueBubbles text was
+        # attached to (multi-party / ambiguous phone matches never pick one).
         msgs_cursor = messages_col.find(
-            {"booking_number": booking_number}, {"_id": 0}
+            {"$or": [
+                {"booking_number": booking_number},
+                {"booking_numbers": booking_number},
+            ]},
+            {"_id": 0},
         ).sort("sent_at", -1).limit(50)
         messages = await msgs_cursor.to_list(50)
 

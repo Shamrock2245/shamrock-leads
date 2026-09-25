@@ -72,6 +72,16 @@ class BlueBubblesClient:
         self.password = password
         self.timeout = timeout
 
+    async def _consent_gate(self, recipient, purpose: str | None) -> dict | None:
+        """Per-recipient STOP/TCPA gate (see dashboard.services.sms_consent_ledger).
+
+        Returns a blocked-result dict when the recipient opted out, else None.
+        Runs before *any* outbound call (including typing indicators) so an
+        opted-out number is never contacted through this client.
+        """
+        from dashboard.services.sms_consent_ledger import check_send_allowed
+        return await check_send_allowed(recipient, purpose or "bb_send")
+
     def _params(self, extra: dict | None = None) -> dict:
         """Build query params with password auth."""
         p = {"password": self.password}
@@ -154,7 +164,8 @@ class BlueBubblesClient:
                         effect_id: str | None = None,
                         subject: str | None = None,
                         selected_message_guid: str | None = None,
-                        method: str = "private-api") -> dict:
+                        method: str = "private-api",
+                        purpose: str | None = None) -> dict:
         """Send a text message. Supports effects, subjects, and replies.
 
         Args:
@@ -165,7 +176,14 @@ class BlueBubblesClient:
             subject: Optional subject line (renders bold)
             selected_message_guid: Reply to this message GUID
             method: Send method — "private-api" (default) or "apple-script"
+            purpose: Optional label for audit/blocked results (e.g. "docuseal_signing_link").
+                     Labels only: there is no purpose-based exemption and no override
+                     of the STOP gate (owner decision — opted-out numbers get nothing
+                     until they text START).
         """
+        blocked = await self._consent_gate(chat_guid, purpose)
+        if blocked:
+            return blocked
         import uuid
         body = {
             "chatGuid": chat_guid,
@@ -272,6 +290,10 @@ class BlueBubblesClient:
             reaction: One of "love", "like", "dislike", "laugh", "emphasize", "question"
                       Prefix with "remove_" to remove a reaction.
         """
+        # Tapbacks to SMS recipients are delivered as text ("Loved “…”") — gate them too.
+        blocked = await self._consent_gate(chat_guid, "react")
+        if blocked:
+            return blocked
         reaction_id = REACTIONS.get(reaction, reaction)
         return await self._request(
             "POST", "/api/v1/message/react",
@@ -310,7 +332,8 @@ class BlueBubblesClient:
     # ─────────────────────────────────────────────────────────────────────────
 
     async def send_with_effect(self, chat_guid: str, message: str,
-                               effect: str, temp_guid: str | None = None) -> dict:
+                               effect: str, temp_guid: str | None = None,
+                               purpose: str | None = None) -> dict:
         """Send a message with an iMessage bubble/screen effect.
 
         Args:
@@ -320,14 +343,19 @@ class BlueBubblesClient:
         return await self.send_text(
             chat_guid, message,
             temp_guid=temp_guid,
-            effect_id=effect
+            effect_id=effect,
+            purpose=purpose or "send_with_effect",
         )
 
     async def send_force_notify(self, chat_guid: str, message: str,
-                                temp_guid: str | None = None) -> dict:
+                                temp_guid: str | None = None,
+                                purpose: str | None = None) -> dict:
         """Send a message that bypasses Do Not Disturb / Focus modes.
         Uses the 'mention' mechanism to trigger a notification override.
         """
+        blocked = await self._consent_gate(chat_guid, purpose or "send_force_notify")
+        if blocked:
+            return blocked
         # Force notify works by mentioning the recipient — the mention
         # triggers notification even in DND/Focus mode
         body = {
@@ -345,12 +373,14 @@ class BlueBubblesClient:
         return await self._request("POST", "/api/v1/message/text", json_body=body)
 
     async def reply_to_message(self, chat_guid: str, reply_to_guid: str,
-                               message: str, temp_guid: str | None = None) -> dict:
+                               message: str, temp_guid: str | None = None,
+                               purpose: str | None = None) -> dict:
         """Send a message as a reply to a specific message (threaded reply)."""
         return await self.send_text(
             chat_guid, message,
             temp_guid=temp_guid,
-            selected_message_guid=reply_to_guid
+            selected_message_guid=reply_to_guid,
+            purpose=purpose or "reply_to_message",
         )
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -404,7 +434,8 @@ class BlueBubblesClient:
     async def send_human_like(self, chat_guid: str, message: str,
                               typing_delay: float = 2.5,
                               mark_read: bool = True,
-                              temp_guid: str | None = None) -> dict:
+                              temp_guid: str | None = None,
+                              purpose: str | None = None) -> dict:
         """Send a message with simulated human behavior.
 
         1. Start typing indicator
@@ -412,14 +443,21 @@ class BlueBubblesClient:
         3. Send the message
         4. Mark chat as read (optional)
         """
+        # 0. Consent gate before *any* contact (typing indicator included)
+        blocked = await self._consent_gate(chat_guid, purpose or "send_human_like")
+        if blocked:
+            return blocked
+
         # 1. Show typing
         await self.start_typing(chat_guid)
 
         # 2. Simulate typing time
         await asyncio.sleep(typing_delay)
 
-        # 3. Send
-        result = await self.send_text(chat_guid, message, temp_guid=temp_guid)
+        # 3. Send (send_text re-checks consent — a STOP that lands during the
+        #    typing delay still blocks the send)
+        result = await self.send_text(chat_guid, message, temp_guid=temp_guid,
+                                      purpose=purpose or "send_human_like")
 
         # 4. Mark read
         if mark_read and result.get("success"):
@@ -522,6 +560,10 @@ class BlueBubblesClient:
         Returns:
             { success: bool, data: { guid: str, ... } }
         """
+        for participant in participants or []:
+            blocked = await self._consent_gate(participant, "create_group_chat")
+            if blocked:
+                return blocked
         body = {"addresses": participants}
         if display_name:
             body["displayName"] = display_name
@@ -557,7 +599,8 @@ class BlueBubblesClient:
     # ─────────────────────────────────────────────────────────────────────────
     async def schedule_message(self, chat_guid: str, message: str,
                                scheduled_date_ms: int,
-                               schedule_type: str = "once") -> dict:
+                               schedule_type: str = "once",
+                               purpose: str | None = None) -> dict:
         """Schedule a message to be sent at a future time.
 
         Args:
@@ -567,7 +610,14 @@ class BlueBubblesClient:
             schedule_type:      "once" | "recurring"
         Returns:
             { success: bool, data: { id: int, ... } }
+
+        NOTE: the consent gate runs at *scheduling* time.  A message already
+        scheduled on the BB server before the recipient opted out is not
+        re-checked by the CRM when BB fires it.
         """
+        blocked = await self._consent_gate(chat_guid, purpose or "schedule_message")
+        if blocked:
+            return blocked
         body = {
             "chatGuid": chat_guid,
             "type": "send-message",
@@ -589,7 +639,8 @@ class BlueBubblesClient:
     #  Attachment / Media Sending
     # ─────────────────────────────────────────────────────────────────────────
     async def send_attachment_url(self, chat_guid: str, attachment_url: str,
-                                  filename: str | None = None) -> dict:
+                                  filename: str | None = None,
+                                  purpose: str | None = None) -> dict:
         """Send a file attachment by providing a publicly accessible URL.
 
         The BlueBubbles server will download the file and send it via iMessage.
@@ -600,6 +651,9 @@ class BlueBubblesClient:
             attachment_url:  Public HTTPS URL of the file to send
             filename:        Optional display filename
         """
+        blocked = await self._consent_gate(chat_guid, purpose or "send_attachment_url")
+        if blocked:
+            return blocked
         body = {
             "chatGuid": chat_guid,
             "attachmentUrl": attachment_url,
