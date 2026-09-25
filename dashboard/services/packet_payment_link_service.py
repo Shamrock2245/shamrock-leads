@@ -23,7 +23,30 @@ from dashboard.services.bb_client import (
 logger = logging.getLogger(__name__)
 
 # Idempotency window for auto-sends (staff force=True bypasses).
+# NOTE: the real guard for auto-sends is the atomic send-once claim below
+# (``payment_link_send_once``); this window is kept as an extra soft check.
 _IDEMPOTENCY_HOURS = 24
+# Atomic send-once marker for AUTO sends (maybe_send_packet_payment_link).
+# Set by a conditional find_one_and_update BEFORE any message is sent; never
+# cleared automatically. A claim that exists (claimed / sent / failed / stale)
+# blocks every later auto-send for that packet (or booking, when there is no
+# packet) → manual review. Staff's explicit endpoint
+# (POST /api/paperwork/payment/swipesimple-link → send_swipesimple_payment_link)
+# does not use this marker.
+SEND_ONCE_FIELD = "payment_link_send_once"
+# Staff-confirmed premium marker (NEW in PR #60 — no pre-existing field).
+# An AUTO send (maybe_send_packet_payment_link) requires ALL THREE on the same
+# document (paperwork packet, else active bond): a positive amount, a timestamp
+# and who confirmed it. Stored ``premium`` / ``premium_amount`` values are NOT
+# used for auto sends: they are often the 10%-of-bond estimate written by
+# intake promote (intake.py), packet_builder_service, or the DocuSeal prefill,
+# and are indistinguishable from staff-entered values.
+# NOTHING in the codebase sets these fields yet (no staff confirmation UI) — so
+# automatic sends stay skipped with reason=premium_unconfirmed until one exists.
+# Never auto-set / backfill them.
+PREMIUM_CONFIRMED_AMOUNT_FIELD = "premium_confirmed_amount"
+PREMIUM_CONFIRMED_AT_FIELD = "premium_confirmed_at"
+PREMIUM_CONFIRMED_BY_FIELD = "premium_confirmed_by"
 _DEFAULT_SWIPESIMPLE_URL = (
     "https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd"
 )
@@ -166,44 +189,57 @@ async def _load_context(
     }
 
 
+def _money_or_zero(raw: Any) -> float:
+    if raw is None or raw == "" or isinstance(raw, bool):
+        return 0.0
+    try:
+        val = float(str(raw).replace(",", "").replace("$", "").strip())
+    except (TypeError, ValueError):
+        return 0.0
+    return val if val > 0 else 0.0
+
+
+def confirmed_premium(
+    packet_doc: Optional[dict],
+    bond_doc: Optional[dict],
+) -> float:
+    """Staff-confirmed premium, or 0.0 when there is none.
+
+    Counts ONLY when ``premium_confirmed_amount`` > 0 AND ``premium_confirmed_at``
+    AND ``premium_confirmed_by`` are all set on the same document (packet first,
+    then active bond). Plain ``premium`` / ``premium_amount`` / ``total_premium``
+    never count — they may be the 10% estimate.
+    """
+    for doc in (packet_doc, bond_doc):
+        if not isinstance(doc, dict):
+            continue
+        amount = _money_or_zero(doc.get(PREMIUM_CONFIRMED_AMOUNT_FIELD))
+        at = doc.get(PREMIUM_CONFIRMED_AT_FIELD)
+        by = str(doc.get(PREMIUM_CONFIRMED_BY_FIELD) or "").strip()
+        if amount > 0 and at and by:
+            return amount
+    return 0.0
+
+
 def _resolve_premium(
     amount_val: Any,
     packet_doc: Optional[dict],
     bond_doc: Optional[dict],
     intake_doc: Optional[dict],
 ) -> float:
-    try:
-        amount = float(amount_val) if amount_val is not None else 0.0
-    except (TypeError, ValueError):
-        amount = 0.0
+    """Amount for the STAFF endpoint copy: the staff-entered amount if > 0, else
+    the staff-confirmed premium, else 0.0 (copy then says "Confirmed Amount").
+
+    Stored ``premium`` / ``premium_amount`` fields are deliberately NOT used as a
+    fallback: they may be the 10%-of-bond estimate (intake promote,
+    packet_builder_service, DocuSeal prefill) and must never be quoted to a
+    customer as the "Confirmed Premium". ``intake_doc`` is accepted for
+    signature compatibility only.
+    """
+    amount = _money_or_zero(amount_val)
     if amount > 0:
         return amount
-    for doc, keys in (
-        (packet_doc, ("premium_amount", "numeric_premium_dollar", "premium")),
-        (bond_doc, ("premium_amount", "total_premium", "premium")),
-        (intake_doc, ("premium_amount", "premium")),
-    ):
-        if not doc:
-            continue
-        for key in keys:
-            raw = doc.get(key)
-            if raw is None or raw == "":
-                continue
-            try:
-                val = float(str(raw).replace(",", "").replace("$", ""))
-                if val > 0:
-                    return val
-            except (TypeError, ValueError):
-                continue
-    # Intake promote stores bond_amount and derives 10% — last resort
-    if bond_doc and bond_doc.get("bond_amount") and not bond_doc.get("premium"):
-        try:
-            ba = float(bond_doc.get("bond_amount") or 0)
-            if ba > 0:
-                return ba * 0.10
-        except (TypeError, ValueError):
-            pass
-    return 0.0
+    return confirmed_premium(packet_doc, bond_doc)
 
 
 def _resolve_contacts(
@@ -508,6 +544,65 @@ async def send_swipesimple_payment_link(
     }
 
 
+async def _claim_send_once(*, packet_id: str, booking_number: str, source: str) -> Dict[str, Any]:
+    """
+    Atomically claim the one allowed auto-send BEFORE sending.
+
+    Key: the paperwork packet when there is one, else the active bond by
+    booking number. Returns {"claimed": True, "collection", "filter", "claim_id"}
+    or {"claimed": False, "reason": ...}. Fails closed: no key, no matching
+    document, or an existing claim (in any state, including a stale
+    "claimed" from a crashed send) → not claimed → caller must not send.
+    """
+    import uuid
+
+    from pymongo import ReturnDocument
+
+    if packet_id:
+        col_name, base = "paperwork_packets", _packet_lookup_filter(packet_id)
+    elif booking_number:
+        col_name, base = "active_bonds", {"booking_number": booking_number}
+    else:
+        return {"claimed": False, "reason": "send_once_no_key"}
+
+    col = get_collection(col_name)
+    claim_id = uuid.uuid4().hex
+    filt = dict(base) if "$or" not in base else {"$and": [base]}
+    filt[SEND_ONCE_FIELD] = {"$exists": False}
+    doc = await col.find_one_and_update(
+        filt,
+        {"$set": {SEND_ONCE_FIELD: {
+            "state": "claimed",
+            "claim_id": claim_id,
+            "claimed_at": datetime.now(timezone.utc).isoformat(),
+            "source": source,
+        }}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if doc and ((doc.get(SEND_ONCE_FIELD) or {}).get("claim_id") == claim_id):
+        return {"claimed": True, "collection": col_name, "filter": base, "claim_id": claim_id}
+    existing = await col.find_one(base)
+    if not existing:
+        return {"claimed": False, "reason": "send_once_target_not_found"}
+    state = (existing.get(SEND_ONCE_FIELD) or {}).get("state") or "unknown"
+    return {"claimed": False, "reason": "already_sent_once", "prior_state": state}
+
+
+async def _finish_send_once(claim: Dict[str, Any], state: str) -> None:
+    try:
+        filt = dict(claim["filter"]) if "$or" not in claim["filter"] else {"$and": [claim["filter"]]}
+        filt[f"{SEND_ONCE_FIELD}.claim_id"] = claim["claim_id"]
+        await get_collection(claim["collection"]).update_one(
+            filt,
+            {"$set": {
+                f"{SEND_ONCE_FIELD}.state": state,
+                f"{SEND_ONCE_FIELD}.finished_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+    except Exception as exc:  # claim stays "claimed" → still blocks (fail closed)
+        logger.warning("[payment_link] send-once finish stamp failed err_type=%s", type(exc).__name__)
+
+
 async def maybe_send_packet_payment_link(
     *,
     packet_id: str = "",
@@ -522,11 +617,33 @@ async def maybe_send_packet_payment_link(
     force: bool = False,
     source: str = "auto",
 ) -> Dict[str, Any]:
-    """Idempotent auto-send for packet / promote / webhook paths.
+    """Send-once auto-send for packet finalize / intake promote / DocuSeal completion.
 
-    Skips when payment already collected, a link was sent recently, premium
-    unknown, or no indemnitor contact. Never raises — soft-fails with reason.
+    Gates, in order (each → ``skipped`` with ``reason``; never raises):
+      * ``switch_off``            DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK is off
+                                  (default) — see legacy_payment_link_switch.
+      * ``payment_already_collected`` / ``recently_sent`` (bypassed by force)
+      * ``premium_unconfirmed``   no staff-confirmed premium (confirmed_premium);
+                                  stored/estimated premiums never count and the
+                                  caller's ``amount`` is ignored for auto sends.
+      * ``no_contact``
+      * send-once claim not won   (already sent / claimed / stale → manual review)
+    ``force`` does NOT bypass the switch or the premium_unconfirmed rule.
     """
+    from dashboard.services.legacy_payment_link_switch import (
+        legacy_payment_link_enabled,
+    )
+
+    if not legacy_payment_link_enabled():
+        logger.info("[payment_link] skip %s reason=switch_off", source)
+        return {
+            "success": True,
+            "skipped": True,
+            "reason": "switch_off",
+            "packet_id": packet_id,
+            "booking_number": booking_number,
+            "source": source,
+        }
     try:
         ctx = await _load_context(
             packet_id=packet_id,
@@ -561,7 +678,9 @@ async def maybe_send_packet_payment_link(
                     "source": source,
                 }
 
-        amount_f = _resolve_premium(amount, packet_doc, bond_doc, intake_doc)
+        # AUTO sends use ONLY the staff-confirmed premium. The caller's `amount`
+        # and any stored premium (possibly the 10% estimate) are ignored.
+        amount_f = confirmed_premium(packet_doc, bond_doc)
         phone_r, email_r, defendant_name = _resolve_contacts(
             phone=phone,
             email_addr=email,
@@ -572,19 +691,14 @@ async def maybe_send_packet_payment_link(
         )
 
         if amount_f <= 0:
-            logger.info(
-                "[payment_link] skip %s — premium unknown (packet=%s booking=%s)",
-                source,
-                packet_id,
-                booking_number,
-            )
+            # No amount / PII in this log line — source + reason only.
+            logger.info("[payment_link] skip %s reason=premium_unconfirmed", source)
             return {
                 "success": True,
                 "skipped": True,
-                "reason": "premium_unknown",
+                "reason": "premium_unconfirmed",
                 "packet_id": packet_id,
                 "booking_number": booking_number,
-                "amount": amount_f,
                 "source": source,
             }
 
@@ -605,19 +719,56 @@ async def maybe_send_packet_payment_link(
                 "source": source,
             }
 
-        return await send_swipesimple_payment_link(
-            packet_id=packet_id,
-            booking_number=booking_number,
-            amount=amount_f,
-            phone=phone_r,
-            email=email_r,
-            defendant_name=defendant_name,
-            deliver=True,
-            packet_doc=packet_doc,
-            bond_doc=bond_doc,
-            intake_doc=intake_doc,
-            source=source,
+        # Atomic send-once: claim BEFORE sending. Any failure to claim (already
+        # claimed/sent, stale claim, no key, Mongo error) fails closed — no send,
+        # no automatic retry; staff can review and use the explicit staff endpoint.
+        try:
+            claim = await _claim_send_once(
+                packet_id=packet_id, booking_number=booking_number, source=source
+            )
+        except Exception as claim_exc:
+            claim = {"claimed": False, "reason": "send_once_claim_error",
+                     "error_type": type(claim_exc).__name__}
+        if not claim.get("claimed"):
+            logger.info(
+                "[payment_link] skip %s — send-once not claimed reason=%s prior_state=%s (packet=%s booking=%s)",
+                source,
+                claim.get("reason"),
+                claim.get("prior_state"),
+                packet_id,
+                booking_number,
+            )
+            return {
+                "success": True,
+                "skipped": True,
+                "reason": claim.get("reason") or "send_once_not_claimed",
+                "manual_review": True,
+                "packet_id": packet_id,
+                "booking_number": booking_number,
+                "source": source,
+            }
+
+        try:
+            sent = await send_swipesimple_payment_link(
+                packet_id=packet_id,
+                booking_number=booking_number,
+                amount=amount_f,
+                phone=phone_r,
+                email=email_r,
+                defendant_name=defendant_name,
+                deliver=True,
+                packet_doc=packet_doc,
+                bond_doc=bond_doc,
+                intake_doc=intake_doc,
+                source=source,
+            )
+        except Exception:
+            await _finish_send_once(claim, "send_error_manual_review")
+            raise
+        await _finish_send_once(
+            claim, "sent" if (sent or {}).get("delivered") else "not_delivered_manual_review"
         )
+        return sent
     except Exception as exc:
         logger.exception(
             "[payment_link] maybe_send soft-fail (%s): %s", source, exc
