@@ -818,6 +818,35 @@ async def _poll_inbox_once() -> dict:
 
         processed += 1
 
+        # ── STOP / START consent keywords (same rules + ledger as the webhook) ──
+        # The webhook normally sees these first; this covers webhook gaps so an
+        # opt-out is never routed to the agent brain via the poller.
+        from dashboard.services.sms_consent_ledger import (
+            EVENT_OPT_IN, EVENT_OPT_OUT, classify_consent_keyword,
+        )
+        _kw = classify_consent_keyword(msg_text)
+        if _kw and _kw["event"] == EVENT_OPT_OUT:
+            try:
+                from dashboard.routers.bb_webhook_receiver import apply_opt_out
+                await apply_opt_out(
+                    sender_phone=sender_phone, msg_text=msg_text, chat_guid=chat_guid,
+                    msg_guid=msg_guid, msg_date_ms=msg_date_ms, keyword_info=_kw, source="poll",
+                )
+            except Exception as _consent_exc:
+                logger.error("Inbox poll opt-out handling failed for ...%s: %s",
+                             sender_phone[-4:], type(_consent_exc).__name__)
+            continue  # never route an opt-out to the agent brain
+        if _kw and _kw["event"] == EVENT_OPT_IN:
+            try:
+                from dashboard.routers.bb_webhook_receiver import apply_opt_in
+                await apply_opt_in(
+                    sender_phone=sender_phone, chat_guid=chat_guid, msg_guid=msg_guid,
+                    msg_date_ms=msg_date_ms, keyword_info=_kw, source="poll",
+                )
+            except Exception as _consent_exc:
+                logger.error("Inbox poll opt-in handling failed for ...%s: %s",
+                             sender_phone[-4:], type(_consent_exc).__name__)
+
         # Match to prospective bond by indemnitor phone
         bond = await bonds_coll.find_one({
             "indemnitor.phone": sender_phone,

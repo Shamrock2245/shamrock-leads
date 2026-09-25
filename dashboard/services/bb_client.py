@@ -34,6 +34,12 @@ def _mask(phone) -> str:
 
 
 
+async def _consent_blocked(phone: str, purpose: str) -> Optional[dict]:
+    """STOP/TCPA per-recipient gate — see dashboard.services.sms_consent_ledger."""
+    from dashboard.services.sms_consent_ledger import check_send_allowed
+    return await check_send_allowed(phone, purpose)
+
+
 def get_bb_client(phone: Optional[str] = None):
     """
     Return a BlueBubblesClient instance for the given phone number.
@@ -108,8 +114,12 @@ async def check_imessage(phone: str) -> bool:
         return False
 
 
-async def _send_message_direct(phone: str, message: str) -> dict:
-    """Send text directly via BlueBubbles without writing to queue first."""
+async def _send_message_direct(phone: str, message: str, purpose: str = "direct") -> dict:
+    """Send text directly via BlueBubbles without writing to queue first.
+
+    The BlueBubbles transport applies the STOP/TCPA consent gate; a blocked
+    result carries ``blocked=True`` so the outreach queue will not retry it.
+    """
     bb = get_bb_client(phone)
     if not bb:
         return {"success": False, "error": "no_bb_server"}
@@ -117,13 +127,13 @@ async def _send_message_direct(phone: str, message: str) -> dict:
     e164 = format_phone(phone) or (f"+1{phone}" if len(phone) == 10 else phone)
     chat_guid = f"any;-;{e164}"
     try:
-        return await bb.send_text(chat_guid, message)
+        return await bb.send_text(chat_guid, message, purpose=purpose)
     except Exception as exc:
         logger.error("[bb_client] _send_message_direct error to %s: %s", _mask(phone), exc)
         return {"success": False, "error": str(exc)}
 
 
-async def _send_attachment_direct(phone: str, message: str, file_path: str) -> dict:
+async def _send_attachment_direct(phone: str, message: str, file_path: str, purpose: str = "attachment") -> dict:
     """Send attachment directly via BlueBubbles without writing to queue first."""
     bb = get_bb_client(phone)
     if not bb:
@@ -131,6 +141,9 @@ async def _send_attachment_direct(phone: str, message: str, file_path: str) -> d
     from dashboard.extensions import format_phone
     e164 = format_phone(phone) or (f"+1{phone}" if len(str(phone).lstrip("+")) == 10 else phone)
     chat_guid = f"any;-;{e164}"
+    blocked = await _consent_blocked(phone, purpose)
+    if blocked:
+        return blocked
     try:
         return await bb.send_attachment_url(chat_guid, file_path, message=message)
     except Exception as exc:
@@ -269,6 +282,7 @@ async def send_message_universal(
     phone: str,
     message: str,
     method: str = "private-api",
+    purpose: str = "universal",
 ) -> dict:
     """
     Universal send via BlueBubbles using `any;-;` chat GUID prefix.
@@ -303,6 +317,11 @@ async def send_message_universal(
     from dashboard.services.outreach_queue import enqueue_message
     from dashboard.extensions import get_collection
 
+    # 0. STOP/TCPA gate — an opted-out recipient is never queued or sent to.
+    blocked = await _consent_blocked(phone, purpose)
+    if blocked:
+        return normalize_bb_send_result(blocked)
+
     # 1. Write to outreach queue first
     queue_id = await enqueue_message(phone, message, context="universal")
 
@@ -329,7 +348,15 @@ async def send_message_universal(
 
     # 3. Attempt immediate direct send
     try:
-        result = await _send_message_direct(phone, message)
+        result = await _send_message_direct(phone, message, purpose=purpose)
+        if result.get("blocked"):
+            # Opted out between enqueue and send — never leave it for retry.
+            await get_collection("outreach_queue").update_one(
+                {"_id": ObjectId(queue_id)},
+                {"$set": {"status": "blocked", "last_error": result.get("reason"),
+                          "updated_at": datetime.now(timezone.utc)}},
+            )
+            return normalize_bb_send_result(result)
         if result.get("success"):
             logger.info(
                 "[bb_client] ✅ Message sent to %s via %s (Queue ID: %s)",
@@ -398,7 +425,12 @@ async def send_imessage_with_attachment(
     """
     from dashboard.services.outreach_queue import enqueue_message
     from dashboard.extensions import get_collection
-    
+
+    # 0. STOP/TCPA gate — an opted-out recipient is never queued or sent to.
+    blocked = await _consent_blocked(phone, "attachment")
+    if blocked:
+        return blocked
+
     # 1. Write to outreach queue first
     queue_id = await enqueue_message(phone, message, file_path=file_path, context="attachment")
     

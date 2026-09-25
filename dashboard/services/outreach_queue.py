@@ -75,6 +75,7 @@ async def process_outreach_queue(db=None) -> dict:
     sent = 0
     retried = 0
     failed = 0
+    blocked = 0
     
     # Process sequentially to avoid race conditions and preserve message order
     cursor = queue_col.find(query).sort("created_at", 1)
@@ -98,7 +99,8 @@ async def process_outreach_queue(db=None) -> dict:
         
         success = False
         error_msg = None
-        
+        res = None
+
         try:
             if file_path:
                 logger.info("[outreach_queue] Processing message %s with attachment to ...%s", msg_id, phone[-4:])
@@ -115,7 +117,17 @@ async def process_outreach_queue(db=None) -> dict:
             error_msg = str(e)
             
         now_updated = datetime.now(timezone.utc)
-        if success:
+        if isinstance(res, dict) and res.get("blocked"):
+            # STOP/TCPA consent gate: recipient opted out — terminal, never retried.
+            logger.warning("[outreach_queue] 🛑 Queued message %s to ...%s blocked: %s",
+                           msg_id, phone[-4:] if phone else "????", res.get("reason"))
+            await queue_col.update_one(
+                {"_id": msg_id},
+                {"$set": {"status": "blocked", "last_error": res.get("reason") or "blocked",
+                          "updated_at": now_updated}},
+            )
+            blocked += 1
+        elif success:
             logger.info("[outreach_queue] ✅ Successfully sent queued message %s to ...%s", msg_id, phone[-4:])
             await queue_col.update_one(
                 {"_id": msg_id},
@@ -169,5 +181,6 @@ async def process_outreach_queue(db=None) -> dict:
         "processed": processed,
         "sent": sent,
         "retried": retried,
-        "failed": failed
+        "failed": failed,
+        "blocked": blocked,
     }

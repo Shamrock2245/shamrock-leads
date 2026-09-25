@@ -768,8 +768,24 @@ async def deliver_packet(request: Request, packet_id: str):
         if not bb:
             return JSONResponse({"error": "BlueBubbles server not configured"}, status_code=503)
         chat_guid = f"iMessage;-;{phone}"
-        result = await bb.send_text(chat_guid, message)
+        # Staff-triggered DocuSeal signing link (B3 BlueBubbles exception):
+        # allowed unless THIS recipient opted out (STOP/TCPA gate in the BB client).
+        result = await bb.send_text(chat_guid, message, purpose="docuseal_signing_link")
         sent_ok = bool(result and result.get("success"))
+        if not sent_ok and (result or {}).get("blocked"):
+            return JSONResponse(
+                {
+                    "success": False,
+                    "blocked": True,
+                    "error": (result or {}).get("reason") or "recipient_opted_out",
+                    "reason": (result or {}).get("reason") or "recipient_opted_out",
+                    "purpose": "docuseal_signing_link",
+                    "message": (result or {}).get("message") or "Recipient opted out of texts.",
+                    "packet_id": packet_id,
+                    "role": party_role,
+                },
+                status_code=409,
+            )
         if not sent_ok:
             return JSONResponse(
                 {
