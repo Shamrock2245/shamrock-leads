@@ -2268,15 +2268,21 @@ async def paperwork_docuseal_status(packet_id: str):
             svc.normalize_submitter_record(s) for s in raw_submitters if isinstance(s, dict)
         ]
         now_iso = datetime.now(timezone.utc).isoformat()
+        status_set = {
+            "docuseal_remote_status": status or None,
+            "docuseal_submitters": submitters or packet.get("docuseal_submitters"),
+            "docuseal_polled_at": now_iso,
+        }
+        # Never persist a terminal "completed" here: docuseal_status=completed is
+        # owned by the shared completion handler (webhook/poller), and writing
+        # it from a staff refresh used to make the poller skip the packet
+        # forever (no signed status, no Drive filing). The live value is still
+        # returned below and stored as docuseal_remote_status.
+        if status not in ("completed", "complete", "signed"):
+            status_set["docuseal_status"] = status or packet.get("docuseal_status") or "pending"
         await get_collection("paperwork_packets").update_one(
             {"packet_id": packet_id},
-            {
-                "$set": {
-                    "docuseal_status": status or packet.get("docuseal_status") or "pending",
-                    "docuseal_submitters": submitters or packet.get("docuseal_submitters"),
-                    "docuseal_polled_at": now_iso,
-                }
-            },
+            {"$set": status_set},
         )
         return {
             "success": True,

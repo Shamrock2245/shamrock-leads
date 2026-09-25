@@ -1,7 +1,8 @@
 """
 DocuSeal completion → stage-only SwipeSimple Share Invoice (never dispatch).
 
-Covers both completion paths (they do NOT share a handler):
+Covers both completion paths, which now share ONE exactly-once handler
+(dashboard/services/docuseal_completion.py):
   - POST /api/webhooks/docuseal  submission.completed  (dashboard/routers/webhooks.py)
   - LifecycleAutomations.run_docuseal_poller           (missed-webhook backup)
 
@@ -49,47 +50,9 @@ PREMIUM = "1234.00"
 # Fakes
 # ─────────────────────────────────────────────────────────────────────────────
 
-class _UpdateResult:
-    matched_count = 1
-    modified_count = 1
+from collections import defaultdict  # noqa: E402
 
-
-class _Cursor:
-    def __init__(self, docs: List[dict]):
-        self._docs = docs
-
-    def limit(self, _n: int) -> "_Cursor":
-        return self
-
-    def __aiter__(self):
-        self._it = iter(self._docs)
-        return self
-
-    async def __anext__(self):
-        try:
-            return next(self._it)
-        except StopIteration:
-            raise StopAsyncIteration
-
-
-class FakeCollection:
-    def __init__(self, docs: Optional[List[dict]] = None):
-        self.docs = docs or []
-        self.updates: List[tuple] = []
-        self.inserts: List[dict] = []
-
-    async def insert_one(self, doc):
-        self.inserts.append(doc)
-
-    async def update_one(self, filt, update, **_kw):
-        self.updates.append((filt, update))
-        return _UpdateResult()
-
-    async def find_one(self, _query, *_a, **_kw):
-        return copy.deepcopy(self.docs[0]) if self.docs else None
-
-    def find(self, *_a, **_kw):
-        return _Cursor([copy.deepcopy(d) for d in self.docs])
+from tests._fake_mongo import FakeCollection  # noqa: E402
 
 
 class FakeDocuSealWebhookSvc:
@@ -287,9 +250,17 @@ def _post_completed(client: TestClient):
     )
 
 
-def _run_poller(packet: dict):
-    db = {"paperwork_packets": FakeCollection([packet])}
-    with patch("dashboard.services.docuseal_service.DocuSealService", FakeDocuSealPollerSvc):
+def _poller_db(packet: dict):
+    db = defaultdict(FakeCollection)
+    db["paperwork_packets"] = FakeCollection([packet])
+    return db
+
+
+def _run_poller(packet_or_db):
+    db = _poller_db(packet_or_db) if isinstance(packet_or_db, dict) and "packet_id" in packet_or_db else packet_or_db
+    with patch("dashboard.services.docuseal_service.DocuSealService", FakeDocuSealPollerSvc), \
+         patch("dashboard.services.bond_court_seed_service.seed_court_calendar_for_bond",
+               new=AsyncMock(return_value={"success": True, "reason": "test", "gcal": {}})):
         return asyncio.run(
             LifecycleAutomations(db).run_docuseal_poller({"file_to_drive": False})
         )
@@ -314,18 +285,18 @@ def test_webhook_duplicate_completed_one_create_zero_dispatch(webhook_env, invoi
     r1 = _post_completed(webhook_env["client"])
     r2 = _post_completed(webhook_env["client"])
 
-    assert r1.status_code == 200 and r1.json()["action"] == "signed_and_filed"
-    assert r2.status_code == 200 and r2.json()["action"] == "signed_and_filed"
+    assert r1.status_code == 200 and r1.json()["action"] == "completion_accepted"
+    # Redelivery loses the atomic claim → no second run of any step.
+    assert r2.status_code == 200 and r2.json()["action"] == "completion_duplicate_ignored"
 
-    assert invoice_store.create_mock.await_count == 2        # called per delivery
+    assert invoice_store.create_mock.await_count == 1        # claim → handler runs once
     assert invoice_store.http_creates == 1                    # exactly ONE invoice created
-    assert [r["idempotent"] for r in invoice_store.create_results] == [False, True]
+    assert [r["idempotent"] for r in invoice_store.create_results] == [False]
     invoice_store.dispatch_mock.assert_not_awaited()          # ZERO dispatch
 
     staged = [l for l in _share_log_lines(caplog) if "staged" in l]
     assert staged == [
         f"[docuseal_webhook] share_invoice staged bond_id={BOND_ID} ok=True idempotent=False",
-        f"[docuseal_webhook] share_invoice staged bond_id={BOND_ID} ok=True idempotent=True",
     ]
     _assert_no_pii(caplog)
 
@@ -353,7 +324,7 @@ def test_webhook_share_invoice_exception_is_soft_fail_no_pii(webhook_env, caplog
         resp = _post_completed(webhook_env["client"])
     assert resp.status_code == 200
     body = resp.json()
-    assert body["success"] is True and body["action"] == "signed_and_filed"
+    assert body["success"] is True and body["action"] == "completion_accepted"
     mock.assert_awaited_once()
     assert (
         f"[docuseal_webhook] share_invoice stage failed (non-fatal) bond_id={BOND_ID} "
@@ -375,7 +346,7 @@ def test_webhook_missing_bond_id_skips_never_guesses(env_guard, caplog):
         app = FastAPI()
         app.include_router(webhooks_bp)
         resp = _post_completed(TestClient(app))
-    assert resp.status_code == 200 and resp.json()["action"] == "signed_and_filed"
+    assert resp.status_code == 200 and resp.json()["action"] == "completion_accepted"
     mock.assert_not_awaited()   # no fallback to booking # / packet_id
     assert (
         f"[docuseal_webhook] share_invoice stage skipped reason=missing_bond_id packet={PACKET_ID}"
@@ -416,12 +387,13 @@ def test_poller_calls_share_invoice_with_dispatch_false(env_guard):
 
 def test_poller_duplicate_runs_one_create_zero_dispatch(env_guard, invoice_store, caplog):
     caplog.set_level(logging.INFO)
-    r1 = _run_poller(_packet())
-    r2 = _run_poller(_packet())
-    assert r1["signed"] == 1 and r2["signed"] == 1
-    assert invoice_store.create_mock.await_count == 2
+    db = _poller_db(_packet())
+    r1 = _run_poller(db)
+    r2 = _run_poller(db)
+    assert r1["signed"] == 1 and r2["signed"] == 0 and r2["scanned"] == 0
+    assert invoice_store.create_mock.await_count == 1
     assert invoice_store.http_creates == 1
-    assert [r["idempotent"] for r in invoice_store.create_results] == [False, True]
+    assert [r["idempotent"] for r in invoice_store.create_results] == [False]
     invoice_store.dispatch_mock.assert_not_awaited()
     _assert_no_pii(caplog)
 
@@ -456,12 +428,15 @@ def test_webhook_then_poller_same_bond_one_create_zero_dispatch(webhook_env, inv
     caplog.set_level(logging.INFO)
     resp = _post_completed(webhook_env["client"])
     assert resp.status_code == 200
-    # Poller picked the packet up before the webhook's status write landed (race).
-    res = _run_poller(_packet())
-    assert res["signed"] == 1
-    assert invoice_store.create_mock.await_count == 2
+    # Poller then runs against the SAME packets collection: the shared
+    # handler already finished → poller neither re-claims nor re-stages.
+    db = defaultdict(FakeCollection)
+    db["paperwork_packets"] = webhook_env["colls"]["paperwork_packets"]
+    res = _run_poller(db)
+    assert res["signed"] == 0
+    assert invoice_store.create_mock.await_count == 1
     assert invoice_store.http_creates == 1
-    assert [r["idempotent"] for r in invoice_store.create_results] == [False, True]
+    assert [r["idempotent"] for r in invoice_store.create_results] == [False]
     invoice_store.dispatch_mock.assert_not_awaited()
     _assert_no_pii(caplog)
 
