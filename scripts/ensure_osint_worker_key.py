@@ -63,6 +63,7 @@ def ensure(env_path: Path) -> dict[str, object]:
     return {
         "env_file": str(env_path),
         "key_minted": minted_key,
+        "key_len": len(key_val),  # returned for tests only; never printed
         "trape_wrote": wrote_trape,
         "trape_url": trape_val,
     }
