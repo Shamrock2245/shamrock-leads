@@ -158,6 +158,21 @@ Related on reconcile: `payment_status`, `premium_paid`, `last_payment_*`, ledger
 
 ---
 
+## Entrypoint usage
+
+```python
+from dashboard.services.swipesimple_invoice_service import maybe_issue_share_invoice_for_bond
+
+# Automated hooks — STAGE ONLY (create + persist link; never texts/emails):
+await maybe_issue_share_invoice_for_bond(bond_id, channel="imessage", dispatch=False, source="intake_promote")
+await maybe_issue_share_invoice_for_bond(bond_id, channel="imessage", dispatch=False, source="docuseal_submission_completed")
+
+# Explicit, human-initiated send only. Still a dry-run unless SWIPESIMPLE_DISPATCH_LIVE=1:
+await maybe_issue_share_invoice_for_bond(bond_id, channel="imessage", dispatch=True, source="manual")
+```
+
+---
+
 ## Fail-closed rules checklist
 
 - [x] Create = form-urlencoded `POST /invoices` (not JSON API create)
@@ -168,6 +183,8 @@ Related on reconcile: `payment_status`, `premium_paid`, `last_payment_*`, ledger
 - [x] Secrets never logged
 - [x] invoice_id resolution: Location → body → `/api/v4/invoices?reference_id=` → list HTML; unresolved marks pending (no duplicate)
 - [x] Dispatch dry-run by default (`SWIPESIMPLE_DISPATCH_LIVE`)
+- [x] `maybe_issue_share_invoice_for_bond` is stage-only by default (`dispatch=False`); dispatch requires explicit `dispatch=True` **and** `SWIPESIMPLE_DISPATCH_LIVE=1`
+- [x] Automated hooks (intake promote, DocuSeal `submission.completed`) pass `dispatch=False` — stage only
 - [x] Customer mapping; empty customer id OK for new customers
 - [x] Entrypoint `maybe_issue_share_invoice_for_bond` (+ optional promote hook)
 - [x] Brendan authorized $0.01 smoke (DISPATCH off); production `SWIPESIMPLE_LIVE` still needs post-smoke go-ahead

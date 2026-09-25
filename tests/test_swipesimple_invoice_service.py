@@ -22,6 +22,7 @@ from dashboard.services.swipesimple_invoice_service import (
     dispatch_invoice,
     dispatch_live_enabled,
     live_http_enabled,
+    maybe_issue_share_invoice_for_bond,
     money_to_decimal,
     new_invoice_path,
     premium_dollars_to_cents,
@@ -285,3 +286,104 @@ async def test_smoke_requires_session_when_live(monkeypatch):
         with pytest.raises(SwipeSimpleInvoiceError, match="session_not_configured"):
             await smoke_create_one_cent_draft(reference_id="SMOKE-20260924-1317")
         share.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# maybe_issue_share_invoice_for_bond — stage-only by default (no env drift)
+# ---------------------------------------------------------------------------
+
+_SVC = "dashboard.services.swipesimple_invoice_service"
+
+
+def _mock_create_and_dispatch():
+    create = AsyncMock(return_value={"ok": True, "idempotent": False, "payment_link": "x"})
+    dispatch = AsyncMock(return_value={"ok": True, "sent": True})
+    return create, dispatch
+
+
+@pytest.mark.asyncio
+async def test_maybe_issue_default_stages_only_no_dispatch():
+    create, dispatch = _mock_create_and_dispatch()
+    with patch(f"{_SVC}.create_locked_invoice", create), patch(
+        f"{_SVC}.dispatch_invoice", dispatch
+    ):
+        result = await maybe_issue_share_invoice_for_bond("BOND-D1")
+    create.assert_awaited_once_with("BOND-D1")
+    dispatch.assert_not_called()
+    assert result["ok"] is True
+    assert result["dispatch"] is None
+
+
+def test_maybe_issue_signature_default_dispatch_false():
+    import inspect
+
+    sig = inspect.signature(maybe_issue_share_invoice_for_bond)
+    assert sig.parameters["dispatch"].default is False
+
+
+@pytest.mark.asyncio
+async def test_maybe_issue_default_ignores_live_env_flags(monkeypatch):
+    monkeypatch.setenv("SWIPESIMPLE_DISPATCH_LIVE", "1")
+    monkeypatch.setenv("SWIPESIMPLE_LIVE", "1")
+    monkeypatch.setenv("SWIPESIMPLE_SHARE_INVOICE_ON_PROMOTE", "1")
+    create, dispatch = _mock_create_and_dispatch()
+    with patch(f"{_SVC}.create_locked_invoice", create), patch(
+        f"{_SVC}.dispatch_invoice", dispatch
+    ), patch(
+        "dashboard.services.bb_client.send_message_universal",
+        new_callable=AsyncMock,
+    ) as bb_send:
+        result = await maybe_issue_share_invoice_for_bond(
+            "BOND-D2", channel="imessage", source="intake_promote"
+        )
+    create.assert_awaited_once_with("BOND-D2")
+    dispatch.assert_not_called()
+    bb_send.assert_not_called()
+    assert result["dispatch"] is None
+
+
+@pytest.mark.asyncio
+async def test_maybe_issue_explicit_dispatch_true_calls_dispatch_once():
+    create, dispatch = _mock_create_and_dispatch()
+    with patch(f"{_SVC}.create_locked_invoice", create), patch(
+        f"{_SVC}.dispatch_invoice", dispatch
+    ):
+        result = await maybe_issue_share_invoice_for_bond(
+            "BOND-D3", channel="email", dispatch=True, source="manual"
+        )
+    create.assert_awaited_once_with("BOND-D3")
+    dispatch.assert_awaited_once_with("BOND-D3", channel="email")
+    assert result["dispatch"] == {"ok": True, "sent": True}
+
+
+def _share_invoice_calls(path):
+    import ast
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1] / path).read_text(encoding="utf-8")
+    calls = []
+    for node in ast.walk(ast.parse(src)):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        name = getattr(fn, "id", None) or getattr(fn, "attr", None)
+        if name == "maybe_issue_share_invoice_for_bond":
+            calls.append(node)
+    return calls
+
+
+def test_intake_promote_hook_passes_dispatch_false_static():
+    """
+    Static guard (the promote router function needs Mongo + heavy fixtures):
+    every call to maybe_issue_share_invoice_for_bond in intake.py must pass
+    an explicit literal dispatch=False — never dispatch=True / omitted / dynamic.
+    """
+    import ast
+
+    calls = _share_invoice_calls("dashboard/routers/intake.py")
+    assert calls, "expected intake promote hook to call maybe_issue_share_invoice_for_bond"
+    for call in calls:
+        kw = {k.arg: k.value for k in call.keywords}
+        assert "dispatch" in kw, "intake promote hook must pass dispatch explicitly"
+        assert isinstance(kw["dispatch"], ast.Constant)
+        assert kw["dispatch"].value is False

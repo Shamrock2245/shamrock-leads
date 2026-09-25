@@ -1074,7 +1074,10 @@ async def intake_promote(request: Request, intake_id: str):
 
     # ── 7a2. Opt-in Share Invoice (SwipeSimple draft + copy_link) — gated OFF ─
     # Requires SWIPESIMPLE_SHARE_INVOICE_ON_PROMOTE=1. Live HTTP still needs
-    # SWIPESIMPLE_LIVE=1; customer send needs SWIPESIMPLE_DISPATCH_LIVE=1.
+    # SWIPESIMPLE_LIVE=1. STAGE ONLY: this automated hook always passes
+    # dispatch=False, so it never texts/emails the payment link — even if
+    # SWIPESIMPLE_DISPATCH_LIVE=1. Customer dispatch happens only via an
+    # explicit dispatch=True caller + SWIPESIMPLE_DISPATCH_LIVE.
     # Soft-fail: never blocks promote. See SWIPESIMPLE_PRODUCTION_CHECKLIST.md.
     try:
         from dashboard.services.swipesimple_invoice_service import (
@@ -1093,7 +1096,7 @@ async def intake_promote(request: Request, intake_id: str):
                 share_result = await maybe_issue_share_invoice_for_bond(
                     share_bond_id,
                     channel="imessage",
-                    dispatch=True,
+                    dispatch=False,  # stage only — automated hooks never dispatch
                     source="intake_promote",
                 )
                 logger.info(

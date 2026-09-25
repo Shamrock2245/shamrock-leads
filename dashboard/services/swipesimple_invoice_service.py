@@ -17,9 +17,14 @@ HARD RULES (fail-closed):
   - LIVE HTTP gated by SWIPESIMPLE_LIVE=1 (default OFF)
   - Customer dispatch gated by SWIPESIMPLE_DISPATCH_LIVE=1 (default OFF / dry-run)
 
-Paperwork Desk one-liner:
+Paperwork Desk one-liner (staging-only by default — creates/persists the
+draft + payment link, never texts/emails the customer):
   from dashboard.services.swipesimple_invoice_service import maybe_issue_share_invoice_for_bond
-  await maybe_issue_share_invoice_for_bond(bond_id, channel="imessage", source="paperwork_desk")
+  await maybe_issue_share_invoice_for_bond(bond_id, channel="imessage", dispatch=False, source="paperwork_desk")
+
+Customer dispatch requires BOTH an explicit ``dispatch=True`` from the caller
+AND SWIPESIMPLE_DISPATCH_LIVE=1 (enforced inside dispatch_invoice). Automated
+hooks (intake promote, DocuSeal submission.completed) must pass dispatch=False.
 
 Brendan $0.01 smoke (no BondCase / no dispatch):
   python scripts/swipesimple_smoke_create.py
@@ -1396,20 +1401,30 @@ async def maybe_issue_share_invoice_for_bond(
     bond_id: str,
     *,
     channel: Channel = "imessage",
-    dispatch: bool = True,
+    dispatch: bool = False,
     source: str = "manual",
 ) -> Dict[str, Any]:
     """
-    Thin integration entrypoint: create_locked_invoice then optional dispatch.
+    Thin integration entrypoint: create_locked_invoice, then dispatch ONLY on
+    explicit opt-in.
+
+    Staging-only by default (``dispatch=False``): creates/persists the locked
+    draft + payment link and returns ``result["dispatch"] is None``. Nothing is
+    texted or emailed to the customer just because an env flag is set.
+
+    Customer dispatch requires BOTH:
+      1) the caller explicitly passing ``dispatch=True``, AND
+      2) SWIPESIMPLE_DISPATCH_LIVE=1 (enforced inside ``dispatch_invoice``;
+         otherwise it is a dry-run that builds/logs the payload only).
 
     Fail-closed + idempotent via create_locked_invoice.
     Call from:
       - Bond Desk / Paperwork Desk after paperwork-complete (recommended)
-      - intake promote when SWIPESIMPLE_SHARE_INVOICE_ON_PROMOTE=1
+      - intake promote when SWIPESIMPLE_SHARE_INVOICE_ON_PROMOTE=1 (always
+        ``dispatch=False`` — automated hooks stage only)
       - Leads Ops manual / queue worker
 
-    Does not invent premiums or links. Live HTTP still requires SWIPESIMPLE_LIVE;
-    customer messages require SWIPESIMPLE_DISPATCH_LIVE.
+    Does not invent premiums or links. Live HTTP still requires SWIPESIMPLE_LIVE.
     """
     bond_id = str(bond_id or "").strip()
     if not bond_id:
