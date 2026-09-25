@@ -63,7 +63,6 @@ def ensure(env_path: Path) -> dict[str, object]:
     return {
         "env_file": str(env_path),
         "key_minted": minted_key,
-        "key_len": len(key_val),
         "trape_wrote": wrote_trape,
         "trape_url": trape_val,
     }
@@ -81,7 +80,7 @@ def main() -> int:
     result = ensure(args.env_file)
     action = "minted" if result["key_minted"] else "kept"
     print(
-        f"OSINT_WORKER_KEY {action} len={result['key_len']} "
+        f"OSINT_WORKER_KEY: set ({action}) "
         f"trape={'wrote' if result['trape_wrote'] else 'kept'} "
         f"file={result['env_file']}"
     )

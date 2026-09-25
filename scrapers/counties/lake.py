@@ -207,7 +207,7 @@ class LakeCountyScraper(BaseScraper):
             logger.warning("[Lake] No SOLVECAPTCHA_KEY set \u2014 cannot solve reCAPTCHA")
             return None
 
-        logger.info("[Lake] Solving reCAPTCHA via SolveCaptcha API (key len=%d)...", len(api_key))
+        logger.info("[Lake] Solving reCAPTCHA via SolveCaptcha API (SOLVECAPTCHA_KEY: set)...")
         try:
             submit_resp = cffi_requests.post(
                 "https://api.solvecaptcha.com/in.php",
