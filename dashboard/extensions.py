@@ -744,6 +744,14 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     # contract. Owner decision 2026-09-25: Obscura/proxy/stealth fallback OFF;
     # fail closed in code (tennessee_tncis_v2_ape.SOURCE_CONTRACT_VALIDATED=False).
     "TnCIS (TN)": "fail_closed",
+    # FL gap queue 2026-09-25 (docs/recon/FL_GAP_QUEUE_2026-09-25.md): fail
+    # closed in code (SOURCE_CONTRACT_VALIDATED=False). Lake: Turnstile token
+    # required (old CAPTCHA-solver path removed). Leon: Akamai 403 to datacenter
+    # egress + no listing booking number. Gadsden: official page only iframes an
+    # unreachable bare-IP SmartWEB host.
+    "Lake (FL)": "fail_closed",
+    "Leon (FL)": "fail_closed",
+    "Gadsden (FL)": "fail_closed",
     # Ohio pilot scopes are registered for truthful health visibility only.
     # They remain blocked before source fetch until county-specific approval.
     "Clermont (OH)": "fail_closed",

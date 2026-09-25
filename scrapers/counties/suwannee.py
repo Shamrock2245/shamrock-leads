@@ -1,170 +1,135 @@
 """
-Suwannee County Arrest Scraper — SmartCop AJAX (AddMoreResults)
-Source: Suwannee County Sheriff's Office
-URL: https://smartcop.suwanneesheriff.com/smartwebclient/jail.aspx
-Method: requests + BeautifulSoup — Wildcard (%) search + direct AJAX AddMoreResults loop.
-Fields: Name, Booking No, MniNo, Booking Date, Age, Bond Amount, Address, Status
+Suwannee County (FL) Sheriff's Office — official SmartCOP SmartWEB "JAIL View".
+
+Source contract (re-verified 2026-09-25, docs/recon/FL_GAP_QUEUE_2026-09-25.md):
+  * URL: https://smartcop.suwanneesheriff.com/smartwebclient/jail.aspx
+  * Plain HTTPS ASP.NET WebForms; no login; the page's reCAPTCHA hook is
+    unconfigured (empty sitekey) and is not required for the public search.
+  * Supported broad criterion: "Begin/End Booking Date" + "Current Inmates Only",
+    sorted by Booking Date descending. First page is the form POST; further
+    pages come from ``Jail.aspx/AddMoreResults`` with ``{"searchVals": {...}}``.
+  * Each card exposes the source-issued ``Booking No`` (``SCSO<YY>JBN<NNNNNN>``),
+    booking date/time, name, status, bond and a charges table.
+    Booking_Number is copied from the source; cards whose image ``bookno`` and
+    ``Booking No:`` text disagree, or that lack one, are dropped.
+
+Why it was silent before: the old code searched ``txbLastName="%"`` (not a
+supported criterion — the server answers "Please fill in at least one search
+criteria" with 0 rows) and posted a flat JSON body to AddMoreResults (the
+endpoint expects ``{"searchVals": ...}``).
 """
 
-import json
 import logging
 import re
 import time
-from datetime import datetime, timezone
-from typing import List
+from datetime import date, datetime, timedelta, timezone
+from typing import List, Optional
+
+import requests
+from bs4 import BeautifulSoup
 
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
-from curl_cffi import requests as cffi_requests
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://smartcop.suwanneesheriff.com/smartwebclient"
 SEARCH_URL = f"{BASE_URL}/jail.aspx"
-AJAX_URL = f"{BASE_URL}/jail.aspx/AddMoreResults"
+AJAX_URL = f"{BASE_URL}/Jail.aspx/AddMoreResults"
 FACILITY = "Suwannee County Jail"
-PAGE_SIZE = 185  # SmartCop default batch size
+LOOKBACK_DAYS = 30
+MAX_PAGES = 60
+REQUEST_DELAY_S = 0.3
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": SEARCH_URL,
 }
-IMPERSONATE = "chrome131"
+
+NO_CRITERIA_TEXT = "There are no records matching"
 
 
 class SuwanneeCountyScraper(BaseScraper):
-    """Suwannee County (FL) — SmartCop AJAX jail roster (Live Oak)"""
+    """Suwannee County (FL) — SmartCOP JAIL View, booking-date window (Live Oak)."""
+
+    SOURCE_CONTRACT_VALIDATED = True
 
     @property
     def county(self) -> str:
         return "Suwannee"
 
-    def scrape(self) -> List[ArrestRecord]:
-        try:
-            import requests
-            from bs4 import BeautifulSoup
-        except ImportError:
-            logger.error("requests/bs4 not installed")
-            raise
+    @property
+    def state(self) -> str:
+        return "FL"
 
-        session = cffi_requests.Session()
-        session.headers.update(HEADERS)
-
-        # Step 1: Initial GET request to retrieve standard ASP.NET ViewState tokens
-        try:
-            logger.info(f"Suwannee: Loading initial page from {SEARCH_URL}")
-            resp = session.get(SEARCH_URL, timeout=30, verify=False, impersonate=IMPERSONATE)
-            resp.raise_for_status()
-        except Exception as e:
-            logger.error(f"Suwannee: Initial GET failed: {e}")
-            raise
-
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        def _get_hidden(name):
-            el = soup.find("input", {"name": name}) or soup.find("input", {"id": name})
-            return el["value"] if el and el.get("value") else ""
-
-        viewstate = _get_hidden("__VIEWSTATE")
-        viewstate_generator = _get_hidden("__VIEWSTATEGENERATOR")
-        event_validation = _get_hidden("__EVENTVALIDATION")
-
-        seen_bookings = set()
-        all_records = []
-
-        # Step 2: Search for '%' in LastName to bypass empty validation and match all
-        logger.info("Suwannee: Initiating wildcard (%) search POST...")
-        post_data = {
-            "__VIEWSTATE": viewstate,
-            "__VIEWSTATEGENERATOR": viewstate_generator,
-            "__EVENTVALIDATION": event_validation,
-            "__EVENTTARGET": "",
-            "__EVENTARGUMENT": "",
-            "txbLastName": "%",
-            "txbFirstName": "",
-            "tbDateOfBirth": "",
-            "TypeSearch": "0",  # Current Inmates Only
-            "SearchSortOption": "1", # Sorted by BookingDate
-            "SearchOrderOption": "1", # Descending
-            "btnSumit": "Submit",
+    def _search_vals(self, begin: str, end: str, loaded: int) -> dict:
+        return {
+            "FirstName": "", "MiddleName": "", "LastName": "",
+            "BeginBookDate": begin, "EndBookDate": end,
+            "BeginReleaseDate": "", "EndReleaseDate": "",
+            "TypeJailSearch": 0, "RecordsLoaded": loaded,
+            "SortOption": 1, "SortOrder": 1, "IsDefault": False,
+            "DateOfBirth": "", "BookingNumber": "",
         }
 
-        try:
-            resp2 = session.post(SEARCH_URL, data=post_data, timeout=30, verify=False, impersonate=IMPERSONATE)
-            resp2.raise_for_status()
-        except Exception as e:
-            logger.error(f"Suwannee: Wildcard POST search failed: {e}")
-            raise
+    def scrape(self, lookback_days: Optional[int] = None) -> List[ArrestRecord]:
+        days = LOOKBACK_DAYS if lookback_days is None else lookback_days
+        begin = (date.today() - timedelta(days=days)).strftime("%m/%d/%Y")
+        end = date.today().strftime("%m/%d/%Y")
 
-        initial_records = self._parse_html(resp2.text, seen_bookings)
-        all_records.extend(initial_records)
-        logger.info(f"Suwannee: Initial search returned {len(initial_records)} records.")
+        session = requests.Session()
+        session.headers.update(HEADERS)
+        resp = session.get(SEARCH_URL, timeout=30)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        if not soup.find("input", {"name": "tbBeginDate"}) or not soup.find("select", {"name": "TypeSearch"}):
+            raise RuntimeError("Suwannee: JAIL View search form changed (tbBeginDate/TypeSearch missing)")
+        form = {i["name"]: i.get("value", "") for i in soup.select("input[type=hidden]") if i.get("name")}
+        form.update({
+            "txbLastName": "", "txbFirstName": "", "txbMiddleName": "",
+            "tbBeginDate": begin, "tbEndDate": end,
+            "tbBeginReleaseDate": "", "tbEndReleaseDate": "",
+            "TypeSearch": "0",          # Current Inmates Only
+            "SearchSortOption": "1",    # Booking Date
+            "SearchOrderOption": "1",   # Descending
+            "btnSumit": "Submit",
+        })
+        resp2 = session.post(SEARCH_URL, data=form, timeout=60)
+        resp2.raise_for_status()
 
-        # Step 3: Loop calling jail.aspx/AddMoreResults to get subsequent records
-        records_loaded = len(initial_records)
+        seen: set = set()
+        all_records = self._parse_html(resp2.text, seen)
+        m = re.search(r'id="ResultsReturned"[^>]*>(\d+)<', resp2.text)
+        loaded = int(m.group(1)) if m else len(all_records)
+        logger.info("Suwannee: first page %d cards (%s..%s)", loaded, begin, end)
+
         json_headers = {
             "Content-Type": "application/json; charset=utf-8",
             "Accept": "application/json, text/javascript, */*; q=0.01",
             "X-Requested-With": "XMLHttpRequest",
-            "Referer": SEARCH_URL
+            "Referer": SEARCH_URL,
         }
-
-        max_pages = 50  # Safety limit
-        page_idx = 1
-
-        while page_idx <= max_pages:
-            logger.info(f"Suwannee: Fetching page {page_idx+1} (loaded so far: {records_loaded})...")
-            payload = {
-                "FirstName": "",
-                "MiddleName": "",
-                "LastName": "%",
-                "BeginBookDate": "",
-                "EndBookDate": "",
-                "BeginReleaseDate": "",
-                "EndReleaseDate": "",
-                "TypeJailSearch": 0,
-                "RecordsLoaded": records_loaded,
-                "SortOption": 1,
-                "SortOrder": 1,
-                "IsDefault": False,
-            }
-
-            try:
-                resp3 = session.post(AJAX_URL, json=payload, headers=json_headers, timeout=30, verify=False, impersonate=IMPERSONATE)
-                resp3.raise_for_status()
-
-                res_data = resp3.json().get("d", {})
-                if isinstance(res_data, dict):
-                    res_data = res_data.get("Data", res_data)
-                
-                results_returned = res_data.get("resultsReturned", 0) if isinstance(res_data, dict) else 0
-                html_snippet = res_data.get("data", "") if isinstance(res_data, dict) else ""
-
-                if results_returned == 0 or not html_snippet:
-                    logger.info("Suwannee: AJAX returned 0 records. Roster fully loaded.")
-                    break
-
-                more_records = self._parse_html(html_snippet, seen_bookings)
-                all_records.extend(more_records)
-                logger.info(f"Suwannee: Page {page_idx+1} loaded {len(more_records)} records.")
-                
-                records_loaded += results_returned
-
-                results_attempted = res_data.get("resultsAttempted", 0) if isinstance(res_data, dict) else 0
-                if results_attempted > results_returned:
-                    logger.info("Suwannee: Reached end of results (attempted > returned).")
-                    break
-
-                page_idx += 1
-                time.sleep(0.5)
-
-            except Exception as e:
-                logger.warning(f"Suwannee: AJAX page {page_idx+1} load failed: {e}")
+        page = 1
+        while loaded and page < MAX_PAGES:
+            time.sleep(REQUEST_DELAY_S)
+            r = session.post(AJAX_URL, json={"searchVals": self._search_vals(begin, end, loaded)},
+                             headers=json_headers, timeout=60)
+            r.raise_for_status()
+            d = (r.json() or {}).get("d") or {}
+            returned = int(d.get("resultsReturned") or 0)
+            attempted = int(d.get("resultsAttempted") or 0)
+            snippet = d.get("data") or ""
+            if returned <= 0 or not snippet:
+                break
+            all_records.extend(self._parse_html("<table>" + snippet + "</table>", seen))
+            loaded += returned
+            page += 1
+            if attempted and returned < attempted:
                 break
 
-        logger.info(f"Suwannee County Scrape Complete: {len(all_records)} total records")
+        logger.info("Suwannee: %d source bookings from %d cards", len(all_records), loaded)
         return all_records
 
     def _parse_html(self, html: str, seen: set) -> List[ArrestRecord]:
@@ -195,6 +160,9 @@ class SuwanneeCountyScraper(BaseScraper):
                 pass
 
             block_text = " ".join(block_text.split())
+            text_bk = re.search(r"Booking No:\s*([A-Z0-9]+)", block_text)
+            if not text_bk or text_bk.group(1) != booking_num:
+                continue
 
             # Name, Race, Sex parsing on normalized text
             name_m = re.search(
@@ -221,8 +189,9 @@ class SuwanneeCountyScraper(BaseScraper):
             dob_m = re.search(r"DOB:\s*([\d/]+)", block_text)
             dob = dob_m.group(1) if dob_m else ""
 
-            bd_m = re.search(r"Booking Date:\s*([\d/]+)", block_text)
+            bd_m = re.search(r"Booking Date:\s*([\d/]+)(?:\s+(\d{1,2}:\d{2}\s*[AP]M))?", block_text)
             booking_date = bd_m.group(1) if bd_m else ""
+            booking_time = (bd_m.group(2) or "") if bd_m else ""
 
             # Parse status from block text
             status_m = re.search(r"Status:\s*([a-zA-Z\s]+)", block_text)
@@ -237,7 +206,7 @@ class SuwanneeCountyScraper(BaseScraper):
             # Find the charges sub-table using sibling rows
             charges_list = []
             total_bond = 0.0
-            charges_table = None
+            charges_tables = []
             row = img.find_parent("tr")
             if row:
                 sibling = row.find_next_sibling("tr")
@@ -245,13 +214,15 @@ class SuwanneeCountyScraper(BaseScraper):
                     # Stop if we hit the next inmate card top row
                     if sibling.find("img", src=re.compile(r"bookno=")):
                         break
-                    table_el = sibling.find("table", class_="JailViewCharges")
-                    if table_el:
-                        charges_table = table_el
-                        break
+                    for table_el in sibling.find_all("table", class_="JailViewCharges"):
+                        first_row = table_el.find("tr")
+                        title = first_row.get_text(" ", strip=True).upper() if first_row else ""
+                        if title.startswith("HOLDS"):
+                            continue
+                        charges_tables.append(table_el)
                     sibling = sibling.find_next_sibling("tr")
 
-            if charges_table:
+            for charges_table in charges_tables:
                 chg_rows = charges_table.find_all("tr")
                 for chg_row in chg_rows:
                     if chg_row.get("class") and "SearchHeader" in chg_row.get("class"):
@@ -282,7 +253,7 @@ class SuwanneeCountyScraper(BaseScraper):
                 Full_Name=full_name.upper(),
                 First_Name=first.upper(), Middle_Name=middle.upper(), Last_Name=last.upper(),
                 DOB=dob, Race=race.upper() if race else "", Sex=sex.upper() if sex else "",
-                Booking_Number=booking_num, Booking_Date=booking_date,
+                Booking_Number=booking_num, Booking_Date=booking_date, Booking_Time=booking_time,
                 Charges=charges_str, Bond_Amount=str(int(total_bond)) if total_bond.is_integer() else f"{total_bond:.2f}",
                 Address=address, Status=status,
                 Detail_URL=SEARCH_URL,

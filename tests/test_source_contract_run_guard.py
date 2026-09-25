@@ -58,6 +58,7 @@ _SELF_HEAL_SUITES = (
     "tests/test_dashboard_source_states.py",
     "tests/test_lee_rate_limit.py",
     "tests/test_tncis_fail_closed.py",
+    "tests/test_fl_gap_queue.py",
 )
 
 

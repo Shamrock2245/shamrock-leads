@@ -5,7 +5,8 @@ Fails when:
 * a registered scraper has code-level ``SOURCE_CONTRACT_VALIDATED = False`` but
   Health (``SCRAPER_SOURCE_STATES``) does not say ``fail_closed``;
 * a ``verified_public`` label's scraper is guarded in code;
-* a hold county (Hampton / Marlboro / Richland / Sumter / Sarasota / FL JailTracker)
+* a hold county (Hampton / Marlboro / Richland / Sumter / Sarasota / FL JailTracker /
+  Lake / Leon / Gadsden)
   is not fail_closed in both places.
 """
 from __future__ import annotations
@@ -22,6 +23,7 @@ HOLD_LABELS = {
     "Hampton (SC)", "Marlboro (SC)", "Richland (SC)", "Sumter (SC)", "Sarasota (FL)",
     "Baker (FL)", "Calhoun (FL)", "Gulf (FL)", "Holmes (FL)", "Levy (FL)", "Wakulla (FL)", "Washington (FL)",
     "TnCIS (TN)",
+    "Lake (FL)", "Leon (FL)", "Gadsden (FL)",
 }
 LIVE_SC = {"Charleston (SC)", "Dorchester (SC)", "Chesterfield (SC)", "Aiken (SC)", "Darlington (SC)"}
 
