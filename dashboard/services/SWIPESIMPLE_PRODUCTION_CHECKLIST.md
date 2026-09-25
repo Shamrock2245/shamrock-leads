@@ -74,6 +74,18 @@ Related: `SWIPESIMPLE_INVOICE_CONTRACT.md`, `swipesimple_invoice_service.py`,
 - [ ] Brendan sign-off on smoke + checklist
 - [ ] Merge PR `#51` (feat/swipesimple-invoice-scaffold)
 - [ ] Deploy dashboard with secrets injected (session jar, optional CSRF)
+- [ ] **Required before `SWIPESIMPLE_LIVE=1` (code):**
+  - [ ] Move the DocuSeal webhook's SwipeSimple share-invoice call **off the request path**
+        into a background task (asyncio task or queue worker) so DocuSeal gets a fast `200`
+        and does not time out and retry. Until then, the atomic per-bond claim keeps retries
+        harmless (no duplicate invoice).
+  - [ ] One-time, **opt-in backfill** that stages invoices for packets completed while LIVE was
+        off (the DocuSeal poller skips completed packets, so nothing else will stage them).
+        Must be **dry-run by default**, act only with an explicit flag, **never dispatch**, and
+        call the same entrypoint `maybe_issue_share_invoice_for_bond(..., dispatch=False)` under
+        the same atomic-claim + idempotency rules.
+  - [ ] Legacy `maybe_send_packet_payment_link` auto-send must **default OFF** with **no
+        10%-of-bond fallback**, via Paperwork Desk's shared-handler PR — must land **before** LIVE.
 - [ ] Enable `SWIPESIMPLE_LIVE=1` in production **only** after merge + deploy review
 - [ ] Enable `SWIPESIMPLE_DISPATCH_LIVE=1` only when ready to message indemnitors
 - [ ] Monitor first live bonds: create → link persist → dry-run/dispatch → reconcile PAID
