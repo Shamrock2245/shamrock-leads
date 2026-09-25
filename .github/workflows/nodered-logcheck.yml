@@ -1,0 +1,86 @@
+# Read-only Node-RED log/health check on the VPS (ops only).
+# - workflow_dispatch only; no POST, no curl to Node-RED, no restart, no writes.
+# - Same SSH host/secret as sync-nodered.yml. Output is redacted on the VPS
+#   before it is printed (fails closed if perl is unavailable).
+name: Node-RED Log Check (read-only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tail:
+        description: "Number of container log lines to show (default 300, max 2000)"
+        type: string
+        default: "300"
+
+permissions:
+  contents: read
+
+jobs:
+  logcheck:
+    name: Read-only NR log check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Validate tail input
+        id: tail
+        env:
+          TAIL_IN: ${{ inputs.tail }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::178.156.179.237"
+          n="${TAIL_IN:-300}"
+          case "$n" in ''|*[!0-9]*) n=300 ;; esac
+          n=$((10#$n))
+          if [ "$n" -lt 1 ]; then n=300; fi
+          if [ "$n" -gt 2000 ]; then n=2000; fi
+          echo "tail=$n" >> "$GITHUB_OUTPUT"
+          echo "Using tail=$n"
+
+      - name: Read-only checks via SSH
+        uses: appleboy/ssh-action@v1
+        env:
+          NR_TAIL: ${{ steps.tail.outputs.tail }}
+        with:
+          host: 178.156.179.237
+          username: root
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          port: 22
+          command_timeout: 5m
+          timeout: 60s
+          envs: NR_TAIL
+          script: |
+            set -uo pipefail
+            case "${NR_TAIL:-}" in ''|*[!0-9]*) NR_TAIL=300 ;; esac
+            if [ "$NR_TAIL" -gt 2000 ]; then NR_TAIL=2000; fi
+
+            if ! command -v perl >/dev/null 2>&1; then
+              echo "perl not available on host; refusing to print unredacted output"; exit 1
+            fi
+            RED=$(mktemp)
+            trap 'rm -f "$RED"' EXIT
+            cat > "$RED" <<'PL'
+            s#(mongodb(?:\+srv)?://)[^\s/@]+@#${1}<redacted>@#gi;
+            s#(script\.google\.com/macros/s/)[A-Za-z0-9_-]+#${1}<redacted>#gi;
+            s#https?://[^\s]*(?:key|token|secret|sig)[^\s]*#<redacted-url>#gi;
+            s#xox[abprs]-[A-Za-z0-9-]+#xox-<redacted>#g;
+            s#(authorization["']?\s*[:=]\s*["']?)(?:(?:bearer|basic|token)\s+)?[^\s"',}]+#${1}<redacted>#gi;
+            s#(bearer\s+)[^\s"',}]+#${1}<redacted>#gi;
+            s#([A-Za-z0-9_.-]*(?:key|token|secret|password|passwd|pwd)[A-Za-z0-9_]*["']?\s*[=:]\s*["']?)(?!<redacted)[^\s"'&,}]+#${1}<redacted>#gi;
+            s#\b[A-Fa-f0-9]{32,}\b#<redacted-hex>#g;
+            s#(?<![A-Za-z0-9+/_=-])(?=[A-Za-z0-9+/_=-]*[0-9])(?=[A-Za-z0-9+/_=-]*[a-z])(?=[A-Za-z0-9+/_=-]*[A-Z])[A-Za-z0-9+/_-]{32,}={0,2}#<redacted-b64>#g;
+            PL
+            redact() { perl -p "$RED"; }
+
+            echo "=== Node-RED read-only log check $(date -u '+%Y-%m-%dT%H:%M:%SZ') tail=${NR_TAIL} ==="
+            echo "-- container status --"
+            docker ps --filter name=shamrock-node-red --format '{{.Names}}\t{{.Status}}\t{{.RunningFor}}' 2>&1 | redact
+            echo "-- health / startedAt / restartCount --"
+            docker inspect --format '{{.State.Health.Status}} {{.State.StartedAt}} {{.RestartCount}}' shamrock-node-red 2>&1 | redact
+            echo "-- /opt/shamrock-node-red HEAD --"
+            git -C /opt/shamrock-node-red rev-parse --short HEAD 2>&1 | redact
+            echo "-- legacy scraper path inside container (read-only test -e) --"
+            docker exec shamrock-node-red test -e /Users/brendan/Desktop/shamrock-active-software/swfl-arrest-scrapers \
+              && echo "legacy scraper path: present" || echo "legacy scraper path: absent"
+            echo "-- docker logs --tail ${NR_TAIL} --timestamps (redacted) --"
+            docker logs --tail "$NR_TAIL" --timestamps shamrock-node-red 2>&1 | redact
+            echo "=== DONE ==="
