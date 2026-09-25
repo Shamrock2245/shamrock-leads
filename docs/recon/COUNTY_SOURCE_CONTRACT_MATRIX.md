@@ -23,7 +23,7 @@
 |---|---:|---:|---:|---:|---:|---:|---:|
 | AL | 67 | 16 | 4 | 0 | 0 | 51 | 12 |
 | CT | 12 | 6 | 0 | 0 | 6 | 1 | 5 |
-| FL | 67 | 67 | 1 | 2 | 53 | 0 | 11 |
+| FL | 67 | 67 | 3 | 0 | 53 | 0 | 11 |
 | GA | 159 | 85 | 0 | 0 | 148 | 0 | 11 |
 | LA | 64 | 13 | 3 | 1 | 4 | 46 | 10 |
 | MS | 82 | 9 | 1 | 0 | 4 | 69 | 8 |
@@ -32,7 +32,7 @@
 | TN | 96 | 22 | 1 | 0 | 74 | 0 | 21 |
 | TX | 254 | 34 | 1 | 0 | 0 | 253 | 0 |
 
-**Aggregate matrix counts:** verified public 16; candidate productive 3; recon only 289; unverified 509; fail closed 130.
+**Aggregate matrix counts:** verified public 18; candidate productive 1; recon only 289; unverified 509; fail closed 130.
 
 ## County matrix
 
@@ -119,7 +119,7 @@
 | CT | 015 | Windham County | Palmetto | recon_required | recon_only | — | Public landing page; linked search rejected; no bypass | CT DOC statewide source linked from [CT.gov][1]; county-equivalent is not shown as a separate county-operated source. Landing/search contract only; linked interface returned request rejected ([2]). No person-level access attempted. |
 | FL | 001 | Alachua County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 003 | Baker County | OSI + Palmetto | registered | fail_closed | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
-| FL | 005 | Bay County | OSI + Palmetto | registered | candidate_productive | https://www.baysomobile.org/is/ | Plain HTTPS public uniGUI inmate search (linked from bayso.org); no login/CAPTCHA/WAF; server requires last+first initial, so a bounded A–Z × A–Z initials walk is used in one session | 2026-09-25 read smoke from box: 940 current in-custody rows / 940 unique source `Booking #` values (format `YYYY-NNNNNN`), Date In on every row; ~200 s per walk. Write smoke pending (MONGODB_URI not available to the agent). See docs/recon/FL_GAP_QUEUE_2026-09-25.md. |
+| FL | 005 | Bay County | OSI + Palmetto | registered | verified_public | https://www.baysomobile.org/is/ | Plain HTTPS public uniGUI inmate search (linked from bayso.org); no login/CAPTCHA/WAF; server requires last+first initial, so a bounded A–Z × A–Z initials walk is used in one session | 2026-09-25 read smoke from box: 940 current in-custody rows / 940 unique source `Booking #` values (format `YYYY-NNNNNN`), Date In on every row; ~200 s per walk. 2026-09-25 Mac write smoke (`python main.py bay`, MongoWriter): scraped 940 / new 940 / updated 0, status ok, 189 s; 940/940 stored booking_number values match `^\d{4}-\d{6}$` (source keys). See docs/recon/FL_GAP_QUEUE_2026-09-25.md. |
 | FL | 007 | Bradford County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 009 | Brevard County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 011 | Broward County | OSI + Palmetto | registered | verified_public | https://apps.sheriff.org/ArrestSearch | BSO Arrest Search Turnstile + name-prefix paged grid (action=arrest_search); requires SOLVECAPTCHA_KEY | 2026-09-23 Mac write smoke: 30 new / status=ok with source JMS_NUMBER booking keys (commit e591b45 lifted the guard). Health `verified_public` added 2026-09-25 to match code (`SOURCE_CONTRACT_VALIDATED=True`). Old InmateDetail/{id} probe path is dead; sequential identifier probing prohibited. |
@@ -177,7 +177,7 @@
 | FL | 109 | St. Johns County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 111 | St. Lucie County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 119 | Sumter County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
-| FL | 121 | Suwannee County | OSI + Palmetto | registered | candidate_productive | https://smartcop.suwanneesheriff.com/smartwebclient/jail.aspx | Plain HTTPS SmartCOP SmartWEB JAIL View; no login; reCAPTCHA hook unconfigured (empty sitekey); supported Begin/End Booking Date criterion + Current Inmates Only, AddMoreResults paging | 2026-09-25 read smoke from box: 44 rows / 44 unique source `Booking No` (format `SCSO<YY>JBN<NNNNNN>`) for a 30-day booking window, booking date+time on every row; 128 current inmates with a 10-year window. Old `%` wildcard search returned 0 rows. Write smoke pending. See docs/recon/FL_GAP_QUEUE_2026-09-25.md. |
+| FL | 121 | Suwannee County | OSI + Palmetto | registered | verified_public | https://smartcop.suwanneesheriff.com/smartwebclient/jail.aspx | Plain HTTPS SmartCOP SmartWEB JAIL View; no login; reCAPTCHA hook unconfigured (empty sitekey); supported Begin/End Booking Date criterion + Current Inmates Only, AddMoreResults paging | 2026-09-25 read smoke from box: 44 rows / 44 unique source `Booking No` (format `SCSO<YY>JBN<NNNNNN>`) for a 30-day booking window, booking date+time on every row; 128 current inmates with a 10-year window. Old `%` wildcard search returned 0 rows. 2026-09-25 Mac write smoke (`python main.py suwannee`, MongoWriter): scraped 44 / new 44 / updated 0, status ok; 44/44 stored booking_number values match `^SCSO\d{2}JBN\d{6}$` (source keys). See docs/recon/FL_GAP_QUEUE_2026-09-25.md. |
 | FL | 123 | Taylor County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 125 | Union County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 127 | Volusia County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
@@ -997,6 +997,8 @@ Documented live writes and holds for scopes named in the latest executive brief.
 | Chesterfield (SC) | verified_public | live_write | 2026-09-24 write smoke 128 new (Citizen Connect BookingID); live per 2026-09-25 brief | `docs/recon/SC_WRITE_SMOKE_2026-09-24.md` |
 | Aiken (SC) | verified_public | live_write | 2026-09-24 write smoke 392 new (Inmate ID# / qSO_NO); live per 2026-09-25 brief | `docs/recon/SC_WRITE_SMOKE_2026-09-24.md` |
 | Darlington (SC) | verified_public | live_write | 2026-09-24 write smoke 100 new (DCN bid, page 1 of ~233); live per 2026-09-25 brief | `docs/recon/SC_WRITE_SMOKE_2026-09-24.md` |
+| Bay (FL) | verified_public | live_write | 2026-09-25 Mac write smoke 940 new / 0 updated, status ok (source Booking # YYYY-NNNNNN) | `docs/recon/FL_GAP_QUEUE_2026-09-25.md` |
+| Suwannee (FL) | verified_public | live_write | 2026-09-25 Mac write smoke 44 new / 0 updated, status ok (source Booking No SCSO<YY>JBN<NNNNNN>) | `docs/recon/FL_GAP_QUEUE_2026-09-25.md` |
 | Broward (FL) | verified_public | live_write | 2026-09-23 BSO Arrest Search write smoke 30 new (JMS_NUMBER); live per 2026-09-25 brief | `docs/COUNTY_REGISTRY.md` |
 | Pinellas (FL) | unverified | live_write | 48h Mongo write evidence 2026-09-23; Who's In Jail roster Mac smoke 149 ok; live per 2026-09-25 brief. Health stays unverified: no documented verified_public decision yet | `docs/recon/PALMETTO_READ_WRITE_HEALTH_2026-09-23.md` |
 | Seminole (FL) | unverified | live_write | 48h Mongo write evidence 2026-09-23; DoSearch A-Z Mac smoke 60 new; live per 2026-09-25 brief. Health stays unverified: no documented verified_public decision yet | `docs/recon/PALMETTO_READ_WRITE_HEALTH_2026-09-23.md` |

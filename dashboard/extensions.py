@@ -599,6 +599,8 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     "Chesterfield (SC)": "verified_public",  # 2026-09-24 SSW Citizen Connect write smoke (source BookingID)
     "Aiken (SC)": "verified_public",  # 2026-09-24 DTNSearch Inmate ID# / qSO_NO write smoke
     "Darlington (SC)": "verified_public",  # 2026-09-24 DCN HTTP bid write smoke
+    "Bay (FL)": "verified_public",  # 2026-09-25 baysomobile.org/is write smoke 940 new (source Booking # YYYY-NNNNNN)
+    "Suwannee (FL)": "verified_public",  # 2026-09-25 SmartWEB JAIL View write smoke 44 new (source Booking No SCSO<YY>JBN<NNNNNN>)
     # 2026-09-23 BSO Arrest Search write smoke (source JMS_NUMBER; e591b45 lifted
     # the guard and set SOURCE_CONTRACT_VALIDATED=True but the Health label was
     # never added). Registry now matches the code + matrix.

@@ -125,5 +125,6 @@ def test_fl_holds_are_fail_closed_in_registry():
     from dashboard.extensions import SCRAPER_SOURCE_STATES
     for label in ("Lake (FL)", "Leon (FL)", "Gadsden (FL)"):
         assert SCRAPER_SOURCE_STATES.get(label) == "fail_closed"
+    # Promoted after the 2026-09-25 Mac write smoke (source booking keys).
     for label in ("Bay (FL)", "Suwannee (FL)"):
-        assert SCRAPER_SOURCE_STATES.get(label) != "fail_closed"
+        assert SCRAPER_SOURCE_STATES.get(label) == "verified_public"
