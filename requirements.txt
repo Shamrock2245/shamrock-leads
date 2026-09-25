@@ -45,7 +45,7 @@ Pillow>=10.0.0      # Preprocess variants for captcha_ocr
 # Surya is for document layout OCR, not tiny captchas — skip for this stack.
 
 # Selenium — Seminole County (NorthPointe Suite Angular portal)
-selenium>=4.15.0
+selenium>=4.49.0
 webdriver-manager>=4.0.0
 
 # PDF parsing — Citrus County (jail roster is PDF)
