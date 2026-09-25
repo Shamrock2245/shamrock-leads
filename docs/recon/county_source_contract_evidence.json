@@ -867,10 +867,10 @@
     {
       "state": "FL",
       "county_fips": "069",
-      "passive_recommendation": "fail_closed",
+      "passive_recommendation": "recon_only",
       "official_source_url": "https://www.lcso.org/inmate-search/",
-      "access_posture": "Fail closed: inmate API requires a Cloudflare Turnstile (reCAPTCHA-compat) token; no CAPTCHA solving/bypass",
-      "evidence_note": "2026-09-25: search page HTTP 200 from box, but `POST /inmate-search/api/inmates` returns HTTP 400 requiring a client-side challenge token. Prior third-party CAPTCHA-solver path removed; `lake.py` SOURCE_CONTRACT_VALIDATED=False. See docs/recon/FL_GAP_QUEUE_2026-09-25.md."
+      "access_posture": "LCSO Inmate Search API (recent_data) behind Cloudflare Turnstile; token from SolveCaptcha per owner decision 2026-09-25 (Broward precedent); requires SOLVECAPTCHA_KEY; plain HTTPS, no proxy/stealth",
+      "evidence_note": "2026-09-25 read smoke from box: 17 recent-arrest rows / 17 unique source `Booking #` (`pin`, 8 digits), booking date/time + charges on every row, one Turnstile solve (~14 s). 2026-09-25 Mac write smoke (`python main.py lake`, MongoWriter): scraped 17 / new 17 / updated 0, status ok; 17/17 stored booking_number values match `^\\d{8}$` (source keys). Health `verified_public`. See docs/recon/FL_GAP_QUEUE_2026-09-25.md."
     },
     {
       "state": "FL",

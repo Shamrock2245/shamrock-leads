@@ -23,7 +23,7 @@
 |---|---:|---:|---:|---:|---:|---:|---:|
 | AL | 67 | 16 | 4 | 0 | 0 | 51 | 12 |
 | CT | 12 | 6 | 0 | 0 | 6 | 1 | 5 |
-| FL | 67 | 67 | 3 | 0 | 53 | 0 | 11 |
+| FL | 67 | 67 | 4 | 0 | 53 | 0 | 10 |
 | GA | 159 | 85 | 0 | 0 | 148 | 0 | 11 |
 | LA | 64 | 13 | 3 | 1 | 4 | 46 | 10 |
 | MS | 82 | 9 | 1 | 0 | 4 | 69 | 8 |
@@ -32,7 +32,7 @@
 | TN | 96 | 22 | 1 | 0 | 74 | 0 | 21 |
 | TX | 254 | 34 | 1 | 0 | 0 | 253 | 0 |
 
-**Aggregate matrix counts:** verified public 18; candidate productive 1; recon only 289; unverified 509; fail closed 130.
+**Aggregate matrix counts:** verified public 19; candidate productive 1; recon only 289; unverified 509; fail closed 129.
 
 ## County matrix
 
@@ -150,7 +150,7 @@
 | FL | 063 | Jackson County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 065 | Jefferson County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 067 | Lafayette County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
-| FL | 069 | Lake County | OSI + Palmetto | registered | fail_closed | https://www.lcso.org/inmate-search/ | Fail closed: inmate API requires a Cloudflare Turnstile (reCAPTCHA-compat) token; no CAPTCHA solving/bypass | 2026-09-25: search page HTTP 200 from box, but `POST /inmate-search/api/inmates` returns HTTP 400 requiring a client-side challenge token. Prior third-party CAPTCHA-solver path removed; `lake.py` SOURCE_CONTRACT_VALIDATED=False. See docs/recon/FL_GAP_QUEUE_2026-09-25.md. |
+| FL | 069 | Lake County | OSI + Palmetto | registered | verified_public | https://www.lcso.org/inmate-search/ | LCSO Inmate Search API (recent_data) behind Cloudflare Turnstile; token from SolveCaptcha per owner decision 2026-09-25 (Broward precedent); requires SOLVECAPTCHA_KEY; plain HTTPS, no proxy/stealth | 2026-09-25 read smoke from box: 17 recent-arrest rows / 17 unique source `Booking #` (`pin`, 8 digits), booking date/time + charges on every row, one Turnstile solve (~14 s). 2026-09-25 Mac write smoke (`python main.py lake`, MongoWriter): scraped 17 / new 17 / updated 0, status ok; 17/17 stored booking_number values match `^\d{8}$` (source keys). Health `verified_public`. See docs/recon/FL_GAP_QUEUE_2026-09-25.md. |
 | FL | 071 | Lee County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 073 | Leon County | OSI + Palmetto | registered | fail_closed | https://www.leoncountyso.com/About-us/Departments/Detention-Facility/Inmate-search | Fail closed: Akamai 403 to datacenter egress on the whole domain; no WAF bypass/proxy | 2026-09-25: every leoncountyso.com path returns `403 Access Denied` (AkamaiGHost) from the box; page renders from other networks, so this is an edge/IP block, not a site change. Public results listing is a name search whose columns carry no source booking number. `leon.py` SOURCE_CONTRACT_VALIDATED=False. See docs/recon/FL_GAP_QUEUE_2026-09-25.md. |
 | FL | 075 | Levy County | OSI + Palmetto | registered | fail_closed | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
@@ -1008,7 +1008,7 @@ Documented live writes and holds for scopes named in the latest executive brief.
 | Hampton (SC) | fail_closed | hold | HTTP 403 / Cloudflare to ordinary public access | `docs/recon/SC_WRITE_SMOKE_2026-09-24.md` |
 | Marlboro (SC) | fail_closed | hold | HTTP 403 / Cloudflare to ordinary public access | `docs/recon/SC_WRITE_SMOKE_2026-09-24.md` |
 | TnCIS (TN) | fail_closed | hold | Cloudflare-protected statewide portal; no proven public contract; Obscura/proxy/stealth fallback removed 2026-09-25 (owner decision) | `docs/ops/SCRAPER_SELF_HEALING.md` |
-| Lake (FL) | fail_closed | hold | Inmate API requires Cloudflare Turnstile/reCAPTCHA token; CAPTCHA-solver path removed 2026-09-25 | `docs/recon/FL_GAP_QUEUE_2026-09-25.md` |
+| Lake (FL) | verified_public | live_write | 2026-09-25 Mac write smoke 17 new / 0 updated, status ok (source Booking # = pin, 8 digits); SolveCaptcha Turnstile per owner decision 2026-09-25 | `docs/recon/FL_GAP_QUEUE_2026-09-25.md` |
 | Leon (FL) | fail_closed | hold | Akamai 403 to datacenter egress; public listing has no source booking number | `docs/recon/FL_GAP_QUEUE_2026-09-25.md` |
 | Gadsden (FL) | fail_closed | hold | Official page only iframes bare-IP SmartWEB host that does not respond; no contract verified | `docs/recon/FL_GAP_QUEUE_2026-09-25.md` |
 

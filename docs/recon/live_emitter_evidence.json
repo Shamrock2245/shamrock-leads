@@ -18,7 +18,7 @@
     {"label": "Hampton (SC)", "emitter": "hold", "evidence": "HTTP 403 / Cloudflare to ordinary public access", "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"},
     {"label": "Marlboro (SC)", "emitter": "hold", "evidence": "HTTP 403 / Cloudflare to ordinary public access", "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"},
     {"label": "TnCIS (TN)", "emitter": "hold", "evidence": "Cloudflare-protected statewide portal; no proven public contract; Obscura/proxy/stealth fallback removed 2026-09-25 (owner decision)", "source": "docs/ops/SCRAPER_SELF_HEALING.md"},
-    {"label": "Lake (FL)", "emitter": "hold", "evidence": "Inmate API requires Cloudflare Turnstile/reCAPTCHA token; CAPTCHA-solver path removed 2026-09-25", "source": "docs/recon/FL_GAP_QUEUE_2026-09-25.md"},
+    {"label": "Lake (FL)", "emitter": "live_write", "evidence": "2026-09-25 Mac write smoke 17 new / 0 updated, status ok (source Booking # = pin, 8 digits); SolveCaptcha Turnstile per owner decision 2026-09-25", "source": "docs/recon/FL_GAP_QUEUE_2026-09-25.md"},
     {"label": "Leon (FL)", "emitter": "hold", "evidence": "Akamai 403 to datacenter egress; public listing has no source booking number", "source": "docs/recon/FL_GAP_QUEUE_2026-09-25.md"},
     {"label": "Gadsden (FL)", "emitter": "hold", "evidence": "Official page only iframes bare-IP SmartWEB host that does not respond; no contract verified", "source": "docs/recon/FL_GAP_QUEUE_2026-09-25.md"}
   ]

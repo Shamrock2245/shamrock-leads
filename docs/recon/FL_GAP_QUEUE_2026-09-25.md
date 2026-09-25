@@ -3,19 +3,19 @@
 **Scope:** the five registered Florida counties that were not emitting. Order worked: Bay → Lake → Leon → Suwannee → Gadsden.
 **Method:** plain HTTP(S) from the agent box (datacenter egress, Python `requests` / `curl`; no TLS impersonation, stealth browser, proxy, Obscura routing, or CAPTCHA/WAF bypass). Where the box was refused, the public page was cross-checked with an ordinary external page fetch only to tell "egress blocked" apart from "site changed".
 **Privacy:** no personal data is recorded here. Booking-key formats are shown as patterns only.
-**Write smoke:** `MONGODB_URI` was not available in the agent environment, so the read smokes below ran on the box and the **Mongo write smokes ran on Brendan's Mac** (residential ISP, plain HTTPS, repo `.env` Mongo config) on 2026-09-25. See [Write smoke](#write-smoke-2026-09-25-mac). Bay and Suwannee are now `verified_public`.
+**Write smoke:** `MONGODB_URI` was not available in the agent environment, so the read smokes below ran on the box and the **Mongo write smokes ran on Brendan's Mac** (residential ISP, plain HTTPS, repo `.env` Mongo config) on 2026-09-25. See [Write smoke](#write-smoke-2026-09-25-mac). Bay and Suwannee are now `verified_public`. Lake was reopened the same day on Brendan's decision (SolveCaptcha Turnstile token, Broward precedent) and is `verified_public` after its own Mac write smoke. See [Lake reopened](#lake-reopened-2026-09-25-owner-decision).
 
 ## Summary
 
 | County | Official source | Box access | Rows parsed (read smoke) | Source booking key | Status |
 |---|---|---|---:|---|---|
 | Bay | https://www.baysomobile.org/is/ (uniGUI inmate search, linked from bayso.org) | 200, plain HTTPS | 940 / 940 unique | `Booking #` → `YYYY-NNNNNN` | **Fixed** — parser rewritten; write smoke 940 new, status ok; `verified_public` |
-| Lake | https://www.lcso.org/inmate-search/ | page 200; API 400 without challenge token | 0 | — | **Held** — `fail_closed` (Turnstile/reCAPTCHA token required) |
+| Lake | https://www.lcso.org/inmate-search/ (API `POST /inmate-search/api/inmates`, `recent_data`) | page 200; API needs a Turnstile token (SolveCaptcha, owner-approved) | 17 / 17 unique | `Booking #` → `pin` (8 digits, `26NNNNNN`) | **Reopened** — owner decision 2026-09-25; write smoke 17 new, status ok; `verified_public` |
 | Leon | https://www.leoncountyso.com/About-us/Departments/Detention-Facility/Inmate-search | 403 Akamai (whole domain), **also 403 from residential Mac** | 0 | none on listing | **Held** — `fail_closed` (403 to box and residential egress + no listing booking #) |
 | Suwannee | https://smartcop.suwanneesheriff.com/smartwebclient/jail.aspx | 200, plain HTTPS | 44 / 44 unique (30-day window); 128 current with 10-yr window | `Booking No` → `SCSO<YY>JBN<NNNNNN>` | **Fixed** — search + paging fixed; write smoke 44 new, status ok; `verified_public` |
 | Gadsden | https://gadsdensheriff.com/inmate-lookup/ → iframe `http://69.21.72.195/smartwebclient/` | page 200; SmartWEB host silent (box **and** residential Mac: connect timeout) | 0 | not verified | **Held** — `fail_closed` (embedded roster host unreachable) |
 
-`SCRAPER_SOURCE_STATES`: Lake/Leon/Gadsden → `fail_closed` (mirrored in code with `SOURCE_CONTRACT_VALIDATED=False`, plus `live_emitter_evidence.json` holds). Bay/Suwannee → `verified_public` after the 2026-09-25 Mac write smoke (source booking keys confirmed in Mongo), plus `live_write` rows in `live_emitter_evidence.json`.
+`SCRAPER_SOURCE_STATES`: Leon/Gadsden → `fail_closed` (mirrored in code with `SOURCE_CONTRACT_VALIDATED=False`, plus `live_emitter_evidence.json` holds). Bay/Suwannee/Lake → `verified_public` after the 2026-09-25 Mac write smokes (source booking keys confirmed in Mongo), plus `live_write` rows in `live_emitter_evidence.json`.
 
 ## Bay (FL 005) — fixed, write smoke clean
 
@@ -27,7 +27,7 @@
 - **Listing fields used:** Booking #, Date In (date + time), name, race, sex, charges, per-charge bond (summed). Photos and commissary numbers are not stored.
 - **Note for owner:** this is 676 name-initial searches per run against the public search, the same pattern as Aiken's A–Z walk but 26× the request count. **Resolved by Brendan on 2026-09-25:** Bay runs every 6 hours (`interval_minutes=360` in `main.register_scrapers`, was 120), i.e. 676 searches every 6 hours.
 
-## Lake (FL 069) — held (`fail_closed`)
+## Lake (FL 069) — held (`fail_closed`), later reopened (see below)
 
 - **Registry before:** registered, runtime `unverified`, matrix `recon_only`. Code used a **third-party CAPTCHA-solving service** (env `SOLVECAPTCHA_KEY`) and soft-failed to `[]` when that did not work.
 - **Finding:** `GET /inmate-search/` → 200 (the page loads Cloudflare Turnstile in reCAPTCHA-compat mode). `POST /inmate-search/api/inmates` without a token → **HTTP 400** `{"required":{"token":"(string) reCAPTCHA token from client-side"}}`. `GET` → 405.
@@ -85,4 +85,14 @@ One plain `curl -L` per URL from the Mac (residential Comcast, normal desktop Ch
 1. ~~Write smoke for Bay and Suwannee~~: **done 2026-09-25 on the Mac.** Both are clean and promoted to `verified_public` (see above).
 2. **Leon and Gadsden reachability:** re-checked from the Mac on 2026-09-25. Leon returns 403 to residential access too, and Gadsden's SmartWEB host does not answer. Both stay `fail_closed`. Reopen only if Leon serves ordinary public access with a listing booking ID, or if Gadsden's host answers with a SmartWEB roster exposing `Booking No`. Never through residential/mobile proxies or Obscura.
 3. ~~Bay walk volume~~: **resolved by Brendan on 2026-09-25.** Bay runs every 6 hours (360 min, was 120): 676 initials searches every 6 hours.
-4. **Lake:** the `SOLVECAPTCHA_KEY` dependency is gone for Lake. Broward still uses it, which is unchanged here.
+4. ~~Lake~~: **resolved by Brendan on 2026-09-25.** Lake is handled like Broward and uses `SOLVECAPTCHA_KEY` for the Turnstile token again. See [Lake reopened](#lake-reopened-2026-09-25-owner-decision).
+
+## Lake reopened 2026-09-25 (owner decision)
+
+- **Decision:** Brendan decided on 2026-09-25 that Lake is handled like Broward. The Turnstile token the LCSO endpoint requires comes from SolveCaptcha (env `SOLVECAPTCHA_KEY`). No proxy, Obscura, stealth browser or TLS impersonation. Only the source's own booking number is used. This supersedes the hold above.
+- **Shared helper:** `scrapers/solvecaptcha.py` (`solve_turnstile`) is used by both Broward (`action=arrest_search`, curl_cffi transport, unchanged behaviour) and Lake. It never logs the key; exceptions are logged by type name only.
+- **Contract:** the page renders Turnstile in reCAPTCHA-compat mode (sitekey `0x4AAAAAAEFZn-Q0bIVuiZHe`, no `data-action`, single-use tokens). The API schema lists `token` (required) plus optional `firstname`/`lastname`/`lookup`/`cache`/`recent_data`. `{"token": T}` alone returns the recent-arrests **PDF**. `{"token": T, "recent_data": true}` returns the JSON behind it (`records`, about the last day of bookings). So each run is **one Turnstile solve**. The UI labels `pin` as **Booking #** (`pcp` is Inmate #, and it is not in this feed). Rows without an 8-digit `pin`, or with `exemption` ≠ 0, are dropped. A missing sitekey on the page, a non-JSON or recordless payload, or rows that are all malformed raise `ParseDriftError`. A failed solve or a rejected token raises `AntiBotBlocked`.
+- **Read smoke (box, 2026-09-25 ~10:28 EDT):** 17 rows / 17 unique `pin`, all `^\d{8}$`. Booking dates 09/24 (13) and 09/25 (4). Booking date/time and charges are on every row. One solve, 13.7 s end to end.
+- **Write smoke (Brendan's Mac, 2026-09-25 10:30 EDT):** branch `fix/lake-solvecaptcha-turnstile-2026-09-25` at `be64f94`, `.venv`, `python main.py lake` (MongoWriter). Result: scraped 17 / new 17 / updated 0 / skipped invalid 0, `status=ok`, 14.4 s (the auto-disable canary cleared). Read-only Mongo check: 17 / 17 stored Lake FL `booking_number` values match `^\d{8}$` (source keys). Scoring: 0 hot / 0 warm / 14 disqualified (the feed carries no bond amounts yet; `total_bond_amount` = 0 on all rows). The Mac was returned to `main` afterwards.
+- **Registry:** `SCRAPER_SOURCE_STATES["Lake (FL)"] = "verified_public"`, a `live_write` evidence row, and the evidence note updated. The matrix is regenerated. As with Broward, the passive evidence row stays `recon_only`, because the passive matrix review itself uses no CAPTCHA service.
+- **Schedule:** unchanged at 90 minutes (one SolveCaptcha solve per run, about 16 solves/day).
