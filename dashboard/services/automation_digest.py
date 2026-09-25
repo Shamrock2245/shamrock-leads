@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 async def post_slack(text: str, webhook_env: str = "SLACK_WEBHOOK_LEADS") -> bool:
     """Post plain text to a Slack incoming webhook. Returns True on success."""
     url = (os.getenv(webhook_env) or "").strip()
+    if not url and webhook_env == "SLACK_WEBHOOK_ALERTS":
+        url = (os.getenv("SLACK_WEBHOOK_ERRORS") or os.getenv("SLACK_WEBHOOK_URL") or "").strip()
     if not url:
         logger.debug("[automation-digest] %s not set — skip Slack", webhook_env)
         return False
@@ -98,7 +100,7 @@ async def digest_poa_low_stock(rows: list[dict[str, Any]], threshold: int) -> No
             f"• {str(r.get('surety_id', '?')).upper()} *{label}*{bond_bit}: "
             f"*{r.get('available', 0)}* available"
         )
-    await post_slack("\n".join(lines), webhook_env="SLACK_WEBHOOK_ERRORS")
+    await post_slack("\n".join(lines), webhook_env="SLACK_WEBHOOK_ALERTS")
 
 
 async def digest_ops_sweep(action: str, counts: dict[str, Any], extras: str = "") -> None:

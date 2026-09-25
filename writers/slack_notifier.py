@@ -48,6 +48,7 @@ class SlackNotifier:
     - Hot lead alerts (for staff)
     - Scraper health/error reports
     - Ingestion summaries
+    - Operational & system alerts (#alerts channel)
     """
 
     def __init__(
@@ -55,10 +56,19 @@ class SlackNotifier:
         webhook_arrests: Optional[str] = None,
         webhook_leads: Optional[str] = None,
         webhook_errors: Optional[str] = None,
+        webhook_alerts: Optional[str] = None,
+        channel_alerts: Optional[str] = None,
     ):
         self.webhook_arrests = webhook_arrests or os.getenv("SLACK_WEBHOOK_ARRESTS", "")
         self.webhook_leads = webhook_leads or os.getenv("SLACK_WEBHOOK_LEADS", "")
         self.webhook_errors = webhook_errors or os.getenv("SLACK_WEBHOOK_ERRORS", "")
+        self.webhook_alerts = (
+            webhook_alerts
+            or os.getenv("SLACK_WEBHOOK_ALERTS", "")
+            or self.webhook_errors
+            or os.getenv("SLACK_WEBHOOK_URL", "")
+        )
+        self.channel_alerts = channel_alerts or os.getenv("SLACK_CHANNEL_ALERTS", "#alerts")
 
     def _post(self, webhook_url: str, payload: Dict[str, Any]) -> bool:
         """Send a Slack message. Returns True on success."""
@@ -412,3 +422,117 @@ class SlackNotifier:
                 },
             ]
         })
+
+    # ── Operational / System Alerts (#alerts channel) ──
+    def notify_alert(
+        self,
+        title: str,
+        message: str,
+        level: str = "warning",
+        details: Optional[Dict[str, Any]] = None,
+        source: Optional[str] = None,
+    ) -> bool:
+        """
+        Send an operational or system alert to the #alerts channel.
+        Levels: 'critical', 'error', 'warning', 'info', 'success'.
+        PII is automatically masked before posting.
+        """
+        safe_msg = _mask_pii(message or "")
+        safe_title = _mask_pii(title or "System Alert")
+
+        emoji_map = {
+            "critical": "🚨",
+            "error": "❌",
+            "warning": "⚠️",
+            "info": "ℹ️",
+            "success": "✅",
+        }
+        emoji = emoji_map.get(level.lower(), "🔔")
+        level_label = level.upper()
+
+        blocks: List[Dict[str, Any]] = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text",
+                    "text": f"{emoji} {safe_title}"[:150],
+                },
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Severity:* `{level_label}`"},
+                    {"type": "mrkdwn", "text": f"*Source:* `{source or 'ShamrockLeads'}`"},
+                ],
+            },
+        ]
+
+        if safe_msg:
+            blocks.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": safe_msg[:2000],
+                },
+            })
+
+        if details:
+            detail_lines = []
+            for k, v in details.items():
+                safe_val = _mask_pii(str(v))
+                detail_lines.append(f"• *{k}:* {safe_val}")
+            if detail_lines:
+                blocks.append({
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": "\n".join(detail_lines)[:2000],
+                    },
+                })
+
+        blocks.append({
+            "type": "context",
+            "elements": [{
+                "type": "mrkdwn",
+                "text": (
+                    f"_{self.channel_alerts} • "
+                    f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}_"
+                ),
+            }],
+        })
+
+        payload = {
+            "channel": self.channel_alerts,
+            "blocks": blocks,
+            "text": f"{emoji} {safe_title}: {safe_msg[:200]}",
+        }
+
+        slack_ok = self._post(self.webhook_alerts, payload)
+
+        # Bridge to dashboard Notification Center (best-effort, non-blocking)
+        self._bridge_to_notification_center(
+            notification_type="system_alert",
+            title=f"{emoji} {safe_title}",
+            message=safe_msg[:300],
+            entity_id=source or "system",
+            metadata={"level": level, "details": details or {}},
+        )
+
+        return slack_ok
+
+    def notify_watchdog_alert(
+        self,
+        failures: List[str],
+        details: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Send a formatted Watchdog system outage alert to #alerts."""
+        msg_lines = ["One or more critical systems are down:"]
+        for f in failures:
+            msg_lines.append(f"• {f}")
+        return self.notify_alert(
+            title="WATCHDOG ALERT — System Down",
+            message="\n".join(msg_lines),
+            level="critical",
+            details=details,
+            source="WatchdogService",
+        )

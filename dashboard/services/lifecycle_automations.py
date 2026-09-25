@@ -203,7 +203,7 @@ class LifecycleAutomations:
                         f"• `{r['booking_number']}` {r['defendant']} — "
                         f"{r['tier']} ({(r.get('prob') or 0):.0%}) ${r.get('amount') or 0:,.0f}"
                     )
-                await post_slack("\n".join(lines), webhook_env="SLACK_WEBHOOK_ERRORS")
+                await post_slack("\n".join(lines), webhook_env="SLACK_WEBHOOK_ALERTS")
             except Exception as e:
                 logger.debug("[forfeiture] slack: %s", e)
 
