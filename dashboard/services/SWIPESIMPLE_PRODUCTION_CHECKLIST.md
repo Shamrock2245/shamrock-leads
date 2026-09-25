@@ -107,3 +107,17 @@ Related: `SWIPESIMPLE_INVOICE_CONTRACT.md`, `swipesimple_invoice_service.py`,
 - Code path + offline tests + smoke CLI are on PR `#51` (do **not** merge until smoke + checklist green).
 - Brendan: **$0.01 smoke approved**; **DISPATCH off**.
 - Next human step: put session cookie in secret store → `--check-only` → LIVE smoke → unset LIVE.
+
+### Atomic claims & manual review (fix/ss-invoice-atomic-claim)
+
+- [x] `create_locked_invoice` takes an atomic per-bond claim in `swipesimple_invoice_claims`
+      (unique `bond_id`, sparse-unique `invoice_number`) **before** any SwipeSimple create;
+      losers get `in_progress` and never call SwipeSimple
+- [x] `dispatch_invoice` takes an atomic once-only dispatch claim before any BB/email send
+- [x] Service logs: `bond_id` + flags only
+- [ ] Ops: alert on log lines `STALE create claim` / `STALE dispatch claim` /
+      `claim needs manual review` → verify in SwipeSimple by reference_id (booking #) and
+      BlueBubbles history, then correct the claim doc by hand. **Never** delete a
+      `claimed` / `needs_review` claim without checking SwipeSimple first (duplicate invoice risk).
+- [ ] Deploy: the unique indexes build lazily on first use (new collection, no backfill needed);
+      if index creation fails, create/dispatch fail closed
