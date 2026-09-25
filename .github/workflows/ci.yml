@@ -64,4 +64,9 @@ jobs:
             tests/test_recon_evidence_contract.py \
             tests/test_subdomains.py \
             tests/test_unhandled_exception_privacy.py \
+            tests/test_swipesimple_invoice_service.py \
+            tests/test_confirmed_booking_intake.py \
+            tests/test_deferred_client_intake.py \
+            tests/test_intake_defendant_extract.py \
+            tests/test_intake_shannon.py \
             --tb=short
