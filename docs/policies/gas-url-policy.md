@@ -15,6 +15,34 @@
 
 ---
 
+## Approval rule (Brendan via Chief of Staff)
+
+- **New GAS deployment URLs require Brendan's explicit approval, requested through Chief of Staff.** No agent mints a new Web App deployment on its own initiative, even to "fix" something.
+- **Always redeploy the existing stable deployment ID** recorded in `shamrock-bail-portal-site/.gas-config.json` (`deploymentId`). Reference it by file; do not paste the full ID or `/exec` URL into docs, commits, PRs, or chat.
+- Any change to where GAS is reached (URL, deployment ID, or the env vars below) goes through the same approval path.
+
+---
+
+## Routing: Netlify Edge proxies (Wix ↔ Twilio ↔ GAS)
+
+Two Netlify Edge functions in **`shamrock-telegram-app`** (`netlify/edge-functions/`, wired in `netlify.toml`), served at **`https://shamrock-telegram.netlify.app`**, sit between Wix, Twilio and GAS:
+
+| Path | Edge function | What it does |
+|------|---------------|--------------|
+| `/api/gas-proxy` | `gas-proxy.js` | Carries **Wix backend** calls (`src/backend/gasIntegration.jsw`, `src/backend/portal-auth.jsw` in the portal repo) to the GAS Web App. Google blocks POSTs from Wix server IPs, so Wix → Netlify Edge → GAS. Requires the `X-GAS-API-Key` header and passes the key through to GAS in the payload. |
+| `/api/twilio-voice` | `twilio-voice-inbound.js` | Twilio voice webhook. **Validates the `X-Twilio-Signature` first** (rejects unsigned/invalid requests), then either rings the office lines or hands the call to **ElevenLabs (Shannon)**. |
+
+**Env var names only — never values:**
+
+| Where | Name(s) | Purpose |
+|-------|---------|---------|
+| Netlify site `shamrock-telegram` | `GAS_WEB_APP_URL` / `GAS_ENDPOINT` | GAS Web App `/exec` URL used by `gas-proxy` (first one set wins) |
+| Request header (Wix → gas-proxy) | `X-GAS-API-Key` | API key header name; the proxy forwards it to GAS as `apiKey` |
+
+These Netlify env vars must keep pointing at the **same stable deployment** as `.gas-config.json`. Changing them follows the approval rule above and belongs on the exception-path checklist below (Netlify → `shamrock-telegram` site).
+
+---
+
 ## Why this exists
 
 The live Web App URL is wired into places **outside** a single `git push`:
@@ -23,6 +51,7 @@ The live Web App URL is wired into places **outside** a single `git push`:
 |----------|------------------------|
 | **Wix Secrets Manager** | `GAS_WEB_APP_URL` / `GAS_WEBHOOK_URL` (portal Velo / backend) |
 | **Netlify** (bail-school) | `GAS_WEBHOOK_URL`, optional `NEXT_PUBLIC_GAS_URL` |
+| **Netlify** (shamrock-telegram, `/api/gas-proxy`) | `GAS_WEB_APP_URL` / `GAS_ENDPOINT` |
 | **Hetzner / leads `.env`** | `GAS_WEB_APP_URL` |
 | **Node-RED** | `GAS_WEBHOOK_URL` / flow HTTP nodes |
 | **Telegram mini-apps / bookmarklets** | Hardcoded or env-backed `/exec` URLs |
@@ -73,6 +102,7 @@ Only when the owner says so (broken deployment, forced Google rotation, project 
 3. After approval, update in **one change window**:
    - [ ] Wix Secrets Manager → `GAS_WEB_APP_URL` / `GAS_WEBHOOK_URL`
    - [ ] Netlify → `GAS_WEBHOOK_URL` (+ `NEXT_PUBLIC_GAS_URL` if used)
+   - [ ] Netlify `shamrock-telegram` site → `GAS_WEB_APP_URL` / `GAS_ENDPOINT` (used by `/api/gas-proxy`)
    - [ ] Hetzner leads `.env` → `GAS_WEB_APP_URL`
    - [ ] Node-RED env / flows → `GAS_WEBHOOK_URL`
    - [ ] `.gas-config.json` + any intentional hardcoded clients (telegram, bookmarklets)
