@@ -147,6 +147,112 @@ export function AutoAssistView() {
 				</Button>
 
 				<Button
+					variant="secondary"
+					disabled={!!busy}
+					onClick={() =>
+						run("gavel", async () => {
+							const gavel = BUNDLED_SFX.find((s) => s.slug === "gavel");
+							if (!gavel) return;
+							editor.playback.seek({ time: ZERO_MEDIA_TIME });
+							await addSoundToTimeline({
+								sound: {
+									id: gavel.id,
+									name: gavel.name,
+									description: gavel.description,
+									url: gavel.url,
+									previewUrl: gavel.previewUrl,
+									duration: gavel.duration || 0.5,
+									filesize: 0,
+									type: "mp3",
+									channels: 2,
+									bitrate: 128000,
+									bitdepth: 16,
+									samplerate: 44100,
+									username: gavel.author,
+									tags: gavel.tags,
+									license: gavel.license,
+									created: "",
+									downloads: 0,
+									rating: 5,
+									ratingCount: 1,
+								},
+							});
+							toast.success("Court Gavel Strike added at 0.0s");
+						})
+					}
+				>
+					{busy === "gavel" ? "Working…" : "⚖️ Add Court Gavel Intro (0.0s)"}
+				</Button>
+
+				<Button
+					variant="secondary"
+					disabled={!!busy}
+					onClick={() =>
+						run("jail", async () => {
+							const door = BUNDLED_SFX.find((s) => s.slug === "jail-door");
+							if (!door) return;
+							await addSoundToTimeline({
+								sound: {
+									id: door.id,
+									name: door.name,
+									description: door.description,
+									url: door.url,
+									previewUrl: door.previewUrl,
+									duration: door.duration || 1.1,
+									filesize: 0,
+									type: "mp3",
+									channels: 2,
+									bitrate: 128000,
+									bitdepth: 16,
+									samplerate: 44100,
+									username: door.author,
+									tags: door.tags,
+									license: door.license,
+									created: "",
+									downloads: 0,
+									rating: 5,
+									ratingCount: 1,
+								},
+							});
+							toast.success("Jail Door Slam Outro added");
+						})
+					}
+				>
+					{busy === "jail" ? "Working…" : "🔒 Add Heavy Jail Slam Outro"}
+				</Button>
+
+				<Button
+					variant="secondary"
+					disabled={!!busy}
+					onClick={() =>
+						run("hotline", () => {
+							const hotlinePreset = {
+								id: "hotline-lowerthird",
+								name: "24/7 Hotline",
+								content: "CALL 24/7: (239) 955-0178",
+							};
+							editor.timeline.insertElement({
+								element: buildPresetTextElement({
+									preset: hotlinePreset,
+									startTime: editor.playback.getCurrentTime() ?? ZERO_MEDIA_TIME,
+								}),
+								placement: { mode: "auto" },
+							});
+							toast.success("24/7 Hotline banner added: (239) 955-0178");
+						})
+					}
+				>
+					{busy === "hotline" ? "Working…" : "📞 Add 24/7 Bail Hotline Banner"}
+				</Button>
+
+				<Button
+					variant="text"
+					onClick={() => setActiveTab("brand")}
+				>
+					Browse Full Shamrock Brand Suite →
+				</Button>
+
+				<Button
 					variant="text"
 					onClick={() => setActiveTab("captions")}
 				>
