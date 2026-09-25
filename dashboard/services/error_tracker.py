@@ -277,4 +277,5 @@ class ErrorTracker:
                 timeout=5,
             )
         except Exception as e:
-            logger.warning("[ErrorTracker] Slack alert failed: %s", e)
+            # str(e) from requests embeds the webhook URL — log the class only.
+            logger.warning("[ErrorTracker] Slack alert failed: %s", type(e).__name__)

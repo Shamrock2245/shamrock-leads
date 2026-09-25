@@ -194,6 +194,7 @@ async def api_scheduler_status():
     errors = 0
     never_run = 0
     disabled = 0
+    auto_disabled = 0
     for label in REGISTERED_COUNTIES:
         bare, st = parse_registered_county(label)
         live = resolve_scraper_status(status_index, bare, st)
@@ -214,6 +215,11 @@ async def api_scheduler_status():
             empty += 1
         elif s in ("error", "failed", "fail"):
             errors += 1
+        elif s == "auto_disabled":
+            if live.get("auto_disabled") is False:
+                errors += 1  # re-enabled manually; last real outcome was a failure
+            else:
+                auto_disabled += 1
         else:
             never_run += 1
 
@@ -224,10 +230,14 @@ async def api_scheduler_status():
         "errors": errors,
         "never_run": never_run,
         "disabled": disabled,
+        "auto_disabled": auto_disabled,
         "pending_triggers": pending_triggers,
         "pending_count": len(pending_triggers),
         "updated_at": datetime.now(timezone.utc).isoformat(),
-        "note": "active = last run ok with records>0; empty = ran with 0 rows",
+        "note": (
+            "active = last run ok with records>0; empty = ran with 0 rows; "
+            "auto_disabled = 5 consecutive failures (canary or manual re-enable)"
+        ),
     }
 
 
@@ -286,14 +296,48 @@ async def _set_scraper_enabled(request: Request, enabled: bool):
         }},
         upsert=True,
     )
+    reenabled_auto = False
+    if enabled:
+        # Manual re-enable also clears a BaseScraper auto-disable (5 consecutive
+        # failures) so the next scheduled run proceeds normally.
+        reenabled_auto = await _clear_auto_disable(matched, data.get("agent", "dashboard"), now)
     action = "enabled" if enabled else "disabled"
     return {
         "ok": True,
         "county": matched,
         "enabled": enabled,
-        "message": f"{matched} scraper {action}.",
+        "message": f"{matched} scraper {action}."
+                   + (" Auto-disable cleared." if reenabled_auto else ""),
+        "auto_disable_cleared": reenabled_auto,
         "updated_at": now.isoformat(),
     }
+
+
+async def _clear_auto_disable(label: str, by: str, now: datetime) -> bool:
+    bare, st = parse_registered_county(label)
+    st = (st or "FL").upper()
+    try:
+        col = get_collection("scraper_status")
+        result = await col.update_many(
+            {
+                "$or": [
+                    {"county_label": label},
+                    {"county": label},
+                    {"county": bare, "state": st},
+                ],
+                "auto_disabled": True,
+            },
+            {"$set": {
+                "auto_disabled": False,
+                "consecutive_failures": 0,
+                "auto_disabled_reason": None,
+                "reenabled_at": now,
+                "reenabled_by": f"manual:{by}",
+            }},
+        )
+        return bool(getattr(result, "modified_count", 0))
+    except Exception:
+        return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────

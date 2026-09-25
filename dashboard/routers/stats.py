@@ -189,6 +189,8 @@ async def api_status():
                 # Normalize legacy ok+0 → empty for accurate fleet counts
                 if live_status in ("ok", "healthy", "success") and live_recs <= 0:
                     live_status = "empty"
+                if live_status == "auto_disabled" and live.get("auto_disabled") is False:
+                    live_status = "error"  # manually re-enabled, awaiting next run
                 scrapers[label] = {
                     "last_run": lr.isoformat() if isinstance(lr, datetime) else str(lr or ""),
                     "records": live_recs,
@@ -257,6 +259,7 @@ async def api_status():
             "total_registered": len(REGISTERED_COUNTIES),
             "active_count": sum(1 for s in scrapers.values() if s["status"] == "ok"),
             "error_count": sum(1 for s in scrapers.values() if s["status"] == "error"),
+            "auto_disabled_count": sum(1 for s in scrapers.values() if s["status"] == "auto_disabled"),
             "never_run_count": sum(1 for s in scrapers.values() if s["status"] == "never_run"),
             "total_hot_leads": sum(s["hot_leads"] for s in scrapers.values()),
             "total_warm_leads": sum(s["warm_leads"] for s in scrapers.values()),
@@ -747,6 +750,7 @@ def _health_status_for_row(
       - healthy / ok  → last run succeeded **with records** and is recent
       - empty         → last run finished with 0 records (soft-fail / empty roster / stub)
       - error         → last run raised
+      - auto_disabled → 5 consecutive failures; skipped until canary/manual re-enable
       - never_run     → no live scraper_status run (historical arrest data alone ≠ healthy)
     """
     if not enabled:
@@ -755,6 +759,15 @@ def _health_status_for_row(
 
     raw = (live.get("status") or "").lower().strip()
     last_records = int(live.get("records") or 0)
+
+    # Auto-disabled after N consecutive failures (BaseScraper resilience).
+    # Never ok/empty. If an operator already cleared the flag, the last real
+    # outcome was still a failure → error until the next run lands.
+    if raw == "auto_disabled":
+        hours = (now - last_run).total_seconds() / 3600 if last_run else 999.0
+        if live.get("auto_disabled") is False:
+            return "error", hours
+        return "auto_disabled", hours
 
     if raw in ("error", "failed", "fail"):
         hours = (now - last_run).total_seconds() / 3600 if last_run else 999.0
@@ -793,6 +806,12 @@ def _health_status_for_row(
         return "never_run", hours
 
     return "never_run", 999.0
+
+
+def _iso_or_none(value):
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return value or None
 
 
 @router.get("/scraper-health")
@@ -947,6 +966,10 @@ async def api_scraper_health():
                 "run_count": (live or {}).get("run_count", 0),
                 "error": (live or {}).get("error"),
                 "enabled": enabled,
+                "error_class": (live or {}).get("last_error_class"),
+                "consecutive_failures": int((live or {}).get("consecutive_failures") or 0),
+                "auto_disabled": bool((live or {}).get("auto_disabled")),
+                "auto_disabled_at": _iso_or_none((live or {}).get("auto_disabled_at")),
             })
 
         # Surface unregistered arrest counties once (labeled), no bare dupes

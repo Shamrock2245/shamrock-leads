@@ -5,6 +5,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-09-25 (Scraper self-heal / fail-loud)
+
+### Added
+- **BaseScraper resilience** (`scrapers/scraper_resilience.py`): transient `network` retry with 2s/4s/8s backoff (never 429, anti-bot, or an active per-county cooldown; Lee opts out), fixed error classes (`network`, `anti_bot`, `url_changed`, `parse_drift`, `unknown`), and immediate `#scraper-errors` schema-drift alerts.
+- **Auto-disable** after 5 consecutive failures, stored on `scraper_status`. Health shows ⛔ Auto-disabled. Re-enable happens through a successful canary (≥1 record), the Health button / `POST /api/scraper/enable`, or `scripts/scraper_reenable.py`. KEY FL counties alert but are never skipped.
+- **Obscura routing policy:** `OBSCURA_ROUTE_COUNTIES` opt-in, verified_public only; hard deny list for holds and fail_closed scopes. No county is routed by default.
+- **Matrix drift gate:** `scripts/build_recon_matrix.py --check`, `docs/recon/live_emitter_evidence.json`, and `tests/test_source_state_drift.py`, which run in CI through a bridge test in `test_source_contract_run_guard.py` until `ci.yml` lists them directly.
+- Runbook `docs/ops/SCRAPER_SELF_HEALING.md`.
+
+### Fixed
+- The Slack webhook URL could leak into logs through `requests` exception strings (`SlackNotifier`, `ErrorTracker`). Only the exception class is logged now. ErrorTracker no longer double-posts failures.
+- **Health registry drift:** 30 code-guarded scrapers added as `fail_closed`, and Broward (FL) added as `verified_public`.
+- **Hampton / Marlboro (SC):** now actually fail closed (they were fetching through proxy paths into a 403 and synthesizing keys).
+- `COUNTY_SOURCE_CONTRACT_MATRIX.md` regenerated from versioned evidence (SC verified_public 1 → 5).
+- Self-healing docs (AGENTS, README, ARCHITECTURE, Watchdog) now describe what exists. The URL pre-flight check, failure history, and `force_enable()` never existed.
+
 ## [Unreleased] — 2026-09-23
 
 ### Fixed

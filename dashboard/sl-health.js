@@ -20,6 +20,7 @@ const SLHealth = (() => {
     fail_closed:{ label: '🛡 Fail closed', cls: 'status-warn', order: 4 },
     offline:   { label: '🔴 Offline',   cls: 'status-error', order: 5 },
     error:     { label: '🔴 Error',     cls: 'status-error', order: 6 },
+    auto_disabled: { label: '⛔ Auto-disabled', cls: 'status-error', order: 5 },
     never_run: { label: '⏳ Never Run', cls: 'status-never', order: 7 },
     disabled:  { label: '⏸ Disabled',  cls: 'status-never', order: 8 },
   };
@@ -36,7 +37,7 @@ const SLHealth = (() => {
   /** Productive = last run succeeded with records (not soft-empty / stubs). */
   function _isProductive(r) {
     const st = (r.status || '').toLowerCase();
-    if (st === 'empty' || st === 'fail_closed' || st === 'error' || st === 'never_run' || st === 'disabled') return false;
+    if (st === 'empty' || st === 'fail_closed' || st === 'error' || st === 'auto_disabled' || st === 'never_run' || st === 'disabled') return false;
     if (st === 'healthy' || st === 'ok') return true;
     // stale/warning/offline only count if last run actually had rows
     const lastN = r.last_run_records != null ? r.last_run_records : r.records;
@@ -199,6 +200,7 @@ const SLHealth = (() => {
     const active = _data.filter(r => _isProductive(r) && (r.status === 'ok' || r.status === 'healthy')).length;
     const empty = _data.filter(r => r.status === 'empty').length;
     const errors = _data.filter(r => r.status === 'error').length;
+    const autoDisabled = _data.filter(r => r.status === 'auto_disabled').length;
     const neverRun = _data.filter(r => r.status === 'never_run').length;
     const stale = _data.filter(r => ['stale','warning','offline'].includes(r.status)).length;
     const disabled = _data.filter(r => r.status === 'disabled' || r.enabled === false).length;
@@ -226,6 +228,11 @@ const SLHealth = (() => {
         <div class="stat-value" style="color:var(--danger,#ff4757)">${errors}</div>
         <div class="stat-sub">need attention</div>
       </div>
+      ${autoDisabled > 0 ? `<div class="stat-card" style="border-color:var(--danger,#ff4757);cursor:pointer" onclick="SLHealth.setFilter('auto_disabled',this)">
+        <div class="stat-label">⛔ Auto-disabled</div>
+        <div class="stat-value" style="color:var(--danger,#ff4757)">${autoDisabled}</div>
+        <div class="stat-sub">5 consecutive failures</div>
+      </div>` : ''}
       <div class="stat-card" style="border-color:#ffa502;cursor:pointer" onclick="SLHealth.setFilter('stale',this)">
         <div class="stat-label">🟡 Stale</div>
         <div class="stat-value" style="color:#ffa502">${stale}</div>
@@ -278,7 +285,9 @@ const SLHealth = (() => {
       const cfg = _statusCfg(r.status);
       const source = _sourceCfg(r.source_state);
       const lastRun = _fmtRelative(r.last_run || r.latest_record);
-      const hasError = r.status === 'error' && r.error;
+      const isAutoDisabled = r.status === 'auto_disabled';
+      const hasError = (r.status === 'error' || isAutoDisabled) && r.error;
+      const errClass = r.error_class ? `[${r.error_class}${r.consecutive_failures ? ` ×${r.consecutive_failures}` : ''}] ` : '';
       const isNeverRun = r.status === 'never_run';
       const isDisabled = r.enabled === false || r.status === 'disabled';
       const st = (r.state || 'FL').toUpperCase();
@@ -292,7 +301,7 @@ const SLHealth = (() => {
           <td>${statePill}</td>
           <td>
             <span class="status-badge ${cfg.cls}">${cfg.label}</span>
-            ${hasError ? `<div style="font-size:11px;color:var(--danger);margin-top:3px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.error}">${r.error}</div>` : ''}
+            ${hasError ? `<div style="font-size:11px;color:var(--danger);margin-top:3px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${errClass}${r.error}">${errClass}${r.error}</div>` : ''}
           </td>
           <td><span title="${source.hint}" style="display:inline-block;padding:2px 6px;border-radius:5px;border:1px solid ${source.color}66;background:${source.color}18;color:${source.color};font-size:10px;font-weight:700;white-space:nowrap">${source.label}</span></td>
           <td title="In DB${lastNLabel}">${_fmtNum(r.total_records)}${lastN != null ? `<div style="font-size:10px;color:var(--text-muted)">last ${lastN}</div>` : ''}</td>
@@ -304,6 +313,7 @@ const SLHealth = (() => {
             <div style="display:flex;gap:4px;flex-wrap:wrap">
               ${!isDisabled && r.source_state !== 'fail_closed' ? `<button class="btn btn-xs" onclick="SLHealth.runNow(${JSON.stringify(r.county)},${JSON.stringify(st)})" style="background:var(--accent);color:#000;font-weight:600;padding:3px 8px;font-size:11px" title="Trigger immediate run">⚡ Run</button>` : ''}
               ${r.source_state === 'fail_closed' ? `<span title="${source.hint}" style="font-size:10px;color:#fbbf24;padding:3px 4px">Guarded</span>` : ''}
+              ${isAutoDisabled && r.source_state !== 'fail_closed' ? `<button class="btn btn-xs" onclick="SLHealth.enableScraper(${JSON.stringify(r.county)},${JSON.stringify(st)})" style="background:#14532d;border:1px solid #16a34a;color:#bbf7d0;padding:3px 8px;font-size:11px" title="Clear auto-disable (Run Now also works as a canary)">▶ Re-enable</button>` : ''}
               ${hasError ? `<button class="btn btn-xs" onclick="SLHealth.showError(${JSON.stringify(r.county)})" style="background:var(--danger);color:#fff;padding:3px 8px;font-size:11px">🔍 Error</button>` : ''}
               <button class="btn btn-xs" onclick="SLHealth.showDrill(${JSON.stringify(r.county)})" style="background:var(--panel-bg);border:1px solid var(--border);padding:3px 8px;font-size:11px" title="View detailed stats">📊 Detail</button>
               <button class="btn btn-xs" onclick="SLHealth.healthCheck(${JSON.stringify(r.county)},${JSON.stringify(st)})" style="background:#1a3a5c;border:1px solid #2563eb;color:#93c5fd;padding:3px 8px;font-size:11px" title="Queue a URL health check">🩺 Check</button>

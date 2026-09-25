@@ -17,12 +17,35 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from abc import ABC, abstractmethod
 from typing import List, Optional
 from datetime import datetime, timezone
 
 from core.models import ArrestRecord
 from scoring.lead_scorer import LeadScorer
+from scrapers.scraper_resilience import (
+    AUTO_DISABLE_EXEMPT_LABELS,
+    ERROR_PARSE_DRIFT,
+    GATE_CANARY,
+    GATE_SKIP,
+    RETRY_DELAYS_S,
+    AlertThrottle,
+    ObscuraRoutingRefused,
+    ParseDriftError,
+    ResilienceState,
+    assess_schema_drift,
+    auto_disable_enabled,
+    auto_disable_threshold,
+    base_retry_enabled,
+    classify_exception,
+    gate_decision,
+    obscura_hard_refusal,
+    obscura_route_decision,
+    retry_transient,
+    state_after_failure,
+    state_after_success,
+)
 
 # Hybrid scorer: ML + rule-based blending + FTA risk overlay
 try:
@@ -67,6 +90,19 @@ logger = logging.getLogger(__name__)
 # Shared instances (initialized once)
 _scorer = LeadScorer()
 _slack = SlackNotifier()
+# Drift alerts: first occurrence is immediate; repeats for the same county and
+# severity are suppressed for 30 minutes so a broken parser cannot flood Slack.
+_drift_alert_throttle = AlertThrottle(window_s=1800.0)
+
+
+def _registry_source_state(label: str) -> str:
+    """Return the deployed Health source state for ``County (ST)`` (never raises)."""
+    try:
+        from dashboard.extensions import scraper_source_state
+
+        return scraper_source_state(label)
+    except Exception:
+        return "unverified"
 
 
 class BaseScraper(ABC):
@@ -98,6 +134,16 @@ class BaseScraper(ABC):
     # behavior can occur.
     SOURCE_CONTRACT_VALIDATED = True
     SOURCE_CONTRACT_REASON = ""
+
+    # ── Self-healing (scrapers/scraper_resilience.py) ──
+    # run() retries scrape() on *transient network* failures with exponential
+    # backoff 2s → 4s → 8s. 429 / anti-bot / active per-county cooldowns are
+    # never retried. Subclasses that already implement a cooldown-aware retry
+    # loop against a quota-limited origin (Lee) set BASE_RETRY_ENABLED = False
+    # so attempts are not multiplied.
+    BASE_RETRY_ENABLED = True
+    TRANSIENT_RETRY_DELAYS = RETRY_DELAYS_S
+    _retry_sleep = staticmethod(time.sleep)
 
     # Disk thresholds (percentage used)
     DISK_WARN_THRESHOLD = 75
@@ -241,8 +287,43 @@ class BaseScraper(ABC):
 
     OBSCURA_CDP_URL = os.getenv("OBSCURA_CDP_URL", "ws://obscura:9222")
 
-    @classmethod
-    async def _get_obscura_browser(cls):
+    # Obscura routing policy (see scrapers/scraper_resilience.py):
+    #   * always refused for fail_closed scopes and the hold/403 list — Obscura
+    #     egresses through the office residential SOCKS proxy and must never be
+    #     used to reopen a guarded or WAF-blocked source;
+    #   * new routing only for verified_public labels explicitly listed in
+    #     OBSCURA_ROUTE_COUNTIES (default: none);
+    #   * pre-existing legacy callers on non-verified scopes keep working but
+    #     log a warning so the decision stays visible.
+    def _obscura_guard(self) -> None:
+        label = self.county_label
+        validated = bool(getattr(self, "SOURCE_CONTRACT_VALIDATED", True))
+        source_state = _registry_source_state(label)
+        refusal = obscura_hard_refusal(
+            label, source_contract_validated=validated, source_state=source_state
+        )
+        if refusal:
+            raise ObscuraRoutingRefused(
+                f"Obscura refused for {label}: {refusal} (no-bypass rule)"
+            )
+        allowed, reason = obscura_route_decision(
+            label, source_contract_validated=validated, source_state=source_state
+        )
+        if not allowed:
+            logger.warning(
+                "Obscura legacy use for %s outside routing policy (%s)", label, reason
+            )
+
+    def obscura_route_enabled(self) -> bool:
+        """True only for verified_public scopes opted in via OBSCURA_ROUTE_COUNTIES."""
+        allowed, _reason = obscura_route_decision(
+            self.county_label,
+            source_contract_validated=bool(getattr(self, "SOURCE_CONTRACT_VALIDATED", True)),
+            source_state=_registry_source_state(self.county_label),
+        )
+        return allowed
+
+    async def _get_obscura_browser(self):
         """
         Connect to the Obscura CDP server via Playwright.
 
@@ -250,8 +331,10 @@ class BaseScraper(ABC):
             tuple: (playwright_instance, browser) — caller must close both.
 
         Raises:
+            ObscuraRoutingRefused: scope is fail_closed or on the hold/403 list.
             ConnectionError: If Obscura container is unreachable.
         """
+        self._obscura_guard()
         try:
             from playwright.async_api import async_playwright
         except ImportError:
@@ -261,17 +344,16 @@ class BaseScraper(ABC):
 
         pw = await async_playwright().__aenter__()
         try:
-            browser = await pw.chromium.connect_over_cdp(cls.OBSCURA_CDP_URL)
-            logger.info(f"✅ Connected to Obscura CDP at {cls.OBSCURA_CDP_URL}")
+            browser = await pw.chromium.connect_over_cdp(self.OBSCURA_CDP_URL)
+            logger.info("✅ Connected to Obscura CDP for %s", self.county_label)
             return pw, browser
         except Exception as e:
             await pw.__aexit__(None, None, None)
             raise ConnectionError(
-                f"❌ Cannot connect to Obscura at {cls.OBSCURA_CDP_URL}: {e}"
+                f"❌ Cannot connect to Obscura CDP: {type(e).__name__}"
             ) from e
 
-    @classmethod
-    def _get_obscura_browser_sync(cls):
+    def _get_obscura_browser_sync(self):
         """
         Synchronous wrapper for _get_obscura_browser().
         For use in scrapers that don't use async/await.
@@ -279,6 +361,7 @@ class BaseScraper(ABC):
         Returns:
             tuple: (playwright_instance, browser) — caller must close both.
         """
+        self._obscura_guard()
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:
@@ -288,13 +371,13 @@ class BaseScraper(ABC):
 
         pw = sync_playwright().start()
         try:
-            browser = pw.chromium.connect_over_cdp(cls.OBSCURA_CDP_URL)
-            logger.info(f"✅ Connected to Obscura CDP at {cls.OBSCURA_CDP_URL}")
+            browser = pw.chromium.connect_over_cdp(self.OBSCURA_CDP_URL)
+            logger.info("✅ Connected to Obscura CDP for %s", self.county_label)
             return pw, browser
         except Exception as e:
             pw.stop()
             raise ConnectionError(
-                f"❌ Cannot connect to Obscura at {cls.OBSCURA_CDP_URL}: {e}"
+                f"❌ Cannot connect to Obscura CDP: {type(e).__name__}"
             ) from e
 
     @classmethod
@@ -618,12 +701,111 @@ class BaseScraper(ABC):
             return f"scraper_{county_slug}"
         return f"scraper_{st.lower()}_{county_slug}"
 
-    def run(self, writers: list = None) -> dict:
+    @property
+    def county_label(self) -> str:
+        """Registry label ``County (ST)`` used by Health and SCRAPER_SOURCE_STATES."""
+        return f"{self.county} ({(getattr(self, 'state', None) or 'FL').upper()})"
+
+    def in_source_cooldown(self) -> bool:
+        """True while a per-county cooldown is active (never retry into it).
+
+        Default: no cooldown. Counties with a shared throttle (Lee's file-backed
+        /32 window in ``scrapers/lee_rate_limit.py``) override this.
+        """
+        return False
+
+    def _scrape_with_retry(self) -> List[ArrestRecord]:
+        """scrape() wrapped in the BaseScraper transient-retry policy."""
+        if not (getattr(self, "BASE_RETRY_ENABLED", True) and base_retry_enabled()):
+            return self.scrape()
+
+        def _log_retry(attempt, delay, exc, verdict):
+            logger.warning(
+                "🔁 %s: transient %s failure (retry %d/%d in %.0fs): %s",
+                self.county_label,
+                verdict.error_class,
+                attempt,
+                len(self.TRANSIENT_RETRY_DELAYS),
+                delay,
+                str(exc)[:200],
+            )
+
+        return retry_transient(
+            self.scrape,
+            delays=self.TRANSIENT_RETRY_DELAYS,
+            sleep=self._retry_sleep,
+            cooldown_active=self.in_source_cooldown,
+            on_retry=_log_retry,
+        )
+
+    @staticmethod
+    def _status_writer(writers: Optional[list]):
+        for writer in (writers or []):
+            if hasattr(writer, "upsert_scraper_status"):
+                return writer
+        return None
+
+    def _load_resilience_state(self, status_writer) -> ResilienceState:
+        """Persisted consecutive-failure / auto-disable state (Mongo scraper_status)."""
+        getter = getattr(status_writer, "get_scraper_resilience", None) if status_writer else None
+        if callable(getter):
+            try:
+                doc = getter(
+                    county=self.county,
+                    state=getattr(self, "state", None) or "FL",
+                )
+                state = ResilienceState.from_doc(doc)
+                self._resilience_state = state
+                return state
+            except Exception as exc:
+                logger.warning(
+                    "⚠️ %s: could not load resilience state (%s) — using in-memory",
+                    self.county_label,
+                    type(exc).__name__,
+                )
+        return getattr(self, "_resilience_state", None) or ResilienceState()
+
+    def _persist_status(self, status_writer, *, extra_fields: Optional[dict] = None, **kwargs) -> None:
+        if status_writer is None:
+            return
+        try:
+            status_writer.upsert_scraper_status(
+                county=self.county,
+                state=getattr(self, "state", None) or "FL",
+                scraper_id=getattr(self, "scraper_id", None),
+                extra_fields=extra_fields,
+                **kwargs,
+            )
+        except Exception as exc:
+            logger.warning(f"⚠️ {self.county}: scraper_status upsert failed: {exc}")
+
+    def _alert_parse_drift(self, detail: str, severity: str) -> None:
+        """Fail loudly: schema drift goes to #scraper-errors immediately."""
+        logger.error("🧬 %s: parse/schema drift (%s): %s", self.county_label, severity, detail[:300])
+        if not _drift_alert_throttle.allow((self.county_label, severity)):
+            return
+        try:
+            _slack.notify_parse_drift(self.county_label, detail, severity=severity)
+        except Exception:
+            pass
+
+    def run(self, writers: list = None, *, force_canary: bool = False) -> dict:
         """
         Execute the full scrape → score → write → alert pipeline.
 
         Args:
             writers: List of writer instances (MongoWriter, SheetsWriter, etc.)
+            force_canary: Operator-requested run (dashboard Run Now / CLI). An
+                auto-disabled scraper runs as a canary instead of being skipped.
+
+        Self-healing contract (scrapers/scraper_resilience.py):
+            * transient network failures retry 2s → 4s → 8s (never into a 429,
+              anti-bot block, or active per-county cooldown);
+            * every failure is classified network / anti_bot / url_changed /
+              parse_drift / unknown and persisted to scraper_status;
+            * schema drift alerts #scraper-errors immediately;
+            * 5 consecutive counted failures → status ``auto_disabled``;
+              re-enabled by a successful canary (records > 0) or manually.
 
         Returns:
             Combined statistics dict.
@@ -673,6 +855,33 @@ class BaseScraper(ABC):
                 "error": reason,
             }
 
+        # ── Preflight: auto-disable gate ──
+        status_writer = self._status_writer(writers)
+        res_state = self._load_resilience_state(status_writer)
+        gate = gate_decision(res_state, start, force=force_canary) if auto_disable_enabled() else "run"
+        if gate == GATE_SKIP:
+            reason = (
+                f"auto-disabled after {res_state.consecutive_failures} consecutive failures "
+                f"({res_state.last_error_class or 'unknown'}); waiting for canary window or manual re-enable"
+            )
+            logger.warning("⛔ %s: %s", self.county_label, reason)
+            self.last_error = reason
+            return {
+                "county": self.county,
+                "records_scraped": 0,
+                "elapsed_seconds": 0,
+                "status": "auto_disabled",
+                "auto_disabled": True,
+                "consecutive_failures": res_state.consecutive_failures,
+                "error_class": res_state.last_error_class,
+                "error": reason,
+            }
+        # With the kill switch off every run proceeds; a successful run of a
+        # previously auto-disabled scraper is then treated like a canary.
+        was_canary = gate == GATE_CANARY or (res_state.auto_disabled and not auto_disable_enabled())
+        if was_canary:
+            logger.info("🐤 %s: auto-disabled — running canary attempt", self.county_label)
+
         # ── Step 0: Disk space guard ──
         disk = self._check_disk_space()
         if not disk['ok']:
@@ -693,8 +902,8 @@ class BaseScraper(ABC):
             }
 
         try:
-            # ── Step 1: Scrape ──
-            records = self.scrape()
+            # ── Step 1: Scrape (BaseScraper transient retry: 2s, 4s, 8s) ──
+            records = self._scrape_with_retry()
             elapsed = (datetime.now(timezone.utc) - start).total_seconds()
 
             raw_record_count = len(records)
@@ -705,6 +914,15 @@ class BaseScraper(ABC):
                     self.county,
                     raw_record_count - len(records),
                 )
+
+            # ── Step 1b: Schema-drift check (fail loudly) ──
+            drift = assess_schema_drift(raw_record_count, records)
+            if drift is not None and drift.severity == "total":
+                # Every row lost its source key: the parser no longer matches
+                # the source. Counts as a parse_drift failure (alert + streak).
+                raise ParseDriftError(f"schema drift: {drift.detail}")
+            if drift is not None:
+                self._alert_parse_drift(drift.detail, drift.severity)
 
             logger.info(
                 f"✅ {self.county}: scraped {len(records)} verified-key records in {elapsed:.1f}s"
@@ -894,33 +1112,72 @@ class BaseScraper(ABC):
                 except Exception:
                     pass
 
-            # ── Step 5b: Persist run status to MongoDB scraper_status collection ──
-            for _writer in (writers or []):
-                if hasattr(_writer, 'upsert_scraper_status'):
-                    try:
-                        _writer.upsert_scraper_status(
-                            county=self.county,
-                            records=len(records),
-                            hot=hot_count,
-                            warm=warm_count,
-                            cold=cold_count,
-                            disqualified=disqualified,
-                            duration=elapsed,
-                            status=run_status,
-                            state=getattr(self, "state", None) or "FL",
-                            scraper_id=getattr(self, "scraper_id", None),
-                        )
-                    except Exception as _e:
-                        logger.warning(f"⚠️ {self.county}: scraper_status upsert failed: {_e}")
-                    break  # Only need one writer to persist status
+            # ── Step 5b: Persist run status + resilience state (scraper_status) ──
+            new_state, reenabled = state_after_success(
+                res_state, len(records), datetime.now(timezone.utc), was_canary=was_canary
+            )
+            self._resilience_state = new_state
+            persisted_status = "auto_disabled" if new_state.auto_disabled else run_status
+            extra = new_state.to_fields()
+            if reenabled:
+                extra.update({
+                    "reenabled_at": datetime.now(timezone.utc),
+                    "reenabled_by": "canary",
+                })
+            self._persist_status(
+                status_writer,
+                records=len(records),
+                hot=hot_count,
+                warm=warm_count,
+                cold=cold_count,
+                disqualified=disqualified,
+                duration=elapsed,
+                status=persisted_status,
+                error=(
+                    "auto-disabled: canary ran but returned 0 records"
+                    if new_state.auto_disabled else None
+                ),
+                extra_fields=extra,
+            )
+            if reenabled:
+                logger.info("✅ %s: canary succeeded — auto-disable cleared", self.county_label)
+                try:
+                    _slack.notify_scraper_reenabled(
+                        self.county_label, how="canary", records=len(records)
+                    )
+                except Exception:
+                    pass
 
-            combined_stats["status"] = run_status
+            combined_stats["status"] = persisted_status
+            combined_stats["consecutive_failures"] = new_state.consecutive_failures
+            if reenabled:
+                combined_stats["reenabled"] = True
             return combined_stats
 
         except Exception as e:
             elapsed = (datetime.now(timezone.utc) - start).total_seconds()
             self.last_error = str(e)
-            logger.error(f"❌ {self.county}: scraper failed after {elapsed:.1f}s — {e}")
+            verdict = classify_exception(e)
+            label = self.county_label
+            logger.error(
+                f"❌ {self.county}: scraper failed after {elapsed:.1f}s "
+                f"[{verdict.error_class}] — {e}"
+            )
+
+            now = datetime.now(timezone.utc)
+            threshold = auto_disable_threshold()
+            exempt = label in AUTO_DISABLE_EXEMPT_LABELS
+            new_state, tripped = state_after_failure(
+                res_state,
+                verdict,
+                now,
+                threshold=threshold,
+                exempt=exempt,
+                was_canary=was_canary,
+                reason=f"{verdict.error_class}: {str(e)[:250]}",
+            )
+            self._resilience_state = new_state
+            persisted_status = "auto_disabled" if new_state.auto_disabled else "error"
 
             # Log to self-hosted error tracker (MongoDB)
             if _error_tracker:
@@ -928,14 +1185,48 @@ class BaseScraper(ABC):
                     _error_tracker.log_error(
                         source=f"scraper.{self.county}",
                         message=str(e),
-                        details={"elapsed": elapsed, "county": self.county},
+                        details={
+                            "elapsed": elapsed,
+                            "county": self.county,
+                            "county_label": label,
+                            "error_class": verdict.error_class,
+                            "consecutive_failures": new_state.consecutive_failures,
+                        },
+                        # SlackNotifier below sends the single classified alert;
+                        # avoid a duplicate generic post to the same channel.
+                        alert_slack=False,
                     )
                 except Exception:
                     pass
 
-            # Alert on scraper failure (Slack)
+            # Alert (Slack #scraper-errors). Schema drift gets its own loud
+            # alert; a failed canary on an already-disabled scraper stays quiet
+            # (it was alerted when it tripped).
             try:
-                _slack.notify_scraper_error(self.county, str(e))
+                if verdict.error_class == ERROR_PARSE_DRIFT:
+                    self._alert_parse_drift(str(e), "exception")
+                elif not (was_canary and not tripped):
+                    _slack.notify_scraper_error(
+                        label,
+                        str(e),
+                        error_class=verdict.error_class,
+                        consecutive_failures=new_state.consecutive_failures,
+                    )
+                if tripped:
+                    _slack.notify_scraper_auto_disabled(
+                        label,
+                        failures=new_state.consecutive_failures,
+                        error_class=verdict.error_class,
+                        last_error=str(e),
+                    )
+                elif exempt and verdict.counts_toward_disable and new_state.consecutive_failures == threshold:
+                    _slack.notify_scraper_auto_disabled(
+                        label,
+                        failures=new_state.consecutive_failures,
+                        error_class=verdict.error_class,
+                        last_error=str(e),
+                        exempt=True,
+                    )
             except Exception:
                 pass
 
@@ -944,43 +1235,49 @@ class BaseScraper(ABC):
                 self._post_dashboard_event("scraper_error", {
                     "county": self.county,
                     "state": (getattr(self, "state", None) or "FL"),
-                    "county_label": f"{self.county} ({(getattr(self, 'state', None) or 'FL')})",
+                    "county_label": label,
                     "scraper_id": getattr(self, "scraper_id", None),
                     "error": str(e)[:300],
+                    "error_class": verdict.error_class,
+                    "consecutive_failures": new_state.consecutive_failures,
+                    "auto_disabled": new_state.auto_disabled,
                 })
             except Exception:
                 pass
-
 
             # Update dashboard with error status (in-memory Flask, legacy)
             if _dashboard_available:
                 try:
                     update_scraper_status(
                         county=self.county, records=0, hot=0, warm=0,
-                        duration=elapsed, status="error", error=str(e),
+                        duration=elapsed, status=persisted_status, error=str(e),
                     )
                 except Exception:
                     pass
 
-            # Persist error status to MongoDB scraper_status collection
-            for _writer in (writers or []):
-                if hasattr(_writer, 'upsert_scraper_status'):
-                    try:
-                        _writer.upsert_scraper_status(
-                            county=self.county, records=0, hot=0, warm=0,
-                            duration=elapsed, status="error", error=str(e),
-                            state=getattr(self, "state", None) or "FL",
-                            scraper_id=getattr(self, "scraper_id", None),
-                        )
-                    except Exception:
-                        pass
-                    break
+            # Persist error + resilience state to MongoDB scraper_status
+            extra = new_state.to_fields()
+            extra.update({
+                "last_failure_at": now,
+                "error_class": verdict.error_class,
+                "cooldown_active": verdict.cooldown,
+            })
+            self._persist_status(
+                status_writer,
+                records=0, hot=0, warm=0,
+                duration=elapsed, status=persisted_status, error=str(e),
+                extra_fields=extra,
+            )
 
             return {
                 "county": self.county,
                 "records_scraped": 0,
                 "elapsed_seconds": round(elapsed, 1),
+                "status": persisted_status,
                 "error": str(e),
+                "error_class": verdict.error_class,
+                "consecutive_failures": new_state.consecutive_failures,
+                "auto_disabled": new_state.auto_disabled,
             }
 
     # ── Real-time dashboard event relay ────────────────────────────────────────
@@ -1054,4 +1351,6 @@ class BaseScraper(ABC):
             "last_run": self.last_run.isoformat() if self.last_run else None,
             "last_error": self.last_error,
             "healthy": self.last_error is None,
+            "consecutive_failures": getattr(self, "_resilience_state", ResilienceState()).consecutive_failures,
+            "auto_disabled": getattr(self, "_resilience_state", ResilienceState()).auto_disabled,
         }

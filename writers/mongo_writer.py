@@ -399,41 +399,18 @@ class MongoWriter:
             "error": error,
         })
 
-    def upsert_scraper_status(
-        self,
-        county: str,
-        records: int = 0,
-        hot: int = 0,
-        warm: int = 0,
-        cold: int = 0,
-        disqualified: int = 0,
-        duration: float = 0.0,
-        status: str = "ok",
-        error: str = None,
-        run_count_increment: int = 1,
-        state: str = None,
-        scraper_id: str = None,
-    ):
-        """
-        Upsert the latest scraper run state into the scraper_status collection.
+    @staticmethod
+    def _scraper_status_identity(county: str, state: str = None):
+        """Return ``(filter, bare, state, label)`` for a scraper_status doc.
 
-        Identity is multi-state aware:
-        - ``county`` stored as bare name (``Lee``) for legacy readers
-        - ``county_label`` as ``Lee (FL)`` and ``state`` for dashboard joins
-        - ``scraper_id`` when provided (``scraper_lee`` / ``scraper_ga_lee``)
-
-        Prefer matching on county_label when present so Lee FL ≠ Lee SC.
+        Identity is multi-state aware: prefer ``county_label`` so Lee FL ≠ Lee SC.
         """
         import re
 
-        now = datetime.now(timezone.utc)
         bare = re.sub(r"\s*\([A-Za-z]{2}\)\s*$", "", (county or "").strip()).strip()
         st_match = re.search(r"\(([A-Za-z]{2})\)\s*$", (county or "").strip())
         st = (state or (st_match.group(1) if st_match else None) or "FL").upper()
         label = f"{bare} ({st})" if bare else county
-
-        # Prefer state-aware identity; fall back to bare county for older docs
-        filter_q: dict
         if bare:
             filter_q = {
                 "$or": [
@@ -448,32 +425,103 @@ class MongoWriter:
             }
         else:
             filter_q = {"county": county}
+        return filter_q, bare, st, label
+
+    def upsert_scraper_status(
+        self,
+        county: str,
+        records: int = 0,
+        hot: int = 0,
+        warm: int = 0,
+        cold: int = 0,
+        disqualified: int = 0,
+        duration: float = 0.0,
+        status: str = "ok",
+        error: str = None,
+        run_count_increment: int = 1,
+        state: str = None,
+        scraper_id: str = None,
+        extra_fields: dict = None,
+    ):
+        """
+        Upsert the latest scraper run state into the scraper_status collection.
+
+        Identity is multi-state aware:
+        - ``county`` stored as bare name (``Lee``) for legacy readers
+        - ``county_label`` as ``Lee (FL)`` and ``state`` for dashboard joins
+        - ``scraper_id`` when provided (``scraper_lee`` / ``scraper_ga_lee``)
+
+        ``extra_fields`` carries BaseScraper resilience state
+        (``consecutive_failures``, ``auto_disabled``, ``last_error_class`` …)
+        so Health can show auto-disabled scrapers honestly.
+        """
+        now = datetime.now(timezone.utc)
+        filter_q, bare, st, label = self._scraper_status_identity(county, state)
+
+        set_fields = {
+            "county": bare or county,
+            "county_label": label,
+            "state": st,
+            "scraper_id": scraper_id,
+            "last_run": now,
+            "last_run_iso": now.isoformat(),
+            "records": records,
+            "hot_leads": hot,
+            "warm_leads": warm,
+            "cold_leads": cold,
+            "disqualified": disqualified,
+            "duration_seconds": round(duration, 1),
+            "status": status,
+            "error": error,
+            "updated_at": now,
+        }
+        protected = set(set_fields)
+        for key, value in (extra_fields or {}).items():
+            if key not in protected:
+                set_fields[key] = value
 
         self.scraper_status.update_one(
             filter_q,
             {
-                "$set": {
-                    "county": bare or county,
-                    "county_label": label,
-                    "state": st,
-                    "scraper_id": scraper_id,
-                    "last_run": now,
-                    "last_run_iso": now.isoformat(),
-                    "records": records,
-                    "hot_leads": hot,
-                    "warm_leads": warm,
-                    "cold_leads": cold,
-                    "disqualified": disqualified,
-                    "duration_seconds": round(duration, 1),
-                    "status": status,
-                    "error": error,
-                    "updated_at": now,
-                },
+                "$set": set_fields,
                 "$inc": {"run_count": run_count_increment},
                 "$setOnInsert": {"created_at": now},
             },
             upsert=True,
         )
+
+    _RESILIENCE_FIELDS = (
+        "consecutive_failures",
+        "auto_disabled",
+        "auto_disabled_at",
+        "auto_disabled_reason",
+        "last_canary_at",
+        "last_error_class",
+    )
+
+    def get_scraper_resilience(self, county: str, state: str = None) -> dict:
+        """Read persisted consecutive-failure / auto-disable state (or ``{}``)."""
+        filter_q, _bare, _st, _label = self._scraper_status_identity(county, state)
+        projection = {field: 1 for field in self._RESILIENCE_FIELDS}
+        projection["_id"] = 0
+        return self.scraper_status.find_one(filter_q, projection) or {}
+
+    def reenable_scraper(self, county: str, state: str = None, by: str = "manual") -> bool:
+        """Manual re-enable: clear auto-disable and reset the failure streak."""
+        filter_q, _bare, _st, _label = self._scraper_status_identity(county, state)
+        now = datetime.now(timezone.utc)
+        result = self.scraper_status.update_one(
+            filter_q,
+            {"$set": {
+                "auto_disabled": False,
+                "consecutive_failures": 0,
+                "auto_disabled_reason": None,
+                "reenabled_at": now,
+                "reenabled_by": by,
+                "updated_at": now,
+            }},
+        )
+        return bool(getattr(result, "matched_count", 0))
 
     def close(self):
         self.client.close()

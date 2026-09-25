@@ -25,6 +25,7 @@ import urllib.parse
 import os
 
 from scrapers.base_scraper import BaseScraper
+from scrapers.scraper_resilience import SourceCooldownActive
 from scrapers.lee_origin import (
     LEE_BASE_URL,
     invalidate_lee_origin_cache,
@@ -89,6 +90,15 @@ class LeeCountyScraper(BaseScraper):
     KEY FL county — registered in main.py at 30-minute interval. Must stay on.
     HTTP path uses APE StealthSession for TLS fingerprint + residential failover.
     """
+
+    # Lee already runs its own cooldown-aware outer retry in scrape(); a
+    # second BaseScraper retry layer would multiply requests against the /32
+    # public-api quota. Cooldowns raise SourceCooldownActive, which BaseScraper
+    # never retries and never counts toward auto-disable.
+    BASE_RETRY_ENABLED = False
+
+    def in_source_cooldown(self) -> bool:
+        return is_cooled_down()
 
     def __init__(self):
         super().__init__()
@@ -165,7 +175,7 @@ class LeeCountyScraper(BaseScraper):
                     + (f": {detail}" if detail else "")
                 )
                 logger.error("[Lee] ⛔ Skipping scrape — %s", msg)
-                raise RuntimeError(msg)
+                raise SourceCooldownActive(msg)
 
             end_date = datetime.now(timezone.utc)
             start_date = end_date - timedelta(days=DAYS_BACK)
@@ -188,7 +198,7 @@ class LeeCountyScraper(BaseScraper):
                 # Fetch-all-failed / mid-run cooldown / 429 → status=error.
                 if self._fetch_rate_limited or is_cooled_down():
                     st = cooldown_status()
-                    raise RuntimeError(
+                    raise SourceCooldownActive(
                         "Lee public-api rate-limit tripped mid-fetch "
                         f"({st['seconds_remaining']:.0f}s remaining); "
                         "no bookings recovered"

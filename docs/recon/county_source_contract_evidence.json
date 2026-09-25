@@ -644,9 +644,9 @@
       "state": "FL",
       "county_fips": "011",
       "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "official_source_url": "https://apps.sheriff.org/ArrestSearch",
+      "access_posture": "BSO Arrest Search Turnstile + name-prefix paged grid (action=arrest_search); requires SOLVECAPTCHA_KEY",
+      "evidence_note": "2026-09-23 Mac write smoke: 30 new / status=ok with source JMS_NUMBER booking keys (commit e591b45 lifted the guard). Health `verified_public` added 2026-09-25 to match code (`SOURCE_CONTRACT_VALIDATED=True`). Old InmateDetail/{id} probe path is dead; sequential identifier probing prohibited."
     },
     {
       "state": "FL",
@@ -660,9 +660,9 @@
       "state": "FL",
       "county_fips": "015",
       "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "official_source_url": "https://inmates.charlottecountyfl.revize.com/bookings",
+      "access_posture": "Revize CMS roster behind Cloudflare; scraper requires US residential egress (APE/Warren sticky / office SOCKS) with exit-IP preflight; datacenter/VPS exits refused by preflight",
+      "evidence_note": "Candidate Revize roster table exists in-repo (`charlotte.py`) but is **not** `verified_public`. Health remains `unverified` (not labeled `fail_closed`) because runtime still attempts fetch when residential egress is healthy. Do not reopen as verified without Brendan-confirmed residential smoke. See `SWFL_SOURCE_CONTRACT_QUEUE.md`."
     },
     {
       "state": "FL",
@@ -916,9 +916,9 @@
       "state": "FL",
       "county_fips": "081",
       "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "official_source_url": "https://manatee-sheriff.revize.com/bookings",
+      "access_posture": "Revize CMS roster behind Cloudflare; same residential preflight as Charlotte; detail pages CF-blocked",
+      "evidence_note": "Candidate Revize roster table exists in-repo (`manatee.py`) but is **not** `verified_public`. Health remains `unverified` (not labeled `fail_closed`) because runtime still attempts fetch when residential egress is healthy. Do not reopen as verified without Brendan-confirmed residential smoke. See `SWFL_SOURCE_CONTRACT_QUEUE.md`."
     },
     {
       "state": "FL",
@@ -1060,9 +1060,9 @@
       "state": "FL",
       "county_fips": "115",
       "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "official_source_url": "\u2014",
+      "access_posture": "Fail closed in `sarasota.py` (`SOURCE_CONTRACT_VALIDATED=False`) and `SCRAPER_SOURCE_STATES`; no network fetch",
+      "evidence_note": "Third-party mirror / JailTracker CAPTCHA / proxy / profile / DOB / mugshot paths retired. FL JailTracker `SARASOTA_COUNTY_FL` historically returned empty HTTP 400 on roster POST. Reopen only after official booking-safe broad roster with complete identity + source-issued booking id + booking timestamp is validated through normal public access. See `SWFL_SOURCE_CONTRACT_QUEUE.md`."
     },
     {
       "state": "FL",
@@ -4388,9 +4388,9 @@
       "state": "SC",
       "county_fips": "003",
       "passive_recommendation": "not_verified",
-      "official_source_url": "\u2014",
-      "access_posture": "No source contract safely verified",
-      "evidence_note": "No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing."
+      "official_source_url": "https://lookups.aikencountysc.gov/DTNSearch/dtnSchInmSchPublicFlex.php",
+      "access_posture": "Public DTNSearch inmate lookup; blank search requires a last-name letter, so an A\u2013Z letter walk is used",
+      "evidence_note": "2026-09-24 write smoke: 392 scraped / 392 new, status ok, source Inmate ID# / `qSO_NO` (docs/recon/SC_WRITE_SMOKE_2026-09-24.md). Synthetic AIK_ hashes removed."
     },
     {
       "state": "SC",
@@ -4452,9 +4452,9 @@
       "state": "SC",
       "county_fips": "019",
       "passive_recommendation": "not_verified",
-      "official_source_url": "\u2014",
-      "access_posture": "No source contract safely verified",
-      "evidence_note": "No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing."
+      "official_source_url": "https://inmatesearch.charlestoncounty.gov/",
+      "access_posture": "Public ASP.NET ListView; reCAPTCHA v2 via the existing audio solver; default 10/page pager because the page-size postback clears results",
+      "evidence_note": "2026-09-23: source Inmate #, name, booking date/time, and charges. Synthetic CHS_ keys removed. Captcha or navigation failure is status=error; a loaded results page with zero Inmate # rows is the only empty."
     },
     {
       "state": "SC",
@@ -4476,9 +4476,9 @@
       "state": "SC",
       "county_fips": "025",
       "passive_recommendation": "not_verified",
-      "official_source_url": "\u2014",
-      "access_posture": "No source contract safely verified",
-      "evidence_note": "No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing."
+      "official_source_url": "https://cc.southernsoftware.com/bookingsearch",
+      "access_posture": "Southern Software Citizen Connect booking search",
+      "evidence_note": "2026-09-24 write smoke: 128 scraped / 128 new, status ok, source Citizen Connect `BookingID` (docs/recon/SC_WRITE_SMOKE_2026-09-24.md). No synthetic keys."
     },
     {
       "state": "SC",
@@ -4500,9 +4500,9 @@
       "state": "SC",
       "county_fips": "031",
       "passive_recommendation": "not_verified",
-      "official_source_url": "\u2014",
-      "access_posture": "No source contract safely verified",
-      "evidence_note": "No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing."
+      "official_source_url": "http://bookings.darlingtonsheriff.org/dcn/inmates",
+      "access_posture": "DCN DevExpress roster over HTTP (HTTPS connect-timeouts); first page \u2248100 of ~233, pagination AJAX not pursued",
+      "evidence_note": "2026-09-24 write smoke: 100 scraped / 100 new, status ok, source URL `bid` required by dcn_base (docs/recon/SC_WRITE_SMOKE_2026-09-24.md). Synthetic DAR_ keys forbidden."
     },
     {
       "state": "SC",
@@ -4516,9 +4516,9 @@
       "state": "SC",
       "county_fips": "035",
       "passive_recommendation": "not_verified",
-      "official_source_url": "\u2014",
-      "access_posture": "No source contract safely verified",
-      "evidence_note": "No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing."
+      "official_source_url": "https://cc.southernsoftware.com/bookingsearch",
+      "access_posture": "Southern Software Citizen Connect booking search (agency DorchesterCoSC); index may return 403 but JMS cards carry source BookingID",
+      "evidence_note": "2026-09-24 write smoke: 331 scraped / 331 new, status ok, source Citizen Connect `BookingID` (docs/recon/SC_WRITE_SMOKE_2026-09-24.md). No synthetic keys."
     },
     {
       "state": "SC",
@@ -4572,9 +4572,9 @@
       "state": "SC",
       "county_fips": "049",
       "passive_recommendation": "not_verified",
-      "official_source_url": "\u2014",
-      "access_posture": "No source contract safely verified",
-      "evidence_note": "No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing."
+      "official_source_url": "https://hamptonjailroster.org/",
+      "access_posture": "HTTP 403 / Cloudflare to ordinary public access; no residential, proxy, or browser workaround permitted",
+      "evidence_note": "Hold: fail closed in `hampton.py` (`SOURCE_CONTRACT_VALIDATED=False`) and `SCRAPER_SOURCE_STATES` 2026-09-25. Reopen only when ordinary public access returns a broad roster with a source-issued booking number."
     },
     {
       "state": "SC",
@@ -4652,9 +4652,9 @@
       "state": "SC",
       "county_fips": "069",
       "passive_recommendation": "not_verified",
-      "official_source_url": "\u2014",
-      "access_posture": "No source contract safely verified",
-      "evidence_note": "No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing."
+      "official_source_url": "https://marlborocountyjailsc.org/",
+      "access_posture": "HTTP 403 / Cloudflare to ordinary public access; no residential, proxy, or browser workaround permitted",
+      "evidence_note": "Hold: fail closed in `marlboro.py` (`SOURCE_CONTRACT_VALIDATED=False`) and `SCRAPER_SOURCE_STATES` 2026-09-25. Reopen only when ordinary public access returns a broad roster with a source-issued booking number."
     },
     {
       "state": "SC",
@@ -4692,9 +4692,9 @@
       "state": "SC",
       "county_fips": "079",
       "passive_recommendation": "not_verified",
-      "official_source_url": "\u2014",
-      "access_posture": "No source contract safely verified",
-      "evidence_note": "No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing."
+      "official_source_url": "https://www7.richlandcountysc.gov/JMSOnline/public/default.aspx",
+      "access_posture": "JMSOnline returned a maintenance page on 2026-09-23; list view has no source-issued booking key",
+      "evidence_note": "Synthetic RIC_ keys are forbidden. SOURCE_CONTRACT_VALIDATED=False until the portal returns a real Inmate/Booking # on the broad list."
     },
     {
       "state": "SC",
@@ -4716,9 +4716,9 @@
       "state": "SC",
       "county_fips": "085",
       "passive_recommendation": "not_verified",
-      "official_source_url": "\u2014",
-      "access_posture": "No source contract safely verified",
-      "evidence_note": "No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing."
+      "official_source_url": "https://portal.sumtercountysheriff.org/smartwebclient/jail.aspx",
+      "access_posture": "SmartCOP path",
+      "evidence_note": "Booking number was synthesized from name+date. Fail closed until a source-issued key exists."
     },
     {
       "state": "SC",
