@@ -253,7 +253,15 @@ def invoice_store():
         return res
 
     create_mock = AsyncMock(side_effect=create_spy)
-    with patch.object(ss, "_load_bond_by_id", side_effect=store.load), \
+    # Atomic claim ledger (swipesimple_invoice_claims) is covered by
+    # tests/test_swipesimple_invoice_claims.py; here every sequential call wins
+    # the claim and idempotency comes from the persisted link. SWIPESIMPLE_LIVE
+    # only lets the flow past the pre-claim live gate — HTTP stays mocked.
+    prev_live = os.environ.get("SWIPESIMPLE_LIVE")
+    os.environ["SWIPESIMPLE_LIVE"] = "1"
+    with patch.object(ss, "_claim_invoice_create", new=AsyncMock(return_value=(True, None, "test-claim"))), \
+         patch.object(ss, "_finish_invoice_claim", new=AsyncMock()), \
+         patch.object(ss, "_load_bond_by_id", side_effect=store.load), \
          patch.object(ss, "_share_invoice_http", side_effect=store.share_http), \
          patch.object(ss, "_persist_invoice_fields", side_effect=store.persist), \
          patch.object(ss, "load_swipesimple_session_config", return_value={}), \
@@ -261,7 +269,13 @@ def invoice_store():
          patch.object(ss, "dispatch_invoice", new=dispatch_mock):
         store.create_mock = create_mock
         store.dispatch_mock = dispatch_mock
-        yield store
+        try:
+            yield store
+        finally:
+            if prev_live is None:
+                os.environ.pop("SWIPESIMPLE_LIVE", None)
+            else:
+                os.environ["SWIPESIMPLE_LIVE"] = prev_live
 
 
 def _post_completed(client: TestClient):
