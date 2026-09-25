@@ -51,7 +51,7 @@ def test_unvalidated_source_contract_stops_before_scrape_or_writer():
 # fails when retry/backoff, auto-disable, error classification, or the
 # registry/matrix drift gate regress. It runs only the listed modules that the
 # current session did not collect (so modules ci.yml does not list, such as
-# tests/test_fl_gap_queue.py, still run in CI) and skips itself when all of
+# tests/test_fl_gap_queue.py and tests/test_gap_queue_nc_tx_sc.py, still run in CI) and skips itself when all of
 # them are already collected (e.g. `pytest tests/`).
 _SELF_HEAL_SUITES = (
     "tests/test_scraper_resilience.py",
@@ -61,6 +61,7 @@ _SELF_HEAL_SUITES = (
     "tests/test_lee_rate_limit.py",
     "tests/test_tncis_fail_closed.py",
     "tests/test_fl_gap_queue.py",
+    "tests/test_gap_queue_nc_tx_sc.py",
 )
 
 

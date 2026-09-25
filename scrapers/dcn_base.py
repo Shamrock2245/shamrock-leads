@@ -11,15 +11,18 @@ Detail view: DOB, height/weight, address, charge grid with bond amounts.
 Notes
 -----
 * Initial HTML includes up to the configured page size (usually 100 rows).
-  DevExpress AJAX pagination/filter callbacks are unreliable from datacenter
-  clients — we scrape the server-rendered first page and optionally enrich
-  each row via the public detail URL (plain HTTP works).
+  Subclasses that set ``paginate_callbacks = True`` then walk the remaining
+  pages with the grid's own DevExpress callback (``__CALLBACKID=gvInmates``,
+  ``__CALLBACKPARAM=c0:KV|…;GB|…;<PAGERONCLICK PN{n}>``, grid state posted as
+  the ``gvInmates`` hidden field, exactly as ``ASPx.GVPagerOnClick`` sends it).
+  Rows are optionally enriched via the public detail URL (plain HTTP).
 * Booking key = URL ``bid`` param when present (stable opaque id), else a
   deterministic hash of name + admit date.
 """
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import time
@@ -53,6 +56,12 @@ class DCNBaseScraper(BaseScraper):
     enrich_details: bool = True
     # When True, skip roster rows that lack a URL bid (no name/date hash keys).
     require_source_bid: bool = False
+    # When True, fetch roster pages 2..N through the grid's DevExpress pager
+    # callback (same request the browser sends). Off by default per county.
+    paginate_callbacks: bool = False
+    max_callback_pages: int = 20
+    callback_delay_s: float = 0.5
+    grid_name: str = "gvInmates"
 
     @property
     def county(self) -> str:
@@ -88,6 +97,9 @@ class DCNBaseScraper(BaseScraper):
         if not roster:
             logger.warning("%s DCN: no roster rows parsed", self.county)
             return []
+
+        if self.paginate_callbacks:
+            roster = self._paginate_roster(session, resp.text, origin, roster)
 
         logger.info("%s DCN: %d list rows", self.county, len(roster))
 
@@ -317,6 +329,60 @@ class DCNBaseScraper(BaseScraper):
             Mugshot_URL=detail.get("mugshot") or "",
         )
 
+    # ── DevExpress pager callbacks ───────────────────────────────────────
+
+    def _paginate_roster(
+        self,
+        session: requests.Session,
+        first_html: str,
+        origin: str,
+        roster: List[Dict[str, str]],
+    ) -> List[Dict[str, str]]:
+        """Append pages 2..N fetched via the grid's own pager callback."""
+        state = extract_grid_state(first_html, self.grid_name)
+        page_count = extract_page_count(first_html)
+        if state is None or not page_count or page_count <= 1:
+            if state is None:
+                logger.warning("%s DCN: grid state not found; page 1 only", self.county)
+            return roster
+        form = dcn_form_fields(first_html)
+        seen = {r["booking"] for r in roster}
+        out = list(roster)
+        last_page = min(page_count, self.max_callback_pages)
+        for page_index in range(1, last_page):
+            data = dict(form)
+            data[self.grid_name] = json.dumps(state, separators=(",", ":"))
+            data["__CALLBACKID"] = self.grid_name
+            data["__CALLBACKPARAM"] = pager_callback_param(state, page_index)
+            time.sleep(self.callback_delay_s)
+            resp = session.post(
+                self.inmates_url,
+                data=data,
+                timeout=60,
+                headers={"Referer": self.inmates_url},
+            )
+            resp.raise_for_status()
+            html, new_state = parse_callback_response(resp.text)
+            if html is None:
+                raise RuntimeError(
+                    f"{self.county} DCN: pager callback for page {page_index + 1} returned no grid html"
+                )
+            added = 0
+            for row in self._parse_roster(html, origin):
+                if row["booking"] in seen:
+                    continue
+                seen.add(row["booking"])
+                out.append(row)
+                added += 1
+            logger.info(
+                "%s DCN: page %d/%d +%d rows", self.county, page_index + 1, page_count, added
+            )
+            if new_state:
+                state.update(new_state)
+            if added == 0:
+                break  # server clamped to the last page
+        return out
+
     # ── helpers ──────────────────────────────────────────────────────────
 
     @staticmethod
@@ -354,3 +420,150 @@ class DCNBaseScraper(BaseScraper):
         if len(parts) >= 2:
             return parts[-1], parts[0], " ".join(parts[1:-1])
         return name, "", ""
+
+
+# ── DevExpress callback helpers (module level for tests) ────────────────────
+
+def _match_brace(text: str, start: int) -> Optional[str]:
+    """Return the balanced ``{…}`` literal starting at ``text[start] == '{'``."""
+    depth = 0
+    quote = ""
+    i = start
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+        elif ch in ("'", '"'):
+            quote = ch
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+        i += 1
+    return None
+
+
+def _js_object_to_dict(literal: str) -> Optional[dict]:
+    """Parse the grid ``stateObject`` JS literal (single-quoted, no functions)."""
+    if literal is None:
+        return None
+    try:
+        return json.loads(literal)
+    except ValueError:
+        pass
+    if '"' in literal:
+        return None
+    try:
+        return json.loads(literal.replace("'", '"'))
+    except ValueError:
+        return None
+
+
+def extract_grid_state(html: str, grid_name: str = "gvInmates") -> Optional[dict]:
+    """The grid's client ``stateObject`` (keys + callbackState) from page HTML."""
+    anchor = html.find(f"'{grid_name}'")
+    idx = html.find("'stateObject':{'scrollState'", max(anchor, 0))
+    if idx < 0:
+        idx = html.find("'stateObject':{")
+    if idx < 0:
+        return None
+    state = _js_object_to_dict(_match_brace(html, html.find("{", idx)))
+    if not state or "callbackState" not in state:
+        return None
+    return state
+
+
+def extract_page_count(html: str) -> int:
+    m = re.search(r"'pageCount':(\d+)", html)
+    return int(m.group(1)) if m else 0
+
+
+def dcn_form_fields(html: str) -> Dict[str, str]:
+    soup = BeautifulSoup(html, "html.parser")
+    form = soup.find("form", id="InmatesForm") or soup.find("form", method=re.compile("post", re.I))
+    data: Dict[str, str] = {}
+    if form is None:
+        return data
+    for inp in form.find_all("input"):
+        name = inp.get("name")
+        typ = (inp.get("type") or "text").lower()
+        if not name or typ in ("submit", "button", "image", "checkbox", "radio"):
+            continue
+        data[name] = inp.get("value") or ""
+    data.setdefault("__EVENTTARGET", "")
+    data.setdefault("__EVENTARGUMENT", "")
+    return data
+
+
+def _dx_arg(prefix: str, value: str) -> str:
+    """``GridCallbackHelper.FormatCallbackState`` item: ``KEY|len;value;``."""
+    return f"{prefix}|{len(value)};{value};"
+
+
+def _dx_serialize(args: List[str]) -> str:
+    """``GridCallbackHelper.SerializeCallbackArgs``: ``len|item`` per item."""
+    return "".join(f"{len(a)}|{a}" for a in args)
+
+
+def pager_callback_param(state: dict, page_index: int) -> str:
+    """``__CALLBACKPARAM`` for ``ASPx.GVPagerOnClick(grid, 'PN<page_index>')`` (0-based)."""
+    keys = json.dumps(state.get("keys") or [], separators=(",", ":"))
+    command = _dx_serialize(["PAGERONCLICK", f"PN{int(page_index)}"])
+    return "c0:" + _dx_arg("KV", keys) + _dx_arg("GB", command)
+
+
+_JS_ESCAPES = {"n": "\n", "r": "\r", "t": "\t", "b": "\b", "f": "\f", "v": "\v", "0": "\0"}
+
+
+def _js_unescape(body: str) -> str:
+    out: List[str] = []
+    i = 0
+    while i < len(body):
+        ch = body[i]
+        if ch == "\\" and i + 1 < len(body):
+            nxt = body[i + 1]
+            if nxt == "u" and re.fullmatch(r"[0-9A-Fa-f]{4}", body[i + 2:i + 6] or ""):
+                out.append(chr(int(body[i + 2:i + 6], 16)))
+                i += 6
+                continue
+            if nxt == "x" and re.fullmatch(r"[0-9A-Fa-f]{2}", body[i + 2:i + 4] or ""):
+                out.append(chr(int(body[i + 2:i + 4], 16)))
+                i += 4
+                continue
+            out.append(_JS_ESCAPES.get(nxt, nxt))
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def parse_callback_response(text: str) -> Tuple[Optional[str], Optional[dict]]:
+    """Split a DevExpress callback reply into (grid html, stateObject update)."""
+    if not text or not text.startswith("s"):
+        return None, None  # 'e…' = server-side callback error
+    key = "'html':'"
+    start = text.find(key)
+    if start < 0:
+        return None, None
+    i = start + len(key)
+    buf_start = i
+    while i < len(text):
+        if text[i] == "\\":
+            i += 2
+            continue
+        if text[i] == "'":
+            break
+        i += 1
+    html = _js_unescape(text[buf_start:i])
+    state = None
+    sidx = text.find("'stateObject':{", i)
+    if sidx >= 0:
+        state = _js_object_to_dict(_match_brace(text, text.find("{", sidx)))
+    return html, state
