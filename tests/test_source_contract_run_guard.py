@@ -49,8 +49,10 @@ def test_unvalidated_source_contract_stops_before_scrape_or_writer():
 # with `workflow` scope. Until ci.yml lists these modules directly, this test
 # runs them in an isolated subprocess, so the "Syntax + contract suite" job
 # fails when retry/backoff, auto-disable, error classification, or the
-# registry/matrix drift gate regress. It skips itself when the modules are
-# already collected in the same session (e.g. `pytest tests/`).
+# registry/matrix drift gate regress. It runs only the listed modules that the
+# current session did not collect (so modules ci.yml does not list, such as
+# tests/test_fl_gap_queue.py, still run in CI) and skips itself when all of
+# them are already collected (e.g. `pytest tests/`).
 _SELF_HEAL_SUITES = (
     "tests/test_scraper_resilience.py",
     "tests/test_base_scraper_self_heal.py",
@@ -76,3 +78,8 @@ def test_self_heal_and_matrix_drift_suites_pass(request):
         cwd=root, env=env, capture_output=True, text=True, timeout=900,
     )
     assert proc.returncode == 0, (proc.stdout[-6000:] + proc.stderr[-2000:])
+    # Make the bridged run visible in the CI log (pytest -q hides passing output).
+    summary = (proc.stdout.strip().splitlines() or ["(no output)"])[-1]
+    reporter = request.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is not None:
+        reporter.write_line(f"\n[ci-bridge] ran {', '.join(pending)}: {summary}")
