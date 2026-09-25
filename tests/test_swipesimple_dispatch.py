@@ -92,7 +92,21 @@ def test_swipesimple_dispatch_basic(client):
         assert "Jane Doe" in email_kwargs["body_html"]
 
 
-def test_swipesimple_dispatch_context_fallback(client):
+_CONFIRMED_750 = {
+    "premium_confirmed_amount": 750.0,
+    "premium_confirmed_at": "2026-09-24T15:00:00+00:00",
+    "premium_confirmed_by": "staff-test",
+}
+
+
+@pytest.mark.parametrize("confirmed, expected_amount", [
+    # A stored premium_amount may be the 10% estimate (packet builder / DocuSeal
+    # prefill) → never quoted as the "Confirmed Premium" when staff omit amount.
+    ({}, 0.0),
+    # A staff-confirmed premium is used as the fallback.
+    (_CONFIRMED_750, 750.0),
+])
+def test_swipesimple_dispatch_context_fallback(client, confirmed, expected_amount):
     mock_packet = {
         "packet_id": "PKT-CTX-200",
         "booking_number": "COL-2026-00444",
@@ -100,6 +114,7 @@ def test_swipesimple_dispatch_context_fallback(client):
         "indemnitor_email": "indemnitor@example.com",
         "defendant_name": "Bob Smith",
         "premium_amount": 750.0,
+        **confirmed,
     }
 
     mock_pkts = MagicMock()
@@ -140,7 +155,12 @@ def test_swipesimple_dispatch_context_fallback(client):
         data = res.json()
 
         assert data["success"] is True
-        assert data["amount"] == 750.0
+        assert data["amount"] == expected_amount
+        sms = mock_bb_send.await_args.args[1]
+        if expected_amount:
+            assert "$750.00" in sms
+        else:
+            assert "$750" not in sms and "Confirmed Amount" in sms
         assert data["recipient_phone"] == "2395550200"
         assert data["recipient_email"] == "indemnitor@example.com"
         assert data["defendant_name"] == "Bob Smith"

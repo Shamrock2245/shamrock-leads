@@ -17,13 +17,14 @@ PROJECT_ROOT = Path(__file__).parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
 
-def _mask(value: str, show_chars: int = 4) -> str:
-    """Mask a secret value for safe logging. Shows first N chars + ***."""
+def _mask(value: str, show_chars: int = 0) -> str:
+    """Presence-only secret status for safe logging (never prints any part of the value).
+
+    ``show_chars`` is accepted for backward compatibility and ignored.
+    """
     if not value:
         return "(empty)"
-    if len(value) <= show_chars:
-        return "***"
-    return value[:show_chars] + "***"
+    return "set"
 
 
 class Settings:

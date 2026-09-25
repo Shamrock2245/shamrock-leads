@@ -26,7 +26,9 @@ config/google-services.json
 !config/alpr_cameras.json
 !docs/recon/county_recon_inventory.json
 !docs/recon/county_source_contract_evidence.json
+!docs/recon/live_emitter_evidence.json
 !deployment/tailscale/acl-policy.json
+!tests/fixtures/docuseal_template_snapshot.json
 
 
 # Python

@@ -60,13 +60,23 @@ Related: `SWIPESIMPLE_INVOICE_CONTRACT.md`, `swipesimple_invoice_service.py`,
 
 ### 4. Paperwork Desk / Bond Desk integration
 
-- [ ] Preferred call site after paperwork-complete / bond ready:
+- [ ] Preferred call site after paperwork-complete / bond ready (**stage only** —
+  `dispatch` defaults to `False`; creates/persists the draft + link, no customer send):
   ```python
   from dashboard.services.swipesimple_invoice_service import maybe_issue_share_invoice_for_bond
-  await maybe_issue_share_invoice_for_bond(bond_id, channel="imessage", source="paperwork_desk")
+  await maybe_issue_share_invoice_for_bond(bond_id, channel="imessage", dispatch=False, source="paperwork_desk")
   ```
+- [ ] Automated hooks **always** stage only (`dispatch=False`), regardless of env flags:
+  ```python
+  # intake promote (dashboard/routers/intake.py, section 7a2)
+  await maybe_issue_share_invoice_for_bond(bond_id, channel="imessage", dispatch=False, source="intake_promote")
+  # DocuSeal submission.completed (if/when wired to Share Invoice)
+  await maybe_issue_share_invoice_for_bond(bond_id, channel="imessage", dispatch=False, source="docuseal_submission_completed")
+  ```
+- [ ] Customer dispatch only via an explicit, human-initiated caller passing
+  `dispatch=True` **and** `SWIPESIMPLE_DISPATCH_LIVE=1` (otherwise dry-run)
 - [ ] Optional intake promote auto-hook: set `SWIPESIMPLE_SHARE_INVOICE_ON_PROMOTE=1`
-  (still respects LIVE + DISPATCH gates; soft-fails)
+  (stage only — respects LIVE gate, never dispatches; soft-fails)
 - [ ] Confirm BondCase always has authoritative `premium` + `booking_number` before create
 
 ### 5. Merge & deploy
@@ -74,6 +84,18 @@ Related: `SWIPESIMPLE_INVOICE_CONTRACT.md`, `swipesimple_invoice_service.py`,
 - [ ] Brendan sign-off on smoke + checklist
 - [ ] Merge PR `#51` (feat/swipesimple-invoice-scaffold)
 - [ ] Deploy dashboard with secrets injected (session jar, optional CSRF)
+- [ ] **Required before `SWIPESIMPLE_LIVE=1` (code):**
+  - [ ] Move the DocuSeal webhook's SwipeSimple share-invoice call **off the request path**
+        into a background task (asyncio task or queue worker) so DocuSeal gets a fast `200`
+        and does not time out and retry. Until then, the atomic per-bond claim keeps retries
+        harmless (no duplicate invoice).
+  - [ ] One-time, **opt-in backfill** that stages invoices for packets completed while LIVE was
+        off (the DocuSeal poller skips completed packets, so nothing else will stage them).
+        Must be **dry-run by default**, act only with an explicit flag, **never dispatch**, and
+        call the same entrypoint `maybe_issue_share_invoice_for_bond(..., dispatch=False)` under
+        the same atomic-claim + idempotency rules.
+  - [ ] Legacy `maybe_send_packet_payment_link` auto-send must **default OFF** with **no
+        10%-of-bond fallback**, via Paperwork Desk's shared-handler PR — must land **before** LIVE.
 - [ ] Enable `SWIPESIMPLE_LIVE=1` in production **only** after merge + deploy review
 - [ ] Enable `SWIPESIMPLE_DISPATCH_LIVE=1` only when ready to message indemnitors
 - [ ] Monitor first live bonds: create → link persist → dry-run/dispatch → reconcile PAID
@@ -90,6 +112,8 @@ Related: `SWIPESIMPLE_INVOICE_CONTRACT.md`, `swipesimple_invoice_service.py`,
 | Create succeeded, id unresolved | Mark pending — **do not** create another draft |
 | `SWIPESIMPLE_LIVE` unset | No HTTP to swipesimple.com |
 | `SWIPESIMPLE_DISPATCH_LIVE` unset | Build/log payload only — no BB/email send |
+| `maybe_issue_share_invoice_for_bond` without `dispatch=True` | Stage only — `dispatch_invoice` never called (even if `SWIPESIMPLE_DISPATCH_LIVE=1`) |
+| Automated hooks (intake promote, DocuSeal) | Always `dispatch=False` |
 
 ---
 
@@ -107,3 +131,17 @@ Related: `SWIPESIMPLE_INVOICE_CONTRACT.md`, `swipesimple_invoice_service.py`,
 - Code path + offline tests + smoke CLI are on PR `#51` (do **not** merge until smoke + checklist green).
 - Brendan: **$0.01 smoke approved**; **DISPATCH off**.
 - Next human step: put session cookie in secret store → `--check-only` → LIVE smoke → unset LIVE.
+
+### Atomic claims & manual review (fix/ss-invoice-atomic-claim)
+
+- [x] `create_locked_invoice` takes an atomic per-bond claim in `swipesimple_invoice_claims`
+      (unique `bond_id`, sparse-unique `invoice_number`) **before** any SwipeSimple create;
+      losers get `in_progress` and never call SwipeSimple
+- [x] `dispatch_invoice` takes an atomic once-only dispatch claim before any BB/email send
+- [x] Service logs: `bond_id` + flags only
+- [ ] Ops: alert on log lines `STALE create claim` / `STALE dispatch claim` /
+      `claim needs manual review` → verify in SwipeSimple by reference_id (booking #) and
+      BlueBubbles history, then correct the claim doc by hand. **Never** delete a
+      `claimed` / `needs_review` claim without checking SwipeSimple first (duplicate invoice risk).
+- [ ] Deploy: the unique indexes build lazily on first use (new collection, no backfill needed);
+      if index creation fails, create/dispatch fail closed

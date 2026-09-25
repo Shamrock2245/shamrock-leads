@@ -599,6 +599,10 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     "Chesterfield (SC)": "verified_public",  # 2026-09-24 SSW Citizen Connect write smoke (source BookingID)
     "Aiken (SC)": "verified_public",  # 2026-09-24 DTNSearch Inmate ID# / qSO_NO write smoke
     "Darlington (SC)": "verified_public",  # 2026-09-24 DCN HTTP bid write smoke
+    # 2026-09-23 BSO Arrest Search write smoke (source JMS_NUMBER; e591b45 lifted
+    # the guard and set SOURCE_CONTRACT_VALIDATED=True but the Health label was
+    # never added). Registry now matches the code + matrix.
+    "Broward (FL)": "verified_public",
     # Deployed guards: no source fetches and no record emission pending revalidation.
     "Calcasieu (LA)": "fail_closed",
     "East Baton Rouge (LA)": "fail_closed",
@@ -698,6 +702,48 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     "Levy (FL)": "fail_closed",
     "Wakulla (FL)": "fail_closed",
     "Washington (FL)": "fail_closed",
+    # Code-level guards (SOURCE_CONTRACT_VALIDATED=False) that Health was still
+    # showing as "unverified". These modules already refuse every source fetch;
+    # the label only makes Health and the matrix truthful. Enforced by
+    # tests/test_source_state_drift.py.
+    "Montgomery (AL)": "fail_closed",
+    "Columbia (GA)": "fail_closed",
+    "Coweta (GA)": "fail_closed",
+    "Dawson (GA)": "fail_closed",
+    "Dougherty (GA)": "fail_closed",
+    "Forsyth (GA)": "fail_closed",
+    "Gordon (GA)": "fail_closed",
+    "Hall (GA)": "fail_closed",
+    "Pickens (GA)": "fail_closed",
+    "Spalding (GA)": "fail_closed",
+    "Walker (GA)": "fail_closed",
+    "Whitfield (GA)": "fail_closed",
+    "Alamance (NC)": "fail_closed",
+    "Cabarrus (NC)": "fail_closed",
+    "Cleveland (NC)": "fail_closed",
+    "Iredell (NC)": "fail_closed",
+    "New Hanover (NC)": "fail_closed",
+    "Abbeville (SC)": "fail_closed",
+    "Allendale (SC)": "fail_closed",
+    "Barnwell (SC)": "fail_closed",
+    "Calhoun (SC)": "fail_closed",
+    "Clarendon (SC)": "fail_closed",
+    "Dillon (SC)": "fail_closed",
+    "Edgefield (SC)": "fail_closed",
+    "Fairfield (SC)": "fail_closed",
+    "Georgetown (SC)": "fail_closed",
+    "McCormick (SC)": "fail_closed",
+    "Orangeburg (SC)": "fail_closed",
+    "Spartanburg (SC)": "fail_closed",
+    "Williamsburg (SC)": "fail_closed",
+    # SC holds (docs/recon/SC_WRITE_SMOKE_2026-09-24.md): 403/Cloudflare to
+    # ordinary public access — fail closed in code; never reopened via proxy/Obscura.
+    "Hampton (SC)": "fail_closed",
+    "Marlboro (SC)": "fail_closed",
+    # TnCIS statewide (non-county scope): Cloudflare-protected, no proven public
+    # contract. Owner decision 2026-09-25: Obscura/proxy/stealth fallback OFF;
+    # fail closed in code (tennessee_tncis_v2_ape.SOURCE_CONTRACT_VALIDATED=False).
+    "TnCIS (TN)": "fail_closed",
     # Ohio pilot scopes are registered for truthful health visibility only.
     # They remain blocked before source fetch until county-specific approval.
     "Clermont (OH)": "fail_closed",

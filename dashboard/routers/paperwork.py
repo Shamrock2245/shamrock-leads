@@ -1039,6 +1039,31 @@ async def packet_builder_context(request: Request):
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
 
+async def _finalize_auto_payment_link(packet_id: str, packet_doc: dict) -> dict:
+    """Packet-finalize legacy payment-link auto send.
+
+    Behind DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK (DEFAULT OFF; any enabled
+    value — webhook-style or "all" — enables this path). Even when on, the
+    service sends only with a staff-confirmed premium, else
+    ``reason=premium_unconfirmed``. See legacy_payment_link_switch.
+    """
+    from dashboard.services.legacy_payment_link_switch import (
+        legacy_payment_link_enabled,
+    )
+
+    if not legacy_payment_link_enabled():
+        return {"skipped": True, "reason": "switch_off", "source": "packet_finalize"}
+    from dashboard.services.packet_payment_link_service import (
+        maybe_send_packet_payment_link,
+    )
+
+    return await maybe_send_packet_payment_link(
+        packet_id=packet_id,
+        packet_doc=packet_doc,
+        source="packet_finalize",
+    )
+
+
 @paperwork_bp.post("/paperwork/packet/finalize")
 async def packet_builder_finalize(request: Request):
     """
@@ -1593,18 +1618,14 @@ async def packet_builder_finalize(request: Request):
             )
 
         # Auto-send SwipeSimple payment link with premium in message copy.
+        # Behind the SAME owner switch as DocuSeal completion
+        # (DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK, DEFAULT OFF — any enabled
+        # value enables this path). Even when on, the service sends ONLY with a
+        # staff-confirmed premium (premium_confirmed_*) → else premium_unconfirmed.
         # Soft-fail: never blocks packet creation.
         payment_link_dispatch: dict = {}
         try:
-            from dashboard.services.packet_payment_link_service import (
-                maybe_send_packet_payment_link,
-            )
-
-            payment_link_dispatch = await maybe_send_packet_payment_link(
-                packet_id=packet_id,
-                packet_doc=packet_doc,
-                source="packet_finalize",
-            )
+            payment_link_dispatch = await _finalize_auto_payment_link(packet_id, packet_doc)
             if payment_link_dispatch:
                 await packets_col.update_one(
                     {"packet_id": packet_id},
@@ -2284,15 +2305,21 @@ async def paperwork_docuseal_status(packet_id: str):
             svc.normalize_submitter_record(s) for s in raw_submitters if isinstance(s, dict)
         ]
         now_iso = datetime.now(timezone.utc).isoformat()
+        status_set = {
+            "docuseal_remote_status": status or None,
+            "docuseal_submitters": submitters or packet.get("docuseal_submitters"),
+            "docuseal_polled_at": now_iso,
+        }
+        # Never persist a terminal "completed" here: docuseal_status=completed is
+        # owned by the shared completion handler (webhook/poller), and writing
+        # it from a staff refresh used to make the poller skip the packet
+        # forever (no signed status, no Drive filing). The live value is still
+        # returned below and stored as docuseal_remote_status.
+        if status not in ("completed", "complete", "signed"):
+            status_set["docuseal_status"] = status or packet.get("docuseal_status") or "pending"
         await get_collection("paperwork_packets").update_one(
             {"packet_id": packet_id},
-            {
-                "$set": {
-                    "docuseal_status": status or packet.get("docuseal_status") or "pending",
-                    "docuseal_submitters": submitters or packet.get("docuseal_submitters"),
-                    "docuseal_polled_at": now_iso,
-                }
-            },
+            {"$set": status_set},
         )
         return {
             "success": True,

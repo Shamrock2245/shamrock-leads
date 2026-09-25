@@ -272,15 +272,17 @@ Active bonds move through these statuses via drag-and-drop Kanban board:
 
 ## 9. Self-Healing Infrastructure
 
+Implemented in `BaseScraper.run()`. Full runbook: [`docs/ops/SCRAPER_SELF_HEALING.md`](docs/ops/SCRAPER_SELF_HEALING.md).
+
 | Feature | Description |
 |---------|-------------|
-| **Pre-flight URL check** | HEAD request to roster URL before scraping — detects 404/403/SSL early |
-| **Retry with backoff** | 3 attempts with exponential backoff (2s, 4s, 8s) |
-| **Error classification** | Auto-classifies: `network`, `anti_bot`, `url_changed`, `parse_error`, `ssl_error`, `rate_limited` |
-| **Auto-disable** | Scraper disabled after 5 consecutive failures |
-| **Auto-re-enable** | Disabled scraper tries one recovery per interval — re-enables on success |
-| **Failure history** | Last 10 failures stored with timestamps + error types |
-| **Force re-enable** | `scraper.force_enable()` for human override |
+| **Retry with backoff** | Transient `network` failures (connection/timeout/5xx) retried after 2s, 4s, 8s. Never retries 429, anti-bot, 404, parse drift, or an active per-county cooldown (Lee opts out; it has its own cooldown-aware logic) |
+| **Error classification** | Fixed set: `network`, `anti_bot`, `url_changed`, `parse_drift`, `unknown` (persisted as `error_class` on `scraper_status`) |
+| **Fail loud** | Schema/parse drift alerts `#scraper-errors` immediately (`SLACK_WEBHOOK_ERRORS`, throttled to 30 min per county). Classified failure alerts on every error |
+| **Auto-disable** | `auto_disabled` after 5 consecutive counted failures (`SCRAPER_AUTO_DISABLE_THRESHOLD`). Shown as ⛔ on Health. KEY FL counties count and alert but are never skipped |
+| **Re-enable** | Automatic canary every 6h (`SCRAPER_AUTO_DISABLE_CANARY_MINUTES`) that must return ≥1 record. Dashboard Run-now = forced canary. Health "Re-enable" button, `POST /api/scraper/enable`, or `scripts/scraper_reenable.py` |
+| **Source-contract guard** | Runs before all of the above. Re-enable never lifts `fail_closed` |
+| **Not implemented** | URL pre-flight HEAD check, failure-history list, `force_enable()` (earlier docs claimed these) |
 
 ---
 
@@ -308,7 +310,7 @@ Active bonds move through these statuses via drag-and-drop Kanban board:
 2. **Idempotent Writes** — `Booking_Number + County` is the dedup key. Always check before insert.
 3. **Score Everything** — No record enters the DB without a lead score.
 4. **Fail Loudly** — Every scraper error fires a Slack alert. Silent failures are unacceptable.
-5. **Self-Heal First** — BaseScraper retries 3x, classifies errors, auto-disables. Fix root causes.
+5. **Self-Heal First** — BaseScraper retries transient network failures (2s/4s/8s), classifies errors, fails loud on parse drift, and auto-disables after 5 failures. Fix root causes; never retry into a cooldown or around a block.
 6. **Human-in-the-Loop for Outreach** — No automated client contact without human approval, except the narrowly documented initial DocuSeal notice in `docs/policies/signature-policy.md`. That exception is disabled by default and may send once only to an explicitly DocuSeal-bound signer with approved role-specific copy; it never authorizes chase, retry, SMS fallback, or outreach to any other contact.
 7. **PII is Sacred** — Never log PII to Slack or console in production.
 8. **Document Everything** — Every fix updates the relevant state registry and `docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md`. No silent fixes.

@@ -74,8 +74,8 @@ ShamrockLeads is the **bond Auto-CRM and arrest intelligence engine** for [Shamr
 │           ├── write()       → MongoWriter + SheetsWriter             │
 │           └── alert()       → SlackNotifier                          │
 │                                                                      │
-│  Self-Healing: URL pre-flight, 3x retry, error classification,      │
-│  auto-disable after 5 failures, auto-recovery attempts               │
+│  Self-Healing: 2/4/8s transient retry, error classification,        │
+│  drift alerts, auto-disable after 5 failures, canary re-enable       │
 └──────────────────────┬───────────────────────────────────────────────┘
                        │
                 APScheduler (per-county intervals)

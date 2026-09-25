@@ -14,7 +14,7 @@ Security:
 Data Flow (DocuSeal submission.completed): validated by the active DocuSeal webhook handler.
 """
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Query, Request
 from fastapi.responses import JSONResponse
 import hmac
 import hashlib
@@ -782,20 +782,20 @@ def verify_docuseal_signature(payload: bytes, signature: str) -> bool:
 
 
 @webhooks_bp.post("/webhooks/docuseal")
-async def docuseal_webhook(request: Request):
+async def docuseal_webhook(request: Request, background_tasks: BackgroundTasks):
     """
     Handle DocuSeal form/submission webhooks.
 
     Events of interest:
       - form.completed       — one submitter finished
-      - submission.completed — all submitters finished → download PDF + Drive
+      - submission.completed — all submitters finished → shared exactly-once
+                               completion handler (claim → 200 → background work)
       - form.declined / submission.expired / submission.created — audit + status
 
     Configure in DocuSeal admin → Webhooks →
       URL: https://leads.shamrockbailbonds.biz/api/webhooks/docuseal
     """
     from dashboard.routers.events import publish_event
-    from dashboard.services.docuseal_service import DocuSealService
 
     raw = await request.body()
     signature = (
@@ -966,8 +966,6 @@ async def docuseal_webhook(request: Request):
 
     packet_id = packet.get("packet_id", "")
     defendant_name = packet.get("defendant_name", "Unknown")
-    booking_number = packet.get("booking_number") or packet.get("defendant_booking_number") or ""
-    surety_id = (packet.get("surety_id") or packet.get("insurance_company") or "osi").lower().strip()
 
     # Full completion: submission.* OR bare "completed" with a submission_id
     is_full = (
@@ -1014,182 +1012,54 @@ async def docuseal_webhook(request: Request):
             content={"success": True, "action": "party_recorded", "packet_id": packet_id},
         )
 
-    # ── Full submission complete → download + Drive ─────────────────────────
-    drive_url = None
-    drive_folder_id = None
-    pdf_bytes = None
-    packet_drive_error = None
-    ds = DocuSealService()
-    if submission_id and ds.is_configured:
-        try:
-            pdf_bytes = await ds.download_combined_pdf(submission_id)
-        except Exception as exc:
-            logger.error("[docuseal_webhook] PDF download failed: %s", exc)
-            packet_drive_error = {
-                "error_code": "pdf_download_failed",
-                "error": str(exc)[:300],
-                "at": now_iso,
-            }
-
-    if pdf_bytes:
-        try:
-            filed = ds.file_signed_pdf_to_drive(
-                pdf_bytes,
-                defendant_name=defendant_name,
-                surety_id=surety_id,
-                packet_id=packet_id,
-                booking_number=booking_number,
-            )
-            if filed.get("ok"):
-                drive_url = filed.get("drive_url")
-                drive_folder_id = filed.get("drive_folder_id")
-                packet_drive_error = None
-            else:
-                logger.warning(
-                    "[docuseal_webhook] Drive file failed code=%s err=%s",
-                    filed.get("error_code"),
-                    filed.get("error"),
-                )
-                packet_drive_error = {
-                    "error_code": filed.get("error_code"),
-                    "error": (filed.get("error") or "")[:300],
-                    "auth_mode": filed.get("auth_mode"),
-                    "at": now_iso,
-                }
-        except Exception as exc:
-            logger.error("[docuseal_webhook] Drive upload error: %s", exc)
-            packet_drive_error = {
-                "error_code": "upload_exception",
-                "error": str(exc)[:300],
-                "at": now_iso,
-            }
-
-    packet_update = {
-        "status": "signed",
-        "esign_provider": "docuseal",
-        "docuseal_status": "completed",
-        "signed_at": now_iso,
-        "docuseal_submission_id": submission_id,
-        "docuseal_last_event": event_type,
-        "docuseal_last_event_at": now_iso,
-    }
-    if drive_url:
-        packet_update["signed_pdf_drive_url"] = drive_url
-        packet_update["drive_link"] = drive_url
-        packet_update["drive_archive_error"] = None
-    if drive_folder_id:
-        packet_update["drive_folder_id"] = drive_folder_id
-        packet_update["signed_pdf_drive_id"] = drive_folder_id
-    if packet_drive_error and not drive_url:
-        packet_update["drive_archive_error"] = packet_drive_error
-
-    await packets_col.update_one({"packet_id": packet_id}, {"$set": packet_update})
-
-    # Bond case update
-    bond_cases = get_collection("bond_cases")
-    bond_case_id = packet.get("bond_case_id")
-    bond_query = {"bond_case_id": bond_case_id} if bond_case_id else {"packet_id": packet_id}
-    bond_update = {
-        "Packet_Status": "signed",
-        "Signature_Status": "signed",
-        "signed_at": now_iso,
-        "esign_provider": "docuseal",
-    }
-    if drive_url:
-        bond_update["signed_pdf_drive_url"] = drive_url
-    await bond_cases.update_one(bond_query, {"$set": bond_update})
-
-    await publish_event(
-        "docuseal_submission_completed",
-        {
-            "packet_id": packet_id,
-            "submission_id": submission_id,
-            "defendant_name": defendant_name,
-            "drive_url": drive_url,
-            "booking_number": booking_number,
-        },
+    # ── Full submission complete → shared exactly-once handler ─────────────
+    # dashboard/services/docuseal_completion.py owns every side effect (Drive,
+    # packet/bond_cases status, SSE, legacy payment link switch, stage-only
+    # share invoice, court sync, Slack) for BOTH this webhook and the cron
+    # poller. We only (1) record that a completion webhook arrived, (2) try to
+    # atomically claim the packet, and (3) return 200 right away; the slow work
+    # runs in a background task so DocuSeal's 15s read timeout never triggers a
+    # redelivery. A crashed background run is retried by the poller once its
+    # lease expires.
+    from dashboard.services.docuseal_completion import (
+        SOURCE_WEBHOOK,
+        claim_completion,
+        mark_webhook_received,
+        run_claimed_completion_safely,
     )
 
-    # Auto-send SwipeSimple if unpaid / not yet sent (soft-fail)
-    try:
-        from dashboard.services.packet_payment_link_service import (
-            maybe_send_packet_payment_link,
-        )
-
-        pay_result = await maybe_send_packet_payment_link(
-            packet_id=packet_id,
-            booking_number=booking_number,
-            packet_doc=packet,
-            source="docuseal_submission_completed",
-        )
+    await mark_webhook_received(packets_col, packet, event_type=event_type, now_iso=now_iso)
+    claimed = await claim_completion(packets_col, packet, source=SOURCE_WEBHOOK)
+    if not claimed:
         logger.info(
-            "[docuseal_webhook] payment_link auto-dispatch packet=%s skipped=%s delivered=%s reason=%s",
+            "[docuseal_webhook] completion already claimed/done — ignoring delivery packet=%s",
             packet_id,
-            pay_result.get("skipped"),
-            pay_result.get("delivered"),
-            pay_result.get("reason") or pay_result.get("error"),
         )
-    except Exception as pay_exc:
-        logger.warning(
-            "[docuseal_webhook] payment_link auto-dispatch failed (non-fatal): %s",
-            pay_exc,
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": True,
+                "action": "completion_duplicate_ignored",
+                "packet_id": packet_id,
+                "submission_id": submission_id,
+            },
         )
 
-    # Seed Google Calendar + court reminders when bonded with court_date
-    if booking_number:
-        try:
-            from dashboard.services.bond_court_seed_service import (
-                seed_court_calendar_for_bond,
-            )
-
-            seed_result = await seed_court_calendar_for_bond(
-                booking_number=booking_number,
-                source="docuseal_submission_completed",
-            )
-            logger.info(
-                "[docuseal_webhook] court seed booking=%s success=%s reason=%s gcal=%s",
-                booking_number,
-                seed_result.get("success"),
-                seed_result.get("reason"),
-                (seed_result.get("gcal") or {}).get("status"),
-            )
-        except Exception as seed_exc:
-            logger.warning(
-                "[docuseal_webhook] court seed failed (non-fatal): %s", seed_exc
-            )
-
-    # Slack (non-PII)
-    try:
-        import httpx
-
-        slack = os.getenv("SLACK_WEBHOOK_LEADS") or os.getenv("SLACK_WEBHOOK_URL") or ""
-        if slack:
-            async with httpx.AsyncClient(timeout=8) as client:
-                await client.post(
-                    slack,
-                    json={
-                        "text": (
-                            f":white_check_mark: *DocuSeal packet signed* — "
-                            f"`{packet_id}` | {defendant_name}"
-                            f"{' | Drive filed' if drive_url else ' | Drive pending'}"
-                        )
-                    },
-                )
-    except Exception as exc:
-        logger.debug("[docuseal_webhook] slack failed: %s", exc)
-
-    logger.info(
-        "[docuseal_webhook] submission complete packet=%s drive=%s",
-        packet_id,
-        bool(drive_url),
+    background_tasks.add_task(
+        run_claimed_completion_safely,
+        claimed,
+        get_col=get_collection,
+        source=SOURCE_WEBHOOK,
+        submission_id=submission_id,
+        event_type=event_type,
     )
+    logger.info("[docuseal_webhook] completion claimed packet=%s — processing in background", packet_id)
     return JSONResponse(
         status_code=200,
         content={
             "success": True,
-            "action": "signed_and_filed",
+            "action": "completion_accepted",
             "packet_id": packet_id,
             "submission_id": submission_id,
-            "drive_url": drive_url,
         },
     )

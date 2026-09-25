@@ -64,4 +64,22 @@ jobs:
             tests/test_recon_evidence_contract.py \
             tests/test_subdomains.py \
             tests/test_unhandled_exception_privacy.py \
+            tests/test_dashboard_source_states.py \
+            tests/test_scraper_resilience.py \
+            tests/test_base_scraper_self_heal.py \
+            tests/test_source_state_drift.py \
+            tests/test_lee_rate_limit.py \
+            tests/test_swipesimple_invoice_service.py \
+            tests/test_confirmed_booking_intake.py \
+            tests/test_deferred_client_intake.py \
+            tests/test_intake_defendant_extract.py \
+            tests/test_intake_shannon.py \
+            tests/test_docuseal_completed_share_invoice.py \
+            tests/test_docuseal_completion_handler.py \
+            tests/test_docuseal_template_drift.py \
+            tests/test_packet_pay_and_court_seed.py \
+            tests/test_packet_payment_link_send_once.py \
+            tests/test_legacy_payment_link_call_sites.py \
+            tests/test_swipesimple_dispatch.py \
+            tests/test_tncis_fail_closed.py \
             --tb=short

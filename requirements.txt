@@ -26,10 +26,10 @@ numpy>=1.26.0
 joblib>=1.3.0
 
 # Slack notifications
-slack-sdk>=3.27.0
+slack-sdk>=3.44.1
 
 # Scraper dependencies — DrissionPage (legacy), curl_cffi (TLS impersonation), Playwright (Obscura CDP)
-curl-cffi>=0.7.0
+curl-cffi>=0.16.3
 beautifulsoup4>=4.12.0
 DrissionPage>=4.0.0
 patchright>=1.50.0  # Charlotte County — Cloudflare Turnstile bypass (also run: patchright install chromium)
@@ -45,7 +45,7 @@ Pillow>=10.0.0      # Preprocess variants for captcha_ocr
 # Surya is for document layout OCR, not tiny captchas — skip for this stack.
 
 # Selenium — Seminole County (NorthPointe Suite Angular portal)
-selenium>=4.15.0
+selenium>=4.49.0
 webdriver-manager>=4.0.0
 
 # PDF parsing — Citrus County (jail roster is PDF)
@@ -78,7 +78,7 @@ openpyxl>=3.1.0
 firebase-admin>=6.4.0
 
 # Court Intelligence (Juriscraper + CourtListener SE US pipeline)
-juriscraper>=2.6.0
+juriscraper>=2.8.4
 
 # Phonetic name matching (Metaphone, Soundex, Jaro-Winkler)
 jellyfish>=1.0.0

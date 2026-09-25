@@ -55,7 +55,7 @@ python main.py sc_lee      # not FL Lee
 | Georgetown | 🟡 Scaffold | — | No machine-readable roster |
 | Greenville | ❌ Blocked | Custom + Incapsula | Official `app.greenvillecounty.org/inmate_search.htm` is access-restricted. Retain fail-closed behavior until a supported public bulk roster is available; do not bypass controls. |
 | Greenwood | 🟡 Wrapper | JailTracker | |
-| Hampton | 🟡 Stub | Custom | 403 |
+| Hampton | ⛔ fail_closed (hold) | Custom | 403; `SOURCE_CONTRACT_VALIDATED=False` 2026-09-25, no proxy/stealth bypass |
 | Horry | ✅ Built | Custom / JSON | |
 | Jasper | ✅ Live | WP cards | Verified 42 inmates (2026-07-14) |
 | Kershaw | ⚠ Fail closed | Zuercher | No source-issued booking/inmate ID or booking timestamp; see `SC_ZUERCHER_SOURCE_SAFETY.md` |
@@ -64,7 +64,7 @@ python main.py sc_lee      # not FL Lee
 | Lee | ⚠ Fail closed | P2C legacy | Sumter-Lee regional portal has no validated broad roster contract; see `LEGACY_P2C_SOURCE_SAFETY.md` |
 | Lexington | ⚠ Fail closed | P2C legacy | Search-only contract; see `LEGACY_P2C_SOURCE_SAFETY.md` |
 | Marion | 🟡 Stub | Custom | 403 |
-| Marlboro | 🟡 Scaffold | Custom | Cloudflare/403 |
+| Marlboro | ⛔ fail_closed (hold) | Custom | Cloudflare/403; `SOURCE_CONTRACT_VALIDATED=False` 2026-09-25, no proxy/stealth bypass |
 | Newberry | 🟡 Source verified | Dynamic official PDF | Current Sheriff-uploaded bookings PDF; source `SO` identifier required; deployed 2026-08-14; per-scraper scheduler telemetry still pending |
 | Oconee | 🟡 Wrapper | Zuercher | |
 | Pickens | 🟡 Wrapper | Zuercher | |

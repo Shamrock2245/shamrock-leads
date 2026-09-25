@@ -1,44 +1,47 @@
 # Scraper Health Agent — "The Watchdog"
 
 > **Status:** `[IMPLEMENTED]`
-> **Implementation:** `writers/slack_notifier.py`, `scrapers/base_scraper.py`, `dashboard/api/scraper_control.py`
+> **Implementation:** `writers/slack_notifier.py`, `scrapers/base_scraper.py`, `dashboard/routers/scraper_control.py`
 
 ---
 
 ## Role
 
-The Watchdog monitors the health of all 51 county scrapers in real-time. It detects failures, classifies error types, fires Slack alerts, and manages the self-healing infrastructure (auto-disable after 5 failures, auto-recovery attempts).
+The Watchdog monitors the health of all registered county scrapers (361 scopes). It detects failures, classifies error types, fires Slack alerts, and manages the self-healing infrastructure (auto-disable after 5 consecutive failures, canary re-enable).
 
 ---
 
 ## Monitoring Pipeline
 
 ```
-Scraper Run
-    → Success: Update last_success timestamp, reset failure count
+Scraper Run (BaseScraper.run)
+    → Source-contract guard (fail_closed / unvalidated ⇒ guarded, no fetch)
+    → Auto-disable gate (auto_disabled ⇒ skip until canary window)
+    → scrape() with transient retry (network/5xx: 2s, 4s, 8s; never 429/anti-bot/cooldown)
+    → Booking-key filter → schema-drift check (drift ⇒ immediate #scraper-errors alert)
+    → Success: reset consecutive_failures; canary success ⇒ auto re-enable + Slack
     → Failure:
-        → Classify error (network / anti_bot / url_changed / parse_error / ssl_error / rate_limited)
-        → Increment consecutive failure count
-        → Store in failure_history (last 10)
-        → Fire Slack alert to #scraper-errors
-        → If failures >= 5: Auto-disable scraper
-        → If disabled: Attempt single recovery per interval
-        → If recovery succeeds: Auto-re-enable
+        → Classify (network / anti_bot / url_changed / parse_drift / unknown)
+        → Increment consecutive_failures on scraper_status (cooldowns not counted)
+        → Slack #scraper-errors (classified)
+        → If failures >= 5: status auto_disabled + Slack (KEY FL: alert only)
 ```
 
 ---
 
 ## Self-Healing Features
 
+Implemented in `BaseScraper.run()`. Full runbook: [`docs/ops/SCRAPER_SELF_HEALING.md`](../ops/SCRAPER_SELF_HEALING.md).
+
 | Feature | Description |
 |---------|-------------|
-| **Pre-flight URL check** | HEAD request to roster URL before scraping — detects 404/403/SSL early |
-| **Retry with backoff** | 3 attempts with exponential backoff (2s, 4s, 8s) |
-| **Error classification** | Auto-classifies: `network`, `anti_bot`, `url_changed`, `parse_error`, `ssl_error`, `rate_limited` |
-| **Auto-disable** | Scraper disabled after 5 consecutive failures |
-| **Auto-re-enable** | Disabled scraper tries one recovery per interval — re-enables on success |
-| **Failure history** | Last 10 failures stored with timestamps + error types |
-| **Force re-enable** | `scraper.force_enable()` / `/api/scraper/enable/<county>` for human override |
+| **Retry with backoff** | Transient `network` failures (connection/timeout/5xx) retried after 2s, 4s, 8s. Never retries 429, anti-bot, 404, parse drift, or an active per-county cooldown (Lee opts out; it has its own cooldown-aware logic) |
+| **Error classification** | Fixed set: `network`, `anti_bot`, `url_changed`, `parse_drift`, `unknown` (persisted as `error_class` on `scraper_status`) |
+| **Fail loud** | Schema/parse drift alerts `#scraper-errors` immediately (`SLACK_WEBHOOK_ERRORS`, throttled to 30 min per county). Classified failure alerts on every error |
+| **Auto-disable** | `auto_disabled` after 5 consecutive counted failures (`SCRAPER_AUTO_DISABLE_THRESHOLD`). Shown as ⛔ on Health. KEY FL counties count and alert but are never skipped |
+| **Re-enable** | Automatic canary every 6h (`SCRAPER_AUTO_DISABLE_CANARY_MINUTES`) that must return ≥1 record. Dashboard Run-now = forced canary. Health "Re-enable" button, `POST /api/scraper/enable`, or `scripts/scraper_reenable.py` |
+| **Source-contract guard** | Runs before all of the above. Re-enable never lifts `fail_closed` |
+| **Not implemented** | URL pre-flight HEAD check, failure-history list, `force_enable()` (earlier docs claimed these) |
 
 ---
 
@@ -47,8 +50,10 @@ Scraper Run
 | File | Purpose |
 |------|---------|
 | `writers/slack_notifier.py` | Slack alert formatting and delivery |
-| `scrapers/base_scraper.py` | Self-healing logic, failure tracking, auto-disable/enable |
-| `dashboard/api/scraper_control.py` | Fleet status API, manual trigger, force-enable |
+| `scrapers/scraper_resilience.py` | Pure policy: error classes, retry, drift detection, auto-disable state machine, Obscura routing policy |
+| `scrapers/base_scraper.py` | Wires resilience into `run()`; persists state via `MongoWriter.upsert_scraper_status` |
+| `scripts/scraper_reenable.py` | Manual re-enable CLI |
+| `dashboard/routers/scraper_control.py` | Fleet status API, manual trigger, force-enable |
 | `dashboard/sl-health.js` | Scraper Health tab frontend |
 
 ---

@@ -213,7 +213,7 @@ Approach:   Query the anonymous FeatureServer directly with `ObjectId,GlobalID,B
 
 ### Custom / In-House
 - **Pattern**: Varies — GET requests, HTML parsing, API reverse-engineering
-- **Active Counties**: Orange, Seminole, St. Lucie, Indian River, Okeechobee, Alachua, Columbia, Clay, Bay, Okaloosa, Gadsden, Monroe, Leon, Dixie, Hernando, St. Johns. Broward remains registered but is explicitly fail closed pending a supported BSO bulk source; sequential identifier probing is prohibited.
+- **Active Counties**: Orange, Seminole, St. Lucie, Indian River, Okeechobee, Alachua, Columbia, Clay, Bay, Okaloosa, Gadsden, Monroe, Leon, Dixie, Hernando, St. Johns. Broward is live (verified_public) on the Turnstile Arrest Search path since 2026-09-23; sequential identifier probing remains prohibited.
 
 ---
 

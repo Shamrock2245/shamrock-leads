@@ -842,6 +842,44 @@ async def intake_stats():
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
+async def _promote_auto_payment_link(
+    *,
+    bond_doc: dict,
+    intake_doc: dict,
+    matched_booking: str,
+    defendant_name: str,
+) -> dict:
+    """Intake-promote legacy payment-link auto send.
+
+    Behind DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK (DEFAULT OFF; any enabled
+    value — webhook-style or "all" — enables this path). Even when on, the
+    service sends only with a staff-confirmed premium (premium_confirmed_*);
+    the 10% ``premium`` estimate on bond_doc never counts → premium_unconfirmed.
+    No amount is passed: auto sends ignore caller-supplied amounts.
+    """
+    from dashboard.services.legacy_payment_link_switch import (
+        legacy_payment_link_enabled,
+    )
+
+    if not legacy_payment_link_enabled():
+        return {"skipped": True, "reason": "switch_off", "source": "intake_promote"}
+    from dashboard.services.packet_payment_link_service import (
+        maybe_send_packet_payment_link,
+    )
+
+    return await maybe_send_packet_payment_link(
+        packet_id=str(bond_doc.get("paperwork_packet_id") or "").strip(),
+        booking_number=matched_booking,
+        amount=None,
+        phone=bond_doc.get("indemnitor_phone") or "",
+        email=bond_doc.get("indemnitor_email") or "",
+        defendant_name=defendant_name,
+        bond_doc=bond_doc,
+        intake_doc=intake_doc,
+        source="intake_promote",
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  POST /api/intake/<intake_id>/promote
 #  Atomic intake-to-case transition: validates match, creates active_bonds,
@@ -1045,36 +1083,33 @@ async def intake_promote(request: Request, intake_id: str):
     )
 
     # ── 7a. Auto payment link + court calendar seed (soft-fail) ───────────────
+    # Behind the SAME owner switch as DocuSeal completion
+    # (DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK, DEFAULT OFF — any enabled value
+    # enables this path). Even when on, the service sends ONLY with a
+    # staff-confirmed premium (premium_confirmed_*); the 10% "premium" written
+    # into bond_doc above is an estimate and never counts → premium_unconfirmed.
     try:
-        from dashboard.services.packet_payment_link_service import (
-            maybe_send_packet_payment_link,
-        )
-
-        packet_id_for_pay = str(bond_doc.get("paperwork_packet_id") or "").strip()
-        pay_result = await maybe_send_packet_payment_link(
-            packet_id=packet_id_for_pay,
-            booking_number=matched_booking,
-            amount=bond_doc.get("premium") or (bond_amount * 0.10),
-            phone=bond_doc.get("indemnitor_phone") or "",
-            email=bond_doc.get("indemnitor_email") or "",
-            defendant_name=defendant_name,
+        pay_result = await _promote_auto_payment_link(
             bond_doc=bond_doc,
             intake_doc=intake_doc,
-            source="intake_promote",
+            matched_booking=matched_booking,
+            defendant_name=defendant_name,
         )
         logger.info(
-            "[intake] payment_link auto-dispatch booking=%s skipped=%s delivered=%s reason=%s",
-            matched_booking,
+            "[intake] payment_link auto-dispatch skipped=%s delivered=%s reason=%s",
             pay_result.get("skipped"),
             pay_result.get("delivered"),
-            pay_result.get("reason") or pay_result.get("error"),
+            pay_result.get("reason") or ("error" if pay_result.get("error") else None),
         )
     except Exception as pay_exc:
-        logger.warning("[intake] payment_link auto-dispatch failed (non-fatal): %s", pay_exc)
+        logger.warning("[intake] payment_link auto-dispatch failed (non-fatal) err_type=%s", type(pay_exc).__name__)
 
     # ── 7a2. Opt-in Share Invoice (SwipeSimple draft + copy_link) — gated OFF ─
     # Requires SWIPESIMPLE_SHARE_INVOICE_ON_PROMOTE=1. Live HTTP still needs
-    # SWIPESIMPLE_LIVE=1; customer send needs SWIPESIMPLE_DISPATCH_LIVE=1.
+    # SWIPESIMPLE_LIVE=1. STAGE ONLY: this automated hook always passes
+    # dispatch=False, so it never texts/emails the payment link — even if
+    # SWIPESIMPLE_DISPATCH_LIVE=1. Customer dispatch happens only via an
+    # explicit dispatch=True caller + SWIPESIMPLE_DISPATCH_LIVE.
     # Soft-fail: never blocks promote. See SWIPESIMPLE_PRODUCTION_CHECKLIST.md.
     try:
         from dashboard.services.swipesimple_invoice_service import (
@@ -1093,7 +1128,7 @@ async def intake_promote(request: Request, intake_id: str):
                 share_result = await maybe_issue_share_invoice_for_bond(
                     share_bond_id,
                     channel="imessage",
-                    dispatch=True,
+                    dispatch=False,  # stage only — automated hooks never dispatch
                     source="intake_promote",
                 )
                 logger.info(

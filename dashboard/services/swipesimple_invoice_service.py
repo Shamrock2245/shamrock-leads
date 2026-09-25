@@ -11,15 +11,25 @@ Playwright (`swipesimple_playwright_bootstrap.py`) = session/CSRF refresh ONLY.
 HARD RULES (fail-closed):
   - premium must match BondCase exactly (dollars → exact integer cents)
   - invoice # / reference_id = booking #
-  - one invoice per bond (idempotency key = bond_id / bond_case_id)
+  - one invoice per bond (idempotency key = bond_id / bond_case_id), enforced by an
+    ATOMIC claim in `swipesimple_invoice_claims` (unique bond_id) before any
+    SwipeSimple create; a stale 'claimed' record is never auto-reclaimed
+  - one customer dispatch per bond: atomic dispatch claim (dispatch_status
+    'sending' → 'sent'); a stale 'sending' record is never auto-resent
+  - logs carry bond_id + flags only (no booking #, links, amounts, names, contacts)
   - never invent premiums or payment links
   - never log/echo session cookies, CSRF tokens, or other secrets
   - LIVE HTTP gated by SWIPESIMPLE_LIVE=1 (default OFF)
   - Customer dispatch gated by SWIPESIMPLE_DISPATCH_LIVE=1 (default OFF / dry-run)
 
-Paperwork Desk one-liner:
+Paperwork Desk one-liner (staging-only by default — creates/persists the
+draft + payment link, never texts/emails the customer):
   from dashboard.services.swipesimple_invoice_service import maybe_issue_share_invoice_for_bond
-  await maybe_issue_share_invoice_for_bond(bond_id, channel="imessage", source="paperwork_desk")
+  await maybe_issue_share_invoice_for_bond(bond_id, channel="imessage", dispatch=False, source="paperwork_desk")
+
+Customer dispatch requires BOTH an explicit ``dispatch=True`` from the caller
+AND SWIPESIMPLE_DISPATCH_LIVE=1 (enforced inside dispatch_invoice). Automated
+hooks (intake promote, DocuSeal submission.completed) must pass dispatch=False.
 
 Brendan $0.01 smoke (no BondCase / no dispatch):
   python scripts/swipesimple_smoke_create.py
@@ -32,7 +42,8 @@ from __future__ import annotations
 import logging
 import os
 import re
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Dict, List, Literal, Optional, Tuple
 from urllib.parse import quote, urlencode, urljoin
@@ -63,6 +74,26 @@ _CREATE_INVOICE_PATH = "/invoices"
 _LIST_INVOICES_API = "/api/v4/invoices"
 _COPY_LINK_PATH_TMPL = "/api/v4/invoices/{invoice_id}/copy_link"
 _AMOUNT_TOLERANCE = Decimal("0.01")
+
+# Atomic per-bond claim ledger (one doc per canonical bond key). Invoice link
+# fields stay on bond_cases / active_bonds; this collection only serialises
+# create + dispatch so concurrent callers (DocuSeal webhook + poller, intake
+# promote, retries) cannot create two SwipeSimple invoices or send twice.
+INVOICE_CLAIMS_COLLECTION = "swipesimple_invoice_claims"
+CLAIM_STALE_AFTER = timedelta(minutes=15)
+
+# Create-claim states
+CLAIM_CLAIMED = "claimed"          # a worker holds the create (in progress)
+CLAIM_CREATED = "created"          # SwipeSimple invoice created + link persisted
+CLAIM_FAILED = "failed"            # failed BEFORE SwipeSimple accepted a create → may be re-claimed
+CLAIM_NEEDS_REVIEW = "needs_review"  # outcome unknown / invoice may exist → manual only
+
+# Dispatch-claim states
+DISPATCH_SENDING = "sending"
+DISPATCH_SENT = "sent"
+DISPATCH_FAILED = "failed"
+
+_claim_indexes_ready = False
 
 # Live gate values (case-insensitive for true-ish strings).
 _LIVE_TRUTHY = frozenset({"1", "true", "yes", "on"})
@@ -283,7 +314,9 @@ async def _load_bond_by_id(bond_id: str) -> Optional[Dict[str, Any]]:
                 doc["_collection"] = coll_name
                 return doc
         except Exception as exc:
-            logger.warning("[ss_invoice] %s lookup failed: %s", coll_name, exc)
+            logger.warning(
+                "[ss_invoice] %s lookup failed err_type=%s", coll_name, type(exc).__name__
+            )
     return None
 
 
@@ -667,9 +700,9 @@ async def _resolve_invoice_id_after_create(
                 resp = await client.get(url, headers=headers)
             except Exception as exc:
                 logger.warning(
-                    "[ss_invoice] list fetch failed path=%s err=%s",
+                    "[ss_invoice] list fetch failed path=%s err_type=%s",
                     path.split("?")[0],
-                    exc,
+                    type(exc).__name__,
                 )
                 continue
             ctype = (resp.headers.get("content-type") or "").lower()
@@ -718,7 +751,7 @@ async def _resolve_invoice_id_after_create(
                     logger.info("[ss_invoice] invoice_id from datatable link_to_invoice")
                     return m.group(1)
     except Exception as exc:
-        logger.warning("[ss_invoice] datatable resolve failed err=%s", exc)
+        logger.warning("[ss_invoice] datatable resolve failed err_type=%s", type(exc).__name__)
 
     raise SwipeSimpleInvoiceError(
         "invoice_id_unresolved_after_create_302 — "
@@ -802,7 +835,10 @@ async def _http_copy_link(*, invoice_id: str, cfg: Dict[str, Any]) -> str:
                 link = m.group(1)
                 logger.info("[ss_invoice] payment_link from invoice show data-url")
         except Exception as exc:
-            logger.warning("[ss_invoice] show-page payment_link fallback failed err=%s", exc)
+            logger.warning(
+                "[ss_invoice] show-page payment_link fallback failed err_type=%s",
+                type(exc).__name__,
+            )
     if not link.startswith("http"):
         # Last resort only when create succeeded and id is known: vendor's public pay path.
         link = urljoin(cfg["base_url"] + "/", f"invoices/{invoice_id}/payment")
@@ -819,12 +855,19 @@ async def _share_invoice_http(
     bond_id: str,
     bond: Dict[str, Any],
     cfg: Dict[str, Any],
+    progress: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Locked Option 2 path: form create → resolve invoice_id → copy_link.
 
     Gated by SWIPESIMPLE_LIVE. Never invents a payment link.
+
+    ``progress`` (optional, mutated) records ``create_posted=True`` right before
+    the create POST so the caller can tell "failed before SwipeSimple saw a
+    create" (safe to re-claim) from "outcome unknown" (manual review).
     """
+    if progress is None:
+        progress = {}
     _require_live()
 
     if not (cfg.get("has_session") or cfg.get("has_cookie_jar")):
@@ -849,7 +892,9 @@ async def _share_invoice_http(
         catalog_item_name=str(cfg.get("catalog_item_name") or _DEFAULT_CATALOG_ITEM_NAME),
     )
 
+    progress["create_posted"] = True
     create_result = await _http_create_invoice(form_fields=form_fields, cfg=cfg)
+    progress["create_status"] = create_result.get("status_code")
     invoice_id = await _resolve_invoice_id_after_create(
         booking_number=booking_number,
         create_result=create_result,
@@ -905,7 +950,12 @@ async def _persist_invoice_fields(
         try:
             await get_collection(coll_name).update_one(filt, {"$set": patch})
         except Exception as exc:
-            logger.warning("[ss_invoice] persist on %s failed: %s", coll_name, exc)
+            logger.warning(
+                "[ss_invoice] persist on %s failed bond_id=%s err_type=%s",
+                coll_name,
+                bond_id,
+                type(exc).__name__,
+            )
 
 
 async def _persist_unresolved_create(
@@ -933,7 +983,289 @@ async def _persist_unresolved_create(
         try:
             await get_collection(coll_name).update_one(filt, {"$set": patch})
         except Exception as exc:
-            logger.warning("[ss_invoice] unresolved persist on %s failed: %s", coll_name, exc)
+            logger.warning(
+                "[ss_invoice] unresolved persist on %s failed bond_id=%s err_type=%s",
+                coll_name,
+                bond_id,
+                type(exc).__name__,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Atomic per-bond claims (create + dispatch) — swipesimple_invoice_claims
+# ---------------------------------------------------------------------------
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_aware_utc(value: Any) -> Optional[datetime]:
+    """Mongo returns naive UTC datetimes unless tz_aware; accept ISO strings too."""
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _is_stale(value: Any, now: Optional[datetime] = None) -> bool:
+    """Missing / unparseable timestamps count as stale (fail closed → manual review)."""
+    ts = _as_aware_utc(value)
+    if ts is None:
+        return True
+    return ((now or _utcnow()) - ts) > CLAIM_STALE_AFTER
+
+
+def _claim_key(bond: Dict[str, Any], bond_id: str) -> str:
+    """
+    Canonical per-bond claim key so callers passing different ids for the same
+    bond (bond_case_id vs booking # vs ObjectId) contend on ONE claim doc.
+    """
+    for key in ("bond_case_id", "Bond_Case_ID", "bond_id"):
+        val = str(bond.get(key) or "").strip()
+        if val:
+            return val
+    if bond.get("_id") is not None:
+        return str(bond["_id"])
+    return str(bond_id).strip()
+
+
+def _error_code(exc: BaseException) -> str:
+    """Short machine code for claim records / logs — never message text or PII."""
+    if isinstance(exc, SwipeSimpleInvoiceError):
+        m = re.match(r"[a-z0-9_]+", str(exc).strip())
+        if m:
+            return m.group(0)[:80]
+        return "swipesimple_invoice_error"
+    return type(exc).__name__[:80]
+
+
+async def _claims_collection():
+    """
+    Claim collection with unique indexes ensured lazily (idempotent).
+    Fails closed: if the unique index cannot be ensured, no create/dispatch.
+    """
+    global _claim_indexes_ready
+    coll = get_collection(INVOICE_CLAIMS_COLLECTION)
+    if not _claim_indexes_ready:
+        try:
+            await coll.create_index("bond_id", unique=True, name="uniq_bond_id")
+            # Backstop: one invoice per booking # (= reference_id) even if two
+            # different bond keys ever resolve to the same booking.
+            await coll.create_index(
+                "invoice_number", unique=True, sparse=True, name="uniq_invoice_number"
+            )
+        except Exception as exc:
+            logger.warning(
+                "[ss_invoice] claim index ensure failed err_type=%s — fail closed",
+                type(exc).__name__,
+            )
+            raise SwipeSimpleInvoiceError("invoice_claim_index_unavailable") from None
+        _claim_indexes_ready = True
+    return coll
+
+
+async def _claim_invoice_create(
+    claim_key: str, booking_number: str
+) -> Tuple[bool, Optional[Dict[str, Any]], str]:
+    """
+    Atomically claim the SwipeSimple create for one bond.
+
+    Returns (won, existing_doc, claim_id). Only the winner may call SwipeSimple.
+      - no doc → upsert with $setOnInsert → winner (ReturnDocument.BEFORE is None)
+      - status 'failed' → conditional re-claim (from 'failed' + same claim_id only)
+      - status 'claimed' / 'created' / 'needs_review' → loser (never auto-reclaim)
+      - DuplicateKeyError (upsert race / booking # backstop) → loser
+    """
+    from pymongo import ReturnDocument
+    from pymongo.errors import DuplicateKeyError
+
+    coll = await _claims_collection()
+    claim_id = uuid.uuid4().hex
+    now = _utcnow()
+    try:
+        before = await coll.find_one_and_update(
+            {"bond_id": claim_key},
+            {
+                "$setOnInsert": {
+                    "bond_id": claim_key,
+                    "invoice_number": booking_number,
+                    "status": CLAIM_CLAIMED,
+                    "claim_id": claim_id,
+                    "claimed_at": now,
+                    "attempts": 1,
+                }
+            },
+            upsert=True,
+            return_document=ReturnDocument.BEFORE,
+        )
+    except DuplicateKeyError:
+        logger.info("[ss_invoice] claim lost race (duplicate key) bond_id=%s", claim_key)
+        existing = None
+        try:
+            existing = await coll.find_one({"bond_id": claim_key})
+        except Exception:
+            pass
+        return False, existing or {"status": CLAIM_CLAIMED, "duplicate_key": True}, claim_id
+
+    if before is None:
+        return True, None, claim_id
+
+    if before.get("status") == CLAIM_FAILED:
+        try:
+            after = await coll.find_one_and_update(
+                {
+                    "bond_id": claim_key,
+                    "status": CLAIM_FAILED,
+                    "claim_id": before.get("claim_id"),
+                },
+                {
+                    "$set": {
+                        "status": CLAIM_CLAIMED,
+                        "claim_id": claim_id,
+                        "claimed_at": now,
+                        "error_code": None,
+                    },
+                    "$inc": {"attempts": 1},
+                },
+                return_document=ReturnDocument.AFTER,
+            )
+        except DuplicateKeyError:
+            after = None
+        if after and after.get("claim_id") == claim_id:
+            logger.info("[ss_invoice] claim re-acquired from failed bond_id=%s", claim_key)
+            return True, None, claim_id
+        return False, (await coll.find_one({"bond_id": claim_key})) or before, claim_id
+
+    return False, before, claim_id
+
+
+async def _finish_invoice_claim(
+    claim_key: str, claim_id: str, status: str, **fields: Any
+) -> None:
+    """Best-effort claim transition (only by the holder). If this write fails the
+    claim stays 'claimed' → goes stale → manual review (fail closed)."""
+    try:
+        coll = await _claims_collection()
+        await coll.update_one(
+            {"bond_id": claim_key, "claim_id": claim_id, "status": CLAIM_CLAIMED},
+            {"$set": {"status": status, "finished_at": _utcnow(), **fields}},
+        )
+    except Exception as exc:
+        logger.warning(
+            "[ss_invoice] claim finish failed bond_id=%s status=%s err_type=%s",
+            claim_key,
+            status,
+            type(exc).__name__,
+        )
+
+
+def _create_loser_result(bond_id: str, claim_key: str, existing: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Loser of the create claim: never calls SwipeSimple, never returns a new link."""
+    existing = existing or {}
+    status = str(existing.get("status") or CLAIM_CLAIMED)
+    if status == CLAIM_NEEDS_REVIEW:
+        logger.warning(
+            "[ss_invoice] claim needs manual review bond_id=%s error_code=%s",
+            claim_key,
+            existing.get("error_code"),
+        )
+        raise SwipeSimpleInvoiceError(
+            "invoice_claim_needs_manual_review — a prior create may have reached "
+            "SwipeSimple; verify by reference_id before clearing the claim"
+        )
+    if status == CLAIM_CLAIMED and not existing.get("duplicate_key") and _is_stale(existing.get("claimed_at")):
+        logger.warning(
+            "[ss_invoice] STALE create claim bond_id=%s — NOT auto-reclaiming; "
+            "manual review required (SwipeSimple may have created the invoice)",
+            claim_key,
+        )
+        raise SwipeSimpleInvoiceError(
+            "invoice_claim_stale_manual_review — claim older than "
+            f"{int(CLAIM_STALE_AFTER.total_seconds() // 60)} min; verify in SwipeSimple "
+            "by reference_id before clearing"
+        )
+    logger.info(
+        "[ss_invoice] claim held elsewhere bond_id=%s claim_status=%s — no create",
+        claim_key,
+        status,
+    )
+    return {
+        "ok": True,
+        "idempotent": True,
+        "in_progress": status == CLAIM_CLAIMED,
+        "claim_status": status,
+        "bond_id": bond_id,
+        "payment_link": None,
+    }
+
+
+async def _claim_dispatch(claim_key: str) -> Tuple[bool, Optional[Dict[str, Any]], str]:
+    """
+    Atomically claim the single customer dispatch for a bond.
+    Match: not yet dispatched AND dispatch_status in (None/absent, 'failed').
+    Upsert covers bonds whose invoice predates the claim ledger; if the doc
+    exists but does not match, the insert hits the unique bond_id → loser.
+    """
+    from pymongo import ReturnDocument
+    from pymongo.errors import DuplicateKeyError
+
+    coll = await _claims_collection()
+    claim_id = uuid.uuid4().hex
+    try:
+        after = await coll.find_one_and_update(
+            {
+                "bond_id": claim_key,
+                "dispatched_at": None,
+                "dispatch_status": {"$in": [None, DISPATCH_FAILED]},
+            },
+            {
+                "$set": {
+                    "dispatch_status": DISPATCH_SENDING,
+                    "dispatch_claim_id": claim_id,
+                    "dispatch_claimed_at": _utcnow(),
+                    "dispatch_error_code": None,
+                },
+                "$inc": {"dispatch_attempts": 1},
+            },
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+    except DuplicateKeyError:
+        after = None
+    if after and after.get("dispatch_claim_id") == claim_id:
+        return True, None, claim_id
+    existing = None
+    try:
+        existing = await coll.find_one({"bond_id": claim_key})
+    except Exception:
+        pass
+    return False, existing, claim_id
+
+
+async def _finish_dispatch_claim(claim_key: str, claim_id: str, status: str, **fields: Any) -> None:
+    try:
+        coll = await _claims_collection()
+        await coll.update_one(
+            {
+                "bond_id": claim_key,
+                "dispatch_claim_id": claim_id,
+                "dispatch_status": DISPATCH_SENDING,
+            },
+            {"$set": {"dispatch_status": status, **fields}},
+        )
+    except Exception as exc:
+        logger.warning(
+            "[ss_invoice] dispatch claim finish failed bond_id=%s status=%s err_type=%s",
+            claim_key,
+            status,
+            type(exc).__name__,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -956,6 +1288,13 @@ async def create_locked_invoice(bond_id: str) -> Dict[str, Any]:
 
     If a prior create left swipesimple_invoice_unresolved=True for this booking,
     fail-closed (do not create a duplicate draft).
+
+    Atomic: before ANY SwipeSimple create, the caller must win the per-bond
+    claim in ``swipesimple_invoice_claims`` (unique bond_id). Losers return
+    ``{ok: True, idempotent: True, in_progress: ...}`` with no link and never
+    call SwipeSimple. A failed claim may be re-claimed only via a conditional
+    update from 'failed'; a stale 'claimed' or 'needs_review' record fails
+    closed for manual review.
     """
     bond_id = str(bond_id or "").strip()
     if not bond_id:
@@ -978,9 +1317,10 @@ async def create_locked_invoice(bond_id: str) -> Dict[str, Any]:
         or bond.get("swipesimple_payment_link")
     ):
         logger.info(
-            "[ss_invoice] idempotent hit bond_id=%s booking=%s",
+            "[ss_invoice] idempotent hit bond_id=%s has_link=%s has_invoice_id=%s",
             bond_id,
-            booking_number,
+            True,
+            bool(bond.get("swipesimple_invoice_id")),
         )
         return {
             "ok": True,
@@ -1026,8 +1366,17 @@ async def create_locked_invoice(bond_id: str) -> Dict[str, Any]:
             "swipesimple_invoice_id": vendor_id_existing,
         }
 
+    # Live gate BEFORE claiming, so a disabled integration never leaves claims.
+    _require_live()
     cfg = load_swipesimple_session_config()
 
+    claim_key = _claim_key(bond, bond_id)
+    won, existing_claim, claim_id = await _claim_invoice_create(claim_key, booking_number)
+    if not won:
+        return _create_loser_result(bond_id, claim_key, existing_claim)
+    logger.info("[ss_invoice] create claim acquired bond_id=%s", claim_key)
+
+    progress: Dict[str, Any] = {}
     try:
         http_result = await _share_invoice_http(
             booking_number=booking_number,
@@ -1035,22 +1384,51 @@ async def create_locked_invoice(bond_id: str) -> Dict[str, Any]:
             bond_id=bond_id,
             bond=bond,
             cfg=cfg,
+            progress=progress,
         )
-    except SwipeSimpleInvoiceError as exc:
-        if "invoice_id_unresolved_after_create_302" in str(exc):
+    except Exception as exc:
+        code = _error_code(exc)
+        unresolved = "invoice_id_unresolved_after_create_302" in str(exc)
+        if unresolved:
             await _persist_unresolved_create(
                 bond,
                 bond_id=bond_id,
                 booking_number=booking_number,
             )
+        # Safe to re-claim ONLY if SwipeSimple cannot have created an invoice:
+        # failed before the create POST, or the POST was rejected with 4xx.
+        retryable = not unresolved and (
+            not progress.get("create_posted")
+            or re.fullmatch(r"create_invoice_http_4\d\d", code) is not None
+        )
+        await _finish_invoice_claim(
+            claim_key,
+            claim_id,
+            CLAIM_FAILED if retryable else CLAIM_NEEDS_REVIEW,
+            error_code=code,
+        )
+        logger.warning(
+            "[ss_invoice] create failed bond_id=%s error_code=%s claim_status=%s",
+            claim_key,
+            code,
+            CLAIM_FAILED if retryable else CLAIM_NEEDS_REVIEW,
+        )
         raise
 
     payment_link = str(http_result.get("payment_link") or "").strip()
     if not payment_link.startswith("http"):
+        await _finish_invoice_claim(
+            claim_key, claim_id, CLAIM_NEEDS_REVIEW,
+            error_code="share_invoice_missing_payment_link",
+        )
         raise SwipeSimpleInvoiceError("share_invoice_missing_payment_link")
 
     vendor_amount = http_result.get("amount")
     if vendor_amount is not None and not amounts_equal(vendor_amount, premium):
+        await _finish_invoice_claim(
+            claim_key, claim_id, CLAIM_NEEDS_REVIEW,
+            error_code="premium_mismatch_vs_bondcase",
+        )
         raise SwipeSimpleInvoiceError("premium_mismatch_vs_bondcase")
 
     await _persist_invoice_fields(
@@ -1060,6 +1438,14 @@ async def create_locked_invoice(bond_id: str) -> Dict[str, Any]:
         payment_link=payment_link,
         invoice_id=str(http_result.get("invoice_id") or ""),
     )
+    await _finish_invoice_claim(
+        claim_key,
+        claim_id,
+        CLAIM_CREATED,
+        swipesimple_invoice_id=str(http_result.get("invoice_id") or "") or None,
+        created_at=_utcnow(),
+    )
+    logger.info("[ss_invoice] create ok bond_id=%s has_link=%s", claim_key, True)
 
     return {
         "ok": True,
@@ -1156,11 +1542,10 @@ async def dispatch_invoice(
 
     live = dispatch_live_enabled()
     logger.info(
-        "[ss_invoice] dispatch channel=%s bond_id=%s booking=%s "
+        "[ss_invoice] dispatch channel=%s bond_id=%s "
         "has_phone=%s has_email=%s live=%s",
         channel,
         bond_id,
-        booking_number,
         bool(payload["phone"]),
         bool(payload["email"]),
         live,
@@ -1192,6 +1577,93 @@ async def dispatch_invoice(
     if not payload["has_recipient"]:
         raise SwipeSimpleInvoiceError("dispatch_missing_recipient")
 
+    # Once-only: atomically claim the dispatch before ANY BlueBubbles / email send.
+    claim_key = _claim_key(bond, bond_id)
+    won, existing, dispatch_claim_id = await _claim_dispatch(claim_key)
+    if not won:
+        existing = existing or {}
+        dstatus = existing.get("dispatch_status")
+        if dstatus == DISPATCH_SENT or existing.get("dispatched_at"):
+            logger.info("[ss_invoice] dispatch skipped already sent bond_id=%s", claim_key)
+            return {
+                "ok": True,
+                "sent": False,
+                "already_dispatched": True,
+                "dry_run": False,
+                "channel": channel,
+                "bond_id": bond_id,
+            }
+        if dstatus == DISPATCH_SENDING and _is_stale(existing.get("dispatch_claimed_at")):
+            logger.warning(
+                "[ss_invoice] STALE dispatch claim bond_id=%s — NOT auto-resending; "
+                "manual review required (message may have been delivered)",
+                claim_key,
+            )
+            raise SwipeSimpleInvoiceError("dispatch_claim_stale_manual_review")
+        logger.info(
+            "[ss_invoice] dispatch claim held elsewhere bond_id=%s status=%s — no send",
+            claim_key,
+            dstatus,
+        )
+        return {
+            "ok": True,
+            "sent": False,
+            "in_progress": True,
+            "dry_run": False,
+            "channel": channel,
+            "bond_id": bond_id,
+        }
+
+    try:
+        sent = await _send_dispatch(channel, payload)
+    except Exception as exc:
+        code = _error_code(exc)
+        await _finish_dispatch_claim(
+            claim_key, dispatch_claim_id, DISPATCH_FAILED, dispatch_error_code=code
+        )
+        logger.warning(
+            "[ss_invoice] dispatch failed bond_id=%s channel=%s error_code=%s",
+            claim_key,
+            channel,
+            code,
+        )
+        raise
+    if sent:
+        await _finish_dispatch_claim(
+            claim_key,
+            dispatch_claim_id,
+            DISPATCH_SENT,
+            dispatched_at=_utcnow(),
+            dispatch_channel=channel,
+        )
+    else:
+        await _finish_dispatch_claim(
+            claim_key,
+            dispatch_claim_id,
+            DISPATCH_FAILED,
+            dispatch_error_code="send_not_accepted",
+            dispatch_channel=channel,
+        )
+    logger.info("[ss_invoice] dispatch result bond_id=%s channel=%s sent=%s", claim_key, channel, bool(sent))
+
+    return {
+        "ok": True,
+        "sent": bool(sent),
+        "dry_run": False,
+        "stub": False,
+        "channel": channel,
+        "bond_id": bond_id,
+        "booking_number": booking_number,
+        "payment_link": payment_link,
+        "premium_amount": float(premium),
+        "has_recipient": True,
+        "send_result_ok": bool(sent),
+        "message": "dispatch live send attempted" if sent else "dispatch live send failed",
+    }
+
+
+async def _send_dispatch(channel: Channel, payload: Dict[str, Any]) -> bool:
+    """Perform the actual BlueBubbles / email send. Only called by the dispatch-claim winner."""
     sent = False
     if channel == "imessage":
         try:
@@ -1230,21 +1702,7 @@ async def dispatch_invoice(
             body_html=payload["body"].replace("\n", "<br>\n"),
         )
         sent = bool(send_result.get("success"))
-
-    return {
-        "ok": True,
-        "sent": bool(sent),
-        "dry_run": False,
-        "stub": False,
-        "channel": channel,
-        "bond_id": bond_id,
-        "booking_number": booking_number,
-        "payment_link": payment_link,
-        "premium_amount": float(premium),
-        "has_recipient": True,
-        "send_result_ok": bool(sent),
-        "message": "dispatch live send attempted" if sent else "dispatch live send failed",
-    }
+    return bool(sent)
 
 
 async def _find_bond_for_reconcile(booking: str, receipt: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -1281,7 +1739,9 @@ async def _find_bond_for_reconcile(booking: str, receipt: Dict[str, Any]) -> Opt
                 doc["_collection"] = coll_name
                 return doc
         except Exception as exc:
-            logger.warning("[ss_invoice] reconcile lookup %s failed: %s", coll_name, exc)
+            logger.warning(
+                "[ss_invoice] reconcile lookup %s failed err_type=%s", coll_name, type(exc).__name__
+            )
     return None
 
 
@@ -1313,8 +1773,9 @@ async def reconcile_payment(
     if not bond:
         raise SwipeSimpleInvoiceError("bond_not_found_for_booking")
 
+    log_bond_id = _claim_key(bond, "")
     if _is_paid(bond):
-        logger.info("[ss_invoice] reconcile idempotent already PAID booking=%s", booking)
+        logger.info("[ss_invoice] reconcile idempotent already PAID bond_id=%s", log_bond_id)
         return {
             "ok": True,
             "idempotent": True,
@@ -1356,7 +1817,12 @@ async def reconcile_payment(
         try:
             await get_collection(coll_name).update_one(filt, {"$set": payment_update})
         except Exception as exc:
-            logger.warning("[ss_invoice] reconcile update %s failed: %s", coll_name, exc)
+            logger.warning(
+                "[ss_invoice] reconcile update %s failed bond_id=%s err_type=%s",
+                coll_name,
+                log_bond_id,
+                type(exc).__name__,
+            )
 
     ledger_txn = None
     try:
@@ -1374,12 +1840,16 @@ async def reconcile_payment(
             }
         )
     except Exception as exc:
-        logger.warning("[ss_invoice] ledger entry failed booking=%s: %s", booking, exc)
+        logger.warning(
+            "[ss_invoice] ledger entry failed bond_id=%s err_type=%s",
+            log_bond_id,
+            type(exc).__name__,
+        )
 
     logger.info(
-        "[ss_invoice] reconcile PAID booking=%s ledger_txn=%s",
-        booking,
-        ledger_txn or "(none)",
+        "[ss_invoice] reconcile PAID bond_id=%s has_ledger_txn=%s",
+        log_bond_id,
+        bool(ledger_txn),
     )
     return {
         "ok": True,
@@ -1396,20 +1866,30 @@ async def maybe_issue_share_invoice_for_bond(
     bond_id: str,
     *,
     channel: Channel = "imessage",
-    dispatch: bool = True,
+    dispatch: bool = False,
     source: str = "manual",
 ) -> Dict[str, Any]:
     """
-    Thin integration entrypoint: create_locked_invoice then optional dispatch.
+    Thin integration entrypoint: create_locked_invoice, then dispatch ONLY on
+    explicit opt-in.
+
+    Staging-only by default (``dispatch=False``): creates/persists the locked
+    draft + payment link and returns ``result["dispatch"] is None``. Nothing is
+    texted or emailed to the customer just because an env flag is set.
+
+    Customer dispatch requires BOTH:
+      1) the caller explicitly passing ``dispatch=True``, AND
+      2) SWIPESIMPLE_DISPATCH_LIVE=1 (enforced inside ``dispatch_invoice``;
+         otherwise it is a dry-run that builds/logs the payload only).
 
     Fail-closed + idempotent via create_locked_invoice.
     Call from:
       - Bond Desk / Paperwork Desk after paperwork-complete (recommended)
-      - intake promote when SWIPESIMPLE_SHARE_INVOICE_ON_PROMOTE=1
+      - intake promote when SWIPESIMPLE_SHARE_INVOICE_ON_PROMOTE=1 (always
+        ``dispatch=False`` — automated hooks stage only)
       - Leads Ops manual / queue worker
 
-    Does not invent premiums or links. Live HTTP still requires SWIPESIMPLE_LIVE;
-    customer messages require SWIPESIMPLE_DISPATCH_LIVE.
+    Does not invent premiums or links. Live HTTP still requires SWIPESIMPLE_LIVE.
     """
     bond_id = str(bond_id or "").strip()
     if not bond_id:
@@ -1434,15 +1914,15 @@ async def maybe_issue_share_invoice_for_bond(
         out["dispatch"] = await dispatch_invoice(bond_id, channel=channel)
     except Exception as exc:
         logger.warning(
-            "[ss_invoice] dispatch after create failed source=%s bond_id=%s err=%s",
+            "[ss_invoice] dispatch after create failed source=%s bond_id=%s error_code=%s",
             source,
             bond_id,
-            exc,
+            _error_code(exc),
         )
         out["dispatch"] = {
             "ok": False,
             "sent": False,
-            "error": str(exc),
+            "error": _error_code(exc),
         }
     return out
 
