@@ -53,7 +53,9 @@ def _bb_client():
 @pytest.mark.parametrize("text,keyword", [
     ("STOP", "stop"), ("Stop.", "stop"), ("stop all", "stopall"), ("STOPALL", "stopall"),
     ("Unsubscribe", "unsubscribe"), ("cancel", "cancel"), ("END", "end"), ("quit!", "quit"),
-    ("opt out", "optout"),
+    ("opt out", "optout"), ("sToP", "stop"), ("  STOP!!!  ", "stop"), ("stop.", "stop"),
+    ("\"Stop\"", "stop"), ("UNSUBSCRIBE.", "unsubscribe"), ("Cancel?", "cancel"), ("Quit 🛑", "quit"),
+    ("stop-all", "stopall"), ("Opt-Out", "optout"), ("REVOKE", "revoke"),
 ])
 def test_exact_opt_out_keywords(text, keyword):
     assert classify_consent_keyword(text) == {"event": "opt_out", "keyword": keyword, "match_type": "exact"}
@@ -64,7 +66,21 @@ def test_leading_keyword_is_opt_out_flagged_for_review():
         "event": "opt_out", "keyword": "stop", "match_type": "leading_keyword"}
 
 
-@pytest.mark.parametrize("text", ["Quite a day", "Ending soon?", "stopped by the office", "start the paperwork", "hello"])
+@pytest.mark.parametrize("text,keyword", [
+    ("Stop texting me please", "stop"), ("STOP, texting me", "stop"), ("Unsubscribe me now", "unsubscribe"),
+    ("stop all messages", "stopall"), ("Quit messaging me!", "quit"), ("End this", "end"),
+])
+def test_stop_word_prefixed_longer_message_is_opt_out(text, keyword):
+    assert classify_consent_keyword(text) == {
+        "event": "opt_out", "keyword": keyword, "match_type": "leading_keyword"}
+
+
+@pytest.mark.parametrize("text", [
+    "Quite a day", "Ending soon?", "stopped by the office", "start the paperwork", "hello",
+    # owner decision: a stop word that is NOT at the start is not an opt-out
+    "Please stop texting me", "I will not stop", "Can you cancel my appointment", "ok STOP",
+    "Don't unsubscribe me", "please end", "Can I START later",
+])
 def test_non_keywords_are_not_consent_events(text):
     assert classify_consent_keyword(text) is None
 
@@ -96,6 +112,46 @@ def test_inbound_stop_writes_ledger_and_legacy_side_effects(db):
     assert len([r for r in db["imessage_outreach"].docs if r.get("category") == "opt_out"]) == 1
 
 
+def test_stop_prefixed_message_opts_out_and_flags_staff_review(db):
+    db["prospective_bonds"].docs.append({"_id": "p1", "indemnitor": {"phone": OPTED}, "status": "active"})
+    res = _run(rx._handle_new_message(_inbound("LEAD-1", "Stop texting me please"), db))
+    assert res["opted_out"] is True
+    db.brain.assert_not_called()                                   # no auto-reply
+    (entry,) = db["sms_consent_ledger"].docs
+    assert entry["event"] == "opt_out" and entry["match_type"] == "leading_keyword"
+    assert entry["needs_staff_review"] is True
+    (row,) = [r for r in db["imessage_outreach"].docs if r.get("bb_message_guid") == "LEAD-1"]
+    assert row["category"] == "opt_out" and row["needs_staff_review"] is True
+    assert row["staff_review_reason"] == rx.STOP_PREFIX_REVIEW_REASON and row["unread"] is True
+    bond = db["prospective_bonds"].docs[0]
+    assert bond["opted_out"] is True and bond["opt_out_needs_staff_review"] is True
+    # and every later send is blocked
+    client = _bb_client()
+    assert _run(client.send_text(f"any;-;{OPTED}", "court tomorrow", purpose="court_reminder"))["blocked"]
+    client._request.assert_not_called()
+
+
+def test_exact_stop_is_not_flagged_for_staff_review(db):
+    _run(rx._handle_new_message(_inbound("EX-1", "STOP"), db))
+    (row,) = [r for r in db["imessage_outreach"].docs if r.get("bb_message_guid") == "EX-1"]
+    assert row["needs_staff_review"] is False and "staff_review_reason" not in row
+
+
+def test_stop_word_later_in_message_is_not_opt_out(db):
+    res = _run(rx._handle_new_message(_inbound("MID-1", "Please stop texting me"), db))
+    assert not res.get("opted_out")
+    assert db["sms_consent_ledger"].docs == []
+    assert _run(ledger.check_send_allowed(OPTED, "x")) is None
+
+
+def test_stop_blocks_until_start_even_after_prefixed_opt_out(db):
+    _run(rx._handle_new_message(_inbound("L-1", "stop sending these", date_ms=1790000000000), db))
+    _run(rx._handle_new_message(_inbound("L-2", "start the paperwork", date_ms=1790000300000), db))
+    assert _run(ledger.get_consent_state(OPTED))["opted_out"] is True   # conversational "start" ≠ opt-in
+    _run(rx._handle_new_message(_inbound("L-3", "START", date_ms=1790000600000), db))
+    assert _run(ledger.get_consent_state(OPTED))["opted_out"] is False
+
+
 def test_start_after_stop_re_enables_sends(db):
     _run(rx._handle_new_message(_inbound("S-1", "stop", date_ms=1790000000000), db))
     assert _run(ledger.get_consent_state(OPTED))["opted_out"] is True
@@ -122,6 +178,26 @@ def test_send_text_blocked_for_opted_out_recipient(db, caplog):
     client._request.assert_not_called()
     assert "reason=recipient_opted_out purpose=outreach" in caplog.text
     assert "2395550111" not in caplog.text  # PII-safe log
+
+
+def test_send_human_like_rechecks_consent_at_send_time(db):
+    """A STOP that lands during the typing delay still blocks the send."""
+    client = _bb_client()
+    calls = {"n": 0}
+    real = ledger.check_send_allowed
+
+    async def flip(recipient, purpose="x"):
+        calls["n"] += 1
+        if calls["n"] == 2:  # second check = send_text, after the typing indicator
+            await ledger.record_consent_event(
+                phone=OPTED, event="opt_out", keyword="stop", source_message_guid="mid-typing")
+        return await real(recipient, purpose)
+
+    with patch.object(ledger, "check_send_allowed", side_effect=flip):
+        res = _run(client.send_human_like(f"any;-;{OPTED}", "hi", typing_delay=0))
+    assert res["blocked"] is True
+    paths = [c.args[1] for c in client._request.call_args_list]
+    assert "/api/v1/message/text" not in paths
 
 
 def test_send_human_like_blocked_before_typing_indicator(db):

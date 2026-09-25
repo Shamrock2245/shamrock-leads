@@ -165,8 +165,7 @@ class BlueBubblesClient:
                         subject: str | None = None,
                         selected_message_guid: str | None = None,
                         method: str = "private-api",
-                        purpose: str | None = None,
-                        _consent_checked: bool = False) -> dict:
+                        purpose: str | None = None) -> dict:
         """Send a text message. Supports effects, subjects, and replies.
 
         Args:
@@ -177,12 +176,14 @@ class BlueBubblesClient:
             subject: Optional subject line (renders bold)
             selected_message_guid: Reply to this message GUID
             method: Send method — "private-api" (default) or "apple-script"
-            purpose: Optional label for audit/blocked results (e.g. "docuseal_signing_link")
+            purpose: Optional label for audit/blocked results (e.g. "docuseal_signing_link").
+                     Labels only: there is no purpose-based exemption and no override
+                     of the STOP gate (owner decision — opted-out numbers get nothing
+                     until they text START).
         """
-        if not _consent_checked:
-            blocked = await self._consent_gate(chat_guid, purpose)
-            if blocked:
-                return blocked
+        blocked = await self._consent_gate(chat_guid, purpose)
+        if blocked:
+            return blocked
         import uuid
         body = {
             "chatGuid": chat_guid,
@@ -453,10 +454,10 @@ class BlueBubblesClient:
         # 2. Simulate typing time
         await asyncio.sleep(typing_delay)
 
-        # 3. Send
+        # 3. Send (send_text re-checks consent — a STOP that lands during the
+        #    typing delay still blocks the send)
         result = await self.send_text(chat_guid, message, temp_guid=temp_guid,
-                                      purpose=purpose or "send_human_like",
-                                      _consent_checked=True)
+                                      purpose=purpose or "send_human_like")
 
         # 4. Mark read
         if mark_read and result.get("success"):

@@ -32,6 +32,18 @@ the legacy opt-out log that the webhook has always written to
 ``imessage_outreach`` (``category="opt_out"``, inbound) and re-classifies the
 stored text with the same keyword rules.  No backfill writes are performed.
 
+Owner decision (final, fail-closed):
+
+* A STOP opt-out blocks EVERY outbound text to that number — marketing,
+  DocuSeal signing links, payment links, AND court-date / FTA / payment
+  reminders.  There is no purpose-based exemption and no staff override; the
+  number stays blocked until it texts START / UNSTOP back.
+* A bare stop word (case-insensitive, punctuation-tolerant) is an opt-out.  A
+  longer message that STARTS with a stop word ("Stop texting me please") is
+  also an opt-out AND is flagged for staff review (ledger row, conversation
+  row in ``imessage_outreach``, and the prospective bond).  A stop word that
+  only appears later in the message is NOT an opt-out.
+
 PII: log lines only ever carry the last 4 digits of a phone number.
 """
 from __future__ import annotations
@@ -51,11 +63,12 @@ EVENT_OPT_IN = "opt_in"
 
 BLOCK_REASON_OPTED_OUT = "recipient_opted_out"
 
-# Carrier / CTIA standard opt-out words plus the phrases the legacy webhook
-# path already honoured ("stop all", "optout", "opt out").
+# Carrier / CTIA standard opt-out words, "revoke" (FCC TCPA revocation rule),
+# plus the phrases the legacy webhook path already honoured ("stop all",
+# "optout", "opt out").
 OPT_OUT_KEYWORDS = frozenset({
     "stop", "stopall", "stop all", "unsubscribe", "cancel", "end", "quit",
-    "optout", "opt out",
+    "revoke", "optout", "opt out",
 })
 # Re-subscribe words (carrier standard).
 OPT_IN_KEYWORDS = frozenset({"start", "unstop"})

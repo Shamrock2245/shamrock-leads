@@ -249,6 +249,9 @@ def _unique_prospective_doc(match_result: dict) -> dict | None:
     return None
 
 
+STOP_PREFIX_REVIEW_REASON = "stop_keyword_prefixed_message"
+
+
 async def apply_opt_out(
     *,
     sender_phone: str,
@@ -268,6 +271,9 @@ async def apply_opt_out(
     outreach_coll_stop = get_collection("imessage_outreach")
     bonds_coll_stop = get_collection("prospective_bonds")
     seqs_coll_stop = get_collection("outreach_sequences")
+    # Owner decision: a longer message that STARTS with a stop word ("Stop texting
+    # me please") is still an opt-out, AND staff must see it for review.
+    staff_review = keyword_info.get("match_type") != "exact"
 
     # 0. Consent ledger (idempotent per message GUID) — this is what the send gate reads.
     ledger_ts = None
@@ -291,15 +297,29 @@ async def apply_opt_out(
         {"phone": {"$in": [sender_phone, sender_phone.replace("+1", "")]}, "status": "active"},
         {"$set": {"status": "stopped", "stopped_at": opted_out_at, "stop_reason": "STOP_keyword"}},
     )
-    # 2. Flag the prospective bond as opted-out
+    # 2. Flag the prospective bond as opted-out (+ staff-review flag for a
+    #    stop-word-prefixed longer message)
+    bond_set = {"opted_out": True, "opted_out_at": opted_out_at}
+    if staff_review:
+        bond_set.update({
+            "opt_out_needs_staff_review": True,
+            "opt_out_staff_review_reason": STOP_PREFIX_REVIEW_REASON,
+        })
     await bonds_coll_stop.update_many(
         {"$or": [
             {"indemnitor.phone": sender_phone},
             {"indemnitor.phone": sender_phone.replace("+1", "")},
         ]},
-        {"$set": {"opted_out": True, "opted_out_at": opted_out_at}},
+        {"$set": bond_set},
     )
-    # 3. Log the opt-out event (once per BB message GUID)
+    # 3. Log the opt-out event on the conversation (once per BB message GUID)
+    review_fields = {}
+    if staff_review:
+        review_fields = {
+            "needs_staff_review": True,
+            "staff_review_reason": STOP_PREFIX_REVIEW_REASON,
+            "unread": True,
+        }
     already = await outreach_coll_stop.find_one({"bb_message_guid": msg_guid}) if msg_guid else None
     if not already:
         await outreach_coll_stop.insert_one({
@@ -313,10 +333,25 @@ async def apply_opt_out(
             "category": "opt_out",
             "consent_keyword": keyword_info.get("keyword", ""),
             "consent_match_type": keyword_info.get("match_type", "exact"),
-            "needs_staff_review": keyword_info.get("match_type") != "exact",
+            "needs_staff_review": staff_review,
             "sent_at": opted_out_at,
             "source": source,
+            **review_fields,
         })
+    elif staff_review and not already.get("needs_staff_review"):
+        await outreach_coll_stop.update_one({"bb_message_guid": msg_guid}, {"$set": review_fields})
+    if staff_review:
+        try:
+            from dashboard.routers.events import publish_event
+            await publish_event("message_received", {
+                "phone_last4": sender_phone[-4:] if sender_phone else "",
+                "category": "opt_out",
+                "needs_staff_review": True,
+                "staff_review_reason": STOP_PREFIX_REVIEW_REASON,
+                "sent_at": _sent_at_iso,
+            })
+        except Exception:
+            pass
     logger.warning(
         "🛑 STOP received from ...%s — opted out and stopped all sequences (keyword=%s match=%s)",
         sender_phone[-4:], keyword_info.get("keyword"), keyword_info.get("match_type"),
