@@ -60,13 +60,23 @@ Related: `SWIPESIMPLE_INVOICE_CONTRACT.md`, `swipesimple_invoice_service.py`,
 
 ### 4. Paperwork Desk / Bond Desk integration
 
-- [ ] Preferred call site after paperwork-complete / bond ready:
+- [ ] Preferred call site after paperwork-complete / bond ready (**stage only** —
+  `dispatch` defaults to `False`; creates/persists the draft + link, no customer send):
   ```python
   from dashboard.services.swipesimple_invoice_service import maybe_issue_share_invoice_for_bond
-  await maybe_issue_share_invoice_for_bond(bond_id, channel="imessage", source="paperwork_desk")
+  await maybe_issue_share_invoice_for_bond(bond_id, channel="imessage", dispatch=False, source="paperwork_desk")
   ```
+- [ ] Automated hooks **always** stage only (`dispatch=False`), regardless of env flags:
+  ```python
+  # intake promote (dashboard/routers/intake.py, section 7a2)
+  await maybe_issue_share_invoice_for_bond(bond_id, channel="imessage", dispatch=False, source="intake_promote")
+  # DocuSeal submission.completed (if/when wired to Share Invoice)
+  await maybe_issue_share_invoice_for_bond(bond_id, channel="imessage", dispatch=False, source="docuseal_submission_completed")
+  ```
+- [ ] Customer dispatch only via an explicit, human-initiated caller passing
+  `dispatch=True` **and** `SWIPESIMPLE_DISPATCH_LIVE=1` (otherwise dry-run)
 - [ ] Optional intake promote auto-hook: set `SWIPESIMPLE_SHARE_INVOICE_ON_PROMOTE=1`
-  (still respects LIVE + DISPATCH gates; soft-fails)
+  (stage only — respects LIVE gate, never dispatches; soft-fails)
 - [ ] Confirm BondCase always has authoritative `premium` + `booking_number` before create
 
 ### 5. Merge & deploy
@@ -90,6 +100,8 @@ Related: `SWIPESIMPLE_INVOICE_CONTRACT.md`, `swipesimple_invoice_service.py`,
 | Create succeeded, id unresolved | Mark pending — **do not** create another draft |
 | `SWIPESIMPLE_LIVE` unset | No HTTP to swipesimple.com |
 | `SWIPESIMPLE_DISPATCH_LIVE` unset | Build/log payload only — no BB/email send |
+| `maybe_issue_share_invoice_for_bond` without `dispatch=True` | Stage only — `dispatch_invoice` never called (even if `SWIPESIMPLE_DISPATCH_LIVE=1`) |
+| Automated hooks (intake promote, DocuSeal) | Always `dispatch=False` |
 
 ---
 
