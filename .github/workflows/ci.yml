@@ -82,4 +82,20 @@ jobs:
             tests/test_legacy_payment_link_call_sites.py \
             tests/test_swipesimple_dispatch.py \
             tests/test_tncis_fail_closed.py \
+            tests/test_bb_webhook_register_auth.py \
+            tests/test_bb_inbound_matching_outbound.py \
+            tests/test_bb_consent_ledger_gate.py \
+            tests/test_bb_consent_gate_merged_paths.py \
+            tests/test_bb_send_normalize.py \
+            tests/test_bb_diagnostic_smoke.py \
+            tests/test_bb_servers_init.py \
+            tests/test_outreach_queue.py \
+            tests/test_docuseal_initial_delivery.py \
+            tests/test_defendant_delivery_authorization.py \
+            tests/test_paperwork_hub.py \
+            tests/test_forfeiture_and_imessage_send.py \
+            tests/test_pin_portal.py \
+            tests/test_shannon_voice_paperwork.py \
+            tests/test_wix_imessage_send.py \
+            tests/test_swipesimple_invoice_claims.py \
             --tb=short
