@@ -1072,6 +1072,46 @@ async def intake_promote(request: Request, intake_id: str):
     except Exception as pay_exc:
         logger.warning("[intake] payment_link auto-dispatch failed (non-fatal): %s", pay_exc)
 
+    # ── 7a2. Opt-in Share Invoice (SwipeSimple draft + copy_link) — gated OFF ─
+    # Requires SWIPESIMPLE_SHARE_INVOICE_ON_PROMOTE=1. Live HTTP still needs
+    # SWIPESIMPLE_LIVE=1; customer send needs SWIPESIMPLE_DISPATCH_LIVE=1.
+    # Soft-fail: never blocks promote. See SWIPESIMPLE_PRODUCTION_CHECKLIST.md.
+    try:
+        from dashboard.services.swipesimple_invoice_service import (
+            maybe_issue_share_invoice_for_bond,
+            share_invoice_on_promote_enabled,
+        )
+
+        if share_invoice_on_promote_enabled():
+            share_bond_id = str(
+                bond_doc.get("bond_case_id")
+                or bond_doc.get("bond_id")
+                or matched_booking
+                or ""
+            ).strip()
+            if share_bond_id:
+                share_result = await maybe_issue_share_invoice_for_bond(
+                    share_bond_id,
+                    channel="imessage",
+                    dispatch=True,
+                    source="intake_promote",
+                )
+                logger.info(
+                    "[intake] share_invoice booking=%s ok=%s idempotent=%s dispatch_sent=%s",
+                    matched_booking,
+                    share_result.get("ok"),
+                    (share_result.get("create") or {}).get("idempotent"),
+                    (share_result.get("dispatch") or {}).get("sent"),
+                )
+            else:
+                logger.info("[intake] share_invoice skipped — no bond id")
+        else:
+            logger.info(
+                "[intake] share_invoice skipped — SWIPESIMPLE_SHARE_INVOICE_ON_PROMOTE not set"
+            )
+    except Exception as share_exc:
+        logger.warning("[intake] share_invoice failed (non-fatal): %s", share_exc)
+
     try:
         from dashboard.services.bond_court_seed_service import (
             seed_court_calendar_for_bond,
