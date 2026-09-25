@@ -34,6 +34,19 @@ _IDEMPOTENCY_HOURS = 24
 # (POST /api/paperwork/payment/swipesimple-link → send_swipesimple_payment_link)
 # does not use this marker.
 SEND_ONCE_FIELD = "payment_link_send_once"
+# Staff-confirmed premium marker (NEW in PR #60 — no pre-existing field).
+# An AUTO send (maybe_send_packet_payment_link) requires ALL THREE on the same
+# document (paperwork packet, else active bond): a positive amount, a timestamp
+# and who confirmed it. Stored ``premium`` / ``premium_amount`` values are NOT
+# used for auto sends: they are often the 10%-of-bond estimate written by
+# intake promote (intake.py), packet_builder_service, or the DocuSeal prefill,
+# and are indistinguishable from staff-entered values.
+# NOTHING in the codebase sets these fields yet (no staff confirmation UI) — so
+# automatic sends stay skipped with reason=premium_unconfirmed until one exists.
+# Never auto-set / backfill them.
+PREMIUM_CONFIRMED_AMOUNT_FIELD = "premium_confirmed_amount"
+PREMIUM_CONFIRMED_AT_FIELD = "premium_confirmed_at"
+PREMIUM_CONFIRMED_BY_FIELD = "premium_confirmed_by"
 _DEFAULT_SWIPESIMPLE_URL = (
     "https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd"
 )
@@ -176,39 +189,57 @@ async def _load_context(
     }
 
 
+def _money_or_zero(raw: Any) -> float:
+    if raw is None or raw == "" or isinstance(raw, bool):
+        return 0.0
+    try:
+        val = float(str(raw).replace(",", "").replace("$", "").strip())
+    except (TypeError, ValueError):
+        return 0.0
+    return val if val > 0 else 0.0
+
+
+def confirmed_premium(
+    packet_doc: Optional[dict],
+    bond_doc: Optional[dict],
+) -> float:
+    """Staff-confirmed premium, or 0.0 when there is none.
+
+    Counts ONLY when ``premium_confirmed_amount`` > 0 AND ``premium_confirmed_at``
+    AND ``premium_confirmed_by`` are all set on the same document (packet first,
+    then active bond). Plain ``premium`` / ``premium_amount`` / ``total_premium``
+    never count — they may be the 10% estimate.
+    """
+    for doc in (packet_doc, bond_doc):
+        if not isinstance(doc, dict):
+            continue
+        amount = _money_or_zero(doc.get(PREMIUM_CONFIRMED_AMOUNT_FIELD))
+        at = doc.get(PREMIUM_CONFIRMED_AT_FIELD)
+        by = str(doc.get(PREMIUM_CONFIRMED_BY_FIELD) or "").strip()
+        if amount > 0 and at and by:
+            return amount
+    return 0.0
+
+
 def _resolve_premium(
     amount_val: Any,
     packet_doc: Optional[dict],
     bond_doc: Optional[dict],
     intake_doc: Optional[dict],
 ) -> float:
-    try:
-        amount = float(amount_val) if amount_val is not None else 0.0
-    except (TypeError, ValueError):
-        amount = 0.0
+    """Amount for the STAFF endpoint copy: the staff-entered amount if > 0, else
+    the staff-confirmed premium, else 0.0 (copy then says "Confirmed Amount").
+
+    Stored ``premium`` / ``premium_amount`` fields are deliberately NOT used as a
+    fallback: they may be the 10%-of-bond estimate (intake promote,
+    packet_builder_service, DocuSeal prefill) and must never be quoted to a
+    customer as the "Confirmed Premium". ``intake_doc`` is accepted for
+    signature compatibility only.
+    """
+    amount = _money_or_zero(amount_val)
     if amount > 0:
         return amount
-    for doc, keys in (
-        (packet_doc, ("premium_amount", "numeric_premium_dollar", "premium")),
-        (bond_doc, ("premium_amount", "total_premium", "premium")),
-        (intake_doc, ("premium_amount", "premium")),
-    ):
-        if not doc:
-            continue
-        for key in keys:
-            raw = doc.get(key)
-            if raw is None or raw == "":
-                continue
-            try:
-                val = float(str(raw).replace(",", "").replace("$", ""))
-                if val > 0:
-                    return val
-            except (TypeError, ValueError):
-                continue
-    # No exact stored premium → 0.0 (callers skip with reason "premium_unknown").
-    # NEVER derive a premium from bond_amount here: an estimated amount must not
-    # be quoted to a customer as the "Confirmed Premium".
-    return 0.0
+    return confirmed_premium(packet_doc, bond_doc)
 
 
 def _resolve_contacts(
@@ -588,11 +619,31 @@ async def maybe_send_packet_payment_link(
 ) -> Dict[str, Any]:
     """Send-once auto-send for packet finalize / intake promote / DocuSeal completion.
 
-    Skips when payment already collected, a link was sent recently, there is no
-    exact stored premium (never estimated), no indemnitor contact, or the
-    atomic send-once claim is not won (already sent / claimed / stale → manual
-    review). Never raises — soft-fails with reason.
+    Gates, in order (each → ``skipped`` with ``reason``; never raises):
+      * ``switch_off``            DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK is off
+                                  (default) — see legacy_payment_link_switch.
+      * ``payment_already_collected`` / ``recently_sent`` (bypassed by force)
+      * ``premium_unconfirmed``   no staff-confirmed premium (confirmed_premium);
+                                  stored/estimated premiums never count and the
+                                  caller's ``amount`` is ignored for auto sends.
+      * ``no_contact``
+      * send-once claim not won   (already sent / claimed / stale → manual review)
+    ``force`` does NOT bypass the switch or the premium_unconfirmed rule.
     """
+    from dashboard.services.legacy_payment_link_switch import (
+        legacy_payment_link_enabled,
+    )
+
+    if not legacy_payment_link_enabled():
+        logger.info("[payment_link] skip %s reason=switch_off", source)
+        return {
+            "success": True,
+            "skipped": True,
+            "reason": "switch_off",
+            "packet_id": packet_id,
+            "booking_number": booking_number,
+            "source": source,
+        }
     try:
         ctx = await _load_context(
             packet_id=packet_id,
@@ -627,7 +678,9 @@ async def maybe_send_packet_payment_link(
                     "source": source,
                 }
 
-        amount_f = _resolve_premium(amount, packet_doc, bond_doc, intake_doc)
+        # AUTO sends use ONLY the staff-confirmed premium. The caller's `amount`
+        # and any stored premium (possibly the 10% estimate) are ignored.
+        amount_f = confirmed_premium(packet_doc, bond_doc)
         phone_r, email_r, defendant_name = _resolve_contacts(
             phone=phone,
             email_addr=email,
@@ -638,19 +691,14 @@ async def maybe_send_packet_payment_link(
         )
 
         if amount_f <= 0:
-            logger.info(
-                "[payment_link] skip %s — premium unknown (packet=%s booking=%s)",
-                source,
-                packet_id,
-                booking_number,
-            )
+            # No amount / PII in this log line — source + reason only.
+            logger.info("[payment_link] skip %s reason=premium_unconfirmed", source)
             return {
                 "success": True,
                 "skipped": True,
-                "reason": "premium_unknown",
+                "reason": "premium_unconfirmed",
                 "packet_id": packet_id,
                 "booking_number": booking_number,
-                "amount": amount_f,
                 "source": source,
             }
 

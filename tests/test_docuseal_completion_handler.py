@@ -669,7 +669,9 @@ def test_legacy_switch_off_prevents_call(value):
 
 def test_legacy_switch_on_via_module_constant_one_line_change():
     h = Harness()
-    with h.patched(), patch.object(dc, "LEGACY_PAYMENT_LINK_DEFAULT", "webhook"):
+    from dashboard.services import legacy_payment_link_switch as sw
+
+    with h.patched(), patch.object(sw, "LEGACY_PAYMENT_LINK_DEFAULT", "webhook"):
         body = _body()
         TestClient(h.app()).post("/api/webhooks/docuseal", content=body,
                                  headers={"Content-Type": "application/json", "X-DocuSeal-Signature": _sig(body)})
@@ -777,3 +779,247 @@ def test_status_refresh_does_not_persist_completed(remote, expect_status):
         assert col.docs[0]["docuseal_status"] == "sent"     # poller will still pick it up
     else:
         assert sets["docuseal_status"] == expect_status
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Completion-path legacy send: premium_unconfirmed (real service, mocked sends)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_preexisting_packet_never_gets_legacy_send_even_with_switch_all():
+    old = _packet(status="signed", docuseal_status="completed")
+    h = Harness(old)
+    with h.patched(env={dc.LEGACY_PAYMENT_LINK_ENV: "all"}):
+        asyncio.run(h.run_poller())
+        asyncio.run(h.run_poller())
+    assert h.calls["legacy_payment_link"] == 0
+    assert h.step(dc.STEP_LEGACY)["reason"] == "completed_before_shared_handler"
+
+
+def _real_pay_world(packet: dict):
+    """Harness whose legacy step calls the REAL maybe_send_packet_payment_link
+    with a BlueBubbles stub (no network)."""
+    import dashboard.services.packet_payment_link_service as pls
+
+    h = Harness(packet)
+    sent: List[str] = []
+
+    async def fake_bb(phone, msg):
+        sent.append(msg)
+        return {"status": 200, "message": "sent"}
+
+    @contextmanager
+    def patched(env):
+        with h.patched(env=env), ExitStack() as st:
+            # undo the Harness mock: the legacy step calls the REAL service
+            st.enter_context(patch("dashboard.services.packet_payment_link_service.maybe_send_packet_payment_link",
+                                   new=_REAL_MAYBE_SEND))
+            st.enter_context(patch.object(pls, "get_collection", side_effect=h.get_col))
+            st.enter_context(patch.object(pls, "send_message_universal", side_effect=fake_bb))
+            gm = st.enter_context(patch("dashboard.services.gmail_reader.GmailReaderService"))
+            gm.return_value.is_configured = False
+            yield
+
+    return h, sent, patched
+
+
+import dashboard.services.packet_payment_link_service as _pls_mod  # noqa: E402
+
+_REAL_MAYBE_SEND = _pls_mod.maybe_send_packet_payment_link
+_CONFIRMED = {
+    "premium_confirmed_amount": 650.0,
+    "premium_confirmed_at": "2026-09-24T15:00:00+00:00",
+    "premium_confirmed_by": "staff-test",
+}
+
+
+@pytest.mark.parametrize("premium_fields", [
+    {},                                                         # nothing
+    {"premium_amount": 500.0, "numeric_premium_dollar": "$500.00", "premium": 500.0},  # estimate / prefill
+    {**_CONFIRMED, "premium_confirmed_by": None},               # partial marker
+])
+def test_completion_switch_on_unconfirmed_premium_skips(premium_fields, caplog):
+    caplog.set_level(logging.INFO)
+    h, sent, patched = _real_pay_world(_packet(indemnitor_phone="2395550142", **premium_fields))
+    with patched({dc.LEGACY_PAYMENT_LINK_ENV: "true"}):
+        body = _body()
+        client = TestClient(h.app())
+        for _ in range(2):
+            client.post("/api/webhooks/docuseal", content=body,
+                        headers={"Content-Type": "application/json", "X-DocuSeal-Signature": _sig(body)})
+        asyncio.run(h.run_poller())
+    assert sent == []
+    st = h.step(dc.STEP_LEGACY)
+    assert st["state"] == "skipped" and st["reason"] == "premium_unconfirmed"
+    assert "payment_link_send_once" not in h.packet_doc()
+    assert "500" not in caplog.text and "2395550142" not in caplog.text
+
+
+def test_completion_switch_on_confirmed_premium_exactly_one_send():
+    h, sent, patched = _real_pay_world(_packet(indemnitor_phone="2395550142", premium_amount=500.0, **_CONFIRMED))
+    with patched({dc.LEGACY_PAYMENT_LINK_ENV: "true"}):
+        body = _body()
+        client = TestClient(h.app())
+        for _ in range(3):
+            client.post("/api/webhooks/docuseal", content=body,
+                        headers={"Content-Type": "application/json", "X-DocuSeal-Signature": _sig(body)})
+        asyncio.run(h.run_poller())
+        # a later auto path (e.g. finalize) is still blocked by the send-once claim
+        later = asyncio.run(_REAL_MAYBE_SEND(packet_id=PACKET_ID, source="packet_finalize"))
+    assert len(sent) == 1 and "$650.00" in sent[0] and "$500" not in sent[0]
+    assert h.step(dc.STEP_LEGACY)["state"] == "done"
+    assert h.packet_doc()["payment_link_send_once"]["state"] == "sent"
+    assert later["skipped"] is True and later["reason"] in ("already_sent_once", "recently_sent")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Drive-only backfill (first deploy): idempotent, rate-limited, no replays
+# ─────────────────────────────────────────────────────────────────────────────
+
+BACKFILL_DRIVE_URL = "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUv/view?usp=drivesdk"
+NEVER_REPLAYED = ("share_invoice", "court_sync", "slack", "sse_event", "legacy_payment_link")
+
+
+def _old(i: int, **kw) -> dict:
+    d = _packet(_id=f"oid-old-{i}", packet_id=f"pkt-old-{i}", bond_case_id=f"BC-OLD-{i}",
+                booking_number=f"OLD-BK-{i}", status="signed", docuseal_status="completed",
+                docuseal_submission_id=900 + i)
+    d.update(kw)
+    return d
+
+
+def _backfill_harness(packets: List[dict], **kw) -> Harness:
+    h = Harness(packets[0], **kw)
+    h.colls["paperwork_packets"] = FakeCollection(packets)
+    return h
+
+
+def _no_replays(h: Harness):
+    for k in NEVER_REPLAYED:
+        assert h.calls[k] == 0, f"{k} replayed"
+    assert not [u for u in h.bond_case_updates() if "Packet_Status" in u[1].get("$set", {})]
+    h.pay.assert_not_awaited()
+
+
+def test_backfill_idempotent_dedups_on_drive_link_and_file_id_and_rerun_uploads_nothing():
+    packets = [
+        _old(1),                                                     # needs upload
+        _old(2, drive_link=BACKFILL_DRIVE_URL),                      # has link
+        _old(3, signed_pdf_drive_url=BACKFILL_DRIVE_URL),            # has link
+        _old(4, signed_pdf_drive_file_id="1AbCdEfGhIjKlMnOpQrStUv"),  # has file id only
+        _old(5, signed_pdf_drive_id="fld-legacy"),                   # legacy id field only
+    ]
+    h = _backfill_harness(packets)
+    h.FakeDocuSeal.file_signed_pdf_to_drive = (
+        lambda self, _pdf, **_kw: (h.calls.update(["drive_upload"]) or
+                                   {"ok": True, "drive_url": BACKFILL_DRIVE_URL, "drive_folder_id": "fld-x"}))
+    with h.patched(env={dc.LEGACY_PAYMENT_LINK_ENV: "all"}), \
+         patch("dashboard.services.lifecycle_automations._backfill_pause", new=AsyncMock()):
+        r1 = asyncio.run(h.run_poller({"drive_backfill_delay_seconds": 0}))
+        r2 = asyncio.run(h.run_poller({"drive_backfill_delay_seconds": 0}))
+        r3 = asyncio.run(h.run_poller({"drive_backfill_delay_seconds": 0}))
+    assert h.calls["drive_upload"] == 1
+    assert r1["drive_backfill"]["uploaded"] == 1
+    assert r2["drive_backfill"]["uploaded"] == 0 and r3["drive_backfill"]["uploaded"] == 0
+    assert r2["drive_backfill"]["scanned"] == 0
+    first = h.packets.docs[0]
+    assert first["signed_pdf_drive_url"] == BACKFILL_DRIVE_URL
+    assert first["signed_pdf_drive_file_id"] == "1AbCdEfGhIjKlMnOpQrStUv"
+    for d in h.packets.docs[1:]:
+        assert "docuseal_completion" not in d                        # never even claimed
+    _no_replays(h)
+
+
+def test_backfill_handler_level_dedup_on_file_id():
+    """Even if a packet slips past the query, the handler skips on a file id."""
+    h = Harness(_old(1, signed_pdf_drive_file_id="1AbCdEfGhIjKlMnOpQrStUv"))
+    with h.patched():
+        asyncio.run(dc.handle_docuseal_completion(h.packet_doc(), get_col=h.get_col,
+                                                  source=dc.SOURCE_POLLER, submission_id=901))
+    assert h.calls["download"] == 0 and h.calls["drive_upload"] == 0
+    assert h.step(dc.STEP_DRIVE)["reason"] == "drive_file_id_exists"
+
+
+def test_backfill_rate_limited_bounded_batch_and_delay():
+    packets = [_old(i) for i in range(1, 8)]
+    h = _backfill_harness(packets)
+    sleep = AsyncMock()
+    with h.patched(), patch("dashboard.services.lifecycle_automations._backfill_pause", new=sleep):
+        r1 = asyncio.run(h.run_poller({"drive_backfill_batch": 3, "drive_backfill_delay_seconds": 1.5}))
+        assert h.calls["drive_upload"] == 3
+        assert r1["drive_backfill"]["uploaded"] == 3
+        assert r1["drive_backfill"]["deferred"] >= 1
+        assert sleep.await_count == 2 and all(c.args == (1.5,) for c in sleep.await_args_list)
+        r2 = asyncio.run(h.run_poller({"drive_backfill_batch": 3, "drive_backfill_delay_seconds": 1.5}))
+        r3 = asyncio.run(h.run_poller({"drive_backfill_batch": 3, "drive_backfill_delay_seconds": 1.5}))
+        r4 = asyncio.run(h.run_poller({"drive_backfill_batch": 3, "drive_backfill_delay_seconds": 1.5}))
+    assert [r["drive_backfill"]["uploaded"] for r in (r2, r3, r4)] == [3, 1, 0]
+    assert h.calls["drive_upload"] == 7                              # each exactly once
+    _no_replays(h)
+
+
+def test_backfill_default_limits_and_clamping():
+    assert dc.drive_backfill_limits({}) == (10, 2.0)
+    assert dc.drive_backfill_limits(None) == (10, 2.0)
+    assert dc.drive_backfill_limits({"drive_backfill_batch": 5000, "drive_backfill_delay_seconds": 999}) == (50, 30.0)
+    assert dc.drive_backfill_limits({"drive_backfill_batch": -3, "drive_backfill_delay_seconds": -1}) == (1, 0.0)
+    assert dc.drive_backfill_limits({"drive_backfill_batch": "x", "drive_backfill_delay_seconds": "y"}) == (10, 2.0)
+    assert dc.drive_backfill_limits({"drive_backfill_delay_seconds": 0}) == (10, 0.0)
+
+
+def test_backfill_failed_upload_retries_count_against_batch_and_no_replays():
+    packets = [_old(i) for i in range(1, 4)]
+    h = _backfill_harness(packets, drive_ok=False)
+    with h.patched(), patch("dashboard.services.lifecycle_automations._backfill_pause", new=AsyncMock()):
+        r1 = asyncio.run(h.run_poller({"drive_backfill_batch": 2}))
+        r2 = asyncio.run(h.run_poller({"drive_backfill_batch": 2}))
+    assert r1["drive_backfill"]["failed"] == 2 and r1["drive_backfill"]["uploaded"] == 0
+    # retries of pre-handler packets are still "backfill": bounded by the batch
+    assert r2["drive_backfill"]["scanned"] == 2
+    assert h.calls["drive_upload"] == 4
+    _no_replays(h)
+
+
+def test_backfill_kill_switch_uploads_nothing_including_retries():
+    packets = [_old(1), _old(2)]
+    h = _backfill_harness(packets, drive_ok=False)
+    with h.patched(), patch("dashboard.services.lifecycle_automations._backfill_pause", new=AsyncMock()):
+        asyncio.run(h.run_poller({}))                 # one failed backfill attempt each
+        before = h.calls["drive_upload"]
+        h.drive_ok = True
+        r = asyncio.run(h.run_poller({"drive_backfill_legacy": False}))
+        r_ftd = asyncio.run(h.run_poller({"file_to_drive": False}))
+    assert before == 2
+    assert h.calls["drive_upload"] == before          # kill switch: no new uploads, no retries
+    assert r["drive_backfill"]["enabled"] is False and r["drive_backfill"]["scanned"] == 0
+    assert r_ftd["drive_backfill"]["enabled"] is False
+    _no_replays(h)
+
+
+def test_backfill_summary_log_counts_no_pii(caplog):
+    caplog.set_level(logging.INFO)
+    packets = [_old(1), _old(2, drive_link=BACKFILL_DRIVE_URL)]
+    h = _backfill_harness(packets)
+    with h.patched(), patch("dashboard.services.lifecycle_automations._backfill_pause", new=AsyncMock()):
+        asyncio.run(h.run_poller({}))
+    lines = [r.getMessage() for r in caplog.records if "drive_backfill summary" in r.getMessage()]
+    assert len(lines) == 1
+    line = lines[0]
+    for key in ("scanned=1", "uploaded=1", "skipped_existing=0", "failed=0"):
+        assert key in line, line
+    for needle in (DEFENDANT, "OLD-BK-", BACKFILL_DRIVE_URL, "1AbCdEf"):
+        assert needle not in line
+
+
+def test_backfill_disabled_logs_kill_switch(caplog):
+    caplog.set_level(logging.INFO)
+    h = _backfill_harness([_old(1)])
+    with h.patched():
+        asyncio.run(h.run_poller({"drive_backfill_legacy": False}))
+    assert "drive_backfill disabled (kill switch)" in caplog.text
+    assert h.calls["drive_upload"] == 0
+
+
+def test_drive_file_id_from_url():
+    assert dc.drive_file_id_from_url(BACKFILL_DRIVE_URL) == "1AbCdEfGhIjKlMnOpQrStUv"
+    assert dc.drive_file_id_from_url("https://drive.google.com/open?id=1AbCdEfGhIjKlMnOpQrStUv") == "1AbCdEfGhIjKlMnOpQrStUv"
+    assert dc.drive_file_id_from_url("") is None and dc.drive_file_id_from_url(None) is None

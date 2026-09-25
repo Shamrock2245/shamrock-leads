@@ -13,12 +13,18 @@ PII: never log full phones/emails; Slack uses names + booking only.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+async def _backfill_pause(seconds: float) -> None:
+    """Pause between Drive backfill uploads (rate limit). Separate for tests."""
+    await asyncio.sleep(seconds)
 
 # SignNow invite / document statuses that mean fully signed
 _SIGNED_STATUSES = frozenset({
@@ -220,10 +226,21 @@ class LifecycleAutomations:
           1. retry  — packets the shared handler started but didn't finish
                       (failed step, crashed run with expired lease, or a
                       webhook-requested legacy link). No DocuSeal GET needed.
-          2. legacy_drive — packets completed before the shared handler that
-                      never got a Drive link (Drive-only retry; other steps are
-                      stamped skipped, never replayed). ``file_to_drive`` and
-                      ``drive_backfill_legacy`` config keys gate this.
+          2. drive backfill — packets completed before the shared handler
+                      (status=signed, no completion record, or a record with
+                      preexisting_completion) that have NO Drive link and NO
+                      Drive file id. DRIVE-ONLY: every other step (bond_cases,
+                      SSE, legacy payment link, share invoice, court sync,
+                      Slack) is stamped skipped, never replayed — so no customer
+                      message, invoice, court sync or Slack post.
+                      Idempotent: dedup on Drive link AND file id (query + a
+                      pre-check + the handler's own check), atomic claim.
+                      Rate-limited: at most ``drive_backfill_batch`` (default
+                      10, max 50) per tick with ``drive_backfill_delay_seconds``
+                      (default 2.0, max 30) between them; the rest is deferred
+                      to the next tick. Kill switch: ``drive_backfill_legacy:
+                      false`` (or ``file_to_drive: false``). Each run logs a
+                      count summary (no PII).
           3. open   — open packets: GET the submission; completed → handler.
                       Note: no longer filters on docuseal_status, so packets a
                       staff status refresh marked docuseal_status=completed
@@ -235,7 +252,10 @@ class LifecycleAutomations:
         from dashboard.services.docuseal_service import DocuSealService
         from dashboard.services.docuseal_completion import (
             SOURCE_POLLER,
+            drive_backfill_limits,
+            drive_record_reason,
             handle_docuseal_completion,
+            is_backfill_packet,
             poller_legacy_drive_query,
             poller_retry_query,
         )
@@ -252,6 +272,19 @@ class LifecycleAutomations:
         packets = self.db["paperwork_packets"]
         file_to_drive = bool(cfg.get("file_to_drive", True))
 
+        backfill_enabled = file_to_drive and bool(cfg.get("drive_backfill_legacy", True))
+        bf_batch, bf_delay = drive_backfill_limits(cfg)
+        backfill = {
+            "enabled": backfill_enabled,
+            "batch": bf_batch,
+            "scanned": 0,
+            "uploaded": 0,
+            "skipped_existing": 0,
+            "failed": 0,
+            "deferred": 0,
+            "claim_busy": 0,
+        }
+
         results = {
             "ok": True,
             "scanned": 0,
@@ -262,22 +295,31 @@ class LifecycleAutomations:
             "completion_retried": 0,
             "claim_busy": 0,
             "signed_packets": [],
+            "drive_backfill": backfill,
         }
 
         work: list[tuple[str, dict]] = []
         seen: set = set()
 
-        async def _collect(kind: str, query: dict) -> None:
-            async for pkt in packets.find(query).limit(limit):
+        async def _collect(kind: str, query: dict, cap: int) -> None:
+            async for pkt in packets.find(query).limit(cap):
                 key = pkt.get("_id") if pkt.get("_id") is not None else pkt.get("packet_id")
                 if key in seen:
                     continue
                 seen.add(key)
-                work.append((kind, pkt))
+                k = kind
+                if kind == "retry" and is_backfill_packet(pkt):
+                    # A pre-handler completion whose Drive upload is being
+                    # retried is still backfill: same batch/delay + kill switch.
+                    if not backfill_enabled:
+                        continue
+                    k = "backfill"
+                work.append((k, pkt))
 
-        await _collect("retry", poller_retry_query())
-        if file_to_drive and bool(cfg.get("drive_backfill_legacy", True)):
-            await _collect("legacy_drive", poller_legacy_drive_query())
+        await _collect("retry", poller_retry_query(), limit)
+        if backfill_enabled:
+            # Fetch one extra so "deferred" can be reported without a count query.
+            await _collect("backfill", poller_legacy_drive_query(), bf_batch + 1)
         await _collect("open", {
             "esign_provider": "docuseal",
             "status": {"$in": [
@@ -285,15 +327,24 @@ class LifecycleAutomations:
                 "pending_esign", "finalized",
             ]},
             "docuseal_submission_id": {"$exists": True, "$ne": None},
-        })
+        }, limit)
 
         def _get_col(name: str):
             return self.db[name]
 
+        backfill_attempted = 0
         for kind, packet in work:
-            results["scanned"] += 1
             packet_id = packet.get("packet_id") or str(packet.get("_id", ""))
             sub_id = packet.get("docuseal_submission_id")
+            if kind == "backfill":
+                if backfill["scanned"] >= bf_batch:
+                    backfill["deferred"] += 1   # next tick
+                    continue
+                backfill["scanned"] += 1
+                if drive_record_reason(packet):
+                    backfill["skipped_existing"] += 1
+                    continue
+            results["scanned"] += 1
             if not sub_id:
                 continue
             try:
@@ -310,6 +361,11 @@ class LifecycleAutomations:
                         )
                         results["still_pending"] += 1
                         continue
+                elif kind == "backfill":
+                    if backfill_attempted and bf_delay > 0:
+                        await _backfill_pause(bf_delay)
+                    backfill_attempted += 1
+                    results["completion_retried"] += 1
                 else:
                     results["completion_retried"] += 1
 
@@ -323,6 +379,8 @@ class LifecycleAutomations:
                 )
                 if not res.get("claimed"):
                     results["claim_busy"] += 1
+                    if kind == "backfill":
+                        backfill["claim_busy"] += 1
                     continue
                 if res.get("filed_drive"):
                     results["filed_drive"] += 1
@@ -331,6 +389,16 @@ class LifecycleAutomations:
                         "packet_id": packet_id,
                         **res["drive_error"],
                     })
+                if kind == "backfill":
+                    if res.get("filed_drive"):
+                        backfill["uploaded"] += 1
+                    elif res.get("drive_error"):
+                        backfill["failed"] += 1
+                    elif any(
+                        step == "drive_upload" and state == "skipped"
+                        for step, state in res.get("ran", [])
+                    ):
+                        backfill["skipped_existing"] += 1
                 if res.get("signed"):
                     results["signed"] += 1
                     results["signed_packets"].append({
@@ -340,7 +408,20 @@ class LifecycleAutomations:
                     })
             except Exception as e:
                 results["errors"] += 1
+                if kind == "backfill":
+                    backfill["failed"] += 1
                 logger.warning("[docuseal-poll] packet %s: err_type=%s", packet_id, type(e).__name__)
+
+        # Per-run count summary for the Drive backfill (counts only — no PII).
+        if backfill_enabled:
+            logger.info(
+                "[docuseal-poll] drive_backfill summary scanned=%d uploaded=%d "
+                "skipped_existing=%d failed=%d deferred=%d claim_busy=%d batch=%d",
+                backfill["scanned"], backfill["uploaded"], backfill["skipped_existing"],
+                backfill["failed"], backfill["deferred"], backfill["claim_busy"], bf_batch,
+            )
+        else:
+            logger.info("[docuseal-poll] drive_backfill disabled (kill switch)")
 
         return results
 

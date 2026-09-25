@@ -2,8 +2,11 @@
 Legacy static SwipeSimple link (packet_payment_link_service.maybe_send_packet_payment_link):
   - atomic send-once claim BEFORE sending (concurrent retries, >24h repeat,
     finalize → completion, stale claim → manual review, never auto-retried)
-  - no exact stored premium → skip (the 10%-of-bond_amount fallback is gone)
-  - DocuSeal completion: flag unset → zero sends; flag on → exactly one.
+  - switch DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK default OFF → switch_off, no send
+  - switch on but no STAFF-CONFIRMED premium (stored / 10% estimate never
+    counts) → premium_unconfirmed, no send, no claim consumed
+  - DocuSeal completion: flag unset → zero sends; flag on + confirmed → exactly one;
+    flag on + unconfirmed → zero (stamped premium_unconfirmed).
 
 All mocked: in-memory Mongo double, BlueBubbles send stub, Gmail off. No sends.
 """
@@ -34,11 +37,20 @@ BOOKING = "PAY-BK-0001"
 PHONE = "2395550142"  # 555 test number
 
 
+SWITCH_ENV = "DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK"
+CONFIRMED = {
+    pls.PREMIUM_CONFIRMED_AMOUNT_FIELD: 750.0,
+    pls.PREMIUM_CONFIRMED_AT_FIELD: "2026-09-24T15:00:00+00:00",
+    pls.PREMIUM_CONFIRMED_BY_FIELD: "staff-test",
+}
+UNCONFIRMED = {k: None for k in CONFIRMED}
+
+
 def _packet(**kw):
     d = {"_id": "oid-pay-1", "packet_id": PACKET_ID, "booking_number": BOOKING,
          "premium_amount": 750.0, "indemnitor_phone": PHONE, "defendant_name": "Test Person",
          "esign_provider": "docuseal", "status": "pending_signature",
-         "docuseal_submission_id": 777}
+         "docuseal_submission_id": 777, **CONFIRMED}
     d.update(kw)
     return d
 
@@ -50,18 +62,22 @@ class World:
         if bond is not None:
             self.colls["active_bonds"] = FakeCollection([bond])
         self.sent = []
+        self.msgs = []
 
     def get_col(self, name):
         return self.colls[name]
 
     @contextmanager
-    def patched(self):
+    def patched(self, switch="true"):
         async def fake_bb(phone, msg):
             self.sent.append(phone)
+            self.msgs.append(msg)
             await asyncio.sleep(0)
             return {"status": 200, "message": "sent"}
 
-        with patch.object(pls, "get_collection", side_effect=self.get_col), \
+        env = {SWITCH_ENV: switch} if switch is not None else {}
+        with patch.dict(os.environ, env), \
+             patch.object(pls, "get_collection", side_effect=self.get_col), \
              patch.object(pls, "send_message_universal", side_effect=fake_bb), \
              patch("dashboard.services.gmail_reader.GmailReaderService") as gm:
             gm.return_value.is_configured = False
@@ -156,7 +172,8 @@ def test_undelivered_send_is_not_retried():
 
 
 def test_intake_promote_without_packet_claims_on_bond_booking():
-    bond = {"booking_number": BOOKING, "premium": 300.0, "indemnitor_phone": PHONE, "payment_status": "pending"}
+    bond = {"booking_number": BOOKING, "premium": 300.0, "indemnitor_phone": PHONE,
+            "payment_status": "pending", **CONFIRMED, pls.PREMIUM_CONFIRMED_AMOUNT_FIELD: 300.0}
     w = World(bond=bond)
     with w.patched():
         for _ in range(2):
@@ -171,37 +188,116 @@ def test_no_key_fails_closed():
     w = World()
     with w.patched():
         r = asyncio.run(pls.maybe_send_packet_payment_link(
-            amount=100.0, phone=PHONE, source="intake_promote"))
+            amount=100.0, phone=PHONE, bond_doc={"indemnitor_phone": PHONE, **CONFIRMED},
+            source="intake_promote"))
     assert w.sent == [] and r["reason"] == "send_once_no_key"
 
 
-# ── premium: exact stored value only, never 10% ──────────────────────────────
+# ── switch (default OFF) ─────────────────────────────────────────────────────
 
-def test_no_exact_premium_skips_without_send():
-    pkt = _packet(premium_amount=None)
-    bond = {"booking_number": BOOKING, "bond_amount": 5000, "indemnitor_phone": PHONE}
+@pytest.mark.parametrize("value", [None, "", "off", "false", "0", "garbage"])
+def test_switch_off_no_send_no_lookup(value):
+    w = World()
+    env = {SWITCH_ENV: value} if value is not None else {}
+    with patch.dict(os.environ, env), \
+         patch.object(pls, "_load_context", new=AsyncMock()) as load, \
+         patch.object(pls, "send_swipesimple_payment_link", new=AsyncMock()) as send:
+        if value is None:
+            os.environ.pop(SWITCH_ENV, None)
+        for source in ("intake_promote", "packet_finalize", "docuseal_submission_completed"):
+            r = asyncio.run(_send(source=source, force=True))
+            assert r["skipped"] is True and r["reason"] == "switch_off"
+    load.assert_not_awaited()
+    send.assert_not_awaited()
+    assert pls.SEND_ONCE_FIELD not in w.packet()
+
+
+@pytest.mark.parametrize("value", ["1", "true", "yes", "on", "enabled", "webhook", "all", "both"])
+def test_any_enabled_value_enables_service_level_send(value):
+    w = World()
+    with w.patched(switch=value):
+        r = asyncio.run(_send(source="packet_finalize"))
+    assert r.get("delivered") is True and len(w.sent) == 1
+
+
+# ── premium: STAFF-CONFIRMED only; stored / 10% estimates never count ─────────
+
+@pytest.mark.parametrize("source", ["intake_promote", "packet_finalize", "docuseal_submission_completed"])
+def test_estimated_or_stored_premium_is_unconfirmed(source):
+    # premium_amount on the packet + the intake-promote 10% "premium" on the bond:
+    # both look like real numbers but neither is staff-confirmed.
+    pkt = _packet(**UNCONFIRMED, premium_amount=500.0, numeric_premium_dollar="$500.00")
+    bond = {"booking_number": BOOKING, "bond_amount": 5000, "premium": 500.0,
+            "premium_amount": 500.0, "total_premium": 500.0, "indemnitor_phone": PHONE}
     w = World(pkt, bond=bond)
     with w.patched():
-        r = asyncio.run(_send(packet_doc=pkt))
-    assert r["skipped"] is True and r["reason"] == "premium_unknown"
+        r = asyncio.run(_send(packet_doc=pkt, amount=500.0, source=source, force=True))
+    assert r["skipped"] is True and r["reason"] == "premium_unconfirmed"
+    assert "amount" not in r
     assert w.sent == []
     assert pls.SEND_ONCE_FIELD not in w.packet()      # no claim consumed by a skip
 
 
-def test_resolve_premium_never_derives_from_bond_amount():
+@pytest.mark.parametrize("missing", list(CONFIRMED))
+def test_partial_confirmation_is_unconfirmed(missing):
+    pkt = _packet(**{missing: None})
+    w = World(pkt)
+    with w.patched():
+        r = asyncio.run(_send(packet_doc=pkt))
+    assert r["reason"] == "premium_unconfirmed" and w.sent == []
+
+
+def test_confirmed_premium_on_bond_counts_and_caller_amount_ignored():
+    pkt = _packet(**UNCONFIRMED)
+    bond = {"booking_number": BOOKING, "indemnitor_phone": PHONE, "premium": 500.0,
+            **CONFIRMED, pls.PREMIUM_CONFIRMED_AMOUNT_FIELD: 612.5}
+    w = World(pkt, bond=bond)
+    with w.patched():
+        r = asyncio.run(_send(packet_doc=pkt, amount=999.0))
+    assert r["delivered"] is True and len(w.sent) == 1
+    assert "$612.50" in w.msgs[0] and "999" not in w.msgs[0] and "$500" not in w.msgs[0]
+
+
+def test_confirmed_premium_helper():
+    assert pls.confirmed_premium(None, None) == 0.0
+    assert pls.confirmed_premium({"premium": 500, "premium_amount": 500}, {"total_premium": 500}) == 0.0
+    assert pls.confirmed_premium(CONFIRMED, None) == 750.0
+    assert pls.confirmed_premium({**CONFIRMED, pls.PREMIUM_CONFIRMED_AMOUNT_FIELD: "1,250.00"}, None) == 1250.0
+    assert pls.confirmed_premium({**CONFIRMED, pls.PREMIUM_CONFIRMED_AMOUNT_FIELD: 0}, None) == 0.0
+    assert pls.confirmed_premium({**CONFIRMED, pls.PREMIUM_CONFIRMED_BY_FIELD: "  "}, None) == 0.0
+
+
+def test_resolve_premium_never_uses_stored_or_derived_amounts():
+    """Staff endpoint copy: explicit staff amount, else confirmed, else 0 ("Confirmed Amount")."""
     assert pls._resolve_premium(None, None, {"bond_amount": 5000}, None) == 0.0
     assert pls._resolve_premium(None, {"bond_amount": 10000}, {"bond_amount": "2,500"}, {"bond_amount": 1}) == 0.0
-    assert pls._resolve_premium(None, None, {"bond_amount": 5000, "premium_amount": "612.50"}, None) == 612.5
+    # stored premium fields may be the 10% estimate → never quoted as "Confirmed"
+    assert pls._resolve_premium(None, None, {"bond_amount": 5000, "premium_amount": "612.50", "premium": 500}, None) == 0.0
+    assert pls._resolve_premium(None, {"premium_amount": 500, "numeric_premium_dollar": "$500"}, None, {"premium": 500}) == 0.0
+    assert pls._resolve_premium(None, None, {**CONFIRMED}, None) == 750.0
+    assert pls._resolve_premium("300", None, {**CONFIRMED}, None) == 300.0    # explicit staff entry wins
 
 
-def test_premium_unknown_log_has_no_amount_or_pii(caplog):
+def test_staff_endpoint_without_amount_does_not_quote_estimate():
+    bond = {"booking_number": BOOKING, "bond_amount": 5000, "premium": 500.0, "indemnitor_phone": PHONE}
+    w = World(bond=bond)
+    with w.patched(switch=None):
+        os.environ.pop(SWITCH_ENV, None)
+        r = asyncio.run(pls.send_swipesimple_payment_link(
+            booking_number=BOOKING, amount=0, phone=PHONE, deliver_email=False,
+            source="staff_swipesimple_link"))
+    assert r["delivered"] is True            # staff action is NOT behind the switch
+    assert "$500" not in w.msgs[0] and "Confirmed Amount" in w.msgs[0]
+
+
+def test_premium_unconfirmed_log_has_no_amount_or_pii(caplog):
     caplog.set_level("INFO")
-    pkt = _packet(premium_amount=None, bond_amount=5000)
+    pkt = _packet(**UNCONFIRMED, premium_amount=500.0, bond_amount=5000)
     w = World(pkt)
     with w.patched():
         asyncio.run(_send(packet_doc=pkt))
-    assert "premium unknown" in caplog.text
-    for needle in ("5000", "500.0", "500", PHONE, "Test Person"):
+    assert "reason=premium_unconfirmed" in caplog.text
+    for needle in ("5000", "500.0", "500", PHONE, "Test Person", BOOKING):
         assert needle not in caplog.text
 
 
@@ -280,6 +376,19 @@ def test_completion_flag_unset_zero_legacy_sends():
         rs = _post_many(w, 3, {})
     assert all(r.status_code == 200 for r in rs)
     assert w.sent == []
+    assert pls.SEND_ONCE_FIELD not in w.packet()
+
+
+def test_completion_flag_on_unconfirmed_premium_zero_sends():
+    from dashboard.services import docuseal_completion as dc
+
+    w = World(_packet(**UNCONFIRMED))
+    with w.patched():
+        rs = _post_many(w, 3, {SWITCH_ENV: "true"})
+    assert all(r.status_code == 200 for r in rs)
+    assert w.sent == []
+    step = w.packet()["docuseal_completion"]["steps"][dc.STEP_LEGACY]
+    assert step["state"] == "skipped" and step["reason"] == "premium_unconfirmed"
     assert pls.SEND_ONCE_FIELD not in w.packet()
 
 

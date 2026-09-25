@@ -36,21 +36,30 @@ Design
 Legacy payment link switch — DEFAULT OFF (owner decision 2026-09-25)
 -------------------------------------------------------------------
 ``maybe_send_packet_payment_link`` auto-SENDS the static SwipeSimple link to
-the customer (BlueBubbles / Gmail). On DocuSeal completion it is now OFF by
-default: with ``DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK`` unset (or any
-unrecognized value) neither the webhook nor the poller calls it.
+the customer (BlueBubbles / Gmail). It is OFF by default on ALL THREE automatic
+paths — DocuSeal completion (this handler), intake promote, and packet
+finalize — via one switch, ``DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK``
+(parsed in ``legacy_payment_link_switch``; unset or unrecognized → off).
 
-  unset / "0" / "false" / "off" / unknown  → off (default; fail closed)
-  "1" / "true" / "yes" / "on" / "webhook"  → previous production behavior: fires
-            for packets where a submission.completed WEBHOOK was received;
-            poller-only completions do not fire it.
-  "all"     → webhook AND poller completions.
+  unset / "0" / "false" / "off" / unknown  → off everywhere (default; fail closed)
+  "1" / "true" / "yes" / "on" / "webhook"  → completion: only packets where a
+            submission.completed WEBHOOK was received (previous production
+            behavior); intake promote + packet finalize: enabled.
+  "all"     → completion: webhook AND poller; intake promote + finalize: enabled.
+
+Even when enabled, the service sends ONLY when a STAFF-CONFIRMED premium is
+present (``premium_confirmed_amount`` + ``premium_confirmed_at`` +
+``premium_confirmed_by``); otherwise the step is stamped
+``skipped: premium_unconfirmed``. Stored ``premium`` values (often the 10%
+estimate) never count. Nothing sets the confirmed fields yet, so in practice
+enabling the switch still sends nothing until a staff confirmation UI exists.
 
 Reversible with the env flag (or the one-line ``LEGACY_PAYMENT_LINK_DEFAULT``
-constant). When enabled, sends are send-once twice over: this handler stamps
-``started`` before the call (never retried), and the service itself claims
-``payment_link_send_once`` atomically BEFORE sending, so concurrent DocuSeal
-retries, the poller, packet finalize, or a >24h gap can never double-send.
+constant in ``legacy_payment_link_switch``). When enabled, sends are send-once
+twice over: this handler stamps ``started`` before the call (never retried), and
+the service itself claims ``payment_link_send_once`` atomically BEFORE sending,
+so concurrent DocuSeal retries, the poller, packet finalize, or a >24h gap can
+never double-send.
 
 PII: logs carry packet_id / bond_id / step / reason / exception type only.
 """
@@ -64,14 +73,15 @@ from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
 
 logger = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# OWNER SWITCH — legacy static payment link on DocuSeal completion.
-# DEFAULT OFF: no automatic link on completion unless the env var below is an
-# explicit truthy value ("1"/"true"/"yes"/"on"/"webhook") or "all".
-LEGACY_PAYMENT_LINK_DEFAULT = "off"
-# ─────────────────────────────────────────────────────────────────────────────
-LEGACY_PAYMENT_LINK_ENV = "DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK"
-LEGACY_MODES = ("off", "webhook", "all")
+# OWNER SWITCH — legacy static payment link. DEFAULT OFF. Single source of truth
+# lives in ``legacy_payment_link_switch`` (shared with intake promote + packet
+# finalize); re-exported here for backwards compatibility.
+from dashboard.services import legacy_payment_link_switch as _switch  # noqa: E402
+from dashboard.services.legacy_payment_link_switch import (  # noqa: E402,F401
+    LEGACY_MODES,
+    LEGACY_PAYMENT_LINK_DEFAULT,
+    LEGACY_PAYMENT_LINK_ENV,
+)
 
 LEASE_SECONDS_DEFAULT = 900
 LEASE_ENV = "DOCUSEAL_COMPLETION_LEASE_SECONDS"
@@ -120,10 +130,24 @@ PREEXISTING_SKIP_STEPS = (
     STEP_PACKET,
     STEP_BOND_CASES,
     STEP_EVENT,
+    STEP_LEGACY,   # never a customer message for a historical packet, whatever the switch says
     STEP_SHARE,
     STEP_COURT,
     STEP_SLACK,
 )
+
+# Drive-only backfill of pre-handler completions (poller "legacy_drive" set).
+# Idempotency: a packet with ANY of these fields set is treated as already filed
+# and is never uploaded again. (``signed_pdf_drive_id`` historically held the
+# upload FOLDER id, but was only ever written after a successful upload.)
+DRIVE_LINK_FIELDS = ("signed_pdf_drive_url", "drive_link")
+DRIVE_FILE_ID_FIELDS = ("signed_pdf_drive_file_id", "signed_pdf_drive_id")
+DRIVE_MARKER_FIELDS = DRIVE_LINK_FIELDS + DRIVE_FILE_ID_FIELDS
+# Rate limit (poller config keys; env not needed — lifecycle config is in Mongo).
+DRIVE_BACKFILL_BATCH_DEFAULT = 10       # uploads attempted per poller tick
+DRIVE_BACKFILL_BATCH_MAX = 50
+DRIVE_BACKFILL_DELAY_DEFAULT = 2.0      # seconds between backfill uploads
+DRIVE_BACKFILL_DELAY_MAX = 30.0
 
 _C = "docuseal_completion"
 
@@ -143,23 +167,9 @@ def _share_source(source: str) -> str:
     return "docuseal_submission_completed" if source == SOURCE_WEBHOOK else "docuseal_poller_completed"
 
 
-_LEGACY_TRUTHY = frozenset({"1", "true", "yes", "on", "enabled", "webhook"})
-_LEGACY_ALL = frozenset({"all", "both"})
-
-
 def _legacy_payment_link_mode() -> str:
-    """'off' (default) | 'webhook' | 'all'. Anything unrecognized → 'off' (fail closed)."""
-    raw = (os.getenv(LEGACY_PAYMENT_LINK_ENV) or LEGACY_PAYMENT_LINK_DEFAULT or "").strip().lower()
-    if raw in _LEGACY_ALL:
-        return "all"
-    if raw in _LEGACY_TRUTHY:
-        return "webhook"
-    if raw not in ("", "0", "false", "no", "off", "disabled", "none"):
-        logger.warning(
-            "[docuseal_completion] unrecognized %s value — treating as off",
-            LEGACY_PAYMENT_LINK_ENV,
-        )
-    return "off"
+    """'off' (default) | 'webhook' | 'all' — see ``legacy_payment_link_switch``."""
+    return _switch.legacy_payment_link_mode()
 
 
 def _lease_seconds() -> int:
@@ -228,15 +238,66 @@ def poller_retry_query(mode: Optional[str] = None) -> Dict[str, Any]:
 
 
 def poller_legacy_drive_query() -> Dict[str, Any]:
-    """Packets completed before this handler existed that never got a Drive link."""
-    return {
+    """Packets completed before this handler existed that have no Drive link AND
+    no Drive file id recorded (dedup on both)."""
+    q: Dict[str, Any] = {
         "esign_provider": "docuseal",
         "status": "signed",
         _C: {"$exists": False},
         "docuseal_submission_id": {"$exists": True, "$ne": None},
-        "signed_pdf_drive_url": {"$in": [None, ""]},
-        "drive_link": {"$in": [None, ""]},
     }
+    for field in DRIVE_MARKER_FIELDS:
+        q[field] = {"$in": [None, ""]}
+    return q
+
+
+def drive_record_reason(doc: Mapping[str, Any]) -> Optional[str]:
+    """'drive_link_exists' / 'drive_file_id_exists' when the packet is already
+    filed in Drive, else None."""
+    if any(doc.get(f) for f in DRIVE_LINK_FIELDS):
+        return "drive_link_exists"
+    if any(doc.get(f) for f in DRIVE_FILE_ID_FIELDS):
+        return "drive_file_id_exists"
+    return None
+
+
+def drive_file_id_from_url(url: Any) -> Optional[str]:
+    """Extract the Drive file id from a webViewLink (``/d/<id>/`` or ``?id=<id>``)."""
+    import re
+
+    text = str(url or "")
+    m = re.search(r"/d/([A-Za-z0-9_-]{10,})", text) or re.search(r"[?&]id=([A-Za-z0-9_-]{10,})", text)
+    return m.group(1) if m else None
+
+
+def drive_backfill_limits(cfg: Optional[Mapping[str, Any]] = None) -> tuple:
+    """(batch, delay_seconds) from poller config, clamped to sane bounds.
+
+    ``drive_backfill_batch`` (default 10, 1..50) — max backfill packets per tick.
+    ``drive_backfill_delay_seconds`` (default 2.0, 0..30) — pause between them.
+    """
+    cfg = cfg or {}
+    try:
+        batch = int(cfg.get("drive_backfill_batch") or DRIVE_BACKFILL_BATCH_DEFAULT)
+    except (TypeError, ValueError):
+        batch = DRIVE_BACKFILL_BATCH_DEFAULT
+    raw_delay = cfg.get("drive_backfill_delay_seconds")
+    try:
+        delay = float(DRIVE_BACKFILL_DELAY_DEFAULT if raw_delay is None or raw_delay == "" else raw_delay)
+    except (TypeError, ValueError):
+        delay = DRIVE_BACKFILL_DELAY_DEFAULT
+    batch = max(1, min(batch, DRIVE_BACKFILL_BATCH_MAX))
+    delay = max(0.0, min(delay, DRIVE_BACKFILL_DELAY_MAX))
+    return batch, delay
+
+
+def is_backfill_packet(doc: Mapping[str, Any]) -> bool:
+    """A pre-handler completion: either never claimed (legacy query) or claimed
+    with ``preexisting_completion`` (Drive-only; everything else skipped)."""
+    rec = doc.get(_C)
+    if not isinstance(rec, Mapping) or not rec:
+        return str(doc.get("status") or "").lower() == "signed"
+    return bool(rec.get("preexisting_completion"))
 
 
 async def mark_webhook_received(packets_col, packet: Mapping[str, Any], *, event_type: str, now_iso: str) -> None:
@@ -471,8 +532,9 @@ class _Run:
 
     # ── (a) Drive ──────────────────────────────────────────────────────────
     async def step_drive(self) -> None:
-        if self.drive_url():
-            await self.stamp(STEP_DRIVE, "skipped", reason="drive_link_exists")
+        existing = drive_record_reason(self.doc)
+        if existing:
+            await self.stamp(STEP_DRIVE, "skipped", reason=existing)
             return
         if self.source == SOURCE_POLLER and not bool(self.cfg.get("file_to_drive", True)):
             return  # poller config disabled Drive filing; leave pending, no attempt
@@ -520,8 +582,12 @@ class _Run:
                 "drive_link": drive_url,
                 "drive_archive_error": None,
             }
+            file_id = drive_file_id_from_url(drive_url)
+            if file_id:
+                sets["signed_pdf_drive_file_id"] = file_id
             if filed.get("drive_folder_id"):
                 sets["drive_folder_id"] = filed.get("drive_folder_id")
+                # Legacy field name (historically the folder id) — kept for compat.
                 sets["signed_pdf_drive_id"] = filed.get("drive_folder_id")
             if not await self._update_owned({"$set": sets}):
                 raise _LostLease(STEP_DRIVE)
@@ -660,8 +726,10 @@ class _Run:
                 pay_result.get("delivered"),
                 pay_result.get("reason") or ("error" if pay_result.get("error") else None),
             )
+            # premium_unconfirmed / switch_off / send-once skips → terminal
+            # "skipped" (never retried; staff can use the explicit endpoint).
             await self.stamp(
-                STEP_LEGACY, "done",
+                STEP_LEGACY, "skipped" if pay_result.get("skipped") else "done",
                 skipped=bool(pay_result.get("skipped")),
                 delivered=bool(pay_result.get("delivered")),
                 reason=str(pay_result.get("reason") or "")[:80],
