@@ -98,4 +98,5 @@ jobs:
             tests/test_shannon_voice_paperwork.py \
             tests/test_wix_imessage_send.py \
             tests/test_swipesimple_invoice_claims.py \
+            tests/test_slack_alerts.py \
             --tb=short
