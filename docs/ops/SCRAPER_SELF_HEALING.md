@@ -89,10 +89,20 @@ Re-enabling never lifts a `fail_closed` or code-level source-contract guard.
   residential SOCKS proxy) and `BaseScraper._get_obscura_browser[_sync]()` (`OBSCURA_CDP_URL`).
 - New policy: `OBSCURA_ROUTE_COUNTIES` (comma-separated labels, **default empty**) is an opt-in used
   only for reliability on counties that are already `verified_public`. `OBSCURA_HARD_DENY_LABELS` (Hampton,
-  Marlboro, Richland, Sumter SC; Sarasota FL; St. Clair AL; all FL JailTracker wrappers) are always
+  Marlboro, Richland, Sumter SC; TnCIS TN; Sarasota FL; St. Clair AL; all FL JailTracker wrappers) are always
   refused, and so is any `fail_closed` scope (`ObscuraRoutingRefused`).
-- No county is routed by this change. The existing TnCIS (TN) Obscura fallback still works but logs a
-  warning because TnCIS is not `verified_public`. That decision belongs to the owner.
+- No county is routed. `OBSCURA_ROUTE_COUNTIES` ships empty, and enabling one requires a `verified_public`
+  source contract first.
+- **TnCIS (TN): the Obscura fallback is OFF (owner decision 2026-09-25).** The portal
+  (`lgc-tn.com/tncis-web-inquiry/`) sits behind Cloudflare and has no proven public contract. The former
+  fallback chain (curl_cffi + residential proxy → curl_cffi + mobile proxy → Patchright stealth → Obscura)
+  was removed from `scrapers/counties/tennessee_tncis_v2_ape.py`. TnCIS now fails closed in three places:
+  1. `SOURCE_CONTRACT_VALIDATED = False` (`BaseScraper.run()` stops before any fetch, and Health shows `fail_closed`);
+  2. `SCRAPER_SOURCE_STATES["TnCIS (TN)"] = "fail_closed"` plus a `hold` row in `live_emitter_evidence.json`;
+  3. `TnCIS (TN)` is on `OBSCURA_HARD_DENY_LABELS`, so `_get_obscura_browser[_sync]()` raises `ObscuraRoutingRefused`.
+  If `scrape()` is ever reached, it makes one ordinary direct request (no proxy, `trust_env=False`,
+  no impersonation). A Cloudflare or anti-bot answer raises `AntiBotBlocked` (error class `anti_bot`),
+  which is never retried and has no alternate route. `tests/test_tncis_fail_closed.py` enforces this.
 
 ## Environment variables
 

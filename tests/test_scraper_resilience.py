@@ -287,7 +287,7 @@ def test_alert_throttle_suppresses_repeats_within_window():
 # ── Obscura routing policy ─────────────────────────────────────────────────
 @pytest.mark.parametrize(
     "label",
-    ["Hampton (SC)", "Marlboro (SC)", "Richland (SC)", "Sumter (SC)", "Sarasota (FL)", "Baker (FL)", "St. Clair (AL)"],
+    ["Hampton (SC)", "Marlboro (SC)", "TnCIS (TN)", "Richland (SC)", "Sumter (SC)", "Sarasota (FL)", "Baker (FL)", "St. Clair (AL)"],
 )
 def test_obscura_never_routes_holds_even_when_opted_in(label):
     allowed, _ = sr.obscura_route_decision(

@@ -165,6 +165,6 @@ def test_active_docs_match_the_canonical_registry_including_guarded_ohio_pilot()
     roadmap = ROADMAP.read_text()
     assert "947 rows total" in roadmap
     assert "20 county paths are explicitly `fail_closed`" in roadmap
-    assert "TnCIS scope remains `unverified`" in roadmap
+    assert "TnCIS scope is `fail_closed`" in roadmap
     assert "13 LA" in roadmap
     assert "3 OH guarded pilot scopes" in roadmap

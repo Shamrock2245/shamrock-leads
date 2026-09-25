@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HOLD_LABELS = {
     "Hampton (SC)", "Marlboro (SC)", "Richland (SC)", "Sumter (SC)", "Sarasota (FL)",
     "Baker (FL)", "Calhoun (FL)", "Gulf (FL)", "Holmes (FL)", "Levy (FL)", "Wakulla (FL)", "Washington (FL)",
+    "TnCIS (TN)",
 }
 LIVE_SC = {"Charleston (SC)", "Dorchester (SC)", "Chesterfield (SC)", "Aiken (SC)", "Darlington (SC)"}
 

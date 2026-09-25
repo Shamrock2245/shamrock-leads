@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-09-25 (TnCIS fail closed)
+
+### Changed
+- **TnCIS (TN): Obscura fallback OFF, fail closed (owner decision).** The Cloudflare-protected statewide portal has no proven public contract. The curl_cffi + residential/mobile proxy, Patchright stealth, and Obscura fallback chain was removed from `tennessee_tncis_v2_ape.py`. The scope is now `SOURCE_CONTRACT_VALIDATED = False` and `fail_closed` in `SCRAPER_SOURCE_STATES`, is added to `OBSCURA_HARD_DENY_LABELS`, and has a `hold` row in the live emitter evidence. A Cloudflare or anti-bot answer raises `AntiBotBlocked` (`anti_bot`, never retried). Rows without a source identifier are never emitted. The matrix was regenerated (TN unverified → fail_closed for the TnCIS scope). Tests: `tests/test_tncis_fail_closed.py`.
+
 ## [Unreleased] — 2026-09-25 (Scraper self-heal / fail-loud)
 
 ### Added

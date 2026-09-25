@@ -14,7 +14,7 @@
 | Davidson | `davidson.py` | 60 min | Custom Justice Integration | Registered; inspect live telemetry before operational reliance |
 | Shelby | `shelby.py` | 90 min | Custom IML | Registered; prior TLS sensitivity remains a monitoring concern |
 | Knox | `knox.py` | 90 min | Custom sheriff roster | Registered; inspect live telemetry before operational reliance |
-| TnCIS | `tncis.py` | 180 min | Statewide TnCIS adapter | Registered; source-specific telemetry required |
+| TnCIS | `tncis.py` | 180 min | Statewide TnCIS adapter | `fail_closed` — Cloudflare-protected, no proven public contract; Obscura/proxy/stealth fallback removed 2026-09-25 |
 | Hamilton | `hamilton.py` | 60 min | Custom JSON API | Registered; inspect live telemetry before operational reliance |
 | Rutherford | `rutherford.py` | 90 min | JailTracker | Registered; source-specific telemetry required |
 | Williamson | `williamson.py` | 90 min | JailTracker | Registered; source-specific telemetry required |
