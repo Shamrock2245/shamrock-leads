@@ -1,16 +1,23 @@
 """
-Denton County (TX) Arrest Scraper — Denton Police Athena JailView API.
+Denton County (TX) Arrest Scraper — Denton Police Department Athena JailView.
 
-Portal: https://athena.dentonpolice.com/JailView/
-API:    POST JailView.aspx/GetInmates (returns JSON array of current inmates)
-Denton County is the 7th-largest TX county (~1.0M pop) in the DFW metro.
-Uses stealth stack (make_stealth_request, curl_cffi) to query the Athena
-JailView WebMethod which returns all current city jail inmates with charges,
-bond amounts, and booking details.
+Portal: https://athena.dentonpolice.com/JailView/  ("DENTON POLICE DEPARTMENT |
+CITY JAIL CUSTODY REPORT")
+API:    POST JailView.aspx/GetInmates  (body ``{}``; the page's own jQuery call)
+        → ``{"d": "<JSON array string>"}`` with ``bookno``, ``bookhandle``,
+        ``datetimebooked``, ``name``, ``charges``, ``outstandingbonds``,
+        ``detainers``, ``amount`` (+ an inline base64 mugshot, not stored).
 
-Note: This covers Denton City Police jail. The county-level Tyler/Odyssey
-PublicAccess system (justice1.dentoncounty.gov) is currently returning errors
-and will be added as a secondary source when it stabilizes.
+Scope: this is the **City of Denton jail** (small, short-stay population), not
+the Denton County Sheriff's jail. The county jail's public lookup is Tyler
+Odyssey PublicAccess "Jail Records" (justice1.dentoncounty.gov), which requires
+a last **and** first name per search — no broad public listing — so county-jail
+coverage stays out of scope (documented in
+docs/recon/GAP_QUEUE_NC_TX_SC_2026-09-25.md).
+
+Key: the source ``bookno`` (8 digits, ``YYNNNNNN``) verbatim. The previous
+implementation prefixed it (``DEN_…``) and went through the stealth request
+stack; this one uses plain ``requests`` and never alters or synthesizes keys.
 """
 from __future__ import annotations
 
@@ -18,19 +25,61 @@ import json
 import logging
 import re
 import time
-from typing import List, Set, Tuple
+from typing import List, Optional, Tuple
 
-from scrapers.base_scraper import BaseScraper
-from scrapers.stealth_utils import make_stealth_request
+import requests
+
 from core.models import ArrestRecord
+from scrapers.base_scraper import BaseScraper
+from scrapers.scraper_resilience import ParseDriftError
 
 logger = logging.getLogger(__name__)
 
-JAILVIEW_URL = "https://athena.dentonpolice.com/JailView/JailView.aspx/GetInmates"
 PORTAL_URL = "https://athena.dentonpolice.com/JailView/"
+JAILVIEW_URL = "https://athena.dentonpolice.com/JailView/JailView.aspx/GetInmates"
+BOOKNO_RE = re.compile(r"^\d{6,10}$")
+
+
+def decode_inmates(payload: dict) -> List[dict]:
+    """Decode the ASP.NET WebMethod ``{"d": "<json>"}`` envelope."""
+    if not isinstance(payload, dict) or "d" not in payload:
+        raise ParseDriftError("Denton: GetInmates response has no 'd' envelope")
+    raw = payload.get("d")
+    if raw in ("", None):
+        return []
+    data = json.loads(raw) if isinstance(raw, str) else raw
+    if not isinstance(data, list):
+        raise ParseDriftError("Denton: GetInmates 'd' is not a list")
+    return data
+
+
+def _money(raw: str) -> float:
+    cleaned = re.sub(r"[^0-9.]", "", raw or "")
+    try:
+        return float(cleaned) if cleaned else 0.0
+    except ValueError:
+        return 0.0
+
+
+def _split_name(name: str) -> Tuple[str, str, str]:
+    name = re.sub(r"\s+", " ", (name or "").replace("\xa0", " ")).strip()
+    if "," in name:
+        last, rest = name.split(",", 1)
+        parts = rest.split()
+        return last.strip(), (parts[0] if parts else ""), " ".join(parts[1:])
+    parts = name.split()
+    if len(parts) >= 2:
+        return parts[-1], parts[0], " ".join(parts[1:-1])
+    return name, "", ""
 
 
 class DentonScraper(BaseScraper):
+    SOURCE_CONTRACT_VALIDATED = True
+    SOURCE_CONTRACT_REASON = (
+        "Denton PD Athena JailView GetInmates (plain HTTPS, city jail custody "
+        "report); source bookno (8 digits)."
+    )
+
     @property
     def county(self) -> str:
         return "Denton"
@@ -41,136 +90,73 @@ class DentonScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         start = time.time()
-        records: List[ArrestRecord] = []
-        seen: Set[str] = set()
-
-        try:
-            inmates = self._fetch_inmates()
-            for inmate in inmates:
-                rec = self._build_record(inmate, seen)
-                if rec:
-                    records.append(rec)
-        except Exception as e:
-            logger.error(f"Denton scrape failed: {e}")
-
-        logger.info(
-            f"✅ Denton (TX): {len(records)} records in {time.time() - start:.1f}s"
+        session = requests.Session()
+        session.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            ),
+        })
+        landing = session.get(PORTAL_URL, timeout=30)
+        landing.raise_for_status()
+        if "GetInmates" not in landing.text and "getInmates" not in landing.text:
+            raise ParseDriftError("Denton: JailView page no longer calls GetInmates")
+        resp = session.post(
+            JAILVIEW_URL,
+            data="{}",
+            headers={
+                "Content-Type": "application/json; charset=utf-8",
+                "Accept": "application/json, text/javascript, */*; q=0.01",
+                "X-Requested-With": "XMLHttpRequest",
+                "Referer": PORTAL_URL,
+            },
+            timeout=45,
         )
+        resp.raise_for_status()
+        inmates = decode_inmates(resp.json())
+
+        records: List[ArrestRecord] = []
+        seen: set = set()
+        for inmate in inmates:
+            rec = self.build_record(inmate)
+            if rec is None or rec.Booking_Number in seen:
+                continue
+            seen.add(rec.Booking_Number)
+            records.append(rec)
+        if inmates and not records:
+            raise ParseDriftError("Denton: inmates returned but none carried a source bookno")
+        logger.info("Denton (TX): %d records in %.1fs", len(records), time.time() - start)
         return records
 
-    def _fetch_inmates(self) -> List[dict]:
-        """Call GetInmates WebMethod and parse the JSON response."""
-        resp = make_stealth_request(
-            JAILVIEW_URL,
-            method="POST",
-            json={},
-            timeout=30,
-        )
-        if not resp or resp.status_code != 200:
-            logger.warning(
-                f"Denton GetInmates returned {resp.status_code if resp else 'None'}"
-            )
-            return []
-
-        data = resp.json()
-
-        # Response format: {"d": "<JSON array as string>"}
-        raw = data.get("d", "")
-        if not raw:
-            return []
-
-        try:
-            inmates = json.loads(raw) if isinstance(raw, str) else raw
-        except (json.JSONDecodeError, TypeError) as e:
-            logger.error(f"Denton JSON parse error: {e}")
-            return []
-
-        if not isinstance(inmates, list):
-            return []
-
-        return inmates
-
-    def _build_record(self, inmate: dict, seen: Set[str]) -> ArrestRecord | None:
-        """Convert a single Athena JailView inmate dict to ArrestRecord."""
-        name = (inmate.get("name") or "").strip()
-        if not name or len(name) < 2:
+    def build_record(self, inmate: dict) -> Optional[ArrestRecord]:
+        book_no = str(inmate.get("bookno") or "").strip()
+        name = str(inmate.get("name") or "").strip()
+        if not BOOKNO_RE.match(book_no) or len(name) < 2:
             return None
-
-        book_no = (inmate.get("bookno") or "").strip()
-        book_handle = (inmate.get("bookhandle") or "").strip()
-
-        # Dedup key: booking number or handle
-        dedup_key = book_no or book_handle
-        if not dedup_key:
-            return None
-
-        booking_id = f"DEN_{dedup_key}"
-        if booking_id in seen:
-            return None
-        seen.add(booking_id)
-
-        # Parse fields
-        charges = (inmate.get("charges") or "").strip()
-        datetime_booked = (inmate.get("datetimebooked") or "").strip()
-        bonds_raw = (inmate.get("outstandingbonds") or "").strip()
-        amount_raw = (inmate.get("amount") or "").strip()
-        detainers = (inmate.get("detainers") or "").strip()
-
-        # Parse bond amount (format: "$2,500.00")
-        bond_amount = self._parse_currency(amount_raw or bonds_raw)
-
-        # Parse booking date (format: "MM/DD/YYYY HH:MM")
-        arrest_date = ""
-        if datetime_booked:
-            date_part = datetime_booked.split(" ")[0] if " " in datetime_booked else datetime_booked
-            arrest_date = date_part
-
-        # Combine charges and detainers
-        full_charges = charges
+        charges = str(inmate.get("charges") or "").strip()
+        detainers = str(inmate.get("detainers") or "").strip()
         if detainers:
-            full_charges = f"{charges}; DETAINER: {detainers}" if charges else f"DETAINER: {detainers}"
-
-        first_name, last_name = self._split_name(name)
-
+            charges = f"{charges}; DETAINER: {detainers}" if charges else f"DETAINER: {detainers}"
+        bond = _money(str(inmate.get("amount") or "")) or _money(str(inmate.get("outstandingbonds") or ""))
+        booked = str(inmate.get("datetimebooked") or "").strip()
+        bdate, _, btime = booked.partition(" ")
+        last, first, middle = _split_name(name)
         return ArrestRecord(
             County=self.county,
             State=self.state,
-            Booking_Number=booking_id,
-            Person_ID=book_handle,
-            Full_Name=name.title() if name.isupper() else name,
-            First_Name=first_name,
-            Last_Name=last_name,
-            Charges=full_charges or "Unknown",
-            Bond_Amount=str(bond_amount),
+            Booking_Number=book_no,
+            Person_ID=str(inmate.get("bookhandle") or "").strip(),
+            Full_Name=name,
+            First_Name=first,
+            Middle_Name=middle,
+            Last_Name=last,
+            Charges=charges or "Unknown",
+            Bond_Amount=f"{bond:.2f}" if bond else "0",
             Status="In Custody",
             Facility="Denton City Jail",
             Agency="Denton Police Department",
-            Booking_Date=arrest_date,
-            Arrest_Date=arrest_date,
+            Booking_Date=bdate,
+            Booking_Time=btime.strip(),
+            Arrest_Date=bdate,
             Detail_URL=PORTAL_URL,
         )
-
-    @staticmethod
-    def _parse_currency(raw: str) -> int:
-        """Parse '$2,500.00' → 2500 (integer dollars)."""
-        if not raw:
-            return 0
-        cleaned = re.sub(r"[^0-9.]", "", raw)
-        try:
-            return int(float(cleaned))
-        except (ValueError, TypeError):
-            return 0
-
-    @staticmethod
-    def _split_name(name: str) -> Tuple[str, str]:
-        """Split 'LAST, FIRST MIDDLE' into (first, last)."""
-        name = name.replace("\xa0", " ").strip()
-        if "," in name:
-            parts = name.split(",", 1)
-            last = parts[0].strip().title()
-            first = parts[1].strip().title()
-            return first, last
-        bits = name.split()
-        if len(bits) >= 2:
-            return bits[0].title(), bits[-1].title()
-        return name.title(), ""
