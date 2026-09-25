@@ -11,7 +11,7 @@
 2. **SC** — Palmetto HQ-adjacent; **46/46 registered**. Fourteen county paths are explicitly `fail_closed` pending compliant source contracts; production depth and telemetry remain ongoing. ✅ registry
 3. **GA** — large existing Track A/B/C investment 🔄 (85/159)  
 4. **NC** — **60 registered** / 100 goal; ten county paths are explicitly `fail_closed` pending compliant source contracts, while production telemetry remains required for every enabled source. 🔄
-5. **TN** — **22 registered**: Putnam is `verified_public`; 20 county paths are explicitly `fail_closed` pending compliant source contracts; the non-county TnCIS scope remains `unverified`. Source-specific production telemetry is still required. 🔄
+5. **TN** — **22 registered**: Putnam is `verified_public`; 20 county paths are explicitly `fail_closed` pending compliant source contracts; the non-county TnCIS scope is `fail_closed` (Cloudflare; no proven contract; Obscura fallback removed 2026-09-25). Source-specific production telemetry is still required. 🔄
 6. **TX** — **34 registered** (including Randall’s validated public roster; source-specific production telemetry remains required) 🔄
 7. **LA → MS** — **13 LA** + **9 MS** registered; Tangipahoa and St. Mary are deployed, and Bossier is registered; per-source production telemetry remains required 🔄
 8. **CT** — **6 registered**. The five judicial-docket scopes (Statewide, Bridgeport, Hartford, New Haven, Stamford) are explicitly `fail_closed`: court docket numbers and hearing dates are not arrest booking identifiers or arrest times. CT DOC remains a separate source requiring its own source-contract proof and telemetry. 🔄

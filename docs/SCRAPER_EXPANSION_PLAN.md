@@ -16,7 +16,7 @@ This document outlines the reconnaissance and architectural blueprints for expan
 | **Davidson County (Nashville)** | Custom Portal | HTTPS / DrissionPage | **Medium** |
 
 ### Implementation Blueprint
-- **TnCIS Scraper:** Must utilize `_get_obscura_browser()` due to Cloudflare. Target the `lgc-tn.com/tncis-web-inquiry/` portal.
+- **TnCIS Scraper:** `fail_closed` (2026-09-25 owner decision). The `lgc-tn.com/tncis-web-inquiry/` portal is Cloudflare-protected; Obscura / proxy / stealth fallbacks are not permitted. Reopen only with a documented public source contract.
 - **Data Schema:** Primary key: `Case_Number` + `County`.
 - **Base Class:** Inherit from `BaseScraper`.
 

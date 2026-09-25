@@ -551,6 +551,7 @@ OBSCURA_ROUTE_ENV = "OBSCURA_ROUTE_COUNTIES"
 OBSCURA_HARD_DENY_LABELS = frozenset({
     "Hampton (SC)",
     "Marlboro (SC)",
+    "TnCIS (TN)",  # Cloudflare; owner decision 2026-09-25 — Obscura fallback OFF
     "Richland (SC)",
     "Sumter (SC)",
     "Sarasota (FL)",

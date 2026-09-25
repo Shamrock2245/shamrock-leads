@@ -740,6 +740,10 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     # ordinary public access — fail closed in code; never reopened via proxy/Obscura.
     "Hampton (SC)": "fail_closed",
     "Marlboro (SC)": "fail_closed",
+    # TnCIS statewide (non-county scope): Cloudflare-protected, no proven public
+    # contract. Owner decision 2026-09-25: Obscura/proxy/stealth fallback OFF;
+    # fail closed in code (tennessee_tncis_v2_ape.SOURCE_CONTRACT_VALIDATED=False).
+    "TnCIS (TN)": "fail_closed",
     # Ohio pilot scopes are registered for truthful health visibility only.
     # They remain blocked before source fetch until county-specific approval.
     "Clermont (OH)": "fail_closed",
