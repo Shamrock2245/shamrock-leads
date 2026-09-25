@@ -14,6 +14,7 @@
     {"label": "Richland (SC)", "emitter": "hold", "evidence": "JMSOnline maintenance; list view has no source booking key (synthetic RIC_ forbidden)", "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"},
     {"label": "Sumter (SC)", "emitter": "hold", "evidence": "SmartCOP synthesizes LAST_YYYYMMDD booking keys", "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"},
     {"label": "Hampton (SC)", "emitter": "hold", "evidence": "HTTP 403 / Cloudflare to ordinary public access", "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"},
-    {"label": "Marlboro (SC)", "emitter": "hold", "evidence": "HTTP 403 / Cloudflare to ordinary public access", "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"}
+    {"label": "Marlboro (SC)", "emitter": "hold", "evidence": "HTTP 403 / Cloudflare to ordinary public access", "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"},
+    {"label": "TnCIS (TN)", "emitter": "hold", "evidence": "Cloudflare-protected statewide portal; no proven public contract; Obscura/proxy/stealth fallback removed 2026-09-25 (owner decision)", "source": "docs/ops/SCRAPER_SELF_HEALING.md"}
   ]
 }

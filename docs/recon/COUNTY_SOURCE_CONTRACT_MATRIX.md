@@ -29,10 +29,10 @@
 | MS | 82 | 9 | 1 | 0 | 4 | 69 | 8 |
 | NC | 100 | 60 | 0 | 0 | 0 | 84 | 16 |
 | SC | 46 | 46 | 5 | 0 | 0 | 5 | 36 |
-| TN | 96 | 22 | 1 | 0 | 74 | 1 | 20 |
+| TN | 96 | 22 | 1 | 0 | 74 | 0 | 21 |
 | TX | 254 | 34 | 1 | 0 | 0 | 253 | 0 |
 
-**Aggregate matrix counts:** verified public 16; candidate productive 1; recon only 294; unverified 510; fail closed 126.
+**Aggregate matrix counts:** verified public 16; candidate productive 1; recon only 294; unverified 509; fail closed 127.
 
 ## County matrix
 
@@ -719,7 +719,7 @@
 | TN | 163 | Sullivan County | Palmetto | recon_required | recon_only | — | Passive landing-page review only; no login/CAPTCHA bypass; no detail probes | Directory anchor is available, but no county-specific broad current-inmate/booking source contract was safely verified; do not infer productivity from registry status. |
 | TN | 165 | Sumner County | Palmetto | registered | fail_closed | — | Passive landing-page review only; no login/CAPTCHA bypass; no detail probes | Directory anchor is available, but no county-specific broad current-inmate/booking source contract was safely verified; do not infer productivity from registry status. |
 | TN | 167 | Tipton County | Palmetto | recon_required | recon_only | — | Passive landing-page review only; no login/CAPTCHA bypass; no detail probes | Directory anchor is available, but no county-specific broad current-inmate/booking source contract was safely verified; do not infer productivity from registry status. |
-| TN | special_tn_tncis | TnCIS (non-county scope) | Palmetto | registered | unverified | — | Registered non-county scope; no county-equivalent source contract asserted | This dashboard registration is outside the Census county-equivalent inventory. It remains unverified until a scope-specific public source-contract validation is documented. |
+| TN | special_tn_tncis | TnCIS (non-county scope) | Palmetto | registered | fail_closed | — | Registered non-county scope; no county-equivalent source contract asserted | This dashboard registration is outside the Census county-equivalent inventory. It remains unverified until a scope-specific public source-contract validation is documented. |
 | TN | 169 | Trousdale County | Palmetto | recon_required | recon_only | — | Passive landing-page review only; no login/CAPTCHA bypass; no detail probes | Directory anchor is available, but no county-specific broad current-inmate/booking source contract was safely verified; do not infer productivity from registry status. |
 | TN | 171 | Unicoi County | Palmetto | recon_required | recon_only | — | Passive landing-page review only; no login/CAPTCHA bypass; no detail probes | Directory anchor is available, but no county-specific broad current-inmate/booking source contract was safely verified; do not infer productivity from registry status. |
 | TN | 173 | Union County | Palmetto | recon_required | recon_only | — | Passive landing-page review only; no login/CAPTCHA bypass; no detail probes | Directory anchor is available, but no county-specific broad current-inmate/booking source contract was safely verified; do not infer productivity from registry status. |
@@ -1005,6 +1005,7 @@ Documented live writes and holds for scopes named in the latest executive brief.
 | Sumter (SC) | fail_closed | hold | SmartCOP synthesizes LAST_YYYYMMDD booking keys | `docs/recon/SC_WRITE_SMOKE_2026-09-24.md` |
 | Hampton (SC) | fail_closed | hold | HTTP 403 / Cloudflare to ordinary public access | `docs/recon/SC_WRITE_SMOKE_2026-09-24.md` |
 | Marlboro (SC) | fail_closed | hold | HTTP 403 / Cloudflare to ordinary public access | `docs/recon/SC_WRITE_SMOKE_2026-09-24.md` |
+| TnCIS (TN) | fail_closed | hold | Cloudflare-protected statewide portal; no proven public contract; Obscura/proxy/stealth fallback removed 2026-09-25 (owner decision) | `docs/ops/SCRAPER_SELF_HEALING.md` |
 
 ## Operating rule
 

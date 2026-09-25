@@ -4,9 +4,11 @@ Tennessee TnCIS statewide case inquiry scraper.
 Portal: https://lgc-tn.com/tncis-web-inquiry/
 Platform: LGC / TnCIS Web Inquiry (Cloudflare protected)
 
-Reuses the existing APE-integrated implementation under
-``scrapers/counties/tennessee_tncis_v2_ape.py`` with multi-state identity
-(``scraper_tn_tncis`` / State=TN).
+FAIL CLOSED (owner decision 2026-09-25). Inherits the guarded adapter in
+``scrapers/counties/tennessee_tncis_v2_ape.py`` (``SOURCE_CONTRACT_VALIDATED =
+False``) with multi-state identity (``scraper_tn_tncis`` / State=TN). A
+Cloudflare / anti-bot answer raises ``AntiBotBlocked`` (error class
+``anti_bot``); there is no Obscura, proxy, or stealth-browser fallback.
 """
 from __future__ import annotations
 

@@ -1,408 +1,117 @@
 """
-Tennessee TnCIS Scraper v2.1 — Full APE Integration
-Enhanced with Autonomous Proxy Engine for maximum stealth and reliability.
+Tennessee TnCIS statewide case inquiry adapter — FAIL CLOSED.
 
-Features:
-- 4-layer stealth stack (IP + TLS + Engine + Behavior)
-- Automatic proxy failover (Warren → S5W2C → Stormsia)
-- Sticky session routing for multi-step flows
-- Metrics tracking and health checking
-- Poison pill detection
+Portal: https://lgc-tn.com/tncis-web-inquiry/ (LGC / TnCIS Web Inquiry, Cloudflare)
+
+Owner decision 2026-09-25 (Brendan / CoS): TnCIS has no proven public source
+contract, and ordinary public access is answered by a Cloudflare interstitial.
+This scope therefore fails closed:
+
+* ``SOURCE_CONTRACT_VALIDATED = False`` — ``BaseScraper.run()`` stops before
+  any source request, scoring, persistence, or alert.
+* ``scrape()`` makes at most ONE ordinary direct request (no proxy, no TLS
+  impersonation, no stealth browser, no Obscura) and raises
+  :class:`AntiBotBlocked` (error class ``anti_bot``, never retried) the moment
+  a Cloudflare / anti-bot answer is seen.
+* The former fallback chain (curl_cffi + residential proxy, curl_cffi + mobile
+  proxy, Patchright stealth, Obscura CDP) was removed. It is a WAF bypass and
+  is not permitted. ``_get_obscura_browser`` is also hard-refused by
+  ``BaseScraper._obscura_guard`` because the scope is ``fail_closed`` and on
+  ``OBSCURA_HARD_DENY_LABELS``.
+
+Reopen only with a documented, scope-specific public source contract
+(ordinary access, source-issued booking/inmate identifier — a court case
+number is not a booking key). See docs/ops/SCRAPER_SELF_HEALING.md.
 """
 
 import logging
-import json
 import re
-import time
-import asyncio
 from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Any, Optional
+from typing import Any, List
+
 from scrapers.base_scraper import BaseScraper
-from scrapers.stealth_utils import (
-    TLSFingerprinter,
-    BehaviorSimulator,
-    PatchrightBrowserManager,
-    CurlCFFISession,
-    get_stealth_config,
-)
+from scrapers.scraper_resilience import AntiBotBlocked
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 BASE_URL = "https://lgc-tn.com/tncis-web-inquiry/"
 
+TNCIS_FAIL_CLOSED_REASON = (
+    "TnCIS (TN) fail closed: portal is Cloudflare-protected and has no proven public "
+    "source contract (no verified source booking key). No Obscura/proxy/stealth "
+    "fallback is permitted. Reopen only with a documented public contract."
+)
+
+# Markers of a Cloudflare / anti-bot answer to an ordinary request.
+_ANTI_BOT_BODY_MARKERS = (
+    "just a moment",
+    "cf-chl",
+    "challenge-platform",
+    "attention required",
+    "cf-turnstile",
+    "captcha",
+    "access denied",
+)
+
+
+def is_anti_bot_response(status_code: int, headers: Any, body: str) -> bool:
+    """True when an ordinary response is a WAF / Cloudflare / CAPTCHA answer."""
+    headers = {str(k).lower(): str(v) for k, v in dict(headers or {}).items()}
+    server = headers.get("server", "").lower()
+    if headers.get("cf-mitigated", "").lower() == "challenge":
+        return True
+    if status_code in (401, 403, 429, 503) and ("cloudflare" in server or "cf-ray" in headers):
+        return True
+    if status_code in (401, 403, 429):
+        return True
+    text = (body or "")[:20000].lower()
+    return any(marker in text for marker in _ANTI_BOT_BODY_MARKERS)
+
 
 class TennesseeTnCISScraperV2APE(BaseScraper):
     """
-    Tennessee TnCIS Scraper with full Autonomous Proxy Engine integration.
-    Covers 80+ Tennessee counties via statewide case management system.
+    Tennessee TnCIS statewide adapter. Fail closed (see module docstring).
+
+    The class name is kept for import compatibility; the Autonomous Proxy
+    Engine / stealth fallback chain it once used has been removed.
     """
-    
+
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = TNCIS_FAIL_CLOSED_REASON
+
     @property
     def county(self) -> str:
         return "Tennessee_Statewide"
-    
+
     def scrape(self) -> List[ArrestRecord]:
+        """Fail closed. Never falls back to Obscura, proxies, or stealth browsers.
+
+        ``run()`` never reaches this while ``SOURCE_CONTRACT_VALIDATED`` is
+        False. If called directly, it refuses outright while the contract is
+        unverified; if a future contract is proven, it makes a single ordinary
+        direct request and raises :class:`AntiBotBlocked` on any Cloudflare /
+        anti-bot answer (no retry, no alternate route).
         """
-        Scrape TnCIS using full 4-layer stealth stack with APE.
-        
-        Fallback chain:
-        1. curl_cffi + Warren (residential)
-        2. curl_cffi + S5W2C (mobile)
-        3. Patchright + Warren
-        4. undetected-chrome + Stormsia
-        5. Obscura (fallback)
-        """
-        all_records = []
-        
-        # Attempt 1: curl_cffi + Warren (fastest, residential)
+        if not getattr(self, "SOURCE_CONTRACT_VALIDATED", False):
+            raise AntiBotBlocked(TNCIS_FAIL_CLOSED_REASON)
+
+        import requests
+        from bs4 import BeautifulSoup
+
+        session = requests.Session()
+        session.trust_env = False  # never inherit HTTP(S)_PROXY / SOCKS from env
         try:
-            logger.info("TnCIS v2.1: Attempting curl_cffi + Warren...")
-            records = self._scrape_with_curl_cffi_ape()
-            if records:
-                logger.info(f"✅ TnCIS v2.1: curl_cffi + Warren succeeded, found {len(records)} records")
-                return records
-        except Exception as e:
-            logger.warning(f"TnCIS v2.1: curl_cffi + Warren failed: {e}")
-        
-        # Attempt 2: curl_cffi + S5W2C (mobile data)
-        try:
-            logger.info("TnCIS v2.1: Attempting curl_cffi + S5W2C...")
-            records = self._scrape_with_curl_cffi_s5w2c()
-            if records:
-                logger.info(f"✅ TnCIS v2.1: curl_cffi + S5W2C succeeded, found {len(records)} records")
-                return records
-        except Exception as e:
-            logger.warning(f"TnCIS v2.1: curl_cffi + S5W2C failed: {e}")
-        
-        # Attempt 3: Patchright + Warren
-        try:
-            logger.info("TnCIS v2.1: Attempting Patchright + Warren...")
-            records = asyncio.run(self._scrape_with_patchright_ape())
-            if records:
-                logger.info(f"✅ TnCIS v2.1: Patchright + Warren succeeded, found {len(records)} records")
-                return records
-        except Exception as e:
-            logger.warning(f"TnCIS v2.1: Patchright + Warren failed: {e}")
-        
-        # Attempt 4: Obscura (fallback)
-        try:
-            logger.info("TnCIS v2.1: Attempting Obscura fallback...")
-            records = asyncio.run(self._scrape_with_obscura())
-            if records:
-                logger.info(f"✅ TnCIS v2.1: Obscura succeeded, found {len(records)} records")
-                return records
-        except Exception as e:
-            logger.warning(f"TnCIS v2.1: Obscura failed: {e}")
-        
-        logger.error("TnCIS v2.1: All scraping methods failed")
-        return []
-    
-    def _scrape_with_curl_cffi_ape(self) -> List[ArrestRecord]:
-        """
-        Layer 2 (TLS) + Layer 1 (IP): curl_cffi with APE proxy selection.
-        """
-        try:
-            from curl_cffi import requests as cffi_requests
-        except ImportError:
-            raise ImportError("curl_cffi not installed")
-        
-        records = []
-        
-        # Get proxy from APE (auto failover)
-        proxy = self.get_proxy(prefer_residential=True)
-        if not proxy:
-            logger.warning("No proxies available from APE")
-            return []
-        
-        logger.debug(f"Using proxy: {proxy[:50]}...")
-        
-        session = CurlCFFISession.create_session(proxy=proxy)
-        
-        try:
-            # Step 1: Get main page with stealth headers
-            logger.info("TnCIS v2.1: Fetching main page with curl_cffi...")
-            
-            start_time = time.time()
-            resp = CurlCFFISession.make_request(
-                session,
-                BASE_URL,
-                method="GET",
-                timeout=20
-            )
-            resp.raise_for_status()
-            response_time_ms = (time.time() - start_time) * 1000
-            
-            # Record success in APE
-            self.record_proxy_success(proxy, response_time_ms=response_time_ms)
-            
-            # Behavioral simulation: random delay
-            if get_stealth_config().behavioral_simulation:
-                BehaviorSimulator.random_delay(0.5, 2.0)
-            
-            # Step 2: Parse HTML and find API endpoint
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(resp.text, "html.parser")
-            
-            api_endpoint = self._extract_api_endpoint(soup)
-            if not api_endpoint:
-                logger.warning("TnCIS v2.1: No API endpoint found")
-                return []
-            
-            # Step 3: Query API with stealth
-            logger.info(f"TnCIS v2.1: Querying API: {api_endpoint}")
-            
-            params = {
-                "searchType": "criminal",
-                "dateFrom": self._get_date_range_start(),
-                "dateTo": datetime.now(timezone.utc).strftime("%m/%d/%Y"),
-                "sortBy": "date_desc",
-                "pageSize": 500,
-            }
-            
-            api_resp = CurlCFFISession.make_request(
-                session,
-                api_endpoint,
-                method="GET",
-                params=params,
-                timeout=20
-            )
-            api_resp.raise_for_status()
-            
-            # Behavioral simulation: random delay
-            if get_stealth_config().behavioral_simulation:
-                BehaviorSimulator.random_delay(0.5, 2.0)
-            
-            # Step 4: Parse response
-            if api_resp.headers.get("content-type", "").startswith("application/json"):
-                data = api_resp.json()
-                records = self._extract_from_api(data)
-            else:
-                soup = BeautifulSoup(api_resp.text, "html.parser")
-                records = self._parse_dom(soup)
-            
-            return records
-        
-        except Exception as e:
-            # Record failure in APE
-            self.record_proxy_failure(proxy)
-            logger.error(f"curl_cffi + APE scrape failed: {e}")
-            raise
-        
+            resp = session.get(BASE_URL, timeout=20, allow_redirects=True)
         finally:
             session.close()
-    
-    def _scrape_with_curl_cffi_s5w2c(self) -> List[ArrestRecord]:
-        """
-        Layer 2 (TLS) + Layer 1 (Mobile IP): curl_cffi with S5W2C mobile proxy.
-        """
-        try:
-            from curl_cffi import requests as cffi_requests
-        except ImportError:
-            raise ImportError("curl_cffi not installed")
-        
-        # Get S5W2C proxy (mobile data exit)
-        if not self.ape or not self.ape.s5w2c_manager.is_available():
-            logger.warning("S5W2C not available")
-            return []
-        
-        proxy = self.ape.s5w2c_manager.get_proxy()
-        logger.debug(f"Using S5W2C proxy: {proxy}")
-        
-        session = CurlCFFISession.create_session(proxy=proxy)
-        
-        try:
-            # Similar flow to curl_cffi_ape but with mobile data
-            start_time = time.time()
-            resp = CurlCFFISession.make_request(
-                session,
-                BASE_URL,
-                method="GET",
-                timeout=20
+        if is_anti_bot_response(resp.status_code, resp.headers, resp.text):
+            raise AntiBotBlocked(
+                f"TnCIS (TN): Cloudflare/anti-bot answer (HTTP {resp.status_code}); "
+                "failing closed — no Obscura/proxy/stealth fallback"
             )
-            resp.raise_for_status()
-            response_time_ms = (time.time() - start_time) * 1000
-            
-            self.record_proxy_success(proxy, response_time_ms=response_time_ms)
-            
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(resp.text, "html.parser")
-            
-            api_endpoint = self._extract_api_endpoint(soup)
-            if not api_endpoint:
-                return []
-            
-            params = {
-                "searchType": "criminal",
-                "dateFrom": self._get_date_range_start(),
-                "dateTo": datetime.now(timezone.utc).strftime("%m/%d/%Y"),
-                "sortBy": "date_desc",
-                "pageSize": 500,
-            }
-            
-            api_resp = CurlCFFISession.make_request(
-                session,
-                api_endpoint,
-                method="GET",
-                params=params,
-                timeout=20
-            )
-            api_resp.raise_for_status()
-            
-            if api_resp.headers.get("content-type", "").startswith("application/json"):
-                data = api_resp.json()
-                records = self._extract_from_api(data)
-            else:
-                soup = BeautifulSoup(api_resp.text, "html.parser")
-                records = self._parse_dom(soup)
-            
-            return records
-        
-        except Exception as e:
-            self.record_proxy_failure(proxy)
-            logger.error(f"curl_cffi + S5W2C scrape failed: {e}")
-            raise
-        
-        finally:
-            session.close()
-    
-    async def _scrape_with_patchright_ape(self) -> List[ArrestRecord]:
-        """
-        Layer 3 (Engine) + Layer 1 (IP): Patchright with APE proxy.
-        """
-        proxy = self.get_proxy(prefer_residential=True)
-        if not proxy:
-            return []
-        
-        pw, browser = await PatchrightBrowserManager.create_stealth_browser(proxy=proxy)
-        
-        try:
-            context = await PatchrightBrowserManager.create_stealth_context(browser, proxy=proxy)
-            page = await context.new_page()
-            
-            logger.info("TnCIS v2.1: Navigating with Patchright + APE...")
-            start_time = time.time()
-            await page.goto(BASE_URL, wait_until="networkidle", timeout=30000)
-            response_time_ms = (time.time() - start_time) * 1000
-            
-            self.record_proxy_success(proxy, response_time_ms=response_time_ms)
-            
-            # Behavioral simulation
-            if get_stealth_config().behavioral_simulation:
-                await BehaviorSimulator.async_random_delay(0.5, 2.0)
-            
-            content = await page.content()
-            
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(content, "html.parser")
-            
-            records = self._parse_dom(soup)
-            
-            await page.close()
-            await context.close()
-            return records
-        
-        except Exception as e:
-            self.record_proxy_failure(proxy)
-            logger.error(f"Patchright + APE scrape failed: {e}")
-            raise
-        
-        finally:
-            await browser.close()
-            await pw.__aexit__(None, None, None)
-    
-    async def _scrape_with_obscura(self) -> List[ArrestRecord]:
-        """
-        Layer 1+2+3 (IP+TLS+Engine): Obscura CDP fallback.
-        """
-        pw, browser = await self._get_obscura_browser()
-        
-        try:
-            page = await browser.new_page()
-            
-            logger.info("TnCIS v2.1: Navigating with Obscura...")
-            await page.goto(BASE_URL, wait_until="networkidle", timeout=30000)
-            
-            if get_stealth_config().behavioral_simulation:
-                await BehaviorSimulator.async_random_delay(0.5, 2.0)
-            
-            content = await page.content()
-            
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(content, "html.parser")
-            
-            records = self._parse_dom(soup)
-            
-            await page.close()
-            return records
-        
-        finally:
-            await browser.close()
-            await pw.__aexit__(None, None, None)
-    
-    def _extract_api_endpoint(self, soup) -> str:
-        """Extract API endpoint from HTML."""
-        scripts = soup.find_all("script")
-        for script in scripts:
-            if script.string:
-                if "api" in script.string.lower():
-                    matches = re.findall(r'(["\'])(/api/[^"\']+)\1', script.string)
-                    if matches:
-                        return matches[0][1]
-        
-        form = soup.find("form")
-        if form and form.get("action"):
-            return form["action"]
-        
-        return "https://lgc-tn.com/api/search"
-    
-    def _extract_from_api(self, data: Any) -> List[ArrestRecord]:
-        """Extract records from API JSON response."""
-        records = []
-        
-        entries = data if isinstance(data, list) else []
-        if isinstance(data, dict):
-            for key in ["data", "results", "cases", "records", "items", "entries"]:
-                if key in data and isinstance(data[key], list):
-                    entries = data[key]
-                    break
-        
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            
-            try:
-                full_name = self._get_field(entry, ["name", "fullName", "defendant", "defendantName"])
-                booking_number = self._get_field(entry, ["caseNumber", "case_number", "bookingNumber", "id"])
-                booking_date = self._get_field(entry, ["filedDate", "filed_date", "arrestDate", "date"])
-                charges = self._get_field(entry, ["charges", "charge", "offense"])
-                county = self._get_field(entry, ["county", "jurisdiction"]) or "Tennessee"
-                
-                if not full_name or not booking_number:
-                    continue
-                
-                first_name, middle_name, last_name = self._parse_name(full_name)
-                
-                record = ArrestRecord(
-                    County=county,
-                    Booking_Number=booking_number,
-                    Full_Name=full_name,
-                    First_Name=first_name,
-                    Middle_Name=middle_name,
-                    Last_Name=last_name,
-                    Booking_Date=booking_date,
-                    Charges=charges,
-                    Status="In Custody",
-                    Detail_URL=BASE_URL,
-                    Facility="Tennessee Court System",
-                    LastCheckedMode="INITIAL"
-                )
-                records.append(record)
-            except Exception as e:
-                logger.debug(f"TnCIS v2.1: Failed to parse entry: {e}")
-                continue
-        
-        return records
-    
+        resp.raise_for_status()
+        return self._parse_dom(BeautifulSoup(resp.text, "html.parser"))
+
     def _parse_dom(self, soup) -> List[ArrestRecord]:
         """Fallback DOM parsing."""
         records = []
@@ -422,10 +131,13 @@ class TennesseeTnCISScraperV2APE(BaseScraper):
                 first_name, middle_name, last_name = self._parse_name(full_name)
                 
                 case_match = re.search(r"\b(\d{2}-[A-Z]{2}-\d{6})\b", text)
+                if not case_match:
+                    # Never emit a row without a source-issued identifier.
+                    continue
                 
                 record = ArrestRecord(
                     County="Tennessee",
-                    Booking_Number=case_match.group(1) if case_match else "",
+                    Booking_Number=case_match.group(1),
                     Full_Name=full_name,
                     First_Name=first_name,
                     Middle_Name=middle_name,
