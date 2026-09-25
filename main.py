@@ -509,7 +509,8 @@ def register_scrapers(sched):
     sched.register_scraper(EscambiaCountyScraper(), interval_minutes=120)
     sched.register_scraper(MiamiDadeCountyScraper(), interval_minutes=60)
     sched.register_scraper(OkaloosaCountyScraper(), interval_minutes=120)
-    sched.register_scraper(BayCountyScraper(), interval_minutes=120)
+    # Bay: 676-search A–Z initials walk per run; every 6 h (Brendan, 2026-09-25).
+    sched.register_scraper(BayCountyScraper(), interval_minutes=360)
     # Leon disabled — target 500 errors
 
     # ── NE FL / First Coast ───────────────────────────────────────────────────

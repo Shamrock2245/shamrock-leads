@@ -25,7 +25,7 @@
 - **Enumeration:** bounded A–Z × A–Z initials walk (676 searches) in one session, paced at 0.15 s. Each run takes about 200 s. Only rows whose `Booking #` matches the source pattern are kept. Landing-page component IDs and labels are checked before searching, and drift raises `BaySourceContractError` (parse_drift/url_changed path).
 - **Read smoke (2026-09-25 ~09:05 EDT):** 940 rows, 940 unique booking numbers, all matching `^\d{4}-\d{3,8}$`. Booking year mix: 2026 = 810, 2025 = 107, older = 23. Date In, name and charges are present on 940/940 rows. The newest Date In is today.
 - **Listing fields used:** Booking #, Date In (date + time), name, race, sex, charges, per-charge bond (summed). Photos and commissary numbers are not stored.
-- **Note for owner:** this is 676 name-initial searches per run against the public search, the same pattern as Aiken's A–Z walk but 26× the request count. The interval stays at 120 min.
+- **Note for owner:** this is 676 name-initial searches per run against the public search, the same pattern as Aiken's A–Z walk but 26× the request count. **Resolved by Brendan on 2026-09-25:** Bay runs every 6 hours (`interval_minutes=360` in `main.register_scrapers`, was 120), i.e. 676 searches every 6 hours.
 
 ## Lake (FL 069) — held (`fail_closed`)
 
@@ -84,5 +84,5 @@ One plain `curl -L` per URL from the Mac (residential Comcast, normal desktop Ch
 
 1. ~~Write smoke for Bay and Suwannee~~: **done 2026-09-25 on the Mac.** Both are clean and promoted to `verified_public` (see above).
 2. **Leon and Gadsden reachability:** re-checked from the Mac on 2026-09-25. Leon returns 403 to residential access too, and Gadsden's SmartWEB host does not answer. Both stay `fail_closed`. Reopen only if Leon serves ordinary public access with a listing booking ID, or if Gadsden's host answers with a SmartWEB roster exposing `Booking No`. Never through residential/mobile proxies or Obscura.
-3. **Bay walk volume:** confirm that 676 initials searches per 120-minute run is acceptable.
+3. ~~Bay walk volume~~: **resolved by Brendan on 2026-09-25.** Bay runs every 6 hours (360 min, was 120): 676 initials searches every 6 hours.
 4. **Lake:** the `SOLVECAPTCHA_KEY` dependency is gone for Lake. Broward still uses it, which is unchanged here.

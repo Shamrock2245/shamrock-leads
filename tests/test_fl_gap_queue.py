@@ -128,3 +128,31 @@ def test_fl_holds_are_fail_closed_in_registry():
     # Promoted after the 2026-09-25 Mac write smoke (source booking keys).
     for label in ("Bay (FL)", "Suwannee (FL)"):
         assert SCRAPER_SOURCE_STATES.get(label) == "verified_public"
+
+
+# ── Scheduling ────────────────────────────────────────────────────────────────
+
+def _registered_intervals():
+    import logging
+
+    import main
+
+    class _Collect:
+        def __init__(self):
+            self.intervals = {}
+
+        def register_scraper(self, scraper, interval_minutes=None):
+            self.intervals[f"{scraper.county} ({scraper.state})"] = interval_minutes
+
+    logging.disable(logging.CRITICAL)
+    try:
+        sched = _Collect()
+        main.register_scrapers(sched)
+        return sched.intervals
+    finally:
+        logging.disable(logging.NOTSET)
+
+
+def test_bay_runs_every_six_hours():
+    # Brendan 2026-09-25: the 676-search Bay walk runs every 6 h, not every 120 min.
+    assert _registered_intervals()["Bay (FL)"] == 360
