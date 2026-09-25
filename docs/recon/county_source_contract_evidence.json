@@ -619,10 +619,10 @@
     {
       "state": "FL",
       "county_fips": "005",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://www.baysomobile.org/is/",
+      "access_posture": "Plain HTTPS public uniGUI inmate search (linked from bayso.org); no login/CAPTCHA/WAF; server requires last+first initial, so a bounded A\u2013Z \u00d7 A\u2013Z initials walk is used in one session",
+      "evidence_note": "2026-09-25 read smoke from box: 940 current in-custody rows / 940 unique source `Booking #` values (format `YYYY-NNNNNN`), Date In on every row; ~200 s per walk. 2026-09-25 Mac write smoke (`python main.py bay`, MongoWriter): scraped 940 / new 940 / updated 0, status ok, 189 s; 940/940 stored booking_number values match `^\\d{4}-\\d{6}$` (source keys). See docs/recon/FL_GAP_QUEUE_2026-09-25.md."
     },
     {
       "state": "FL",
@@ -747,10 +747,10 @@
     {
       "state": "FL",
       "county_fips": "039",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "fail_closed",
+      "official_source_url": "https://gadsdensheriff.com/inmate-lookup/",
+      "access_posture": "Fail closed: official page only iframes a bare-IP SmartWEB host (http://69.21.72.195/smartwebclient/) that does not answer box egress",
+      "evidence_note": "2026-09-25: inmate-lookup page HTTP 200 with no roster table; embedded SmartWEB host accepts TCP but returns 0 bytes (HTTP timeout, HTTPS TLS EOF). No rows or booking-number format verified. `gadsden.py` SOURCE_CONTRACT_VALIDATED=False. See docs/recon/FL_GAP_QUEUE_2026-09-25.md."
     },
     {
       "state": "FL",
@@ -867,10 +867,10 @@
     {
       "state": "FL",
       "county_fips": "069",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "fail_closed",
+      "official_source_url": "https://www.lcso.org/inmate-search/",
+      "access_posture": "Fail closed: inmate API requires a Cloudflare Turnstile (reCAPTCHA-compat) token; no CAPTCHA solving/bypass",
+      "evidence_note": "2026-09-25: search page HTTP 200 from box, but `POST /inmate-search/api/inmates` returns HTTP 400 requiring a client-side challenge token. Prior third-party CAPTCHA-solver path removed; `lake.py` SOURCE_CONTRACT_VALIDATED=False. See docs/recon/FL_GAP_QUEUE_2026-09-25.md."
     },
     {
       "state": "FL",
@@ -883,10 +883,10 @@
     {
       "state": "FL",
       "county_fips": "073",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "fail_closed",
+      "official_source_url": "https://www.leoncountyso.com/About-us/Departments/Detention-Facility/Inmate-search",
+      "access_posture": "Fail closed: Akamai 403 to datacenter egress on the whole domain; no WAF bypass/proxy",
+      "evidence_note": "2026-09-25: every leoncountyso.com path returns `403 Access Denied` (AkamaiGHost) from the box; page renders from other networks, so this is an edge/IP block, not a site change. Public results listing is a name search whose columns carry no source booking number. `leon.py` SOURCE_CONTRACT_VALIDATED=False. See docs/recon/FL_GAP_QUEUE_2026-09-25.md."
     },
     {
       "state": "FL",
@@ -1083,10 +1083,10 @@
     {
       "state": "FL",
       "county_fips": "121",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://smartcop.suwanneesheriff.com/smartwebclient/jail.aspx",
+      "access_posture": "Plain HTTPS SmartCOP SmartWEB JAIL View; no login; reCAPTCHA hook unconfigured (empty sitekey); supported Begin/End Booking Date criterion + Current Inmates Only, AddMoreResults paging",
+      "evidence_note": "2026-09-25 read smoke from box: 44 rows / 44 unique source `Booking No` (format `SCSO<YY>JBN<NNNNNN>`) for a 30-day booking window, booking date+time on every row; 128 current inmates with a 10-year window. Old `%` wildcard search returned 0 rows. 2026-09-25 Mac write smoke (`python main.py suwannee`, MongoWriter): scraped 44 / new 44 / updated 0, status ok; 44/44 stored booking_number values match `^SCSO\\d{2}JBN\\d{6}$` (source keys). See docs/recon/FL_GAP_QUEUE_2026-09-25.md."
     },
     {
       "state": "FL",

@@ -599,6 +599,8 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     "Chesterfield (SC)": "verified_public",  # 2026-09-24 SSW Citizen Connect write smoke (source BookingID)
     "Aiken (SC)": "verified_public",  # 2026-09-24 DTNSearch Inmate ID# / qSO_NO write smoke
     "Darlington (SC)": "verified_public",  # 2026-09-24 DCN HTTP bid write smoke
+    "Bay (FL)": "verified_public",  # 2026-09-25 baysomobile.org/is write smoke 940 new (source Booking # YYYY-NNNNNN)
+    "Suwannee (FL)": "verified_public",  # 2026-09-25 SmartWEB JAIL View write smoke 44 new (source Booking No SCSO<YY>JBN<NNNNNN>)
     # 2026-09-23 BSO Arrest Search write smoke (source JMS_NUMBER; e591b45 lifted
     # the guard and set SOURCE_CONTRACT_VALIDATED=True but the Health label was
     # never added). Registry now matches the code + matrix.
@@ -744,6 +746,14 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     # contract. Owner decision 2026-09-25: Obscura/proxy/stealth fallback OFF;
     # fail closed in code (tennessee_tncis_v2_ape.SOURCE_CONTRACT_VALIDATED=False).
     "TnCIS (TN)": "fail_closed",
+    # FL gap queue 2026-09-25 (docs/recon/FL_GAP_QUEUE_2026-09-25.md): fail
+    # closed in code (SOURCE_CONTRACT_VALIDATED=False). Lake: Turnstile token
+    # required (old CAPTCHA-solver path removed). Leon: Akamai 403 to datacenter
+    # egress + no listing booking number. Gadsden: official page only iframes an
+    # unreachable bare-IP SmartWEB host.
+    "Lake (FL)": "fail_closed",
+    "Leon (FL)": "fail_closed",
+    "Gadsden (FL)": "fail_closed",
     # Ohio pilot scopes are registered for truthful health visibility only.
     # They remain blocked before source fetch until county-specific approval.
     "Clermont (OH)": "fail_closed",
