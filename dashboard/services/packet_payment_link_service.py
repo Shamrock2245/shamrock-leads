@@ -55,9 +55,21 @@ _PAID_STATUSES = frozenset(
 )
 
 
-def resolve_swipesimple_url() -> str:
-    """Return configured static SwipeSimple checkout URL (amount lives in copy)."""
-    url = (os.getenv("SWIPESIMPLE_PAYMENT_LINK") or "").strip()
+def resolve_swipesimple_url(intake_source: Optional[str] = None,
+                            case: Optional[dict] = None) -> str:
+    """Pay-by-card URL: case's own invoice link → per-source link
+    (dashboard/services/payment_links.py; Telegram → lnk_07a13eb…, all other
+    sources → lnk_b6bf996f…). Amount lives in the message copy."""
+    from dashboard.services import payment_links
+
+    own = payment_links.case_invoice_link(case)
+    if own:
+        return own
+    if payment_links.normalize_source(intake_source) == "telegram":
+        return payment_links.static_link_for_source("telegram")
+    url = payment_links.static_link_for_source("default")
+    if url == _DEFAULT_SWIPESIMPLE_URL:
+        url = ""
     if not url:
         try:
             from dashboard.deps import get_settings
@@ -329,7 +341,17 @@ async def send_swipesimple_payment_link(
         intake_doc=intake_doc,
     )
     amount_f = _resolve_premium(amount, packet_doc, bond_doc, intake_doc)
-    swipesimple_url = resolve_swipesimple_url()
+    from dashboard.services.payment_links import source_of as _source_of
+
+    _case_src = "default"
+    for _doc in (intake_doc, packet_doc, bond_doc):
+        _case_src = _source_of(_doc)
+        if _case_src != "default":
+            break
+    swipesimple_url = resolve_swipesimple_url(
+        intake_source=_case_src,
+        case=(bond_doc or {}),
+    )
 
     text_delivered = False
     text_queued = False

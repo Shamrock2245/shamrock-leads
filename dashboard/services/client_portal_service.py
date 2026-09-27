@@ -29,6 +29,15 @@ SWIPESIMPLE_PAYMENT_LINK = os.getenv(
     "SWIPESIMPLE_PAYMENT_LINK",
     "https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd",
 )
+
+
+def _payment_link_for_bond(bond: Optional[dict]) -> str:
+    """Case's own invoice link wins; else per-source link (payment_links.py)."""
+    from dashboard.services.payment_links import payment_link_for, source_of
+
+    return payment_link_for(source_of(bond), bond)
+
+
 PUBLIC_URL = os.getenv("DASHBOARD_PUBLIC_URL", "https://leads.shamrockbailbonds.biz")
 
 # Transparent check-in consent version (must match checkin_enrollment_service)
@@ -219,7 +228,7 @@ async def get_portal_case_status(booking_number: str, role: str) -> dict:
         status_data.update({
             "premium": bond.get("premium", 0),
             "indemnitor_name": bond.get("indemnitor_name", ""),
-            "payment_link": SWIPESIMPLE_PAYMENT_LINK,
+            "payment_link": _payment_link_for_bond(bond),
         })
 
         # Get payment plan info
