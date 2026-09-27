@@ -356,6 +356,14 @@ async def _run_paperwork_chase():
         except Exception as e:
             logger.debug("[PaperworkChase] digest: %s", e)
 
+async def _run_intake_fanout_retry():
+    """Retry Sheets ledger / Slack copies of saved intakes (never blocks intake)."""
+    from dashboard.services.intake_fanout import retry_due
+    counts = await retry_due()
+    if counts:
+        logger.info("[IntakeFanout] retry sweep: %s", counts)
+
+
 async def _run_intake_recovery():
     from dashboard.services.intake_recovery_service import IntakeRecoveryService
     from dashboard.services.automation_config import get_automation_config
@@ -729,6 +737,7 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("speed_to_contact",   "SpeedToContact",     1800,  90, _run_speed_to_contact, default_enabled=True),
     CronDef("paperwork_chase",    "PaperworkChase",     3600, 150, _run_paperwork_chase, default_enabled=True),
     CronDef("intake_recovery",    "IntakeRecovery",     3600, 200, _run_intake_recovery, default_enabled=True),
+    CronDef("intake_fanout_retry", "IntakeFanout",       300,  75, _run_intake_fanout_retry, default_enabled=True),
     CronDef("poa_low_stock",      "POALowStock",       21600, 240, _run_poa_low_stock, default_enabled=True),
     CronDef("surety_weekly_reports", "SuretyWeekly",  604800, 600, _run_surety_weekly_reports, default_enabled=True),
     CronDef("overdue_tasks",      "OverdueTasks",       3600, 180, _run_overdue_tasks),
