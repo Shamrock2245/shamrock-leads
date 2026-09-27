@@ -18,6 +18,7 @@ def test_open_paths_exact_whitelist():
     """Verify OPEN_PATHS only exposes public/safe routes."""
     expected = frozenset({
         "/done",
+        "/kiosk",  # neutral lobby-tablet home, no data (2026-09-27)
         "/paperwork",
         "/login",
         "/health",

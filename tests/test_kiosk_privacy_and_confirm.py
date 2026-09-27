@@ -137,3 +137,12 @@ def test_portal_ui_no_localstorage_pii_and_pin_scoped_scan():
     assert "Still there?" not in html
     kiosk_html = client.get("/api/portal/portal-ui?mode=kiosk").text
     assert "Still there?" in kiosk_html and "180 * 1000" in kiosk_html
+
+
+def test_kiosk_home_is_public_exact_path_only():
+    """The idle reset lands on /kiosk; it must not bounce to the staff login
+    (and a staff session must never be needed on the lobby tablet)."""
+    from dashboard.auth import pin_middleware as pm
+
+    assert "/kiosk" in pm.OPEN_PATHS
+    assert not any(p.startswith("/kiosk") for p in pm.OPEN_PREFIXES)
