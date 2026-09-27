@@ -504,6 +504,7 @@ function openBondModal(nameOrLead, bond, county, booking) {
         <button class="insurer-pill" id="suretyPalmetto" onclick="selectSurety('palmetto')">
           <span class="insurer-pill-icon">🌴</span><span class="insurer-pill-name">Palmetto</span><span class="insurer-pill-full">Palmetto Surety Corp.</span>
         </button>
+        <span id="suretyComingSoon" style="display:contents"></span>
       </div>
     </div>
     <div class="wb-section">
@@ -681,6 +682,7 @@ function openBondModal(nameOrLead, bond, county, booking) {
   };
 
   fetchPoaNumbers(initialSurety, bondAmt, chargeList);
+  renderComingSoonSureties();
   if (initialSurety === 'palmetto') {
     const osi = document.getElementById('suretyOSI');
     const pal = document.getElementById('suretyPalmetto');
@@ -1288,7 +1290,36 @@ async function downloadAllBonds(copiesPerCharge = 2) {
   return printAppearanceBondPackage({ copies: copiesPerCharge });
 }
 
+// Surety registry (GET /api/paperwork/sureties). Only ACTIVE sureties are
+// selectable; listed-but-inactive carriers render greyed out ("coming soon").
+// The server fails closed on inactive/unknown sureties regardless of the UI.
+const ACTIVE_SURETY_IDS = new Set(['osi', 'palmetto']);
+async function renderComingSoonSureties() {
+  const slot = document.getElementById('suretyComingSoon');
+  if (!slot) return;
+  try {
+    const r = await fetch('/api/paperwork/sureties', { credentials: 'same-origin' });
+    const d = await r.json();
+    const rows = (d && d.sureties) || [];
+    rows.forEach((row) => { if (row.selectable) ACTIVE_SURETY_IDS.add(row.id); });
+    const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    slot.innerHTML = rows
+      .filter((row) => !row.selectable)
+      .map((row) => `<button type="button" class="insurer-pill disabled" disabled aria-disabled="true"
+          data-surety="${esc(row.id)}" title="${esc(row.reason || 'Coming soon')}">
+          <span class="insurer-pill-icon">⏳</span><span class="insurer-pill-name">${esc(row.short)}</span><span class="insurer-pill-full">Coming soon</span>
+        </button>`)
+      .join('');
+  } catch (e) {
+    slot.innerHTML = '';
+  }
+}
+
 function selectSurety(s) {
+  if (!ACTIVE_SURETY_IDS.has(String(s || '').toLowerCase())) {
+    if (typeof SL !== 'undefined' && SL.toast) SL.toast('That surety is not active yet — no paperwork template.', 'warn');
+    return;
+  }
   window._bondModalData.surety = s;
   document.getElementById('suretyOSI').classList.toggle('active', s === 'osi');
   document.getElementById('suretyPalmetto').classList.toggle('active', s === 'palmetto');

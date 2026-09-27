@@ -342,6 +342,7 @@ def test_generate_appearance_bond_singular():
         "charges": "GRAND THEFT",
         "bond_date": "05/20/2026",
         "poa_number": "OSI-111",
+        "surety": "osi",  # no implicit OSI any more (fail closed, 2026-09-27)
     }
     
     # Should work seamlessly for backward compatibility, returning a single byte buffer

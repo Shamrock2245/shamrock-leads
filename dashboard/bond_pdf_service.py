@@ -914,7 +914,7 @@ def fill_palmetto_bond(data: dict) -> bytes:
     return buf.read()
 
 
-def generate_appearance_bonds(bond_data: dict, template: str = "osi") -> list[bytes]:
+def generate_appearance_bonds(bond_data: dict, template: Optional[str] = None) -> list[bytes]:
     """
     Generate filled appearance bond PDFs — **one PDF per charge**.
 
@@ -930,9 +930,10 @@ def generate_appearance_bonds(bond_data: dict, template: str = "osi") -> list[by
     Returns:
         List of PDF byte buffers in charge order (same length as normalize_charge_rows).
     """
-    surety = (template or bond_data.get("surety") or "osi").lower().strip()
-    if surety not in ("osi", "palmetto"):
-        surety = "osi"
+    from dashboard.services.surety_registry import require_surety
+
+    # Fail closed: never print OSI appearance bonds for an unknown/missing surety.
+    surety = require_surety(template or bond_data.get("surety"))
 
     rows = normalize_charge_rows(bond_data)
     pdfs: List[bytes] = []
@@ -1023,7 +1024,8 @@ def generate_appearance_bond(data: dict) -> bytes:
 
     Returns: PDF bytes
     """
-    surety = (data.get("surety", "osi") or "osi").lower().strip()
+    # generate_appearance_bonds fails closed on a missing/unknown surety.
+    surety = str(data.get("surety") or "").lower().strip()
     pdfs = generate_appearance_bonds(data, template=surety)
     if not pdfs:
         return b""

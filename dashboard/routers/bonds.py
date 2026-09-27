@@ -85,7 +85,8 @@ async def api_record_bond(request: Request):
         errors.append("booking_number is required")
     if not poa_number:
         errors.append("poa_number is required")
-    if surety not in ("osi", "palmetto"):
+    from dashboard.services.surety_registry import is_supported_surety  # active sureties only
+    if not is_supported_surety(surety):
         errors.append("surety must be 'osi' or 'palmetto'")
     if errors:
         return JSONResponse({"success": False, "errors": errors}, status_code=400)
@@ -1130,9 +1131,13 @@ def _build_appearance_bond_data(d: dict):
       (b_data: dict, error: Optional[str])
     """
     d = d or {}
-    surety = (d.get("surety") or "osi").lower().strip()
-    if surety not in ("osi", "palmetto"):
-        surety = "osi"
+    from dashboard.services.surety_registry import normalize_surety, is_supported_surety
+
+    surety = normalize_surety(d.get("surety"))
+    if not surety:
+        return {}, "Surety is required (OSI or Palmetto) before printing appearance bonds."
+    if not is_supported_surety(surety):
+        return {}, f"Surety '{surety}' is not supported for appearance bonds."
 
     charges_data = (
         d.get("charge_details")
@@ -1324,7 +1329,7 @@ async def api_appearance_bond_pdf(request: Request):
                 status_code=400,
             )
 
-        surety = data.get("surety") or "osi"
+        surety = data.get("surety")  # validated by _build_appearance_bond_data
         try:
             copies_count = int(d.get("copies") or d.get("copies_per_charge") or "2")
         except (TypeError, ValueError):
@@ -1419,7 +1424,7 @@ async def api_appearance_bond_batch(request: Request):
         b_data, err = _build_appearance_bond_data(d)
         if err:
             return JSONResponse({"error": err}, status_code=400)
-        surety = b_data.get("surety") or "osi"
+        surety = b_data.get("surety")  # validated by _build_appearance_bond_data
         try:
             copies = int(d.get("copies", 2) or 2)
         except (TypeError, ValueError):
@@ -1453,8 +1458,12 @@ async def api_appearance_bond_batch(request: Request):
             drive_service = GoogleDriveService()
             if drive_service.is_configured:
                 root_folder_id = os.getenv("GOOGLE_DRIVE_CASES_FOLDER_ID", "root")
-                surety_label = "OSI Appearance Bonds" if surety.lower() == "osi" else "Palmetto Appearance Bonds"
-                surety_folder_id = drive_service.get_or_create_folder(surety_label, root_folder_id)
+                from dashboard.services.surety_registry import drive_folder_label
+                surety_label = drive_folder_label(surety)
+                surety_folder_id = (
+                    drive_service.get_or_create_folder(surety_label, root_folder_id)
+                    if surety_label else None
+                )
                 if surety_folder_id:
                     def_folder_name = f"{safe_name}_{d.get('booking', 'no_bk')}"
                     def_folder_id = drive_service.get_or_create_folder(def_folder_name, surety_folder_id)
@@ -1776,15 +1785,17 @@ async def _hydrate_appearance_bond_payload(d: dict) -> dict:
                 if one:
                     out["poa_number"] = one
 
+        from dashboard.services.surety_registry import normalize_surety
+
+        # Keep unknown/missing as-is so _build_appearance_bond_data fails closed
+        # instead of silently printing OSI forms.
         surety = (
             out.get("surety")
             or (ab or {}).get("surety_id")
             or (ab or {}).get("insurance_company")
-            or "osi"
+            or ""
         )
-        out["surety"] = str(surety).lower().strip()
-        if out["surety"] not in ("osi", "palmetto"):
-            out["surety"] = "osi"
+        out["surety"] = normalize_surety(surety)
     except Exception as exc:
         logger.warning("[appearance-print] hydrate failed booking=%s: %s", booking, exc)
     return out
@@ -1835,7 +1846,7 @@ async def api_appearance_bonds_print_package(request: Request):
                 },
                 status_code=400,
             )
-        surety = b_data.get("surety") or "osi"
+        surety = b_data.get("surety")  # validated by _build_appearance_bond_data
         b_data["copies_per_charge"] = copies
 
         plan = describe_appearance_bonds(b_data)
@@ -1899,10 +1910,12 @@ async def api_appearance_bonds_print_package(request: Request):
                     or os.getenv("GOOGLE_DRIVE_CASES_FOLDER_ID")
                     or "root"
                 )
-                surety_label = (
-                    "OSI Appearance Bonds" if surety == "osi" else "Palmetto Appearance Bonds"
+                from dashboard.services.surety_registry import drive_folder_label
+                surety_label = drive_folder_label(surety)
+                surety_folder_id = (
+                    drive_service.get_or_create_folder(surety_label, root_folder_id)
+                    if surety_label else None
                 )
-                surety_folder_id = drive_service.get_or_create_folder(surety_label, root_folder_id)
                 if surety_folder_id:
                     def_folder = drive_service.get_or_create_folder(
                         f"{safe_name}_{b_data.get('booking_number') or 'nobk'}",

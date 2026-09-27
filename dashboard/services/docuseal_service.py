@@ -245,7 +245,8 @@ def validate_docuseal_packet_binding(
         )
 
     surety = _required_text(data, "surety_id").lower()
-    if surety not in ("osi", "palmetto"):
+    from dashboard.services.surety_registry import is_supported_surety  # active sureties only
+    if not is_supported_surety(surety):
         raise DocuSealPacketValidationError(
             "DocuSeal packet blocked: an explicit OSI or Palmetto surety is required."
         )
@@ -293,7 +294,8 @@ def validate_shannon_voice_packet(
         raise DocuSealPacketValidationError("Shannon paperwork blocked: packet_id is required.")
     data = bond_data or {}
     surety = _required_text(data, "surety_id").lower() or "osi"
-    if surety not in ("osi", "palmetto"):
+    from dashboard.services.surety_registry import is_supported_surety  # active sureties only
+    if not is_supported_surety(surety):
         raise DocuSealPacketValidationError(
             "Shannon paperwork blocked: surety_id must be osi or palmetto."
         )
@@ -1831,9 +1833,18 @@ class DocuSealService:
             or os.getenv("GOOGLE_DRIVE_OUTPUT_FOLDER_ID")
             or DEFAULT_COMPLETED_BONDS_FOLDER
         )
-        surety = (surety_id or "osi").lower().strip()
-        if surety not in ("osi", "palmetto"):
-            surety = "osi"
+        from dashboard.services.surety_registry import normalize_surety, is_supported_surety
+
+        surety = normalize_surety(surety_id)
+        if not is_supported_surety(surety):
+            # Never file a signed packet under the wrong carrier's folder.
+            logger.warning("[docuseal] Drive archive skipped: unsupported surety %r", surety_id)
+            return {
+                "ok": False,
+                "error": "unsupported_surety",
+                "error_code": "unsupported_surety",
+                "surety": surety,
+            }
         surety_label = surety.upper()
 
         mmddyy = datetime.now().strftime("%m%d%y")
@@ -1916,30 +1927,20 @@ class DocuSealService:
         }
 
 
-def resolve_template_id_for_surety(surety_id: str = "osi") -> Optional[str]:
+def resolve_template_id_for_surety(surety_id: Optional[str] = None) -> Optional[str]:
     """
-    Env-based template IDs until admin maps all packet docs in DocuSeal UI.
+    DocuSeal template id for an ACTIVE surety from the surety registry
+    (dashboard/services/surety_registry.py):
 
-      DOCUSEAL_TEMPLATE_ID_OSI      — OSI combined packet (preferred for osi)
-      DOCUSEAL_TEMPLATE_ID          — OSI fallback
-      DOCUSEAL_TEMPLATE_ID_PALMETTO — Palmetto only (no silent OSI fallback)
+      osi       — DOCUSEAL_TEMPLATE_ID_OSI, then DOCUSEAL_TEMPLATE_ID
+      palmetto  — DOCUSEAL_TEMPLATE_ID_PALMETTO only (no OSI fallback)
+      inactive  — Lexington / Roche / Universal / Bankers → None until activated
 
-    Palmetto requires its own template id so we never send Palmetto bonds
-    to the OSI DocuSeal form by accident.
+    Missing, unknown, or inactive surety → None (fail closed; never OSI).
     """
-    surety = (surety_id or "osi").lower().strip()
-    if surety == "palmetto":
-        tid = (os.getenv("DOCUSEAL_TEMPLATE_ID_PALMETTO") or "").strip()
-        return tid or None
-    if surety != "osi":
-        # Never silently map unknown surety labels onto the OSI template.
-        return None
-    tid = (
-        os.getenv("DOCUSEAL_TEMPLATE_ID_OSI")
-        or os.getenv("DOCUSEAL_TEMPLATE_ID")
-        or ""
-    ).strip()
-    return tid or None
+    from dashboard.services.surety_registry import template_id_for
+
+    return template_id_for(surety_id)
 
 
 BOND_AGENTS = {
@@ -2132,7 +2133,7 @@ def build_bond_data_from_dashboard(
     return bond_data
 
 
-def readiness_report(bond_data: Optional[Dict[str, Any]] = None, surety_id: str = "osi") -> Dict[str, Any]:
+def readiness_report(bond_data: Optional[Dict[str, Any]] = None, surety_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Dashboard-facing readiness check: env + template + sample prefill key count.
     """

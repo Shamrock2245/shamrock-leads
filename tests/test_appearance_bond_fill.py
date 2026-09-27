@@ -193,6 +193,7 @@ def test_build_rejects_booking_as_only_case():
         "case_number": "1029767",
         "charge": "TEST CHARGE",
         "bond": 1000,
+        "surety": "osi",  # surety is required now (fail closed, 2026-09-27)
     })
     assert err is None
     assert b_data["case_number"] in ("", None) or b_data["case_number"] != "1029767"

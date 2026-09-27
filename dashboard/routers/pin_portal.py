@@ -292,7 +292,7 @@ class InstantIndemnitorPacketRequest(BaseModel):
     indemnitor_email: Optional[str] = None
     indemnitor_address: Optional[str] = None
     indemnitor_dl: Optional[str] = None
-    surety_id: Optional[str] = "osi"
+    surety_id: Optional[str] = None
     county: Optional[str] = None
     state: Optional[str] = None
 
@@ -812,7 +812,8 @@ async def _upsert_deferred_client_intake(
         "match_confidence": 0,
         "match_strategy": "pending_auto",
         "match_timestamp": None,
-        "surety_id": "osi",
+        # Surety is a staff decision at Write Bond — never default a client intake to OSI.
+        "surety_id": None,
         "paperwork_packet_id": None,
         "paperwork_status": "intake_complete",
         "_raw": {

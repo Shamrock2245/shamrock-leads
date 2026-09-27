@@ -18,6 +18,7 @@ Provides all endpoints needed by sl-indemnitor.js:
   PATCH /api/prospective-bonds/{booking_number}/indemnitor — update single indemnitor
 """
 
+import logging
 import os
 import uuid
 from datetime import datetime, timezone
@@ -27,6 +28,8 @@ from fastapi import APIRouter, File, Form, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 from dashboard.deps import get_collection, get_db
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["indemnitors"])
 
@@ -199,8 +202,15 @@ async def api_scan_id_ocr(request: Request):
                     return
                 
                 defendant_name = bond.get("defendant_name", "Unknown Defendant")
-                surety = bond.get("surety_id", "osi")
-                surety_label = "OSI Appearance Bonds" if surety.lower() == "osi" else "Palmetto Appearance Bonds"
+                from dashboard.services.surety_registry import drive_folder_label
+                surety_label = drive_folder_label(bond.get("surety_id"))
+                if not surety_label:
+                    # Unknown/missing surety: do not guess a carrier folder.
+                    logger.warning(
+                        "[scan-id] Drive ID upload skipped: bond %s has no supported surety",
+                        booking_number,
+                    )
+                    return
                 
                 indemnitor_name = result.get("extracted", {}).get("full_name", "Indemnitor")
                 ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpg"
