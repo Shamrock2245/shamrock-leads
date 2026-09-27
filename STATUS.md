@@ -16,6 +16,13 @@
 
 ---
 
+## Pending branch `fix/kiosk-and-wix-intake` (2026-09-27, LOCAL — not deployed)
+- Website applications → `/api/webhooks/wix-intake` → Mongo `intake_queue` first, then non-blocking, retried fan-out to the Sheets "Intake Ledger" (GAS) and Slack (`intake_fanout_outbox`, cron `intake_fanout_retry`).
+- Surety registry: OSI + Palmetto active; Lexington / Roche / Universal / Bankers greyed out and fail closed; no silent OSI fallback.
+- Pay-by-card on every source (Telegram link vs website link; case invoice link wins) — `dashboard/services/payment_links.py`.
+- Kiosk: role-scoped ID scan with confirm step, co-indemnitor no longer overwrites the indemnitor, defendant allowed, idle wipe + `/kiosk` home.
+- Details + go-live checklist: [`docs/INTAKE_KIOSK_SURETY_PAYMENTS_2026-09-27.md`](./docs/INTAKE_KIOSK_SURETY_PAYMENTS_2026-09-27.md).
+
 ## Gate update (2026-08-28, operator)
 
 - **D2 closed:** Brendan confirmed Super CRM dashboard iMessage send is working.

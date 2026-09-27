@@ -5,6 +5,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — 2026-09-27 (Wix intake, kiosk, surety registry, pay links)
+
+### Added
+- `POST /api/webhooks/wix-intake` now accepts the Wix wizard payload via `wix_wizard_adapter` (no county/state/surety defaults), is idempotent on `clientNonce`, auto-matches, and returns `payment_link`.
+- `intake_fanout`: after the Mongo save, a non-blocking, retried copy to the GAS "Intake Ledger" sheet and Slack (`intake_fanout_outbox`, cron `intake_fanout_retry`).
+- `surety_registry` (OSI + Palmetto active; Lexington/Roche/Universal/Bankers inactive) and `GET /api/paperwork/sureties`; greyed-out "coming soon" pills in Write Bond.
+- `payment_links` (one place for pay-by-card links) and `GET /api/paperwork/payment-links`.
+- Kiosk: `/kiosk`, `POST /api/portal/kiosk-id-confirm`, idle wipe, `/done?kiosk=1` reset.
+
+### Fixed
+- Co-indemnitor kiosk ID scan overwrote the primary indemnitor's CRM record.
+- Unknown sureties silently became OSI in PDF/DocuSeal/Drive paths (now fail closed).
+- Applicant data was kept in the browser's localStorage on the shared tablet.
+
 ## [Unreleased] — 2026-09-25 (TnCIS fail closed)
 
 ### Changed
