@@ -62,19 +62,22 @@ def test_kiosk_sign_page_shows_id_scan_for_indemnitor():
     with patch("dashboard.routers.pin_portal.get_collection", return_value=mock_packets):
         response = client.get("/sign/PKT-E224F5FB54/indemnitor?mode=kiosk")
     assert response.status_code == 200
-    assert "Scan your driver license" in response.text
+    assert "Scan your ID" in response.text
+    assert "/api/portal/kiosk-id-confirm" in response.text
+    assert "Still there?" in response.text  # 3-minute idle reset
     assert "/api/portal/kiosk-id-ocr" in response.text
     assert "PKT-E224F5FB54" in response.text
     assert "waiting" in response.text
 
 
-def test_kiosk_id_ocr_rejects_defendant_role():
+def test_kiosk_id_ocr_requires_image_for_any_role():
+    # 2026-09-27: defendants MAY scan their own ID at the kiosk (owner decision).
     response = client.post(
         "/api/portal/kiosk-id-ocr",
         json={"packet_id": "PKT-E224F5FB54", "role": "defendant"},
     )
     assert response.status_code == 400
-    assert "indemnitor" in response.json()["error"].lower()
+    assert "image" in response.json()["error"].lower()
 
 
 def test_client_fields_from_id_ocr_stays_role_scoped():
