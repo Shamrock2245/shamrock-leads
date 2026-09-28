@@ -188,6 +188,7 @@ def test_docs_name_the_opt_in_gates():
     example = (ROOT / ".env.example").read_text()
     assert "SWIPESIMPLE_SESSION_KEEPALIVE" in checklist
     assert "swipesimple_session_keepalive" in checklist
+    assert "239-955-0314" in checklist
     assert "239-955-0178" in checklist
     assert "Auto-relogin is **not** enabled" in checklist
     assert "SWIPESIMPLE_LIVE" in checklist
@@ -324,10 +325,11 @@ async def test_alert_once_then_cooldown_then_recovery(monkeypatch, caplog_debug)
     assert bb.await_count == 2
     assert tg.send_staff_alert.await_count == 2
     phone, message = bb.await_args_list[0].args[:2]
-    assert phone == DEFAULT_ALERT_TO == "2399550178"
+    assert phone == DEFAULT_ALERT_TO == "2399550314"
     assert message == ALERT_TEXT
     assert SENTINEL not in message
     assert bb.await_args_list[0].kwargs.get("purpose") == "swipesimple_session_alert"
+    assert bb.await_args_list[0].kwargs.get("server_phone") == "2399550178"
     doc = db["swipesimple_session_health"].docs["merchant_session"]
     assert doc["last_alert_at"]
     assert "cookie" not in doc
@@ -402,8 +404,38 @@ async def test_rejected_bb_send_does_not_start_cooldown(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_direct_send_uses_0178_server_for_0314_recipient(monkeypatch):
+    """Recipient 0314 must not select the 0314 BlueBubbles host."""
+    from dashboard.services.bb_client import _send_message_direct
+
+    looked_up = {}
+
+    class _BB:
+        async def send_text(self, chat_guid, message, purpose=None):
+            looked_up["chat_guid"] = chat_guid
+            looked_up["message"] = message
+            return {"success": True}
+
+    def _client(phone=None):
+        looked_up["server_phone"] = phone
+        return _BB()
+
+    monkeypatch.setattr("dashboard.services.bb_client.get_bb_client", _client)
+    result = await _send_message_direct(
+        "2399550314",
+        ALERT_TEXT,
+        purpose="swipesimple_session_alert",
+        server_phone="2399550178",
+    )
+    assert result["success"] is True
+    assert looked_up["server_phone"] == "2399550178"
+    assert looked_up["chat_guid"] == "any;-;+12399550314"
+    assert looked_up["message"] == ALERT_TEXT
+
+
+@pytest.mark.asyncio
 async def test_alert_phone_override(monkeypatch):
-    _enable(monkeypatch, phone="+12399550178")
+    _enable(monkeypatch, phone="+12399550314")
     db = MemoryDB()
     bb = AsyncMock(return_value={"success": True, "sent": True, "channel": "imessage"})
     tg = AsyncMock()
@@ -414,7 +446,8 @@ async def test_alert_phone_override(monkeypatch):
         _http(monkeypatch, _Resp(401, json_raises=True))
         result = await run_session_keepalive(db=db, now=T0)
     assert result["alerted"] is True
-    assert bb.await_args.args[0] == "+12399550178"
+    assert bb.await_args.args[0] == "+12399550314"
+    assert bb.await_args.kwargs.get("server_phone") == "2399550178"
     assert SENTINEL not in bb.await_args.args[1]
 
 

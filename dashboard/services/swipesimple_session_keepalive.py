@@ -26,7 +26,9 @@ PROBE_NAME = "Brendan"
 HEALTH_COLLECTION = "swipesimple_session_health"
 HEALTH_DOC_ID = "merchant_session"
 ALERT_COOLDOWN = timedelta(hours=6)
-DEFAULT_ALERT_TO = "2399550178"  # office text line 239-955-0178
+DEFAULT_ALERT_TO = "2399550314"  # Brendan's text line 239-955-0314
+# Outbound BlueBubbles host stays the office 0178 server. 0314 is the recipient.
+ALERT_SENDER_PHONE = "2399550178"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 _ALERT_REASONS = frozenset({
     "unauthorized",
@@ -53,7 +55,7 @@ def keepalive_enabled() -> bool:
 
 
 def alert_phone() -> str:
-    """Recipient for the expiry text. Env override or the 0178 office line."""
+    """Recipient for the expiry text. Env override or Brendan's 0314 line."""
     raw = (os.getenv("SWIPESIMPLE_SESSION_ALERT_TO") or "").strip()
     return raw or DEFAULT_ALERT_TO
 
@@ -313,6 +315,7 @@ async def _send_expiry_alert(phone: str) -> Dict[str, Any]:
             phone,
             ALERT_TEXT,
             purpose="swipesimple_session_alert",
+            server_phone=ALERT_SENDER_PHONE,
         )
         accepted = bb_send_accepted(bb_result)
     except Exception as exc:

@@ -47,7 +47,7 @@ Read-only probe so the merchant cookie does not die quietly. It does **not** cre
   - env `SWIPESIMPLE_SESSION_KEEPALIVE=1`
   - automation_config `swipesimple_session_keepalive.enabled=true` (cron `default_enabled` is false, so a missing toggle stays quiet)
 - [ ] Cron `SS-SessionKeepalive` runs every 20 minutes (`1200s`, first run ~150s): `GET /api/v4/customers?name=Brendan` with the existing `SWIPESIMPLE_SESSION` or `SWIPESIMPLE_COOKIE_JAR` cookie. Success is HTTP 200 plus JSON. No cookie is stored or logged.
-- [ ] On expiry (401, redirect to login, HTML login page, or non-JSON), text Brendan on BlueBubbles line **239-955-0178** (override `SWIPESIMPLE_SESSION_ALERT_TO`). Telegram staff alert is secondary when that bot is already configured.
+- [ ] On expiry (401, redirect to login, HTML login page, or non-JSON), text Brendan at **239-955-0314** (override `SWIPESIMPLE_SESSION_ALERT_TO`). The BlueBubbles **sender** stays the office **239-955-0178** server. Telegram staff alert is secondary when that bot is already configured.
 - [ ] Cooldown: at most one expiry text per 6 hours, unless a later probe succeeds and then fails again. Health timestamps live in Mongo `swipesimple_session_health` (no cookie).
 - [ ] Missing session env: log once and do not alert.
 - [ ] Auto-relogin is **not** enabled.
