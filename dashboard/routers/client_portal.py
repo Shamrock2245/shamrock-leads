@@ -171,10 +171,9 @@ async def portal_payment_link(token: str):
     if not token_data:
         return JSONResponse({"error": "Invalid or expired token"}, status_code=401)
 
-    swipesimple_link = os.getenv(
-        "SWIPESIMPLE_PAYMENT_LINK",
-        "https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd",
-    )
+    from dashboard.services.payment_links import payment_link_for
+
+    swipesimple_link = payment_link_for(token_data.get("intake_source") or token_data.get("source"))
 
     return {
         "payment_link": swipesimple_link,

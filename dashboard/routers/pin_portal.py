@@ -292,7 +292,7 @@ class InstantIndemnitorPacketRequest(BaseModel):
     indemnitor_email: Optional[str] = None
     indemnitor_address: Optional[str] = None
     indemnitor_dl: Optional[str] = None
-    surety_id: Optional[str] = "osi"
+    surety_id: Optional[str] = None
     county: Optional[str] = None
     state: Optional[str] = None
 
@@ -470,6 +470,12 @@ _CLIENT_FIELD_ALLOWLIST = frozenset({
     "def_vehicle_plate", "def_facebook", "def_instagram",
     "children_names_ages_1", "children_names_ages_2",
     "children_school_1", "children_school_2",
+    # Co-indemnitor (kiosk scan). Kept separate so a co-signer's ID never
+    # overwrites the primary indemnitor (bug fixed 2026-09-27).
+    "coindemnitor_name", "coindemnitor_first_name", "coindemnitor_last_name",
+    "coindemnitor_address", "coindemnitor_city", "coindemnitor_state", "coindemnitor_zip",
+    "coindemnitor_city_state_zip", "coindemnitor_dob", "coindemnitor_dl",
+    "coindemnitor_phone", "coindemnitor_email", "Ind2Name",
 })
 
 
@@ -557,6 +563,21 @@ def client_fields_from_id_ocr(
             "defendant_dl": dl_number,
             "defendant_dl_state": dl_state,
         }
+    elif role == "coindemnitor":
+        raw = {
+            "coindemnitor_name": full_name,
+            "Ind2Name": full_name,
+            "coindemnitor_first_name": first_name,
+            "coindemnitor_last_name": last_name,
+            "coindemnitor_address": address,
+            "coindemnitor_city": city,
+            "coindemnitor_state": state,
+            "coindemnitor_zip": zip_code,
+            "coindemnitor_dob": dob,
+            "coindemnitor_dl": dl_number,
+        }
+        if city or state or zip_code:
+            raw["coindemnitor_city_state_zip"] = ", ".join(p for p in (city, f"{state} {zip_code}".strip()) if p)
     else:
         raw = {
             "indemnitor_name": full_name,
@@ -812,7 +833,8 @@ async def _upsert_deferred_client_intake(
         "match_confidence": 0,
         "match_strategy": "pending_auto",
         "match_timestamp": None,
-        "surety_id": "osi",
+        # Surety is a staff decision at Write Bond — never default a client intake to OSI.
+        "surety_id": None,
         "paperwork_packet_id": None,
         "paperwork_status": "intake_complete",
         "_raw": {
@@ -909,21 +931,60 @@ async def portal_session(request: Request):
     return _session_payload(session, meta)
 
 
-@pin_portal_router.post("/kiosk-id-ocr")
-async def kiosk_id_ocr(request: Request):
-    """Lobby kiosk: scan indemnitor ID onto a staff-issued packet. Never writes defendant identity."""
+# ── Kiosk (in-office tablet) ID scan: scan → CONFIRM → apply ────────────────
+# 2026-09-27 owner decisions: a defendant in the office may scan their own ID;
+# the lobby tablet is staff-overseen. Scan never writes anything; the person
+# confirms name/address, then phone, then email; /kiosk-id-confirm applies it
+# to THAT role only (co-indemnitor never overwrites the primary indemnitor).
+
+_KIOSK_SCAN_TTL_SECONDS = 15 * 60
+_KIOSK_ROLES = ("defendant", "indemnitor", "coindemnitor")
+
+
+def _kiosk_serializer():
+    from itsdangerous import URLSafeTimedSerializer
+    from dashboard.auth.pin_middleware import _get_serializer
+
+    base = _get_serializer()
+    return URLSafeTimedSerializer(base.secret_key, salt="kiosk-id-scan-v1")
+
+
+def _kiosk_role_prefix(role: str) -> str:
+    return {"defendant": "defendant_", "coindemnitor": "coindemnitor_"}.get(role, "indemnitor_")
+
+
+def _kiosk_confirm_fields(role: str, scanned: Dict[str, str], edits: Dict[str, Any]) -> Dict[str, str]:
+    """Merge the person's confirmed edits onto the scan, restricted to THEIR role's keys."""
+    prefix = _kiosk_role_prefix(role)
+    clean_edits = {
+        k: v for k, v in _sanitize_client_fields(edits or {}).items()
+        if k.startswith(prefix) or (role == "coindemnitor" and k == "Ind2Name")
+        or (role == "indemnitor" and k in ("IndemnitorName", "IndName", "FullName"))
+        or (role == "defendant" and k in ("DefName", "DefFirstName", "DefLastName"))
+    }
+    merged = {**scanned, **clean_edits}
+    name_key = {"defendant": "defendant_name", "coindemnitor": "coindemnitor_name"}.get(role, "indemnitor_name")
+    if clean_edits.get(name_key):
+        nm = clean_edits[name_key]
+        for alias in {"defendant": ("DefName",), "coindemnitor": ("Ind2Name",),
+                      "indemnitor": ("IndemnitorName", "IndName", "FullName")}[role]:
+            merged[alias] = nm
+    csz = ", ".join(p for p in (merged.get(prefix + "city", ""),
+                                f"{merged.get(prefix + 'state', '')} {merged.get(prefix + 'zip', '')}".strip()) if p)
+    if csz and role != "defendant":
+        merged[prefix + "city_state_zip"] = csz
+    return merged
+
+
+async def _read_kiosk_upload(request: Request) -> tuple[str, str, bytes, str]:
     import base64
 
     content_type = request.headers.get("content-type", "")
-    packet_id = ""
-    role = "indemnitor"
-    image_bytes = b""
-    filename = "id_photo.jpg"
-
+    packet_id, role_raw, image_bytes, filename = "", "", b"", "id_photo.jpg"
     if "multipart/form-data" in content_type:
         form = await request.form()
         packet_id = str(form.get("packet_id") or "").strip()
-        role = _normalize_client_role(form.get("role") or "indemnitor") or "indemnitor"
+        role_raw = str(form.get("role") or "")
         file_obj = form.get("file") or form.get("image") or form.get("id_photo")
         if file_obj and hasattr(file_obj, "read"):
             filename = getattr(file_obj, "filename", "") or filename
@@ -934,7 +995,7 @@ async def kiosk_id_ocr(request: Request):
         except Exception:
             body = {}
         packet_id = str(body.get("packet_id") or "").strip()
-        role = _normalize_client_role(body.get("role") or "indemnitor") or "indemnitor"
+        role_raw = str(body.get("role") or "")
         raw_b64 = body.get("image_b64") or body.get("image") or ""
         if raw_b64:
             if "," in raw_b64:
@@ -943,26 +1004,31 @@ async def kiosk_id_ocr(request: Request):
                 image_bytes = base64.b64decode(raw_b64)
             except Exception:
                 image_bytes = b""
+    return packet_id, role_raw, image_bytes, filename
 
-    if role == "defendant":
-        return JSONResponse(
-            {"success": False, "error": "Kiosk ID scan is for the indemnitor. Defendant identity stays on the booking record."},
-            status_code=400,
-        )
+
+async def _load_active_packet(packet_id: str) -> Optional[dict]:
+    packet = await get_collection("paperwork_packets").find_one({"packet_id": packet_id})
+    if not packet or packet.get("voided") or packet.get("status") in ("voided", "cancelled", "canceled"):
+        return None
+    return packet
+
+
+@pin_portal_router.post("/kiosk-id-ocr")
+async def kiosk_id_ocr(request: Request):
+    """Kiosk step 1: read the ID and return role-scoped fields + a signed
+    ``scan_token``. Writes NOTHING — the person confirms first
+    (POST /api/portal/kiosk-id-confirm)."""
+    packet_id, role_raw, image_bytes, filename = await _read_kiosk_upload(request)
+    role = _normalize_client_role(role_raw or "indemnitor") or "indemnitor"
     if not packet_id:
         return JSONResponse({"success": False, "error": "Missing packet_id"}, status_code=400)
     if not image_bytes:
         return JSONResponse({"success": False, "error": "No ID image data provided"}, status_code=400)
-
-    packets = get_collection("paperwork_packets")
-    packet = await packets.find_one({"packet_id": packet_id})
-    if not packet or packet.get("voided") or packet.get("status") in ("voided", "cancelled", "canceled"):
+    if not await _load_active_packet(packet_id):
         return JSONResponse({"success": False, "error": "Packet not found or no longer active."}, status_code=404)
 
     from dashboard.services.id_scanner_service import IDScannerService
-    from dashboard.services.paperwork_signers import normalize_role
-    from dashboard.services.docuseal_service import DocuSealService
-    from dashboard.services.docuseal_signing_ux import submission_fields_from_values, IDENTITY_READONLY_FIELD_NAMES
 
     result = await IDScannerService.scan_id_image(image_bytes, filename=filename)
     extracted = result.get("extracted") if isinstance(result.get("extracted"), dict) else {}
@@ -972,80 +1038,145 @@ async def kiosk_id_ocr(request: Request):
             "error": result.get("error") or "Could not read ID photo. Try a clearer photo.",
         }, status_code=422)
 
-    ocr_fields = client_fields_from_id_ocr(extracted, "indemnitor")
-    submitters = list(packet.get("docuseal_submitters") or [])
-    target = None
-    want = normalize_role(role)
-    for item in submitters:
-        if normalize_role((item or {}).get("role")) == want:
-            target = item
-            break
-    if not target:
-        for item in submitters:
-            if normalize_role((item or {}).get("role")) == "indemnitor":
-                target = item
-                break
-    submitter_id = (target or {}).get("id")
+    fields = client_fields_from_id_ocr(extracted, role)
+    token = _kiosk_serializer().dumps({"p": packet_id, "r": role, "f": fields})
+    return JSONResponse({
+        "success": True,
+        "confirm_required": True,
+        "role": role,
+        "fields": fields,
+        "extracted": extracted,
+        "scan_token": token,
+        "portrait_jpeg_b64": result.get("portrait_jpeg_b64") or "",
+    })
+
+
+class KioskConfirmRequest(BaseModel):
+    scan_token: str
+    fields: Dict[str, Any] = {}
+
+
+@pin_portal_router.post("/kiosk-id-confirm")
+async def kiosk_id_confirm(req: KioskConfirmRequest):
+    """Kiosk step 2: apply the person's CONFIRMED fields to their own role.
+
+    * defendant    → defendant submitter + packet client_fields (booking name wins;
+                     a different scanned name is kept for staff review)
+    * indemnitor   → indemnitor submitter + primary indemnitor CRM record
+    * coindemnitor → co-indemnitor submitter ONLY + packet coindemnitor fields.
+                     Never the primary indemnitor's submitter, CRM record or fields.
+    """
+    from itsdangerous import BadSignature, SignatureExpired
+
+    try:
+        data = _kiosk_serializer().loads(req.scan_token, max_age=_KIOSK_SCAN_TTL_SECONDS)
+    except SignatureExpired:
+        return JSONResponse({"success": False, "error": "Scan expired. Please scan again."}, status_code=410)
+    except BadSignature:
+        return JSONResponse({"success": False, "error": "Invalid scan. Please scan again."}, status_code=400)
+    packet_id = str(data.get("p") or "")
+    role = str(data.get("r") or "")
+    if role not in _KIOSK_ROLES:
+        return JSONResponse({"success": False, "error": "Invalid role."}, status_code=400)
+    packet = await _load_active_packet(packet_id)
+    if not packet:
+        return JSONResponse({"success": False, "error": "Packet not found or no longer active."}, status_code=404)
+
+    fields = _kiosk_confirm_fields(role, data.get("f") or {}, req.fields or {})
+    now_iso = datetime.now(timezone.utc).isoformat()
+    set_doc: Dict[str, Any] = {
+        "kiosk_ready": True,
+        "in_person": True,
+        "id_ocr_pushed_at": now_iso,
+        "client_fields_updated_at": now_iso,
+    }
+    existing_fields = packet.get("client_fields") if isinstance(packet.get("client_fields"), dict) else {}
+
+    if role == "defendant":
+        booking_name = str(packet.get("defendant_name") or packet.get("Defendant_Name") or "").strip()
+        scanned_name = fields.get("defendant_name", "")
+        if booking_name:
+            for k in ("defendant_name", "DefName", "DefFirstName", "DefLastName"):
+                fields.pop(k, None)
+            if scanned_name and scanned_name.lower() != booking_name.lower():
+                set_doc["defendant_name_scanned"] = scanned_name
+        set_doc["client_fields"] = {**existing_fields, **fields}
+        set_doc["defendant_kiosk_confirmed_at"] = now_iso
+    elif role == "coindemnitor":
+        set_doc["client_fields"] = {**existing_fields, **fields}
+        set_doc["coindemnitor_fields"] = fields
+        set_doc["coindemnitor_kiosk_confirmed_at"] = now_iso
+    else:
+        set_doc["client_fields"] = {**existing_fields, **fields}
+        set_doc["pending_staff_indemnitor"] = False
+
+    # DocuSeal: the submitter for THIS role only — no fallback to another role.
+    from dashboard.services.paperwork_signers import normalize_role
+    from dashboard.services.docuseal_service import DocuSealService
+    from dashboard.services.docuseal_signing_ux import submission_fields_from_values, IDENTITY_READONLY_FIELD_NAMES
+
+    target = next(
+        (item for item in (packet.get("docuseal_submitters") or [])
+         if normalize_role((item or {}).get("role")) == normalize_role(role)),
+        None,
+    )
     pushed = False
-    if submitter_id:
+    push_note = ""
+    if target and target.get("id"):
+        values = dict(fields)
+        if role == "coindemnitor":
+            # The co-indemnitor's own signer section uses the indemnitor_* names
+            # on its copy; values are per-submitter, so this never touches the
+            # primary indemnitor's submitter.
+            for k, v in fields.items():
+                if k.startswith("coindemnitor_"):
+                    values["indemnitor_" + k[len("coindemnitor_"):]] = v
+        name_key = {"defendant": "defendant_name", "coindemnitor": "coindemnitor_name"}.get(role, "indemnitor_name")
         try:
-            svc = DocuSealService()
-            await svc.update_submitter(
-                submitter_id,
-                name=ocr_fields.get("indemnitor_name") or None,
-                values=ocr_fields,
-                fields=submission_fields_from_values(
-                    ocr_fields,
-                    extra_readonly=IDENTITY_READONLY_FIELD_NAMES,
-                ),
+            await DocuSealService().update_submitter(
+                target["id"],
+                name=fields.get(name_key) or None,
+                values=values,
+                fields=submission_fields_from_values(values, extra_readonly=IDENTITY_READONLY_FIELD_NAMES),
                 send_email=False,
-                metadata={"kiosk_id_scan": True, "packet_id": packet_id, "party_role": "indemnitor"},
+                metadata={"kiosk_id_scan": True, "packet_id": packet_id, "party_role": role},
             )
             pushed = True
         except Exception:
-            logger.warning("[Kiosk] DocuSeal indemnitor update failed for %s", packet_id, exc_info=True)
+            logger.warning("[Kiosk] DocuSeal %s update failed for %s", role, packet_id, exc_info=True)
+            push_note = "DocuSeal update failed; staff can re-send."
+    else:
+        push_note = f"No {role} signer on this packet yet — staff must add one."
 
-    ind_id = packet.get("indemnitor_id")
-    if ind_id:
+    if role == "indemnitor" and packet.get("indemnitor_id"):
+        ind_id = packet.get("indemnitor_id")
         try:
             await get_collection("indemnitors").update_one(
                 {"$or": [{"indemnitor_id": ind_id}, {"Indemnitor_ID": ind_id}]},
                 {"$set": {
-                    "name": ocr_fields.get("indemnitor_name") or "Indemnitor",
-                    "firstName": (extracted.get("first_name") or "").strip(),
-                    "lastName": (extracted.get("last_name") or "").strip(),
-                    "dob": ocr_fields.get("indemnitor_dob") or "",
-                    "dl": ocr_fields.get("indemnitor_dl") or "",
-                    "address": ocr_fields.get("indemnitor_address") or "",
-                    "city": ocr_fields.get("indemnitor_city") or "",
-                    "state": ocr_fields.get("indemnitor_state") or "",
-                    "zip": ocr_fields.get("indemnitor_zip") or "",
+                    "name": fields.get("indemnitor_name") or "Indemnitor",
+                    "dob": fields.get("indemnitor_dob") or "",
+                    "dl": fields.get("indemnitor_dl") or "",
+                    "address": fields.get("indemnitor_address") or "",
+                    "city": fields.get("indemnitor_city") or "",
+                    "state": fields.get("indemnitor_state") or "",
+                    "zip": fields.get("indemnitor_zip") or "",
+                    **({"phone": fields["indemnitor_phone"]} if fields.get("indemnitor_phone") else {}),
+                    **({"email": fields["indemnitor_email"]} if fields.get("indemnitor_email") else {}),
                     "pending_real_party": False,
                     "source": "kiosk_id_scan",
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "updated_at": now_iso,
                 }},
             )
         except Exception:
             logger.warning("[Kiosk] indemnitor CRM update failed", exc_info=True)
 
-    existing_fields = packet.get("client_fields") if isinstance(packet.get("client_fields"), dict) else {}
-    await packets.update_one(
-        {"packet_id": packet_id},
-        {"$set": {
-            "client_fields": {**existing_fields, **ocr_fields},
-            "kiosk_ready": True,
-            "in_person": True,
-            "pending_staff_indemnitor": False,
-            "id_ocr_pushed_at": datetime.now(timezone.utc).isoformat(),
-            "client_fields_updated_at": datetime.now(timezone.utc).isoformat(),
-        }},
-    )
+    await get_collection("paperwork_packets").update_one({"packet_id": packet_id}, {"$set": set_doc})
     return JSONResponse({
         "success": True,
-        "extracted": extracted,
+        "role": role,
         "pushed_to_docuseal": pushed,
-        "role": "indemnitor",
-        "portrait_jpeg_b64": result.get("portrait_jpeg_b64") or "",
+        "note": push_note,
     })
 
 
@@ -1276,6 +1407,84 @@ async def portal_remaining_fields(req: RemainingFieldsRequest):
     }
 
 
+# ── Kiosk idle reset (3 minutes) ─────────────────────────────────────────────
+# Shared by the kiosk sign page and the in-person portal. The DocuSeal iframe
+# is cross-origin, so taps inside it are invisible to this page; after 180 s
+# without activity we show "Still there?" for 30 s, then wipe the page (memory,
+# sessionStorage) and go to /kiosk. Plain string (not an f-string).
+KIOSK_IDLE_SECONDS = 180
+KIOSK_WARN_SECONDS = 30
+KIOSK_IDLE_SNIPPET = """
+    <div id="slIdle" role="alertdialog" aria-modal="true" hidden
+         style="position:fixed;inset:0;z-index:20000;background:rgba(2,6,23,.86);display:flex;align-items:center;justify-content:center;padding:24px">
+      <div style="background:#151c2c;border:1px solid rgba(34,197,94,.35);border-radius:16px;padding:28px 22px;max-width:420px;width:100%;text-align:center;color:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
+        <h2 style="margin:0 0 8px">Still there?</h2>
+        <p style="color:#94a3b8;margin:0 0 16px">For your privacy this screen resets in <strong id="slIdleCount">30</strong> seconds.</p>
+        <button type="button" id="slIdleStay" style="width:100%;min-height:52px;border:0;border-radius:12px;background:#22c55e;color:#052e16;font-weight:800;font-size:1rem">I'm still here</button>
+      </div>
+    </div>
+    <script>
+    (function () {
+        var IDLE_MS = __IDLE__ * 1000, WARN_S = __WARN__;
+        var idleTimer = null, warnTimer = null, left = WARN_S;
+        function wipe() {
+            try { sessionStorage.clear(); } catch (e) {}
+            try { ['sl_portal_phone','sl_indemnitor_scanned_profile','sl_portal_in_person'].forEach(function (k) { localStorage.removeItem(k); }); } catch (e) {}
+            window.location.replace('/kiosk');
+        }
+        function hideWarn() {
+            var o = document.getElementById('slIdle'); if (o) o.hidden = true;
+            if (warnTimer) { clearInterval(warnTimer); warnTimer = null; }
+        }
+        function warn() {
+            var o = document.getElementById('slIdle'); if (!o) return wipe();
+            left = WARN_S; o.hidden = false;
+            var c = document.getElementById('slIdleCount'); if (c) c.textContent = left;
+            warnTimer = setInterval(function () {
+                left -= 1; if (c) c.textContent = left;
+                if (left <= 0) { clearInterval(warnTimer); wipe(); }
+            }, 1000);
+        }
+        function bump() {
+            if (warnTimer) return;  // only the button dismisses the warning
+            if (idleTimer) clearTimeout(idleTimer);
+            idleTimer = setTimeout(warn, IDLE_MS);
+        }
+        ['pointerdown','keydown','touchstart','scroll','input'].forEach(function (ev) {
+            window.addEventListener(ev, bump, { passive: true, capture: true });
+        });
+        // Focus moving into the DocuSeal iframe = the client is working in it.
+        window.addEventListener('blur', function () { setTimeout(bump, 0); });
+        window.addEventListener('message', bump);
+        document.addEventListener('DOMContentLoaded', function () {
+            var stay = document.getElementById('slIdleStay');
+            if (stay) stay.addEventListener('click', function () { hideWarn(); bump(); });
+        });
+        window.SLKiosk = { reset: wipe, bump: bump };
+        bump();
+    })();
+    </script>
+""".replace("__IDLE__", str(KIOSK_IDLE_SECONDS)).replace("__WARN__", str(KIOSK_WARN_SECONDS))
+
+
+KIOSK_READY_HTML = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow"><meta name="theme-color" content="#0b0f19">
+<title>Shamrock Bail Bonds — Kiosk</title>
+<style>body{margin:0;min-height:100dvh;display:flex;align-items:center;justify-content:center;background:#0b0f19;color:#f8fafc;
+font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;text-align:center;padding:24px}
+.card{background:#151c2c;border:1px solid rgba(34,197,94,.3);border-radius:18px;padding:36px 26px;max-width:520px}
+h1{color:#22c55e;margin:0 0 10px;font-size:1.6rem}p{color:#94a3b8;line-height:1.5}</style></head>
+<body><div class="card"><div style="font-size:48px">☘️</div>
+<h1>Ready for the next client</h1>
+<p>Please see the front desk. A Shamrock agent will open your paperwork on this tablet.</p>
+<p style="font-size:.85rem">Staff: open the packet from the CRM with “Open on kiosk”, or scan its QR code.</p>
+</div>
+<script>try{sessionStorage.clear();['sl_portal_phone','sl_indemnitor_scanned_profile','sl_portal_in_person'].forEach(function(k){localStorage.removeItem(k)})}catch(e){}</script>
+</body></html>"""
+
+
 def _branded_sign_page(
     *,
     sign_url: str,
@@ -1304,30 +1513,62 @@ def _branded_sign_page(
     safe_name = html_lib.escape(party_name or "")
     case_line = f"Bond packet for {safe_def}" if safe_def else "Bond packet"
     cfg_json = json.dumps(cfg)
-    kiosk_meta = json.dumps({"packet_id": packet_id or "", "role": normalize_role(role) or "indemnitor"})
-    show_kiosk_scan = bool(kiosk and packet_id and normalize_role(role) in ("indemnitor", "coindemnitor"))
+    kiosk_role = normalize_role(role) or "indemnitor"
+    kiosk_meta = json.dumps({"packet_id": packet_id or "", "role": kiosk_role})
+    # 2026-09-27: defendant may scan their own ID at the (staff-overseen) kiosk.
+    show_kiosk_scan = bool(kiosk and packet_id and kiosk_role in ("defendant", "indemnitor", "coindemnitor"))
     kiosk_panel = ""
+    if kiosk:
+        kiosk_panel += KIOSK_IDLE_SNIPPET
     if show_kiosk_scan:
-        kiosk_panel = f"""
+        kiosk_panel += f"""
     <div id="kioskScan" class="kiosk">
-        <h2>Scan your driver license</h2>
-        <p>Stand at the kiosk. Photograph the <strong>front</strong> of your ID. We fill your name, address, DOB, and license. The person in jail and the bond amount stay locked.</p>
+        <h2>Scan your ID</h2>
+        <p>Photograph the <strong>front</strong> of your driver license, state ID or passport. You'll check your name and address, then your phone, then your email before anything is saved.</p>
         <label class="kiosk-btn">Open camera / choose photo
             <input id="kioskIdFile" type="file" accept="image/*" capture="environment" hidden>
         </label>
         <div id="kioskScanStatus"></div>
+        <form id="kioskConfirm" class="kiosk-confirm" hidden autocomplete="off">
+            <div class="kc-step" data-step="1">
+                <h3>1 · Is this your name and address?</h3>
+                <label>Full name<input name="name" required></label>
+                <label>Street address<input name="address"></label>
+                <div class="kc-row"><label>City<input name="city"></label><label>State<input name="state" maxlength="3"></label><label>ZIP<input name="zip" inputmode="numeric" maxlength="10"></label></div>
+                <button type="button" class="kiosk-btn" data-next="2">Yes, that's right</button>
+            </div>
+            <div class="kc-step" data-step="2" hidden>
+                <h3>2 · Best mobile number</h3>
+                <label>Mobile phone<input name="phone" type="tel" inputmode="numeric" autocomplete="off" placeholder="(239) 555-0100"></label>
+                <button type="button" class="kiosk-btn" data-next="3">Next</button>
+            </div>
+            <div class="kc-step" data-step="3" hidden>
+                <h3>3 · Best email</h3>
+                <label>Email<input name="email" type="email" inputmode="email" autocomplete="off" placeholder="you@example.com"></label>
+                <button type="submit" class="kiosk-btn">Save &amp; open my paperwork</button>
+            </div>
+        </form>
         <button type="button" class="kiosk-skip" id="kioskSkip">Skip scan — fill by hand</button>
     </div>
     <style>
         .kiosk {{ max-width:640px; margin:0 auto 16px; padding:16px; background:var(--card); border-radius:16px; }}
         .kiosk h2 {{ margin:0 0 8px; font-size:1.2rem; }}
+        .kiosk h3 {{ margin:12px 0 8px; font-size:1.05rem; }}
         .kiosk p {{ color:var(--muted); line-height:1.45; }}
-        .kiosk-btn {{ display:flex; align-items:center; justify-content:center; min-height:48px; background:var(--accent); color:#052e16; font-weight:800; border-radius:12px; cursor:pointer; }}
+        .kiosk label {{ display:block; color:var(--muted); font-size:.85rem; margin:8px 0; }}
+        .kiosk input {{ display:block; width:100%; margin-top:4px; min-height:48px; padding:10px 12px; border-radius:10px; border:1px solid rgba(148,163,184,.3); background:#0b0f19; color:var(--text); font-size:1.05rem; }}
+        .kc-row {{ display:flex; gap:8px; }} .kc-row label {{ flex:1; }}
+        .kiosk-btn {{ display:flex; width:100%; border:0; margin-top:10px; align-items:center; justify-content:center; min-height:52px; background:var(--accent); color:#052e16; font-weight:800; font-size:1rem; border-radius:12px; cursor:pointer; }}
         .kiosk-skip {{ margin-top:12px; min-height:44px; width:100%; background:transparent; color:var(--accent); border:1px solid rgba(34,197,94,.35); border-radius:12px; font-weight:700; }}
         #docuseal-mount.waiting {{ display:none; }}
     </style>
     <script>
+        // Kiosk: nothing about the client is kept in localStorage/sessionStorage —
+        // scan results live in this page's memory only and die with the reset.
         const KIOSK = {kiosk_meta};
+        let kioskScanToken = '';
+        const PREFIX = KIOSK.role === 'defendant' ? 'defendant_' : (KIOSK.role === 'coindemnitor' ? 'coindemnitor_' : 'indemnitor_');
+        function esc(s) {{ return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c])); }}
         function showKioskStatus(html) {{
             const el = document.getElementById('kioskScanStatus');
             if (el) el.innerHTML = html;
@@ -1339,9 +1580,14 @@ def _branded_sign_page(
             if (mount) mount.classList.remove('waiting');
             if (typeof mountForm === 'function') mountForm();
         }}
+        function showStep(n) {{
+            document.querySelectorAll('#kioskConfirm .kc-step').forEach(el => {{ el.hidden = el.getAttribute('data-step') !== String(n); }});
+            const first = document.querySelector('#kioskConfirm .kc-step[data-step="' + n + '"] input');
+            if (first) setTimeout(() => first.focus(), 50);
+        }}
         async function kioskScanFile(file) {{
             if (!file) return;
-            showKioskStatus('<p>Scanning ID…</p>');
+            showKioskStatus('<p>Reading your ID…</p>');
             const fd = new FormData();
             fd.append('file', file);
             fd.append('packet_id', KIOSK.packet_id);
@@ -1350,27 +1596,73 @@ def _branded_sign_page(
                 const r = await fetch('/api/portal/kiosk-id-ocr', {{ method: 'POST', body: fd }});
                 const d = await r.json();
                 if (!d.success) {{
-                    showKioskStatus('<p>' + (d.error || 'Could not read ID. Try again or skip.') + '</p>');
+                    showKioskStatus('<p>' + esc(d.error || 'Could not read ID. Try again or skip.') + '</p>');
                     return;
                 }}
-                const ext = d.extracted || {{}};
-                const name = ext.full_name || 'ID captured';
-                showKioskStatus('<p><strong>' + name + '</strong> loaded. Opening your paperwork…</p>');
-                setTimeout(revealSigning, 600);
+                kioskScanToken = d.scan_token || '';
+                const f = d.fields || {{}};
+                const form = document.getElementById('kioskConfirm');
+                form.name.value = f[PREFIX + 'name'] || '';
+                form.address.value = f[PREFIX + 'address'] || '';
+                form.city.value = f[PREFIX + 'city'] || '';
+                form.state.value = f[PREFIX + 'state'] || '';
+                form.zip.value = f[PREFIX + 'zip'] || '';
+                form.phone.value = '';
+                form.email.value = '';
+                form.hidden = false;
+                showKioskStatus('<p>Check each step. Fix anything that is wrong.</p>');
+                showStep(1);
             }} catch (err) {{
                 showKioskStatus('<p>Scan failed. Try again or skip.</p>');
+            }}
+        }}
+        async function kioskConfirm(ev) {{
+            if (ev) ev.preventDefault();
+            const form = document.getElementById('kioskConfirm');
+            const phone = String(form.phone.value || '').replace(/[^0-9]/g, '').slice(-10);
+            const email = String(form.email.value || '').trim();
+            if (form.phone.value && phone.length !== 10) {{ showStep(2); showKioskStatus('<p>Enter a 10-digit mobile number.</p>'); return; }}
+            if (email && !/^[^@ ]+@[^@ ]+[.][^@ ]+$/.test(email)) {{ showKioskStatus('<p>Check the email address.</p>'); return; }}
+            const fields = {{}};
+            fields[PREFIX + 'name'] = form.name.value.trim();
+            fields[PREFIX + 'address'] = form.address.value.trim();
+            fields[PREFIX + 'city'] = form.city.value.trim();
+            fields[PREFIX + 'state'] = form.state.value.trim();
+            fields[PREFIX + 'zip'] = form.zip.value.trim();
+            if (phone) fields[PREFIX + 'phone'] = phone;
+            if (email) fields[PREFIX + 'email'] = email;
+            showKioskStatus('<p>Saving…</p>');
+            try {{
+                const r = await fetch('/api/portal/kiosk-id-confirm', {{
+                    method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ scan_token: kioskScanToken, fields }})
+                }});
+                const d = await r.json();
+                if (!d.success) {{ showKioskStatus('<p>' + esc(d.error || 'Could not save. Ask staff for help.') + '</p>'); return; }}
+                kioskScanToken = '';
+                form.reset();
+                showKioskStatus('<p>Saved. Opening your paperwork…</p>');
+                setTimeout(revealSigning, 500);
+            }} catch (err) {{
+                showKioskStatus('<p>Network error. Ask staff for help.</p>');
             }}
         }}
         document.addEventListener('DOMContentLoaded', function () {{
             const mount = document.getElementById('docuseal-mount');
             if (mount) mount.classList.add('waiting');
             const input = document.getElementById('kioskIdFile');
-            if (input) input.addEventListener('change', function () {{ kioskScanFile(input.files && input.files[0]); }});
+            if (input) input.addEventListener('change', function () {{ kioskScanFile(input.files && input.files[0]); input.value = ''; }});
             const skip = document.getElementById('kioskSkip');
             if (skip) skip.addEventListener('click', revealSigning);
+            const form = document.getElementById('kioskConfirm');
+            if (form) {{
+                form.addEventListener('submit', kioskConfirm);
+                form.querySelectorAll('[data-next]').forEach(btn => btn.addEventListener('click', () => showStep(btn.getAttribute('data-next'))));
+            }}
         }});
     </script>
 """
+    completed_redirect = "/done?kiosk=1" if kiosk else ""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1437,7 +1729,7 @@ def _branded_sign_page(
             mount.appendChild(iframe);
             window.addEventListener('message', function (e) {{
                 if (e.data && (e.data.event === 'completed' || e.data.type === 'docuseal:completed')) {{
-                    window.location.href = CFG['data-completed-redirect-url'] || '/done';
+                    window.location.href = {json.dumps(completed_redirect)} || CFG['data-completed-redirect-url'] || '/done';
                 }}
             }});
         }}
@@ -1535,6 +1827,12 @@ def _is_paperwork_host(request: Request) -> bool:
     )
 
 
+@portal_page_router.api_route("/kiosk", response_class=HTMLResponse, methods=["GET", "HEAD"])
+async def kiosk_ready_page():
+    """Neutral kiosk home: no client data. Idle resets and /done?kiosk=1 land here."""
+    return HTMLResponse(content=KIOSK_READY_HTML, headers={"Cache-Control": "no-store"})
+
+
 @portal_page_router.api_route("/", response_class=HTMLResponse, methods=["GET", "HEAD"])
 @portal_page_router.api_route("/done", response_class=HTMLResponse, methods=["GET", "HEAD"])
 @portal_page_router.api_route("/paperwork", response_class=HTMLResponse, methods=["GET", "HEAD"])
@@ -1590,7 +1888,20 @@ async def get_portal_ui(request: Request):
     </div>
 </body>
 </html>"""
-        return HTMLResponse(content=html_done)
+        kiosk_done = (request.query_params.get("kiosk") or "").strip().lower() in ("1", "true", "yes")
+        if kiosk_done:
+            # In-office tablet: wipe and return to the neutral kiosk screen.
+            html_done = html_done.replace(
+                '<a href="/" class="btn" style="background:transparent;color:var(--accent);border:1px solid rgba(34,197,94,0.4);margin-top:10px">Sign another packet</a>',
+                '<p id="kioskResetNote">This screen resets for the next client in <strong id="kioskResetCount">20</strong> seconds.</p>'
+                '<a href="/kiosk" class="btn" style="background:transparent;color:var(--accent);border:1px solid rgba(34,197,94,0.4);margin-top:10px">Done — reset now</a>',
+            ).replace(
+                "</body>",
+                "<script>(function(){try{sessionStorage.clear();['sl_portal_phone','sl_indemnitor_scanned_profile','sl_portal_in_person'].forEach(function(k){localStorage.removeItem(k)})}catch(e){}"
+                "var n=20,c=document.getElementById('kioskResetCount');var t=setInterval(function(){n-=1;if(c)c.textContent=n;"
+                "if(n<=0){clearInterval(t);location.replace('/kiosk');}},1000);})();</script></body>",
+            )
+        return HTMLResponse(content=html_done, headers={"Cache-Control": "no-store"})
     html = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2027,6 +2338,10 @@ async def get_portal_ui(request: Request):
 
     <script>
         let inPerson = false;
+        // Client data lives in page memory only — never localStorage (a shared
+        // office tablet must not keep the last client's phone or ID).
+        const portalMem = { phone: '', sessionToken: '', pendingIdFile: null, signingLink: '', signingOpts: null, role: '' };
+        try { ['sl_portal_phone', 'sl_indemnitor_scanned_profile', 'sl_portal_in_person'].forEach(k => localStorage.removeItem(k)); } catch (e) {}
 
         function isTabletOrTouch() {
             return window.matchMedia('(pointer: coarse)').matches || Math.min(screen.width, screen.height) >= 768;
@@ -2038,7 +2353,7 @@ async def get_portal_ui(request: Request):
             const btn = document.getElementById('btnInPerson');
             if (btn) btn.textContent = inPerson ? '✓ In-person on' : '✍️ iPad / In-person';
             if (inPerson) showAuthTab('link');
-            try { localStorage.setItem('sl_portal_in_person', inPerson ? '1' : '0'); } catch (e) {}
+            try { sessionStorage.setItem('sl_portal_in_person', inPerson ? '1' : '0'); } catch (e) {}
         }
 
         function showAuthTab(which) {
@@ -2158,12 +2473,7 @@ async def get_portal_ui(request: Request):
                 const err = document.getElementById('slPhoneSheetErr');
                 const go = document.getElementById('slPhoneSheetContinue');
                 if (err) { err.hidden = true; err.textContent = ''; }
-                if (input) {
-                    try {
-                        const saved = localStorage.getItem('sl_portal_phone') || '';
-                        input.value = saved;
-                    } catch (e) { input.value = ''; }
-                }
+                if (input) input.value = portalMem.phone || '';
                 const submit = () => {
                     const digits = String(input.value || '').replace(/[^0-9]/g, '').slice(-10);
                     if (digits.length !== 10) {
@@ -2171,7 +2481,7 @@ async def get_portal_ui(request: Request):
                         input.focus();
                         return;
                     }
-                    try { localStorage.setItem('sl_portal_phone', digits); } catch (e) {}
+                    portalMem.phone = digits;  // memory only (privacy, 2026-09-27)
                     closePhoneSheet(digits);
                 };
                 go.onclick = submit;
@@ -2181,48 +2491,110 @@ async def get_portal_ui(request: Request):
             });
         }
 
+        // Public Step-1 ID scan (2026-09-27): the photo stays in memory until the
+        // phone is verified by PIN, then goes to the PIN-scoped /api/portal/id-ocr
+        // (the old staff-only /api/id scan route returned 401 here).
         async function processPortalIdScan(file) {
             const resEl = document.getElementById('portalIdResult');
-            if (!resEl) return;
-            resEl.innerHTML = '<div class="status" style="display:block">📷 Scanning ID with secure OCR…</div>';
+            if (!resEl || !file) return;
+            if (!portalMem.sessionToken) {
+                portalMem.pendingIdFile = file;
+                resEl.innerHTML = `<div class="status success" style="display:block">📷 ID photo ready. Verify your phone with a one-time PIN — we read your ID right after.</div>
+                    <div class="id-extracted-actions"><button type="button" class="btn-primary" id="btnProceedPin">Continue with secure PIN →</button></div>`;
+                const btnPin = document.getElementById('btnProceedPin');
+                if (btnPin) btnPin.addEventListener('click', () => showAuthTab('pin'));
+                return;
+            }
+            await scanIdWithSession(file);
+        }
+
+        async function scanIdWithSession(file) {
+            showAuthTab('scan');
+            const resEl = document.getElementById('portalIdResult');
+            resEl.innerHTML = '<div class="status" style="display:block">📷 Reading your ID securely…</div>';
             try {
                 const formData = new FormData();
                 formData.append('file', file);
-
-                const r = await fetch('/api/id/scan-ocr', { method: 'POST', body: formData });
+                formData.append('session_token', portalMem.sessionToken);
+                const r = await fetch('/api/portal/id-ocr', { method: 'POST', body: formData });
                 const d = await r.json();
-
+                portalMem.pendingIdFile = null;
                 if (!d.success || !d.extracted) {
                     resEl.innerHTML = `<div class="status error" style="display:block">❌ ${escHtml(d.error || 'Could not read ID photo. Try a clearer photo.')}</div>`;
                     return;
                 }
-
-                const ext = d.extracted;
-                try { localStorage.setItem('sl_indemnitor_scanned_profile', JSON.stringify(ext)); } catch (e) {}
-
-                const addrLine = [ext.address, ext.city, ext.state, ext.zip].filter(Boolean).join(', ');
-                resEl.innerHTML = `
-                    <div class="id-extracted-card">
-                        <div class="id-extracted-title">ID verified</div>
-                        ${d.portrait_jpeg_b64 ? `<img alt="ID portrait" src="data:image/jpeg;base64,${d.portrait_jpeg_b64}" style="width:72px;height:90px;object-fit:cover;border-radius:6px;margin-bottom:8px">` : ''}
-                        ${ext.full_name ? `<div class="id-extracted-row"><span class="id-extracted-label">Name</span><strong>${escHtml(ext.full_name)}</strong></div>` : ''}
-                        ${ext.dl_number ? `<div class="id-extracted-row"><span class="id-extracted-label">DL / ID#</span><span>${escHtml(ext.dl_number)} (${escHtml(ext.dl_state || ext.issuing_country || '')})</span></div>` : ''}
-                        ${ext.dob ? `<div class="id-extracted-row"><span class="id-extracted-label">DOB</span><span>${escHtml(ext.dob)}</span></div>` : ''}
-                        ${addrLine ? `<div class="id-extracted-row"><span class="id-extracted-label">Address</span><span>${escHtml(addrLine)}</span></div>` : ''}
-                        ${ext.organ_donor === true ? `<div class="id-extracted-row"><span class="id-extracted-label">Donor</span><span>Yes</span></div>` : ''}
-                        ${ext.sex ? `<div class="id-extracted-row"><span class="id-extracted-label">Sex</span><span>${escHtml(ext.sex)}</span></div>` : ''}
-                        ${ext.height ? `<div class="id-extracted-row"><span class="id-extracted-label">Height</span><span>${escHtml(ext.height)}</span></div>` : ''}
-                        <div class="id-extracted-actions">
-                            <button type="button" class="btn-primary" id="btnProceedPin">Continue with secure PIN →</button>
-                        </div>
-                        <p class="id-extracted-hint">Your bondsman must validate the defendant and bond case before a signing packet is available.</p>
-                    </div>
-                `;
-                const btnPin = document.getElementById('btnProceedPin');
-                if (btnPin) btnPin.addEventListener('click', () => showAuthTab('pin'));
+                portalMem.role = d.role || 'indemnitor';
+                renderPortalConfirm(d.extracted, d.portrait_jpeg_b64 || '');
             } catch (err) {
                 resEl.innerHTML = `<div class="status error" style="display:block">❌ ID scan error: ${escHtml(err.message)}</div>`;
             }
+        }
+
+        // Confirm order: name/address → phone → email.
+        function renderPortalConfirm(ext, portrait) {
+            const resEl = document.getElementById('portalIdResult');
+            const P = portalMem.role === 'defendant' ? 'defendant_' : 'indemnitor_';
+            resEl.innerHTML = `
+                <form id="portalConfirm" class="id-extracted-card" autocomplete="off">
+                    <div class="id-extracted-title">Check your details</div>
+                    ${portrait ? `<img alt="ID portrait" src="data:image/jpeg;base64,${portrait}" style="width:72px;height:90px;object-fit:cover;border-radius:6px;margin-bottom:8px">` : ''}
+                    <div data-step="1">
+                        <p class="id-extracted-hint"><strong>1.</strong> Is this your name and address?</p>
+                        <input name="name" placeholder="Full name" value="${escHtml(ext.full_name || '')}">
+                        <input name="address" placeholder="Street address" value="${escHtml(ext.address || '')}">
+                        <input name="city" placeholder="City" value="${escHtml(ext.city || '')}">
+                        <input name="state" placeholder="State" maxlength="3" value="${escHtml(ext.state || '')}">
+                        <input name="zip" placeholder="ZIP" inputmode="numeric" value="${escHtml(ext.zip || '')}">
+                        <button type="button" class="btn-primary" data-next="2">Yes, that's right</button>
+                    </div>
+                    <div data-step="2" hidden>
+                        <p class="id-extracted-hint"><strong>2.</strong> Best mobile number</p>
+                        <input name="phone" type="tel" inputmode="numeric" placeholder="(239) 555-0100" value="${escHtml(portalMem.phone || '')}">
+                        <button type="button" class="btn-primary" data-next="3">Next</button>
+                    </div>
+                    <div data-step="3" hidden>
+                        <p class="id-extracted-hint"><strong>3.</strong> Best email</p>
+                        <input name="email" type="email" inputmode="email" placeholder="you@example.com">
+                        <label class="id-extracted-hint"><input type="checkbox" name="ack" style="width:auto;min-height:auto"> This is correct. I understand staff will review it.</label>
+                        <button type="submit" class="btn-primary">Save &amp; continue</button>
+                    </div>
+                    <p id="portalConfirmErr" class="status error" style="display:none"></p>
+                </form>`;
+            const form = document.getElementById('portalConfirm');
+            const show = (n) => form.querySelectorAll('[data-step]').forEach(el => { el.hidden = el.getAttribute('data-step') !== String(n); });
+            form.querySelectorAll('[data-next]').forEach(b => b.addEventListener('click', () => show(b.getAttribute('data-next'))));
+            form.addEventListener('submit', async (ev) => {
+                ev.preventDefault();
+                const err = document.getElementById('portalConfirmErr');
+                const phone = String(form.phone.value || '').replace(/[^0-9]/g, '').slice(-10);
+                if (!form.ack.checked) { err.style.display = 'block'; err.textContent = 'Please confirm your details.'; return; }
+                if (form.phone.value && phone.length !== 10) { show(2); err.style.display = 'block'; err.textContent = 'Enter a 10-digit mobile number.'; return; }
+                const fields = {};
+                fields[P + 'name'] = form.name.value.trim();
+                if (P === 'indemnitor_') fields.FullName = fields[P + 'name'];
+                fields[P + 'address'] = form.address.value.trim();
+                fields[P + 'city'] = form.city.value.trim();
+                fields[P + 'state'] = form.state.value.trim();
+                fields[P + 'zip'] = form.zip.value.trim();
+                if (phone) fields[P + 'phone'] = phone;
+                if (form.email.value.trim()) fields[P + 'email'] = form.email.value.trim();
+                try {
+                    const r = await fetch('/api/portal/remaining-fields', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ session_token: portalMem.sessionToken, fields, role: portalMem.role,
+                                               address_confirmed: true, staff_review_acknowledged: true })
+                    });
+                    const d = await r.json();
+                    if (!d.success) { err.style.display = 'block'; err.textContent = d.error || 'Could not save.'; return; }
+                    if (portalMem.signingLink) {
+                        openDocuSealForm(portalMem.signingLink, portalMem.signingOpts || {});
+                    } else {
+                        resEl.innerHTML = '<div class="status success" style="display:block">✅ Saved. A Shamrock agent will text you when your paperwork is ready. (239) 332-2245</div>';
+                    }
+                } catch (e) {
+                    err.style.display = 'block'; err.textContent = 'Network error. Try again.';
+                }
+            });
         }
 
         function checkUrlDirectLink() {
@@ -2233,7 +2605,7 @@ async def get_portal_ui(request: Request):
                 toggleInPersonMode(true);
             } else {
                 try {
-                    if (localStorage.getItem('sl_portal_in_person') === '1' || isTabletOrTouch()) {
+                    if (sessionStorage.getItem('sl_portal_in_person') === '1' || isTabletOrTouch()) {
                         // Soft-enable banner on tablets without forcing link tab
                         document.body.classList.add('in-person');
                         const btn = document.getElementById('btnInPerson');
@@ -2385,6 +2757,19 @@ async def get_portal_ui(request: Request):
                 });
                 const d = await r.json();
                 if (d.success) {
+                    portalMem.sessionToken = d.session_token || '';
+                    portalMem.phone = String(phone || '').replace(/[^0-9]/g, '').slice(-10);
+                    if (portalMem.pendingIdFile && portalMem.sessionToken) {
+                        portalMem.signingLink = d.signing_link || '';
+                        portalMem.signingOpts = {
+                            title: d.defendant_name ? ('Packet — ' + d.defendant_name) : 'Bond Agreement Packet',
+                            fullscreen: inPerson || isTabletOrTouch(), role: d.role || '', name: d.name || '', email: d.email || '',
+                        };
+                        statusEl.className = 'status success';
+                        statusEl.textContent = '✅ Phone verified — reading your ID…';
+                        await scanIdWithSession(portalMem.pendingIdFile);
+                        return;
+                    }
                     if (d.signing_link) {
                         statusEl.className = 'status success';
                         const who = d.defendant_name ? (' for ' + d.defendant_name) : '';
@@ -2431,4 +2816,8 @@ async def get_portal_ui(request: Request):
     </script>
 </body>
 </html>"""
-    return HTMLResponse(content=html)
+    mode = (request.query_params.get("mode") or request.query_params.get("kiosk") or "").strip().lower()
+    if mode in ("kiosk", "ipad", "inperson", "1", "true") or request.query_params.get("inperson") == "1":
+        # Shared office tablet: 3-minute idle reset back to /kiosk.
+        html = html.replace("</body>", KIOSK_IDLE_SNIPPET + "\n</body>", 1)
+    return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})

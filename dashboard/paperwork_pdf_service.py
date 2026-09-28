@@ -99,13 +99,17 @@ SHARED_LEGAL_SLUGS = frozenset({"promissory-note", "disclosure-form"})
 
 
 def _normalize_surety(surety: Optional[str]) -> str:
-    s = (surety or "osi").lower().strip()
-    if s not in ("osi", "palmetto"):
-        return "osi"
-    return s
+    """Fail closed: a missing or unknown surety raises UnsupportedSuretyError.
+
+    Previously any unknown label silently became "osi", which could print OSI
+    blanks for another carrier's bond.
+    """
+    from dashboard.services.surety_registry import require_surety
+
+    return require_surety(surety)
 
 
-def get_template_path(slug: str, surety: str = "osi") -> Path:
+def get_template_path(slug: str, surety: Optional[str] = None) -> Path:
     """
     Resolve blank PDF path for a document slug + surety.
 
@@ -164,7 +168,7 @@ def get_template_path(slug: str, surety: str = "osi") -> Path:
     return AGNOSTIC_DIR / f"{slug}.pdf"
 
 
-def packet_composition(surety: str = "osi") -> Dict[str, Any]:
+def packet_composition(surety: Optional[str] = None) -> Dict[str, Any]:
     """
     Describe which folders + files compose a packet for a surety.
     Used by paperwork config / diagnostics UI.
@@ -339,7 +343,7 @@ def _hydrate_common_fields(
 
 
 def hydrate_indemnity_agreement(
-    data: Dict[str, Any], indemnitor_index: int = 0, surety: str = "osi"
+    data: Dict[str, Any], indemnitor_index: int = 0, surety: Optional[str] = None
 ) -> bytes:
     """Fills the Indemnity Agreement and places SignNow signature tags."""
     doc = _open_blank("indemnity-agreement", surety)
@@ -418,7 +422,7 @@ def _doc_bytes_for_slug(
 
 def generate_full_packet(
     data: Dict[str, Any],
-    surety: str = "osi",
+    surety: Optional[str] = None,
     *,
     include_appearance_bond: bool = False,
 ) -> bytes:
@@ -516,7 +520,7 @@ def generate_full_packet(
     return buf.read()
 
 
-def list_available_blanks(surety: str = "osi") -> Dict[str, bool]:
+def list_available_blanks(surety: Optional[str] = None) -> Dict[str, bool]:
     """Diagnostics: which packet slugs resolve to an on-disk blank."""
     surety = _normalize_surety(surety)
     out = {slug: get_template_path(slug, surety).is_file() for slug in PACKET_DOC_ORDER}

@@ -363,16 +363,17 @@ async def resolve_case_context(
     if premium <= 0 and bond_amount > 0:
         premium = round(bond_amount * 0.10, 2)
 
-    surety_id = (
+    from dashboard.services.surety_registry import normalize_surety
+
+    # No OSI default and no coercion: validate_docuseal_packet_data rejects a
+    # missing or unknown surety, so the packet fails closed.
+    surety_id = normalize_surety(
         _first(
             bond.get("Surety_ID"), bond.get("surety_id"),
             packet.get("surety_id"), packet.get("template"),
-            intake.get("surety_id"), "osi",
+            intake.get("surety_id"),
         )
-        or "osi"
-    ).lower()
-    if surety_id not in ("osi", "palmetto"):
-        surety_id = "osi"
+    )
 
     match_status = _first(
         match.get("Status"), match.get("status"),
@@ -760,7 +761,7 @@ def build_adaptive_field_map(context: Dict[str, Any]) -> Dict[str, Any]:
         "offense_2": "",
         "offense_3": "",
         "offense_4": "",
-        "surety_id": context.get("surety_id") or "osi",
+        "surety_id": context.get("surety_id") or "",
         "date": today,
         "Date": today,
         "Today": today,
@@ -850,15 +851,21 @@ def hydration_score(fields: Dict[str, Any]) -> Dict[str, Any]:
 def assemble_manifest(
     categories: Dict[str, List[str]],
     *,
-    surety_id: str = "osi",
+    surety_id: Optional[str] = None,
     include_payment_plan: bool = True,
     extra_catalog_keys: Optional[List[str]] = None,
     self_indemnitor: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Build ordered packet document list from drag-drop categories + extras.
+
+    Surety-specific documents are only added for a supported surety. A missing
+    or unknown surety yields the surety-agnostic set only (never OSI's or
+    Palmetto's forms by default).
     """
-    surety_id = (surety_id or "osi").lower()
+    from dashboard.services.surety_registry import normalize_surety, is_supported_surety
+
+    surety_id = normalize_surety(surety_id)
     ordered_keys: List[str] = []
     for k in categories.get("universal") or []:
         if k not in ordered_keys:
@@ -867,8 +874,8 @@ def assemble_manifest(
         for k in categories.get("payment_plan") or []:
             if k not in ordered_keys:
                 ordered_keys.append(k)
-    surety_cat = "osi_surety" if surety_id == "osi" else "palmetto_surety"
-    for k in categories.get(surety_cat) or []:
+    surety_cat = f"{surety_id}_surety" if is_supported_surety(surety_id) else ""
+    for k in (categories.get(surety_cat) if surety_cat else None) or []:
         if k not in ordered_keys:
             ordered_keys.append(k)
     for k in categories.get("conditional") or []:

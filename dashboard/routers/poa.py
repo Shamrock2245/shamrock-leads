@@ -34,7 +34,8 @@ async def api_poa_next(
     poa_inventory = get_collection("poa_inventory")
 
     surety = (surety or "").lower().strip()
-    if surety not in ("osi", "palmetto"):
+    from dashboard.services.surety_registry import is_supported_surety  # active sureties only
+    if not is_supported_surety(surety):
         return JSONResponse({"error": "surety must be 'osi' or 'palmetto'"}, status_code=400)
     try:
         bond_amount = float(bond_amount or 0)
@@ -1048,7 +1049,8 @@ async def api_poa_add(request: Request):
         max_bond = parse_max_bond_from_prefix(poa_prefix)
     expiration = body.get("expiration")
 
-    if not surety_id or surety_id not in ("osi", "palmetto"):
+    from dashboard.services.surety_registry import is_supported_surety  # active sureties only
+    if not surety_id or not is_supported_surety(surety_id):
         return JSONResponse({"error": "surety_id must be 'osi' or 'palmetto'"}, status_code=400)
     if not poa_prefix or not start:
         return JSONResponse({"error": "poa_prefix and start are required"}, status_code=400)

@@ -240,6 +240,8 @@ canvas{max-height:280px}
 
 
 .insurer-pill.active .insurer-pill-name{color:var(--accent)}
+.insurer-pill.disabled,.insurer-pill:disabled{opacity:.45;cursor:not-allowed;filter:grayscale(1);transform:none}
+.insurer-pill.disabled:hover,.insurer-pill:disabled:hover{border-color:inherit;background:inherit;transform:none}
 
 
 /* ── Premium Calculation ── */

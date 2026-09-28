@@ -389,12 +389,31 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
 @webhooks_bp.post("/webhooks/wix-intake")
 async def wix_intake_webhook(request: Request, api_key: str = Query(default="")):
     """
-    Handle intake submissions from the Wix indemnitor portal.
+    Website (Wix) applications → CRM. MongoDB ``intake_queue`` is the source
+    of truth.
 
-    Validates the WIX_WEBHOOK_SECRET (or GAS_API_KEY fallback) then
-    forwards the payload to the intake pipeline.
+    Caller: shamrock-bail-portal-site ``backend/leadsIntake.jsw`` (server-side,
+    header ``X-Wix-Webhook-Secret`` from Wix Secrets Manager).
+
+    Flow
+      1. Auth (fail closed): WIX_WEBHOOK_SECRET (GAS_API_KEY fallback).
+      2. Nested wizard payload (defendant / indemnitor forms) → flat keys via
+         ``services/wix_wizard_adapter.py``; legacy flat payloads pass through.
+      3. Save to ``intake_queue`` with role + form_type. No surety / county /
+         state defaults for website intakes (staff choose at Write Bond).
+      4. Idempotent on the client nonce (same nonce → same intake, no re-fan-out).
+      5. Auto-match (same engine as /api/intake/submit).
+      6. AFTER the save: non-blocking fan-out to Google Sheets ledger + Slack
+         (``services/intake_fanout.py``); failures are logged + retried and
+         never fail this request.
+
+    Response: ``{success: true, intake_id, duplicate, payment_link}`` (201/200)
+    — the wizard shows success ONLY when ``success`` is true.
     """
+    import hmac
+
     from dashboard.routers.intake import _normalize_intake
+    from dashboard.services import wix_wizard_adapter as wiz
 
     # Auth check — fail closed if no secret configured
     wix_secret = os.getenv("WIX_WEBHOOK_SECRET", "") or os.getenv("GAS_API_KEY", "")
@@ -405,50 +424,122 @@ async def wix_intake_webhook(request: Request, api_key: str = Query(default=""))
     )
     if not wix_secret:
         logger.error("[wix_intake_webhook] WIX_WEBHOOK_SECRET/GAS_API_KEY not configured")
-        return JSONResponse({"error": "Webhook auth not configured"}, status_code=503)
-    if provided != wix_secret:
+        return JSONResponse({"success": False, "error": "Webhook auth not configured"}, status_code=503)
+    if not hmac.compare_digest(str(provided).encode(), str(wix_secret).encode()):
         logger.warning("[wix_intake_webhook] Unauthorized — invalid secret")
-        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+        return JSONResponse({"success": False, "error": "Unauthorized"}, status_code=401)
 
     try:
         data = await request.json()
     except Exception:
-        return JSONResponse({"error": "Invalid or empty JSON body"}, status_code=400)
+        return JSONResponse({"success": False, "error": "Invalid or empty JSON body"}, status_code=400)
 
     if not data or not isinstance(data, dict):
-        return JSONResponse({"error": "Empty or invalid JSON body"}, status_code=400)
+        return JSONResponse({"success": False, "error": "Empty or invalid JSON body"}, status_code=400)
 
     now_iso = datetime.now(timezone.utc).isoformat()
 
-    audit_events = get_collection("audit_events")
-    await audit_events.insert_one({
-        "source": "wix_intake_webhook",
-        "event_type": "intake_submission",
-        "payload": data,
-        "timestamp": now_iso,
-    })
+    # 2. Adapt nested wizard payloads
+    extra: dict = {}
+    if wiz.is_wizard_payload(data):
+        flat, meta = wiz.flatten(data)
+        extra = {
+            "form_type": meta["form_type"],
+            "submitted_by_role": meta["role"],
+            "application": meta["application"],
+            "client_nonce": meta["nonce"] or None,
+            "landing": meta["landing"] or None,
+            "intake_source": "website",
+        }
+        source_detail = f"wix_{meta['role']}_wizard"
+    else:
+        flat = data
+        extra = {"intake_source": "website"}
+        source_detail = "wix_legacy_flat"
+    extra["source_detail"] = source_detail
 
+    # Audit copy is redacted (no SSN, no uploads).
     try:
-        intake_id, intake_doc = await _normalize_intake(data, source="wix_webhook")
-        logger.info("[wix_intake_webhook] Intake %s created from Wix webhook", intake_id)
-
-        # Real-time dashboard event — sl-core.js listens for 'new_intake'
-        try:
-            from dashboard.routers.events import publish_event
-            await publish_event("new_intake", {
-                "intake_id": intake_id,
-                "defendant_name": (intake_doc or {}).get("defendant_name", ""),
-                "county": (intake_doc or {}).get("county", ""),
-                "booking_number": (intake_doc or {}).get("booking_number", ""),
-                "source": "wix_webhook",
-            })
-        except Exception:
-            pass
-
-        return JSONResponse(status_code=201, content={"success": True, "intake_id": intake_id})
+        await get_collection("audit_events").insert_one({
+            "source": "wix_intake_webhook",
+            "event_type": "intake_submission",
+            "source_detail": source_detail,
+            "payload": wiz.redact(data),
+            "timestamp": now_iso,
+        })
     except Exception as exc:
-        logger.exception("[wix_intake_webhook] Intake normalization failed")
-        return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+        logger.warning("[wix_intake_webhook] audit insert failed (non-fatal): %s", exc)
+
+    # 4. Idempotency on the client nonce
+    intake_queue = get_collection("intake_queue")
+    nonce_id = flat.get("intakeId") if isinstance(flat, dict) else None
+    if nonce_id and extra.get("client_nonce"):
+        try:
+            existing = await intake_queue.find_one({"intake_id": nonce_id}, {"_id": 0, "intake_id": 1})
+        except Exception:
+            existing = None
+        if existing:
+            from dashboard.services.payment_links import payment_link_for
+
+            return JSONResponse(status_code=200, content={
+                "success": True, "intake_id": nonce_id, "duplicate": True,
+                "payment_link": payment_link_for("website"),
+            })
+
+    # 3. Save (source of truth)
+    try:
+        intake_id, intake_doc = await _normalize_intake(flat, source="wix_webhook", extra=extra)
+    except Exception as exc:
+        logger.exception("[wix_intake_webhook] Intake save failed")
+        return JSONResponse({"success": False, "error": "Intake could not be saved"}, status_code=500)
+    logger.info("[wix_intake_webhook] Intake %s saved (%s)", intake_id, source_detail)
+
+    # 5. Auto-match (non-fatal)
+    match_result = None
+    try:
+        from dashboard.extensions import get_db
+        from dashboard.services.matching_engine import MatchingEngine
+
+        match_result = await MatchingEngine(get_db()).match_intake(intake_doc)
+        if isinstance(match_result, dict) and match_result.get("auto_linked"):
+            best = match_result.get("best_match") or {}
+            intake_doc["matched_booking_number"] = best.get("booking_number") or intake_doc.get("matched_booking_number")
+            intake_doc["match_confidence"] = match_result.get("confidence")
+    except Exception as match_err:
+        logger.warning("[wix_intake_webhook] Auto-match failed for %s: %s", intake_id, match_err)
+
+    # Real-time dashboard event — sl-core.js listens for 'new_intake'
+    try:
+        from dashboard.routers.events import publish_event
+        await publish_event("new_intake", {
+            "intake_id": intake_id,
+            "defendant_name": (intake_doc or {}).get("defendant_name", ""),
+            "county": (intake_doc or {}).get("defendant_county", ""),
+            "booking_number": (intake_doc or {}).get("defendant_booking_number", ""),
+            "source": "wix_webhook",
+            "form_type": extra.get("form_type", ""),
+        })
+    except Exception:
+        pass
+
+    # 6. Fan-out AFTER the save — fire-and-forget, never fails the intake.
+    try:
+        from dashboard.services.intake_fanout import schedule_after_save
+
+        schedule_after_save(dict(intake_doc))
+    except Exception as exc:
+        logger.error("[wix_intake_webhook] fan-out scheduling failed (non-fatal): %s", exc)
+
+    from dashboard.services.payment_links import payment_link_for
+
+    return JSONResponse(status_code=201, content={
+        "success": True,
+        "intake_id": intake_id,
+        "duplicate": False,
+        "form_type": extra.get("form_type"),
+        "matched": bool(isinstance(match_result, dict) and match_result.get("auto_linked")),
+        "payment_link": payment_link_for("website"),
+    })
 
 
 # ─────────────────────────────────────────────────────────────────────────────

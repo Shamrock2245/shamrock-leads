@@ -38,6 +38,7 @@ import os
 import re
 import uuid
 import logging
+from typing import Optional
 from datetime import datetime, timezone
 from dashboard.extensions import get_collection, get_db
 logger = logging.getLogger(__name__)
@@ -104,7 +105,27 @@ def _normalize_source(raw: str) -> str:
     return "manual_entry"
 
 
-def _extract_indemnitor(data: dict) -> dict:
+
+def _intake_surety(data: dict):
+    """Supported surety id when the payload names one; otherwise None.
+
+    Intakes never default to OSI. An unrecognised label is kept separately in
+    ``surety_unrecognized`` for staff instead of being coerced or dropping the lead.
+    """
+    from dashboard.services.surety_registry import normalize_surety, is_supported_surety
+
+    raw = normalize_surety(data.get("surety_id") or data.get("SuretyID") or data.get("surety"))
+    return raw if is_supported_surety(raw) else None
+
+
+def _intake_surety_unrecognized(data: dict):
+    from dashboard.services.surety_registry import normalize_surety, is_supported_surety
+
+    raw = normalize_surety(data.get("surety_id") or data.get("SuretyID") or data.get("surety"))
+    return raw if raw and not is_supported_surety(raw) else None
+
+
+def _extract_indemnitor(data: dict, apply_defaults: bool = True) -> dict:
     """
     Extract and normalize indemnitor fields from any source payload.
     Handles all field-name variants used by Wix, Telegram, GAS, and manual entry.
@@ -121,14 +142,14 @@ def _extract_indemnitor(data: dict) -> dict:
         "dob":          g("IndDOB", "indemnitorDOB", "dob", "DOB"),
         "ssn":          g("IndSSN", "indemnitorSSN", "ssn", "SSN"),
         "dl":           g("IndDL", "indemnitorDL", "dlNumber", "dl", "DL"),
-        "dlState":      g("IndDLState", "indemnitorDLState", "dlState", "DLState") or "FL",
+        "dlState":      g("IndDLState", "indemnitorDLState", "dlState", "DLState") or ("FL" if apply_defaults else ""),
         # Contact
         "phone":        g("IndPhone", "indPhone", "indemnitorPhone", "phone", "Phone"),
         "email":        g("IndEmail", "indEmail", "indemnitorEmail", "email", "Email"),
         # Address
         "address":      g("IndAddress", "indemnitorStreetAddress", "indemnitorAddress", "address", "Address"),
         "city":         g("IndCity", "indemnitorCity", "city", "City"),
-        "state":        g("IndState", "indemnitorState", "state", "State") or "FL",
+        "state":        g("IndState", "indemnitorState", "state", "State") or ("FL" if apply_defaults else ""),
         "zip":          g("IndZip", "indemnitorZipCode", "indemnitorZip", "zip", "ZIP"),
         # Employment
         "employer":         g("IndEmployer", "indemnitorEmployerName", "employer", "Employer"),
@@ -166,7 +187,7 @@ def _extract_indemnitor(data: dict) -> dict:
     return out
 
 
-def _extract_defendant(data: dict) -> dict:
+def _extract_defendant(data: dict, apply_defaults: bool = True) -> dict:
     """Extract defendant fields from any source payload (including bookmarklet)."""
     g = lambda *keys: next((str(data.get(k, "")).strip() for k in keys if data.get(k)), "")
     
@@ -186,7 +207,8 @@ def _extract_defendant(data: dict) -> dict:
         "lastName":      g("DefLastName", "defLastName", "defendant_last_name", "lastName"),
         "dob":           g("defendantDOB", "DefDOB", "defDOB", "defendant_dob", "dob", "DOB"),
         "facility":      g("DefFacility", "defFacility", "jailFacility", "facility", "Facility"),
-        "county":        g("DefCounty", "defCounty", "county", "County") or "Lee",
+        # Website applicants don't pick a county; never assume Lee for them.
+        "county":        g("DefCounty", "defCounty", "county", "County") or ("Lee" if apply_defaults else ""),
         "bookingNumber": g("defendantArrestNumber", "DefBookingNumber", "bookingNumber", "booking_number", "Booking_Number", "arrest_number"),
         "charges":       charge_str,
         "bondAmount":    g("DefBondAmount", "defBondAmount", "bondAmount", "bond_amount", "Bond_Amount", "totalBond"),
@@ -196,7 +218,7 @@ def _extract_defendant(data: dict) -> dict:
         "weight":        g("defendantWeight", "weight", "Weight"),
         "street":        g("defendantStreetAddress", "street", "street_address", "address"),
         "city":          g("defendantCity", "city"),
-        "state":         g("defendantState", "state") or "FL",
+        "state":         g("defendantState", "state") or ("FL" if apply_defaults else ""),
         "zip":           g("defendantZip", "zip", "zip_code"),
         "phone":         g("defendantPhone", "DefPhone", "defPhone", "defendant_phone"),
         "email":         g("defendantEmail", "DefEmail", "defEmail", "defendant_email"),
@@ -218,14 +240,23 @@ def _extract_defendant(data: dict) -> dict:
     }
 
 
-async def _normalize_intake(data: dict, source: str = "wix_webhook") -> tuple[str, dict]:
+async def _normalize_intake(
+    data: dict,
+    source: str = "wix_webhook",
+    extra: Optional[dict] = None,
+) -> tuple[str, dict]:
     """
     Normalize and persist an intake record from any source dictionary.
     Returns (intake_id, intake_doc).
+
+    ``extra`` fields are merged into the stored doc (e.g. form_type,
+    submitted_by_role, application subdoc from the Wix wizard adapter).
+    Website (Wix) intakes get NO county / state / surety defaults.
     """
     source_canonical = _normalize_source(source)
-    indemnitor = _extract_indemnitor(data)
-    defendant = _extract_defendant(data)
+    apply_defaults = not (source_canonical.startswith("wix") or "wix" in str(source).lower())
+    indemnitor = _extract_indemnitor(data, apply_defaults=apply_defaults)
+    defendant = _extract_defendant(data, apply_defaults=apply_defaults)
 
     ind_full_name = (
         " ".join(
@@ -296,11 +327,15 @@ async def _normalize_intake(data: dict, source: str = "wix_webhook") -> tuple[st
         "match_confidence": None,
         "match_strategy": None,
         "match_timestamp": None,
-        "surety_id": (data.get("surety_id") or data.get("SuretyID") or "osi").lower().strip(),
+        # No OSI default: staff choose the surety at Write Bond (fail closed).
+        "surety_id": _intake_surety(data),
+        "surety_unrecognized": _intake_surety_unrecognized(data),
         "paperwork_packet_id": None,
         "paperwork_status": None,
         "_raw": data,
     }
+    if extra:
+        doc.update(extra)
 
     intake_queue = get_collection("intake_queue")
     await intake_queue.update_one(
@@ -426,9 +461,10 @@ async def intake_submit(request: Request):
         "match_confidence": None,
         "match_strategy": None,
         "match_timestamp": None,
-        # Surety company routing — 'osi' (default) or 'palmetto'
-        # Staff can override in dashboard before triggering paperwork
-        "surety_id": (data.get("surety_id") or data.get("SuretyID") or "osi").lower().strip(),
+        # Surety company routing — 'osi' or 'palmetto' only when the source
+        # names one explicitly. Missing/unknown stays None; staff pick at Write Bond.
+        "surety_id": _intake_surety(data),
+        "surety_unrecognized": _intake_surety_unrecognized(data),
         # Paperwork fields (populated by Phase 6)
         "paperwork_packet_id": None,
         "paperwork_status": None,
@@ -948,7 +984,8 @@ async def intake_promote(request: Request, intake_id: str):
 
     # ── 3. Validate surety ───────────────────────────────────────────────────
     surety = (data.get("surety") or "").lower().strip()
-    if surety not in ("osi", "palmetto"):
+    from dashboard.services.surety_registry import is_supported_surety  # active sureties only
+    if not is_supported_surety(surety):
         return JSONResponse(status_code=400, content={
             "success": False,
             "error": "surety is required and must be 'osi' or 'palmetto'."

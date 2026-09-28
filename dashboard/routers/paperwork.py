@@ -250,7 +250,7 @@ async def paperwork_preview(bond_case_id: str):
                     case_doc.get("surety")
                     or case_doc.get("surety_id")
                     or case_doc.get("insuranceCompany")
-                    or "osi"
+                    or ""  # no OSI default — bond_pdf_service fails closed
                 ),
                 "court_date": case_doc.get("court_date") or "",
                 "address": case_doc.get("defendant_address") or case_doc.get("address") or "",
@@ -608,6 +608,33 @@ async def list_all_packets(
 # GET /api/paperwork/<packet_id>/hydration-audit
 # Twenty CRM style: field hydration audit for 14-doc packet before dispatch
 # ─────────────────────────────────────────────────────────────────────────────
+# Static /paperwork/* routes must be declared before /paperwork/{packet_id}.
+@paperwork_bp.get("/paperwork/sureties")
+async def list_sureties():
+    """Surety registry for the Write Bond picker.
+
+    Active sureties (OSI, Palmetto) are selectable; listed-but-inactive
+    carriers (Lexington National, Roche, Universal, Bankers) come back with
+    ``selectable: false`` so the UI renders them greyed out. Every paperwork
+    path still fails closed on inactive/unknown sureties server-side.
+    """
+    from dashboard.services.surety_registry import picker_options
+
+    return {"success": True, "sureties": picker_options()}
+
+
+@paperwork_bp.get("/paperwork/payment-links")
+async def list_payment_links():
+    """Resolved pay-by-card link per intake source (payment_links.py).
+
+    Rule: a case's own SwipeSimple invoice link wins; Telegram → the
+    Telegram link; every other source → the website link. Read-only.
+    """
+    from dashboard.services.payment_links import describe
+
+    return {"success": True, "links": describe()}
+
+
 @paperwork_bp.get("/paperwork/{packet_id}/hydration-audit")
 async def get_packet_hydration_audit(packet_id: str):
     """Audit field hydration completeness for a paperwork packet."""
@@ -1003,7 +1030,7 @@ async def packet_builder_context(request: Request):
         extra_keys = body.get("extra_doc_keys") or []
         manifest = assemble_manifest(
             categories,
-            surety_id=ctx.get("surety_id") or "osi",
+            surety_id=ctx.get("surety_id") or "",
             include_payment_plan=include_pp,
             extra_catalog_keys=extra_keys,
             self_indemnitor=bool(ctx.get("self_indemnitor")),
@@ -1188,6 +1215,25 @@ async def packet_builder_finalize(request: Request):
                     },
                     status_code=409,
                 )
+        # Fail closed on surety BEFORE any document, POA, or template work.
+        # A missing or unknown surety must never become OSI.
+        from dashboard.services.surety_registry import (
+            UnsupportedSuretyError,
+            require_surety,
+        )
+        try:
+            finalize_surety = require_surety(body.get("surety_id") or ctx.get("surety_id"))
+        except UnsupportedSuretyError as surety_exc:
+            return JSONResponse(
+                {
+                    "success": False,
+                    "error": surety_exc.code,
+                    "message": str(surety_exc),
+                    "surety_id": surety_exc.surety,
+                },
+                status_code=400,
+            )
+
         fields = build_adaptive_field_map(ctx)
         audit = hydration_score(fields)
 
@@ -1201,7 +1247,7 @@ async def packet_builder_finalize(request: Request):
         extra_keys = body.get("extra_doc_keys") or body.get("packet_doc_keys") or []
         manifest = assemble_manifest(
             categories,
-            surety_id=ctx.get("surety_id") or body.get("surety_id") or "osi",
+            surety_id=finalize_surety,
             include_payment_plan=bool(body.get("include_payment_plan", True)),
             extra_catalog_keys=extra_keys,
             self_indemnitor=bool(ctx.get("self_indemnitor")),
@@ -1211,7 +1257,7 @@ async def packet_builder_finalize(request: Request):
 
         now = datetime.now(timezone.utc)
         packet_id = body.get("packet_id") or f"PKT-{uuid.uuid4().hex[:10].upper()}"
-        surety_id = (body.get("surety_id") or ctx.get("surety_id") or "osi").lower()
+        surety_id = finalize_surety
 
         # Build normalized bond/intake data for DocuSeal template prefill
         def_ = ctx.get("defendant") or {}
@@ -1966,9 +2012,19 @@ async def hydrate_from_booking(request: Request):
             },
             status_code=404,
         )
-    surety_id = (body.get("surety_id") or ctx.get("surety_id") or "osi").lower().strip()
-    if surety_id not in ("osi", "palmetto"):
-        surety_id = "osi"
+    # Hydrate is surety-agnostic: a missing surety is fine (staff pick it
+    # next), but an unknown surety fails closed instead of becoming OSI.
+    from dashboard.services.surety_registry import normalize_surety, is_supported_surety
+    surety_id = normalize_surety(body.get("surety_id") or ctx.get("surety_id"))
+    if surety_id and not is_supported_surety(surety_id):
+        return JSONResponse(
+            {
+                "success": False,
+                "error": f"Surety '{surety_id}' is not supported for paperwork",
+                "code": "unsupported_surety",
+            },
+            status_code=400,
+        )
     ctx["surety_id"] = surety_id
 
     bond_data = build_bond_data_from_dashboard(
@@ -2084,9 +2140,17 @@ async def docuseal_prefill_preview(request: Request):
         ROLE_DEFENDANT,
     )
 
-    surety_id = (body.get("surety_id") or "osi").lower().strip()
-    if surety_id not in ("osi", "palmetto"):
-        surety_id = "osi"
+    from dashboard.services.surety_registry import normalize_surety, is_supported_surety
+    surety_id = normalize_surety(body.get("surety_id"))
+    if surety_id and not is_supported_surety(surety_id):
+        return JSONResponse(
+            {
+                "success": False,
+                "error": f"Surety '{surety_id}' is not supported for paperwork",
+                "code": "unsupported_surety",
+            },
+            status_code=400,
+        )
 
     ctx = await resolve_case_context(
         intake_id=body.get("intake_id"),
@@ -2809,11 +2873,10 @@ async def shannon_email_indemnitor_paperwork(request: Request):
         elif role == "defendant" and url:
             defendant_link = url
 
-    payment_link = (
-        os.getenv("SWIPESIMPLE_BOND_PAYMENT_LINK")
-        or os.getenv("PAYMENT_LINK")
-        or "https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd"
-    )
+    # Single source of truth for pay-by-card links (per intake source).
+    from dashboard.services.payment_links import payment_link_for, source_of
+
+    payment_link = payment_link_for(source_of(pkt), pkt)
     portal_url = (os.getenv("PAPERWORK_PUBLIC_URL") or "https://paperwork.shamrockbailbonds.biz").rstrip("/")
 
     now_iso = datetime.now(timezone.utc).isoformat()
