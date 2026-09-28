@@ -99,4 +99,9 @@ jobs:
             tests/test_wix_imessage_send.py \
             tests/test_swipesimple_invoice_claims.py \
             tests/test_slack_alerts.py \
+            tests/test_payment_links.py \
+            tests/test_surety_registry.py \
+            tests/test_wix_intake_webhook.py \
+            tests/test_intake_fanout.py \
+            tests/test_kiosk_privacy_and_confirm.py \
             --tb=short
