@@ -14,7 +14,8 @@ Automations controlled (see also dashboard/cron.py CRON_REGISTRY):
   3. Intake Recovery    — Auto-recover abandoned intakes
   4. Auto-Reply AI      — AI responds to inbound iMessages
   5. DocuSeal Poller    — Backup signed-packet sync + Drive archive
-  6. SwipeSimple Gmail  — Bond premium receipt reconciliation
+    6. SwipeSimple Gmail  — Bond premium receipt reconciliation
+       SwipeSimple session keep-alive — read-only cookie probe, default OFF
   7. Outreach Queue     — Drain queued BlueBubbles sends
   8. FindMy Geofence    — Alert on Lee County boundary breach
 """
@@ -141,6 +142,15 @@ DEFAULT_CONFIG = {
         "limit": 20,
         "mark_read": True,
         "interval_seconds": 300,        # 5 minutes
+    },
+
+    # ── SwipeSimple session keep-alive (read-only probe; default OFF) ──
+    # Does not create invoices or dispatch. Also requires SWIPESIMPLE_SESSION_KEEPALIVE=1.
+    # CronDef.default_enabled is False so a missing config document stays quiet.
+    "swipesimple_session_keepalive": {
+        "enabled": False,
+        "interval_seconds": 1200,       # 20 minutes (CronDef is the scheduler)
+        "alert_cooldown_hours": 6,
     },
 
     # ── Compliance task backfill for active bonds ──
@@ -450,6 +460,7 @@ _FAIL_CLOSED_KEYS = frozenset({
     "nr_payment_reminders",
     "nr_whatsapp_campaigns",
     "nr_the_closer",
+    "swipesimple_session_keepalive",
 })
 
 # Health / delivery rails: fail OPEN so monitoring + PIN queue survive Mongo blips

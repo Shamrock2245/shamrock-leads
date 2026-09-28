@@ -133,6 +133,7 @@ ALL_SERVICE_KEYS = {
     "poa_low_stock", "surety_weekly_reports", "drip_scanner",
     # Lifecycle suite
     "forfeiture_scan", "docuseal_poller", "swipesimple_gmail_poll",
+    "swipesimple_session_keepalive",
     "compliance_backfill", "matching_backlog", "lee_clerk_watch", "overdue_tasks",
     # Intelligence Pipeline
     "alpha_engine", "docket_monitor", "court_intel", "nlp_enrichment",
@@ -167,6 +168,7 @@ SERVICE_META = {
     "forfeiture_scan":     {"name": "Forfeiture Scan",     "icon": "🔴", "category": "lifecycle", "desc": "Score active bonds; Slack high/critical risk"},
     "docuseal_poller":     {"name": "DocuSeal Poller",     "icon": "☘️", "category": "lifecycle", "desc": "Poll DocuSeal for completed packets; Drive archive backup"},
     "swipesimple_gmail_poll": {"name": "SwipeSimple Gmail", "icon": "💳", "category": "lifecycle", "desc": "Poll Gmail for SwipeSimple bond premium receipts"},
+    "swipesimple_session_keepalive": {"name": "SwipeSimple Session Keep-Alive", "icon": "🔐", "category": "lifecycle", "desc": "Opt-in read-only session probe every 20 min; BlueBubbles expiry text to 0178. No auto-login."},
     "compliance_backfill": {"name": "Compliance Backfill", "icon": "✅", "category": "lifecycle", "desc": "Create missing check-in/court tasks"},
     "matching_backlog":    {"name": "Matching Backlog",    "icon": "🔗", "category": "lifecycle", "desc": "Batch-match intakes; human on ambiguity"},
     "lee_clerk_watch":     {"name": "Lee Clerk Watch",     "icon": "🏛️", "category": "lifecycle", "desc": "Wait ~1 day for Lee Clerk catch-up, then apply jail/clerk updates immediately"},
