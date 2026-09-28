@@ -447,13 +447,15 @@ function openBondModal(nameOrLead, bond, county, booking) {
   const bondAmt = parseFloat(lead.bond_amount || bond || 0);
   const cnty = lead.county || county || '';
   const bkNum = lead.booking_number || booking || '';
-  const premium = Math.max(100, bondAmt * 0.1);
-  const transferFee = (bondAmt > 25000 || ['Lee','Charlotte'].includes(cnty)) ? 0 : 125;
 
   // Parse charges into individual bonds (one per charge).
   // Prefer structured charge_details (Lee/API) over pipe-delimited charges string.
   const chargeList = _extractChargeListFromLead(lead);
   const chargesRaw = chargeList.join(' | ');
+  const premium = (window.SLPremium && SLPremium.statutoryPremium)
+    ? SLPremium.statutoryPremium(bondAmt, { chargeCount: Math.max(1, chargeList.length || 1) })
+    : Math.max(100, bondAmt * 0.1);
+  const transferFee = (bondAmt > 25000 || ['Lee','Charlotte'].includes(cnty)) ? 0 : 125;
 
   document.getElementById('bondModal').classList.add('show');
 
@@ -479,9 +481,34 @@ function openBondModal(nameOrLead, bond, county, booking) {
               ${bondAmt <= 0 ? '<span style="font-size:11px;color:#fbbf24">⚠️ Scraper left $0 — set the real bond from the jail/court before billing</span>' : ''}
             </div>
           </div>
-          <div><span class="wb-meta-label">Est. Premium (10%)</span><strong id="wbPremiumDisplay" style="color:var(--success)">$${premium.toLocaleString()}</strong></div>
           <div><span class="wb-meta-label">Transfer Fee</span><span id="wbTransferDisplay">${transferFee ? '$'+transferFee : '<span style="color:var(--success)">Waived</span>'}</span></div>
           <div><span class="wb-meta-label">Total Due</span><strong id="wbTotalDueDisplay">$${(premium + transferFee).toLocaleString()}</strong></div>
+          <div>
+            <span class="wb-meta-label">Premium due ($)</span>
+            <input type="number" id="wbPremiumInput" min="0" step="0.01" value="${premium}" style="width:140px;margin-top:4px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-weight:700" oninput="onWriteBondPremiumEdit()">
+          </div>
+          <div>
+            <span class="wb-meta-label">Down payment ($)</span>
+            <input type="number" id="wbDownPayment" min="0" step="0.01" value="${premium}" style="width:140px;margin-top:4px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-weight:700" oninput="onWriteBondDownEdit()">
+          </div>
+          <div>
+            <span class="wb-meta-label">Down payment method</span>
+            <select id="wbDownMethod" style="margin-top:4px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+              <option value="cash">Cash</option>
+              <option value="check">Check</option>
+              <option value="swipesimple">SwipeSimple</option>
+              <option value="card">Card</option>
+            </select>
+          </div>
+          <div>
+            <span class="wb-meta-label">Reference</span>
+            <input type="text" id="wbDownRef" placeholder="Check # or Swipe id" style="width:160px;margin-top:4px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+          </div>
+          <div>
+            <span class="wb-meta-label">Next payment due</span>
+            <input type="date" id="wbNextDue" style="margin-top:4px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+          </div>
+          <div style="grid-column:1/-1;font-size:11px;color:var(--muted)">Entered once here. Accounts Receivable picks this up. Balance is calculated — do not type it again. Leave next due blank when the down payment covers the premium.</div>
         </div>
       </div>
     </div>
@@ -1514,6 +1541,16 @@ async function submitBond() {
     if (wbAmtEl) wbAmtEl.focus();
     return;
   }
+  const moneySaved = await persistWriteBondAR();
+  if (!moneySaved.ok) {
+    if (statusEl) {
+      statusEl.style.background = 'rgba(239,68,68,0.15)';
+      statusEl.style.color = 'var(--danger)';
+      statusEl.textContent = moneySaved.error || 'Enter premium and down payment before writing the bond';
+    }
+    toast(moneySaved.error || 'Enter premium and down payment', 'error');
+    return;
+  }
 
   // Persist override so the Defendants list / future opens stay correct
   if (data.booking) {
@@ -1559,7 +1596,8 @@ async function submitBond() {
     },
     bond: {
       amount: data.bond,
-      premium: Math.max(100, data.bond * 0.1),
+      premium: (moneySaved.money && moneySaved.money.premium) || Math.max(100, data.bond * 0.1),
+      down_payment: moneySaved.money && moneySaved.money.down_payment,
       type: lead.bond_type || 'Surety',
       paid: 'NO',
     },
@@ -1632,7 +1670,11 @@ async function registerActiveBond(data, bondResult) {
       poa_numbers: data.poaNumbers || [],
       county: data.county,
       bond_amount: data.bond,
-      premium: Math.max(100, data.bond * 0.1),
+      premium: (typeof readWriteBondMoney === 'function' && readWriteBondMoney().premium) || Math.max(100, data.bond * 0.1),
+      down_payment: (typeof readWriteBondMoney === 'function' && readWriteBondMoney().down_payment),
+      down_payment_method: (typeof readWriteBondMoney === 'function' && readWriteBondMoney().down_payment_method) || 'cash',
+      down_payment_reference: (typeof readWriteBondMoney === 'function' && readWriteBondMoney().down_payment_reference) || '',
+      next_payment_due: (typeof readWriteBondMoney === 'function' && readWriteBondMoney().next_payment_due) || '',
       surety: data.surety,
       charges: data.chargeList,
       charges_raw: data.charges,
@@ -1923,19 +1965,90 @@ function onWriteBondAmountChange(raw, persist) {
   if (data.lead) data.lead.bond_amount = amount;
 
   const cnty = data.county || '';
-  const premium = Math.max(100, amount * 0.1);
+  const chargeCount = (data.chargeList || []).length || 1;
+  const premium = (window.SLPremium && SLPremium.statutoryPremium)
+    ? SLPremium.statutoryPremium(amount, { chargeCount: chargeCount })
+    : Math.max(100 * chargeCount, amount * 0.1);
   const transferFee = (amount > 25000 || ['Lee', 'Charlotte'].includes(cnty)) ? 0 : 125;
-  const premEl = document.getElementById('wbPremiumDisplay');
+  const premEl = document.getElementById('wbPremiumInput');
+  const downEl = document.getElementById('wbDownPayment');
   const xferEl = document.getElementById('wbTransferDisplay');
   const totEl = document.getElementById('wbTotalDueDisplay');
-  if (premEl) premEl.textContent = '$' + premium.toLocaleString();
+  if (premEl && !premEl.dataset.manualEdit) premEl.value = premium;
+  if (downEl && !downEl.dataset.manualEdit) downEl.value = premEl ? premEl.value : premium;
   if (xferEl) xferEl.innerHTML = transferFee ? ('$' + transferFee) : '<span style="color:var(--success)">Waived</span>';
-  if (totEl) totEl.textContent = '$' + (premium + transferFee).toLocaleString();
+  const livePrem = parseFloat(premEl && premEl.value) || premium;
+  if (totEl) totEl.textContent = '$' + (livePrem + transferFee).toLocaleString();
 
   // Re-suggest POA tier when bond changes (debounced lightly via persist path)
   if (persist && data.surety && data.chargeList) {
     fetchPoaNumbers(data.surety, amount, data.chargeList);
   }
+}
+
+function onWriteBondPremiumEdit() {
+  const premEl = document.getElementById('wbPremiumInput');
+  const downEl = document.getElementById('wbDownPayment');
+  if (premEl) premEl.dataset.manualEdit = '1';
+  if (downEl && !downEl.dataset.manualEdit) downEl.value = premEl ? premEl.value : '';
+  onWriteBondAmountChange(document.getElementById('wbBondAmountInput')?.value, false);
+}
+
+function onWriteBondDownEdit() {
+  const downEl = document.getElementById('wbDownPayment');
+  if (downEl) downEl.dataset.manualEdit = '1';
+}
+
+function readWriteBondMoney() {
+  const premium = parseFloat(document.getElementById('wbPremiumInput')?.value);
+  const down = parseFloat(document.getElementById('wbDownPayment')?.value);
+  return {
+    premium: Number.isFinite(premium) ? premium : null,
+    down_payment: Number.isFinite(down) ? down : null,
+    down_payment_method: document.getElementById('wbDownMethod')?.value || 'cash',
+    down_payment_reference: document.getElementById('wbDownRef')?.value || '',
+    next_payment_due: document.getElementById('wbNextDue')?.value || '',
+  };
+}
+
+async function persistWriteBondAR() {
+  const data = window._bondModalData;
+  if (!data || !data.booking) return { ok: false, error: 'no_booking' };
+  const money = readWriteBondMoney();
+  if (money.premium == null || money.down_payment == null) {
+    return { ok: false, error: 'Enter premium and down payment' };
+  }
+  if (money.down_payment > money.premium) {
+    return { ok: false, error: 'Down payment cannot exceed premium' };
+  }
+  const lead = data.lead || {};
+  const body = {
+    booking_number: data.booking,
+    premium: money.premium,
+    down_payment: money.down_payment,
+    down_payment_method: money.down_payment_method,
+    down_payment_reference: money.down_payment_reference,
+    next_payment_due: money.next_payment_due,
+    defendant_name: data.name || '',
+    indemnitor_name: lead.indemnitor_name || (data.indemnitors && data.indemnitors[0] && data.indemnitors[0].name) || '',
+    indemnitor_phone: lead.indemnitor_phone || document.getElementById('outreachPhone')?.value || '',
+    defendant_phone: lead.phone || lead.defendant_phone || '',
+    case_number: (document.getElementById('caseNumInput_0')?.value || '').trim() || data.case_number || '',
+    poa_number: (document.getElementById('poaInput_0')?.value || '').trim(),
+    county: data.county || '',
+    source: 'write_bond',
+  };
+  const r = await fetch(`${API}/api/ar/write-capture`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || d.ok === false) {
+    return { ok: false, error: d.message || d.error || 'Could not save premium to Accounts Receivable', status: r.status };
+  }
+  return { ok: true, money };
 }
 
 async function saveWriteBondAmount() {
@@ -3021,6 +3134,14 @@ async function triggerDocuSealPacket() {
   const poaInput = document.getElementById('poaInput_0');
   const poaNumber = poaInput ? poaInput.value.trim() : '';
 
+  if (snStatus) snStatus.textContent = 'Saving premium to Accounts Receivable...';
+  const moneySaved = await persistWriteBondAR();
+  if (!moneySaved.ok) {
+    if (snStatus) snStatus.textContent = moneySaved.error || 'Enter premium and down payment first';
+    toast(moneySaved.error || 'Enter premium and down payment', 'error');
+    return;
+  }
+  const money = moneySaved.money || readWriteBondMoney();
   if (snStatus) snStatus.textContent = 'Creating DocuSeal submission...';
   try {
     let signerEmail = (data.lead && (data.lead.indemnitor_email || data.lead.email)) || '';
@@ -3051,6 +3172,11 @@ async function triggerDocuSealPacket() {
       include_defendant: true,
       send_email: false,
       charge_details: chargeDetails,
+      premium_amount: money.premium,
+      down_payment_amount: money.down_payment,
+      down_payment: money.down_payment,
+      balance_financed_amount: Math.max(0, Math.round((money.premium - money.down_payment) * 100) / 100),
+      first_payment_due_date: money.next_payment_due || '',
       field_overrides: {
         defendant_name: data.name || (data.lead && (data.lead.full_name || data.lead.defendant_name)) || '',
         indemnitor_name: signerName,

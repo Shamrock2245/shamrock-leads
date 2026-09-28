@@ -223,6 +223,7 @@ window.SLRecordBond = (() => {
     if ((parseFloat(bondAmt) || 0) > 0) {
       premiumEl.value = prem;
       delete premiumEl.dataset.manualEdit;
+      syncDownPayment(true);
     } else {
       premiumEl.value = '';
     }
@@ -251,6 +252,19 @@ window.SLRecordBond = (() => {
   function markPremiumManual() {
     const el = $('rbPremium');
     if (el) el.dataset.manualEdit = 'true';
+  }
+
+  function markDownManual() {
+    const el = $('rbDownPayment');
+    if (el) el.dataset.manualEdit = 'true';
+  }
+
+  function syncDownPayment(force) {
+    const down = $('rbDownPayment');
+    const prem = $('rbPremium');
+    if (!down || !prem) return;
+    if (force) delete down.dataset.manualEdit;
+    if (!down.dataset.manualEdit) down.value = prem.value;
   }
 
   // ── Suggest next available POA ──────────────────────────────────────────
@@ -307,6 +321,10 @@ window.SLRecordBond = (() => {
       charges: $('rbCharges')?.value || '',
       bond_amount: parseFloat($('rbBondAmount')?.value || 0),
       premium: parseFloat($('rbPremium')?.value || 0),
+      down_payment: parseFloat($('rbDownPayment')?.value || 0),
+      down_payment_method: $('rbPaymentMethod')?.value || 'cash',
+      down_payment_reference: $('rbDownRef')?.value || '',
+      next_payment_due: $('rbNextDue')?.value || '',
       surety: $('rbSurety')?.value || 'osi',
       poa_number: $('rbPOANumber')?.value || '',
       case_number: $('rbCaseNumber')?.value || '',
@@ -513,7 +531,7 @@ window.SLRecordBond = (() => {
   }
 
   // Public API
-  return { open, close, calcPremium, markPremiumManual, suggestPOA, submit,
+  return { open, close, calcPremium, markPremiumManual, markDownManual, syncDownPayment, suggestPOA, submit,
            searchDefendants, showResults, hideResults, selectDefendant,
            fetchFromURL, fetchRiskBadge };
 })();

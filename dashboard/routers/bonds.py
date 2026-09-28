@@ -99,6 +99,16 @@ async def api_record_bond(request: Request):
         premium = float(data.get("premium") or 0)
     except (ValueError, TypeError):
         premium = 0.0
+    # Record Bond historically logged the premium as collected. When the new
+    # down-payment field is omitted, keep that meaning. When it is sent, that
+    # amount is what was collected at the desk.
+    if "down_payment" in data and data.get("down_payment") not in (None, ""):
+        try:
+            down_payment = float(data.get("down_payment"))
+        except (ValueError, TypeError):
+            return JSONResponse({"success": False, "errors": ["down_payment must be a number"]}, status_code=400)
+    else:
+        down_payment = premium
 
     county = (data.get("county") or "").strip()
     from dashboard.routers.helpers import reject_unless_write_book
@@ -161,6 +171,23 @@ async def api_record_bond(request: Request):
 
     # ── 1. Create / upsert active_bonds document ────────────────────────────
     active_bonds = get_collection("active_bonds")
+    from dashboard.services.ar_service import commit_money_side_effects, money_set_fields, plan_money_write
+    before_bond = await active_bonds.find_one({"booking_number": booking_number})
+    money_plan = plan_money_write(
+        before_bond,
+        premium,
+        down_payment,
+        confirm=bool(data.get("confirm_money_change")),
+        reason=str(data.get("money_change_reason") or ""),
+    )
+    if not money_plan.get("ok"):
+        return JSONResponse(
+            {"success": False, "errors": [money_plan.get("error")], **money_plan},
+            status_code=int(money_plan.get("status") or 400),
+        )
+    down_method = (data.get("down_payment_method") or payment_method or "cash").strip()
+    down_reference = (data.get("down_payment_reference") or "").strip()
+    next_due = (data.get("next_payment_due") or "").strip()[:10]
     bond_doc = {
         "booking_number": booking_number,
         "defendant_name": defendant_name,
@@ -201,6 +228,16 @@ async def api_record_bond(request: Request):
         "created_at": bond_date,
         "updated_at": now,
     }
+    bond_doc.update(money_set_fields(
+        money_plan,
+        method=down_method,
+        reference=down_reference,
+        actor=agent_name,
+        next_due=next_due,
+        when=now,
+        before=before_bond,
+    ))
+    bond_doc["down_payment_ledger_ref"] = f"write-bond-down:{booking_number.strip().upper()}"
 
     await active_bonds.update_one(
         {"booking_number": booking_number},
@@ -211,22 +248,25 @@ async def api_record_bond(request: Request):
 
     # ── 2. Create payments document (revenue tracking) ──────────────────────
     payment_doc = None
-    if premium > 0:
+    if down_payment > 0:
         payments = get_collection("payments")
         payment_doc = {
             "booking_number": booking_number,
             "defendant_name": defendant_name,
             "county": county,
-            "amount": premium,
+            "amount": down_payment,
             "bond_amount": bond_amount,
+            "premium": premium,
             "surety": surety.upper(),
             "poa_number": poa_number,
-            "method": payment_method,
+            "method": down_method,
+            "type": "down_payment",
             "status": "completed",
             "source": "retrospective_manual",
             "agent_name": agent_name,
             "indemnitor_name": indemnitor_name,
             "indemnitor_phone": indemnitor_phone,
+            "reference": down_reference,
             "timestamp": bond_date,
             "created_at": now,
         }
@@ -235,7 +275,21 @@ async def api_record_bond(request: Request):
             {"$set": payment_doc},
             upsert=True,
         )
-        logger.info("[record-bond] Payment recorded: $%.2f for %s", premium, booking_number)
+        logger.info("[record-bond] Down payment recorded: $%.2f for %s", down_payment, booking_number)
+
+    try:
+        await commit_money_side_effects(
+            booking_number=booking_number,
+            before=before_bond,
+            plan=money_plan,
+            actor=agent_name,
+            method=down_method,
+            reference=down_reference,
+            reason=str(data.get("money_change_reason") or "record_bond"),
+            when=bond_date,
+        )
+    except Exception as exc:
+        logger.warning("[record-bond] AR ledger sync failed for %s: %s", booking_number, exc)
 
     # ── 3. Assign POA in inventory ──────────────────────────────────────────
     poa_result = {"assigned": False}
@@ -370,9 +424,10 @@ async def api_record_bond(request: Request):
         "booking_number": booking_number,
         "bond_amount": bond_amount,
         "premium": premium,
+        "down_payment": down_payment,
         "surety": surety.upper(),
         "poa": poa_result,
-        "payment_recorded": premium > 0,
+        "payment_recorded": down_payment > 0,
     }
 
 @bonds_bp.post("/write-bond")
@@ -731,12 +786,46 @@ async def api_active_bonds_create(request: Request):
         "created_at": now,
         "updated_at": now,
     }
+    money_plan = None
+    if data.get("down_payment") not in (None, "") and data.get("premium") not in (None, ""):
+        from dashboard.services.ar_service import commit_money_side_effects, money_set_fields, plan_money_write
+        before_bond = await active_bonds.find_one({"booking_number": booking_number})
+        money_plan = plan_money_write(
+            before_bond,
+            data.get("premium"),
+            data.get("down_payment"),
+            confirm=bool(data.get("confirm_money_change")),
+            reason=str(data.get("money_change_reason") or ""),
+        )
+        if not money_plan.get("ok"):
+            return JSONResponse({"success": False, **money_plan}, status_code=int(money_plan.get("status") or 400))
+        doc.update(money_set_fields(
+            money_plan,
+            method=str(data.get("down_payment_method") or data.get("payment_method") or "cash"),
+            reference=str(data.get("down_payment_reference") or ""),
+            actor=str(data.get("agent_name") or "staff"),
+            next_due=str(data.get("next_payment_due") or "")[:10],
+            when=now,
+            before=before_bond,
+        ))
+        doc["down_payment_ledger_ref"] = f"write-bond-down:{str(booking_number).strip().upper()}"
     try:
         await active_bonds.update_one(
             {"booking_number": booking_number},
             {"$set": doc},
             upsert=True,
         )
+        if money_plan and money_plan.get("ok"):
+            await commit_money_side_effects(
+                booking_number=booking_number,
+                before=before_bond,
+                plan=money_plan,
+                actor=str(data.get("agent_name") or "staff"),
+                method=str(data.get("down_payment_method") or data.get("payment_method") or "cash"),
+                reference=str(data.get("down_payment_reference") or ""),
+                reason=str(data.get("money_change_reason") or "write_bond"),
+                when=now,
+            )
         if doc.get("court_date"):
             try:
                 from dashboard.services.bond_court_seed_service import (

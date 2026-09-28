@@ -284,3 +284,4 @@ updated_at            : str (ISO)
 6. **`active_bonds` → `paperwork_packets`**: Packet generation hydrates the two DocuSeal templates with bond data.
 7. **Status changes**: Every transition writes to `status_history[]` AND `audit_events`.
 8. **POA lifecycle**: Available → Assigned (on bond creation) → Released (on exoneration/forfeit/surrender) → Available.
+9. **Premium receivable**: `active_bonds.premium_cents` and `active_bonds.down_payment_cents` are entered once on Write Bond / Record Bond. Later collections are `financial_ledger` rows (`type: payment`, negative cents) plus any `transactions` row already attributed by `booking_number` (SwipeSimple). Balance is computed, never stored: `premium_cents - down_payment_cents - later_payments_cents`. Reminder drafts and sends append to `active_bonds.ar_history` and `audit_events`.

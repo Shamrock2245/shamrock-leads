@@ -77,13 +77,18 @@ class LedgerService:
 
         entry = {
             "booking_number": data.get("booking_number", "").strip().upper(),
-            "type": data.get("type", "payment"),  # payment, fee, premium, refund
+            "type": data.get("type", "payment"),  # payment, fee, premium, refund, down_payment
             "amount": amount_cents,  # Stored as integer cents
             "category": data.get("category", "premium"),
             "timestamp": ts,
             "actor": data.get("actor", "System"),
+            "entered_by": data.get("entered_by") or data.get("actor") or "System",
             "notes": data.get("notes", ""),
             "stripe_swipe_ref": data.get("stripe_swipe_ref", ""),
+            "method": data.get("method") or "",
+            "reference": data.get("reference") or data.get("stripe_swipe_ref") or "",
+            "entry_kind": data.get("entry_kind") or data.get("type") or "payment",
+            "source": data.get("source") or "",
             "created_at": datetime.now(timezone.utc),
         }
         
