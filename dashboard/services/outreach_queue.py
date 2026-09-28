@@ -20,6 +20,7 @@ async def enqueue_message(
     message: str,
     file_path: Optional[str] = None,
     context: str = "outreach",
+    server_phone: Optional[str] = None,
 ) -> str:
     """
     Queue an outreach message for dispatch via BlueBubbles.
@@ -29,6 +30,8 @@ async def enqueue_message(
         message: Text body of the message
         file_path: Optional path to local attachment file
         context: Description metadata of dispatch context
+        server_phone: Optional outbound BlueBubbles server key. The queued
+            ``phone`` stays the recipient. Retries use this host when set.
         
     Returns:
         The queued document's ID as a string.
@@ -48,6 +51,8 @@ async def enqueue_message(
         "created_at": now,
         "updated_at": now,
     }
+    if server_phone:
+        doc["bb_server_phone"] = str(server_phone)
     
     result = await queue_col.insert_one(doc)
     logger.info("[outreach_queue] Enqueued message to ...%s [ID: %s]", phone[-4:] if phone else "???", result.inserted_id)
@@ -107,7 +112,13 @@ async def process_outreach_queue(db=None) -> dict:
                 res = await _send_attachment_direct(phone, message, file_path)
             else:
                 logger.info("[outreach_queue] Processing text message %s to ...%s", msg_id, phone[-4:])
-                res = await _send_message_direct(phone, message)
+                server_phone = msg.get("bb_server_phone")
+                if server_phone:
+                    res = await _send_message_direct(
+                        phone, message, server_phone=server_phone,
+                    )
+                else:
+                    res = await _send_message_direct(phone, message)
                 
             if res.get("success"):
                 success = True

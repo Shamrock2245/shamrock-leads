@@ -114,13 +114,22 @@ async def check_imessage(phone: str) -> bool:
         return False
 
 
-async def _send_message_direct(phone: str, message: str, purpose: str = "direct") -> dict:
+async def _send_message_direct(
+    phone: str,
+    message: str,
+    purpose: str = "direct",
+    server_phone: Optional[str] = None,
+) -> dict:
     """Send text directly via BlueBubbles without writing to queue first.
 
     The BlueBubbles transport applies the STOP/TCPA consent gate; a blocked
     result carries ``blocked=True`` so the outreach queue will not retry it.
+
+    ``phone`` is the recipient. ``server_phone`` picks the outbound BlueBubbles
+    host when the recipient is also a configured line (for example text 0314
+    from the 0178 server). Omitted, the recipient selects the host as before.
     """
-    bb = get_bb_client(phone)
+    bb = get_bb_client(server_phone or phone)
     if not bb:
         return {"success": False, "error": "no_bb_server"}
     from dashboard.extensions import format_phone
@@ -283,6 +292,7 @@ async def send_message_universal(
     message: str,
     method: str = "private-api",
     purpose: str = "universal",
+    server_phone: Optional[str] = None,
 ) -> dict:
     """
     Universal send via BlueBubbles using `any;-;` chat GUID prefix.
@@ -299,9 +309,11 @@ async def send_message_universal(
     Client text NEVER routes through Twilio.
 
     Args:
-        phone:    Recipient phone number (E.164 or 10-digit)
-        message:  Message text to send
-        method:   BlueBubbles send method ("private-api" or "apple-script")
+        phone:         Recipient phone number (E.164 or 10-digit)
+        message:       Message text to send
+        method:        BlueBubbles send method ("private-api" or "apple-script")
+        purpose:       Consent-ledger purpose label
+        server_phone:  Optional outbound server key (10-digit). Recipient is unchanged.
 
     Returns:
         {
@@ -323,9 +335,11 @@ async def send_message_universal(
         return normalize_bb_send_result(blocked)
 
     # 1. Write to outreach queue first
-    queue_id = await enqueue_message(phone, message, context="universal")
+    queue_id = await enqueue_message(
+        phone, message, context="universal", server_phone=server_phone,
+    )
 
-    bb = get_bb_client(phone)
+    bb = get_bb_client(server_phone or phone)
     if not bb:
         logger.error("[bb_client] No BB server configured for %s", _mask(phone))
         # Leave it in the queue to retry in case server gets configured/restored later
@@ -348,7 +362,9 @@ async def send_message_universal(
 
     # 3. Attempt immediate direct send
     try:
-        result = await _send_message_direct(phone, message, purpose=purpose)
+        result = await _send_message_direct(
+            phone, message, purpose=purpose, server_phone=server_phone,
+        )
         if result.get("blocked"):
             # Opted out between enqueue and send — never leave it for retry.
             await get_collection("outreach_queue").update_one(

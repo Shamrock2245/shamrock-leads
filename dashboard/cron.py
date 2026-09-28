@@ -648,6 +648,61 @@ async def _run_swipesimple_gmail_poll():
         )
 
 
+async def _run_swipesimple_session_keepalive():
+    """Read-only SwipeSimple session probe. Soft-fail. Default OFF.
+
+    Does not create invoices, dispatch, or auto-login. Requires
+    SWIPESIMPLE_SESSION_KEEPALIVE=1 and automation_config enabled.
+    """
+    try:
+        from dashboard.services.swipesimple_session_keepalive import (
+            keepalive_enabled,
+            run_session_keepalive,
+        )
+        if not keepalive_enabled():
+            # Service logs the disabled state once. No probe, no alert.
+            await run_session_keepalive()
+            return
+        result = await run_session_keepalive()
+        reason = str(result.get("reason") or "")
+        if len(reason) > 64:
+            reason = "redacted"
+        status = result.get("status") if isinstance(result.get("status"), int) else None
+        logger.info(
+            "[SS-SessionKeepalive] ok=%s status=%s reason=%s alerted=%s suppressed=%s",
+            bool(result.get("ok")),
+            status,
+            reason,
+            bool(result.get("alerted")),
+            bool(result.get("alert_suppressed")),
+        )
+        try:
+            from dashboard.extensions import get_db
+            from datetime import datetime, timezone
+            safe = {
+                "ok": bool(result.get("ok")),
+                "status": status,
+                "reason": reason,
+                "alerted": bool(result.get("alerted")),
+                "alert_suppressed": bool(result.get("alert_suppressed")),
+            }
+            await get_db()["automation_run_log"].insert_one({
+                "automation": "swipesimple_session_keepalive",
+                "run_at": datetime.now(timezone.utc),
+                "result": safe,
+            })
+        except Exception as log_exc:
+            logger.warning(
+                "[SS-SessionKeepalive] run log skipped error_type=%s",
+                type(log_exc).__name__,
+            )
+    except Exception as exc:
+        logger.warning(
+            "[SS-SessionKeepalive] soft-fail error_type=%s",
+            type(exc).__name__,
+        )
+
+
 async def _run_compliance_backfill():
     from dashboard.services.lifecycle_automations import LifecycleAutomations
     from dashboard.services.automation_config import get_automation_config
@@ -747,6 +802,8 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("forfeiture_scan",    "ForfeitureScan",    14400, 300, _run_forfeiture_scan, default_enabled=True),
     CronDef("docuseal_poller",    "DocuSealPoller",     1800, 210, _run_docuseal_poller, default_enabled=True),
     CronDef("swipesimple_gmail_poll", "SwipeSimpleGmail", 300, 120, _run_swipesimple_gmail_poll, default_enabled=True),
+    # Read-only session probe. Stays off until automation_config + SWIPESIMPLE_SESSION_KEEPALIVE=1.
+    CronDef("swipesimple_session_keepalive", "SS-SessionKeepalive", 1200, 150, _run_swipesimple_session_keepalive, default_enabled=False),
     CronDef("compliance_backfill","ComplianceFill",    21600, 270, _run_compliance_backfill, default_enabled=True),
     CronDef("matching_backlog",   "MatchingBacklog",    3600, 240, _run_matching_backlog, default_enabled=True),
     CronDef("lee_clerk_watch",    "LeeClerkWatch",      900, 180, _run_lee_clerk_watch, default_enabled=True),
