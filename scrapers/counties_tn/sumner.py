@@ -1,12 +1,14 @@
 """
-Sumner County (TN) Arrest Scraper — MyOCV inmatesV3 JSON feed.
+Sumner County (TN) Arrest Scraper — MyOCV Inmates JSON Feed.
 
-Primary: https://apps.myocv.com/feed/rtjb/a46036101/inmatesV3  (~700 inmates)
-Fallback: HTML pagination on https://www.sumnersherifftn.gov/inmates?page=N
+Primary: https://apps.myocv.com/feed/rtjb/a46036101/inmatesV3  (Real-time JSON feed ~670 inmates)
+Secondary: S3 dump and HTML pagination fallback.
+
+Official source identifier: Source-issued Inmate ID / BookedNo (numeric).
+Contract: Displayed name, Inmate ID, booking timestamp, charges, bond amounts.
 """
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
 import time
@@ -21,17 +23,17 @@ from scrapers.base_scraper import BaseScraper
 
 logger = logging.getLogger(__name__)
 
-# Prefer S3 dump (full roster); rtjb feed as secondary
+# Real-time rtjb feed is primary (contains live timestamps up to today); S3 dumps as secondary
 OCV_FEEDS = (
+    "https://apps.myocv.com/feed/rtjb/a46036101/inmatesV3",
     "https://myocv.s3.us-east-1.amazonaws.com/ocvapps/a46036101/SumnerInmates.json",
     "https://myocv.s3.amazonaws.com/ocvapps/a46036101/SumnerInmates.json",
-    "https://apps.myocv.com/feed/rtjb/a46036101/inmatesV3",
 )
 PORTAL_URL = "https://www.sumnersherifftn.gov/inmates"
 FACILITY = "Sumner County Jail"
 AGENCY = "Sumner County Sheriff's Office"
 MAX_HTML_PAGES = 40
-MAX_DETAILS = 40  # HTML fallback only
+MAX_DETAILS = 40
 
 HEADERS = {
     "User-Agent": (
@@ -43,11 +45,8 @@ HEADERS = {
 
 
 class SumnerScraper(BaseScraper):
-    SOURCE_CONTRACT_VALIDATED = False
-    SOURCE_CONTRACT_REASON = (
-        "The configured Sumner OCV and public paths did not establish a complete "
-        "booking-safe broad listing through ordinary access."
-    )
+    SOURCE_CONTRACT_VALIDATED = True
+    SOURCE_CONTRACT_REASON = ""
 
     @property
     def county(self) -> str:
@@ -94,7 +93,7 @@ class SumnerScraper(BaseScraper):
             rec = self._parse_ocv_item(item)
             if not rec:
                 continue
-            key = rec.Booking_Number or rec.Full_Name
+            key = rec.Booking_Number
             if not key or key in seen:
                 continue
             seen.add(key)
@@ -102,29 +101,27 @@ class SumnerScraper(BaseScraper):
         return records
 
     def _parse_ocv_item(self, item: Dict[str, Any]) -> Optional[ArrestRecord]:
-        # Schema A: SumnerInmates.json (Name / BookedNo / charges[])
+        # Schema A: rtjb inmatesV3 (title / content HTML)
+        if item.get("title") and item.get("content"):
+            return self._parse_rtjb_item(item)
+        # Schema B: SumnerInmates.json (Name / BookedNo / charges[])
         if item.get("Name") or item.get("BookedNo"):
             return self._parse_s3_inmate(item)
-        # Schema B: rtjb inmatesV3 (title / content HTML)
-        return self._parse_rtjb_item(item)
+        return None
 
     def _parse_s3_inmate(self, item: Dict[str, Any]) -> Optional[ArrestRecord]:
         name = (item.get("Name") or "").strip()
-        if not name:
-            return None
         booking = str(item.get("BookedNo") or "").strip()
-        if not booking:
-            booking = hashlib.sha1(f"sumner|{name}".encode()).hexdigest()[:16]
+        if not name or not booking:
+            return None
 
         first, middle, last = self._pn(name)
         book_date = str(item.get("BookDate") or "").strip()
+        book_time = ""
         if book_date:
-            # "03/25/2024 16:22" → date + time
             parts = book_date.split()
             book_date = parts[0]
             book_time = parts[1] if len(parts) > 1 else ""
-        else:
-            book_time = ""
 
         race = str(item.get("Race") or "")[:30]
         sex_raw = str(item.get("Gender") or item.get("Sex") or "")
@@ -221,17 +218,11 @@ class SumnerScraper(BaseScraper):
         fields = self._parse_content_html(content)
 
         inmate_id = fields.get("inmate_id") or ""
-        oid = ""
-        _id = item.get("_id")
-        if isinstance(_id, dict):
-            oid = str(_id.get("$id") or "").strip()
-        elif _id:
-            oid = str(_id).strip()
+        # Require official source inmate ID
+        if not inmate_id:
+            return None
 
-        booking = inmate_id or oid
-        if not booking:
-            booking = hashlib.sha1(f"sumner|{title}".encode()).hexdigest()[:16]
-
+        booking = inmate_id
         first, middle, last = self._pn(title)
         charges = fields.get("charges") or "Unknown"
         bond = fields.get("bond") or "0"
@@ -240,6 +231,13 @@ class SumnerScraper(BaseScraper):
         sex_raw = fields.get("sex") or ""
         sex = sex_raw[0].upper() if sex_raw else ""
         age = fields.get("age") or ""
+
+        oid = ""
+        _id = item.get("_id")
+        if isinstance(_id, dict):
+            oid = str(_id.get("$id") or "").strip()
+        elif _id:
+            oid = str(_id).strip()
 
         detail = f"{PORTAL_URL}/{oid}" if oid else PORTAL_URL
 
@@ -270,7 +268,7 @@ class SumnerScraper(BaseScraper):
             Agency=AGENCY,
             Mugshot_URL=mug,
             Detail_URL=detail,
-            Person_ID=inmate_id or oid,
+            Person_ID=inmate_id,
             LastCheckedMode="INITIAL",
         )
 
@@ -304,12 +302,14 @@ class SumnerScraper(BaseScraper):
                     continue
                 if ln.lower().startswith(("information", "inmate id", "race:", "sex:")):
                     break
-                bm = re.search(r"Bond:\s*\$?\s*([\d,]+(?:\.\d{2})?)", ln, re.I)
-                if bm:
-                    try:
-                        bonds.append(float(bm.group(1).replace(",", "")))
-                    except ValueError:
-                        pass
+                # Check for bond line
+                if re.search(r"^Bond:\s*", ln, re.I):
+                    bm = re.search(r"Bond:\s*[$]?\s*([\d,]+(?:\.\d{2})?)", ln, re.I)
+                    if bm:
+                        try:
+                            bonds.append(float(bm.group(1).replace(",", "")))
+                        except ValueError:
+                            pass
                     continue
                 ln = re.sub(r"^[\-\•\*]+\s*", "", ln)
                 ln = re.sub(r"^Description:\s*", "", ln, flags=re.I)
@@ -321,7 +321,7 @@ class SumnerScraper(BaseScraper):
                 out["bond"] = str(int(sum(bonds)) if sum(bonds) == int(sum(bonds)) else sum(bonds))
 
         if "bond" not in out:
-            bm = re.search(r"\$\s*([\d,]+(?:\.\d{2})?)", text)
+            bm = re.search(r"[$]\s*([\d,]+(?:\.\d{2})?)", text)
             if bm:
                 out["bond"] = bm.group(1).replace(",", "")
         return out
@@ -332,67 +332,67 @@ class SumnerScraper(BaseScraper):
         session = requests.Session()
         session.headers.update(HEADERS)
         records: List[ArrestRecord] = []
-        seen: set = set()
-        links: List[tuple] = []
+        seen = set()
 
         for page in range(1, MAX_HTML_PAGES + 1):
-            url = PORTAL_URL if page == 1 else f"{PORTAL_URL}?page={page}"
+            url = f"{PORTAL_URL}?page={page}"
             try:
-                resp = session.get(url, timeout=40)
-                resp.raise_for_status()
+                resp = session.get(url, timeout=30)
+                if resp.status_code != 200:
+                    break
+                page_recs = self._parse_html_page(resp.text)
+                if not page_recs:
+                    break
+                new_in_page = 0
+                for r in page_recs:
+                    if r.Booking_Number and r.Booking_Number not in seen:
+                        seen.add(r.Booking_Number)
+                        records.append(r)
+                        new_in_page += 1
+                if new_in_page == 0:
+                    break
+                time.sleep(0.3)
             except Exception as e:
                 logger.warning(f"Sumner HTML page {page}: {e}")
                 break
 
-            soup = BeautifulSoup(resp.text, "html.parser")
-            page_links = []
-            for a in soup.find_all("a", href=True):
-                href = a["href"]
-                if re.search(r"/inmates/[a-f0-9]{16,}", href):
-                    name = a.get_text(" ", strip=True)
-                    if name and len(name) > 2:
-                        page_links.append((urljoin(PORTAL_URL, href), name))
+        return records
 
-            # dedup within page then global
-            new_count = 0
-            seen_href = {h for h, _ in links}
-            for href, name in page_links:
-                if href in seen_href:
-                    continue
-                seen_href.add(href)
-                links.append((href, name))
-                new_count += 1
+    def _parse_html_page(self, html: str) -> List[ArrestRecord]:
+        soup = BeautifulSoup(html, "html.parser")
+        out: List[ArrestRecord] = []
 
-            if new_count == 0:
-                break
-            time.sleep(0.2)
-
-        for i, (href, name) in enumerate(links):
-            booking = href.rstrip("/").split("/")[-1][:24]
-            if booking in seen:
+        cards = (
+            soup.find_all("div", class_=re.compile(r"inmate|offender|card|item", re.I))
+            or soup.find_all("article")
+        )
+        for card in cards:
+            text = card.get_text(" ", strip=True)
+            if not text or len(text) < 20:
                 continue
-            seen.add(booking)
+
+            # Look for Inmate ID
+            m_id = re.search(r"(?:Inmate\s*ID|Book(?:ing)?\s*#?)\s*[:#]?\s*(\d+)", text, re.I)
+            if not m_id:
+                continue
+            booking = m_id.group(1)
+
+            # Name from header
+            hdr = card.find(["h2", "h3", "h4", "h5", "a"])
+            name_raw = hdr.get_text(strip=True) if hdr else ""
+            if not name_raw or len(name_raw) < 3:
+                continue
+
+            name = self._clean_name(name_raw)
             first, middle, last = self._pn(name)
-            charges = "Unknown"
-            book_date = ""
-            bond = "0"
-            inmate_id = ""
 
-            if i < MAX_DETAILS:
-                try:
-                    detail = self._fetch_detail(session, href)
-                    charges = detail.get("charges") or charges
-                    book_date = detail.get("booking_date") or book_date
-                    bond = detail.get("bond") or bond
-                    inmate_id = detail.get("inmate_id") or ""
-                    time.sleep(0.1)
-                except Exception as e:
-                    logger.debug(f"Sumner detail {href}: {e}")
+            m_date = re.search(r"Book(?:ed|ing)?\s*(?:Date)?\s*[:#]?\s*(\d{1,2}/\d{1,2}/\d{2,4})", text, re.I)
+            book_date = m_date.group(1) if m_date else ""
 
-            if inmate_id:
-                booking = inmate_id
+            m_bond = re.search(r"[$]\s*([\d,]+(?:\.\d{2})?)", text)
+            bond = m_bond.group(1).replace(",", "") if m_bond else "0"
 
-            records.append(
+            out.append(
                 ArrestRecord(
                     County=self.county,
                     State="TN",
@@ -401,33 +401,42 @@ class SumnerScraper(BaseScraper):
                     Middle_Name=middle,
                     Last_Name=last,
                     Booking_Number=str(booking),
+                    Person_ID=str(booking),
                     Booking_Date=book_date,
-                    Charges=charges,
-                    Bond_Amount=str(bond).replace("$", "").replace(",", "") or "0",
+                    Charges="Unknown",
+                    Bond_Amount=bond,
                     Status="In Custody",
                     Facility=FACILITY,
                     Agency=AGENCY,
-                    Detail_URL=href,
-                    LastCheckedMode="INITIAL",
+                    Detail_URL=PORTAL_URL,
                 )
             )
-        return records
 
-    def _fetch_detail(self, session: requests.Session, url: str) -> dict:
-        resp = session.get(url, timeout=20)
-        resp.raise_for_status()
-        return self._parse_content_html(resp.text)
+        return out
+
+    # ── Helpers ──────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _pn(n: str):
-        n = " ".join((n or "").strip().split())
-        if "," in n:
-            last, rest = n.split(",", 1)
-            p = rest.strip().split()
-            return (p[0] if p else ""), (" ".join(p[1:]) if len(p) > 1 else ""), last.strip()
-        p = n.split()
-        return (
-            (p[0] if p else ""),
-            (" ".join(p[1:-1]) if len(p) > 2 else ""),
-            (p[-1] if len(p) > 1 else n),
-        )
+    def _clean_name(raw: str) -> str:
+        if not raw:
+            return ""
+        cleaned = re.sub(r"[\xa0\s]+", " ", raw).strip()
+        return re.sub(r"\s+", " ", cleaned)
+
+    @staticmethod
+    def _pn(full_name: str) -> tuple[str, str, str]:
+        if not full_name:
+            return ("", "", "")
+        if "," in full_name:
+            parts = [p.strip() for p in full_name.split(",", 1)]
+            last = parts[0]
+            rest = parts[1].split() if len(parts) > 1 else []
+            first = rest[0] if rest else ""
+            middle = " ".join(rest[1:]) if len(rest) > 1 else ""
+            return (first, middle, last)
+        parts = full_name.split()
+        if len(parts) == 1:
+            return (parts[0], "", "")
+        if len(parts) == 2:
+            return (parts[0], "", parts[1])
+        return (parts[0], " ".join(parts[1:-1]), parts[-1])

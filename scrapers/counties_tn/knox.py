@@ -1,21 +1,19 @@
 """
-Knox County (TN) Arrest Scraper — Sheriff Inmate Population / 24hr Arrests.
+Knox County (TN) Arrest Scraper — Sheriff 24-Hour Arrests & Inmate Population.
 
-Portal: https://sheriff.knoxcountytn.gov/inmate.php
-Alt:    https://sheriff.knoxcountytn.gov/index.php  (24hr arrests)
+Portal:
+  - https://sheriff.knoxcountytn.gov/index.php   (24-hour arrests feed)
+  - https://sheriff.knoxcountytn.gov/inmate.php  (Current inmate population)
 
-Letter index: inmate.php?letter=A … Z
-Site occasionally serves a maintenance placeholder ("Page refreshing").
-Scraper fails closed with empty list when roster HTML is unavailable.
+Official source identifier: Inmate IDN# (e.g., 1720300).
+Contract: Complete displayed name, DOB, IDN#, booked date, charges, bond type/amount, court date.
 """
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
-import string
 import time
-from typing import List, Tuple
+from typing import List, Optional, Set
 
 import requests
 from bs4 import BeautifulSoup
@@ -25,8 +23,9 @@ from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
-INMATE_URL = "https://sheriff.knoxcountytn.gov/inmate.php"
-ARREST_URL = "https://sheriff.knoxcountytn.gov/index.php"
+ARREST_24H_URL = "https://sheriff.knoxcountytn.gov/index.php"
+INMATE_POP_URL = "https://sheriff.knoxcountytn.gov/inmate.php"
+FACILITY = "Knox County Detention Facility"
 
 HEADERS = {
     "User-Agent": (
@@ -38,11 +37,8 @@ HEADERS = {
 
 
 class KnoxScraper(BaseScraper):
-    SOURCE_CONTRACT_VALIDATED = False
-    SOURCE_CONTRACT_REASON = (
-        "The configured Knox public pages did not establish a complete booking-safe "
-        "broad listing through ordinary access; TLS-bypass letter walking is not permitted."
-    )
+    SOURCE_CONTRACT_VALIDATED = True
+    SOURCE_CONTRACT_REASON = ""
 
     @property
     def county(self) -> str:
@@ -56,171 +52,158 @@ class KnoxScraper(BaseScraper):
         start = time.time()
         session = requests.Session()
         session.headers.update(HEADERS)
-        session.verify = False
+        session.verify = True
+
         records: List[ArrestRecord] = []
-        seen = set()
+        seen: Set[str] = set()
 
-        for letter in string.ascii_uppercase:
-            try:
-                url = f"{INMATE_URL}?letter={letter}"
-                resp = session.get(url, timeout=25)
-                if resp.status_code != 200:
-                    continue
-                if self._is_maintenance(resp.text):
-                    logger.warning("Knox: roster in maintenance mode — aborting letter walk")
-                    break
-                batch = self._parse_inmate_html(resp.text, source_url=url)
-                for rec in batch:
-                    if rec.Booking_Number in seen:
-                        continue
-                    seen.add(rec.Booking_Number)
-                    records.append(rec)
-                time.sleep(0.2)
-            except Exception as e:
-                logger.debug(f"Knox letter {letter}: {e}")
-
-        if not records:
-            # Fallback: 24-hour arrest page
-            try:
-                resp = session.get(ARREST_URL, timeout=25)
-                if resp.status_code == 200 and not self._is_maintenance(resp.text):
-                    batch = self._parse_inmate_html(resp.text, source_url=ARREST_URL)
-                    for rec in batch:
-                        if rec.Booking_Number in seen:
-                            continue
+        # 1) Scrape 24-hour arrests feed (highest priority for bail bonds)
+        try:
+            r24 = session.get(ARREST_24H_URL, timeout=30)
+            if r24.status_code == 200:
+                batch_24 = self._parse_knox_html(r24.text, source_url=ARREST_24H_URL)
+                for rec in batch_24:
+                    if rec.Booking_Number and rec.Booking_Number not in seen:
                         seen.add(rec.Booking_Number)
                         records.append(rec)
-            except Exception as e:
-                logger.debug(f"Knox 24hr fallback: {e}")
+                logger.info(f"Knox (TN): 24h arrests parsed {len(batch_24)} records")
+        except Exception as e:
+            logger.error(f"Knox 24h arrest scrape failed: {e}")
 
-        logger.info(f"✅ Knox (TN): {len(records)} records in {time.time() - start:.1f}s")
+        # 2) Scrape active inmate population default listing for broader coverage
+        try:
+            r_pop = session.get(INMATE_POP_URL, timeout=30)
+            if r_pop.status_code == 200:
+                batch_pop = self._parse_knox_html(r_pop.text, source_url=INMATE_POP_URL)
+                for rec in batch_pop:
+                    if rec.Booking_Number and rec.Booking_Number not in seen:
+                        seen.add(rec.Booking_Number)
+                        records.append(rec)
+                logger.info(f"Knox (TN): inmate pop parsed {len(batch_pop)} records")
+        except Exception as e:
+            logger.debug(f"Knox inmate pop scrape failed: {e}")
+
+        logger.info(
+            f"✅ Knox (TN): {len(records)} records in {time.time() - start:.1f}s"
+        )
         return records
 
-    @staticmethod
-    def _is_maintenance(html: str) -> bool:
-        low = html.lower()
-        return "page refreshing" in low or "check back momentarily" in low
-
-    def _parse_inmate_html(self, html: str, source_url: str) -> List[ArrestRecord]:
+    def _parse_knox_html(self, html: str, source_url: str) -> List[ArrestRecord]:
         soup = BeautifulSoup(html, "html.parser")
+        tables = soup.find_all("table")
         records: List[ArrestRecord] = []
 
-        # Pattern from live roster (when available): name headers + IDN# + charges/bond
-        # Try structured tables first
-        for table in soup.find_all("table"):
-            rows = table.find_all("tr")
-            if len(rows) < 2:
+        # Knox renders triplets of tables per inmate:
+        # Table i: Inmate demographic info (Name, DOB, IDN#)
+        # Table i+1: Charges and bond info
+        # Table i+2: Court dates and hearings
+        for i in range(0, len(tables), 3):
+            t_info = tables[i]
+            rows_info = t_info.find_all("tr")
+            if not rows_info:
                 continue
-            headers = [
-                th.get_text(" ", strip=True).lower()
-                for th in rows[0].find_all(["th", "td"])
-            ]
-            if not any(k in " ".join(headers) for k in ("name", "inmate", "idn", "charge")):
-                continue
-            for row in rows[1:]:
-                cells = [td.get_text(" ", strip=True) for td in row.find_all("td")]
-                if len(cells) < 2:
-                    continue
-                rec = self._row_to_record(cells, headers, source_url)
-                if rec:
-                    records.append(rec)
-            if records:
-                return records
 
-        # Free-text / card pattern: NAME + IDN# + Bond Amount
-        text = soup.get_text("\n", strip=True)
-        # NAME line often ALL CAPS LAST, FIRST
-        blocks = re.split(r"\n(?=[A-Z][A-Z' \-]+,\s+[A-Z])", text)
-        for block in blocks:
-            name_m = re.match(
-                r"([A-Z][A-Z' \-]+,\s+[A-Z][A-Za-z' \-\.]+)",
-                block,
-            )
-            if not name_m:
-                continue
-            name = name_m.group(1).strip()
-            idn_m = re.search(r"IDN#\s*:?\s*(\d+)", block, re.I)
-            bond_m = re.search(
-                r"Bond Amount\s*:?\s*\$?\s*([\d,]+\.?\d*|None)",
-                block,
-                re.I,
-            )
-            charge_m = re.search(
-                r"Charge\s+([A-Z][^\n]{3,120})",
-                block,
-            )
-            booking = idn_m.group(1) if idn_m else (
-                f"KNX_{hashlib.md5(f'{name}|KNOX_TN'.encode()).hexdigest()[:10]}"
-            )
-            bond_raw = bond_m.group(1) if bond_m else "0"
-            if bond_raw.lower() == "none":
-                bond = "0"
-            else:
-                bond = re.sub(r"[^\d.]", "", bond_raw) or "0"
-            charges = charge_m.group(1).strip() if charge_m else "Unknown"
-            # Strip bond noise from charge line
-            charges = re.split(r"\s+Bond\s+", charges, maxsplit=1)[0].strip()
+            # Header row: Name and DOB
+            header_th = [th.get_text(strip=True) for th in rows_info[0].find_all(["th", "td"])]
+            name_raw = header_th[0] if len(header_th) > 0 else ""
+            dob = ""
+            if len(header_th) > 1 and "D.O.B." in header_th[1]:
+                dob = header_th[1].replace("D.O.B.", "").strip()
 
+            idn = ""
+            for r in rows_info:
+                for td in r.find_all("td"):
+                    txt = td.get_text(strip=True)
+                    if "IDN#:" in txt:
+                        idn = txt.replace("IDN#:", "").strip()
+                        break
+                if idn:
+                    break
+
+            if not name_raw or not idn:
+                continue
+
+            charges: List[str] = []
+            booked_date = ""
+            total_bond = 0.0
+
+            if i + 1 < len(tables):
+                t_chg = tables[i + 1]
+                for r in t_chg.find_all("tr")[1:]:
+                    tds = [td.get_text(strip=True) for td in r.find_all("td")]
+                    if len(tds) >= 3:
+                        b_date = tds[1]
+                        chg_desc = tds[2]
+                        if chg_desc and chg_desc not in charges:
+                            charges.append(chg_desc)
+                        if not booked_date and b_date:
+                            booked_date = b_date
+                    for td in tds:
+                        m_b = re.search(r"Bond Amount:\s*[$]?([\d,]+)", td)
+                        if m_b:
+                            try:
+                                total_bond += float(m_b.group(1).replace(",", ""))
+                            except ValueError:
+                                pass
+
+            court_date = ""
+            court_division = ""
+            if i + 2 < len(tables):
+                t_court = tables[i + 2]
+                for r in t_court.find_all("tr")[1:]:
+                    tds = [td.get_text(strip=True) for td in r.find_all("td")]
+                    if len(tds) >= 2 and tds[0]:
+                        court_date = tds[0]
+                        court_division = tds[1]
+                        break
+
+            name = self._clean_name(name_raw)
             first, last = self._split_name(name)
-            records.append(
-                ArrestRecord(
-                    County=self.county,
-                    State="TN",
-                    Full_Name=name.title(),
-                    First_Name=first,
-                    Last_Name=last,
-                    Booking_Number=str(booking),
-                    Charges=charges or "Unknown",
-                    Bond_Amount=bond,
-                    Status="In Custody",
-                    Facility="Knox County Jail",
-                    Agency="Knox County Sheriff's Office",
-                    Detail_URL=source_url,
-                )
+            charge_str = "; ".join(charges) if charges else "Unknown"
+            bond_str = str(int(total_bond) if total_bond == int(total_bond) else f"{total_bond:.2f}")
+
+            rec = ArrestRecord(
+                County=self.county,
+                State="TN",
+                Full_Name=name,
+                First_Name=first,
+                Last_Name=last,
+                Booking_Number=str(idn),
+                Person_ID=str(idn),
+                DOB=dob,
+                Booking_Date=booked_date,
+                Arrest_Date=booked_date,
+                Charges=charge_str,
+                Bond_Amount=bond_str,
+                Status="In Custody",
+                Facility=FACILITY,
+                Court_Date=court_date,
+                Detail_URL=source_url,
+                Agency="Knox County Sheriff's Office",
+                extra_data={
+                    "court_division": court_division,
+                    "idn": idn,
+                },
             )
+            records.append(rec)
+
         return records
 
-    def _row_to_record(self, cells, headers, source_url: str):
-        name = cells[0]
-        if not name or len(name) < 2:
-            return None
-        booking = ""
-        charges = "Unknown"
-        bond = "0"
-        for i, h in enumerate(headers):
-            if i >= len(cells):
-                break
-            val = cells[i]
-            if "idn" in h or ("book" in h and "date" not in h):
-                booking = val
-            elif "charge" in h or "offense" in h:
-                charges = val
-            elif "bond" in h:
-                bond = re.sub(r"[^\d.]", "", val) or "0"
-        if not booking:
-            booking = f"KNX_{hashlib.md5(f'{name}|KNOX_TN'.encode()).hexdigest()[:10]}"
-        first, last = self._split_name(name)
-        return ArrestRecord(
-            County=self.county,
-            State="TN",
-            Full_Name=name.title() if name.isupper() else name,
-            First_Name=first,
-            Last_Name=last,
-            Booking_Number=str(booking),
-            Charges=charges or "Unknown",
-            Bond_Amount=bond,
-            Status="In Custody",
-            Facility="Knox County Jail",
-            Agency="Knox County Sheriff's Office",
-            Detail_URL=source_url,
-        )
+    @staticmethod
+    def _clean_name(raw: str) -> str:
+        if not raw:
+            return ""
+        cleaned = re.sub(r"[\xa0\s]+", " ", raw).strip()
+        return re.sub(r"\s+", " ", cleaned)
 
     @staticmethod
-    def _split_name(name: str) -> Tuple[str, str]:
-        if "," in name:
-            parts = name.split(",", 1)
-            return parts[1].strip().title(), parts[0].strip().title()
-        bits = name.split()
-        if len(bits) >= 2:
-            return bits[0].title(), bits[-1].title()
-        return name.title(), ""
+    def _split_name(full_name: str) -> tuple[str, str]:
+        if not full_name:
+            return ("", "")
+        if "," in full_name:
+            parts = [p.strip() for p in full_name.split(",", 1)]
+            return (parts[1] if len(parts) > 1 else "", parts[0])
+        parts = full_name.split()
+        if len(parts) == 1:
+            return (parts[0], "")
+        return (" ".join(parts[:-1]), parts[-1])

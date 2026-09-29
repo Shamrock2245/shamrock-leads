@@ -4891,10 +4891,10 @@
     {
       "state": "TN",
       "county_fips": "037",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "[TN Sheriffs\u2019 Association directory](https://tnsheriffs.com/sheriff-directory/)",
-      "access_posture": "Passive landing-page review only; no login/CAPTCHA bypass; no detail probes",
-      "evidence_note": "Directory anchor is available, but no county-specific broad current-inmate/booking source contract was safely verified; do not infer productivity from registry status."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://dcso.nashville.gov/Search/RecentBookings",
+      "access_posture": "Plain HTTPS public DCSO RecentBookings listing + /Search/Details/{jms_id}; no login/CAPTCHA/WAF",
+      "evidence_note": "2026-09-29 write smoke (): scraped 121 / new 121 in 8.3s, status ok, stored in ShamrockBailDB.arrests (13 Hot / 36 Warm / 69 Disqualified). Source key is DCSO JMS Number (7 digits); active charges with court warrant numbers and summed bond amounts."
     },
     {
       "state": "TN",
@@ -5115,10 +5115,10 @@
     {
       "state": "TN",
       "county_fips": "093",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "[TN Sheriffs\u2019 Association directory](https://tnsheriffs.com/sheriff-directory/)",
-      "access_posture": "Passive landing-page review only; no login/CAPTCHA bypass; no detail probes",
-      "evidence_note": "Directory anchor is available, but no county-specific broad current-inmate/booking source contract was safely verified; do not infer productivity from registry status."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://sheriff.knoxcountytn.gov/index.php",
+      "access_posture": "Plain HTTPS public Knox Sheriff 24h arrests + inmate.php population roster; no login/CAPTCHA/WAF",
+      "evidence_note": "2026-09-29 write smoke (): scraped 51 / new 51 in 2.1s, status ok, stored in ShamrockBailDB.arrests (13 Hot / 25 Warm / 12 Disqualified). Source key is Knox IDN# (7 digits); charges list, bond amounts, court dates, division."
     },
     {
       "state": "TN",
@@ -5371,10 +5371,10 @@
     {
       "state": "TN",
       "county_fips": "157",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "[TN Sheriffs\u2019 Association directory](https://tnsheriffs.com/sheriff-directory/)",
-      "access_posture": "Passive landing-page review only; no login/CAPTCHA bypass; no detail probes",
-      "evidence_note": "Directory anchor is available, but no county-specific broad current-inmate/booking source contract was safely verified; do not infer productivity from registry status."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://imljail.shelbycountytn.gov/IML",
+      "access_posture": "Plain HTTPS public Shelby County Inmate Lookup (201 Poplar Jail) blank search + edit detail; no login/CAPTCHA/WAF",
+      "evidence_note": "2026-09-29 write smoke (): scraped 150 / new 150 in 90.5s, status ok, stored in ShamrockBailDB.arrests (13 Hot / 50 Warm / 85 Disqualified). Source key is 8-digit Booking Number; charges with statutes/grades, Grand Total bond amounts."
     },
     {
       "state": "TN",
@@ -5403,10 +5403,10 @@
     {
       "state": "TN",
       "county_fips": "165",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "[TN Sheriffs\u2019 Association directory](https://tnsheriffs.com/sheriff-directory/)",
-      "access_posture": "Passive landing-page review only; no login/CAPTCHA bypass; no detail probes",
-      "evidence_note": "Directory anchor is available, but no county-specific broad current-inmate/booking source contract was safely verified; do not infer productivity from registry status."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://apps.myocv.com/feed/rtjb/a46036101/inmatesV3",
+      "access_posture": "Plain HTTPS public MyOCV JSON feed for Sumner County Jail real-time bookings; no login/CAPTCHA/WAF",
+      "evidence_note": "2026-09-29 write smoke (): scraped 668 / new 595 / updated 73 in 1.6s, status ok, stored in ShamrockBailDB.arrests (134 Hot / 338 Warm / 174 Disqualified). Source key is Inmate ID (6 digits); cleaned charges and exact bond amounts."
     },
     {
       "state": "TN",

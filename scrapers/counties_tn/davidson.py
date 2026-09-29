@@ -2,18 +2,16 @@
 Davidson County (TN) Arrest Scraper — Nashville DCSO Active Inmate Search.
 
 Portal: https://dcso.nashville.gov
-  - /Search/RecentBookings  — last 48h bookings (high value for bail)
-  - /Search/Person          — active inmate letter search
-  - /Search/Details/{jms}   — charges + bond
+  - /Search/RecentBookings  — last 48h bookings (primary high-intent bail feed)
+  - /Search/Details/{jms}   — charges, warrants, bond amounts, custody status
 
 Davidson (Nashville) is TN's 2nd-largest county. Powered by Justice Integration Services.
+Official source identifiers: DCSO JMS Number and Control Number.
 """
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
-import string
 import time
 from typing import Dict, List, Optional, Set
 from urllib.parse import urljoin
@@ -28,7 +26,6 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://dcso.nashville.gov"
 RECENT_URL = f"{BASE_URL}/Search/RecentBookings"
-PERSON_URL = f"{BASE_URL}/Search/Person"
 DETAIL_PATH = "/Search/Details/"
 
 HEADERS = {
@@ -40,17 +37,13 @@ HEADERS = {
     "Referer": BASE_URL,
 }
 
-# Cap detail enrichment so one-shot stays within a reasonable window.
-MAX_DETAIL_FETCHES = 200
+MAX_DETAIL_FETCHES = 250
 REQUEST_PAUSE = 0.15
 
 
 class DavidsonScraper(BaseScraper):
-    SOURCE_CONTRACT_VALIDATED = False
-    SOURCE_CONTRACT_REASON = (
-        "Configured Davidson paths did not establish a booking-safe broad roster "
-        "through ordinary access; TLS-bypass and speculative search flows are not permitted."
-    )
+    SOURCE_CONTRACT_VALIDATED = True
+    SOURCE_CONTRACT_REASON = ""
 
     @property
     def county(self) -> str:
@@ -64,7 +57,7 @@ class DavidsonScraper(BaseScraper):
         start = time.time()
         session = requests.Session()
         session.headers.update(HEADERS)
-        session.verify = False
+        session.verify = True
 
         records: List[ArrestRecord] = []
         seen: Set[str] = set()
@@ -73,27 +66,15 @@ class DavidsonScraper(BaseScraper):
         try:
             recent = self._scrape_recent(session)
             for rec in recent:
-                key = rec.Booking_Number or rec.Full_Name
-                if key in seen:
+                key = rec.Booking_Number
+                if not key or key in seen:
                     continue
                 seen.add(key)
                 records.append(rec)
         except Exception as e:
             logger.error(f"Davidson recent bookings failed: {e}")
 
-        # 2) Active roster via last-name letter walk (list-level fields)
-        try:
-            active = self._scrape_active_letters(session, seen)
-            for rec in active:
-                key = rec.Booking_Number or rec.Full_Name
-                if key in seen:
-                    continue
-                seen.add(key)
-                records.append(rec)
-        except Exception as e:
-            logger.error(f"Davidson active letter walk failed: {e}")
-
-        # 3) Enrich missing charges/bond from detail pages (recent first)
+        # 2) Enrich charges and bond from detail pages
         try:
             self._enrich_details(session, records)
         except Exception as e:
@@ -110,39 +91,6 @@ class DavidsonScraper(BaseScraper):
         resp = session.get(RECENT_URL, timeout=30)
         resp.raise_for_status()
         return self._parse_results_table(resp.text, source="recent")
-
-    # ── Active letter walk ───────────────────────────────────────────────────
-
-    def _scrape_active_letters(
-        self, session: requests.Session, seen: Set[str]
-    ) -> List[ArrestRecord]:
-        out: List[ArrestRecord] = []
-        for letter in string.ascii_uppercase:
-            try:
-                batch = self._search_person(session, last_name=letter, first_name="")
-            except Exception as e:
-                logger.debug(f"Davidson letter {letter}: {e}")
-                continue
-            for rec in batch:
-                key = rec.Booking_Number or rec.Full_Name
-                if key in seen:
-                    continue
-                out.append(rec)
-            time.sleep(REQUEST_PAUSE)
-        return out
-
-    def _search_person(
-        self, session: requests.Session, last_name: str, first_name: str = ""
-    ) -> List[ArrestRecord]:
-        # Seed session / any cookies
-        session.get(PERSON_URL, timeout=25)
-        data = {
-            "firstName": first_name,
-            "lastName": last_name,
-        }
-        resp = session.post(PERSON_URL, data=data, timeout=30)
-        resp.raise_for_status()
-        return self._parse_results_table(resp.text, source="active")
 
     # ── Table parsing ────────────────────────────────────────────────────────
 
@@ -167,7 +115,7 @@ class DavidsonScraper(BaseScraper):
             if len(cells) < 3:
                 continue
 
-            # Detail JMS id from onclick
+            # Detail JMS id from button onclick
             jms_id = self._extract_jms_id(row)
             cell_text = [c.get_text(" ", strip=True) for c in cells]
 
@@ -210,7 +158,11 @@ class DavidsonScraper(BaseScraper):
                 elif "release" in h:
                     release = val
 
-            booking = control or jms_id or self._fallback_booking(name)
+            # Require official source booking identifier (JMS ID or Control Number)
+            booking = jms_id or control
+            if not booking:
+                continue
+
             status = "Released" if release else "In Custody"
             detail_url = (
                 urljoin(BASE_URL, f"{DETAIL_PATH}{jms_id}") if jms_id else RECENT_URL
@@ -225,7 +177,7 @@ class DavidsonScraper(BaseScraper):
                     First_Name=first,
                     Last_Name=last,
                     Booking_Number=str(booking),
-                    Person_ID=str(jms_id or control or ""),
+                    Person_ID=str(control or jms_id or ""),
                     DOB=dob,
                     Race=race,
                     Sex=sex,
@@ -233,12 +185,12 @@ class DavidsonScraper(BaseScraper):
                     Arrest_Date=admitted,
                     Release_Date=release,
                     Status=status,
-                    Facility=facility or "Davidson County Correctional Center",
+                    Facility=facility or "Downtown Detention Center",
                     Charges="Unknown",
                     Bond_Amount="0",
                     Detail_URL=detail_url,
                     Agency="Davidson County Sheriff's Office",
-                    extra_data={"source": source, "jms_id": jms_id or ""},
+                    extra_data={"source": source, "jms_id": jms_id or "", "control_number": control or ""},
                 )
             )
 
@@ -249,20 +201,16 @@ class DavidsonScraper(BaseScraper):
     def _enrich_details(
         self, session: requests.Session, records: List[ArrestRecord]
     ) -> None:
-        """Fetch charge/bond from detail pages for records missing charges."""
+        """Fetch charge/bond from detail pages for records."""
         fetched = 0
         for rec in records:
             if fetched >= MAX_DETAIL_FETCHES:
                 break
             jms = (rec.extra_data or {}).get("jms_id") or ""
             if not jms:
-                # Try extract from Detail_URL
                 m = re.search(r"/Details/(\d+)", rec.Detail_URL or "")
                 jms = m.group(1) if m else ""
             if not jms:
-                continue
-            # Skip if already enriched
-            if rec.Charges and rec.Charges != "Unknown" and rec.Bond_Amount not in ("", "0"):
                 continue
 
             try:
@@ -294,47 +242,65 @@ class DavidsonScraper(BaseScraper):
         if resp.status_code != 200:
             return None
         soup = BeautifulSoup(resp.text, "html.parser")
-        text = soup.get_text("\n", strip=True)
 
         out: Dict[str, str] = {}
 
-        # Label/value pairs from page text blocks
-        def _after(label: str) -> str:
-            m = re.search(
-                rf"{re.escape(label)}\s*\n\s*(.+)",
-                text,
-                re.IGNORECASE,
-            )
-            return m.group(1).strip() if m else ""
-
-        out["facility"] = _after("Facility")
-        dob_raw = _after("Date of Birth")
-        if dob_raw:
-            out["dob"] = self._clean_dob(dob_raw)
-        out["booking_date"] = _after("Arrest Booking Date") or _after("Admitted Date")
-        out["release"] = _after("Release Date")
-
-        # Charges: collect Arrested Charge lines
-        charges = re.findall(
-            r"Arrested Charge\s*\n\s*(.+)",
-            text,
-            re.IGNORECASE,
-        )
-        if charges:
-            out["charges"] = " | ".join(c.strip() for c in charges if c.strip())
-
-        # Bonds: sum all Bond $ amounts
-        bonds = re.findall(r"Bond\s*\n\s*\$?\s*([\d,]+\.?\d*)", text, re.IGNORECASE)
-        if not bonds:
-            bonds = re.findall(r"\$\s*([\d,]+\.\d{2})", text)
-        if bonds:
-            total = 0.0
-            for b in bonds:
-                try:
-                    total += float(b.replace(",", ""))
-                except ValueError:
+        # Parse inmate info details list
+        info_div = soup.find("div", id="processing-inmate-information")
+        if info_div:
+            for li in info_div.find_all("li"):
+                lbl = li.find("label")
+                if not lbl:
                     continue
-            out["bond"] = str(int(total)) if total == int(total) else f"{total:.2f}"
+                lbl_txt = lbl.get_text(strip=True).lower()
+                val = li.get_text(strip=True).replace(lbl.get_text(strip=True), "").strip()
+                if "facility" in lbl_txt and val:
+                    out["facility"] = val
+                elif ("birth" in lbl_txt or "dob" in lbl_txt) and val:
+                    out["dob"] = self._clean_dob(val)
+                elif "arrest booking date" in lbl_txt or "admitted date" in lbl_txt:
+                    if val and "booking_date" not in out:
+                        out["booking_date"] = val
+                elif "release date" in lbl_txt and val:
+                    out["release"] = val
+
+        # Parse active charges from details-list
+        charges: List[str] = []
+        total_bond = 0.0
+        for ul in soup.find_all("ul", class_="details-list"):
+            chg_val = ""
+            bond_val = ""
+            warrant_val = ""
+            for li in ul.find_all("li"):
+                lbl = li.find("label")
+                if not lbl:
+                    continue
+                lbl_txt = lbl.get_text(strip=True).lower()
+                val = li.get_text(" ", strip=True).replace(lbl.get_text(" ", strip=True), "").strip()
+                if "arrested charge" in lbl_txt and val:
+                    chg_val = val
+                elif "warrant" in lbl_txt and val:
+                    warrant_val = val
+                elif "bond" in lbl_txt and val:
+                    bond_val = val
+
+            if chg_val:
+                label = chg_val
+                if warrant_val:
+                    label = f"{label} (Warrant: {warrant_val})"
+                charges.append(label)
+                if bond_val and "$" in bond_val:
+                    m_b = re.search(r"[$]\s*([\d,]+(?:\.\d{2})?)", bond_val)
+                    if m_b:
+                        try:
+                            total_bond += float(m_b.group(1).replace(",", ""))
+                        except ValueError:
+                            pass
+
+        if charges:
+            out["charges"] = " | ".join(charges)
+        if total_bond > 0:
+            out["bond"] = str(int(total_bond) if total_bond == int(total_bond) else f"{total_bond:.2f}")
 
         return out if out else None
 
@@ -357,40 +323,31 @@ class DavidsonScraper(BaseScraper):
     def _clean_name(raw: str) -> str:
         if not raw:
             return ""
-        # Results often append AKA variants after the primary name
-        primary = raw.split("  ")[0].strip()
-        primary = re.sub(r"\s+", " ", primary)
-        # Prefer LAST, FIRST form — take first comma-separated name unit
-        if "," in primary:
-            parts = primary.split(",")
-            last = parts[0].strip()
-            first = parts[1].strip().split("  ")[0].strip()
-            # Truncate first if AKA pollution
-            first = re.split(r"\s{2,}|\s(?=[A-Z]{2,},\s)", first)[0].strip()
-            return f"{last}, {first}".strip(", ")
-        return primary.title() if primary.isupper() else primary
+        cleaned = re.sub(r"[\xa0\s]+", " ", raw).strip()
+        cleaned = re.sub(r"\s+", " ", cleaned)
+        return cleaned
 
     @staticmethod
-    def _split_name(name: str) -> tuple:
-        if "," in name:
-            parts = name.split(",", 1)
-            last = parts[0].strip().title()
-            first = parts[1].strip().title()
-            return first, last
-        bits = name.split()
-        if len(bits) >= 2:
-            return bits[0].title(), bits[-1].title()
-        return name.title(), ""
+    def _split_name(full_name: str) -> tuple[str, str]:
+        if not full_name:
+            return ("", "")
+        if "," in full_name:
+            parts = [p.strip() for p in full_name.split(",", 1)]
+            return (parts[1] if len(parts) > 1 else "", parts[0])
+        parts = full_name.split()
+        if len(parts) == 1:
+            return (parts[0], "")
+        return (" ".join(parts[:-1]), parts[-1])
 
     @staticmethod
     def _clean_dob(raw: str) -> str:
         if not raw:
             return ""
-        # "Dec 09, 1995 (30)" or "9/1/1990 12:00:00 AM  (35)"
-        raw = re.sub(r"\s*\(\d+\)\s*$", "", raw).strip()
-        raw = re.sub(r"\s+\d{1,2}:\d{2}:\d{2}\s*[AP]M\s*$", "", raw, flags=re.I)
-        return raw.strip()
-
-    @staticmethod
-    def _fallback_booking(name: str) -> str:
-        return f"DAV_{hashlib.md5(f'{name}|DAVIDSON_TN'.encode()).hexdigest()[:10]}"
+        raw = re.sub(r"\s*\(\d+\)\s*", "", raw).strip()
+        m = re.search(r"(\d{1,2}/\d{1,2}/\d{4})", raw)
+        if m:
+            return m.group(1)
+        m = re.search(r"([A-Za-z]{3}\s+\d{1,2},\s*\d{4})", raw)
+        if m:
+            return m.group(1)
+        return raw.split()[0] if raw else ""

@@ -610,6 +610,11 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     # Turnstile token for LCSO /inmate-search/api/inmates recent_data.
     # 2026-09-25 Mac write smoke 17 new / status ok (source Booking # = pin, 8 digits).
     "Lake (FL)": "verified_public",
+    # 2026-09-29 Tennessee broad-listing write smokes (docs/recon/TENNESSEE_SCRAPERS_PROMOTION_2026-09-29.md)
+    "Davidson (TN)": "verified_public",  # DCSO RecentBookings + Details (JMS Number)
+    "Knox (TN)": "verified_public",  # Knox Sheriff 24h arrests + inmate pop (IDN#)
+    "Sumner (TN)": "verified_public",  # MyOCV inmatesV3 real-time feed (Inmate ID)
+    "Shelby (TN)": "verified_public",  # IML portal 201 Poplar (Booking # 8 digits)
     # 2026-09-23 BSO Arrest Search write smoke (source JMS_NUMBER; e591b45 lifted
     # the guard and set SOURCE_CONTRACT_VALIDATED=True but the Health label was
     # never added). Registry now matches the code + matrix.
@@ -662,13 +667,9 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     "Scotland (NC)": "fail_closed",
     "Union (NC)": "fail_closed",
     "Wake (NC)": "fail_closed",
-    "Davidson (TN)": "fail_closed",
     "Hamilton (TN)": "fail_closed",
-    "Knox (TN)": "fail_closed",
     "Montgomery (TN)": "fail_closed",
     "Rutherford (TN)": "fail_closed",
-    "Shelby (TN)": "fail_closed",
-    "Sumner (TN)": "fail_closed",
     "Williamson (TN)": "fail_closed",
     "Wilson (TN)": "fail_closed",
     "Orleans (LA)": "fail_closed",
