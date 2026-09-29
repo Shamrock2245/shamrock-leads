@@ -50,7 +50,7 @@ PyMuPDF>=1.24.0
 openpyxl>=3.1.0
 
 # BlueBubbles URL sync
-firebase-admin>=6.4.0
+firebase-admin>=7.7.0
 
 # Name matching
 jellyfish>=1.0.0
