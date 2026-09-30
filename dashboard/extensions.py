@@ -615,6 +615,10 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     "Knox (TN)": "verified_public",  # Knox Sheriff 24h arrests + inmate pop (IDN#)
     "Sumner (TN)": "verified_public",  # MyOCV inmatesV3 real-time feed (Inmate ID)
     "Shelby (TN)": "verified_public",  # IML portal 201 Poplar (Booking # 8 digits)
+    "Hamilton (TN)": "verified_public",  # HCSO Corrections booking API + Inmates-app roster (R_ID / SPN)
+    "Sevier (TN)": "verified_public",  # SCSO Next.js / MyOCV public roster (Inmate ID)
+    "Washington (TN)": "verified_public",  # WCSO 30-day rolling booking sheet PDF (numeric Booking #)
+    "Hamblen (TN)": "verified_public",  # HCSO public ISOMS current inmate portal (deterministic surrogate)
     # 2026-09-23 BSO Arrest Search write smoke (source JMS_NUMBER; e591b45 lifted
     # the guard and set SOURCE_CONTRACT_VALIDATED=True but the Health label was
     # never added). Registry now matches the code + matrix.
@@ -667,7 +671,6 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     "Scotland (NC)": "fail_closed",
     "Union (NC)": "fail_closed",
     "Wake (NC)": "fail_closed",
-    "Hamilton (TN)": "fail_closed",
     "Montgomery (TN)": "fail_closed",
     "Rutherford (TN)": "fail_closed",
     "Williamson (TN)": "fail_closed",
@@ -676,11 +679,8 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     "St. Tammany (LA)": "fail_closed",
     "Blount (TN)": "fail_closed",
     "Bradley (TN)": "fail_closed",
-    "Sevier (TN)": "fail_closed",
-    "Washington (TN)": "fail_closed",
     "Maury (TN)": "fail_closed",
     "Robertson (TN)": "fail_closed",
-    "Hamblen (TN)": "fail_closed",
     "Bedford (TN)": "fail_closed",
     "Coffee (TN)": "fail_closed",
     "Lincoln (TN)": "fail_closed",

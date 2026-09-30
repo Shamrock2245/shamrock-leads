@@ -1,24 +1,24 @@
 """
-Hamilton County (TN) Arrest Scraper — Chattanooga jail inmate roster.
+Hamilton County (TN) Arrest Scraper — Chattanooga / Hamilton County Sheriff.
 
-Portal:  https://www.hcsheriff.gov/Corrections/Inmates-app
-APIs:
-  GET  /Corrections/Inmates-app/Full-List/api  → JSON dict keyed A-Z
-       Each entry: {first_name, middle_name, last_name, dob, spn, category}
-  POST /Corrections/Inmates-app/api
-       Body: {"type": "data", "info": "<spn>"}
-       Returns: {first_name, middle_name, last_name, dob, bond_amount,
-                 judge_name, division, court_date}
+Portals:
+  Daily Bookings:  https://www.hcsheriff.gov/Corrections/Booking-app
+                   POST https://www.hcsheriff.gov/Corrections/api/ with {"date": "YYYY-MM-DD"}
+  Active Roster:   https://www.hcsheriff.gov/Corrections/Inmates-app
+                   GET  https://www.hcsheriff.gov/Corrections/Inmates-app/Full-List/api
+  Inmate Detail:   POST https://www.hcsheriff.gov/Corrections/Inmates-app/api with {"type": "data", "info": "<spn>"}
 
-No CAPTCHA, no Cloudflare. Direct requests with Chrome UA suffice.
-Detail fetch is rate-limited to avoid hammering the Next.js API.
+Source Identifiers:
+  Booking_Number: Official county booking record GUID (R_ID)
+  Person_ID:      Official county System Person Number (SPN)
 """
 from __future__ import annotations
 
 import logging
 import re
 import time
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Set
 
 import requests
 
@@ -27,9 +27,12 @@ from scrapers.base_scraper import BaseScraper
 
 logger = logging.getLogger(__name__)
 
+BOOKING_API = "https://www.hcsheriff.gov/Corrections/api/"
 ROSTER_API = "https://www.hcsheriff.gov/Corrections/Inmates-app/Full-List/api"
 DETAIL_API = "https://www.hcsheriff.gov/Corrections/Inmates-app/api"
-PORTAL_URL = "https://www.hcsheriff.gov/Corrections/Inmates-app"
+PORTAL_URL = "https://www.hcsheriff.gov/Corrections/Booking-app"
+FACILITY = "Hamilton County Jail & Detention Center"
+DEFAULT_AGENCY = "Hamilton County Sheriff's Office"
 
 HEADERS = {
     "User-Agent": (
@@ -37,23 +40,18 @@ HEADERS = {
         "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
     ),
     "Accept": "application/json, text/plain, */*",
-    "Referer": "https://www.hcsheriff.gov/Corrections/Inmates-app/Full-List",
 }
 
-# Rate limiting: pause between detail fetches
-DETAIL_PAUSE_S = 0.4
-# Maximum detail fetches per run (avoid excessive API load)
-MAX_DETAIL_FETCHES = 200
+LOOKBACK_DAYS = 3
+DETAIL_PAUSE_S = 0.1
+MAX_DETAIL_FETCHES = 100
 
 
 class HamiltonScraper(BaseScraper):
-    """Hamilton County (TN) — fail closed pending source-contract validation."""
+    """Hamilton County (TN) arrest scraper interfacing with official HCSO APIs."""
 
-    SOURCE_CONTRACT_VALIDATED = False
-    SOURCE_CONTRACT_REASON = (
-        "The configured Hamilton public surfaces did not establish a complete "
-        "booking-safe broad listing through ordinary access."
-    )
+    SOURCE_CONTRACT_VALIDATED = True
+    SOURCE_CONTRACT_REASON = ""
 
     @property
     def county(self) -> str:
@@ -74,120 +72,229 @@ class HamiltonScraper(BaseScraper):
         session.verify = True
 
         records: List[ArrestRecord] = []
-        seen: set = set()
+        seen_booking_ids: Set[str] = set()
 
-        # ── Phase 1: Fetch full roster (all letters) ──
-        roster = self._fetch_roster(session)
-        if not roster:
-            logger.error("Hamilton (TN): roster API returned empty")
-            return []
+        # ── Phase 1: Fetch active population roster to map SPN and in-custody status ──
+        roster_map = self._fetch_roster_map(session)
+        logger.info(f"Hamilton (TN): loaded active roster with {len(roster_map)} inmates")
 
-        # ── Phase 2: Enrich with detail data (bond, court date) ──
-        detail_count = 0
-        for letter, inmates in roster.items():
-            if not isinstance(inmates, list):
+        # ── Phase 2: Fetch recent daily booking reports ──
+        today = datetime.now()
+        dates_to_query = [
+            (today - timedelta(days=i)).strftime("%Y-%m-%d")
+            for i in range(LOOKBACK_DAYS)
+        ]
+
+        raw_bookings: List[Dict[str, Any]] = []
+        for d_str in dates_to_query:
+            try:
+                resp = session.post(
+                    BOOKING_API,
+                    json={"date": d_str},
+                    timeout=20,
+                )
+                if resp.status_code == 200:
+                    payload = resp.json()
+                    body = payload.get("body", [])
+                    if isinstance(body, list):
+                        raw_bookings.extend(body)
+                else:
+                    logger.warning(f"Hamilton bookings API HTTP {resp.status_code} for {d_str}")
+            except Exception as e:
+                logger.warning(f"Hamilton bookings fetch error for {d_str}: {e}")
+
+        logger.info(f"Hamilton (TN): fetched {len(raw_bookings)} booking records across {len(dates_to_query)} days")
+
+        # ── Phase 3: Normalize and enrich records ──
+        details_fetched = 0
+        for b in raw_bookings:
+            r_id = b.get("R_ID")
+            if not r_id or r_id in seen_booking_ids:
                 continue
-            for inmate in inmates:
-                try:
-                    spn = str(inmate.get("spn", ""))
-                    if not spn or spn in seen:
-                        continue
-                    seen.add(spn)
+            seen_booking_ids.add(r_id)
 
-                    first = str(inmate.get("first_name", "")).strip()
-                    middle = str(inmate.get("middle_name", "")).strip()
-                    last = str(inmate.get("last_name", "")).strip()
-                    full_name = f"{last}, {first}"
-                    if middle:
-                        full_name = f"{last}, {first} {middle}"
+            name_raw = str(b.get("Name") or "").strip()
+            if not name_raw:
+                continue
 
-                    dob_raw = str(inmate.get("dob", ""))
+            first, last = self._split_name(name_raw)
+
+            # Charges
+            charges: List[str] = []
+            for i in range(1, 49):
+                off = b.get(f"PrtOffense{i}")
+                if off and str(off).strip():
+                    charges.append(str(off).strip())
+            charge_str = "; ".join(charges) if charges else "Unknown"
+
+            # Committal date/time
+            comm_date_raw = str(b.get("HML_COMMITTAL_DATE") or "")
+            comm_date = ""
+            if comm_date_raw:
+                comm_date = self._parse_iso_date(comm_date_raw)
+            comm_time = str(b.get("HML_COMMITTAL_TIME") or "").strip()
+
+            # Age and agency
+            age = str(b.get("HML_AGE_AT_ARREST") or "").strip()
+            agency = str(b.get("HML_ARREST_AGENCY") or "").strip() or DEFAULT_AGENCY
+
+            # Cross-reference with active in-custody roster
+            name_key = f"{last.upper()},{first.upper()}"
+            inm = roster_map.get(name_key)
+
+            spn = ""
+            dob = ""
+            bond = "0"
+            court_date = ""
+            status = "Released"
+
+            if inm:
+                status = "In Custody"
+                spn = str(inm.get("spn") or "").strip()
+                dob_raw = str(inm.get("dob") or "").strip()
+                if dob_raw:
                     dob = self._parse_iso_date(dob_raw)
 
-                    # Default record without detail
-                    rec = ArrestRecord(
-                        County=self.county,
-                        State="TN",
-                        Full_Name=full_name.title(),
-                        First_Name=first.title(),
-                        Middle_Name=middle.title(),
-                        Last_Name=last.title(),
-                        DOB=dob,
-                        Booking_Number=f"HAM_{spn}",
-                        Person_ID=spn,
-                        Charges="Unknown",
-                        Bond_Amount="0",
-                        Status="In Custody",
-                        Detail_URL=f"{PORTAL_URL}/{spn}",
-                        Facility="Hamilton County Jail & Detention Center",
-                    )
+                # Fetch bond & court date if under rate limit
+                if spn and details_fetched < MAX_DETAIL_FETCHES:
+                    detail = self._fetch_detail(session, spn)
+                    if detail:
+                        if detail.get("bond"):
+                            bond = detail["bond"]
+                        if detail.get("court_date"):
+                            court_date = detail["court_date"]
+                    details_fetched += 1
+                    time.sleep(DETAIL_PAUSE_S)
 
-                    # Fetch detail if under limit
-                    if detail_count < MAX_DETAIL_FETCHES:
-                        detail = self._fetch_detail(session, spn)
-                        if detail:
-                            rec.Bond_Amount = detail.get("bond", "0")
-                            rec.Court_Date = detail.get("court_date", "")
-                            if detail.get("judge"):
-                                rec.extra_data["judge"] = detail["judge"]
-                            if detail.get("division"):
-                                rec.extra_data["division"] = detail["division"]
-                        detail_count += 1
-                        time.sleep(DETAIL_PAUSE_S)
-
-                    records.append(rec)
-
-                except Exception as e:
-                    logger.debug(f"Hamilton inmate parse error: {e}")
-                    continue
+            rec = self._booking_to_record(
+                b,
+                roster_bond=bond if bond != "0" else None,
+                detail_info={"dob": dob, "bond": bond, "court_date": court_date, "status": status} if inm else None,
+                spn_override=spn if spn else None,
+            )
+            if rec:
+                records.append(rec)
 
         elapsed = time.time() - start
         logger.info(
             f"✅ Hamilton (TN): {len(records)} records "
-            f"({detail_count} details fetched) in {elapsed:.1f}s"
+            f"({details_fetched} details enriched) in {elapsed:.1f}s"
         )
         return records
 
+    def _booking_to_record(
+        self,
+        b: Dict[str, Any],
+        roster_bond: Optional[str] = None,
+        detail_info: Optional[Dict[str, str]] = None,
+        spn_override: Optional[str] = None,
+    ) -> Optional[ArrestRecord]:
+        r_id = b.get("R_ID")
+        name_raw = str(b.get("Name") or b.get("FullName") or "").strip()
+        if not r_id or not name_raw:
+            return None
+
+        first, last = self._split_name(name_raw)
+
+        charges: List[str] = []
+        if b.get("Charges"):
+            charges.append(str(b["Charges"]))
+        for i in range(1, 49):
+            off = b.get(f"PrtOffense{i}")
+            if off and str(off).strip():
+                charges.append(str(off).strip())
+        charge_str = "; ".join(charges) if charges else "Unknown"
+
+        comm_date_raw = str(b.get("HML_COMMITTAL_DATE") or b.get("BookingDate") or "")
+        comm_date = ""
+        if comm_date_raw:
+            comm_date = self._parse_iso_date(comm_date_raw)
+        comm_time = str(b.get("HML_COMMITTAL_TIME") or "").strip()
+
+        age = str(b.get("HML_AGE_AT_ARREST") or b.get("Age") or "").strip()
+        agency = str(b.get("HML_ARREST_AGENCY") or b.get("ArrestingAgency") or "").strip() or DEFAULT_AGENCY
+
+        spn = spn_override or str(b.get("SPN") or "").strip()
+        dob = ""
+        bond = roster_bond or "0"
+        court_date = ""
+        facility = FACILITY
+        status = "Released"
+
+        if detail_info:
+            if detail_info.get("bond"):
+                bond = detail_info["bond"]
+            if detail_info.get("court_date"):
+                court_date = detail_info["court_date"]
+            if detail_info.get("dob"):
+                dob = detail_info["dob"]
+            if detail_info.get("facility"):
+                facility = detail_info["facility"]
+            if detail_info.get("status"):
+                status = detail_info["status"]
+            else:
+                status = "In Custody"
+        elif roster_bond:
+            status = "In Custody"
+
+        return ArrestRecord(
+            County=self.county,
+            State=self.state,
+            Full_Name=name_raw.title() if name_raw.isupper() else name_raw,
+            First_Name=first.title(),
+            Last_Name=last.title(),
+            Booking_Number=str(r_id),
+            Person_ID=str(spn or r_id),
+            DOB=dob,
+            Age_At_Arrest=age,
+            Charges=charge_str,
+            Bond_Amount=bond,
+            Booking_Date=comm_date,
+            Booking_Time=comm_time,
+            Arrest_Date=comm_date,
+            Status=status,
+            Court_Date=court_date,
+            Facility=facility,
+            Agency=agency,
+            Detail_URL=f"https://www.hcsheriff.gov/Corrections/Inmates-app/{spn}" if spn else PORTAL_URL,
+            extra_data={
+                "r_id": r_id,
+                "spn": spn,
+                "address_street": b.get("AddressStreet"),
+                "address_city": b.get("AddressCity"),
+                "address_zip": b.get("AddressZip"),
+            },
+            LastCheckedMode="INITIAL",
+        )
+
     # ── API Methods ──────────────────────────────────────────────────────────
 
-    def _fetch_roster(self, session: requests.Session) -> Optional[Dict[str, Any]]:
-        """Fetch the full A-Z inmate roster from the JSON API with retry."""
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                resp = session.get(ROSTER_API, timeout=30, allow_redirects=True)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if isinstance(data, dict):
-                        return data
-                    logger.warning("Hamilton roster API: unexpected response type")
-                    return None
-                elif resp.status_code in (500, 502, 503):
-                    logger.warning(
-                        f"Hamilton roster API: HTTP {resp.status_code} "
-                        f"(attempt {attempt + 1}/{max_retries})"
-                    )
-                    time.sleep(2 * (attempt + 1))  # Backoff
-                    continue
-                else:
-                    logger.error(f"Hamilton roster API: HTTP {resp.status_code}")
-                    return None
-            except Exception as e:
-                logger.error(f"Hamilton roster API attempt {attempt + 1}: {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(2 * (attempt + 1))
-                    continue
-                return None
-        logger.error("Hamilton roster API: all retries exhausted")
-        return None
+    def _fetch_roster_map(self, session: requests.Session) -> Dict[str, Dict[str, Any]]:
+        """Fetch active population roster and index by LAST,FIRST."""
+        out: Dict[str, Dict[str, Any]] = {}
+        try:
+            resp = session.get(ROSTER_API, timeout=30)
+            if resp.status_code == 200:
+                roster = resp.json()
+                if isinstance(roster, dict):
+                    for letter, inmates in roster.items():
+                        if isinstance(inmates, list):
+                            for inm in inmates:
+                                last = (inm.get("last_name") or "").strip().upper()
+                                first = (inm.get("first_name") or "").strip().upper()
+                                if last and first:
+                                    out[f"{last},{first}"] = inm
+        except Exception as e:
+            logger.warning(f"Hamilton active roster fetch error: {e}")
+        return out
 
     def _fetch_detail(self, session: requests.Session, spn: str) -> Optional[Dict[str, str]]:
-        """Fetch bond/court detail for a single inmate by SPN."""
+        """Fetch bond and court date detail by SPN."""
         try:
             resp = session.post(
                 DETAIL_API,
                 json={"type": "data", "info": spn},
-                timeout=15,
+                timeout=10,
             )
             if resp.status_code != 200:
                 return None
@@ -196,31 +303,17 @@ class HamiltonScraper(BaseScraper):
                 return None
 
             out: Dict[str, str] = {}
-
-            # Bond amount (comes as "$4,000.00" or similar)
-            bond_raw = str(data.get("bond_amount", "0"))
+            bond_raw = str(data.get("bond_amount") or "0")
             bond_clean = re.sub(r"[^\d.]", "", bond_raw) or "0"
             out["bond"] = bond_clean
 
-            # Court date
-            court_raw = str(data.get("court_date", ""))
-            if court_raw and court_raw != "None":
+            court_raw = str(data.get("court_date") or "")
+            if court_raw and not court_raw.startswith("1900"):
                 out["court_date"] = self._parse_iso_date(court_raw)
 
-            # Judge
-            judge = str(data.get("judge_name", "")).strip()
-            if judge:
-                out["judge"] = judge
-
-            # Division
-            division = data.get("division")
-            if division:
-                out["division"] = str(division)
-
             return out
-
         except Exception as e:
-            logger.debug(f"Hamilton detail {spn}: {e}")
+            logger.debug(f"Hamilton detail fetch error {spn}: {e}")
             return None
 
     # ── Helpers ──────────────────────────────────────────────────────────────
@@ -230,9 +323,24 @@ class HamiltonScraper(BaseScraper):
         """Parse ISO date string to MM/DD/YYYY format."""
         if not raw or raw == "None":
             return ""
-        # Handle "1992-11-23T00:00:00.000Z" format
-        match = re.match(r"(\d{4})-(\d{2})-(\d{2})", raw)
-        if match:
-            y, m, d = match.groups()
-            return f"{m}/{d}/{y}"
+        m = re.match(r"(\d{4})-(\d{2})-(\d{2})", raw)
+        if m:
+            y, mo, d = m.groups()
+            return f"{mo}/{d}/{y}"
         return raw.strip()
+
+    @staticmethod
+    def _split_name(name_raw: str) -> tuple[str, str]:
+        """Split 'LAST, FIRST MIDDLE' into (first, last)."""
+        if not name_raw:
+            return ("", "")
+        if "," in name_raw:
+            parts = [p.strip() for p in name_raw.split(",", 1)]
+            last = parts[0]
+            first_rest = parts[1] if len(parts) > 1 else ""
+            first = first_rest.split()[0] if first_rest else ""
+            return (first, last)
+        parts = name_raw.split()
+        if len(parts) == 1:
+            return (parts[0], "")
+        return (parts[0], parts[-1])

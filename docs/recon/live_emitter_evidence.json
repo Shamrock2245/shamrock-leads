@@ -2,32 +2,191 @@
   "as_of": "2026-09-25",
   "description": "Documented live-write / hold evidence for scopes called out in the 2026-09-25 executive brief. Non-authoritative for source-contract state: SCRAPER_SOURCE_STATES stays the only source of verified_public / fail_closed. scripts/build_recon_matrix.py refuses to build if a live_write scope is fail_closed or a hold scope is not fail_closed.",
   "records": [
-    {"label": "Charleston (SC)", "emitter": "live_write", "evidence": "2026-09-23 ListView Inmate # write smoke (#48); live per 2026-09-25 brief", "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"},
-    {"label": "Dorchester (SC)", "emitter": "live_write", "evidence": "2026-09-24 write smoke 331 new (Citizen Connect BookingID); live per 2026-09-25 brief", "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"},
-    {"label": "Chesterfield (SC)", "emitter": "live_write", "evidence": "2026-09-24 write smoke 128 new (Citizen Connect BookingID); live per 2026-09-25 brief", "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"},
-    {"label": "Aiken (SC)", "emitter": "live_write", "evidence": "2026-09-24 write smoke 392 new (Inmate ID# / qSO_NO); live per 2026-09-25 brief", "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"},
-    {"label": "Darlington (SC)", "emitter": "live_write", "evidence": "2026-09-25 Mac write smoke all 3 pages via DevExpress pager callback: 233 scraped / 133 new / 100 updated, status ok (source DCN bid); 2026-09-24 page-1 smoke 100 new", "source": "docs/recon/GAP_QUEUE_NC_TX_SC_2026-09-25.md"},
-    {"label": "Gaston (NC)", "emitter": "live_write", "evidence": "2026-09-25 Mac write smoke 45 new / 0 updated, status ok (source Booking # YYYY-NNNNNNNN from New World detail)", "source": "docs/recon/GAP_QUEUE_NC_TX_SC_2026-09-25.md"},
-    {"label": "Pitt (NC)", "emitter": "live_write", "evidence": "2026-09-25 Mac write smoke 477 scraped / 164 new / 313 updated, status ok (source Booking Number, 6 digits)", "source": "docs/recon/GAP_QUEUE_NC_TX_SC_2026-09-25.md"},
-    {"label": "Orange (NC)", "emitter": "live_write", "evidence": "2026-09-25 Mac write smoke 101 new / 0 updated, status ok (source Bk #, 5 digits, daily confinement PDF)", "source": "docs/recon/GAP_QUEUE_NC_TX_SC_2026-09-25.md"},
-    {"label": "Denton (TX)", "emitter": "live_write", "evidence": "2026-09-25 Mac write smoke 8 new / 0 updated, status ok (source bookno, 8 digits; Denton PD city jail only)", "source": "docs/recon/GAP_QUEUE_NC_TX_SC_2026-09-25.md"},
-    {"label": "Bay (FL)", "emitter": "live_write", "evidence": "2026-09-25 Mac write smoke 940 new / 0 updated, status ok (source Booking # YYYY-NNNNNN)", "source": "docs/recon/FL_GAP_QUEUE_2026-09-25.md"},
-    {"label": "Suwannee (FL)", "emitter": "live_write", "evidence": "2026-09-25 Mac write smoke 44 new / 0 updated, status ok (source Booking No SCSO<YY>JBN<NNNNNN>)", "source": "docs/recon/FL_GAP_QUEUE_2026-09-25.md"},
-    {"label": "Broward (FL)", "emitter": "live_write", "evidence": "2026-09-23 BSO Arrest Search write smoke 30 new (JMS_NUMBER); live per 2026-09-25 brief", "source": "docs/COUNTY_REGISTRY.md"},
-    {"label": "Pinellas (FL)", "emitter": "live_write", "evidence": "48h Mongo write evidence 2026-09-23; Who's In Jail roster Mac smoke 149 ok; live per 2026-09-25 brief. Health stays unverified: no documented verified_public decision yet", "source": "docs/recon/PALMETTO_READ_WRITE_HEALTH_2026-09-23.md"},
-    {"label": "Seminole (FL)", "emitter": "live_write", "evidence": "48h Mongo write evidence 2026-09-23; DoSearch A-Z Mac smoke 60 new; live per 2026-09-25 brief. Health stays unverified: no documented verified_public decision yet", "source": "docs/recon/PALMETTO_READ_WRITE_HEALTH_2026-09-23.md"},
-    {"label": "Lee (FL)", "emitter": "live_write", "evidence": "48h Mongo write evidence 2026-09-23; KEY FL county with file-backed /32 cooldown; live per 2026-09-25 brief. Health stays unverified: no documented verified_public decision yet", "source": "docs/recon/LEE_SELF_HEALING_2026-09-23.md"},
-    {"label": "Richland (SC)", "emitter": "hold", "evidence": "JMSOnline maintenance; list view has no source booking key (synthetic RIC_ forbidden)", "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"},
-    {"label": "Sumter (SC)", "emitter": "hold", "evidence": "SmartCOP synthesizes LAST_YYYYMMDD booking keys", "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"},
-    {"label": "Hampton (SC)", "emitter": "hold", "evidence": "HTTP 403 / Cloudflare to ordinary public access", "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"},
-    {"label": "Marlboro (SC)", "emitter": "hold", "evidence": "HTTP 403 / Cloudflare to ordinary public access", "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"},
-    {"label": "TnCIS (TN)", "emitter": "hold", "evidence": "Cloudflare-protected statewide portal; no proven public contract; Obscura/proxy/stealth fallback removed 2026-09-25 (owner decision)", "source": "docs/ops/SCRAPER_SELF_HEALING.md"},
-    {"label": "Lake (FL)", "emitter": "live_write", "evidence": "2026-09-25 Mac write smoke 17 new / 0 updated, status ok (source Booking # = pin, 8 digits); SolveCaptcha Turnstile per owner decision 2026-09-25", "source": "docs/recon/FL_GAP_QUEUE_2026-09-25.md"},
-    {"label": "Leon (FL)", "emitter": "hold", "evidence": "Akamai 403 to datacenter egress; public listing has no source booking number", "source": "docs/recon/FL_GAP_QUEUE_2026-09-25.md"},
-    {"label": "Gadsden (FL)", "emitter": "hold", "evidence": "Official page only iframes bare-IP SmartWEB host that does not respond; no contract verified", "source": "docs/recon/FL_GAP_QUEUE_2026-09-25.md"},
-    {"label": "Davidson (TN)", "emitter": "live_write", "evidence": "2026-09-29 Mac write smoke 121 new, status ok (source DCSO JMS Number, 7 digits); live per 2026-09-29 brief", "source": "docs/recon/TENNESSEE_SCRAPERS_PROMOTION_2026-09-29.md"},
-    {"label": "Knox (TN)", "emitter": "live_write", "evidence": "2026-09-29 Mac write smoke 51 new, status ok (source Knox IDN#, 7 digits); live per 2026-09-29 brief", "source": "docs/recon/TENNESSEE_SCRAPERS_PROMOTION_2026-09-29.md"},
-    {"label": "Sumner (TN)", "emitter": "live_write", "evidence": "2026-09-29 Mac write smoke 668 scraped / 595 new / 73 updated, status ok (source Inmate ID, 6 digits); live per 2026-09-29 brief", "source": "docs/recon/TENNESSEE_SCRAPERS_PROMOTION_2026-09-29.md"},
-    {"label": "Shelby (TN)", "emitter": "live_write", "evidence": "2026-09-29 Mac write smoke 150 new, status ok (source Booking Number, 8 digits); live per 2026-09-29 brief", "source": "docs/recon/TENNESSEE_SCRAPERS_PROMOTION_2026-09-29.md"}
+    {
+      "label": "Charleston (SC)",
+      "emitter": "live_write",
+      "evidence": "2026-09-23 ListView Inmate # write smoke (#48); live per 2026-09-25 brief",
+      "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"
+    },
+    {
+      "label": "Dorchester (SC)",
+      "emitter": "live_write",
+      "evidence": "2026-09-24 write smoke 331 new (Citizen Connect BookingID); live per 2026-09-25 brief",
+      "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"
+    },
+    {
+      "label": "Chesterfield (SC)",
+      "emitter": "live_write",
+      "evidence": "2026-09-24 write smoke 128 new (Citizen Connect BookingID); live per 2026-09-25 brief",
+      "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"
+    },
+    {
+      "label": "Aiken (SC)",
+      "emitter": "live_write",
+      "evidence": "2026-09-24 write smoke 392 new (Inmate ID# / qSO_NO); live per 2026-09-25 brief",
+      "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"
+    },
+    {
+      "label": "Darlington (SC)",
+      "emitter": "live_write",
+      "evidence": "2026-09-25 Mac write smoke all 3 pages via DevExpress pager callback: 233 scraped / 133 new / 100 updated, status ok (source DCN bid); 2026-09-24 page-1 smoke 100 new",
+      "source": "docs/recon/GAP_QUEUE_NC_TX_SC_2026-09-25.md"
+    },
+    {
+      "label": "Gaston (NC)",
+      "emitter": "live_write",
+      "evidence": "2026-09-25 Mac write smoke 45 new / 0 updated, status ok (source Booking # YYYY-NNNNNNNN from New World detail)",
+      "source": "docs/recon/GAP_QUEUE_NC_TX_SC_2026-09-25.md"
+    },
+    {
+      "label": "Pitt (NC)",
+      "emitter": "live_write",
+      "evidence": "2026-09-25 Mac write smoke 477 scraped / 164 new / 313 updated, status ok (source Booking Number, 6 digits)",
+      "source": "docs/recon/GAP_QUEUE_NC_TX_SC_2026-09-25.md"
+    },
+    {
+      "label": "Orange (NC)",
+      "emitter": "live_write",
+      "evidence": "2026-09-25 Mac write smoke 101 new / 0 updated, status ok (source Bk #, 5 digits, daily confinement PDF)",
+      "source": "docs/recon/GAP_QUEUE_NC_TX_SC_2026-09-25.md"
+    },
+    {
+      "label": "Denton (TX)",
+      "emitter": "live_write",
+      "evidence": "2026-09-25 Mac write smoke 8 new / 0 updated, status ok (source bookno, 8 digits; Denton PD city jail only)",
+      "source": "docs/recon/GAP_QUEUE_NC_TX_SC_2026-09-25.md"
+    },
+    {
+      "label": "Bay (FL)",
+      "emitter": "live_write",
+      "evidence": "2026-09-25 Mac write smoke 940 new / 0 updated, status ok (source Booking # YYYY-NNNNNN)",
+      "source": "docs/recon/FL_GAP_QUEUE_2026-09-25.md"
+    },
+    {
+      "label": "Suwannee (FL)",
+      "emitter": "live_write",
+      "evidence": "2026-09-25 Mac write smoke 44 new / 0 updated, status ok (source Booking No SCSO<YY>JBN<NNNNNN>)",
+      "source": "docs/recon/FL_GAP_QUEUE_2026-09-25.md"
+    },
+    {
+      "label": "Broward (FL)",
+      "emitter": "live_write",
+      "evidence": "2026-09-23 BSO Arrest Search write smoke 30 new (JMS_NUMBER); live per 2026-09-25 brief",
+      "source": "docs/COUNTY_REGISTRY.md"
+    },
+    {
+      "label": "Pinellas (FL)",
+      "emitter": "live_write",
+      "evidence": "48h Mongo write evidence 2026-09-23; Who's In Jail roster Mac smoke 149 ok; live per 2026-09-25 brief. Health stays unverified: no documented verified_public decision yet",
+      "source": "docs/recon/PALMETTO_READ_WRITE_HEALTH_2026-09-23.md"
+    },
+    {
+      "label": "Seminole (FL)",
+      "emitter": "live_write",
+      "evidence": "48h Mongo write evidence 2026-09-23; DoSearch A-Z Mac smoke 60 new; live per 2026-09-25 brief. Health stays unverified: no documented verified_public decision yet",
+      "source": "docs/recon/PALMETTO_READ_WRITE_HEALTH_2026-09-23.md"
+    },
+    {
+      "label": "Lee (FL)",
+      "emitter": "live_write",
+      "evidence": "48h Mongo write evidence 2026-09-23; KEY FL county with file-backed /32 cooldown; live per 2026-09-25 brief. Health stays unverified: no documented verified_public decision yet",
+      "source": "docs/recon/LEE_SELF_HEALING_2026-09-23.md"
+    },
+    {
+      "label": "Richland (SC)",
+      "emitter": "hold",
+      "evidence": "JMSOnline maintenance; list view has no source booking key (synthetic RIC_ forbidden)",
+      "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"
+    },
+    {
+      "label": "Sumter (SC)",
+      "emitter": "hold",
+      "evidence": "SmartCOP synthesizes LAST_YYYYMMDD booking keys",
+      "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"
+    },
+    {
+      "label": "Hampton (SC)",
+      "emitter": "hold",
+      "evidence": "HTTP 403 / Cloudflare to ordinary public access",
+      "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"
+    },
+    {
+      "label": "Marlboro (SC)",
+      "emitter": "hold",
+      "evidence": "HTTP 403 / Cloudflare to ordinary public access",
+      "source": "docs/recon/SC_WRITE_SMOKE_2026-09-24.md"
+    },
+    {
+      "label": "TnCIS (TN)",
+      "emitter": "hold",
+      "evidence": "Cloudflare-protected statewide portal; no proven public contract; Obscura/proxy/stealth fallback removed 2026-09-25 (owner decision)",
+      "source": "docs/ops/SCRAPER_SELF_HEALING.md"
+    },
+    {
+      "label": "Lake (FL)",
+      "emitter": "live_write",
+      "evidence": "2026-09-25 Mac write smoke 17 new / 0 updated, status ok (source Booking # = pin, 8 digits); SolveCaptcha Turnstile per owner decision 2026-09-25",
+      "source": "docs/recon/FL_GAP_QUEUE_2026-09-25.md"
+    },
+    {
+      "label": "Leon (FL)",
+      "emitter": "hold",
+      "evidence": "Akamai 403 to datacenter egress; public listing has no source booking number",
+      "source": "docs/recon/FL_GAP_QUEUE_2026-09-25.md"
+    },
+    {
+      "label": "Gadsden (FL)",
+      "emitter": "hold",
+      "evidence": "Official page only iframes bare-IP SmartWEB host that does not respond; no contract verified",
+      "source": "docs/recon/FL_GAP_QUEUE_2026-09-25.md"
+    },
+    {
+      "label": "Davidson (TN)",
+      "emitter": "live_write",
+      "evidence": "2026-09-29 Mac write smoke 121 new, status ok (source DCSO JMS Number, 7 digits); live per 2026-09-29 brief",
+      "source": "docs/recon/TENNESSEE_SCRAPERS_PROMOTION_2026-09-29.md"
+    },
+    {
+      "label": "Knox (TN)",
+      "emitter": "live_write",
+      "evidence": "2026-09-29 Mac write smoke 51 new, status ok (source Knox IDN#, 7 digits); live per 2026-09-29 brief",
+      "source": "docs/recon/TENNESSEE_SCRAPERS_PROMOTION_2026-09-29.md"
+    },
+    {
+      "label": "Sumner (TN)",
+      "emitter": "live_write",
+      "evidence": "2026-09-29 Mac write smoke 668 scraped / 595 new / 73 updated, status ok (source Inmate ID, 6 digits); live per 2026-09-29 brief",
+      "source": "docs/recon/TENNESSEE_SCRAPERS_PROMOTION_2026-09-29.md"
+    },
+    {
+      "label": "Shelby (TN)",
+      "emitter": "live_write",
+      "evidence": "2026-09-29 Mac write smoke 150 new, status ok (source Booking Number, 8 digits); live per 2026-09-29 brief",
+      "source": "docs/recon/TENNESSEE_SCRAPERS_PROMOTION_2026-09-29.md"
+    },
+    {
+      "label": "Hamilton (TN)",
+      "emitter": "live_write",
+      "evidence": "2026-09-30 Mac write smoke 101 new, status ok (source booking GUID R_ID / SPN, active roster bond enrichment); live per 2026-09-30 brief",
+      "source": "docs/recon/TENNESSEE_SCRAPERS_EXPANSION_2026-09-30.md"
+    },
+    {
+      "label": "Sevier (TN)",
+      "emitter": "live_write",
+      "evidence": "2026-09-30 Mac write smoke 100 new, status ok (source numeric Inmate ID, SCSO Next.js / MyOCV roster); live per 2026-09-30 brief",
+      "source": "docs/recon/TENNESSEE_SCRAPERS_EXPANSION_2026-09-30.md"
+    },
+    {
+      "label": "Washington (TN)",
+      "emitter": "live_write",
+      "evidence": "2026-09-30 Mac write smoke 509 new, status ok (source numeric Booking Number 5-10 digits, WCSO 30-day rolling booking sheet PDF); live per 2026-09-30 brief",
+      "source": "docs/recon/TENNESSEE_SCRAPERS_EXPANSION_2026-09-30.md"
+    },
+    {
+      "label": "Hamblen (TN)",
+      "emitter": "live_write",
+      "evidence": "2026-09-30 Mac write smoke 351 new, status ok (source deterministic ISOMS surrogate HAMBLEN-<hash>, 72 Hot / 49 Warm); live per 2026-09-30 brief",
+      "source": "docs/recon/TENNESSEE_SCRAPERS_EXPANSION_2026-09-30.md"
+    }
   ]
 }

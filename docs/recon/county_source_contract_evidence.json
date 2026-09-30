@@ -4995,18 +4995,18 @@
     {
       "state": "TN",
       "county_fips": "063",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "[TN Sheriffs\u2019 Association directory](https://tnsheriffs.com/sheriff-directory/)",
-      "access_posture": "Passive landing-page review only; no login/CAPTCHA bypass; no detail probes",
-      "evidence_note": "Directory anchor is available, but no county-specific broad current-inmate/booking source contract was safely verified; do not infer productivity from registry status."
+      "passive_recommendation": "verified_public",
+      "official_source_url": "https://isoms.co.hamblen.tn.us/portal/Jail",
+      "access_posture": "Plain HTTPS public HCSO ISOMS paginated current inmate roster (?hours=0&pagenum=N); no login/CAPTCHA/WAF",
+      "evidence_note": "2026-09-30 write smoke (): scraped 351 / new 351 in 7.4s, status ok, stored in ShamrockBailDB.arrests (72 Hot / 49 Warm / 190 Disqualified). Source key is deterministic surrogate HAMBLEN-<hash>; full charges and individual bond amounts extracted."
     },
     {
       "state": "TN",
       "county_fips": "065",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "[TN Sheriffs\u2019 Association directory](https://tnsheriffs.com/sheriff-directory/)",
-      "access_posture": "Passive landing-page review only; no login/CAPTCHA bypass; no detail probes",
-      "evidence_note": "Directory anchor is available, but no county-specific broad current-inmate/booking source contract was safely verified; do not infer productivity from registry status."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://www.hcsheriff.gov/Corrections/Booking-app",
+      "access_posture": "Plain HTTPS public HCSO Corrections booking API (/Corrections/api/) + Inmates-app active roster; no login/CAPTCHA/WAF",
+      "evidence_note": "2026-09-30 write smoke (): scraped 101 / new 101 in 8.5s, status ok, stored in ShamrockBailDB.arrests (7 Hot / 17 Warm / 73 Disqualified). Source key is official booking record GUID (R_ID); person ID is SPN; charges from daily feed, bond/court enriched from active roster."
     },
     {
       "state": "TN",
@@ -5363,10 +5363,10 @@
     {
       "state": "TN",
       "county_fips": "155",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "[TN Sheriffs\u2019 Association directory](https://tnsheriffs.com/sheriff-directory/)",
-      "access_posture": "Passive landing-page review only; no login/CAPTCHA bypass; no detail probes",
-      "evidence_note": "Directory anchor is available, but no county-specific broad current-inmate/booking source contract was safely verified; do not infer productivity from registry status."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://www.seviercountysheriff.com/inmateRoster",
+      "access_posture": "Plain HTTPS public SCSO Next.js / MyOCV paginated public roster (?page=N); no login/CAPTCHA/WAF",
+      "evidence_note": "2026-09-30 write smoke (): scraped 100 / new 100 in 8.3s, status ok, stored in ShamrockBailDB.arrests (100 Disqualified due to zsh bond/no charges on public roster). Source key is numeric Inmate ID (6 digits); booked date and full demographics extracted."
     },
     {
       "state": "TN",
@@ -5459,10 +5459,10 @@
     {
       "state": "TN",
       "county_fips": "179",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "[TN Sheriffs\u2019 Association directory](https://tnsheriffs.com/sheriff-directory/)",
-      "access_posture": "Passive landing-page review only; no login/CAPTCHA bypass; no detail probes",
-      "evidence_note": "Directory anchor is available, but no county-specific broad current-inmate/booking source contract was safely verified; do not infer productivity from registry status."
+      "passive_recommendation": "verified_public",
+      "official_source_url": "https://www.wcso.net/arrests/Website_Booking_Sheet.pdf",
+      "access_posture": "Plain HTTPS public WCSO 30-day rolling booking sheet PDF; no login/CAPTCHA/WAF",
+      "evidence_note": "2026-09-30 write smoke (): scraped 509 / new 509 in 1.5s, status ok, stored in ShamrockBailDB.arrests (509 Disqualified due to unlisted bond). Source key is numeric Booking Number (5-10 digits); charges with statutes/descriptions and full demographics extracted."
     },
     {
       "state": "TN",

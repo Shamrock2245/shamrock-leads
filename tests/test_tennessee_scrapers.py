@@ -9,11 +9,16 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
+from bs4 import BeautifulSoup
 
 from scrapers.counties_tn.davidson import DavidsonScraper
+from scrapers.counties_tn.hamblen import HamblenScraper
+from scrapers.counties_tn.hamilton import HamiltonScraper
 from scrapers.counties_tn.knox import KnoxScraper
+from scrapers.counties_tn.sevier import SevierScraper
 from scrapers.counties_tn.shelby import ShelbyScraper
 from scrapers.counties_tn.sumner import SumnerScraper
+from scrapers.counties_tn.washington import WashingtonScraper
 
 
 # ── Davidson County Fixtures ─────────────────────────────────────────────────
@@ -224,3 +229,155 @@ def test_shelby_scraper_contract():
     assert "10/12/2026" in detail["court_date"]
     assert detail["bond"] == "25000.00"
     assert "BURGLARY" in detail["charges"]
+
+
+# ── Hamilton County Fixtures ─────────────────────────────────────────────────
+
+HAMILTON_BOOKING_ITEM = {
+    "R_ID": "11514DF8-D7A0-4C2A-A831-693E278B15AE",
+    "FullName": "CONNER, CHRISTOPHER DEWAYNE",
+    "LastName": "CONNER",
+    "FirstName": "CHRISTOPHER",
+    "MiddleName": "DEWAYNE",
+    "SPN": "00318029",
+    "BookingDate": "09/30/2026 04:31:00",
+    "ArrestDate": "09/30/2026 03:00:00",
+    "Age": "41",
+    "Race": "White",
+    "Sex": "M",
+    "City": "CHATTANOOGA",
+    "ArrestingAgency": "Chattanooga Police Department",
+    "Charges": "CRIMINAL TRESPASS",
+}
+
+
+def test_hamilton_scraper_contract():
+    scraper = HamiltonScraper()
+    assert scraper.SOURCE_CONTRACT_VALIDATED is True
+    assert scraper.county == "Hamilton"
+    assert scraper.state == "TN"
+
+    rec = scraper._booking_to_record(
+        HAMILTON_BOOKING_ITEM,
+        roster_bond="5000.00",
+        detail_info={"dob": "01/15/1985", "facility": "Hamilton County Jail"},
+    )
+    assert rec is not None
+    assert rec.Booking_Number == "11514DF8-D7A0-4C2A-A831-693E278B15AE"
+    assert rec.Person_ID == "00318029"
+    assert rec.Full_Name == "Conner, Christopher Dewayne"
+    assert rec.First_Name == "Christopher"
+    assert rec.Last_Name == "Conner"
+    assert rec.Charges == "CRIMINAL TRESPASS"
+    assert rec.Bond_Amount == "5000.00"
+    assert rec.DOB == "01/15/1985"
+    assert rec.Facility == "Hamilton County Jail"
+
+
+# ── Sevier County Fixtures ───────────────────────────────────────────────────
+
+SEVIER_HTML = (
+    '<script>self.__next_f.push([1, "1:{\\"entries\\":['
+    '{\\"inmateID\\":974489,\\"title\\":\\"Johnson, Micah Dean\\",'
+    '\\"content\\":\\"<div><p>Booked Date: 09/29/2026 08:30 PM</p><p>Age: 28</p><p>Gender: M</p><p>Race: W</p></div>\\",'
+    '\\"custody_status_cd\\":\\"IN\\"}'
+    ']}\\n"])</script>'
+)
+
+
+def test_sevier_scraper_contract():
+    scraper = SevierScraper()
+    assert scraper.SOURCE_CONTRACT_VALIDATED is True
+    assert scraper.county == "Sevier"
+    assert scraper.state == "TN"
+
+    entries = scraper._extract_flight_entries(SEVIER_HTML)
+    assert len(entries) == 1
+    assert entries[0]["inmateID"] == 974489
+
+    rec = scraper._parse_entry(entries[0])
+    assert rec is not None
+    assert rec.Booking_Number == "974489"
+    assert rec.Full_Name == "Johnson, Micah Dean"
+    assert rec.First_Name == "Micah"
+    assert rec.Last_Name == "Johnson"
+    assert rec.Status == "In Custody"
+    assert rec.Sex == "M"
+    assert rec.Race == "W"
+
+
+# ── Washington County Fixtures ───────────────────────────────────────────────
+
+def test_washington_scraper_contract():
+    scraper = WashingtonScraper()
+    assert scraper.SOURCE_CONTRACT_VALIDATED is True
+    assert scraper.county == "Washington"
+    assert scraper.state == "TN"
+
+    entry = {
+        "booking_number": "202606801",
+        "name": "RABY, BOBBY EARL JR",
+        "sex": "Male",
+        "race": "White",
+        "age": "38",
+        "charges": "55-50-504 - Driving While Suspended 1st offense; 39-14-103 - Theft of Property (Up to $1000)",
+        "booking_date": "09/30/26 02:16",
+    }
+    rec = scraper._entry_to_record(entry)
+    assert rec is not None
+    assert rec.Booking_Number == "202606801"
+    assert rec.Full_Name == "Raby, Bobby Earl Jr"
+    assert rec.First_Name == "Bobby"
+    assert rec.Middle_Name == "Earl Jr"
+    assert rec.Last_Name == "Raby"
+    assert rec.Booking_Date == "09/30/2026 02:16"
+    assert "Driving While Suspended" in rec.Charges
+    assert "Theft of Property" in rec.Charges
+    assert rec.Status == "In Custody"
+
+
+# ── Hamblen County Fixtures ──────────────────────────────────────────────────
+
+HAMBLEN_CARD_HTML = """
+<article class="inmate">
+  <section style="width: 500px;">
+    <h1>AILOR, SHASHA W</h1>
+    <p><h2>Age:</h2><data>38</data></p>
+    <p><h2>Race/Sex:</h2><data>W/F</data></p>
+    <p><h2>Intake Date:</h2><data>09/16/2026 06:36 PM</data></p>
+    <p><h2>City:</h2><data>NASHVILLE</data></p>
+    <p><h2>Arrested By Department:</h2><data>HAMBLEN COUNTY SHERIFF'S OFFICE</data></p>
+    <p><h2>Release Date:</h2><data></data></p>
+  </section>
+  <section>
+    <table class="charges">
+      <tr><th>Charge</th><th>Bond</th></tr>
+      <tr><td>FAILURE TO APPEAR</td><td>25000</td></tr>
+      <tr><td>DRIVING ON SUSPENDED</td><td>1500</td></tr>
+    </table>
+  </section>
+</article>
+"""
+
+
+def test_hamblen_scraper_contract():
+    scraper = HamblenScraper()
+    assert scraper.SOURCE_CONTRACT_VALIDATED is True
+    assert scraper.county == "Hamblen"
+    assert scraper.state == "TN"
+
+    soup = BeautifulSoup(HAMBLEN_CARD_HTML, "html.parser")
+    card = soup.select_one("article.inmate")
+    assert card is not None
+
+    rec = scraper._card_to_record(card)
+    assert rec is not None
+    assert rec.Full_Name == "Ailor, Shasha W"
+    assert rec.First_Name == "Shasha"
+    assert rec.Last_Name == "Ailor"
+    assert rec.Bond_Amount == "26500.00"
+    assert "FAILURE TO APPEAR" in rec.Charges
+    assert "DRIVING ON SUSPENDED" in rec.Charges
+    assert rec.Booking_Number.startswith("HAMBLEN-")
+    assert rec.Status == "In Custody"
+
