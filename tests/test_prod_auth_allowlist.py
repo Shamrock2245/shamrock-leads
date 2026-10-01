@@ -28,6 +28,7 @@ def test_open_paths_exact_whitelist():
         "/favicon.png",
         "/apple-touch-icon.png",
         "/shamrock-logo.png",
+        "/robots.txt",
     })
     assert OPEN_PATHS == expected
     assert "/api/stats" not in OPEN_PATHS
