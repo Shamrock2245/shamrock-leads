@@ -81,7 +81,7 @@ firebase-admin>=6.4.0
 juriscraper>=2.8.4
 
 # Phonetic name matching (Metaphone, Soundex, Jaro-Winkler)
-jellyfish>=1.0.0
+jellyfish>=1.2.1
 
 # reCAPTCHA v2 audio solver (free, self-hosted — Hillsborough County)
 pydub>=0.25.1      # MP3→WAV conversion (requires ffmpeg system package)
