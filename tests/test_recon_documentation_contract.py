@@ -90,17 +90,36 @@ def test_retired_louisiana_endpoints_are_reported_as_fail_closed():
 def test_unvalidated_tennessee_batch_is_reported_as_fail_closed():
     matrix = MATRIX.read_text()
     for fips, county in (
-        ("037", "Davidson"),
-        ("065", "Hamilton"),
-        ("093", "Knox"),
+        ("003", "Bedford"),
+        ("009", "Blount"),
+        ("011", "Bradley"),
+        ("031", "Coffee"),
+        ("055", "Giles"),
+        ("103", "Lincoln"),
+        ("119", "Maury"),
         ("125", "Montgomery"),
+        ("147", "Robertson"),
         ("149", "Rutherford"),
-        ("157", "Shelby"),
-        ("165", "Sumner"),
         ("187", "Williamson"),
         ("189", "Wilson"),
     ):
         assert f"| TN | {fips} | {county} County | Palmetto | registered | fail_closed |" in matrix
+
+
+def test_promoted_tennessee_scrapers_are_reported_as_verified_public():
+    matrix = MATRIX.read_text()
+    for fips, county in (
+        ("037", "Davidson"),
+        ("063", "Hamblen"),
+        ("065", "Hamilton"),
+        ("093", "Knox"),
+        ("141", "Putnam"),
+        ("155", "Sevier"),
+        ("157", "Shelby"),
+        ("165", "Sumner"),
+        ("179", "Washington"),
+    ):
+        assert f"| TN | {fips} | {county} County | Palmetto | registered | verified_public |" in matrix
 
 
 def test_unvalidated_north_carolina_batch_is_reported_as_fail_closed():
