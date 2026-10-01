@@ -56,6 +56,9 @@ OPEN_PATHS = frozenset({
     "/favicon.png",
     "/apple-touch-icon.png",
     "/shamrock-logo.png",
+    # Crawl hygiene: public disallow file. Must not 302 to /login.
+    # Exact path only — do not open every *.txt under the dashboard.
+    "/robots.txt",
 })
 
 # Hostnames that serve the public indemnitor PIN portal (not staff CRM)
@@ -341,6 +344,7 @@ def login_redirect_location(path: str, query: str = "") -> str:
 
 _LOGIN_HTML = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
 <title>Shamrock — Agent & Admin Login</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -470,9 +474,14 @@ function switchLoginMode(m) {
 def mount_login_routes(app):
     """Register /login GET and POST routes on the FastAPI app."""
 
-    @app.get("/login", include_in_schema=False)
+    @app.api_route("/login", methods=["GET", "HEAD"], include_in_schema=False)
     async def login_page():
-        return HTMLResponse(_LOGIN_HTML)
+        # HEAD must be registered. FastAPI GET-only routes 404 on HEAD, which
+        # is what crawlers (Bingbot) receive as JSON instead of this page.
+        return HTMLResponse(
+            _LOGIN_HTML,
+            headers={"X-Robots-Tag": "noindex, nofollow"},
+        )
 
     @app.post("/login", include_in_schema=False)
     async def login_submit(request: Request):

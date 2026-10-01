@@ -29,7 +29,7 @@ _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(_project_root, ".env"))
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import Response
@@ -200,6 +200,10 @@ async def cache_static_assets(request: Request, call_next):
     """
     response: Response = await call_next(request)
     path = request.url.path
+    # Staff CRM root and the PIN page are not for crawlers. The header covers
+    # the unauthenticated 302 (no HTML body) as well as the login document.
+    if path in ("/", "/login"):
+        response.headers["X-Robots-Tag"] = "noindex, nofollow"
     if path.endswith((".js", ".css")):
         has_version = bool(request.query_params.get("v"))
         if has_version:
@@ -249,6 +253,17 @@ async def health():
 async def health_live():
     """Liveness check — verifies the FastAPI process is serving requests."""
     return {"status": "ok", "engine": "fastapi"}
+
+
+# Public crawl file. PinAuthMiddleware exempts this exact path; the body
+# discloses nothing. Nginx on leads.* only proxy_passes `/`, so this route
+# is what stops the live 302 to /login?next=%2Frobots.txt.
+_ROBOTS_TXT = "User-agent: *\nDisallow: /\n"
+
+
+@app.api_route("/robots.txt", methods=["GET", "HEAD"], include_in_schema=False)
+async def robots_txt():
+    return PlainTextResponse(_ROBOTS_TXT, media_type="text/plain")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
