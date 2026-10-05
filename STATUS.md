@@ -1,6 +1,6 @@
 # ShamrockLeads — True Status
 
-> **Last verified:** 2026-08-28
+> **Last verified:** 2026-10-05
 > **VPS:** Hetzner **CCX33** (8 dedicated vCPU / 32 GB RAM) as of 2026-08-13 — compose ceilings raised (`docs/runbooks/vps-ccx33-resize.md`). Root disk was **not** grown with the type change (still ~38 GB); grow to 160–240 GB in the Cloud Console.
 > **Repo:** `Shamrock2245/shamrock-leads` · branch `main`  
 > **Product URL:** `https://leads.shamrockbailbonds.biz`  
@@ -16,7 +16,34 @@
 
 ---
 
-## Pending branch `fix/kiosk-and-wix-intake` (2026-09-27, LOCAL — not deployed)
+## Crawl hygiene & search exclusion deployment (2026-10-01)
+
+Commit `d75604b` (PR #80) deployed crawl hygiene controls to prevent search engines from indexing the staff CRM:
+- Public `/robots.txt` is served directly with `User-agent: * Disallow: /` for GET and HEAD requests, exempt from PIN authentication allowlist.
+- Added `<meta name="robots" content="noindex, nofollow">` to `/` and `/login` headers.
+- Tested and verified via `tests/test_crawl_hygiene.py` (5/5 passing).
+
+## Tennessee scrapers expansion & PDF scraper deployment (2026-09-30)
+
+Commit `6ed5b94` and documentation/test commit `8068c03` expanded Tennessee live coverage with 4 additional verified county scrapers:
+- **Washington County (TN 179):** Official 30-day rolling booking sheet PDF parser (`scrapers/counties_tn/washington.py`) extracting official 5–10 digit booking numbers via `pypdf`/`pdfplumber`. Plain HTTPS, 509+ live records.
+- **Hamilton County (TN 065):** HCSO Daily Booking API + Inmates Roster (`scrapers/counties_tn/hamilton.py`) extracting official Record GUID (`R_ID`) and SPN. Plain HTTPS, 101+ live records.
+- **Sevier County (TN 155):** SCSO Next.js / MyOCV public roster (`scrapers/counties_tn/sevier.py`) extracting numeric Inmate ID. Plain HTTPS, 100+ live records.
+- **Hamblen County (TN 063):** ISOMS public portal (`scrapers/counties_tn/hamblen.py`) with deterministic surrogate key. Plain HTTPS, 351+ live records.
+- All four promoted to `verified_public` in `dashboard/extensions.py` (`SCRAPER_SOURCE_STATES`), documented in `docs/recon/TENNESSEE_SCRAPERS_EXPANSION_2026-09-30.md`. Tennessee total: **9 productive verified_public counties** managing 2,590+ stored records. Verified via `tests/test_tennessee_scrapers.py` (8/8 passing).
+
+## Tennessee scrapers promotion deployment (2026-09-29)
+
+Commit `136b43c` promoted four high-volume Tennessee scrapers from `fail_closed` to `verified_public` without synthetic keys, CAPTCHA bypasses, or TLS circumvention:
+- **Davidson County (TN 037):** DCSO RecentBookings + Details with official 7-digit DCSO JMS number.
+- **Knox County (TN 093):** Knox Sheriff 24h arrests + inmate population with official 7-digit Knox IDN#.
+- **Sumner County (TN 165):** MyOCV `inmatesV3` real-time S3 feed with official 6-digit Inmate ID.
+- **Shelby County (TN 157):** Memphis 201 Poplar IML portal with official 8-digit booking number.
+- Documented in `docs/recon/TENNESSEE_SCRAPERS_PROMOTION_2026-09-29.md`.
+
+## Wix intake, surety registry, payment links & kiosk privacy (Merged in PR #72, 2026-09-27)
+
+Commit `762d967` merged PR #72 into `main` with passing CI checks:
 - Website applications → `/api/webhooks/wix-intake` → Mongo `intake_queue` first, then non-blocking, retried fan-out to the Sheets "Intake Ledger" (GAS) and Slack (`intake_fanout_outbox`, cron `intake_fanout_retry`).
 - Surety registry: OSI + Palmetto active; Lexington / Roche / Universal / Bankers greyed out and fail closed; no silent OSI fallback.
 - Pay-by-card on every source (Telegram link vs website link; case invoice link wins) — `dashboard/services/payment_links.py`.
@@ -30,9 +57,9 @@
 - **B3 open:** path is believed to work; gated on Brendan's next live Write Bond / mid-deal BondCase ID. Do not invent a case or hunt a random old BondCase. Until then, the paperwork desk is limited to hydrate-from-booking / prefill-preview.
 - **B5 still open.** Stage 2 production-hardened is **not** claimed. Automations stay `review` for 7 days after D2 (clock starts 2026-08-28).
 
-## Clipboard / docs alignment (2026-08-28)
+## Clipboard / docs alignment (2026-08-28 / 2026-09-30)
 
-Sibling `shamrock-bail-portal-site` staff case lightbox no longer calls retired Wix packet-create. Super CRM remains the only DocuSeal issuer. `SECURITY.md` and public blog copy no longer describe SignNow as the active signing path. `docs/ECOSYSTEM_PROD_CHECKLIST.md` C4 now records the portal factory as **V468 / @468**.
+Sibling `shamrock-bail-portal-site` staff case lightbox no longer calls retired Wix packet-create. Super CRM remains the only DocuSeal issuer. `SECURITY.md` and public blog copy no longer describe SignNow as the active signing path. `docs/ECOSYSTEM_PROD_CHECKLIST.md` C4 records the portal factory as **V508 / @508** (deduplication push 2026-09-30).
 
 This does **not** close B3/B5, C3, or D2 and does not mark Stage 2 production-hardened.
 

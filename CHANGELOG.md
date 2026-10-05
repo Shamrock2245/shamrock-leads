@@ -3,9 +3,44 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
----
+## [Unreleased] — 2026-10-05 (Dependency updates)
 
-## [Unreleased] — 2026-09-27 (Wix intake, kiosk, surety registry, pay links)
+### Changed
+- Bumped `uvicorn` from >=0.30.0 to >=0.54.0 (#79).
+- Bumped `firebase-admin` from >=6.4.0 to >=7.7.0 (#78).
+- Bumped `openpyxl` from >=3.1.0 to >=3.1.5 (#77).
+- Bumped `httpx` from >=0.27.0 to >=0.28.1 (#76).
+- Bumped `jellyfish` from >=1.0.0 to >=1.2.1 (#75).
+
+## [Unreleased] — 2026-10-01 (Crawl hygiene, robots.txt & noindex)
+
+### Added
+- Public `robots.txt` endpoint served directly with `User-agent: * Disallow: /` for GET and HEAD requests, exempt from PIN authentication allowlist.
+- Added `<meta name="robots" content="noindex, nofollow">` to `/` and `/login` headers to prevent search crawlers from indexing staff CRM pages.
+- Regression test suite `tests/test_crawl_hygiene.py` verifying public accessibility of `/robots.txt` and noindex meta tags on CRM surfaces.
+
+## [Unreleased] — 2026-09-30 (Tennessee scrapers wave 2 expansion)
+
+### Added
+- **Washington County (TN 179):** Official 30-day rolling booking sheet PDF parser (`scrapers/counties_tn/washington.py`) extracting official 5–10 digit booking numbers via `pypdf`/`pdfplumber`. Plain HTTPS, 509+ live records.
+- **Hamilton County (TN 065):** HCSO Daily Booking API + Inmates Roster (`scrapers/counties_tn/hamilton.py`) extracting official Record GUID (`R_ID`) and SPN. Plain HTTPS, 101+ live records.
+- **Sevier County (TN 155):** SCSO Next.js / MyOCV public roster (`scrapers/counties_tn/sevier.py`) extracting numeric Inmate ID. Plain HTTPS, 100+ live records.
+- **Hamblen County (TN 063):** ISOMS public portal (`scrapers/counties_tn/hamblen.py`) with deterministic surrogate key. Plain HTTPS, 351+ live records.
+- Promoted all four to `verified_public` in `dashboard/extensions.py` (`SCRAPER_SOURCE_STATES`); added contract evidence to `docs/recon/county_source_contract_evidence.json` and `docs/recon/live_emitter_evidence.json`. Documentation in `docs/recon/TENNESSEE_SCRAPERS_EXPANSION_2026-09-30.md`.
+- Expanded test suite `tests/test_tennessee_scrapers.py` with synthetic fixtures for Hamilton, Sevier, Washington, and Hamblen.
+
+## [Unreleased] — 2026-09-29 (Tennessee scrapers wave 1 promotion)
+
+### Added
+- Promoted four high-volume Tennessee scrapers from `fail_closed` to `verified_public` with direct official county portal integrations without synthetic keys, CAPTCHA bypasses, or TLS circumvention:
+  - **Davidson County (TN 037):** DCSO RecentBookings + Details with official 7-digit DCSO JMS number.
+  - **Knox County (TN 093):** Knox Sheriff 24h arrests + inmate population with official 7-digit Knox IDN#.
+  - **Sumner County (TN 165):** MyOCV `inmatesV3` real-time S3 feed with official 6-digit Inmate ID.
+  - **Shelby County (TN 157):** Memphis 201 Poplar IML portal with official 8-digit booking number.
+- Documentation in `docs/recon/TENNESSEE_SCRAPERS_PROMOTION_2026-09-29.md`.
+- Test suite in `tests/test_tennessee_scrapers.py`.
+
+## [Unreleased] — 2026-09-27 (Wix intake, kiosk, surety registry, pay links — Merged in PR #72)
 
 ### Added
 - `POST /api/webhooks/wix-intake` now accepts the Wix wizard payload via `wix_wizard_adapter` (no county/state/surety defaults), is idempotent on `clientNonce`, auto-matches, and returns `payment_link`.

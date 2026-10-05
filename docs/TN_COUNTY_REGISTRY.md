@@ -1,7 +1,7 @@
 # Tennessee County Scraper Registry
 
-> **Last Updated:** 2026-08-12
-> **Registered scheduler jobs:** 22
+> **Last Updated:** 2026-10-05
+> **Registered scheduler jobs:** 22 (9 `verified_public`, 13 `fail_closed` guards / holds)
 > **Package:** `scrapers/counties_tn/`
 > **Job IDs:** `scraper_tn_<county>` · CLI: `python main.py tn_davidson`
 
@@ -11,28 +11,28 @@
 
 | County / source label | Scraper module | Cadence | Source family | Verification posture |
 |---|---|---:|---|---|
-| Davidson | `davidson.py` | 60 min | Custom Justice Integration | Registered; inspect live telemetry before operational reliance |
-| Shelby | `shelby.py` | 90 min | Custom IML | Registered; prior TLS sensitivity remains a monitoring concern |
-| Knox | `knox.py` | 90 min | Custom sheriff roster | Registered; inspect live telemetry before operational reliance |
+| Davidson | `davidson.py` | 60 min | DCSO RecentBookings + Details | ✅ **`verified_public` (2026-09-29)** — Official DCSO JMS Number (7 digits). Plain HTTPS. Smoke: 121+ records. |
+| Shelby | `shelby.py` | 90 min | Memphis 201 Poplar IML Portal | ✅ **`verified_public` (2026-09-29)** — Official Booking Number (8 digits). Plain HTTPS. Smoke: 150+ records. |
+| Knox | `knox.py` | 90 min | Knox Sheriff 24h Arrests + Inmates | ✅ **`verified_public` (2026-09-29)** — Official Knox IDN# (7 digits). Plain HTTPS. Smoke: 51+ records. |
 | TnCIS | `tncis.py` | 180 min | Statewide TnCIS adapter | `fail_closed` — Cloudflare-protected, no proven public contract; Obscura/proxy/stealth fallback removed 2026-09-25 |
-| Hamilton | `hamilton.py` | 60 min | Custom JSON API | Registered; inspect live telemetry before operational reliance |
-| Rutherford | `rutherford.py` | 90 min | JailTracker | Registered; source-specific telemetry required |
-| Williamson | `williamson.py` | 90 min | JailTracker | Registered; source-specific telemetry required |
-| Montgomery | `montgomery.py` | 60 min | Embedded roster JSON | Registered; source-specific telemetry required |
-| Sumner | `sumner.py` | 90 min | Custom OCV/S3 handling | Registered; source-specific telemetry required |
-| Wilson | `wilson.py` | 90 min | JailTracker | Registered; source-specific telemetry required |
-| Bradley | `bradley.py` | 90 min | Southern Software | **Fail-closed safeguard deployed 2026-08-15.** Configured Citizen Connect agency `BradleyCoTN` resolves to the generic agency directory rather than a Bradley booking roster. The county guard emits no records and does not invoke the shared parser until an official broad roster supplies a source-issued booking/inmate ID and booking time. Deployment run `31860512979` completed successfully; Bradley-specific persistence and alert telemetry remain unproven. |
-| Blount | `blount.py` | 90 min | JailTracker | **Inherited JailTracker fail-closed safeguard deployed.** Revalidated 2026-08-15: official landing page requires image-character human verification. The shared guard makes no CAPTCHA attempt, proxy request, profile request, sensitive-field collection, or synthetic key; it emits no records until a separately verified listing-only contract exists. |
-| Sevier | `sevier.py` | 90 min | Zuercher | **Fail-closed safeguard deployed 2026-08-15.** The configured Zuercher hostname no longer resolves normally, and the currently accessible official ISOMS listing has no verified source-issued booking/inmate identity contract. The county guard emits no records until a compliant broad roster is validated. Deployment run `31861048094` completed successfully; Sevier-specific persistence and alert telemetry remain unproven. |
-| Washington | `washington.py` | 90 min | Southern Software | **Fail-closed safeguard deployed 2026-08-15.** Configured Citizen Connect agency `WashingtonCoTN` resolves to the generic agency directory rather than a Washington booking roster. The county guard emits no records and does not invoke the shared parser until an official broad roster supplies a source-issued booking/inmate ID and booking time. Deployment run `31861360339` completed successfully; Washington-specific persistence and alert telemetry remain unproven. |
-| Maury | `maury.py` | 90 min | JailTracker | **Inherited JailTracker fail-closed safeguard deployed.** Revalidated 2026-08-15: normal public access to the official landing page returned service-unavailable. The shared guard makes no CAPTCHA attempt, proxy request, profile request, sensitive-field collection, or synthetic key and emits no records until a separately verified listing-only contract exists. |
-| Robertson | `robertson.py` | 90 min | Southern Software | **Fail-closed safeguard deployed 2026-08-15.** Configured Citizen Connect agency `RobertsonCoTN` resolves to the generic agency directory rather than a Robertson booking roster. The county guard emits no records and does not invoke the shared parser until an official broad roster supplies a source-issued booking/inmate ID and booking time. Deployment run `31861791340` completed successfully; Robertson-specific persistence and alert telemetry remain unproven. |
-| Hamblen | `hamblen.py` | 90 min | Zuercher | **Fail-closed safeguard deployed 2026-08-15.** The configured Zuercher hostname no longer resolves normally, and the currently accessible official ISOMS listing exposes intake timing but no verified source-issued booking/inmate identity contract. The county guard emits no records until a compliant broad roster is validated. Deployment run `31862118252` completed successfully; Hamblen-specific persistence and alert telemetry remain unproven. |
-| Bedford | `bedford.py` | 120 min | Southern Software | **Fail-closed safeguard deployed 2026-08-15.** Configured Citizen Connect agency `BedfordCoTN` resolves to the generic agency directory rather than a Bedford booking roster. The county guard emits no records and does not invoke the shared parser until an official broad roster supplies a source-issued booking/inmate ID and booking time. Deployment run `31862395762` completed successfully; Bedford-specific persistence and alert telemetry remain unproven. |
-| Coffee | `coffee.py` | 120 min | Southern Software | **Fail-closed safeguard deployed 2026-08-15.** Configured Citizen Connect agency `CoffeeCoTN` resolves to the generic agency directory rather than a Coffee booking roster. The county guard emits no records and does not invoke the shared parser until an official broad roster supplies a source-issued booking/inmate ID and booking time. Deployment run `31862690586` completed successfully; Coffee-specific persistence and alert telemetry remain unproven. |
-| Lincoln | `lincoln.py` | 120 min | Southern Software | **Fail-closed safeguard deployed 2026-08-15.** Configured Citizen Connect agency `LincolnCoTN` resolves to the generic agency directory rather than a Lincoln booking roster. The county guard emits no records and does not invoke the shared parser until an official broad roster supplies a source-issued booking/inmate ID and booking time. Deployment run `31862982383` completed successfully; Lincoln-specific persistence and alert telemetry remain unproven. |
-| Giles | `giles.py` | 120 min | Southern Software | **Fail-closed safeguard deployed 2026-08-15.** Configured Citizen Connect agency `GilesCoTN` resolves to the generic agency directory rather than a Giles booking roster. The county guard emits no records and does not invoke the shared parser until an official broad roster supplies a source-issued booking/inmate ID and booking time. Deployment run `31885691719` completed successfully; Giles-specific persistence and alert telemetry remain unproven. |
-| Putnam | `putnam.py` | 120 min | Public ISOMS roster | **Deployed 2026-08-12 EDT**; public service health green and local source smoke passed; no per-scraper Mongo write or Slack delivery has been claimed |
+| Hamilton | `hamilton.py` | 60 min | HCSO Daily Booking API + Inmates | ✅ **`verified_public` (2026-09-30)** — Official Record GUID (`R_ID`) / SPN. Plain HTTPS. Smoke: 101+ records. |
+| Rutherford | `rutherford.py` | 90 min | JailTracker | `fail_closed` — pending compliant broad-listing source contract |
+| Williamson | `williamson.py` | 90 min | JailTracker | `fail_closed` — pending compliant broad-listing source contract |
+| Montgomery | `montgomery.py` | 60 min | Embedded roster JSON | `fail_closed` — pending compliant broad-listing source contract |
+| Sumner | `sumner.py` | 90 min | MyOCV `inmatesV3` S3 Feed | ✅ **`verified_public` (2026-09-29)** — Official Inmate ID (6 digits). S3 JSON. Smoke: 816+ records. |
+| Wilson | `wilson.py` | 90 min | JailTracker | `fail_closed` — pending compliant broad-listing source contract |
+| Bradley | `bradley.py` | 90 min | Southern Software | **Fail-closed safeguard deployed 2026-08-15.** Configured Citizen Connect agency `BradleyCoTN` resolves to the generic agency directory rather than a Bradley booking roster. The county guard emits no records and does not invoke the shared parser until an official broad roster supplies a source-issued booking/inmate ID and booking time. |
+| Blount | `blount.py` | 90 min | JailTracker | **Inherited JailTracker fail-closed safeguard deployed.** Revalidated 2026-08-15: official landing page requires image-character human verification. Emits no records. |
+| Sevier | `sevier.py` | 90 min | SCSO Next.js / MyOCV Public Roster | ✅ **`verified_public` (2026-09-30)** — Official Numeric Inmate ID (6 digits). Smoke: 100+ records. |
+| Washington | `washington.py` | 90 min | WCSO 30-Day Rolling PDF Sheet | ✅ **`verified_public` (2026-09-30)** — Official Booking # (5–10 digits) parsed via `pypdf`/`pdfplumber`. Smoke: 509+ records. |
+| Maury | `maury.py` | 90 min | JailTracker | **Inherited JailTracker fail-closed safeguard deployed.** Service-unavailable through normal public access; emits no records. |
+| Robertson | `robertson.py` | 90 min | Southern Software | **Fail-closed safeguard deployed 2026-08-15.** Generic agency directory; emits no records. |
+| Hamblen | `hamblen.py` | 90 min | Hamblen Sheriff ISOMS Portal | ✅ **`verified_public` (2026-09-30)** — Deterministic surrogate derived from public name + intake time. Smoke: 351+ records. |
+| Bedford | `bedford.py` | 120 min | Southern Software | **Fail-closed safeguard deployed 2026-08-15.** Generic agency directory; emits no records. |
+| Coffee | `coffee.py` | 120 min | Southern Software | **Fail-closed safeguard deployed 2026-08-15.** Generic agency directory; emits no records. |
+| Lincoln | `lincoln.py` | 120 min | Southern Software | **Fail-closed safeguard deployed 2026-08-15.** Generic agency directory; emits no records. |
+| Giles | `giles.py` | 120 min | Southern Software | **Fail-closed safeguard deployed 2026-08-15.** Generic agency directory; emits no records. |
+| Putnam | `putnam.py` | 120 min | Public ISOMS roster | ✅ **`verified_public` (2026-08-12)** — Deterministic surrogate derived from public name + intake time. Smoke: 540+ records. |
 
 ## Putnam implementation notes
 

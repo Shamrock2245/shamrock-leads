@@ -1,6 +1,6 @@
 # 🤖 ShamrockLeads — Agent Handbook
 
-> **Last Updated:** 2026-08-14
+> **Last Updated:** 2026-10-05
 > **Repo:** `Shamrock2245/shamrock-leads`  
 > **Mission:** Scrape every arrest. Score every lead. Run the bond Auto-CRM.  
 > **Read first:** `BRAND.md`, then **`STATUS.md`** (git vs live truth).  
@@ -19,7 +19,7 @@ ShamrockLeads is a **multi-state arrest intelligence and bond Auto-CRM** platfor
 5. **Stores** everything in MongoDB Atlas (`ShamrockBailDB`) `[IMPLEMENTED]`
 6. **Automates First Appearance Bond Filling** 24/7 background worker (`FirstAppearanceWatcher`) re-checking unset/$0 bonds across target active counties (Lee, Collier, Charlotte, Sarasota, Manatee, Hendry, DeSoto) every 30 mins `[IMPLEMENTED]`
 7. **Supports Per-Charge Bond Breakdown** structured `charge_details` data model + UI modal editing + `POST /api/leads/update-charge-bonds` auto-rescoring `[IMPLEMENTED]`
-8. **Powers Multi-State Query Engine** robust query builder matching all 10 states and **357** county labels with regex case-insensitivity and dynamic county selector `[IMPLEMENTED]`
+8. **Powers Multi-State Query Engine** robust query builder matching all 10 states and **361** registered scopes (including 3 guarded Ohio pilot labels) with regex case-insensitivity and dynamic county selector `[IMPLEMENTED]`
 9. **Matches** indemnitor intake to the correct defendant `[IMPLEMENTED — human gate on ambiguity]`
 10. **Creates bonded cases** with surety selection and POA assignment `[IMPLEMENTED]`
 11. **Generates paperwork** (surety-specific template packets) `[IMPLEMENTED]`
@@ -143,7 +143,7 @@ Move records safely through this lifecycle:
 │  │                      │  │                            │ │
 │  │  APScheduler         │  │  7 dashboard pages         │ │
 │  │    ↓                 │  │  39+ cron queries          │ │
-│  │  358 County Scrapers  │  │  Super CRM + Multi-State  │ │
+│  │  361 Scraper Scopes  │  │  Super CRM + Multi-State  │ │
 │  │  (10 states)          │  │  Ops + Bond Intel         │ │
 │  │  (Self-Healing)      │  │                            │ │
 │  │    ↓                 │  └─────────┬────────────────┘ │

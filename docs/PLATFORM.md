@@ -1,7 +1,7 @@
 # Shamrock’s Platform
 
 > **North star:** Become the **authoritative bail brand expert** in Florida — and the model operators elsewhere in the U.S. copy.  
-> **Last Updated:** 2026-08-28  
+> **Last Updated:** 2026-10-05  
 > **Production cutover:** [`ECOSYSTEM_PROD_CHECKLIST.md`](./ECOSYSTEM_PROD_CHECKLIST.md)  
 > **Repo harmony:** [`ECOSYSTEM.md`](./ECOSYSTEM.md) · **Brand:** [`../BRAND.md`](../BRAND.md)
 

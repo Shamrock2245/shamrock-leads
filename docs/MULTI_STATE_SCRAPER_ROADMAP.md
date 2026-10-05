@@ -2,7 +2,7 @@
 
 > Palmetto Surety licensed states: **FL, SC, NC, TN, TX, CT, LA, MS**  
 > Plus **GA** (adjacent market / existing build) and **AL** (adjacent).  
-> Last updated: 2026-08-19
+> Last updated: 2026-10-05
 > **Registry in code:** 67 FL · 85 GA · 60 NC · 46 SC · 34 TX · 22 TN · 16 AL · 13 LA · 9 MS · 6 CT · 3 OH guarded pilot scopes = **361**. The root `STATUS.md` remains the live-deployment truth and must not be updated until deployment proof exists. Registration is not proof of a successful production scrape. The complete ten-state source-contract inventory remains `docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md` (942 Census county-equivalents plus five registered non-county scopes; 947 rows total); separate Ohio guard requirements are in `docs/recon/OHIO_PILOT_SOURCE_CONTRACTS.md`.
 
 ## Why this order
@@ -11,7 +11,7 @@
 2. **SC** — Palmetto HQ-adjacent; **46/46 registered**. Fourteen county paths are explicitly `fail_closed` pending compliant source contracts; production depth and telemetry remain ongoing. ✅ registry
 3. **GA** — large existing Track A/B/C investment 🔄 (85/159)  
 4. **NC** — **60 registered** / 100 goal; ten county paths are explicitly `fail_closed` pending compliant source contracts, while production telemetry remains required for every enabled source. 🔄
-5. **TN** — **22 registered**: Putnam is `verified_public`; 20 county paths are explicitly `fail_closed` pending compliant source contracts; the non-county TnCIS scope is `fail_closed` (Cloudflare; no proven contract; Obscura fallback removed 2026-09-25). Source-specific production telemetry is still required. 🔄
+5. **TN** — **22 registered**: Putnam is `verified_public`; 20 county paths are explicitly `fail_closed` pending compliant source contracts (with Waves 1 & 2 promoting 8 counties to verified public in code); the non-county TnCIS scope is `fail_closed` (Cloudflare; no proven contract; Obscura fallback removed 2026-09-25). Source-specific production telemetry is still required. 🔄
 6. **TX** — **34 registered** (including Randall’s validated public roster; source-specific production telemetry remains required) 🔄
 7. **LA → MS** — **13 LA** + **9 MS** registered; Tangipahoa and St. Mary are deployed, and Bossier is registered; per-source production telemetry remains required 🔄
 8. **CT** — **6 registered**. The five judicial-docket scopes (Statewide, Bridgeport, Hartford, New Haven, Stamford) are explicitly `fail_closed`: court docket numbers and hearing dates are not arrest booking identifiers or arrest times. CT DOC remains a separate source requiring its own source-contract proof and telemetry. 🔄
@@ -62,12 +62,12 @@
 
 5. Next: DCN pagination beyond first 100 · more OCV app_ids · Rowan/Robeson · remaining rural  
 
-### TN (22 registered — deepen and validate)
-1. **Putnam** — public ISOMS parser added and local source smoke passed on 2026-08-12; production write/alert evidence is still required.
-2. **Davidson** and **Knox** — historically successful custom paths; re-check current source telemetry before operational reliance.
-3. **Shelby** — IML TLS sensitivity; retain curl_cffi-first monitoring.
-4. **Sullivan** — recon-only. The public OCV page is observable, but direct public-feed retrieval was access-denied in the validation environment; do not circumvent controls.
-5. Full scheduler inventory and source posture: `docs/TN_COUNTY_REGISTRY.md`.
+### TN (22 registered — 9 verified_public, 13 fail_closed)
+1. **Wave 1 verified (2026-09-29):** Davidson (DCSO RecentBookings), Knox (IDN# 24h arrests), Sumner (MyOCV inmatesV3), Shelby (201 Poplar IML) promoted to `verified_public` without synthetic keys or TLS circumvention.
+2. **Wave 2 verified (2026-09-30):** Hamilton (HCSO Daily Booking API + Inmates), Sevier (SCSO Next.js / MyOCV), Washington (WCSO 30-Day Rolling PDF Sheet), Hamblen (ISOMS) promoted to `verified_public`.
+3. **Putnam** — public ISOMS parser operational with deterministic surrogate.
+4. **Statewide TnCIS** — fail-closed (Cloudflare; no proven public contract; Obscura fallback removed).
+5. Full scheduler inventory, documentation, and tests: `docs/TN_COUNTY_REGISTRY.md` and `tests/test_tennessee_scrapers.py`.
 
 ### TX (34 registered — validate and harden)
 1. **Randall** — official public OCV/Next.js roster parser added; local two-page browser-rendered source smoke passed. Mongo upsert and alert evidence remain required.

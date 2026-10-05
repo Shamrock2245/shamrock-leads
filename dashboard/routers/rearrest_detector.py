@@ -460,7 +460,7 @@ async def get_rearrest_meter_stats():
             "overage_rate_usd": overage_rate,
             "estimated_monthly_meter_usd": round(estimated_monthly_meter, 2),
             "plan_tier": "starter_50" if total_watched <= included_defendants else "scaled_metered",
-            "coverage_footprint": "10-state Palmetto/OSI footprint (357+ counties)",
+            "coverage_footprint": "10-state Palmetto/OSI footprint (361 registered scopes)",
             "updated_at": now.isoformat(),
         }
     }

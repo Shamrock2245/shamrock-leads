@@ -2,7 +2,7 @@
 
 > **Purpose:** Single source of “are we production?” across the whole platform.
 > **Platform thesis:** [`PLATFORM.md`](./PLATFORM.md)
-> **Last Updated:** 2026-09-22 (D2 confirmed; C3 deferred; B3 gated on Brendan's next live Write Bond / mid-deal BondCase ID)
+> **Last Updated:** 2026-10-05 (D2 confirmed; C3 deferred; B3 gated on Brendan's next live Write Bond / mid-deal BondCase ID)
 > **Owner:** Brendan · Super-admin: `admin@shamrockbailbonds.biz`
 
 Mark items `[x]` only when **live** is proven (not merely code on `main`).
@@ -67,7 +67,7 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 | C1 | Wix Secrets: `GAS_WEB_APP_URL` / `GAS_WEBHOOK_URL` = **central portal/CRM stable factory** `…CvP-Z/exec` | Human | [x] *2026-08-11* — Wix portal, Telegram shared client, and central CRM paths use `…CvP-Z/exec`. Bail School is the approved exception and uses its dedicated stable school factory `…Qa_DMg`. Human confirmation of current Wix Secrets Manager values remains required if the dashboard has been changed manually. |
 | C2 | Public Bail School marketing shows **$649** (not $699) after embed redeploy + Wix publish | Ops | [x] **verified live 2026-08-12** — public page source JSON-LD lists the 120-hour course at `$649`; no retired “The Agent Path” or `$699` string was found in the live page source. |
 | C3 | Secret rotation complete if any keys ever lived in git (`SECRETS_ROTATION_GUIDE.md`) | Ops | [ ] **Owner-deferred** — Not a formal Stage 2 blocker. Brendan will rotate shortly using `docs/ops/C3_SECRET_ROTATION_APPROVAL_PACKAGE.md`. Do not mint a new GAS `/exec` URL. |
-| C4 | GAS health `?action=health` success on production deployment | Ops | [x] *2026-08-25* — sibling `shamrock-bail-portal-site/STATUS.md` reports stable factory **@468** / `V468` on `…CvP-Z` and school `…Qa_DMg`. Prior probe on 2026-08-11 was `V409` @461. Re-probe after any factory push; never mint a new `/exec` URL. |
+| C4 | GAS health `?action=health` success on production deployment | Ops | [x] *2026-09-30* — sibling `shamrock-bail-portal-site/STATUS.md` reports stable factory **@508** / `V508` on `…CvP-Z` and school `…Qa_DMg`. Prior probe on 2026-08-25 was `V468` @468. Re-probe after any factory push; never mint a new `/exec` URL. |
 
 ### D. BlueBubbles / iMessage (preferred consumer rail)
 
