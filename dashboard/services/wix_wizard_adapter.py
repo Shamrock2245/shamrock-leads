@@ -120,11 +120,21 @@ def flatten(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     _put(out, "DefCounty", d.get("county"))
     _put(out, "defendantArrestNumber", d.get("bookingNumber"))
     _put(out, "DefFacility", d.get("facility"))
+    # Identity the bond packet reads off the defendant record. Prefixed keys
+    # only — bare ssn/dl/address collide with the indemnitor on the same flat
+    # payload. The nested `application` copy still redacts SSN to last-4.
+    _put(out, "defendantAlias", d.get("alias"))
+    _put(out, "DefSSN", d.get("ssn"))
+    ident = _d(inner.get("identification"))
+    _put(out, "DefDL", ident.get("dl") or d.get("dl"))
+    _put(out, "DefDLState", ident.get("dlState") or d.get("dlState"))
 
     phys = _d(inner.get("physical"))
     _put(out, "defendantRace", phys.get("race"))
     _put(out, "defendantHeight", phys.get("height"))
     _put(out, "defendantWeight", phys.get("weight"))
+    _put(out, "defendantEyes", phys.get("eyes"))
+    _put(out, "defendantHair", phys.get("hair"))
 
     if role == "defendant":
         emp = _d(inner.get("employment"))
@@ -162,6 +172,7 @@ def flatten(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         _put(out, "IndZip", ind.get("zip"))
         _put(out, "IndEmployer", ind.get("employer"))
         _put(out, "IndEmployerPhone", ind.get("employerPhone"))
+        _put(out, "IndEmployerAddress", ind.get("employerAddress"))
         refs = inner.get("references")
         if isinstance(refs, list):
             for i, r in enumerate(refs[:2], start=1):

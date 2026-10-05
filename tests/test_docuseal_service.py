@@ -474,6 +474,49 @@ def test_build_bond_data_from_dashboard_merges_charges():
     assert vals["numeric_premium"] == "500.00"
 
 
+def test_build_bond_data_keeps_website_identity_when_packet_context_is_blank():
+    """Website wizard fields live on the intake party, not always on the packet copy."""
+    from dashboard.services.docuseal_service import (
+        build_bond_data_from_dashboard,
+        DocuSealService,
+    )
+
+    bond = build_bond_data_from_dashboard(
+        ctx={"defendant": {"name": "Jane Doe"}, "indemnitor": {"name": "Amy Roe"}},
+        intake_doc={
+            "defendant": {
+                "ssn": "123-45-6789",
+                "dl": "D123",
+                "dlState": "FL",
+                "street": "1 Palm St",
+                "city": "Naples",
+                "employerPhone": "2395550000",
+                "eyes": "BRO",
+                "hair": "BRO",
+                "alias": "JD",
+            },
+            "indemnitor": {
+                "employerAddress": "100 Health Blvd",
+                "employerPhone": "2395550202",
+            },
+        },
+    )
+    assert bond["defendant_ssn"] == "123-45-6789"
+    assert bond["defendant_dl"] == "D123"
+    assert bond["defendant_dl_state"] == "FL"
+    assert bond["defendant_address"] == "1 Palm St"
+    assert bond["defendant_city"] == "Naples"
+    assert bond["defendant_alias"] == "JD"
+    assert bond["defendant_eyes"] == "BRO" and bond["defendant_hair"] == "BRO"
+    assert bond["defendant_employer_phone"] == "2395550000"
+    assert bond["indemnitor_employer_address"] == "100 Health Blvd"
+    assert bond["indemnitor_employer_phone"] == "2395550202"
+    vals = DocuSealService.prefill_values_from_bond(bond)
+    assert vals["defendant_ssn"] == "123-45-6789"
+    assert vals["DefAddress"] == "1 Palm St"
+    assert "123-45-6789" not in vals.get("defendant_name", "")
+
+
 @pytest.mark.asyncio
 async def test_default_esign_provider_is_docuseal():
     from dashboard.services.packet_builder_service import resolve_client_esign_provider

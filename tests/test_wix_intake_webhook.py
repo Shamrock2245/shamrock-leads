@@ -37,7 +37,7 @@ INDEMNITOR_WIZARD = {
                    "dob": "1985-05-05", "phone": "2395550101", "email": "amy@example.com",
                    "street": "9 Bay Rd", "city": "Fort Myers", "state": "FL", "zip": "33901",
                    "dl": "R555", "dlState": "FL", "ssn": "987654321", "employer": "Lee Health",
-                   "employerPhone": "2395550202", "employerAddress": ""},
+                   "employerPhone": "2395550202", "employerAddress": "100 Health Blvd"},
     "vehicle": {}, "homeowner": {"isHomeowner": False}, "spouse": {"isMarried": False},
     "references": [{"name": "Ref One", "relation": "Friend", "phone": "2395550303", "address": "x"},
                    {"name": "Ref Two", "relation": "Cousin", "phone": "2395550404", "address": "y"}],
@@ -51,6 +51,8 @@ def test_flatten_defendant_wizard():
     assert flat["DefFirstName"] == "Jane" and flat["defendantCity"] == "Naples"
     assert flat["defendantEmployer"] == "Publix" and flat["defendantVehiclePlate"] == "ABC123"
     assert flat["defendantEmergencyName"] == "Mom Doe"
+    assert flat["DefSSN"] == "123-45-6789" and flat["DefDL"] == "D123" and flat["DefDLState"] == "FL"
+    assert flat["defendantStreetAddress"] == "1 Palm St"
     assert "DefCounty" not in flat and "surety_id" not in flat
     assert flat["intakeId"].startswith("WX-")
     assert meta["application"]["defendant"]["ssn"] == "***-**-6789"
@@ -62,6 +64,7 @@ def test_flatten_indemnitor_wizard_legacy_envelope():
     assert flat["IndFirstName"] == "Amy" and flat["IndAddress"] == "9 Bay Rd"
     assert flat["DefCounty"] == "Collier" and flat["defendantArrestNumber"] == "2026-0001"
     assert flat["Ref2Name"] == "Ref Two"
+    assert flat["IndEmployerAddress"] == "100 Health Blvd"
     assert "intakeId" not in flat  # no nonce → server-generated id
 
 
@@ -107,7 +110,13 @@ def test_defendant_wizard_saved_without_defaults(env):
     assert doc["defendant"]["county"] == ""      # no Lee default
     assert doc["defendant"]["state"] == "FL"     # from the form, not a default
     assert doc["defendant_name"] == "Jane Doe"
+    assert doc["defendant"]["ssn"] == "123-45-6789"
+    assert doc["defendant"]["dl"] == "D123" and doc["defendant"]["dlState"] == "FL"
+    assert doc["defendant"]["address"] == "1 Palm St" and doc["defendant"]["street"] == "1 Palm St"
+    assert doc["indemnitor"]["ssn"] == ""       # defendant SSN must not copy onto the cosigner
     assert doc["application"]["defendant"]["ssn"] == "***-**-6789"
+    from dashboard.services.intake_fanout import ledger_row
+    assert "123-45-6789" not in str(ledger_row(doc))
     engine.match_intake.assert_awaited_once()
     sched.assert_called_once()
     # audit copy is redacted
@@ -124,6 +133,9 @@ def test_indemnitor_wizard_no_state_default(env):
     assert doc["submitted_by_role"] == "indemnitor"
     assert doc["indemnitor"]["state"] == "" and doc["indemnitor"]["dlState"] == ""
     assert doc["defendant"]["county"] == "Collier"
+    assert doc["defendant"]["ssn"] == ""
+    assert doc["indemnitor"]["employerAddress"] == "100 Health Blvd"
+    assert doc["indemnitor"]["ssn"] == "987654321"
     assert doc["indemnitor_name"] == "Amy Roe"
 
 

@@ -154,6 +154,7 @@ def _extract_indemnitor(data: dict, apply_defaults: bool = True) -> dict:
         # Employment
         "employer":         g("IndEmployer", "indemnitorEmployerName", "employer", "Employer"),
         "employerPhone":    g("IndEmployerPhone", "indemnitorEmployerPhone", "employerPhone"),
+        "employerAddress":  g("IndEmployerAddress", "indemnitorEmployerAddress"),
         "employerCity":     g("IndEmployerCity", "indemnitorEmployerCity", "employerCity"),
         "employerState":    g("IndEmployerState", "indemnitorEmployerState", "employerState"),
         "supervisor":       g("IndJobTitle", "indemnitorSupervisorName", "supervisor", "jobTitle"),
@@ -201,11 +202,20 @@ def _extract_defendant(data: dict, apply_defaults: bool = True) -> dict:
     else:
         charge_str = str(charges_raw).strip()
 
+    # SSN and DL stay on prefixed keys. Bare ssn/dl would copy the cosigner
+    # onto the defendant when both people are on one Wix payload. Street is
+    # also stored as `address` because the packet builder and DocuSeal read
+    # `address`. City/state/zip keep their old bare-key fallbacks.
+    street = g("defendantStreetAddress", "street", "street_address", "address")
     return {
         "name":          g("defendantFullName", "DefName", "defName", "defendantName", "defendant_name", "DefendantName", "full_name"),
         "firstName":     g("DefFirstName", "defFirstName", "defendant_first_name", "firstName"),
         "lastName":      g("DefLastName", "defLastName", "defendant_last_name", "lastName"),
+        "alias":         g("defendantAlias", "DefAlias", "defendant_alias"),
         "dob":           g("defendantDOB", "DefDOB", "defDOB", "defendant_dob", "dob", "DOB"),
+        "ssn":           g("DefSSN", "defendantSSN", "defendant_ssn"),
+        "dl":            g("DefDL", "defendantDL", "defendant_dl"),
+        "dlState":       g("DefDLState", "defendantDLState", "defendant_dl_state"),
         "facility":      g("DefFacility", "defFacility", "jailFacility", "facility", "Facility"),
         # Website applicants don't pick a county; never assume Lee for them.
         "county":        g("DefCounty", "defCounty", "county", "County") or ("Lee" if apply_defaults else ""),
@@ -216,7 +226,10 @@ def _extract_defendant(data: dict, apply_defaults: bool = True) -> dict:
         "sex":           g("defendantSex", "sex", "Sex", "gender"),
         "height":        g("defendantHeight", "height", "Height"),
         "weight":        g("defendantWeight", "weight", "Weight"),
-        "street":        g("defendantStreetAddress", "street", "street_address", "address"),
+        "eyes":          g("defendantEyes", "defendant_eyes"),
+        "hair":          g("defendantHair", "defendant_hair"),
+        "street":        street,
+        "address":       street,
         "city":          g("defendantCity", "city"),
         "state":         g("defendantState", "state") or ("FL" if apply_defaults else ""),
         "zip":           g("defendantZip", "zip", "zip_code"),

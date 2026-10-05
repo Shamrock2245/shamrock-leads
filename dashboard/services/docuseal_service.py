@@ -990,6 +990,7 @@ class DocuSealService:
             bond_data.get("defendant_address")
             or bond_data.get("address")
             or def_.get("address")
+            or def_.get("street")
             or ""
         )
 
@@ -1160,7 +1161,7 @@ class DocuSealService:
             "defendant_email": bond_data.get("defendant_email") or def_.get("email") or "",
             "defendant_dob": bond_data.get("defendant_dob") or def_.get("dob") or def_.get("date_of_birth") or "",
             "defendant_dl": bond_data.get("defendant_dl") or def_.get("dl") or def_.get("dl_number") or "",
-            "defendant_dl_state": bond_data.get("defendant_dl_state") or def_.get("dl_state") or "FL",
+            "defendant_dl_state": bond_data.get("defendant_dl_state") or def_.get("dl_state") or def_.get("dlState") or "FL",
             "defendant_ssn": bond_data.get("defendant_ssn") or def_.get("ssn") or "",
             "defendant_city": bond_data.get("defendant_city") or def_.get("city") or "",
             "defendant_state": bond_data.get("defendant_state") or def_.get("state") or "FL",
@@ -1199,7 +1200,7 @@ class DocuSealService:
             "indemnitor_city_state_zip": bond_data.get("indemnitor_city_state_zip") or ind.get("city_state_zip") or "",
             "indemnitor_employer": bond_data.get("indemnitor_employer") or ind.get("employer") or "",
             "indemnitor_employer_phone": bond_data.get("indemnitor_employer_phone") or ind.get("employer_phone") or "",
-            "indemnitor_employer_address": bond_data.get("indemnitor_employer_address") or ind.get("employer_address") or "",
+            "indemnitor_employer_address": bond_data.get("indemnitor_employer_address") or ind.get("employer_address") or ind.get("employerAddress") or "",
             "indemnitor_work_phone": (
                 bond_data.get("indemnitor_work_phone")
                 or ind.get("work_phone")
@@ -1981,6 +1982,11 @@ def build_bond_data_from_dashboard(
     body = body if isinstance(body, dict) else {}
     def_ = ctx.get("defendant") if isinstance(ctx.get("defendant"), dict) else {}
     ind = ctx.get("indemnitor") if isinstance(ctx.get("indemnitor"), dict) else {}
+    # Intake parties keep wizard camelCase (street, dlState, employerAddress).
+    # Packet context uses the snake_case copy. Read both so a blank packet
+    # field does not drop what the website application already stored.
+    def_src = intake_doc.get("defendant") if isinstance(intake_doc.get("defendant"), dict) else {}
+    ind_src = intake_doc.get("indemnitor") if isinstance(intake_doc.get("indemnitor"), dict) else {}
 
     # Structured charges from lead / write-bond / body
     charge_details = (
@@ -2045,23 +2051,23 @@ def build_bond_data_from_dashboard(
         "defendant_dob": def_.get("dob") or "",
         "defendant_phone": def_.get("phone") or "",
         "defendant_email": def_.get("email") or "",
-        "defendant_address": overrides.get("defendant_address") or def_.get("address") or "",
-        "defendant_city": def_.get("city") or "",
-        "defendant_state": def_.get("state") or "FL",
-        "defendant_zip": def_.get("zip") or "",
-        "defendant_dl": def_.get("dl") or "",
-        "defendant_dl_state": def_.get("dl_state") or "FL",
-        "defendant_ssn": def_.get("ssn") or "",
-        "defendant_employer": def_.get("employer") or "",
-        "defendant_employer_phone": def_.get("employer_phone") or def_.get("employerPhone") or "",
-        "defendant_employer_address": def_.get("employer_address") or "",
-        "defendant_height": def_.get("height") or "",
-        "defendant_weight": def_.get("weight") or "",
-        "defendant_hair": def_.get("hair") or def_.get("hair_color") or "",
-        "defendant_eyes": def_.get("eyes") or def_.get("eye_color") or "",
-        "defendant_race": def_.get("race") or "",
-        "defendant_sex": def_.get("sex") or def_.get("gender") or "",
-        "defendant_alias": def_.get("alias") or "",
+        "defendant_address": overrides.get("defendant_address") or def_.get("address") or def_.get("street") or def_src.get("address") or def_src.get("street") or "",
+        "defendant_city": def_.get("city") or def_src.get("city") or "",
+        "defendant_state": def_.get("state") or def_src.get("state") or "FL",
+        "defendant_zip": def_.get("zip") or def_src.get("zip") or "",
+        "defendant_dl": def_.get("dl") or def_src.get("dl") or "",
+        "defendant_dl_state": def_.get("dl_state") or def_.get("dlState") or def_src.get("dlState") or def_src.get("dl_state") or "FL",
+        "defendant_ssn": def_.get("ssn") or def_src.get("ssn") or "",
+        "defendant_employer": def_.get("employer") or def_src.get("employer") or "",
+        "defendant_employer_phone": def_.get("employer_phone") or def_.get("employerPhone") or def_src.get("employerPhone") or "",
+        "defendant_employer_address": def_.get("employer_address") or def_.get("employerAddress") or def_src.get("employerAddress") or "",
+        "defendant_height": def_.get("height") or def_src.get("height") or "",
+        "defendant_weight": def_.get("weight") or def_src.get("weight") or "",
+        "defendant_hair": def_.get("hair") or def_.get("hair_color") or def_src.get("hair") or "",
+        "defendant_eyes": def_.get("eyes") or def_.get("eye_color") or def_src.get("eyes") or "",
+        "defendant_race": def_.get("race") or def_src.get("race") or "",
+        "defendant_sex": def_.get("sex") or def_.get("gender") or def_src.get("sex") or "",
+        "defendant_alias": def_.get("alias") or def_src.get("alias") or "",
         "indemnitor_name": ind.get("name")
             or intake_doc.get("indemnitor_name")
             or "",
@@ -2074,9 +2080,9 @@ def build_bond_data_from_dashboard(
         "indemnitor_city": ind.get("city") or "",
         "indemnitor_state": ind.get("state") or "FL",
         "indemnitor_zip": ind.get("zip") or "",
-        "indemnitor_employer": ind.get("employer") or "",
-        "indemnitor_employer_phone": ind.get("employer_phone") or ind.get("employerPhone") or "",
-        "indemnitor_employer_address": ind.get("employer_address") or "",
+        "indemnitor_employer": ind.get("employer") or ind_src.get("employer") or "",
+        "indemnitor_employer_phone": ind.get("employer_phone") or ind.get("employerPhone") or ind_src.get("employerPhone") or "",
+        "indemnitor_employer_address": ind.get("employer_address") or ind.get("employerAddress") or ind_src.get("employerAddress") or "",
         "indemnitor_vehicle_year": ind.get("vehicle_year") or "",
         "indemnitor_vehicle_make": ind.get("vehicle_make") or "",
         "indemnitor_vehicle_model": ind.get("vehicle_model") or "",

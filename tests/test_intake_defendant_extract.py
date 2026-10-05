@@ -41,3 +41,26 @@ def test_defendant_prefixed_contact_and_vehicle_keys_are_kept():
     assert defendant["employer"] == "Dockside"
     assert defendant["vehiclePlate"] == "ABC123"
     assert defendant["vehicleMake"] == "Ford"
+
+
+def test_defendant_ssn_and_dl_do_not_trade_places_with_indemnitor():
+    payload = {
+        "DefSSN": "123-45-6789",
+        "DefDL": "D123",
+        "DefDLState": "FL",
+        "defendantStreetAddress": "1 Palm St",
+        "IndSSN": "987654321",
+        "IndDL": "R555",
+        "ssn": "987654321",
+        "dl": "R555",
+        "address": "9 Bay Rd",
+    }
+    defendant = _extract_defendant(payload, apply_defaults=False)
+    indemnitor = _extract_indemnitor(payload, apply_defaults=False)
+    assert defendant["ssn"] == "123-45-6789"
+    assert defendant["dl"] == "D123" and defendant["dlState"] == "FL"
+    assert defendant["address"] == "1 Palm St" and defendant["street"] == "1 Palm St"
+    assert indemnitor["ssn"] == "987654321"
+    assert indemnitor["dl"] == "R555"
+    assert indemnitor["address"] == "9 Bay Rd"
+    assert defendant["ssn"] != indemnitor["ssn"]
