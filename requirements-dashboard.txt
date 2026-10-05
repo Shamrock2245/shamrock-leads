@@ -53,7 +53,7 @@ openpyxl>=3.1.0
 firebase-admin>=6.4.0
 
 # Name matching
-jellyfish>=1.0.0
+jellyfish>=1.2.1
 
 # Adobe PDF Services (paperwork)
 pdfservices-sdk>=4.0.0
