@@ -11,7 +11,7 @@
 #   ddddocr + tesseract (core) → PaddleOCR → EasyOCR → vote
 #   paid: SOLVECAPTCHA_KEY → OPENAI_API_KEY
 
-paddlepaddle>=2.6.0
+paddlepaddle>=3.3.1
 paddleocr>=2.7.0
 easyocr>=1.7.0
 # Surya (document layout OCR) — not used for JailTracker captchas:
