@@ -7,7 +7,7 @@ python-dotenv>=1.0.0
 APScheduler>=3.10.4
 
 # Google Sheets (optional legacy writer) + Gmail/Calendar API
-gspread>=6.0.0
+gspread>=6.2.1
 google-auth>=2.25.0
 google-auth-oauthlib>=0.8.0
 google-api-python-client>=2.200.0

@@ -9,7 +9,7 @@ pymongo[srv]>=4.6.0
 python-dotenv>=1.0.0
 
 # Google APIs (Gmail / Calendar / Drive / optional Sheets)
-gspread>=6.0.0
+gspread>=6.2.1
 google-auth>=2.25.0
 google-auth-oauthlib>=0.8.0
 google-api-python-client>=2.200.0
