@@ -52,7 +52,22 @@ When logged into the Super CRM dashboard as staff, paste the following snippet d
     ]
   });
 
-  // Step 3: Finalize DocuSeal paperwork packet with structured charge details
+  // Step 3: Ensure validated Match + BondCase chain (Gap B closed: no direct Mongo scripts needed)
+  const chain = await j('/api/staff/chain/ensure-match-bondcase', {
+    booking_number: '1033474',
+    surety_id: 'osi',
+    case_number: '26CF017605',
+    poa_numbers: [
+      'OSI-P6-116-26-0015',
+      'OSI-P6-116-26-0016',
+      'OSI-P3-116-26-0018',
+      'OSI-P3-116-26-0019'
+    ],
+    bond_amount: 12000,
+    premium: 1200,
+  });
+
+  // Step 4: Finalize DocuSeal paperwork packet with structured charge details
   const fin = await j('/api/paperwork/packet/finalize', {
     booking_number: '1033474',
     county: 'Lee',
@@ -71,7 +86,7 @@ When logged into the Super CRM dashboard as staff, paste the following snippet d
     ]
   });
 
-  // Step 4: Extract DocuSeal signing link and build iPad in-person signing URL
+  // Step 5: Extract DocuSeal signing link and build iPad in-person signing URL
   const d = fin.data || {};
   const ds = d.send_results?.docuseal || {};
   const link = d.signing_link || ds.signing_link || ds.sign_links?.[0] || ds.submitters?.[0]?.sign_url || '';
@@ -80,6 +95,7 @@ When logged into the Super CRM dashboard as staff, paste the following snippet d
   const out = {
     add,
     assign,
+    chain,
     finalizeStatus: fin.status,
     packet_id: d.packet_id,
     error: d.error || d.message,

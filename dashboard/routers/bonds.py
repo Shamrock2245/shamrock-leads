@@ -1451,21 +1451,29 @@ async def api_appearance_bond_pdf(request: Request):
         if "UNSIGNED" not in filename.upper():
             filename = filename.replace(".pdf", "_UNSIGNED_PRINT.pdf")
 
+        def _safe_latin1_header(val: Any) -> str:
+            """Sanitize string for HTTP response headers (must be latin-1 encodable, no em-dashes)."""
+            if val is None:
+                return ""
+            s = str(val).replace("\u2014", "-").replace("\u2013", "-")
+            return s.encode("latin-1", errors="replace").decode("latin-1")
+
         proc = appearance_bond_procedure_meta()
+        safe_fn = _safe_latin1_header(filename).replace('"', '')
         headers = {
-            "Content-Disposition": f"attachment; filename={filename}",
+            "Content-Disposition": f'attachment; filename="{safe_fn}"',
             "X-Appearance-Bond-Print-Only": "1",
             "X-Appearance-Bond-Signature": "wet_ink_live",
             "X-Appearance-Bond-Count": str(len(pdf_list)),
-            "X-Appearance-Bond-Charge": (data.get("charge_details") or [{}])[0].get("charge", "")[:120],
-            "X-Appearance-Bond-Case": str(
+            "X-Appearance-Bond-Charge": _safe_latin1_header((data.get("charge_details") or [{}])[0].get("charge", "")[:120]),
+            "X-Appearance-Bond-Case": _safe_latin1_header(str(
                 (data.get("charge_details") or [{}])[0].get("case_number")
                 or data.get("case_number")
                 or ""
-            )[:80],
+            )[:80]),
         }
         if stored:
-            headers["X-Appearance-Bond-Stored"] = stored[0].get("file_path", "")[:200]
+            headers["X-Appearance-Bond-Stored"] = _safe_latin1_header(stored[0].get("file_path", "")[:200])
 
         return Response(
             pdf_bytes,

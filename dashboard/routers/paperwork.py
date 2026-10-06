@@ -1136,6 +1136,45 @@ async def packet_builder_finalize(request: Request):
         if user.get("license_number"):
             ctx["license_number"] = user.get("license_number")
 
+        # If match/bond_case chain is not yet validated in CRM, attempt inline chain ensure
+        booking_for_chain = str(ctx.get("booking_number") or body.get("booking_number") or "").strip()
+        if booking_for_chain and (ctx.get("match_status") != "validated" or not ctx.get("bond_case_id") or not ctx.get("match_id")):
+            from dashboard.services.staff_chain_service import ensure_match_bondcase
+            try:
+                chain_res = await ensure_match_bondcase(
+                    booking_number=booking_for_chain,
+                    surety_id=body.get("surety_id") or ctx.get("surety_id"),
+                    case_number=body.get("case_number") or ctx.get("case_number"),
+                    poa_numbers=body.get("poa_numbers") or ([body.get("poa_number")] if body.get("poa_number") else None),
+                    poa_number=body.get("poa_number") or ctx.get("poa_number"),
+                    indemnitor_name=body.get("indemnitor_name"),
+                    indemnitor_email=body.get("indemnitor_email") or body.get("signer_email"),
+                    indemnitor_phone=body.get("indemnitor_phone"),
+                    bond_amount=body.get("bond_amount"),
+                    premium=body.get("premium"),
+                    packet_id=body.get("packet_id"),
+                    charge_details=body.get("charge_details"),
+                    actor_email=str(ctx.get("agent_name") or user.get("agent_name") or "staff_direct"),
+                    source="inline_packet_finalize_ensure",
+                )
+                if chain_res.get("success"):
+                    # Reload case context with newly ensured IDs
+                    ctx = await resolve_case_context(
+                        intake_id=body.get("intake_id"),
+                        match_id=chain_res.get("match_id"),
+                        defendant_id=chain_res.get("defendant_id"),
+                        booking_number=booking_for_chain,
+                        county=body.get("county") or ctx.get("county"),
+                        bond_case_id=chain_res.get("bond_case_id"),
+                        packet_id=body.get("packet_id"),
+                    )
+                    if user.get("agent_name"):
+                        ctx["agent_name"] = user.get("agent_name")
+                    if user.get("license_number"):
+                        ctx["license_number"] = user.get("license_number")
+            except Exception as chain_err:
+                logger.warning("[packet_finalize] inline chain ensure skipped: %s", chain_err)
+
         from dashboard.routers.helpers import reject_unless_write_book
         blocked = await reject_unless_write_book(
             county=ctx.get("county") or body.get("county") or "",

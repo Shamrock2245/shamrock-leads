@@ -1,11 +1,12 @@
 /**
  * Super CRM — Example: Programmatic Defendant Onboarding & Bond Writing
  * 
- * Demonstrates the 4-step sequence to get a new defendant into the Super CRM:
+ * Demonstrates the authoritative 5-step sequence to get a new defendant into the Super CRM:
  * 1. Add Powers of Attorney (POAs) to inventory (/api/poa/add)
  * 2. Bulk-assign POAs per charge/case (/api/poa/bulk-assign)
- * 3. Finalize DocuSeal paperwork packet with structured charge breakdown (/api/paperwork/packet/finalize)
- * 4. Extract DocuSeal signing link and construct the iPad in-person signing URL
+ * 3. Ensure validated Match + BondCase chain (/api/staff/chain/ensure-match-bondcase)
+ * 4. Finalize DocuSeal paperwork packet with structured charge breakdown (/api/paperwork/packet/finalize)
+ * 5. Extract DocuSeal signing link and construct the iPad in-person signing URL
  * 
  * Usage: Paste directly into the browser DevTools Console while logged into
  * https://leads.shamrockbailbonds.biz (or http://localhost:5050 in dev).
@@ -44,7 +45,22 @@
     ]
   });
 
-  // Step 3: Finalize DocuSeal paperwork packet with structured charge details
+  // Step 3: Ensure validated Match + BondCase chain (Gap B closed: no direct Mongo scripts needed)
+  const chain = await j('/api/staff/chain/ensure-match-bondcase', {
+    booking_number: '1033474',
+    surety_id: 'osi',
+    case_number: '26CF017605',
+    poa_numbers: [
+      'OSI-P6-116-26-0015',
+      'OSI-P6-116-26-0016',
+      'OSI-P3-116-26-0018',
+      'OSI-P3-116-26-0019'
+    ],
+    bond_amount: 12000,
+    premium: 1200,
+  });
+
+  // Step 4: Finalize DocuSeal paperwork packet with structured charge details
   const fin = await j('/api/paperwork/packet/finalize', {
     booking_number: '1033474',
     county: 'Lee',
@@ -63,7 +79,7 @@
     ]
   });
 
-  // Step 4: Extract DocuSeal signing link and build iPad in-person signing URL
+  // Step 5: Extract DocuSeal signing link and build iPad in-person signing URL
   const d = fin.data || {};
   const ds = d.send_results?.docuseal || {};
   const link = d.signing_link || ds.signing_link || ds.sign_links?.[0] || ds.submitters?.[0]?.sign_url || '';
@@ -72,6 +88,7 @@
   const out = {
     add,
     assign,
+    chain,
     finalizeStatus: fin.status,
     packet_id: d.packet_id,
     error: d.error || d.message,

@@ -359,6 +359,8 @@ Escalate immediately if:
 | Variable | Required | Purpose |
 |----------|----------|---------|
 | `MONGODB_URI` | ✅ | MongoDB Atlas connection string |
+| `SHAMROCK_MONGO_WRITE_URI` | Cloud Agents | Least-privilege write connection string for staff-directed backfill/repair only (never for scrapers; never log URI) |
+| `SHAMROCK_MONGO_RO_URI` | Audit Agents | Read-only connection string for read audits |
 | `MONGODB_DB_NAME` | ✅ | Database name (default: `ShamrockBailDB`) |
 | `DASHBOARD_PIN` | ✅ | Dashboard authentication PIN |
 | `SECRET_KEY` | ✅ | Session encryption key (prevents invalidation on restart) |

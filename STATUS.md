@@ -16,6 +16,17 @@
 
 ---
 
+## Paperwork Desk Mongo write & Write Bond chain gaps closed (2026-10-06)
+
+Resolved the two production blockers identified during live bond onboarding (Fischer & Schmidt backfills):
+- **Gap A Closed (Agent Mongo Write Secret):** Documented `SHAMROCK_MONGO_WRITE_URI` for least-privilege cloud agent operations (Paperwork Desk). Agents use WRITE URI only for staff-directed repair/backfill (never for scrapers; never logged). Write permissions on `ShamrockBailDB` smoke-tested and verified with probe document insert/delete.
+- **Gap B Closed (Staff-Gated Chain Ensure API):** Deployed `POST /api/staff/chain/ensure-match-bondcase` (`dashboard/routers/staff_chain.py` + `dashboard/services/staff_chain_service.py`). Bridges `ArrestLead` → `Defendant` → `Indemnitor` → `validated Match` → `BondCase` → `Packet` programmatically and idempotently from existing CRM facts (fail-closed on unverified facts). Added automatic inline chain ensure in `packet_builder_finalize` (`dashboard/routers/paperwork.py`).
+- **Paperwork Polish & Bugfixes:**
+  - Resolved `GET /api/appearance-bond-pdf` latin-1 HTTP header encoding crash when charge descriptions contain em dashes (`—`) via `_safe_latin1_header` sanitization.
+  - Archived and voided 7 stale August 2026 unbound Shannon test packets (`scripts/archive_stale_shannon_packets.py`), clearing all legacy `pending_staff_match: true` residue.
+  - Updated programmatic onboarding reference script (`scripts/examples/write_bond_super_crm.js`), runbook (`docs/runbooks/SUPER_CRM_DEFENDANT_ONBOARDING_EXAMPLE.md`), and created [`docs/runbooks/STAFF_CHAIN_ENSURE_RUNBOOK.md`](docs/runbooks/STAFF_CHAIN_ENSURE_RUNBOOK.md).
+  - Verified with comprehensive test suite (`tests/test_staff_chain_ensure.py`, 8/8 passing).
+
 ## Crawl hygiene & search exclusion deployment (2026-10-01)
 
 Commit `d75604b` (PR #80) deployed crawl hygiene controls to prevent search engines from indexing the staff CRM:
