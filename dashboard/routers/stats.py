@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 
 from dashboard.deps import get_collection
 from dashboard.extensions import (
+    ACTIVE_STATE_CODES,
     REGISTERED_COUNTIES,
     county_label,
     index_scraper_status_docs,
@@ -19,8 +20,18 @@ from dashboard.extensions import (
     resolve_scraper_status,
     scraper_source_state,
 )
-from dashboard.routers.helpers import serialize_doc, async_csv_streamer
+from dashboard.routers.helpers import serialize_doc, async_csv_streamer, attach_write_eligible
 from dashboard.models.leads import LeadsQueryModel
+from dashboard.services.intel_population import (
+    SAFE_BOND,
+    arrest_state_breakdown,
+    canonical_state,
+    county_clause,
+    fetch_population,
+    resolve_preset,
+    state_clause,
+    time_clause,
+)
 
 logger = logging.getLogger("shamrock.stats")
 
@@ -320,77 +331,52 @@ async def api_mongo_stats():
 async def api_command_center():
     arrests = get_collection("arrests")
     try:
-        bond_ready = []
-        async for doc in arrests.find(
-            {"status": {"$regex": "custody|confined|held", "$options": "i"},
-             "bond_amount": {"$gte": 1000}, "lead_score": {"$gte": 40}},
-            {"_id": 0, "full_name": 1, "county": 1, "state": 1, "charges": 1,
-             "bond_amount": 1, "lead_score": 1, "lead_status": 1,
-             "status": 1, "booking_number": 1, "dob": 1, "arrest_date": 1,
-             "booking_date": 1, "bond_type": 1, "detail_url": 1},
-        ).sort("bond_amount", -1).limit(25):
-            bond_ready.append(serialize_doc(doc))
-        pipeline_total = sum(d.get("bond_amount", 0) for d in bond_ready)
-        premium_est = sum(max(100, d.get("bond_amount", 0) * 0.1) for d in bond_ready)
+        ready = await fetch_population(
+            arrests, resolve_preset("bond_ready"), page=1, limit=25,
+        )
+        bond_ready = [attach_write_eligible(row) for row in ready["defendants"]]
+        pipeline_total = ready["pipeline_total"]
+        premium_est = ready["premium_estimate"]
         recent = []
         async for doc in arrests.find(
             {}, {"_id": 0, "full_name": 1, "county": 1, "state": 1, "bond_amount": 1,
                  "lead_score": 1, "lead_status": 1, "scraped_at": 1,
-                 "status": 1, "charges": 1},
+                 "status": 1, "charges": 1, "booking_number": 1},
         ).sort("scraped_at", -1).limit(10):
             recent.append(serialize_doc(doc))
-        custody_by_county = []
+        custody_merged: dict = {}
         async for d in arrests.aggregate([
-            {"$match": {"status": {"$regex": "custody|confined|held", "$options": "i"}}},
+            {"$addFields": {
+                "_safe_bond": SAFE_BOND,
+                "_custody_str": {"$ifNull": ["$status", {"$ifNull": ["$custody_status", ""]}]},
+            }},
+            {"$match": {"_custody_str": {"$regex": "custody|confined|held|booked", "$options": "i"}}},
             {"$group": {"_id": {"county": "$county", "state": "$state"},
                         "count": {"$sum": 1},
-                        "total_bond": {"$sum": "$bond_amount"}}},
-            {"$sort": {"total_bond": -1}},
+                        "total_bond": {"$sum": "$_safe_bond"}}},
         ]):
             grp = d.get("_id") or {}
-            if grp.get("county"):
-                custody_by_county.append({
-                    "county": grp["county"],
-                    "state": (grp.get("state") or "FL").upper(),
-                    "count": d["count"],
-                    "total_bond": d.get("total_bond", 0),
-                })
-        # State-level breakdown for Command Center KPI row
-        now = datetime.now(timezone.utc)
-        h24 = now - timedelta(hours=24)
-        state_breakdown: dict = {}
-        for st in ("FL", "GA", "SC", "NC"):
-            state_breakdown[st] = {"total": 0, "last_24h": 0, "hot_leads": 0, "pipeline": 0}
-        async for d in arrests.aggregate([
-            {"$group": {"_id": {"$toUpper": {"$ifNull": ["$state", "FL"]}},
-                        "total": {"$sum": 1},
-                        "hot": {"$sum": {"$cond": [{"$gte": ["$lead_score", 70]}, 1, 0]}},
-                        "pipeline": {"$sum": {"$cond": [
-                            {"$and": [
-                                {"$gte": ["$bond_amount", 1000]},
-                                {"$gte": ["$lead_score", 40]},
-                            ]}, "$bond_amount", 0]}}}},
-        ]):
-            st = d["_id"] or "FL"
-            if st in state_breakdown:
-                state_breakdown[st].update({"total": d["total"], "hot_leads": d["hot"],
-                                            "pipeline": round(d["pipeline"], 2)})
-        async for d in arrests.aggregate([
-            {"$match": {"$or": [
-                {"scraped_at": {"$gte": h24}},
-                {"scraped_at": {"$gte": h24.isoformat()}},
-            ]}},
-            {"$group": {"_id": {"$toUpper": {"$ifNull": ["$state", "FL"]}},
-                        "count": {"$sum": 1}}},
-        ]):
-            st = d["_id"] or "FL"
-            if st in state_breakdown:
-                state_breakdown[st]["last_24h"] = d["count"]
+            county_name = grp.get("county")
+            if not county_name:
+                continue
+            code = canonical_state(grp.get("state")) or "FL"
+            key = (str(county_name).casefold(), code)
+            bucket = custody_merged.setdefault(key, {
+                "county": county_name, "state": code, "count": 0, "total_bond": 0.0,
+            })
+            bucket["count"] += int(d.get("count") or 0)
+            bucket["total_bond"] = round(bucket["total_bond"] + float(d.get("total_bond") or 0), 2)
+        custody_by_county = sorted(
+            custody_merged.values(), key=lambda row: row["total_bond"], reverse=True,
+        )
+        state_breakdown = await arrest_state_breakdown(arrests)
         return {
             "bond_ready": bond_ready, "pipeline_total": pipeline_total,
-            "premium_estimate": premium_est, "bond_ready_count": len(bond_ready),
+            "premium_estimate": premium_est, "bond_ready_count": ready["total"],
+            "bond_ready_page": ready["page"], "bond_ready_pages": ready["pages"],
             "recent_activity": recent, "custody_by_county": custody_by_county,
             "state_breakdown": state_breakdown,
+            "state_order": list(ACTIVE_STATE_CODES),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
     except Exception as exc:
@@ -1068,26 +1054,16 @@ async def api_bond_intelligence(
     arrests = get_collection("arrests")
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=days)
-    match_stage: dict = {"$or": [
-        {"scraped_at": {"$gte": cutoff.isoformat()}},
-        {"scraped_at": {"$gte": cutoff}},
-        {"created_at": {"$gte": cutoff.isoformat()}},
-    ]}
+    match_clauses = [time_clause(cutoff)]
     if state:
-        match_stage["state"] = state.upper()
+        match_clauses.append(state_clause(state))
     if county:
-        match_stage["county"] = {"$regex": county, "$options": "i"}
+        match_clauses.append(county_clause(county))
+    match_stage: dict = match_clauses[0] if len(match_clauses) == 1 else {"$and": match_clauses}
 
     safe_bond_fields = {
         "$addFields": {
-            "_safe_bond": {
-                "$convert": {
-                    "input": "$bond_amount",
-                    "to": "double",
-                    "onError": 0.0,
-                    "onNull": 0.0,
-                }
-            },
+            "_safe_bond": SAFE_BOND,
             "_custody_str": {
                 "$ifNull": ["$status", {"$ifNull": ["$custody_status", ""]}]
             },

@@ -13,10 +13,12 @@ const SLMultiState = (() => {
   let _feedTimer = null;
   let _registryChart = null;
   let _platformChart = null;
+  let _arrestsChart = null;
   let _initialized = false;
+  let _stateOrder = [];
 
-  // STATE_ORDER controls card layout order. Live states first, scaffolded states at end.
-  const STATE_ORDER = ['FL', 'GA', 'SC', 'NC', 'TN', 'TX', 'LA', 'CT', 'AL', 'MS'];
+  // Card order matches ACTIVE_STATE_CODES. Ohio is the guarded pilot.
+  const STATE_ORDER = ['FL', 'GA', 'SC', 'NC', 'TN', 'TX', 'LA', 'AL', 'CT', 'MS', 'OH'];
   const STATE_NAMES = {
     FL: 'Florida',
     GA: 'Georgia',
@@ -28,11 +30,12 @@ const SLMultiState = (() => {
     CT: 'Connecticut',
     AL: 'Alabama',
     MS: 'Mississippi',
+    OH: 'Ohio',
   };
   const STATE_EMOJI = {
     FL: '🌴', GA: '🍑', SC: '🌙', NC: '🦅',
     TN: '🎸', TX: '⭐',  LA: '🎷', CT: '⚓',
-    AL: '🌻', MS: '🎶',
+    AL: '🌻', MS: '🎶', OH: '📍',
   };
   const STATE_COLORS = {
     FL: '#00d4aa',
@@ -45,6 +48,7 @@ const SLMultiState = (() => {
     CT: '#06b6d4',
     AL: '#f97316',
     MS: '#84cc16',
+    OH: '#94a3b8',
   };
   // States that are scaffolded (no live data yet) — shown with a dimmed card style.
   // 2026-07-22: All 10 states now have live scrapers registered. None scaffolded.
@@ -101,6 +105,22 @@ const SLMultiState = (() => {
     return Number(n).toLocaleString();
   }
 
+  function _fmtCount(n) {
+    const v = Number(n);
+    if (!Number.isFinite(v)) return '0';
+    return v.toLocaleString();
+  }
+
+  function _esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+  }
+
+  function _cardOrder() {
+    return _stateOrder.length ? _stateOrder : STATE_ORDER;
+  }
+
   // ─── INIT ─────────────────────────────────────────────────────────────────
   async function init() {
     if (_initialized) { await _refresh(); return; }
@@ -133,7 +153,7 @@ const SLMultiState = (() => {
           <span class="ms-title-icon">🌎</span>
           <div>
             <h2 class="ms-title-text">Multi-State Operations</h2>
-            <p class="ms-title-sub" id="msTitleSub">Live scraper network across FL · GA · SC · NC · TN · TX · LA · CT · AL · MS</p>
+            <p class="ms-title-sub" id="msTitleSub">Live scraper network across FL · GA · SC · NC · TN · TX · LA · AL · CT · MS · OH</p>
           </div>
         </div>
         <div class="ms-header-actions">
@@ -200,6 +220,7 @@ const SLMultiState = (() => {
               <option value="CT">⚓ Connecticut</option>
               <option value="AL">🌻 Alabama</option>
               <option value="MS">🎶 Mississippi</option>
+              <option value="OH">📍 Ohio</option>
             </select>
             <select class="ms-select" onchange="SLMultiState.setStatusFilter(this.value)">
               <option value="">All Status</option>
@@ -238,6 +259,9 @@ const SLMultiState = (() => {
       const res = await fetch('/api/ops/state-summary', { credentials: 'same-origin', cache: 'no-store' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      if (Array.isArray(data.state_order) && data.state_order.length) {
+        _stateOrder = data.state_order.slice();
+      }
       _renderStateCards(data.states || {});
       _renderStateChart(data.states || {});
       _renderArrestsChart(data.states || {});
@@ -252,7 +276,7 @@ const SLMultiState = (() => {
     if (!el) return;
     const fleet = data.fleet || {};
     const states = data.states || {};
-    const parts = STATE_ORDER
+    const parts = _cardOrder()
       .filter(s => (states[s]?.total_counties || 0) > 0)
       .map(s => `${s} ${states[s].total_counties}`);
     const total = fleet.total_registered
@@ -271,7 +295,7 @@ const SLMultiState = (() => {
     const container = document.getElementById('msStateCards');
     if (!container) return;
 
-    container.innerHTML = STATE_ORDER.map(s => {
+    container.innerHTML = _cardOrder().map(s => {
       const d = states[s] || {};
       const color = STATE_COLORS[s] || '#64748b';
       const isScaffolded = SCAFFOLDED_STATES.has(s);
@@ -287,7 +311,7 @@ const SLMultiState = (() => {
           <div class="ms-state-card-header">
             <span class="ms-state-emoji">${STATE_EMOJI[s] || '📍'}</span>
             <div>
-              <div class="ms-state-name">${STATE_NAMES[s] || s}</div>
+              <div class="ms-state-name">${STATE_NAMES[s] || s}${s === 'OH' ? ' <span class="ms-muted">guarded</span>' : ''}</div>
               <div class="ms-state-abbr">${s}</div>
             </div>
             <div class="ms-state-health-ring">
@@ -313,22 +337,22 @@ const SLMultiState = (() => {
               <div class="ms-metric-val" style="color:#ef4444">${_fmtNum(d.error_scrapers) || '0'}</div>
               <div class="ms-metric-lbl">Errors</div>
             </div>
-            <div class="ms-metric">
-              <div class="ms-metric-val">${_fmtNum(d.arrests_24h) || '0'}</div>
+            <button type="button" class="ms-metric" title="Open these defendants and start paperwork" onclick="event.stopPropagation(); SLMultiState.openPeople('${s}','24h')">
+              <div class="ms-metric-val">${_fmtCount(d.arrests_24h)}</div>
               <div class="ms-metric-lbl">24h Arrests</div>
-            </div>
-            <div class="ms-metric">
-              <div class="ms-metric-val">${_fmtNum(d.arrests_7d) || '0'}</div>
+            </button>
+            <button type="button" class="ms-metric" title="Open these defendants and start paperwork" onclick="event.stopPropagation(); SLMultiState.openPeople('${s}','7d')">
+              <div class="ms-metric-val">${_fmtCount(d.arrests_7d)}</div>
               <div class="ms-metric-lbl">7d Arrests</div>
-            </div>
-            <div class="ms-metric">
-              <div class="ms-metric-val">${_fmtNum(d.total_arrests) || '0'}</div>
+            </button>
+            <button type="button" class="ms-metric" title="Open these defendants and start paperwork" onclick="event.stopPropagation(); SLMultiState.openPeople('${s}','all')">
+              <div class="ms-metric-val">${_fmtCount(d.total_arrests)}</div>
               <div class="ms-metric-lbl">Total</div>
-            </div>
+            </button>
           </div>
           <div class="ms-state-card-footer">
-            <span class="ms-state-card-footer-stat">🔥 <strong style="color:#ef4444">${_fmtNum(d.hot_leads)||'0'}</strong> hot</span>
-            <span class="ms-state-card-footer-stat">🟡 <strong style="color:#f59e0b">${_fmtNum(d.warm_leads)||'0'}</strong> warm</span>
+            <button type="button" class="ms-state-card-footer-stat" onclick="event.stopPropagation(); SLMultiState.openPeople('${s}','hot')">🔥 <strong style="color:#ef4444">${_fmtCount(d.hot_leads)}</strong> hot</button>
+            <button type="button" class="ms-state-card-footer-stat" onclick="event.stopPropagation(); SLMultiState.openPeople('${s}','warm')">🟡 <strong style="color:#f59e0b">${_fmtCount(d.warm_leads)}</strong> warm</button>
             ${d.avg_bond ? `<span class="ms-state-card-footer-stat">💰 <strong style="color:#10b981">$${Number(d.avg_bond).toLocaleString(undefined,{maximumFractionDigits:0})}</strong> avg bond</span>` : ''}
           </div>
         </div>
@@ -341,7 +365,7 @@ const SLMultiState = (() => {
     if (!el || typeof ApexCharts === 'undefined') return;
     if (_registryChart) { _registryChart.destroy(); _registryChart = null; }
     // Prefer fixed STATE_ORDER so chart order is stable across refreshes
-    const labels = STATE_ORDER.filter(s => (states[s]?.total_counties || 0) > 0);
+    const labels = _cardOrder().filter(s => (states[s]?.total_counties || 0) > 0);
     Object.keys(states || {}).forEach(s => {
       if (!labels.includes(s) && (states[s]?.total_counties || 0) > 0) labels.push(s);
     });
@@ -367,21 +391,24 @@ const SLMultiState = (() => {
   function _renderArrestsChart(states) {
     const el = document.getElementById('msArrestsChart');
     if (!el || typeof ApexCharts === 'undefined') return;
-    const series = STATE_ORDER.map(s => ({
+    if (_arrestsChart) { _arrestsChart.destroy(); _arrestsChart = null; }
+    const order = _cardOrder();
+    const series = order.map(s => ({
       name: STATE_NAMES[s] || s,
       data: [states[s]?.arrests_7d || 0],
     }));
-    new ApexCharts(el, {
+    _arrestsChart = new ApexCharts(el, {
       chart: { type: 'bar', background: 'transparent', height: 220, toolbar: { show: false } },
       series,
       xaxis: { categories: ['Last 7 Days'], labels: { style: { colors: '#94a3b8' } } },
       yaxis: { labels: { style: { colors: '#94a3b8' } } },
-      colors: STATE_ORDER.map(s => STATE_COLORS[s]),
+      colors: order.map(s => STATE_COLORS[s] || '#64748b'),
       plotOptions: { bar: { columnWidth: '50%', borderRadius: 4 } },
       legend: { labels: { colors: '#94a3b8' } },
       theme: { mode: 'dark' },
       grid: { borderColor: '#1e293b' },
-    }).render();
+    });
+    _arrestsChart.render();
   }
 
   // ─── PLATFORM CHART ───────────────────────────────────────────────────────
@@ -393,7 +420,8 @@ const SLMultiState = (() => {
       const el = document.getElementById('msPlatformChart');
       if (!el || typeof ApexCharts === 'undefined') return;
       if (_platformChart) { _platformChart.destroy(); _platformChart = null; }
-      const top = data.platforms.slice(0, 10);
+      const top = (data.platforms || []).slice(0, 10);
+      if (!top.length) return;
       _platformChart = new ApexCharts(el, {
         chart: { type: 'bar', background: 'transparent', height: 220, toolbar: { show: false } },
         series: [{ name: 'Counties', data: top.map(p => p.total) }],
@@ -515,30 +543,35 @@ const SLMultiState = (() => {
       const bail = Number(bondVal) > 0
         ? `$${Number(bondVal).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
         : 'No Bail';
-      const rawCharge = a.charges || a.Charges || '';
+      const rawCharge = String(a.charges || a.Charges || '');
       const charge = rawCharge
         ? (rawCharge.length > 45 ? rawCharge.substring(0, 45) + '…' : rawCharge)
         : 'Unknown Charge';
       const time = _fmtRelative(a.scraped_at || a.created_at);
       const name = a.full_name || a.Full_Name || 'Unknown';
       const county = a.county || a.County || '?';
-      const score = a.lead_score || 0;
+      const score = Number(a.lead_score) || 0;
       const scoreBadge = score >= 70
         ? `<span style="color:#ef4444;font-size:10px;font-weight:700">🔥${score}</span>`
         : (score >= 40 ? `<span style="color:#f59e0b;font-size:10px">${score}</span>` : '');
+      const bk = String(a.booking_number || '');
+      const write = bk
+        ? `<button type="button" class="ms-action-btn ms-write-btn" data-bk="${_esc(bk)}" data-county="${_esc(county)}" data-state="${_esc(state)}" data-name="${_esc(name)}" onclick="SLMultiState.writeDefendant(this.getAttribute('data-bk'), this.getAttribute('data-county'), this.getAttribute('data-state'), this.getAttribute('data-name'))">☘️ Write / Print</button>`
+        : `<span class="ms-muted">No booking #</span>`;
       return `
         <div class="ms-feed-item">
-          <div class="ms-feed-state-dot" style="background:${color}" title="${state}"></div>
+          <div class="ms-feed-state-dot" style="background:${color}" title="${_esc(state)}"></div>
           <div class="ms-feed-content">
-            <div class="ms-feed-name">${name} ${scoreBadge}</div>
+            <div class="ms-feed-name">${_esc(name)} ${scoreBadge}</div>
             <div class="ms-feed-meta">
-              <span class="ms-feed-county" style="color:${color}">${county}, ${state}</span>
-              <span class="ms-feed-charge">${charge}</span>
+              <span class="ms-feed-county" style="color:${color}">${_esc(county)}, ${_esc(state)}</span>
+              <span class="ms-feed-charge">${_esc(charge)}</span>
             </div>
           </div>
           <div class="ms-feed-right">
             <div class="ms-feed-bail">${bail}</div>
             <div class="ms-feed-time">${time}</div>
+            ${write}
           </div>
         </div>
       `;
@@ -580,7 +613,7 @@ const SLMultiState = (() => {
   }
 
   async function runAll() {
-    if (!confirm('Trigger an immediate run for ALL registered scrapers across 10 states? This will put significant load on the server.')) return;
+    if (!confirm('Trigger an immediate run for ALL registered scrapers, including the guarded Ohio pilot? This will put significant load on the server.')) return;
     try {
       const res = await fetch('/api/scraper/run-all', { method: 'POST', credentials: 'same-origin' });
       const data = await _parseJsonRes(res);
@@ -649,5 +682,180 @@ const SLMultiState = (() => {
   function setSearch(v) { _searchQuery = v; _renderRegistry(); }
   function refresh() { _refresh(); }
 
-  return { init, refresh, runCounty, runAll, viewCountyArrests, setStateFilter, setStatusFilter, setSearch };
+  function writeDefendant(bk, county, state, name) {
+    if (!bk) { _showToast('This arrest has no booking number', 'error'); return; }
+    window._leadMap = window._leadMap || {};
+    const prior = window._leadMap[bk] || {};
+    window._leadMap[bk] = Object.assign({}, prior, {
+      booking_number: bk,
+      county: county || prior.county || '',
+      state: state || prior.state || '',
+      full_name: name || prior.full_name || '',
+    });
+    if (typeof openDefendantWritePrint === 'function') openDefendantWritePrint(bk);
+    else _showToast('Write / Print is not loaded', 'error');
+  }
+
+  function openPeople(state, preset) {
+    const name = STATE_NAMES[state] || state;
+    const labels = {
+      '24h': 'last 24 hours',
+      '7d': 'last 7 days',
+      all: 'all arrests',
+      hot: 'hot leads',
+      warm: 'warm leads',
+    };
+    if (window.SLIntel) {
+      SLIntel.open({ preset, state, title: `${name} · ${labels[preset] || preset}` });
+    }
+  }
+
+  return {
+    init, refresh, runCounty, runAll, viewCountyArrests,
+    setStateFilter, setStatusFilter, setSearch, openPeople, writeDefendant,
+  };
 })();
+
+// Defendant list behind a count. Every row starts the Write / Print desk.
+const SLIntel = (() => {
+  let _opts = { preset: 'all', title: 'Defendants' };
+  let _page = 1;
+  let _query = '';
+  let _searchTimer = null;
+
+  function _ensure() {
+    if (document.getElementById('slIntelDrawer')) return;
+    const root = document.createElement('div');
+    root.id = 'slIntelDrawer';
+    root.className = 'sl-intel-drawer';
+    root.hidden = true;
+    root.innerHTML = `
+      <div class="sl-intel-backdrop" onclick="SLIntel.close()"></div>
+      <aside class="sl-intel-panel" role="dialog" aria-labelledby="slIntelTitle">
+        <header class="sl-intel-head">
+          <div>
+            <h3 id="slIntelTitle">Defendants</h3>
+            <p id="slIntelSub">Each person opens Write / Print.</p>
+          </div>
+          <button type="button" class="ms-action-btn" onclick="SLIntel.close()">Close</button>
+        </header>
+        <input id="slIntelSearch" class="ms-search" type="search" placeholder="Search name or booking number" oninput="SLIntel.search(this.value)">
+        <div id="slIntelList" class="sl-intel-list"></div>
+        <div id="slIntelPager" class="sl-intel-pager"></div>
+      </aside>`;
+    document.body.appendChild(root);
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') close();
+    });
+  }
+
+  function open(opts) {
+    _ensure();
+    _opts = Object.assign({ preset: 'all', title: 'Defendants' }, opts || {});
+    _page = 1;
+    _query = '';
+    const search = document.getElementById('slIntelSearch');
+    if (search) search.value = '';
+    const title = document.getElementById('slIntelTitle');
+    if (title) title.textContent = _opts.title || 'Defendants';
+    const root = document.getElementById('slIntelDrawer');
+    if (root) root.hidden = false;
+    load();
+  }
+
+  function openFromAttrs(el) {
+    if (!el) return;
+    open({
+      preset: el.dataset.preset || 'all',
+      state: el.dataset.state || '',
+      county: el.dataset.county || '',
+      days: el.dataset.days ? Number(el.dataset.days) : undefined,
+      title: el.dataset.title || 'Defendants',
+    });
+  }
+
+  function close() {
+    const root = document.getElementById('slIntelDrawer');
+    if (root) root.hidden = true;
+  }
+
+  function search(value) {
+    _query = value || '';
+    _page = 1;
+    clearTimeout(_searchTimer);
+    _searchTimer = setTimeout(load, 250);
+  }
+
+  function go(page) {
+    _page = page;
+    load();
+  }
+
+  async function load() {
+    const list = document.getElementById('slIntelList');
+    const sub = document.getElementById('slIntelSub');
+    if (list) list.innerHTML = '<div class="ms-loading">Loading defendants…</div>';
+    const params = new URLSearchParams({
+      preset: _opts.preset || 'all',
+      page: String(_page),
+      limit: '40',
+    });
+    if (_opts.state) params.set('state', _opts.state);
+    if (_opts.county) params.set('county', _opts.county);
+    if (_opts.days) params.set('days', String(_opts.days));
+    if (_query.trim()) params.set('q', _query.trim());
+    try {
+      const res = await fetch(`/api/ops/defendants?${params}`, { credentials: 'same-origin', cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      const total = Number(data.total) || 0;
+      if (sub) {
+        sub.textContent = `${total.toLocaleString()} defendant${total === 1 ? '' : 's'}. Write / Print starts paperwork for that person.`;
+      }
+      const rows = data.defendants || [];
+      if (!list) return;
+      if (!rows.length) {
+        list.innerHTML = '<div class="ms-empty">No defendants in this count.</div>';
+      } else {
+        list.innerHTML = rows.map(a => {
+          const bk = String(a.booking_number || '');
+          const bond = Number(a.bond_amount) || 0;
+          const bail = bond > 0 ? `$${bond.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : 'No bail';
+          const write = bk
+            ? `<button type="button" class="ms-action-btn ms-write-btn" data-bk="${_escAttr(bk)}" data-county="${_escAttr(a.county)}" data-state="${_escAttr(a.state)}" data-name="${_escAttr(a.full_name)}" onclick="SLMultiState.writeDefendant(this.getAttribute('data-bk'), this.getAttribute('data-county'), this.getAttribute('data-state'), this.getAttribute('data-name'))">☘️ Write / Print</button>`
+            : '<span class="ms-muted">No booking #</span>';
+          return `<article class="sl-intel-row">
+            <div>
+              <div class="ms-feed-name">${_escAttr(a.full_name)} <span class="ms-muted">${a.lead_score || 0}</span></div>
+              <div class="ms-feed-meta"><span>${_escAttr(a.county)}${a.state ? ', ' + _escAttr(a.state) : ''}</span><span class="ms-feed-charge">${_escAttr(a.charges || '')}</span></div>
+            </div>
+            <div class="ms-feed-right">
+              <div class="ms-feed-bail">${bail}</div>
+              ${write}
+            </div>
+          </article>`;
+        }).join('');
+      }
+      const pager = document.getElementById('slIntelPager');
+      if (pager) {
+        const pages = Number(data.pages) || 1;
+        pager.innerHTML = pages > 1
+          ? `<button type="button" class="ms-action-btn" ${data.page <= 1 ? 'disabled' : ''} onclick="SLIntel.go(${(data.page || 1) - 1})">Prev</button>
+             <span class="ms-muted">${data.page || 1} / ${pages}</span>
+             <button type="button" class="ms-action-btn" ${data.page >= pages ? 'disabled' : ''} onclick="SLIntel.go(${(data.page || 1) + 1})">Next</button>`
+          : '';
+      }
+    } catch (err) {
+      if (list) list.innerHTML = `<div class="ms-empty">Could not load defendants. ${_escAttr(err.message)}</div>`;
+    }
+  }
+
+  function _escAttr(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+  }
+
+  return { open, openFromAttrs, close, search, go };
+})();
+window.SLIntel = SLIntel;

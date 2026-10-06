@@ -661,10 +661,23 @@ td:has(.bond-low),
    ═══════════════════════════════════════════════════════════════════════════ */
 .cmd-state-strip {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 12px;
   margin: 0 0 20px;
 }
+.stat-card-hit { cursor: pointer; }
+.stat-card-hit:hover { transform: translateY(-1px); }
+.cmd-chip-hit {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.cmd-chip-hit:hover { color: #fff; text-decoration: underline; }
+.sl-intel-pager { display: flex; justify-content: flex-end; align-items: center; gap: 8px; padding-top: 8px; }
 
 @media (max-width: 900px) {
   .cmd-state-strip { grid-template-columns: repeat(2, 1fr); }

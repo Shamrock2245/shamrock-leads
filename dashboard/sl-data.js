@@ -12,6 +12,86 @@ function _relTime(iso) {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
+function escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+function renderBondReadyRows(rows) {
+  const body = document.getElementById('bondQueueBody');
+  if (!body) return;
+  body.innerHTML = (rows && rows.length) ? rows.map(l => {
+    const bond = Number(l.bond_amount) || 0;
+    const prem = Math.max(100, bond * 0.1);
+    const bc = bond >= 10000 ? 'bond-high' : bond >= 2500 ? 'bond-mid' : 'bond-low';
+    const charges = String(l.charges || '');
+    const chargeShort = charges.length > 60 ? charges.slice(0, 57) + '…' : (charges || '—');
+    const bk = String(l.booking_number || '');
+    const writeBadge = l.write_eligible
+      ? '<span class="write-eligible-pill" title="Shamrock Write-Eligible Book" style="display:inline-block;margin-left:4px;padding:1px 5px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.4);border-radius:4px;font-size:10px;font-weight:700">WRITE</span>'
+      : '';
+    return `<tr class="ld-clickable" title="Open lead detail" data-booking="${escHtml(bk)}">
+      <td><strong>${escHtml(l.full_name || '?')}</strong><br><span style="color:var(--muted);font-size:11px">${escHtml(l.dob || '')} · ${escHtml(bk)}</span></td>
+      <td>${l.county && l.county !== '—' ? `<span class="county-badge">${escHtml(l.county)}</span>${writeBadge}` : '—'}</td>
+      <td class="${bc}">$${bond.toLocaleString()}</td>
+      <td style="color:var(--success);font-weight:600">$${Math.round(prem).toLocaleString()}</td>
+      <td><span class="score-pill ${{'hot':'score-hot','warm':'score-warm','cold':'score-cold','disqualified':'score-disq'}[(l.lead_status||'').toLowerCase()]||'score-warm'}">${l.lead_score||0}</span></td>
+      <td title="${escHtml(charges)}" style="font-size:11px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(chargeShort)}</td>
+      <td><button type="button" class="btn-write-bond" data-write="${escHtml(bk)}" data-county="${escHtml(l.county || '')}" data-state="${escHtml(l.state || '')}" data-name="${escHtml(l.full_name || '')}">☘️ Write / Print</button></td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="7" class="loading">No bond-ready defendants</td></tr>';
+  body.querySelectorAll('tr[data-booking]').forEach(row => {
+    row.addEventListener('click', (ev) => {
+      if (ev.target.closest('button')) return;
+      const bk = row.getAttribute('data-booking');
+      if (bk && window.SLProspective) SLProspective.openDetail(bk);
+    });
+  });
+  body.querySelectorAll('[data-write]').forEach(btn => {
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const bk = btn.getAttribute('data-write');
+      if (bk) {
+        window._leadMap = window._leadMap || {};
+        const prior = window._leadMap[bk] || {};
+        window._leadMap[bk] = Object.assign({}, prior, {
+          booking_number: bk,
+          full_name: btn.getAttribute('data-name') || prior.full_name || '',
+          county: btn.getAttribute('data-county') || prior.county || '',
+          state: btn.getAttribute('data-state') || prior.state || '',
+        });
+        if (typeof openDefendantWritePrint === 'function') openDefendantWritePrint(bk);
+      }
+    });
+  });
+}
+
+function paintBondQueuePager(page, pages, total) {
+  const el = document.getElementById('bondQueuePager');
+  if (!el) return;
+  if (!total || pages <= 1) { el.innerHTML = ''; return; }
+  el.innerHTML = `
+    <button type="button" class="sl-btn sl-btn-secondary" ${page <= 1 ? 'disabled' : ''} onclick="loadBondReadyPage(${page - 1})">Prev</button>
+    <span class="meta">${page} / ${pages} · ${Number(total).toLocaleString()} defendants</span>
+    <button type="button" class="sl-btn sl-btn-secondary" ${page >= pages ? 'disabled' : ''} onclick="loadBondReadyPage(${page + 1})">Next</button>`;
+}
+
+async function loadBondReadyPage(page) {
+  const res = await fetch(`/api/ops/defendants?preset=bond_ready&page=${page}&limit=25`, { credentials: 'same-origin' });
+  const data = await res.json();
+  renderBondReadyRows(data.defendants || []);
+  paintBondQueuePager(data.page || page, data.pages || 1, data.total || 0);
+  const meta = document.getElementById('bondQueueMeta');
+  if (meta && data.total != null) {
+    const shown = (data.defendants || []).length;
+    meta.textContent = shown < data.total
+      ? `showing ${shown} of ${data.total}`
+      : `${data.total} defendants`;
+  }
+}
+window.loadBondReadyPage = loadBondReadyPage;
+
 // ── Lead Explorer Fetch ──
 async function applyFilters() {
   SL_STATE.custody = document.getElementById('custodyFilter')?.value || '';
@@ -201,35 +281,24 @@ async function loadDashboard() {
       const totalBondReady = cmd.bond_ready_count || bq.length;
       const shownLabel = bq.length < totalBondReady ? `showing ${bq.length} of ${totalBondReady}` : `${totalBondReady} defendants`;
       document.getElementById('bondQueueMeta').textContent = `${shownLabel} · $${(cmd.pipeline_total||0).toLocaleString()} total bond`;
-      document.getElementById('bondQueueBody').innerHTML = bq.length ? bq.map(l => {
-        const bond = l.bond_amount||0;
-        const prem = Math.max(100, bond * 0.1);
-        const bc = bond>=10000?'bond-high':bond>=2500?'bond-mid':'bond-low';
-        const charges = (l.charges||'').length > 60 ? (l.charges||'').slice(0,57)+'…' : (l.charges||'—');
-        const bkJs = String(l.booking_number||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
-        const writeBadge = l.write_eligible ? `<span class="write-eligible-pill" title="Shamrock Write-Eligible Book" style="display:inline-block;margin-left:4px;padding:1px 5px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.4);border-radius:4px;font-size:10px;font-weight:700">WRITE</span>` : '';
-        return `<tr class="ld-clickable" title="Open lead detail" onclick="if(!event.target.closest('button,select,a,input'))SLProspective&&SLProspective.openDetail('${bkJs}')">
-          <td><strong>${l.full_name||'?'}</strong><br><span style="color:var(--muted);font-size:11px">${l.dob||''} · ${l.booking_number||''}</span></td>
-          <td>${(l.county&&l.county!=='—')?`<span class="county-badge" data-county="${l.county}">${l.county}</span>${writeBadge}`:'—'}</td>
-          <td class="${bc}">$${bond.toLocaleString()}</td>
-          <td style="color:var(--success);font-weight:600">$${prem.toLocaleString()}</td>
-          <td><span class="score-pill ${{'hot':'score-hot','warm':'score-warm','cold':'score-cold','disqualified':'score-disq'}[(l.lead_status||'').toLowerCase()]||'score-warm'}">${l.lead_score||0}</span></td>
-          <td title="${(l.charges||'').replace(/"/g,'&quot;')}" style="font-size:11px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${charges}</td>
-          <td><button class="btn-write-bond" onclick="typeof openDefendantWritePrint==='function'&&'${l.booking_number||''}'?openDefendantWritePrint('${(l.booking_number||'').replace(/'/g,"\\'")}'):openBondModal('${(l.full_name||'').replace(/'/g,"\\'")}',${bond},'${l.county||''}','${l.booking_number||''}')">☘️ Write / Print</button></td>
-        </tr>`;
-      }).join('') : '<tr><td colspan="7" class="loading">No bond-ready defendants</td></tr>';
+      renderBondReadyRows(bq);
+      paintBondQueuePager(cmd.bond_ready_page || 1, cmd.bond_ready_pages || 1, totalBondReady);
 
       // Custody by county — with state color badge
-      const STATE_COLORS_CMD = { FL: '#00d4aa', GA: '#f59e0b', SC: '#8b5cf6', NC: '#3b82f6' };
+      const STATE_COLORS_CMD = {
+        FL: '#00d4aa', GA: '#f59e0b', SC: '#8b5cf6', NC: '#3b82f6',
+        TN: '#ef4444', TX: '#eab308', LA: '#ec4899', AL: '#f97316',
+        CT: '#06b6d4', MS: '#84cc16', OH: '#94a3b8',
+      };
       const cbc = cmd.custody_by_county || [];
       document.getElementById('custodyCountyList').innerHTML = cbc.length ? cbc.map(c => {
         const st = (c.state || 'FL').toUpperCase();
         const stColor = STATE_COLORS_CMD[st] || '#64748b';
         return `<div class="county-row">
-          <span style="background:${stColor}22;color:${stColor};border:1px solid ${stColor}44;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:700;margin-right:5px">${st}</span>
-          <span class="county-name">${c.county}</span>
+          <span style="background:${stColor}22;color:${stColor};border:1px solid ${stColor}44;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:700;margin-right:5px">${escHtml(st)}</span>
+          <span class="county-name">${escHtml(c.county)}</span>
           <span style="color:var(--success);font-size:12px;font-weight:600">$${fmt(c.total_bond)}</span>
-          <span class="county-count">${c.count} in custody</span>
+          <button type="button" class="cmd-chip-hit county-count" data-preset="custody" data-state="${escHtml(st)}" data-county="${escHtml(c.county)}" data-title="${escHtml(c.county + ' in custody')}" onclick="SLIntel.openFromAttrs(this)">${c.count} in custody</button>
         </div>`;
       }).join('') : '<div class="loading">No in-custody defendants</div>';
 
@@ -240,40 +309,66 @@ async function loadDashboard() {
         const dot = sc2==='hot'?'🔥':sc2==='warm'?'🟡':'⚪';
         const st2 = (l.state || 'FL').toUpperCase();
         const stColor2 = STATE_COLORS_CMD[st2] || '#64748b';
-        const charge = (l.charges||'').length > 38 ? (l.charges||'').slice(0,35)+'…' : (l.charges||'—');
-        const bkJs = String(l.booking_number||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
-        return `<div class="county-row ld-clickable" style="flex-wrap:wrap;gap:2px" title="Open lead detail" onclick="SLProspective&&SLProspective.openDetail('${bkJs}')">
-          <span style="background:${stColor2}22;color:${stColor2};border:1px solid ${stColor2}44;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:700">${st2}</span>
-          <span class="county-name" style="font-size:12px">${dot} ${l.full_name||'?'}</span>
-          <span style="color:var(--accent);font-size:12px;font-weight:700">$${(l.bond_amount||0).toLocaleString()}</span>
-          <span class="county-count" style="width:100%;padding-left:4px;font-size:11px;color:var(--muted)">${l.county||'—'} · ${charge} · ${timeAgo(l.scraped_at)}</span>
+        const chargeRaw = String(l.charges || '');
+        const charge = chargeRaw.length > 38 ? chargeRaw.slice(0, 35) + '…' : (chargeRaw || '—');
+        const bk = String(l.booking_number || '');
+        const bondNum = Number(l.bond_amount) || 0;
+        return `<div class="county-row" style="flex-wrap:wrap;gap:6px" data-booking="${escHtml(bk)}">
+          <span style="background:${stColor2}22;color:${stColor2};border:1px solid ${stColor2}44;padding:1px 5px;border-radius:4px;font-size:10px;font-weight:700">${escHtml(st2)}</span>
+          <span class="county-name" style="font-size:12px">${dot} ${escHtml(l.full_name || '?')}</span>
+          <span style="color:var(--accent);font-size:12px;font-weight:700">$${bondNum.toLocaleString()}</span>
+          <button type="button" class="btn-write-bond" data-write="${escHtml(bk)}" data-county="${escHtml(l.county || '')}" data-state="${escHtml(st2)}" data-name="${escHtml(l.full_name || '')}" style="margin-left:auto">☘️ Write / Print</button>
+          <span class="county-count" style="width:100%;padding-left:4px;font-size:11px;color:var(--muted)">${escHtml(l.county || '—')} · ${escHtml(charge)} · ${timeAgo(l.scraped_at)}</span>
         </div>`;
       }).join('') : '<div class="loading">No recent activity</div>';
+      document.getElementById('cmdRecentActivity').querySelectorAll('[data-write]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const bk = btn.getAttribute('data-write');
+          if (bk) {
+            window._leadMap = window._leadMap || {};
+            const prior = window._leadMap[bk] || {};
+            window._leadMap[bk] = Object.assign({}, prior, {
+              booking_number: bk,
+              full_name: btn.getAttribute('data-name') || prior.full_name || '',
+              county: btn.getAttribute('data-county') || prior.county || '',
+              state: btn.getAttribute('data-state') || prior.state || '',
+            });
+            if (typeof openDefendantWritePrint === 'function') openDefendantWritePrint(bk);
+          }
+        });
+      });
 
       // State breakdown strip
       const sb = cmd.state_breakdown || {};
       const STATE_META_CMD = {
-        FL: { name: 'Florida',        emoji: '🌴', color: '#00d4aa' },
-        GA: { name: 'Georgia',        emoji: '🍑', color: '#f59e0b' },
+        FL: { name: 'Florida', emoji: '🌴', color: '#00d4aa' },
+        GA: { name: 'Georgia', emoji: '🍑', color: '#f59e0b' },
         SC: { name: 'South Carolina', emoji: '🌙', color: '#8b5cf6' },
         NC: { name: 'North Carolina', emoji: '🦅', color: '#3b82f6' },
+        TN: { name: 'Tennessee', emoji: '🎸', color: '#ef4444' },
+        TX: { name: 'Texas', emoji: '⭐', color: '#eab308' },
+        LA: { name: 'Louisiana', emoji: '🎷', color: '#ec4899' },
+        AL: { name: 'Alabama', emoji: '🌻', color: '#f97316' },
+        CT: { name: 'Connecticut', emoji: '⚓', color: '#06b6d4' },
+        MS: { name: 'Mississippi', emoji: '🎶', color: '#84cc16' },
+        OH: { name: 'Ohio', emoji: '📍', color: '#94a3b8' },
       };
-      ['FL','GA','SC','NC'].forEach(st => {
-        const el = document.getElementById(`cmdState${st}`);
-        if (!el) return;
-        const d = sb[st] || {};
-        const meta = STATE_META_CMD[st];
-        el.classList.remove('cmd-state-chip-skeleton');
-        el.style.setProperty('--chip-color', meta.color);
-        el.innerHTML = `
-          <span class="cmd-chip-flag">${meta.emoji}</span>
-          <span class="cmd-chip-abbr" style="color:${meta.color}">${st}</span>
-          <span class="cmd-chip-stat">${(d.total||0).toLocaleString()} <span class="cmd-chip-lbl">arrests</span></span>
-          <span class="cmd-chip-stat">${(d.last_24h||0).toLocaleString()} <span class="cmd-chip-lbl">today</span></span>
-          <span class="cmd-chip-stat" style="color:#ef4444">🔥 ${(d.hot_leads||0).toLocaleString()} <span class="cmd-chip-lbl">hot</span></span>
-          <span class="cmd-chip-stat" style="color:${meta.color}">$${fmt(d.pipeline||0)} <span class="cmd-chip-lbl">pipeline</span></span>
-        `;
-      });
+      const strip = document.getElementById('cmdStateStrip');
+      const order = (cmd.state_order && cmd.state_order.length) ? cmd.state_order : Object.keys(STATE_META_CMD);
+      if (strip) {
+        strip.innerHTML = order.map(st => {
+          const d = sb[st] || {};
+          const meta = STATE_META_CMD[st] || { name: st, emoji: '📍', color: '#64748b' };
+          return `<div class="cmd-state-chip" style="--chip-color:${meta.color}">
+            <span class="cmd-chip-flag">${meta.emoji}</span>
+            <span class="cmd-chip-abbr" style="color:${meta.color}">${escHtml(st)}</span>
+            <button type="button" class="cmd-chip-hit" data-preset="all" data-state="${escHtml(st)}" data-title="${escHtml(meta.name + ' arrests')}" onclick="SLIntel.openFromAttrs(this)">${(d.total||0).toLocaleString()} <span class="cmd-chip-lbl">arrests</span></button>
+            <button type="button" class="cmd-chip-hit" data-preset="24h" data-state="${escHtml(st)}" data-title="${escHtml(meta.name + ' · last 24 hours')}" onclick="SLIntel.openFromAttrs(this)">${(d.last_24h||0).toLocaleString()} <span class="cmd-chip-lbl">today</span></button>
+            <button type="button" class="cmd-chip-hit" data-preset="hot" data-state="${escHtml(st)}" data-title="${escHtml(meta.name + ' · hot leads')}" onclick="SLIntel.openFromAttrs(this)">🔥 ${(d.hot_leads||0).toLocaleString()} <span class="cmd-chip-lbl">hot</span></button>
+            <span class="cmd-chip-stat" style="color:${meta.color}">$${fmt(d.pipeline||0)} <span class="cmd-chip-lbl">pipeline</span></span>
+          </div>`;
+        }).join('');
+      }
     }
 
     // Hot lead audio alert

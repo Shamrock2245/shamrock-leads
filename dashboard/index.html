@@ -27,12 +27,13 @@
   <link rel="stylesheet" href="/sl-imessage.css?v=6">
   <link rel="stylesheet" href="/sl-intelligence.css?v=2">
   <link rel="stylesheet" href="/sl-alpha-intel.css?v=2">
-  <link rel="stylesheet" href="/sl-premium.css?v=2">
+  <link rel="stylesheet" href="/sl-multi-state.css?v=2">
+  <link rel="stylesheet" href="/sl-premium.css?v=3">
   <link rel="stylesheet" href="/sl-enrichment.css?v=1">
   <link rel="stylesheet" href="/sl-osint.css?v=4">
   <link rel="stylesheet" href="/sl-palantir.css?v=6">
   <link rel="stylesheet" href="/sl-alpr.css?v=2">
-  <link rel="stylesheet" href="/sl-bond-intelligence.css?v=4">
+  <link rel="stylesheet" href="/sl-bond-intelligence.css?v=5">
   <link rel="stylesheet" href="/sl-lee-county.css?v=1">
   <link rel="stylesheet" href="/sl-ar.css?v=1">
   <!-- PWA Manifest -->
@@ -149,7 +150,7 @@
         <span class="sidebar-chevron" aria-hidden="true">▸</span>
       </button>
       <div class="sidebar-group-body" data-group-body="intel" hidden>
-        <button class="sidebar-btn" data-tab="tabMultiState" onclick="SL.switchTab(this);SLMultiState.init()"><span class="sidebar-btn-icon">🌎</span> Multi-State Ops <span class="badge" id="multiStateBadge" style="background:linear-gradient(135deg,#10b981,#3b82f6);font-size:9px">10 ST</span></button>
+        <button class="sidebar-btn" data-tab="tabMultiState" onclick="SL.switchTab(this);SLMultiState.init()"><span class="sidebar-btn-icon">🌎</span> Multi-State Ops <span class="badge" id="multiStateBadge" style="background:linear-gradient(135deg,#10b981,#3b82f6);font-size:9px">11 ST</span></button>
         <button class="sidebar-btn" data-tab="tabBondIntel" onclick="SL.switchTab(this);SLBondIntel.load()"><span class="sidebar-btn-icon">💰</span> Bond Intelligence <span class="badge" id="bondIntelBadge" style="background:#10b981;color:#000;font-size:9px">LIVE</span></button>
         <button class="sidebar-btn" data-tab="tabHealth" onclick="SL.switchTab(this);SLHealth.load();SLServiceControl.init()"><span class="sidebar-btn-icon">🏥</span> Scraper Health</button>
         <button class="sidebar-btn" data-tab="tabAdminHygiene" onclick="SL.switchTab(this);SLAdminHygiene&&SLAdminHygiene.init()" title="Superadmin: delete test data, fix mismatches"><span class="sidebar-btn-icon">🛡️</span> Data Hygiene</button>
@@ -204,7 +205,7 @@
   <div class="container">
     <!-- KPI Row -->
     <div class="stats-grid">
-      <div class="stat-card">
+      <div class="stat-card stat-card-hit" title="Open every scraped defendant and start paperwork" onclick="SLIntel.open({preset:'all', title:'All scraped defendants'})">
         <div class="stat-label">Total Records</div>
         <div class="stat-value" id="kpiRecords">—</div>
         <div class="stat-sub" id="kpiRecordsSub"></div>
@@ -214,12 +215,12 @@
         <div class="stat-value" id="kpiPipeline">—</div>
         <div class="stat-sub" id="kpiPipelineSub">est. premium</div>
       </div>
-      <div class="stat-card">
+      <div class="stat-card stat-card-hit" title="Open every hot lead and start paperwork" onclick="SLIntel.open({preset:'hot', title:'Hot leads'})">
         <div class="stat-label">🔥 Hot Leads</div>
         <div class="stat-value" id="kpiHot">—</div>
         <div class="stat-sub">score ≥ 70</div>
       </div>
-      <div class="stat-card">
+      <div class="stat-card stat-card-hit" title="Open every bond-ready defendant and start paperwork" onclick="document.getElementById('bondQueueBody')?.scrollIntoView({behavior:'smooth', block:'start'})">
         <div class="stat-label">✍️ Bond-Ready</div>
         <div class="stat-value" id="kpiBondReady">—</div>
         <div class="stat-sub">in custody + bondable</div>
@@ -232,11 +233,8 @@
     </div>
 
     <!-- ═══ STATE BREAKDOWN STRIP ═══ -->
-    <div id="cmdStateStrip" class="cmd-state-strip">
-      <div class="cmd-state-chip cmd-state-chip-skeleton" id="cmdStateFL">Loading…</div>
-      <div class="cmd-state-chip cmd-state-chip-skeleton" id="cmdStateGA">Loading…</div>
-      <div class="cmd-state-chip cmd-state-chip-skeleton" id="cmdStateSC">Loading…</div>
-      <div class="cmd-state-chip cmd-state-chip-skeleton" id="cmdStateNC">Loading…</div>
+    <div id="cmdStateStrip" class="cmd-state-strip" aria-label="Arrests by state">
+      <div class="cmd-state-chip cmd-state-chip-skeleton">Loading state intel…</div>
     </div>
 
     <!-- ═══ REPEAT OFFENDER ALERTS ═══ -->
@@ -304,6 +302,7 @@
           <tbody id="bondQueueBody"></tbody>
         </table>
       </div>
+      <div id="bondQueuePager" class="sl-intel-pager"></div>
     </div>
 
     <!-- Two-column: Custody by County + Recent Activity Feed -->
@@ -1028,7 +1027,7 @@
         <label class="bi-field">
           <span>State</span>
           <select id="biStateSelect" onchange="SLBondIntel.setState(this.value)">
-            <option value="">All 10 states</option>
+            <option value="">All states</option>
             <option value="FL">Florida</option>
             <option value="GA">Georgia</option>
             <option value="SC">South Carolina</option>
@@ -1039,6 +1038,7 @@
             <option value="AL">Alabama</option>
             <option value="MS">Mississippi</option>
             <option value="CT">Connecticut</option>
+            <option value="OH">Ohio · guarded</option>
           </select>
         </label>
         <div class="bi-seg" id="biWindowSeg" role="group" aria-label="Lookback window">
@@ -1057,7 +1057,7 @@
         <div class="bi-panel-head">
           <div>
             <h3>Work now</h3>
-            <p>In custody · bond set · last 48 hours. Sorted by score then premium.</p>
+            <p>Same people as Writable now, for this window. Each row starts paperwork.</p>
           </div>
           <div class="bi-queue-filters">
             <label><input type="checkbox" id="biHotOnly" onchange="SLBondIntel.reloadQueue()"> Hot only</label>
@@ -3843,7 +3843,7 @@
 <script src="/sl-rbac.js?v=1"></script>
 <script src="/sl-staff.js?v=1"></script>
 <script src="/sl-rearrest.js?v=5"></script>
-<script src="/sl-data.js?v=8"></script>
+<script src="/sl-data.js?v=9"></script>
 <script src="/sl-features.js?v=21"></script>
 <!-- ═══ ADDRESS OVERRIDE AUTH MODAL ═══ -->
 <div id="addressOverrideModal" class="modal-overlay" style="display:none">
@@ -6549,9 +6549,9 @@
   </div>
 </aside>
 
-<script defer src="/sl-help.js?v=3"></script>
-<script defer src="/sl-bond-intelligence.js?v=5"></script>
-<script defer src="/sl-multi-state.js?v=3"></script>
+<script defer src="/sl-help.js?v=4"></script>
+<script defer src="/sl-bond-intelligence.js?v=6"></script>
+<script defer src="/sl-multi-state.js?v=4"></script>
 <script defer src="/sl-hydrate.js?v=3"></script>
 <script defer src="/sl-lee-county.js?v=1"></script>
 </body>

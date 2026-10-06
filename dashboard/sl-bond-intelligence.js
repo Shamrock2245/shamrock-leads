@@ -7,6 +7,7 @@ const SLBondIntel = (() => {
   let _state = '';
   let _county = '';
   let _days = 30;
+  let _queuePage = 1;
   let _refreshTimer = null;
   let _initialized = false;
 
@@ -21,8 +22,9 @@ const SLBondIntel = (() => {
     AL: { name: 'Alabama', color: '#fb923c' },
     MS: { name: 'Mississippi', color: '#2dd4bf' },
     CT: { name: 'Connecticut', color: '#38bdf8' },
+    OH: { name: 'Ohio', color: '#94a3b8' },
   };
-  const STATE_ORDER = ['FL', 'GA', 'SC', 'NC', 'TN', 'TX', 'LA', 'AL', 'MS', 'CT'];
+  const STATE_ORDER = ['FL', 'GA', 'SC', 'NC', 'TN', 'TX', 'LA', 'AL', 'MS', 'CT', 'OH'];
 
   function _fmt$(n) {
     if (!n || n === 0) return '—';
@@ -99,15 +101,15 @@ const SLBondIntel = (() => {
         <div class="val">${_fmt$(s.est_premium)}</div>
         <div class="hint">$100 min / 10% over $1k · ${windowLabel}</div>
       </article>
-      <article class="bi-stat warn">
+      <article class="bi-stat warn bi-stat-hit" onclick="SLBondIntel.focusWritable()" title="Show every writable defendant and start paperwork">
         <div class="lbl">Writable now</div>
-        <div class="val">${_fmtN(s.writable)}</div>
-        <div class="hint">In custody with a bond set</div>
+        <div class="val" id="biWritableVal">${_fmtN(s.writable)}</div>
+        <div class="hint">In custody with a bond set · click to list them</div>
       </article>
-      <article class="bi-stat">
+      <article class="bi-stat bi-stat-hit" onclick="SLBondIntel.openHot()" title="Open every hot lead in this window">
         <div class="lbl">Hot leads</div>
         <div class="val">${_fmtN(s.hot_leads)}</div>
-        <div class="hint">Score 70+ in this window</div>
+        <div class="hint">Score 70+ in this window · click to list them</div>
       </article>
       <article class="bi-stat">
         <div class="lbl">Capture</div>
@@ -128,11 +130,12 @@ const SLBondIntel = (() => {
       const m = STATE_META[code];
       const d = byState[code] || {};
       const on = _state === code ? ' on' : '';
-      return `<button type="button" class="bi-state${on}" onclick="SLBondIntel.setState('${code}')">
-        <div class="nm">${m.name}</div>
-        <div class="bd">${_fmt$(d.est_premium || d.total_bond || 0)}</div>
-        <div class="sm">${_fmtN(d.last_24h || 0)} today · ${_fmtN(d.hot_leads || 0)} hot</div>
-      </button>`;
+      const people = Number(d.total_arrests) || 0;
+      return `<div class="bi-state${on}" onclick="SLBondIntel.setState('${code}')">
+        <div class="nm">${m.name}${code === 'OH' ? ' · guarded' : ''}</div>
+        <div class="bd">${_fmt$(d.est_premium || 0)}</div>
+        <div class="sm"><button type="button" class="bi-people" onclick="event.stopPropagation(); SLBondIntel.openPeople('${code}')">${_fmtN(people)} in this window</button> · ${_fmtN(d.hot_leads || 0)} hot</div>
+      </div>`;
     }).join('');
   }
 
@@ -173,28 +176,31 @@ const SLBondIntel = (() => {
     const hotOnly = document.getElementById('biHotOnly')?.checked;
     const min1k = document.getElementById('biMinBond1k')?.checked;
     const q = new URLSearchParams({
-      limit: '40',
-      hours: '48',
-      min_bond: min1k ? '1000' : '1',
-      in_custody: 'true',
+      preset: 'writable',
+      days: String(_days),
+      page: String(_queuePage),
+      limit: '25',
     });
     if (hotOnly) q.set('min_score', '70');
+    if (min1k) q.set('min_bond', '1000');
     if (_state) q.set('state', _state);
     if (_county) q.set('county', _county);
     try {
-      const res = await fetch(`/api/arrests/recent?${q}`, { credentials: 'same-origin' });
+      const res = await fetch(`/api/ops/defendants?${q}`, { credentials: 'same-origin', cache: 'no-store' });
       const data = await res.json();
-      let arrests = data.arrests || [];
-      arrests.sort((a, b) => {
-        const s = (b.lead_score || 0) - (a.lead_score || 0);
-        if (s) return s;
-        return (b.bond_amount || 0) - (a.bond_amount || 0);
-      });
-      arrests = arrests.slice(0, 18);
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      const arrests = data.defendants || [];
+      const total = Number(data.total) || 0;
+      if (!hotOnly && !min1k) {
+        const val = document.getElementById('biWritableVal');
+        if (val) val.textContent = _fmtN(total);
+      }
       if (!arrests.length) {
-        el.innerHTML = '<div class="bi-empty">No in-custody bonded arrests in the last 48 hours for this filter.</div>';
+        el.innerHTML = `<div class="bi-empty">No writable defendants in this window${_state ? ' for ' + _esc(_state) : ''}.</div>`;
         return;
       }
+      const pages = Number(data.pages) || 1;
+      const page = Number(data.page) || 1;
       el.innerHTML = arrests.map(a => {
         const bond = parseFloat(a.bond_amount) || 0;
         const prem = _prem(bond);
@@ -215,18 +221,19 @@ const SLBondIntel = (() => {
             <div class="prem">${_fmt$(prem)} premium</div>
           </div>
           <div class="act">
-            <button type="button" class="bi-btn" data-write="1"
-              data-name="${_esc(name)}" data-bond="${bond}" data-county="${_esc(county)}" data-bk="${_esc(bk)}">Write</button>
+            <button type="button" class="bi-btn" data-write="1" data-bk="${_esc(bk)}" data-county="${_esc(county)}" data-state="${_esc(st)}" data-name="${_esc(name)}">Write / Print</button>
           </div>
         </article>`;
-      }).join('');
+      }).join('') + (pages > 1
+        ? `<div class="bi-pager"><button type="button" class="bi-btn" ${page <= 1 ? 'disabled' : ''} onclick="SLBondIntel.queuePage(${page - 1})">Prev</button><span>${page} / ${pages} · ${_fmtN(total)}</span><button type="button" class="bi-btn" ${page >= pages ? 'disabled' : ''} onclick="SLBondIntel.queuePage(${page + 1})">Next</button></div>`
+        : `<div class="bi-pager"><span>${_fmtN(total)} defendant${total === 1 ? '' : 's'}</span></div>`);
       el.querySelectorAll('.bi-row').forEach(row => {
         row.addEventListener('click', () => openLead(row.dataset.bk));
       });
       el.querySelectorAll('[data-write]').forEach(btn => {
         btn.addEventListener('click', (ev) => {
           ev.stopPropagation();
-          writeBond(btn.dataset.name, btn.dataset.bond, btn.dataset.county, btn.dataset.bk);
+          writeBond(btn.dataset.name, 0, btn.dataset.county, btn.dataset.bk, btn.dataset.state);
         });
       });
     } catch (err) {
@@ -277,6 +284,7 @@ const SLBondIntel = (() => {
   function setState(s) {
     _state = s || '';
     _county = '';
+    _queuePage = 1;
     const sel = document.getElementById('biStateSelect');
     if (sel && sel.value !== _state) sel.value = _state;
     load();
@@ -284,6 +292,7 @@ const SLBondIntel = (() => {
 
   function setCounty(county, state) {
     _county = county || '';
+    _queuePage = 1;
     if (state) _state = state;
     const sel = document.getElementById('biStateSelect');
     if (sel && _state) sel.value = _state;
@@ -292,13 +301,58 @@ const SLBondIntel = (() => {
 
   function setDays(d) {
     _days = d;
+    _queuePage = 1;
     document.querySelectorAll('#biWindowSeg button').forEach(b => {
       b.classList.toggle('on', parseInt(b.dataset.days, 10) === d);
     });
     load();
   }
 
-  function reloadQueue() { return _loadQueue(); }
+  function reloadQueue() {
+    _queuePage = 1;
+    return _loadQueue();
+  }
+
+  function queuePage(page) {
+    _queuePage = Math.max(1, page || 1);
+    return _loadQueue();
+  }
+
+  function focusWritable() {
+    const hot = document.getElementById('biHotOnly');
+    const min = document.getElementById('biMinBond1k');
+    if (hot) hot.checked = false;
+    if (min) min.checked = false;
+    _queuePage = 1;
+    const queue = document.getElementById('biWorkQueue');
+    if (queue) queue.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    return _loadQueue();
+  }
+
+  function openPeople(code) {
+    const name = (STATE_META[code] && STATE_META[code].name) || code;
+    if (window.SLIntel) {
+      SLIntel.open({
+        preset: 'range',
+        state: code,
+        days: _days,
+        title: `${name} · last ${_days} days`,
+      });
+    }
+  }
+
+  function openHot() {
+    const name = _state ? ((STATE_META[_state] && STATE_META[_state].name) || _state) : 'All states';
+    if (window.SLIntel) {
+      SLIntel.open({
+        preset: 'hot',
+        state: _state,
+        county: _county,
+        days: _days,
+        title: `${name} · hot leads · last ${_days} days`,
+      });
+    }
+  }
 
   function openLead(booking) {
     if (window.SL && typeof SL.openLeadDetail === 'function' && booking) {
@@ -306,8 +360,17 @@ const SLBondIntel = (() => {
     }
   }
 
-  function writeBond(name, bond, county, booking) {
+  function writeBond(name, bond, county, booking, state) {
     if (typeof openDefendantWritePrint === 'function' && booking) {
+      window._leadMap = window._leadMap || {};
+      const prior = window._leadMap[booking] || {};
+      window._leadMap[booking] = Object.assign({}, prior, {
+        booking_number: booking,
+        full_name: name || prior.full_name || '',
+        county: county || prior.county || '',
+        state: state || prior.state || '',
+        bond_amount: bond || prior.bond_amount || 0,
+      });
       openDefendantWritePrint(booking);
       return;
     }
@@ -324,5 +387,8 @@ const SLBondIntel = (() => {
     }, 120000);
   }
 
-  return { load, setState, setCounty, setDays, reloadQueue, openLead, writeBond };
+  return {
+    load, setState, setCounty, setDays, reloadQueue, queuePage,
+    focusWritable, openPeople, openHot, openLead, writeBond,
+  };
 })();

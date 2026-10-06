@@ -15,7 +15,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from dashboard.extensions import (
     ACTIVE_STATE_CODES,
@@ -25,6 +25,16 @@ from dashboard.extensions import (
     parse_registered_county,
     registered_county_to_trigger_key,
     resolve_scraper_status,
+)
+from dashboard.routers.helpers import attach_write_eligible
+from dashboard.services.intel_population import (
+    PRESETS,
+    SAFE_BOND,
+    fetch_population,
+    parse_money,
+    resolve_preset,
+    state_clause,
+    time_clause,
 )
 
 logger = logging.getLogger(__name__)
@@ -189,12 +199,7 @@ def _get_registry() -> list[dict]:
 
 def _scraped_at_match(cutoff: datetime) -> dict:
     """Match scraped_at whether stored as datetime or ISO string."""
-    return {"$or": [
-        {"scraped_at": {"$gte": cutoff}},
-        {"scraped_at": {"$gte": cutoff.isoformat()}},
-        {"created_at": {"$gte": cutoff}},
-        {"created_at": {"$gte": cutoff.isoformat()}},
-    ]}
+    return time_clause(cutoff)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -285,16 +290,8 @@ async def get_state_summary():
         total_counties = len(rows)
         total_fleet += total_counties
 
-        # Arrest counts — FL includes legacy docs with missing state
-        if state == "FL":
-            state_match = {"$or": [
-                {"state": {"$in": ["FL", "fl", "Florida", "FLORIDA"]}},
-                {"state": None},
-                {"state": ""},
-                {"state": {"$exists": False}},
-            ]}
-        else:
-            state_match = {"state": {"$in": [state, state.lower(), state.title()]}}
+        # Same clause the defendant drawer uses, so the card count is the list.
+        state_match = state_clause(state)
 
         arrests_24h = await arrests.count_documents({
             "$and": [state_match, _scraped_at_match(cutoff_24h)],
@@ -345,14 +342,15 @@ async def get_state_summary():
         warm_leads = 0
         async for r in arrests.aggregate([
             {"$match": state_match},
+            {"$addFields": {"_safe_bond": SAFE_BOND}},
             {"$group": {
                 "_id": None,
                 "avg_bond": {"$avg": {
-                    "$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", "$$REMOVE"],
+                    "$cond": [{"$gt": ["$_safe_bond", 0]}, "$_safe_bond", "$$REMOVE"],
                 }},
-                "max_bond": {"$max": "$bond_amount"},
+                "max_bond": {"$max": "$_safe_bond"},
                 "total_bond": {"$sum": {
-                    "$cond": [{"$gt": ["$bond_amount", 0]}, "$bond_amount", 0],
+                    "$cond": [{"$gt": ["$_safe_bond", 0]}, "$_safe_bond", 0],
                 }},
                 "hot": {"$sum": {"$cond": [{"$gte": ["$lead_score", 70]}, 1, 0]}},
                 "warm": {"$sum": {"$cond": [
@@ -540,10 +538,7 @@ async def get_live_feed(limit: int = Query(default=50, ge=1, le=200)):
         bond = doc.get("bond_amount")
         if bond is None:
             bond = doc.get("bail_amount")
-        try:
-            bond_num = float(bond) if bond not in (None, "") else 0
-        except (TypeError, ValueError):
-            bond_num = 0
+        bond_num = parse_money(bond)
         charges = doc.get("charges") or doc.get("Charges") or ""
         if isinstance(charges, list):
             charges = " | ".join(str(c) for c in charges)
@@ -566,3 +561,47 @@ async def get_live_feed(limit: int = Query(default=50, ge=1, le=200)):
         "count": len(results),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/ops/defendants
+# The list behind a state-intel graphic. `total` is that graphic's population.
+# ─────────────────────────────────────────────────────────────────────────────
+@multi_state_bp.get("/defendants")
+async def get_population_defendants(
+    preset: str = Query(default="all"),
+    state: str = "",
+    county: str = "",
+    days: int | None = Query(default=None, ge=1, le=365),
+    hours: int | None = Query(default=None, ge=1, le=168),
+    min_score: int | None = Query(default=None, ge=0, le=100),
+    max_score: int | None = Query(default=None, ge=0, le=101),
+    min_bond: float | None = Query(default=None, ge=0),
+    q: str = "",
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=40, ge=1, le=100),
+):
+    """Page the defendants a state card, bond desk, or command chip counted."""
+    try:
+        spec = resolve_preset(
+            preset,
+            days=days,
+            hours=hours,
+            min_score=min_score,
+            max_score=max_score,
+            min_bond=min_bond,
+        )
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Unknown preset. Use one of: {', '.join(PRESETS)}")
+    arrests = get_collection("arrests")
+    payload = await fetch_population(
+        arrests,
+        spec,
+        state=state,
+        county=county,
+        q=q,
+        page=page,
+        limit=limit,
+    )
+    payload["defendants"] = [attach_write_eligible(row) for row in payload["defendants"]]
+    return payload

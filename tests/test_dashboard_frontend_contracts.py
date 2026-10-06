@@ -36,6 +36,28 @@ def test_defendant_card_write_print_is_the_primary_desk():
 def test_bond_intelligence_write_uses_write_print_desk():
     source = (ROOT / "dashboard" / "sl-bond-intelligence.js").read_text()
     assert "openDefendantWritePrint" in source
+    assert "/api/ops/defendants" in source
+    assert "hours: '48'" not in source
+
+
+def test_state_counts_open_the_same_defendants_with_write_print():
+    multi = (ROOT / "dashboard" / "sl-multi-state.js").read_text()
+    command = (ROOT / "dashboard" / "sl-data.js").read_text()
+    page = (ROOT / "dashboard" / "index.html").read_text()
+    ops = (ROOT / "dashboard" / "routers" / "stats.py").read_text()
+
+    assert "openDefendantWritePrint" in multi
+    assert "/api/ops/defendants" in multi
+    assert "SLIntel.open" in multi
+    assert "OH" in multi
+    assert 'data-write="' in command
+    assert "state_order" in command
+    assert "['FL','GA','SC','NC'].forEach" not in command
+    assert "sl-multi-state.css" in page
+    assert "preset:'all'" in page
+    assert "ACTIVE_STATE_CODES" in ops
+    assert "bond_ready_count\": len(bond_ready)" not in ops
+    assert "booking_number" in ops
 
 
 def test_osint_ui_has_ghunt_companion_login():

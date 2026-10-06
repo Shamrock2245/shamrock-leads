@@ -15,7 +15,7 @@
     {
       title: 'Step 1 · Lead Explorer',
       content: `
-        <p>Arrests from <strong>10 states</strong> score automatically:</p>
+        <p>Arrests from <strong>11 states</strong> (Ohio is a guarded pilot) score automatically:</p>
         <ul>
           <li>🔥 <strong style="color:#f87171">Hot (80–100)</strong> — prioritize; Slack may alert <code>#leads</code>.</li>
           <li>🟡 <strong style="color:#fbbf24">Warm (50–79)</strong> — follow up when capacity allows.</li>
@@ -76,7 +76,7 @@
       title: 'Step 6 · Ops health',
       content: `
         <ul>
-          <li>📊 <strong>Multi-State Ops</strong> — scraper health across 10 states.</li>
+          <li>📊 <strong>Multi-State Ops</strong> — scraper health across 11 states. Ohio is guarded.</li>
           <li>🧹 Data hygiene — managers only; protect Atlas storage.</li>
           <li>Printable SOP: <a href="/guide" target="_blank" rel="noopener">leads…/guide</a></li>
         </ul>
