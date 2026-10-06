@@ -94,4 +94,4 @@ nodriver>=0.38  # Seminole, Lake — JS-rendered jail portals (headless Chrome v
 
 # Adobe PDF Services (official SDK — fill/combine/compress)
 # https://developer.adobe.com/document-services/docs/overview/pdf-services-api/quickstarts/python/
-pdfservices-sdk>=4.0.0
+pdfservices-sdk>=4.3.0

@@ -56,4 +56,4 @@ firebase-admin>=7.7.0
 jellyfish>=1.2.1
 
 # Adobe PDF Services (paperwork)
-pdfservices-sdk>=4.0.0
+pdfservices-sdk>=4.3.0
