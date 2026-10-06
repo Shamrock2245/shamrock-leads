@@ -112,6 +112,8 @@ agent_retains = premium - surety_owed - buf_owed
 
 **Output:** Packet ready for signature.
 
+> 💡 **Developer / Console Example:** See [`docs/runbooks/SUPER_CRM_DEFENDANT_ONBOARDING_EXAMPLE.md`](./SUPER_CRM_DEFENDANT_ONBOARDING_EXAMPLE.md) and [`scripts/examples/write_bond_super_crm.js`](../../scripts/examples/write_bond_super_crm.js) for an executable script demonstrating `/api/poa/add`, `/api/poa/bulk-assign`, and `/api/paperwork/packet/finalize` with iPad in-person signing URL generation.
+
 ---
 
 ## Step 7: Send for Signature `[Phase 7]`

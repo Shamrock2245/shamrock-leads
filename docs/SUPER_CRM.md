@@ -69,6 +69,8 @@ iMessage / Shannon / portal magic link → Wix/Telegram webhook → `intake_queu
 ### 3. Match → Paperwork → Active Bond
 Bond Desk: match (human-gated) → surety + POA → DocuSeal packet → payment → **promote to Active Bonds**
 
+> 📋 **Runnable Example:** See [`scripts/examples/write_bond_super_crm.js`](../scripts/examples/write_bond_super_crm.js) and the companion runbook [`docs/runbooks/SUPER_CRM_DEFENDANT_ONBOARDING_EXAMPLE.md`](./runbooks/SUPER_CRM_DEFENDANT_ONBOARDING_EXAMPLE.md) for the exact browser console snippet to add POAs (`/api/poa/add`), bulk-assign charges (`/api/poa/bulk-assign`), and finalize DocuSeal packets (`/api/paperwork/packet/finalize`) with iPad in-person signing links.
+
 ### 4. Active bond lifecycle
 Kanban: Active → Monitoring → Alert → Exonerated / Forfeited / Surrendered  
 GPS tracking, court reminders, FTA alerts, rearrest detector

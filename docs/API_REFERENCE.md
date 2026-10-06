@@ -96,9 +96,12 @@ The dashboard exposes **200+ REST endpoints** across **61 API modules** and **36
 | GET | `/api/poa/inventory` | List all POAs by surety |
 | POST | `/api/poa/add` | Add POA to inventory |
 | POST | `/api/poa/assign` | Assign POA to bond |
+| POST | `/api/poa/bulk-assign` | Bulk-assign POAs per charge/appearance bond |
 | PATCH | `/api/poa/release` | Release POA from bond |
 | PATCH | `/api/poa/reassign` | Swap POA between bonds |
 | GET | `/api/poa/next-available` | Get next available POA for tier |
+
+> 📖 **Working Example:** See [`docs/runbooks/SUPER_CRM_DEFENDANT_ONBOARDING_EXAMPLE.md`](./runbooks/SUPER_CRM_DEFENDANT_ONBOARDING_EXAMPLE.md) for the end-to-end console script chaining `/api/poa/add`, `/api/poa/bulk-assign`, and `/api/paperwork/packet/finalize`.
 
 ---
 
