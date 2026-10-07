@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -230,6 +231,35 @@ def _redact(text: str) -> str:
     return text
 
 
+_LINK_PART = re.compile(r'<([^>]+)>\s*;\s*rel="?([^";,\s]+)"?')
+_MAX_COMMENT_PAGES = 10
+
+
+def _header(headers: dict[str, str], name: str) -> str | None:
+    for key, value in headers.items():
+        if key.lower() == name.lower():
+            return value
+    return None
+
+
+def link_rel(header: str | None, rel: str) -> str | None:
+    """Return the URL for one rel in a GitHub Link header."""
+    if not header:
+        return None
+    for url, name in _LINK_PART.findall(header):
+        if name == rel:
+            return url
+    return None
+
+
+def _comment_dicts(payload: list) -> list[dict]:
+    return [item for item in payload if isinstance(item, dict)]
+
+
+def _comments_have_marker(comments: list[dict]) -> bool:
+    return any(_signature_from_text(item.get("body") or "") for item in comments)
+
+
 class GitHubIssues:
     """Minimal Issues API client. Never prints the token."""
 
@@ -238,16 +268,32 @@ class GitHubIssues:
         self._token = token
         self._api = api_url.rstrip("/")
 
-    def _request(
+    def _api_url(self, url: str | None) -> str | None:
+        """Accept only URLs on this API origin. Link headers must not send us elsewhere."""
+        if not url:
+            return None
+        prefix = self._api + "/"
+        if url.startswith(prefix):
+            return url
+        return None
+
+    def _exchange(
         self,
         method: str,
         path: str,
         payload: dict | None = None,
         quiet: tuple[int, ...] = (),
-    ) -> tuple[int, dict | list | None]:
+    ) -> tuple[int, dict | list | None, dict[str, str]]:
+        if path.startswith("http://") or path.startswith("https://"):
+            url = self._api_url(path)
+            if url is None:
+                print("refusing GitHub URL outside the API origin", file=sys.stderr)
+                return 0, None, {}
+        else:
+            url = f"{self._api}{path}"
         data = None if payload is None else json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
-            f"{self._api}{path}",
+            url,
             data=data,
             method=method,
             headers={
@@ -260,12 +306,24 @@ class GitHubIssues:
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
                 raw = response.read().decode("utf-8")
-                return response.status, json.loads(raw) if raw else None
+                headers = {key: value for key, value in response.headers.items()}
+                return response.status, json.loads(raw) if raw else None, headers
         except urllib.error.HTTPError as exc:
             raw = exc.read().decode("utf-8", errors="replace")
             if exc.code not in quiet:
                 print(f"GitHub API {method} {path} -> HTTP {exc.code}: {_redact(raw)[:300]}", file=sys.stderr)
-            return exc.code, None
+            headers = {key: value for key, value in exc.headers.items()} if exc.headers else {}
+            return exc.code, None, headers
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        payload: dict | None = None,
+        quiet: tuple[int, ...] = (),
+    ) -> tuple[int, dict | list | None]:
+        status, body, _headers = self._exchange(method, path, payload, quiet)
+        return status, body
 
     def ensure_label(self) -> None:
         status, _ = self._request("GET", f"/repos/{self.repo}/labels/{LABEL}", quiet=(404,))
@@ -294,13 +352,35 @@ class GitHubIssues:
         return issues
 
     def _comments(self, number: int) -> list[dict]:
-        status, payload = self._request(
-            "GET",
-            f"/repos/{self.repo}/issues/{number}/comments?per_page=100",
-        )
+        """Issue comments, newest page last, so the newest watchdog marker wins.
+
+        The list endpoint is oldest-first and caps a page at 100. Page 1 is
+        therefore the oldest page. Follow Link rel=last, then rel=prev only
+        while the pages in hand have no marker.
+        """
+        path = f"/repos/{self.repo}/issues/{number}/comments?per_page=100&page=1"
+        status, payload, headers = self._exchange("GET", path)
         if status != 200 or not isinstance(payload, list):
             return []
-        return [item for item in payload if isinstance(item, dict)]
+        first_page = _comment_dicts(payload)
+        collected = first_page
+        last = self._api_url(link_rel(_header(headers, "Link"), "last"))
+        if last:
+            status, payload, headers = self._exchange("GET", last)
+            if status != 200 or not isinstance(payload, list):
+                return first_page
+            collected = _comment_dicts(payload)
+        for _ in range(_MAX_COMMENT_PAGES - 1):
+            if _comments_have_marker(collected):
+                break
+            prev = self._api_url(link_rel(_header(headers, "Link"), "prev"))
+            if not prev:
+                break
+            status, payload, headers = self._exchange("GET", prev)
+            if status != 200 or not isinstance(payload, list):
+                break
+            collected = _comment_dicts(payload) + collected
+        return collected
 
     def describe(self, issue: dict) -> OpenIssue:
         number = int(issue["number"])

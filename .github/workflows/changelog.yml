@@ -7,6 +7,8 @@ name: Changelog
 
 on:
   pull_request:
+    # labeled/unlabeled so adding or removing skip-changelog reruns the gate.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
     branches: [main]
 
 permissions:
