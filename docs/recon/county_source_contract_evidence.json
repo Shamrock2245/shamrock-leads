@@ -630,7 +630,7 @@
       "passive_recommendation": "productive",
       "official_source_url": "http://smartweb.bradfordsheriff.org/smartwebclient/Jail.aspx",
       "access_posture": "Ordinary public HTTP SmartWEB JAIL View (HTTP-only host)",
-      "evidence_note": "2026-10-07 SmartWEB-five recon: Booking No BCSO<YY>JBN<NNNNNN>, booking date/time, charges, bond via booking-date window. Prior curl_cffi path + name/date invented keys retired; shared fl_smartweb. AddMoreResults 500 from box \u2014 first-page cards still emit."
+      "evidence_note": "2026-10-07 SmartWEB-five recon: Booking No BCSO<YY>JBN<NNNNNN>, booking date/time, charges, bond via booking-date window. Prior curl_cffi path + name/date invented keys retired; shared fl_smartweb. 2026-10-07 legacy-paging fix: bare-SearchVals AddMoreResults now pages (30-day read smoke 36 rows, was 10)."
     },
     {
       "state": "FL",
@@ -710,7 +710,7 @@
       "passive_recommendation": "productive",
       "official_source_url": "https://smartcop.dixiecountysheriff.com/smartwebclient/Jail.aspx",
       "access_posture": "Ordinary public HTTPS SmartWEB JAIL View (TypeSearch omitted on this build)",
-      "evidence_note": "2026-10-07 SmartWEB-five recon: Booking No DCSO<YY>JBN<NNNNNN>, booking date/time, charges when published. Plain requests fl_smartweb; TypeSearch optional."
+      "evidence_note": "2026-10-07 SmartWEB-five recon: Booking No DCSO<YY>JBN<NNNNNN>, booking date/time, charges when published. Plain requests fl_smartweb; TypeSearch optional. 2026-10-07 legacy-paging fix: bare-SearchVals AddMoreResults now pages (30-day read smoke 33 rows, was 20)."
     },
     {
       "state": "FL",
@@ -1027,10 +1027,10 @@
     {
       "state": "FL",
       "county_fips": "107",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://smartweb.pcso.us/smartwebclient/Jail.aspx",
+      "access_posture": "Ordinary public HTTPS SmartWEB JAIL View (legacy AddMoreResults page method)",
+      "evidence_note": "2026-10-07 SmartWEB legacy-paging recon: Booking No PCSO<YY>JBN<NNNNNN>, booking date/time, charges, bond via booking-date window + Current Inmates Only. 30-day read smoke 123 rows / 123 unique source Booking No (was capped at 20 first-page cards: % wildcard + wrong AJAX payload). curl_cffi/verify=False retired; shared fl_smartweb. See docs/recon/FL_SMARTWEB_LEGACY_PAGING_2026-10-07.md."
     },
     {
       "state": "FL",
@@ -1054,7 +1054,7 @@
       "passive_recommendation": "productive",
       "official_source_url": "https://jailview.srso.net/SmartWebClient/jail.aspx",
       "access_posture": "Ordinary public HTTPS SmartWEB JAIL View",
-      "evidence_note": "2026-10-07 SmartWEB-five recon: Booking No SRSO<YY>JBN<NNNNNN>, booking date/time, charges when published. AddMoreResults may 500 \u2014 first-page cards emit. curl_cffi retired."
+      "evidence_note": "2026-10-07 SmartWEB-five recon: Booking No SRSO<YY>JBN<NNNNNN>, booking date/time, charges when published. curl_cffi retired. 2026-10-07 legacy-paging fix: bare-SearchVals AddMoreResults now pages (30-day read smoke 153 rows, was 50)."
     },
     {
       "state": "FL",
@@ -1075,10 +1075,10 @@
     {
       "state": "FL",
       "county_fips": "119",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://portal.sumtercountysheriff.org/smartwebclient/Jail.aspx",
+      "access_posture": "Ordinary public HTTPS SmartWEB JAIL View (modern AddMoreResults page method)",
+      "evidence_note": "2026-10-07 SmartWEB legacy-paging recon: Booking No SCSO<YY>JBN<NNNNNN> (same agency prefix as Suwannee; keys are county-scoped), booking date/time, charges, bond via booking-date window + Current Inmates Only. 30-day read smoke 118 rows / 118 unique source Booking No. curl_cffi/verify=False + % wildcard retired; shared fl_smartweb. See docs/recon/FL_SMARTWEB_LEGACY_PAGING_2026-10-07.md."
     },
     {
       "state": "FL",
@@ -1094,7 +1094,7 @@
       "passive_recommendation": "productive",
       "official_source_url": "http://smartcop.taylorsheriff.org:8989/SmartWEBClient/Jail.aspx",
       "access_posture": "Ordinary public HTTP SmartWEB JAIL View on SO port 8989 (TypeSearch omitted)",
-      "evidence_note": "2026-10-07 SmartWEB-five recon: Booking No TCSO<YY>JBN<NNNNNN>, booking date/time, charges + bond on card. Plain requests fl_smartweb."
+      "evidence_note": "2026-10-07 SmartWEB-five recon: Booking No TCSO<YY>JBN<NNNNNN>, booking date/time, charges + bond on card. Plain requests fl_smartweb. 2026-10-07 legacy-paging fix: bare-SearchVals AddMoreResults now pages (30-day read smoke 38 rows, was 10)."
     },
     {
       "state": "FL",

@@ -21,6 +21,7 @@
 - Parser hardened for SearchHeader identity lines `(W/ FEMALE )` and `(W/ FEMALE / DOB: … )`, and strips `Enlarge Photo` link text so Full_Name is source-clean.
 - TypeSearch ("Current Inmates Only") is optional — Dixie/Taylor builds omit it; booking-date window still works.
 - Bradford / Dixie / Taylor / Santa Rosa: `AddMoreResults` returned HTTP 500 from box on 2026-10-07; first-page cards still carry matching `bookno=` + `Booking No:` text. Escambia paginated successfully (147 bookings in a 7-day window).
+- **Superseded later 2026-10-07** by [`FL_SMARTWEB_LEGACY_PAGING_2026-10-07.md`](./FL_SMARTWEB_LEGACY_PAGING_2026-10-07.md): those 500s were the legacy page-method build rejecting the modern `{searchVals: …}` wrapper. `fl_smartweb` now detects the build and pages all five.
 - Rows without a matching source Booking No are dropped. No name/date synthetic keys.
 
 ## Holds / next steps
