@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-07 (SC Lancaster NewWorld contract)
+
+### Changed
+- **Lancaster (SC):** replaced thin `NewWorldBaseScraper` wrapper with a plain-HTTPS InmateInquiry scraper (`SC0290000`). `Booking_Number` is the detail **Booking** `YYYY-########` (URL Detail ids and invented `NW_` keys rejected). `Charges` from the BookingCharges grid; `Bond_Amount` from **Total Bond Amount** only (per-charge Bond cells may be reference ids, not dollars). `SOURCE_CONTRACT_VALIDATED=True`; Health stays **unverified** until write smoke (not `verified_public`). Evidence + matrix updated (`docs/recon/SC_LANCASTER_NEWWORLD_2026-10-07.md`). SC fail_closed holds (Richland/Sumter/Hampton/Marlboro/Oconee/Pickens/…) untouched.
+
 ## [Unreleased] — 2026-10-07 (SC Florence + Newberry field completeness)
 
 ### Changed
