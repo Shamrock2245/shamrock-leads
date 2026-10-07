@@ -41,6 +41,9 @@ New Arrest Scraped
 
 - Fuzzy name matching with configurable threshold (default: 0.85)
 - DOB must match exactly when available
-- Only scans against `active` and `monitoring` status bonds
-- Never auto-changes bond status — human reviews and decides
-- All detections logged in `audit_events`
+- Watches `active`, `monitoring`, `alert`, `reinstated`, and `forfeited` bonds
+- Low-confidence matches stay in the Book Watch "Needs identity check" lane
+- Indemnitor texts require confirmed or high confidence plus a staff session action
+- Revoke moves a bond to `alert` only through `BondStateMachine.transition_bond`
+- Triage actor comes from the staff session
+- All triage actions are logged in `audit_events`
