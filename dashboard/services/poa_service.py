@@ -23,14 +23,33 @@ TIERS = {
 
 
 def determine_surety_from_prefix(prefix: str, explicit_surety: str | None = None) -> str:
-    """Return 'osi' or 'palmetto' based on prefix string, with optional explicit fallback."""
-    clean = str(prefix or "").strip().upper()
-    if clean.startswith("PSC") or clean.startswith("PAL"):
-        return "palmetto"
-    if clean.startswith("OSI") or "OSI-P" in clean:
-        return "osi"
-    if explicit_surety and explicit_surety.lower().strip() in ("osi", "palmetto"):
-        return explicit_surety.lower().strip()
+    """Resolve a POA prefix to a surety.
+
+    Published carriers win when the prefix is one of their tiers. An explicit
+    third-party surety is never rewritten to OSI: an unknown or mismatched
+    prefix fails closed. A blank prefix with no explicit surety stays OSI,
+    which is the historical inventory default.
+    """
+    from dashboard.services.surety_registry import (
+        UnsupportedSuretyError,
+        is_supported_surety,
+        surety_for_poa_prefix,
+    )
+
+    matched = surety_for_poa_prefix(prefix)
+    explicit = str(explicit_surety or "").strip().lower()
+    if explicit and explicit not in ("osi", "palmetto"):
+        if not is_supported_surety(explicit):
+            raise UnsupportedSuretyError(explicit)
+        if matched == explicit:
+            return explicit
+        if matched and matched != explicit:
+            raise UnsupportedSuretyError(explicit, code="surety_prefix_mismatch")
+        raise UnsupportedSuretyError(explicit, code="surety_prefix_required")
+    if matched:
+        return matched
+    if explicit in ("osi", "palmetto"):
+        return explicit
     return "osi"
 
 
@@ -101,20 +120,44 @@ def inventory_prefix_query(prefix: str) -> dict:
     }
 
 
+_OSI_DISPLAY = {
+    "OSI3": "OSI-P3",
+    "OSI6": "OSI-P6",
+    "OSI16": "OSI-P16",
+    "OSI51": "OSI-P51",
+    "OSI101": "OSI-P101",
+    "OSI251": "OSI-P251",
+}
+
+
 def get_poa_tier_for_bond(surety_id: str, bond_amount: float) -> str:
     """
-    Return the smallest POA prefix that covers the bond amount for the given surety.
-    OSI tiers:     OSI-P3 / OSI3→$3k, OSI-P6 / OSI6→$6k, OSI-P16 / OSI16→$16k, OSI-P51 / OSI51→$51k
-    Palmetto tiers: PSC2->$2k, PSC5->$5k, PSC15->$15k, PSC25->$25k, PSC50->$50k, PSC75->$75k, PSC105->$105k
+    Smallest POA prefix that covers the bond.
+
+    A published version's prefixes are the tiers for that surety. OSI keeps
+    the historical OSI-P labels when the published prefix is OSI3 / OSI6 / ….
+    A third-party surety with no published tiers fails closed.
     """
-    for item in TIERS.get(surety_id.lower(), []):
-        cap = item[0]
-        prefix = item[1]
-        if bond_amount <= cap:
-            return prefix
-    # Bond exceeds all tiers — return highest available
-    last = TIERS.get(surety_id.lower(), [(0, "UNKNOWN")])[-1]
-    return last[1]
+    from dashboard.services.surety_registry import UnsupportedSuretyError, published_poa_tiers
+
+    sid = str(surety_id or "").strip().lower()
+    published = published_poa_tiers(sid)
+    if published:
+        tiers = published
+    elif sid in TIERS:
+        tiers = [(float(item[0]), str(item[1])) for item in TIERS[sid]]
+    else:
+        raise UnsupportedSuretyError(sid, code="poa_tiers_unavailable")
+    chosen = ""
+    for cap, prefix in tiers:
+        if float(bond_amount) <= float(cap):
+            chosen = prefix
+            break
+    if not chosen:
+        chosen = tiers[-1][1]
+    if sid == "osi":
+        return _OSI_DISPLAY.get(str(chosen).upper(), chosen)
+    return chosen
 
 
 async def seed_poa_inventory(poa_inventory):

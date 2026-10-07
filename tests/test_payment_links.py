@@ -21,6 +21,9 @@ def test_defaults():
         assert "lnk_b6bf996f" in WEB and "lnk_07a13eb" in TG
         assert pl.payment_link_for("telegram") == TG
         assert pl.payment_link_for("telegram_mini_app") == TG
+        assert pl.payment_link_for("elevenlabs_voice") == WEB
+        assert pl.payment_link_for("walk_in") == WEB
+        assert pl.payment_link_for("bookmarklet") == WEB
         for src in ("website", "wix_webhook", "kiosk", "manual", "shannon", "sms", None, "whatever"):
             assert pl.payment_link_for(src) == WEB, src
 

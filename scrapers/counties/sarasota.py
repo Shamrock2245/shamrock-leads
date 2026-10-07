@@ -27,7 +27,11 @@ class SarasotaCountyScraper(JailTrackerBaseScraper):
     SOURCE_CONTRACT_VALIDATED = False
     SOURCE_CONTRACT_REASON = (
         "No official Sarasota broad roster with complete identity, source-issued "
-        "booking identity, and booking timestamp is verified through normal access."
+        "booking identity, and booking timestamp is verified through normal access. "
+        "2026-10-07 live check: the sheriff's current-inmate listing shows only an "
+        "opaque per-person link id, name and birth date (no booking number, no "
+        "booking date/time); detail and search pages return a Cloudflare challenge. "
+        "Reopen gate: scrapers/counties/sarasota_contract.py."
     )
 
     @property

@@ -44,12 +44,15 @@ def test_shannon_intake_submit_skips_matching(monkeypatch):
                 "skip_match": True,
             }
 
-    with patch("dashboard.services.matching_engine.MatchingEngine") as engine_cls:
+    with patch("dashboard.services.matching_engine.MatchingEngine") as engine_cls, \
+         patch("dashboard.services.intake_fanout.schedule_after_save") as sched:
         result = asyncio.run(intake_mod.intake_submit(Req()))
     assert result["success"] is True
     assert result["intake_id"] == "SH-2397849365-JANE-DOE"
     assert result["indemnitor_name"] == "Brendan O'Neal"
     assert result["match"] is None
+    assert result["payment_link"].startswith("https://")
     engine_cls.assert_not_called()
+    sched.assert_called_once()
     saved = col.update_one.await_args.args[1]["$set"]
     assert saved["indemnitor_name"] == "Brendan O'Neal"

@@ -525,12 +525,13 @@ function openBondModal(nameOrLead, bond, county, booking) {
     <div class="wb-section">
       <div class="wb-section-label">Select Surety Company</div>
       <div class="insurer-selector">
-        <button class="insurer-pill active" id="suretyOSI" onclick="selectSurety('osi')">
+        <button class="insurer-pill active" id="suretyOSI" data-surety="osi" onclick="selectSurety('osi')">
           <span class="insurer-pill-icon">🛡️</span><span class="insurer-pill-name">OSI</span><span class="insurer-pill-full">O'Shaughnahill S&I</span>
         </button>
-        <button class="insurer-pill" id="suretyPalmetto" onclick="selectSurety('palmetto')">
+        <button class="insurer-pill" id="suretyPalmetto" data-surety="palmetto" onclick="selectSurety('palmetto')">
           <span class="insurer-pill-icon">🌴</span><span class="insurer-pill-name">Palmetto</span><span class="insurer-pill-full">Palmetto Surety Corp.</span>
         </button>
+        <span id="suretyPublished" style="display:contents"></span>
         <span id="suretyComingSoon" style="display:contents"></span>
       </div>
     </div>
@@ -695,7 +696,7 @@ function openBondModal(nameOrLead, bond, county, booking) {
     }));
   }
 
-  const initialSurety = (lead.surety_id || lead.surety || 'osi').toLowerCase() === 'palmetto' ? 'palmetto' : 'osi';
+  const initialSurety = writeBondSuretyId(lead.surety_id || lead.surety || 'osi');
   window._bondModalData = {
     lead,
     name, bond: bondAmt, county: cnty, booking: bkNum,
@@ -709,13 +710,13 @@ function openBondModal(nameOrLead, bond, county, booking) {
   };
 
   fetchPoaNumbers(initialSurety, bondAmt, chargeList);
-  renderComingSoonSureties();
-  if (initialSurety === 'palmetto') {
+  if (initialSurety !== 'osi') {
     const osi = document.getElementById('suretyOSI');
-    const pal = document.getElementById('suretyPalmetto');
     if (osi) osi.classList.remove('active');
-    if (pal) pal.classList.add('active');
+    const pal = document.getElementById('suretyPalmetto');
+    if (pal && initialSurety === 'palmetto') pal.classList.add('active');
   }
+  renderComingSoonSureties();
 
   // Check BlueBubbles status + load outreach template + history
   checkBBStatus();
@@ -1321,47 +1322,71 @@ async function downloadAllBonds(copiesPerCharge = 2) {
 // selectable; listed-but-inactive carriers render greyed out ("coming soon").
 // The server fails closed on inactive/unknown sureties regardless of the UI.
 const ACTIVE_SURETY_IDS = new Set(['osi', 'palmetto']);
+
+function writeBondSuretyId(raw) {
+  const id = String(raw || '').trim().toLowerCase();
+  if (!id) return 'osi';
+  return id;
+}
+
 async function renderComingSoonSureties() {
   const slot = document.getElementById('suretyComingSoon');
-  if (!slot) return;
+  const publishedSlot = document.getElementById('suretyPublished');
+  if (!slot && !publishedSlot) return;
   try {
     const r = await fetch('/api/paperwork/sureties', { credentials: 'same-origin' });
     const d = await r.json();
     const rows = (d && d.sureties) || [];
     rows.forEach((row) => { if (row.selectable) ACTIVE_SURETY_IDS.add(row.id); });
     const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-    slot.innerHTML = rows
-      .filter((row) => !row.selectable)
-      .map((row) => `<button type="button" class="insurer-pill disabled" disabled aria-disabled="true"
-          data-surety="${esc(row.id)}" title="${esc(row.reason || 'Coming soon')}">
-          <span class="insurer-pill-icon">⏳</span><span class="insurer-pill-name">${esc(row.short)}</span><span class="insurer-pill-full">Coming soon</span>
-        </button>`)
-      .join('');
+    if (publishedSlot) {
+      publishedSlot.innerHTML = rows
+        .filter((row) => row.selectable && row.id !== 'osi' && row.id !== 'palmetto')
+        .map((row) => `<button type="button" class="insurer-pill" data-surety="${esc(row.id)}" onclick="selectSurety('${esc(row.id)}')">
+            <span class="insurer-pill-icon">📄</span><span class="insurer-pill-name">${esc(row.short)}</span><span class="insurer-pill-full">${esc(row.label || row.id)}</span>
+          </button>`)
+        .join('');
+    }
+    if (slot) {
+      slot.innerHTML = rows
+        .filter((row) => !row.selectable)
+        .map((row) => `<button type="button" class="insurer-pill disabled" disabled aria-disabled="true"
+            data-surety="${esc(row.id)}" title="${esc(row.reason || 'Coming soon')}">
+            <span class="insurer-pill-icon">⏳</span><span class="insurer-pill-name">${esc(row.short)}</span><span class="insurer-pill-full">Coming soon</span>
+          </button>`)
+        .join('');
+    }
+    const current = window._bondModalData && window._bondModalData.surety;
+    if (current && ACTIVE_SURETY_IDS.has(current)) selectSurety(current);
   } catch (e) {
-    slot.innerHTML = '';
+    if (slot) slot.innerHTML = '';
+    if (publishedSlot) publishedSlot.innerHTML = '';
   }
 }
 
 function selectSurety(s) {
-  if (!ACTIVE_SURETY_IDS.has(String(s || '').toLowerCase())) {
+  s = writeBondSuretyId(s);
+  if (!ACTIVE_SURETY_IDS.has(s)) {
     if (typeof SL !== 'undefined' && SL.toast) SL.toast('That surety is not active yet — no paperwork template.', 'warn');
     return;
   }
   window._bondModalData.surety = s;
-  document.getElementById('suretyOSI').classList.toggle('active', s === 'osi');
-  document.getElementById('suretyPalmetto').classList.toggle('active', s === 'palmetto');
+  document.querySelectorAll('.insurer-selector .insurer-pill').forEach((btn) => {
+    if (btn.disabled) return;
+    btn.classList.toggle('active', btn.getAttribute('data-surety') === s);
+  });
   // DocuSeal surety badge (template set for selected surety)
   const snBadge = document.getElementById('sn-surety-badge');
   if (snBadge) {
     if (s === 'palmetto') {
       snBadge.textContent = '🌴 Palmetto · DocuSeal';
-      snBadge.style.background = 'rgba(34,197,94,0.18)';
-      snBadge.style.color = '#4ade80';
-    } else {
+    } else if (s === 'osi') {
       snBadge.textContent = '🛡️ OSI · DocuSeal';
-      snBadge.style.background = 'rgba(34,197,94,0.18)';
-      snBadge.style.color = '#4ade80';
+    } else {
+      snBadge.textContent = s.toUpperCase() + ' · DocuSeal';
     }
+    snBadge.style.background = 'rgba(34,197,94,0.18)';
+    snBadge.style.color = '#4ade80';
   }
   // Re-fetch POA numbers for the newly selected surety
   const data = window._bondModalData;

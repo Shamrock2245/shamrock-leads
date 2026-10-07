@@ -125,6 +125,17 @@ class AntiBotBlocked(RuntimeError):
     """WAF / CAPTCHA / 403 / Cloudflare interstitial — never retried."""
 
 
+class EgressBlocked(AntiBotBlocked):
+    """The source refuses *this host's egress* (WAF / Cloudflare challenge that
+    only clears from residential networks), as opposed to the source being empty.
+
+    Classified ``anti_bot`` with ``egress_block=True``; never retried. Raise it
+    instead of returning ``[]`` so Health shows an egress block, not ``empty``.
+    Messages should start with ``egress_block:`` so the persisted error string
+    carries the classification too.
+    """
+
+
 class SourceUrlChanged(RuntimeError):
     """Source endpoint returned 404/410 or redirected away — never retried."""
 
@@ -148,6 +159,7 @@ class ErrorClassification:
     retryable: bool = False
     cooldown: bool = False
     http_status: Optional[int] = None
+    egress_block: bool = False
 
     @property
     def counts_toward_disable(self) -> bool:
@@ -288,6 +300,10 @@ def classify_exception(exc: BaseException) -> ErrorClassification:
         return ErrorClassification(ERROR_ANTI_BOT, retryable=False, cooldown=True)
     if isinstance(exc, ParseDriftError):
         return ErrorClassification(ERROR_PARSE_DRIFT)
+    if isinstance(exc, EgressBlocked):
+        return ErrorClassification(
+            ERROR_ANTI_BOT, http_status=_http_status(exc), egress_block=True
+        )
     if isinstance(exc, AntiBotBlocked):
         return ErrorClassification(ERROR_ANTI_BOT, http_status=_http_status(exc))
     if isinstance(exc, SourceUrlChanged):
