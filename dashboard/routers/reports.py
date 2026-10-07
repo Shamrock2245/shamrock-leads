@@ -1223,6 +1223,98 @@ async def upload_spreadsheet(
         logger.exception("reports/upload-spreadsheet error: %s", exc)
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
 
+@reports_bp.get("/reports/powers-pack/{pack}")
+async def powers_pack_download(
+    pack: str,
+    surety: str = Query(default=""),
+    start_date: str = Query(default=None),
+    end_date: str = Query(default=None),
+    fmt: str = Query(default="xlsx"),
+):
+    """Carrier-named Execution, Void, Transfer, or Combined powers pack.
+
+    Unknown, missing, or inactive surety fails closed (same posture as
+    ``require_surety``). Transfer rows come only from stored POA evidence.
+    """
+    from dashboard.services.powers_pack import (
+        PACK_KINDS,
+        assemble_powers_pack,
+        build_powers_pack_xlsx,
+    )
+    from dashboard.services.surety_registry import UnsupportedSuretyError, require_surety
+
+    pack_key = (pack or "").strip().lower()
+    if pack_key not in PACK_KINDS:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "invalid_pack",
+                "message": "Pack must be execution, void, transfer, or combined.",
+                "pack": pack,
+            },
+            status_code=400,
+        )
+    fmt_key = (fmt or "xlsx").strip().lower()
+    if fmt_key not in ("xlsx", "json"):
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "invalid_format",
+                "message": "fmt must be xlsx or json.",
+            },
+            status_code=400,
+        )
+    try:
+        surety_id = require_surety(surety)
+    except UnsupportedSuretyError as exc:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": exc.code,
+                "message": str(exc),
+                "surety_id": exc.surety,
+            },
+            status_code=400,
+        )
+    try:
+        db = get_db()
+        contract = await assemble_powers_pack(
+            db,
+            surety_id=surety_id,
+            pack=pack_key,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        if fmt_key == "json":
+            return contract
+        xlsx = build_powers_pack_xlsx(contract, pack=pack_key)
+        fname = contract["filename"]
+        return Response(
+            content=xlsx,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f'attachment; filename="{fname}"',
+                "Cache-Control": "no-store",
+                "X-Powers-Filename": fname,
+                "X-Execution-Count": str(contract["execution"]["count"]),
+                "X-Void-Count": str(contract["void"]["count"]),
+                "X-Transfer-Count": str(contract["transfer"]["count"]),
+                "X-Transfer-Partial": "true",
+                "X-History-Complete": "false",
+            },
+        )
+    except Exception as exc:
+        logger.exception("reports/powers-pack error: %s", exc)
+        return JSONResponse(
+            {
+                "success": False,
+                "error": str(exc)[:400],
+                "error_type": type(exc).__name__,
+            },
+            status_code=500,
+        )
+
+
 @reports_bp.get("/reports/drive-reports")
 async def list_drive_reports(limit: int = Query(default=15)):
     """Fetch recent reports generated and saved to Google Drive."""

@@ -2594,6 +2594,25 @@
     </div>
   </div>
 
+  <!-- ═══ REPORTS: Carrier powers packs (BailSafe exec / void / transfer / combined) ═══ -->
+  <div class="panel rpt-powers-pack" id="rptPowersPack">
+    <div class="panel-title">Carrier powers packs</div>
+    <p class="rpt-powers-lead">Pick OSI or Palmetto, then download an Execution, Void, Transfer, or Combined pack for the date range above. File names carry the surety.</p>
+    <div class="rpt-powers-row">
+      <div class="rpt-powers-chips" role="group" aria-label="Pack surety">
+        <button type="button" class="rpt-powers-chip rpt-powers-chip-active" data-surety="osi" aria-pressed="true" onclick="SLReports.setPowersSurety('osi')">OSI</button>
+        <button type="button" class="rpt-powers-chip" data-surety="palmetto" aria-pressed="false" onclick="SLReports.setPowersSurety('palmetto')">Palmetto</button>
+      </div>
+      <div class="rpt-powers-actions">
+        <button type="button" class="sl-btn sl-btn-secondary" onclick="SLReports.downloadPowersPack('execution')">Execution</button>
+        <button type="button" class="sl-btn sl-btn-secondary" onclick="SLReports.downloadPowersPack('void')">Void</button>
+        <button type="button" class="sl-btn sl-btn-secondary" onclick="SLReports.downloadPowersPack('transfer')">Transfer</button>
+        <button type="button" class="sl-btn sl-btn-primary" onclick="SLReports.downloadPowersPack('combined')">Combined</button>
+      </div>
+    </div>
+    <p class="rpt-powers-note" id="rptPowersPackNote">Transfer rows come only from stored POA reassign, release, and audit evidence. Agent and office moves are not in the database, so that sheet can be empty or partial. Amounts are stored values. A blank cell was not on the record.</p>
+  </div>
+
   <!-- ═══ REPORTS: KPI Summary Strip ═══ -->
   <div class="stats-grid" style="grid-template-columns:repeat(6,1fr);margin-bottom:20px" id="rptKpiStrip">
     <div class="stat-card accent-card">
@@ -3894,7 +3913,7 @@
 <script defer src="/sl-calendar.js?v=4"></script>
 <script defer src="/sl-calendar-ext.js?v=4"></script>
 <script defer src="/sl-record-bond.js?v=6"></script>
-<script defer src="/sl-reports.js?v=10"></script>
+<script defer src="/sl-reports.js?v=11"></script>
 <script defer src="/sl-animations.js?v=4"></script>
 <script defer src="/sl-lifecycle.js?v=4"></script>
 <script defer src="/sl-refinements.js?v=4"></script>

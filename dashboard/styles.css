@@ -3132,3 +3132,14 @@ button, [role="button"], .tab-btn, .preset-btn, .btn-export,
   transform: scale(1.01);
   box-shadow: 0 0 20px rgba(56, 189, 248, 0.2);
 }
+
+/* Carrier powers packs (Reports) */
+.rpt-powers-pack{padding:16px 18px;margin-bottom:16px}
+.rpt-powers-lead{margin:6px 0 12px;color:var(--muted);font-size:13px;max-width:760px}
+.rpt-powers-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.rpt-powers-chips{display:flex;gap:6px}
+.rpt-powers-chip{padding:6px 14px;border-radius:20px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:.2px}
+.rpt-powers-chip:hover{border-color:var(--accent);color:var(--accent)}
+.rpt-powers-chip-active{background:rgba(16,185,129,.12);border-color:var(--accent);color:var(--accent)}
+.rpt-powers-actions{display:flex;gap:8px;flex-wrap:wrap}
+.rpt-powers-note{margin:12px 0 0;font-size:12px;line-height:1.45;color:var(--muted);max-width:860px}
