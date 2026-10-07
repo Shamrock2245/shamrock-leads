@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-07 (SC Oconee + Pickens Zuercher fail_closed)
+
+### Changed
+- **Oconee (SC) / Pickens (SC):** explicit `SOURCE_CONTRACT_VALIDATED=False` guards on the Zuercher thin wrappers (public roster, **no** source booking/inmate ID — same hold as Colleton/Kershaw). `SCRAPER_SOURCE_STATES` → `fail_closed`. Evidence + matrix + `docs/recon/SC_OCONEE_PICKENS_ZUERCHER_2026-10-07.md`. No invented keys.
+
 ## [Unreleased] — 2026-10-07 (NC Mecklenburg Inmate Inquiry JSON)
 
 ### Changed

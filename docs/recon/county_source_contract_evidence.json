@@ -4667,10 +4667,10 @@
     {
       "state": "SC",
       "county_fips": "073",
-      "passive_recommendation": "not_verified",
-      "official_source_url": "\u2014",
-      "access_posture": "No source contract safely verified",
-      "evidence_note": "No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing."
+      "passive_recommendation": "fail_closed",
+      "official_source_url": "https://oconee-so-sc.zuercherportal.com/",
+      "access_posture": "Ordinary public Zuercher inmates roster; no source booking/inmate ID on listing or detail",
+      "evidence_note": "2026-10-07 recon: public roster confirmed at oconee-so-sc.zuercherportal.com; rows lack source-issued booking/inmate ID. Hold fail_closed \u2014 do not invent keys. See docs/recon/SC_OCONEE_PICKENS_ZUERCHER_2026-10-07.md."
     },
     {
       "state": "SC",
@@ -4683,10 +4683,10 @@
     {
       "state": "SC",
       "county_fips": "077",
-      "passive_recommendation": "not_verified",
-      "official_source_url": "\u2014",
-      "access_posture": "No source contract safely verified",
-      "evidence_note": "No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing."
+      "passive_recommendation": "fail_closed",
+      "official_source_url": "https://pickens-so-sc.zuercherportal.com/",
+      "access_posture": "Ordinary public Zuercher inmates roster; no source booking/inmate ID on listing or detail",
+      "evidence_note": "2026-10-07 recon: public roster confirmed at pickens-so-sc.zuercherportal.com; rows lack source-issued booking/inmate ID. Hold fail_closed \u2014 do not invent keys. See docs/recon/SC_OCONEE_PICKENS_ZUERCHER_2026-10-07.md."
     },
     {
       "state": "SC",

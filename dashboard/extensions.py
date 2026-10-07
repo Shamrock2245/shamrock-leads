@@ -655,6 +655,8 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     "Jasper (SC)": "fail_closed",
     "Kershaw (SC)": "fail_closed",
     "Laurens (SC)": "fail_closed",
+    "Oconee (SC)": "fail_closed",
+    "Pickens (SC)": "fail_closed",
     "Lee (SC)": "fail_closed",
     "Lexington (SC)": "fail_closed",
     "Marion (SC)": "fail_closed",
