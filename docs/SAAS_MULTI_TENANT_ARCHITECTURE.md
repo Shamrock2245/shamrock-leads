@@ -358,6 +358,8 @@ Suspension blocks packet send, outbound text, and new bonds. It does not delete 
 
 ### 11.3 Surety access
 
+**Shipped behind `SAAS_MULTI_TENANT`.** `GET /platform/sureties` is the checklist. `PUT /api/platform/tenants/{id}/sureties` stores enabled active sureties and private-template labels on the tenant. Inactive catalog rows cannot be enabled. Packet finalize and `create_submission_for_packet` return `surety_not_entitled` when the flag is on and the agency is not enabled. Flag off, `require_surety` and the picker stay on today's registry. Shamrock keeps OSI and Palmetto even if the checklist is saved empty. Private labels are a slot for the upload-and-map desk; this slice does not render a packet from them.
+
 ```mermaid
 flowchart TD
   cat[Catalog: OSI, Palmetto, Lexington, Roche, Universal, Bankers] --> checklist[Checkbox per agency]
@@ -469,7 +471,7 @@ Each phase is shippable on its own. Each is reversible by turning `SAAS_MULTI_TE
 | **1b. Human backfill** | Operator runs `--connect` then `--apply` with the ack env, in a window. | `--down --apply` with the same ack. | Operational. Not this PR. |
 | **2. Onboarding console** | Wizard, self-serve pending state, invites recorded not sent. Implemented behind the flag in the onboarding follow-up. | Flag off returns 404. Shamrock seed is untouched. | New routes and one HTML surface. |
 | **3. Stripe test mode** | Plans, Checkout, webhooks, MRR, suspend. Implemented behind the flag in the billing follow-up. No live key. | Flag off returns 404. Stripe test data can be discarded. | New billing module. Webhook signature required. |
-| **4. Surety entitlements** | Checklist over `SURETY_REGISTRY`. Finalize refuses a surety the tenant does not have. Private-template slot for Paperwork Desk. | Flag off uses today's registry. | A guard in the existing finalize path, not a new packet builder. |
+| **4. Surety entitlements** | Checklist over `SURETY_REGISTRY`. Implemented behind the flag. Finalize refuses a surety the tenant does not have. Private-template slot for Paperwork Desk. | Flag off uses today's registry. | A guard in the existing finalize path, not a new packet builder. |
 | **5. Lead subscriptions** | State/county picker. `route_lead` fan-out. Shared and exclusive both implemented; exclusive stays off until the owner decides. | Flag off. Writer keeps inserting Shamrock's leads as it does now. | Writer change is the risky part and stays behind the flag. |
 | **6. Start bond packet** | Four-click UI calling hydrate → preflight → DocuSeal → existing pay link. | Flag off hides the UI. Old paperwork routes stay. | Thin client over `paperwork.py`. |
 | **7. Bypass closure** | The 19 clients in §12 either call the proxy or are proven global-only. SSE filtered by tenant. | Per client. | The gate before enabling the flag in production. |

@@ -1609,9 +1609,16 @@ class DocuSealService:
         defendant: optional override; falls back to bond_data defendant fields.
         """
         from dashboard.services.agency_billing import suspension_block
+        from dashboard.services.surety_entitlements import SuretyEntitlementError, assert_entitled
 
         if await suspension_block():
             raise DocuSealPacketValidationError("tenant_suspended")
+        packet_surety = str((bond_data or {}).get("surety_id") or "").strip()
+        if packet_surety:
+            try:
+                await assert_entitled(packet_surety)
+            except SuretyEntitlementError as exc:
+                raise DocuSealPacketValidationError(exc.code) from exc
         bond_data = dict(bond_data or {})
         if template_id is None or str(template_id).strip() in ("", "0", "null", "none"):
             raise DocuSealPacketValidationError("DocuSeal packet blocked: a valid template_id is required.")

@@ -618,9 +618,10 @@ async def list_sureties():
     ``selectable: false`` so the UI renders them greyed out. Every paperwork
     path still fails closed on inactive/unknown sureties server-side.
     """
+    from dashboard.services.surety_entitlements import annotate_picker
     from dashboard.services.surety_registry import picker_options
 
-    return {"success": True, "sureties": picker_options()}
+    return {"success": True, "sureties": await annotate_picker(picker_options())}
 
 
 @paperwork_bp.get("/paperwork/payment-links")
@@ -1328,12 +1329,24 @@ async def packet_builder_finalize(request: Request):
                 )
         # Fail closed on surety BEFORE any document, POA, or template work.
         # A missing or unknown surety must never become OSI.
+        from dashboard.services.surety_entitlements import SuretyEntitlementError, assert_entitled
         from dashboard.services.surety_registry import (
             UnsupportedSuretyError,
             require_surety,
         )
         try:
             finalize_surety = require_surety(body.get("surety_id") or ctx.get("surety_id"))
+            await assert_entitled(finalize_surety)
+        except SuretyEntitlementError as ent_exc:
+            return JSONResponse(
+                {
+                    "success": False,
+                    "error": ent_exc.code,
+                    "message": "This agency is not enabled for that surety.",
+                    "surety_id": body.get("surety_id") or ctx.get("surety_id"),
+                },
+                status_code=403,
+            )
         except UnsupportedSuretyError as surety_exc:
             return JSONResponse(
                 {
