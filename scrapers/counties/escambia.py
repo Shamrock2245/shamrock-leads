@@ -1,60 +1,43 @@
 """
-Escambia County Arrest Scraper — SmartCOP SmartWeb.
-Source: Escambia County Sheriff's Office
-URL: https://inmatelookup.myescambia.com/smartwebclient/jail.aspx
-Method: curl_cffi (chrome131 impersonation) + shared smartweb_parser
-Stealth: Direct-first (proxy CONNECT 502s common on SmartWEB hosts)
+Escambia County (FL) Arrest Scraper — SmartCOP SmartWEB JAIL View.
+
+Source contract (recon 2026-10-07, docs/recon/FL_SMARTWEB_FIVE_2026-10-07.md):
+  * URL: https://inmatelookup.myescambia.com/smartwebclient/jail.aspx
+  * Plain HTTPS ASP.NET WebForms; no login; ordinary access from box.
+  * Broad criterion: Begin/End Booking Date + Current Inmates Only.
+  * Source-issued Booking No pattern: ECC<YY>JBN<NNNNNN>.
+  * No Odyssey / invented keys; curl_cffi path retired.
 """
-import logging
-import urllib3
-from typing import List
+from __future__ import annotations
 
-from curl_cffi import requests as cffi_requests
+from typing import List, Optional
+
 from scrapers.base_scraper import BaseScraper
+from scrapers.fl_smartweb import scrape_smartweb_jail_view
 from core.models import ArrestRecord
-from scrapers.smartweb_parser import scrape_smartweb
 
-logger = logging.getLogger(__name__)
-
-BASE_URL = "https://inmatelookup.myescambia.com"
-SEARCH_URL = f"{BASE_URL}/smartwebclient/jail.aspx"
+BASE_URL = "https://inmatelookup.myescambia.com/smartwebclient"
 FACILITY = "Escambia County Jail"
-
-# ── Stealth Stack ──────────────────────────────────────────────────────────────
-IMPERSONATE = "chrome131"
-STEALTH_HEADERS = {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "Upgrade-Insecure-Requests": "1",
-    "DNT": "1",
-}
 
 
 class EscambiaCountyScraper(BaseScraper):
+    """Escambia County (FL) — SmartWEB JAIL View (Pensacola)."""
+
+    SOURCE_CONTRACT_VALIDATED = True
+
     @property
     def county(self) -> str:
         return "Escambia"
 
-    def scrape(self) -> List[ArrestRecord]:
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        session = cffi_requests.Session(impersonate=IMPERSONATE)
+    @property
+    def state(self) -> str:
+        return "FL"
 
-        try:
-            logger.info(f"Starting Escambia SmartWeb scrape using base URL: {SEARCH_URL}")
-            records = scrape_smartweb(
-                base_url=SEARCH_URL,
-                county=self.county,
-                facility=FACILITY,
-                session=session,
-                ArrestRecord=ArrestRecord
-            )
-            logger.info(f"Escambia: {len(records)} records scraped successfully")
-            return records
-        except Exception as e:
-            logger.error(f"Escambia SmartWeb fatal: {e}")
-            raise
+    def scrape(self, lookback_days: Optional[int] = None) -> List[ArrestRecord]:
+        return scrape_smartweb_jail_view(
+            county=self.county,
+            facility=FACILITY,
+            base_url=BASE_URL,
+            lookback_days=lookback_days,
+            log_prefix="Escambia",
+        )

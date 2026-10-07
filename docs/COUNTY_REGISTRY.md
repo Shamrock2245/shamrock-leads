@@ -101,10 +101,10 @@
 ## Tier 8 — Panhandle (7 Counties)
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
-| 40 | **Escambia** | Odyssey REST API | `escambia.py` | ✅ Active | 120 min | 2026-04-27 |
+| 40 | **Escambia** | SmartWEB JAIL View (`ECC<YY>JBN######`) — plain requests | `escambia.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
 | 41 | **Okaloosa** | requests POST — HTML table | `okaloosa.py` | ✅ Active | 120 min | 2026-04-27 |
 | 42 | **Bay** | Custom HTML | `bay.py` | ✅ Active | 120 min | 2026-04-27 |
-| 43 | **Santa Rosa** | SmartWeb — wildcard (%) search + AJAX AddMoreResults | `santa_rosa.py` | ✅ Active | 120 min | 2026-05-25 |
+| 43 | **Santa Rosa** | SmartWEB JAIL View (`SRSO<YY>JBN######`) — plain requests | `santa_rosa.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
 | 44 | **Walton** | New World InmateInquiry GET | `walton.py` | ✅ Active | 120 min | 2026-04-27 |
 | 45 | **Jackson** | Stub — no public roster | `jackson.py` | ✅ Active | 360 min | 2026-04-27 |
 | 46 | **Gadsden** | SmartWEB iframe → `69.21.72.195` (server dead) | `gadsden.py` | 🔴 Upstream dead | 180 min | 2026-07-24 |
@@ -115,8 +115,8 @@
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 47 | **Leon** | requests POST — A-Z iteration | `leon.py` | 🔴 Broken Target (500 Error) | 90 min | 2026-05-24 |
-| 48 | **Taylor** | SmartWeb ASP.NET POST | `taylor.py` | ✅ Active | 240 min | 2026-04-27 |
-| 49 | **Dixie** | Custom HTML | `dixie.py` | ✅ Active | 240 min | 2026-04-27 |
+| 48 | **Taylor** | SmartWEB JAIL View (`TCSO<YY>JBN######`) — plain requests | `taylor.py` | ✅ Active (unverified until write smoke) | 240 min | 2026-10-07 |
+| 49 | **Dixie** | SmartWEB JAIL View (`DCSO<YY>JBN######`) — plain requests | `dixie.py` | ✅ Active (unverified until write smoke) | 240 min | 2026-10-07 |
 | 50 | **Monroe** | JSON API `data.keysso.net/api/arrests` (v2) | `monroe.py` | ✅ Active | 120 min | 2026-07-24 |
 
 ---
@@ -132,7 +132,7 @@
 
 ### Rural source-recon queue — scaffolded and registered
 
-The following counties are **not missing implementations**. Their modules and scheduler entries are present, but public source contracts still require county-by-county confirmation before any record-emitting behavior can be relied on: **Wakulla, Baker, Bradford, Levy, Hamilton, Lafayette, Madison, Gilchrist, Union, Calhoun, Gulf, Holmes, Jefferson, Liberty, Washington, and Franklin**.
+The following counties are **not missing implementations**. Their modules and scheduler entries are present, but public source contracts still require county-by-county confirmation before any record-emitting behavior can be relied on: **Wakulla, Baker, Levy, Lafayette, Union, Calhoun, Gulf, Holmes, Jefferson, Liberty, Washington, and Franklin** (Bradford / Hamilton / Madison / Gilchrist SmartWEB contracts proven 2026-10-07 — Health unverified until write smoke).
 
 > A scaffold must return no arrest records whenever a source row lacks a complete identity and a source-issued immutable booking identifier. Do not synthesize a key from a name, date, profile URL, or document ID. Record the final source decision in `SCRAPER_SOURCE_STATES` and this registry only after a bounded validation.
 

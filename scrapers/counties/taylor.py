@@ -1,68 +1,43 @@
 """
-Taylor County Arrest Scraper — SmartCOP ASP.NET.
-Source: Taylor County Sheriff's Office
-Public entry: http://jail.taylorsheriff.org/ → redirects to
-  http://smartcop.taylorsheriff.org:8989/SmartWEBClient/Jail.aspx
-(HTTPS :443 is dead; use HTTP on port 8989.)
+Taylor County (FL) Arrest Scraper — SmartCOP SmartWEB JAIL View.
+
+Source contract (recon 2026-10-07, docs/recon/FL_SMARTWEB_FIVE_2026-10-07.md):
+  * URL: http://smartcop.taylorsheriff.org:8989/SmartWEBClient/Jail.aspx
+  * Plain HTTP ASP.NET WebForms on SO-published port 8989; no login.
+  * Broad criterion: Begin/End Booking Date (this build omits TypeSearch).
+  * Source-issued Booking No pattern: TCSO<YY>JBN<NNNNNN>.
+  * No invented booking keys.
 """
-import logging
-from typing import List
+from __future__ import annotations
+
+from typing import List, Optional
 
 from scrapers.base_scraper import BaseScraper
+from scrapers.fl_smartweb import scrape_smartweb_jail_view
 from core.models import ArrestRecord
-from scrapers.smartweb_parser import scrape_smartweb
 
-from curl_cffi import requests as cffi_requests
-logger = logging.getLogger(__name__)
-
-SEARCH_URL = "http://smartcop.taylorsheriff.org:8989/SmartWEBClient/Jail.aspx"
+BASE_URL = "http://smartcop.taylorsheriff.org:8989/SmartWEBClient"
 FACILITY = "Taylor County Jail"
 
-# ── Stealth Stack ──────────────────────────────────────────────────────────────
-IMPERSONATE = "chrome131"
-STEALTH_HEADERS = {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "Upgrade-Insecure-Requests": "1",
-    "DNT": "1",
-}
 
 class TaylorCountyScraper(BaseScraper):
+    """Taylor County (FL) — SmartWEB JAIL View."""
+
+    SOURCE_CONTRACT_VALIDATED = True
+
     @property
     def county(self) -> str:
         return "Taylor"
 
-    def scrape(self) -> List[ArrestRecord]:
-        # Direct only — CONNECT proxies rarely support custom ports like :8989
-        session = cffi_requests.Session(impersonate=IMPERSONATE)
-        session.headers.update(STEALTH_HEADERS)
-        try:
-            records = scrape_smartweb(
-                base_url=SEARCH_URL,
-                county=self.county,
-                facility=FACILITY,
-                session=session,
-                ArrestRecord=ArrestRecord,
-            )
-            # Fallback via public entry host if direct port fails
-            if not records:
-                entry = "http://jail.taylorsheriff.org/"
-                r = session.get(entry, timeout=20, allow_redirects=True, verify=False)
-                final = getattr(r, "url", None) or SEARCH_URL
-                records = scrape_smartweb(
-                    base_url=final,
-                    county=self.county,
-                    facility=FACILITY,
-                    session=session,
-                    ArrestRecord=ArrestRecord,
-                )
-            logger.info(f"Taylor: {len(records)} records")
-            return records
-        except Exception as e:
-            logger.error(f"Taylor: scrape failed: {e}")
-            raise
+    @property
+    def state(self) -> str:
+        return "FL"
+
+    def scrape(self, lookback_days: Optional[int] = None) -> List[ArrestRecord]:
+        return scrape_smartweb_jail_view(
+            county=self.county,
+            facility=FACILITY,
+            base_url=BASE_URL,
+            lookback_days=lookback_days,
+            log_prefix="Taylor",
+        )

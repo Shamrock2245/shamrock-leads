@@ -80,8 +80,10 @@ def scrape_smartweb_jail_view(
     resp = session.get(search_url, timeout=30)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
-    if not soup.find("input", {"name": "tbBeginDate"}) or not soup.find("select", {"name": "TypeSearch"}):
-        raise RuntimeError(f"{prefix}: JAIL View search form changed (tbBeginDate/TypeSearch missing)")
+    if not soup.find("input", {"name": "tbBeginDate"}):
+        raise RuntimeError(f"{prefix}: JAIL View search form changed (tbBeginDate missing)")
+    # TypeSearch (Current Inmates Only) exists on newer JAIL Views (Suwannee/Hamilton);
+    # older Dixie/Taylor builds omit it and still accept a booking-date window POST.
 
     form = {i["name"]: i.get("value", "") for i in soup.select("input[type=hidden]") if i.get("name")}
     form.update(
@@ -93,12 +95,13 @@ def scrape_smartweb_jail_view(
             "tbEndDate": end,
             "tbBeginReleaseDate": "",
             "tbEndReleaseDate": "",
-            "TypeSearch": "0",  # Current Inmates Only
             "SearchSortOption": "1",  # Booking Date
             "SearchOrderOption": "1",  # Descending
             "btnSumit": "Submit",
         }
     )
+    if soup.find("select", {"name": "TypeSearch"}):
+        form["TypeSearch"] = "0"  # Current Inmates Only
     resp2 = session.post(search_url, data=form, timeout=60)
     resp2.raise_for_status()
 
@@ -154,6 +157,54 @@ def scrape_smartweb_jail_view(
     return all_records
 
 
+def _parse_name_from_header(header_text: str) -> tuple[str, str, str, str]:
+    """Parse SearchHeader / card identity line.
+
+    Variants seen in the wild:
+      LAST, FIRST MIDDLE (W/ FEMALE )
+      LAST, FIRST MIDDLE (W/ FEMALE / DOB: 11/30/1995 )
+      LAST, FIRST (W/ MALE )
+    Returns (full_name, race, sex, dob_from_header).
+    """
+    cleaned = re.sub(r"\s+", " ", (header_text or "")).strip()
+    cleaned = re.sub(r"(?i)^enlarge\s+photo\s+", "", cleaned).strip()
+    m = re.search(
+        r"([A-Z][A-Z\s\-\',\.]+,\s*[A-Z][A-Z\s\-\'\.]+?)\s*"
+        r"\(([A-Z])\s*/\s*([A-Z]+)(?:\s*/\s*DOB:\s*([\d/]+))?\s*\)",
+        cleaned,
+        re.IGNORECASE,
+    )
+    if not m:
+        return "", "", "", ""
+    full_name = m.group(1).strip()
+    race = (m.group(2) or "").upper()
+    sex_raw = (m.group(3) or "").upper()
+    dob = (m.group(4) or "").strip()
+    sex = "M" if sex_raw in ("MALE", "M") else "F" if sex_raw in ("FEMALE", "F") else ""
+    return full_name, race, sex, dob
+
+
+def _header_text_for_card(img) -> str:
+    """Prefer the inmate SearchHeader cell; fall back to nearby row text."""
+    row = img.find_parent("tr")
+    if row:
+        sh = row.select_one(".SearchHeader") or row.find(class_="SearchHeader")
+        if sh and sh.get_text(strip=True):
+            return sh.get_text(" ", strip=True)
+        # SearchHeader sometimes sits one sibling down from the photo row
+        sib = row.find_next_sibling("tr")
+        for _ in range(3):
+            if not sib:
+                break
+            sh = sib.select_one(".SearchHeader") or sib.find(class_="SearchHeader")
+            if sh and sh.get_text(strip=True):
+                return sh.get_text(" ", strip=True)
+            if sib.find("img", src=re.compile(r"bookno=")):
+                break
+            sib = sib.find_next_sibling("tr")
+    return ""
+
+
 def _parse_html(
     html: str,
     seen: set,
@@ -188,25 +239,14 @@ def _parse_html(
             pass
 
         block_text = " ".join(block_text.split())
+        block_text = re.sub(r"(?i)\benlarge\s+photo\b", " ", block_text)
+        block_text = " ".join(block_text.split())
         text_bk = re.search(r"Booking No:\s*([A-Z0-9]+)", block_text)
         if not text_bk or text_bk.group(1) != booking_num:
             continue
 
-        name_m = re.search(
-            r"([A-Z][A-Z\s\-\',]+,\s*[A-Z][A-Z\s\-\'\.]+)\s*\(([A-Z])/\s*([A-Z]+)\s*\)",
-            block_text,
-            re.IGNORECASE,
-        )
-        full_name = name_m.group(1).strip() if name_m else ""
-        race = name_m.group(2) if name_m else ""
-        sex_raw = name_m.group(3) if name_m else ""
-        sex = (
-            "M"
-            if sex_raw.upper() in ("MALE", "M")
-            else "F"
-            if sex_raw.upper() in ("FEMALE", "F")
-            else ""
-        )
+        header = _header_text_for_card(img)
+        full_name, race, sex, header_dob = _parse_name_from_header(header or block_text)
         if not full_name:
             continue
 
@@ -219,7 +259,7 @@ def _parse_html(
             middle = " ".join(fm[1:]) if len(fm) > 1 else ""
 
         dob_m = re.search(r"DOB:\s*([\d/]+)", block_text)
-        dob = dob_m.group(1) if dob_m else ""
+        dob = header_dob or (dob_m.group(1) if dob_m else "")
         bd_m = re.search(r"Booking Date:\s*([\d/]+)(?:\s+(\d{1,2}:\d{2}\s*[AP]M))?", block_text)
         booking_date = bd_m.group(1) if bd_m else ""
         booking_time = (bd_m.group(2) or "") if bd_m else ""
@@ -229,7 +269,7 @@ def _parse_html(
         if "jail" in status.lower() or "custody" in status.lower():
             status = "In Custody"
 
-        addr_m = re.search(r"Address Given:\s*([^\n\r\t]+)", block_text)
+        addr_m = re.search(r"Address Given:\s*([^\n\r\t]+?)(?:\s+CHARGES\b|\s+STATUTE\b|$)", block_text)
         address = addr_m.group(1).strip() if addr_m else ""
 
         charges_list: list[str] = []
@@ -270,6 +310,15 @@ def _parse_html(
                             except ValueError:
                                 pass
                     total_bond += bond_val
+
+        # Listing-level Bond Amount is source text when no charge-grid bonds exist.
+        if total_bond == 0.0:
+            card_bond = re.search(r"Bond Amount:\s*\$?\s*([0-9,]+\.?\d*)", block_text, re.I)
+            if card_bond:
+                try:
+                    total_bond = float(card_bond.group(1).replace(",", ""))
+                except ValueError:
+                    pass
 
         records.append(
             ArrestRecord(
