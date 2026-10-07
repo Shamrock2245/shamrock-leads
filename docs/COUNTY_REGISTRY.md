@@ -1,6 +1,6 @@
 # 🗺️ Florida County Registry — All 67 Counties
 > Master reference for every Florida county jail roster. Updated as scrapers are built and validated.
-> **Last Updated:** 2026-09-22 (SWFL source-contract queue notes) | Original body largely 2026-08-04 | **Active Scrapers:** **67 FL** (full state on `REGISTERED_COUNTIES` + scheduler) · multi-state total **361** (FL **67**) — see root `STATUS.md`. **Architecture note:** FL uses custom scrapers + shared APE proxy / SmartWeb card parser — not wholesale multi-state platform wrappers.
+> **Last Updated:** 2026-10-07 (SmartWEB paging, idle-eight, SmartWEB-five) | Original body largely 2026-08-04 | **Active Scrapers:** **67 FL** (full state on `REGISTERED_COUNTIES` + scheduler) · multi-state total **361** (FL **67**) — see root `STATUS.md`. **Architecture note:** FL uses custom scrapers + shared APE proxy / SmartWEB JAIL View helper — not wholesale multi-state platform wrappers. Registration is not `verified_public`.
 
 ---
 
@@ -38,7 +38,7 @@
 | 12 | **Pasco** | DrissionPage — Cloudflare bypass | `pasco.py` | ✅ Active | 90 min | 2026-04-27 |
 | 13 | **Lake** | requests POST `recent_data` + Turnstile token (SolveCaptcha, owner-approved; shared `scrapers/solvecaptcha.py`) | `lake.py` | ✅ `verified_public` (Mac write smoke 17 new; needs SOLVECAPTCHA_KEY) | 90 min | 2026-09-25 |
 | 14 | **Hernando** | Custom HTML | `hernando.py` | ✅ Active | 90 min | 2026-04-27 |
-| 15 | **Citrus** | JailTracker | `citrus.py` | ✅ Active | 120 min | 2026-04-27 |
+| 15 | **Citrus** | Public recent-arrest PDF (source `AR #`) — plain requests + pdfplumber | `citrus.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
 
 ---
 
@@ -80,8 +80,8 @@
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 31 | **Alachua** | Custom HTML | `alachua.py` | ✅ Active | 90 min | 2026-04-27 |
 | 32 | **Putnam** | SmartWEB JAIL View (`PCSO<YY>JBN######`, legacy AddMoreResults) — plain requests | `putnam.py` | ✅ Active (unverified until write smoke) | 180 min | 2026-10-07 |
-| 33 | **Columbia** | P2C HTML | `columbia.py` | ✅ Active | 120 min | 2026-04-27 |
-| 34 | **Suwannee** | SmartWeb — wildcard (%) search + AJAX AddMoreResults | `suwannee.py` | 🔴 Upstream 500 (server crash on search POST) | 180 min | 2026-07-24 |
+| 33 | **Columbia** | Legacy SmartWEB IP returns 503; no replacement public roster URL | `columbia.py` | 🔴 Fail closed (`SOURCE_CONTRACT_VALIDATED=False`) | 120 min | 2026-10-07 |
+| 34 | **Suwannee** | SmartWEB JAIL View (`SCSO<YY>JBN######`, modern AddMoreResults) — plain requests | `suwannee.py` | ✅ `verified_public` (Mac write smoke 44 new) | 180 min | 2026-09-25 |
 | 35 | **Marion** | curl_cffi + **required residential** (Warren/Tailscale) — jail.marionso.com AWS WAF | `marion.py` | ✅ Active (residential egress) | 90 min | 2026-08-04 |
 
 > **Note:** Marion fails closed without US residential exit (APE Warren / Tailscale SOCKS). Direct VPS IP is always 403.
@@ -94,7 +94,7 @@
 | 36 | **Duval** | DrissionPage — API interception (jaxsheriff.org) | `duval.py` | ✅ Active | 90 min | 2026-04-27 |
 | 37 | **St. Johns** | Stub — `st_johns.py` returns no rows; sjso.org links `/smartwebclient/jail.aspx` but it answers **403** (Cloudflare/nginx) to ordinary access | `st_johns.py` | 🔴 No reachable public roster (hold; no WAF bypass) | 120 min | 2026-10-07 |
 | 38 | **Nassau** | New World InmateInquiry GET | `nassau.py` | ✅ Active | 120 min | 2026-04-27 |
-| 39 | **Clay** | Custom HTML | `clay.py` | ✅ Active | 120 min | 2026-04-27 |
+| 39 | **Clay** | Public detention listing has Name/Booking Date only — no source booking ID | `clay.py` | 🔴 Fail closed (no invented name keys) | 120 min | 2026-10-07 |
 
 ---
 
@@ -102,7 +102,7 @@
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 40 | **Escambia** | SmartWEB JAIL View (`ECC<YY>JBN######`) — plain requests | `escambia.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
-| 41 | **Okaloosa** | requests POST — HTML table | `okaloosa.py` | ✅ Active | 120 min | 2026-04-27 |
+| 41 | **Okaloosa** | Inmate Locator `Default.aspx` (source Booking# 10-digit) — plain requests A–Z | `okaloosa.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
 | 42 | **Bay** | Custom HTML | `bay.py` | ✅ Active | 120 min | 2026-04-27 |
 | 43 | **Santa Rosa** | SmartWEB JAIL View (`SRSO<YY>JBN######`) — plain requests | `santa_rosa.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
 | 44 | **Walton** | New World InmateInquiry GET | `walton.py` | ✅ Active | 120 min | 2026-04-27 |
@@ -192,12 +192,12 @@ Approach:   Query the anonymous FeatureServer directly with `ObjectId,GlobalID,B
 - **Pattern**: REST API with JSON responses
 - **Auth**: None (public inmate search)
 - **Pagination**: Offset-based (`?page=1&size=50`)
-- **Active Counties**: Lee, Collier, Sarasota, Brevard, Escambia
+- **Active Counties**: Lee, Collier, Brevard. Escambia moved to SmartWEB JAIL View (2026-10-07). Sarasota is fail_closed.
 
 ### JailTracker (Black Creek ISC)
 - **Pattern**: Paginated HTML tables or JSON API
 - **Auth**: None; occasional CAPTCHA / rate limiting
-- **Active Counties**: DeSoto, Hendry, Citrus, Highlands, Glades
+- **Active Counties**: Highlands, Glades. Citrus is the sheriff PDF roster, not JailTracker (2026-10-07). Baker/Calhoun/Gulf/Holmes/Levy/Wakulla/Washington stay fail_closed.
 
 ### New World / InmateInquiry (Tyler Technologies)
 - **Pattern**: Server-rendered HTML listing + detail pages (GET)
@@ -205,7 +205,7 @@ Approach:   Query the anonymous FeatureServer directly with `ObjectId,GlobalID,B
 
 ### SmartWeb (Black Creek ISC)
 - **Pattern**: ASP.NET POST form with ViewState, returns HTML table
-- **Active Counties**: Putnam, Suwannee, Santa Rosa, Sumter, Taylor
+- **Active Counties**: Putnam, Suwannee, Santa Rosa, Sumter, Taylor, Bradford, Dixie, Escambia, Hamilton, Madison, Gilchrist. Health stays unverified until write smoke except Suwannee (`verified_public`).
 
 ### DrissionPage (Browser Automation)
 - **Pattern**: Chromium headless — JS rendering or Cloudflare bypass required
@@ -213,7 +213,7 @@ Approach:   Query the anonymous FeatureServer directly with `ObjectId,GlobalID,B
 
 ### Custom / In-House
 - **Pattern**: Varies — GET requests, HTML parsing, API reverse-engineering
-- **Active Counties**: Orange, Seminole, St. Lucie, Indian River, Okeechobee, Alachua, Columbia, Clay, Bay, Okaloosa, Gadsden, Monroe, Leon, Dixie, Hernando, St. Johns. Broward is live (verified_public) on the Turnstile Arrest Search path since 2026-09-23; sequential identifier probing remains prohibited.
+- **Active Counties**: Orange, Seminole, St. Lucie, Indian River, Alachua, Bay, Monroe, Hernando. Fail closed or held, not active emitters: Okeechobee, Columbia, Clay, Gadsden, Leon, St. Johns, Hardee. Dixie and Okaloosa are listed under SmartWEB / Inmate Locator above. Broward is live (`verified_public`) on the Turnstile Arrest Search path since 2026-09-23; sequential identifier probing remains prohibited.
 
 ---
 

@@ -87,6 +87,57 @@ def test_fl_smartweb_parses_searchheader_without_dob():
     assert r.Race == "B"
 
 
+def test_fl_smartweb_status_does_not_swallow_the_next_label():
+    released = _card_no_dob("ECC26JBN000010").replace("Status: In Jail", "Status: Released")
+    out = _card_no_dob("ECC26JBN000011").replace("Status: In Jail", "Status: Out of Jail")
+    in_jail = _card_no_dob("ECC26JBN000012")
+    html = "<table>" + released + out + in_jail + "</table>"
+    recs = fl_smartweb._parse_html(
+        html, set(), county="Escambia", facility="X", detail_url="https://example.test/"
+    )
+    by_book = {r.Booking_Number: r.Status for r in recs}
+    assert by_book == {
+        "ECC26JBN000010": "Released",
+        "ECC26JBN000011": "Released",
+        "ECC26JBN000012": "In Custody",
+    }
+
+
+def test_fl_smartweb_bond_cell_keeps_dollars_when_type_word_follows():
+    html = _card_no_dob("TCSO26JBN000007")
+    html = html.replace(
+        "</tbody></table></td>\n</tr>",
+        "</tbody></table></td>\n</tr>\n"
+        "<tr><td><table class=\"JailViewCharges\">"
+        "<tr class=\"SearchHeader\"><td>CHARGES</td></tr>"
+        "<tr><td></td><td>843.02</td><td></td><td>RESIST OFFICER</td>"
+        "<td>M</td><td>1</td><td>$2,500.00 SURETY</td></tr>"
+        "</table></td></tr>",
+        1,
+    )
+    recs = fl_smartweb._parse_html(
+        "<table>" + html + "</table>",
+        set(),
+        county="Taylor",
+        facility="X",
+        detail_url="http://example.test/",
+    )
+    assert len(recs) == 1
+    assert recs[0].Bond_Amount == "2500"
+    assert recs[0].Charges == "843.02 - RESIST OFFICER"
+
+
+def test_fl_smartweb_rejected_photo_does_not_hide_a_later_match():
+    bad = _card_with_dob("BCSO26JBN000001").replace(
+        "Booking No: BCSO26JBN000001", "Booking No: BCSO26JBN999999", 1
+    )
+    html = "<table>" + bad + _card_with_dob("BCSO26JBN000001") + "</table>"
+    recs = fl_smartweb._parse_html(
+        html, set(), county="Bradford", facility="X", detail_url="http://example.test/"
+    )
+    assert [r.Booking_Number for r in recs] == ["BCSO26JBN000001"]
+
+
 def test_fl_smartweb_drops_mismatched_booking_no():
     html = _card_with_dob("BCSO26JBN000001").replace(
         "Booking No: BCSO26JBN000001", "Booking No: BCSO26JBN000002", 1

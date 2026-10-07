@@ -787,10 +787,10 @@
     {
       "state": "FL",
       "county_fips": "049",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "fail_closed",
+      "official_source_url": "https://www.hardeeso.com/",
+      "access_posture": "Inmate search links only the OCV mobile app; OCV inmates.json buckets return 403 to ordinary access",
+      "evidence_note": "2026-10-07 SmartWEB legacy-paging check: no public web roster. Hold fail_closed in hardee.py (SOURCE_CONTRACT_VALIDATED=False) and SCRAPER_SOURCE_STATES. Do not invent booking keys. See docs/recon/FL_SMARTWEB_LEGACY_PAGING_2026-10-07.md."
     },
     {
       "state": "FL",
@@ -1035,10 +1035,10 @@
     {
       "state": "FL",
       "county_fips": "109",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "fail_closed",
+      "official_source_url": "https://www.sjso.org/sj-inmate-search/",
+      "access_posture": "Linked /smartwebclient/jail.aspx returns 403 (Cloudflare/nginx) to ordinary access; no WAF bypass",
+      "evidence_note": "2026-10-07 SmartWEB legacy-paging check: no reachable public roster. Hold fail_closed in st_johns.py (SOURCE_CONTRACT_VALIDATED=False) and SCRAPER_SOURCE_STATES. See docs/recon/FL_SMARTWEB_LEGACY_PAGING_2026-10-07.md."
     },
     {
       "state": "FL",

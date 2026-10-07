@@ -23,7 +23,7 @@
 |---|---:|---:|---:|---:|---:|---:|---:|
 | AL | 67 | 16 | 4 | 0 | 0 | 51 | 12 |
 | CT | 12 | 6 | 0 | 0 | 6 | 1 | 5 |
-| FL | 67 | 67 | 4 | 12 | 38 | 0 | 13 |
+| FL | 67 | 67 | 4 | 12 | 36 | 0 | 15 |
 | GA | 159 | 85 | 0 | 0 | 148 | 0 | 11 |
 | LA | 64 | 13 | 3 | 1 | 4 | 46 | 10 |
 | MS | 82 | 9 | 1 | 0 | 4 | 69 | 8 |
@@ -32,7 +32,7 @@
 | TN | 96 | 22 | 9 | 0 | 74 | 0 | 13 |
 | TX | 254 | 34 | 2 | 0 | 0 | 252 | 0 |
 
-**Aggregate matrix counts:** verified public 33; candidate productive 27; recon only 274; unverified 489; fail closed 124.
+**Aggregate matrix counts:** verified public 33; candidate productive 27; recon only 272; unverified 489; fail closed 126.
 
 ## County matrix
 
@@ -140,7 +140,7 @@
 | FL | 043 | Glades County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 045 | Gulf County | OSI + Palmetto | registered | fail_closed | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 047 | Hamilton County | OSI + Palmetto | registered | candidate_productive | https://inmate.hamiltonsheriff.com/smartwebclient/jail.aspx | Ordinary public HTTPS SmartWEB JAIL View | 2026-10-07 idle-eight recon: Booking No HCSO<YY>JBN<NNNNNN>, booking date/time, charges, bond via booking-date window. Prior smartcop.hamiltoncountysheriff.com NXDOMAIN. |
-| FL | 049 | Hardee County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
+| FL | 049 | Hardee County | OSI + Palmetto | registered | fail_closed | https://www.hardeeso.com/ | Inmate search links only the OCV mobile app; OCV inmates.json buckets return 403 to ordinary access | 2026-10-07 SmartWEB legacy-paging check: no public web roster. Hold fail_closed in hardee.py (SOURCE_CONTRACT_VALIDATED=False) and SCRAPER_SOURCE_STATES. Do not invent booking keys. See docs/recon/FL_SMARTWEB_LEGACY_PAGING_2026-10-07.md. |
 | FL | 051 | Hendry County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 053 | Hernando County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 055 | Highlands County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
@@ -174,7 +174,7 @@
 | FL | 113 | Santa Rosa County | OSI + Palmetto | registered | candidate_productive | https://jailview.srso.net/SmartWebClient/jail.aspx | Ordinary public HTTPS SmartWEB JAIL View | 2026-10-07 SmartWEB-five recon: Booking No SRSO<YY>JBN<NNNNNN>, booking date/time, charges when published. curl_cffi retired. 2026-10-07 legacy-paging fix: bare-SearchVals AddMoreResults now pages (30-day read smoke 153 rows, was 50). |
 | FL | 115 | Sarasota County | OSI + Palmetto | registered | fail_closed | — | Fail closed in `sarasota.py` (`SOURCE_CONTRACT_VALIDATED=False`) and `SCRAPER_SOURCE_STATES`; no network fetch | Third-party mirror / JailTracker CAPTCHA / proxy / profile / DOB / mugshot paths retired. FL JailTracker `SARASOTA_COUNTY_FL` historically returned empty HTTP 400 on roster POST. Reopen only after official booking-safe broad roster with complete identity + source-issued booking id + booking timestamp is validated through normal public access. See `SWFL_SOURCE_CONTRACT_QUEUE.md`. |
 | FL | 117 | Seminole County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
-| FL | 109 | St. Johns County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
+| FL | 109 | St. Johns County | OSI + Palmetto | registered | fail_closed | https://www.sjso.org/sj-inmate-search/ | Linked /smartwebclient/jail.aspx returns 403 (Cloudflare/nginx) to ordinary access; no WAF bypass | 2026-10-07 SmartWEB legacy-paging check: no reachable public roster. Hold fail_closed in st_johns.py (SOURCE_CONTRACT_VALIDATED=False) and SCRAPER_SOURCE_STATES. See docs/recon/FL_SMARTWEB_LEGACY_PAGING_2026-10-07.md. |
 | FL | 111 | St. Lucie County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 119 | Sumter County | OSI + Palmetto | registered | candidate_productive | https://portal.sumtercountysheriff.org/smartwebclient/Jail.aspx | Ordinary public HTTPS SmartWEB JAIL View (modern AddMoreResults page method) | 2026-10-07 SmartWEB legacy-paging recon: Booking No SCSO<YY>JBN<NNNNNN> (same agency prefix as Suwannee; keys are county-scoped), booking date/time, charges, bond via booking-date window + Current Inmates Only. 30-day read smoke 118 rows / 118 unique source Booking No. curl_cffi/verify=False + % wildcard retired; shared fl_smartweb. See docs/recon/FL_SMARTWEB_LEGACY_PAGING_2026-10-07.md. |
 | FL | 121 | Suwannee County | OSI + Palmetto | registered | verified_public | https://smartcop.suwanneesheriff.com/smartwebclient/jail.aspx | Plain HTTPS SmartCOP SmartWEB JAIL View; no login; reCAPTCHA hook unconfigured (empty sitekey); supported Begin/End Booking Date criterion + Current Inmates Only, AddMoreResults paging | 2026-09-25 read smoke from box: 44 rows / 44 unique source `Booking No` (format `SCSO<YY>JBN<NNNNNN>`) for a 30-day booking window, booking date+time on every row; 128 current inmates with a 10-year window. Old `%` wildcard search returned 0 rows. 2026-09-25 Mac write smoke (`python main.py suwannee`, MongoWriter): scraped 44 / new 44 / updated 0, status ok; 44/44 stored booking_number values match `^SCSO\d{2}JBN\d{6}$` (source keys). See docs/recon/FL_GAP_QUEUE_2026-09-25.md. |

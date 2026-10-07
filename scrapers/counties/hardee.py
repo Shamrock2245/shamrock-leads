@@ -24,6 +24,13 @@ INFO_URL = "https://apps.myocv.com/share/a27833873"
 class HardeeCountyScraper(BaseScraper):
     """Hardee County (FL) — No public web roster (Mobile App only). Stub scraper."""
 
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "hardeeso.com inmate search links only the OCV mobile app; OCV "
+        "inmates.json buckets return 403 to ordinary access. No public web "
+        "roster and no invented booking keys."
+    )
+
     @property
     def county(self) -> str:
         return "Hardee"

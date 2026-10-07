@@ -24,6 +24,13 @@ INFO_URL = "https://www.sjso.org/sj-inmate-search/"
 class StJohnsCountyScraper(BaseScraper):
     """St. Johns County (FL) — No public roster. Stub scraper."""
 
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "sjso.org links /smartwebclient/jail.aspx, which returns 403 "
+        "(Cloudflare/nginx) to ordinary access. No WAF bypass and no "
+        "reachable public roster."
+    )
+
     @property
     def county(self) -> str:
         return "St. Johns"

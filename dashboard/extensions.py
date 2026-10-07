@@ -772,6 +772,11 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     "Clay (FL)": "fail_closed",
     "Columbia (FL)": "fail_closed",
     "Okeechobee (FL)": "fail_closed",
+    # 2026-10-07 SmartWEB legacy-paging check: no reachable public roster.
+    # St. Johns jail.aspx is 403 (Cloudflare/nginx). Hardee links only the
+    # OCV mobile app (inmates.json 403). Do not invent a roster.
+    "Hardee (FL)": "fail_closed",
+    "St. Johns (FL)": "fail_closed",
     # Ohio pilot scopes are registered for truthful health visibility only.
     # They remain blocked before source fetch until county-specific approval.
     "Clermont (OH)": "fail_closed",
