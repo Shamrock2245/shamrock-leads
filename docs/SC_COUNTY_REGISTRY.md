@@ -51,7 +51,7 @@ python main.py sc_lee      # not FL Lee
 | Colleton | ⚠ Fail closed | Zuercher | No source-issued booking/inmate ID or booking timestamp; see `SC_ZUERCHER_SOURCE_SAFETY.md` |
 | Darlington | 🟡 Stub | Custom | |
 | Dorchester | 🟡 Wrapper | Southern SW | |
-| Florence | ✅ Live | DevExpress ASP.NET | Letter walk on booking.fcso.org; name/age/race/sex/booked |
+| Florence | ✅ Live / verified_public | DevExpress ASP.NET | Letter walk + inmate-details; Name ID booking key; charges/bond from detail Charge grid (2026-10-07) |
 | Georgetown | 🟡 Scaffold | — | No machine-readable roster |
 | Greenville | ❌ Blocked | Custom + Incapsula | Official `app.greenvillecounty.org/inmate_search.htm` is access-restricted. Retain fail-closed behavior until a supported public bulk roster is available; do not bypass controls. |
 | Greenwood | 🟡 Wrapper | JailTracker | |
@@ -65,7 +65,7 @@ python main.py sc_lee      # not FL Lee
 | Lexington | ⚠ Fail closed | P2C legacy | Search-only contract; see `LEGACY_P2C_SOURCE_SAFETY.md` |
 | Marion | 🟡 Stub | Custom | 403 |
 | Marlboro | ⛔ fail_closed (hold) | Custom | Cloudflare/403; `SOURCE_CONTRACT_VALIDATED=False` 2026-09-25, no proxy/stealth bypass |
-| Newberry | 🟡 Source verified | Dynamic official PDF | Current Sheriff-uploaded bookings PDF; source `SO` identifier required; deployed 2026-08-14; per-scraper scheduler telemetry still pending |
+| Newberry | ✅ Live / verified_public | Dynamic official PDF | Current Sheriff PDF; source SO/NP/HP/PP/… ids; charges from PDF lines; $ bond only when printed (2026-10-07) |
 | Oconee | 🟡 Wrapper | Zuercher | |
 | Pickens | 🟡 Wrapper | Zuercher | |
 | Richland | ⚠ Fail closed | ASP.NET JMSOnline | 2026-09-23 portal is a maintenance page. List view has no source-issued booking key; synthetic `RIC_` keys are forbidden. `SOURCE_CONTRACT_VALIDATED=False`. |

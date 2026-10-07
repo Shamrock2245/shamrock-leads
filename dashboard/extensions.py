@@ -599,6 +599,8 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     "Chesterfield (SC)": "verified_public",  # 2026-09-24 SSW Citizen Connect write smoke (source BookingID)
     "Aiken (SC)": "verified_public",  # 2026-09-24 DTNSearch Inmate ID# / qSO_NO write smoke
     "Darlington (SC)": "verified_public",  # 2026-09-24 DCN HTTP bid write smoke; 2026-09-25 all pages (233) via DevExpress pager callback
+    "Florence (SC)": "verified_public",  # 2026-09-23 live_write 624 Mongo; 2026-10-07 Name ID + detail charges/bond
+    "Newberry (SC)": "verified_public",  # 2026-09-23 live_write 19 Mongo; 2026-10-07 PDF source IDs + charges
     # 2026-09-25 NC/TX gap queue Mac write smokes (docs/recon/GAP_QUEUE_NC_TX_SC_2026-09-25.md)
     "Gaston (NC)": "verified_public",  # New World detail Booking # YYYY-NNNNNNNN; 45 new, status ok
     "Pitt (NC)": "verified_public",  # Detainee Search GridView Booking Number (6 digits); 477 (164 new / 313 updated), ok
