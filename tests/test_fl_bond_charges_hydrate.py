@@ -153,7 +153,7 @@ class TestMarionDetailChargeParse(unittest.TestCase):
         self.assertEqual(parsed["bond_amount"], "12500")
 
 
-class TestCharlotteManateeBondHonestZero(unittest.TestCase):
+class TestCharlotteManateeBondHonest(unittest.TestCase):
     def test_charlotte_record_sets_bond_zero_with_charge(self):
         # Construct the same ArrestRecord shape the scraper emits.
         rec = ArrestRecord(
@@ -172,20 +172,17 @@ class TestCharlotteManateeBondHonestZero(unittest.TestCase):
         self.assertEqual(rec.Charges, "BATTERY")
         self.assertEqual(CharlotteCountyScraper().county, "Charlotte")
 
-    def test_manatee_record_sets_bond_zero_with_charge(self):
-        rec = ArrestRecord(
-            County="Manatee",
-            State="FL",
-            Booking_Number="67890",
-            Full_Name="DOE, JOHN",
-            First_Name="JOHN",
-            Last_Name="DOE",
-            Charges="THEFT",
-            Bond_Amount="0",
-            Facility="Manatee County Jail",
-            Status="In Custody",
-        )
-        self.assertEqual(rec.Bond_Amount, "0")
+    def test_manatee_record_keeps_bond_unknown_with_charge(self):
+        # Manatee now builds records via build_records (2026-10-07 Sarasota/Manatee audit): the roster
+        # publishes no bond, so Bond_Amount is "" (unknown), never "0".
+        from scrapers.counties.manatee import build_records
+
+        rec = build_records([{
+            "booking": "67890", "last": "DOE", "first": "JOHN", "middle": "",
+            "charge": "THEFT", "arrest_date": "2026-10-07", "arrest_time": "",
+            "status": "In Custody", "release_date": "", "detail_url": "", "mugshot_url": "",
+        }])[0]
+        self.assertEqual(rec.Bond_Amount, "")
         self.assertEqual(rec.Charges, "THEFT")
         self.assertEqual(ManateeCountyScraper().county, "Manatee")
 

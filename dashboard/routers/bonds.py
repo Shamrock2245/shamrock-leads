@@ -1133,7 +1133,7 @@ async def _maybe_send_overdue_checkin_email(bond: dict, now: datetime) -> bool:
         f"Our records indicate that your required check-in for case #{b_num} is overdue.\n\n"
         f"Please use the following secure link immediately from your current device to complete your check-in:\n"
         f"{portal_url}\n\n"
-        f"If you are having technical difficulties, contact Shamrock Bail Bonds immediately at (239) 334-2245.\n\n"
+        f"If you are having technical difficulties, contact Shamrock Bail Bonds immediately at (239) 332-2245.\n\n"
         f"Shamrock Bail Bonds Compliance Department"
     )
     body_html = f"""
@@ -1147,7 +1147,7 @@ async def _maybe_send_overdue_checkin_email(bond: dict, now: datetime) -> bool:
                         </div>
                         <p style="font-size: 13px; color: #666;">Or copy and paste this secure link into your browser:<br><a href="{portal_url}" style="color: #00875A;">{portal_url}</a></p>
                         <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
-                        <p style="font-size: 12px; color: #888;">If you are experiencing device or technical difficulties, you must contact our office immediately at <strong>(239) 334-2245</strong>.</p>
+                        <p style="font-size: 12px; color: #888;">If you are experiencing device or technical difficulties, you must contact our office immediately at <strong>(239) 332-2245</strong>.</p>
                     </div>
                     """
     res = GmailReaderService().send_email(

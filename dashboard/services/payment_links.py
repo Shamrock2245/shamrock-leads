@@ -58,9 +58,13 @@ _SOURCE_ALIASES = {
     "in_office": "kiosk", "tablet": "kiosk", "lobby": "kiosk",
     "pin_portal": "portal", "paperwork_portal": "portal",
     "walk_in": "manual", "staff": "manual", "dashboard": "manual",
-    "voice": "shannon", "elevenlabs": "shannon", "twilio_voice": "shannon",
+    "manual_entry": "manual", "phone_call": "manual",
+    "shamrock_leads_dashboard": "manual",
+    "voice": "shannon", "elevenlabs": "shannon", "elevenlabs_voice": "shannon",
+    "twilio_voice": "shannon",
     "bluebubbles": "sms", "imessage": "sms", "text": "sms", "twilio_sms": "sms",
     "arrest_scraper": "scraper", "sheriff": "scraper", "clerk": "scraper",
+    "bookmarklet": "scraper", "id_scan": "kiosk", "id_ocr": "kiosk",
 }
 
 # Fields on a case (bond / packet / intake) that hold ITS OWN invoice link.

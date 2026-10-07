@@ -1,0 +1,37 @@
+# Public CRM uptime. Probes the unauthenticated /health and /health/live routes
+# on leads and paperwork, then keeps a single GitHub issue labeled prod-down.
+#
+# Schedule: every 15 minutes at minute 7, 22, 37, and 52 UTC (offset from
+# Shannon's */15 watchdog and the Node-RED 13:17 log check).
+#
+# Disable: Actions → Production uptime → Disable workflow.
+# This does not deploy, SSH, or read any Slack/Hetzner secret. Existing
+# workflows do not reference a Slack webhook secret, so Slack is not called.
+
+name: Production uptime
+
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: prod-uptime-watchdog
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Public /health
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Probe public health routes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/prod_uptime_watchdog.py
