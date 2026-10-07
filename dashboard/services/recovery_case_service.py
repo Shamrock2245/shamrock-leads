@@ -527,14 +527,97 @@ async def list_recovery_agents() -> list[dict]:
     return out
 
 
+async def _shares_for_booking(booking_number: str) -> list[dict]:
+    if not booking_number:
+        return []
+    return await _collect(
+        get_collection("recovery_case_shares").find({"booking_number": booking_number})
+    )
+
+
 async def _active_share_for_booking(booking_number: str) -> dict | None:
-    rows = await _collect(get_collection("recovery_case_shares").find({"booking_number": booking_number}))
+    rows = await _shares_for_booking(booking_number)
     now = _now()
     for doc in rows:
         open_, _reason = _share_open(doc, now)
         if open_:
             return doc
     return None
+
+
+async def _pending_review_share_for_booking(booking_number: str) -> dict | None:
+    for doc in await _shares_for_booking(booking_number):
+        if str(doc.get("status") or "") == "pending_review":
+            return doc
+    return None
+
+
+async def queue_forfeiture_review(*, booking_number: str, actor: str = "system") -> dict:
+    """Open a B1 recovery case in pending_review.
+
+    Staff confirm later by sharing the forfeiture (that promotes this row to
+    active). Recovery agents cannot see pending_review. This does not send
+    Slack, email, BlueBubbles, or SMS.
+    """
+    booking_number = (booking_number or "").strip()
+    if not booking_number:
+        return {"success": False, "reason": "booking_required"}
+    bond = await _find_bond(booking_number)
+    if not bond or not _is_forfeiture(bond):
+        return {"success": False, "reason": "not_forfeiture"}
+    canonical = _text(bond.get("booking_number"), 80) or booking_number
+    active = await _active_share_for_booking(canonical)
+    if active:
+        return {
+            "success": True,
+            "already_open": True,
+            "share_id": active.get("share_id") or "",
+            "status": active.get("status") or "active",
+        }
+    pending = await _pending_review_share_for_booking(canonical)
+    if pending:
+        return {
+            "success": True,
+            "already_open": True,
+            "share_id": pending.get("share_id") or "",
+            "status": "pending_review",
+        }
+    share_id = str(uuid.uuid4())
+    found_case = str(bond.get("Bond_Case_ID") or bond.get("bond_case_id") or "")
+    share = {
+        "share_id": share_id,
+        "booking_number": canonical,
+        "bond_case_id": found_case,
+        "county": _text(bond.get("county"), 80),
+        "state": _text(bond.get("state"), 8),
+        "status": "pending_review",
+        "staff_notes": "",
+        "recovery_agent_id": "",
+        "shared_by": "",
+        "shared_at": "",
+        "queued_by": actor or "system",
+        "queued_at": _iso(_now()),
+        "expires_at": "",
+        "revoked_at": "",
+        "revoked_by": "",
+        "disposition": "",
+        "disposition_at": "",
+        "disposition_by_label": "",
+    }
+    await get_collection("recovery_case_shares").insert_one(share)
+    await _audit(
+        action="recovery_case_pending_review",
+        entity_id=share_id,
+        actor=actor or "system",
+        actor_type="system",
+        details={"booking_number": canonical, "share_id": share_id, "status": "pending_review"},
+    )
+    return {
+        "success": True,
+        "already_open": False,
+        "share_id": share_id,
+        "status": "pending_review",
+    }
 
 
 def _expiry_from_days(raw: Any) -> str:
@@ -607,6 +690,45 @@ async def share_forfeiture_case(
             )
         case = await _project_share(existing)
         return {"success": True, "already_shared": True, "share_id": existing["share_id"], "case": case}
+
+    pending = await _pending_review_share_for_booking(canonical_booking)
+    if pending:
+        confirmed_at = _iso(_now())
+        updates: dict[str, Any] = {
+            "status": "active",
+            "shared_by": actor,
+            "shared_at": confirmed_at,
+            "recovery_agent_id": assigned,
+            "expires_at": expires_at,
+            "confirmed_from": "pending_review",
+        }
+        if notes:
+            updates["staff_notes"] = notes
+        await get_collection("recovery_case_shares").update_one(
+            {"share_id": pending["share_id"]},
+            {"$set": updates},
+        )
+        pending.update(updates)
+        await _audit(
+            action="recovery_case_shared",
+            entity_id=pending["share_id"],
+            actor=actor,
+            actor_type="staff",
+            details={
+                "booking_number": canonical_booking,
+                "share_id": pending["share_id"],
+                "confirmed_from": "pending_review",
+                "recovery_agent_id": assigned,
+            },
+        )
+        case = await _project_share(pending)
+        return {
+            "success": True,
+            "already_shared": False,
+            "confirmed_pending_review": True,
+            "share_id": pending["share_id"],
+            "case": case,
+        }
 
     share_id = str(uuid.uuid4())
     share = {

@@ -1467,6 +1467,8 @@ async def packet_builder_finalize(request: Request):
                     status_code=422,
                 )
 
+            from dashboard.services.bond_packet_start import poa_assignment_block
+
             poa_doc = await get_collection("poa_inventory").find_one(
                 {
                     "poa_number": bond_data["poa_number"],
@@ -1475,32 +1477,13 @@ async def packet_builder_finalize(request: Request):
                 },
                 {"_id": 0, "max_bond_value": 1},
             )
-            if not poa_doc:
+            poa_block = poa_assignment_block(poa_doc, bond_data)
+            if poa_block:
                 return JSONResponse(
                     {
                         "success": False,
-                        "error": "docuseal_poa_not_assigned",
-                        "message": (
-                            "DocuSeal packet blocked: the selected POA must be assigned in the "
-                            "matching surety inventory before paperwork can be created."
-                        ),
-                    },
-                    status_code=422,
-                )
-            try:
-                poa_limit = float(poa_doc.get("max_bond_value") or 0)
-                bond_amount = float(bond_data.get("bond_amount") or 0)
-            except (TypeError, ValueError):
-                poa_limit, bond_amount = 0, 0
-            if poa_limit <= 0 or bond_amount <= 0 or bond_amount > poa_limit:
-                return JSONResponse(
-                    {
-                        "success": False,
-                        "error": "docuseal_poa_tier_invalid",
-                        "message": (
-                            "DocuSeal packet blocked: the assigned POA tier must cover the "
-                            "authoritative BondCase amount."
-                        ),
+                        "error": poa_block[0],
+                        "message": poa_block[1],
                     },
                     status_code=422,
                 )
@@ -1588,20 +1571,30 @@ async def packet_builder_finalize(request: Request):
         # ── DocuSeal (default / self-hosted OSS) ──
         if provider == "docuseal":
             try:
-                from dashboard.services.docuseal_service import (
-                    get_docuseal_service,
-                    resolve_template_id_for_surety,
+                from dashboard.services.bond_packet_start import (
+                    BondPacketStartError,
+                    start_indemnitor_bond_packet,
                 )
 
-                ds = get_docuseal_service()
-                template_id = resolve_template_id_for_surety(surety_id)
-                if not ds.is_configured:
+                # Tenant stays shamrock until request tenancy chooses it.
+                # The body is not a tenant source.
+                started = await start_indemnitor_bond_packet(
+                    packet_id=packet_id,
+                    surety_id=surety_id,
+                    bond_data=bond_data,
+                    indemnitors=bond_data.get("indemnitors"),
+                    send_email=bool(body.get("send_email", False)),
+                    include_defendant=bool(body.get("include_defendant", True)),
+                    poa_record=poa_doc,
+                )
+            except BondPacketStartError as exc:
+                if exc.code == "docuseal_not_configured":
                     send_results["docuseal"] = {
                         "success": False,
                         "error": "docuseal_not_configured",
                         "hint": "Set DOCUSEAL_URL + DOCUSEAL_API_KEY after admin login",
                     }
-                elif not template_id:
+                elif exc.code == "template_unavailable":
                     send_results["docuseal"] = {
                         "success": False,
                         "error": "template_id_required",
@@ -1611,41 +1604,20 @@ async def packet_builder_finalize(request: Request):
                         ),
                     }
                 else:
-                    docuseal_result = await ds.create_submission_for_packet(
-                        template_id=template_id,
-                        packet_id=packet_id,
-                        bond_data=bond_data,
-                        indemnitors=bond_data.get("indemnitors"),
-                        send_email=bool(body.get("send_email", False)),
-                        include_defendant=bool(body.get("include_defendant", True)),
+                    logger.warning(
+                        "DocuSeal packet start refused for packet %s code=%s",
+                        packet_id,
+                        exc.code,
                     )
-                    from dashboard.services.paperwork_signers import (
-                        party_signers_from_submitters,
-                        pick_party,
+                    return JSONResponse(
+                        {
+                            "success": False,
+                            "error": exc.code,
+                            "message": str(exc),
+                            "packet_id": packet_id,
+                        },
+                        status_code=422,
                     )
-
-                    parties = party_signers_from_submitters(
-                        docuseal_result.get("submitters") or [],
-                        packet_id=packet_id,
-                        indemnitor_name=ind.get("name") or "",
-                        defendant_name=def_.get("name") or "",
-                        indemnitor_phone=ind.get("phone") or "",
-                        defendant_phone=def_.get("phone") or "",
-                    )
-                    links = [p.get("share_url") or p.get("sign_url") for p in parties if p.get("sign_url")]
-                    signing_link = (pick_party(parties, role="indemnitor") or {}).get("share_url") or (
-                        links[0] if links else ""
-                    )
-                    status = "pending_signature"
-                    send_results["docuseal"] = {
-                        "success": True,
-                        "submission_id": docuseal_result.get("submission_id"),
-                        "template_id": template_id,
-                        "submitters": docuseal_result.get("submitters"),
-                        "signing_link": signing_link,
-                        "sign_links": links,
-                        "parties": parties,
-                    }
             except Exception as ds_exc:
                 logger.exception("DocuSeal finalize failed for packet %s", packet_id)
                 send_results["docuseal"] = {"success": False, "error": str(ds_exc)[:400]}
@@ -1658,6 +1630,36 @@ async def packet_builder_finalize(request: Request):
                     },
                     status_code=502,
                 )
+            else:
+                docuseal_result = started["submission"]
+                template_id = started["template_id"]
+                from dashboard.services.paperwork_signers import (
+                    party_signers_from_submitters,
+                    pick_party,
+                )
+
+                parties = party_signers_from_submitters(
+                    docuseal_result.get("submitters") or [],
+                    packet_id=packet_id,
+                    indemnitor_name=ind.get("name") or "",
+                    defendant_name=def_.get("name") or "",
+                    indemnitor_phone=ind.get("phone") or "",
+                    defendant_phone=def_.get("phone") or "",
+                )
+                links = [p.get("share_url") or p.get("sign_url") for p in parties if p.get("sign_url")]
+                signing_link = (pick_party(parties, role="indemnitor") or {}).get("share_url") or (
+                    links[0] if links else ""
+                )
+                status = "pending_signature"
+                send_results["docuseal"] = {
+                    "success": True,
+                    "submission_id": docuseal_result.get("submission_id"),
+                    "template_id": template_id,
+                    "submitters": docuseal_result.get("submitters"),
+                    "signing_link": signing_link,
+                    "sign_links": links,
+                    "parties": parties,
+                }
 
         # SignNow and Adobe Sign are retired for new paperwork packets.
 

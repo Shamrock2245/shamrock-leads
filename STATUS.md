@@ -16,6 +16,20 @@
 
 ---
 
+## Add surety — data-driven surety templates (2026-10-07)
+
+Staff can add a carrier from Super CRM → Paperwork Config → Surety Templates without a code change per surety. They upload AcroForm or flat PDFs, confirm canonical mappings (flat PDFs get staff-placed boxes), set POA prefixes and a per-charge repeat form, preview a local PDF filled with fake sample data, and publish an immutable version. Write Bond / DocuSeal reads the active published version. Prior versions stay for audit.
+
+OSI and Palmetto v1 are seeded onto that path. Appearance-bond bytes still come from the historical recipes in `bond_pdf_service`, including the empty-fill `/V` clear. Env template ids still win: `DOCUSEAL_TEMPLATE_ID_OSI` (fallback `DOCUSEAL_TEMPLATE_ID`) and `DOCUSEAL_TEMPLATE_ID_PALMETTO` (no OSI fallback). Production stays OSI template 1 and Palmetto template 5 while those vars are set. Seeded versions do not store a DocuSeal id.
+
+Publishing is blocked until defendant identity, county, booking number, case number, charge, bond amount, per-charge POA, premium, and execution date are mapped. New sureties do not invent premiums, POA numbers, phones, or emails. Lexington National, Roche Surety, Universal, and Bankers Surety stay inactive until blank forms and POA prefixes are provided.
+
+Versions carry `owner_tenant_id` (null = platform-owned, same name as the SaaS tenancy plan) and `entitled_tenant_ids`. `resolve_active_published_template(surety, tenant)` picks an agency-private version for that tenant, otherwise a platform version that lists the tenant. The default tenant is `shamrock`. OSI and Palmetto seeds stay platform-owned and entitled to shamrock, so Write Bond for shamrock is unchanged, including env template ids. Another tenant does not inherit those env ids. Write Bond submits through `start_indemnitor_bond_packet`, which re-runs the binding and POA gates before DocuSeal. Outside dev/test (`ENV` of test, dev, development, or local, or `SURETY_TEMPLATE_STORE=memory`), publish fails closed unless Mongo accepts the version.
+
+Published versions and uploaded PDFs live in Mongo (`surety_template_versions` and `surety_template_files`). A fresh process loads both in `ensure_loaded()`. The production dashboard does not write `/app/data`. POA tier lookup and prefix resolution use each published version's prefixes. An explicit third-party surety is never rewritten to OSI. Mapped DocuSeal submissions fail closed when a required mapped value is empty, including a premium taken from `prefill_values_from_bond`. The production packet includes every uploaded form. Publish writes an `audit_events` row with the actor and the old→new version. The Write Bond picker lists published carriers and keeps their surety id.
+
+Tests: `tests/test_surety_onboarding.py`, `tests/test_bond_packet_start.py`, `tests/test_surety_review_fixes.py` (included in `.github/workflows/ci.yml`).
+
 ## BailSafe P0 slice A2 — Missed check-in evidence pack (2026-10-07)
 
 Staff can download a check-in evidence ZIP for a booking from Active Bonds (Evidence) or the Check-In Compliance report. The pack is the last stored `check_in_log` and `bond_checkins` rows: timestamp, lat/lon and accuracy when those fields were stored, and a selfie file only when stored bytes or an upload under `dashboard/uploads` exist. Due and missed times come from the bond. If the booking exists and has no logs, the PDF says no check-in logs are on file. Reports also lists signed bonds whose check-in link was never sent (`checkin_enroll` task when one is pending). God-admin, admin, and staff only. The recovery role stays off this pack.

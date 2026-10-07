@@ -37,7 +37,13 @@ def test_ledger_row_minimal_pii():
     text = str(row) + fo.slack_text(DOC)
     for secret in ("987654321", "1985-05-05", "9 Bay Rd", "1990-01-01", "555-0101"):
         assert secret not in text
-    assert "Amy R." in fo.slack_text(DOC)
+    text = fo.slack_text(DOC)
+    assert "Amy R." in text
+    assert "website application" in text
+    tg = {**DOC, "source": "telegram", "submitted_by_role": "", "intake_id": "TG-1"}
+    tg_text = fo.slack_text(tg)
+    assert "Telegram application" in tg_text
+    assert "website application" not in tg_text
 
 
 @pytest.fixture

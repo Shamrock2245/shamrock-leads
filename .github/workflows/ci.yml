@@ -60,6 +60,9 @@ jobs:
             tests/test_agency_onboarding.py \
             tests/test_agency_billing.py \
             tests/test_secret_scanner.py \
+            tests/test_brand_contacts.py \
+            tests/test_prod_uptime_watchdog.py \
+            tests/test_pr_changelog.py \
             tests/test_source_contract_run_guard.py \
             tests/test_source_booking_identity_guard.py \
             tests/test_registered_counties_coverage.py \
@@ -76,6 +79,11 @@ jobs:
             tests/test_fl_brevard_newworld.py \
             tests/test_fl_idle_eight.py \
             tests/test_fl_bond_charges_hydrate.py \
+            tests/test_fl_sarasota_manatee_audit.py \
+            tests/test_sarasota_safety.py \
+            tests/test_packet_builder_service.py \
+            tests/test_cf_browser.py \
+            tests/test_residential_proxy.py \
             tests/test_putnam_parser.py \
             tests/test_davidson_nc_parser.py \
             tests/test_mecklenburg_nc_parser.py \
@@ -125,7 +133,11 @@ jobs:
             tests/test_slack_alerts.py \
             tests/test_payment_links.py \
             tests/test_surety_registry.py \
+            tests/test_surety_onboarding.py \
+            tests/test_bond_packet_start.py \
+            tests/test_surety_review_fixes.py \
             tests/test_wix_intake_webhook.py \
             tests/test_intake_fanout.py \
+            tests/test_workflow_endpoints.py \
             tests/test_kiosk_privacy_and_confirm.py \
             --tb=short

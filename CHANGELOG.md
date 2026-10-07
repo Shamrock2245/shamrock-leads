@@ -19,6 +19,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **One-click hydrate (`packet_builder_service`):** an arrest saved with an unknown bond (`bond_amount_raw=""`, numeric `bond_amount=0.0`) no longer hydrates as a $0 bond. The context carries `bond_amount_known=False` and per-charge rows carry `bond_amount=None` (blank in Write Bond). A source-published `0` stays `0.0`. Staff bond edits (`bond_override` from update-bond-amount, `MANUAL_CHARGE_BONDS` from update-charge-bonds) win over the stale blank `bond_amount_raw`, and top-level `charge_details` (the writer's copy or the staff-edited rows) now takes precedence over the scraped `extra.charge_details`, so staff amounts, case numbers and POAs survive rehydrate.
 - **Sarasota (FL):** stays fail closed. The 2026-10-07 live check found the official current-inmate listing (1,081 entries) carries only an opaque per-person link id, name and date of birth, with no booking number or booking timestamp; detail and search pages return a Cloudflare challenge. The reopen gate is encoded in `scrapers/counties/sarasota_contract.py`: every listing entry must itself carry a source booking number and a booking date/time (page-wide labels do not count). Evidence, matrix and registry updated (`docs/recon/FL_SARASOTA_MANATEE_AUDIT_2026-10-07.md`). Health: Sarasota `fail_closed`, Manatee `unverified`.
 
+## [Unreleased] — 2026-10-07 (Bond workflow fail-closed)
+
+### Fixed
+- **Intake match:** a name and date of birth with no county stays in staff review. The matcher no longer auto-links the first arrest in the file that shares that name and date, including when only one arrest matches.
+- **Sheets ledger:** fan-out reloads the intake after the match, so a matched row keeps status, county, state, strategy, and timestamp.
+- **Promote:** a blank or $0 bond amount returns 422 and does not allocate a power.
+- **Forfeiture:** the power is still released, and one recovery case opens at `pending_review` for staff to confirm. Recovery agents do not see it until that confirm, and no message is sent. If that insert fails, repeating the forfeited status opens the missing review.
+- **Bond Desk:** a name and date of birth with no county shows each possible arrest and links one only after staff confirm. A suggested booking is not treated as a match.
+
+### Changed
+- **Workflow map:** Telegram and Shannon are a gap. `shamrock-telegram-app` does not call `/api/intake/submit`. The map lists the Telegram and Shannon callers that exist in this repo.
+
 ## [Unreleased] — 2026-10-07 (Production uptime watchdog)
 
 ### Added
