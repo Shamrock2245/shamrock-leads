@@ -254,6 +254,14 @@ async def paperwork_preview(bond_case_id: str):
                 ),
                 "court_date": case_doc.get("court_date") or "",
                 "address": case_doc.get("defendant_address") or case_doc.get("address") or "",
+                "writing_agent_name": case_doc.get("writing_agent_name") or "",
+                "agent_name": case_doc.get("agent_name") or "",
+                "bondsman_name": case_doc.get("bondsman_name") or "",
+                "writing_agent": case_doc.get("writing_agent") or "",
+                "writing_agent_license": case_doc.get("writing_agent_license") or "",
+                "agent_license": case_doc.get("agent_license") or "",
+                "bondsman_license": case_doc.get("bondsman_license") or "",
+                "license_number": case_doc.get("license_number") or "",
             }
 
         pdf_bytes = generate_appearance_bond(bond_data)
@@ -339,6 +347,14 @@ def _build_bond_data(intake: dict) -> dict:
         "intake_id": intake.get("intake_id", ""),
         "source": intake.get("source", ""),
         "created_at": datetime.now(timezone.utc).strftime("%m/%d/%Y"),
+        "writing_agent_name": intake.get("writing_agent_name") or "",
+        "agent_name": intake.get("agent_name") or "",
+        "bondsman_name": intake.get("bondsman_name") or "",
+        "writing_agent": intake.get("writing_agent") or "",
+        "writing_agent_license": intake.get("writing_agent_license") or "",
+        "agent_license": intake.get("agent_license") or "",
+        "bondsman_license": intake.get("bondsman_license") or "",
+        "license_number": intake.get("license_number") or "",
     }
 
 

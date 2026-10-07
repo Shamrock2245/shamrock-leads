@@ -131,6 +131,7 @@ jobs:
             tests/test_payment_links.py \
             tests/test_surety_registry.py \
             tests/test_surety_onboarding.py \
+            tests/test_palmetto_packet_fields.py \
             tests/test_bond_packet_start.py \
             tests/test_surety_review_fixes.py \
             tests/test_wix_intake_webhook.py \

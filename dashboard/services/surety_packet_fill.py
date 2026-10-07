@@ -87,6 +87,8 @@ def resolve_fail_closed_canonical(data: Mapping[str, Any]) -> Dict[str, str]:
         _safe_float,
         _split_charge,
         _split_court_datetime,
+        writing_agent_license,
+        writing_agent_name,
     )
 
     data = data or {}
@@ -179,8 +181,8 @@ def resolve_fail_closed_canonical(data: Mapping[str, Any]) -> Dict[str, str]:
         "court.datetime": court_datetime,
         "court.type": str(data.get("court_type") or data.get("defendant_court_type") or "").strip(),
         "collateral.description": collateral,
-        "agent.name": str(data.get("agent_name") or data.get("bondsman_name") or "").strip(),
-        "agent.license": str(data.get("agent_license") or data.get("bondsman_license") or "").strip(),
+        "agent.name": writing_agent_name(data),
+        "agent.license": writing_agent_license(data),
         "agency.name": str(data.get("agency_name") or "").strip(),
         "agency.details": str(data.get("agency_details") or "").strip(),
     }

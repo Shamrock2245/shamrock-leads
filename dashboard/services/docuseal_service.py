@@ -158,6 +158,19 @@ def _text(*vals: Any) -> str:
     return ""
 
 
+def _writing_agent_name(data: Optional[Dict[str, Any]]) -> str:
+    """Agent already on the bond. Empty when absent. Never the template sample."""
+    from dashboard.bond_pdf_service import writing_agent_name
+
+    return writing_agent_name(data if isinstance(data, dict) else None)
+
+
+def _writing_agent_license(data: Optional[Dict[str, Any]]) -> str:
+    from dashboard.bond_pdf_service import writing_agent_license
+
+    return writing_agent_license(data if isinstance(data, dict) else None)
+
+
 def _person_text(person: Any, *keys: str) -> str:
     if not isinstance(person, dict):
         return ""
@@ -1215,12 +1228,12 @@ class DocuSealService:
             ),
             "AgencyName": "Shamrock Bail Bonds",
             "agency_name": "Shamrock Bail Bonds",
-            "AgentName": bond_data.get("bondsman_name") or os.getenv("BOND_AGENT_NAME", "Brendan O'Neal"),
-            "agent_name": bond_data.get("bondsman_name") or os.getenv("BOND_AGENT_NAME", "Brendan O'Neal"),
-            "AgentLicense": bond_data.get("bondsman_license") or os.getenv("BOND_AGENT_LICENSE", "P139768"),
-            "agent_license": bond_data.get("bondsman_license") or os.getenv("BOND_AGENT_LICENSE", "P139768"),
-            "bondsman_name": bond_data.get("bondsman_name") or os.getenv("BOND_AGENT_NAME", "Brendan O'Neal"),
-            "bondsman_license": bond_data.get("bondsman_license") or os.getenv("BOND_AGENT_LICENSE", "P139768"),
+            "AgentName": _writing_agent_name(bond_data),
+            "agent_name": _writing_agent_name(bond_data),
+            "AgentLicense": _writing_agent_license(bond_data),
+            "agent_license": _writing_agent_license(bond_data),
+            "bondsman_name": _writing_agent_name(bond_data),
+            "bondsman_license": _writing_agent_license(bond_data),
         }
 
         def_first, def_middle, def_last = _split_full_name(defendant_name)
@@ -1691,7 +1704,7 @@ class DocuSealService:
                 "0", "false", "no",
             )
         if include_bondsman:
-            agent_name = bond_data.get("bondsman_name") or os.getenv("BOND_AGENT_NAME", "Brendan O'Neal")
+            agent_name = _writing_agent_name(bond_data)
             agent_email = (
                 bond_data.get("bondsman_email")
                 or os.getenv("BOND_AGENT_EMAIL", "admin@shamrockbailbonds.biz")
@@ -2072,8 +2085,10 @@ def build_bond_data_from_dashboard(
                 agent_license_session = k
                 break
 
-    bondsman_name = agent_reg.get("agent_name") or agent_name_session or os.getenv("BOND_AGENT_NAME", "Brendan O'Neal")
-    bondsman_license = agent_license_session or os.getenv("BOND_AGENT_LICENSE", "P139768")
+    bondsman_name = agent_reg.get("agent_name") or _writing_agent_name({"agent_name": agent_name_session})
+    bondsman_license = agent_license_session or (
+        os.getenv("BOND_AGENT_LICENSE", "P139768") if bondsman_name else ""
+    )
     bondsman_email = agent_reg.get("agent_email") or os.getenv("BOND_AGENT_EMAIL", "admin@shamrockbailbonds.biz")
     bondsman_phone = agent_reg.get("agent_phone") or os.getenv("BOND_AGENT_PHONE", "2393322245")
 

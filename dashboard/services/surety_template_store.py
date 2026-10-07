@@ -176,15 +176,15 @@ def _osi_seed() -> Dict[str, Any]:
 
 
 def _palmetto_seed() -> Dict[str, Any]:
-    # Historical writer keys. The Palmetto blank's widgets differ for a few
-    # of these (chargestField1, writtenPremiumAmountField, AgentField). The
-    # legacy recipe still writes the historical keys so the filled PDF matches
-    # the current path. See tests/test_surety_onboarding.py.
+    # Widget names on the Palmetto appearance blank. ``chargestField1`` is the
+    # carrier's printed name. Both agent lines share ``AgentField``. The blank
+    # has no case-number widget; case.number stays mapped so publish validation
+    # still requires it, and the writer does not emit CaseNumberField.
     mappings = [
         _map("defendantNameField", "defendant.full_name"),
         _map("countyField", "defendant.county"),
         _map("numericBondAmount", "charge.bond_amount"),
-        _map("chargesField1", "charge.description"),
+        _map("chargestField1", "charge.description"),
         _map("chargesField2", "charge.description_line2"),
         _map("CourtDateAndTimeField", "court.datetime"),
         _map("ArrestNumberField", "booking.number"),
@@ -196,9 +196,8 @@ def _palmetto_seed() -> Dict[str, Any]:
         _map("yearYYYYField", "bond.execution_year"),
         _map("cirCoField", "court.type"),
         _map("agentBailLicNumField", "agent.license"),
-        _map("AgentField#0", "agent.name"),
-        _map("AgentField#1", "agent.name"),
-        _map("writtenPremiumAmount", "bond.premium_words"),
+        _map("AgentField", "agent.name"),
+        _map("writtenPremiumAmountField", "bond.premium_words"),
         _map("calculatedPremiumField", "bond.premium_amount"),
         _map("CollateralField", "collateral.description"),
         _map("AgencyField", "agency.name"),

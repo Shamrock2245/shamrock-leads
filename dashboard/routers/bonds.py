@@ -1350,7 +1350,39 @@ def _build_appearance_bond_data(d: dict):
         "poa_numbers": [c.get("poa_number") for c in charge_details],
         "poa_number": d.get("poa_number") or (charge_details[0].get("poa_number") if charge_details else ""),
     }
+    from dashboard.bond_pdf_service import writing_agent_license, writing_agent_name
+
+    agent = writing_agent_name(d)
+    license_no = writing_agent_license(d)
+    b_data["writing_agent_name"] = agent
+    b_data["agent_name"] = agent
+    b_data["bondsman_name"] = agent
+    b_data["writing_agent"] = agent
+    b_data["writing_agent_license"] = license_no
+    b_data["agent_license"] = license_no
+    b_data["bondsman_license"] = license_no
     return b_data, None
+
+
+def _attach_session_writing_agent(request: Request, payload: dict) -> dict:
+    """Use the signed-in agent only when the payload has no writing agent."""
+    from dashboard.auth.agent_scope import agent_identity
+    from dashboard.bond_pdf_service import writing_agent_license, writing_agent_name
+
+    out = dict(payload or {})
+    if writing_agent_name(out):
+        return out
+    ident = agent_identity(request)
+    name = writing_agent_name({"agent_name": ident.get("agent_name")})
+    if name:
+        out["writing_agent_name"] = name
+        out["agent_name"] = name
+    if not writing_agent_license(out):
+        lic = writing_agent_license({"license_number": ident.get("license_number")})
+        if lic:
+            out["writing_agent_license"] = lic
+            out["agent_license"] = lic
+    return out
 
 
 @bonds_bp.api_route("/appearance-bond-pdf", methods=["GET", "POST"])
@@ -1399,7 +1431,7 @@ async def api_appearance_bond_pdf(request: Request):
         if d.get("charge") and not d.get("charges") and not d.get("charge_details"):
             d["charges"] = d["charge"]
 
-        d = await _hydrate_appearance_bond_payload(d)
+        d = _attach_session_writing_agent(request, await _hydrate_appearance_bond_payload(d))
         from dashboard.routers.helpers import reject_unless_write_book
         blocked = await reject_unless_write_book(
             county=d.get("county") or "",
@@ -1506,7 +1538,7 @@ async def api_appearance_bond_batch(request: Request):
             store_appearance_bond_pdfs,
         )
         d = await request.json() or {}
-        d = await _hydrate_appearance_bond_payload(d)
+        d = _attach_session_writing_agent(request, await _hydrate_appearance_bond_payload(d))
         from dashboard.routers.helpers import reject_unless_write_book
         blocked = await reject_unless_write_book(
             county=d.get("county") or "",
@@ -1893,6 +1925,19 @@ async def _hydrate_appearance_bond_payload(d: dict) -> dict:
             or ""
         )
         out["surety"] = normalize_surety(surety)
+
+        from dashboard.bond_pdf_service import writing_agent_license, writing_agent_name
+
+        if not writing_agent_name(out) and isinstance(ab, dict):
+            carried = writing_agent_name(ab)
+            if carried:
+                out["writing_agent_name"] = carried
+                out["agent_name"] = carried
+        if not writing_agent_license(out) and isinstance(ab, dict):
+            carried_lic = writing_agent_license(ab)
+            if carried_lic:
+                out["writing_agent_license"] = carried_lic
+                out["agent_license"] = carried_lic
     except Exception as exc:
         logger.warning("[appearance-print] hydrate failed booking=%s: %s", booking, exc)
     return out
@@ -1914,7 +1959,7 @@ async def api_appearance_bonds_print_package(request: Request):
         )
 
         d = await request.json() or {}
-        d = await _hydrate_appearance_bond_payload(d)
+        d = _attach_session_writing_agent(request, await _hydrate_appearance_bond_payload(d))
         from dashboard.routers.helpers import reject_unless_write_book
         blocked = await reject_unless_write_book(
             county=d.get("county") or "",
