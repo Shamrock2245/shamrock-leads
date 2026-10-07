@@ -45,3 +45,7 @@ They remain **`recon_only` / Health `unverified`** — not `verified_public`.
 ## 2026-10-07 audit update
 
 See `FL_SARASOTA_MANATEE_AUDIT_2026-10-07.md`. Sarasota stays fail closed: the official current-inmate listing has only per-person link ids, with no booking number or booking timestamp. Manatee is hardened (header-mapped keys, required Released, paging drift guards, unknown bond kept blank, `EgressBlocked` on CF/non-residential exits, `MANATEE_EGRESS_MODE=direct` for Leads Ops Mac/hotspot runs). It stays `unverified` until a residential read + prod write smoke.
+
+## 2026-10-07 Charlotte hardening
+
+See `FL_CHARLOTTE_REVIZE_2026-10-07.md`. Charlotte now uses the same shared Revize contract as Manatee (`scrapers/revize_roster.py`): header-mapped columns, source Booking # cross-checked against its link, every charge kept, required Released, bond unknown=`""` (was `"0"`), fail-closed paging, and `EgressBlocked` on CF / unverified exits. Live check from the box: `/`, `/bookings`, `?page=2` → 403 CF challenge. Stays `unverified` until a Leads Ops residential read + prod write smoke (`CHARLOTTE_EGRESS_MODE=direct`).

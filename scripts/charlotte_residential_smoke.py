@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Manatee FL residential READ smoke (no writes, no names printed).
+"""Charlotte FL residential READ smoke (no writes, no names printed).
 
-Run on the Leads Ops home relay (Brendan's residential connection, VPN off):
+Run from the Leads Ops Mac on home ISP or an iPhone hotspot (VPN off):
 
-    MANATEE_EGRESS_MODE=direct python scripts/manatee_residential_smoke.py
+    CHARLOTTE_EGRESS_MODE=direct python scripts/charlotte_residential_smoke.py
 
 Prints one JSON line of aggregates. Exit codes:
     0 roster read and every drift guard passed
@@ -11,8 +11,8 @@ Prints one JSON line of aggregates. Exit codes:
     3 parse drift (columns, Released values, paging, totals, key collisions)
     1 anything else
 The write path is the normal one-shot run with MONGODB_URI set:
-    MANATEE_EGRESS_MODE=direct python main.py Manatee
-See docs/ops/MANATEE_RESIDENTIAL_RUN.md.
+    CHARLOTTE_EGRESS_MODE=direct python main.py Charlotte
+See docs/recon/FL_CHARLOTTE_REVIZE_2026-10-07.md.
 """
 from __future__ import annotations
 
@@ -28,10 +28,10 @@ from scrapers.scraper_resilience import EgressBlocked, ParseDriftError  # noqa: 
 
 
 def main() -> int:
-    from scrapers.counties.manatee import ManateeCountyScraper, egress_mode
+    from scrapers.counties.charlotte import CharlotteCountyScraper, egress_mode
 
-    out = {"county": "Manatee (FL)", "egress_mode": os.getenv("MANATEE_EGRESS_MODE", "direct")}
-    scraper = ManateeCountyScraper()
+    out = {"county": "Charlotte (FL)", "egress_mode": os.getenv("CHARLOTTE_EGRESS_MODE", "auto")}
+    scraper = CharlotteCountyScraper()
     try:
         out["egress_mode"] = egress_mode()
         records = scraper.scrape()
