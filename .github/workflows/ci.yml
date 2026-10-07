@@ -73,6 +73,11 @@ jobs:
             tests/test_fl_brevard_newworld.py \
             tests/test_fl_idle_eight.py \
             tests/test_fl_bond_charges_hydrate.py \
+            tests/test_fl_sarasota_manatee_audit.py \
+            tests/test_sarasota_safety.py \
+            tests/test_packet_builder_service.py \
+            tests/test_cf_browser.py \
+            tests/test_residential_proxy.py \
             tests/test_putnam_parser.py \
             tests/test_davidson_nc_parser.py \
             tests/test_mecklenburg_nc_parser.py \
