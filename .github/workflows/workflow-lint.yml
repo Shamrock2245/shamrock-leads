@@ -1,0 +1,34 @@
+# actionlint for workflow YAML. Runs when a PR (or a push to main) touches
+# .github/. Shellcheck and pyflakes are off so existing deploy shell is not
+# re-litigated here.
+#
+# Disable: Actions → Workflow lint → Disable workflow.
+
+name: Workflow lint
+
+on:
+  pull_request:
+    paths:
+      - ".github/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/**"
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install actionlint 1.7.12
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
+
+      - name: Lint workflow files
+        run: ./actionlint -shellcheck= -pyflakes=

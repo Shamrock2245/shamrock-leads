@@ -59,6 +59,69 @@ def _last4(v: Any) -> str:
     return digits[-4:] if len(digits) >= 4 else ""
 
 
+def _stamp(value: Any) -> str:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.isoformat()
+    if value is None:
+        return ""
+    return str(value)
+
+
+def apply_auto_link_snapshot(doc: Dict[str, Any], match_result: Optional[dict]) -> Dict[str, Any]:
+    """Mirror a successful auto-link onto the intake copy used for fan-out."""
+    out = dict(doc or {})
+    if not isinstance(match_result, dict) or not match_result.get("auto_linked"):
+        return out
+    best = match_result.get("best_match") if isinstance(match_result.get("best_match"), dict) else {}
+    booking = best.get("booking_number") or ""
+    if booking:
+        out["matched_booking_number"] = booking
+    if best.get("county"):
+        out["matched_county"] = best.get("county")
+    if best.get("state"):
+        out["matched_state"] = best.get("state")
+    if best.get("defendant_id"):
+        out["matched_defendant_id"] = best.get("defendant_id")
+    if match_result.get("confidence") is not None:
+        out["match_confidence"] = match_result.get("confidence")
+    strategy = best.get("strategy") or match_result.get("strategy") or ""
+    if strategy and strategy != "ambiguous":
+        out["match_strategy"] = strategy
+    out["status"] = "matched"
+    if not out.get("match_timestamp"):
+        out["match_timestamp"] = _now()
+    return out
+
+
+async def intake_for_fanout(
+    collection,
+    intake_id: str,
+    fallback: Dict[str, Any],
+    match_result: Optional[dict] = None,
+) -> Dict[str, Any]:
+    """Reload the persisted intake after match, then fill any missing link fields.
+
+    The Sheets outbox uses ``$setOnInsert``, so the document scheduled here is
+    the one the ledger keeps. Matching writes status, county, state, strategy,
+    and timestamp onto the intake row; the in-memory copy from before that
+    write does not have them.
+    """
+    saved = None
+    try:
+        if collection is not None and intake_id:
+            saved = await collection.find_one({"intake_id": intake_id}, {"_id": 0})
+    except Exception as exc:
+        logger.warning("[intake_fanout] reload before fan-out failed for %s: %s", intake_id, exc)
+        saved = None
+    base = dict(saved) if isinstance(saved, dict) else dict(fallback or {})
+    base.pop("_id", None)
+    if str(base.get("status") or "") == "matched" and base.get("match_strategy"):
+        return base
+    return apply_auto_link_snapshot(base, match_result)
+
+
 def _short_name(full: str) -> str:
     parts = [p for p in str(full or "").split() if p]
     if not parts or parts == ["Unknown"]:
@@ -91,7 +154,8 @@ def ledger_row(doc: Dict[str, Any]) -> Dict[str, Any]:
         "submitted_by_role": doc.get("submitted_by_role", ""),
         "defendant_name": doc.get("defendant_name", ""),
         "indemnitor_name": doc.get("indemnitor_name", "") if doc.get("indemnitor_name") != "Unknown" else "",
-        "county": doc.get("defendant_county", "") or d.get("county", ""),
+        "county": doc.get("matched_county") or doc.get("defendant_county") or d.get("county") or "",
+        "state": doc.get("matched_state") or doc.get("defendant_state") or d.get("state") or doc.get("state") or "",
         "booking_number": doc.get("defendant_booking_number", "") or d.get("bookingNumber", ""),
         "bond_amount": d.get("bondAmount", ""),
         "surety": doc.get("surety_id") or "",
@@ -100,14 +164,37 @@ def ledger_row(doc: Dict[str, Any]) -> Dict[str, Any]:
         "has_email": bool(doc.get("indemnitor_email") or d.get("email")),
         "match_confidence": doc.get("match_confidence") if doc.get("match_confidence") is not None else "",
         "matched_booking_number": doc.get("matched_booking_number") or "",
+        "match_strategy": doc.get("match_strategy") or "",
+        "match_timestamp": _stamp(doc.get("match_timestamp")),
         "status": doc.get("status", ""),
     }
 
 
+_SLACK_KIND = {
+    "wix_webhook": "website application",
+    "wix_portal": "website application",
+    "telegram": "Telegram application",
+    "telegram_mini_app": "Telegram mini-app application",
+    "walk_in": "walk-in intake",
+    "phone_call": "phone intake",
+    "elevenlabs_voice": "Shannon voice intake",
+    "shannon": "Shannon voice intake",
+    "bookmarklet": "bookmarklet booking intake",
+    "manual_entry": "manual intake",
+    "shamrock-leads-dashboard": "dashboard intake",
+}
+
+
 def slack_text(doc: Dict[str, Any]) -> str:
     row = ledger_row(doc)
-    who = "Indemnitor" if row["submitted_by_role"] == "indemnitor" else "Defendant"
-    lines = [f"🌐 *New website application* ({who} form) — `{row['intake_id']}`"]
+    kind = _SLACK_KIND.get(str(doc.get("source") or ""), "intake")
+    role = row["submitted_by_role"]
+    who = ""
+    if role == "indemnitor":
+        who = " (Indemnitor form)"
+    elif role == "defendant":
+        who = " (Defendant form)"
+    lines = [f"📥 *New {kind}*{who} — `{row['intake_id']}`"]
     if row["defendant_name"]:
         lines.append(f"• Defendant: *{row['defendant_name']}*")
     ind = _short_name(row["indemnitor_name"])

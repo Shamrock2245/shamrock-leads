@@ -113,7 +113,7 @@ The surety selection is made by the bondsman based on:
 
 ### Validation Rules
 
-- `Surety_ID` must be `osi` or `palmetto`
+- `Surety_ID` must be an active surety: `osi`, `palmetto`, or a carrier with a published Add-surety version
 - Selected POA prefix must belong to the selected surety
 - POA must be in `available` status in the POAInventory
 - Assigned POA's tier must cover the bond amount
@@ -166,6 +166,38 @@ Available → Assigned → Used → Reported
 - Unreported POAs flagged in monthly compliance check
 
 ---
+
+## Adding a surety (no code change)
+
+Staff add a carrier from Super CRM → Paperwork Config → Surety Templates → **Add surety**.
+
+1. Upload one or more PDFs (fillable AcroForm, or a flat PDF with staff-placed boxes).
+2. Confirm the suggested canonical mappings. Publishing is blocked until every required rule below is mapped.
+3. Set POA prefixes and max bond amounts when the owner has them. Repeat-per-charge duplicates that form once per charge (POA, amount, description).
+4. Preview a local PDF filled with fake sample data. Preview does not call DocuSeal and does not contact anyone.
+5. Publish. The version is immutable. Older versions stay for packets already in flight. Write Bond uses the newest published version.
+
+Required canonical rules:
+
+| Rule | Satisfied by |
+|------|----------------|
+| `defendant.identity` | `defendant.full_name`, or `defendant.first_name` and `defendant.last_name` |
+| `defendant.county` | `defendant.county` |
+| `booking.number` | `booking.number` |
+| `case.number` | `case.number` |
+| `charge.description` | `charge.description` |
+| `charge.bond_amount` | `charge.bond_amount` |
+| `charge.poa_number` | `charge.poa_number` |
+| `bond.premium_amount` | `bond.premium_amount` |
+| `bond.execution_date` | `bond.execution_date`, or day + month + year (or 2-digit year) |
+
+OSI and Palmetto v1 are seeded onto this same publish record. Their appearance-bond fill still uses the historical recipes, so filled output is unchanged. DocuSeal template ids still come from `DOCUSEAL_TEMPLATE_ID_OSI` (then `DOCUSEAL_TEMPLATE_ID`) and `DOCUSEAL_TEMPLATE_ID_PALMETTO`. A published version id is used only when the env var is unset. Production OSI template 1 and Palmetto template 5 stay in effect while those env vars are set.
+
+A new carrier does not invent a premium, POA number, phone, or email. Missing mapped values fail closed. Lexington National, Roche Surety, Universal, and Bankers Surety stay inactive until their blank forms and POA prefixes are supplied and a version is published.
+
+A published version has `owner_tenant_id` and `entitled_tenant_ids`. Null owner means the platform catalog. The entitlement list is the tenants that may use that catalog version. A non-null `owner_tenant_id` is private to that tenant. Shamrock (`tenant_id` `shamrock`) keeps today's OSI and Palmetto templates. Write Bond calls `start_indemnitor_bond_packet`, which resolves the template for that pair and refuses the submission when the match, parties, POA, or template entitlement is missing. Outside dev and test, publish requires MongoDB. The version document and each uploaded PDF are stored in Mongo (`surety_template_versions`, `surety_template_files`) and reloaded from there. A version is not published into memory or a container-local file.
+
+POA assignment uses the published version's prefix and max bond. An explicit surety that is not OSI or Palmetto fails closed when the prefix does not belong to that surety. Mapped templates refuse DocuSeal when a required mapped field is empty. The packet sent for a mapped surety contains every uploaded form. Publish records the actor and the previous version number in `audit_events`. The Write Bond surety picker shows published carriers under their own id.
 
 ## Escalation Conditions
 

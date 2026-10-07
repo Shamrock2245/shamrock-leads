@@ -368,6 +368,17 @@ Escalate immediately if:
 | `SLACK_WEBHOOK_LEADS` | ✅ | #leads channel (hot leads) |
 | `SLACK_WEBHOOK_ERRORS` | ✅ | #scraper-errors channel (drift / syntax exceptions) |
 | `SLACK_WEBHOOK_ALERTS` | ✅ | #alerts channel (system watchdog, health monitors, forfeitures, POA stock) |
+| `SLACK_WEBHOOK_INTAKE` | Optional | New-application Slack copy. Falls back to `SLACK_WEBHOOK_LEADS` |
+| `WIX_WEBHOOK_SECRET` | Website intake | `POST /api/webhooks/wix-intake` and `wix_portal` submits. Fail closed if unset. `GAS_API_KEY` is the fallback |
+| `GAS_WEB_APP_URL` | Sheets copy | Existing GAS Web App `/exec` for `appendIntakeLedger`. Do not mint a new URL |
+| `GAS_API_KEY` | Machine auth | Same key on the VPS, GAS, and Wix. Also a machine key for `POST /api/intake/submit` |
+| `INTAKE_FANOUT_DISABLED` | Optional | `1` keeps Sheets/Slack outbox rows pending |
+| `SWIPESIMPLE_LINK_DEFAULT` | Optional | Pay-by-card link for every non-Telegram source. Legacy aliases: `SWIPESIMPLE_PAYMENT_LINK`, `SWIPESIMPLE_BOND_PAYMENT_LINK`, `PAYMENT_LINK` |
+| `SWIPESIMPLE_LINK_TELEGRAM` | Optional | Pay-by-card link for Telegram bot and mini-apps |
+| `SWIPESIMPLE_WEBHOOK_SECRET` | Payments | HMAC for `POST /api/webhooks/payment` |
+| `BB_WEBHOOK_PUBLIC_URL` | BlueBubbles | Public CRM origin registered with the office server |
+| `BB_WEBHOOK_SECRET` | Optional | If set, a present `x-bb-signature` must match. BlueBubbles omits signatures by default |
+| `TWILIO_WEBHOOK_PUBLIC_URL` | Optional | Exact URL Twilio signed for `POST /api/webhooks/twilio` |
 | `BLUEBUBBLES_URL_0178` | ✅ | Tailscale primary `http://100.102.10.86:1234`; frp backup `http://178.156.179.237:12434`. Not ngrok, not Warren, not `bb.shamrockbailbonds.biz` |
 | `BLUEBUBBLES_PASSWORD_0178` | ✅ | BlueBubbles API password |
 | `DOCUSEAL_URL` | ✅ | DocuSeal public URL (`https://sign.shamrockbailbonds.biz`) |
