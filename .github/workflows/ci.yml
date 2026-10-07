@@ -68,6 +68,20 @@ jobs:
             tests/test_scraper_resilience.py \
             tests/test_base_scraper_self_heal.py \
             tests/test_source_state_drift.py \
+            tests/test_fl_smartweb_five.py \
+            tests/test_fl_smartweb_legacy_paging.py \
+            tests/test_fl_idle_eight.py \
+            tests/test_fl_bond_charges_hydrate.py \
+            tests/test_putnam_parser.py \
+            tests/test_davidson_nc_parser.py \
+            tests/test_mecklenburg_nc_parser.py \
+            tests/test_harnett_nc_parser.py \
+            tests/test_nc_ssw_five_parser.py \
+            tests/test_nc_ssw_adpst_parser.py \
+            tests/test_lancaster_sc_parser.py \
+            tests/test_florence_sc_parser.py \
+            tests/test_newberry_pdf_scraper.py \
+            tests/test_powers_pack.py \
             tests/test_lee_rate_limit.py \
             tests/test_swipesimple_invoice_service.py \
             tests/test_confirmed_booking_intake.py \

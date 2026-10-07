@@ -38,8 +38,8 @@ Booking date and name are present on every emitted row. Charges and bond come fr
 
 | County | Finding | Outcome |
 |---|---|---|
-| St. Johns | sjso.org inmate-search page links `/smartwebclient/jail.aspx`; that path returns **403** (nginx behind Cloudflare) to plain access | **Hold**: no reachable public roster; no WAF bypass. Registry row corrected (was "Active / HTML table"; module is a no-row stub). |
-| Hardee | hardeeso.com inmate search links only the OCV mobile app; OCV `inmates.json` S3/CDN paths for the app id return 403 | **Hold**: no public web roster. Registry row corrected (module is a no-row stub). |
+| St. Johns | sjso.org inmate-search page links `/smartwebclient/jail.aspx`; that path returns **403** (nginx behind Cloudflare) to plain access | **Hold / fail_closed**: no reachable public roster; no WAF bypass. `SOURCE_CONTRACT_VALIDATED=False` and Health `fail_closed`. |
+| Hardee | hardeeso.com inmate search links only the OCV mobile app; OCV `inmates.json` S3/CDN paths for the app id return 403 | **Hold / fail_closed**: no public web roster. `SOURCE_CONTRACT_VALIDATED=False` and Health `fail_closed`. |
 
 ## Holds / next steps
 

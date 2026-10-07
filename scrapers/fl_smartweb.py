@@ -266,7 +266,6 @@ def _parse_html(
         booking_num = bk_m.group(1)
         if booking_num in seen:
             continue
-        seen.add(booking_num)
 
         block_text = ""
         try:
@@ -290,6 +289,9 @@ def _parse_html(
         full_name, race, sex, header_dob = _parse_name_from_header(header or block_text)
         if not full_name:
             continue
+        # Only a card that will be emitted consumes the booking key. A photo
+        # whose Booking No text does not match must not hide a later good card.
+        seen.add(booking_num)
 
         last, first, middle = "", "", ""
         if "," in full_name:
@@ -305,9 +307,19 @@ def _parse_html(
         booking_date = bd_m.group(1) if bd_m else ""
         booking_time = (bd_m.group(2) or "") if bd_m else ""
 
-        status_m = re.search(r"Status:\s*([a-zA-Z\s]+)", block_text)
-        status = status_m.group(1).strip() if status_m else "In Custody"
-        if "jail" in status.lower() or "custody" in status.lower():
+        # Bound the status token. A greedy letter capture swallows "Booking No"
+        # and used to treat "Out of Jail" as in custody because it contains "jail".
+        status_m = re.search(
+            r"Status:\s*(Out\s+of\s+Jail|In\s+Jail|In\s+Custody|Released)",
+            block_text,
+            re.IGNORECASE,
+        )
+        status_raw = status_m.group(1).strip() if status_m else ""
+        if re.search(r"released|out\s+of", status_raw, re.I):
+            status = "Released"
+        elif re.search(r"jail|custody", status_raw, re.I):
+            status = "In Custody"
+        else:
             status = "In Custody"
 
         addr_m = re.search(r"Address Given:\s*([^\n\r\t]+?)(?:\s+CHARGES\b|\s+STATUTE\b|$)", block_text)
@@ -344,12 +356,20 @@ def _parse_html(
                         charges_list.append(item)
                     bond_val = 0.0
                     if bond_str:
-                        cleaned = re.sub(r"[$,\s]", "", bond_str.strip().upper())
-                        if not any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
-                            try:
-                                bond_val = float(cleaned)
-                            except ValueError:
-                                pass
+                        compact = re.sub(r"[\s]", "", bond_str.strip().upper())
+                        if any(t in compact for t in ("NOBOND", "NONE", "N/A", "HOLD")):
+                            bond_val = 0.0
+                        else:
+                            # "$2,500.00 SURETY" is a published dollar amount plus a
+                            # type word. Require a $ or a pure numeric cell so a
+                            # reference id in the bond column is not summed.
+                            money = re.search(r"([0-9][0-9,]*(?:\.\d+)?)", bond_str)
+                            pure = re.fullmatch(r"[0-9][0-9,]*(?:\.\d+)?", bond_str.strip())
+                            if money and ("$" in bond_str or pure):
+                                try:
+                                    bond_val = float(money.group(1).replace(",", ""))
+                                except ValueError:
+                                    pass
                     total_bond += bond_val
 
         # Listing-level Bond Amount is source text when no charge-grid bonds exist.

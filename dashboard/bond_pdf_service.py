@@ -626,6 +626,25 @@ def _widget_base_name(field_name: Optional[str]) -> str:
     return (m.group(1).strip() if m else name)
 
 
+def _clear_widget_value(widget) -> None:
+    """Blank a form widget, including a template sample already stored in /V.
+
+    PyMuPDF treats ``field_value = ""`` as "leave the existing value", so a
+    rejected case number would keep the blank OSI template's sample CaseNum.
+    """
+    # field_value="" reports as cleared but save() restores the template /V.
+    page = getattr(widget, "parent", None)
+    doc = getattr(page, "parent", None) if page is not None else None
+    xref = getattr(widget, "xref", None)
+    if doc is not None and xref:
+        doc.xref_set_key(xref, "V", "()")
+    widget.field_value = ""
+    try:
+        widget.update()
+    except Exception:
+        pass
+
+
 def _set_widget_value_with_scaling(widget, val, default_font_size=10):
     """
     Writes a value to a PDF form widget, automatically scaling the font size
@@ -634,8 +653,7 @@ def _set_widget_value_with_scaling(widget, val, default_font_size=10):
     val_str = str(val if val is not None else "").strip()
     try:
         if not val_str:
-            widget.field_value = ""
-            widget.update()
+            _clear_widget_value(widget)
             return
 
         rect = getattr(widget, "rect", None)

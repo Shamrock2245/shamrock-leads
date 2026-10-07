@@ -3,6 +3,21 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-07 (post-merge cleanup)
+
+### Fixed
+- **SmartWEB JAIL View (`scrapers/fl_smartweb.py`):** status is a bounded token (`In Jail` / `Released` / `Out of Jail`). The old greedy capture stored `Released Booking No` and classified `Out of Jail` as in custody. Charge-grid cells like `$2,500.00 SURETY` keep the published dollars. A photo whose `bookno` does not match `Booking No` no longer consumes that booking key, so a later matching card can still emit.
+- **OSI appearance bond PDF:** an empty `CaseNum` (booking number rejected as a court case) now clears the template sample `26MM020844`. PyMuPDF was leaving the stored `/V` when the fill wrote `""`.
+- **Hardee (FL) / St. Johns (FL):** #104 documented both as holds, but Health stayed the unverified default and the matrix still said generic `recon_only`. Both are now `SOURCE_CONTRACT_VALIDATED=False` and Health `fail_closed` (403 SmartWEB path / OCV app only). Matrix regenerated.
+
+### Changed
+- Restored Unreleased notes that never landed for the 2026-10-07 merges below. `curl_cffi` stays in `requirements.txt` because Lee, Marion, and the stealth stack still import it; the SmartWEB counties no longer do.
+- **#104 Putnam / Sumter:** legacy vs modern `AddMoreResults` is chosen from the results page. Putnam and Sumter use shared `fl_smartweb` and source Booking No. Health stays unverified.
+- **#103 Bradford / Dixie / Taylor / Escambia / Santa Rosa:** SmartWEB JAIL View Booking No contracts. Invented name/date keys and the county `curl_cffi` paths are retired. Health stays unverified.
+- **#95 Citrus / Gilchrist / Hamilton / Madison / Okaloosa:** public contracts revived, Health unverified. Clay, Columbia, and Okeechobee stay fail_closed.
+- **#93 Pinellas / Marion / Charlotte / Manatee / Miami-Dade:** bond and charges hydrate from published source fields only.
+- **BailSafe P0:** Book Watch review (A1), OSI/Palmetto powers packs (C1), fail-closed Recovery role (B1), staff missed check-in evidence pack (A2). No automatic indemnitor text.
+
 ## [Unreleased] — 2026-10-07 (NC SSW ADPST Citizen Connect BookingID)
 
 ### Changed
