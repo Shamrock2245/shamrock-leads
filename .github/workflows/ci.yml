@@ -58,6 +58,7 @@ jobs:
           pytest -q \
             tests/test_tenant_scope.py \
             tests/test_agency_onboarding.py \
+            tests/test_agency_billing.py \
             tests/test_secret_scanner.py \
             tests/test_source_contract_run_guard.py \
             tests/test_source_booking_identity_guard.py \

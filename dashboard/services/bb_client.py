@@ -326,8 +326,18 @@ async def send_message_universal(
           data?: any,
         }
     """
+    from dashboard.services.agency_billing import suspension_block
     from dashboard.services.outreach_queue import enqueue_message
     from dashboard.extensions import get_collection
+
+    if await suspension_block():
+        return {
+            "success": False,
+            "sent": False,
+            "queued": False,
+            "channel": "failed",
+            "error": "tenant_suspended",
+        }
 
     # 0. STOP/TCPA gate — an opted-out recipient is never queued or sent to.
     blocked = await _consent_blocked(phone, purpose)
@@ -439,8 +449,18 @@ async def send_imessage_with_attachment(
     Returns:
         BlueBubbles API response dict or queued status
     """
+    from dashboard.services.agency_billing import suspension_block
     from dashboard.services.outreach_queue import enqueue_message
     from dashboard.extensions import get_collection
+
+    if await suspension_block():
+        return {
+            "success": False,
+            "sent": False,
+            "queued": False,
+            "channel": "failed",
+            "error": "tenant_suspended",
+        }
 
     # 0. STOP/TCPA gate — an opted-out recipient is never queued or sent to.
     blocked = await _consent_blocked(phone, "attachment")
