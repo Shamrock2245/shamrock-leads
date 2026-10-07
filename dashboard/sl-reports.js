@@ -55,6 +55,7 @@ const SLReports = (() => {
   let _currentReport = null;
   let _currentData   = null;
   let _currentPreset = 'mtd';
+  let _powersSurety  = 'osi';
   let _chartInstance = null;
   let _loaded        = false;
   const PRESET_KEY = 'sl_reports_preset_v1';
@@ -693,6 +694,63 @@ const SLReports = (() => {
     recalcLiabilityTotals();
   }
 
+  function setPowersSurety(id) {
+    _powersSurety = id === 'palmetto' ? 'palmetto' : 'osi';
+    document.querySelectorAll('.rpt-powers-chip').forEach(btn => {
+      const on = btn.dataset.surety === _powersSurety;
+      btn.classList.toggle('rpt-powers-chip-active', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  }
+
+  async function downloadPowersPack(pack) {
+    const kind = String(pack || '').toLowerCase();
+    const params = new URLSearchParams();
+    params.set('surety', _powersSurety);
+    params.set('fmt', 'xlsx');
+    const start = $('rptStartDate')?.value;
+    const end = $('rptEndDate')?.value;
+    if (start) params.set('start_date', start);
+    if (end) params.set('end_date', end);
+    const carrier = _powersSurety === 'palmetto' ? 'Palmetto' : 'OSI';
+    toast(`Building ${carrier} ${kind} powers pack…`, 'info');
+    try {
+      const r = await fetch(`${API}/api/reports/powers-pack/${encodeURIComponent(kind)}?${params}`, {
+        credentials: 'same-origin',
+      });
+      if (!r.ok) {
+        let msg = `HTTP ${r.status}`;
+        try {
+          const j = await r.json();
+          msg = j.message || j.error || msg;
+        } catch (_) {}
+        throw new Error(msg);
+      }
+      const blob = await r.blob();
+      const cd = r.headers.get('Content-Disposition') || '';
+      const m = /filename="?([^"]+)"?/.exec(cd);
+      const fname = m ? m[1] : (r.headers.get('X-Powers-Filename') || `${carrier}_Powers.xlsx`);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = fname;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(a.href);
+      const execN = r.headers.get('X-Execution-Count');
+      const voidN = r.headers.get('X-Void-Count');
+      const xferN = r.headers.get('X-Transfer-Count');
+      const partial = r.headers.get('X-Transfer-Partial') === 'true';
+      const counts = [execN, voidN, xferN].every(v => v !== null)
+        ? ` Execution ${execN}, Void ${voidN}, Transfer ${xferN}.`
+        : '';
+      const partialNote = partial ? ' Transfer history is partial.' : '';
+      toast(`${fname} downloaded.${counts}${partialNote}`, 'success');
+    } catch (e) {
+      toast('Powers pack failed: ' + (e.message || e), 'error');
+    }
+  }
+
   async function _downloadOneXlsx(suretyCode) {
     const url = `${API}/api/reports/bond-report.xlsx${_qs({ surety: suretyCode })}`;
     const r = await fetch(url, { credentials: 'same-origin' });
@@ -1285,6 +1343,7 @@ const SLReports = (() => {
   return {
     load, runAll, generate, onDateChange, onScopeChange, setPreset,
     exportCSV, exportPDF, exportXLSX, copySummary, printReport, closeResults,
+    setPowersSurety, downloadPowersPack,
     scheduleReport, closeSchedule, saveSchedule, uploadSpreadsheet,
     // Chronological output ordering (oldest bond → newest)
     resortForOutput, sortBondsOldestFirst,
