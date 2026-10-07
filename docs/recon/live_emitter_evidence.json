@@ -1,5 +1,5 @@
 {
-  "as_of": "2026-09-25",
+  "as_of": "2026-10-07",
   "description": "Documented live-write / hold evidence for scopes called out in the 2026-09-25 executive brief. Non-authoritative for source-contract state: SCRAPER_SOURCE_STATES stays the only source of verified_public / fail_closed. scripts/build_recon_matrix.py refuses to build if a live_write scope is fail_closed or a hold scope is not fail_closed.",
   "records": [
     {
@@ -31,6 +31,18 @@
       "emitter": "live_write",
       "evidence": "2026-09-25 Mac write smoke all 3 pages via DevExpress pager callback: 233 scraped / 133 new / 100 updated, status ok (source DCN bid); 2026-09-24 page-1 smoke 100 new",
       "source": "docs/recon/GAP_QUEUE_NC_TX_SC_2026-09-25.md"
+    },
+    {
+      "label": "Florence (SC)",
+      "emitter": "live_write",
+      "evidence": "2026-09-23 Palmetto/SC read-write health: 624 arrests, max scraped_at same day, status ok/623 (docs/recon/SC_READ_WRITE_HEALTH_2026-09-23.md). 2026-10-07 field completeness: booking.fcso.org inmate-details exposes source Name ID + Charge grid (charge text, $ bond, bond type); no invented FLO_ keys.",
+      "source": "docs/recon/SC_READ_WRITE_HEALTH_2026-09-23.md"
+    },
+    {
+      "label": "Newberry (SC)",
+      "emitter": "live_write",
+      "evidence": "2026-09-23 Palmetto/SC read-write health: 19 arrests (morning write; PDF flaky later), source SO# (docs/recon/SC_READ_WRITE_HEALTH_2026-09-23.md). 2026-10-07 field completeness: Sheriff current-bookings PDF publishes source SO/NP/HP/PP/\u2026 ids and charge lines; Bond_Amount only when $ printed.",
+      "source": "docs/recon/SC_READ_WRITE_HEALTH_2026-09-23.md"
     },
     {
       "label": "Gaston (NC)",

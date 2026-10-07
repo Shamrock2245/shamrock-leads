@@ -3,6 +3,13 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-07 (SC Florence + Newberry field completeness)
+
+### Changed
+- **Florence (SC):** letter-walk roster now enriches each inmate from `inmate-details`; `Booking_Number` is the source **Name ID** (no `FLO_` keys); `Charges` / `Bond_Amount` / `Bond_Type` come from the detail Charge grid only.
+- **Newberry (SC):** current Sheriff bookings PDF parser extracts charge lines; accepts source ids `SO`/`NP`/`HP`/`PP`/`HA`/`SL`/`GS`; `Bond_Amount` only when an explicit `Bond $…` line is printed (statute `$` text and `BOND POSTED` are not bonds).
+- Promoted both to Health `verified_public` with live_write evidence from 2026-09-23 plus this field probe (`docs/recon/SC_FLORENCE_NEWBERRY_FIELDS_2026-10-07.md`). Fail_closed SC counties untouched.
+
 ## [Unreleased] — 2026-10-05 (Dependency updates)
 
 ### Changed

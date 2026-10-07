@@ -2,8 +2,14 @@
 
 The official county inmate-search page temporarily links a current-bookings PDF
 instead of a live search interface. This scraper discovers the current Sheriff
-PDF from that page on every run and retains only entries carrying the document's
-source-provided ``SO`` identifier as ``Booking_Number``.
+PDF from that page on every run and retains only entries carrying a
+source-provided booking identifier (``SO-`` / ``NP-`` / ``HP-`` / ``PP-`` /
+``HA-`` / ``SL-`` / ``GS-`` and the legacy ``SO#`` form).
+
+Charges are taken from the PDF charge lines under each inmate. Dollar bond
+amounts are taken only when the PDF prints a ``$`` amount — release labels
+like ``BOND POSTED`` / ``PR BOND`` are not bond dollars and are not invented
+into ``Bond_Amount``.
 """
 from __future__ import annotations
 
@@ -27,16 +33,42 @@ PORTAL_URL = (
 )
 FACILITY = "Newberry County Detention Center"
 
-_SO_IDENTIFIER = re.compile(r"\bSO\s*[-#:]*\s*([A-Z0-9][A-Z0-9-]{2,})\b", re.I)
-_NAME = re.compile(
+# Live 2026-10 PDF: "LAST, FIRST - SO-0024345 - 25" (also NP/HP/PP/HA/SL/GS).
+_INMATE_HEADER = re.compile(
+    r"(?P<name>[A-Z][A-Z'\-]+(?:\s+[A-Z][A-Z'\-\.]+)*,\s*"
+    r"[A-Z][A-Z'\-]+(?:\s+[A-Z][A-Z'\-\.]+)*)"
+    r"\s*-\s*(?P<booking>[A-Z]{2}-\d{4,})\s*-\s*(?P<age>\d{1,3})"
+    r"(?:\s+(?P<inline_charge>.+))?",
+    re.I,
+)
+# Legacy fixture form: "SO# ABC-123" / "SO- ABC-123"
+_LEGACY_SO = re.compile(r"\bSO\s*[-#:]*\s*([A-Z0-9][A-Z0-9-]{2,})\b", re.I)
+_LEGACY_NAME = re.compile(
     r"\b([A-Z][A-Z'\-]{1,}(?:\s+[A-Z][A-Z'\-]{1,})*),\s*"
     r"([A-Z][A-Z'\-]{1,}(?:\s+[A-Z][A-Z'\-]{1,})*)\b"
 )
 _BOND = re.compile(r"\$\s*([\d,]+(?:\.\d{2})?)")
 _DATE = re.compile(r"\b(\d{1,2}/\d{1,2}/\d{2,4})\b")
+_RELEASED = re.compile(r"Released\s+(\d{1,2}/\d{1,2}/\d{2,4})", re.I)
+_SECTION_DATE = re.compile(r"^\s*(\d{1,2}/\d{1,2}/\d{2,4})\s*$")
+_PAGE_NOISE = re.compile(
+    r"Prisoners/Charges Booked In by Date Range|^\s*Page\s+\d+\s*$",
+    re.I,
+)
+_SKIP_CHARGE = re.compile(
+    r"^(Released\b|Booked\b|Bond\s*\$|SO\s*#|Page\s+\d+|Prisoners/)",
+    re.I,
+)
 
 
 class NewberryScraper(BaseScraper):
+    SOURCE_CONTRACT_VALIDATED = True
+    SOURCE_CONTRACT_REASON = (
+        "newberrycounty.gov Sheriff uploads current-bookings PDF; "
+        "source booking id (SO/NP/HP/PP/HA/SL/GS-#) required; charges from "
+        "PDF charge lines; dollar Bond_Amount only when $ is printed."
+    )
+
     @property
     def county(self) -> str:
         return "Newberry"
@@ -130,24 +162,132 @@ class NewberryScraper(BaseScraper):
 
     def _parse_pdf_text(self, text: str, pdf_url: str) -> List[ArrestRecord]:
         """Parse source IDs while keeping every record tied to an official PDF key."""
+        modern = self._parse_modern_layout(text, pdf_url)
+        if modern:
+            return modern
+        return self._parse_legacy_so_layout(text, pdf_url)
+
+    def _parse_modern_layout(self, text: str, pdf_url: str) -> List[ArrestRecord]:
+        lines = [ln.rstrip() for ln in text.splitlines()]
+        headers: List[Tuple[int, re.Match]] = []
+        for idx, line in enumerate(lines):
+            match = _INMATE_HEADER.search(line)
+            if match:
+                headers.append((idx, match))
+        if not headers:
+            return []
+
+        section_dates: List[Tuple[int, str]] = []
+        for idx, line in enumerate(lines):
+            if _SECTION_DATE.match(line.strip()):
+                section_dates.append((idx, line.strip()))
+
         records: List[ArrestRecord] = []
         seen = set()
-        matches = list(_SO_IDENTIFIER.finditer(text))
+        for h_i, (line_idx, match) in enumerate(headers):
+            booking_number = match.group("booking").upper()
+            if booking_number in seen:
+                continue
+
+            end_idx = headers[h_i + 1][0] if h_i + 1 < len(headers) else len(lines)
+            block_lines = lines[line_idx:end_idx]
+
+            charges: List[str] = []
+            inline = (match.group("inline_charge") or "").strip()
+            if inline and not _SKIP_CHARGE.match(inline):
+                charges.append(self._clean_charge(inline))
+
+            booking_date = ""
+            for prior_idx, prior_date in reversed(section_dates):
+                if prior_idx < line_idx:
+                    booking_date = prior_date
+                    break
+
+            for raw in block_lines[1:]:
+                line = raw.strip()
+                if not line or _PAGE_NOISE.search(line):
+                    continue
+                released = _RELEASED.search(line)
+                if released:
+                    if not booking_date:
+                        booking_date = released.group(1)
+                    continue
+                if _SKIP_CHARGE.match(line):
+                    continue
+                if _INMATE_HEADER.search(line):
+                    continue
+                if _SECTION_DATE.match(line):
+                    continue
+                charge = self._clean_charge(line)
+                if charge and charge not in charges:
+                    charges.append(charge)
+
+            # Dollar bonds only from explicit Bond lines — never from charge
+            # statute text like "VALUE $2,000 OR LESS", and never from release
+            # labels like "BOND POSTED" / "PR BOND".
+            bond_amount = "0"
+            for raw in block_lines:
+                line = raw.strip()
+                if not re.match(r"(?i)^bond\b", line):
+                    continue
+                money = _BOND.findall(line)
+                if money:
+                    bond_amount = money[-1].replace(",", "")
+
+            full_name = re.sub(r"\s+", " ", match.group("name")).strip().title()
+            last_name, _, rest = full_name.partition(",")
+            last_name = last_name.strip()
+            name_parts = rest.strip().split()
+            first_name = name_parts[0] if name_parts else ""
+            middle_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
+
+            seen.add(booking_number)
+            records.append(
+                ArrestRecord(
+                    County=self.county,
+                    State=self.state,
+                    Full_Name=f"{last_name}, {first_name} {middle_name}".strip(),
+                    First_Name=first_name,
+                    Middle_Name=middle_name,
+                    Last_Name=last_name,
+                    Booking_Number=booking_number,
+                    Booking_Date=booking_date,
+                    Age_At_Arrest=match.group("age"),
+                    Charges=" | ".join(charges) if charges else "",
+                    Bond_Amount=bond_amount,
+                    Status="In Custody",
+                    Facility=FACILITY,
+                    Agency="Newberry County Sheriff",
+                    Detail_URL=pdf_url,
+                    LastCheckedMode="INITIAL",
+                )
+            )
+        return records
+
+    def _parse_legacy_so_layout(self, text: str, pdf_url: str) -> List[ArrestRecord]:
+        """Retain the earlier SO#-block fixture format for regression tests."""
+        records: List[ArrestRecord] = []
+        seen = set()
+        matches = list(_LEGACY_SO.finditer(text))
         for index, identifier_match in enumerate(matches):
             booking_number = f"SO-{identifier_match.group(1).upper()}"
             if booking_number in seen:
                 continue
 
-            previous_boundary = matches[index - 1].end() if index else max(0, identifier_match.start() - 600)
-            following_name = _NAME.search(text, identifier_match.end())
-            following_identifier = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+            previous_boundary = (
+                matches[index - 1].end() if index else max(0, identifier_match.start() - 600)
+            )
+            following_name = _LEGACY_NAME.search(text, identifier_match.end())
+            following_identifier = (
+                matches[index + 1].start() if index + 1 < len(matches) else len(text)
+            )
             next_boundary = min(
                 following_name.start() if following_name else len(text),
                 following_identifier,
                 identifier_match.end() + 900,
             )
             context = text[previous_boundary:next_boundary]
-            names = list(_NAME.finditer(context))
+            names = list(_LEGACY_NAME.finditer(context))
             if not names:
                 continue
             name_match = names[-1]
@@ -163,6 +303,26 @@ class NewberryScraper(BaseScraper):
             if bonds:
                 bond_amount = bonds[-1].replace(",", "")
 
+            # Legacy layout rarely printed charge lines; leave empty rather than
+            # inventing "Unknown".
+            charges = ""
+            charge_lines = []
+            for line in context.splitlines():
+                stripped = line.strip()
+                if not stripped or _LEGACY_NAME.search(stripped) or _LEGACY_SO.search(stripped):
+                    continue
+                if _SKIP_CHARGE.match(stripped) or _DATE.fullmatch(stripped):
+                    continue
+                if _BOND.search(stripped) and not re.search(r"[A-Za-z]{3,}", stripped.replace("Bond", "")):
+                    continue
+                if stripped.lower().startswith("bond"):
+                    continue
+                cleaned = self._clean_charge(stripped)
+                if cleaned and cleaned not in charge_lines:
+                    charge_lines.append(cleaned)
+            if charge_lines:
+                charges = " | ".join(charge_lines)
+
             seen.add(booking_number)
             records.append(
                 ArrestRecord(
@@ -174,7 +334,7 @@ class NewberryScraper(BaseScraper):
                     Last_Name=last_name,
                     Booking_Number=booking_number,
                     Booking_Date=dates[-1] if dates else "",
-                    Charges="Unknown",
+                    Charges=charges,
                     Bond_Amount=bond_amount,
                     Status="In Custody",
                     Facility=FACILITY,
@@ -184,3 +344,10 @@ class NewberryScraper(BaseScraper):
                 )
             )
         return records
+
+    @staticmethod
+    def _clean_charge(text: str) -> str:
+        cleaned = re.sub(r"\s+", " ", text).strip(" -|")
+        if len(cleaned) < 3:
+            return ""
+        return cleaned

@@ -28,11 +28,11 @@
 | LA | 64 | 13 | 3 | 1 | 4 | 46 | 10 |
 | MS | 82 | 9 | 1 | 0 | 4 | 69 | 8 |
 | NC | 100 | 60 | 3 | 0 | 0 | 81 | 16 |
-| SC | 46 | 46 | 5 | 0 | 0 | 5 | 36 |
+| SC | 46 | 46 | 7 | 0 | 0 | 3 | 36 |
 | TN | 96 | 22 | 9 | 0 | 74 | 0 | 13 |
 | TX | 254 | 34 | 2 | 0 | 0 | 252 | 0 |
 
-**Aggregate matrix counts:** verified public 31; candidate productive 1; recon only 289; unverified 505; fail closed 121.
+**Aggregate matrix counts:** verified public 33; candidate productive 1; recon only 289; unverified 503; fail closed 121.
 
 ## County matrix
 
@@ -609,7 +609,7 @@
 | SC | 035 | Dorchester County | Palmetto | registered | verified_public | https://cc.southernsoftware.com/bookingsearch | Southern Software Citizen Connect booking search (agency DorchesterCoSC); index may return 403 but JMS cards carry source BookingID | 2026-09-24 write smoke: 331 scraped / 331 new, status ok, source Citizen Connect `BookingID` (docs/recon/SC_WRITE_SMOKE_2026-09-24.md). No synthetic keys. |
 | SC | 037 | Edgefield County | Palmetto | registered | fail_closed | https://edgefieldcounty.sc.gov/sheriff/ | Ordinary public landing page; no bypass used | Official Edgefield County Sheriff page explicitly states there is no online inmate lookup; telephone contact only. |
 | SC | 039 | Fairfield County | Palmetto | registered | fail_closed | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
-| SC | 041 | Florence County | Palmetto | registered | unverified | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
+| SC | 041 | Florence County | Palmetto | registered | verified_public | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
 | SC | 043 | Georgetown County | Palmetto | registered | fail_closed | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
 | SC | 045 | Greenville County | Palmetto | registered | fail_closed | https://app.greenvillecounty.org/inmate_search.htm | Ordinary public landing page; no bypass used | Official Greenville County inmate-search page; search form present, broad roster and row schema not verified. |
 | SC | 047 | Greenwood County | Palmetto | registered | fail_closed | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
@@ -624,7 +624,7 @@
 | SC | 067 | Marion County | Palmetto | registered | fail_closed | https://www.marionsc.org/departments/detention_center/current_inmates_and_releases.php | Ordinary public landing page; no bypass used | Official Marion County current-inmates-and-releases page; listing contract fields and pagination not verified. |
 | SC | 069 | Marlboro County | Palmetto | registered | fail_closed | https://marlborocountyjailsc.org/ | HTTP 403 / Cloudflare to ordinary public access; no residential, proxy, or browser workaround permitted | Hold: fail closed in `marlboro.py` (`SOURCE_CONTRACT_VALIDATED=False`) and `SCRAPER_SOURCE_STATES` 2026-09-25. Reopen only when ordinary public access returns a broad roster with a source-issued booking number. |
 | SC | 065 | McCormick County | Palmetto | registered | fail_closed | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
-| SC | 071 | Newberry County | Palmetto | registered | unverified | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
+| SC | 071 | Newberry County | Palmetto | registered | verified_public | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
 | SC | 073 | Oconee County | Palmetto | registered | unverified | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
 | SC | 075 | Orangeburg County | Palmetto | registered | fail_closed | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
 | SC | 077 | Pickens County | Palmetto | registered | unverified | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
@@ -997,6 +997,8 @@ Documented live writes and holds for scopes named in the latest executive brief.
 | Chesterfield (SC) | verified_public | live_write | 2026-09-24 write smoke 128 new (Citizen Connect BookingID); live per 2026-09-25 brief | `docs/recon/SC_WRITE_SMOKE_2026-09-24.md` |
 | Aiken (SC) | verified_public | live_write | 2026-09-24 write smoke 392 new (Inmate ID# / qSO_NO); live per 2026-09-25 brief | `docs/recon/SC_WRITE_SMOKE_2026-09-24.md` |
 | Darlington (SC) | verified_public | live_write | 2026-09-25 Mac write smoke all 3 pages via DevExpress pager callback: 233 scraped / 133 new / 100 updated, status ok (source DCN bid); 2026-09-24 page-1 smoke 100 new | `docs/recon/GAP_QUEUE_NC_TX_SC_2026-09-25.md` |
+| Florence (SC) | verified_public | live_write | 2026-09-23 Palmetto/SC read-write health: 624 arrests, max scraped_at same day, status ok/623 (docs/recon/SC_READ_WRITE_HEALTH_2026-09-23.md). 2026-10-07 field completeness: booking.fcso.org inmate-details exposes source Name ID + Charge grid (charge text, $ bond, bond type); no invented FLO_ keys. | `docs/recon/SC_READ_WRITE_HEALTH_2026-09-23.md` |
+| Newberry (SC) | verified_public | live_write | 2026-09-23 Palmetto/SC read-write health: 19 arrests (morning write; PDF flaky later), source SO# (docs/recon/SC_READ_WRITE_HEALTH_2026-09-23.md). 2026-10-07 field completeness: Sheriff current-bookings PDF publishes source SO/NP/HP/PP/… ids and charge lines; Bond_Amount only when $ printed. | `docs/recon/SC_READ_WRITE_HEALTH_2026-09-23.md` |
 | Gaston (NC) | verified_public | live_write | 2026-09-25 Mac write smoke 45 new / 0 updated, status ok (source Booking # YYYY-NNNNNNNN from New World detail) | `docs/recon/GAP_QUEUE_NC_TX_SC_2026-09-25.md` |
 | Pitt (NC) | verified_public | live_write | 2026-09-25 Mac write smoke 477 scraped / 164 new / 313 updated, status ok (source Booking Number, 6 digits) | `docs/recon/GAP_QUEUE_NC_TX_SC_2026-09-25.md` |
 | Orange (NC) | verified_public | live_write | 2026-09-25 Mac write smoke 101 new / 0 updated, status ok (source Bk #, 5 digits, daily confinement PDF) | `docs/recon/GAP_QUEUE_NC_TX_SC_2026-09-25.md` |
