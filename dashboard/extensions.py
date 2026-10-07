@@ -36,16 +36,30 @@ def get_mongo_client():
 
 
 def get_db():
-    """Return the database handle (Motor async)."""
+    """Return the database handle (Motor async).
+
+    This is the tenancy chokepoint, together with ``get_collection``.
+    ``SAAS_MULTI_TENANT`` defaults off, and this function then returns the
+    raw Motor database so Shamrock's queries are unchanged.
+
+    When the flag is on, the handle is a proxy: global collections (the
+    allowlist in ``dashboard.tenancy.constants``) stay raw, and every other
+    collection is pinned to the current tenant or rejected.
+    """
     global _mongo_db
     client = get_mongo_client()
     if _mongo_db is None:
         db_name = os.getenv("MONGODB_DB_NAME", "ShamrockBailDB")
         _mongo_db = client[db_name]
-    return _mongo_db
+    from dashboard.tenancy.flag import multi_tenant_enabled
+    if not multi_tenant_enabled():
+        return _mongo_db
+    from dashboard.tenancy.scope import TenantScopedDatabase
+    return TenantScopedDatabase(_mongo_db)
 
 
-# Convenience collection accessors
+# Convenience collection accessors. Always go through get_db() so the flag
+# lives in one place. Do not open a second Motor client for request paths.
 def get_collection(name: str):
     return get_db()[name]
 

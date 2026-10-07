@@ -37,6 +37,8 @@ from starlette.responses import Response
 from dashboard.deps import get_db, get_collection, get_settings
 from dashboard.extensions import init_bluebubbles
 from dashboard.auth.pin_middleware import PinAuthMiddleware, mount_login_routes
+from dashboard.tenancy.context import TenantContextMiddleware
+from dashboard.tenancy.scope import TenantScopeError, tenant_scope_http_error
 from dashboard.logging_redaction import SensitiveDataRedactionFilter
 
 logger = logging.getLogger(__name__)
@@ -111,6 +113,12 @@ async def lifespan(app: FastAPI):
     tasks = await start_all_crons()
 
     db_name = os.getenv("MONGODB_DB_NAME", "ShamrockBailDB")
+    from dashboard.tenancy.flag import multi_tenant_enabled
+    if multi_tenant_enabled():
+        logger.warning(
+            "SAAS_MULTI_TENANT is ON — tenant filters are active. "
+            "The shamrock backfill must already have been applied."
+        )
     logger.info(
         "☘️  FastAPI ready — Motor connected to %s — %d cron tasks launched",
         db_name, len(tasks),
@@ -160,6 +168,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Tenant context sits inside PIN auth. Starlette runs the last add_middleware
+# first, so PinAuthMiddleware below stays the outer gate and has already
+# attached the session before we resolve a tenant. Flag off: context is
+# Shamrock and the response is unchanged.
+app.add_middleware(TenantContextMiddleware)
+
 # ── PIN Authentication ──
 app.add_middleware(PinAuthMiddleware)
 mount_login_routes(app)
@@ -167,6 +181,17 @@ mount_login_routes(app)
 
 # ── Ensure unhandled errors return JSON (not Starlette plain-text "Internal Server Error") ──
 # Starlette still routes HTTPException / RequestValidationError to their own handlers (MRO).
+@app.exception_handler(TenantScopeError)
+async def _tenant_scope_error(request: Request, exc: TenantScopeError):
+    """Missing or cross-tenant access. 403, no document contents."""
+    logger.warning(
+        "Tenant scope rejected route=%s code=%s",
+        request.url.path,
+        getattr(exc, "code", "tenant_required"),
+    )
+    return tenant_scope_http_error()
+
+
 @app.exception_handler(Exception)
 async def _unhandled_exception(request: Request, exc: Exception):
     """Return a stable, non-sensitive JSON error with an operator lookup ID."""
