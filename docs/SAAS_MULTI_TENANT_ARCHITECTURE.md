@@ -393,6 +393,8 @@ OH fail-closed scopes never become a sellable lead source just because they are 
 
 ### 11.5 Start bond packet
 
+**Shipped behind `SAAS_MULTI_TENANT`.** `GET /bond-packet` is a four-step staff screen: booking, confirm defendant, indemnitor and surety, then a power that is still `available`. Prepare calls the roster hydrate, `preflight_write_bond_forward`, and `create_submission_for_packet` with `send_email` false. A pay link is copied only when one is already stored on the bond. The screen does not text, charge, or mark the power used. Flag off returns 404. `POST /api/write-bond` stays HTTP 410. Recovery still cannot open the page. Sub-agent POA scope is passed through `poa_scope_query`.
+
 Reuse the live path. Do not build a second one. `POST /api/write-bond` in `dashboard/routers/bonds.py` is retired (HTTP 410) and tells the caller to use the Super CRM DocuSeal workflow. The real chain is:
 
 1. `POST /api/paperwork/hydrate-from-booking` and the packet context/finalize routes in `dashboard/routers/paperwork.py`.
@@ -477,7 +479,7 @@ Each phase is shippable on its own. Each is reversible by turning `SAAS_MULTI_TE
 | **3. Stripe test mode** | Plans, Checkout, webhooks, MRR, suspend. Implemented behind the flag in the billing follow-up. No live key. | Flag off returns 404. Stripe test data can be discarded. | New billing module. Webhook signature required. |
 | **4. Surety entitlements** | Checklist over `SURETY_REGISTRY`. Implemented behind the flag. Finalize refuses a surety the tenant does not have. Private-template slot for Paperwork Desk. | Flag off uses today's registry. | A guard in the existing finalize path, not a new packet builder. |
 | **5. Lead subscriptions** | State/county picker. Fan-out of new arrests. Implemented behind the flag. Shared is the default; exclusive rejects a second subscriber. | Flag off. The writer does not import the fan-out. | Writer change stays behind the flag and runs only after the arrest upsert. |
-| **6. Start bond packet** | Four-click UI calling hydrate → preflight → DocuSeal → existing pay link. | Flag off hides the UI. Old paperwork routes stay. | Thin client over `paperwork.py`. |
+| **6. Start bond packet** | Four-step UI calling hydrate → preflight → DocuSeal → a pay link already on the bond. Implemented behind the flag. | Flag off returns 404. `POST /api/write-bond` stays 410. | Thin client. Does not send or burn a power. |
 | **7. Bypass closure** | The 19 clients in §12 either call the proxy or are proven global-only. SSE filtered by tenant. | Per client. | The gate before enabling the flag in production. |
 | **8. Trust pack** | Stop creating the 90-day audit TTL, keep 7 years for money/sign/POA, quiet hours on outbound, one-click export, backup runbook. | Re-add the TTL index only if a human accepts the data loss. Export is read-only. | Touches `dashboard/cron.py` boot indexes. Needs Brendan's yes. |
 | **9. Dedicated database option** | `tenants.db_name` for a single large tenant. Same proxy. | Point `db_name` back at the shared database after a copy. | Not needed for tenant #2. |

@@ -61,6 +61,7 @@ jobs:
             tests/test_agency_billing.py \
             tests/test_surety_entitlements.py \
             tests/test_lead_subscriptions.py \
+            tests/test_start_bond_packet.py \
             tests/test_secret_scanner.py \
             tests/test_source_contract_run_guard.py \
             tests/test_source_booking_identity_guard.py \
