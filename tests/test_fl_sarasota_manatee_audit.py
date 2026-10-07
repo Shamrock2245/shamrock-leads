@@ -373,6 +373,39 @@ async def test_resolve_case_context_marks_manatee_bond_unknown(monkeypatch):
     assert ctx["defendant"]["last_name"] == "DOE" and ctx["defendant"]["first_name"] == "JANE"
 
 
+def test_staff_bond_edits_win_over_stale_blank_raw():
+    # Codex P1: update-bond-amount / update-charge-bonds set the numeric
+    # bond_amount but leave bond_amount_raw="" from the Manatee scrape.
+    scraped = {"bond_amount": 0.0, "bond_amount_raw": ""}
+    assert arrest_bond_value(scraped) == ""
+    assert arrest_bond_value({**scraped, "bond_amount": 7500.0, "bond_override": True}) == 7500.0
+    assert arrest_bond_value({**scraped, "bond_amount": 0.0, "bond_override": True}) == "0"
+    charge_edit = {**scraped, "bond_amount": 3000.0, "last_checked_mode": "MANUAL_CHARGE_BONDS"}
+    assert arrest_bond_value(charge_edit) == 3000.0
+    # Any later positive numeric with a blank raw is still a real amount.
+    assert arrest_bond_value({**scraped, "bond_amount": 1200.0}) == 1200.0
+
+
+def test_staff_edited_charge_rows_win_over_scraped_extra():
+    # Codex P1: update-charge-bonds writes top-level charge_details; the scraped
+    # extra.charge_details must not shadow the staff amounts / case / POA.
+    rec = build_records(parse_roster_page(_page([_row(), _row(charge="RESIST OFFICER")])))[0]
+    doc = rec.to_mongo_doc()
+    doc["extra"] = rec.extra_data
+    doc["charge_details"] = [
+        {"charge": "BATTERY (DOMESTIC)", "bond_amount": 2500.0, "bond_type": "Surety",
+         "case_number": "2026-MM-000111", "poa_number": "POA-77"},
+        {"charge": "RESIST OFFICER", "bond_amount": 500.0, "bond_type": "Surety",
+         "case_number": "2026-MM-000111"},
+    ]
+    rows = charge_details_from_sources(arrest=doc, default_case="", default_bond=None)
+    assert [r["bond_amount"] for r in rows] == [2500.0, 500.0]
+    assert rows[0]["case_number"] == "2026-MM-000111" and rows[0]["poa_number"] == "POA-77"
+    # Writer's promoted copy (same as extra) still hydrates unknown, not $0.
+    doc["charge_details"] = rec.extra_data["charge_details"]
+    assert [r["bond_amount"] for r in charge_details_from_sources(arrest=doc)] == [None, None]
+
+
 # ── Sarasota: stays fail_closed; reopen gate on the live listing shape ──────
 SARASOTA_LIVE_SHAPED = """
 <h1 class="page-title">Current Inmate Population</h1>
@@ -394,10 +427,29 @@ def test_sarasota_live_listing_shape_fails_reopen_gate():
     assert "no booking date/time on the listing" in verdict.reasons
 
 
-def test_sarasota_gate_opens_only_with_booking_number_and_timestamp():
-    proof = SARASOTA_LIVE_SHAPED + "<table><tr><th>Booking Number</th><th>Booking Date</th></tr></table>"
-    assert assess_listing(proof).reopen_ok is True
+def test_sarasota_gate_ignores_page_wide_booking_labels():
+    # Codex P2: an empty "Booking Number / Booking Date" header elsewhere on the
+    # page must not reopen while every entry is still link id + name + DOB.
+    decoy = SARASOTA_LIVE_SHAPED + "<table><tr><th>Booking Number</th><th>Booking Date</th></tr></table>"
+    verdict = assess_listing(decoy)
+    assert verdict.reopen_ok is False
+    assert "no source booking number on the listing (link id only)" in verdict.reasons
     assert assess_listing("<html>nothing</html>").reopen_ok is False
+
+
+def test_sarasota_gate_opens_only_when_every_entry_has_booking_and_timestamp():
+    def entry(i, booking, when):
+        return (
+            f'<a class="dropdown-item" href="viewInmate.php?id=02000000{i:02d}">'
+            f"DOE,JANE - Booking #: {booking} - Booked: {when}</a>"
+        )
+
+    full = entry(1, "2026-012345", "10/06/2026 21:14") + entry(2, "2026-012346", "10/07/2026 03:02")
+    assert assess_listing(full).reopen_ok is True
+    # One entry with a date but no time, or without a booking number -> closed.
+    assert assess_listing(full + entry(3, "2026-012347", "10/07/2026")).reopen_ok is False
+    no_key = full + '<a href="viewInmate.php?id=0200000009">ROE,RICHARD - Booked: 10/07/2026 04:00</a>'
+    assert assess_listing(no_key).reopen_ok is False
 
 
 def test_sarasota_still_fail_closed_with_documented_reason():

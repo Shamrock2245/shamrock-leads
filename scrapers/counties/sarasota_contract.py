@@ -29,8 +29,18 @@ LISTING_URL = "https://cms.revize.com/revize/apps/sarasota/"
 _ENTRY_RE = re.compile(
     r'href="viewInmate\.php\?id=(\d+)\s*"[^>]*>\s*([^<]+?)\s*</a>', re.I
 )
-_BOOKING_LABEL_RE = re.compile(r"booking\s*(?:#|no\.?|number)", re.I)
-_BOOKING_TIME_RE = re.compile(r"(?:booking|book)\s*(?:date|time)", re.I)
+# Per-entry proof: each entry itself must carry a labelled booking number with
+# a value and a booking date *with a time*. Page-wide labels (an empty table
+# header, help text) prove nothing about the entries.
+_ENTRY_BOOKING_RE = re.compile(
+    r"booking\s*(?:#|no\.?|number)\s*[:#]?\s*(?=[A-Z0-9-]*\d)[A-Z0-9][A-Z0-9-]{3,19}\b",
+    re.I,
+)
+_ENTRY_BOOKING_TIME_RE = re.compile(
+    r"book(?:ing|ed)?\s*(?:date|time|date/time)?\s*[:#]?\s*"
+    r"\d{1,2}/\d{1,2}/\d{2,4}[ T,]+\d{1,2}:\d{2}",
+    re.I,
+)
 
 
 @dataclass(frozen=True)
@@ -47,15 +57,19 @@ def listing_entries(page_html: str) -> List[Tuple[str, str]]:
 
 
 def assess_listing(page_html: str) -> SarasotaListingVerdict:
-    """Decide whether the listing alone satisfies the booking-safe contract."""
+    """Decide whether the listing alone satisfies the booking-safe contract.
+
+    Every entry must itself expose a source booking number and a booking
+    date/time; labels elsewhere on the page do not count.
+    """
     entries = listing_entries(page_html)
-    text = re.sub(r"<[^>]+>", " ", page_html or "")
     reasons: List[str] = []
     if not entries:
         reasons.append("no current-inmate listing entries")
-    if not _BOOKING_LABEL_RE.search(text):
+    labels = [label for _, label in entries]
+    if not labels or not all(_ENTRY_BOOKING_RE.search(lb) for lb in labels):
         reasons.append("no source booking number on the listing (link id only)")
-    if not _BOOKING_TIME_RE.search(text):
+    if not labels or not all(_ENTRY_BOOKING_TIME_RE.search(lb) for lb in labels):
         reasons.append("no booking date/time on the listing")
     ids = [e[0] for e in entries]
     if len(set(ids)) != len(ids):

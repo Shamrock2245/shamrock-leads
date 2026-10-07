@@ -168,13 +168,29 @@ def arrest_bond_value(arrest: Optional[Dict[str, Any]]) -> Any:
     when the source published nothing) and the source string in
     ``bond_amount_raw``. Prefer the raw string so an unknown bond (``""``)
     stays unknown instead of hydrating as $0.
+
+    Staff edits (``/api/leads/update-bond-amount`` sets ``bond_override``;
+    ``/api/leads/update-charge-bonds`` sets ``last_checked_mode``) update the
+    numeric ``bond_amount`` but not ``bond_amount_raw``, so they win over a
+    stale blank raw value. A staff-entered $0 stays a known ``"0"``.
     """
     arrest = arrest if isinstance(arrest, dict) else {}
     if arrest.get("Bond_Amount") not in (None, ""):
         return arrest.get("Bond_Amount")
+    numeric = arrest.get("bond_amount")
+    staff_set = bool(arrest.get("bond_override")) or (
+        arrest.get("last_checked_mode") == "MANUAL_CHARGE_BONDS"
+    )
+    if staff_set and numeric not in (None, ""):
+        return numeric if _money(numeric) else "0"
     if "bond_amount_raw" in arrest:
-        return arrest.get("bond_amount_raw")
-    return arrest.get("bond_amount")
+        raw = arrest.get("bond_amount_raw")
+        if raw is not None and str(raw).strip():
+            return raw
+        # Blank raw = source published nothing; a positive numeric written by
+        # a later updater is still a real amount, a 0.0 is not.
+        return numeric if _money(numeric) else ""
+    return numeric
 
 
 def charge_details_from_sources(
@@ -193,9 +209,12 @@ def charge_details_from_sources(
     arrest = arrest if isinstance(arrest, dict) else {}
     bond = bond if isinstance(bond, dict) else {}
     extra = arrest.get("extra") if isinstance(arrest.get("extra"), dict) else {}
+    # Top-level arrest.charge_details is either the Mongo writer's copy of
+    # extra.charge_details or the staff-edited rows saved by
+    # /api/leads/update-charge-bonds, so it wins over the scraped original.
     raw = (
-        extra.get("charge_details")
-        or arrest.get("charge_details")
+        arrest.get("charge_details")
+        or extra.get("charge_details")
         or bond.get("charge_details")
         or bond.get("charge_list")
         or []
