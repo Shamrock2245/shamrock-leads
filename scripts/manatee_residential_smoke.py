@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Manatee FL residential READ smoke (no writes, no names printed).
 
-Run from the Leads Ops Mac on home ISP or an iPhone hotspot (VPN off):
+Run on the Leads Ops home relay (Brendan's residential connection, VPN off):
 
     MANATEE_EGRESS_MODE=direct python scripts/manatee_residential_smoke.py
 
@@ -30,7 +30,7 @@ from scrapers.scraper_resilience import EgressBlocked, ParseDriftError  # noqa: 
 def main() -> int:
     from scrapers.counties.manatee import ManateeCountyScraper, egress_mode
 
-    out = {"county": "Manatee (FL)", "egress_mode": os.getenv("MANATEE_EGRESS_MODE", "auto")}
+    out = {"county": "Manatee (FL)", "egress_mode": os.getenv("MANATEE_EGRESS_MODE", "direct")}
     scraper = ManateeCountyScraper()
     try:
         out["egress_mode"] = egress_mode()

@@ -63,8 +63,12 @@ def check_exit_ip(
     *,
     timeout: float = 20.0,
     retries: int = 3,
+    trust_env: bool = True,
 ) -> Dict[str, Any]:
     """Return public exit IP metadata via the proxy (or direct if proxy_url is None).
+
+    ``trust_env=False`` ignores HTTP(S)_PROXY / ALL_PROXY so a direct check
+    really measures this host's own exit (Manatee).
 
     Keys: ok, ip, org, country, city, residential_likely, raw
     """
@@ -90,6 +94,7 @@ def check_exit_ip(
             client_kwargs: Dict[str, Any] = {
                 "timeout": timeout,
                 "follow_redirects": True,
+                "trust_env": trust_env,
             }
             if proxy_url:
                 client_kwargs["proxy"] = proxy_url
