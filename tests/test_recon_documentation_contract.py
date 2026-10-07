@@ -132,7 +132,7 @@ def test_unvalidated_north_carolina_batch_is_reported_as_fail_closed():
         ("081", "Guilford"),
         ("083", "Halifax"),
         ("151", "Randolph"),
-        ("165", "Scotland"),
+        # Scotland (165) lifted 2026-10-07 — see test_nc_ssw_adpst_are_candidate_productive
         ("179", "Union"),
         ("183", "Wake"),
     ):
@@ -167,6 +167,22 @@ def test_nc_ssw_five_are_candidate_productive():
         ("163", "Sampson"),
         ("169", "Stokes"),
         ("171", "Surry"),
+    ):
+        assert (
+            f"| NC | {fips} | {county} County | Palmetto | registered | candidate_productive |"
+            in matrix
+        )
+
+
+def test_nc_ssw_adpst_are_candidate_productive():
+    """Citizen Connect BookingID contracts proven 2026-10-07 (post-#101 remaining SSW); Health unverified until write smoke."""
+    matrix = MATRIX.read_text()
+    for fips, county in (
+        ("007", "Anson"),
+        ("061", "Duplin"),
+        ("149", "Polk"),
+        ("165", "Scotland"),
+        ("175", "Transylvania"),
     ):
         assert (
             f"| NC | {fips} | {county} County | Palmetto | registered | candidate_productive |"
