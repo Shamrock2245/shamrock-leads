@@ -667,7 +667,7 @@
     {
       "state": "FL",
       "county_fips": "017",
-      "passive_recommendation": "candidate_productive",
+      "passive_recommendation": "productive",
       "official_source_url": "https://www.sheriffcitrus.org/public_info/recent_arrest.php",
       "access_posture": "Ordinary public HTTPS; dated arrest PDF iframe with AR # / charges / bond",
       "evidence_note": "2026-10-07 idle-eight recon: landing 200; PDF table columns Photo/Name/AR #/Date/Arrest Type/Offense/DOB/Bond; AR # pattern AAYY-NNNNNN. Parser uses plain requests+pdfplumber (no DrissionPage)."
@@ -755,7 +755,7 @@
     {
       "state": "FL",
       "county_fips": "041",
-      "passive_recommendation": "candidate_productive",
+      "passive_recommendation": "productive",
       "official_source_url": "https://inmate.gcso.us/smartwebclient/Jail.aspx",
       "access_posture": "Ordinary public HTTPS SmartWEB JAIL View (linked from gcso.us)",
       "evidence_note": "2026-10-07 idle-eight recon: Booking No GCSO<YY>JBN<NNNNNN>, booking date/time, charges, bond via booking-date window. Prior smartcop.gilchristsheriff.com NXDOMAIN."
@@ -779,7 +779,7 @@
     {
       "state": "FL",
       "county_fips": "047",
-      "passive_recommendation": "candidate_productive",
+      "passive_recommendation": "productive",
       "official_source_url": "https://inmate.hamiltonsheriff.com/smartwebclient/jail.aspx",
       "access_posture": "Ordinary public HTTPS SmartWEB JAIL View",
       "evidence_note": "2026-10-07 idle-eight recon: Booking No HCSO<YY>JBN<NNNNNN>, booking date/time, charges, bond via booking-date window. Prior smartcop.hamiltoncountysheriff.com NXDOMAIN."
@@ -907,7 +907,7 @@
     {
       "state": "FL",
       "county_fips": "079",
-      "passive_recommendation": "candidate_productive",
+      "passive_recommendation": "productive",
       "official_source_url": "https://smartweb.mcso-fl.org/smartwebclient/jail.aspx",
       "access_posture": "Ordinary public HTTPS SmartWEB JAIL View (Madison FL SO)",
       "evidence_note": "2026-10-07 idle-eight recon: Booking No MCSO<YY>JBN<NNNNNN>, booking date/time, charges, bond. Prior smartcop.madisonsheriff.org is wrong tenant/expired cert."
@@ -963,7 +963,7 @@
     {
       "state": "FL",
       "county_fips": "091",
-      "passive_recommendation": "candidate_productive",
+      "passive_recommendation": "productive",
       "official_source_url": "https://okaloosacountyjail.myokaloosa.com/InmateLocator/Default.aspx",
       "access_posture": "Ordinary public HTTPS ASP.NET Inmate Locator (linked from sheriff-okaloosa.org)",
       "evidence_note": "2026-10-07 idle-eight recon: Default.aspx A\u2013Z last-name search returns Booking# (10-digit YYYY+seq), name, demographics. SPA root /InmateLocator/ is not the roster."
