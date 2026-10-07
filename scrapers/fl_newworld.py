@@ -19,7 +19,9 @@ Contract (ordinary public HTTPS, plain ``requests``, TLS verification on):
 The previous per-county parsers took the first ``h2/h3`` that started with
 "Booking", which is the ``Booking History`` section heading, so every row got
 the same key (``History``). No name/date/row-id keys are ever synthesized and
-bond is the source ``Total Bond Amount`` of the open booking only.
+bond is the source ``Total Bond Amount`` of the open booking only. A blank or
+unparseable Total Bond Amount leaves ``Bond_Amount=""`` (unknown) rather than
+inventing $0; a failed detail fetch drops the row.
 """
 from __future__ import annotations
 
@@ -198,7 +200,8 @@ def detail_to_record(
         Booking_Date=booking_date,
         Booking_Time=booking_time,
         Charges=booking.get("charges", ""),
-        Bond_Amount=booking.get("bond") or "0",
+        # "" = source Total Bond Amount blank/unparseable (unknown); "0.00" only when published.
+        Bond_Amount=booking.get("bond", ""),
         Agency=booking.get("agency", ""),
         Status="In Custody",
         Detail_URL=detail_url,

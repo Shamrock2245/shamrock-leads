@@ -18,6 +18,15 @@ Source contract (recon 2026-10-07, docs/recon/FL_BREVARD_NEWWORLD_2026-10-07.md)
     ``Charges`` card (Charge column) for that booking. Bond is the sum of the
     source Bond Amount cells; never synthesized. Details are fetched only for
     rows the source marks ``Released = No``.
+  * Unknown bond stays unknown: a released row (no detail fetched), or a detail
+    fetch that fails / times out / is non-200 / names another booking, emits
+    ``Bond_Amount=""`` (scorer: no bond-amount points either way). ``0`` is
+    emitted only when the source Bonds card itself publishes $0.
+  * Bond_Type comes from the bond rows with a positive Bond Amount, so a
+    ``$2,500 Surety`` row is never masked by a ``$0 No Bond`` row (the scorer
+    checks NO BOND before SURETY). With no positive row, all source types are kept.
+  * ``Released`` is a required column and only ``Yes`` / ``No`` are accepted;
+    header or value drift raises instead of marking everyone In Custody.
   * Health stays unverified until a write smoke.
 """
 from __future__ import annotations
@@ -57,7 +66,8 @@ HEADERS = {
     "Referer": BASE_URL + "/",
 }
 
-_REQUIRED_COLUMNS = ("booking #", "name", "booking date")
+_REQUIRED_COLUMNS = ("booking #", "name", "booking date", "released")
+_RELEASED_VALUES = {"yes": True, "no": False}
 
 
 class BrevardContractError(RuntimeError):
@@ -84,13 +94,18 @@ def parse_results_html(html: str) -> List[Dict[str, str]]:
             continue
         cell = lambda col: tds[idx[col]].get_text(" ", strip=True) if col in idx else ""  # noqa: E731
         link = tr.find("a", href=re.compile(r"/Details/", re.I))
+        released = cell("released")
+        if released.strip().lower() not in _RELEASED_VALUES:
+            raise BrevardContractError(
+                f"Brevard: unrecognized Released value {released!r} for booking {cell('booking #')!r}"
+            )
         rows.append(
             {
                 "booking": cell("booking #"),
                 "name": cell("name"),
                 "dob": cell("dob"),
                 "booking_date": cell("booking date"),
-                "released": cell("released"),
+                "released": released,
                 "detail_url": urljoin(BASE_URL + "/", link["href"]) if link else "",
             }
         )
@@ -126,14 +141,33 @@ def parse_detail_html(html: str, expected_booking: str) -> Optional[Dict[str, st
                 out.append(tds[i].get_text(" ", strip=True))
         return out
 
-    total = 0.0
-    seen_amount = False
-    for raw in column(card_table("bonds"), "bond amount"):
-        money = _MONEY_RE.search(raw)
-        if money:
-            total += float(money.group(1).replace(",", ""))
-            seen_amount = True
-    bond_types = [t for t in column(card_table("bonds"), "bond type") if t]
+    def bond_rows(table) -> List[tuple]:
+        """(bond_type, amount or None) per source Bonds row."""
+        if table is None:
+            return []
+        heads = [th.get_text(" ", strip=True).lower() for th in table.find_all("th")]
+        if "bond amount" not in heads:
+            return []
+        ia = heads.index("bond amount")
+        it = heads.index("bond type") if "bond type" in heads else None
+        out = []
+        for tr in table.find_all("tr"):
+            tds = tr.find_all("td")
+            if len(tds) <= ia:
+                continue
+            money = _MONEY_RE.search(tds[ia].get_text(" ", strip=True))
+            amount = float(money.group(1).replace(",", "")) if money else None
+            btype = tds[it].get_text(" ", strip=True) if it is not None and len(tds) > it else ""
+            out.append((btype, amount))
+        return out
+
+    bonds = bond_rows(card_table("bonds"))
+    amounts = [a for _, a in bonds if a is not None]
+    total = sum(amounts)
+    seen_amount = bool(amounts)
+    positive_types = [t for t, a in bonds if t and a is not None and a > 0]
+    all_types = [t for t, _ in bonds if t]
+    bond_types = list(dict.fromkeys(positive_types or all_types))
     charges = [c for c in column(card_table("charges"), "charge") if c]
     sex = race = ""
     for dt in soup.find_all("dt"):
@@ -215,12 +249,13 @@ class BrevardCountyScraper(BaseScraper):
         records: List[ArrestRecord] = []
         seen = set()
         details = 0
+        detail_failures = 0
         for row in rows:
             booking = row["booking"]
             if not BOOKING_RE.fullmatch(booking) or booking in seen or not row["name"]:
                 continue
             seen.add(booking)
-            released = row["released"].strip().lower() == "yes"
+            released = _RELEASED_VALUES[row["released"].strip().lower()]
             detail: Dict[str, str] = {}
             if not released and row["detail_url"] and details < MAX_DETAILS:
                 details += 1
@@ -228,8 +263,12 @@ class BrevardCountyScraper(BaseScraper):
                     d = session.get(row["detail_url"], timeout=25)
                     if d.status_code == 200:
                         detail = parse_detail_html(d.text, booking) or {}
+                    else:
+                        logger.debug("Brevard detail HTTP %s (%s)", d.status_code, row["detail_url"])
                 except requests.RequestException as exc:
                     logger.debug("Brevard detail failed (%s): %s", row["detail_url"], exc)
+                if not detail:
+                    detail_failures += 1  # bond stays unknown (""), never $0
                 time.sleep(REQUEST_PAUSE_S)
 
             booking_date, booking_time = row["booking_date"], ""
@@ -254,7 +293,8 @@ class BrevardCountyScraper(BaseScraper):
                     Booking_Date=booking_date,
                     Booking_Time=booking_time,
                     Charges=detail.get("charges", ""),
-                    Bond_Amount=detail.get("bond") or "0",
+                    # "" = unknown (released row, or detail failed/mismatched). Never "0" unless published.
+                    Bond_Amount=detail.get("bond", ""),
                     Bond_Type=detail.get("bond_type", ""),
                     Status="Released" if released else "In Custody",
                     Detail_URL=row["detail_url"],
@@ -264,6 +304,11 @@ class BrevardCountyScraper(BaseScraper):
 
         if rows and not records:
             raise BrevardContractError("Brevard: results rows present but none carry a source Booking #")
+        if detail_failures:
+            logger.warning(
+                "Brevard: %d/%d in-custody detail pages failed or mismatched; bond left unknown",
+                detail_failures, details,
+            )
         logger.info(
             "Brevard: %d source bookings (%s..%s), %d detail pages",
             len(records), from_date.date(), to_date.date(), details,

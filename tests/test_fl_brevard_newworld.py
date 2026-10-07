@@ -7,6 +7,9 @@ from __future__ import annotations
 
 import pytest
 
+import requests
+
+from scoring.lead_scorer import LeadScorer
 from scrapers import fl_newworld
 from scrapers.counties import brevard
 from scrapers.counties.flagler import FlaglerCountyScraper
@@ -71,7 +74,8 @@ def test_brevard_detail_sums_current_booking_bonds_only():
     assert d is not None
     assert d["bond"] == "2500.00"  # history card $99,999 ignored
     assert d["charges"] == "BATTERY | VOP"
-    assert d["bond_type"] == "Surety | No Bond"
+    # Type from the positive-amount rows: the $0 No Bond row must not mask Surety.
+    assert d["bond_type"] == "Surety"
     assert d["sex"] == "Female"
 
 
@@ -115,10 +119,107 @@ def test_brevard_scrape_end_to_end(monkeypatch):
     jane, john = recs
     assert jane.Full_Name == "DOE, JANE Q" and jane.Booking_Date == "10/6/2026" and jane.Booking_Time == "11:44 PM"
     assert jane.Bond_Amount == "2500.00" and jane.Status == "In Custody" and jane.Sex == "F"
-    assert john.Status == "Released" and john.Bond_Amount == "0" and john.Charges == ""
+    # Released row: no detail fetched, so bond is unknown (""), never an invented $0.
+    assert john.Status == "Released" and john.Bond_Amount == "" and john.Charges == ""
     # Detail fetched only for the in-custody row.
     assert sum(1 for m, u in calls if "/Details/" in u) == 1
     assert ("POST", brevard.BASE_URL + "/?handler=Search") in calls
+
+
+class _Resp:
+    def __init__(self, text, status=200):
+        self.text, self.status_code = text, status
+
+    def raise_for_status(self):
+        pass
+
+
+_HOME = (
+    '<form method="post" action="/Results">'
+    '<input type="date" max="2026-10-06" name="SearchForm.ToDate" />'
+    '<input name="__RequestVerificationToken" type="hidden" value="tok" /></form>'
+)
+
+
+def _scrape_with_detail(monkeypatch, detail_get):
+    """Run the Brevard scraper with a fake session whose detail GET is ``detail_get(url)``."""
+
+    class FakeSession:
+        headers = {}
+
+        def get(self, url, **kw):
+            return detail_get(url) if "/Details/" in url else _Resp(_HOME)
+
+        def post(self, url, data=None, **kw):
+            return _Resp(BREVARD_RESULTS)
+
+    monkeypatch.setattr(brevard.requests, "Session", FakeSession)
+    monkeypatch.setattr(brevard, "REQUEST_PAUSE_S", 0)
+    return brevard.BrevardCountyScraper().scrape()
+
+
+def _timeout(url):
+    raise requests.Timeout("read timed out")
+
+
+@pytest.mark.parametrize(
+    "detail_get",
+    [
+        _timeout,
+        lambda url: _Resp("Service Unavailable", status=503),
+        lambda url: _Resp(BREVARD_DETAIL.replace("2026-00000002", "2026-00000099")),  # mismatched booking
+    ],
+    ids=["timeout", "non-200", "mismatched-booking"],
+)
+def test_brevard_failed_detail_keeps_bond_unknown_not_zero(monkeypatch, detail_get):
+    recs = _scrape_with_detail(monkeypatch, detail_get)
+    jane = next(r for r in recs if r.Booking_Number == "2026-00000002")
+    assert jane.Status == "In Custody"
+    assert jane.Bond_Amount == "" and jane.Bond_Type == ""
+    scorer = LeadScorer()
+    scorer.score_arrest(jane)
+    assert not any("Bond amount" in r for r in scorer.get_score_breakdown())  # no $0 (-50) penalty
+
+
+def test_brevard_published_zero_bond_is_kept():
+    html = BREVARD_DETAIL.replace("<td>Surety</td><td>$2,500.00</td>", "<td>No Bond</td><td>$0.00</td>")
+    d = brevard.parse_detail_html(html, "2026-00000002")
+    assert d["bond"] == "0.00" and d["bond_type"] == "No Bond"
+
+
+def test_brevard_mixed_bond_scores_as_surety_not_no_bond(monkeypatch):
+    recs = _scrape_with_detail(monkeypatch, lambda url: _Resp(BREVARD_DETAIL))
+    jane = next(r for r in recs if r.Booking_Number == "2026-00000002")
+    assert jane.Bond_Amount == "2500.00" and jane.Bond_Type == "Surety"
+    scorer = LeadScorer()
+    scorer.score_arrest(jane)
+    breakdown = scorer.get_score_breakdown()
+    assert any("CASH/SURETY" in r and "+25" in r for r in breakdown)
+    assert not any("NO BOND" in r for r in breakdown)
+
+
+def test_brevard_bond_type_dedupes_positive_rows():
+    html = BREVARD_DETAIL.replace("<td>No Bond</td><td>$0.00</td>", "<td>Surety</td><td>$1,000.00</td>")
+    d = brevard.parse_detail_html(html, "2026-00000002")
+    assert d["bond"] == "3500.00" and d["bond_type"] == "Surety"
+
+
+def test_brevard_released_column_required():
+    html = BREVARD_RESULTS.replace("<th>Released</th>", "<th>Status</th>")
+    with pytest.raises(brevard.BrevardContractError, match="released"):
+        brevard.parse_results_html(html)
+
+
+@pytest.mark.parametrize("value", ["", "Pending", "Transferred", "N"])
+def test_brevard_unrecognized_released_value_fails_closed(value):
+    html = BREVARD_RESULTS.replace("<td>No</td>", f"<td>{value}</td>")
+    with pytest.raises(brevard.BrevardContractError, match="Released"):
+        brevard.parse_results_html(html)
+
+
+def test_brevard_released_values_case_insensitive():
+    html = BREVARD_RESULTS.replace("<td>No</td>", "<td> NO </td>").replace("<td>Yes</td>", "<td>yes</td>")
+    assert [r["released"].strip().lower() for r in brevard.parse_results_html(html)] == ["no", "yes"]
 
 
 # ── New World (Walton / Flagler) ─────────────────────────────────────────────
@@ -179,10 +280,19 @@ def test_newworld_drops_malformed_open_booking():
     assert fl_newworld.detail_to_record(html, county="Flagler", facility="x", detail_url="u") is None
 
 
-def test_newworld_bond_zero_when_source_blank():
+def test_newworld_bond_unknown_when_source_blank():
     html = _detail(_booking_block("2026-00000001", "", "", ["TRESPASS"]))
     rec = fl_newworld.detail_to_record(html, county="Flagler", facility="x", detail_url="u")
-    assert rec is not None and rec.Bond_Amount == "0"
+    assert rec is not None and rec.Bond_Amount == ""
+    scorer = LeadScorer()
+    scorer.score_arrest(rec)
+    assert not any("$0" in r for r in scorer.get_score_breakdown())
+
+
+def test_newworld_bond_zero_only_when_source_publishes_zero():
+    html = _detail(_booking_block("2026-00000001", "", "$0.00", ["TRESPASS"]))
+    rec = fl_newworld.detail_to_record(html, county="Walton", facility="x", detail_url="u")
+    assert rec is not None and rec.Bond_Amount == "0.00"
 
 
 def test_newworld_listing_links_absolute_and_deduped():
