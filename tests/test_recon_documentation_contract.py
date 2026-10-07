@@ -205,9 +205,10 @@ def test_unvalidated_south_carolina_batch_is_reported_as_fail_closed():
         ("067", "Marion"),
         ("081", "Saluda"),
         ("087", "Union"),
-        ("091", "York"),
     ):
         assert f"| SC | {fips} | {county} County | Palmetto | registered | fail_closed |" in matrix
+    # York reopened 2026-10-07 on its source Booking Number (Health unverified until write smoke).
+    assert "| SC | 091 | York County | Palmetto | registered | candidate_productive |" in matrix
 
 
 def test_connecticut_court_docket_counties_are_reported_as_fail_closed():

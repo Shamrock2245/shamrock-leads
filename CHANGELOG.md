@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-07 (York SC source Booking Number)
+
+### Changed
+- **York (SC):** the official Inmates in Jail roster (`inmatesinjail.yorkcountygov.com`) answers plain HTTPS again. The earlier timeout hold no longer reproduces. The scraper now walks every `dgJackets` page (29 pages, 435 rows, matching `Results Count`). `Booking_Number` is the published Booking Number (`DC<YYYY><NNNNN>`) and is cross-checked against the photo key. Booking date/time, `*In Jail` status, `Total Bond`, and charges come from source fields only. The old parser read the facility header as the person's name and saw page 1 only; both are fixed. `SOURCE_CONTRACT_VALIDATED=True` and Health `fail_closed` is lifted, but Health stays **unverified** until a write smoke. Evidence and matrix are updated (`docs/recon/SC_YORK_INMATES_IN_JAIL_2026-10-07.md`). Richland, Sumter, Hampton, Marlboro, Oconee, and Pickens are untouched.
+
 ## [Unreleased] — 2026-10-07 (post-merge cleanup)
 
 ### Fixed

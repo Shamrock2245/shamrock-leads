@@ -28,11 +28,11 @@
 | LA | 64 | 13 | 3 | 1 | 4 | 46 | 10 |
 | MS | 82 | 9 | 1 | 0 | 4 | 69 | 8 |
 | NC | 100 | 60 | 3 | 13 | 0 | 70 | 14 |
-| SC | 46 | 46 | 7 | 1 | 0 | 0 | 38 |
+| SC | 46 | 46 | 7 | 2 | 0 | 0 | 37 |
 | TN | 96 | 22 | 9 | 0 | 74 | 0 | 13 |
 | TX | 254 | 34 | 2 | 0 | 0 | 252 | 0 |
 
-**Aggregate matrix counts:** verified public 33; candidate productive 27; recon only 272; unverified 489; fail closed 126.
+**Aggregate matrix counts:** verified public 33; candidate productive 28; recon only 272; unverified 489; fail closed 125.
 
 ## County matrix
 
@@ -634,7 +634,7 @@
 | SC | 085 | Sumter County | Palmetto | registered | fail_closed | https://portal.sumtercountysheriff.org/smartwebclient/jail.aspx | SmartCOP path | Booking number was synthesized from name+date. Fail closed until a source-issued key exists. |
 | SC | 087 | Union County | Palmetto | registered | fail_closed | https://union-so-sc.zuercherportal.com/ | Ordinary public landing page; no bypass used | Public-facing Union County Zuercher portal surfaced for inmate search; official sponsorship and broad row schema not independently verified. |
 | SC | 089 | Williamsburg County | Palmetto | registered | fail_closed | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
-| SC | 091 | York County | Palmetto | registered | fail_closed | https://inmatesinjail.yorkcountygov.com/detentioncenter/inmatesinjail.aspx | Ordinary public landing page; no bypass used | Official York County government inmate-listing domain; page accessible as a listing endpoint, row schema and pagination not verified. |
+| SC | 091 | York County | Palmetto | registered | candidate_productive | https://inmatesinjail.yorkcountygov.com/detentioncenter/inmatesinjail.aspx | Ordinary public HTTPS ASP.NET roster (official York County government host); dgJackets DataGrid pages via __doPostBack; no login/CAPTCHA/WAF | 2026-10-07 box read smoke: 29 pages / 435 rows = Results Count 435; 435/435 unique source Booking Number (DC<YYYY><NNNNN>), Booking Date+time on every row, Release Date *In Jail, Total Bond, charge grid; photo path /photos/<Booking Number>.jpg cross-checked. Earlier timeout no longer reproduces. Plain requests (no proxy/stealth). Health stays unverified until write smoke. See docs/recon/SC_YORK_INMATES_IN_JAIL_2026-10-07.md. |
 | TN | 001 | Anderson County | Palmetto | recon_required | recon_only | — | Passive landing-page review only; no login/CAPTCHA bypass; no detail probes | Directory anchor is available, but no county-specific broad current-inmate/booking source contract was safely verified; do not infer productivity from registry status. |
 | TN | 003 | Bedford County | Palmetto | registered | fail_closed | — | Passive landing-page review only; no login/CAPTCHA bypass; no detail probes | Directory anchor is available, but no county-specific broad current-inmate/booking source contract was safely verified; do not infer productivity from registry status. |
 | TN | 005 | Benton County | Palmetto | recon_required | recon_only | — | Passive landing-page review only; no login/CAPTCHA bypass; no detail probes | Directory anchor is available, but no county-specific broad current-inmate/booking source contract was safely verified; do not infer productivity from registry status. |

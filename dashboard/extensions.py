@@ -662,7 +662,6 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     "Marion (SC)": "fail_closed",
     "Saluda (SC)": "fail_closed",
     "Union (SC)": "fail_closed",
-    "York (SC)": "fail_closed",
     "Sumter (SC)": "fail_closed",
     "Richland (SC)": "fail_closed",
     "Caldwell (NC)": "fail_closed",

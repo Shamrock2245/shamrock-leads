@@ -1,31 +1,257 @@
-"""York County, South Carolina public detention-roster scraper.
+"""York County, South Carolina — public "Inmates in Jail" roster.
 
-The official ASP.NET listing renders one nested table per person. This parser uses
-only the public listing cards and fails closed without the source-issued Booking
-Number, booking date, and complete displayed name. It never creates a synthetic
-booking identifier.
+Source recon 2026-10-07 (docs/recon/SC_YORK_INMATES_IN_JAIL_2026-10-07.md):
+  * URL: https://inmatesinjail.yorkcountygov.com/detentioncenter/inmatesinjail.aspx
+    (official York County government host). Plain HTTPS GET, no login, CAPTCHA,
+    or WAF. The page states "Only current booking information is available".
+  * ASP.NET DataGrid ``dgJackets`` lists 15 people per page and pages through
+    ``__doPostBack('dgJackets$ctl01$ctlNN')``. A full walk was 29 pages and 435
+    rows, matching ``Results Count: 435``.
+  * Each row's bookings table publishes ``Booking Number`` (source key, format
+    ``DC<YYYY><NNNNN>``), ``Booking Date`` (date + time), ``Release Date``
+    (``*In Jail`` while in custody), ``Total Bond``, and a charge grid
+    (Sequence# / Charge Description / Arresting Agency). The mugshot path is
+    ``/photos/<Booking Number>.jpg``.
+  * The read smoke found 435 of 435 unique source Booking Numbers. The earlier
+    timeout no longer reproduces.
+
+Contract: ``Booking_Number`` is the published Booking Number only. A row is
+dropped when that number is missing, malformed, or disagrees with its photo
+key. Bond comes from ``Total Bond`` only. Nothing is synthesized.
 """
+from __future__ import annotations
+
 import logging
 import re
-from typing import Dict, List, Optional
+import time
+from typing import Dict, List, Optional, Tuple
 
 import requests
 from bs4 import BeautifulSoup, Tag
 
 from core.models import ArrestRecord
 from scrapers.base_scraper import BaseScraper
+from scrapers.scraper_resilience import AntiBotBlocked, ParseDriftError
 
 logger = logging.getLogger(__name__)
+
 PORTAL_URL = "https://inmatesinjail.yorkcountygov.com/detentioncenter/inmatesinjail.aspx"
+PHOTO_BASE = "https://inmatesinjail.yorkcountygov.com"
+FACILITY = "York County Detention Center"
+USER_AGENT = "Mozilla/5.0 (compatible; ShamrockRoster/1.0)"
+BOOKING_RE = re.compile(r"^DC\d{9}$")
+PHOTO_KEY_RE = re.compile(r"/photos/([A-Za-z0-9]+)\.jpg", re.I)
+DATETIME_RE = re.compile(r"^(\d{1,2}/\d{1,2}/\d{4})\s+(\d{1,2}:\d{2}(?::\d{2})?\s*[AP]M)$", re.I)
+MAX_PAGES = 80
+PAGE_DELAY_S = 0.4
+
+
+def _text(node: Optional[Tag]) -> str:
+    return " ".join(node.get_text(" ", strip=True).split()) if node else ""
+
+
+def _split_datetime(raw: str) -> Tuple[str, str]:
+    raw = " ".join((raw or "").split())
+    m = DATETIME_RE.match(raw)
+    if not m:
+        return raw, ""
+    return m.group(1), m.group(2).upper()
+
+
+def _bond(raw: str) -> str:
+    """Published Total Bond dollars ("$1,250.00" -> "1250"); "0" when blank."""
+    cleaned = re.sub(r"[^\d.]", "", raw or "")
+    if not cleaned:
+        return "0"
+    try:
+        amount = float(cleaned)
+    except ValueError:
+        return "0"
+    return ("%.2f" % amount).rstrip("0").rstrip(".") or "0"
+
+
+def _split_name(full_name: str) -> Tuple[str, str, str]:
+    """``Last , First Middle`` -> (first, middle, last)."""
+    if "," not in full_name:
+        return "", "", ""
+    last, remainder = [part.strip() for part in full_name.split(",", 1)]
+    parts = remainder.split()
+    return (parts[0] if parts else ""), " ".join(parts[1:]), last
+
+
+def _person_info(item: Tag) -> Dict[str, str]:
+    info: Dict[str, str] = {}
+    table = item.find("table", class_="table2")
+    if table is None:
+        return info
+    name_cell = table.find("td", class_="cell1")
+    info["name"] = " ".join(_text(name_cell).replace(" ,", ",").split())
+    for row in table.find_all("tr", recursive=False):
+        cells = row.find_all("td", recursive=False)
+        if len(cells) != 2:
+            continue
+        label = _text(cells[0]).rstrip(":").casefold()
+        if label:
+            info[label] = _text(cells[1])
+    return info
+
+
+def _charges(cell: Tag) -> Tuple[str, str]:
+    """Return (charge descriptions, arresting agencies) from a nested charge grid."""
+    charges: List[str] = []
+    agencies: List[str] = []
+    for table in cell.find_all("table"):
+        rows = table.find_all("tr")
+        if not rows:
+            continue
+        headers = [_text(c).casefold() for c in rows[0].find_all("td")]
+        if "charge description" not in headers:
+            continue
+        ci = headers.index("charge description")
+        ai = headers.index("arresting agency") if "arresting agency" in headers else -1
+        for row in rows[1:]:
+            cells = row.find_all("td")
+            if len(cells) > ci and _text(cells[ci]):
+                charges.append(_text(cells[ci]))
+            if 0 <= ai < len(cells) and _text(cells[ai]):
+                agencies.append(_text(cells[ai]))
+    return " | ".join(dict.fromkeys(charges)), " | ".join(dict.fromkeys(agencies))
+
+
+def _bookings(item: Tag) -> List[Dict[str, str]]:
+    """Booking rows from the item's ``table5`` (header row, value rows, charge rows)."""
+    table = item.find("table", class_="table5")
+    if table is None:
+        return []
+    rows = table.find_all("tr", recursive=False)
+    header: List[str] = []
+    out: List[Dict[str, str]] = []
+    for row in rows:
+        cells = row.find_all("td", recursive=False)
+        texts = [_text(c) for c in cells]
+        lowered = [t.casefold() for t in texts]
+        if "booking number" in lowered:
+            header = lowered
+            continue
+        if not header:
+            continue
+        if len(cells) == len(header):
+            out.append(dict(zip(header, texts)))
+        elif len(cells) == 1 and out:
+            charges, agencies = _charges(cells[0])
+            if charges:
+                prev = out[-1].get("_charges", "")
+                out[-1]["_charges"] = " | ".join(x for x in (prev, charges) if x)
+            if agencies:
+                out[-1]["_agency"] = agencies
+    return out
+
+
+def parse_page(html: str) -> Tuple[List[ArrestRecord], int]:
+    """Parse one roster page. Returns (records, people rows seen)."""
+    soup = BeautifulSoup(html, "html.parser")
+    grid = soup.find("table", id="dgJackets")
+    if grid is None:
+        raise ParseDriftError("York: dgJackets grid missing from roster page")
+    items = [
+        tr for tr in grid.find_all("tr", recursive=False)
+        if {"dgItem", "dgAltItem"} & set(tr.get("class") or [])
+    ]
+    records: List[ArrestRecord] = []
+    for item in items:
+        info = _person_info(item)
+        full_name = info.get("name", "")
+        if not full_name:
+            continue
+        bookings = _bookings(item)
+        photo = item.find("img", src=PHOTO_KEY_RE)
+        photo_key = ""
+        if photo is not None:
+            m = PHOTO_KEY_RE.search(photo.get("src", ""))
+            photo_key = m.group(1).upper() if m else ""
+        for bk in bookings:
+            booking = bk.get("booking number", "").strip().upper()
+            if not BOOKING_RE.match(booking):
+                continue
+            if len(bookings) == 1 and photo_key and photo_key != booking:
+                logger.warning("York: photo key disagrees with Booking Number; row dropped")
+                continue
+            booking_date, booking_time = _split_datetime(bk.get("booking date", ""))
+            if not booking_date:
+                continue
+            release_raw = bk.get("release date", "")
+            in_jail = "in jail" in release_raw.casefold()
+            release_date = "" if in_jail else _split_datetime(release_raw)[0]
+            first, middle, last = _split_name(full_name)
+            race_sex = info.get("race/sex", "").split()
+            records.append(ArrestRecord(
+                County="York",
+                State="SC",
+                Full_Name=full_name,
+                First_Name=first,
+                Middle_Name=middle,
+                Last_Name=last,
+                Booking_Number=booking,
+                Booking_Date=booking_date,
+                Booking_Time=booking_time,
+                Arrest_Date=booking_date,
+                Arrest_Time=booking_time,
+                Status="In Custody" if in_jail else ("Released" if release_date else "Unknown"),
+                Release_Date=release_date,
+                Facility=FACILITY,
+                Agency=bk.get("_agency", ""),
+                Race=race_sex[0] if race_sex else "",
+                Sex=race_sex[1] if len(race_sex) > 1 else "",
+                Age_At_Arrest=info.get("age", ""),
+                City=info.get("city", ""),
+                Charges=bk.get("_charges", ""),
+                Bond_Amount=_bond(bk.get("total bond", "")),
+                Mugshot_URL=f"{PHOTO_BASE}/photos/{booking}.jpg" if photo_key == booking else "",
+                Detail_URL=PORTAL_URL,
+                extra_data={"booking_key_origin": "source-issued public Booking Number"},
+            ))
+    return records, len(items)
+
+
+def _next_page_target(html: str) -> Optional[str]:
+    """Postback target for the page after the current one (``N+1`` or ``...``)."""
+    soup = BeautifulSoup(html, "html.parser")
+    grid = soup.find("table", id="dgJackets")
+    pager = grid.find("tr", class_="pager") if grid is not None else None
+    if pager is None:
+        return None
+    current = pager.find("span")
+    if current is None or not _text(current).isdigit():
+        return None
+    want = str(int(_text(current)) + 1)
+    link = next((a for a in pager.find_all("a") if _text(a) == want), None)
+    if link is None:
+        sib = current.find_next_sibling("a")
+        link = sib if sib is not None and _text(sib) == "..." else None
+    if link is None:
+        return None
+    m = re.search(r"__doPostBack\('([^']+)'", link.get("href", ""))
+    return m.group(1) if m else None
+
+
+def _hidden_fields(html: str) -> Dict[str, str]:
+    soup = BeautifulSoup(html, "html.parser")
+    return {
+        i.get("name"): i.get("value", "")
+        for i in soup.find_all("input", type="hidden")
+        if i.get("name")
+    }
+
+
+def _results_count(html: str) -> Optional[int]:
+    m = re.search(r"Results Count:\s*(\d+)", BeautifulSoup(html, "html.parser").get_text(" "))
+    return int(m.group(1)) if m else None
 
 
 class YorkScraper(BaseScraper):
+    """York County (SC) public roster keyed on the source Booking Number."""
 
-    SOURCE_CONTRACT_VALIDATED = False
-    SOURCE_CONTRACT_REASON = (
-        "The configured York roster path timed out through ordinary access; no booking-safe broad roster contract is revalidated."
-    )
-    """Parse source-faithful York County public booking cards."""
+    SOURCE_CONTRACT_VALIDATED = True
 
     @property
     def county(self) -> str:
@@ -39,122 +265,42 @@ class YorkScraper(BaseScraper):
     def roster_url(self) -> str:
         return PORTAL_URL
 
-    @staticmethod
-    def _text(node: Optional[Tag]) -> str:
-        return " ".join(node.get_text(" ", strip=True).split()) if node else ""
-
-    @classmethod
-    def _labeled_values(cls, card: Tag) -> Dict[str, str]:
-        """Read only explicit label/value pairs in a top-level booking-card row."""
-        values: Dict[str, str] = {}
-        rows = card.find_all("tr", recursive=False)
-        for row_index, row in enumerate(rows):
-            cells = row.find_all(["th", "td"], recursive=False)
-            texts = [cls._text(cell) for cell in cells]
-            normalized = [text.rstrip(":").casefold() for text in texts]
-
-            # Live York cards put labels in one row and values at the same
-            # column positions in the following row. Controlled test cards
-            # use label/value pairs instead, so retain that safe fallback.
-            try:
-                booking_index = normalized.index("booking number")
-                date_index = normalized.index("booking date")
-            except ValueError:
-                booking_index = date_index = -1
-            if booking_index >= 0 and date_index == booking_index + 1 and row_index + 1 < len(rows):
-                next_cells = rows[row_index + 1].find_all(["th", "td"], recursive=False)
-                next_texts = [cls._text(cell) for cell in next_cells]
-                if booking_index < len(next_texts) and next_texts[booking_index]:
-                    values["booking number"] = next_texts[booking_index]
-                if date_index < len(next_texts) and next_texts[date_index]:
-                    values["booking date"] = next_texts[date_index]
-                continue
-
-            for index, label in enumerate(normalized[:-1]):
-                if label in {"booking number", "booking date", "bond", "bond amount"}:
-                    value = texts[index + 1]
-                    if value:
-                        values[label] = value
-        return values
-
-    @classmethod
-    def _charges(cls, card: Tag) -> str:
-        """Collect public charge descriptions from the card's nested charge table."""
-        charges: List[str] = []
-        for table in card.find_all("table"):
-            rows = table.find_all("tr")
-            if not rows:
-                continue
-            headers = [cls._text(cell).casefold() for cell in rows[0].find_all(["th", "td"])]
-            if "charge description" not in headers:
-                continue
-            charge_index = headers.index("charge description")
-            for row in rows[1:]:
-                cells = row.find_all("td")
-                if len(cells) > charge_index:
-                    charge = cls._text(cells[charge_index])
-                    if charge:
-                        charges.append(charge)
-        return " | ".join(dict.fromkeys(charges))
-
-    @classmethod
-    def _record_from_card(cls, card: Tag) -> Optional[ArrestRecord]:
-        direct_rows = card.find_all("tr", recursive=False)
-        if not direct_rows:
-            return None
-        name_cell = direct_rows[0].find(["th", "td"], recursive=False)
-        full_name = cls._text(name_cell)
-        values = cls._labeled_values(card)
-        booking_number = values.get("booking number", "")
-        booking_date = values.get("booking date", "")
-        if not full_name or not booking_number or not booking_date:
-            return None
-
-        first_name = last_name = middle_name = ""
-        if "," in full_name:
-            last_name, remainder = [part.strip() for part in full_name.split(",", 1)]
-            parts = remainder.split()
-            if parts:
-                first_name = parts[0]
-                middle_name = " ".join(parts[1:])
-
-        bond = values.get("bond amount", values.get("bond", "0"))
-        bond = re.sub(r"[^\d.]", "", bond) or "0"
-        return ArrestRecord(
-            County="York",
-            State="SC",
-            Full_Name=full_name,
-            First_Name=first_name,
-            Middle_Name=middle_name,
-            Last_Name=last_name,
-            Booking_Number=booking_number,
-            Booking_Date=booking_date,
-            Charges=cls._charges(card),
-            Bond_Amount=bond,
-            Status="Unknown",
-            Detail_URL=PORTAL_URL,
-            extra_data={"booking_key_origin": "source-issued public Booking Number"},
-        )
+    def _fetch(self, session: requests.Session, data: Optional[Dict[str, str]] = None) -> str:
+        if data is None:
+            resp = session.get(PORTAL_URL, timeout=45)
+        else:
+            resp = session.post(PORTAL_URL, data=data, timeout=45)
+        if resp.status_code == 403:
+            raise AntiBotBlocked("York roster returned 403")
+        resp.raise_for_status()
+        return resp.text
 
     def scrape(self) -> List[ArrestRecord]:
-        try:
-            response = requests.get(
-                PORTAL_URL,
-                headers={"User-Agent": "Mozilla/5.0 (compatible; ShamrockRoster/1.0)"},
-                timeout=30,
-            )
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, "html.parser")
-            records: List[ArrestRecord] = []
-            seen_booking_numbers = set()
-            for card in soup.find_all("table"):
-                record = self._record_from_card(card)
-                if record is None or record.Booking_Number in seen_booking_numbers:
+        session = requests.Session()
+        session.headers.update({"User-Agent": USER_AGENT, "Referer": PORTAL_URL})
+        html = self._fetch(session)
+        expected = _results_count(html)
+        records: List[ArrestRecord] = []
+        seen: set = set()
+        people = 0
+        for page in range(1, MAX_PAGES + 1):
+            page_records, page_people = parse_page(html)
+            people += page_people
+            if page_people and not page_records:
+                raise ParseDriftError(f"York: page {page} had {page_people} rows but no source Booking Number")
+            for rec in page_records:
+                if rec.Booking_Number in seen:
                     continue
-                seen_booking_numbers.add(record.Booking_Number)
-                records.append(record)
-            logger.info("Parsed %d source-safe public York booking cards", len(records))
-            return records
-        except requests.RequestException as exc:
-            logger.error("York public roster request failed: %s", exc)
-            return []
+                seen.add(rec.Booking_Number)
+                records.append(rec)
+            target = _next_page_target(html)
+            if not target:
+                break
+            form = _hidden_fields(html)
+            form.update({"__EVENTTARGET": target, "__EVENTARGUMENT": "", "txtLastName": ""})
+            time.sleep(PAGE_DELAY_S)
+            html = self._fetch(session, form)
+        if expected is not None and people != expected:
+            logger.warning("York: walked %d rows but page reports Results Count %d", people, expected)
+        logger.info("York: %d source-keyed bookings from %d roster rows", len(records), people)
+        return records
