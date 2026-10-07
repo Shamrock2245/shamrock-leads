@@ -1,250 +1,242 @@
 """
-Okaloosa County Arrest Scraper — Okaloosa County Jail Locator
-Source: Okaloosa County Sheriff's Office
-URL: https://okaloosacountyjail.myokaloosa.com/inmatelocator/
-Method: requests POST — HTML table with all current inmates
-Columns: NameTypeID, NameType, NameTitle, LastName, FirstName, MiddleName, NameSuffix,
-         RTC, Eye, Hair, Skin, Booking#, SPN#, Name, DOB, Sex, Race, Height, Weight, EligReleaseDate
+Okaloosa County (FL) Arrest Scraper — Inmate Locator (ProPhoenix / Infragistics).
+
+Source contract (recon 2026-10-07, docs/recon/FL_IDLE_EIGHT_2026-10-07.md):
+  * URL: https://okaloosacountyjail.myokaloosa.com/InmateLocator/Default.aspx
+    (linked from https://www.sheriff-okaloosa.org/)
+  * Plain HTTPS ASP.NET WebForms search; A–Z last-name sweeps cover the roster.
+  * Source-issued Booking# is a 10-digit value (YYYY + sequence, e.g. 2026005082).
+  * Rows without Booking# are dropped — no invented keys.
+  * The root ``/InmateLocator/`` path is an Angular shell; the public roster is the
+    legacy Default.aspx form, not the SPA.
 """
+from __future__ import annotations
+
 import logging
 import re
+import string
+import time
 from typing import List
+
+import requests
+from bs4 import BeautifulSoup
+
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
-from curl_cffi import requests as cffi_requests
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://okaloosacountyjail.myokaloosa.com"
-SEARCH_URL = f"{BASE_URL}/inmatelocator/"
+SEARCH_URL = f"{BASE_URL}/InmateLocator/Default.aspx"
 FACILITY = "Okaloosa County Jail"
-
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Content-Type": "application/x-www-form-urlencoded",
     "Referer": SEARCH_URL,
 }
-IMPERSONATE = "chrome131"
+
+LAST_NAME_FIELD = "_ctl0:CpnlMain:ctrlUsrSrchTools:txtLastName"
+FIRST_NAME_FIELD = "_ctl0:CpnlMain:ctrlUsrSrchTools:txtFirstName"
+DOB_FIELD = "_ctl0:CpnlMain:ctrlUsrSrchTools:txtDOB"
+SEARCH_BTN = "_ctl0:CpnlMain:ctrlUsrSrchTools:cmdSearch"
+_BOOKING_RE = re.compile(r"^\d{8,12}$")
 
 
 class OkaloosaCountyScraper(BaseScraper):
+    """Okaloosa County (FL) — Inmate Locator Default.aspx (Crestview)."""
+
+    SOURCE_CONTRACT_VALIDATED = True
+
     @property
     def county(self) -> str:
         return "Okaloosa"
 
+    @property
+    def state(self) -> str:
+        return "FL"
+
     def scrape(self) -> List[ArrestRecord]:
-        try:
-            import requests
-            from bs4 import BeautifulSoup
-        except ImportError:
-            logger.error("requests/bs4 not installed")
-            raise
-
-        session = cffi_requests.Session()
+        session = requests.Session()
         session.headers.update(HEADERS)
-
-        # GET to get ViewState/CSRF tokens
-        try:
-            resp = session.get(SEARCH_URL, timeout=30, impersonate=IMPERSONATE, verify=False)
-            resp.raise_for_status()
-        except Exception as e:
-            logger.error(f"Okaloosa: GET failed: {e}")
-            raise
-
+        resp = session.get(SEARCH_URL, timeout=30)
+        resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
+        base_post = self._hidden_fields(soup)
+        if "__VIEWSTATE" not in base_post:
+            raise RuntimeError("Okaloosa: Default.aspx search form missing __VIEWSTATE")
 
-        # Build POST data with all hidden fields
-        base_post_data = {}
-        for inp in soup.find_all("input", {"type": "hidden"}):
-            name = inp.get("name", "")
-            value = inp.get("value", "")
-            if name:
-                base_post_data[name] = value
-
-        # Find the submit button
-        submit_btn = soup.find("input", {"type": "submit"}) or soup.find("button", {"type": "submit"})
-        btn_name = ""
-        btn_value = "Search"
-        if submit_btn:
-            btn_name = submit_btn.get("name", "")
-            btn_value = submit_btn.get("value", "Search")
-
-        all_records = []
-        seen = set()
-
-        import string
-        import time
-
+        all_records: List[ArrestRecord] = []
+        seen: set[str] = set()
         for letter in string.ascii_uppercase:
-            post_data = dict(base_post_data)
-            post_data["LastName"] = letter
-            post_data["FirstName"] = ""
-            if btn_name:
-                post_data[btn_name] = btn_value
-
+            post = dict(base_post)
+            post[LAST_NAME_FIELD] = letter
+            post[FIRST_NAME_FIELD] = ""
+            post[DOB_FIELD] = ""
+            post[SEARCH_BTN] = "Search"
             try:
-                resp = session.post(SEARCH_URL, data=post_data, timeout=30, impersonate=IMPERSONATE, verify=False)
-                if resp.status_code == 200:
-                    soup_post = BeautifulSoup(resp.text, "html.parser")
-                    
-                    # Dynamically update the base ViewState/EventValidation tokens from the response
-                    for inp in soup_post.find_all("input", {"type": "hidden"}):
-                        name = inp.get("name", "")
-                        value = inp.get("value", "")
-                        if name:
-                            base_post_data[name] = value
-                            
-                    records = self._parse_soup(soup_post)
-                    for r in records:
-                        k = r.Booking_Number or r.Full_Name
-                        if k not in seen:
-                            seen.add(k)
-                            all_records.append(r)
-            except Exception as e:
-                logger.warning(f"Okaloosa letter {letter} failed: {e}")
-            time.sleep(0.3)
+                resp = session.post(SEARCH_URL, data=post, timeout=45)
+                if resp.status_code != 200:
+                    logger.warning("Okaloosa letter %s HTTP %s", letter, resp.status_code)
+                    continue
+                soup_post = BeautifulSoup(resp.text, "html.parser")
+                base_post.update(self._hidden_fields(soup_post))
+                for rec in self._parse_soup(soup_post):
+                    key = rec.Booking_Number
+                    if not key or key in seen:
+                        continue
+                    seen.add(key)
+                    all_records.append(rec)
+            except Exception as exc:
+                logger.warning("Okaloosa letter %s failed: %s", letter, exc)
+            time.sleep(0.25)
 
-        logger.info(f"Okaloosa: {len(all_records)} total records from A-Z search")
+        logger.info("Okaloosa: %d total records from A-Z search", len(all_records))
         return all_records
 
-    def _parse(self, html: str) -> List[ArrestRecord]:
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(html, "html.parser")
-        return self._parse_soup(soup)
+    @staticmethod
+    def _hidden_fields(soup) -> dict:
+        out = {}
+        for inp in soup.find_all("input"):
+            name = inp.get("name") or ""
+            if not name:
+                continue
+            typ = (inp.get("type") or "").lower()
+            if typ == "hidden" or name.startswith("__"):
+                out[name] = inp.get("value") or ""
+        return out
 
     def _parse_soup(self, soup) -> List[ArrestRecord]:
-        records = []
-        seen = set()
+        """Parse Infragistics search-results tables.
 
-        tables = soup.find_all("table")
-        header_table = None
-        header_idx = -1
-        for idx, table in enumerate(tables):
-            h_row = table.find("tr")
-            if not h_row:
-                continue
-            cells = [cell.get_text(strip=True).lower().replace(" ", "").replace("#", "") for cell in h_row.find_all(["th", "td"])]
-            if "lastname" in cells and "firstname" in cells and "booking" in cells:
-                # Filter out the layout table that has a huge concatenated header string
-                if any(len(c) > 50 for c in cells):
-                    continue
-                header_table = table
-                header_idx = idx
-                break
+        The grid flattens header captions and inmate fields into long ``<td>``
+        streams. Each inmate exposes a source Booking# (10-digit ``20YY######``),
+        often duplicated a few cells later. We anchor on Booking# and walk
+        backward for name parts — never invent keys.
+        """
+        records: List[ArrestRecord] = []
+        seen: set[str] = set()
 
-        if not header_table or header_idx == -1 or header_idx + 1 >= len(tables):
-            logger.warning("Okaloosa: no inmate header or data table found")
+        best: list[str] = []
+        for table in soup.find_all("table"):
+            cells = [c.get_text(strip=True) for c in table.find_all(["th", "td"])]
+            if "Booking#" in cells and "LastName" in cells and len(cells) > len(best):
+                best = cells
+        if not best:
             return []
 
-        data_table = tables[header_idx + 1]
+        # Data begins after the last header caption block.
+        try:
+            booking_caption = len(best) - 1 - best[::-1].index("Booking#")
+        except ValueError:
+            return []
+        header_end = booking_caption
+        for label in ("EligReleaseDate", "Weight", "Height", "Race", "Sex", "Age", "DOB", "Name", "SPN#"):
+            if label in best[booking_caption : booking_caption + 12]:
+                header_end = best.index(label, booking_caption)
+                break
+        data = best[header_end + 1 :]
 
-        # Parse header to find column indices
-        header_row = header_table.find("tr")
-        headers = [th.get_text(strip=True).lower().replace(" ", "").replace("#", "") for th in header_row.find_all(["th", "td"])]
-
-        def col(name):
-            for i, h in enumerate(headers):
-                if h == name:
-                    return i
-            return -1
-
-        last_idx = col("lastname")
-        first_idx = col("firstname")
-        mid_idx = col("middlename")
-        booking_idx = col("booking")
-        dob_idx = col("dob")
-        sex_idx = col("sex")
-        race_idx = col("race")
-        height_idx = col("height")
-        weight_idx = col("weight")
-        name_idx = col("name")  # Full name column
-
-        for row in data_table.find_all("tr"):
-            cells = row.find_all(["th", "td"])
-            if not cells:
+        booking_idxs = [i for i, c in enumerate(data) if _BOOKING_RE.match(c)]
+        # Prefer the first of each duplicate pair (same value ~7 cells later).
+        primaries: list[int] = []
+        skip: set[int] = set()
+        for i in booking_idxs:
+            if i in skip:
                 continue
-
-            cell_texts = [c.get_text(strip=True) for c in cells]
-            if len(cell_texts) < 10:
+            if i + 7 < len(data) and data[i + 7] == data[i]:
+                primaries.append(i)
+                skip.add(i + 7)
+            elif i - 7 >= 0 and data[i - 7] == data[i]:
                 continue
-
-            def get_val(idx):
-                if idx < 0 or idx >= len(cell_texts):
-                    return ""
-                return cell_texts[idx]
-
-            last_name = get_val(last_idx)
-            first_name = get_val(first_idx)
-            middle_name = get_val(mid_idx)
-            booking_num = get_val(booking_idx)
-            sex = get_val(sex_idx)
-            race = get_val(race_idx)
-            height = get_val(height_idx)
-            weight = get_val(weight_idx)
-            full_name_cell = get_val(name_idx)
-
-            # Reconstruct DOB from cell matching pattern MM/DD/YYYY
-            dob = ""
-            if len(cell_texts) > 8 and re.match(r'^\d{1,2}/\d{1,2}/\d{4}$', cell_texts[8]):
-                dob = cell_texts[8]
             else:
-                for val in cell_texts:
-                    if re.match(r'^\d{1,2}/\d{1,2}/\d{4}$', val):
-                        dob = val
-                        break
-                if not dob:
-                    dob = get_val(dob_idx)
+                primaries.append(i)
 
-            # Build full name
-            if last_name and first_name:
+        captions = {
+            "nametypeid", "nametype", "nametitle", "lastname", "firstname", "middlename",
+            "namesuffix", "rtc", "eye", "hair", "skin", "booking#", "booking", "spn#",
+            "spn", "name", "dob", "age", "sex", "race", "height", "weight", "eligreleasedate",
+        }
+
+        for bi in primaries:
+            booking_num = data[bi]
+            if booking_num in seen:
+                continue
+            # Walk backward for LastName / FirstName / MiddleName.
+            window = data[max(0, bi - 16) : bi]
+            # Prefer a LAST,FIRST display name after the booking when present.
+            full_name = ""
+            for c in data[bi + 1 : bi + 6]:
+                if "," in c and re.search(r"[A-Za-z]", c) and len(c) < 60:
+                    full_name = c
+                    break
+            last_name = first_name = middle_name = ""
+            # Candidate name tokens: alphabetic, not captions, not dates/colors.
+            name_tokens = []
+            for c in window:
+                cl = c.lower()
+                if not c or cl in captions or _BOOKING_RE.match(c):
+                    continue
+                if re.match(r"^\d{1,2}/\d{1,2}/\d{2,4}$", c):
+                    continue
+                if re.match(r"^[A-Z]{3}$", c):  # eye/hair codes
+                    continue
+                if re.fullmatch(r"\d+", c):
+                    continue
+                if re.search(r"[A-Za-z]", c) and len(c) <= 40:
+                    name_tokens.append(c)
+            if full_name:
+                first_name, middle_name, last_name = self._pn(full_name)
+            elif len(name_tokens) >= 2:
+                last_name, first_name = name_tokens[0], name_tokens[1]
+                middle_name = name_tokens[2] if len(name_tokens) > 2 else ""
+            else:
+                continue
+            if not last_name or not first_name:
+                continue
+            if not full_name:
                 full_name = f"{last_name}, {first_name}"
                 if middle_name:
                     full_name += f" {middle_name}"
-            elif full_name_cell:
-                full_name = full_name_cell
-                if not last_name:
-                    _, _, last_name = self._pn(full_name)
-                    first_name = self._pn(full_name)[0]
-            else:
-                continue
 
-            key = booking_num or full_name
-            if not key or key in seen:
-                continue
-            seen.add(key)
+            dob = ""
+            for c in data[bi + 1 : bi + 8]:
+                if re.match(r"^\d{1,2}/\d{2,4}$", c) or re.match(r"^\d{1,2}/\d{1,2}/\d{2,4}$", c):
+                    dob = c
+                    break
+            sex = next((c for c in data[bi + 1 : bi + 10] if c in ("M", "F")), "")
+            race = ""
+            for c in data[bi + 1 : bi + 12]:
+                if c in ("W", "B", "H", "A", "I", "O", "U") and c != sex:
+                    race = c
+                    break
 
-            # Get detail URL
-            detail_url = ""
-            link = row.find("a", href=True)
-            if link:
-                href = link["href"]
-                detail_url = href if href.startswith("http") else f"{BASE_URL}/{href.lstrip('/')}"
-
-            records.append(ArrestRecord(
-                County=self.county,
-                Booking_Number=booking_num,
-                Full_Name=full_name,
-                First_Name=first_name,
-                Middle_Name=middle_name,
-                Last_Name=last_name,
-                DOB=dob,
-                Sex=sex,
-                Race=race,
-                Height=height,
-                Weight=weight,
-                Status="In Custody",
-                Release_Date="",
-                Facility=FACILITY,
-                Detail_URL=detail_url,
-                LastCheckedMode="INITIAL",
-            ))
-
-        logger.info(f"Okaloosa: {len(records)} records")
+            seen.add(booking_num)
+            records.append(
+                ArrestRecord(
+                    County=self.county,
+                    State="FL",
+                    Booking_Number=booking_num,
+                    Full_Name=full_name,
+                    First_Name=first_name,
+                    Middle_Name=middle_name,
+                    Last_Name=last_name,
+                    DOB=dob,
+                    Sex=sex,
+                    Race=race,
+                    Status="In Custody",
+                    Facility=FACILITY,
+                    Detail_URL=SEARCH_URL,
+                    LastCheckedMode="INITIAL",
+                )
+            )
         return records
 
     @staticmethod
-    def _pn(n):
+    def _pn(n: str):
         if not n:
             return "", "", ""
         n = " ".join(n.strip().split())
