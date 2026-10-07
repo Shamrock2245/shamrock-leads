@@ -3,6 +3,13 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-07 (tenant host membership and backfill)
+
+### Fixed
+- **Multi-tenant foundation (`SAAS_MULTI_TENANT` still default off).** A customer host `{slug}.app.shamrockbailbonds.biz` is routing only. The request binds that agency only when the signed-in email has an active `tenant_memberships` row for that slug. A signed-in caller on a Shamrock host must be a member of the tenant that host selects. Anonymous webhook and machine calls on Shamrock hosts still bind Shamrock. Flag off does not check membership and does not change filters.
+- **Backfill.** `scripts/backfill_tenant_id.py` stamps every tenant-owned collection the app opens, including `family_relationships`, `persons`, `osint_scans`, `docket_events`, and `intake_fanout_outbox`. A connected run also stamps any other present collection that is not on the global or platform allowlist. `tests/test_tenant_scope.py` fails if application code uses a collection that is neither tenant-owned nor allowlisted.
+- **Startup.** POA seeding and core index creation run inside a Shamrock tenant context, so a flag-on boot does not call the tenant proxy with no context. Flag off still writes the same unstamped seed.
+
 ## [Unreleased] — 2026-10-07 (York SC source Booking Number)
 
 ### Changed
