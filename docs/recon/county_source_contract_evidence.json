@@ -4051,10 +4051,10 @@
     {
       "state": "NC",
       "county_fips": "119",
-      "passive_recommendation": "fail_closed",
-      "official_source_url": "Not verified",
-      "access_posture": "No official source safely verified in passive review",
-      "evidence_note": "No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://mecksheriffweb.mecklenburgcountync.gov/Inmate",
+      "access_posture": "Ordinary public HTTPS MCSO Inmate Inquiry Knockout JSON; GET /Inmate/_Search?activeOnly=true paginates max=50; _Summary/_GetCharges publish JID, CommitedFormatted, Description, ActualBailAmount (no login/CAPTCHA/proxy)",
+      "evidence_note": "2026-10-07 box recon: activeOnly roster TotalRows=2224 across ~45 pages; Booking_Number is source JID (YY-######), never MECK_ hashes; charges/bond from _GetCharges ActualBailAmount sum only. Parser uses plain requests. Health stays unverified until write smoke \u2014 do not set verified_public yet. See docs/recon/NC_MECKLENBURG_INMATE_API_2026-10-07.md."
     },
     {
       "state": "NC",

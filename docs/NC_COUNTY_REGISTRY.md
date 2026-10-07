@@ -113,7 +113,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | Madison | ⬜ No portal | — | VINE / phone |
 | Martin | ⬜ No portal | — | VINE / phone |
 | McDowell | ⬜ No portal | — | VINE / phone |
-| **Mecklenburg** | 🔲 Planned | Custom MCSO | Top build target |
+| **Mecklenburg** | ✅ Contract proven (unverified Health) | MCSO Inmate Inquiry JSON | `mecksheriffweb…/Inmate` `_Search` activeOnly + `_Summary`/`_GetCharges`; Booking_Number=source **JID**; no `MECK_` keys; Health unverified until write smoke (`docs/recon/NC_MECKLENBURG_INMATE_API_2026-10-07.md`) |
 | Mitchell | ⬜ No portal | — | VINE / phone |
 | Montgomery | ⬜ No portal | — | VINE / phone |
 | Moore | ✅ Live | DCN | `webapps.moorecountync.gov/dcn/inmates` · `dcn_base` |

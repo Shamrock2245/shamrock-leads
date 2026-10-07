@@ -148,7 +148,7 @@ Registered **46/46**. Modules **46/46**.
 - **Orange** — family=Custom; status=`empty`/0; arrests=4; max_scraped=2026-09-23T15:17:12.322105+00:00; mongo has recent-ish data but status not ok
 - **Pitt** — family=Custom; status=`empty`/0; arrests=325; max_scraped=2026-09-23T12:59:54.969308+00:00; fresh mongo writes but status not healthy — writer gap
 
-**Ranked NC gaps:** (1) Gaston NewWorld stalled (fresh Mongo, empty status) (2) Pitt writer gap (3) Orange thin/possibly polluted evidence (4) high-pop unknowns Mecklenburg/Durham never live (5) 40 Census counties never registered (6) do not reopen Wake/Cumberland/Guilford/Forsyth/Union P2C.
+**Ranked NC gaps:** (1) Gaston NewWorld stalled (fresh Mongo, empty status) (2) Pitt writer gap (3) Orange thin/possibly polluted evidence (4) high-pop unknowns — **Mecklenburg Inmate Inquiry 2026-10-07** contract proven (JID roster; Health unverified until write smoke); Durham still fail_closed (5) 40 Census counties never registered (6) do not reopen Wake/Cumberland/Guilford/Forsyth/Union P2C.
 
 **Unknowns with historical Mongo (≥10 arrests) — recon, not reopen:** Brunswick (94, Zuercher), Davie (20, Zuercher), Duplin (12, SouthernSW), Edgecombe (28, SouthernSW), Harnett (19, SouthernSW), Henderson (57, SouthernSW), Hoke (19, Zuercher), Polk (16, SouthernSW), Sampson (29, SouthernSW), Stokes (12, SouthernSW), Surry (25, SouthernSW), Transylvania (11, SouthernSW)
 

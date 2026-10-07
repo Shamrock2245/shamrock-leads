@@ -88,3 +88,9 @@ Lead scoring on the same runs: Gaston 3 hot / 12 warm, Orange 25 hot / 46 warm, 
 1. **Legacy keys:** 250 Gaston docs keyed on the internal Detail id and 32 Denton docs keyed `DEN_<bookno>` stay in `arrests`. New runs write source keys, so the same people can appear twice until the legacy docs age out or are cleaned up. Nothing was deleted, so the cleanup is your call.
 2. **Denton coverage:** only the City of Denton jail is covered. The Denton County Sheriff's jail has no broad public listing (Odyssey name search only). Say whether the city-jail-only scope is acceptable under the `Denton (TX)` label.
 3. **Load:** Darlington now reads about 233 detail pages every 120 min (was 100). Gaston reads about 45 detail pages every 60 min (the 3-day in-custody window). Intervals are unchanged.
+
+
+### 2026-10-07 Mecklenburg Inmate Inquiry (follow-up)
+- **Mecklenburg:** public `_Search` activeOnly contract proven on box (TotalRows≈2224; Booking_Number=JID; charges/bond from `_GetCharges`). Scraper rewritten; Health **unverified** until write smoke. See `docs/recon/NC_MECKLENBURG_INMATE_API_2026-10-07.md`.
+- **Deferred verified_public promotions** for Buncombe/Carteret/Catawba/Craven/Johnston/Lee/Lincoln/Moore/Richmond/Stanly: Palmetto lists them `live_write` but `live_emitter_evidence.json` has no write-smoke rows (unlike Gaston/Pitt/Orange).
+- **Still held / not this PR:** Durham fail_closed; Onslow/Rowan P2C; Wayne CivicPlus CTA (no Citizen Connect AgencyID); Wake/Forsyth/Cumberland P2C.
