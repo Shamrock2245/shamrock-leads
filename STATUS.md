@@ -16,11 +16,17 @@
 
 ---
 
+## BailSafe P0 slice A2 — Missed check-in evidence pack (2026-10-07)
+
+Staff can download a check-in evidence ZIP for a booking from Active Bonds (Evidence) or the Check-In Compliance report. The pack is the last stored `check_in_log` and `bond_checkins` rows: timestamp, lat/lon and accuracy when those fields were stored, and a selfie file only when stored bytes or an upload under `dashboard/uploads` exist. Due and missed times come from the bond. If the booking exists and has no logs, the PDF says no check-in logs are on file. Reports also lists signed bonds whose check-in link was never sent (`checkin_enroll` task when one is pending). God-admin, admin, and staff only. The recovery role stays off this pack.
+
+Deferred: randomized check-in windows (cadence stays the stored frequency, default 7 days), B2 forfeiture SLA glue, C2 powers-pack polish, tenant isolation, Aluro, Road Mode, intake widget, payment work, and Active Book Watch billing.
+
 ## BailSafe P0 slice B1 — Recovery role and limited case share (2026-10-07)
 
 Staff can share a forfeiture file to a fail-closed `recovery` PIN role. The recovery session is denied every route except login, health, `GET /api/session/me`, and the recovery case endpoints. Shared cards carry defendant name, DOB, booking and court case numbers, forfeiture dates and status, known defendant addresses, notes staff typed on purpose, and the remittitur clock (dates and days remaining). Indemnitor phones and emails, premiums, ledgers, payment plans, POA execute/void/reassign, Write Bond, and DocuSeal issue/finalize stay off the role. Recovery does not generate warrants or demand letters. Unshare and expiry remove access. Share, note, and disposition write audit events.
 
-Deferred from this slice: B2 forfeiture SLA glue and Kanban assignee fields, A2 missed-check-in evidence, C2 powers-pack polish, tenant isolation, Aluro, Road Mode, intake widget, and payment work. A one-line Active Bonds link opens `/recovery?booking=` for an already forfeited row. That is a deep link only.
+Deferred from this slice: B2 forfeiture SLA glue and Kanban assignee fields, C2 powers-pack polish, tenant isolation, Aluro, Road Mode, intake widget, and payment work. Missed check-in evidence is slice A2 above. A one-line Active Bonds link opens `/recovery?booking=` for an already forfeited row. That is a deep link only.
 
 ## BailSafe P0 slice A1 — Book Watch review (2026-10-07)
 

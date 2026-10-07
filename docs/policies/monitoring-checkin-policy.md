@@ -149,6 +149,8 @@ Stored in `bond_checkins` + optional `location_history` on the bond. Consent met
 | `POST /api/active-bonds/{booking}/send-checkin-link` | Staff-gated send |
 | DocuSeal webhook / lifecycle poller | Post-sign enrollment (staff task only) |
 | `bond_checkins` / Tracking tab | Ops visibility |
+| `GET /api/checkin/evidence/{booking}/download` | Staff evidence ZIP (stored selfie, GPS, due/missed). Recovery role excluded |
+| `GET /api/checkin/enrollment-sla` | Signed bonds whose check-in link has not been sent |
 
 ---
 

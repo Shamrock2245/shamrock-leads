@@ -319,6 +319,7 @@ function renderActiveBondsTable() {
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#0ea5e9;color:#fff;font-weight:600" onclick="window.startPaperworkFromBondObj(${JSON.stringify(b).replace(/"/g, '&quot;')})" title="Open the guided DocuSeal workflow. Match, BondCase, surety, POA, hydration, and staff approval must all pass before sending.">☘️ DocuSeal</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#f59e0b;color:#000;font-weight:600" onclick="openBondFromActiveBond(${JSON.stringify(b).replace(/"/g, '&quot;')})" title="Appearance-bond print / wet-ink">🖨️ Print bonds</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px" onclick="openCheckinModal('${bkSafe}','${nameSafe}')">📍 Check-In</button>
+          <button class="btn-export" style="font-size:10px;padding:3px 8px" onclick="downloadCheckinEvidence('${bkSafe}')">⬇ Evidence</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px" onclick="showLocationHistory('${bkSafe}','${nameSafe}')">🗺️ History</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#3b82f6;color:#fff" onclick="openInTracking('${bkSafe}')">📡 Track</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:var(--danger)" onclick="addManualAlert('${bkSafe}','${nameSafe}')">🚨 Alert</button>
@@ -947,6 +948,32 @@ function closeCheckinModal() {
   _abCheckinName = '';
   _abCheckinPortalUrl = '';
 }
+
+window.downloadCheckinEvidence = async function (booking) {
+  const bk = String(booking || _abCheckinBooking || '').trim();
+  if (!bk) { toast('No booking selected', 'error'); return; }
+  try {
+    const r = await fetch(`${API}/api/checkin/evidence/${encodeURIComponent(bk)}/download?format=zip`, {
+      credentials: 'include',
+    });
+    if (!r.ok) {
+      toast(r.status === 403 ? 'Evidence pack is staff-only' : 'Evidence pack unavailable', 'error');
+      return;
+    }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const safe = bk.replace(/[^A-Za-z0-9._-]+/g, '_');
+    a.download = `Checkin_Evidence_${safe}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (_) {
+    toast('Evidence pack download failed', 'error');
+  }
+};
 
 async function enableBondCheckin() {
   if (!_abCheckinBooking) { toast('No booking selected', 'error'); return; }
