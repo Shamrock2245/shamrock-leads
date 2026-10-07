@@ -3,6 +3,12 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-07 (FL Brevard + New World booking keys)
+
+### Fixed
+- **Brevard (FL):** the results parser read column 0 as the name, so it stored the source `Booking #` as the name, the name as the booking number and the DOB as the booking date. Columns are now mapped by header. The plain-requests path posts the public form to `/?handler=Search` with its antiforgery token and the form's `max` date, and bonds/charges come from the detail page for in-custody rows only. `curl_cffi`, `verify=False` and the DrissionPage fallback are retired. Health stays unverified.
+- **Walton / Flagler (FL):** the New World detail parsers took the `Booking History` heading as the booking number, so every row shared one key. New shared `scrapers/fl_newworld.py` emits the newest open booking (`YYYY-NNNNNNNN`, empty Release Date) with its source Total Bond Amount and charges. Walton no longer walks `InCustody=False`. Health stays unverified.
+
 ## [Unreleased] — 2026-10-07 (post-merge cleanup)
 
 ### Fixed
