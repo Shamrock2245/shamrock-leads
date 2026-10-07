@@ -301,7 +301,16 @@ async def api_poa_execute(request: Request):
 
     poa_prefix = str(body.get("poa_prefix", "")).strip()
     provided_surety = str(body.get("surety_id", "")).lower().strip()
-    surety_id = determine_surety_from_prefix(poa_prefix, provided_surety)
+    try:
+        surety_id = determine_surety_from_prefix(poa_prefix, provided_surety or None)
+    except Exception as exc:
+        from dashboard.services.surety_registry import UnsupportedSuretyError
+        if isinstance(exc, UnsupportedSuretyError):
+            return JSONResponse(
+                {"error": exc.code, "message": str(exc)},
+                status_code=422,
+            )
+        raise
 
     date_executed = str(body.get("date_executed", "")).strip()
     if not date_executed:
