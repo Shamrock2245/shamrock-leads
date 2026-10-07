@@ -6,7 +6,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased] — 2026-10-07 (Alachua FL fail closed)
 
 ### Fixed
-- **Alachua (FL):** the View All roster publishes no booking number. The old parser read the FirstName column as `Booking_Number`, so ~984 rows collapsed onto ~618 first-name keys. The only other identifier is the person-level MNI, and person IDs are not booking keys (same policy as Durham NC and Clay FL). `alachua.py` is now `SOURCE_CONTRACT_VALIDATED=False` with no source fetch, Health `fail_closed`, and the matrix, registry and evidence are updated (`docs/recon/FL_ALACHUA_FAIL_CLOSED_2026-10-07.md`). Existing prod rows keyed on first names need a Leads Ops cleanup. Nothing was deleted here.
+- **Alachua (FL):** the View All roster publishes no booking number. The old parser read the FirstName column as `Booking_Number` and the Full Name column as `Booking_Date`, so ~984 rows collapsed onto ~618 first-name keys. The only other identifier is the person-level `MNI #`, and person IDs are not booking keys (same policy as Durham NC and Clay FL). This resolves the owner-decision note from #106. `alachua.py` is now `SOURCE_CONTRACT_VALIDATED=False` with no source fetch, Health `fail_closed`, and the matrix, registry and evidence are updated (`docs/recon/FL_ALACHUA_FAIL_CLOSED_2026-10-07.md`). Existing prod rows keyed on first names need a Leads Ops cleanup. Nothing was deleted here.
+
+## [Unreleased] — 2026-10-07 (FL Brevard + New World booking keys)
+
+### Fixed
+- **Brevard (FL):** the results parser read column 0 as the name, so it stored the source `Booking #` as the name, the name as the booking number and the DOB as the booking date. Columns are now mapped by header. The plain-requests path posts the public form to `/?handler=Search` with its antiforgery token and the form's `max` date, and bonds/charges come from the detail page for in-custody rows only. `curl_cffi`, `verify=False` and the DrissionPage fallback are retired. Health stays unverified.
+- **Brevard / Walton / Flagler (FL) review fixes:** unknown bond stays unknown. A released Brevard row, or a detail fetch that fails, times out, returns non-200 or names another booking, now emits `Bond_Amount=""` instead of an invented `0`, so the scorer applies no $0 penalty; New World does the same for a blank Total Bond Amount. `0` is emitted only when the source publishes $0. Brevard `Bond_Type` comes from bond rows with a positive amount, so a `$2,500 Surety` row is no longer masked by a `$0 No Bond` row (previously scored NO BOND -50). `Released` is now a required Brevard results column and only `Yes`/`No` are accepted; header or value drift raises. `tests/test_fl_brevard_newworld.py` added to CI.
+- **Walton / Flagler (FL):** the New World detail parsers took the `Booking History` heading as the booking number, so every row shared one key. New shared `scrapers/fl_newworld.py` emits the newest open booking (`YYYY-NNNNNNNN`, empty Release Date) with its source Total Bond Amount and charges. Walton no longer walks `InCustody=False`. Health stays unverified.
 
 ## [Unreleased] — 2026-10-07 (post-merge cleanup)
 

@@ -15,11 +15,11 @@
 | Listing columns | Last Name, FirstName, Full Name, Book Date, Race, Sex, Age, POD, Arrest Agency |
 | Source booking number on listing | **None** |
 | Row link | `ASOInmateLookup.aspx?lname=…&fname=…` (a name query, not a booking record) |
-| Other identifier | Person-level MNI only. It identifies a person, not a booking |
+| Other identifier | Person-level `MNI #` only. Per the #106 recon (`FL_BREVARD_NEWWORLD_2026-10-07.md`), the per-person page shows it. It identifies a person, not a booking |
 
 ## Root cause
 
-`alachua.py` assumed `Name, Booking#, Booking Date, Charges, Bond` and read column 2 as the booking number. Column 2 is **FirstName**. In this observation there were 620 distinct first names across 987 rows, so `County + Booking_Number` dedup merged unrelated people. Booking Date landed in Charges, and Race landed in Bond.
+`alachua.py` assumed `Name, Booking#, Booking Date, Charges, Bond` and read column 2 as the booking number. Column 2 is **FirstName**. In this observation there were 620 distinct first names across 987 rows, so `County + Booking_Number` dedup merged unrelated people. The other fields were shifted too: Full Name went into `Booking_Date`, Book Date into Charges, and Race into Bond.
 
 ## Decision
 

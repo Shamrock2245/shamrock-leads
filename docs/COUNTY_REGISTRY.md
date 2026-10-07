@@ -70,15 +70,15 @@
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 28 | **Volusia** | Direct ASP.NET Postback (volusiamug.vcgov.org) | `volusia.py` | ✅ Active | 90 min | 2026-05-24 |
-| 29 | **Brevard** | Odyssey REST API | `brevard.py` | ✅ Active | 120 min | 2026-04-27 |
-| 30 | **Flagler** | New World HTML | `flagler.py` | ✅ Active | 120 min | 2026-04-27 |
+| 29 | **Brevard** | BCSO Inmate Search (`/?handler=Search` date window → `Booking #` `YYYY-NNNNNNNN`; detail Bonds/Charges for in-custody rows) — plain requests | `brevard.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
+| 30 | **Flagler** | New World InmateInquiry (`InCustody=True` + detail open `Booking` `YYYY-NNNNNNNN`; shared `fl_newworld`) — plain requests | `flagler.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
 
 ---
 
 ## Tier 6 — North Central FL (5 Counties)
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
-| 31 | **Alachua** | Public View All grid has names/Book Date only — no source booking ID (person-level MNI only) | `alachua.py` | 🔴 Fail closed (no invented name keys) | 90 min | 2026-10-07 |
+| 31 | **Alachua** | ASP.NET View All GridView — names/Book Date only, no source booking ID (per-person page shows `MNI #` person ID, not a booking key) | `alachua.py` | 🔴 Fail closed (`SOURCE_CONTRACT_VALIDATED=False`; no invented name keys). See `docs/recon/FL_ALACHUA_FAIL_CLOSED_2026-10-07.md` | 90 min | 2026-10-07 |
 | 32 | **Putnam** | SmartWEB JAIL View (`PCSO<YY>JBN######`, legacy AddMoreResults) — plain requests | `putnam.py` | ✅ Active (unverified until write smoke) | 180 min | 2026-10-07 |
 | 33 | **Columbia** | Legacy SmartWEB IP returns 503; no replacement public roster URL | `columbia.py` | 🔴 Fail closed (`SOURCE_CONTRACT_VALIDATED=False`) | 120 min | 2026-10-07 |
 | 34 | **Suwannee** | SmartWEB JAIL View (`SCSO<YY>JBN######`, modern AddMoreResults) — plain requests | `suwannee.py` | ✅ `verified_public` (Mac write smoke 44 new) | 180 min | 2026-09-25 |
@@ -93,7 +93,7 @@
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 36 | **Duval** | DrissionPage — API interception (jaxsheriff.org) | `duval.py` | ✅ Active | 90 min | 2026-04-27 |
 | 37 | **St. Johns** | Stub — `st_johns.py` returns no rows; sjso.org links `/smartwebclient/jail.aspx` but it answers **403** (Cloudflare/nginx) to ordinary access | `st_johns.py` | 🔴 No reachable public roster (hold; no WAF bypass) | 120 min | 2026-10-07 |
-| 38 | **Nassau** | New World InmateInquiry GET | `nassau.py` | ✅ Active | 120 min | 2026-04-27 |
+| 38 | **Nassau** | New World InmateInquiry GET (curl_cffi, `verify=False`) | `nassau.py` | ⚠️ Keys broken (every row keyed `History`); not migrated — portal serves an incomplete TLS chain (leaf only, GoDaddy G2 intermediate missing). See `docs/recon/FL_BREVARD_NEWWORLD_2026-10-07.md` | 120 min | 2026-10-07 |
 | 39 | **Clay** | Public detention listing has Name/Booking Date only — no source booking ID | `clay.py` | 🔴 Fail closed (no invented name keys) | 120 min | 2026-10-07 |
 
 ---
@@ -105,7 +105,7 @@
 | 41 | **Okaloosa** | Inmate Locator `Default.aspx` (source Booking# 10-digit) — plain requests A–Z | `okaloosa.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
 | 42 | **Bay** | Custom HTML | `bay.py` | ✅ Active | 120 min | 2026-04-27 |
 | 43 | **Santa Rosa** | SmartWEB JAIL View (`SRSO<YY>JBN######`) — plain requests | `santa_rosa.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
-| 44 | **Walton** | New World InmateInquiry GET | `walton.py` | ✅ Active | 120 min | 2026-04-27 |
+| 44 | **Walton** | New World InmateInquiry (`InCustody=True` + detail open `Booking` `YYYY-NNNNNNNN`; shared `fl_newworld`) — plain requests | `walton.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
 | 45 | **Jackson** | Stub — no public roster | `jackson.py` | ✅ Active | 360 min | 2026-04-27 |
 | 46 | **Gadsden** | SmartWEB iframe → `69.21.72.195` (server dead) | `gadsden.py` | 🔴 Upstream dead | 180 min | 2026-07-24 |
 
