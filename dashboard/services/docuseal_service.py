@@ -1627,6 +1627,24 @@ class DocuSealService:
                 include_defendant=include_defendant,
             )
         raw_values = self.prefill_values_from_bond(bond_data)
+        # Published "mapped" sureties add their PDF field names. OSI/Palmetto
+        # seeds stay on canonical_prefill, so this dict is unchanged for them.
+        surety_for_alias = str(
+            bond_data.get("surety_id") or bond_data.get("surety") or ""
+        ).strip().lower()
+        if surety_for_alias:
+            from dashboard.services.surety_packet_fill import (
+                SuretyDataMissing,
+                docuseal_mapped_aliases,
+            )
+            try:
+                for key, val in docuseal_mapped_aliases(surety_for_alias, bond_data).items():
+                    if key not in raw_values and str(val or "").strip():
+                        raw_values[key] = val
+            except SuretyDataMissing:
+                raise
+            except Exception:
+                logger.warning("[docuseal] published field aliases skipped for surety=%s", surety_for_alias)
 
         in_person = bool(bond_data.get("in_person") or bond_data.get("in_person_scan"))
         payload_values: Dict[str, Any] = raw_values
@@ -1928,20 +1946,49 @@ class DocuSealService:
         }
 
 
-def resolve_template_id_for_surety(surety_id: Optional[str] = None) -> Optional[str]:
+def resolve_template_id_for_surety(
+    surety_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+) -> Optional[str]:
     """
-    DocuSeal template id for an ACTIVE surety from the surety registry
-    (dashboard/services/surety_registry.py):
+    DocuSeal template id for (surety, tenant).
+
+    The published version comes from
+    resolve_active_published_template(surety, tenant). Default tenant is
+    shamrock. For shamrock, registry env vars still win:
 
       osi       — DOCUSEAL_TEMPLATE_ID_OSI, then DOCUSEAL_TEMPLATE_ID
       palmetto  — DOCUSEAL_TEMPLATE_ID_PALMETTO only (no OSI fallback)
-      inactive  — Lexington / Roche / Universal / Bankers → None until activated
+      published — if no env id is set, the active published version's id
+      inactive  — Lexington / Roche / Universal / Bankers → None until
+                  staff publish a version (env alone does not activate them)
 
-    Missing, unknown, or inactive surety → None (fail closed; never OSI).
+    Another tenant never receives Shamrock's env template ids. It gets the
+    id stored on a platform version it is entitled to, or on its private
+    version. Missing, unknown, unentitled, or inactive → None (fail closed).
     """
     from dashboard.services.surety_registry import template_id_for
+    from dashboard.services.surety_template_store import (
+        DEFAULT_TENANT_ID,
+        SuretyTemplateError,
+        normalize_tenant_id,
+        resolve_active_published_template,
+    )
 
-    return template_id_for(surety_id)
+    try:
+        tenant = normalize_tenant_id(tenant_id) if tenant_id else DEFAULT_TENANT_ID
+    except SuretyTemplateError:
+        return None
+    if tenant == DEFAULT_TENANT_ID:
+        return template_id_for(surety_id)
+    try:
+        doc = resolve_active_published_template(surety_id or "", tenant)
+    except SuretyTemplateError:
+        return None
+    if not doc:
+        return None
+    tid = str(doc.get("docuseal_template_id") or "").strip()
+    return tid or None
 
 
 BOND_AGENTS = {

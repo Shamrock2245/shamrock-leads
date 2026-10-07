@@ -6,6 +6,7 @@ DocuSeal, SwipeSimple, Slack, Google Sheets, or BlueBubbles.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -431,7 +432,185 @@ def test_bluebubbles_unmatched_text_is_review_not_a_new_lead():
     assert db["imessage_outreach"].docs[0]["status"] == "unmatched"
 
 
-def test_forfeiture_releases_poa_and_does_not_open_recovery():
+def _arrest(booking, county, state="FL", name="Bob Roe", dob="1990-01-15"):
+    return {
+        "booking_number": booking,
+        "county": county,
+        "state": state,
+        "full_name": name,
+        "dob": dob,
+        "defendant_id": f"DEF-{booking}",
+    }
+
+
+def _name_dob_intake(**extra):
+    doc = {
+        "intake_id": "WI-MATCH",
+        "status": "pending",
+        "defendant_name": "Bob Roe",
+        "defendant": {"name": "Bob Roe", "dob": "1990-01-15", "county": "", "state": ""},
+        "indemnitor": {"name": "Amy Roe"},
+        "indemnitor_name": "Amy Roe",
+    }
+    doc.update(extra)
+    return doc
+
+
+def test_name_dob_without_county_stays_in_staff_review():
+    """Same person in two counties must not auto-link, and neither may a single global hit."""
+    from dashboard.services.matching_engine import AUTO_LINK_THRESHOLD, MatchingEngine
+
+    db = FakeDB()
+    db["arrests"].docs.extend([
+        _arrest("LEE-1", "Lee", "FL"),
+        _arrest("COL-2", "Collier", "FL"),
+    ])
+    intake = _name_dob_intake()
+    db["intake_queue"].docs.append(intake)
+    engine = MatchingEngine(db)
+    result = _run(engine.match_intake(intake, prior_bonds=[]))
+    assert result["auto_linked"] is False
+    assert result["confidence"] < AUTO_LINK_THRESHOLD
+    bookings = {row["booking_number"] for row in result["candidates"]}
+    assert bookings == {"LEE-1", "COL-2"}
+    counties = {row["county"] for row in result["candidates"]}
+    assert counties == {"Lee", "Collier"}
+    assert db["intake_queue"].docs[0]["status"] == "pending"
+    assert not db["intake_queue"].docs[0].get("matched_booking_number")
+
+    # State alone is not a county. Still staff review.
+    state_only = _name_dob_intake(intake_id="WI-STATE")
+    state_only["defendant"]["state"] = "FL"
+    db["intake_queue"].docs.append(state_only)
+    state_result = _run(engine.match_intake(state_only, prior_bonds=[]))
+    assert state_result["auto_linked"] is False
+    assert {row["booking_number"] for row in state_result["candidates"]} == {"LEE-1", "COL-2"}
+
+    # Exactly one arrest anywhere in the file still does not auto-link.
+    solo = FakeDB()
+    solo["arrests"].docs.append(_arrest("ONLY-1", "Sarasota", "FL"))
+    one = _name_dob_intake(intake_id="WI-ONE")
+    solo["intake_queue"].docs.append(one)
+    one_result = _run(MatchingEngine(solo).match_intake(one, prior_bonds=[]))
+    assert one_result["auto_linked"] is False
+    assert one_result["confidence"] < AUTO_LINK_THRESHOLD
+    assert one_result["strategy"] == "name_dob_review"
+    assert solo["intake_queue"].docs[0]["status"] == "pending"
+
+
+def test_name_dob_with_county_still_auto_links_that_county():
+    from dashboard.services.matching_engine import MatchingEngine
+
+    db = FakeDB()
+    db["arrests"].docs.extend([
+        _arrest("LEE-1", "Lee", "FL"),
+        _arrest("COL-2", "Collier", "FL"),
+    ])
+    intake = _name_dob_intake()
+    intake["defendant"]["county"] = "Lee"
+    intake["defendant"]["state"] = "FL"
+    db["intake_queue"].docs.append(intake)
+    result = _run(MatchingEngine(db).match_intake(intake, prior_bonds=[]))
+    assert result["auto_linked"] is True
+    assert result["confidence"] == 95
+    assert result["strategy"] == "name_dob_county"
+    assert result["best_match"]["booking_number"] == "LEE-1"
+    saved = db["intake_queue"].docs[0]
+    assert saved["status"] == "matched"
+    assert saved["matched_booking_number"] == "LEE-1"
+    assert saved["matched_county"] == "Lee"
+    assert saved["matched_state"] == "FL"
+    assert saved["match_strategy"] == "name_dob_county"
+    assert saved["match_timestamp"]
+
+
+def test_sheets_fanout_uses_persisted_post_match_intake():
+    from dashboard.routers.intake import intake_submit
+    from dashboard.services import intake_fanout as fo
+
+    db = FakeDB()
+    db["arrests"].docs.append(_arrest("LEE-9", "Lee", "FL"))
+    captured = []
+
+    def _schedule(doc):
+        captured.append(doc)
+        return None
+
+    with patch("dashboard.routers.intake.get_collection", side_effect=db.get_collection), \
+         patch("dashboard.routers.intake.get_db", return_value=db), \
+         patch("dashboard.services.past_bond_search.search_past_bonds", AsyncMock(return_value=[])), \
+         patch("dashboard.services.intake_fanout.schedule_after_save", side_effect=_schedule):
+        result = _run(intake_submit(_Json({
+            "source": "walk_in",
+            "indemnitorName": "Amy Roe",
+            "indemnitorPhone": "2395550101",
+            "defendantName": "Bob Roe",
+            "defendantDOB": "1990-01-15",
+            "county": "Lee",
+            "defendantState": "FL",
+        })))
+
+    assert result["success"] is True
+    assert result["match"]["auto_linked"] is True
+    [saved] = db["intake_queue"].docs
+    assert saved["status"] == "matched"
+    [fanout] = captured
+    assert fanout["status"] == "matched"
+    assert fanout["matched_county"] == "Lee"
+    assert fanout["matched_state"] == "FL"
+    assert fanout["match_strategy"] == "name_dob_county"
+    assert fanout["match_timestamp"]
+    assert fanout["matched_booking_number"] == "LEE-9"
+    row = fo.ledger_row(fanout)
+    assert row["status"] == "matched"
+    assert row["county"] == "Lee"
+    assert row["state"] == "FL"
+    assert row["match_strategy"] == "name_dob_county"
+    assert row["match_timestamp"]
+    assert row["matched_booking_number"] == "LEE-9"
+    assert "1990-01-15" not in str(row)
+
+
+def test_promote_refuses_blank_or_zero_bond_without_taking_a_power():
+    from dashboard.routers.intake import intake_promote
+
+    amounts = ["", "0", "$0", "0.00", None]
+    for amount in amounts:
+        db = FakeDB()
+        defendant = {"charges": "petit theft"}
+        if amount is not None:
+            defendant["bondAmount"] = amount
+        db["intake_queue"].docs.append({
+            "intake_id": "WI-ZERO",
+            "status": "pending",
+            "matched_booking_number": "2026-4401",
+            "matched_county": "Collier",
+            "defendant_name": "Bob Roe",
+            "defendant": defendant,
+            "indemnitor": {},
+        })
+        db["poa_inventory"].docs.append({
+            "poa_number": "OSI-FIT",
+            "surety_id": "osi",
+            "status": "available",
+            "max_bond_value": 10000,
+        })
+        with patch("dashboard.routers.intake.get_collection", side_effect=db.get_collection):
+            denied = _run(intake_promote(_Json({"surety": "osi"}), "WI-ZERO"))
+        body = json.loads(denied.body)
+        assert denied.status_code == 422, amount
+        assert "bond amount" in body["error"].lower()
+        assert db["active_bonds"].docs == []
+        assert db["poa_inventory"].docs[0]["status"] == "available"
+        assert db["intake_queue"].docs[0]["status"] == "pending"
+
+
+def test_forfeiture_releases_poa_and_opens_pending_recovery_review():
+    from dashboard.services.recovery_case_service import (
+        list_cases_for_recovery,
+        queue_forfeiture_review,
+        share_forfeiture_case,
+    )
     from dashboard.services.state_machine import BondStateMachine
 
     db = FakeDB()
@@ -439,18 +618,97 @@ def test_forfeiture_releases_poa_and_does_not_open_recovery():
         "booking_number": "2026-4401",
         "status": "active",
         "poa_number": "OSI-FIT",
+        "county": "Lee",
+        "state": "FL",
+        "defendant_name": "Bob Roe",
     })
     release = AsyncMock()
     with patch("dashboard.services.state_machine.get_db", return_value=db), \
+         patch("dashboard.services.recovery_case_service.get_collection", side_effect=db.get_collection), \
          patch("dashboard.services.audit_service.AuditService.log_event", AsyncMock()), \
          patch("dashboard.services.poa_service.auto_release_poa", release), \
          patch("dashboard.services.task_engine.TaskEngine.cancel_pending_tasks", AsyncMock()):
         result = _run(BondStateMachine.transition_bond(
             "2026-4401", "forfeited", "Dashboard", "fta",
         ))
+        again = _run(queue_forfeiture_review(booking_number="2026-4401", actor="Dashboard"))
+        pending_status = db["recovery_case_shares"].docs[0]["status"]
+        hidden = _run(list_cases_for_recovery("R-1"))
+        confirmed = _run(share_forfeiture_case(booking_number="2026-4401", actor="Dashboard"))
+
     assert result["success"] is True
     assert result["poa_released"] is True
     assert result["poa_number"] == "OSI-FIT"
     assert db["active_bonds"].docs[0]["status"] == "forfeited"
-    assert db["recovery_cases"].docs == []
+    assert again["already_open"] is True
+    assert pending_status == "pending_review"
+    [share] = [row for row in db["recovery_case_shares"].docs]
+    assert share["status"] == "active"
+    assert share["confirmed_from"] == "pending_review"
+    assert confirmed["confirmed_pending_review"] is True
+    assert confirmed["share_id"] == share["share_id"]
+    assert hidden == []
+    assert share["recovery_agent_id"] == ""
     release.assert_awaited()
+
+    cleared = FakeDB()
+    cleared["active_bonds"].docs.append({
+        "booking_number": "2026-4402",
+        "status": "active",
+        "poa_number": "OSI-FIT",
+        "county": "Lee",
+        "state": "FL",
+    })
+    with patch("dashboard.services.state_machine.get_db", return_value=cleared), \
+         patch("dashboard.services.recovery_case_service.get_collection", side_effect=cleared.get_collection), \
+         patch("dashboard.services.audit_service.AuditService.log_event", AsyncMock()), \
+         patch("dashboard.services.poa_service.auto_release_poa", AsyncMock()), \
+         patch("dashboard.services.task_engine.TaskEngine.cancel_pending_tasks", AsyncMock()):
+        exo = _run(BondStateMachine.transition_bond(
+            "2026-4402", "exonerated", "Dashboard", "court discharged",
+        ))
+    assert exo["poa_released"] is True
+    assert cleared["recovery_case_shares"].docs == []
+
+
+def test_forfeiture_review_failure_is_repaired_on_retry():
+    from dashboard.services import recovery_case_service as recovery
+    from dashboard.services.state_machine import BondStateMachine
+
+    db = FakeDB()
+    db["active_bonds"].docs.append({
+        "booking_number": "2026-4403",
+        "status": "active",
+        "poa_number": "OSI-FIT",
+        "county": "Lee",
+        "state": "FL",
+    })
+    real = recovery.queue_forfeiture_review
+    calls = {"n": 0}
+
+    async def flaky(**kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("share insert failed")
+        return await real(**kwargs)
+
+    with patch("dashboard.services.state_machine.get_db", return_value=db), \
+         patch("dashboard.services.recovery_case_service.get_collection", side_effect=db.get_collection), \
+         patch("dashboard.services.recovery_case_service.queue_forfeiture_review", flaky), \
+         patch("dashboard.services.audit_service.AuditService.log_event", AsyncMock()), \
+         patch("dashboard.services.poa_service.auto_release_poa", AsyncMock()), \
+         patch("dashboard.services.task_engine.TaskEngine.cancel_pending_tasks", AsyncMock()):
+        with pytest.raises(RuntimeError, match="share insert failed"):
+            _run(BondStateMachine.transition_bond(
+                "2026-4403", "forfeited", "Dashboard", "fta",
+            ))
+        assert db["active_bonds"].docs[0]["status"] == "forfeited"
+        assert db["recovery_case_shares"].docs == []
+        repaired = _run(BondStateMachine.transition_bond(
+            "2026-4403", "forfeited", "Dashboard", "fta",
+        ))
+    assert repaired["success"] is True
+    assert repaired["note"] == "No change"
+    assert repaired["recovery_review"]["status"] == "pending_review"
+    [share] = db["recovery_case_shares"].docs
+    assert share["status"] == "pending_review"

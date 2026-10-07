@@ -118,6 +118,8 @@ curl -sSL "https://script.google.com/macros/s/<STABLE_ID>/exec?action=health"
 **Primary production paperwork path is DocuSeal only** (`docuseal_service` / `/api/paperwork/packet/finalize`). Local PDF stitcher is secondary/offline assist.
 
 > **Paperwork vocabulary:** An indemnitor/defendant `docuseal_packet` may be `pending`, `sent`, `signed`, or `voided` and follows the validated Match → BondCase → surety → POA chain. An `appearance_bond` is a separate `unsigned_stored` PDF requiring print and live wet ink; it is never an e-signature readiness gap and must never be sent to DocuSeal.
+>
+> **Add surety:** Staff publish a carrier from Paperwork Config without a code change (`/api/crm/sureties/onboarding`). OSI and Palmetto v1 are on that path; `DOCUSEAL_TEMPLATE_ID_OSI` and `DOCUSEAL_TEMPLATE_ID_PALMETTO` still win when set (production 1 and 5). Lexington, Roche, Universal, and Bankers still need owner-supplied blank PDFs and POA prefixes before anyone publishes them.
 
 ---
 
