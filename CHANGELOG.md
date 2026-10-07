@@ -10,6 +10,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Newberry (SC):** current Sheriff bookings PDF parser extracts charge lines; accepts source ids `SO`/`NP`/`HP`/`PP`/`HA`/`SL`/`GS`; `Bond_Amount` only when an explicit `Bond $…` line is printed (statute `$` text and `BOND POSTED` are not bonds).
 - Promoted both to Health `verified_public` with live_write evidence from 2026-09-23 plus this field probe (`docs/recon/SC_FLORENCE_NEWBERRY_FIELDS_2026-10-07.md`). Fail_closed SC counties untouched.
 
+## [Unreleased] — 2026-10-07 (NC Pitt listing-only hydrate note)
+
+### Changed
+- **Pitt County (NC 147):** Select-detail probe confirmed the public Detainee Search does not publish charges or bond amounts (detail has demographics/date confined only; Charge/Sentence/Print bounce to search; bond link is instructions PDF). Scraper stays `verified_public` on source 6-digit Booking Number, keeps Charges=`Unknown` / Bond_Amount=`0` (no invented amounts), and records an honest `extra.hydrate_limitation` / `listing_only_for_hydrate` flag for Write Bond / DocuSeal. Matrix + gap-queue evidence updated. NC fail_closed holds unchanged; optional Buncombe/Carteret/… verified_public promotions deferred (matrix still `unverified`).
+
 ## [Unreleased] — 2026-10-05 (Dependency updates)
 
 ### Changed

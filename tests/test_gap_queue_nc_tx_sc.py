@@ -272,6 +272,28 @@ def test_darlington_flags():
     assert DarlingtonScraper.max_detail_fetches >= 300
 
 
+
+
+def test_pitt_listing_only_hydrate_limitation_no_invented_bond():
+    """Select detail does not publish charges/bond; records stay honest placeholders."""
+    assert pitt.LISTING_ONLY_FOR_HYDRATE is True
+    assert "do not invent" in pitt.HYDRATE_LIMITATION.lower()
+    assert "charge" in pitt.HYDRATE_LIMITATION.lower()
+    assert "bond" in pitt.HYDRATE_LIMITATION.lower()
+    scraper = pitt.PittScraper()
+    rec = scraper._to_record({
+        "last": "DOE", "first": "JOHN", "middle": "Q", "suffix": "",
+        "dob": "01/01/1990", "booking": "123456", "gender": "M", "race": "W",
+    })
+    assert rec.Booking_Number == "123456"
+    assert rec.Charges == "Unknown"
+    assert rec.Bond_Amount == "0"
+    assert rec.extra_data.get("listing_only_for_hydrate") is True
+    assert "do not invent" in rec.extra_data["hydrate_limitation"].lower()
+    # Booking key remains source digits; never invent bond dollars
+    assert pitt.BOOKING_RE.match(rec.Booking_Number)
+    assert "$" not in rec.Bond_Amount
+
 # ── Contract flags / schedule ────────────────────────────────────────────────
 
 def test_rewritten_scrapers_are_plain_http_and_source_validated():
