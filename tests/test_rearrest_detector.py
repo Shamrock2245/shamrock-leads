@@ -219,6 +219,8 @@ async def test_scan_checks_monitoring_and_alert_bonds():
     assert "$in" in bonds_find_filter["status"]
     assert "monitoring" in bonds_find_filter["status"]["$in"]
     assert "alert" in bonds_find_filter["status"]["$in"]
+    assert "reinstated" in bonds_find_filter["status"]["$in"]
+    assert "forfeited" in bonds_find_filter["status"]["$in"]
 
 
 @pytest.mark.asyncio
@@ -245,6 +247,8 @@ async def test_rearrest_meter_stats_endpoint():
         res = await get_rearrest_meter_stats()
 
     assert res["success"] is True
+    watched_filter = bonds_col.count_documents.await_args.args[0]
+    assert "forfeited" in watched_filter["status"]["$in"]
     meter = res["meter"]
     assert meter["total_watched_defendants"] == 75
     assert meter["included_defendants_quota"] == 50
@@ -272,6 +276,7 @@ async def test_api_rearrest_action_triage():
     notifications_col.update_one = AsyncMock()
 
     bonds_col = MagicMock()
+    bonds_col.find_one = AsyncMock(return_value={"booking_number": "BK-OLD-11", "status": "active"})
     bonds_col.update_one = AsyncMock()
 
     audit_col = MagicMock()
@@ -284,24 +289,39 @@ async def test_api_rearrest_action_triage():
             "audit_events": audit_col,
         }[name]
 
-    # Test 'revoke' action
+    session = {"auth": True, "email": "kayla@shamrockbailbonds.biz"}
     mock_req = MagicMock()
     mock_req.json = AsyncMock(return_value={"action": "revoke", "actor": "Brendan", "notes": "FTA risk"})
 
-    with patch("dashboard.routers.rearrest_notifier.get_collection", side_effect=get_col):
+    with patch("dashboard.routers.rearrest_notifier.get_collection", side_effect=get_col), patch(
+        "dashboard.routers.rearrest_notifier.get_session_from_request", return_value=session
+    ), patch(
+        "dashboard.services.state_machine.BondStateMachine.transition_bond",
+        new_callable=AsyncMock,
+        return_value={"success": True, "status": "alert", "from_status": "active"},
+    ) as transition:
         res = await api_rearrest_action(mock_req, test_notif_id)
 
     assert res["success"] is True
     assert res["action"] == "revoke"
-    bonds_col.update_one.assert_awaited()
+    assert res["actor"] == "session:kayla@shamrockbailbonds.biz"
+    transition.assert_awaited()
+    assert transition.await_args.args[1] == "alert"
+    assert transition.await_args.args[2].startswith("session:")
+    flag_update = bonds_col.update_one.await_args.args[1]["$set"]
+    assert "status" not in flag_update
+    assert flag_update["bond_revocation_flag"] is True
     audit_col.insert_one.assert_awaited()
 
-    # Test 'second_bond' action
+    # Test 'second_bond' action. Body actor is ignored.
     mock_req.json = AsyncMock(return_value={"action": "second_bond", "actor": "Brendan"})
-    with patch("dashboard.routers.rearrest_notifier.get_collection", side_effect=get_col):
+    with patch("dashboard.routers.rearrest_notifier.get_collection", side_effect=get_col), patch(
+        "dashboard.routers.rearrest_notifier.get_session_from_request", return_value=session
+    ):
         res_bond = await api_rearrest_action(mock_req, test_notif_id)
 
     assert res_bond["success"] is True
     assert res_bond["action"] == "second_bond"
+    assert res_bond["actor"] == "session:kayla@shamrockbailbonds.biz"
     assert "/api/portal" in res_bond["intake_url"]
 

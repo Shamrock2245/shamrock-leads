@@ -94,6 +94,8 @@ jobs:
             tests/test_defendant_delivery_authorization.py \
             tests/test_paperwork_hub.py \
             tests/test_staff_chain_ensure.py \
+            tests/test_rearrest_detector.py \
+            tests/test_book_watch_review.py \
             tests/test_forfeiture_and_imessage_send.py \
             tests/test_pin_portal.py \
             tests/test_shannon_voice_paperwork.py \

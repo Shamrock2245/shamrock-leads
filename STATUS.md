@@ -16,6 +16,18 @@
 
 ---
 
+## BailSafe P0 slice A1 — Book Watch review (2026-10-07)
+
+This branch adds Book Watch review on the command center. It is not a live-production metric:
+- Confidence badges and side-by-side arrest vs bond evidence.
+- One-click triage calls `PATCH /api/rearrest/{id}/action` (revoke, second bond, false positive, contacted, dismiss). Indemnitor text is a separate staff action and only for confirmed or high confidence.
+- `GET /api/rearrest/pending` returns `pending_review` and a collapsed Needs identity check lane for `unconfirmed_triage` and low confidence.
+- Triage actor is the session. Revoke uses `BondStateMachine.transition_bond` when `alert` is a legal next status. Forfeited bonds stay forfeited.
+- The detector watch set includes `forfeited` with active, monitoring, alert, and reinstated.
+- `POST /api/rearrest/check` queues a review item and does not text indemnitors.
+
+Deferred: missed check-in evidence pack (A2), carrier powers packs (C1), recovery role (B1), tenant isolation, Stripe / defendant-month metering, and unifying `writers/rearrest_checker.py` onto one enqueue path. The scraper checker still has its own name match and no bond-status filter; those rows are labeled unscored and land in the identity lane, and that path does not text indemnitors.
+
 ## Paperwork Desk Mongo write & Write Bond chain gaps closed (2026-10-06)
 
 Resolved the two production blockers identified during live bond onboarding (Fischer & Schmidt backfills):

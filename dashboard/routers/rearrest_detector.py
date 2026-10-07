@@ -21,6 +21,7 @@ import re
 import os
 
 from dashboard.extensions import get_collection
+from dashboard.services.book_watch import WATCH_STATUSES
 
 logger = logging.getLogger(__name__)
 
@@ -165,13 +166,13 @@ async def scan_for_rearrests(hours: int = 24) -> dict:
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(hours=hours)).isoformat()
 
-    # Get all open liability bonds (active, monitoring, alert, reinstated)
+    # Watched book: open liability plus forfeited (default on; tenant toggle later).
     active_bonds = []
-    async for bond in bonds_col.find({"status": {"$in": ["active", "monitoring", "alert", "reinstated"]}}):
+    async for bond in bonds_col.find({"status": {"$in": list(WATCH_STATUSES)}}):
         active_bonds.append(bond)
 
     if not active_bonds:
-        return {"scanned": 0, "detected": 0, "message": "No active bonds to check against"}
+        return {"scanned": 0, "detected": 0, "message": "No watched bonds to check against"}
 
     # Get recent arrests
     recent_arrests = []
@@ -249,6 +250,8 @@ async def scan_for_rearrests(hours: int = 24) -> dict:
                 "bond_amount": arrest.get("bond_amount", 0),
                 "arrest_date": arrest.get("arrest_date", ""),
                 "custody_status": arrest.get("custody_status", ""),
+                "arrest_dob": arrest_dob or "",
+                "bond_dob": bond_dob or "",
                 # Prior bond / indemnitor details
                 "indemnitor_name": indemnitor_name,
                 "indemnitor_phone": indemnitor_phone,
@@ -429,7 +432,7 @@ async def get_rearrest_meter_stats():
 
     # 1. Total watched defendants currently on open book
     total_watched = await bonds_col.count_documents({
-        "status": {"$in": ["active", "monitoring", "alert", "reinstated"]}
+        "status": {"$in": list(WATCH_STATUSES)}
     })
 
     # 2. Monthly alerts generated this calendar month

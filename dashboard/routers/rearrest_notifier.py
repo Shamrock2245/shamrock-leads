@@ -9,13 +9,12 @@ notify their previous indemnitors (family members / co-signers) via iMessage
 
 Business Logic
 --------------
-1. The Scout (Node-RED) or the county scrapers detect a new arrest.
-2. This module checks MongoDB's `bonds` collection for any historical bond
-   where the defendant name + DOB matches the newly arrested person.
-3. If a match is found, we extract the previous indemnitor(s)' phone numbers.
-4. We send via BlueBubbles using `any;-;` chat GUID prefix, which auto-routes
-   to iMessage for iPhones and SMS for everyone else.
-5. All notifications are logged to `rearrest_notifications` collection.
+1. A check against historical bonds queues a Book Watch review item.
+2. Confidence decides the lane: pending_review, or unconfirmed_triage when low.
+3. Indemnitor iMessage is not sent from a name match. Staff approve a text
+   only when stored confidence is confirmed or high.
+4. Triage actor is the signed session. Body actor / reviewed_by fields are ignored.
+5. Revoke uses BondStateMachine.transition_bond when alert is a legal next status.
 
 This serves two purposes:
   a) Genuine customer service — the family already knows us and trusts us.
@@ -40,8 +39,15 @@ from bson import ObjectId
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
+from dashboard.auth.pin_middleware import get_session_from_request
 from dashboard.routers.bb_private_api import BlueBubblesClient
 from dashboard.extensions import BB_SERVERS, get_bb_server, get_collection, format_phone
+from dashboard.services.book_watch import (
+    IDENTITY_CHECK_STATUS,
+    INDEMNITOR_TEXT_CONFIDENCE,
+    PENDING_REVIEW_STATUS,
+    QUEUE_STATUSES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +116,109 @@ def _build_rearrest_message(indemnitor: dict, defendant_name: str,
 #  Core Logic
 # ─────────────────────────────────────────────────────────────────────────────
 
+def session_triage_actor(request: Request) -> Optional[str]:
+    """Staff label from the signed session. Request-body actor fields are ignored."""
+    sess = get_session_from_request(request) or {}
+    if not sess.get("auth"):
+        return None
+    who = str(sess.get("agent_name") or sess.get("email") or sess.get("role") or "").strip()
+    if not who:
+        return None
+    return f"session:{who}"
+
+
+class _ActionRequest:
+    """Same session cookie as the caller, with a body that cannot carry an actor."""
+
+    def __init__(self, request: Request, payload: dict):
+        self.cookies = request.cookies
+        self._payload = payload
+
+    async def json(self):
+        return self._payload
+
+
+def _action_request(request: Request, payload: dict) -> _ActionRequest:
+    return _ActionRequest(request, payload)
+
+
+def _session_required():
+    return JSONResponse(
+        {
+            "success": False,
+            "error": "session_required",
+            "message": "Triage actor comes from the staff session.",
+        },
+        status_code=401,
+    )
+
+
+async def _audit_triage(audit_col, notification_id: str, action: str, actor: str, notes: str, doc: dict, to_status: str) -> None:
+    await audit_col.insert_one({
+        "event_type": f"rearrest_triage_{action}",
+        "entity_type": "rearrest_notification",
+        "entity_id": notification_id,
+        "actor": actor,
+        "notes": notes or "",
+        "confidence": doc.get("confidence"),
+        "from_status": doc.get("status"),
+        "to_status": to_status,
+        "timestamp": datetime.now(timezone.utc),
+    })
+
+
+def _queue_status_for_confidence(confidence: str) -> str:
+    if confidence == "low":
+        return IDENTITY_CHECK_STATUS
+    return PENDING_REVIEW_STATUS
+
+
+def _evidence_pair(doc: dict) -> dict:
+    """Side-by-side arrest vs bond fields for the Book Watch card."""
+    return {
+        "arrest": {
+            "name": doc.get("defendant_name") or "",
+            "dob": doc.get("arrest_dob") or doc.get("dob") or "",
+            "county": doc.get("county") or "",
+            "booking_number": doc.get("booking_number") or "",
+            "charges": doc.get("charges") or "",
+            "bond_amount": doc.get("bond_amount") or 0,
+            "custody_status": doc.get("custody_status") or "",
+        },
+        "bond": {
+            "name": doc.get("prior_defendant_name") or "",
+            "dob": doc.get("bond_dob") or doc.get("prior_dob") or "",
+            "county": doc.get("prior_county") or "",
+            "booking_number": doc.get("prior_booking_number") or "",
+            "case_number": doc.get("original_case_number") or doc.get("prior_case_number") or "",
+            "poa_number": doc.get("original_poa") or doc.get("prior_poa") or "",
+            "bond_amount": doc.get("prior_bond_amount") if doc.get("prior_bond_amount") not in (None, "") else doc.get("original_bond_amount") or 0,
+            "status": doc.get("prior_bond_status") or "",
+        },
+    }
+
+
+def _lane_for(doc: dict) -> str:
+    status = doc.get("status") or ""
+    confidence = str(doc.get("confidence") or "").lower()
+    if status == IDENTITY_CHECK_STATUS or confidence == "low":
+        return "needs_identity_check"
+    return "pending_review"
+
+
+def _serialize_alert(doc: dict) -> dict:
+    out = dict(doc)
+    if out.get("_id") is not None:
+        out["_id"] = str(out["_id"])
+    for dt_field in ("created_at", "updated_at", "reviewed_at", "contacted_at", "prior_bond_date", "action_at"):
+        val = out.get(dt_field)
+        if hasattr(val, "isoformat"):
+            out[dt_field] = val.isoformat()
+    out["lane"] = _lane_for(out)
+    out["evidence"] = _evidence_pair(out)
+    return out
+
+
 async def check_and_notify_rearrest(
     defendant_name: str,
     county: str,
@@ -118,32 +227,19 @@ async def check_and_notify_rearrest(
     bond_amount: Optional[float] = None,
     charges: Optional[str] = None,
 ) -> dict:
-    """Main entry point: check for prior bonds and send notifications.
+    """Queue a re-arrest for staff review. Never text an indemnitor from a name match.
 
-    Called by:
-      - first_appearance_watcher.py when a bond is set on a watched record
-      - The Scout (Node-RED) via POST /api/rearrest/check
-      - Any scraper that detects a new arrest
-
-    Returns:
-        {
-            "prior_bonds_found": int,
-            "notifications_sent": int,
-            "notifications_failed": int,
-            "fallback_needed": list[str],  # phones needing Twilio SMS
-        }
+    A regex or DOB hit is only a candidate. Confidence scoring decides the lane.
+    Indemnitor iMessage stays blocked until a staff session approves a confirmed
+    or high match through PATCH /api/rearrest/{id}/action.
     """
+    from dashboard.routers.rearrest_detector import evaluate_match_confidence
+
     bonds_coll = get_collection("active_bonds")
     notifications_coll = get_collection("rearrest_notifications")
 
-    # ── 1. Find prior bonds for this defendant ──────────────────────────────
-    # Normalize name for matching (case-insensitive, strip extra spaces)
     name_parts = defendant_name.upper().split()
-    if len(name_parts) >= 2:
-        # Try last-name first match (common jail roster format: "SMITH JOHN")
-        query_name = " ".join(name_parts)
-    else:
-        query_name = defendant_name.upper()
+    query_name = " ".join(name_parts) if name_parts else defendant_name.upper()
 
     match_filter = {
         "$or": [
@@ -158,112 +254,174 @@ async def check_and_notify_rearrest(
         legacy_coll = get_collection("bonds")
         prior_bonds = await legacy_coll.find(match_filter, {"_id": 0}).to_list(length=20)
 
+    empty = {
+        "prior_bonds_found": 0,
+        "notifications_sent": 0,
+        "notifications_queued": 0,
+        "notifications_failed": 0,
+        "fallback_needed": [],
+        "auto_text": "blocked_pending_staff_approval",
+        "mismatches_skipped": 0,
+    }
     if not prior_bonds:
-        logger.info("🔍 Re-arrest check: no prior bonds for %s", defendant_name)
-        return {
-            "prior_bonds_found": 0,
-            "notifications_sent": 0,
-            "notifications_failed": 0,
-            "fallback_needed": [],
-        }
+        logger.info("Re-arrest check: no prior bonds (booking %s)", booking_number)
+        return empty
 
-    logger.info("🔔 Re-arrest detected: %s — %d prior bond(s) found", defendant_name, len(prior_bonds))
-
-    # ── 2. Collect unique indemnitors across all prior bonds ────────────────
-    seen_phones = set()
-    indemnitors_to_notify = []
+    now = datetime.now(timezone.utc)
+    queued = 0
+    mismatches = 0
 
     for bond in prior_bonds:
+        bond_name = bond.get("defendant_name") or bond.get("full_name") or ""
+        bond_dob = bond.get("dob") or bond.get("date_of_birth") or bond.get("defendant_dob") or ""
+        confidence, reason = evaluate_match_confidence(
+            arrest_name=defendant_name,
+            bond_name=bond_name,
+            arrest_dob=dob or "",
+            bond_dob=bond_dob,
+            arrest_county=county,
+            bond_county=bond.get("county") or "",
+        )
+        if confidence == "mismatch":
+            mismatches += 1
+            continue
+
+        prior_booking = bond.get("booking_number", "")
+        existing = await notifications_coll.find_one({
+            "booking_number": booking_number,
+            "prior_booking_number": prior_booking,
+        })
+        if existing:
+            continue
+
         indemnitor = bond.get("indemnitor") or {}
-        raw_phone = indemnitor.get("phone", "")
-        phone = format_phone(raw_phone)
-        if phone and phone not in seen_phones:
-            seen_phones.add(phone)
-            indemnitors_to_notify.append({
-                "phone": phone,
-                "indemnitor": indemnitor,
-                "prior_bond": bond,
-            })
-
-    if not indemnitors_to_notify:
-        return {
-            "prior_bonds_found": len(prior_bonds),
-            "notifications_sent": 0,
-            "notifications_failed": 0,
-            "fallback_needed": [],
-        }
-
-    # ── 3. Get BB client ────────────────────────────────────────────────────
-    bb_server = next(iter(BB_SERVERS.values()), None) if BB_SERVERS else None
-    bb_client = BlueBubblesClient(bb_server["url"], bb_server["password"]) if bb_server else None
-
-    # ── 4. Send notifications ───────────────────────────────────────────────
-    sent = 0
-    failed = 0
-    fallback_needed = []
-
-    for item in indemnitors_to_notify:
-        phone = item["phone"]
-        indemnitor = item["indemnitor"]
-        prior_bond = item["prior_bond"]
-        prior_date = prior_bond.get("created_at", prior_bond.get("bond_date", ""))
-
-        message = _build_rearrest_message(indemnitor, defendant_name, county, prior_date)
-        chat_guid = f"any;-;{phone}"
-
-        # Check iMessage availability (for channel reporting only)
-        channel = "sms"
-        if bb_client:
-            try:
-                avail = await bb_client.check_imessage_availability(phone)
-                if avail.get("available", False):
-                    channel = "imessage"
-            except Exception:
-                pass
-
-        notification_doc = {
+        phone = format_phone(
+            bond.get("indemnitor_phone") or indemnitor.get("phone", "")
+        )
+        indemnitor_name = (
+            bond.get("indemnitor_name")
+            or indemnitor.get("name", "")
+            or indemnitor.get("firstName", "")
+        )
+        await notifications_coll.insert_one({
             "defendant_name": defendant_name,
             "booking_number": booking_number,
             "county": county,
             "bond_amount": bond_amount,
-            "charges": charges,
+            "charges": charges or "",
+            "arrest_dob": dob or "",
+            "bond_dob": bond_dob,
+            "custody_status": "",
             "indemnitor_phone": phone,
-            "indemnitor_name": indemnitor.get("name", ""),
-            "prior_booking_number": prior_bond.get("booking_number", ""),
-            "message": message,
-            "channel": channel,
-            "sent_at": datetime.now(timezone.utc).isoformat(),
-            "status": "pending",
-        }
+            "indemnitor_name": indemnitor_name,
+            "prior_booking_number": prior_booking,
+            "prior_bond_amount": bond.get("bond_amount", 0),
+            "prior_bond_date": bond.get("created_at", bond.get("bond_date", "")),
+            "prior_defendant_name": bond_name,
+            "prior_county": bond.get("county", ""),
+            "prior_bond_status": bond.get("status", ""),
+            "original_case_number": bond.get("case_number", ""),
+            "original_poa": bond.get("poa_number", ""),
+            "original_bond_amount": bond.get("bond_amount", 0),
+            "confidence": confidence,
+            "confidence_reason": reason,
+            "book_watch_monitored": True,
+            "indemnitor_auto_text": "blocked",
+            "indemnitor_notify_status": "awaiting_staff_approval",
+            "status": _queue_status_for_confidence(confidence),
+            "created_at": now,
+            "updated_at": now,
+        })
+        queued += 1
 
-        if bb_client:
-            # Send via BB with any;-; (auto-routes to iMessage or SMS)
-            result = await bb_client.send_human_like(chat_guid, message, typing_delay=2.5)
-            if result.get("success"):
-                notification_doc["status"] = "sent"
-                notification_doc["bb_message_guid"] = (result.get("data") or {}).get("guid", "")
-                sent += 1
-                logger.info("✅ Re-arrest notification sent via %s to ...%s", channel, phone[-4:])
-            else:
-                notification_doc["status"] = "failed"
-                notification_doc["error"] = result.get("error", "unknown")
-                failed += 1
-                fallback_needed.append(phone)
-                logger.warning("❌ BB send failed for ...%s: %s", phone[-4:], result.get("error"))
-        else:
-            notification_doc["status"] = "failed"
-            notification_doc["error"] = "no_bb_client"
-            fallback_needed.append(phone)
-            logger.warning("⚠️ No BB client configured — cannot send to ...%s", phone[-4:])
-
-        await notifications_coll.insert_one(notification_doc)
-
+    logger.info(
+        "Re-arrest check queued %s review item(s) for booking %s (auto-text blocked)",
+        queued,
+        booking_number,
+    )
     return {
         "prior_bonds_found": len(prior_bonds),
-        "notifications_sent": sent,
-        "notifications_failed": failed,
-        "fallback_needed": fallback_needed,
+        "notifications_sent": 0,
+        "notifications_queued": queued,
+        "notifications_failed": 0,
+        "fallback_needed": [],
+        "auto_text": "blocked_pending_staff_approval",
+        "mismatches_skipped": mismatches,
     }
+
+
+async def _send_staff_approved_indemnitor_text(doc: dict, actor: str) -> dict:
+    """Send one indemnitor text after staff approval and a strong identity match."""
+    confidence = str(doc.get("confidence") or "").lower()
+    if confidence not in INDEMNITOR_TEXT_CONFIDENCE:
+        return {
+            "ok": False,
+            "status_code": 409,
+            "error": "indemnitor_text_blocked",
+            "message": "Indemnitor text requires confirmed or high confidence and an explicit staff action.",
+        }
+
+    phone = format_phone(doc.get("indemnitor_phone") or "")
+    if not phone:
+        return {
+            "ok": False,
+            "status_code": 409,
+            "error": "indemnitor_phone_missing",
+            "message": "No indemnitor phone on this alert.",
+        }
+
+    bb_server = next(iter(BB_SERVERS.values()), None) if BB_SERVERS else None
+    if not bb_server:
+        return {
+            "ok": False,
+            "status_code": 503,
+            "error": "no_bb_client",
+            "message": "No BlueBubbles server configured.",
+        }
+
+    prior_date = doc.get("prior_bond_date") or ""
+    if hasattr(prior_date, "isoformat"):
+        prior_date = prior_date.isoformat()
+    message = _build_rearrest_message(
+        {"name": doc.get("indemnitor_name") or ""},
+        doc.get("defendant_name") or "",
+        doc.get("county") or "",
+        str(prior_date),
+    )
+    bb_client = BlueBubblesClient(bb_server["url"], bb_server["password"])
+    channel = "sms"
+    try:
+        avail = await bb_client.check_imessage_availability(phone)
+        if avail.get("available", False):
+            channel = "imessage"
+    except Exception:
+        pass
+
+    result = await bb_client.send_human_like(f"any;-;{phone}", message, typing_delay=2.5)
+    now = datetime.now(timezone.utc)
+    notifications_coll = get_collection("rearrest_notifications")
+    sent = bool(result.get("success"))
+    await notifications_coll.update_one(
+        {"_id": doc["_id"]},
+        {"$set": {
+            "indemnitor_notify_status": "sent" if sent else "failed",
+            "indemnitor_text_approved_by": actor,
+            "indemnitor_text_approved_at": now,
+            "message": message,
+            "channel": channel,
+            "bb_message_guid": (result.get("data") or {}).get("guid", ""),
+            "updated_at": now,
+        }},
+    )
+    if not sent:
+        return {
+            "ok": False,
+            "status_code": 502,
+            "error": result.get("error") or "send_failed",
+            "message": "BlueBubbles did not accept the indemnitor text.",
+        }
+    logger.info("Staff-approved indemnitor text sent via %s by %s", channel, actor)
+    return {"ok": True, "channel": channel, "message": message}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -314,56 +472,57 @@ async def api_rearrest_check(request: Request):
 
 @rearrest_bp.post("/rearrest/notify")
 async def api_rearrest_notify(request: Request):
-    """Manually send a re-arrest notification to a specific phone number.
+    """Staff-approved indemnitor text for one queued alert.
 
     Body:
         {
-            "phone": "+12395550178",
-            "defendant_name": "JOHN SMITH",
-            "county": "Lee",
-            "booking_number": "2024-00123",
-            "message": "Custom message..."  (optional — overrides template)
+            "notification_id": "<rearrest_notifications _id>",
+            "staff_approved": true
         }
+
+    Confidence is read from the stored alert. A client-supplied phone, confidence,
+    or actor cannot authorize a send.
     """
     try:
+        actor = session_triage_actor(request)
+        if not actor:
+            return _session_required()
+
         data = await request.json() or {}
-        phone = format_phone(data.get("phone", ""))
-        defendant_name = (data.get("defendant_name") or "").strip()
-        county = (data.get("county") or "").strip()
-        booking_number = (data.get("booking_number") or "").strip()
-        custom_message = data.get("message", "")
+        if data.get("staff_approved") is not True:
+            return JSONResponse(
+                {
+                    "success": False,
+                    "error": "indemnitor_text_blocked",
+                    "message": "Set staff_approved true. Name matches never text indemnitors on their own.",
+                },
+                status_code=409,
+            )
 
-        if not phone or not defendant_name:
-            return JSONResponse({"success": False, "error": "phone and defendant_name required"}, status_code=400)
+        notification_id = str(data.get("notification_id") or "").strip()
+        if not notification_id:
+            return JSONResponse(
+                {"success": False, "error": "notification_id_required"},
+                status_code=400,
+            )
 
-        bb_server = next(iter(BB_SERVERS.values()), None) if BB_SERVERS else None
-        if not bb_server:
-            return JSONResponse({"success": False, "error": "No BlueBubbles server configured"}, status_code=503)
-
-        bb_client = BlueBubblesClient(bb_server["url"], bb_server["password"])
-        chat_guid = f"any;-;{phone}"
-
-        message = custom_message or _build_rearrest_message(
-            {"name": ""}, defendant_name, county, ""
-        )
-
-        result = await bb_client.send_human_like(chat_guid, message, typing_delay=2.5)
+        try:
+            oid = ObjectId(notification_id)
+        except Exception:
+            return JSONResponse({"success": False, "error": "invalid_notification_id"}, status_code=400)
 
         notifications_coll = get_collection("rearrest_notifications")
-        await notifications_coll.insert_one({
-            "defendant_name": defendant_name,
-            "booking_number": booking_number,
-            "county": county,
-            "indemnitor_phone": phone,
-            "message": message,
-            "channel": "imessage",
-            "sent_at": datetime.now(timezone.utc).isoformat(),
-            "status": "sent" if result.get("success") else "failed",
-            "bb_message_guid": (result.get("data") or {}).get("guid", ""),
-            "manual_trigger": True,
-        })
+        doc = await notifications_coll.find_one({"_id": oid})
+        if not doc:
+            return JSONResponse({"success": False, "error": "Notification not found"}, status_code=404)
 
-        return {"success": result.get("success", False), "result": result}
+        sent = await _send_staff_approved_indemnitor_text(doc, actor)
+        if not sent.get("ok"):
+            return JSONResponse(
+                {"success": False, "error": sent.get("error"), "message": sent.get("message")},
+                status_code=sent.get("status_code") or 409,
+            )
+        return {"success": True, "action": "notify_indemnitor", "channel": sent.get("channel"), "actor": actor}
 
     except Exception as e:
         logger.error("Manual re-arrest notify error: %s", e, exc_info=True)
@@ -431,33 +590,46 @@ async def api_rearrest_stats():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @rearrest_bp.get("/rearrest/pending")
-async def api_rearrest_pending(limit: int = Query(default=25)):
-    """Get unreviewed re-arrest alerts for the dashboard Command Center.
-    Returns rearrest_notifications with status 'pending_review' (written by
-    the synchronous RearrestChecker in the scraper pipeline).
+async def api_rearrest_pending(
+    limit: int = Query(default=25),
+    include: str = Query(default="pending_review,unconfirmed_triage"),
+):
+    """Book Watch queue.
 
-    Query params:
-        limit (default 25)
+    Default include is pending_review plus unconfirmed_triage. Low-confidence
+    rows are returned on the needs_identity_check lane. `limit` applies per lane.
     """
     try:
-        limit = int(limit)
+        limit = max(1, min(100, int(limit)))
+        requested = [part.strip() for part in (include or "").split(",") if part.strip()]
+        statuses = [s for s in requested if s in QUEUE_STATUSES] or list(QUEUE_STATUSES)
+
         notifications_coll = get_collection("rearrest_notifications")
+        pending_review = []
+        needs_identity = []
+        for status in statuses:
+            cursor = notifications_coll.find({"status": status}).sort("created_at", -1).limit(limit)
+            async for doc in cursor:
+                alert = _serialize_alert(doc)
+                if alert["lane"] == "needs_identity_check":
+                    needs_identity.append(alert)
+                else:
+                    pending_review.append(alert)
 
-        cursor = notifications_coll.find(
-            {"status": "pending_review"},
-        ).sort("created_at", -1).limit(limit)
-
-        alerts = []
-        async for doc in cursor:
-            doc["_id"] = str(doc["_id"])
-            # Ensure datetime fields are serializable
-            for dt_field in ("created_at", "updated_at", "reviewed_at", "contacted_at", "prior_bond_date"):
-                val = doc.get(dt_field)
-                if hasattr(val, "isoformat"):
-                    doc[dt_field] = val.isoformat()
-            alerts.append(doc)
-
-        return {"success": True, "count": len(alerts), "alerts": alerts}
+        alerts = pending_review + needs_identity
+        return {
+            "success": True,
+            "count": len(alerts),
+            "alerts": alerts,
+            "lanes": {
+                "pending_review": pending_review,
+                "needs_identity_check": needs_identity,
+            },
+            "counts": {
+                "pending_review": len(pending_review),
+                "needs_identity_check": len(needs_identity),
+            },
+        }
 
     except Exception as e:
         logger.error("Rearrest pending fetch error: %s", e, exc_info=True)
@@ -465,36 +637,17 @@ async def api_rearrest_pending(limit: int = Query(default=25)):
 
 
 @rearrest_bp.patch("/rearrest/{notification_id}/dismiss")
-
 async def api_rearrest_dismiss(request: Request, notification_id):
-    """Mark a re-arrest alert as reviewed/dismissed.
-
-    Body (optional):
-        {"reviewed_by": "Agent Name"}
-    """
+    """Mark a re-arrest alert reviewed. Actor is the session, not reviewed_by."""
     try:
+        actor = session_triage_actor(request)
+        if not actor:
+            return _session_required()
         data = await request.json() or {}
-        reviewed_by = data.get("reviewed_by", "staff")
-
-        notifications_coll = get_collection("rearrest_notifications")
-        result = await notifications_coll.update_one(
-            {"_id": ObjectId(notification_id)},
-            {
-                "$set": {
-                    "status": "reviewed",
-                    "reviewed_by": reviewed_by,
-                    "reviewed_at": datetime.now(timezone.utc),
-                    "updated_at": datetime.now(timezone.utc),
-                }
-            },
+        return await api_rearrest_action(
+            _action_request(request, {"action": "dismiss", "notes": data.get("notes") or ""}),
+            notification_id,
         )
-
-        if result.modified_count == 0:
-            return JSONResponse({"success": False, "error": "Notification not found"}, status_code=404)
-
-        logger.info("✅ Rearrest alert %s dismissed by %s", notification_id, reviewed_by)
-        return {"success": True, "status": "reviewed"}
-
     except Exception as e:
         logger.error("Rearrest dismiss error: %s", e, exc_info=True)
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
@@ -502,36 +655,16 @@ async def api_rearrest_dismiss(request: Request, notification_id):
 
 @rearrest_bp.patch("/rearrest/{notification_id}/contacted")
 async def api_rearrest_contacted(request: Request, notification_id):
-    """Mark a re-arrest alert as 'contacted' — indemnitor was reached.
-
-    Body (optional):
-        {"contacted_by": "Agent Name", "notes": "Called, left voicemail"}
-    """
+    """Mark indemnitor contacted. Actor is the session, not contacted_by."""
     try:
+        actor = session_triage_actor(request)
+        if not actor:
+            return _session_required()
         data = await request.json() or {}
-        contacted_by = data.get("contacted_by", "staff")
-        notes = data.get("notes", "")
-
-        notifications_coll = get_collection("rearrest_notifications")
-        result = await notifications_coll.update_one(
-            {"_id": ObjectId(notification_id)},
-            {
-                "$set": {
-                    "status": "contacted",
-                    "contacted_by": contacted_by,
-                    "contacted_at": datetime.now(timezone.utc),
-                    "contact_notes": notes,
-                    "updated_at": datetime.now(timezone.utc),
-                }
-            },
+        return await api_rearrest_action(
+            _action_request(request, {"action": "contacted", "notes": data.get("notes") or ""}),
+            notification_id,
         )
-
-        if result.modified_count == 0:
-            return JSONResponse({"success": False, "error": "Notification not found"}, status_code=404)
-
-        logger.info("📞 Rearrest alert %s marked contacted by %s", notification_id, contacted_by)
-        return {"success": True, "status": "contacted"}
-
     except Exception as e:
         logger.error("Rearrest contacted error: %s", e, exc_info=True)
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
@@ -552,14 +685,21 @@ async def api_rearrest_action(request: Request, notification_id: str):
     try:
         data = await request.json() or {}
         action = str(data.get("action") or "").lower().strip()
-        actor = data.get("actor") or data.get("reviewed_by") or "staff"
+        actor = session_triage_actor(request)
+        if not actor:
+            return _session_required()
         notes = data.get("notes") or ""
 
         notifications_coll = get_collection("rearrest_notifications")
         bonds_col = get_collection("active_bonds")
         audit_col = get_collection("audit_events")
 
-        doc = await notifications_coll.find_one({"_id": ObjectId(notification_id)})
+        try:
+            oid = ObjectId(notification_id)
+        except Exception:
+            return JSONResponse({"success": False, "error": "invalid_notification_id"}, status_code=400)
+
+        doc = await notifications_coll.find_one({"_id": oid})
         if not doc:
             return JSONResponse({"success": False, "error": "Notification not found"}, status_code=404)
 
@@ -570,7 +710,48 @@ async def api_rearrest_action(request: Request, notification_id: str):
         county = doc.get("county", "")
 
         if action in ("revoke", "surrender"):
-            # Update notification
+            reason = f"New arrest on booking {booking} ({county}): {notes}".strip()
+            transition = None
+            transition_note = None
+            bond_status_unchanged = False
+            if prior_bk:
+                from dashboard.services.state_machine import BondStateMachine
+
+                bond = await bonds_col.find_one({"booking_number": prior_bk})
+                current = (bond or {}).get("status") or ""
+                allowed = BondStateMachine.VALID_TRANSITIONS.get(current, [])
+                if bond and (current == "alert" or "alert" in allowed):
+                    try:
+                        transition = await BondStateMachine.transition_bond(
+                            prior_bk,
+                            "alert",
+                            actor,
+                            reason=reason,
+                        )
+                    except Exception as exc:
+                        logger.error("Rearrest revoke transition failed for %s: %s", prior_bk, exc)
+                        return JSONResponse(
+                            {
+                                "success": False,
+                                "error": "bond_transition_failed",
+                                "message": "Bond status was not changed. Retry the revoke action.",
+                            },
+                            status_code=409,
+                        )
+                else:
+                    bond_status_unchanged = True
+                    transition_note = (
+                        "bond_not_found" if not bond else f"invalid_transition:{current}->alert"
+                    )
+                if bond:
+                    await bonds_col.update_one(
+                        {"booking_number": prior_bk},
+                        {"$set": {
+                            "bond_revocation_flag": True,
+                            "revocation_initiated_at": now.isoformat(),
+                            "revocation_reason": reason,
+                        }},
+                    )
             await notifications_coll.update_one(
                 {"_id": doc["_id"]},
                 {"$set": {
@@ -582,34 +763,29 @@ async def api_rearrest_action(request: Request, notification_id: str):
                     "updated_at": now,
                 }}
             )
-            # Flag active bond record
-            if prior_bk:
-                await bonds_col.update_one(
-                    {"booking_number": prior_bk},
-                    {"$set": {
-                        "bond_revocation_flag": True,
-                        "revocation_initiated_at": now.isoformat(),
-                        "revocation_reason": f"New arrest on booking {booking} ({county}): {notes}",
-                        "status": "alert",
-                    }}
-                )
-            # Immutable audit event
             await audit_col.insert_one({
                 "event_type": "bond_revocation_initiated_rearrest",
-                "entity_id": prior_bk or booking,
-                "defendant_name": defendant_name,
+                "entity_type": "rearrest_notification",
+                "entity_id": notification_id,
+                "prior_booking_number": prior_bk,
                 "new_booking_number": booking,
                 "new_county": county,
                 "actor": actor,
                 "notes": notes,
+                "bond_status_unchanged": bond_status_unchanged,
+                "transition_note": transition_note,
                 "timestamp": now,
             })
-            logger.info("🚨 Bond revocation initiated for %s (prior bk: %s) by %s", defendant_name, prior_bk, actor)
+            logger.info("Bond revocation initiated for prior booking %s by %s", prior_bk, actor)
             return {
                 "success": True,
                 "action": "revoke",
                 "status": "revocation_initiated",
                 "prior_booking_number": prior_bk,
+                "actor": actor,
+                "bond_transition": transition,
+                "bond_status_unchanged": bond_status_unchanged,
+                "transition_note": transition_note,
             }
 
         elif action in ("second_bond", "bond_second"):
@@ -624,6 +800,7 @@ async def api_rearrest_action(request: Request, notification_id: str):
                 }}
             )
             intake_url = f"/api/portal?booking={booking}&county={county}&defendant={defendant_name}"
+            await _audit_triage(audit_col, notification_id, "second_bond", actor, notes, doc, "second_bond_opportunity")
             return {
                 "success": True,
                 "action": "second_bond",
@@ -631,6 +808,7 @@ async def api_rearrest_action(request: Request, notification_id: str):
                 "new_booking_number": booking,
                 "county": county,
                 "intake_url": intake_url,
+                "actor": actor,
             }
 
         elif action in ("false_positive", "mismatch"):
@@ -651,8 +829,18 @@ async def api_rearrest_action(request: Request, notification_id: str):
                     {"booking_number": prior_bk},
                     {"$set": {"rearrest_detected": False}}
                 )
-            logger.info("Dismissed rearrest alert %s as false positive: %s", notification_id, notes)
-            return {"success": True, "action": "false_positive", "status": "false_positive"}
+            await audit_col.insert_one({
+                "event_type": "rearrest_triage_false_positive",
+                "entity_type": "rearrest_notification",
+                "entity_id": notification_id,
+                "prior_booking_number": prior_bk,
+                "actor": actor,
+                "notes": notes,
+                "confidence": doc.get("confidence"),
+                "timestamp": now,
+            })
+            logger.info("Dismissed rearrest alert %s as false positive", notification_id)
+            return {"success": True, "action": "false_positive", "status": "false_positive", "actor": actor}
 
         elif action == "contacted":
             await notifications_coll.update_one(
@@ -665,7 +853,8 @@ async def api_rearrest_action(request: Request, notification_id: str):
                     "updated_at": now,
                 }}
             )
-            return {"success": True, "action": "contacted", "status": "contacted"}
+            await _audit_triage(audit_col, notification_id, "contacted", actor, notes, doc, "contacted")
+            return {"success": True, "action": "contacted", "status": "contacted", "actor": actor}
 
         elif action in ("dismiss", "reviewed"):
             await notifications_coll.update_one(
@@ -677,11 +866,36 @@ async def api_rearrest_action(request: Request, notification_id: str):
                     "updated_at": now,
                 }}
             )
-            return {"success": True, "action": "dismiss", "status": "reviewed"}
+            await _audit_triage(audit_col, notification_id, "dismiss", actor, notes, doc, "reviewed")
+            return {"success": True, "action": "dismiss", "status": "reviewed", "actor": actor}
+
+        elif action == "notify_indemnitor":
+            sent = await _send_staff_approved_indemnitor_text(doc, actor)
+            if not sent.get("ok"):
+                return JSONResponse(
+                    {"success": False, "error": sent.get("error"), "message": sent.get("message")},
+                    status_code=sent.get("status_code") or 409,
+                )
+            await _audit_triage(
+                audit_col, notification_id, "notify_indemnitor", actor, notes, doc, doc.get("status") or ""
+            )
+            return {
+                "success": True,
+                "action": "notify_indemnitor",
+                "status": doc.get("status"),
+                "actor": actor,
+                "channel": sent.get("channel"),
+            }
 
         else:
             return JSONResponse(
-                {"success": False, "error": f"Unknown action: {action}. Must be revoke, second_bond, false_positive, contacted, or dismiss."},
+                {
+                    "success": False,
+                    "error": (
+                        f"Unknown action: {action}. Must be revoke, second_bond, "
+                        "false_positive, contacted, dismiss, or notify_indemnitor."
+                    ),
+                },
                 status_code=400
             )
 

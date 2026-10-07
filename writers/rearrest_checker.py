@@ -242,8 +242,13 @@ class RearrestChecker:
             "prior_county": best_bond.get("county", ""),
             "prior_bonds_count": len(prior_bonds),
             "prior_bonds_source": best_bond.get("_source", "unknown"),
-            # Workflow state
-            "status": "pending_review",
+            # Unscored scraper matches are not staff-ready. They wait in the
+            # identity-check lane. This path never texts indemnitors.
+            "confidence": "low",
+            "confidence_reason": "scraper_path_unscored",
+            "indemnitor_auto_text": "blocked",
+            "indemnitor_notify_status": "awaiting_staff_approval",
+            "status": "unconfirmed_triage",
             "created_at": datetime.now(timezone.utc),
             "updated_at": datetime.now(timezone.utc),
             "reviewed_by": None,
@@ -356,7 +361,7 @@ class RearrestChecker:
                 {
                     "type": "context",
                     "elements": [
-                        {"type": "mrkdwn", "text": "📋 Review on dashboard → Command Center → Repeat Offender Alerts"},
+                        {"type": "mrkdwn", "text": "Review on dashboard → Book Watch → Needs identity check"},
                     ],
                 },
             ]
