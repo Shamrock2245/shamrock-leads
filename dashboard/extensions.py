@@ -765,6 +765,13 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     # see verified_public above.)
     "Leon (FL)": "fail_closed",
     "Gadsden (FL)": "fail_closed",
+    # FL idle eight 2026-10-07 (docs/recon/FL_IDLE_EIGHT_2026-10-07.md):
+    # Clay — public detention listing has Name/Booking Date only (no source booking ID).
+    # Columbia — legacy SmartWEB IP 503; no replacement public roster URL.
+    # Okeechobee — Wix inmate-search shell with no roster feed.
+    "Clay (FL)": "fail_closed",
+    "Columbia (FL)": "fail_closed",
+    "Okeechobee (FL)": "fail_closed",
     # Ohio pilot scopes are registered for truthful health visibility only.
     # They remain blocked before source fetch until county-specific approval.
     "Clermont (OH)": "fail_closed",

@@ -1,273 +1,170 @@
 """
-Citrus County Arrest Scraper — PDF Roster via DrissionPage
-Source: Citrus County Sheriff's Office
-URL: https://www.sheriffcitrus.org/public_info/recent_arrest.php
-Method: DrissionPage (bypasses 403) → extract PDF URL from iframe → download → pdfplumber parse
-Note: Server returns 403 to plain requests; DrissionPage with real browser headers bypasses this.
-Proven pattern: swfl-arrest-scrapers/counties/citrus/solver.py
+Citrus County (FL) Arrest Scraper — public recent-arrest PDF roster.
+
+Source contract (recon 2026-10-07, docs/recon/FL_IDLE_EIGHT_2026-10-07.md):
+  * Landing: https://www.sheriffcitrus.org/public_info/recent_arrest.php
+  * Plain HTTPS returns 200; an iframe points at a dated PDF under
+    ``/public info/recent arrests/…Arrests and Charges….pdf``.
+  * PDF table columns: Photo / Name / AR # / Date / Arrest Type / Offense / DOB / Bond.
+  * Source-issued identifier is ``AR #`` (pattern ``AAYY-NNNNNN``). Rows without AR # are dropped.
+  * No DrissionPage / stealth / proxy — ordinary requests + pdfplumber.
 """
+from __future__ import annotations
+
+import io
 import logging
 import re
-import io
+from html import unescape
 from typing import List
+from urllib.parse import urljoin
+
+import requests
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
-from curl_cffi import requests as cffi_requests
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.sheriffcitrus.org"
 PAGE_URL = f"{BASE_URL}/public_info/recent_arrest.php"
 FACILITY = "Citrus County Detention Facility"
-
-# ── Stealth Stack ──────────────────────────────────────────────────────────────
-IMPERSONATE = "chrome131"
-STEALTH_HEADERS = {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/pdf,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "Upgrade-Insecure-Requests": "1",
-    "DNT": "1",
+    "Referer": PAGE_URL,
 }
 
+_AR_RE = re.compile(r"^[A-Z]{1,4}\d{2}-\d{4,}$", re.I)
+
+
 class CitrusCountyScraper(BaseScraper):
+    """Citrus County (FL) — recent arrest PDF roster (Inverness / Lecanto)."""
+
+    SOURCE_CONTRACT_VALIDATED = True
+
     @property
     def county(self) -> str:
         return "Citrus"
 
+    @property
+    def state(self) -> str:
+        return "FL"
+
     def scrape(self) -> List[ArrestRecord]:
         try:
-            from DrissionPage import ChromiumPage
-        except ImportError:
-            logger.error("DrissionPage not installed")
-            raise
+            import pdfplumber  # noqa: F401
+        except ImportError as exc:
+            raise RuntimeError("Citrus: pdfplumber is required to parse the arrest PDF") from exc
 
-        try:
-            import pdfplumber
-        except ImportError:
-            logger.warning("pdfplumber not installed — install with: pip install pdfplumber")
-            pdfplumber = None
-
-        opts = self._get_browser_options()
-
-        page = None
-        pdf_url = None
-
-        try:
-            page = ChromiumPage(addr_or_opts=opts)
-            page.get(PAGE_URL)
-            page.wait(3)
-
-            # Look for iframe with PDF
-            iframes = page.eles("tag:iframe")
-            for iframe in iframes:
-                src = iframe.attr("src") or ""
-                if ".pdf" in src.lower() or "arrest" in src.lower():
-                    pdf_url = src if src.startswith("http") else BASE_URL + src
-                    break
-
-            # Also look for embed/object tags
-            if not pdf_url:
-                for tag in ["embed", "object"]:
-                    els = page.eles(f"tag:{tag}")
-                    for el in els:
-                        src = el.attr("src") or el.attr("data") or ""
-                        if ".pdf" in src.lower():
-                            pdf_url = src if src.startswith("http") else BASE_URL + src
-                            break
-                    if pdf_url:
-                        break
-
-            # Look for direct PDF links
-            if not pdf_url:
-                links = page.eles("tag:a")
-                for link in links:
-                    href = link.attr("href") or ""
-                    if ".pdf" in href.lower():
-                        pdf_url = href if href.startswith("http") else BASE_URL + href
-                        break
-
-            # Try to get page source and parse with BeautifulSoup
-            if not pdf_url:
-                from bs4 import BeautifulSoup
-                soup = BeautifulSoup(page.html, "html.parser")
-                for iframe in soup.find_all("iframe"):
-                    src = iframe.get("src", "")
-                    if src:
-                        pdf_url = src if src.startswith("http") else BASE_URL + src
-                        break
-
-        except Exception as e:
-            logger.error(f"Citrus: DrissionPage error: {e}")
-            raise
-        finally:
-            if page:
-                try:
-                    page.quit()
-                except Exception:
-                    pass
-
+        resp = requests.get(PAGE_URL, headers=HEADERS, timeout=45)
+        resp.raise_for_status()
+        pdf_url = self._extract_pdf_url(resp.text)
         if not pdf_url:
-            logger.warning("Citrus: could not find PDF URL")
+            logger.warning("Citrus: no arrest PDF iframe/link on landing page")
             return []
 
-        logger.info(f"Citrus: found PDF at {pdf_url}")
+        logger.info("Citrus: downloading PDF %s", pdf_url.split("?")[0])
+        pdf_resp = requests.get(pdf_url, headers=HEADERS, timeout=90)
+        pdf_resp.raise_for_status()
+        if not pdf_resp.content.startswith(b"%PDF"):
+            raise RuntimeError("Citrus: arrest PDF response was not a PDF")
+        return self._parse_pdf(pdf_resp.content, detail_url=pdf_url.split("?")[0])
 
-        # Download and parse the PDF
-        if not pdfplumber:
-            logger.warning("Citrus: pdfplumber not available, cannot parse PDF")
-            return []
+    @staticmethod
+    def _extract_pdf_url(html: str) -> str:
+        m = re.search(r"<iframe[^>]+src=(['\"])(.*?)\1", html, re.I | re.S)
+        if m:
+            src = unescape(m.group(2)).strip()
+            if ".pdf" in src.lower():
+                return urljoin(BASE_URL + "/", src)
+        for href in re.findall(r'href=(["\'])(.*?)\1', html, re.I):
+            src = unescape(href[1]).strip()
+            if ".pdf" in src.lower() and re.search(r"arrest", src, re.I):
+                return urljoin(BASE_URL + "/", src)
+        return ""
 
-        try:
-            import requests
-            resp = cffi_requests.get(pdf_url, timeout=60, impersonate=IMPERSONATE, headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-                "Referer": PAGE_URL,
-            })
-            resp.raise_for_status()
-            pdf_bytes = resp.content
-        except Exception as e:
-            logger.error(f"Citrus: failed to download PDF: {e}")
-            raise
+    def _parse_pdf(self, pdf_bytes: bytes, detail_url: str = PAGE_URL) -> List[ArrestRecord]:
+        import pdfplumber
 
-        return self._parse_pdf(pdf_bytes)
-
-    def _parse_pdf(self, pdf_bytes: bytes) -> List[ArrestRecord]:
-        """Parse arrest records from the Citrus County PDF roster."""
-        try:
-            import pdfplumber
-        except ImportError:
-            return []
-
-        records = []
-        seen = set()
-
-        try:
-            with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-                for page_num, page in enumerate(pdf.pages):
-                    text = page.extract_text() or ""
-                    # Parse records from text
-                    batch = self._parse_pdf_text(text, seen)
-                    records.extend(batch)
-        except Exception as e:
-            logger.error(f"Citrus: PDF parse error: {e}")
-
-        logger.info(f"Citrus: {len(records)} records from PDF")
+        records: List[ArrestRecord] = []
+        seen: set[str] = set()
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for page in pdf.pages:
+                for table in page.extract_tables() or []:
+                    if not table or len(table) < 2:
+                        continue
+                    header = [(c or "").strip().lower() for c in table[0]]
+                    if "ar #" not in header and "name" not in header:
+                        continue
+                    col = {h: i for i, h in enumerate(header)}
+                    for row in table[1:]:
+                        if not row:
+                            continue
+                        rec = self._row_to_record(row, col, seen, detail_url)
+                        if rec:
+                            records.append(rec)
+        logger.info("Citrus: %d records from PDF", len(records))
         return records
 
-    def _parse_pdf_text(self, text: str, seen: set) -> List[ArrestRecord]:
-        """
-        Parse individual arrest records from PDF page text.
-        Citrus PDF format (Nitro Pro 13):
-          NAME: LAST, FIRST MIDDLE
-          Booking #: XXXXXXX  Date: MM/DD/YYYY
-          Charges: ...
-          Bond: $X,XXX.XX
-        """
-        records = []
-        if not text:
-            return records
+    def _row_to_record(self, row, col: dict, seen: set, detail_url: str):
+        def cell(key: str) -> str:
+            idx = col.get(key)
+            if idx is None or idx >= len(row):
+                return ""
+            return " ".join(str(row[idx] or "").replace("\n", " ").split())
 
-        lines = [l.strip() for l in text.split("\n") if l.strip()]
+        booking = cell("ar #") or cell("ar#")
+        if not booking or not _AR_RE.match(booking):
+            return None
+        if booking in seen:
+            return None
+        seen.add(booking)
 
-        # Pattern: look for lines that start with a name (LAST, FIRST format)
-        # followed by booking info
-        i = 0
-        while i < len(lines):
-            line = lines[i]
+        full_name = cell("name")
+        if not full_name or len(full_name) < 3:
+            return None
+        # Name cell sometimes includes a trailing fragment on a second line already flattened
+        first, middle, last = self._parse_name(full_name)
+        bond_amount = self._parse_bond(cell("bond"))
+        return ArrestRecord(
+            County=self.county,
+            State="FL",
+            Booking_Number=booking,
+            Full_Name=full_name,
+            First_Name=first,
+            Middle_Name=middle,
+            Last_Name=last,
+            DOB=cell("dob"),
+            Booking_Date=cell("date"),
+            Status="In Custody",
+            Facility=FACILITY,
+            Charges=cell("offense"),
+            Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
+            Detail_URL=detail_url,
+            LastCheckedMode="INITIAL",
+        )
 
-            # Detect name line: "LASTNAME, FIRSTNAME" or "LASTNAME, FIRSTNAME MIDDLE"
-            name_match = re.match(r"^([A-Z][A-Z\s\-\']+),\s+([A-Z][A-Z\s\-\']+)$", line)
-            if name_match:
-                last_name = name_match.group(1).strip()
-                first_middle = name_match.group(2).strip()
-                parts = first_middle.split()
-                first_name = parts[0] if parts else ""
-                middle_name = " ".join(parts[1:]) if len(parts) > 1 else ""
-                full_name = f"{last_name}, {first_middle}"
-
-                # Look ahead for booking info
-                booking_num = ""
-                booking_date = ""
-                charges_parts = []
-                bond_raw = "0"
-                race = ""
-                sex = ""
-                dob = ""
-
-                j = i + 1
-                while j < min(i + 15, len(lines)):
-                    next_line = lines[j]
-
-                    # Booking number
-                    bk_match = re.search(r"(?:Booking\s*#?:?\s*|BK\s*)([A-Z0-9\-]+)", next_line, re.I)
-                    if bk_match:
-                        booking_num = bk_match.group(1)
-
-                    # Date
-                    dt_match = re.search(r"(?:Date:?\s*)(\d{1,2}/\d{1,2}/\d{2,4})", next_line, re.I)
-                    if dt_match:
-                        booking_date = dt_match.group(1)
-
-                    # Bond
-                    bond_match = re.search(r"(?:Bond:?\s*)\$?([\d,]+(?:\.\d{2})?)", next_line, re.I)
-                    if bond_match:
-                        bond_raw = bond_match.group(1)
-
-                    # Race/Sex
-                    rs_match = re.search(r"\b([BWHAOI])/([MF])\b", next_line)
-                    if rs_match:
-                        race = rs_match.group(1)
-                        sex = rs_match.group(2)
-
-                    # DOB
-                    dob_match = re.search(r"(?:DOB:?\s*|Born:?\s*)(\d{1,2}/\d{1,2}/\d{2,4})", next_line, re.I)
-                    if dob_match:
-                        dob = dob_match.group(1)
-
-                    # Charges (collect multi-line)
-                    if re.search(r"(?:Charge|Count|Statute|F\.S\.|§)", next_line, re.I):
-                        charges_parts.append(next_line)
-
-                    # Stop if we hit another name
-                    if re.match(r"^[A-Z][A-Z\s\-\']+,\s+[A-Z][A-Z\s\-\']+$", next_line) and j > i + 2:
-                        break
-
-                    j += 1
-
-                charges = "; ".join(charges_parts) if charges_parts else ""
-                key = (full_name, booking_num)
-                if key not in seen and (full_name or booking_num):
-                    seen.add(key)
-                    bond_amount = self._parse_bond(bond_raw)
-                    records.append(ArrestRecord(
-                        County=self.county,
-                        Booking_Number=booking_num,
-                        Full_Name=full_name,
-                        First_Name=first_name,
-                        Middle_Name=middle_name,
-                        Last_Name=last_name,
-                        DOB=dob,
-                        Booking_Date=booking_date,
-                        Status="In Custody",
-                        Release_Date="",
-                        Facility=FACILITY,
-                        Race=race,
-                        Sex=sex,
-                        Charges=charges,
-                        Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
-                        Detail_URL=BASE_URL,
-
-                        LastCheckedMode="INITIAL",
-                    ))
-
-            i += 1
-
-        return records
+    @staticmethod
+    def _parse_name(name: str):
+        if not name:
+            return "", "", ""
+        name = " ".join(name.strip().split())
+        if "," in name:
+            parts = name.split(",", 1)
+            last = parts[0].strip()
+            fm = parts[1].strip().split()
+            first = fm[0] if fm else ""
+            middle = " ".join(fm[1:]) if len(fm) > 1 else ""
+            return first, middle, last
+        parts = name.split()
+        if len(parts) == 1:
+            return parts[0], "", ""
+        if len(parts) == 2:
+            return parts[0], "", parts[1]
+        return parts[0], " ".join(parts[1:-1]), parts[-1]
 
     @staticmethod
     def _parse_bond(bond_str: str) -> float:

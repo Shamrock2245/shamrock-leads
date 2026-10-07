@@ -1,40 +1,33 @@
 """
-Madison County (FL) Arrest Scraper — SmartCOP ASP.NET.
-Source: Madison County Sheriff's Office
-URL: https://smartcop.madisonsheriff.org/smartwebclient/Jail.aspx
-Method: curl_cffi (chrome131 impersonation) + BeautifulSoup — ASP.NET ViewState form
-Stealth: APE proxy rotation + TLS fingerprint impersonation
-NOTE: Madison County is small (~18k pop). SmartCOP portal may be intermittent.
-Scraper fails closed with empty list if portal is unreachable.
+Madison County (FL) Arrest Scraper — SmartCOP SmartWEB JAIL View.
+
+Source contract (recon 2026-10-07, docs/recon/FL_IDLE_EIGHT_2026-10-07.md):
+  * URL: https://smartweb.mcso-fl.org/smartwebclient/jail.aspx
+  * Plain HTTPS ASP.NET WebForms; no login; ordinary public access from box.
+  * Broad criterion: Begin/End Booking Date + Current Inmates Only.
+  * Source-issued Booking No pattern: MCSO<YY>JBN<NNNNNN>; charges + bond on card.
+  * Prior host smartcop.madisonsheriff.org is the wrong tenant (expired cert /
+    not Madison FL) — do not restore it. Official SO site is madisonflsheriff.org.
 """
+from __future__ import annotations
+
 import logging
-import re
-import time
-from typing import List
+from typing import List, Optional
 
 from scrapers.base_scraper import BaseScraper
+from scrapers.fl_smartweb import scrape_smartweb_jail_view
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://smartcop.madisonsheriff.org"
-SEARCH_URL = f"{BASE_URL}/smartwebclient/Jail.aspx"
+BASE_URL = "https://smartweb.mcso-fl.org/smartwebclient"
 FACILITY = "Madison County Jail"
-IMPERSONATE = "chrome131"
-
-HEADERS = {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": SEARCH_URL,
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "same-origin",
-    "Sec-Fetch-User": "?1",
-}
 
 
 class MadisonCountyScraper(BaseScraper):
-    """Madison County (FL) — SmartCOP ASP.NET jail roster."""
+    """Madison County (FL) — SmartWEB JAIL View (Madison)."""
+
+    SOURCE_CONTRACT_VALIDATED = True
 
     @property
     def county(self) -> str:
@@ -44,159 +37,11 @@ class MadisonCountyScraper(BaseScraper):
     def state(self) -> str:
         return "FL"
 
-    def scrape(self) -> List[ArrestRecord]:
-        try:
-            from curl_cffi import requests as cffi_requests
-            from bs4 import BeautifulSoup
-        except ImportError:
-            logger.error("curl_cffi/bs4 not installed")
-            raise
-
-        proxy = self.get_proxy(prefer_residential=True) if self.ape else None
-        proxies = {"http": proxy, "https": proxy} if proxy else None
-
-        session = cffi_requests.Session()
-        try:
-            resp = session.get(
-                SEARCH_URL, headers=HEADERS, timeout=30,
-                impersonate=IMPERSONATE, proxies=proxies
-            )
-            if resp.status_code != 200:
-                raise Exception(f"{resp.status_code} loading page")
-        except Exception as e:
-            logger.warning(f"Madison: portal unreachable ({e}) — fail closed")
-            if proxy:
-                self.record_proxy_failure(proxy)
-            return []
-
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        def _get_hidden(name):
-            el = soup.find("input", {"name": name})
-            return el["value"] if el and el.get("value") else ""
-
-        post_data = {
-            "__VIEWSTATE": _get_hidden("__VIEWSTATE"),
-            "__VIEWSTATEGENERATOR": _get_hidden("__VIEWSTATEGENERATOR"),
-            "__EVENTVALIDATION": _get_hidden("__EVENTVALIDATION"),
-            "__EVENTTARGET": "",
-            "__EVENTARGUMENT": "",
-        }
-
-        for btn in soup.find_all("input", {"type": "submit"}):
-            name = btn.get("name", "")
-            value = btn.get("value", "")
-            if any(kw in value.lower() for kw in ["search", "view", "all", "find", "show"]):
-                post_data[name] = value
-                break
-
-        time.sleep(1.5)
-
-        try:
-            resp2 = session.post(
-                SEARCH_URL, data=post_data, headers=HEADERS,
-                timeout=60, impersonate=IMPERSONATE, proxies=proxies
-            )
-            if resp2.status_code != 200:
-                raise Exception(f"{resp2.status_code} on POST")
-            soup2 = BeautifulSoup(resp2.text, "html.parser")
-        except Exception as e:
-            logger.warning(f"Madison: POST failed ({e}) — fail closed")
-            if proxy:
-                self.record_proxy_failure(proxy)
-            return []
-
-        records = self._parse_table(soup2)
-        if proxy and records:
-            self.record_proxy_success(proxy)
-        logger.info(f"Madison: {len(records)} records")
-        return records
-
-    def _parse_table(self, soup) -> List[ArrestRecord]:
-        records = []
-        table = None
-        for t in soup.find_all("table"):
-            text = t.get_text(" ").lower()
-            if any(kw in text for kw in ["name", "booking", "inmate", "arrest"]):
-                rows = t.find_all("tr")
-                if len(rows) > 1:
-                    table = t
-                    break
-        if not table:
-            return []
-
-        for row in table.find_all("tr")[1:]:
-            cells = row.find_all("td")
-            if len(cells) < 2:
-                continue
-            texts = [c.get_text(strip=True) for c in cells]
-            if not any(texts):
-                continue
-
-            full_name = texts[0] if len(texts) > 0 else ""
-            booking_num = texts[1] if len(texts) > 1 else ""
-            booking_date = texts[2] if len(texts) > 2 else ""
-            charges = texts[3] if len(texts) > 3 else ""
-            bond_raw = texts[4] if len(texts) > 4 else "0"
-
-            if not full_name:
-                continue
-
-            detail_url = ""
-            link = row.find("a", href=True)
-            if link:
-                href = link["href"]
-                if not href.startswith("http"):
-                    href = f"{BASE_URL}/{href.lstrip('/')}"
-                detail_url = href
-
-            f, m, l = self._parse_name(full_name)
-            bond_amount = self._parse_bond(bond_raw)
-
-            records.append(ArrestRecord(
-                County=self.county,
-                State="FL",
-                Booking_Number=self._clean(booking_num) or f"{l.upper()}_{booking_date.replace('-', '').replace('/', '')}",
-                Full_Name=full_name,
-                First_Name=f,
-                Middle_Name=m,
-                Last_Name=l,
-                Booking_Date=self._clean(booking_date),
-                Status="In Custody",
-                Facility=FACILITY,
-                Charges=self._clean(charges),
-                Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
-                Detail_URL=detail_url,
-            ))
-        return records
-
-    @staticmethod
-    def _clean(text):
-        if not text:
-            return ""
-        return " ".join(str(text).strip().split())
-
-    @staticmethod
-    def _parse_name(n):
-        if not n:
-            return "", "", ""
-        n = " ".join(n.strip().split())
-        if "," in n:
-            p = n.split(",", 1)
-            l = p[0].strip()
-            fm = p[1].strip().split()
-            return (fm[0] if fm else ""), (" ".join(fm[1:]) if len(fm) > 1 else ""), l
-        p = n.split()
-        return p[0], (" ".join(p[2:]) if len(p) > 2 else ""), (p[-1] if len(p) >= 2 else "")
-
-    @staticmethod
-    def _parse_bond(bond_str):
-        if not bond_str:
-            return 0.0
-        cleaned = re.sub(r"[$,\s]", "", bond_str.strip().upper())
-        if any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
-            return 0.0
-        try:
-            return float(cleaned)
-        except (ValueError, TypeError):
-            return 0.0
+    def scrape(self, lookback_days: Optional[int] = None) -> List[ArrestRecord]:
+        return scrape_smartweb_jail_view(
+            county=self.county,
+            facility=FACILITY,
+            base_url=BASE_URL,
+            lookback_days=lookback_days,
+            log_prefix="Madison",
+        )

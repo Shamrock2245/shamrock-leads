@@ -6,7 +6,7 @@ Fails when:
   Health (``SCRAPER_SOURCE_STATES``) does not say ``fail_closed``;
 * a ``verified_public`` label's scraper is guarded in code;
 * a hold county (Hampton / Marlboro / Richland / Sumter / Sarasota / FL JailTracker /
-  Leon / Gadsden)
+  Leon / Gadsden / Clay / Columbia / Okeechobee)
   is not fail_closed in both places.
 """
 from __future__ import annotations
@@ -24,6 +24,7 @@ HOLD_LABELS = {
     "Baker (FL)", "Calhoun (FL)", "Gulf (FL)", "Holmes (FL)", "Levy (FL)", "Wakulla (FL)", "Washington (FL)",
     "TnCIS (TN)",
     "Leon (FL)", "Gadsden (FL)",
+    "Clay (FL)", "Columbia (FL)", "Okeechobee (FL)",
 }
 LIVE_SC = {"Charleston (SC)", "Dorchester (SC)", "Chesterfield (SC)", "Aiken (SC)", "Darlington (SC)"}
 

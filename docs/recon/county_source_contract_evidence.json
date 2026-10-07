@@ -667,18 +667,18 @@
     {
       "state": "FL",
       "county_fips": "017",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://www.sheriffcitrus.org/public_info/recent_arrest.php",
+      "access_posture": "Ordinary public HTTPS; dated arrest PDF iframe with AR # / charges / bond",
+      "evidence_note": "2026-10-07 idle-eight recon: landing 200; PDF table columns Photo/Name/AR #/Date/Arrest Type/Offense/DOB/Bond; AR # pattern AAYY-NNNNNN. Parser uses plain requests+pdfplumber (no DrissionPage)."
     },
     {
       "state": "FL",
       "county_fips": "019",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "fail_closed",
+      "official_source_url": "https://www.sheriffclayco.org/divisions/detention/detention-listings/",
+      "access_posture": "Ordinary public HTTPS HTML table; no source booking identifier on listing",
+      "evidence_note": "2026-10-07 idle-eight recon: ~400-row Name/Booking Date/Court/Court Date table; no Booking #. Hold fail_closed \u2014 do not invent name keys."
     },
     {
       "state": "FL",
@@ -691,10 +691,10 @@
     {
       "state": "FL",
       "county_fips": "023",
-      "passive_recommendation": "recon_only",
+      "passive_recommendation": "fail_closed",
       "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "access_posture": "Legacy SmartWEB IP returns 503; SO site has no working inmate-search deep link",
+      "evidence_note": "2026-10-07 idle-eight recon: http://50.204.15.10/smartwebclient/Jail.aspx \u2192 503; columbiasheriff.org FAQ inmate-search 404; FL DOS directory lists no Columbia inmate-search URL. Hold fail_closed."
     },
     {
       "state": "FL",
@@ -755,10 +755,10 @@
     {
       "state": "FL",
       "county_fips": "041",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://inmate.gcso.us/smartwebclient/Jail.aspx",
+      "access_posture": "Ordinary public HTTPS SmartWEB JAIL View (linked from gcso.us)",
+      "evidence_note": "2026-10-07 idle-eight recon: Booking No GCSO<YY>JBN<NNNNNN>, booking date/time, charges, bond via booking-date window. Prior smartcop.gilchristsheriff.com NXDOMAIN."
     },
     {
       "state": "FL",
@@ -779,10 +779,10 @@
     {
       "state": "FL",
       "county_fips": "047",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://inmate.hamiltonsheriff.com/smartwebclient/jail.aspx",
+      "access_posture": "Ordinary public HTTPS SmartWEB JAIL View",
+      "evidence_note": "2026-10-07 idle-eight recon: Booking No HCSO<YY>JBN<NNNNNN>, booking date/time, charges, bond via booking-date window. Prior smartcop.hamiltoncountysheriff.com NXDOMAIN."
     },
     {
       "state": "FL",
@@ -907,10 +907,10 @@
     {
       "state": "FL",
       "county_fips": "079",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://smartweb.mcso-fl.org/smartwebclient/jail.aspx",
+      "access_posture": "Ordinary public HTTPS SmartWEB JAIL View (Madison FL SO)",
+      "evidence_note": "2026-10-07 idle-eight recon: Booking No MCSO<YY>JBN<NNNNNN>, booking date/time, charges, bond. Prior smartcop.madisonsheriff.org is wrong tenant/expired cert."
     },
     {
       "state": "FL",
@@ -963,18 +963,18 @@
     {
       "state": "FL",
       "county_fips": "091",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://okaloosacountyjail.myokaloosa.com/InmateLocator/Default.aspx",
+      "access_posture": "Ordinary public HTTPS ASP.NET Inmate Locator (linked from sheriff-okaloosa.org)",
+      "evidence_note": "2026-10-07 idle-eight recon: Default.aspx A\u2013Z last-name search returns Booking# (10-digit YYYY+seq), name, demographics. SPA root /InmateLocator/ is not the roster."
     },
     {
       "state": "FL",
       "county_fips": "093",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "fail_closed",
+      "official_source_url": "https://www.okeesheriff.org/inmate-search",
+      "access_posture": "Wix marketing shell; no public inmate roster feed",
+      "evidence_note": "2026-10-07 idle-eight recon: page 200 but no table/JSON roster or booking ID. Hold fail_closed."
     },
     {
       "state": "FL",
