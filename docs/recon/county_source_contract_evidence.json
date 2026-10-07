@@ -3915,10 +3915,10 @@
     {
       "state": "NC",
       "county_fips": "085",
-      "passive_recommendation": "fail_closed",
-      "official_source_url": "Not verified",
-      "access_posture": "No official source safely verified in passive review",
-      "evidence_note": "No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://cc.southernsoftware.com/bookingsearch/index.php?AgencyID=HarnettCoNC",
+      "access_posture": "Ordinary public HTTPS Southern Software Citizen Connect; GET index AgencyID=HarnettCoNC exposes JMSAgencyID=NC0430000; POST fetch_current_confinements.php paginates booking-cards with source BookingID (href / data-bookingid / mugshot debug; NameID is person-level only)",
+      "evidence_note": "2026-10-07 box recon: IDX=1 returns 20 cards each with BookingID (e.g. 1381); HarnettScraper.scrape() \u2192 306 records / 306 unique Booking_Number; charges/bond only when card publishes Bond Total / charge lines. Health stays unverified until write smoke. See docs/recon/NC_HARNETT_CITIZEN_CONNECT_2026-10-07.md."
     },
     {
       "state": "NC",

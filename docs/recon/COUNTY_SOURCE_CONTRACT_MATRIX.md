@@ -27,12 +27,12 @@
 | GA | 159 | 85 | 0 | 0 | 148 | 0 | 11 |
 | LA | 64 | 13 | 3 | 1 | 4 | 46 | 10 |
 | MS | 82 | 9 | 1 | 0 | 4 | 69 | 8 |
-| NC | 100 | 60 | 3 | 2 | 0 | 80 | 15 |
+| NC | 100 | 60 | 3 | 3 | 0 | 79 | 15 |
 | SC | 46 | 46 | 7 | 1 | 0 | 0 | 38 |
 | TN | 96 | 22 | 9 | 0 | 74 | 0 | 13 |
 | TX | 254 | 34 | 2 | 0 | 0 | 252 | 0 |
 
-**Aggregate matrix counts:** verified public 33; candidate productive 9; recon only 281; unverified 499; fail closed 125.
+**Aggregate matrix counts:** verified public 33; candidate productive 10; recon only 281; unverified 498; fail closed 125.
 
 ## County matrix
 
@@ -531,7 +531,7 @@
 | NC | 079 | Greene County | Palmetto | recon_required | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 081 | Guilford County | Palmetto | registered | fail_closed | — | public page; no record queries | Public sheriff-linked P2C catalog URL identified; no roster or person-level page was opened. |
 | NC | 083 | Halifax County | Palmetto | registered | fail_closed | — | public page; no record queries | Official sheriff inmate-search page was located; listing-field contract was not tested. |
-| NC | 085 | Harnett County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
+| NC | 085 | Harnett County | Palmetto | registered | candidate_productive | https://cc.southernsoftware.com/bookingsearch/index.php?AgencyID=HarnettCoNC | Ordinary public HTTPS Southern Software Citizen Connect; GET index AgencyID=HarnettCoNC exposes JMSAgencyID=NC0430000; POST fetch_current_confinements.php paginates booking-cards with source BookingID (href / data-bookingid / mugshot debug; NameID is person-level only) | 2026-10-07 box recon: IDX=1 returns 20 cards each with BookingID (e.g. 1381); HarnettScraper.scrape() → 306 records / 306 unique Booking_Number; charges/bond only when card publishes Bond Total / charge lines. Health stays unverified until write smoke. See docs/recon/NC_HARNETT_CITIZEN_CONNECT_2026-10-07.md. |
 | NC | 087 | Haywood County | Palmetto | recon_required | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 089 | Henderson County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 091 | Hertford County | Palmetto | recon_required | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
