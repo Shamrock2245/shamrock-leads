@@ -223,41 +223,46 @@ def test_manatee_live_cf_challenge_is_classified_as_egress_block():
     assert verdict.error_class == ERROR_ANTI_BOT and verdict.egress_block and not verdict.retryable
 
 
+def _fake_exit(monkeypatch, info):
+    import scrapers.cf_browser as cfb
+    calls = []
+
+    def fake(proxy_url, **kw):
+        calls.append((proxy_url, kw))
+        return info
+
+    monkeypatch.setattr(cfb, "check_exit_ip", fake)
+    return calls
+
+
 def test_manatee_direct_mode_refuses_non_residential_host(monkeypatch):
     monkeypatch.setenv("MANATEE_EGRESS_MODE", "direct")
-    import scrapers.socks_proxy as sp
-    monkeypatch.setattr(sp, "validate_residential_proxy",
-                        lambda url, require_residential_exit=True: (False, {"ip": "203.0.113.9", "org": "Hetzner"}))
+    _fake_exit(monkeypatch, {"ok": True, "ip": "203.0.113.9", "org": "Hetzner", "country": "DE",
+                             "residential_likely": False})
     with pytest.raises(EgressBlocked, match="egress_block: MANATEE_EGRESS_MODE=direct"):
         manatee.resolve_egress()
 
 
 def test_manatee_direct_mode_uses_host_egress_without_proxy(monkeypatch):
-    monkeypatch.setenv("MANATEE_EGRESS_MODE", "direct")
-    import scrapers.socks_proxy as sp
-    called = []
-    monkeypatch.setattr(sp, "validate_residential_proxy",
-                        lambda url, require_residential_exit=True: (True, {"ip": "198.51.100.7", "org": "Comcast"}))
-    monkeypatch.setattr(sp, "resolve_residential_proxy", lambda *a, **k: called.append(1))
+    monkeypatch.delenv("MANATEE_EGRESS_MODE", raising=False)  # default is direct
+    calls = _fake_exit(monkeypatch, {"ok": True, "ip": "198.51.100.7", "org": "Comcast",
+                                     "country": "US", "residential_likely": True})
     assert manatee.resolve_egress() == (None, "direct")
-    assert called == []
+    assert calls == [(None, {"timeout": 15.0, "retries": 2, "trust_env": False})]
 
 
-def test_manatee_auto_mode_no_residential_exit_is_egress_block(monkeypatch):
+def test_manatee_unverified_exit_is_egress_block(monkeypatch):
     monkeypatch.delenv("MANATEE_EGRESS_MODE", raising=False)
-    import scrapers.socks_proxy as sp
-
-    def boom(*a, **k):
-        raise RuntimeError("No healthy residential egress available for WAF/CF scrapers.")
-
-    monkeypatch.setattr(sp, "resolve_residential_proxy", boom)
-    with pytest.raises(EgressBlocked, match="egress_block: no residential exit"):
+    _fake_exit(monkeypatch, {"ok": True, "ip": "203.0.113.9", "org": "", "country": "",
+                             "exit_unverified": True, "residential_likely": False})
+    with pytest.raises(EgressBlocked, match="not verified US residential"):
         manatee.resolve_egress()
 
 
-def test_manatee_bad_egress_mode_fails_loudly(monkeypatch):
-    monkeypatch.setenv("MANATEE_EGRESS_MODE", "proxyservice")
-    with pytest.raises(ValueError):
+@pytest.mark.parametrize("value", ["auto", "proxyservice"])
+def test_manatee_removed_or_bad_egress_mode_fails_loudly(monkeypatch, value):
+    monkeypatch.setenv("MANATEE_EGRESS_MODE", value)
+    with pytest.raises(ValueError, match="only 'direct'"):
         manatee.egress_mode()
 
 
@@ -281,6 +286,9 @@ class _FakePage:
 
 
 class _FakeBrowser:
+    def new_context(self, **kw):
+        return type("C", (), {"new_page": lambda self: _FakePage()})()
+
     def close(self):
         pass
 
@@ -291,12 +299,9 @@ class _FakePW:
 
 
 def test_manatee_scrape_raises_egress_block_instead_of_silent_empty(monkeypatch):
-    monkeypatch.setenv("MANATEE_EGRESS_MODE", "direct")
     monkeypatch.setattr(manatee, "resolve_egress", lambda scraper=None: (None, "direct"))
-    import scrapers.cf_browser as cfb
-    monkeypatch.setattr(cfb, "launch_cf_browser", lambda *a, **k: (_FakePW(), _FakeBrowser(), "playwright"))
-    monkeypatch.setattr(cfb, "new_stealth_context", lambda b: type("C", (), {"new_page": lambda self: _FakePage()})())
-    monkeypatch.setattr(cfb, "wait_past_cloudflare", lambda page, label="", max_wait=45: False)
+    monkeypatch.setattr(manatee, "launch_plain_browser", lambda: (_FakePW(), _FakeBrowser()))
+    monkeypatch.setattr(manatee, "wait_for_page", lambda page, **kw: False)
     with pytest.raises(EgressBlocked, match="egress_block: Manatee page 1"):
         ManateeCountyScraper().scrape()
 

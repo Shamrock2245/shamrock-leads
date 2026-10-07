@@ -81,6 +81,7 @@ jobs:
             tests/test_packet_builder_service.py \
             tests/test_cf_browser.py \
             tests/test_residential_proxy.py \
+            tests/test_manatee_no_proxy_path.py \
             tests/test_putnam_parser.py \
             tests/test_davidson_nc_parser.py \
             tests/test_mecklenburg_nc_parser.py \

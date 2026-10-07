@@ -3,10 +3,10 @@ Manatee County Arrest Scraper: Revize CMS roster, residential egress only
 =========================================================================
 Source: Manatee County Sheriff's Office
 URL: https://manatee-sheriff.revize.com/bookings
-Method: Playwright/Patchright page load of the public roster table from a
-US residential exit (office Mac / home ISP / iPhone hotspot, or the existing
-APE/Warren + office SOCKS resolver). No new proxy, CAPTCHA solver or stealth
-path is added here.
+Method: stock Playwright Chromium (no Patchright, no stealth context, no
+proxy) loading the public roster table from a host whose own exit is US
+residential: Brendan's home relay that Leads Ops runs. There is no proxy,
+SOCKS, APE/Warren, CAPTCHA-solver or stealth path in this module.
 
 Source contract (columns mapped by header, never by position):
     Booking # | Last Name | First Name | Middle | Charge | Arrest Date | Released
@@ -33,12 +33,14 @@ Source contract (columns mapped by header, never by position):
   :class:`EgressBlocked` (classified ``anti_bot`` + ``egress_block``), never
   a silent empty run.
 
-Egress (``MANATEE_EGRESS_MODE``):
-    auto    (default) existing resolver: env SOCKS -> APE/Warren residential
-            -> office/Tailscale SOCKS -> direct only when this host is residential.
-    direct  Leads Ops Mac / home ISP / iPhone hotspot run: no proxy at all;
-            the host exit must look US residential or the run raises
-            EgressBlocked before touching the source.
+Egress (``MANATEE_EGRESS_MODE``, default and only value ``direct``):
+    The host's own exit must be verified US residential (known ISP org,
+    country US) or the run raises EgressBlocked before touching the source.
+    Proxy environment variables (HTTP(S)_PROXY, ALL_PROXY, SCRAPER_SOCKS_PROXY,
+    WARREN_*) are ignored: the exit check runs with ``trust_env=False`` and
+    Chromium is launched with ``--no-proxy-server`` and a proxy-free env.
+    The old ``auto`` value (APE/Warren + office SOCKS resolver) was removed
+    2026-10-07 and now fails loudly as a config error.
 See docs/ops/MANATEE_RESIDENTIAL_RUN.md.
 """
 from __future__ import annotations
@@ -61,7 +63,8 @@ BASE_URL = "https://manatee-sheriff.revize.com"
 BOOKINGS_URL = f"{BASE_URL}/bookings"
 MAX_PAGES = 20
 PAGE_DELAY_S = 3.0
-EGRESS_MODES = ("auto", "direct")
+EGRESS_MODES = ("direct",)
+CF_WAIT_S = 45
 
 # Normalised header text -> logical column
 HEADER_ALIASES: Dict[str, Tuple[str, ...]] = {
@@ -104,11 +107,12 @@ _CF_BODY_MARKERS = (
 
 # ── Egress ───────────────────────────────────────────────────────────────────
 def egress_mode() -> str:
-    """``MANATEE_EGRESS_MODE`` (auto|direct). Unknown values fail loudly."""
-    mode = (os.getenv("MANATEE_EGRESS_MODE") or "auto").strip().lower()
+    """``MANATEE_EGRESS_MODE``: only ``direct``. Anything else fails loudly."""
+    mode = (os.getenv("MANATEE_EGRESS_MODE") or "direct").strip().lower()
     if mode not in EGRESS_MODES:
         raise ValueError(
-            f"MANATEE_EGRESS_MODE={mode!r} is not one of {EGRESS_MODES}"
+            f"MANATEE_EGRESS_MODE={mode!r} is not supported; only 'direct' (the host's "
+            "own residential exit). The APE/office SOCKS 'auto' path was removed."
         )
     return mode
 
@@ -139,44 +143,75 @@ def is_egress_block(
     return False
 
 
-def resolve_egress(scraper: Any = None) -> Tuple[Optional[str], str]:
-    """Pick the egress for this run, or raise :class:`EgressBlocked`.
+def resolve_egress(scraper: Any = None) -> Tuple[None, str]:
+    """Verify this host's own exit is US residential, or raise EgressBlocked.
 
-    Returns ``(proxy_url_or_None, source)``. ``direct`` mode never resolves a
-    proxy: the host itself (Mac / hotspot) must be a US residential exit.
+    Always returns ``(None, "direct")``: there is no proxy to resolve. The
+    exit lookup ignores proxy env vars, and an exit whose org/country can't
+    be looked up is unverified and refused (#113).
     """
-    mode = egress_mode()
-    if mode == "direct":
-        from scrapers.socks_proxy import validate_residential_proxy
-
-        ok, info = validate_residential_proxy(None, require_residential_exit=True)
-        if not ok:
-            raise EgressBlocked(
-                "egress_block: MANATEE_EGRESS_MODE=direct but this host's exit is not "
-                f"US residential (ip={info.get('ip')} org={info.get('org')!r} "
-                f"country={info.get('country')} err={info.get('error')}). Run from the "
-                "office Mac on home ISP or an iPhone hotspot with VPN off."
-            )
-        logger.info(
-            "[Manatee] direct residential egress ip=%s org=%s", info.get("ip"), info.get("org")
-        )
-        return None, "direct"
-
-    from scrapers.socks_proxy import resolve_residential_proxy
+    egress_mode()
+    from scrapers.cf_browser import check_exit_ip
 
     try:
-        return resolve_residential_proxy(
-            scraper,
-            sticky_session="fl-manatee",
-            require=True,
-            max_ape_attempts=5,
-        )
-    except RuntimeError as exc:
+        info = check_exit_ip(None, timeout=15.0, retries=2, trust_env=False)
+    except Exception as exc:  # noqa: BLE001 - any lookup failure is unverified
+        info = {"error": str(exc)}
+    if not info.get("residential_likely"):
         raise EgressBlocked(
-            f"egress_block: no residential exit for Manatee Revize ({exc}). "
-            "Run from the Mac/hotspot with MANATEE_EGRESS_MODE=direct "
-            "(docs/ops/MANATEE_RESIDENTIAL_RUN.md)."
-        ) from exc
+            "egress_block: MANATEE_EGRESS_MODE=direct but this host's exit is not verified "
+            f"US residential (ip={info.get('ip')} org={info.get('org')!r} "
+            f"country={info.get('country')} err={info.get('error')}). Run on the "
+            "Leads Ops home relay with VPN off (docs/ops/MANATEE_RESIDENTIAL_RUN.md)."
+        )
+    logger.info(
+        "[Manatee] direct residential egress ip=%s org=%s", info.get("ip"), info.get("org")
+    )
+    return None, "direct"
+
+
+def browser_env(environ: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """Copy of the environment without any variable whose name mentions a proxy
+    (HTTP(S)_PROXY, ALL_PROXY, NO_PROXY, SCRAPER_SOCKS_PROXY, WARREN_PROXY_*, ...)."""
+    src = os.environ if environ is None else environ
+    return {k: v for k, v in src.items() if "proxy" not in k.lower()}
+
+
+def launch_plain_browser():
+    """Stock Playwright Chromium, headless, no proxy. Returns ``(pw, browser)``."""
+    from playwright.sync_api import sync_playwright
+
+    pw = sync_playwright().start()
+    try:
+        browser = pw.chromium.launch(
+            headless=True,
+            args=["--no-proxy-server"],
+            env=browser_env(),
+        )
+    except Exception:
+        pw.stop()
+        raise
+    return pw, browser
+
+
+def wait_for_page(page, *, max_wait: float = CF_WAIT_S, sleep: Callable[[float], None] = time.sleep) -> bool:
+    """Passively wait for an interstitial to go away. No clicks, no solving.
+
+    Returns False when the page title still looks like a Cloudflare
+    challenge/block after ``max_wait`` seconds.
+    """
+    waited = 0.0
+    while True:
+        try:
+            title = page.title() or ""
+        except Exception:  # navigation in flight: keep waiting
+            title = None
+        if title is not None and not is_egress_block(title=title):
+            return True
+        if waited >= max_wait:
+            return False
+        sleep(1.5)
+        waited += 1.5
 
 
 # ── Pure parsing (unit-tested with live-shaped fixtures) ────────────────────
@@ -505,31 +540,23 @@ class ManateeCountyScraper(BaseScraper):
         return "Manatee"
 
     def scrape(self) -> List[ArrestRecord]:
-        from scrapers.cf_browser import launch_cf_browser, new_stealth_context, wait_past_cloudflare
-
-        proxy_url, proxy_source = resolve_egress(self)
-        logger.info("[Manatee] egress mode=%s source=%s", egress_mode(), proxy_source)
+        _, egress_source = resolve_egress(self)
+        logger.info("[Manatee] egress mode=%s source=%s", egress_mode(), egress_source)
 
         pw = browser = None
-        t0 = time.time()
         try:
-            pw, browser, engine = launch_cf_browser(
-                proxy_url,
-                label="Manatee",
-                verify_residential=(proxy_source != "direct"),
-            )
-            context = new_stealth_context(browser)
-            page = context.new_page()
+            pw, browser = launch_plain_browser()
+            page = browser.new_context().new_page()
 
             def fetch_page(url: str, pg: int) -> Dict[str, Any]:
-                logger.info("[Manatee] roster page %s (engine=%s)", pg, engine)
+                logger.info("[Manatee] roster page %s", pg)
                 resp = page.goto(url, wait_until="domcontentloaded", timeout=60000)
                 status = getattr(resp, "status", None) if resp is not None else None
                 try:
                     headers = dict(resp.headers) if resp is not None else {}
                 except Exception:
                     headers = {}
-                cleared = wait_past_cloudflare(page, label=f"Manatee page {pg}", max_wait=45)
+                cleared = wait_for_page(page)
                 payload = page.evaluate(_EXTRACT_JS)
                 blocked = is_egress_block(
                     title=payload.get("title") or "",
@@ -541,30 +568,23 @@ class ManateeCountyScraper(BaseScraper):
                 ):
                     raise EgressBlocked(
                         f"egress_block: Manatee page {pg} stuck on a Cloudflare challenge/block "
-                        f"(HTTP {status}) via {proxy_source} exit. Nothing written. Run from "
-                        "residential egress: MANATEE_EGRESS_MODE=direct on the Mac/hotspot "
+                        f"(HTTP {status}) via {egress_source} exit. Nothing written. Run on "
+                        "the Leads Ops home relay with MANATEE_EGRESS_MODE=direct "
                         "(docs/ops/MANATEE_RESIDENTIAL_RUN.md)."
                     )
                 return payload
 
             records, meta = walk_roster(fetch_page)
-            meta["egress_source"] = proxy_source
+            meta["egress_source"] = egress_source
             self.last_walk_meta = meta
             logger.info(
                 "[Manatee] %s bookings from %s rows over %s pages (published total=%s, egress=%s)",
-                meta["bookings"], meta["rows"], meta["pages"], meta["published_total"], proxy_source,
+                meta["bookings"], meta["rows"], meta["pages"], meta["published_total"], egress_source,
             )
-            if records and proxy_source == "ape":
-                self.record_proxy_success(proxy_url, (time.time() - t0) * 1000)
             return records
 
         except Exception as e:
             logger.error("[Manatee] run failed: %s", e)
-            if proxy_source == "ape":
-                try:
-                    self.record_proxy_failure(proxy_url)
-                except Exception:
-                    pass
             raise
         finally:
             if browser is not None:
