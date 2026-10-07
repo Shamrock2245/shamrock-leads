@@ -8,6 +8,7 @@ Method: Patchright/Playwright + APE residential (Warren) with office SOCKS fallb
 Extracts data directly from the roster table — detail pages are blocked
 by Cloudflare. The roster table contains: Booking #, Last Name, First Name,
 Middle, Charge, Arrest Date for all in-custody inmates.
+Bond is NOT on the Revize roster table (confirmed 2026-10-07); Bond_Amount stays "0".
 
 Requires a **true US residential** exit (Warren mac-office on home ISP, or SOCKS).
 Datacamp/VPN/Bahamas exits will never clear CF — preflight fails closed.
@@ -132,6 +133,9 @@ class CharlotteCountyScraper(BaseScraper):
                         Arrest_Date=arrest_date,
                         Booking_Date=arrest_date,
                         Charges=charge,
+                        # Revize roster publishes Charge but not bond; detail
+                        # pages are CF-blocked. Do not invent Bond_Amount.
+                        Bond_Amount="0",
                         Facility="Charlotte County Jail",
                         Status="In Custody",
                         Detail_URL=f"{BASE_URL}/bookings/{booking_num}",

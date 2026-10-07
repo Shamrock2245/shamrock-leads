@@ -8,6 +8,13 @@ Method: curl_cffi Chrome JA3 + Warren/Tailscale residential proxy
 AWS WAF blocks Hetzner VPS IPs with HTTP 403. Direct egress will always fail.
 This scraper **requires** validated US residential exit (APE Warren preferred,
 Tailscale/office SOCKS fallback) — same stack as Charlotte/Manatee CF counties.
+
+Recent Bookings roster columns (2026-10-07 recon): Booking #, Photo, Inmate ID,
+name parts, DOB, Sex, Race, Booking Date, Release Date, InCustody — **no**
+charges or bond on the list. Detail pages (`Details.aspx?InmateRID=…`) expose a
+"Charge Information" section; when the jail returns charge rows we parse
+offense text + any published bond dollars. When the section says
+"No data was returned" we leave Charges="" and Bond_Amount="0" (no invention).
 """
 from __future__ import annotations
 
@@ -26,6 +33,8 @@ SEARCH_URL = f"{BASE_URL}/"
 FACILITY = "Marion County Jail"
 IMPERSONATE = "chrome131"
 MAX_PROXY_ATTEMPTS = 4
+MAX_DETAIL_FETCHES = 80  # polite bound per run
+DETAIL_SLEEP_S = 0.4
 
 HEADERS = {
     "User-Agent": (
@@ -191,7 +200,7 @@ class MarionCountyScraper(BaseScraper):
             raise RuntimeError(f"POST HTTP {resp2.status_code}")
 
         soup2 = BeautifulSoup(resp2.text, "html.parser")
-        records: List[ArrestRecord] = []
+        records: List[dict] = []
 
         table = None
         for t in soup2.find_all("table"):
@@ -246,31 +255,84 @@ class MarionCountyScraper(BaseScraper):
                 else "Released"
             )
 
+            charges = ""
+            bond_amount = "0"
             records.append(
+                {
+                    "booking_num": self._clean(booking_num),
+                    "inmate_id": inmate_id,
+                    "full_name": full_name,
+                    "first_name": first_name,
+                    "middle_name": middle_name,
+                    "last_name": last_name,
+                    "dob": self._clean(dob),
+                    "booking_date": self._clean(booking_date),
+                    "status": status,
+                    "race": self._clean(race),
+                    "sex": self._clean(sex)[:1].upper() if sex else "",
+                    "charges": charges,
+                    "bond_amount": bond_amount,
+                    "detail_url": detail_url,
+                }
+            )
+
+        # Phase 2: detail pages for charges/bond when the jail publishes them.
+        out: List[ArrestRecord] = []
+        detail_fetches = 0
+        for raw in records:
+            if (
+                raw.get("detail_url")
+                and detail_fetches < MAX_DETAIL_FETCHES
+            ):
+                try:
+                    dresp = session.get(
+                        raw["detail_url"],
+                        headers=HEADERS,
+                        timeout=30,
+                        impersonate=IMPERSONATE,
+                        proxies=proxies,
+                    )
+                    detail_fetches += 1
+                    if dresp.status_code == 403:
+                        raise _WafBlocked("DETAIL HTTP 403 (WAF)")
+                    if dresp.status_code == 200:
+                        parsed = self.parse_detail_charges(dresp.text)
+                        if parsed.get("charges"):
+                            raw["charges"] = parsed["charges"]
+                        raw["bond_amount"] = parsed.get("bond_amount") or "0"
+                    time.sleep(DETAIL_SLEEP_S)
+                except _WafBlocked:
+                    raise
+                except Exception as exc:
+                    logger.debug(
+                        "[Marion] detail %s: %s", raw.get("booking_num"), exc
+                    )
+
+            out.append(
                 ArrestRecord(
                     County=self.county,
                     State="FL",
-                    Booking_Number=self._clean(booking_num),
-                    Person_ID=inmate_id,
-                    Full_Name=full_name,
-                    First_Name=first_name,
-                    Middle_Name=middle_name,
-                    Last_Name=last_name,
-                    DOB=self._clean(dob),
-                    Booking_Date=self._clean(booking_date),
-                    Status=status,
+                    Booking_Number=raw["booking_num"],
+                    Person_ID=raw["inmate_id"],
+                    Full_Name=raw["full_name"],
+                    First_Name=raw["first_name"],
+                    Middle_Name=raw["middle_name"],
+                    Last_Name=raw["last_name"],
+                    DOB=raw["dob"],
+                    Booking_Date=raw["booking_date"],
+                    Status=raw["status"],
                     Release_Date="",
                     Facility=FACILITY,
-                    Race=self._clean(race),
-                    Sex=self._clean(sex)[:1].upper() if sex else "",
-                    Charges="",
-                    Bond_Amount="0",
-                    Detail_URL=detail_url,
+                    Race=raw["race"],
+                    Sex=raw["sex"],
+                    Charges=raw["charges"],
+                    Bond_Amount=self._format_bond_amount(raw["bond_amount"]),
+                    Detail_URL=raw["detail_url"],
                     LastCheckedMode="INITIAL",
                 )
             )
 
-        return records
+        return out
 
     @staticmethod
     def _clean(text: Any) -> str:
@@ -278,17 +340,128 @@ class MarionCountyScraper(BaseScraper):
             return ""
         return " ".join(str(text).strip().split())
 
+    @classmethod
+    def parse_detail_charges(cls, html: str) -> dict:
+        """Parse Marion Details.aspx Charge Information (source-faithful).
+
+        Returns charges + bond_amount. If the jail says "No data was returned"
+        or publishes no bond dollars, bond_amount is "0".
+        """
+        if not html:
+            return {"charges": "", "bond_amount": "0"}
+
+        if re.search(
+            r"Charge Information.*?No data was returned",
+            html,
+            flags=re.I | re.S,
+        ):
+            return {"charges": "", "bond_amount": "0"}
+
+        try:
+            from bs4 import BeautifulSoup
+        except ImportError:
+            BeautifulSoup = None
+
+        charges: list[str] = []
+        total = 0.0
+        saw_bond = False
+
+        if BeautifulSoup is not None:
+            soup = BeautifulSoup(html, "html.parser")
+            text = soup.get_text("\n", strip=True)
+            for m in re.finditer(
+                r"(?:Offense|Charge Description|Description)\s*:?\s*([^\n]+)",
+                text,
+                flags=re.I,
+            ):
+                val = cls._clean(m.group(1))
+                low = val.lower()
+                if not val or low in {"information", "no data", "bond", "amount", "charge"}:
+                    continue
+                if val not in charges:
+                    charges.append(val)
+            for m in re.finditer(
+                r"(?:Bond(?:\s*Amount)?|Total\s*Bond|Bail)\s*:?\s*"
+                r"(\$?[\d,]+(?:\.\d{2})?|NO\s*BOND|N/?A|HOLD)",
+                text,
+                flags=re.I,
+            ):
+                saw_bond = True
+                total += cls._parse_bond(m.group(1))
+
+            for table in soup.find_all("table"):
+                rows = table.find_all("tr")
+                if not rows:
+                    continue
+                headers = [
+                    cls._clean(c.get_text(" ", strip=True)).lower()
+                    for c in rows[0].find_all(["th", "td"])
+                ]
+                if not headers:
+                    continue
+                charge_idx = next(
+                    (
+                        i
+                        for i, h in enumerate(headers)
+                        if "charge" in h or "offense" in h or "description" in h
+                    ),
+                    None,
+                )
+                bond_idx = next(
+                    (i for i, h in enumerate(headers) if "bond" in h or "bail" in h),
+                    None,
+                )
+                if charge_idx is None and bond_idx is None:
+                    continue
+                for row in rows[1:]:
+                    cells = [c.get_text(" ", strip=True) for c in row.find_all("td")]
+                    if charge_idx is not None and charge_idx < len(cells):
+                        val = cls._clean(cells[charge_idx])
+                        if val and val not in charges:
+                            charges.append(val)
+                    if bond_idx is not None and bond_idx < len(cells):
+                        saw_bond = True
+                        total += cls._parse_bond(cells[bond_idx])
+
+        if not saw_bond:
+            for m in re.finditer(
+                r"bond[^$\d]{0,40}(\$[\d,]+(?:\.\d{2})?)",
+                html,
+                flags=re.I,
+            ):
+                saw_bond = True
+                total += cls._parse_bond(m.group(1))
+
+        return {
+            "charges": " | ".join(charges),
+            "bond_amount": cls._format_bond_amount(total) if saw_bond else "0",
+        }
+
     @staticmethod
     def _parse_bond(bond_str: str) -> float:
         if not bond_str:
             return 0.0
-        cleaned = re.sub(r"[$,\s]", "", bond_str.strip().upper())
-        if any(t in cleaned for t in ("NOBOND", "NONE", "N/A", "HOLD")):
+        cleaned = re.sub(r"[$,\s]", "", str(bond_str).strip().upper())
+        if any(t in cleaned for t in ("NOBOND", "NONE", "N/A", "HOLD", "ROR")):
             return 0.0
         try:
             return float(cleaned)
         except (ValueError, TypeError):
             return 0.0
+
+    @classmethod
+    def _format_bond_amount(cls, value) -> str:
+        if value is None or value == "":
+            return "0"
+        if isinstance(value, (int, float)):
+            amount = float(value)
+        else:
+            amount = cls._parse_bond(str(value))
+        if amount <= 0:
+            return "0"
+        if amount.is_integer():
+            return str(int(amount))
+        return f"{amount:.2f}"
 
 
 class _WafBlocked(RuntimeError):

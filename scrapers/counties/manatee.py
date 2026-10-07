@@ -6,7 +6,7 @@ URL: https://manatee-sheriff.revize.com/bookings
 Method: Patchright/Playwright + APE residential (Warren) with office SOCKS fallback
 
 Extracts data directly from the roster table — detail pages are blocked
-by Cloudflare. Requires true US residential egress (see scrapers/cf_browser.py).
+by Cloudflare. Roster has Charge but no bond column (2026-10-07); Bond_Amount stays "0". Requires true US residential egress (see scrapers/cf_browser.py).
 
 HISTORY:
 - v1–v3: Various CF bypass attempts (DrissionPage, Obscura, JailTracker)
@@ -134,6 +134,9 @@ class ManateeCountyScraper(BaseScraper):
                         Arrest_Date=arrest_date,
                         Booking_Date=arrest_date,
                         Charges=charge,
+                        # Revize roster publishes Charge but not bond; detail
+                        # pages are CF-blocked. Do not invent Bond_Amount.
+                        Bond_Amount="0",
                         Facility="Manatee County Jail",
                         Status=custody,
                         Detail_URL=f"{BASE_URL}/bookings/{booking_num}",
