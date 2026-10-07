@@ -217,7 +217,7 @@ Prices can change — if the website and a flyer disagree, **trust the live webs
 ### Create a post
 1. **Create Post**  
 2. Select channels  
-3. Write caption (professional, 24/7 service, phone **(239) 334-2245**)  
+3. Write caption (professional, 24/7 service, phone **(239) 332-2245**)  
 4. Add media (1080×1080 image is safest)  
 5. **Post Now** or **Schedule**
 
@@ -245,7 +245,7 @@ Prices can change — if the website and a flyer disagree, **trust the live webs
 | Client sign links | Paperwork tab or portal |
 | Social | https://social.shamrockbailbonds.biz |
 | School | https://school.shamrockbailbonds.biz |
-| After-hours emergency | **(239) 334-2245** or Slack `#shamrock` |
+| After-hours emergency | **(239) 332-2245** or Slack `#shamrock` |
 
 **Escalate immediately if:**
 - Two defendants could match one cosigner  
