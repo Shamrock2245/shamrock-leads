@@ -157,6 +157,22 @@ def test_harnett_nc_is_candidate_productive():
         in matrix
     )
 
+
+def test_nc_ssw_five_are_candidate_productive():
+    """Citizen Connect BookingID contracts proven 2026-10-07; Health stays unverified until write smoke."""
+    matrix = MATRIX.read_text()
+    for fips, county in (
+        ("065", "Edgecombe"),
+        ("089", "Henderson"),
+        ("163", "Sampson"),
+        ("169", "Stokes"),
+        ("171", "Surry"),
+    ):
+        assert (
+            f"| NC | {fips} | {county} County | Palmetto | registered | candidate_productive |"
+            in matrix
+        )
+
 def test_unvalidated_south_carolina_batch_is_reported_as_fail_closed():
     matrix = MATRIX.read_text()
     for fips, county in (

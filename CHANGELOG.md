@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-07 (NC SSW five Citizen Connect BookingID)
+
+### Changed
+- **Henderson / Sampson / Stokes / Surry / Edgecombe (NC):** proved ordinary public Southern Software Citizen Connect rosters (`AgencyID=HendersonCoNC` / `SampsonCoNC` / `StokesCoNC` / `SurryCoNC` / `EdgecombeCoNC`). `Booking_Number` is source **BookingID** (href / `data-bookingid` / mugshot debug) — never invent keys; never use person `NameID` alone. Live scrapes 196 / 275 / 106 / 317 / 261 unique bookings; charges/bond only when the card publishes them. `SOURCE_CONTRACT_VALIDATED=True`; Health stays **unverified** until write smoke. Evidence + matrix updated (`docs/recon/NC_SSW_FIVE_CITIZEN_CONNECT_2026-10-07.md`). Empty CC agencies and Brunswick Zuercher / Durham / Wayne / P2C holds untouched.
+
 ## [Unreleased] — 2026-10-07 (NC Harnett Citizen Connect BookingID)
 
 ### Changed

@@ -81,7 +81,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | Davie | 🔲 Planned | Zuercher | `davie-so-nc.zuercherportal.com` |
 | Duplin | 🔲 Planned | Southern SW | AgencyID=`DuplinCoNC` |
 | Durham | ⏳ Fail closed — deployed 2026-08-14 | Custom legacy IPS | Prior `www2.dconc.gov` path was stale and unsafe (TLS disabled, broad A–Z submissions, no verified booking-date boundary). Existing scheduled path emits no records until a supported public bulk roster exposes complete identity plus source-issued booking fields. Public production hosts are healthy; no Durham writes or alerts are expected from the safety guard. |
-| Edgecombe | 🔲 Planned | Southern SW | AgencyID=`EdgecombeCoNC` |
+| **Edgecombe** | ✅ Contract proven (unverified Health) | Southern SW Citizen Connect | `AgencyID=EdgecombeCoNC` / JMS=`NC0330000`; Booking_Number=source **BookingID**; 261 live; Health unverified until write smoke (`docs/recon/NC_SSW_FIVE_CITIZEN_CONNECT_2026-10-07.md`) |
 | Forsyth | ⚠ Fail closed | P2C legacy | Official portal access-restricted; see `LEGACY_P2C_SOURCE_SAFETY.md` |
 | Franklin | ⬜ No portal | — | VINE / phone |
 | Gaston | 🔲 Planned | New World | `tepsweb.cityofgastonia.com/NewWorld.InmateInquiry/GastonCounty` |
@@ -93,7 +93,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | Halifax | ✅ Live | DCN | `inmates.halifaxncsheriff.com/dcn/inmates` · shared `dcn_base` (list ≤100 + detail enrich) |
 | **Harnett** | ✅ Contract proven (unverified Health) | Southern SW Citizen Connect | `AgencyID=HarnettCoNC` / JMS=`NC0430000`; Booking_Number=source **BookingID**; no invented keys; Health unverified until write smoke (`docs/recon/NC_HARNETT_CITIZEN_CONNECT_2026-10-07.md`) |
 | Haywood | ⬜ No portal | — | VINE / phone |
-| Henderson | 🔲 Planned | Southern SW | AgencyID=`HendersonCoNC` |
+| **Henderson** | ✅ Contract proven (unverified Health) | Southern SW Citizen Connect | `AgencyID=HendersonCoNC` / JMS=`NC0450000`; Booking_Number=source **BookingID**; 196 live; Health unverified until write smoke (`docs/recon/NC_SSW_FIVE_CITIZEN_CONNECT_2026-10-07.md`) |
 | Hertford | ⬜ No portal | — | VINE / phone |
 | Hoke | 🔲 Planned | Zuercher | `hoke-so-nc.zuercherportal.com` |
 | Hyde | ⬜ No portal | — | VINE / phone |
@@ -140,11 +140,11 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | Rockingham | ⬜ No portal | — | VINE / phone |
 | Rowan | 🔲 Planned | P2C cloud | WAF |
 | Rutherford | 🔲 Planned | Zuercher | `rutherford-so-nc.zuercherportal.com` |
-| Sampson | 🔲 Planned | Southern SW | Prefer SW over legacy DCN IP |
+| **Sampson** | ✅ Contract proven (unverified Health) | Southern SW Citizen Connect | `AgencyID=SampsonCoNC` / JMS=`NC0820000`; Booking_Number=source **BookingID**; 275 live; Health unverified until write smoke (`docs/recon/NC_SSW_FIVE_CITIZEN_CONNECT_2026-10-07.md`) |
 | Scotland | 🔲 Planned | Southern SW | AgencyID=`ScotlandCoNC` |
 | Stanly | ✅ Live | OCV JSON | `myocv.s3…/a109928001/inmates.json` · ~143 |
-| Stokes | 🔲 Planned | Southern SW | AgencyID=`StokesCoNC` |
-| Surry | 🔲 Planned | Southern SW | AgencyID=`SurryCoNC` |
+| **Stokes** | ✅ Contract proven (unverified Health) | Southern SW Citizen Connect | `AgencyID=StokesCoNC` / JMS=`NC0850000`; Booking_Number=source **BookingID**; 106 live; Health unverified until write smoke (`docs/recon/NC_SSW_FIVE_CITIZEN_CONNECT_2026-10-07.md`) |
+| **Surry** | ✅ Contract proven (unverified Health) | Southern SW Citizen Connect | `AgencyID=SurryCoNC` / JMS=`NC0860000`; Booking_Number=source **BookingID**; 317 live; Health unverified until write smoke (`docs/recon/NC_SSW_FIVE_CITIZEN_CONNECT_2026-10-07.md`) |
 | Swain | ⬜ No portal | — | VINE / phone |
 | Transylvania | 🔲 Planned | Southern SW | AgencyID=`TransylvaniaCoNC` |
 | Tyrrell | ⬜ No portal | — | VINE / phone |

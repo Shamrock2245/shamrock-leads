@@ -3835,10 +3835,10 @@
     {
       "state": "NC",
       "county_fips": "065",
-      "passive_recommendation": "fail_closed",
-      "official_source_url": "Not verified",
-      "access_posture": "No official source safely verified in passive review",
-      "evidence_note": "No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://cc.southernsoftware.com/bookingsearch/index.php?AgencyID=EdgecombeCoNC",
+      "access_posture": "Ordinary public HTTPS Southern Software Citizen Connect; GET index AgencyID=EdgecombeCoNC exposes JMSAgencyID=NC0330000; POST fetch_current_confinements.php paginates booking-cards with source BookingID (href / data-bookingid / mugshot debug; NameID is person-level only)",
+      "evidence_note": "2026-10-07 box recon: IDX=1 returns 20 cards each with BookingID (e.g. 94331\u2260NameID 33803); EdgecombeScraper.scrape() \u2192 261 records / 261 unique Booking_Number; charges/bond only when card publishes Bond Total / charge lines. Health stays unverified until write smoke. See docs/recon/NC_SSW_FIVE_CITIZEN_CONNECT_2026-10-07.md."
     },
     {
       "state": "NC",
@@ -3931,10 +3931,10 @@
     {
       "state": "NC",
       "county_fips": "089",
-      "passive_recommendation": "fail_closed",
-      "official_source_url": "Not verified",
-      "access_posture": "No official source safely verified in passive review",
-      "evidence_note": "No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://cc.southernsoftware.com/bookingsearch/index.php?AgencyID=HendersonCoNC",
+      "access_posture": "Ordinary public HTTPS Southern Software Citizen Connect; GET index AgencyID=HendersonCoNC exposes JMSAgencyID=NC0450000; POST fetch_current_confinements.php paginates booking-cards with source BookingID (href / data-bookingid / mugshot debug; NameID is person-level only)",
+      "evidence_note": "2026-10-07 box recon: IDX=1 returns 20 cards each with BookingID (e.g. 97946\u2260NameID 27651); HendersonScraper.scrape() \u2192 196 records / 196 unique Booking_Number; charges/bond only when card publishes Bond Total / charge lines. Health stays unverified until write smoke. See docs/recon/NC_SSW_FIVE_CITIZEN_CONNECT_2026-10-07.md."
     },
     {
       "state": "NC",
@@ -4227,10 +4227,10 @@
     {
       "state": "NC",
       "county_fips": "163",
-      "passive_recommendation": "fail_closed",
-      "official_source_url": "Not verified",
-      "access_posture": "No official source safely verified in passive review",
-      "evidence_note": "No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://cc.southernsoftware.com/bookingsearch/index.php?AgencyID=SampsonCoNC",
+      "access_posture": "Ordinary public HTTPS Southern Software Citizen Connect; GET index AgencyID=SampsonCoNC exposes JMSAgencyID=NC0820000; POST fetch_current_confinements.php paginates booking-cards with source BookingID (href / data-bookingid / mugshot debug; NameID is person-level only)",
+      "evidence_note": "2026-10-07 box recon: IDX=1 returns 20 cards each with BookingID (e.g. 96480\u2260NameID 5060881); SampsonScraper.scrape() \u2192 275 records / 275 unique Booking_Number; charges/bond only when card publishes Bond Total / charge lines. Health stays unverified until write smoke. See docs/recon/NC_SSW_FIVE_CITIZEN_CONNECT_2026-10-07.md."
     },
     {
       "state": "NC",
@@ -4251,18 +4251,18 @@
     {
       "state": "NC",
       "county_fips": "169",
-      "passive_recommendation": "fail_closed",
-      "official_source_url": "Not verified",
-      "access_posture": "No official source safely verified in passive review",
-      "evidence_note": "No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://cc.southernsoftware.com/bookingsearch/index.php?AgencyID=StokesCoNC",
+      "access_posture": "Ordinary public HTTPS Southern Software Citizen Connect; GET index AgencyID=StokesCoNC exposes JMSAgencyID=NC0850000; POST fetch_current_confinements.php paginates booking-cards with source BookingID (href / data-bookingid / mugshot debug; NameID is person-level only)",
+      "evidence_note": "2026-10-07 box recon: IDX=1 returns 20 cards each with BookingID (e.g. 2704\u2260NameID 1682); StokesScraper.scrape() \u2192 106 records / 106 unique Booking_Number; charges/bond only when card publishes Bond Total / charge lines. Health stays unverified until write smoke. See docs/recon/NC_SSW_FIVE_CITIZEN_CONNECT_2026-10-07.md."
     },
     {
       "state": "NC",
       "county_fips": "171",
-      "passive_recommendation": "fail_closed",
-      "official_source_url": "Not verified",
-      "access_posture": "No official source safely verified in passive review",
-      "evidence_note": "No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://cc.southernsoftware.com/bookingsearch/index.php?AgencyID=SurryCoNC",
+      "access_posture": "Ordinary public HTTPS Southern Software Citizen Connect; GET index AgencyID=SurryCoNC exposes JMSAgencyID=NC0860000; POST fetch_current_confinements.php paginates booking-cards with source BookingID (href / data-bookingid / mugshot debug; NameID is person-level only)",
+      "evidence_note": "2026-10-07 box recon: IDX=1 returns 20 cards each with BookingID (e.g. 108431\u2260NameID 8033); SurryScraper.scrape() \u2192 317 records / 317 unique Booking_Number; charges/bond only when card publishes Bond Total / charge lines. Health stays unverified until write smoke. See docs/recon/NC_SSW_FIVE_CITIZEN_CONNECT_2026-10-07.md."
     },
     {
       "state": "NC",
