@@ -124,6 +124,7 @@ jobs:
             tests/test_surety_registry.py \
             tests/test_surety_onboarding.py \
             tests/test_bond_packet_start.py \
+            tests/test_surety_review_fixes.py \
             tests/test_wix_intake_webhook.py \
             tests/test_intake_fanout.py \
             tests/test_kiosk_privacy_and_confirm.py \

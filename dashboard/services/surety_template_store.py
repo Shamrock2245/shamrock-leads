@@ -43,8 +43,14 @@ _TENANT_SLUG = re.compile(r"^[a-z][a-z0-9_]{1,48}$")
 _LOCK = threading.RLock()
 _DRAFTS: Dict[str, Dict[str, Any]] = {}
 _PUBLISHED: Dict[str, List[Dict[str, Any]]] = {}
+_FILES: Dict[str, bytes] = {}
+_AUDIT: List[Dict[str, Any]] = []
 _STORAGE_ROOT: Optional[Path] = None
 _MEMORY_ONLY = os.getenv("SURETY_TEMPLATE_STORE", "").strip().lower() == "memory"
+_LOADED = False
+_MONGO_OVERRIDE: Any = None
+VERSIONS_COLLECTION = "surety_template_versions"
+FILES_COLLECTION = "surety_template_files"
 
 _OSI_PREFIXES = (
     {"prefix": "OSI3", "max_bond_amount": 3000},
@@ -223,14 +229,42 @@ class SuretyTemplateError(ValueError):
 
 def reset_for_tests(storage_root: Optional[Path] = None) -> None:
     """Drop staff drafts. Seeded OSI/Palmetto v1 stay."""
-    global _STORAGE_ROOT, _MEMORY_ONLY
+    global _STORAGE_ROOT, _MEMORY_ONLY, _LOADED, _MONGO_OVERRIDE
     with _LOCK:
         _DRAFTS.clear()
         _PUBLISHED.clear()
+        _FILES.clear()
+        _AUDIT.clear()
+        _LOADED = False
+        _MONGO_OVERRIDE = None
         _MEMORY_ONLY = True
         _STORAGE_ROOT = Path(storage_root) if storage_root else None
         if _STORAGE_ROOT:
             _STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
+
+
+def install_mongo_for_tests(database: Any) -> None:
+    """Point the store at a fake or local database. Does not open a network client."""
+    global _MONGO_OVERRIDE, _MEMORY_ONLY, _LOADED
+    with _LOCK:
+        _MONGO_OVERRIDE = database
+        _MEMORY_ONLY = False
+        _LOADED = False
+
+
+def reload_from_durable() -> None:
+    """Drop process memory and read Mongo, as a fresh container would."""
+    global _LOADED
+    with _LOCK:
+        _DRAFTS.clear()
+        _PUBLISHED.clear()
+        _FILES.clear()
+        _LOADED = False
+    ensure_loaded()
+
+
+def publish_audit_log() -> List[Dict[str, Any]]:
+    return [dict(row) for row in _AUDIT]
 
 
 def _now() -> str:
@@ -261,6 +295,8 @@ def _dev_or_test_store() -> bool:
 
 
 def _use_mongo() -> bool:
+    if _MONGO_OVERRIDE is not None:
+        return True
     if _MEMORY_ONLY:
         return False
     if os.getenv("SURETY_TEMPLATE_STORE", "").strip().lower() == "memory":
@@ -268,7 +304,108 @@ def _use_mongo() -> bool:
     return bool((os.getenv("MONGODB_URI") or "").strip())
 
 
+def _mongo_database():
+    if _MONGO_OVERRIDE is not None:
+        return _MONGO_OVERRIDE
+    if not _use_mongo():
+        return None
+    try:
+        from pymongo import MongoClient
+    except Exception:
+        return None
+    uri = os.getenv("MONGODB_URI") or ""
+    db_name = os.getenv("MONGODB_DB_NAME") or "ShamrockBailDB"
+    try:
+        client = MongoClient(uri, serverSelectionTimeoutMS=1500)
+        return client[db_name]
+    except Exception:
+        return None
+
+
+def _mongo_col():
+    db = _mongo_database()
+    if db is None:
+        return None
+    try:
+        return db[VERSIONS_COLLECTION]
+    except Exception:
+        return None
+
+
+def _as_bytes(raw: Any) -> bytes:
+    if isinstance(raw, bytes):
+        return raw
+    if raw is None:
+        return b""
+    try:
+        return bytes(raw)
+    except Exception:
+        return b""
+
+
+def _load_from_mongo(db) -> None:
+    for doc in db[VERSIONS_COLLECTION].find({}):
+        if not isinstance(doc, Mapping):
+            continue
+        clean = {k: v for k, v in dict(doc).items() if k != "_id"}
+        vid = str(clean.get("version_id") or "").strip()
+        if not vid:
+            continue
+        if clean.get("status") == "draft":
+            _DRAFTS[vid] = clean
+        elif clean.get("status") == "published":
+            sid = str(clean.get("surety_id") or "").strip().lower()
+            if sid:
+                _PUBLISHED.setdefault(sid, []).append(clean)
+    for row in db[FILES_COLLECTION].find({}):
+        if not isinstance(row, Mapping):
+            continue
+        form_id = str(row.get("form_id") or "").strip()
+        blob = _as_bytes(row.get("pdf"))
+        if form_id and blob:
+            _FILES[form_id] = blob
+
+
+def _upsert_version(doc: Mapping[str, Any]) -> None:
+    db = _mongo_database()
+    if db is None:
+        return
+    payload = json.loads(json.dumps(doc, default=str))
+    payload.pop("_id", None)
+    db[VERSIONS_COLLECTION].replace_one(
+        {"version_id": payload.get("version_id")},
+        payload,
+        upsert=True,
+    )
+
+
+def _upsert_file(form_id: str, version_id: str, filename: str, pdf_bytes: bytes) -> None:
+    db = _mongo_database()
+    if db is None:
+        if not _dev_or_test_store():
+            raise SuretyTemplateError(
+                "Upload refused: durable template storage is unavailable. "
+                "Set MONGODB_URI. Uploaded PDFs are not kept on container disk.",
+                code="durable_storage_unavailable",
+            )
+        return
+    db[FILES_COLLECTION].replace_one(
+        {"form_id": form_id},
+        {
+            "form_id": form_id,
+            "version_id": version_id,
+            "filename": filename,
+            "sha256": hashlib.sha256(pdf_bytes).hexdigest(),
+            "pdf": pdf_bytes,
+        },
+        upsert=True,
+    )
+
+
 def _persist_local() -> None:
+    """Dev/test JSON cache only. Production is read-only and has no data volume."""
+    if not _dev_or_test_store():
+        return
     if _MEMORY_ONLY and _STORAGE_ROOT is None:
         return
     root = _default_root()
@@ -291,27 +428,33 @@ def _load_local() -> None:
         _PUBLISHED.update(payload["published"])
 
 
-def _mongo_col():
-    if not _use_mongo():
-        return None
-    try:
-        from pymongo import MongoClient
-    except Exception:
-        return None
-    uri = os.getenv("MONGODB_URI") or ""
-    db_name = os.getenv("MONGODB_DB_NAME") or "ShamrockBailDB"
-    try:
-        client = MongoClient(uri, serverSelectionTimeoutMS=1500)
-        return client[db_name]["surety_template_versions"]
-    except Exception:
-        return None
-
-
 def ensure_loaded() -> None:
+    """Load drafts, published versions, and PDF bytes.
+
+    Mongo is the durable store. The local JSON file is a dev/test cache.
+    A production process does not require /app/data.
+    """
+    global _LOADED
     with _LOCK:
-        if _DRAFTS or _PUBLISHED:
+        if _LOADED:
             return
-        _load_local()
+        _LOADED = True
+        db = _mongo_database()
+        if db is not None:
+            try:
+                _load_from_mongo(db)
+            except SuretyTemplateError:
+                raise
+            except Exception as exc:
+                if not _dev_or_test_store():
+                    raise SuretyTemplateError(
+                        "Template store could not be read from MongoDB.",
+                        code="durable_storage_unavailable",
+                    ) from exc
+        elif not _dev_or_test_store():
+            return
+        if _dev_or_test_store():
+            _load_local()
 
 
 def _public_version(doc: Mapping[str, Any]) -> Dict[str, Any]:
@@ -633,6 +776,8 @@ def create_draft(
     with _LOCK:
         _DRAFTS[doc_id] = doc
         _persist_local()
+        if _use_mongo():
+            _upsert_version(doc)
     return _public_version(doc)
 
 
@@ -660,11 +805,16 @@ def add_form(version_id: str, filename: str, pdf_bytes: bytes) -> Dict[str, Any]
         inspected = inspect_pdf(pdf_bytes)
         form_id = str(uuid.uuid4())
         safe_name = Path(filename or "form.pdf").name.replace("\x00", "")[:180] or "form.pdf"
-        root = _default_root()
-        form_dir = root / "forms" / doc["version_id"]
-        form_dir.mkdir(parents=True, exist_ok=True)
-        path = form_dir / f"{form_id}.pdf"
-        path.write_bytes(pdf_bytes)
+        _FILES[form_id] = pdf_bytes
+        _upsert_file(form_id, doc["version_id"], safe_name, pdf_bytes)
+        storage_path = ""
+        if _dev_or_test_store() and not (_MEMORY_ONLY and _STORAGE_ROOT is None):
+            root = _default_root()
+            form_dir = root / "forms" / doc["version_id"]
+            form_dir.mkdir(parents=True, exist_ok=True)
+            path = form_dir / f"{form_id}.pdf"
+            path.write_bytes(pdf_bytes)
+            storage_path = str(path)
         role = "repeat_per_charge" if not doc["forms"] else "static"
         form = {
             "form_id": form_id,
@@ -673,7 +823,8 @@ def add_form(version_id: str, filename: str, pdf_bytes: bytes) -> Dict[str, Any]
             "sha256": hashlib.sha256(pdf_bytes).hexdigest(),
             "kind": inspected["kind"],
             "role": role,
-            "storage_path": str(path),
+            "storage": "mongo" if _use_mongo() else "memory",
+            "storage_path": storage_path,
             "page_count": inspected["page_count"],
             "fields": inspected["fields"],
             "placed_fields": [],
@@ -685,6 +836,8 @@ def add_form(version_id: str, filename: str, pdf_bytes: bytes) -> Dict[str, Any]
         if repeat.get("enabled") and not repeat.get("form_id"):
             repeat["form_id"] = form_id
         _persist_local()
+        if _use_mongo():
+            _upsert_version(doc)
         return _public_version(doc)
 
 
@@ -736,6 +889,8 @@ def update_draft(version_id: str, patch: Mapping[str, Any]) -> Dict[str, Any]:
                         if is_canonical_id(field.get("suggestion")):
                             field["canonical"] = field["suggestion"]
         _persist_local()
+        if _use_mongo():
+            _upsert_version(doc)
         return _public_version(doc)
 
 
@@ -866,13 +1021,23 @@ def load_form_bytes(form: Mapping[str, Any]) -> bytes:
         if not path.exists():
             raise SuretyTemplateError(f"Template PDF missing: {repo_path}", code="pdf_missing")
         return path.read_bytes()
+    form_id = str(form.get("form_id") or "").strip()
+    cached = _FILES.get(form_id)
+    if cached:
+        return cached
+    db = _mongo_database()
+    if db is not None and form_id:
+        row = db[FILES_COLLECTION].find_one({"form_id": form_id})
+        blob = _as_bytes((row or {}).get("pdf")) if isinstance(row, Mapping) else b""
+        if blob:
+            _FILES[form_id] = blob
+            return blob
     storage = str(form.get("storage_path") or "").strip()
-    if not storage:
-        raise SuretyTemplateError("Form PDF is not stored.", code="pdf_missing")
-    path = Path(storage)
-    if not path.exists():
-        raise SuretyTemplateError("Uploaded PDF is missing on disk.", code="pdf_missing")
-    return path.read_bytes()
+    if storage and _dev_or_test_store():
+        path = Path(storage)
+        if path.exists():
+            return path.read_bytes()
+    raise SuretyTemplateError("Uploaded PDF is not in durable storage.", code="pdf_missing")
 
 
 def publish_draft(version_id: str, actor: str) -> Dict[str, Any]:
@@ -887,8 +1052,13 @@ def publish_draft(version_id: str, actor: str) -> Dict[str, Any]:
                 code="required_unmapped",
             )
         sid = doc["surety_id"]
-        existing_nums = [int(r.get("version") or 0) for r in published_versions(sid)]
-        nxt = max(existing_nums or [0]) + 1
+        prior = [
+            int(r.get("version") or 0)
+            for r in published_versions(sid)
+            if r.get("status") == "published"
+        ]
+        old_version = max(prior) if prior else None
+        nxt = max(prior or [0]) + 1
         published = json.loads(json.dumps(doc))
         published["status"] = "published"
         published["immutable"] = True
@@ -919,28 +1089,87 @@ def publish_draft(version_id: str, actor: str) -> Dict[str, Any]:
                     "Publish refused: durable template storage is unavailable.",
                     code="durable_storage_unavailable",
                 ) from exc
+        for form in published.get("forms") or []:
+            if not isinstance(form, dict):
+                continue
+            form_id = str(form.get("form_id") or "")
+            if form.get("repo_path"):
+                continue
+            blob = _FILES.get(form_id) or b""
+            if not blob and _dev_or_test_store():
+                disk = str(form.get("storage_path") or "")
+                if disk and Path(disk).exists():
+                    blob = Path(disk).read_bytes()
+                    _FILES[form_id] = blob
+            if not blob:
+                raise SuretyTemplateError(
+                    "Publish refused: an uploaded PDF is not in durable storage.",
+                    code="durable_storage_unavailable",
+                )
+            if not _dev_or_test_store() or _use_mongo():
+                _upsert_file(form_id, published["version_id"], str(form.get("filename") or ""), blob)
+            form["storage"] = "mongo" if _use_mongo() else form.get("storage") or "memory"
+            if not _dev_or_test_store():
+                form["storage_path"] = ""
         _PUBLISHED.setdefault(sid, []).append(published)
         _DRAFTS.pop(doc["version_id"], None)
         _persist_local()
         try:
-            if durable is not None:
-                durable.insert_one(json.loads(json.dumps(published)))
-            elif _use_mongo():
-                col = _mongo_col()
-                if col is not None:
-                    col.insert_one(json.loads(json.dumps(published)))
+            if durable is not None or _use_mongo():
+                _upsert_version(published)
+            _write_publish_audit(
+                actor=str(published.get("published_by") or actor),
+                surety_id=sid,
+                version_id=published["version_id"],
+                old_version=old_version,
+                new_version=nxt,
+            )
         except Exception as exc:
             _PUBLISHED[sid].pop()
             if not _PUBLISHED[sid]:
                 _PUBLISHED.pop(sid, None)
             _DRAFTS[doc["version_id"]] = doc
             _persist_local()
-            if durable is not None:
+            if durable is not None or not _dev_or_test_store():
                 raise SuretyTemplateError(
                     "Publish refused: durable template storage did not accept the version.",
                     code="durable_storage_unavailable",
                 ) from exc
         return _public_version(published)
+
+
+def _write_publish_audit(
+    *,
+    actor: str,
+    surety_id: str,
+    version_id: str,
+    old_version: Optional[int],
+    new_version: int,
+) -> None:
+    """Immutable publish record: who published, and which version replaced which."""
+    event = {
+        "event_type": "surety_template_published",
+        "entity_type": "surety_template",
+        "entity_id": version_id,
+        "action": "publish",
+        "actor": str(actor or "staff")[:120],
+        "actor_type": "staff",
+        "surety_id": surety_id,
+        "version_id": version_id,
+        "old_version": old_version,
+        "new_version": new_version,
+        "timestamp": _now(),
+    }
+    _AUDIT.append(dict(event))
+    db = _mongo_database()
+    if db is None:
+        if _dev_or_test_store():
+            return
+        raise SuretyTemplateError(
+            "Publish refused: audit storage is unavailable.",
+            code="durable_storage_unavailable",
+        )
+    db["audit_events"].insert_one(dict(event))
 
 
 def suggest_for_unmapped(form: Mapping[str, Any]) -> List[Dict[str, Any]]:

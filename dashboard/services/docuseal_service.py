@@ -1633,11 +1633,16 @@ class DocuSealService:
             bond_data.get("surety_id") or bond_data.get("surety") or ""
         ).strip().lower()
         if surety_for_alias:
+            from dashboard.services.surety_packet_fill import (
+                SuretyDataMissing,
+                docuseal_mapped_aliases,
+            )
             try:
-                from dashboard.services.surety_packet_fill import docuseal_mapped_aliases
                 for key, val in docuseal_mapped_aliases(surety_for_alias, bond_data).items():
                     if key not in raw_values and str(val or "").strip():
                         raw_values[key] = val
+            except SuretyDataMissing:
+                raise
             except Exception:
                 logger.warning("[docuseal] published field aliases skipped for surety=%s", surety_for_alias)
 

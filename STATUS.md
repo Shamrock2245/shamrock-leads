@@ -26,7 +26,9 @@ Publishing is blocked until defendant identity, county, booking number, case num
 
 Versions carry `owner_tenant_id` (null = platform-owned, same name as the SaaS tenancy plan) and `entitled_tenant_ids`. `resolve_active_published_template(surety, tenant)` picks an agency-private version for that tenant, otherwise a platform version that lists the tenant. The default tenant is `shamrock`. OSI and Palmetto seeds stay platform-owned and entitled to shamrock, so Write Bond for shamrock is unchanged, including env template ids. Another tenant does not inherit those env ids. Write Bond submits through `start_indemnitor_bond_packet`, which re-runs the binding and POA gates before DocuSeal. Outside dev/test (`ENV` of test, dev, development, or local, or `SURETY_TEMPLATE_STORE=memory`), publish fails closed unless Mongo accepts the version.
 
-Tests: `tests/test_surety_onboarding.py` (included in `.github/workflows/ci.yml`).
+Published versions and uploaded PDFs live in Mongo (`surety_template_versions` and `surety_template_files`). A fresh process loads both in `ensure_loaded()`. The production dashboard does not write `/app/data`. POA tier lookup and prefix resolution use each published version's prefixes. An explicit third-party surety is never rewritten to OSI. Mapped DocuSeal submissions fail closed when a required mapped value is empty, including a premium taken from `prefill_values_from_bond`. The production packet includes every uploaded form. Publish writes an `audit_events` row with the actor and the old→new version. The Write Bond picker lists published carriers and keeps their surety id.
+
+Tests: `tests/test_surety_onboarding.py`, `tests/test_bond_packet_start.py`, `tests/test_surety_review_fixes.py` (included in `.github/workflows/ci.yml`).
 
 ## BailSafe P0 slice A2 — Missed check-in evidence pack (2026-10-07)
 

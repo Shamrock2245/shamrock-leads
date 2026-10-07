@@ -415,17 +415,99 @@ def render_preview(version: Mapping[str, Any]) -> bytes:
         out.close()
 
 
+def _with_computed_premium(bond_data: Mapping[str, Any]) -> Dict[str, Any]:
+    """Copy bond data, filling premium from DocuSeal's statutory prefill when absent.
+
+    The fail-closed resolver does not invent a premium. DocuSeal already
+    computes one from the bond amount. The mapped-field gate uses that
+    computed value, and still fails when the computation is empty.
+    """
+    data = dict(bond_data or {})
+    if str(data.get("premium_amount") or data.get("premium") or "").strip():
+        return data
+    from dashboard.services.docuseal_service import DocuSealService
+
+    prefill = DocuSealService.prefill_values_from_bond(data)
+    premium = str(prefill.get("premium_amount") or "").strip()
+    if premium:
+        data["premium_amount"] = premium
+    return data
+
+
+def assert_mapped_submission_ready(surety_id: str, bond_data: Mapping[str, Any]) -> None:
+    """Fail closed before DocuSeal when a mapped required value is empty."""
+    version = active_published(surety_id)
+    if not version or version.get("docuseal_field_mode") != "mapped":
+        return
+    data = _with_computed_premium(bond_data)
+    canonical = resolve_fail_closed_canonical(data)
+    missing: List[str] = []
+    for form in version.get("forms") or []:
+        if isinstance(form, Mapping):
+            missing.extend(_missing_fail_closed(form, canonical))
+    if missing:
+        raise SuretyDataMissing(sorted(set(missing)))
+
+
 def docuseal_mapped_aliases(surety_id: str, bond_data: Mapping[str, Any]) -> Dict[str, str]:
     """Extra DocuSeal value keys for a published mapped template.
 
     OSI/Palmetto seeds use canonical_prefill and return nothing, so the
-    existing prefill dict is unchanged. Empty values are omitted.
+    existing prefill dict is unchanged. Mapped sureties fail closed when a
+    required value is empty, including a premium DocuSeal would have computed.
     """
     version = active_published(surety_id)
     if not version or version.get("docuseal_field_mode") != "mapped":
         return {}
-    try:
-        values = field_values_for_version(version, bond_data, strict=False)
-    except SuretyTemplateError:
-        return {}
+    data = _with_computed_premium(bond_data)
+    assert_mapped_submission_ready(surety_id, data)
+    values = field_values_for_version(version, data, strict=True)
     return {key: val for key, val in values.items() if str(val or "").strip()}
+
+
+def production_packet_parts(surety_id: str, bond_data: Mapping[str, Any]) -> Optional[List[bytes]]:
+    """Every uploaded form for a mapped surety.
+
+    Legacy OSI/Palmetto recipes return None so the caller keeps the
+    one-PDF-per-charge appearance path. Repeat forms are emitted once per
+    charge. Other forms are emitted once.
+    """
+    version = active_published(surety_id)
+    if not version:
+        return None
+    profile = str(version.get("value_profile") or "")
+    if profile in ("legacy_osi_appearance", "legacy_palmetto_appearance"):
+        return None
+    from dashboard.bond_pdf_service import normalize_charge_rows
+
+    forms = [f for f in (version.get("forms") or []) if isinstance(f, Mapping)]
+    if not forms:
+        raise SuretyTemplateError("Published version has no PDF.", code="pdf_missing")
+    settings = version.get("settings") if isinstance(version.get("settings"), Mapping) else {}
+    repeat = settings.get("repeat_per_charge") if isinstance(settings.get("repeat_per_charge"), Mapping) else {}
+    repeat_on = bool(repeat.get("enabled"))
+    repeat_id = str(repeat.get("form_id") or "")
+    rows = normalize_charge_rows(dict(bond_data))
+    charge_count = max(1, len(rows))
+    data = _with_computed_premium(bond_data)
+    parts: List[bytes] = []
+    for form in forms:
+        is_repeat = form.get("role") == "repeat_per_charge" or (
+            repeat_id and form.get("form_id") == repeat_id
+        )
+        repeats = charge_count if repeat_on and is_repeat else 1
+        for index in range(repeats):
+            sliced = _charge_slice(data, index) if is_repeat else dict(data)
+            if is_repeat and index < len(rows):
+                row = rows[index]
+                sliced["charge"] = row.get("charge") or sliced.get("charge") or ""
+                sliced["bond_amount"] = row.get("amount", sliced.get("bond_amount"))
+                sliced["case_number"] = row.get("case_number") or sliced.get("case_number") or ""
+                sliced["poa_number"] = row.get("poa_number") or sliced.get("poa_number") or ""
+            canonical = resolve_fail_closed_canonical(sliced)
+            missing = _missing_fail_closed(form, canonical)
+            if missing:
+                raise SuretyDataMissing(sorted(set(missing)))
+            values = project_form_values(form, canonical)
+            parts.append(fill_pdf_bytes(load_form_bytes(form), values, form, stamp_sample=False))
+    return parts

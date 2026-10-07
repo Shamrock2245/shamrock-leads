@@ -230,6 +230,65 @@ def drive_folder_label(raw: object) -> Optional[str]:
     return label or None
 
 
+def published_poa_tiers(surety_id: str) -> List[tuple]:
+    """(max_bond_amount, prefix) from the active published version, smallest cap first."""
+    try:
+        from dashboard.services.surety_template_store import published_poa_prefixes
+    except Exception:
+        return []
+    rows = []
+    for row in published_poa_prefixes(surety_id):
+        prefix = str(row.get("prefix") or "").strip().upper()
+        try:
+            cap = float(row.get("max_bond_amount") or 0)
+        except (TypeError, ValueError):
+            continue
+        if prefix and cap > 0:
+            rows.append((cap, prefix))
+    rows.sort(key=lambda item: (item[0], item[1]))
+    return rows
+
+
+def _prefix_matches(clean: str, prefix: str) -> bool:
+    if not clean or not prefix:
+        return False
+    if clean == prefix:
+        return True
+    if clean.startswith(prefix) and not clean[len(prefix)].isalnum():
+        return True
+    return False
+
+
+def surety_for_poa_prefix(prefix: str) -> Optional[str]:
+    """Surety that owns this prefix on a published version, else OSI/Palmetto by pattern."""
+    clean = str(prefix or "").strip().upper()
+    if not clean:
+        return None
+    try:
+        from dashboard.services.surety_template_store import list_onboarding
+        rows = list_onboarding()
+    except Exception:
+        rows = []
+    best: Optional[tuple] = None
+    for row in rows:
+        if not row.get("published_version"):
+            continue
+        sid = str(row.get("surety_id") or "")
+        for tier in row.get("poa_prefixes") or []:
+            pfx = str((tier or {}).get("prefix") or "").strip().upper()
+            if not _prefix_matches(clean, pfx):
+                continue
+            if best is None or len(pfx) > best[0]:
+                best = (len(pfx), sid)
+    if best:
+        return best[1]
+    if clean.startswith("PSC") or clean.startswith("PAL"):
+        return "palmetto"
+    if clean.startswith("OSI") or "OSI-P" in clean:
+        return "osi"
+    return None
+
+
 def picker_options() -> List[Dict[str, Any]]:
     """Rows for the Write Bond surety picker. Inactive rows render greyed out.
 

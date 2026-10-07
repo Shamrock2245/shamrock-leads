@@ -1016,7 +1016,15 @@ def generate_appearance_bonds(bond_data: dict, template: Optional[str] = None) -
         if not charge_data["case_number"]:
             missing_case.append(row["index"])
 
-        from dashboard.services.surety_packet_fill import fill_published_appearance
+        from dashboard.services.surety_packet_fill import (
+            fill_published_appearance,
+            production_packet_parts,
+        )
+
+        if not pdfs:
+            mapped_parts = production_packet_parts(surety, bond_data)
+            if mapped_parts is not None:
+                return mapped_parts
 
         pdf_bytes = fill_published_appearance(surety, charge_data)
         pdfs.append(pdf_bytes)
