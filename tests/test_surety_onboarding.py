@@ -145,6 +145,9 @@ def test_osi_and_palmetto_seeds_pass_publish_validation():
         check = validate_publish(store.seed_version(sid))
         assert check["ok"], check["missing"]
         assert check["missing"] == []
+        seed = store.seed_version(sid)
+        assert seed["owner_tenant_id"] is None
+        assert seed["entitled_tenant_ids"] == ["shamrock"]
 
 
 def test_publish_blocks_when_required_canonical_is_unmapped():
@@ -407,3 +410,81 @@ def test_onboarding_routes_are_staff_gated(monkeypatch):
         headers=headers,
     )
     assert seeded.status_code == 409
+
+
+def test_shamrock_keeps_platform_seed_other_tenant_does_not():
+    shamrock = store.resolve_active_published_template("osi", "shamrock")
+    assert shamrock["version_id"] == "seed-osi-v1"
+    assert shamrock["owner_tenant_id"] is None
+    assert store.resolve_active_published_template("palmetto")["version_id"] == "seed-palmetto-v1"
+    assert store.resolve_active_published_template("osi", "otheragency") is None
+    with pytest.raises(store.SuretyTemplateError):
+        store.resolve_active_published_template("osi", "Not A Tenant")
+
+
+def test_private_template_does_not_replace_shamrock_platform_version():
+    platform = _publish_suggested("sharedcarrier", "42")
+    assert platform["owner_tenant_id"] is None
+    assert platform["entitled_tenant_ids"] == ["shamrock"]
+    private = store.create_draft(
+        surety_id="sharedcarrier",
+        label="Shared Carrier private",
+        poa_prefixes=[{"prefix": "SMP5", "max_bond_amount": 5000}],
+        docuseal_template_id="99",
+        owner_tenant_id="otheragency",
+    )
+    store.add_form(private["version_id"], "packet.pdf", _acroform(SUGGESTED_FIELDS))
+    store.update_draft(private["version_id"], {"use_suggestions": True})
+    published_private = store.publish_draft(private["version_id"], "tester")
+    assert published_private["owner_tenant_id"] == "otheragency"
+    assert published_private["version"] == 2
+
+    shamrock_doc = store.resolve_active_published_template("sharedcarrier", "shamrock")
+    other_doc = store.resolve_active_published_template("sharedcarrier", "otheragency")
+    assert shamrock_doc["docuseal_template_id"] == "42"
+    assert other_doc["docuseal_template_id"] == "99"
+    assert store.active_published("sharedcarrier")["version"] == 1
+
+    from dashboard.services.docuseal_service import resolve_template_id_for_surety
+    with patch.dict(os.environ, {"DOCUSEAL_TEMPLATE_ID_OSI": "1"}):
+        assert resolve_template_id_for_surety("osi") == "1"
+        assert resolve_template_id_for_surety("osi", "shamrock") == "1"
+        assert resolve_template_id_for_surety("osi", "otheragency") is None
+    assert resolve_template_id_for_surety("sharedcarrier") == "42"
+    assert resolve_template_id_for_surety("sharedcarrier", "otheragency") == "99"
+
+
+def test_publish_fails_closed_without_durable_storage_outside_dev(monkeypatch):
+    draft = store.create_draft(
+        surety_id="durablecheck",
+        label="Durable Check",
+        poa_prefixes=[{"prefix": "DRB5", "max_bond_amount": 5000}],
+    )
+    store.add_form(draft["version_id"], "packet.pdf", _acroform(SUGGESTED_FIELDS))
+    store.update_draft(draft["version_id"], {"use_suggestions": True})
+    store._MEMORY_ONLY = False
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("SURETY_TEMPLATE_STORE", "mongo")
+    monkeypatch.delenv("MONGODB_URI", raising=False)
+    with pytest.raises(store.SuretyTemplateError) as raised:
+        store.publish_draft(draft["version_id"], "tester")
+    assert raised.value.code == "durable_storage_unavailable"
+    assert store.get_version(draft["version_id"])["status"] == "draft"
+    assert store.active_published("durablecheck") is None
+
+
+def test_publish_allows_memory_when_env_is_test(monkeypatch):
+    draft = store.create_draft(
+        surety_id="devpublish",
+        label="Dev Publish",
+        poa_prefixes=[{"prefix": "DVP5", "max_bond_amount": 5000}],
+    )
+    store.add_form(draft["version_id"], "packet.pdf", _acroform(SUGGESTED_FIELDS))
+    store.update_draft(draft["version_id"], {"use_suggestions": True})
+    store._MEMORY_ONLY = False
+    monkeypatch.setenv("ENV", "test")
+    monkeypatch.setenv("SURETY_TEMPLATE_STORE", "mongo")
+    monkeypatch.delenv("MONGODB_URI", raising=False)
+    published = store.publish_draft(draft["version_id"], "tester")
+    assert published["status"] == "published"
+    assert published["version"] == 1

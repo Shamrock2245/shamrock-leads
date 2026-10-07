@@ -7,6 +7,16 @@ in a process store plus an optional JSON file under data/surety_onboarding/.
 Mongo is used when MONGODB_URI is set and SURETY_TEMPLATE_STORE is not
 "memory". Tests force the memory store.
 
+Outside dev/test, publish refuses to succeed unless that Mongo insert works.
+A version that exists only in process memory or in the container JSON file
+is not a published template.
+
+Tenant fields (aligned with the SaaS foundation's tenant_id slug and
+owner_tenant_id): owner_tenant_id null means platform-owned. entitled_tenant_ids
+lists which tenants may use a platform template. A set owner_tenant_id is an
+agency-private template, visible only to that tenant. The default tenant is
+shamrock. resolve_active_published_template(surety, tenant) is the lookup.
+
 DocuSeal template ids: a published version may store one. Resolution still
 prefers DOCUSEAL_TEMPLATE_ID_* env vars for registry sureties, so production
 OSI=1 and Palmetto=5 keep working when those env vars are set. Seeded
@@ -17,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -24,6 +35,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
 from dashboard.services.surety_canonical import is_canonical_id, suggest_canonical, validate_publish
+
+# Same slug as dashboard/tenancy on the SaaS branch: tenant_id = "shamrock".
+DEFAULT_TENANT_ID = "shamrock"
+_TENANT_SLUG = re.compile(r"^[a-z][a-z0-9_]{1,48}$")
 
 _LOCK = threading.RLock()
 _DRAFTS: Dict[str, Dict[str, Any]] = {}
@@ -109,6 +124,9 @@ def _seed_version(
         "published_at": "2026-10-07T00:00:00+00:00",
         "published_by": "migration",
         "created_at": "2026-10-07T00:00:00+00:00",
+        # Platform catalog. Shamrock is entitled; other tenants are not until listed.
+        "owner_tenant_id": None,
+        "entitled_tenant_ids": [DEFAULT_TENANT_ID],
     }
 
 
@@ -229,6 +247,19 @@ def _state_path() -> Path:
     return _default_root() / "versions.json"
 
 
+def _dev_or_test_store() -> bool:
+    """Local JSON / memory is enough only for dev and test.
+
+    Production (any other ENV, including unset) must insert into Mongo.
+    """
+    if _MEMORY_ONLY:
+        return True
+    if os.getenv("SURETY_TEMPLATE_STORE", "").strip().lower() == "memory":
+        return True
+    env = (os.getenv("ENV") or os.getenv("APP_ENV") or "").strip().lower()
+    return env in {"test", "dev", "development", "local"}
+
+
 def _use_mongo() -> bool:
     if _MEMORY_ONLY:
         return False
@@ -318,11 +349,84 @@ def published_versions(surety_id: str) -> List[Dict[str, Any]]:
     return rows
 
 
-def active_published(surety_id: str) -> Optional[Dict[str, Any]]:
-    rows = [r for r in published_versions(surety_id) if r.get("status") == "published"]
-    if not rows:
+def normalize_tenant_id(raw: object, *, default: str = DEFAULT_TENANT_ID) -> str:
+    """Tenant slug. Blank becomes the default. Anything else must match ^[a-z][a-z0-9_]{1,48}$."""
+    text = str(raw or "").strip().lower() or default
+    if not _TENANT_SLUG.fullmatch(text):
+        raise SuretyTemplateError(
+            "tenant id must be a lowercase slug.",
+            code="invalid_tenant",
+        )
+    return text
+
+
+def _owner_tenant_id(doc: Mapping[str, Any]) -> Optional[str]:
+    """Null owner is platform-owned. Accept owner_tenant as an alias of owner_tenant_id."""
+    raw = doc.get("owner_tenant_id", doc.get("owner_tenant"))
+    if raw in (None, "", "null"):
         return None
-    return rows[-1]
+    return normalize_tenant_id(raw)
+
+
+def _entitled_tenant_ids(doc: Mapping[str, Any]) -> List[str]:
+    """Who may use a platform template. A missing list means shamrock only."""
+    raw = doc.get("entitled_tenant_ids")
+    if raw is None:
+        raw = doc.get("entitlements")
+    if not isinstance(raw, list):
+        return [DEFAULT_TENANT_ID]
+    out = []
+    for item in raw:
+        slug = str(item or "").strip().lower()
+        if not slug:
+            continue
+        if not _TENANT_SLUG.fullmatch(slug):
+            raise SuretyTemplateError(
+                "entitled tenant id must be a lowercase slug.",
+                code="invalid_tenant",
+            )
+        if slug not in out:
+            out.append(slug)
+    return out
+
+
+def _version_visible_to(doc: Mapping[str, Any], tenant_id: str) -> bool:
+    if doc.get("status") != "published":
+        return False
+    owner = _owner_tenant_id(doc)
+    if owner:
+        return owner == tenant_id
+    return tenant_id in _entitled_tenant_ids(doc)
+
+
+def resolve_active_published_template(
+    surety_id: str,
+    tenant_id: str = DEFAULT_TENANT_ID,
+) -> Optional[Dict[str, Any]]:
+    """Active published template for (surety, tenant).
+
+    An agency-private version (owner_tenant_id == tenant) wins over the
+    platform catalog. A platform version (owner_tenant_id null) is returned
+    only when tenant_id is in entitled_tenant_ids. Shamrock's seeded OSI and
+    Palmetto versions resolve here. Another tenant does not see them until
+    it is listed, or until it has its own private version.
+    """
+    tenant = normalize_tenant_id(tenant_id)
+    visible = [
+        row for row in published_versions(surety_id)
+        if _version_visible_to(row, tenant)
+    ]
+    if not visible:
+        return None
+    private = [row for row in visible if _owner_tenant_id(row) == tenant]
+    pool = private or visible
+    pool.sort(key=lambda row: int(row.get("version") or 0))
+    return pool[-1]
+
+
+def active_published(surety_id: str) -> Optional[Dict[str, Any]]:
+    """Newest published version the default tenant (shamrock) may use."""
+    return resolve_active_published_template(surety_id, DEFAULT_TENANT_ID)
 
 
 def has_published_version(surety_id: str) -> bool:
@@ -463,6 +567,25 @@ def _clean_rect(raw: object) -> Optional[List[float]]:
     return rect
 
 
+def _clean_owner_tenant_id(raw: object) -> Optional[str]:
+    if raw in (None, "", "null"):
+        return None
+    return normalize_tenant_id(raw)
+
+
+def _clean_entitled_tenant_ids(raw: object, *, default_shamrock: bool) -> List[str]:
+    if raw is None and default_shamrock:
+        return [DEFAULT_TENANT_ID]
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise SuretyTemplateError(
+            "entitled_tenant_ids must be a list of tenant slugs.",
+            code="invalid_tenant",
+        )
+    return _entitled_tenant_ids({"entitled_tenant_ids": raw})
+
+
 def create_draft(
     *,
     surety_id: str,
@@ -471,6 +594,8 @@ def create_draft(
     repeat_per_charge: bool = True,
     docuseal_template_id: str = "",
     drive_folder_label: str = "",
+    owner_tenant_id: object = None,
+    entitled_tenant_ids: Optional[list] = None,
 ) -> Dict[str, Any]:
     ensure_loaded()
     sid = _clean_surety_id(surety_id)
@@ -500,6 +625,10 @@ def create_draft(
         "created_at": _now(),
         "published_at": None,
         "published_by": None,
+        "owner_tenant_id": _clean_owner_tenant_id(owner_tenant_id),
+        "entitled_tenant_ids": _clean_entitled_tenant_ids(
+            entitled_tenant_ids, default_shamrock=True
+        ),
     }
     with _LOCK:
         _DRAFTS[doc_id] = doc
@@ -569,6 +698,14 @@ def update_draft(version_id: str, patch: Mapping[str, Any]) -> Dict[str, Any]:
             doc["label"] = label[:120]
         if "docuseal_template_id" in patch:
             doc["docuseal_template_id"] = str(patch.get("docuseal_template_id") or "").strip()
+        if "owner_tenant_id" in patch or "owner_tenant" in patch:
+            raw_owner = patch.get("owner_tenant_id", patch.get("owner_tenant"))
+            doc["owner_tenant_id"] = _clean_owner_tenant_id(raw_owner)
+        if "entitled_tenant_ids" in patch or "entitlements" in patch:
+            raw_entitled = patch.get("entitled_tenant_ids", patch.get("entitlements"))
+            doc["entitled_tenant_ids"] = _clean_entitled_tenant_ids(
+                raw_entitled, default_shamrock=False
+            )
         if "drive_folder_label" in patch:
             doc["drive_folder_label"] = str(patch.get("drive_folder_label") or "").strip()
         if "poa_prefixes" in patch:
@@ -759,15 +896,50 @@ def publish_draft(version_id: str, actor: str) -> Dict[str, Any]:
         published["published_at"] = _now()
         published["published_by"] = str(actor or "staff")[:120]
         published["publish_warnings"] = check["warnings"]
+        published["owner_tenant_id"] = _clean_owner_tenant_id(doc.get("owner_tenant_id"))
+        published["entitled_tenant_ids"] = _clean_entitled_tenant_ids(
+            doc.get("entitled_tenant_ids"), default_shamrock=True
+        )
+        # Refuse before mutating the draft. A failed ping must not leave a
+        # published version that exists only in memory or on container disk.
+        durable = None
+        if not _dev_or_test_store():
+            durable = _mongo_col()
+            if durable is None:
+                raise SuretyTemplateError(
+                    "Publish refused: durable template storage is unavailable. "
+                    "Set MONGODB_URI. A published version is not kept in memory "
+                    "or on container disk.",
+                    code="durable_storage_unavailable",
+                )
+            try:
+                durable.database.client.admin.command("ping")
+            except Exception as exc:
+                raise SuretyTemplateError(
+                    "Publish refused: durable template storage is unavailable.",
+                    code="durable_storage_unavailable",
+                ) from exc
         _PUBLISHED.setdefault(sid, []).append(published)
         _DRAFTS.pop(doc["version_id"], None)
         _persist_local()
         try:
-            col = _mongo_col()
-            if col is not None:
-                col.insert_one(json.loads(json.dumps(published)))
-        except Exception:
-            pass
+            if durable is not None:
+                durable.insert_one(json.loads(json.dumps(published)))
+            elif _use_mongo():
+                col = _mongo_col()
+                if col is not None:
+                    col.insert_one(json.loads(json.dumps(published)))
+        except Exception as exc:
+            _PUBLISHED[sid].pop()
+            if not _PUBLISHED[sid]:
+                _PUBLISHED.pop(sid, None)
+            _DRAFTS[doc["version_id"]] = doc
+            _persist_local()
+            if durable is not None:
+                raise SuretyTemplateError(
+                    "Publish refused: durable template storage did not accept the version.",
+                    code="durable_storage_unavailable",
+                ) from exc
         return _public_version(published)
 
 

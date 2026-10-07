@@ -195,6 +195,8 @@ OSI and Palmetto v1 are seeded onto this same publish record. Their appearance-b
 
 A new carrier does not invent a premium, POA number, phone, or email. Missing mapped values fail closed. Lexington National, Roche Surety, Universal, and Bankers Surety stay inactive until their blank forms and POA prefixes are supplied and a version is published.
 
+A published version has `owner_tenant_id` and `entitled_tenant_ids`. Null owner means the platform catalog. The entitlement list is the tenants that may use that catalog version. A non-null `owner_tenant_id` is private to that tenant. Shamrock (`tenant_id` `shamrock`) keeps today's OSI and Palmetto templates. Write Bond calls `start_indemnitor_bond_packet`, which resolves the template for that pair and refuses the submission when the match, parties, POA, or template entitlement is missing. Outside dev and test, publish requires MongoDB. A version is not published into memory or a container-local file.
+
 ## Escalation Conditions
 
 Escalate immediately if:

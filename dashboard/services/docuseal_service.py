@@ -1941,10 +1941,16 @@ class DocuSealService:
         }
 
 
-def resolve_template_id_for_surety(surety_id: Optional[str] = None) -> Optional[str]:
+def resolve_template_id_for_surety(
+    surety_id: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+) -> Optional[str]:
     """
-    DocuSeal template id from the surety registry
-    (dashboard/services/surety_registry.py):
+    DocuSeal template id for (surety, tenant).
+
+    The published version comes from
+    resolve_active_published_template(surety, tenant). Default tenant is
+    shamrock. For shamrock, registry env vars still win:
 
       osi       — DOCUSEAL_TEMPLATE_ID_OSI, then DOCUSEAL_TEMPLATE_ID
       palmetto  — DOCUSEAL_TEMPLATE_ID_PALMETTO only (no OSI fallback)
@@ -1952,13 +1958,32 @@ def resolve_template_id_for_surety(surety_id: Optional[str] = None) -> Optional[
       inactive  — Lexington / Roche / Universal / Bankers → None until
                   staff publish a version (env alone does not activate them)
 
-    Missing, unknown, or inactive surety → None (fail closed; never OSI).
-    Production keeps working while DOCUSEAL_TEMPLATE_ID_OSI / _PALMETTO are set;
-    those env vars win over any id stored on a published version.
+    Another tenant never receives Shamrock's env template ids. It gets the
+    id stored on a platform version it is entitled to, or on its private
+    version. Missing, unknown, unentitled, or inactive → None (fail closed).
     """
     from dashboard.services.surety_registry import template_id_for
+    from dashboard.services.surety_template_store import (
+        DEFAULT_TENANT_ID,
+        SuretyTemplateError,
+        normalize_tenant_id,
+        resolve_active_published_template,
+    )
 
-    return template_id_for(surety_id)
+    try:
+        tenant = normalize_tenant_id(tenant_id) if tenant_id else DEFAULT_TENANT_ID
+    except SuretyTemplateError:
+        return None
+    if tenant == DEFAULT_TENANT_ID:
+        return template_id_for(surety_id)
+    try:
+        doc = resolve_active_published_template(surety_id or "", tenant)
+    except SuretyTemplateError:
+        return None
+    if not doc:
+        return None
+    tid = str(doc.get("docuseal_template_id") or "").strip()
+    return tid or None
 
 
 BOND_AGENTS = {

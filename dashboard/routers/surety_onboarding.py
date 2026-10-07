@@ -86,7 +86,12 @@ def _denied() -> JSONResponse:
 
 def _error(exc: SuretyTemplateError, status: int = 400) -> JSONResponse:
     code = getattr(exc, "code", "surety_template_error")
-    http = 422 if code == "required_unmapped" else status
+    if code == "required_unmapped":
+        http = 422
+    elif code == "durable_storage_unavailable":
+        http = 503
+    else:
+        http = status
     return JSONResponse(
         {"success": False, "error": code, "message": str(exc)},
         status_code=http,
@@ -167,6 +172,8 @@ async def onboarding_create_draft(request: Request):
             repeat_per_charge=bool(body.get("repeat_per_charge", True)),
             docuseal_template_id=str(body.get("docuseal_template_id") or ""),
             drive_folder_label=str(body.get("drive_folder_label") or ""),
+            owner_tenant_id=body.get("owner_tenant_id", body.get("owner_tenant")),
+            entitled_tenant_ids=body.get("entitled_tenant_ids", body.get("entitlements")),
         )
     except SuretyTemplateError as exc:
         return _error(exc)
