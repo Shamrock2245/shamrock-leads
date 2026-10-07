@@ -3,7 +3,8 @@ Pitt County (NC) Arrest Scraper — Detainee Search ASP.NET GridView (plain HTTP
 
 URL: https://apps.pittcountync.gov/apps/detention/detainee/
 
-Source contract (verified 2026-09-25 from datacenter egress, plain requests):
+Source contract (verified 2026-09-25 from datacenter egress, plain requests;
+Select-detail hydrate probe 2026-10-07):
 
 * A **blank** "Get Detainee" search returns every current detainee in a
   10-row GridView (``ctl00_mainContent_GridView1``) with columns
@@ -15,6 +16,15 @@ Source contract (verified 2026-09-25 from datacenter egress, plain requests):
   ~48 pages / ~480 detainees on 2026-09-25.
 * ``Booking Number`` (digits) is the source booking key. Rows without one
   are skipped; nothing is synthesized.
+
+**Hydrate limitation (listing-only for Write Bond fields):** the public
+listing has no charges or bond columns. A ``Select$N`` detail postback
+publishes demographics and Date Confined only. The detail ``Charge`` /
+``Sentence`` / ``Print`` submit buttons return to the search form without
+charge or bond rows; ``bondHyperLink`` is a static bond-instructions PDF.
+Charges remain ``Unknown`` and Bond_Amount ``0`` — amounts are never
+invented. Do not walk Select for hydrate until the site publishes those
+fields publicly.
 
 The previous implementation ran an A–Z / digraph last-name walk and never
 followed the pager, so every saturated search was cut at 10 rows.
@@ -40,6 +50,15 @@ GRID_ID = "ctl00_mainContent_GridView1"
 GRID_TARGET = "ctl00$mainContent$GridView1"
 BOOKING_RE = re.compile(r"^\d{4,10}$")
 EXPECTED_HEADERS = ["Last Name", "First Name", "Date of Birth", "Booking Number"]
+
+# Honest Write Bond / DocuSeal hydrate note — site does not publish these publicly.
+HYDRATE_LIMITATION = (
+    "listing_only: public GridView + Select detail publish name/DOB/booking/"
+    "demographics/date confined only; Charge/Sentence/Print return to search "
+    "without charge or bond rows; bondHyperLink is instructions PDF only. "
+    "Charges=Unknown Bond_Amount=0 — do not invent."
+)
+LISTING_ONLY_FOR_HYDRATE = True
 
 
 def form_fields(soup: BeautifulSoup) -> Dict[str, str]:
@@ -102,7 +121,10 @@ class PittScraper(BaseScraper):
     SOURCE_CONTRACT_VALIDATED = True
     SOURCE_CONTRACT_REASON = (
         "Pitt Detainee Search (plain HTTPS); blank search + GridView Page$N "
-        "postbacks; source Booking Number column."
+        "postbacks; source Booking Number column. Listing-only hydrate: "
+        "public site does not publish charges or bond amounts (Select detail "
+        "has demographics/date confined only; Charge/Sentence/Print bounce "
+        "to search). Charges=Unknown Bond_Amount=0 — do not invent."
     )
 
     MAX_PAGES = 120  # ~48 used on 2026-09-25; hard stop against pager loops
@@ -189,9 +211,14 @@ class PittScraper(BaseScraper):
             DOB=row.get("dob") or "",
             Sex=(row.get("gender") or "")[:1].upper(),
             Race=row.get("race") or "",
+            # Public source does not publish charges or bond — do not invent.
             Charges="Unknown",
             Bond_Amount="0",
             Status="In Custody",
             Detail_URL=PORTAL_URL,
             Facility="Pitt County Detention Center",
+            extra_data={
+                "hydrate_limitation": HYDRATE_LIMITATION,
+                "listing_only_for_hydrate": LISTING_ONLY_FOR_HYDRATE,
+            },
         )

@@ -27,8 +27,9 @@
 
 - **Registry before:** registered, runtime `unverified`. Mongo held 316 source-format keys, so it was partially emitting.
 - **Why partial:** the old code ran an A–Z + digraph last-name walk, but the GridView shows 10 rows per page and the code never followed the pager. Every saturated search was cut at 10 rows. Its docstring claimed page postbacks "error out", which is not true today.
-- **Contract:** a blank "Get Detainee" POST returns all current detainees. Columns: Last / Suffix / First / Middle / DOB / **Booking Number** / Gender / Race. Paging is a standard GridView postback (`__EVENTTARGET=ctl00$mainContent$GridView1`, `__EVENTARGUMENT=Page$N`) carrying the prior `__VIEWSTATE`/`__EVENTVALIDATION`. The listing has no charges or bond (Charges=`Unknown`, as before). "Select" detail postbacks were not used.
-- **New scraper:** one blank search, then `Page$2..N` while the pager offers the next page and new keys keep appearing (hard stop 120 pages). A header check raises `ParseDriftError`.
+- **Contract:** a blank "Get Detainee" POST returns all current detainees. Columns: Last / Suffix / First / Middle / DOB / **Booking Number** / Gender / Race. Paging is a standard GridView postback (`__EVENTTARGET=ctl00$mainContent$GridView1`, `__EVENTARGUMENT=Page$N`) carrying the prior `__VIEWSTATE`/`__EVENTVALIDATION`. The listing has no charges or bond (Charges=`Unknown`, as before).
+- **Select-detail hydrate probe (2026-10-07):** `Select$N` opens Detainee Detail with name / address / DOB / Date Confined / gender / race / height / weight only. Detail `Charge` / `Sentence` / `Print` submit buttons return to the search form without charge or bond rows; `bondHyperLink` is `Documents/bondinstructions.pdf` (instructions only). **Listing-only for Write Bond hydrate** — Charges remain `Unknown` and Bond_Amount `0`; amounts are never invented. Select is not walked for enrichment until the site publishes those fields publicly.
+- **New scraper:** one blank search, then `Page$2..N` while the pager offers the next page and new keys keep appearing (hard stop 120 pages). A header check raises `ParseDriftError`. Records carry `extra.hydrate_limitation` / `listing_only_for_hydrate`.
 - **Read smoke (box):** 48 pages, 477 rows / 477 unique, all `^\d{6}$`. 21 s.
 
 ## Orange (NC 135): fixed

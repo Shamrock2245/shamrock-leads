@@ -132,7 +132,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | Pender | 🔲 Planned | Zuercher | `pender-so-nc.zuercherportal.com` |
 | Perquimans | ⬜ No portal | — | VINE / phone |
 | Person | ⬜ No portal | — | VINE / phone |
-| Pitt | ✅ Live | Custom ASP.NET | Letter-walk detainee search · ~300 active · booking #s |
+| Pitt | ✅ Live | Custom ASP.NET | Blank search + GridView pager · source booking # · **listing-only hydrate** (no public charges/bond) |
 | Polk | 🔲 Planned | Southern SW | AgencyID=`PolkCoNC` |
 | Randolph | ✅ Live | ASP.NET HTML | ConfinedInmatesByName · ~362 with charges/bail |
 | Richmond | ✅ Live | DCN | `webapp01.richmondnc.com/dcn/inmates` · `dcn_base` |
