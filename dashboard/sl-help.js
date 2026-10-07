@@ -103,7 +103,7 @@
         <ol>
           <li>Click <strong>Create Post</strong>.</li>
           <li>Select channels.</li>
-          <li>Write a clear caption (include <strong>(239) 334-2245</strong> when relevant).</li>
+          <li>Write a clear caption (include <strong>(239) 332-2245</strong> when relevant).</li>
           <li>Add 3–5 local hashtags.</li>
         </ol>
         <p style="font-size:12px;color:#34d399">Use the mobile preview before publishing.</p>

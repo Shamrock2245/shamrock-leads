@@ -1,0 +1,29 @@
+# Fail a PR that changes scrapers/ or dashboard/ without CHANGELOG.md.
+# Add the skip-changelog label to pass without an entry.
+#
+# Disable: Actions → Changelog → Disable workflow.
+
+name: Changelog
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  changelog:
+    name: CHANGELOG.md for scraper and dashboard edits
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Require changelog entry
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: python3 scripts/check_pr_changelog.py
