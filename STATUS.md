@@ -16,6 +16,12 @@
 
 ---
 
+## BailSafe P0 slice B1 — Recovery role and limited case share (2026-10-07)
+
+Staff can share a forfeiture file to a fail-closed `recovery` PIN role. The recovery session is denied every route except login, health, `GET /api/session/me`, and the recovery case endpoints. Shared cards carry defendant name, DOB, booking and court case numbers, forfeiture dates and status, known defendant addresses, notes staff typed on purpose, and the remittitur clock (dates and days remaining). Indemnitor phones and emails, premiums, ledgers, payment plans, POA execute/void/reassign, Write Bond, and DocuSeal issue/finalize stay off the role. Recovery does not generate warrants or demand letters. Unshare and expiry remove access. Share, note, and disposition write audit events.
+
+Deferred from this slice: B2 forfeiture SLA glue and Kanban assignee fields, A2 missed-check-in evidence, C2 powers-pack polish, tenant isolation, Aluro, Road Mode, intake widget, and payment work. A one-line Active Bonds link opens `/recovery?booking=` for an already forfeited row. That is a deep link only.
+
 ## BailSafe P0 slice A1 — Book Watch review (2026-10-07)
 
 This branch adds Book Watch review on the command center. It is not a live-production metric:
@@ -26,7 +32,7 @@ This branch adds Book Watch review on the command center. It is not a live-produ
 - The detector watch set includes `forfeited` with active, monitoring, alert, and reinstated.
 - `POST /api/rearrest/check` queues a review item and does not text indemnitors.
 
-Deferred: missed check-in evidence pack (A2), carrier powers packs (C1), recovery role (B1), tenant isolation, Stripe / defendant-month metering, and unifying `writers/rearrest_checker.py` onto one enqueue path. The scraper checker still has its own name match and no bond-status filter; those rows are labeled unscored and land in the identity lane, and that path does not text indemnitors.
+Deferred: missed check-in evidence pack (A2), tenant isolation, Stripe / defendant-month metering, and unifying `writers/rearrest_checker.py` onto one enqueue path. Recovery role (B1) is the following section. The scraper checker still has its own name match and no bond-status filter; those rows are labeled unscored and land in the identity lane, and that path does not text indemnitors.
 
 ## Paperwork Desk Mongo write & Write Bond chain gaps closed (2026-10-06)
 

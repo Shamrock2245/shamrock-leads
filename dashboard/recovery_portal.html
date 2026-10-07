@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Recovery — Shamrock</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,560;9..144,680&family=Outfit:wght@380;520;640&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #14170f;
+    --paper: #f4efe4;
+    --card: #fffaf2;
+    --line: #d9cbb6;
+    --moss: #1f6b3a;
+    --moss-deep: #143d22;
+    --brass: #a56b12;
+    --brass-soft: #f3e2c0;
+    --danger: #8f2d2d;
+    --muted: #6d6458;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    color: var(--ink);
+    font-family: Outfit, Georgia, sans-serif;
+    background:
+      radial-gradient(1200px 500px at 10% -10%, rgba(31,107,58,.18), transparent 50%),
+      linear-gradient(165deg, #e7efe4 0%, var(--paper) 42%, #efe4d2 100%);
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 22px 28px 8px;
+  }
+  .mark {
+    font-family: Fraunces, Georgia, serif;
+    font-size: 28px;
+    letter-spacing: -0.03em;
+    margin: 0;
+  }
+  .mark span { color: var(--moss); }
+  .who { margin-left: auto; color: var(--muted); font-size: 14px; }
+  button, input, textarea, select {
+    font: inherit;
+  }
+  button {
+    border: 0;
+    border-radius: 999px;
+    padding: 8px 14px;
+    background: var(--moss-deep);
+    color: #f6f3ea;
+    cursor: pointer;
+  }
+  button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  button.brass { background: var(--brass); color: #fffaf2; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  main { padding: 8px 28px 48px; display: grid; gap: 22px; }
+  section {
+    background: rgba(255,250,242,.78);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    padding: 18px 18px 8px;
+    box-shadow: 0 18px 40px rgba(40, 32, 16, .06);
+  }
+  h2 {
+    font-family: Fraunces, Georgia, serif;
+    font-weight: 560;
+    font-size: 22px;
+    margin: 0 0 8px;
+  }
+  p.lede { margin: 0 0 14px; color: var(--muted); max-width: 68ch; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-bottom: 14px; }
+  label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+  input, textarea, select {
+    border: 1px solid var(--line);
+    background: white;
+    border-radius: 10px;
+    padding: 8px 10px;
+    min-width: 0;
+  }
+  textarea { width: min(520px, 100%); min-height: 72px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .cards { display: grid; gap: 12px; }
+  .file {
+    display: grid;
+    grid-template-columns: 92px 1fr auto;
+    gap: 12px;
+    padding: 12px;
+    border-radius: 14px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    cursor: pointer;
+  }
+  .file:hover { border-color: var(--moss); }
+  .spine {
+    background: var(--moss-deep);
+    color: #f6f3ea;
+    border-radius: 10px;
+    display: grid;
+    place-items: center;
+    font-family: Fraunces, Georgia, serif;
+    letter-spacing: .12em;
+    font-size: 12px;
+  }
+  .pill {
+    display: inline-block;
+    border-radius: 999px;
+    padding: 2px 8px;
+    background: var(--brass-soft);
+    color: var(--brass);
+    font-size: 12px;
+  }
+  .detail { display: grid; gap: 12px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+  .fact { background: white; border-radius: 12px; padding: 10px 12px; border: 1px solid var(--line); }
+  .fact b { display: block; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 520; }
+  .status { min-height: 1.2em; color: var(--danger); font-size: 14px; }
+  .ok { color: var(--moss); }
+  .notes { display: grid; gap: 8px; }
+  .note { background: white; border-left: 3px solid var(--moss); padding: 8px 10px; border-radius: 8px; }
+  a.doc { color: var(--moss-deep); }
+  @media (max-width: 720px) {
+    header, main { padding-left: 14px; padding-right: 14px; }
+    .file { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body data-recovery-portal="b1">
+<header>
+  <p class="mark">Shamrock <span>Recovery</span></p>
+  <div class="who" id="who">Checking session…</div>
+  <button class="ghost" type="button" id="logout">Sign out</button>
+</header>
+<main>
+  <section id="staffTools" hidden>
+    <h2>Share a forfeiture</h2>
+    <p class="lede">Staff only. The recovery desk receives defendant identity, forfeiture dates, court case, addresses, the note you type here, and the remittitur clock. Indemnitor phones, premiums, and powers stay off the card.</p>
+    <form id="agentForm" class="row">
+      <label>Recovery id<input name="recovery_id" placeholder="REC-1001" required></label>
+      <label>Display name<input name="display_name" placeholder="Alex Rivera" required></label>
+      <button type="submit">Provision agent</button>
+    </form>
+    <div id="agentStatus" class="status"></div>
+    <div id="agents"></div>
+    <h2>Open forfeitures</h2>
+    <div id="candidates"><p class="lede">Loading forfeiture files…</p></div>
+    <form id="shareForm">
+      <div class="row">
+        <label>Booking<input name="booking_number" id="shareBooking" required></label>
+        <label>Limit to recovery id<input name="recovery_agent_id" placeholder="optional"></label>
+        <label>Expires in days<input name="expires_in_days" type="number" min="1" max="366" placeholder="optional"></label>
+      </div>
+      <label>Note shared on purpose<textarea name="staff_notes" placeholder="What recovery needs to work this file"></textarea>
+      <div class="row" style="margin-top:10px">
+        <button class="brass" type="submit">Share forfeiture case</button>
+      </div>
+    </form>
+    <div id="shareStatus" class="status"></div>
+  </section>
+
+  <section>
+    <h2>Shared files</h2>
+    <p class="lede" id="filesLede">Files currently shared with Recovery.</p>
+    <div id="cases" class="cards"></div>
+    <article id="detail" class="detail" hidden></article>
+  </section>
+</main>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  let role = '';
+  let selected = '';
+
+  function esc(value) {
+    return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[ch]));
+  }
+
+  function setStatus(id, message, ok) {
+    const el = $(id);
+    if (!el) return;
+    el.textContent = message || '';
+    el.className = ok ? 'status ok' : 'status';
+  }
+
+  async function api(path, options) {
+    const res = await fetch(path, Object.assign({ credentials: 'same-origin' }, options || {}));
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.success === false) {
+      const err = new Error(data.error || ('Request failed (' + res.status + ')'));
+      err.status = res.status;
+      throw err;
+    }
+    return data;
+  }
+
+  function clockLine(card) {
+    const clock = card.remittitur || {};
+    if (!clock.clock_known) return 'Remittitur clock has no forfeiture date on file.';
+    return '60-day window ' + clock.days_left_60d + 'd left (deadline ' + clock.deadline_60d + '). 180-day window ' + clock.days_left_180d + 'd left. Motion: ' + (clock.motion_status || 'unset') + '.';
+  }
+
+  function renderCases(cases) {
+    const host = $('cases');
+    if (!cases.length) {
+      host.innerHTML = '<p class="lede">No open shared files.</p>';
+      return;
+    }
+    host.innerHTML = cases.map((card) => (
+      '<button type="button" class="file" data-share="' + esc(card.share_id) + '">' +
+        '<div class="spine">FILE</div>' +
+        '<div><strong>' + esc(card.defendant_name || 'Unnamed') + '</strong>' +
+        '<div>' + esc(card.booking_number || '') + ' · ' + esc(card.court_case_number || '') + '</div>' +
+        '<div>' + esc(card.county || '') + ' ' + esc(card.state || '') + '</div></div>' +
+        '<div>' + (card.disposition ? '<span class="pill">' + esc(card.disposition) + '</span>' : '<span class="pill">open</span>') + '</div>' +
+      '</button>'
+    )).join('');
+    host.querySelectorAll('[data-share]').forEach((btn) => {
+      btn.addEventListener('click', () => openCase(btn.getAttribute('data-share')));
+    });
+  }
+
+  function renderDetail(card) {
+    selected = card.share_id;
+    const detail = $('detail');
+    detail.hidden = false;
+    const addresses = (card.known_addresses || []).map((row) => '<li>' + esc(row.line) + '</li>').join('') || '<li>None on file</li>';
+    const notes = (card.notes || []).map((note) => {
+      const who = note.actor_label || note.actor_role || 'Note';
+      const tag = note.kind === 'disposition' && note.disposition ? ' · ' + note.disposition : '';
+      return '<div class="note"><b>' + esc(who + tag) + '</b><div>' + esc(note.text) + '</div></div>';
+    }).join('') || '<p class="lede">No notes yet.</p>';
+    const docs = (card.documents || []).map((doc) => (
+      '<li><a class="doc" href="/api/recovery/cases/' + encodeURIComponent(card.share_id) + '/documents/' + encodeURIComponent(doc.doc_id) + '">' +
+      esc(doc.filename || 'Document') + '</a></li>'
+    )).join('') || '<li>None</li>';
+    detail.innerHTML =
+      '<div class="grid">' +
+        fact('Defendant', card.defendant_name) +
+        fact('Date of birth', card.date_of_birth) +
+        fact('Booking', card.booking_number) +
+        fact('Case', card.case_number) +
+        fact('Court case', card.court_case_number) +
+        fact('Status', card.bond_status) +
+        fact('Forfeiture date', card.forfeiture_order_date || card.forfeited_at) +
+        fact('Court date', card.court_date) +
+        fact('Court', card.court_location) +
+        fact('County', (card.county || '') + ' ' + (card.state || '')) +
+      '</div>' +
+      '<div class="fact"><b>Known addresses</b><ul>' + addresses + '</ul></div>' +
+      '<div class="fact"><b>Staff note</b>' + esc(card.staff_notes || 'None shared.') + '</div>' +
+      '<div class="fact"><b>Remittitur clock</b>' + esc(clockLine(card)) + '</div>' +
+      '<div class="notes">' + notes + '</div>' +
+      '<div class="fact"><b>Documents</b><ul>' + docs + '</ul></div>' +
+      '<form id="noteForm"><label>Disposition note<textarea name="text" required></textarea></label>' +
+      '<div class="row"><button type="submit">Add note</button>' +
+      '<button type="button" data-disp="contacted">Mark contacted</button>' +
+      '<button type="button" data-disp="located">Mark located</button>' +
+      '<button type="button" data-disp="surrendered">Mark surrendered</button></div></form>' +
+      '<form id="docForm"><label>Limited document<input type="file" name="file" accept=".pdf,.jpg,.jpeg,.png,.webp" required></label>' +
+      '<div class="row"><button type="submit">Upload</button></div></form>' +
+      (role === 'recovery' ? '' :
+        '<div class="row"><button type="button" class="ghost" id="unshare">Unshare</button></div>') +
+      '<div id="detailStatus" class="status"></div>';
+
+    function fact(label, value) {
+      return '<div class="fact"><b>' + esc(label) + '</b>' + esc(value || '—') + '</div>';
+    }
+
+    $('noteForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const text = new FormData(event.target).get('text');
+      try {
+        const data = await api('/api/recovery/cases/' + encodeURIComponent(card.share_id) + '/notes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: text })
+        });
+        setStatus('detailStatus', 'Note saved.', true);
+        renderDetail(data.case);
+        loadCases();
+      } catch (err) {
+        setStatus('detailStatus', err.message, false);
+      }
+    });
+    detail.querySelectorAll('[data-disp]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        try {
+          const data = await api('/api/recovery/cases/' + encodeURIComponent(card.share_id) + '/disposition', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ disposition: btn.getAttribute('data-disp') })
+          });
+          setStatus('detailStatus', 'Disposition updated.', true);
+          renderDetail(data.case);
+          loadCases();
+        } catch (err) {
+          setStatus('detailStatus', err.message, false);
+        }
+      });
+    });
+    $('docForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const body = new FormData(event.target);
+      try {
+        const res = await fetch('/api/recovery/cases/' + encodeURIComponent(card.share_id) + '/documents', {
+          method: 'POST',
+          credentials: 'same-origin',
+          body: body
+        });
+        const data = await res.json();
+        if (!res.ok || data.success === false) throw new Error(data.error || 'Upload failed');
+        setStatus('detailStatus', 'Document stored.', true);
+        renderDetail(data.case);
+      } catch (err) {
+        setStatus('detailStatus', err.message, false);
+      }
+    });
+    const unshare = $('unshare');
+    if (unshare) {
+      unshare.addEventListener('click', async () => {
+        try {
+          await api('/api/recovery/shares/' + encodeURIComponent(card.share_id) + '/revoke', { method: 'POST' });
+          detail.hidden = true;
+          setStatus('shareStatus', 'Share removed.', true);
+          loadCases();
+          loadCandidates();
+        } catch (err) {
+          setStatus('detailStatus', err.message, false);
+        }
+      });
+    }
+  }
+
+  async function openCase(shareId) {
+    const data = await api('/api/recovery/cases/' + encodeURIComponent(shareId));
+    renderDetail(data.case);
+  }
+
+  async function loadCases() {
+    const data = await api('/api/recovery/cases');
+    renderCases(data.cases || []);
+    if (selected) {
+      const still = (data.cases || []).find((row) => row.share_id === selected);
+      if (still) renderDetail(still);
+    }
+  }
+
+  function renderCandidates(rows) {
+    const host = $('candidates');
+    if (!rows.length) {
+      host.innerHTML = '<p class="lede">No forfeiture files on the book.</p>';
+      return;
+    }
+    host.innerHTML = '<table><thead><tr><th>Defendant</th><th>Booking</th><th>Court case</th><th></th></tr></thead><tbody>' +
+      rows.map((row) => (
+        '<tr><td>' + esc(row.defendant_name) + '</td><td>' + esc(row.booking_number) + '</td><td>' +
+        esc(row.court_case_number) + '</td><td>' +
+        (row.already_shared ? '<span class="pill">shared</span>' :
+          '<button type="button" data-book="' + esc(row.booking_number) + '">Use</button>') +
+        '</td></tr>'
+      )).join('') + '</tbody></table>';
+    host.querySelectorAll('[data-book]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        $('shareBooking').value = btn.getAttribute('data-book') || '';
+        $('shareBooking').focus();
+      });
+    });
+  }
+
+  async function loadCandidates() {
+    if (role === 'recovery') return;
+    const data = await api('/api/recovery/forfeiture-candidates');
+    renderCandidates(data.forfeitures || []);
+  }
+
+  async function loadAgents() {
+    if (role === 'recovery') return;
+    const data = await api('/api/recovery/agents');
+    const lines = (data.agents || []).filter((row) => row.is_active).map((row) => esc(row.recovery_id) + ' · ' + esc(row.display_name));
+    $('agents').innerHTML = lines.length ? '<p class="lede">Active recovery ids: ' + lines.join(', ') + '</p>' : '';
+  }
+
+  $('logout').addEventListener('click', async () => {
+    await fetch('/api/recovery/logout', { method: 'POST', credentials: 'same-origin' });
+    location.href = '/login';
+  });
+
+  $('agentForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const body = Object.fromEntries(new FormData(event.target).entries());
+    try {
+      await api('/api/recovery/agents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      setStatus('agentStatus', 'Recovery agent provisioned.', true);
+      event.target.reset();
+      loadAgents();
+    } catch (err) {
+      setStatus('agentStatus', err.message, false);
+    }
+  });
+
+  $('shareForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const body = Object.fromEntries(new FormData(event.target).entries());
+    if (!body.expires_in_days) delete body.expires_in_days;
+    try {
+      const data = await api('/api/recovery/shares', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      setStatus('shareStatus', data.already_shared ? 'Already shared. Card refreshed.' : 'Forfeiture shared.', true);
+      await loadCases();
+      await loadCandidates();
+      if (data.case) renderDetail(data.case);
+    } catch (err) {
+      setStatus('shareStatus', err.message, false);
+    }
+  });
+
+  async function boot() {
+    const res = await fetch('/api/session/me', { credentials: 'same-origin' });
+    const me = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      location.href = '/login?next=%2Frecovery';
+      return;
+    }
+    role = me.role || '';
+    const name = me.agent_name || me.email || role;
+    $('who').textContent = name + ' · ' + role;
+    if (role === 'recovery') {
+      $('filesLede').textContent = 'Only files staff have shared with you.';
+    } else {
+      $('staffTools').hidden = false;
+      await loadAgents();
+      await loadCandidates();
+      const preset = new URLSearchParams(location.search).get('booking');
+      if (preset) $('shareBooking').value = preset;
+    }
+    await loadCases();
+  }
+
+  boot().catch((err) => {
+    $('cases').innerHTML = '<p class="lede">' + esc(err.message || 'Could not open Recovery.') + '</p>';
+  });
+})();
+</script>
+</body>
+</html>

@@ -5,9 +5,12 @@ Stateless signed-cookie approach using itsdangerous.
 Supports God-Admin (full access) and Sub-Agent (restricted) roles.
 
 Roles:
-  - god_admin: Full unrestricted access (PIN 224545 with no agent fields, or admin email)
+  - god_admin: Full unrestricted access (PIN with no agent fields, or admin email)
+  - admin / staff: Staff bond desk. May share forfeiture files to Recovery.
   - sub_agent: Restricted access — must be whitelisted in MongoDB `sub_agents` collection.
                Sees only their own bonds, revenue, and assigned POAs.
+  - recovery: Fail-closed BailSafe recovery desk. Denied every route except the
+              allowlist in ``dashboard.auth.recovery_scope``. Not a sub-agent.
 
 Usage in main.py:
     from dashboard.auth.pin_middleware import PinAuthMiddleware, mount_login_routes
@@ -133,11 +136,12 @@ def _sign_token(
     agent_name: str | None = None,
     license_number: str | None = None,
     is_admin: bool = False,
+    recovery_id: str | None = None,
 ) -> str:
     """Create a signed session token with identity claims."""
     s = _get_serializer()
     payload: dict[str, Any] = {"auth": True, "t": int(time.time())}
-    if is_admin:
+    if is_admin and role != "recovery":
         payload["is_admin"] = True
     if email:
         payload["email"] = normalize_email(email)
@@ -149,7 +153,41 @@ def _sign_token(
         payload["agent_name"] = str(agent_name)
     if license_number:
         payload["license_number"] = str(license_number)
+    if recovery_id:
+        payload["recovery_id"] = str(recovery_id).strip().upper()
+    if payload.get("role") == "recovery":
+        payload["is_admin"] = False
     return s.dumps(payload)
+
+
+def _attach_session(request: Request, sess: dict[str, Any]) -> None:
+    """Copy signed claims onto request.state. Recovery is never admin."""
+    request.state.sl_session = sess
+    request.state.sl_email = sess.get("email") or PRIMARY_SUPER_ADMIN
+    request.state.sl_role = sess.get("role") or "god_admin"
+    request.state.sl_agent_name = sess.get("agent_name") or ""
+    request.state.sl_license_number = sess.get("license_number") or ""
+    request.state.sl_recovery_id = sess.get("recovery_id") or ""
+    request.state.sl_is_admin = (
+        sess.get("role") in ("admin", "god_admin") or is_admin_email(sess.get("email"))
+    )
+    if sess.get("role") == "recovery":
+        request.state.sl_is_admin = False
+
+
+def _recovery_denied(path: str) -> Response:
+    """Block a recovery session. APIs and assets get 403; pages go to /recovery."""
+    asset = path.startswith("/static/") or any(path.endswith(ext) for ext in _STATIC_EXTENSIONS)
+    if path.startswith("/api/") or asset or path == "/openapi.json":
+        return JSONResponse(
+            {
+                "error": "Access denied — recovery role cannot use this endpoint",
+                "role": "recovery",
+                "code": "recovery_route_denied",
+            },
+            status_code=403,
+        )
+    return RedirectResponse("/recovery", status_code=302)
 
 
 def _load_session(token: str | None) -> dict[str, Any] | None:
@@ -273,6 +311,18 @@ class PinAuthMiddleware(BaseHTTPMiddleware):
         if is_machine_auth_valid(request):
             return await call_next(request)
 
+        # Recovery is fail-closed before static/open bypasses. A recovery
+        # cookie must not download the staff CRM, its JS, or any non-allowlisted API.
+        recovery_cookie = request.cookies.get(COOKIE_NAME)
+        recovery_sess = _load_session(recovery_cookie) if recovery_cookie else None
+        if recovery_sess and recovery_sess.get("role") == "recovery":
+            from dashboard.auth.recovery_scope import path_allowed_for_recovery
+
+            if not path_allowed_for_recovery(path, request.method):
+                return _recovery_denied(path)
+            _attach_session(request, recovery_sess)
+            return await call_next(request)
+
         if path in OPEN_PATHS or any(path.startswith(p) for p in OPEN_PREFIXES):
             return await call_next(request)
 
@@ -294,14 +344,7 @@ class PinAuthMiddleware(BaseHTTPMiddleware):
         cookie = request.cookies.get(COOKIE_NAME)
         sess = _load_session(cookie) if cookie else None
         if sess:
-            request.state.sl_session = sess
-            request.state.sl_email = sess.get("email") or PRIMARY_SUPER_ADMIN
-            request.state.sl_role = sess.get("role") or "god_admin"
-            request.state.sl_agent_name = sess.get("agent_name") or ""
-            request.state.sl_license_number = sess.get("license_number") or ""
-            request.state.sl_is_admin = (
-                sess.get("role") in ("admin", "god_admin") or is_admin_email(sess.get("email"))
-            )
+            _attach_session(request, sess)
             # Sub-agent hard gate: block restricted API prefixes server-side
             if (
                 sess.get("role") == "sub_agent"
@@ -352,14 +395,14 @@ body{min-height:100vh;display:flex;align-items:center;justify-content:center;
   background:linear-gradient(135deg,#0a0f1a 0%,#1a2332 50%,#0d1520 100%);
   font-family:'Inter',system-ui,sans-serif;color:#e0e0e0}
 .card{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);
-  border-radius:20px;padding:40px 36px;width:420px;backdrop-filter:blur(20px);
+  border-radius:20px;padding:40px 36px;width:480px;max-width:calc(100vw - 24px);backdrop-filter:blur(20px);
   box-shadow:0 20px 60px rgba(0,0,0,0.5)}
 .logo{font-size:28px;font-weight:700;text-align:center;margin-bottom:4px;
   background:linear-gradient(135deg,#00d26a,#00b85c);-webkit-background-clip:text;
   -webkit-text-fill-color:transparent}
 .sub{text-align:center;color:#8899aa;font-size:13px;margin-bottom:24px}
 .tab-row{display:flex;gap:8px;background:rgba(255,255,255,0.05);padding:4px;border-radius:10px;margin-bottom:20px}
-.tab-btn{flex:1;padding:8px;border:none;border-radius:8px;background:none;color:#8899aa;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s}
+.tab-btn{flex:1;padding:8px 4px;border:none;border-radius:8px;background:none;color:#8899aa;font-size:12px;font-weight:600;cursor:pointer;transition:all .2s}
 .tab-btn.active{background:#00d26a;color:#000}
 label{display:block;font-size:12px;color:#8899aa;margin-bottom:6px;margin-top:12px}
 input{width:100%;padding:12px 14px;border:1px solid rgba(255,255,255,0.12);
@@ -380,6 +423,7 @@ button.submit-btn:hover{transform:translateY(-1px);box-shadow:0 8px 24px rgba(0,
   <div class="tab-row">
     <button class="tab-btn active" id="tabGodBtn" onclick="switchLoginMode('god')">👑 God Admin</button>
     <button class="tab-btn" id="tabSubBtn" onclick="switchLoginMode('sub')">🏷️ Sub-Agent</button>
+    <button class="tab-btn" id="tabRecoveryBtn" onclick="switchLoginMode('recovery')">🎯 Recovery</button>
   </div>
   <form id="f" method="POST" action="/login">
     <div id="subAgentFields" style="display:none">
@@ -387,6 +431,10 @@ button.submit-btn:hover{transform:translateY(-1px);box-shadow:0 8px 24px rgba(0,
       <input type="text" name="agent_name" id="agent_name" placeholder="e.g. John Smith">
       <label for="license_number">FL License Number</label>
       <input type="text" name="license_number" id="license_number" placeholder="e.g. P123456">
+    </div>
+    <div id="recoveryFields" style="display:none">
+      <label for="recovery_id">Recovery ID</label>
+      <input type="text" name="recovery_id" id="recovery_id" placeholder="REC-1001" autocomplete="username">
     </div>
     <div id="godAdminFields">
       <label for="email">Owner / Admin Email (optional)</label>
@@ -405,12 +453,18 @@ function switchLoginMode(m) {
   mode = m;
   document.getElementById('tabGodBtn').classList.toggle('active', m === 'god');
   document.getElementById('tabSubBtn').classList.toggle('active', m === 'sub');
+  document.getElementById('tabRecoveryBtn').classList.toggle('active', m === 'recovery');
   document.getElementById('godAdminFields').style.display = m === 'god' ? 'block' : 'none';
   document.getElementById('subAgentFields').style.display = m === 'sub' ? 'block' : 'none';
-  document.getElementById('subBtnText').textContent = m === 'god' ? 'Unlock God-Admin Access' : 'Login as Sub-Agent';
+  document.getElementById('recoveryFields').style.display = m === 'recovery' ? 'block' : 'none';
+  document.getElementById('subBtnText').textContent = m === 'god'
+    ? 'Unlock God-Admin Access'
+    : (m === 'recovery' ? 'Enter Recovery' : 'Login as Sub-Agent');
   document.getElementById('loginHint').textContent = m === 'god'
     ? 'God-Admin grants full unrestricted control over the entire system.'
-    : 'Sub-Agent login requires whitelisted name and FL license number.';
+    : (m === 'recovery'
+      ? 'Recovery sees only forfeiture files staff have shared. No bond writing, payments, or indemnitor contact data.'
+      : 'Sub-Agent login requires whitelisted name and FL license number.');
 }
 (function(){
   function stashExtract(payload){
@@ -444,17 +498,19 @@ function switchLoginMode(m) {
     e.preventDefault();
     const payload = {
       pin: document.getElementById('pin').value,
-      email: document.getElementById('email').value || '',
+      email: mode === 'god' ? (document.getElementById('email').value || '') : '',
       agent_name: mode === 'sub' ? document.getElementById('agent_name').value : '',
       license_number: mode === 'sub' ? document.getElementById('license_number').value : '',
+      recovery_id: mode === 'recovery' ? document.getElementById('recovery_id').value : '',
     };
     const r=await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},
       credentials:'same-origin',
       body:JSON.stringify(payload)});
+    const j=await r.json().catch(()=>({}));
     if(r.ok){
-      let dest=next;
+      let dest = j.role === 'recovery' ? '/recovery' : next;
       try{
-        if(sessionStorage.getItem('sl_booking_extract')){
+        if(j.role !== 'recovery' && sessionStorage.getItem('sl_booking_extract')){
           const u=new URL(dest, location.origin);
           u.searchParams.set('tab','defendants');
           u.searchParams.set('write','1');
@@ -463,7 +519,7 @@ function switchLoginMode(m) {
       }catch(err){}
       window.location=dest;
     }
-    else{const j=await r.json().catch(()=>({}));
+    else{
       document.getElementById('err').textContent=j.error||'Invalid credentials';
       document.getElementById('pin').value=''}
   });
@@ -493,12 +549,47 @@ def mount_login_routes(app):
         email = normalize_email(data.get("email") or "")
         agent_name = str(data.get("agent_name", "")).strip()
         license_number = str(data.get("license_number", "")).strip()
+        recovery_id = str(data.get("recovery_id") or "").strip()
 
         if pin not in VALID_PINS:
             return JSONResponse({"error": "Invalid PIN"}, status_code=401)
 
+        # ── Recovery login ────────────────────────────────────────────────
+        if recovery_id:
+            try:
+                from dashboard.services.recovery_case_service import authenticate_recovery_agent
+                agent = await authenticate_recovery_agent(recovery_id)
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).error("Recovery login lookup failed: %s", type(exc).__name__)
+                return JSONResponse(
+                    {"error": "System error checking Recovery access. Try again."},
+                    status_code=500,
+                )
+            if not agent:
+                return JSONResponse(
+                    {"error": "Not authorized for Recovery. Ask staff to provision your recovery id."},
+                    status_code=403,
+                )
+            token = _sign_token(
+                email=agent["email"],
+                role="recovery",
+                agent_name=agent["display_name"],
+                recovery_id=agent["recovery_id"],
+                is_admin=False,
+            )
+            response = JSONResponse({
+                "success": True,
+                "email": agent["email"],
+                "role": "recovery",
+                "agent_name": agent["display_name"],
+                "license_number": "",
+                "recovery_id": agent["recovery_id"],
+                "is_admin": False,
+            })
+
         # ── Sub-Agent login ───────────────────────────────────────────────
-        if agent_name or license_number:
+        elif agent_name or license_number:
             if not agent_name or not license_number:
                 return JSONResponse(
                     {"error": "Both Agent Name and License Number are required"},

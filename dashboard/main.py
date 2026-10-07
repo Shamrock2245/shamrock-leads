@@ -72,6 +72,13 @@ async def _ensure_core_indexes_async():
         await bonds.create_index("booking_number", sparse=True)
         await bonds.create_index("defendant_name")
 
+        recovery_shares = get_collection("recovery_case_shares")
+        await recovery_shares.create_index("share_id", unique=True)
+        await recovery_shares.create_index("booking_number")
+        await recovery_shares.create_index("status")
+        recovery_agents = get_collection("recovery_agents")
+        await recovery_agents.create_index("recovery_id", unique=True)
+
         # Audit Events
         events = get_collection("audit_events")
         await events.create_index("event_id", sparse=True)
