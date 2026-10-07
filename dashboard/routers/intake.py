@@ -34,6 +34,7 @@ Dashboard.html in the GAS project:
     Meta:       source, platform, timestamp, consentGiven, consentTimestamp,
                 telegramUserId, telegramUsername, gpsLatitude, gpsLongitude
 """
+import hmac
 import os
 import re
 import uuid
@@ -102,6 +103,8 @@ def _normalize_source(raw: str) -> str:
         return "elevenlabs_voice"
     if "bookmarklet" in raw or "lcso" in raw:
         return "bookmarklet"
+    if raw in ("shamrock_leads_dashboard", "dashboard"):
+        return "shamrock-leads-dashboard"
     return "manual_entry"
 
 
@@ -345,7 +348,7 @@ async def _normalize_intake(
         "surety_unrecognized": _intake_surety_unrecognized(data),
         "paperwork_packet_id": None,
         "paperwork_status": None,
-        "_raw": data,
+        "_raw": _strip_secrets(data),
     }
     if extra:
         doc.update(extra)
@@ -359,6 +362,29 @@ async def _normalize_intake(
     return intake_id, doc
 
 
+_RAW_SECRET_KEYS = ("apiKey", "secret", "api_key")
+
+
+def _strip_secrets(data: dict) -> dict:
+    """Drop credentials before the raw payload is stored on the intake."""
+    return {k: v for k, v in data.items() if k not in _RAW_SECRET_KEYS}
+
+
+def _anchor_present(value) -> bool:
+    text = str(value or "").strip()
+    return bool(text) and text.lower() != "unknown"
+
+
+def _has_intake_anchor(indemnitor: dict, defendant: dict) -> bool:
+    """True when the payload names a person, phone, or booking. Empty leads are refused."""
+    if any(_anchor_present(indemnitor.get(k)) for k in ("firstName", "lastName", "phone", "email")):
+        return True
+    return any(
+        _anchor_present(defendant.get(k))
+        for k in ("name", "firstName", "lastName", "bookingNumber", "phone")
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  POST /api/intake/submit
 #  Accept a new indemnitor intake from any source
@@ -369,9 +395,16 @@ async def intake_submit(request: Request):
     Accept indemnitor intake from any source (Wix, Telegram, manual, walk-in, phone).
     Stores in MongoDB `intake_queue` collection.
     Mirrors handleNewIntake() / storeIntakeInQueue() from GAS WixPortalIntegration.js.
-    After storing, auto-triggers Phase 4 matching engine.
+    After storing, auto-triggers Phase 4 matching engine, then the same Sheets +
+    Slack fan-out the website webhook uses. County, state, and surety are never
+    invented here.
     """
-    data = await request.json() or {}
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"success": False, "error": "Invalid or empty JSON body"}, status_code=400)
+    if not isinstance(data, dict) or not data:
+        return JSONResponse({"success": False, "error": "Empty or invalid JSON body"}, status_code=400)
 
     source_raw = (
         data.get("source")
@@ -383,19 +416,29 @@ async def intake_submit(request: Request):
 
     # ── Auth Gate for external Wix Portal submissions ─────────────────────────
     if source == "wix_portal":
-        wix_secret = os.getenv("WIX_WEBHOOK_SECRET", "") or os.getenv("GAS_API_KEY", "")
+        wix_secret = (os.getenv("WIX_WEBHOOK_SECRET") or os.getenv("GAS_API_KEY") or "").strip()
         provided = (
             request.headers.get("X-Wix-Webhook-Secret", "")
             or request.headers.get("X-Api-Key", "")
             or data.get("apiKey", "")
             or data.get("secret", "")
+            or ""
         )
-        if wix_secret and provided != wix_secret:
+        if not wix_secret:
+            logger.error("[intake_submit] WIX_WEBHOOK_SECRET/GAS_API_KEY not configured")
+            return JSONResponse({"success": False, "error": "Webhook auth not configured"}, status_code=503)
+        if not hmac.compare_digest(str(provided).encode(), wix_secret.encode()):
             logger.warning("[intake_submit] Unauthorized wix_portal submission — invalid or missing secret")
-            return JSONResponse({"error": "Unauthorized: Invalid or missing webhook secret"}, status_code=401)
+            return JSONResponse({"success": False, "error": "Unauthorized: Invalid or missing webhook secret"}, status_code=401)
 
-    indemnitor = _extract_indemnitor(data)
-    defendant = _extract_defendant(data)
+    # No county / state / DL-state defaults. Staff set those at Write Bond.
+    indemnitor = _extract_indemnitor(data, apply_defaults=False)
+    defendant = _extract_defendant(data, apply_defaults=False)
+    if not _has_intake_anchor(indemnitor, defendant):
+        return JSONResponse(
+            {"success": False, "error": "A name, phone, or booking number is required"},
+            status_code=400,
+        )
 
     # Build a full name for display
     ind_full_name = (
@@ -481,8 +524,8 @@ async def intake_submit(request: Request):
         # Paperwork fields (populated by Phase 6)
         "paperwork_packet_id": None,
         "paperwork_status": None,
-        # Raw payload preserved for full hydration
-        "_raw": data,
+        # Raw payload preserved for full hydration (credentials stripped)
+        "_raw": _strip_secrets(data),
     }
 
     intake_queue = get_collection("intake_queue")
@@ -493,7 +536,7 @@ async def intake_submit(request: Request):
             {"$set": doc},
             upsert=True,
         )
-        logger.info(f"[intake] New intake stored: {intake_id} | source={source} | defendant={def_full_name}")
+        logger.info("[intake] New intake stored: %s | source=%s", intake_id, source)
 
         # Shannon's create_intake webhook has a short ElevenLabs deadline.
         # Matching can run later from the desk; do not block the voice turn.
@@ -511,8 +554,34 @@ async def intake_submit(request: Request):
                     match_result.get("strategy"),
                     match_result.get("auto_linked"),
                 )
+                if isinstance(match_result, dict) and match_result.get("auto_linked"):
+                    best = match_result.get("best_match") or {}
+                    doc["matched_booking_number"] = best.get("booking_number") or doc.get("matched_booking_number")
+                    doc["match_confidence"] = match_result.get("confidence")
             except Exception as match_err:
                 logger.warning("[intake] Auto-match failed for %s: %s", intake_id, match_err)
+
+        try:
+            from dashboard.routers.events import publish_event
+            await publish_event("new_intake", {
+                "intake_id": intake_id,
+                "defendant_name": def_full_name if def_full_name != "Unknown" else "",
+                "county": doc.get("defendant_county", ""),
+                "booking_number": doc.get("defendant_booking_number", ""),
+                "source": source,
+            })
+        except Exception:
+            pass
+
+        # Same post-save copy as the website webhook: Sheets ledger + Slack.
+        # Fire-and-forget; a fan-out failure never fails the intake.
+        try:
+            from dashboard.services.intake_fanout import schedule_after_save
+            schedule_after_save(dict(doc))
+        except Exception as exc:
+            logger.error("[intake] fan-out scheduling failed (non-fatal): %s", exc)
+
+        from dashboard.services.payment_links import payment_link_for
 
         return {
             "success": True,
@@ -522,6 +591,7 @@ async def intake_submit(request: Request):
             "indemnitor_name": ind_full_name,
             "message": f"Intake received from {SOURCE_LABELS.get(source, source)}",
             "match": match_result,
+            "payment_link": payment_link_for(source),
         }
     except Exception as e:
         logger.error(f"[intake] Failed to store intake {intake_id}: {e}")
@@ -1044,13 +1114,6 @@ async def intake_promote(request: Request, intake_id: str):
     )
 
     if not poa_doc:
-        # Fallback: try any available POA from this surety
-        poa_doc = await poa_inventory.find_one(
-            {"surety_id": surety, "status": "available"},
-            sort=[("max_bond_value", -1), ("poa_number", 1)],
-        )
-
-    if not poa_doc:
         return JSONResponse(status_code=422, content={
             "success": False,
             "error": f"No available POA in {surety.upper()} inventory for bond amount ${bond_amount:,.2f}. "
@@ -1065,7 +1128,7 @@ async def intake_promote(request: Request, intake_id: str):
     court_date = data.get("court_date", "").strip()
     court_time = data.get("court_time", "").strip()
     court_location = data.get("court_location", "").strip()
-    agent_name = data.get("agent_name", "Brendan O'Neal").strip()
+    agent_name = (data.get("agent_name") or "").strip() or "Dashboard"
     notes = data.get("notes", "").strip()
 
     bond_doc = {

@@ -57,6 +57,9 @@ jobs:
         run: |
           pytest -q \
             tests/test_secret_scanner.py \
+            tests/test_brand_contacts.py \
+            tests/test_prod_uptime_watchdog.py \
+            tests/test_pr_changelog.py \
             tests/test_source_contract_run_guard.py \
             tests/test_source_booking_identity_guard.py \
             tests/test_registered_counties_coverage.py \
@@ -129,5 +132,6 @@ jobs:
             tests/test_surety_registry.py \
             tests/test_wix_intake_webhook.py \
             tests/test_intake_fanout.py \
+            tests/test_workflow_endpoints.py \
             tests/test_kiosk_privacy_and_confirm.py \
             --tb=short

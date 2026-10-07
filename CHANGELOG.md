@@ -12,6 +12,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **One-click hydrate (`packet_builder_service`):** an arrest saved with an unknown bond (`bond_amount_raw=""`, numeric `bond_amount=0.0`) no longer hydrates as a $0 bond. The context carries `bond_amount_known=False` and per-charge rows carry `bond_amount=None` (blank in Write Bond). A source-published `0` stays `0.0`.
 - **Sarasota (FL):** stays fail closed. The 2026-10-07 live check found the official current-inmate listing (1,081 entries) carries only an opaque per-person link id, name and date of birth, with no booking number or booking timestamp; detail and search pages return a Cloudflare challenge. The reopen gate is encoded in `scrapers/counties/sarasota_contract.py`. Evidence, matrix and registry updated (`docs/recon/FL_SARASOTA_MANATEE_AUDIT_2026-10-07.md`). Health: Sarasota `fail_closed`, Manatee `unverified`.
 
+## [Unreleased] — 2026-10-07 (Production uptime watchdog)
+
+### Added
+- **Production uptime** GitHub Action (`.github/workflows/prod-uptime.yml`). Every 15 minutes at :07/:22/:37/:52 UTC, plus `workflow_dispatch`, it probes the public `/health` and `/health/live` routes on `leads` and `paperwork`. A failure opens one `prod-down` issue (or comments on the open one). Recovery closes it. Disable from the Actions tab.
+- **Workflow lint** (actionlint on PRs that touch `.github/`), a **changelog** check when `scrapers/` or `dashboard/` change (skip with the `skip-changelog` label), and a **weekly Python CodeQL** scan (Monday 05:41 UTC).
+- **Brand-contact guard** (`scripts/check_brand_contacts.py`, in the CI pytest list). Fails on the known-wrong lookalike hostnames and on phones shaped like the canonical Shamrock numbers (239-332-2245, 727-295-2245, 239-955-0178) that are not those numbers.
+
+### Fixed
+- Obvious brand typos in the overdue check-in email, social help, and the ops manual now use the canonical office line 239-332-2245. Prospecting's fallback intake URL uses the `.biz` apex. The active-bond payment SMS fallback uses that office line instead of the dashboard PIN.
+
 ## [Unreleased] — 2026-10-07 (York SC source Booking Number)
 
 ### Changed

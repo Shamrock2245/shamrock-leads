@@ -25,6 +25,10 @@ def _match_value(val, cond) -> bool:
                 return False
             if op == "$lt" and not (val is not None and val < arg):
                 return False
+            if op == "$gte" and not (val is not None and val >= arg):
+                return False
+            if op == "$gt" and not (val is not None and val > arg):
+                return False
             if op == "$ne" and val == arg:
                 return False
             if op == "$exists" and (val is not None) != bool(arg):
@@ -66,6 +70,12 @@ class _Cursor:
             raise StopAsyncIteration
 
 
+class _WriteResult:
+    def __init__(self, matched: int):
+        self.matched_count = matched
+        self.modified_count = matched
+
+
 class FakeCollection:
     def __init__(self):
         self.docs: List[Dict[str, Any]] = []
@@ -73,11 +83,17 @@ class FakeCollection:
     async def insert_one(self, doc):
         self.docs.append(copy.deepcopy(doc))
 
-    async def find_one(self, flt=None, projection=None):
-        for d in self.docs:
-            if matches(d, flt or {}):
-                return copy.deepcopy(d)
-        return None
+    async def find_one(self, flt=None, projection=None, sort=None, **kwargs):
+        hits = [d for d in self.docs if matches(d, flt or {})]
+        if sort:
+            for field, direction in reversed(list(sort)):
+                hits.sort(
+                    key=lambda d, field=field: (d.get(field) is None, d.get(field)),
+                    reverse=int(direction) < 0,
+                )
+        if not hits:
+            return None
+        return copy.deepcopy(hits[0])
 
     def find(self, flt=None, projection=None):
         return _Cursor([d for d in self.docs if matches(d, flt or {})])
@@ -85,6 +101,12 @@ class FakeCollection:
     def _apply(self, d, update, inserting):
         for k, v in (update.get("$set") or {}).items():
             d[k] = copy.deepcopy(v)
+        for k, v in (update.get("$push") or {}).items():
+            bucket = d.get(k)
+            if not isinstance(bucket, list):
+                bucket = []
+                d[k] = bucket
+            bucket.append(copy.deepcopy(v))
         if inserting:
             for k, v in (update.get("$setOnInsert") or {}).items():
                 d[k] = copy.deepcopy(v)
@@ -93,11 +115,13 @@ class FakeCollection:
         for d in self.docs:
             if matches(d, flt):
                 self._apply(d, update, inserting=False)
-                return
+                return _WriteResult(1)
         if upsert:
             d = {k: v for k, v in flt.items() if not k.startswith("$") and not isinstance(v, dict)}
             self._apply(d, update, inserting=True)
             self.docs.append(d)
+            return _WriteResult(0)
+        return _WriteResult(0)
 
     async def find_one_and_update(self, flt, update, **kw):
         for d in self.docs:
@@ -108,6 +132,11 @@ class FakeCollection:
 
 
 class FakeDB(dict):
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return self[name]
+
     def __missing__(self, name):
         col = FakeCollection()
         self[name] = col

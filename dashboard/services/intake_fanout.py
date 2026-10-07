@@ -104,10 +104,31 @@ def ledger_row(doc: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+_SLACK_KIND = {
+    "wix_webhook": "website application",
+    "wix_portal": "website application",
+    "telegram": "Telegram application",
+    "telegram_mini_app": "Telegram mini-app application",
+    "walk_in": "walk-in intake",
+    "phone_call": "phone intake",
+    "elevenlabs_voice": "Shannon voice intake",
+    "shannon": "Shannon voice intake",
+    "bookmarklet": "bookmarklet booking intake",
+    "manual_entry": "manual intake",
+    "shamrock-leads-dashboard": "dashboard intake",
+}
+
+
 def slack_text(doc: Dict[str, Any]) -> str:
     row = ledger_row(doc)
-    who = "Indemnitor" if row["submitted_by_role"] == "indemnitor" else "Defendant"
-    lines = [f"🌐 *New website application* ({who} form) — `{row['intake_id']}`"]
+    kind = _SLACK_KIND.get(str(doc.get("source") or ""), "intake")
+    role = row["submitted_by_role"]
+    who = ""
+    if role == "indemnitor":
+        who = " (Indemnitor form)"
+    elif role == "defendant":
+        who = " (Defendant form)"
+    lines = [f"📥 *New {kind}*{who} — `{row['intake_id']}`"]
     if row["defendant_name"]:
         lines.append(f"• Defendant: *{row['defendant_name']}*")
     ind = _short_name(row["indemnitor_name"])

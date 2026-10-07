@@ -188,7 +188,7 @@ async def send_prospecting_outreach(
             "county": county.replace(" County", "").title(),
             "bond_amount": bond_amount,
             "charges": charges,
-            "intake_url": intake_url or "https://shamrockbailbonds.com/intake",
+            "intake_url": intake_url or "https://shamrockbailbonds.biz/intake",
         }
 
         # Choose template based on bond amount
