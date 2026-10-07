@@ -28,11 +28,11 @@
 | LA | 64 | 13 | 3 | 1 | 4 | 46 | 10 |
 | MS | 82 | 9 | 1 | 0 | 4 | 69 | 8 |
 | NC | 100 | 60 | 3 | 1 | 0 | 80 | 16 |
-| SC | 46 | 46 | 7 | 1 | 0 | 2 | 36 |
+| SC | 46 | 46 | 7 | 1 | 0 | 0 | 38 |
 | TN | 96 | 22 | 9 | 0 | 74 | 0 | 13 |
 | TX | 254 | 34 | 2 | 0 | 0 | 252 | 0 |
 
-**Aggregate matrix counts:** verified public 33; candidate productive 8; recon only 281; unverified 501; fail closed 124.
+**Aggregate matrix counts:** verified public 33; candidate productive 8; recon only 281; unverified 499; fail closed 126.
 
 ## County matrix
 
@@ -625,9 +625,9 @@
 | SC | 069 | Marlboro County | Palmetto | registered | fail_closed | https://marlborocountyjailsc.org/ | HTTP 403 / Cloudflare to ordinary public access; no residential, proxy, or browser workaround permitted | Hold: fail closed in `marlboro.py` (`SOURCE_CONTRACT_VALIDATED=False`) and `SCRAPER_SOURCE_STATES` 2026-09-25. Reopen only when ordinary public access returns a broad roster with a source-issued booking number. |
 | SC | 065 | McCormick County | Palmetto | registered | fail_closed | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
 | SC | 071 | Newberry County | Palmetto | registered | verified_public | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
-| SC | 073 | Oconee County | Palmetto | registered | unverified | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
+| SC | 073 | Oconee County | Palmetto | registered | fail_closed | https://oconee-so-sc.zuercherportal.com/ | Ordinary public Zuercher inmates roster; no source booking/inmate ID on listing or detail | 2026-10-07 recon: public roster confirmed at oconee-so-sc.zuercherportal.com; rows lack source-issued booking/inmate ID. Hold fail_closed — do not invent keys. See docs/recon/SC_OCONEE_PICKENS_ZUERCHER_2026-10-07.md. |
 | SC | 075 | Orangeburg County | Palmetto | registered | fail_closed | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
-| SC | 077 | Pickens County | Palmetto | registered | unverified | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
+| SC | 077 | Pickens County | Palmetto | registered | fail_closed | https://pickens-so-sc.zuercherportal.com/ | Ordinary public Zuercher inmates roster; no source booking/inmate ID on listing or detail | 2026-10-07 recon: public roster confirmed at pickens-so-sc.zuercherportal.com; rows lack source-issued booking/inmate ID. Hold fail_closed — do not invent keys. See docs/recon/SC_OCONEE_PICKENS_ZUERCHER_2026-10-07.md. |
 | SC | 079 | Richland County | Palmetto | registered | fail_closed | https://www7.richlandcountysc.gov/JMSOnline/public/default.aspx | JMSOnline returned a maintenance page on 2026-09-23; list view has no source-issued booking key | Synthetic RIC_ keys are forbidden. SOURCE_CONTRACT_VALIDATED=False until the portal returns a real Inmate/Booking # on the broad list. |
 | SC | 081 | Saluda County | Palmetto | registered | fail_closed | https://saludacounty.sc.gov/departments/detention-center | Ordinary public landing page; no bypass used | Official Saluda County detention-center page; facility information only, no broad roster contract verified. |
 | SC | 083 | Spartanburg County | Palmetto | registered | fail_closed | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
