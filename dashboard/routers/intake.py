@@ -554,10 +554,6 @@ async def intake_submit(request: Request):
                     match_result.get("strategy"),
                     match_result.get("auto_linked"),
                 )
-                if isinstance(match_result, dict) and match_result.get("auto_linked"):
-                    best = match_result.get("best_match") or {}
-                    doc["matched_booking_number"] = best.get("booking_number") or doc.get("matched_booking_number")
-                    doc["match_confidence"] = match_result.get("confidence")
             except Exception as match_err:
                 logger.warning("[intake] Auto-match failed for %s: %s", intake_id, match_err)
 
@@ -576,8 +572,9 @@ async def intake_submit(request: Request):
         # Same post-save copy as the website webhook: Sheets ledger + Slack.
         # Fire-and-forget; a fan-out failure never fails the intake.
         try:
-            from dashboard.services.intake_fanout import schedule_after_save
-            schedule_after_save(dict(doc))
+            from dashboard.services.intake_fanout import intake_for_fanout, schedule_after_save
+            fanout_doc = await intake_for_fanout(intake_queue, intake_id, doc, match_result)
+            schedule_after_save(fanout_doc)
         except Exception as exc:
             logger.error("[intake] fan-out scheduling failed (non-fatal): %s", exc)
 
@@ -1092,12 +1089,28 @@ async def intake_promote(request: Request, intake_id: str):
     defendant_name = intake_doc.get("defendant_name", def_.get("name", "Unknown"))
     indemnitor_name = intake_doc.get("indemnitor_name", "Unknown")
 
-    # Parse bond amount safely
-    raw_bond = def_.get("bondAmount") or def_.get("bond_amount") or "0"
-    try:
-        bond_amount = float(str(raw_bond).replace(",", "").replace("$", ""))
-    except (ValueError, TypeError):
-        bond_amount = 0.0
+    # Bond amount comes from the county source or an explicit staff override.
+    # A blank or $0 amount is not a bond. Do not invent one and do not take a power.
+    if "bond_amount" in data:
+        raw_bond = data.get("bond_amount")
+    elif "bondAmount" in data:
+        raw_bond = data.get("bondAmount")
+    else:
+        raw_bond = def_.get("bondAmount")
+        if raw_bond in (None, ""):
+            raw_bond = def_.get("bond_amount")
+    bond_amount = None
+    if raw_bond not in (None, ""):
+        try:
+            bond_amount = float(str(raw_bond).replace(",", "").replace("$", "").strip())
+        except (ValueError, TypeError):
+            bond_amount = None
+    if bond_amount is None or bond_amount <= 0:
+        return JSONResponse(status_code=422, content={
+            "success": False,
+            "error": "Cannot promote: bond amount is blank or $0. "
+                     "Enter the county bond amount before a power can be assigned.",
+        })
 
     # ── 6. Auto-assign POA from inventory ────────────────────────────────────
     poa_inventory = get_collection("poa_inventory")
@@ -1106,7 +1119,7 @@ async def intake_promote(request: Request, intake_id: str):
     poa_query = {
         "surety_id": surety,
         "status": "available",
-        "max_bond_value": {"$gte": bond_amount} if bond_amount > 0 else {"$gt": 0},
+        "max_bond_value": {"$gte": bond_amount},
     }
     poa_doc = await poa_inventory.find_one(
         poa_query,

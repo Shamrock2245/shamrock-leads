@@ -367,6 +367,7 @@ const SLIntake = (() => {
             ${matchBadge}
             ${h.consent_given ? '<span style="background:#22c55e;color:#fff;padding:2px 8px;border-radius:12px;font-size:11px">✓ CONSENT</span>' : ''}
           </div>
+          <div id="intake-match-review" style="margin-bottom:12px"></div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
             <button type="button" class="btn-sm btn-primary" onclick="SLIntake.runMatch()" style="font-size:12px;padding:6px 12px">🔗 Match defendant</button>
             <button type="button" class="btn-sm btn-primary" onclick="SLIntake.writeBondFromIntake()" style="font-size:12px;padding:6px 12px">📄 Write packet</button>
@@ -415,6 +416,57 @@ const SLIntake = (() => {
     `;
   }
 
+  // ── Staff review when name+DOB has no county ───────────────────────────────
+  function _renderMatchReview(candidates) {
+    const host = document.getElementById('intake-match-review');
+    if (!host) return;
+    const rows = Array.isArray(candidates) ? candidates : [];
+    if (!rows.length) {
+      host.innerHTML = '<p style="margin:0;font-size:13px;color:#fbbf24">No county on this intake, and no arrest matched. Staff must choose the booking before promote.</p>';
+      return;
+    }
+    host.innerHTML = `
+      <div style="margin:0 0 8px;font-size:13px;color:#fbbf24">Staff review. Nothing is linked until you confirm the county.</div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        ${rows.map((row) => `
+          <button type="button" class="btn-sm intake-confirm-candidate"
+            data-booking="${_esc(row.booking_number || '')}"
+            data-county="${_esc(row.county || '')}"
+            data-state="${_esc(row.state || '')}"
+            style="text-align:left;font-size:12px;padding:6px 10px">
+            Confirm ${_esc(row.full_name || 'arrest')} · ${_esc(row.county || 'no county')}${row.state ? ' (' + _esc(row.state) + ')' : ''} · ${_esc(row.booking_number || '')} · ${row.confidence != null ? _esc(row.confidence) + '%' : ''}
+          </button>
+        `).join('')}
+      </div>
+    `;
+    host.onclick = async (event) => {
+      const btn = event.target.closest('.intake-confirm-candidate');
+      if (!btn || !_currentIntakeId) return;
+      btn.disabled = true;
+      try {
+        const res = await fetch(`/api/match/intake/${encodeURIComponent(_currentIntakeId)}/confirm`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            booking_number: btn.getAttribute('data-booking') || '',
+            county: btn.getAttribute('data-county') || '',
+            state: btn.getAttribute('data-state') || '',
+            agent: 'Dashboard',
+          }),
+        });
+        const payload = await res.json();
+        if (!res.ok || payload.success === false) {
+          throw new Error(payload.error || 'Confirm failed');
+        }
+        if (typeof SL !== 'undefined') SL.toast('✅ Match confirmed', 'success');
+        await openProcess(_currentIntakeId);
+      } catch (err) {
+        btn.disabled = false;
+        if (typeof SL !== 'undefined') SL.toast('Confirm error: ' + err.message, 'error');
+      }
+    };
+  }
+
   // ── Run matching engine from Bond Desk ─────────────────────────────────────
   async function runMatch() {
     if (!_currentIntakeId) {
@@ -438,7 +490,9 @@ const SLIntake = (() => {
       const booking = (best && (best.booking_number || best.Booking_Number)) || data.matched_booking_number || '';
       const name = (best && (best.full_name || best.Full_Name || best.defendant_name)) || '';
 
-      if (booking && _currentHydration) {
+      // A booking on best_match is only a link when the engine auto-linked it.
+      // Name+DOB without a county returns candidates for staff to confirm.
+      if (data.auto_linked && booking && _currentHydration) {
         _currentHydration.matched_booking_number = booking;
         _currentHydration.match_confidence = conf;
         if (_currentHydration.defendant && !_currentHydration.defendant.bookingNumber) {
@@ -446,14 +500,22 @@ const SLIntake = (() => {
         }
       }
 
-      if (typeof SL !== 'undefined') {
-        if (data.auto_linked || booking) {
-          SL.toast(`✅ Match${data.auto_linked ? ' (auto-linked)' : ''}: ${name || booking}${confLabel(conf)}`, 'success');
-        } else if (data.candidates && data.candidates.length) {
-          SL.toast(`⚠️ ${data.candidates.length} candidate(s) under threshold — review carefully (human gate)`, 'warn');
-        } else {
-          SL.toast('No automatic match — set booking # on intake or search Hot Leads', 'warn');
+      if (!data.auto_linked) {
+        _renderMatchReview(data.candidates || []);
+        if (typeof SL !== 'undefined') {
+          const n = (data.candidates || []).length;
+          SL.toast(
+            n
+              ? `⚠️ ${n} possible arrest(s). Confirm the county before this intake is linked.`
+              : 'No automatic match — set booking # on intake or search Hot Leads',
+            'warn'
+          );
         }
+        return;
+      }
+
+      if (typeof SL !== 'undefined') {
+        SL.toast(`✅ Match (auto-linked): ${name || booking}${confLabel(conf)}`, 'success');
       }
 
       // Re-open process view with refreshed hydration from API

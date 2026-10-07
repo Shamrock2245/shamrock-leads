@@ -501,10 +501,6 @@ async def wix_intake_webhook(request: Request, api_key: str = Query(default=""))
         from dashboard.services.matching_engine import MatchingEngine
 
         match_result = await MatchingEngine(get_db()).match_intake(intake_doc)
-        if isinstance(match_result, dict) and match_result.get("auto_linked"):
-            best = match_result.get("best_match") or {}
-            intake_doc["matched_booking_number"] = best.get("booking_number") or intake_doc.get("matched_booking_number")
-            intake_doc["match_confidence"] = match_result.get("confidence")
     except Exception as match_err:
         logger.warning("[wix_intake_webhook] Auto-match failed for %s: %s", intake_id, match_err)
 
@@ -524,9 +520,10 @@ async def wix_intake_webhook(request: Request, api_key: str = Query(default=""))
 
     # 6. Fan-out AFTER the save — fire-and-forget, never fails the intake.
     try:
-        from dashboard.services.intake_fanout import schedule_after_save
+        from dashboard.services.intake_fanout import intake_for_fanout, schedule_after_save
 
-        schedule_after_save(dict(intake_doc))
+        fanout_doc = await intake_for_fanout(intake_queue, intake_id, intake_doc, match_result)
+        schedule_after_save(fanout_doc)
     except Exception as exc:
         logger.error("[wix_intake_webhook] fan-out scheduling failed (non-fatal): %s", exc)
 

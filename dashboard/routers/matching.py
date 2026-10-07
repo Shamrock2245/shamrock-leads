@@ -62,6 +62,7 @@ async def confirm_match(request: Request, intake_id: str):
         data = (await request.json()) or {}
         booking_number = data.get("booking_number", "").strip()
         county = data.get("county", "").strip()
+        state = str(data.get("state") or "").strip()
         agent = data.get("agent", "staff")
 
         if not booking_number or not county:
@@ -73,6 +74,7 @@ async def confirm_match(request: Request, intake_id: str):
             booking_number=booking_number,
             county=county,
             agent=agent,
+            state=state,
         )
         return result
 

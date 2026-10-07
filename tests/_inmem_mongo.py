@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any, Dict, List
 
 
@@ -15,8 +16,14 @@ def _get(doc: Dict[str, Any], key: str):
 
 
 def _match_value(val, cond) -> bool:
-    if isinstance(cond, dict) and any(k.startswith("$") for k in cond):
+    if isinstance(cond, dict) and any(str(k).startswith("$") for k in cond):
+        if "$regex" in cond:
+            flags = re.IGNORECASE if "i" in str(cond.get("$options") or "") else 0
+            if val is None or re.search(str(cond["$regex"]), str(val), flags) is None:
+                return False
         for op, arg in cond.items():
+            if op in ("$regex", "$options"):
+                continue
             if op == "$in" and val not in arg:
                 return False
             if op == "$nin" and val in arg:
@@ -41,6 +48,10 @@ def matches(doc: Dict[str, Any], flt: Dict[str, Any]) -> bool:
     for key, cond in (flt or {}).items():
         if key == "$or":
             if not any(matches(doc, sub) for sub in cond):
+                return False
+            continue
+        if key == "$and":
+            if not all(matches(doc, sub) for sub in cond):
                 return False
             continue
         if not _match_value(_get(doc, key), cond):
