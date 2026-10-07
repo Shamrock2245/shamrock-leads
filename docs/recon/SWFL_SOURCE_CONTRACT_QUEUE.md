@@ -41,3 +41,7 @@ They remain **`recon_only` / Health `unverified`** — not `verified_public`.
 - Do not touch `shamrock-trading-bot`.
 - Do not change production secrets or invent credentials.
 - Do not send emails.
+
+## 2026-10-07 audit update
+
+See `FL_SARASOTA_MANATEE_AUDIT_2026-10-07.md`. Sarasota stays fail closed: the official current-inmate listing has only per-person link ids, with no booking number or booking timestamp. Manatee is hardened (header-mapped keys, required Released, paging drift guards, unknown bond kept blank, `EgressBlocked` on CF/non-residential exits, `MANATEE_EGRESS_MODE=direct` for Leads Ops Mac/hotspot runs). It stays `unverified` until a residential read + prod write smoke.

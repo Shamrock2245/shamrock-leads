@@ -143,21 +143,78 @@ def lee_clerk_search_url(case_number: str = "", booking_number: str = "") -> str
     return f"https://matrix.leeclerk.org/Home/Search?query={quote(query)}"
 
 
+def _row_bond(item: Dict[str, Any]) -> Optional[float]:
+    """Per-charge bond from a structured row; ``None`` when the source left it blank.
+
+    A blank/missing amount is *unknown*, not $0 (Manatee/Charlotte rosters
+    publish no bond). A source-published ``0`` stays ``0.0``.
+    """
+    published_zero = False
+    for key in ("bond_amount", "amount", "bond"):
+        val = item.get(key)
+        if val is None or (isinstance(val, str) and not val.strip()):
+            continue
+        amount = _money(val)
+        if amount:
+            return amount
+        published_zero = True
+    return 0.0 if published_zero else None
+
+
+def arrest_bond_value(arrest: Optional[Dict[str, Any]]) -> Any:
+    """Bond as the scraper recorded it on an arrests doc.
+
+    ``ArrestRecord.to_mongo_doc`` stores ``bond_amount`` as a float (``0.0``
+    when the source published nothing) and the source string in
+    ``bond_amount_raw``. Prefer the raw string so an unknown bond (``""``)
+    stays unknown instead of hydrating as $0.
+
+    Staff edits (``/api/leads/update-bond-amount`` sets ``bond_override``;
+    ``/api/leads/update-charge-bonds`` sets ``last_checked_mode``) update the
+    numeric ``bond_amount`` but not ``bond_amount_raw``, so they win over a
+    stale blank raw value. A staff-entered $0 stays a known ``"0"``.
+    """
+    arrest = arrest if isinstance(arrest, dict) else {}
+    if arrest.get("Bond_Amount") not in (None, ""):
+        return arrest.get("Bond_Amount")
+    numeric = arrest.get("bond_amount")
+    staff_set = bool(arrest.get("bond_override")) or (
+        arrest.get("last_checked_mode") == "MANUAL_CHARGE_BONDS"
+    )
+    if staff_set and numeric not in (None, ""):
+        return numeric if _money(numeric) else "0"
+    if "bond_amount_raw" in arrest:
+        raw = arrest.get("bond_amount_raw")
+        if raw is not None and str(raw).strip():
+            return raw
+        # Blank raw = source published nothing; a positive numeric written by
+        # a later updater is still a real amount, a 0.0 is not.
+        return numeric if _money(numeric) else ""
+    return numeric
+
+
 def charge_details_from_sources(
     *,
     arrest: Optional[Dict[str, Any]] = None,
     bond: Optional[Dict[str, Any]] = None,
     charges_text: str = "",
     default_case: str = "",
-    default_bond: float = 0.0,
+    default_bond: Optional[float] = 0.0,
 ) -> List[Dict[str, Any]]:
-    """Lee (and later counties) store structured rows on arrest.extra.charge_details."""
+    """Lee (and later counties) store structured rows on arrest.extra.charge_details.
+
+    ``default_bond=None`` means the booking's bond is unknown: rows built from
+    ``charges_text`` then carry ``bond_amount=None`` (blank in Write Bond), not 0.
+    """
     arrest = arrest if isinstance(arrest, dict) else {}
     bond = bond if isinstance(bond, dict) else {}
     extra = arrest.get("extra") if isinstance(arrest.get("extra"), dict) else {}
+    # Top-level arrest.charge_details is either the Mongo writer's copy of
+    # extra.charge_details or the staff-edited rows saved by
+    # /api/leads/update-charge-bonds, so it wins over the scraped original.
     raw = (
-        extra.get("charge_details")
-        or arrest.get("charge_details")
+        arrest.get("charge_details")
+        or extra.get("charge_details")
         or bond.get("charge_details")
         or bond.get("charge_list")
         or []
@@ -172,7 +229,7 @@ def charge_details_from_sources(
                 rows.append({
                     "charge": desc,
                     "description": desc,
-                    "bond_amount": _money(item.get("bond_amount") or item.get("amount") or item.get("bond")),
+                    "bond_amount": _row_bond(item),
                     "bond_type": _first(item.get("bond_type"), "SURETY"),
                     "case_number": _first(item.get("case_number"), item.get("Case_Number"), default_case),
                     "poa_number": _first(item.get("poa_number"), item.get("POA_Number")),
@@ -183,7 +240,7 @@ def charge_details_from_sources(
                 rows.append({
                     "charge": str(item).strip(),
                     "description": str(item).strip(),
-                    "bond_amount": 0.0,
+                    "bond_amount": None,  # bare charge text: bond unknown
                     "bond_type": "SURETY",
                     "case_number": default_case,
                     "poa_number": "",
@@ -194,7 +251,9 @@ def charge_details_from_sources(
             rows.append({
                 "charge": part,
                 "description": part,
-                "bond_amount": default_bond if idx == 0 else 0.0,
+                "bond_amount": (
+                    None if default_bond is None else (default_bond if idx == 0 else 0.0)
+                ),
                 "bond_type": "SURETY",
                 "case_number": default_case,
                 "poa_number": "",
@@ -349,14 +408,16 @@ async def resolve_case_context(
         packet.get("indemnitor_name"),
     )
 
-    bond_amount = _money(
-        _first(
-            bond.get("Bond_Amount"), bond.get("bond_amount"),
-            def_nested.get("bondAmount"), intake.get("bond_amount"),
-            arrest.get("Bond_Amount"), arrest.get("bond_amount"),
-            packet.get("bond_amount"),
-        )
+    bond_raw = _first(
+        bond.get("Bond_Amount"), bond.get("bond_amount"),
+        def_nested.get("bondAmount"), intake.get("bond_amount"),
+        arrest_bond_value(arrest),
+        packet.get("bond_amount"),
     )
+    # bond_amount stays a float for existing consumers; bond_amount_known says
+    # whether any source actually published it (blank != $0).
+    bond_amount_known = bool(bond_raw)
+    bond_amount = _money(bond_raw)
     premium = _money(
         _first(bond.get("Premium"), bond.get("premium_amount"), packet.get("premium_amount"))
     )
@@ -442,6 +503,7 @@ async def resolve_case_context(
             arrest.get("Charge"), intake.get("charges"), bond.get("charges"),
         ),
         "bond_amount": bond_amount,
+        "bond_amount_known": bond_amount_known,
         "premium_amount": premium,
         "is_small_bond": bond_amount > 0 and bond_amount <= SMALL_BOND_MAX,
         "small_bond_max": SMALL_BOND_MAX,
@@ -525,7 +587,7 @@ async def resolve_case_context(
         bond=bond,
         charges_text=context.get("charges") or "",
         default_case=context.get("case_number") or "",
-        default_bond=bond_amount,
+        default_bond=bond_amount if bond_amount_known else None,
     )
     context["charge_details"] = charge_rows
     context["court_date"] = _first(

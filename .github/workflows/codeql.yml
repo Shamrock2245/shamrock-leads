@@ -1,0 +1,35 @@
+# Weekly Python CodeQL scan. Not on pull requests; the repo is large and
+# this must not sit on the merge path. Findings land in the Security tab.
+#
+# Schedule: Monday 05:41 UTC.
+# Disable: Actions → CodeQL → Disable workflow.
+
+name: CodeQL
+
+on:
+  schedule:
+    - cron: "41 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: Python
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: python
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:python"

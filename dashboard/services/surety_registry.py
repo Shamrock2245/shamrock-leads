@@ -12,17 +12,22 @@ Roche Surety, Universal, Bankers Surety. The Write Bond picker shows them
 greyed out via GET /api/paperwork/sureties.
 
 HOW TO ACTIVATE A SURETY (e.g. "lexington")
-  1. DocuSeal: build the carrier's combined packet template on
-     sign.shamrockbailbonds.biz using the canonical field names
-     (defendant_*, indemnitor_*, coindemnitor_*, poa_*, bond_*).
-  2. Env (VPS .env): DOCUSEAL_TEMPLATE_ID_<ID upper>, e.g.
-     DOCUSEAL_TEMPLATE_ID_LEXINGTON=<template id>.
-  3. POA inventory: set `poa_prefixes` below to the carrier's POA prefixes
-     and load its powers into `poa_inventory` with surety_id=<id>.
-  4. Drive: set `drive_folder_label` (folder is created on first upload
-     under the Completed Bonds root).
-  5. Local blanks (print/offline): add templates/<id>/ PDFs.
-  6. Flip `active` to True, add a test, deploy.
+  Staff can publish one without a code change: Super CRM → Paperwork
+  Config → Surety Templates → Add surety. Upload the carrier PDFs, confirm
+  canonical mappings, set POA prefixes, preview with sample data, publish.
+  Write Bond then uses that immutable version.
+
+  DocuSeal id resolution (do not break production):
+    1. Env DOCUSEAL_TEMPLATE_ID_<ID> still wins for registry sureties.
+       OSI reads DOCUSEAL_TEMPLATE_ID_OSI then DOCUSEAL_TEMPLATE_ID.
+       Palmetto reads DOCUSEAL_TEMPLATE_ID_PALMETTO only.
+       Production stays OSI=1, Palmetto=5 while those env vars are set.
+    2. Else the active published version's docuseal_template_id.
+    Seeded OSI/Palmetto v1 leave that id empty so step 1 is unchanged.
+
+  POA prefixes and inventory for a new carrier are owner input. Publishing
+  does not invent them. Listed-but-inactive carriers stay fail-closed until
+  a non-seed version is published.
 """
 from __future__ import annotations
 
@@ -139,10 +144,32 @@ def is_known_surety(raw: object) -> bool:
     return normalize_surety(raw) in SURETY_REGISTRY
 
 
+def _published_doc(surety_id: str):
+    """Active published version, if the onboarding store can be imported."""
+    try:
+        from dashboard.services.surety_template_store import active_published
+    except Exception:
+        return None
+    return active_published(surety_id)
+
+
 def is_supported_surety(raw: object) -> bool:
-    """True only for ACTIVE sureties (the ones we can generate paperwork for)."""
+    """True for registry-active sureties and for sureties with a published template.
+
+    A migration seed does not flip a registry-inactive carrier on. Lexington,
+    Roche, Universal, and Bankers stay fail-closed until staff publish a version.
+    """
     s = normalize_surety(raw)
-    return bool(s in SURETY_REGISTRY and SURETY_REGISTRY[s]["active"])
+    if not s:
+        return False
+    if s in SURETY_REGISTRY and SURETY_REGISTRY[s]["active"]:
+        return True
+    doc = _published_doc(s)
+    if not doc:
+        return False
+    if s in SURETY_REGISTRY and not SURETY_REGISTRY[s]["active"] and doc.get("migration_seed"):
+        return False
+    return True
 
 
 def _error_for(s: str) -> UnsupportedSuretyError:
@@ -172,15 +199,23 @@ def require_surety(raw: object) -> str:
 
 
 def template_id_for(raw: object) -> Optional[str]:
-    """DocuSeal template id for an ACTIVE surety, else None (fail closed)."""
+    """DocuSeal template id for a surety we can write, else None (fail closed).
+
+    Registry env vars win when set (production OSI=1, Palmetto=5). A published
+    version id is used only when no env id is set. Inactive carriers without
+    a published version stay None even if their env var is present.
+    """
     s = normalize_surety(raw)
     if not is_supported_surety(s):
         return None
-    for env_key in SURETY_REGISTRY[s]["template_env"]:
-        tid = (os.getenv(env_key) or "").strip()
-        if tid:
-            return tid
-    return None
+    if s in SURETY_REGISTRY:
+        for env_key in SURETY_REGISTRY[s]["template_env"]:
+            tid = (os.getenv(env_key) or "").strip()
+            if tid:
+                return tid
+    doc = _published_doc(s)
+    tid = str((doc or {}).get("docuseal_template_id") or "").strip()
+    return tid or None
 
 
 def drive_folder_label(raw: object) -> Optional[str]:
@@ -188,23 +223,117 @@ def drive_folder_label(raw: object) -> Optional[str]:
     s = normalize_surety(raw)
     if not is_supported_surety(s):
         return None
-    return SURETY_REGISTRY[s]["drive_folder_label"]
+    if s in SURETY_REGISTRY and SURETY_REGISTRY[s]["active"]:
+        return SURETY_REGISTRY[s]["drive_folder_label"]
+    doc = _published_doc(s)
+    label = str((doc or {}).get("drive_folder_label") or "").strip()
+    return label or None
+
+
+def published_poa_tiers(surety_id: str) -> List[tuple]:
+    """(max_bond_amount, prefix) from the active published version, smallest cap first."""
+    try:
+        from dashboard.services.surety_template_store import published_poa_prefixes
+    except Exception:
+        return []
+    rows = []
+    for row in published_poa_prefixes(surety_id):
+        prefix = str(row.get("prefix") or "").strip().upper()
+        try:
+            cap = float(row.get("max_bond_amount") or 0)
+        except (TypeError, ValueError):
+            continue
+        if prefix and cap > 0:
+            rows.append((cap, prefix))
+    rows.sort(key=lambda item: (item[0], item[1]))
+    return rows
+
+
+def _prefix_matches(clean: str, prefix: str) -> bool:
+    if not clean or not prefix:
+        return False
+    if clean == prefix:
+        return True
+    if clean.startswith(prefix) and not clean[len(prefix)].isalnum():
+        return True
+    return False
+
+
+def surety_for_poa_prefix(prefix: str) -> Optional[str]:
+    """Surety that owns this prefix on a published version, else OSI/Palmetto by pattern."""
+    clean = str(prefix or "").strip().upper()
+    if not clean:
+        return None
+    try:
+        from dashboard.services.surety_template_store import list_onboarding
+        rows = list_onboarding()
+    except Exception:
+        rows = []
+    best: Optional[tuple] = None
+    for row in rows:
+        if not row.get("published_version"):
+            continue
+        sid = str(row.get("surety_id") or "")
+        for tier in row.get("poa_prefixes") or []:
+            pfx = str((tier or {}).get("prefix") or "").strip().upper()
+            if not _prefix_matches(clean, pfx):
+                continue
+            if best is None or len(pfx) > best[0]:
+                best = (len(pfx), sid)
+    if best:
+        return best[1]
+    if clean.startswith("PSC") or clean.startswith("PAL"):
+        return "palmetto"
+    if clean.startswith("OSI") or "OSI-P" in clean:
+        return "osi"
+    return None
 
 
 def picker_options() -> List[Dict[str, Any]]:
-    """Rows for the Write Bond surety picker. Inactive rows render greyed out."""
+    """Rows for the Write Bond surety picker. Inactive rows render greyed out.
+
+    A published onboarding version makes a listed or new surety selectable.
+    Registry `active: False` alone does not.
+    """
     rows = []
+    seen = set()
     for sid, meta in SURETY_REGISTRY.items():
-        has_template = bool(template_id_for(sid))
+        seen.add(sid)
+        selectable = is_supported_surety(sid)
+        has_template = bool(template_id_for(sid)) if selectable else False
         rows.append({
             "id": sid,
             "label": meta["label"],
             "short": meta["short"],
-            "active": bool(meta["active"]),
-            "selectable": bool(meta["active"]),
+            "active": selectable,
+            "selectable": selectable,
             "template_configured": has_template,
-            "status": "active" if meta["active"] else "coming_soon",
-            "reason": "" if meta["active"] else "Coming soon — no paperwork template yet",
+            "status": "active" if selectable else "coming_soon",
+            "reason": "" if selectable else "Coming soon — no paperwork template yet",
             "website": meta.get("website") or "",
+        })
+    try:
+        from dashboard.services.surety_template_store import list_onboarding
+        extras = list_onboarding()
+    except Exception:
+        extras = []
+    for row in extras:
+        sid = row.get("surety_id")
+        if not sid or sid in seen:
+            continue
+        if not row.get("published_version"):
+            continue
+        seen.add(sid)
+        selectable = is_supported_surety(sid)
+        rows.append({
+            "id": sid,
+            "label": row.get("label") or sid,
+            "short": row.get("label") or sid,
+            "active": selectable,
+            "selectable": selectable,
+            "template_configured": bool(template_id_for(sid)) if selectable else False,
+            "status": "active" if selectable else "coming_soon",
+            "reason": "" if selectable else "Coming soon — no paperwork template yet",
+            "website": "",
         })
     return rows
