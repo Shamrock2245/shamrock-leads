@@ -122,6 +122,7 @@ jobs:
             tests/test_slack_alerts.py \
             tests/test_payment_links.py \
             tests/test_surety_registry.py \
+            tests/test_surety_onboarding.py \
             tests/test_wix_intake_webhook.py \
             tests/test_intake_fanout.py \
             tests/test_kiosk_privacy_and_confirm.py \

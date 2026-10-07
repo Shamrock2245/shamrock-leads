@@ -1627,6 +1627,19 @@ class DocuSealService:
                 include_defendant=include_defendant,
             )
         raw_values = self.prefill_values_from_bond(bond_data)
+        # Published "mapped" sureties add their PDF field names. OSI/Palmetto
+        # seeds stay on canonical_prefill, so this dict is unchanged for them.
+        surety_for_alias = str(
+            bond_data.get("surety_id") or bond_data.get("surety") or ""
+        ).strip().lower()
+        if surety_for_alias:
+            try:
+                from dashboard.services.surety_packet_fill import docuseal_mapped_aliases
+                for key, val in docuseal_mapped_aliases(surety_for_alias, bond_data).items():
+                    if key not in raw_values and str(val or "").strip():
+                        raw_values[key] = val
+            except Exception:
+                logger.warning("[docuseal] published field aliases skipped for surety=%s", surety_for_alias)
 
         in_person = bool(bond_data.get("in_person") or bond_data.get("in_person_scan"))
         payload_values: Dict[str, Any] = raw_values
@@ -1930,14 +1943,18 @@ class DocuSealService:
 
 def resolve_template_id_for_surety(surety_id: Optional[str] = None) -> Optional[str]:
     """
-    DocuSeal template id for an ACTIVE surety from the surety registry
+    DocuSeal template id from the surety registry
     (dashboard/services/surety_registry.py):
 
       osi       — DOCUSEAL_TEMPLATE_ID_OSI, then DOCUSEAL_TEMPLATE_ID
       palmetto  — DOCUSEAL_TEMPLATE_ID_PALMETTO only (no OSI fallback)
-      inactive  — Lexington / Roche / Universal / Bankers → None until activated
+      published — if no env id is set, the active published version's id
+      inactive  — Lexington / Roche / Universal / Bankers → None until
+                  staff publish a version (env alone does not activate them)
 
     Missing, unknown, or inactive surety → None (fail closed; never OSI).
+    Production keeps working while DOCUSEAL_TEMPLATE_ID_OSI / _PALMETTO are set;
+    those env vars win over any id stored on a published version.
     """
     from dashboard.services.surety_registry import template_id_for
 

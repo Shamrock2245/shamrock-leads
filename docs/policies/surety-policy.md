@@ -113,7 +113,7 @@ The surety selection is made by the bondsman based on:
 
 ### Validation Rules
 
-- `Surety_ID` must be `osi` or `palmetto`
+- `Surety_ID` must be an active surety: `osi`, `palmetto`, or a carrier with a published Add-surety version
 - Selected POA prefix must belong to the selected surety
 - POA must be in `available` status in the POAInventory
 - Assigned POA's tier must cover the bond amount
@@ -166,6 +166,34 @@ Available → Assigned → Used → Reported
 - Unreported POAs flagged in monthly compliance check
 
 ---
+
+## Adding a surety (no code change)
+
+Staff add a carrier from Super CRM → Paperwork Config → Surety Templates → **Add surety**.
+
+1. Upload one or more PDFs (fillable AcroForm, or a flat PDF with staff-placed boxes).
+2. Confirm the suggested canonical mappings. Publishing is blocked until every required rule below is mapped.
+3. Set POA prefixes and max bond amounts when the owner has them. Repeat-per-charge duplicates that form once per charge (POA, amount, description).
+4. Preview a local PDF filled with fake sample data. Preview does not call DocuSeal and does not contact anyone.
+5. Publish. The version is immutable. Older versions stay for packets already in flight. Write Bond uses the newest published version.
+
+Required canonical rules:
+
+| Rule | Satisfied by |
+|------|----------------|
+| `defendant.identity` | `defendant.full_name`, or `defendant.first_name` and `defendant.last_name` |
+| `defendant.county` | `defendant.county` |
+| `booking.number` | `booking.number` |
+| `case.number` | `case.number` |
+| `charge.description` | `charge.description` |
+| `charge.bond_amount` | `charge.bond_amount` |
+| `charge.poa_number` | `charge.poa_number` |
+| `bond.premium_amount` | `bond.premium_amount` |
+| `bond.execution_date` | `bond.execution_date`, or day + month + year (or 2-digit year) |
+
+OSI and Palmetto v1 are seeded onto this same publish record. Their appearance-bond fill still uses the historical recipes, so filled output is unchanged. DocuSeal template ids still come from `DOCUSEAL_TEMPLATE_ID_OSI` (then `DOCUSEAL_TEMPLATE_ID`) and `DOCUSEAL_TEMPLATE_ID_PALMETTO`. A published version id is used only when the env var is unset. Production OSI template 1 and Palmetto template 5 stay in effect while those env vars are set.
+
+A new carrier does not invent a premium, POA number, phone, or email. Missing mapped values fail closed. Lexington National, Roche Surety, Universal, and Bankers Surety stay inactive until their blank forms and POA prefixes are supplied and a version is published.
 
 ## Escalation Conditions
 

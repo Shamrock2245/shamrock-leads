@@ -726,23 +726,12 @@ def _apply_field_values(page, field_values: dict, font_sizes: Optional[dict] = N
         _set_widget_value_with_scaling(widget, val, default_font_size=default_fs)
 
 
-def fill_osi_bond(data: dict) -> bytes:
+def build_osi_field_values(data: dict) -> tuple[dict, dict]:
+    """Historical OSI appearance-bond values and font sizes.
+
+    Published OSI v1 calls this recipe so filled output stays identical.
+    New sureties do not use these defaults (premium floor, TBN, "OSI").
     """
-    Fill the OSI Appearance Bond template with arrest data.
-    
-    Expected data keys:
-        name/defendant_name, first_name, last_name, booking_number, county, bond_amount,
-        charge, court_date, court_time, case_number, address, dob,
-        bond_date, poa_number, court_type, indemnitor_name
-    
-    Returns: PDF bytes
-    """
-    if not OSI_TEMPLATE.exists():
-        raise FileNotFoundError(f"OSI template not found: {OSI_TEMPLATE}")
-    
-    doc = fitz.open(str(OSI_TEMPLATE))
-    page = doc[0]
-    
     bond_amount = _safe_float(data.get("bond_amount", 0))
     premium = max(100.0, bond_amount * 0.10)
     date_parts = _parse_date_parts(data.get("bond_date", ""))
@@ -822,9 +811,28 @@ def fill_osi_bond(data: dict) -> bytes:
         "IndNameandDefName": 9,
     }
 
+    return field_values, font_sizes
+
+
+def fill_osi_bond(data: dict) -> bytes:
+    """
+    Fill the OSI Appearance Bond template with arrest data.
+
+    Expected data keys:
+        name/defendant_name, first_name, last_name, booking_number, county, bond_amount,
+        charge, court_date, court_time, case_number, address, dob,
+        bond_date, poa_number, court_type, indemnitor_name
+
+    Returns: PDF bytes
+    """
+    if not OSI_TEMPLATE.exists():
+        raise FileNotFoundError(f"OSI template not found: {OSI_TEMPLATE}")
+
+    field_values, font_sizes = build_osi_field_values(data)
+    doc = fitz.open(str(OSI_TEMPLATE))
+    page = doc[0]
     _apply_field_values(page, field_values, font_sizes)
 
-    # Output
     buf = io.BytesIO()
     try:
         doc.save(buf)
@@ -834,22 +842,12 @@ def fill_osi_bond(data: dict) -> bytes:
     return buf.read()
 
 
-def fill_palmetto_bond(data: dict) -> bytes:
+def build_palmetto_field_values(data: dict) -> tuple[dict, dict]:
+    """Historical Palmetto appearance-bond values and font sizes.
+
+    Published Palmetto v1 calls this recipe. Field names are the historical
+    writer keys (some differ from the blank's widget names).
     """
-    Fill the Palmetto Appearance Bond template with arrest data.
-    
-    Expected data keys:
-        name/defendant_name, booking_number, county, bond_amount, charge, court_date,
-        case_number, address, bond_date, poa_number
-    
-    Returns: PDF bytes
-    """
-    if not PALMETTO_TEMPLATE.exists():
-        raise FileNotFoundError(f"Palmetto template not found: {PALMETTO_TEMPLATE}")
-    
-    doc = fitz.open(str(PALMETTO_TEMPLATE))
-    page = doc[0]
-    
     bond_amount = _safe_float(data.get("bond_amount", 0))
     premium = max(100.0, bond_amount * 0.10)
     date_parts = _parse_date_parts(data.get("bond_date", ""))
@@ -921,6 +919,25 @@ def fill_palmetto_bond(data: dict) -> bytes:
         "chargesField1": 9.0,
     }
 
+    return field_values, font_sizes
+
+
+def fill_palmetto_bond(data: dict) -> bytes:
+    """
+    Fill the Palmetto Appearance Bond template with arrest data.
+
+    Expected data keys:
+        name/defendant_name, booking_number, county, bond_amount, charge, court_date,
+        case_number, address, bond_date, poa_number
+
+    Returns: PDF bytes
+    """
+    if not PALMETTO_TEMPLATE.exists():
+        raise FileNotFoundError(f"Palmetto template not found: {PALMETTO_TEMPLATE}")
+
+    field_values, font_sizes = build_palmetto_field_values(data)
+    doc = fitz.open(str(PALMETTO_TEMPLATE))
+    page = doc[0]
     _apply_field_values(page, field_values, font_sizes)
 
     buf = io.BytesIO()
@@ -999,10 +1016,9 @@ def generate_appearance_bonds(bond_data: dict, template: Optional[str] = None) -
         if not charge_data["case_number"]:
             missing_case.append(row["index"])
 
-        if surety == "palmetto":
-            pdf_bytes = fill_palmetto_bond(charge_data)
-        else:
-            pdf_bytes = fill_osi_bond(charge_data)
+        from dashboard.services.surety_packet_fill import fill_published_appearance
+
+        pdf_bytes = fill_published_appearance(surety, charge_data)
         pdfs.append(pdf_bytes)
 
     if missing_poa:

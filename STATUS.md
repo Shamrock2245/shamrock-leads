@@ -16,6 +16,16 @@
 
 ---
 
+## Add surety — data-driven surety templates (2026-10-07)
+
+Staff can add a carrier from Super CRM → Paperwork Config → Surety Templates without a code change per surety. They upload AcroForm or flat PDFs, confirm canonical mappings (flat PDFs get staff-placed boxes), set POA prefixes and a per-charge repeat form, preview a local PDF filled with fake sample data, and publish an immutable version. Write Bond / DocuSeal reads the active published version. Prior versions stay for audit.
+
+OSI and Palmetto v1 are seeded onto that path. Appearance-bond bytes still come from the historical recipes in `bond_pdf_service`, including the empty-fill `/V` clear. Env template ids still win: `DOCUSEAL_TEMPLATE_ID_OSI` (fallback `DOCUSEAL_TEMPLATE_ID`) and `DOCUSEAL_TEMPLATE_ID_PALMETTO` (no OSI fallback). Production stays OSI template 1 and Palmetto template 5 while those vars are set. Seeded versions do not store a DocuSeal id.
+
+Publishing is blocked until defendant identity, county, booking number, case number, charge, bond amount, per-charge POA, premium, and execution date are mapped. New sureties do not invent premiums, POA numbers, phones, or emails. Lexington National, Roche Surety, Universal, and Bankers Surety stay inactive until blank forms and POA prefixes are provided.
+
+Tests: `tests/test_surety_onboarding.py` (included in `.github/workflows/ci.yml`).
+
 ## BailSafe P0 slice A2 — Missed check-in evidence pack (2026-10-07)
 
 Staff can download a check-in evidence ZIP for a booking from Active Bonds (Evidence) or the Check-In Compliance report. The pack is the last stored `check_in_log` and `bond_checkins` rows: timestamp, lat/lon and accuracy when those fields were stored, and a selfie file only when stored bytes or an upload under `dashboard/uploads` exist. Due and missed times come from the bond. If the booking exists and has no logs, the PDF says no check-in logs are on file. Reports also lists signed bonds whose check-in link was never sent (`checkin_enroll` task when one is pending). God-admin, admin, and staff only. The recovery role stays off this pack.

@@ -35,7 +35,7 @@ Hot Leads → contact (iMessage / sequence) → Bond Desk (intake + match + pack
 | Indemnitors | tabIndemnitor | `/api/indemnitors/*` | indemnitors, matches |
 | Lead Pipeline (legacy) | tabProspective | `/api/prospective/*`, outreach | prospective_bonds |
 | Matching | (Bond Desk + match manager) | `/api/bonds/match`, `/api/match-manager/*` | matches, active_bonds |
-| Paperwork Config | tabPaperwork | DocuSeal services | paperwork_packets |
+| Paperwork Config | tabPaperwork | DocuSeal services, `/api/crm/sureties/onboarding` | paperwork_packets, `surety_template_versions` |
 | Payments | Accounting / plans | `/api/payments/*` | payments, payment_plans |
 | Tasks | Today / tasks API | `/api/tasks/*` | tasks |
 | Tracking | tabTracking | Traccar webhooks | locations |

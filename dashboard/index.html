@@ -5025,7 +5025,7 @@
       <div class="inv-tabs" style="margin-top:16px;">
         <button class="inv-tab-btn active" id="pwSubTab_live" onclick="SLPaperwork.switchSubTab('live')">📋 Live Document Packets</button>
         <button class="inv-tab-btn" id="pwSubTab_builder" onclick="SLPaperwork.switchSubTab('builder')">🎯 Packet Composition Rules</button>
-        <button class="inv-tab-btn" id="pwSubTab_templates" onclick="SLPaperwork.switchSubTab('templates')">⚙️ Surety Templates & Config</button>
+        <button class="inv-tab-btn" id="pwSubTab_templates" onclick="SLPaperwork.switchSubTab('templates');window.SLSuretyOnboarding&&SLSuretyOnboarding.init()">⚙️ Surety Templates & Config</button>
         <button class="inv-tab-btn" id="pwSubTab_rules" onclick="SLPaperwork.switchSubTab('rules')">📜 Document Rules</button>
         <button class="inv-tab-btn" id="pwSubTab_post_release" onclick="SLPaperwork.switchSubTab('post_release')">🛡️ Post-Release & Forfeiture Remedies</button>
         <button class="inv-tab-btn" id="pwSubTab_adobe_tools" onclick="SLPaperwork.switchSubTab('adobe_tools');SLPaperwork.initAdobeTools()">🔬 Adobe PDF Tools</button>
@@ -5228,6 +5228,11 @@
               <tbody></tbody>
             </table>
           </div>
+        </div>
+
+        <div class="glass-panel" id="suretyOnboardingRoot" style="margin-top:20px;">
+          <h3>Add surety</h3>
+          <p style="font-size:12px;color:var(--text-muted,#94a3b8);margin:0 0 8px 0;">Staff only. Upload carrier PDFs, confirm field mappings, preview with sample data, then publish. Nothing is sent to a defendant or indemnitor.</p>
         </div>
       </div>
 
@@ -6509,6 +6514,7 @@
 <script defer src="/sl-palantir.js?v=6"></script>
 <script defer src="/sl-alpr.js?v=3"></script>
 <script defer src="/sl-paperwork.js?v=4"></script>
+<script defer src="/sl-surety-onboarding.js?v=1"></script>
 <script defer src="/sl-automations.js?v=4"></script>
 <script defer src="/sl-relationships.js?v=1"></script>
 <script defer src="/sl-family-tree.js?v=1"></script>
