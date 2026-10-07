@@ -152,6 +152,7 @@ Registered **46/46**. Modules **46/46**.
 
 **NC Harnett (2026-10-07):** Citizen Connect `AgencyID=HarnettCoNC` contract proven (source `BookingID`; 306 live scrape) — Health stays unverified until write smoke (`docs/recon/NC_HARNETT_CITIZEN_CONNECT_2026-10-07.md`).
 **NC SSW five (2026-10-07):** Henderson/Sampson/Stokes/Surry/Edgecombe Citizen Connect contracts proven (source `BookingID`; 196/275/106/317/261 live scrape) — Health stays unverified until write smoke (`docs/recon/NC_SSW_FIVE_CITIZEN_CONNECT_2026-10-07.md`).
+**NC SSW ADPST (2026-10-07):** Anson/Duplin/Polk/Scotland/Transylvania Citizen Connect contracts proven (source `BookingID`; 82/161/43/157/79 live scrape); Scotland lifted from fail_closed — Health stays unverified until write smoke (`docs/recon/NC_SSW_ADPST_CITIZEN_CONNECT_2026-10-07.md`).
 
 **Unknowns with historical Mongo (≥10 arrests) — recon, not reopen:** Brunswick (94, Zuercher), Davie (20, Zuercher), Duplin (12, SouthernSW), Edgecombe (28, SouthernSW), Henderson (57, SouthernSW), Hoke (19, Zuercher), Polk (16, SouthernSW), Sampson (29, SouthernSW), Stokes (12, SouthernSW), Surry (25, SouthernSW), Transylvania (11, SouthernSW)
 

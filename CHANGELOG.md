@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-07 (NC SSW ADPST Citizen Connect BookingID)
+
+### Changed
+- **Anson / Duplin / Polk / Scotland / Transylvania (NC):** proved ordinary public Southern Software Citizen Connect rosters (`AgencyID=AnsonCoNC` / `DuplinCoNC` / `PolkCoNC` / `ScotlandCoNC` / `TransylvaniaCoNC`). `Booking_Number` is source **BookingID** (href / `data-bookingid` / mugshot debug) — never invent keys; never use person `NameID` alone. Live scrapes 82 / 161 / 43 / 157 / 79 unique bookings; charges/bond only when the card publishes them. `SOURCE_CONTRACT_VALIDATED=True`; Scotland lifted from Health `fail_closed`. Health stays **unverified** until write smoke. Evidence + matrix updated (`docs/recon/NC_SSW_ADPST_CITIZEN_CONNECT_2026-10-07.md`). Empty CC agencies and Brunswick Zuercher / Durham / Wayne / P2C holds untouched.
+
 ## [Unreleased] — 2026-10-07 (NC SSW five Citizen Connect BookingID)
 
 ### Changed

@@ -671,7 +671,6 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     "Guilford (NC)": "fail_closed",
     "Halifax (NC)": "fail_closed",
     "Randolph (NC)": "fail_closed",
-    "Scotland (NC)": "fail_closed",
     "Union (NC)": "fail_closed",
     "Wake (NC)": "fail_closed",
     "Montgomery (TN)": "fail_closed",

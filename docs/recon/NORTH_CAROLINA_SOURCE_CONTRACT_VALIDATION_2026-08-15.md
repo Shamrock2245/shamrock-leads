@@ -13,7 +13,7 @@
 | Guilford | The configured inmate-lookup path returned HTTP `404`. | Not proven. | **Fail closed** — no source fetch is permitted. |
 | Halifax | The configured DCN path was unavailable through ordinary access. | Not proven. | **Fail closed** — inherited source retrieval is blocked. |
 | Randolph | The configured legacy roster was unavailable through ordinary access. | Not proven. | **Fail closed** — no source fetch is permitted. |
-| Scotland | No configured public roster URL is documented for the inherited source path. | Not proven. | **Fail closed** — inherited source retrieval is blocked. |
+| Scotland | Citizen Connect `AgencyID=ScotlandCoNC` / JMS=`NC0830000` ordinary public roster (2026-10-07). | Source **BookingID** proven (157 live). | **Contract proven** — Health unverified until write smoke (`docs/recon/NC_SSW_ADPST_CITIZEN_CONNECT_2026-10-07.md`). |
 | Union | The configured P2C public path returned HTTP `403`; its existing explicit source guard remains appropriate. | Not proven. | **Fail closed** — source retrieval remains blocked. |
 | Wake | Both configured public paths were unavailable through ordinary access. | Not proven. | **Fail closed** — no P2C or source fallback is permitted. |
 

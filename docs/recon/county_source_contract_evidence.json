@@ -3603,10 +3603,10 @@
     {
       "state": "NC",
       "county_fips": "007",
-      "passive_recommendation": "fail_closed",
-      "official_source_url": "Not verified",
-      "access_posture": "No official source safely verified in passive review",
-      "evidence_note": "No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://cc.southernsoftware.com/bookingsearch/index.php?AgencyID=AnsonCoNC",
+      "access_posture": "Ordinary public HTTPS Southern Software Citizen Connect; GET index AgencyID=AnsonCoNC exposes JMSAgencyID=NC0040000; POST fetch_current_confinements.php paginates booking-cards with source BookingID (href / data-bookingid / mugshot debug; NameID is person-level only)",
+      "evidence_note": "2026-10-07 box recon: IDX=1 returns booking-cards each with BookingID (e.g. 22231\u2260NameID 8045); AnsonScraper.scrape() \u2192 82 records / 82 unique Booking_Number; charges/bond only when card publishes Bond Total / charge lines. Health stays unverified until write smoke. See docs/recon/NC_SSW_ADPST_CITIZEN_CONNECT_2026-10-07.md."
     },
     {
       "state": "NC",
@@ -3819,10 +3819,10 @@
     {
       "state": "NC",
       "county_fips": "061",
-      "passive_recommendation": "fail_closed",
-      "official_source_url": "Not verified",
-      "access_posture": "No official source safely verified in passive review",
-      "evidence_note": "No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://cc.southernsoftware.com/bookingsearch/index.php?AgencyID=DuplinCoNC",
+      "access_posture": "Ordinary public HTTPS Southern Software Citizen Connect; GET index AgencyID=DuplinCoNC exposes JMSAgencyID=NC0310000; POST fetch_current_confinements.php paginates booking-cards with source BookingID (href / data-bookingid / mugshot debug; NameID is person-level only)",
+      "evidence_note": "2026-10-07 box recon: IDX=1 returns booking-cards each with BookingID (e.g. 48682\u2260NameID 5802); DuplinScraper.scrape() \u2192 161 records / 161 unique Booking_Number; charges/bond only when card publishes Bond Total / charge lines. Health stays unverified until write smoke. See docs/recon/NC_SSW_ADPST_CITIZEN_CONNECT_2026-10-07.md."
     },
     {
       "state": "NC",
@@ -4171,10 +4171,10 @@
     {
       "state": "NC",
       "county_fips": "149",
-      "passive_recommendation": "fail_closed",
-      "official_source_url": "Not verified",
-      "access_posture": "No official source safely verified in passive review",
-      "evidence_note": "No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://cc.southernsoftware.com/bookingsearch/index.php?AgencyID=PolkCoNC",
+      "access_posture": "Ordinary public HTTPS Southern Software Citizen Connect; GET index AgencyID=PolkCoNC exposes JMSAgencyID=NC0750000; POST fetch_current_confinements.php paginates booking-cards with source BookingID (href / data-bookingid / mugshot debug; NameID is person-level only)",
+      "evidence_note": "2026-10-07 box recon: IDX=1 returns booking-cards each with BookingID (e.g. 10041335\u2260NameID 47340); PolkScraper.scrape() \u2192 43 records / 43 unique Booking_Number; charges/bond only when card publishes Bond Total / charge lines. Health stays unverified until write smoke. See docs/recon/NC_SSW_ADPST_CITIZEN_CONNECT_2026-10-07.md."
     },
     {
       "state": "NC",
@@ -4235,10 +4235,10 @@
     {
       "state": "NC",
       "county_fips": "165",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "[https://scotlandcountysheriff.com/inmate-search](https://scotlandcountysheriff.com/inmate-search)",
-      "access_posture": "public page; no record queries",
-      "evidence_note": "Official sheriff inmate-search page located; listing-field contract was not tested."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://cc.southernsoftware.com/bookingsearch/index.php?AgencyID=ScotlandCoNC",
+      "access_posture": "Ordinary public HTTPS Southern Software Citizen Connect; GET index AgencyID=ScotlandCoNC exposes JMSAgencyID=NC0830000; POST fetch_current_confinements.php paginates booking-cards with source BookingID (href / data-bookingid / mugshot debug; NameID is person-level only)",
+      "evidence_note": "2026-10-07 box recon: IDX=1 returns booking-cards each with BookingID (e.g. 10059982\u2260NameID 94943); ScotlandScraper.scrape() \u2192 157 records / 157 unique Booking_Number; charges/bond only when card publishes Bond Total / charge lines. Health stays unverified until write smoke. See docs/recon/NC_SSW_ADPST_CITIZEN_CONNECT_2026-10-07.md."
     },
     {
       "state": "NC",
@@ -4275,10 +4275,10 @@
     {
       "state": "NC",
       "county_fips": "175",
-      "passive_recommendation": "fail_closed",
-      "official_source_url": "Not verified",
-      "access_posture": "No official source safely verified in passive review",
-      "evidence_note": "No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://cc.southernsoftware.com/bookingsearch/index.php?AgencyID=TransylvaniaCoNC",
+      "access_posture": "Ordinary public HTTPS Southern Software Citizen Connect; GET index AgencyID=TransylvaniaCoNC exposes JMSAgencyID=NC0880000; POST fetch_current_confinements.php paginates booking-cards with source BookingID (href / data-bookingid / mugshot debug; NameID is person-level only)",
+      "evidence_note": "2026-10-07 box recon: IDX=1 returns booking-cards each with BookingID (e.g. 56134\u2260NameID 74860); TransylvaniaScraper.scrape() \u2192 79 records / 79 unique Booking_Number; charges/bond only when card publishes Bond Total / charge lines. Health stays unverified until write smoke. See docs/recon/NC_SSW_ADPST_CITIZEN_CONNECT_2026-10-07.md."
     },
     {
       "state": "NC",
