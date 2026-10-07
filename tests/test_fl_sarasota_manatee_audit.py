@@ -99,9 +99,15 @@ def test_manatee_bond_is_empty_not_zero_and_scorer_skips_it():
     assert rec.to_mongo_doc()["bond_amount_raw"] == ""
 
 
-def test_manatee_malformed_booking_dropped_and_name_key_page_fails_closed():
-    rows = parse_roster_page(_page([_row(), _row(booking="DOE", href="")]))
-    assert [r["booking"] for r in rows] == ["2026012345"]
+@pytest.mark.parametrize("bad", [
+    _row(booking="DOE", href=""),                         # name in the key column
+    _row(booking="", href=""),                            # blank key
+    {"cells": ["2026012399", "DOE"], "href": "", "img": ""},  # short row
+])
+def test_manatee_any_bad_booking_row_fails_closed(bad):
+    # One bad row among valid rows must not be silently dropped (Codex #119).
+    with pytest.raises(ParseDriftError, match="row 2 .*no source Booking #"):
+        parse_roster_page(_page([_row(), bad, _row(booking="2026012346", last="ROE")]))
     with pytest.raises(ParseDriftError, match="no source Booking"):
         parse_roster_page(_page([_row(booking="SMITH", href=""), _row(booking="", href="")]))
 

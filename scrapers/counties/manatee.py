@@ -12,8 +12,10 @@ Source contract (columns mapped by header, never by position):
     Booking # | Last Name | First Name | Middle | Charge | Arrest Date | Released
 
 * ``Booking_Number`` is the source ``Booking #`` cell. When the row links to
-  ``/bookings/<id>`` the id must match the cell (column-shift guard). A
-  booking number that maps to two different people raises ParseDriftError.
+  ``/bookings/<id>`` the id must match the cell (column-shift guard). Any
+  row with a short cell list or a blank / unrecognised Booking # raises
+  ParseDriftError (never silently dropped). A booking number that maps to
+  two different people raises ParseDriftError.
 * A booking listed on several rows (one per charge) becomes ONE record whose
   charges are joined with `` | `` and mirrored into
   ``extra_data["charge_details"]`` for one-click hydrate.
@@ -308,17 +310,21 @@ def parse_roster_page(payload: Dict[str, Any], *, page_no: int = 1) -> List[Dict
         raise ParseDriftError(f"Manatee: no roster table on page {page_no}")
     idx = map_headers(payload.get("headers") or [])
     out: List[Dict[str, Any]] = []
-    malformed = 0
     raw_rows = payload.get("rows") or []
-    for row in raw_rows:
+    for n, row in enumerate(raw_rows, start=1):
         cells = [re.sub(r"\s+", " ", str(c or "")).strip() for c in (row.get("cells") or [])]
+        # Any row without a valid source Booking # is booking-key drift: fail
+        # closed rather than silently omit that arrest (Codex #119).
         if len(cells) <= max(idx.values()):
-            malformed += 1
-            continue
+            raise ParseDriftError(
+                f"Manatee: page {page_no} row {n} has {len(cells)} cells for "
+                f"{len(payload.get('headers') or [])} headers; no source Booking #"
+            )
         booking = cells[idx["booking"]]
         if not _BOOKING_RE.match(booking):
-            malformed += 1
-            continue
+            raise ParseDriftError(
+                f"Manatee: page {page_no} row {n} has no source Booking # (cell {booking!r})"
+            )
         href = str(row.get("href") or "").strip()
         m = _DETAIL_ID_RE.search(href) if href else None
         if m and m.group(1) != booking:
@@ -342,12 +348,6 @@ def parse_roster_page(payload: Dict[str, Any], *, page_no: int = 1) -> List[Dict
             "detail_url": urljoin(BASE_URL + "/", href) if m else "",
             "mugshot_url": urljoin(BASE_URL + "/", img) if img else "",
         })
-    if raw_rows and not out:
-        raise ParseDriftError(
-            f"Manatee: page {page_no} had {len(raw_rows)} rows but no source Booking #"
-        )
-    if malformed:
-        logger.warning("[Manatee] page %s: dropped %s malformed rows", page_no, malformed)
     return out
 
 
