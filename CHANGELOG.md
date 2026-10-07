@@ -9,7 +9,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Intake match:** a name and date of birth with no county stays in staff review. The matcher no longer auto-links the first arrest in the file that shares that name and date, including when only one arrest matches.
 - **Sheets ledger:** fan-out reloads the intake after the match, so a matched row keeps status, county, state, strategy, and timestamp.
 - **Promote:** a blank or $0 bond amount returns 422 and does not allocate a power.
-- **Forfeiture:** the power is still released, and one recovery case opens at `pending_review` for staff to confirm. Recovery agents do not see it until that confirm, and no message is sent.
+- **Forfeiture:** the power is still released, and one recovery case opens at `pending_review` for staff to confirm. Recovery agents do not see it until that confirm, and no message is sent. If that insert fails, repeating the forfeited status opens the missing review.
+- **Bond Desk:** a name and date of birth with no county shows each possible arrest and links one only after staff confirm. A suggested booking is not treated as a match.
 
 ### Changed
 - **Workflow map:** Telegram and Shannon are a gap. `shamrock-telegram-app` does not call `/api/intake/submit`. The map lists the Telegram and Shannon callers that exist in this repo.

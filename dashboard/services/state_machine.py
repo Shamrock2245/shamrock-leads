@@ -21,6 +21,19 @@ logger = logging.getLogger(__name__)
 _MAX_RETRIES = 2  # optimistic-lock retry budget
 
 
+async def _ensure_forfeiture_review(booking_number: str, actor: str) -> dict:
+    """Open the pending-review recovery case, or raise if it was not opened."""
+    from dashboard.services.recovery_case_service import queue_forfeiture_review
+
+    review = await queue_forfeiture_review(booking_number=booking_number, actor=actor)
+    if not isinstance(review, dict) or not review.get("success"):
+        reason = (review or {}).get("reason") if isinstance(review, dict) else "no_result"
+        raise RuntimeError(
+            f"Forfeiture recovery review was not opened for {booking_number}: {reason}"
+        )
+    return review
+
+
 class BondStateMachine:
     """Enforces valid state transitions for active bonds."""
 
@@ -60,6 +73,20 @@ class BondStateMachine:
             current_status = current_bond.get("status", "active")
 
             if current_status == new_status:
+                # A forfeited bond whose review insert failed can be retried.
+                # The status no longer changes, so this path opens the missing
+                # pending_review row. queue_forfeiture_review is idempotent.
+                if new_status == "forfeited":
+                    review = await _ensure_forfeiture_review(booking_number, actor)
+                    return {
+                        "success": True,
+                        "status": new_status,
+                        "from_status": current_status,
+                        "poa_released": False,
+                        "poa_number": None,
+                        "note": "No change",
+                        "recovery_review": review,
+                    }
                 return {
                     "success": True,
                     "status": new_status,
@@ -168,21 +195,11 @@ class BondStateMachine:
                 )
 
             # Forfeiture still releases the power above, and also opens a B1
-            # recovery case for staff to confirm. pending_review is not visible
-            # to recovery agents and sends no messages.
+            # recovery case for staff to confirm. A failed insert is not
+            # swallowed: the bond is already forfeited, and a repeat of this
+            # same status runs _ensure_forfeiture_review again.
             if new_status == "forfeited":
-                try:
-                    from dashboard.services.recovery_case_service import queue_forfeiture_review
-                    await queue_forfeiture_review(
-                        booking_number=booking_number,
-                        actor=actor,
-                    )
-                except Exception as exc:
-                    logger.error(
-                        "queue_forfeiture_review failed for %s: %s",
-                        booking_number,
-                        exc,
-                    )
+                await _ensure_forfeiture_review(booking_number, actor)
 
             elif new_status == "active" and current_status != "active":
                 # Schedule compliance tasks when transitioning to active

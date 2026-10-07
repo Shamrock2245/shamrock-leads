@@ -669,3 +669,46 @@ def test_forfeiture_releases_poa_and_opens_pending_recovery_review():
         ))
     assert exo["poa_released"] is True
     assert cleared["recovery_case_shares"].docs == []
+
+
+def test_forfeiture_review_failure_is_repaired_on_retry():
+    from dashboard.services import recovery_case_service as recovery
+    from dashboard.services.state_machine import BondStateMachine
+
+    db = FakeDB()
+    db["active_bonds"].docs.append({
+        "booking_number": "2026-4403",
+        "status": "active",
+        "poa_number": "OSI-FIT",
+        "county": "Lee",
+        "state": "FL",
+    })
+    real = recovery.queue_forfeiture_review
+    calls = {"n": 0}
+
+    async def flaky(**kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("share insert failed")
+        return await real(**kwargs)
+
+    with patch("dashboard.services.state_machine.get_db", return_value=db), \
+         patch("dashboard.services.recovery_case_service.get_collection", side_effect=db.get_collection), \
+         patch("dashboard.services.recovery_case_service.queue_forfeiture_review", flaky), \
+         patch("dashboard.services.audit_service.AuditService.log_event", AsyncMock()), \
+         patch("dashboard.services.poa_service.auto_release_poa", AsyncMock()), \
+         patch("dashboard.services.task_engine.TaskEngine.cancel_pending_tasks", AsyncMock()):
+        with pytest.raises(RuntimeError, match="share insert failed"):
+            _run(BondStateMachine.transition_bond(
+                "2026-4403", "forfeited", "Dashboard", "fta",
+            ))
+        assert db["active_bonds"].docs[0]["status"] == "forfeited"
+        assert db["recovery_case_shares"].docs == []
+        repaired = _run(BondStateMachine.transition_bond(
+            "2026-4403", "forfeited", "Dashboard", "fta",
+        ))
+    assert repaired["success"] is True
+    assert repaired["note"] == "No change"
+    assert repaired["recovery_review"]["status"] == "pending_review"
+    [share] = db["recovery_case_shares"].docs
+    assert share["status"] == "pending_review"

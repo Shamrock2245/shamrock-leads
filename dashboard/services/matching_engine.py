@@ -766,12 +766,13 @@ class MatchingEngine:
         booking_number: str,
         county: str,
         agent: str = "staff",
+        state: str = "",
     ) -> dict:
         """
         Manually confirm a match between an intake record and an arrest record.
         Used when staff reviews candidates and selects the correct one.
         """
-        place = self._arrest_place_query(county)
+        place = self._arrest_place_query(county, state)
         q: dict = {"booking_number": booking_number}
         if place:
             q = {"$and": [q, place]}
