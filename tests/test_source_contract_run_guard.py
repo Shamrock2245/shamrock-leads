@@ -64,6 +64,7 @@ _SELF_HEAL_SUITES = (
     "tests/test_gap_queue_nc_tx_sc.py",
     "tests/test_tennessee_scrapers.py",
     "tests/test_fl_bond_charges_hydrate.py",
+    "tests/test_york_sc_scraper.py",
 )
 
 

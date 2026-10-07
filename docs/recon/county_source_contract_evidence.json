@@ -4739,10 +4739,10 @@
     {
       "state": "SC",
       "county_fips": "091",
-      "passive_recommendation": "recon_only",
+      "passive_recommendation": "productive",
       "official_source_url": "https://inmatesinjail.yorkcountygov.com/detentioncenter/inmatesinjail.aspx",
-      "access_posture": "Ordinary public landing page; no bypass used",
-      "evidence_note": "Official York County government inmate-listing domain; page accessible as a listing endpoint, row schema and pagination not verified."
+      "access_posture": "Ordinary public HTTPS ASP.NET roster (official York County government host); dgJackets DataGrid pages via __doPostBack; no login/CAPTCHA/WAF",
+      "evidence_note": "2026-10-07 box read smoke: 29 pages / 435 rows = Results Count 435; 435/435 unique source Booking Number (DC<YYYY><NNNNN>), Booking Date+time on every row, Release Date *In Jail, Total Bond, charge grid; photo path /photos/<Booking Number>.jpg cross-checked. Earlier timeout no longer reproduces. Plain requests (no proxy/stealth). Health stays unverified until write smoke. See docs/recon/SC_YORK_INMATES_IN_JAIL_2026-10-07.md."
     },
     {
       "state": "TN",

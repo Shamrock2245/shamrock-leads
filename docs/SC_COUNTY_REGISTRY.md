@@ -72,7 +72,7 @@ python main.py sc_lee      # not FL Lee
 | Spartanburg | 🟡 Scaffold | — | Prior 72h URL 404 |
 | Sumter | ⚠ Fail closed | SmartCOP | Booking number was synthesized from name+date. Fail closed until a source-issued key exists. |
 | Union | 🟡 Wrapper | Zuercher | |
-| York | ⚠ Fail closed | ASP.NET public roster | Parser maps official booking numbers and timestamps and refuses synthetic keys, but ordinary access to the configured roster timed out. `SOURCE_CONTRACT_VALIDATED = False`; Scraper Health reports `fail_closed`. Re-enable only after ordinary public access is revalidated. |
+| York | 🟡 Live / unverified | ASP.NET public roster (Inmates in Jail) | All `dgJackets` pages (29 pages, 435 rows on 2026-10-07); source Booking Number `DC<YYYY><NNNNN>`, booking date/time, Total Bond, charges. No synthetic keys. Health unverified until write smoke (2026-10-07) |
 
 ### Not yet scaffolded (typically no public portal)
 
