@@ -8,6 +8,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 - **York (SC):** the official Inmates in Jail roster (`inmatesinjail.yorkcountygov.com`) answers plain HTTPS again. The earlier timeout hold no longer reproduces. The scraper now walks every `dgJackets` page (29 pages, 435 rows, matching `Results Count`). `Booking_Number` is the published Booking Number (`DC<YYYY><NNNNN>`) and is cross-checked against the photo key. Booking date/time, `*In Jail` status, `Total Bond`, and charges come from source fields only. The old parser read the facility header as the person's name and saw page 1 only; both are fixed. `SOURCE_CONTRACT_VALIDATED=True` and Health `fail_closed` is lifted, but Health stays **unverified** until a write smoke. Evidence and matrix are updated (`docs/recon/SC_YORK_INMATES_IN_JAIL_2026-10-07.md`). Richland, Sumter, Hampton, Marlboro, Oconee, and Pickens are untouched.
 
+## [Unreleased] — 2026-10-07 (FL Brevard + New World booking keys)
+
+### Fixed
+- **Brevard (FL):** the results parser read column 0 as the name, so it stored the source `Booking #` as the name, the name as the booking number and the DOB as the booking date. Columns are now mapped by header. The plain-requests path posts the public form to `/?handler=Search` with its antiforgery token and the form's `max` date, and bonds/charges come from the detail page for in-custody rows only. `curl_cffi`, `verify=False` and the DrissionPage fallback are retired. Health stays unverified.
+- **Brevard / Walton / Flagler (FL) review fixes:** unknown bond stays unknown. A released Brevard row, or a detail fetch that fails, times out, returns non-200 or names another booking, now emits `Bond_Amount=""` instead of an invented `0`, so the scorer applies no $0 penalty; New World does the same for a blank Total Bond Amount. `0` is emitted only when the source publishes $0. Brevard `Bond_Type` comes from bond rows with a positive amount, so a `$2,500 Surety` row is no longer masked by a `$0 No Bond` row (previously scored NO BOND -50). `Released` is now a required Brevard results column and only `Yes`/`No` are accepted; header or value drift raises. `tests/test_fl_brevard_newworld.py` added to CI.
+- **Walton / Flagler (FL):** the New World detail parsers took the `Booking History` heading as the booking number, so every row shared one key. New shared `scrapers/fl_newworld.py` emits the newest open booking (`YYYY-NNNNNNNN`, empty Release Date) with its source Total Bond Amount and charges. Walton no longer walks `InCustody=False`. Health stays unverified.
+
 ## [Unreleased] — 2026-10-07 (post-merge cleanup)
 
 ### Fixed
