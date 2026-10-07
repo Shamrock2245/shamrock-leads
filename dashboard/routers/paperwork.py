@@ -1136,9 +1136,20 @@ async def packet_builder_finalize(request: Request):
         if user.get("license_number"):
             ctx["license_number"] = user.get("license_number")
 
-        # If match/bond_case chain is not yet validated in CRM, attempt inline chain ensure
+        # Office finalize binds the packet. Shannon's create/email route is the
+        # only skip_bond_binding + pending_staff_match path; this handler does
+        # not honor a skip flag. If the chain is not already validated, ensure
+        # must succeed or finalize stops before DocuSeal and before insert.
         booking_for_chain = str(ctx.get("booking_number") or body.get("booking_number") or "").strip()
-        if booking_for_chain and (ctx.get("match_status") != "validated" or not ctx.get("bond_case_id") or not ctx.get("match_id")):
+        chain_needs_ensure = bool(
+            booking_for_chain
+            and (
+                str(ctx.get("match_status") or "").lower() != "validated"
+                or not ctx.get("bond_case_id")
+                or not ctx.get("match_id")
+            )
+        )
+        if chain_needs_ensure:
             from dashboard.services.staff_chain_service import ensure_match_bondcase
             try:
                 chain_res = await ensure_match_bondcase(
@@ -1157,23 +1168,84 @@ async def packet_builder_finalize(request: Request):
                     actor_email=str(ctx.get("agent_name") or user.get("agent_name") or "staff_direct"),
                     source="inline_packet_finalize_ensure",
                 )
-                if chain_res.get("success"):
-                    # Reload case context with newly ensured IDs
-                    ctx = await resolve_case_context(
-                        intake_id=body.get("intake_id"),
-                        match_id=chain_res.get("match_id"),
-                        defendant_id=chain_res.get("defendant_id"),
-                        booking_number=booking_for_chain,
-                        county=body.get("county") or ctx.get("county"),
-                        bond_case_id=chain_res.get("bond_case_id"),
-                        packet_id=body.get("packet_id"),
-                    )
-                    if user.get("agent_name"):
-                        ctx["agent_name"] = user.get("agent_name")
-                    if user.get("license_number"):
-                        ctx["license_number"] = user.get("license_number")
             except Exception as chain_err:
-                logger.warning("[packet_finalize] inline chain ensure skipped: %s", chain_err)
+                logger.warning(
+                    "[packet_finalize] inline chain ensure failed closed booking=%s error_type=%s",
+                    booking_for_chain,
+                    type(chain_err).__name__,
+                )
+                return JSONResponse(
+                    {
+                        "success": False,
+                        "error": "chain_ensure_failed",
+                        "message": (
+                            "Match/BondCase ensure failed. The packet was not created "
+                            "and was not sent for signature."
+                        ),
+                        "bound": False,
+                        "booking_number": booking_for_chain,
+                    },
+                    status_code=500,
+                )
+            if not chain_res.get("success"):
+                try:
+                    ensure_status = int(chain_res.get("status_code") or 400)
+                except (TypeError, ValueError):
+                    ensure_status = 400
+                if ensure_status < 400:
+                    ensure_status = 400
+                logger.warning(
+                    "[packet_finalize] inline chain ensure refused booking=%s error=%s",
+                    booking_for_chain,
+                    chain_res.get("error"),
+                )
+                return JSONResponse(
+                    {
+                        "success": False,
+                        "error": chain_res.get("error") or "chain_ensure_failed",
+                        "message": chain_res.get("message")
+                        or "Match/BondCase ensure failed. The packet was not created.",
+                        "bound": False,
+                        "booking_number": booking_for_chain,
+                    },
+                    status_code=ensure_status,
+                )
+            if not chain_res.get("bond_case_id") or not chain_res.get("match_id"):
+                return JSONResponse(
+                    {
+                        "success": False,
+                        "error": "chain_ensure_incomplete",
+                        "message": (
+                            "Match/BondCase ensure did not return a bond case and match. "
+                            "The packet was not created."
+                        ),
+                        "bound": False,
+                        "booking_number": booking_for_chain,
+                    },
+                    status_code=409,
+                )
+            # Reload case context with newly ensured IDs. Keep the IDs from
+            # ensure when the follow-up read is stale so finalize cannot
+            # continue as if the chain were still unbound.
+            ctx = await resolve_case_context(
+                intake_id=body.get("intake_id"),
+                match_id=chain_res.get("match_id"),
+                defendant_id=chain_res.get("defendant_id"),
+                booking_number=booking_for_chain,
+                county=body.get("county") or ctx.get("county"),
+                bond_case_id=chain_res.get("bond_case_id"),
+                packet_id=body.get("packet_id"),
+            )
+            ctx["bond_case_id"] = ctx.get("bond_case_id") or chain_res.get("bond_case_id")
+            ctx["match_id"] = ctx.get("match_id") or chain_res.get("match_id")
+            ctx["defendant_id"] = ctx.get("defendant_id") or chain_res.get("defendant_id")
+            ctx["indemnitor_id"] = ctx.get("indemnitor_id") or chain_res.get("indemnitor_id")
+            if str(ctx.get("match_status") or "").lower() != "validated":
+                ctx["match_status"] = "validated"
+            if user.get("agent_name"):
+                ctx["agent_name"] = user.get("agent_name")
+            if user.get("license_number"):
+                ctx["license_number"] = user.get("license_number")
 
         from dashboard.routers.helpers import reject_unless_write_book
         blocked = await reject_unless_write_book(

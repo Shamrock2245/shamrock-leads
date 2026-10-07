@@ -6,10 +6,13 @@ Ensures the canonical paperwork chain:
 
 Fails closed on missing CRM facts:
 - Refuses inventing contact info (indemnitor name + email must be on file in CRM).
-- Refuses missing bond amount or premium.
-- Refuses missing or unassigned POAs.
+- Refuses missing bond amount.
+- Refuses missing or zero premium. Never invents a premium (including 10% of bond).
+- Refuses missing or unassigned POAs. Does not pull an available POA from inventory.
 - Refuses unvalidated surety.
 - Strictly idempotent: repeated calls return existing IDs and preserve state.
+  A POA is ours when bond_case_id or assigned_to matches the booking number,
+  the case number, or the BondCase UUID already stored for this booking.
 """
 from __future__ import annotations
 
@@ -35,6 +38,48 @@ def _parse_first_last(name: str) -> Tuple[str, str]:
     if len(parts) == 1:
         return parts[0], ""
     return parts[0], parts[-1]
+
+
+# Case-ownership fields only. assigned_to_agent is the writing agent, not the case.
+_POA_OWNER_FIELDS = ("bond_case_id", "Bond_Case_ID", "assigned_to", "Assigned_To")
+
+
+def _owner_token(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _positive_amount(value: Any) -> Optional[float]:
+    """Positive money amount already on file or explicitly submitted.
+
+    Blank, non-numeric, and zero are not amounts. Callers must not substitute
+    a calculated premium for those values.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return None
+    if amount <= 0:
+        return None
+    return amount
+
+
+def _doc_bond_case_id(doc: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(doc, dict):
+        return ""
+    return _owner_token(doc.get("bond_case_id") or doc.get("Bond_Case_ID"))
+
+
+def _poa_owner_tokens(poa_doc: Dict[str, Any]) -> List[str]:
+    tokens: List[str] = []
+    for key in _POA_OWNER_FIELDS:
+        token = _owner_token(poa_doc.get(key))
+        if token and token not in tokens:
+            tokens.append(token)
+    return tokens
 
 
 async def ensure_match_bondcase(
@@ -155,32 +200,58 @@ async def ensure_match_bondcase(
             "message": "At least one POA number is required for bond chain validation",
         }
 
+    # Ownership allowlist must include the BondCase UUID before the POA read.
+    # The first ensure writes that UUID onto poa_inventory; a second ensure has
+    # to recognize it as ours or it 409s with poa_assigned_elsewhere.
+    owned_tokens = {token for token in (booking, resolved_case_num) if token}
+    active_case_token = _doc_bond_case_id(active)
+    if active_case_token:
+        owned_tokens.add(active_case_token)
+    bc_or: List[Dict[str, Any]] = [
+        {"booking_number": booking},
+        {"Booking_Number": booking},
+    ]
+    if active_case_token:
+        bc_or.append({"bond_case_id": active_case_token})
+        bc_or.append({"Bond_Case_ID": active_case_token})
+    existing_bc = await get_collection("bond_cases").find_one({"$or": bc_or})
+    if not isinstance(existing_bc, dict):
+        existing_bc = None
+    existing_case_token = _doc_bond_case_id(existing_bc)
+    if existing_case_token:
+        owned_tokens.add(existing_case_token)
+
     poa_col = get_collection("poa_inventory")
     for p_num in poa_list:
         poa_doc = await poa_col.find_one({"poa_number": p_num})
-        if not poa_doc:
+        if not isinstance(poa_doc, dict):
             return {
                 "success": False,
                 "status_code": 400,
                 "error": f"poa_not_found:{p_num}",
                 "message": f"POA {p_num} not found in inventory",
             }
-        assigned_case = str(poa_doc.get("bond_case_id") or poa_doc.get("assigned_to") or "").strip()
-        status = str(poa_doc.get("status") or "").lower().strip()
-        # If assigned elsewhere to a different booking/case
-        if assigned_case and assigned_case not in (booking, resolved_case_num):
+        owner_tokens = _poa_owner_tokens(poa_doc)
+        foreign = next((token for token in owner_tokens if token not in owned_tokens), "")
+        # Every populated case field must be this booking, this case number,
+        # or the BondCase UUID. Legacy bulk-assign stores the booking number
+        # in bond_case_id; that remains ours. A different UUID does not.
+        if foreign:
             return {
                 "success": False,
                 "status_code": 409,
                 "error": f"poa_assigned_elsewhere:{p_num}",
-                "message": f"POA {p_num} is already assigned to case/booking {assigned_case}",
+                "message": f"POA {p_num} is already assigned to case/booking {foreign}",
             }
-        if status == "available" and not assigned_case:
+        if not owner_tokens:
             return {
                 "success": False,
                 "status_code": 400,
                 "error": f"poa_not_assigned:{p_num}",
-                "message": f"POA {p_num} is available but not assigned to booking {booking}. Run /api/poa/bulk-assign first.",
+                "message": (
+                    f"POA {p_num} is not assigned to booking {booking}. "
+                    "Run /api/poa/bulk-assign first."
+                ),
             }
 
     primary_poa = poa_list[0]
@@ -205,26 +276,36 @@ async def ensure_match_bondcase(
             "message": "Bond amount must be greater than zero",
         }
 
-    try:
-        resolved_premium = float(
-            premium
-            or active.get("premium")
-            or active.get("premium_amount")
-            or 0.0
-        )
-    except (ValueError, TypeError):
-        resolved_premium = 0.0
-
-    if resolved_premium <= 0:
-        resolved_premium = round(resolved_bond_amt * 0.10, 2)
-
-    if resolved_premium <= 0:
-        return {
-            "success": False,
-            "status_code": 400,
-            "error": "premium_required",
-            "message": "Premium amount must be greater than zero",
-        }
+    # Explicit zero/blank is a refusal, not a cue to fall back or invent 10%.
+    premium_submitted = premium is not None and not (isinstance(premium, str) and not premium.strip())
+    if premium_submitted:
+        resolved_premium = _positive_amount(premium)
+        if resolved_premium is None:
+            return {
+                "success": False,
+                "status_code": 400,
+                "error": "premium_required",
+                "message": (
+                    "Premium must be greater than zero. "
+                    "Refusing to invent a premium, including 10% of the bond amount."
+                ),
+            }
+    else:
+        resolved_premium = _positive_amount(active.get("premium"))
+        if resolved_premium is None:
+            resolved_premium = _positive_amount(active.get("premium_amount"))
+        if resolved_premium is None:
+            resolved_premium = _positive_amount(active.get("Premium"))
+        if resolved_premium is None:
+            return {
+                "success": False,
+                "status_code": 400,
+                "error": "premium_required",
+                "message": (
+                    "Premium must already be on the active bond or sent explicitly on this request. "
+                    "Refusing to invent a premium, including 10% of the bond amount."
+                ),
+            }
 
     # 7. Indemnitor verification (no fabricated contact info)
     active_ind = active.get("indemnitor") if isinstance(active.get("indemnitor"), dict) else {}
@@ -438,25 +519,17 @@ async def ensure_match_bondcase(
         }
         await match_col.insert_one(match_doc)
 
-    # 11. Upsert bond_cases document
+    # 11. Upsert bond_cases document (existing_bc loaded before the POA check)
     bc_col = get_collection("bond_cases")
-    existing_bc = await bc_col.find_one(
-        {
-            "$or": [
-                {"booking_number": booking},
-                {"Booking_Number": booking},
-                {"bond_case_id": active.get("bond_case_id")},
-                {"Bond_Case_ID": active.get("bond_case_id")},
-            ]
-        }
-    )
 
     resolved_cds = charge_details or active.get("charge_details") or arrest.get("charge_details") or []
     charges_str = active.get("charges") or arrest.get("charges") or ""
 
     if existing_bc:
-        bond_case_id = existing_bc.get("bond_case_id") or existing_bc.get("Bond_Case_ID")
+        bond_case_id = _doc_bond_case_id(existing_bc) or str(uuid.uuid4())
         bc_patch: Dict[str, Any] = {
+            "bond_case_id": bond_case_id,
+            "Bond_Case_ID": bond_case_id,
             "defendant_id": defendant_id,
             "defendant_name": full_def_name,
             "indemnitor_id": indemnitor_id,
@@ -558,7 +631,7 @@ async def ensure_match_bondcase(
         {
             "$set": {
                 "assigned_defendant": full_def_name,
-                "assigned_to": booking,
+                "assigned_to": bond_case_id,
                 "bond_case_id": bond_case_id,
                 "updated_at": now_iso,
             }

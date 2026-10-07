@@ -27,6 +27,15 @@ Resolved the two production blockers identified during live bond onboarding (Fis
   - Updated programmatic onboarding reference script (`scripts/examples/write_bond_super_crm.js`), runbook (`docs/runbooks/SUPER_CRM_DEFENDANT_ONBOARDING_EXAMPLE.md`), and created [`docs/runbooks/STAFF_CHAIN_ENSURE_RUNBOOK.md`](docs/runbooks/STAFF_CHAIN_ENSURE_RUNBOOK.md).
   - Verified with comprehensive test suite (`tests/test_staff_chain_ensure.py`, 8/8 passing).
 
+## Staff chain ensure hardening (2026-10-07)
+
+Follow-up on the Gap B API so a second ensure and the next live finalize cannot repeat the unbound-packet backfill:
+- **POA idempotency:** Ownership accepts the booking number, the case number, or the BondCase UUID on either `poa_inventory.bond_case_id` or `assigned_to`. Ensure now writes both fields to the BondCase UUID. A second ensure after that write returns the same IDs (200), not `poa_assigned_elsewhere`.
+- **Finalize fail-closed:** `packet_builder_finalize` returns the ensure error and does not create or send a packet when it attempted binding and ensure failed. Shannon voice create still uses `skip_bond_binding` and `pending_staff_match`.
+- **Premium:** Ensure refuses a missing or zero premium. It does not invent 10% of the bond amount.
+- **Auth:** God-Admin, admin, or staff sessions, plus `GAS_API_KEY` / `LEADS_INTERNAL_TOKEN` and `X-Admin-Token` matching `DASHBOARD_PIN`. Sub-agent and other authenticated sessions are refused.
+- **CI:** `.github/workflows/ci.yml` runs `tests/test_staff_chain_ensure.py`.
+
 ## Crawl hygiene & search exclusion deployment (2026-10-01)
 
 Commit `d75604b` (PR #80) deployed crawl hygiene controls to prevent search engines from indexing the staff CRM:

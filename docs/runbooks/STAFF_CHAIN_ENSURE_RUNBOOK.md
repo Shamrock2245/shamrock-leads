@@ -1,7 +1,7 @@
 # Staff Runbook: Ensuring Match + BondCase Paperwork Chain
 
 > **Endpoint:** `POST /api/staff/chain/ensure-match-bondcase`  
-> **Auth:** God-Admin / Staff (`X-Admin-Token`, staff cookie session, or machine token)  
+> **Auth:** God-Admin, admin, or staff session (`role` `god_admin` / `admin` / `staff`). Sub-agent and other authenticated sessions are refused. Machine tokens: `X-API-Key` or `X-Internal-Token` matching `GAS_API_KEY` / `LEADS_INTERNAL_TOKEN`. Or `X-Admin-Token` / `X-PIN` / Bearer matching `DASHBOARD_PIN`.
 > **Purpose:** Closes Gap B — programmatically bridges `ArrestLead` → `Defendant` → `Indemnitor` → `validated Match` → `BondCase` → `Packet` so emergency manual Mongo scripts are never needed for live bonds.
 
 ---
@@ -52,7 +52,7 @@ X-Admin-Token: <DASHBOARD_PIN>
 | `poa_numbers` | list[str] | Optional | List of POAs assigned in `poa_inventory` for this case. |
 | `poa_number` | string | Optional | Single primary POA number. |
 | `bond_amount` | float | Optional | Total bond amount (defaults to active_bonds/arrest). |
-| `premium` | float | Optional | Premium amount (defaults to 10% of bond). |
+| `premium` | float | Required on file or in the body | Positive premium already stored on the active bond (`premium` or `premium_amount`), or an explicit amount on this request. Missing and zero are refused. The service does not calculate 10% of the bond. |
 | `packet_id` | string | Optional | If provided, links packet and sets `pending_staff_match: false`. |
 | `charge_details` | list[dict] | Optional | Charge breakdown details. |
 
@@ -64,10 +64,15 @@ X-Admin-Token: <DASHBOARD_PIN>
    - Requires verified arrest record in `arrests` collection.
    - Requires verified active bond in `active_bonds` collection.
    - Requires verified indemnitor contact (name + email) already on file in CRM (no fabricated contact).
-   - Requires POAs to exist in `poa_inventory` and be assigned to this booking/case.
+   - Requires POAs to exist in `poa_inventory` and already be assigned to this booking, this case number, or this BondCase UUID. Available inventory is never auto-assigned.
+   - Requires a positive premium on the active bond or in the request. A missing or zero premium is `premium_required`. No percentage is invented.
 2. **Idempotent:**
    - Re-running the endpoint with the same booking number returns the existing UUIDs (`defendant_id`, `indemnitor_id`, `match_id`, `bond_case_id`) without creating duplicates.
-3. **Audit Trail:**
+   - Ensure writes `poa_inventory.bond_case_id` and `assigned_to` to the BondCase UUID. A second ensure treats that UUID, the booking number, and the case number as ownership and returns 200. It does not 409 with `poa_assigned_elsewhere`.
+3. **Finalize binding:**
+   - `POST /api/paperwork/packet/finalize` calls ensure when the Match/BondCase chain is not already validated. If ensure fails, finalize returns that error (4xx) with `bound: false` and does not create or send a packet.
+   - Shannon voice create (`skip_bond_binding` + `pending_staff_match`) is unchanged.
+4. **Audit Trail:**
    - Automatically writes an immutable audit record to `audit_events` (`staff_ensure_match_bondcase`).
    - Appends a transition note to `active_bonds.status_history`.
 
@@ -86,6 +91,8 @@ curl -X POST "https://leads.shamrockbailbonds.biz/api/staff/chain/ensure-match-b
     "poa_numbers": ["OSI-P6-116-26-0015", "OSI-P6-116-26-0016"]
   }'
 ```
+
+Premium is not calculated. This call succeeds only when the active bond already has a positive `premium` or `premium_amount`. Otherwise send that amount in the body. A missing or zero premium returns `400 premium_required`.
 
 ### Success Response (200 OK)
 ```json
