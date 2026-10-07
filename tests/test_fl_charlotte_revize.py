@@ -118,6 +118,18 @@ def test_charlotte_name_in_booking_column_fails_closed():
         ROSTER.parse_roster_page(_page([_row(booking="DOE")]))
 
 
+@pytest.mark.parametrize("bad", [
+    _row(booking="", href=""),                      # blank key
+    _row(booking="BOOKING PENDING", href=""),        # new non-key format
+    {"cells": ["26-004599", "DOE"], "href": "", "img": ""},  # short row
+])
+def test_charlotte_one_bad_row_among_valid_rows_fails_closed(bad):
+    # Codex P1 (#119): one bad row must not be silently dropped while the
+    # rest of the page is written.
+    with pytest.raises(ParseDriftError, match="row 2 .*no source Booking #"):
+        ROSTER.parse_roster_page(_page([_row(), bad, _row(booking="26-004513", last="ROE")]))
+
+
 # ── Released ────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("value,expected", [
     ("", ("In Custody", "")), ("In Custody", ("In Custody", "")), ("N/A", ("In Custody", "")),

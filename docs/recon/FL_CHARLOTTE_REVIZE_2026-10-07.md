@@ -25,7 +25,7 @@ read smoke is the confirmation.
 | # | Item | State | Evidence |
 |---|---|---|---|
 | 1 | Source contract | **blocked** from the box / **fixed** in code | CF 403 on every checked URL. Fail-closed guards now enforce the contract; Leads Ops must confirm headers from residential egress. |
-| 2 | Booking keys | **fixed** | Columns mapped by header. Key is the source `Booking #`, checked against the row's `/bookings/<id>` link. A mismatch or the same booking on two people raises `ParseDriftError`. |
+| 2 | Booking keys | **fixed** | Columns mapped by header. Key is the source `Booking #`, checked against the row's `/bookings/<id>` link. A mismatch, any row with a blank / unrecognised booking number or too few cells, or the same booking on two people raises `ParseDriftError` (rows are never silently dropped). |
 | 3 | Bond | **fixed** | `Bond_Amount=""` and `Bond_Type=""` (was `"0"`, which cost each lead −50). The roster publishes no bond. A source-published `$0` would still be kept as `"0"`. |
 | 4 | Charges | **fixed** / **blocked** | Fixed: every charge row for a booking is kept (`Charges` pipe-joined + `extra.charge_details`). Before, only the first charge survived. Blocked: statute and degree are not on the roster; detail pages are CF-blocked. |
 | 5 | Dates / Released / mugshot | **fixed** | Arrest Date is the booking date origin. `Released` is required; blank / In Custody / No / N/A → In Custody; Yes / Released / a date → Released; anything else fails closed. Mugshot only from a row `<img>`. |
