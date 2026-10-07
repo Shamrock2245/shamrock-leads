@@ -34,12 +34,23 @@ staff_chain_bp = APIRouter(prefix="/api/staff", tags=["staff_chain"])
 
 
 def _check_staff_auth(request: Request, body: Dict[str, Any]) -> tuple[bool, str]:
-    """Verify God-Admin or staff session / token / PIN. Fail closed."""
-    # 1. Staff / God-Admin cookie session
+    """Verify God-Admin, admin, or staff. Fail closed.
+
+    A signed cookie with auth=True is not enough. Sub-agent sessions and any
+    other non-staff role are refused. Machine tokens and the dashboard PIN
+    remain valid for staff tooling.
+    """
+    # 1. God-Admin / admin / staff cookie. Sub-agents cannot mint a BondCase.
     sess = get_session_from_request(request)
     if sess and sess.get("auth"):
-        actor = sess.get("email") or sess.get("agent_name") or "staff_session"
-        return True, actor
+        role = str(sess.get("role") or "").strip().lower()
+        if role != "sub_agent" and (
+            session_is_god_admin(request)
+            or session_is_admin(request)
+            or role in ("staff", "admin", "god_admin")
+        ):
+            actor = sess.get("email") or sess.get("agent_name") or "staff_session"
+            return True, actor
 
     # 2. Machine auth (GAS_API_KEY, LEADS_INTERNAL_TOKEN)
     if is_machine_auth_valid(request):
