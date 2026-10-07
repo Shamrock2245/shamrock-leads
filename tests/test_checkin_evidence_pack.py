@@ -20,10 +20,11 @@ JPEG_B64 = base64.b64encode(JPEG).decode("ascii")
 
 
 def _pdf_text(payload: bytes) -> str:
-    from pypdf import PdfReader
+    """Read generated pack text with pdfplumber, which CI already installs."""
+    import pdfplumber
 
-    reader = PdfReader(io.BytesIO(payload))
-    return "\n".join((page.extract_text() or "") for page in reader.pages)
+    with pdfplumber.open(io.BytesIO(payload)) as pdf:
+        return "\n".join((page.extract_text() or "") for page in pdf.pages)
 
 
 def test_recovery_allowlist_excludes_evidence_pack():
