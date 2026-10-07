@@ -24,7 +24,8 @@
 
 - `Booking_Number` is the published Booking Number only, and must match `^DC\d{9}$`. A row is dropped if its single photo key disagrees with it. Nothing is synthesized.
 - A page with people rows but no keyed booking raises `ParseDriftError`. A missing grid also raises `ParseDriftError`. A 403 raises `AntiBotBlocked`.
-- The scraper walks every page, capped at 80, with 0.4 s pacing. It logs a warning if the walked row count differs from `Results Count`.
+- The scraper walks every page, capped at 80, with 0.4 s pacing. The walk fails closed with `ParseDriftError` (no partial records are returned or written) when: the unique walked row count differs from the published `Results Count` (this also covers a next-page link that disappears early); a postback returns a page number already visited, or a page repeats an earlier page's rows; or `MAX_PAGES` is reached while the pager still offers a next page.
+- If `Results Count` is not published there is nothing to verify against: the repeat and `MAX_PAGES` guards still apply, a warning is logged, and the walked records are returned.
 - Old bugs fixed: the name was read from the bookings table's facility header (`York County Detention Center`), only page 1 was parsed, and `Total Bond` was ignored.
 
 ## Next

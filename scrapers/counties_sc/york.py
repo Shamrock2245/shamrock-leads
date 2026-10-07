@@ -18,6 +18,9 @@ Source recon 2026-10-07 (docs/recon/SC_YORK_INMATES_IN_JAIL_2026-10-07.md):
 Contract: ``Booking_Number`` is the published Booking Number only. A row is
 dropped when that number is missing, malformed, or disagrees with its photo
 key. Bond comes from ``Total Bond`` only. Nothing is synthesized.
+An incomplete page walk (count mismatch against ``Results Count``, repeated
+page/postback, or ``MAX_PAGES`` hit early) raises ParseDriftError; no partial
+success.
 """
 from __future__ import annotations
 
@@ -234,6 +237,32 @@ def _next_page_target(html: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+def _current_page(html: str) -> Optional[int]:
+    """Page number the pager marks as current (the ``<span>``), or None without a pager."""
+    soup = BeautifulSoup(html, "html.parser")
+    grid = soup.find("table", id="dgJackets")
+    pager = grid.find("tr", class_="pager") if grid is not None else None
+    current = pager.find("span") if pager is not None else None
+    text = _text(current)
+    return int(text) if text.isdigit() else None
+
+
+def _row_keys(html: str) -> List[str]:
+    """One identity string per roster row (whitespace-normalised row text).
+
+    Used only to detect repeated pages and to count unique walked rows against
+    the published Results Count. It is never written as a booking key.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    grid = soup.find("table", id="dgJackets")
+    if grid is None:
+        return []
+    return [
+        _text(tr) for tr in grid.find_all("tr", recursive=False)
+        if {"dgItem", "dgAltItem"} & set(tr.get("class") or [])
+    ]
+
+
 def _hidden_fields(html: str) -> Dict[str, str]:
     soup = BeautifulSoup(html, "html.parser")
     return {
@@ -276,15 +305,41 @@ class YorkScraper(BaseScraper):
         return resp.text
 
     def scrape(self) -> List[ArrestRecord]:
+        """Walk every roster page; fail closed unless the walk is provably complete.
+
+        * A page whose pager number was already visited, or whose rows exactly
+          repeat an earlier page, raises ParseDriftError (postback loop).
+        * Reaching MAX_PAGES while the pager still offers a next page raises.
+        * When the page publishes ``Results Count``, the number of unique walked
+          rows must equal it exactly; otherwise ParseDriftError. This also covers
+          a next-page link that disappears early.
+        * When ``Results Count`` is absent there is nothing to verify against:
+          the repeat / MAX_PAGES guards still apply, a warning is logged, and the
+          walked records are returned (pre-existing behaviour).
+        """
         session = requests.Session()
         session.headers.update({"User-Agent": USER_AGENT, "Referer": PORTAL_URL})
         html = self._fetch(session)
         expected = _results_count(html)
         records: List[ArrestRecord] = []
         seen: set = set()
+        seen_rows: set = set()
+        visited_pages: set = set()
+        page_fingerprints: set = set()
         people = 0
         for page in range(1, MAX_PAGES + 1):
             page_records, page_people = parse_page(html)
+            current = _current_page(html)
+            if current is not None:
+                if current in visited_pages:
+                    raise ParseDriftError(f"York: postback returned page {current} again (walk step {page})")
+                visited_pages.add(current)
+            row_keys = _row_keys(html)
+            fingerprint = tuple(row_keys)
+            if fingerprint and fingerprint in page_fingerprints:
+                raise ParseDriftError(f"York: walk step {page} repeated an earlier page's rows")
+            page_fingerprints.add(fingerprint)
+            seen_rows.update(row_keys)
             people += page_people
             if page_people and not page_records:
                 raise ParseDriftError(f"York: page {page} had {page_people} rows but no source Booking Number")
@@ -296,11 +351,22 @@ class YorkScraper(BaseScraper):
             target = _next_page_target(html)
             if not target:
                 break
+            if page == MAX_PAGES:
+                raise ParseDriftError(
+                    f"York: hit MAX_PAGES={MAX_PAGES} with a next page still offered; walk incomplete"
+                )
             form = _hidden_fields(html)
             form.update({"__EVENTTARGET": target, "__EVENTARGUMENT": "", "txtLastName": ""})
             time.sleep(PAGE_DELAY_S)
             html = self._fetch(session, form)
-        if expected is not None and people != expected:
-            logger.warning("York: walked %d rows but page reports Results Count %d", people, expected)
+        unique_rows = len(seen_rows)
+        if expected is None:
+            logger.warning(
+                "York: Results Count not published; cannot verify completeness of %d walked rows", unique_rows
+            )
+        elif unique_rows != expected:
+            raise ParseDriftError(
+                f"York: walked {unique_rows} unique rows but page reports Results Count {expected}; walk incomplete"
+            )
         logger.info("York: %d source-keyed bookings from %d roster rows", len(records), people)
         return records

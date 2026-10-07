@@ -38,14 +38,14 @@ def _item(booking="DC202600001", photo=None, release="*In Jail", bond="$1,250.00
 </tr>"""
 
 
-def _page(*items, current=1, pages=3):
+def _page(*items, current=1, pages=3, count=2):
     links = "".join(
         f"<span>{n}</span> " if n == current else f"<a href=\"javascript:__doPostBack('dgJackets$ctl01$ctl{n-1:02d}','')\">{n}</a> "
         for n in range(1, pages + 1)
     )
     return f"""<html><body><form>
 <input type="hidden" name="__VIEWSTATE" value="vs"/><input type="hidden" name="__EVENTVALIDATION" value="ev"/>
-Results Count: 2
+{f"Results Count: {count}" if count is not None else ""}
 <table id="dgJackets">
 <tr class="pager"><td colspan="3">{links}</td></tr>
 <tr class="dgHeader"><td>Inmate Information</td><td>Inmate Photo</td><td>Bookings/Charges</td></tr>
@@ -98,8 +98,8 @@ def test_next_page_target_follows_pager():
 
 def test_scrape_walks_pages_and_dedups(monkeypatch):
     pages = [
-        _page(_item("DC202600001"), _item("DC202600002", cls="dgAltItem"), current=1, pages=2),
-        _page(_item("DC202600002"), _item("DC202600003"), current=2, pages=2),
+        _page(_item("DC202600001"), _item("DC202600002", cls="dgAltItem"), current=1, pages=2, count=3),
+        _page(_item("DC202600002"), _item("DC202600003"), current=2, pages=2, count=3),
     ]
     calls = []
 
@@ -118,6 +118,87 @@ def test_rows_without_any_keyed_booking_raise_drift(monkeypatch):
     monkeypatch.setattr(YorkScraper, "_fetch", lambda self, s, data=None: _page(_item(booking="", photo="X"), pages=1))
     with pytest.raises(ParseDriftError):
         YorkScraper().scrape()
+
+
+def _serve(monkeypatch, pages):
+    """Patch YorkScraper._fetch to serve ``pages`` in order; returns the call log."""
+    calls = []
+
+    def fake_fetch(self, session, data=None):
+        calls.append(data)
+        if len(calls) > len(pages):
+            raise AssertionError("scraper fetched past the fixture pages")
+        return pages[len(calls) - 1]
+
+    monkeypatch.setattr(YorkScraper, "_fetch", fake_fetch)
+    monkeypatch.setattr(york, "PAGE_DELAY_S", 0)
+    return calls
+
+
+def _two_rows(a, b, **kw):
+    return _page(_item(a, name=f"Doe , {a}"), _item(b, name=f"Roe , {b}", cls="dgAltItem"), **kw)
+
+
+def test_full_walk_matching_results_count_returns_all(monkeypatch):
+    calls = _serve(monkeypatch, [
+        _two_rows("DC202600001", "DC202600002", current=1, pages=2, count=4),
+        _two_rows("DC202600003", "DC202600004", current=2, pages=2, count=4),
+    ])
+    recs = YorkScraper().scrape()
+    assert [r.Booking_Number for r in recs] == ["DC202600001", "DC202600002", "DC202600003", "DC202600004"]
+    assert len(calls) == 2
+
+
+def test_results_count_mismatch_raises_drift(monkeypatch):
+    _serve(monkeypatch, [_two_rows("DC202600001", "DC202600002", current=1, pages=1, count=5)])
+    with pytest.raises(ParseDriftError, match="Results Count 5"):
+        YorkScraper().scrape()
+
+
+def test_postback_returning_visited_page_raises_drift(monkeypatch):
+    first = _two_rows("DC202600001", "DC202600002", current=1, pages=3, count=6)
+    _serve(monkeypatch, [first, first])
+    with pytest.raises(ParseDriftError, match="page 1 again"):
+        YorkScraper().scrape()
+
+
+def test_repeated_page_rows_under_new_page_number_raise_drift(monkeypatch):
+    _serve(monkeypatch, [
+        _two_rows("DC202600001", "DC202600002", current=1, pages=3, count=6),
+        _two_rows("DC202600001", "DC202600002", current=2, pages=3, count=6),
+    ])
+    with pytest.raises(ParseDriftError, match="repeated"):
+        YorkScraper().scrape()
+
+
+def test_max_pages_hit_before_last_page_raises_drift(monkeypatch):
+    monkeypatch.setattr(york, "MAX_PAGES", 2)
+    calls = _serve(monkeypatch, [
+        _two_rows("DC202600001", "DC202600002", current=1, pages=3, count=4),
+        _two_rows("DC202600003", "DC202600004", current=2, pages=3, count=4),
+        _two_rows("DC202600005", "DC202600006", current=3, pages=3, count=4),
+    ])
+    with pytest.raises(ParseDriftError, match="MAX_PAGES"):
+        YorkScraper().scrape()
+    assert len(calls) == 2
+
+
+def test_next_page_target_disappearing_early_raises_drift(monkeypatch):
+    _serve(monkeypatch, [
+        _two_rows("DC202600001", "DC202600002", current=1, pages=3, count=6),
+        # page 2's pager no longer offers page 3: the walk stops at 4 of 6 rows
+        _two_rows("DC202600003", "DC202600004", current=2, pages=2, count=6),
+    ])
+    with pytest.raises(ParseDriftError, match="walked 4 unique rows"):
+        YorkScraper().scrape()
+
+
+def test_missing_results_count_keeps_walked_records_with_warning(monkeypatch, caplog):
+    _serve(monkeypatch, [_two_rows("DC202600001", "DC202600002", current=1, pages=1, count=None)])
+    with caplog.at_level("WARNING", logger=york.__name__):
+        recs = YorkScraper().scrape()
+    assert [r.Booking_Number for r in recs] == ["DC202600001", "DC202600002"]
+    assert "Results Count not published" in caplog.text
 
 
 def test_source_contract_is_validated_and_https():
