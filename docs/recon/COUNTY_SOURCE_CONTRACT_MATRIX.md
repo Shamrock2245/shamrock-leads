@@ -23,7 +23,7 @@
 |---|---:|---:|---:|---:|---:|---:|---:|
 | AL | 67 | 16 | 4 | 0 | 0 | 51 | 12 |
 | CT | 12 | 6 | 0 | 0 | 6 | 1 | 5 |
-| FL | 67 | 67 | 4 | 15 | 33 | 0 | 15 |
+| FL | 67 | 67 | 4 | 15 | 32 | 0 | 16 |
 | GA | 159 | 85 | 0 | 0 | 148 | 0 | 11 |
 | LA | 64 | 13 | 3 | 1 | 4 | 46 | 10 |
 | MS | 82 | 9 | 1 | 0 | 4 | 69 | 8 |
@@ -32,7 +32,7 @@
 | TN | 96 | 22 | 9 | 0 | 74 | 0 | 13 |
 | TX | 254 | 34 | 2 | 0 | 0 | 252 | 0 |
 
-**Aggregate matrix counts:** verified public 33; candidate productive 30; recon only 269; unverified 489; fail closed 126.
+**Aggregate matrix counts:** verified public 33; candidate productive 30; recon only 268; unverified 489; fail closed 127.
 
 ## County matrix
 
@@ -117,7 +117,7 @@
 | CT | special_ct_statewide | Statewide (non-county scope) | Palmetto | registered | fail_closed | — | Registered non-county scope; no county-equivalent source contract asserted | This dashboard registration is outside the Census county-equivalent inventory. It remains unverified until a scope-specific public source-contract validation is documented. |
 | CT | 013 | Tolland County | Palmetto | recon_required | recon_only | — | Public landing page; linked search rejected; no bypass | CT DOC statewide source linked from [CT.gov][1]; county-equivalent is not shown as a separate county-operated source. Landing/search contract only; linked interface returned request rejected ([2]). No person-level access attempted. |
 | CT | 015 | Windham County | Palmetto | recon_required | recon_only | — | Public landing page; linked search rejected; no bypass | CT DOC statewide source linked from [CT.gov][1]; county-equivalent is not shown as a separate county-operated source. Landing/search contract only; linked interface returned request rejected ([2]). No person-level access attempted. |
-| FL | 001 | Alachua County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
+| FL | 001 | Alachua County | OSI + Palmetto | registered | fail_closed | https://asosite.alachuasheriff.org/ASOInmateLookup.aspx | Ordinary public HTTPS ASP.NET View All grid; no source booking identifier on listing (person-level MNI only) | 2026-10-07 recon: ~987-row Last/First/Full Name/Book Date/Race/Sex/Age/POD/Agency grid; no Booking #. Old parser keyed Booking_Number on FirstName (984 rows -> ~618 keys). Hold fail_closed in alachua.py (SOURCE_CONTRACT_VALIDATED=False) and SCRAPER_SOURCE_STATES; person IDs are not booking keys. See docs/recon/FL_ALACHUA_FAIL_CLOSED_2026-10-07.md. |
 | FL | 003 | Baker County | OSI + Palmetto | registered | fail_closed | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 005 | Bay County | OSI + Palmetto | registered | verified_public | https://www.baysomobile.org/is/ | Plain HTTPS public uniGUI inmate search (linked from bayso.org); no login/CAPTCHA/WAF; server requires last+first initial, so a bounded A–Z × A–Z initials walk is used in one session | 2026-09-25 read smoke from box: 940 current in-custody rows / 940 unique source `Booking #` values (format `YYYY-NNNNNN`), Date In on every row; ~200 s per walk. 2026-09-25 Mac write smoke (`python main.py bay`, MongoWriter): scraped 940 / new 940 / updated 0, status ok, 189 s; 940/940 stored booking_number values match `^\d{4}-\d{6}$` (source keys). See docs/recon/FL_GAP_QUEUE_2026-09-25.md. |
 | FL | 007 | Bradford County | OSI + Palmetto | registered | candidate_productive | http://smartweb.bradfordsheriff.org/smartwebclient/Jail.aspx | Ordinary public HTTP SmartWEB JAIL View (HTTP-only host) | 2026-10-07 SmartWEB-five recon: Booking No BCSO<YY>JBN<NNNNNN>, booking date/time, charges, bond via booking-date window. Prior curl_cffi path + name/date invented keys retired; shared fl_smartweb. 2026-10-07 legacy-paging fix: bare-SearchVals AddMoreResults now pages (30-day read smoke 36 rows, was 10). |

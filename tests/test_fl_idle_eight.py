@@ -10,6 +10,7 @@ import io
 import pytest
 
 from scrapers.counties import citrus, okaloosa
+from scrapers.counties.alachua import AlachuaCountyScraper
 from scrapers.counties.clay import ClayCountyScraper
 from scrapers.counties.columbia import ColumbiaCountyScraper
 from scrapers.counties.gilchrist import GilchristCountyScraper
@@ -127,7 +128,7 @@ def test_okaloosa_parser_requires_source_booking_number():
 
 @pytest.mark.parametrize(
     "cls",
-    [ClayCountyScraper, ColumbiaCountyScraper, OkeechobeeCountyScraper],
+    [ClayCountyScraper, ColumbiaCountyScraper, OkeechobeeCountyScraper, AlachuaCountyScraper],
 )
 def test_incomplete_idle_counties_are_fail_closed(cls):
     assert cls.SOURCE_CONTRACT_VALIDATED is False

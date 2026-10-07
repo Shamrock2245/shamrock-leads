@@ -1,189 +1,51 @@
 """
-Alachua County Arrest Scraper — ASP.NET ViewState + "View All" button.
-Source: Alachua County Sheriff's Office
-URL: https://asosite.alachuasheriff.org/ASOInmateLookup.aspx
-Method: requests + BeautifulSoup — POST with ViewState to get all inmates
+Alachua County (FL) — fail closed (public roster has no source booking ID).
+
+Source recon 2026-10-07 (docs/recon/FL_ALACHUA_FAIL_CLOSED_2026-10-07.md):
+  * URL: https://asosite.alachuasheriff.org/ASOInmateLookup.aspx ("View All")
+  * Plain HTTPS returns a public ASP.NET GridView (~987 rows) with columns
+    Last Name / FirstName / Full Name / Book Date / Race / Sex / Age / POD /
+    Arrest Agency. No Booking # column is published; the row link is a
+    last/first-name query, and the only identifier behind it is person-level
+    (MNI), which is not a booking key.
+  * The previous parser read column 2 (FirstName) as Booking_Number, so 984
+    rows collapsed onto ~618 first-name keys. Person IDs and names are never
+    booking keys (same policy as Durham NC and Clay FL), so emission is
+    refused until a source-issued booking number appears on the listing.
+  * The form's booking-number search box is not a listing; sequential
+    identifier probing stays prohibited.
 """
+from __future__ import annotations
+
 import logging
-import re
-import time
 from typing import List
+
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://asosite.alachuasheriff.org/ASOInmateLookup.aspx"
-FACILITY = "Alachua County Jail"
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Referer": BASE_URL,
-    "DNT": "1",
-    "Connection": "keep-alive",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "same-origin",
-    "Sec-Fetch-User": "?1",
-}
-IMPERSONATE = "chrome131"
+ROSTER_URL = "https://asosite.alachuasheriff.org/ASOInmateLookup.aspx"
 
 
 class AlachuaCountyScraper(BaseScraper):
+    """Fail closed: public roster has no source booking number."""
+
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "asosite.alachuasheriff.org View All is a public name/Book Date grid "
+        "with no source booking number (only a person-level MNI); refuse "
+        "emission rather than key rows on names."
+    )
+
     @property
     def county(self) -> str:
         return "Alachua"
 
+    @property
+    def state(self) -> str:
+        return "FL"
+
     def scrape(self) -> List[ArrestRecord]:
-        try:
-            from curl_cffi import requests as cffi_requests
-            from bs4 import BeautifulSoup
-        except ImportError:
-            logger.error("curl_cffi/bs4 not installed"); raise
-
-        session = cffi_requests.Session()
-
-        # Step 1: GET page to harvest ASP.NET tokens
-        try:
-            resp = session.get(BASE_URL, headers=HEADERS, timeout=30, impersonate=IMPERSONATE)
-            if resp.status_code != 200:
-                raise Exception(f"{resp.status_code} error")
-        except Exception as e:
-            logger.error(f"Alachua: failed to load page: {e}"); raise
-
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        def _get_hidden(name):
-            el = soup.find("input", {"name": name})
-            return el["value"] if el and el.get("value") else ""
-
-        viewstate = _get_hidden("__VIEWSTATE")
-        viewstate_gen = _get_hidden("__VIEWSTATEGENERATOR")
-        event_validation = _get_hidden("__EVENTVALIDATION")
-
-        if not viewstate:
-            logger.warning("Alachua: no __VIEWSTATE found — page structure may have changed")
-
-        # Step 2: POST with "View All" button
-        # IMPORTANT: Only send fields that actually exist on the HTML form.
-        # ASP.NET EventValidation will 500 if we send unregistered fields.
-        # Verified fields from live HTML: txtLName, txtFName, txtBookNo, ButtonView,
-        # __VIEWSTATE, __VIEWSTATEGENERATOR, __VIEWSTATEENCRYPTED, __EVENTVALIDATION
-        post_data = {
-            "__VIEWSTATE": viewstate,
-            "__VIEWSTATEGENERATOR": viewstate_gen,
-            "__VIEWSTATEENCRYPTED": "",
-            "__EVENTVALIDATION": event_validation,
-            "txtLName": "",
-            "txtFName": "",
-            "txtBookNo": "",
-            "ButtonView": "View All",
-        }
-
-        try:
-            resp2 = session.post(BASE_URL, data=post_data, headers=HEADERS, timeout=60, impersonate=IMPERSONATE)
-            if resp2.status_code != 200:
-                raise Exception(f"{resp2.status_code} error")
-        except Exception as e:
-            logger.error(f"Alachua: POST failed: {e}"); raise
-
-        soup2 = BeautifulSoup(resp2.text, "html.parser")
-        records = []
-
-        # Find the GridView table
-        table = soup2.find("table", id=re.compile(r"GridView|InmateGrid|gvInmates", re.I))
-        if not table:
-            # Fallback: find any table with booking data
-            for t in soup2.find_all("table"):
-                headers_row = t.find("tr")
-                if headers_row:
-                    header_text = headers_row.get_text(" ").lower()
-                    if any(kw in header_text for kw in ["name", "booking", "inmate"]):
-                        table = t
-                        break
-
-        if not table:
-            logger.warning("Alachua: no data table found")
-            return []
-
-        rows = table.find_all("tr")[1:]  # Skip header
-        for row in rows:
-            cells = row.find_all("td")
-            if len(cells) < 2:
-                continue
-            texts = [c.get_text(strip=True) for c in cells]
-            if not any(texts):
-                continue
-
-            # Common column order: Name, Booking#, Booking Date, Charges, Bond
-            full_name = texts[0] if len(texts) > 0 else ""
-            booking_num = texts[1] if len(texts) > 1 else ""
-            booking_date = texts[2] if len(texts) > 2 else ""
-            charges = texts[3] if len(texts) > 3 else ""
-            bond_raw = texts[4] if len(texts) > 4 else "0"
-
-            # Try to find a detail link
-            detail_url = ""
-            link = row.find("a", href=True)
-            if link:
-                href = link["href"]
-                if not href.startswith("http"):
-                    href = f"https://asosite.alachuasheriff.org/{href.lstrip('/')}"
-                detail_url = href
-
-            f, m, l = self._pn(full_name)
-            bond_amount = self._parse_bond(bond_raw)
-
-            records.append(ArrestRecord(
-                County=self.county,
-                Booking_Number=self._clean(booking_num),
-                Full_Name=full_name,
-                First_Name=f,
-                Middle_Name=m,
-                Last_Name=l,
-                        DOB="",
-                Booking_Date=self._clean(booking_date),
-                Status="In Custody",
-                        Release_Date="",
-                Facility=FACILITY,
-                Charges=self._clean(charges),
-                Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
-                Detail_URL=detail_url,
-                LastCheckedMode="INITIAL",
-            ))
-
-        logger.info(f"Alachua: {len(records)} records")
-        return records
-
-    @staticmethod
-    def _clean(text):
-        if not text:
-            return ""
-        return " ".join(str(text).strip().split())
-
-    @staticmethod
-    def _pn(n):
-        if not n:
-            return "", "", ""
-        n = " ".join(n.strip().split())
-        if "," in n:
-            p = n.split(",", 1)
-            l = p[0].strip()
-            fm = p[1].strip().split()
-            return (fm[0] if fm else ""), (" ".join(fm[1:]) if len(fm) > 1 else ""), l
-        p = n.split()
-        return p[0], (" ".join(p[2:]) if len(p) > 2 else ""), p[-1] if len(p) >= 2 else ""
-
-    @staticmethod
-    def _parse_bond(bond_str):
-        if not bond_str:
-            return 0.0
-        cleaned = re.sub(r"[$,\s]", "", bond_str.strip().upper())
-        if any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
-            return 0.0
-        try:
-            return float(cleaned)
-        except (ValueError, TypeError):
-            return 0.0
+        logger.warning("Alachua: SOURCE_CONTRACT_VALIDATED=False — %s", self.SOURCE_CONTRACT_REASON)
+        return []
