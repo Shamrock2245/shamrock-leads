@@ -4,7 +4,7 @@
 requests>=2.31.0
 pymongo[srv]>=4.6.0
 python-dotenv>=1.0.0
-APScheduler>=3.10.4
+APScheduler>=3.11.3
 
 # Google Sheets (optional legacy writer) + Gmail/Calendar API
 gspread>=6.0.0
