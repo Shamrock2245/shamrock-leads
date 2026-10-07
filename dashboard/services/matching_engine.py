@@ -12,6 +12,10 @@ Match Strategies (in order of priority):
 
 Auto-links when confidence >= AUTO_LINK_THRESHOLD (default: 80).
 Returns candidates for manual review when confidence < threshold.
+
+Name + DOB never auto-links unless a county is present. A missing county
+(state alone included) is a global scan, so those hits stay in staff review
+with confidence capped below the auto-link line.
 """
 import logging
 import unicodedata
@@ -30,6 +34,14 @@ logger = logging.getLogger(__name__)
 # ── Thresholds ────────────────────────────────────────────────────────────────
 AUTO_LINK_THRESHOLD = 80   # Auto-link intake → defendant above this score
 REVIEW_THRESHOLD = 50      # Surface as candidate above this score
+# Name+DOB with no county stays under the auto-link line for staff review.
+UNSCOPED_NAME_DOB_CONFIDENCE = AUTO_LINK_THRESHOLD - 1
+_NAME_DOB_STRATEGIES = frozenset({
+    "name_dob_county",
+    "name_dob_review",
+    "fuzzy_name_dob",
+    "phonetic_name_dob",
+})
 
 # ── Suffix list (same as defendant_normalizer) ────────────────────────────────
 _SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v", "esq", "phd", "md", "dds"}
@@ -301,6 +313,7 @@ class MatchResult:
         self.defendant_id = defendant_id or arrest_doc.get("defendant_id")
         self.booking_number = arrest_doc.get("booking_number", "")
         self.county = arrest_doc.get("county", "")
+        self.state = arrest_doc.get("state") or arrest_doc.get("State") or ""
         self.full_name = arrest_doc.get("full_name", "")
         self.bond_amount = arrest_doc.get("bond_amount", 0)
         self.charges = arrest_doc.get("charges", "")
@@ -313,6 +326,7 @@ class MatchResult:
             "defendant_id": self.defendant_id,
             "booking_number": self.booking_number,
             "county": self.county,
+            "state": self.state,
             "full_name": self.full_name,
             "bond_amount": self.bond_amount,
             "charges": self.charges,
@@ -343,6 +357,11 @@ class MatchingEngine:
     @property
     def intake_queue(self):
         return self.db["intake_queue"]
+
+    @staticmethod
+    def _name_dob_place_ready(county: str) -> bool:
+        """County is required. State alone still matches every county in that state."""
+        return bool((county or "").strip())
 
     def _arrest_place_query(self, county: str, state: str = "") -> dict:
         from dashboard.services.place_identity import mongo_place_clause, parse_place
@@ -433,18 +452,37 @@ class MatchingEngine:
                 candidates.append(MatchResult(doc, 100, "exact_booking"))
 
         # ── Strategy 2: Normalized name + DOB + county ─────────────────────
+        # Without a county this scan is global. Collect every exact hit and
+        # leave them for staff. Never auto-link the first name+DOB in the file.
+        place_ready = self._name_dob_place_ready(county)
         if def_name and def_dob and not candidates:
             norm_dob = _norm_dob(def_dob)
             norm_name = _norm(def_name)
-            query: dict = self._arrest_place_query(county, state)
+            query: dict = self._arrest_place_query(county, state) if place_ready else {}
 
             cursor = self.arrests.find(query, {"_id": 0}).limit(500)
+            exact_hits = []
             async for doc in cursor:
                 doc_name = _norm(doc.get("full_name", ""))
                 doc_dob = _norm_dob(str(doc.get("dob", "")))
                 if doc_dob == norm_dob and doc_name == norm_name:
-                    candidates.append(MatchResult(doc, 95, "name_dob_county"))
-                    break
+                    exact_hits.append(doc)
+                    if place_ready:
+                        break
+                    if len(exact_hits) >= 25:
+                        break
+            if exact_hits and place_ready:
+                candidates.append(MatchResult(exact_hits[0], 95, "name_dob_county"))
+            elif exact_hits:
+                logger.info(
+                    "[match] name+DOB without county stays in staff review: intake=%s candidates=%s",
+                    intake_id,
+                    len(exact_hits),
+                )
+                for doc in exact_hits:
+                    candidates.append(
+                        MatchResult(doc, UNSCOPED_NAME_DOB_CONFIDENCE, "name_dob_review")
+                    )
 
         # ── Strategy 3: Fuzzy name + DOB ───────────────────────────────────
         if def_name and def_dob and not candidates:
@@ -465,6 +503,8 @@ class MatchingEngine:
                     best_score = score
                     best_doc = doc
             if best_doc:
+                if not place_ready:
+                    best_score = min(best_score, UNSCOPED_NAME_DOB_CONFIDENCE)
                 candidates.append(MatchResult(best_doc, best_score, "fuzzy_name_dob"))
 
         # ── Strategy 3.5: Phonetic name match + DOB (jellyfish) ──────────
@@ -486,6 +526,8 @@ class MatchingEngine:
                         best_score = score
                         best_doc = doc
             if best_doc:
+                if not place_ready:
+                    best_score = min(best_score, UNSCOPED_NAME_DOB_CONFIDENCE)
                 candidates.append(MatchResult(best_doc, best_score, "phonetic_name_dob"))
 
         # ── Strategy 4: Name only (weak) ───────────────────────────────────
@@ -527,25 +569,44 @@ class MatchingEngine:
 
         auto_linked = False
         ambiguous = False
-        if best and best.confidence >= AUTO_LINK_THRESHOLD:
-            rival_bookings = {
+        # Fail closed: name+DOB without a county is staff review even when
+        # exactly one arrest matches anywhere in the file.
+        if not place_ready and best and best.strategy in _NAME_DOB_STRATEGIES:
+            for cand in candidates:
+                if cand.strategy in _NAME_DOB_STRATEGIES and cand.confidence >= AUTO_LINK_THRESHOLD:
+                    cand.confidence = UNSCOPED_NAME_DOB_CONFIDENCE
+            candidates.sort(key=lambda c: c.confidence, reverse=True)
+            best = candidates[0] if candidates else None
+            review_bookings = {
                 c.booking_number
                 for c in candidates
-                if c.confidence >= 70
-                and c.booking_number
-                and c.booking_number != best.booking_number
+                if c.strategy in _NAME_DOB_STRATEGIES and c.booking_number
             }
-            # Exact booking / name+DOB always auto-link. Returning-indemnitor
-            # auto-links only when the live booking is unique.
-            if rival_bookings and best.strategy not in ("exact_booking", "name_dob_county"):
+            if len(review_bookings) > 1:
+                ambiguous = True
+        if best and best.confidence >= AUTO_LINK_THRESHOLD:
+            if best.strategy in _NAME_DOB_STRATEGIES and not place_ready:
                 ambiguous = True
             else:
-                auto_linked = await self._link_intake_to_arrest(
-                    intake_id=intake_id,
-                    arrest_doc=best.arrest_doc,
-                    confidence=best.confidence,
-                    strategy=best.strategy,
-                )
+                rival_bookings = {
+                    c.booking_number
+                    for c in candidates
+                    if c.confidence >= 70
+                    and c.booking_number
+                    and c.booking_number != best.booking_number
+                }
+                # Exact booking / county-scoped name+DOB auto-link. Returning
+                # indemnitor auto-links only when the live booking is unique.
+                # Unscoped name+DOB never reaches this branch.
+                if rival_bookings and best.strategy not in ("exact_booking", "name_dob_county"):
+                    ambiguous = True
+                else:
+                    auto_linked = await self._link_intake_to_arrest(
+                        intake_id=intake_id,
+                        arrest_doc=best.arrest_doc,
+                        confidence=best.confidence,
+                        strategy=best.strategy,
+                    )
 
         return {
             "matched": bool(best),

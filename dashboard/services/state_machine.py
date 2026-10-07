@@ -167,6 +167,23 @@ class BondStateMachine:
                     booking_number, reason=f"Bond {new_status}"
                 )
 
+            # Forfeiture still releases the power above, and also opens a B1
+            # recovery case for staff to confirm. pending_review is not visible
+            # to recovery agents and sends no messages.
+            if new_status == "forfeited":
+                try:
+                    from dashboard.services.recovery_case_service import queue_forfeiture_review
+                    await queue_forfeiture_review(
+                        booking_number=booking_number,
+                        actor=actor,
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "queue_forfeiture_review failed for %s: %s",
+                        booking_number,
+                        exc,
+                    )
+
             elif new_status == "active" and current_status != "active":
                 # Schedule compliance tasks when transitioning to active
                 from dashboard.services.task_engine import TaskEngine
