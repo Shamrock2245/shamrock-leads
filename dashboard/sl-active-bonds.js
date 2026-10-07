@@ -326,6 +326,7 @@ function renderActiveBondsTable() {
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#10b981;color:#fff" onclick="fileBondToDrive('${bkSafe}')">📁 File to Drive</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#0ea5e9;color:#fff" onclick="sendPaymentLink('${bkSafe}','${nameSafe}','${escHtml(b.indemnitor?.phone || b.indemnitor_phone || '')}')">💳 Pay Link</button>
           <button class="btn-export" style="font-size:10px;padding:3px 8px;background:#8b5cf6;color:#fff" onclick="sendBondImessage('${bkSafe}','${nameSafe}','${escHtml(b.indemnitor?.phone || b.indemnitor_phone || '')}')">💬 iMessage</button>
+          ${b.status === 'forfeited' ? `<a class="btn-export" style="font-size:10px;padding:3px 8px;background:#b45309;color:#fff;text-decoration:none" href="/recovery?booking=${encodeURIComponent(b.booking_number || '')}" title="Share this forfeiture on the Recovery desk">🎯 Recovery</a>` : ''}
           <select style="font-size:10px;padding:3px;background:var(--panel);border:1px solid var(--border);border-radius:4px;color:var(--text)" onchange="updateBondStatus('${bkSafe}',this.value);this.value=''">
             <option value="">Status…</option>
             <option value="active">Active</option>

@@ -132,6 +132,7 @@
       <button class="sidebar-btn" data-tab="tabAccounting" onclick="SL.switchTab(this);SLAccounting.load()"><span class="sidebar-btn-icon">🧾</span> Accounting</button>
       <button class="sidebar-btn" data-tab="tabAccountsReceivable" onclick="SL.switchTab(this);SLAr.load()" title="Premium balances. Staff only."><span class="sidebar-btn-icon">📒</span> Receivables</button>
       <button class="sidebar-btn" data-tab="tabFTA" onclick="SL.switchTab(this);SLFTA.load()"><span class="sidebar-btn-icon">🚨</span> FTA Alerts <span class="badge" id="ftaBadge" style="background:#ef4444"></span></button>
+      <button class="sidebar-btn recovery-staff-nav" type="button" onclick="location.href='/recovery'" title="BailSafe Recovery — share a forfeiture file with a limited recovery agent"><span class="sidebar-btn-icon">🎯</span> Recovery</button>
       <button class="sidebar-btn" data-tab="tabTracking" onclick="SL.switchTab(this);SLTracking.init();SLGeoIntel.init()"><span class="sidebar-btn-icon">📍</span> Tracking <span class="badge" id="trackingBadge">—</span></button>
 
       <div class="sidebar-group-label">Workspace</div>
@@ -3860,7 +3861,7 @@
 
 <!-- Core path first (Lead Explorer + county catch-up). Heavy CDNs deferred. -->
 <script src="/sl-core.js?v=12"></script>
-<script src="/sl-rbac.js?v=1"></script>
+<script src="/sl-rbac.js?v=2"></script>
 <script src="/sl-staff.js?v=1"></script>
 <script src="/sl-rearrest.js?v=6"></script>
 <script src="/sl-data.js?v=9"></script>
@@ -3886,7 +3887,7 @@
 <script src="/sl-utils.js"></script>
 <script src="/sl-intake.js?v=9"></script>
 <script src="/sl-prospective.js?v=9"></script>
-<script src="/sl-active-bonds.js?v=6"></script>
+<script src="/sl-active-bonds.js?v=7"></script>
 <script src="/sl-active-bonds-ext.js?v=4"></script>
 <script src="/sl-notifications.js?v=4"></script>
 <script src="/sl-omnibar.js?v=3"></script>

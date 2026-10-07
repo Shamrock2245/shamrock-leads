@@ -72,6 +72,7 @@ deployment/frp/frps.runtime.toml
 
 # Uploads (KYC data — never commit PII)
 dashboard/uploads/
+var/recovery_uploads/
 
 # Coverage and testing
 htmlcov/

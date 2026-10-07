@@ -97,6 +97,7 @@ jobs:
             tests/test_rearrest_detector.py \
             tests/test_book_watch_review.py \
             tests/test_forfeiture_and_imessage_send.py \
+            tests/test_recovery_b1.py \
             tests/test_pin_portal.py \
             tests/test_shannon_voice_paperwork.py \
             tests/test_wix_imessage_send.py \

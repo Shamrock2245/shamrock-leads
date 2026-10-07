@@ -69,6 +69,7 @@ SUB_AGENT_BLOCKED_API_PREFIXES = [
     "/api/fta",
     "/api/discharge-monitor",
     "/api/sub-agents",
+    "/api/recovery",
 ]
 
 
@@ -81,6 +82,19 @@ async def session_me(request: Request):
 
     role = sess.get("role", "god_admin")
     is_god = role in ("god_admin", "admin")
+    is_staff = role in ("god_admin", "admin", "staff")
+    is_recovery = role == "recovery"
+    is_sub = role == "sub_agent"
+
+    if is_staff:
+        blocked_tabs: list = []
+        blocked_prefixes: list = []
+    elif is_recovery:
+        blocked_tabs = ["*"]
+        blocked_prefixes = ["*"]
+    else:
+        blocked_tabs = SUB_AGENT_BLOCKED_TABS
+        blocked_prefixes = SUB_AGENT_BLOCKED_API_PREFIXES
 
     return {
         "success": True,
@@ -88,10 +102,14 @@ async def session_me(request: Request):
         "role": role,
         "agent_name": sess.get("agent_name", ""),
         "license_number": sess.get("license_number", ""),
-        "is_god_admin": is_god,
-        "is_sub_agent": role == "sub_agent",
-        "blocked_tabs": [] if is_god else SUB_AGENT_BLOCKED_TABS,
-        "blocked_api_prefixes": [] if is_god else SUB_AGENT_BLOCKED_API_PREFIXES,
+        "recovery_id": sess.get("recovery_id", "") if is_recovery else "",
+        "is_god_admin": is_god and not is_recovery,
+        "is_staff": is_staff,
+        "is_sub_agent": is_sub,
+        "is_recovery": is_recovery,
+        "recovery_portal": "/recovery" if (is_recovery or is_staff) else "",
+        "blocked_tabs": blocked_tabs,
+        "blocked_api_prefixes": blocked_prefixes,
     }
 
 

@@ -58,6 +58,7 @@
     'button.sidebar-btn[title*="Social Command Center"]',
     'button.sidebar-btn[title*="Postiz"]',
     '.god-admin-only',
+    '.recovery-staff-nav',
   ];
 
   function escapeHtml(str) {
@@ -82,6 +83,11 @@
       RBAC.licenseNumber = data.license_number || '';
       RBAC.isGodAdmin = data.is_god_admin === true || data.role === 'god_admin' || data.role === 'admin';
       RBAC.isSubAgent = data.is_sub_agent === true || data.role === 'sub_agent';
+      RBAC.isRecovery = data.is_recovery === true || data.role === 'recovery';
+      if (RBAC.isRecovery) {
+        window.location.replace('/recovery');
+        return;
+      }
       RBAC.blockedTabs = data.blocked_tabs || [];
       RBAC.blockedApiPrefixes = data.blocked_api_prefixes || [];
       RBAC.loaded = true;
