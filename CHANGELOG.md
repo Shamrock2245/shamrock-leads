@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-07 (NC Mecklenburg Inmate Inquiry JSON)
+
+### Changed
+- **Mecklenburg (NC):** replaced HTML letter-walk + invented `MECK_` MD5 booking keys with ordinary public Knockout JSON (`GET /Inmate/_Search?activeOnly=true`, `_Summary`, `_GetCharges`). `Booking_Number` is source **JID** (`YY-######`); `Charges` / `Bond_Amount` from published `ActualBailAmount` sum only. `SOURCE_CONTRACT_VALIDATED=True`; Health stays **unverified** until write smoke. Evidence + matrix updated (`docs/recon/NC_MECKLENBURG_INMATE_API_2026-10-07.md`). Option A (promote Buncombe/Carteret/Catawba/Craven/Johnston/Lee/Lincoln/Moore/Richmond/Stanly to `verified_public`) deferred — those ten appear as Palmetto `live_write` labels but lack `live_emitter_evidence.json` write-smoke rows. Durham/Onslow/Rowan/Wayne and P2C holds untouched.
+
 ## [Unreleased] — 2026-10-07 (SC Lancaster NewWorld contract)
 
 ### Changed

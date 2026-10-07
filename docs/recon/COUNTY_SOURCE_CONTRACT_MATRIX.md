@@ -27,12 +27,12 @@
 | GA | 159 | 85 | 0 | 0 | 148 | 0 | 11 |
 | LA | 64 | 13 | 3 | 1 | 4 | 46 | 10 |
 | MS | 82 | 9 | 1 | 0 | 4 | 69 | 8 |
-| NC | 100 | 60 | 3 | 0 | 0 | 81 | 16 |
+| NC | 100 | 60 | 3 | 1 | 0 | 80 | 16 |
 | SC | 46 | 46 | 7 | 1 | 0 | 2 | 36 |
 | TN | 96 | 22 | 9 | 0 | 74 | 0 | 13 |
 | TX | 254 | 34 | 2 | 0 | 0 | 252 | 0 |
 
-**Aggregate matrix counts:** verified public 33; candidate productive 7; recon only 281; unverified 502; fail closed 124.
+**Aggregate matrix counts:** verified public 33; candidate productive 8; recon only 281; unverified 501; fail closed 124.
 
 ## County matrix
 
@@ -548,7 +548,7 @@
 | NC | 115 | Madison County | Palmetto | recon_required | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 117 | Martin County | Palmetto | recon_required | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 111 | McDowell County | Palmetto | recon_required | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
-| NC | 119 | Mecklenburg County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
+| NC | 119 | Mecklenburg County | Palmetto | registered | candidate_productive | https://mecksheriffweb.mecklenburgcountync.gov/Inmate | Ordinary public HTTPS MCSO Inmate Inquiry Knockout JSON; GET /Inmate/_Search?activeOnly=true paginates max=50; _Summary/_GetCharges publish JID, CommitedFormatted, Description, ActualBailAmount (no login/CAPTCHA/proxy) | 2026-10-07 box recon: activeOnly roster TotalRows=2224 across ~45 pages; Booking_Number is source JID (YY-######), never MECK_ hashes; charges/bond from _GetCharges ActualBailAmount sum only. Parser uses plain requests. Health stays unverified until write smoke — do not set verified_public yet. See docs/recon/NC_MECKLENBURG_INMATE_API_2026-10-07.md. |
 | NC | 121 | Mitchell County | Palmetto | recon_required | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 123 | Montgomery County | Palmetto | recon_required | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 125 | Moore County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
