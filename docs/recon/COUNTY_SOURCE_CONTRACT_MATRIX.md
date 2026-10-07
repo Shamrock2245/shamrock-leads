@@ -28,11 +28,11 @@
 | LA | 64 | 13 | 3 | 1 | 4 | 46 | 10 |
 | MS | 82 | 9 | 1 | 0 | 4 | 69 | 8 |
 | NC | 100 | 60 | 3 | 0 | 0 | 81 | 16 |
-| SC | 46 | 46 | 7 | 0 | 0 | 3 | 36 |
+| SC | 46 | 46 | 7 | 1 | 0 | 2 | 36 |
 | TN | 96 | 22 | 9 | 0 | 74 | 0 | 13 |
 | TX | 254 | 34 | 2 | 0 | 0 | 252 | 0 |
 
-**Aggregate matrix counts:** verified public 33; candidate productive 6; recon only 281; unverified 503; fail closed 124.
+**Aggregate matrix counts:** verified public 33; candidate productive 7; recon only 281; unverified 502; fail closed 124.
 
 ## County matrix
 
@@ -617,7 +617,7 @@
 | SC | 051 | Horry County | Palmetto | registered | fail_closed | https://www.horrycountysc.gov/departments/sheriffs-office/detention-center/booking-releases/ | Ordinary public landing page; no bypass used | Official Horry County booking/releases page; booking information is described, broad listing schema and pagination not verified. |
 | SC | 053 | Jasper County | Palmetto | registered | fail_closed | https://experience.arcgis.com/experience/4dbd3f63e56c492f9b408ebff12155f3/ | Ordinary public landing page; no bypass used | Officially surfaced Jasper County inmate inquiry ArcGIS experience; broad roster and row schema not verified. |
 | SC | 055 | Kershaw County | Palmetto | registered | fail_closed | https://www.kershaw.sc.gov/government/departments-r-z/safety-and-emergency-services/detention-center | Ordinary public landing page; no bypass used | Official Kershaw County detention-center page links an inmate list; listing schema and pagination not verified. |
-| SC | 057 | Lancaster County | Palmetto | registered | unverified | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |
+| SC | 057 | Lancaster County | Palmetto | registered | candidate_productive | https://inmate.lancastercountysc.net/NewWorld.InmateInquiry/SC0290000 | Ordinary public HTTPS NewWorld InmateInquiry; InCustody=True roster paginates via Page=; Inmate/Detail publishes Booking YYYY-########, Booking Date, Total Bond Amount, and charge grid (no login/CAPTCHA/WAF) | 2026-10-07 box recon: listing 200 with 100+100+14 in-custody detail links (3 pages); detail Booking label is source key YYYY-######## (not URL Detail id); charges from BookingCharges; Bond_Amount from Total Bond Amount only (per-charge Bond cells may be reference ids). Parser uses plain requests (no proxy/stealth). Health stays unverified until write smoke — do not set verified_public yet. See docs/recon/SC_LANCASTER_NEWWORLD_2026-10-07.md. |
 | SC | 059 | Laurens County | Palmetto | registered | fail_closed | https://www.laurenscountysheriff.org/inmate-search | Ordinary public landing page; no bypass used | Official Laurens County Sheriff inmate-search landing page links to a Zuercher portal; broad roster and fields not verified. |
 | SC | 061 | Lee County | Palmetto | registered | fail_closed | https://www.sumtercountysc.gov/departments/a_-_d/detention_center/index.php | Ordinary public landing page; no bypass used | Official Sumter County Lee Regional Detention Center page; online inmate inquiry is linked, row schema and pagination not verified. |
 | SC | 063 | Lexington County | Palmetto | registered | fail_closed | — | No source contract safely verified | No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing. |

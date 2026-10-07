@@ -31,7 +31,7 @@ python main.py sc_lee      # not FL Lee
 | Southern Software | Chesterfield, Dorchester | `SouthernSWBaseScraper` |
 | P2C / CentralSquare | Lexington, Lee | `P2CBaseScraper` — both fail closed pending a supported source-safe broad roster |
 | SmartCOP | Sumter | `SmartCOPBaseScraper` |
-| New World | Lancaster | `NewWorldBaseScraper` |
+| New World | Lancaster | `counties_sc/lancaster.py` (plain requests; `SOURCE_CONTRACT_VALIDATED`) |
 | Custom / XML | Beaufort, Charleston, Florence, Horry, York, Jasper, Aiken… | per-file |
 
 ## County Status
@@ -59,7 +59,7 @@ python main.py sc_lee      # not FL Lee
 | Horry | ✅ Built | Custom / JSON | |
 | Jasper | ✅ Live | WP cards | Verified 42 inmates (2026-07-14) |
 | Kershaw | ⚠ Fail closed | Zuercher | No source-issued booking/inmate ID or booking timestamp; see `SC_ZUERCHER_SOURCE_SAFETY.md` |
-| Lancaster | 🟡 Wrapper | New World | |
+| Lancaster | 🟡 Live / unverified | New World InmateInquiry | InCustody roster + detail Booking YYYY-########; charges/Total Bond; Health unverified until write smoke (2026-10-07) |
 | Laurens | ⚠ Fail closed | Zuercher | No validated broad roster contract; see `SC_ZUERCHER_SOURCE_SAFETY.md` |
 | Lee | ⚠ Fail closed | P2C legacy | Sumter-Lee regional portal has no validated broad roster contract; see `LEGACY_P2C_SOURCE_SAFETY.md` |
 | Lexington | ⚠ Fail closed | P2C legacy | Search-only contract; see `LEGACY_P2C_SOURCE_SAFETY.md` |

@@ -60,7 +60,7 @@ Registered **46/46**. Modules **46/46**.
 
 **Fail_closed (19 — HOLD, no reopen without proven source contract):** includes P2C Lee/Lexington; Zuercher audited five (Anderson/Cherokee/Colleton/Kershaw/Laurens) + Union; JailTracker Chester/Greenwood; Greenville Incapsula; Bamberg/Beaufort/Berkeley/Horry/Jasper/Marion/Saluda/York and related holds. Health UI now lists **19** SC `fail_closed` keys (parity with code gates as of latest Health parity commit on this branch).
 
-**Strategic unknowns (still no reopen):** Georgetown/Orangeburg/Spartanburg scaffolds; Lancaster NewWorld; Oconee/Pickens Zuercher (not in audited fail_closed five — prefer explicit fail_closed until broad roster+ID+time proven).
+**Strategic unknowns (still no reopen):** Georgetown/Orangeburg/Spartanburg scaffolds; Lancaster NewWorld fixed 2026-10-07 (unverified until write smoke); Oconee/Pickens Zuercher (not in audited fail_closed five — prefer explicit fail_closed until broad roster+ID+time proven).
 
 ### 2.B Florida (67 registered / 67 Census)
 

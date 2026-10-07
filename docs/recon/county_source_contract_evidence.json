@@ -4603,10 +4603,10 @@
     {
       "state": "SC",
       "county_fips": "057",
-      "passive_recommendation": "not_verified",
-      "official_source_url": "\u2014",
-      "access_posture": "No source contract safely verified",
-      "evidence_note": "No official current-inmate/booking source was safely verified from the passive reconnaissance performed; no record-level probing."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://inmate.lancastercountysc.net/NewWorld.InmateInquiry/SC0290000",
+      "access_posture": "Ordinary public HTTPS NewWorld InmateInquiry; InCustody=True roster paginates via Page=; Inmate/Detail publishes Booking YYYY-########, Booking Date, Total Bond Amount, and charge grid (no login/CAPTCHA/WAF)",
+      "evidence_note": "2026-10-07 box recon: listing 200 with 100+100+14 in-custody detail links (3 pages); detail Booking label is source key YYYY-######## (not URL Detail id); charges from BookingCharges; Bond_Amount from Total Bond Amount only (per-charge Bond cells may be reference ids). Parser uses plain requests (no proxy/stealth). Health stays unverified until write smoke \u2014 do not set verified_public yet. See docs/recon/SC_LANCASTER_NEWWORLD_2026-10-07.md."
     },
     {
       "state": "SC",
