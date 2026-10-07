@@ -77,7 +77,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | County | Status | Platform | Notes |
 |--------|--------|----------|-------|
 | Dare | ⬜ No portal | — | VINE / phone |
-| Davidson | 🔲 Planned | Custom HTML | `www2.co.davidson.nc.us/DCInmates/` |
+| **Davidson** | ✅ Contract proven (unverified Health) | Custom dhtmlxGrid ashx | `www2.co.davidson.nc.us/DCInmates/` inmate_data.ashx + inmate_details.ashx; Booking_Number=source **YY-######**; no `DAV_` keys; Health unverified until write smoke (`docs/recon/NC_DAVIDSON_DCINMATES_2026-10-07.md`) |
 | Davie | 🔲 Planned | Zuercher | `davie-so-nc.zuercherportal.com` |
 | Duplin | 🔲 Planned | Southern SW | AgencyID=`DuplinCoNC` |
 | Durham | ⏳ Fail closed — deployed 2026-08-14 | Custom legacy IPS | Prior `www2.dconc.gov` path was stale and unsafe (TLS disabled, broad A–Z submissions, no verified booking-date boundary). Existing scheduled path emits no records until a supported public bulk roster exposes complete identity plus source-issued booking fields. Public production hosts are healthy; no Durham writes or alerts are expected from the safety guard. |

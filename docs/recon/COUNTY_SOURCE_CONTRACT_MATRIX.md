@@ -27,12 +27,12 @@
 | GA | 159 | 85 | 0 | 0 | 148 | 0 | 11 |
 | LA | 64 | 13 | 3 | 1 | 4 | 46 | 10 |
 | MS | 82 | 9 | 1 | 0 | 4 | 69 | 8 |
-| NC | 100 | 60 | 3 | 1 | 0 | 80 | 16 |
+| NC | 100 | 60 | 3 | 2 | 0 | 80 | 15 |
 | SC | 46 | 46 | 7 | 1 | 0 | 0 | 38 |
 | TN | 96 | 22 | 9 | 0 | 74 | 0 | 13 |
 | TX | 254 | 34 | 2 | 0 | 0 | 252 | 0 |
 
-**Aggregate matrix counts:** verified public 33; candidate productive 8; recon only 281; unverified 499; fail closed 126.
+**Aggregate matrix counts:** verified public 33; candidate productive 9; recon only 281; unverified 499; fail closed 125.
 
 ## County matrix
 
@@ -517,7 +517,7 @@
 | NC | 051 | Cumberland County | Palmetto | registered | fail_closed | — | public page; no record queries | Official sheriff active-inmate page located; listing-field contract was not tested. |
 | NC | 053 | Currituck County | Palmetto | recon_required | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 055 | Dare County | Palmetto | recon_required | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
-| NC | 057 | Davidson County | Palmetto | registered | fail_closed | — | public page; no list opened | Official sheriff detention page identifies an active inmate list; no list was opened. |
+| NC | 057 | Davidson County | Palmetto | registered | candidate_productive | http://www2.co.davidson.nc.us/DCInmates/ | Ordinary public HTTP DCInmates dhtmlxGrid ashx roster + details; GET inmate_data.ashx paginates posStart/count; POST inmate_details.ashx publishes Incarceration Date, offenses, Bail Bonds Remaining (HTTPS EOF from box; HTTP works) | 2026-10-07 box recon: total_count=311; every sampled cell[11] is source booking YY-###### (e.g. 26-003404); never DAV_ invent. Detail number=17942&curbook=26-003404 → Incarceration Date, POSSESS STOLEN MOTOR VEHICLE, Remaining $4000. Health stays unverified until write smoke. See docs/recon/NC_DAVIDSON_DCINMATES_2026-10-07.md. |
 | NC | 059 | Davie County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 061 | Duplin County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |
 | NC | 063 | Durham County | Palmetto | registered | unverified | — | No official source safely verified in passive review | No official current-inmate/booking source was safely verified; no inference from snippets or third-party pages. |

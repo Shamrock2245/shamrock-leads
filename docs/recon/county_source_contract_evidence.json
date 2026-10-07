@@ -3803,10 +3803,10 @@
     {
       "state": "NC",
       "county_fips": "057",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "[https://www.davidsoncountysheriffsnc.org/inmate-detention-center](https://www.davidsoncountysheriffsnc.org/inmate-detention-center)",
-      "access_posture": "public page; no list opened",
-      "evidence_note": "Official sheriff detention page identifies an active inmate list; no list was opened."
+      "passive_recommendation": "productive",
+      "official_source_url": "http://www2.co.davidson.nc.us/DCInmates/",
+      "access_posture": "Ordinary public HTTP DCInmates dhtmlxGrid ashx roster + details; GET inmate_data.ashx paginates posStart/count; POST inmate_details.ashx publishes Incarceration Date, offenses, Bail Bonds Remaining (HTTPS EOF from box; HTTP works)",
+      "evidence_note": "2026-10-07 box recon: total_count=311; every sampled cell[11] is source booking YY-###### (e.g. 26-003404); never DAV_ invent. Detail number=17942&curbook=26-003404 \u2192 Incarceration Date, POSSESS STOLEN MOTOR VEHICLE, Remaining $4000. Health stays unverified until write smoke. See docs/recon/NC_DAVIDSON_DCINMATES_2026-10-07.md."
     },
     {
       "state": "NC",

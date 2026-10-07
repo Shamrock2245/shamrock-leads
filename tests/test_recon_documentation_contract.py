@@ -128,7 +128,7 @@ def test_unvalidated_north_carolina_batch_is_reported_as_fail_closed():
         ("027", "Caldwell"),
         ("037", "Chatham"),
         ("051", "Cumberland"),
-        ("057", "Davidson"),
+        # Davidson (057) lifted 2026-10-07 — see test_davidson_nc_is_candidate_productive
         ("081", "Guilford"),
         ("083", "Halifax"),
         ("151", "Randolph"),
@@ -137,6 +137,15 @@ def test_unvalidated_north_carolina_batch_is_reported_as_fail_closed():
         ("183", "Wake"),
     ):
         assert f"| NC | {fips} | {county} County | Palmetto | registered | fail_closed |" in matrix
+
+
+def test_davidson_nc_is_candidate_productive():
+    """DCInmates ashx contract proven 2026-10-07; Health stays unverified until write smoke."""
+    matrix = MATRIX.read_text()
+    assert (
+        "| NC | 057 | Davidson County | Palmetto | registered | candidate_productive |"
+        in matrix
+    )
 
 
 def test_unvalidated_south_carolina_batch_is_reported_as_fail_closed():

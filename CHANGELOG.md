@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-07 (NC Davidson DCInmates ashx)
+
+### Fixed
+- **Davidson (NC):** lifted fail_closed after proving ordinary public `inmate_data.ashx` roster (`total_count≈311`) with source booking **YY-######** in cell[11]; detail `inmate_details.ashx` supplies Incarceration Date, offenses, and Bail Bonds Remaining. Removed historical `DAV_` invented-key fallback. `SOURCE_CONTRACT_VALIDATED=True`; Health stays **unverified** until write smoke. Evidence + matrix updated (`docs/recon/NC_DAVIDSON_DCINMATES_2026-10-07.md`). Durham (person offender ID only, no booking ID) and Wayne (Citizen Connect AgencyID missing) stay held — no fluff PR.
+
 ## [Unreleased] — 2026-10-07 (SC Oconee + Pickens Zuercher fail_closed)
 
 ### Changed
