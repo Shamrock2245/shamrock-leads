@@ -161,6 +161,19 @@ def _row_bond(item: Dict[str, Any]) -> Optional[float]:
     return 0.0 if published_zero else None
 
 
+# Revize rosters that publish no bond. Their scrapers wrote Bond_Amount "0"
+# before the 2026-10-07 audits, so a scraped zero there is unknown, not $0.
+NO_BOND_ROSTER_COUNTIES = frozenset({("FL", "charlotte"), ("FL", "manatee")})
+
+
+def _scraped_zero_is_unknown(arrest: Dict[str, Any]) -> bool:
+    county = str(arrest.get("county") or arrest.get("County") or "").strip().lower()
+    county = re.sub(r"\s+county$", "", county)
+    state = str(arrest.get("state") or arrest.get("State") or "FL").strip().upper()
+    extra = arrest.get("extra") if isinstance(arrest.get("extra"), dict) else {}
+    return (state, county) in NO_BOND_ROSTER_COUNTIES and extra.get("bond_published") is not True
+
+
 def arrest_bond_value(arrest: Optional[Dict[str, Any]]) -> Any:
     """Bond as the scraper recorded it on an arrests doc.
 
@@ -171,8 +184,12 @@ def arrest_bond_value(arrest: Optional[Dict[str, Any]]) -> Any:
 
     Staff edits (``/api/leads/update-bond-amount`` sets ``bond_override``;
     ``/api/leads/update-charge-bonds`` sets ``last_checked_mode``) update the
-    numeric ``bond_amount`` but not ``bond_amount_raw``, so they win over a
-    stale blank raw value. A staff-entered $0 stays a known ``"0"``.
+    numeric ``bond_amount`` but not ``bond_amount_raw``, so a positive staff
+    amount wins over a stale blank raw value. A zero alongside those flags is
+    ambiguous (the next scrape rewrites ``bond_amount`` to 0.0 but leaves the
+    flags), so it is treated as unknown: Write Bond shows blank, never $0.
+    Legacy Charlotte/Manatee docs carry a scraped ``"0"`` for a bond the
+    roster never published; that is unknown too.
     """
     arrest = arrest if isinstance(arrest, dict) else {}
     if arrest.get("Bond_Amount") not in (None, ""):
@@ -181,15 +198,20 @@ def arrest_bond_value(arrest: Optional[Dict[str, Any]]) -> Any:
     staff_set = bool(arrest.get("bond_override")) or (
         arrest.get("last_checked_mode") == "MANUAL_CHARGE_BONDS"
     )
-    if staff_set and numeric not in (None, ""):
-        return numeric if _money(numeric) else "0"
+    if staff_set and _money(numeric):
+        return numeric
+    no_bond_roster = _scraped_zero_is_unknown(arrest)
     if "bond_amount_raw" in arrest:
         raw = arrest.get("bond_amount_raw")
         if raw is not None and str(raw).strip():
+            if no_bond_roster and not _money(raw):
+                return ""
             return raw
         # Blank raw = source published nothing; a positive numeric written by
         # a later updater is still a real amount, a 0.0 is not.
         return numeric if _money(numeric) else ""
+    if no_bond_roster and not _money(numeric):
+        return ""
     return numeric
 
 
