@@ -3,6 +3,31 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-07 (multi-tenant foundation and agency onboarding)
+
+### Added
+- **`SAAS_MULTI_TENANT` flag, default off.** `get_collection()` is the tenant chokepoint: tenant-owned collections are scoped by `tenant_id`, and an explicit global allowlist (jail rosters and scraper health) stays shared. A request or job with no tenant fails closed only when the flag is on. Shamrock routes are unchanged while the flag is off. The offline backfill script and the tenant index specs are in the repo and are not applied to production. The 90-day audit TTL is unchanged.
+- **Agency onboarding** (`/platform`, `/signup`). A super-admin records the agency, Florida license numbers, branding, staff invites, and `env:` secret refs. Invites are stored and are not emailed. Self-serve signup stays pending until that super-admin approves it.
+
+## [Unreleased] — 2026-10-07 (Sarasota / Manatee FL audit)
+
+### Fixed
+- **Manatee (FL):** the roster parser maps columns by header (Booking # / Last / First / Middle / Charge / Arrest Date / Released) and keys on the source `Booking #`, checked against the row's `/bookings/<id>` link; one booking number naming two people raises `ParseDriftError`. Charge rows for the same booking are grouped into one record (`Charges` joined with ` | `, plus `extra_data.charge_details` for hydrate) instead of keeping only the first charge. `Bond_Amount`/`Bond_Type` are `""` (the roster publishes no bond), no longer `"0"`. `Released` is a required column, and an unrecognised value fails closed. Paging fails closed on a missing table or column, an empty first page, an empty or repeated page, hitting `MAX_PAGES` with a next page still offered, or a walked count that differs from a published total. Previously a repeated page or a Cloudflare page ended the walk silently and wrote what it had.
+- **Manatee egress:** a Cloudflare challenge/block page, or no usable residential exit, raises the new `EgressBlocked` (classified `anti_bot` with `egress_block=True`, never retried) instead of returning an empty or partial roster. New `MANATEE_EGRESS_MODE=direct` runs from the Leads Ops Mac / home ISP / iPhone hotspot without any proxy and refuses a non-residential host. `auto` (the default) keeps the existing resolver. No proxy, CAPTCHA or stealth path added. Ops note: `docs/ops/MANATEE_RESIDENTIAL_RUN.md`; read smoke: `scripts/manatee_residential_smoke.py`.
+- **Residential preflight (`scrapers/cf_browser.check_exit_ip`):** an exit whose org/country lookup came back empty (IP-info APIs rate-limited) was treated as residential. A datacenter box passed this check on 2026-10-07. Unknown exits are now `exit_unverified` and not residential.
+- **One-click hydrate (`packet_builder_service`):** an arrest saved with an unknown bond (`bond_amount_raw=""`, numeric `bond_amount=0.0`) no longer hydrates as a $0 bond. The context carries `bond_amount_known=False` and per-charge rows carry `bond_amount=None` (blank in Write Bond). A source-published `0` stays `0.0`. Staff bond edits (`bond_override` from update-bond-amount, `MANUAL_CHARGE_BONDS` from update-charge-bonds) win over the stale blank `bond_amount_raw`, and top-level `charge_details` (the writer's copy or the staff-edited rows) now takes precedence over the scraped `extra.charge_details`, so staff amounts, case numbers and POAs survive rehydrate.
+- **Sarasota (FL):** stays fail closed. The 2026-10-07 live check found the official current-inmate listing (1,081 entries) carries only an opaque per-person link id, name and date of birth, with no booking number or booking timestamp; detail and search pages return a Cloudflare challenge. The reopen gate is encoded in `scrapers/counties/sarasota_contract.py`: every listing entry must itself carry a source booking number and a booking date/time (page-wide labels do not count). Evidence, matrix and registry updated (`docs/recon/FL_SARASOTA_MANATEE_AUDIT_2026-10-07.md`). Health: Sarasota `fail_closed`, Manatee `unverified`.
+
+## [Unreleased] — 2026-10-07 (Production uptime watchdog)
+
+### Added
+- **Production uptime** GitHub Action (`.github/workflows/prod-uptime.yml`). Every 15 minutes at :07/:22/:37/:52 UTC, plus `workflow_dispatch`, it probes the public `/health` and `/health/live` routes on `leads` and `paperwork`. A failure opens one `prod-down` issue (or comments on the open one). Recovery closes it. Disable from the Actions tab.
+- **Workflow lint** (actionlint on PRs that touch `.github/`), a **changelog** check when `scrapers/` or `dashboard/` change (skip with the `skip-changelog` label), and a **weekly Python CodeQL** scan (Monday 05:41 UTC).
+- **Brand-contact guard** (`scripts/check_brand_contacts.py`, in the CI pytest list). Fails on the known-wrong lookalike hostnames and on phones shaped like the canonical Shamrock numbers (239-332-2245, 727-295-2245, 239-955-0178) that are not those numbers.
+
+### Fixed
+- Obvious brand typos in the overdue check-in email, social help, and the ops manual now use the canonical office line 239-332-2245. Prospecting's fallback intake URL uses the `.biz` apex. The active-bond payment SMS fallback uses that office line instead of the dashboard PIN.
+
 ## [Unreleased] — 2026-10-07 (York SC source Booking Number)
 
 ### Changed
