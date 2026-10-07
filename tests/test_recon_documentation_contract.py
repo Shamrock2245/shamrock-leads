@@ -148,6 +148,15 @@ def test_davidson_nc_is_candidate_productive():
     )
 
 
+
+def test_harnett_nc_is_candidate_productive():
+    """Citizen Connect BookingID contract proven 2026-10-07; Health stays unverified until write smoke."""
+    matrix = MATRIX.read_text()
+    assert (
+        "| NC | 085 | Harnett County | Palmetto | registered | candidate_productive |"
+        in matrix
+    )
+
 def test_unvalidated_south_carolina_batch_is_reported_as_fail_closed():
     matrix = MATRIX.read_text()
     for fips, county in (

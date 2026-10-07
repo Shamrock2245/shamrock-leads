@@ -91,7 +91,7 @@ Status key: 🔲 Planned · ⬜ No public portal · ✅ Live · 🟡 Partial · 
 | Greene | ⬜ No portal | — | VINE / phone |
 | Guilford | 🔲 Planned | P2C cloud | WAF; dual jails |
 | Halifax | ✅ Live | DCN | `inmates.halifaxncsheriff.com/dcn/inmates` · shared `dcn_base` (list ≤100 + detail enrich) |
-| Harnett | 🔲 Planned | Southern SW | AgencyID=`HarnettCoNC` |
+| **Harnett** | ✅ Contract proven (unverified Health) | Southern SW Citizen Connect | `AgencyID=HarnettCoNC` / JMS=`NC0430000`; Booking_Number=source **BookingID**; no invented keys; Health unverified until write smoke (`docs/recon/NC_HARNETT_CITIZEN_CONNECT_2026-10-07.md`) |
 | Haywood | ⬜ No portal | — | VINE / phone |
 | Henderson | 🔲 Planned | Southern SW | AgencyID=`HendersonCoNC` |
 | Hertford | ⬜ No portal | — | VINE / phone |

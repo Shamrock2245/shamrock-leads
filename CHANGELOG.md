@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-07 (NC Harnett Citizen Connect BookingID)
+
+### Changed
+- **Harnett (NC):** proved ordinary public Southern Software Citizen Connect roster (`AgencyID=HarnettCoNC`, JMS `NC0430000`). `Booking_Number` is source **BookingID** (href / `data-bookingid` / mugshot debug) — never invent keys; never use person `NameID` alone. Live scrape 306 unique bookings; charges/bond only when the card publishes them. `SOURCE_CONTRACT_VALIDATED=True`; Health stays **unverified** until write smoke. Evidence + matrix updated (`docs/recon/NC_HARNETT_CITIZEN_CONNECT_2026-10-07.md`). Brunswick Zuercher (no booking/inmate ID) and empty Citizen Connect agencies (Robeson/Rockingham/Vance/Warren/Wilkes/Granville/Nash) stay held; other proven NC SSW counties (Henderson/Sampson/Stokes/Surry/Edgecombe) deferred to follow-on PRs.
+
 ## [Unreleased] — 2026-10-07 (NC Davidson DCInmates ashx)
 
 ### Fixed
