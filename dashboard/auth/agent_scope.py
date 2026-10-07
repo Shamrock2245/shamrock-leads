@@ -32,6 +32,8 @@ SUB_AGENT_BLOCKED_API_PREFIXES = (
     "/api/discharge-monitor",
     "/api/sub-agents",  # management is God-Admin only (session/me is separate)
     "/api/recovery",  # forfeiture case share is staff or the recovery role, never sub-agent
+    "/api/checkin/evidence",
+    "/api/checkin/enrollment-sla",
 )
 
 

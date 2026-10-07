@@ -23,6 +23,13 @@ def test_restricted_prefixes_blocked():
     assert path_blocked_for_sub_agent("/api/discharge-monitor/scan") is True
 
 
+def test_checkin_evidence_blocked_for_sub_agent():
+    assert path_blocked_for_sub_agent("/api/checkin/evidence/BK-1") is True
+    assert path_blocked_for_sub_agent("/api/checkin/evidence/BK-1/download") is True
+    assert path_blocked_for_sub_agent("/api/checkin/enrollment-sla") is True
+    assert path_blocked_for_sub_agent("/api/checkin/submit") is False
+
+
 def test_bond_desk_apis_allowed():
     assert path_blocked_for_sub_agent("/api/active-bonds") is False
     assert path_blocked_for_sub_agent("/api/poa/list") is False

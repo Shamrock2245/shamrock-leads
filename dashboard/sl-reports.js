@@ -255,6 +255,7 @@ const SLReports = (() => {
     if (dis.success)    $('rptStatDischarged').textContent = `${dis.count||0} bonds`;
     if (forf.success)   $('rptStatForfeitures').textContent= forf.count > 0 ? `${forf.count} · ${money(forf.total_liability||0)} exposure` : '0 forfeitures';
     if (comp.success)   $('rptStatCompliance').textContent = `${pct(comp.compliance_rate||100)} compliant`;
+    _loadEnrollmentSlaBadge();
     if (poa.success)    {
       let total = 0;
       (poa.sureties||[]).forEach(s => Object.values(s.totals||{}).forEach(v => total += (v||0)));
@@ -418,7 +419,7 @@ const SLReports = (() => {
       case 'agent-production':    _renderAgents(data);       break;
       case 'discharged':          _renderDischarged(data);   break;
       case 'forfeitures':         _renderForfeitures(data);  break;
-      case 'check-in-compliance': _renderCompliance(data);   break;
+      case 'check-in-compliance': await _renderCompliance(data);   break;
       case 'poa-inventory':       _renderPOA(data);          break;
       case 'voided-powers':       _renderVoided(data);       break;
       case 'expired-powers':      _renderExpired(data);      break;
@@ -432,7 +433,7 @@ const SLReports = (() => {
       'agent-production':    () => `${(data.agents||[]).length} agents`,
       'discharged':          () => `${data.count||0} bonds`,
       'forfeitures':         () => `${data.count||0} bonds`,
-      'check-in-compliance': () => `${(data.bonds||[]).length} defendants`,
+      'check-in-compliance': () => `${(data.records||data.bonds||[]).length} defendants`,
       'poa-inventory':       () => `${(data.sureties||[]).length} sureties`,
       'voided-powers':       () => `${data.count||0} powers`,
       'expired-powers':      () => `${(data.expired||[]).length} expired`,
@@ -956,28 +957,72 @@ const SLReports = (() => {
     _renderTable(headers, rows);
   }
 
-  function _renderCompliance(data) {
+  async function _loadEnrollmentSlaBadge() {
+    try {
+      const r = await fetch(`${API}/api/checkin/enrollment-sla`, { credentials: 'include' });
+      if (!r.ok) return null;
+      const data = await r.json();
+      const badge = $('rptBadgeCompliance');
+      if (badge) {
+        const count = Number(data.count || 0);
+        badge.textContent = count > 0 ? String(count) : '';
+        badge.title = 'Signed bond, check-in not sent';
+        badge.style.display = count > 0 ? 'flex' : 'none';
+      }
+      return data;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function _slaBanner(data) {
+    const items = (data && data.items) || [];
+    if (!items.length) {
+      return `<div style="margin:0 0 12px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--muted)">Signed bond, check-in not sent: none on file.</div>`;
+    }
+    const rows = items.slice(0, 12).map(item => {
+      const bk = escHtml(item.booking_number || '');
+      return `<div style="display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-top:1px solid var(--border)">
+        <span><strong>${escHtml(item.defendant_name || '—')}</strong> <span style="color:var(--muted)">${bk}</span></span>
+        <button class="rpt-action-link" onclick="downloadCheckinEvidence('${bk}')">Evidence</button>
+      </div>`;
+    }).join('');
+    return `<div style="margin:0 0 12px;padding:10px 12px;border:1px solid rgba(245,158,11,.45);border-radius:8px;font-size:12px">
+      <div style="font-weight:700;margin-bottom:4px">Signed bond, check-in not sent · ${items.length}</div>
+      ${rows}
+    </div>`;
+  }
+
+  async function _renderCompliance(data) {
+    const bonds = data.records || data.bonds || [];
+    const overdueCount = data.overdue ?? data.overdue_count ?? bonds.filter(b => b.is_overdue).length;
+    const missedCount = data.missed_count ?? bonds.reduce((n, b) => n + (Number(b.missed_check_ins ?? b.missed_checkins) || 0), 0);
     _renderSummary([
       { label: 'Compliance Rate',    value: pct(data.compliance_rate||100),      color: data.compliance_rate >= 90 ? 'rpt-val-green' : 'rpt-val-red' },
-      { label: 'Total Defendants',   value: String((data.bonds||[]).length),      color: 'rpt-val-blue'  },
-      { label: 'Overdue',            value: String(data.overdue_count||0),        color: 'rpt-val-red'   },
-      { label: 'Missed Check-Ins',   value: String(data.missed_count||0),         color: 'rpt-val-gold'  },
+      { label: 'Total Defendants',   value: String(bonds.length),                 color: 'rpt-val-blue'  },
+      { label: 'Overdue',            value: String(overdueCount||0),              color: 'rpt-val-red'   },
+      { label: 'Missed Check-Ins',   value: String(missedCount||0),               color: 'rpt-val-gold'  },
     ]);
-    const bonds = data.bonds || [];
     const headers = ['Defendant','County','Bond Amount','Last Check-In','Missed','Status','Action'];
     const rows = bonds.map(b => {
       const overdue = b.is_overdue;
+      const missed = Number(b.missed_check_ins ?? b.missed_checkins) || 0;
+      const last = b.last_checkin_at || b.last_check_in || b.last_checkin;
+      const bk = escHtml(b.booking_number || '');
       return [
-        `<strong>${escHtml(b.defendant_name||'—')}</strong><br><small style="color:var(--muted)">${escHtml(b.booking_number||'')}</small>`,
+        `<strong>${escHtml(b.defendant_name||'—')}</strong><br><small style="color:var(--muted)">${bk}</small>`,
         escHtml(b.county||'—'),
         money(b.bond_amount||0),
-        b.last_checkin_at ? fmtDate(b.last_checkin_at) : '<span class="rpt-val-red">Never</span>',
-        `<span class="${b.missed_checkins > 0 ? 'rpt-val-red' : 'rpt-val-green'}">${b.missed_checkins||0}</span>`,
+        last ? fmtDate(last) : '<span class="rpt-val-red">Never</span>',
+        `<span class="${missed > 0 ? 'rpt-val-red' : 'rpt-val-green'}">${missed}</span>`,
         `<span class="rpt-status-badge rpt-status-${overdue?'forfeited':'active'}">${overdue?'OVERDUE':'OK'}</span>`,
-        `<button class="rpt-action-link" onclick="SLTracking&&SLTracking.openDetail('${escHtml(b.booking_number||'')}')">📍 Track</button>`,
+        `<button class="rpt-action-link" onclick="downloadCheckinEvidence('${bk}')">Evidence</button> <button class="rpt-action-link" onclick="SLTracking&&SLTracking.openDetail('${bk}')">Track</button>`,
       ];
     });
     _renderTable(headers, rows);
+    const sla = await _loadEnrollmentSlaBadge();
+    const wrap = $('rptTableWrap');
+    if (wrap && sla) wrap.insertAdjacentHTML('afterbegin', _slaBanner(sla));
   }
 
   function _renderPOA(data) {
