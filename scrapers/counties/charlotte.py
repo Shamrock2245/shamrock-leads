@@ -1,37 +1,77 @@
 """
-Charlotte County Arrest Scraper — Revize CMS Roster via residential proxy
-==========================================================================
+Charlotte County Arrest Scraper: Revize CMS roster, residential egress only
+===========================================================================
 Source: Charlotte County Sheriff's Office (CCSO)
 URL: https://inmates.charlottecountyfl.revize.com/bookings
-Method: Patchright/Playwright + APE residential (Warren) with office SOCKS fallback
+Method: Playwright/Patchright page load of the public roster table from a US
+residential exit. No new proxy, CAPTCHA solver or stealth path is added here.
 
-Extracts data directly from the roster table — detail pages are blocked
-by Cloudflare. The roster table contains: Booking #, Last Name, First Name,
-Middle, Charge, Arrest Date for all in-custody inmates.
-Bond is NOT on the Revize roster table (confirmed 2026-10-07); Bond_Amount stays "0".
+The roster contract (header-mapped columns, source Booking # cross-checked
+against its link, all charges per booking, required Released column, bond
+unknown = "" never "0", fail-closed paging) lives in
+``scrapers/revize_roster.py`` and is the same contract as Manatee (#113).
+Detail pages are Cloudflare-blocked, so bond, statute, degree, DOB and address
+are not collected.
 
-Requires a **true US residential** exit (Warren mac-office on home ISP, or SOCKS).
-Datacamp/VPN/Bahamas exits will never clear CF — preflight fails closed.
+A Cloudflare challenge/block page, or no usable residential exit, raises
+``EgressBlocked`` (``anti_bot`` + ``egress_block``); nothing is written.
+
+Egress (``CHARLOTTE_EGRESS_MODE``):
+    auto    (default) existing resolver (env SOCKS -> APE/Warren residential ->
+            office/Tailscale SOCKS -> direct only when this host is residential).
+    direct  Leads Ops residential egress: no proxy at all; the host exit must be
+            verified US residential or the run raises before touching the source.
+
+Live check from the box, 2026-10-07 7:12 PM ET: ``/``, ``/bookings`` and
+``/bookings?page=2`` -> 403 ``cf-mitigated: challenge``, ``server: cloudflare``,
+title "Just a moment..." (docs/recon/FL_CHARLOTTE_REVIZE_2026-10-07.md).
 
 HISTORY:
-- v1–v4: Various CF bypass attempts (DrissionPage, curl_cffi, Obscura, JailTracker)
-- v5: Roster table extraction via office SOCKS tunnel
+- v1-v4: CF bypass attempts (DrissionPage, curl_cffi, Obscura, JailTracker)
+- v5: roster table extraction via office SOCKS tunnel
 - v6: APE-first residential proxy + SOCKS fallback
-- v7 (current): Exit-IP preflight + Patchright + sticky Warren session
+- v7: exit-IP preflight + Patchright + sticky Warren session
+- v8 (current): shared fail-closed Revize contract, egress blocks fail loud
 """
+from __future__ import annotations
+
 import logging
 import time
-from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
+from scrapers.base_scraper import BaseScraper
+from scrapers.revize_roster import (
+    EXTRACT_JS,
+    RevizeRoster,
+    check_page_egress,
+    egress_mode as _egress_mode,
+    resolve_egress as _resolve_egress,
+)
 
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://inmates.charlottecountyfl.revize.com"
 BOOKINGS_URL = f"{BASE_URL}/bookings"
 MAX_PAGES = 50
+EGRESS_ENV = "CHARLOTTE_EGRESS_MODE"
+
+ROSTER = RevizeRoster(
+    county="Charlotte",
+    base_url=BASE_URL,
+    facility="Charlotte County Jail",
+    max_pages=MAX_PAGES,
+)
+
+
+def egress_mode() -> str:
+    return _egress_mode(EGRESS_ENV)
+
+
+def resolve_egress(scraper: Any = None) -> Tuple[Optional[str], str]:
+    return _resolve_egress(
+        scraper, county="Charlotte", env_var=EGRESS_ENV, sticky_session="fl-charlotte"
+    )
 
 
 class CharlotteCountyScraper(BaseScraper):
@@ -41,124 +81,53 @@ class CharlotteCountyScraper(BaseScraper):
         return "Charlotte"
 
     def scrape(self) -> List[ArrestRecord]:
-        from scrapers.socks_proxy import resolve_residential_proxy
-        from scrapers.cf_browser import (
-            launch_cf_browser,
-            new_stealth_context,
-            wait_past_cloudflare,
-        )
+        from scrapers.cf_browser import launch_cf_browser, new_stealth_context, wait_past_cloudflare
 
-        # Fail closed without US residential — VPS IP never clears Revize CF.
-        proxy_url, proxy_source = resolve_residential_proxy(
-            self,
-            sticky_session="fl-charlotte",
-            require=True,
-            max_ape_attempts=5,
-        )
-        logger.info("[Charlotte] proxy source=%s", proxy_source)
+        proxy_url, proxy_source = resolve_egress(self)
+        logger.info("[Charlotte] egress mode=%s source=%s", egress_mode(), proxy_source)
 
         pw = browser = None
         t0 = time.time()
         try:
-            # proxy_url may be None when source=direct (office Mac residential)
             pw, browser, engine = launch_cf_browser(
                 proxy_url,
                 label="Charlotte",
-                # already validated for direct; re-check for proxy paths
                 verify_residential=(proxy_source != "direct"),
             )
             context = new_stealth_context(browser)
             page = context.new_page()
 
-            records = []
-            seen_bookings = set()
-
-            for pg in range(1, MAX_PAGES + 1):
-                url = BOOKINGS_URL if pg == 1 else f"{BOOKINGS_URL}?page={pg}"
-                logger.info(f"[Charlotte] Roster page {pg} (engine={engine})")
-
-                page.goto(url, wait_until="domcontentloaded", timeout=60000)
-                if not wait_past_cloudflare(page, label=f"Charlotte page {pg}", max_wait=45):
-                    if proxy_source == "ape" and not records:
-                        self.record_proxy_failure(proxy_url)
-                    break
-
-                rows = page.evaluate("""() => {
-                    const table = document.querySelector('table');
-                    if (!table) return [];
-                    const tbody = table.querySelector('tbody');
-                    if (!tbody) return [];
-                    return Array.from(tbody.querySelectorAll('tr')).map(r => {
-                        const cells = Array.from(r.querySelectorAll('td'));
-                        return cells.map(c => c.textContent.trim());
-                    });
-                }""")
-
-                if not rows:
-                    logger.info(f"[Charlotte] No rows on page {pg} — end of roster")
-                    break
-
-                new_count = 0
-                for row in rows:
-                    # Booking #, Last Name, First Name, Mid., Charge, Arrest Date
-                    if len(row) < 5:
-                        continue
-
-                    booking_num = row[0].strip()
-                    if not booking_num or booking_num in seen_bookings:
-                        continue
-                    seen_bookings.add(booking_num)
-                    new_count += 1
-
-                    last_name = row[1].strip()
-                    first_name = row[2].strip()
-                    middle = row[3].strip() if len(row) > 3 else ""
-                    charge = row[4].strip() if len(row) > 4 else ""
-                    arrest_date_raw = row[5].strip() if len(row) > 5 else ""
-
-                    full_name = f"{last_name}, {first_name}"
-                    if middle:
-                        full_name = f"{last_name}, {first_name} {middle}"
-
-                    arrest_date = self._parse_date(arrest_date_raw)
-
-                    records.append(ArrestRecord(
-                        County="Charlotte",
-                        State="FL",
-                        Booking_Number=booking_num,
-                        Full_Name=full_name,
-                        First_Name=first_name,
-                        Middle_Name=middle,
-                        Last_Name=last_name,
-                        Arrest_Date=arrest_date,
-                        Booking_Date=arrest_date,
-                        Charges=charge,
-                        # Revize roster publishes Charge but not bond; detail
-                        # pages are CF-blocked. Do not invent Bond_Amount.
-                        Bond_Amount="0",
-                        Facility="Charlotte County Jail",
-                        Status="In Custody",
-                        Detail_URL=f"{BASE_URL}/bookings/{booking_num}",
-                    ))
-
-                logger.info(
-                    f"[Charlotte] Page {pg}: +{new_count} records (total: {len(records)})"
+            def fetch_page(url: str, pg: int) -> Dict[str, Any]:
+                logger.info("[Charlotte] roster page %s (engine=%s)", pg, engine)
+                resp = page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                status = getattr(resp, "status", None) if resp is not None else None
+                try:
+                    headers = dict(resp.headers) if resp is not None else {}
+                except Exception:
+                    headers = {}
+                cleared = wait_past_cloudflare(page, label=f"Charlotte page {pg}", max_wait=45)
+                payload = page.evaluate(EXTRACT_JS)
+                check_page_egress(
+                    county="Charlotte", pg=pg, cleared=cleared, payload=payload,
+                    status=status, headers=headers,
+                    body=page.content() if not payload.get("has_table") else "",
+                    egress_source=proxy_source, env_var=EGRESS_ENV,
                 )
-                if new_count == 0:
-                    break
+                return payload
 
-                time.sleep(3)
-
+            records, meta = ROSTER.walk(fetch_page)
+            meta["egress_source"] = proxy_source
+            self.last_walk_meta = meta
             logger.info(
-                f"[Charlotte] Scraped {len(records)} records "
-                f"(proxy={proxy_source}, engine={engine})"
+                "[Charlotte] %s bookings from %s rows over %s pages (published total=%s, egress=%s)",
+                meta["bookings"], meta["rows"], meta["pages"], meta["published_total"], proxy_source,
             )
             if records and proxy_source == "ape":
                 self.record_proxy_success(proxy_url, (time.time() - t0) * 1000)
             return records
 
         except Exception as e:
-            logger.error(f"[Charlotte] Fatal error: {e}")
+            logger.error("[Charlotte] run failed: %s", e)
             if proxy_source == "ape":
                 try:
                     self.record_proxy_failure(proxy_url)
@@ -176,14 +145,3 @@ class CharlotteCountyScraper(BaseScraper):
                     pw.stop()
                 except Exception:
                     pass
-
-    @staticmethod
-    def _parse_date(text: str) -> Optional[str]:
-        if not text:
-            return None
-        for fmt in ["%m-%d-%Y", "%m/%d/%Y", "%Y-%m-%d", "%m-%d-%y", "%m/%d/%y"]:
-            try:
-                return datetime.strptime(text.strip(), fmt).strftime("%Y-%m-%d")
-            except ValueError:
-                continue
-        return text.strip() if text.strip() else None

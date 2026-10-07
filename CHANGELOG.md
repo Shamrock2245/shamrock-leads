@@ -3,6 +3,12 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-07 (Charlotte FL Revize hardening)
+
+### Fixed
+- **Charlotte (FL):** moved onto the shared Revize roster contract (`scrapers/revize_roster.py`, same as Manatee #113). Columns are mapped by header (Booking # / Last / First / Middle / Charge / Arrest Date / Released); the source `Booking #` is checked against the row's `/bookings/<id>` link; a row with a blank or unrecognised booking number (or too few cells) and a booking that names two people both fail closed. Every charge row for a booking is kept (`Charges` joined with ` | `, plus `extra_data.charge_details`). `Bond_Amount`/`Bond_Type` are `""` (the roster publishes no bond), no longer `"0"`. `Released` is required and an unrecognised value fails closed. Paging fails closed on a missing table or column, an empty first page, an empty or repeated page, hitting `MAX_PAGES` with a next page still offered, or a walked count that differs from a published total. A Cloudflare challenge/block, or no verified US residential exit, raises `EgressBlocked` and writes nothing (`CHARLOTTE_EGRESS_MODE=direct` for Leads Ops residential runs; default `auto` keeps the existing resolver). Live check from the box: `/`, `/bookings` and `?page=2` → 403 CF challenge (`docs/recon/FL_CHARLOTTE_REVIZE_2026-10-07.md`). Health stays `unverified`.
+- **Hydrate:** legacy Charlotte/Manatee docs that carry a scraped `"0"` for a bond the roster never published now hydrate as unknown (blank), not `$0`. A staff `bond_override` / `MANUAL_CHARGE_BONDS` flag left behind a rescrape that rewrote `bond_amount` to `0.0` also stays unknown; a staff-set positive amount still wins.
+
 ## [Unreleased] — 2026-10-07 (Sarasota / Manatee FL audit)
 
 ### Fixed
