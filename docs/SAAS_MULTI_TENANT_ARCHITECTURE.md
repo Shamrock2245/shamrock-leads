@@ -372,6 +372,10 @@ Screen: one checklist. Active catalog entries can be toggled. Inactive stubs (no
 
 ### 11.4 Lead subscriptions
 
+**Shipped behind `SAAS_MULTI_TENANT`.** `/platform/leads` lists sellable counties by state. Fail-closed contracts, including Clermont, Clinton, and Huron in Ohio, are omitted. Shared is the default and more than one agency can subscribe. Exclusive is rejected when anyone else already has that county. Prices are stored only when a super-admin sends `price_cents`; otherwise the screen says "price not set".
+
+Shamrock with no stored list is treated as `KEY_FL_COUNTY_LABELS` (Lee, Sarasota, Collier, Charlotte, Manatee, DeSoto, Hendry), shared, and that seed is not written by the scraper. `MongoWriter.write_records` still upserts the global arrest either way. Only when the flag is on, and only for newly inserted arrests, it calls `fan_out_if_enabled`, which writes a lead pointer (`state`, `county`, `booking_number`) per subscriber. The pointer does not copy the defendant name.
+
 ```mermaid
 flowchart TD
   pick[State, then county list or map] --> mode{Owner policy}
@@ -472,7 +476,7 @@ Each phase is shippable on its own. Each is reversible by turning `SAAS_MULTI_TE
 | **2. Onboarding console** | Wizard, self-serve pending state, invites recorded not sent. Implemented behind the flag in the onboarding follow-up. | Flag off returns 404. Shamrock seed is untouched. | New routes and one HTML surface. |
 | **3. Stripe test mode** | Plans, Checkout, webhooks, MRR, suspend. Implemented behind the flag in the billing follow-up. No live key. | Flag off returns 404. Stripe test data can be discarded. | New billing module. Webhook signature required. |
 | **4. Surety entitlements** | Checklist over `SURETY_REGISTRY`. Implemented behind the flag. Finalize refuses a surety the tenant does not have. Private-template slot for Paperwork Desk. | Flag off uses today's registry. | A guard in the existing finalize path, not a new packet builder. |
-| **5. Lead subscriptions** | State/county picker. `route_lead` fan-out. Shared and exclusive both implemented; exclusive stays off until the owner decides. | Flag off. Writer keeps inserting Shamrock's leads as it does now. | Writer change is the risky part and stays behind the flag. |
+| **5. Lead subscriptions** | State/county picker. Fan-out of new arrests. Implemented behind the flag. Shared is the default; exclusive rejects a second subscriber. | Flag off. The writer does not import the fan-out. | Writer change stays behind the flag and runs only after the arrest upsert. |
 | **6. Start bond packet** | Four-click UI calling hydrate → preflight → DocuSeal → existing pay link. | Flag off hides the UI. Old paperwork routes stay. | Thin client over `paperwork.py`. |
 | **7. Bypass closure** | The 19 clients in §12 either call the proxy or are proven global-only. SSE filtered by tenant. | Per client. | The gate before enabling the flag in production. |
 | **8. Trust pack** | Stop creating the 90-day audit TTL, keep 7 years for money/sign/POA, quiet hours on outbound, one-click export, backup runbook. | Re-add the TTL index only if a human accepts the data loss. Export is read-only. | Touches `dashboard/cron.py` boot indexes. Needs Brendan's yes. |

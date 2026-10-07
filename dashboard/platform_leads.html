@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lead subscriptions</title>
+  <style>
+    :root { color-scheme: light; --green: #0b6b3a; }
+    body { font-family: Georgia, "Iowan Old Style", serif; margin: 0; background: #f6f4ef; color: #1c1915; }
+    main { max-width: 52rem; margin: 2rem auto; padding: 1.5rem; background: #fff; border: 1px solid #e4dfd4; }
+    h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
+    label { display: block; margin: .35rem 0; }
+    select, button { font: inherit; }
+    button { background: var(--green); color: #fff; border: 0; padding: .4rem .8rem; }
+    .counties { max-height: 16rem; overflow: auto; border: 1px solid #eee; padding: .5rem; }
+    .error { color: #8c1d1d; }
+    article { border-top: 1px solid #eee; padding-top: .8rem; margin-top: .8rem; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Lead subscriptions</h1>
+  <p>Shared is the default: more than one agency can receive the same county. Exclusive rejects a second subscriber. Fail-closed counties, including the Ohio pilot, are not listed. Prices stay unset until you enter one.</p>
+  <p class="error" id="error"></p>
+  <label>State <select id="state"></select></label>
+  <div id="agencies"></div>
+</main>
+<script>
+(function () {
+  var data = null;
+  function selectedState() { return document.getElementById("state").value; }
+  function subsFor(agency) {
+    return (agency.subscriptions || []).filter(function (row) { return row.state === selectedState(); });
+  }
+  function paint() {
+    var root = document.getElementById("agencies");
+    root.innerHTML = "";
+    var counties = (data.counties || []).filter(function (row) { return row.state === selectedState(); });
+    (data.agencies || []).forEach(function (agency) {
+      var article = document.createElement("article");
+      var title = document.createElement("h2");
+      title.textContent = (agency.legal_name || agency.tenant_id) + (agency.seeded ? " (current Florida desk)" : "");
+      article.appendChild(title);
+      var box = document.createElement("div");
+      box.className = "counties";
+      var mine = {};
+      subsFor(agency).forEach(function (row) { mine[row.county] = row; });
+      counties.forEach(function (county) {
+        var label = document.createElement("label");
+        var input = document.createElement("input");
+        input.type = "checkbox";
+        input.dataset.county = county.county;
+        input.checked = !!mine[county.county];
+        var mode = document.createElement("select");
+        ["shared", "exclusive"].forEach(function (value) {
+          var option = document.createElement("option");
+          option.value = value;
+          option.textContent = value;
+          if (mine[county.county] && mine[county.county].mode === value) option.selected = true;
+          mode.appendChild(option);
+        });
+        mode.dataset.county = county.county;
+        label.appendChild(input);
+        label.appendChild(document.createTextNode(" " + county.county + " "));
+        label.appendChild(mode);
+        var price = mine[county.county] ? mine[county.county].price_cents : null;
+        label.appendChild(document.createTextNode(price == null ? " — price not set" : " — $" + (price / 100).toFixed(2)));
+        box.appendChild(label);
+      });
+      article.appendChild(box);
+      var save = document.createElement("button");
+      save.type = "button";
+      save.textContent = "Save " + selectedState();
+      save.onclick = function () {
+        var kept = (agency.subscriptions || []).filter(function (row) { return row.state !== selectedState(); });
+        box.querySelectorAll("input[type=checkbox]").forEach(function (input) {
+          if (!input.checked) return;
+          var mode = box.querySelector("select[data-county='" + input.dataset.county + "']");
+          kept.push({state: selectedState(), county: input.dataset.county, mode: mode.value});
+        });
+        fetch("/api/platform/tenants/" + encodeURIComponent(agency.tenant_id) + "/lead-subscriptions", {
+          method: "PUT",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({subscriptions: kept})
+        }).then(function (res) { return res.json().then(function (body) { return {ok: res.ok, body: body}; }); })
+          .then(function (result) {
+            document.getElementById("error").textContent = result.ok ? "" : (result.body.error || "Could not save");
+            if (result.ok) load();
+          });
+      };
+      article.appendChild(save);
+      root.appendChild(article);
+    });
+  }
+  function load() {
+    var state = document.getElementById("state").value || "FL";
+    fetch("/api/platform/lead-subscriptions?state=" + encodeURIComponent(state)).then(function (res) {
+      if (!res.ok) {
+        document.getElementById("error").textContent = "Lead subscriptions are unavailable";
+        return null;
+      }
+      return res.json();
+    }).then(function (body) {
+      if (!body) return;
+      data = body;
+      var select = document.getElementById("state");
+      var current = select.value || "FL";
+      select.innerHTML = "";
+      (body.states || []).forEach(function (code) {
+        var option = document.createElement("option");
+        option.value = code;
+        option.textContent = code;
+        if (code === current) option.selected = true;
+        select.appendChild(option);
+      });
+      paint();
+    });
+  }
+  document.getElementById("state").onchange = load;
+  load();
+})();
+</script>
+</body>
+</html>
