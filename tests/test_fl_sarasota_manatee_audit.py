@@ -379,7 +379,9 @@ def test_staff_bond_edits_win_over_stale_blank_raw():
     scraped = {"bond_amount": 0.0, "bond_amount_raw": ""}
     assert arrest_bond_value(scraped) == ""
     assert arrest_bond_value({**scraped, "bond_amount": 7500.0, "bond_override": True}) == 7500.0
-    assert arrest_bond_value({**scraped, "bond_amount": 0.0, "bond_override": True}) == "0"
+    # A zero next to the staff flags is ambiguous: the next scrape rewrites
+    # bond_amount to 0.0 but leaves the flags, so it stays unknown (blank).
+    assert arrest_bond_value({**scraped, "bond_amount": 0.0, "bond_override": True}) == ""
     charge_edit = {**scraped, "bond_amount": 3000.0, "last_checked_mode": "MANUAL_CHARGE_BONDS"}
     assert arrest_bond_value(charge_edit) == 3000.0
     # Any later positive numeric with a blank raw is still a real amount.

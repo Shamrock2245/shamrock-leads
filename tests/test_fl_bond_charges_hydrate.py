@@ -154,22 +154,19 @@ class TestMarionDetailChargeParse(unittest.TestCase):
 
 
 class TestCharlotteManateeBondHonest(unittest.TestCase):
-    def test_charlotte_record_sets_bond_zero_with_charge(self):
-        # Construct the same ArrestRecord shape the scraper emits.
-        rec = ArrestRecord(
-            County="Charlotte",
-            State="FL",
-            Booking_Number="12345",
-            Full_Name="DOE, JANE",
-            First_Name="JANE",
-            Last_Name="DOE",
-            Charges="BATTERY",
-            Bond_Amount="0",
-            Facility="Charlotte County Jail",
-            Status="In Custody",
-        )
-        self.assertEqual(rec.Bond_Amount, "0")
+    def test_charlotte_record_keeps_bond_unknown_with_charge(self):
+        # Charlotte builds records through the shared Revize contract
+        # (2026-10-07): the roster publishes no bond, so Bond_Amount is "" (unknown), never "0".
+        from scrapers.counties.charlotte import ROSTER
+
+        rec = ROSTER.build_records([{
+            "booking": "12345", "last": "DOE", "first": "JANE", "middle": "",
+            "charge": "BATTERY", "arrest_date": "2026-10-07", "arrest_time": "",
+            "status": "In Custody", "release_date": "", "detail_url": "", "mugshot_url": "",
+        }])[0]
+        self.assertEqual(rec.Bond_Amount, "")
         self.assertEqual(rec.Charges, "BATTERY")
+        self.assertEqual(rec.Facility, "Charlotte County Jail")
         self.assertEqual(CharlotteCountyScraper().county, "Charlotte")
 
     def test_manatee_record_keeps_bond_unknown_with_charge(self):
