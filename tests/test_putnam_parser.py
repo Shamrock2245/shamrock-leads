@@ -1,4 +1,9 @@
-"""Regression tests for Putnam SmartWeb card-bounded parsing.
+"""Regression tests for the shared SmartWeb card-bounded parser.
+
+Originally written against Putnam (FL). Putnam now scrapes through
+``scrapers.fl_smartweb`` (source Booking No cross-checked against the photo
+``bookno``); see ``tests/test_fl_smartweb_legacy_paging.py``. These fixtures keep
+covering ``scrapers.smartweb_card_parser`` directly.
 
 Guards against:
   - ENLARGE PHOTO UI chrome leaking into Address/Charges
@@ -6,7 +11,12 @@ Guards against:
   - Missing bond type / amount when charge rows exist
 """
 
-from scrapers.counties.putnam import PutnamCountyScraper
+from scrapers.smartweb_card_parser import (
+    is_ui_label,
+    parse_bond_cell,
+    parse_smartweb_cards,
+    strip_ui_noise,
+)
 
 
 SAMPLE_HTML = """
@@ -92,9 +102,15 @@ SAMPLE_HTML = """
 """
 
 
-def _parse():
-    s = PutnamCountyScraper.__new__(PutnamCountyScraper)
-    return s._parse_html(SAMPLE_HTML, set())
+def _parse(html=None):
+    return parse_smartweb_cards(
+        SAMPLE_HTML if html is None else html,
+        county="Putnam",
+        facility="Putnam County Jail",
+        detail_url="https://example.test/jail.aspx",
+        seen=set(),
+        state="FL",
+    )
 
 
 # Live Putnam/Santa Rosa headers often omit DOB (only race/sex in paren)
@@ -128,8 +144,7 @@ SAMPLE_HTML_SHORT_HEADER = """
 
 
 def test_parses_short_header_without_dob():
-    s = PutnamCountyScraper.__new__(PutnamCountyScraper)
-    recs = s._parse_html(SAMPLE_HTML_SHORT_HEADER, set())
+    recs = _parse(SAMPLE_HTML_SHORT_HEADER)
     assert len(recs) == 1
     assert recs[0].Last_Name.upper() == "COLEMAN"
     assert recs[0].First_Name.upper() == "CECIL"
@@ -169,12 +184,12 @@ def test_status_and_bonds():
 
 
 def test_ui_noise_helpers():
-    assert "ENLARGE" not in PutnamCountyScraper._strip_ui_noise("123 MAIN ENLARGE PHOTO ST").upper()
-    assert PutnamCountyScraper._is_ui_label("ENLARGE PHOTO")
-    amt, btype = PutnamCountyScraper._parse_bond_cell("$1,500.00")
+    assert "ENLARGE" not in strip_ui_noise("123 MAIN ENLARGE PHOTO ST").upper()
+    assert is_ui_label("ENLARGE PHOTO")
+    amt, btype = parse_bond_cell("$1,500.00")
     assert amt == 1500.0
     assert btype == "SURETY"
-    amt, btype = PutnamCountyScraper._parse_bond_cell("NO BOND")
+    amt, btype = parse_bond_cell("NO BOND")
     assert amt == 0.0
     assert btype == "NO BOND"
 

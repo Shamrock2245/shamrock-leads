@@ -6,6 +6,19 @@ booking date/time, charges, and bond on each card.
 
 Caller supplies base URL (…/smartwebclient), facility name, and county label.
 Uses plain ``requests`` only — no proxy, stealth browser, or CAPTCHA solver.
+
+Two ``AddMoreResults`` page-method builds exist in the wild (recon 2026-10-07):
+
+* **modern** (Suwannee / Hamilton / Escambia / Sumter): page JS posts
+  ``JSON.stringify({ searchVals: SearchVals })`` with ``DateOfBirth`` and
+  ``BookingNumber`` keys; response is ``{"d": {"data", "resultsReturned", ...}}``.
+* **legacy** (Putnam / Bradford / Dixie / Taylor / Santa Rosa): page JS posts the
+  bare ``JSON.stringify(SearchVals)`` without those two keys; response is
+  ``{"d": {"Data": {"data", "resultsReturned", ...}}}``. Sending the modern
+  wrapper to a legacy host returns HTTP 500, which previously capped those
+  counties at the first page of cards.
+
+The build is detected from the search-results page script, never guessed.
 """
 from __future__ import annotations
 
@@ -37,6 +50,30 @@ def _headers(search_url: str) -> dict:
         "Accept-Language": "en-US,en;q=0.9",
         "Referer": search_url,
     }
+
+
+def _is_legacy_page_method(html: str) -> bool:
+    """True when the results page posts bare ``SearchVals`` (legacy build)."""
+    if re.search(r"searchVals\s*:\s*SearchVals", html):
+        return False
+    return bool(re.search(r"JSON\.stringify\(\s*SearchVals\s*\)", html))
+
+
+def _more_results_payload(begin: str, end: str, loaded: int, *, legacy: bool) -> dict:
+    vals = _search_vals(begin, end, loaded)
+    if legacy:
+        vals.pop("DateOfBirth", None)
+        vals.pop("BookingNumber", None)
+        return vals
+    return {"searchVals": vals}
+
+
+def _more_results_body(payload: dict) -> dict:
+    """Unwrap ``d`` (modern) or ``d.Data`` (legacy) from an AddMoreResults reply."""
+    d = (payload or {}).get("d") or {}
+    if isinstance(d, dict) and isinstance(d.get("Data"), dict):
+        d = d["Data"]
+    return d if isinstance(d, dict) else {}
 
 
 def _search_vals(begin: str, end: str, loaded: int) -> dict:
@@ -111,7 +148,11 @@ def scrape_smartweb_jail_view(
     )
     m = re.search(r'id="ResultsReturned"[^>]*>(\d+)<', resp2.text)
     loaded = int(m.group(1)) if m else len(all_records)
-    logger.info("%s: first page %d cards (%s..%s)", prefix, loaded, begin, end)
+    legacy = _is_legacy_page_method(resp2.text)
+    logger.info(
+        "%s: first page %d cards (%s..%s, %s AddMoreResults)",
+        prefix, loaded, begin, end, "legacy" if legacy else "modern",
+    )
 
     json_headers = {
         "Content-Type": "application/json; charset=utf-8",
@@ -125,12 +166,12 @@ def scrape_smartweb_jail_view(
         try:
             r = session.post(
                 ajax_url,
-                json={"searchVals": _search_vals(begin, end, loaded)},
+                json=_more_results_payload(begin, end, loaded, legacy=legacy),
                 headers=json_headers,
                 timeout=60,
             )
             r.raise_for_status()
-            d = (r.json() or {}).get("d") or {}
+            d = _more_results_body(r.json())
         except Exception as exc:
             logger.warning("%s: AddMoreResults stopped after %d cards (%s)", prefix, len(all_records), exc)
             break

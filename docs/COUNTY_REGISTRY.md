@@ -47,10 +47,10 @@
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 16 | **Polk** | Direct Kendo UI REST API | `polk.py` | ✅ Active | 120 min | 2026-05-24 |
 | 17 | **Osceola** | DrissionPage — daily reports | `osceola.py` | ✅ Active | 120 min | 2026-04-27 |
-| 18 | **Sumter** | SmartWeb ASP.NET POST | `sumter.py` | ✅ Active | 180 min | 2026-04-27 |
+| 18 | **Sumter** | SmartWEB JAIL View (`SCSO<YY>JBN######`, modern AddMoreResults) — plain requests | `sumter.py` | ✅ Active (unverified until write smoke) | 180 min | 2026-10-07 |
 | 19 | **Highlands** | Direct OCV JSON API | `highlands.py` | ✅ Active | 120 min | 2026-05-24 |
 | 20 | **Glades** | JailTracker | `glades.py` | ✅ Active | 180 min | 2026-04-27 |
-| 21 | **Hardee** | OCV API | `hardee.py` | ✅ Active | 120 min | 2026-04-27 |
+| 21 | **Hardee** | Stub — `hardee.py` returns no rows; hardeeso.com inmate search links only the OCV mobile app; OCV `inmates.json` buckets return 403 | `hardee.py` | 🔴 No public web roster (hold) | 120 min | 2026-10-07 |
 
 ---
 
@@ -79,7 +79,7 @@
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 31 | **Alachua** | Custom HTML | `alachua.py` | ✅ Active | 90 min | 2026-04-27 |
-| 32 | **Putnam** | SmartWeb — wildcard (%) search + AJAX AddMoreResults | `putnam.py` | ✅ Active | 180 min | 2026-05-25 |
+| 32 | **Putnam** | SmartWEB JAIL View (`PCSO<YY>JBN######`, legacy AddMoreResults) — plain requests | `putnam.py` | ✅ Active (unverified until write smoke) | 180 min | 2026-10-07 |
 | 33 | **Columbia** | P2C HTML | `columbia.py` | ✅ Active | 120 min | 2026-04-27 |
 | 34 | **Suwannee** | SmartWeb — wildcard (%) search + AJAX AddMoreResults | `suwannee.py` | 🔴 Upstream 500 (server crash on search POST) | 180 min | 2026-07-24 |
 | 35 | **Marion** | curl_cffi + **required residential** (Warren/Tailscale) — jail.marionso.com AWS WAF | `marion.py` | ✅ Active (residential egress) | 90 min | 2026-08-04 |
@@ -92,7 +92,7 @@
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 36 | **Duval** | DrissionPage — API interception (jaxsheriff.org) | `duval.py` | ✅ Active | 90 min | 2026-04-27 |
-| 37 | **St. Johns** | requests GET — BS4 HTML table | `st_johns.py` | ✅ Active | 120 min | 2026-04-27 |
+| 37 | **St. Johns** | Stub — `st_johns.py` returns no rows; sjso.org links `/smartwebclient/jail.aspx` but it answers **403** (Cloudflare/nginx) to ordinary access | `st_johns.py` | 🔴 No reachable public roster (hold; no WAF bypass) | 120 min | 2026-10-07 |
 | 38 | **Nassau** | New World InmateInquiry GET | `nassau.py` | ✅ Active | 120 min | 2026-04-27 |
 | 39 | **Clay** | Custom HTML | `clay.py` | ✅ Active | 120 min | 2026-04-27 |
 
