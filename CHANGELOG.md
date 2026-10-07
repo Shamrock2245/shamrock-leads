@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-07 (Alachua FL fail closed)
+
+### Fixed
+- **Alachua (FL):** the View All roster publishes no booking number. The old parser read the FirstName column as `Booking_Number`, so ~984 rows collapsed onto ~618 first-name keys. The only other identifier is the person-level MNI, and person IDs are not booking keys (same policy as Durham NC and Clay FL). `alachua.py` is now `SOURCE_CONTRACT_VALIDATED=False` with no source fetch, Health `fail_closed`, and the matrix, registry and evidence are updated (`docs/recon/FL_ALACHUA_FAIL_CLOSED_2026-10-07.md`). Existing prod rows keyed on first names need a Leads Ops cleanup. Nothing was deleted here.
+
 ## [Unreleased] — 2026-10-07 (post-merge cleanup)
 
 ### Fixed

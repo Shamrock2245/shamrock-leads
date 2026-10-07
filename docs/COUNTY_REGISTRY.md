@@ -78,7 +78,7 @@
 ## Tier 6 — North Central FL (5 Counties)
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
-| 31 | **Alachua** | Custom HTML | `alachua.py` | ✅ Active | 90 min | 2026-04-27 |
+| 31 | **Alachua** | Public View All grid has names/Book Date only — no source booking ID (person-level MNI only) | `alachua.py` | 🔴 Fail closed (no invented name keys) | 90 min | 2026-10-07 |
 | 32 | **Putnam** | SmartWEB JAIL View (`PCSO<YY>JBN######`, legacy AddMoreResults) — plain requests | `putnam.py` | ✅ Active (unverified until write smoke) | 180 min | 2026-10-07 |
 | 33 | **Columbia** | Legacy SmartWEB IP returns 503; no replacement public roster URL | `columbia.py` | 🔴 Fail closed (`SOURCE_CONTRACT_VALIDATED=False`) | 120 min | 2026-10-07 |
 | 34 | **Suwannee** | SmartWEB JAIL View (`SCSO<YY>JBN######`, modern AddMoreResults) — plain requests | `suwannee.py` | ✅ `verified_public` (Mac write smoke 44 new) | 180 min | 2026-09-25 |
@@ -213,7 +213,7 @@ Approach:   Query the anonymous FeatureServer directly with `ObjectId,GlobalID,B
 
 ### Custom / In-House
 - **Pattern**: Varies — GET requests, HTML parsing, API reverse-engineering
-- **Active Counties**: Orange, Seminole, St. Lucie, Indian River, Alachua, Bay, Monroe, Hernando. Fail closed or held, not active emitters: Okeechobee, Columbia, Clay, Gadsden, Leon, St. Johns, Hardee. Dixie and Okaloosa are listed under SmartWEB / Inmate Locator above. Broward is live (`verified_public`) on the Turnstile Arrest Search path since 2026-09-23; sequential identifier probing remains prohibited.
+- **Active Counties**: Orange, Seminole, St. Lucie, Indian River, Bay, Monroe, Hernando. Fail closed or held, not active emitters: Okeechobee, Columbia, Clay, Gadsden, Leon, St. Johns, Hardee, Alachua. Dixie and Okaloosa are listed under SmartWEB / Inmate Locator above. Broward is live (`verified_public`) on the Turnstile Arrest Search path since 2026-09-23; sequential identifier probing remains prohibited.
 
 ---
 

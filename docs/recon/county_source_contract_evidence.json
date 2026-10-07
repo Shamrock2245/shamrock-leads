@@ -603,10 +603,10 @@
     {
       "state": "FL",
       "county_fips": "001",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "fail_closed",
+      "official_source_url": "https://asosite.alachuasheriff.org/ASOInmateLookup.aspx",
+      "access_posture": "Ordinary public HTTPS ASP.NET View All grid; no source booking identifier on listing (person-level MNI only)",
+      "evidence_note": "2026-10-07 recon: ~987-row Last/First/Full Name/Book Date/Race/Sex/Age/POD/Agency grid; no Booking #. Old parser keyed Booking_Number on FirstName (984 rows -> ~618 keys). Hold fail_closed in alachua.py (SOURCE_CONTRACT_VALIDATED=False) and SCRAPER_SOURCE_STATES; person IDs are not booking keys. See docs/recon/FL_ALACHUA_FAIL_CLOSED_2026-10-07.md."
     },
     {
       "state": "FL",
