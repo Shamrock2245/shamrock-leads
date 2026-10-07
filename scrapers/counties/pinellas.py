@@ -10,6 +10,13 @@ HISTORY:
   Blazor Server (SignalR; no public REST). Scrape via booking-date search.
 
 Public roster covers current inmates + releases within ~30 days.
+
+Bond / charges for hydrate:
+- Roster rows include abbreviated charge text under the name when
+  "Include Charge Information" is checked.
+- Per-charge **Bond Assessed** and full **Offense Description** live only in
+  the Subject Charge Report modal (name click). We sum Bond Assessed across
+  charges; if the jail publishes $0.00 we store "0" (no invention).
 """
 from __future__ import annotations
 
@@ -124,6 +131,17 @@ class PinellasCountyScraper(BaseScraper):
                 if booking_num in seen:
                     continue
                 seen.add(booking_num)
+                detail = self._read_detail_modal(page, booking_num)
+                if detail:
+                    if detail.get("charges"):
+                        raw["charge"] = detail["charges"]
+                    raw["bond_amount"] = detail.get("bond_amount") or "0"
+                    if detail.get("case_numbers"):
+                        raw["case_number"] = detail["case_numbers"]
+                else:
+                    # Roster-only path: charges may still be present; bond is
+                    # modal-only — leave "0" rather than inventing an amount.
+                    raw.setdefault("bond_amount", "0")
                 rec = self._row_to_record(raw)
                 if rec:
                     records.append(rec)
@@ -232,10 +250,145 @@ class PinellasCountyScraper(BaseScraper):
             Race=self._clean(raw.get("race") or ""),
             Sex=sex,
             Charges=self._clean(raw.get("charge") or ""),
-            Bond_Amount="0",
+            Bond_Amount=self._format_bond_amount(raw.get("bond_amount") or "0"),
+            Case_Number=self._clean(raw.get("case_number") or ""),
             Detail_URL=SEARCH_URL,
             LastCheckedMode="INITIAL",
         )
+
+
+    def _read_detail_modal(self, page, booking_num: str) -> Optional[dict]:
+        """Open Subject Charge Report for one roster row; parse bond + charges.
+
+        Bond Assessed / Offense Description are not on the roster table — only
+        in the name-click modal. Returns None if the modal does not render.
+        """
+        try:
+            clicked = page.evaluate(
+                """(bn) => {
+                  for (const r of document.querySelectorAll('table tbody tr')) {
+                    const tds = r.querySelectorAll('td');
+                    if (!tds.length) continue;
+                    const idText = (tds[tds.length - 1].innerText || '').trim();
+                    const booking = idText.split(/\n/)[0].trim();
+                    if (booking !== bn) continue;
+                    const a = r.querySelector('.td-name a');
+                    if (a) { a.click(); return true; }
+                  }
+                  return false;
+                }""",
+                booking_num,
+            )
+            if not clicked:
+                return None
+            # Blazor modal fills asynchronously
+            deadline = time.time() + 8
+            text = ""
+            while time.time() < deadline:
+                text = page.evaluate(
+                    """() => {
+                      for (const m of document.querySelectorAll('.modal, [role=dialog]')) {
+                        const t = m.innerText || '';
+                        if (/Bond Assessed/i.test(t)) return t;
+                      }
+                      return '';
+                    }"""
+                )
+                if text:
+                    break
+                time.sleep(0.25)
+            try:
+                page.keyboard.press("Escape")
+            except Exception:
+                pass
+            try:
+                closer = page.get_by_role("button", name=re.compile(r"close", re.I))
+                if closer.count():
+                    closer.first.click(force=True)
+            except Exception:
+                pass
+            time.sleep(0.35)
+            if not text:
+                return None
+            return self.parse_charge_report_text(text)
+        except Exception as exc:
+            logger.debug("[Pinellas] detail modal %s: %s", booking_num, exc)
+            try:
+                page.keyboard.press("Escape")
+            except Exception:
+                pass
+            return None
+
+    @staticmethod
+    def parse_charge_report_text(text: str) -> dict:
+        """Parse Subject Charge Report modal text (source-faithful, no invention).
+
+        Sums every published **Bond Assessed** value. Uses Offense Description
+        lines for Charges. Court Case Number values joined when present.
+        """
+        if not text:
+            return {"charges": "", "bond_amount": "0", "case_numbers": ""}
+
+        offenses = re.findall(
+            r"Offense Description:\s*([^\n]+)", text, flags=re.I
+        )
+        bonds = re.findall(
+            r"Bond Assessed:\s*([^\n]+)", text, flags=re.I
+        )
+        cases = re.findall(
+            r"Court Case Number:\s*([^\n]+)", text, flags=re.I
+        )
+
+        total = 0.0
+        saw_bond = False
+        for raw in bonds:
+            saw_bond = True
+            total += PinellasCountyScraper._parse_bond_number(raw)
+
+        charges = " | ".join(
+            PinellasCountyScraper._clean(o) for o in offenses if o and o.strip()
+        )
+        case_numbers = " | ".join(
+            PinellasCountyScraper._clean(c) for c in cases if c and c.strip()
+        )
+
+        if not saw_bond:
+            bond_amount = "0"
+        else:
+            bond_amount = PinellasCountyScraper._format_bond_amount(total)
+
+        return {
+            "charges": charges,
+            "bond_amount": bond_amount,
+            "case_numbers": case_numbers,
+        }
+
+    @staticmethod
+    def _parse_bond_number(bond_str: str) -> float:
+        if not bond_str:
+            return 0.0
+        cleaned = re.sub(r"[$,\s]", "", str(bond_str).strip().upper())
+        if any(t in cleaned for t in ("NOBOND", "NONE", "N/A", "HOLD", "ROR")):
+            return 0.0
+        try:
+            return float(cleaned)
+        except (ValueError, TypeError):
+            return 0.0
+
+    @staticmethod
+    def _format_bond_amount(value) -> str:
+        """Canonical Bond_Amount string; never invent — empty/invalid → '0'."""
+        if value is None or value == "":
+            return "0"
+        if isinstance(value, (int, float)):
+            amount = float(value)
+        else:
+            amount = PinellasCountyScraper._parse_bond_number(str(value))
+        if amount <= 0:
+            return "0"
+        if amount.is_integer():
+            return str(int(amount))
+        return f"{amount:.2f}"
 
     @staticmethod
     def _clean(text: str) -> str:

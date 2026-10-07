@@ -7,6 +7,7 @@ Features:
 - Date-based filtering to only fetch recent bookings
 - Data-minimized public-field retrieval (no address or ZIP fields)
 - Fail-closed identity and booking-date validation
+- ArcGIS layer has NO bond/bail fields (confirmed 2026-10-07) — Bond_Amount stays "0"
 """
 
 import logging
@@ -33,7 +34,7 @@ DAYS_BACK = 3  # Fetch bookings from the last 3 days
 PAGE_SIZE = 200
 MAX_PAGES = 10
 # Retrieve only source fields needed for identity, booking deduplication, and charges.
-OUT_FIELDS = "ObjectId,GlobalID,BookDate,Defendant,Charge1,Charge3"
+OUT_FIELDS = "ObjectId,GlobalID,BookDate,Defendant,Charge1,Code2,Charge3"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -134,13 +135,14 @@ class MiamiDadeCountyScraper(BaseScraper):
             full_name = attrs.get("Defendant", "").strip()
             first_name, middle_name, last_name = self._parse_name(full_name)
             
-            # Charges
+            # Charges — layer fields are Charge1, Code2 (charge 2 text), Charge3.
+            # There is no bond/bail attribute on this FeatureServer (2026-10-07).
             charges_list = []
-            for i in range(1, 4):
-                charge = attrs.get(f"Charge{i}")
-                if charge and charge.strip():
-                    charges_list.append(charge.strip())
-            
+            for key in ("Charge1", "Code2", "Charge3"):
+                charge = attrs.get(key)
+                if charge and str(charge).strip():
+                    charges_list.append(str(charge).strip())
+
             charges_str = " | ".join(charges_list) if charges_list else "UNKNOWN CHARGE"
             
             # GlobalID is preferred; ObjectId is a source-issued fallback. Both are
@@ -161,6 +163,8 @@ class MiamiDadeCountyScraper(BaseScraper):
                 Last_Name=last_name,
                 Booking_Date=booking_date_str,
                 Charges=charges_str,
+                # ArcGIS miamidade_jail_data has no bond/bail fields.
+                Bond_Amount="0",
                 Status="Unknown",
                 Facility="Miami-Dade Corrections",
                 LastCheckedMode="INITIAL",
