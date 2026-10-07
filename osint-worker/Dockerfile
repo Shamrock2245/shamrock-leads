@@ -66,8 +66,13 @@ RUN pip install --no-cache-dir instaloader \
     && python -c "import instaloader"
 
 # ── GHunt (Google account OSINT) — package required; runtime needs `ghunt login` ──
-RUN pip install --no-cache-dir "ghunt>=2.3.0" \
-    && python -c "import ghunt"
+# ghunt 2.2.1–2.3.4 Require-Dist httpx[http2]<0.28 (2.3.0 and 2.3.1 were never
+# published). A joint pin with httpx>=0.28.1 is ResolutionImpossible and failed
+# the Hetzner image build. GHunt only subclasses httpx.AsyncClient. Install the
+# 2.3.4 wheel without that cap, then its other deps, and keep httpx[http2]>=0.28.1.
+RUN pip install --no-cache-dir --no-deps "ghunt==2.3.4" \
+    && python -c "import importlib.metadata as md,subprocess,sys; reqs=[raw.split(';',1)[0].strip() for raw in (md.requires('ghunt') or []) if not raw.split(';',1)[0].strip().lower().startswith('httpx')]; reqs.append('httpx[http2]>=0.28.1'); subprocess.check_call([sys.executable,'-m','pip','install','--no-cache-dir',*reqs])" \
+    && python -c "import ghunt, httpx; parts=tuple(int(p) for p in httpx.__version__.split('.')[:2]); assert parts>=(0,28), httpx.__version__"
 
 # ── h8mail (email breach hunter) — does not email the target ──
 RUN pip install --no-cache-dir "h8mail>=2.5.0" \
