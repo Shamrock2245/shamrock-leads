@@ -627,10 +627,10 @@
     {
       "state": "FL",
       "county_fips": "007",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "productive",
+      "official_source_url": "http://smartweb.bradfordsheriff.org/smartwebclient/Jail.aspx",
+      "access_posture": "Ordinary public HTTP SmartWEB JAIL View (HTTP-only host)",
+      "evidence_note": "2026-10-07 SmartWEB-five recon: Booking No BCSO<YY>JBN<NNNNNN>, booking date/time, charges, bond via booking-date window. Prior curl_cffi path + name/date invented keys retired; shared fl_smartweb. AddMoreResults 500 from box \u2014 first-page cards still emit."
     },
     {
       "state": "FL",
@@ -707,10 +707,10 @@
     {
       "state": "FL",
       "county_fips": "029",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://smartcop.dixiecountysheriff.com/smartwebclient/Jail.aspx",
+      "access_posture": "Ordinary public HTTPS SmartWEB JAIL View (TypeSearch omitted on this build)",
+      "evidence_note": "2026-10-07 SmartWEB-five recon: Booking No DCSO<YY>JBN<NNNNNN>, booking date/time, charges when published. Plain requests fl_smartweb; TypeSearch optional."
     },
     {
       "state": "FL",
@@ -723,10 +723,10 @@
     {
       "state": "FL",
       "county_fips": "033",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://inmatelookup.myescambia.com/smartwebclient/jail.aspx",
+      "access_posture": "Ordinary public HTTPS SmartWEB JAIL View",
+      "evidence_note": "2026-10-07 SmartWEB-five recon: Booking No ECC<YY>JBN<NNNNNN>, booking date/time, charges, bond. AddMoreResults pages successfully (147 in 7-day window). curl_cffi retired."
     },
     {
       "state": "FL",
@@ -1051,10 +1051,10 @@
     {
       "state": "FL",
       "county_fips": "113",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://jailview.srso.net/SmartWebClient/jail.aspx",
+      "access_posture": "Ordinary public HTTPS SmartWEB JAIL View",
+      "evidence_note": "2026-10-07 SmartWEB-five recon: Booking No SRSO<YY>JBN<NNNNNN>, booking date/time, charges when published. AddMoreResults may 500 \u2014 first-page cards emit. curl_cffi retired."
     },
     {
       "state": "FL",
@@ -1091,10 +1091,10 @@
     {
       "state": "FL",
       "county_fips": "123",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "productive",
+      "official_source_url": "http://smartcop.taylorsheriff.org:8989/SmartWEBClient/Jail.aspx",
+      "access_posture": "Ordinary public HTTP SmartWEB JAIL View on SO port 8989 (TypeSearch omitted)",
+      "evidence_note": "2026-10-07 SmartWEB-five recon: Booking No TCSO<YY>JBN<NNNNNN>, booking date/time, charges + bond on card. Plain requests fl_smartweb."
     },
     {
       "state": "FL",
