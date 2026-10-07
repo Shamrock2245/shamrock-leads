@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agency onboarding</title>
+  <style>
+    :root { color-scheme: light; --green: #0b6b3a; }
+    body { font-family: Georgia, "Iowan Old Style", serif; margin: 0; background: #f6f4ef; color: #1c1915; }
+    main { max-width: 40rem; margin: 2rem auto; padding: 1.5rem; background: #fff; border: 1px solid #e4dfd4; }
+    h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
+    p.lead { margin-top: 0; color: #4a453c; }
+    ol.steps { display: flex; gap: .5rem; padding: 0; list-style: none; font-size: .85rem; }
+    ol.steps li { padding: .2rem .4rem; border-bottom: 2px solid #ddd; }
+    ol.steps li.on { border-color: var(--green); font-weight: 700; }
+    label { display: block; margin: .8rem 0 .2rem; font-size: .9rem; }
+    input, select { width: 100%; box-sizing: border-box; padding: .45rem; font: inherit; }
+    .row { display: flex; gap: .5rem; }
+    button { font: inherit; background: var(--green); color: #fff; border: 0; padding: .55rem 1rem; margin-top: 1rem; }
+    button.secondary { background: #fff; color: var(--green); border: 1px solid var(--green); }
+    .hidden { display: none; }
+    .error { color: #8c1d1d; }
+    table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+    td, th { text-align: left; border-bottom: 1px solid #eee; padding: .35rem; }
+  </style>
+</head>
+<body>
+<main>
+  <h1 id="title">Onboard an agency</h1>
+  <p class="lead" id="lead">Five short steps. Invites are recorded here and are not sent.</p>
+  <ol class="steps" id="stepper">
+    <li data-step="1">Agency</li>
+    <li data-step="2">Licenses</li>
+    <li data-step="3">Branding</li>
+    <li data-step="4">Staff</li>
+    <li data-step="5">Connections</li>
+  </ol>
+  <p class="error" id="error"></p>
+  <form id="wizard">
+    <section data-step="1">
+      <label for="legal_name">Agency legal name</label>
+      <input id="legal_name" required maxlength="120">
+      <label for="home_state">Home state</label>
+      <input id="home_state" value="FL" maxlength="2" required>
+      <label for="owner_name">Owner name</label>
+      <input id="owner_name" required maxlength="120">
+      <label for="owner_email">Owner email</label>
+      <input id="owner_email" type="email" required>
+      <label for="owner_phone">Owner phone</label>
+      <input id="owner_phone" maxlength="32">
+    </section>
+    <section data-step="2" class="hidden">
+      <label for="license_number">Florida DFS or producer license number</label>
+      <input id="license_number" maxlength="40">
+      <label for="license_state">State on the license</label>
+      <input id="license_state" value="FL" maxlength="2">
+      <label for="license_name">Name on the license</label>
+      <input id="license_name" maxlength="120">
+    </section>
+    <section data-step="3" class="hidden">
+      <label for="display_name">Name on paperwork</label>
+      <input id="display_name" maxlength="120">
+      <label for="primary_color">Brand color</label>
+      <input id="primary_color" value="#0b6b3a" maxlength="7">
+      <label for="logo_url">Logo URL (https) or leave blank</label>
+      <input id="logo_url" maxlength="2000">
+    </section>
+    <section data-step="4" class="hidden">
+      <p>Add one coworker. The owner is invited automatically. Nothing is emailed.</p>
+      <label for="invite_email">Staff email</label>
+      <input id="invite_email" type="email">
+      <label for="invite_role">Role</label>
+      <select id="invite_role">
+        <option value="staff">Staff</option>
+        <option value="admin">Admin</option>
+        <option value="sub_agent">Agent</option>
+        <option value="recovery">Recovery</option>
+      </select>
+    </section>
+    <section data-step="5" class="hidden">
+      <label for="texting">Texting line</label>
+      <select id="texting">
+        <option value="none">Skip for now</option>
+        <option value="bluebubbles">BlueBubbles</option>
+        <option value="twilio">Twilio</option>
+      </select>
+      <label for="texting_ref">Secret reference, like env:ACME_TWILIO_TOKEN</label>
+      <input id="texting_ref" placeholder="env:ACME_TWILIO_TOKEN" maxlength="80">
+      <label for="payments">Indemnitor payment processor</label>
+      <select id="payments">
+        <option value="none">Skip for now</option>
+        <option value="swipesimple">SwipeSimple</option>
+        <option value="later">Decide later</option>
+      </select>
+      <label for="payments_ref">Secret reference, not the key</label>
+      <input id="payments_ref" placeholder="env:ACME_SWIPESIMPLE_KEY" maxlength="80">
+      <label id="approve-wrap"><input id="approve_now" type="checkbox" style="width:auto"> Approve this agency now</label>
+    </section>
+    <button type="button" class="secondary" id="back">Back</button>
+    <button type="button" id="next">Continue</button>
+  </form>
+  <section id="done" class="hidden">
+    <h2 id="done-title">Saved</h2>
+    <p id="done-body"></p>
+  </section>
+  <section id="queue">
+    <h2>Agencies</h2>
+    <table>
+      <thead><tr><th>Agency</th><th>Status</th><th>State</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </section>
+</main>
+<script>
+(function () {
+  var mode = document.body.getAttribute("data-mode") || "admin";
+  var step = 1;
+  var form = document.getElementById("wizard");
+  if (mode === "signup") {
+    document.getElementById("title").textContent = "Create your agency";
+    document.getElementById("lead").textContent = "Submit for approval. We record staff invites and do not email them from this form.";
+    document.getElementById("approve-wrap").classList.add("hidden");
+    document.getElementById("queue").classList.add("hidden");
+  }
+  function show(n) {
+    step = n;
+    Array.prototype.forEach.call(form.querySelectorAll("section"), function (sec) {
+      sec.classList.toggle("hidden", sec.getAttribute("data-step") !== String(n));
+    });
+    Array.prototype.forEach.call(document.querySelectorAll("#stepper li"), function (li) {
+      li.classList.toggle("on", li.getAttribute("data-step") === String(n));
+    });
+    document.getElementById("back").classList.toggle("hidden", n === 1);
+    document.getElementById("next").textContent = n === 5 ? "Submit" : "Continue";
+  }
+  function payload() {
+    var licenses = [];
+    if (document.getElementById("license_number").value.trim()) {
+      licenses.push({
+        number: document.getElementById("license_number").value.trim(),
+        state: document.getElementById("license_state").value.trim(),
+        name_on_license: document.getElementById("license_name").value.trim()
+      });
+    }
+    var invites = [];
+    if (document.getElementById("invite_email").value.trim()) {
+      invites.push({
+        email: document.getElementById("invite_email").value.trim(),
+        role: document.getElementById("invite_role").value
+      });
+    }
+    return {
+      legal_name: document.getElementById("legal_name").value.trim(),
+      home_state: document.getElementById("home_state").value.trim(),
+      owner: {
+        name: document.getElementById("owner_name").value.trim(),
+        email: document.getElementById("owner_email").value.trim(),
+        phone: document.getElementById("owner_phone").value.trim()
+      },
+      licenses: licenses,
+      branding: {
+        display_name: document.getElementById("display_name").value.trim(),
+        primary_color: document.getElementById("primary_color").value.trim(),
+        logo_url: document.getElementById("logo_url").value.trim()
+      },
+      invites: invites,
+      integrations: {
+        texting: {
+          provider: document.getElementById("texting").value,
+          secret_ref: document.getElementById("texting_ref").value.trim()
+        },
+        payments: {
+          provider: document.getElementById("payments").value,
+          secret_ref: document.getElementById("payments_ref").value.trim()
+        }
+      },
+      approve_now: mode === "admin" && document.getElementById("approve_now").checked
+    };
+  }
+  function paint(rows) {
+    var body = document.getElementById("rows");
+    body.innerHTML = "";
+    (rows || []).forEach(function (row) {
+      var tr = document.createElement("tr");
+      tr.innerHTML = "<td></td><td></td><td></td>";
+      tr.children[0].textContent = row.legal_name || "";
+      tr.children[1].textContent = row.status || "";
+      tr.children[2].textContent = row.home_state || "";
+      body.appendChild(tr);
+    });
+  }
+  async function refresh() {
+    if (mode !== "admin") return;
+    var res = await fetch("/api/platform/tenants");
+    if (!res.ok) return;
+    var data = await res.json();
+    paint(data.agencies || []);
+  }
+  document.getElementById("back").onclick = function () { show(Math.max(1, step - 1)); };
+  document.getElementById("next").onclick = async function () {
+    document.getElementById("error").textContent = "";
+    if (step < 5) { show(step + 1); return; }
+    var url = mode === "signup" ? "/api/public/signup" : "/api/platform/tenants";
+    var res = await fetch(url, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload())
+    });
+    var data = await res.json().catch(function () { return {}; });
+    if (!res.ok) {
+      document.getElementById("error").textContent = data.error || "Could not save";
+      return;
+    }
+    form.classList.add("hidden");
+    document.getElementById("done").classList.remove("hidden");
+    document.getElementById("done-title").textContent = data.status === "active" ? "Agency is active" : "Waiting for approval";
+    document.getElementById("done-body").textContent = (data.legal_name || "Agency") + " is " + data.status + ". Invites sent: " + (data.invites_sent || 0) + ".";
+    refresh();
+  };
+  show(1);
+  refresh();
+})();
+</script>
+</body>
+</html>

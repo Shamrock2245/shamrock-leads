@@ -289,11 +289,15 @@ Until that ships, the function is a cross-tenant hole even after this database i
 
 ## 11. Super-admin console (owner scope)
 
-These five surfaces are the product Brendan described. They ship as follow-up PRs, each behind the same flag. Flag off: the routes are not mounted, or they return 404, and Shamrock's desk is unchanged. Tests never send a real text, email, or charge. Stripe stays in test mode with no live key.
+These five surfaces are the product Brendan described. They ship as follow-up PRs, each behind the same flag. Onboarding (§11.1) is the first of those. Flag off: the routes return 404, and Shamrock's desk is unchanged. Tests never send a real text, email, or charge. Stripe stays in test mode with no live key.
 
 The visual target is a short wizard, not a settings dump. One decision per screen. Plain language. The platform home shows agencies as rows: name, status, plan, MRR, last lead, open issues.
 
 ### 11.1 Onboard an agency (and self-serve)
+
+**Shipped behind `SAAS_MULTI_TENANT`.** `GET /platform`, `GET /signup`, `POST /api/platform/tenants`, `POST /api/public/signup`, and approve/reject live in `dashboard/routers/platform_onboarding.py`. With the flag off they return 404 and do not touch Mongo. `/signup` and `/api/public/signup` skip the PIN so a new agency can open the form. `/platform` stays PIN-gated and also requires the platform super-admin email.
+
+The wizard writes one `tenants` document: legal name, owner, license numbers, branding, staff invites, and texting/payment `env:` secret references. Invite tokens are stored on that document and stripped from every API response. `invites_sent` stays 0. The service does not import a mailer, an HTTP client, or Stripe, and it rejects raw `api_key`, `password`, `secret`, `token`, `card`, `pan`, and `smtp` fields. Self-serve cannot set `approve_now`. The slug `shamrock` is reserved. Staff rows stay embedded on the tenant in this slice, because platform mode cannot write tenant-owned `tenant_memberships`. A later sign-in desk can project them into memberships.
 
 Guided wizard for the super-admin. The same steps exist as a public signup that stops at **Pending approval**.
 
@@ -459,7 +463,7 @@ Each phase is shippable on its own. Each is reversible by turning `SAAS_MULTI_TE
 |---|---|---|---|
 | **1. Foundation (this change)** | Models, context, `get_collection` chokepoint, offline backfill, index specs, notification tests, session field. Flag off. | Do not set the flag. `--down` if a stamp was applied. | One package plus the chokepoint. No route rewrites beyond the tested slice. |
 | **1b. Human backfill** | Operator runs `--connect` then `--apply` with the ack env, in a window. | `--down --apply` with the same ack. | Operational. Not this PR. |
-| **2. Onboarding console** | Wizard, self-serve pending state, invites recorded not sent. Flag-gated. | Flag off unmounts it. Shamrock seed is untouched. | New routes and one HTML surface. |
+| **2. Onboarding console** | Wizard, self-serve pending state, invites recorded not sent. Implemented behind the flag in the onboarding follow-up. | Flag off returns 404. Shamrock seed is untouched. | New routes and one HTML surface. |
 | **3. Stripe test mode** | Plans, Checkout, webhooks, MRR, suspend. No live key. | Flag off. Stripe test data can be discarded. | New billing module. Webhook signature required. |
 | **4. Surety entitlements** | Checklist over `SURETY_REGISTRY`. Finalize refuses a surety the tenant does not have. Private-template slot for Paperwork Desk. | Flag off uses today's registry. | A guard in the existing finalize path, not a new packet builder. |
 | **5. Lead subscriptions** | State/county picker. `route_lead` fan-out. Shared and exclusive both implemented; exclusive stays off until the owner decides. | Flag off. Writer keeps inserting Shamrock's leads as it does now. | Writer change is the risky part and stays behind the flag. |
@@ -478,8 +482,8 @@ Enabling the flag in production is not a phase by itself. It happens after 1b an
 # Offline plan. Does not read or write Mongo.
 python scripts/backfill_tenant_id.py
 
-# Tests, including cross-tenant rejection.
-pytest -q tests/test_tenant_scope.py
+# Tests, including cross-tenant rejection and the onboarding wizard.
+pytest -q tests/test_tenant_scope.py tests/test_agency_onboarding.py
 ```
 
 `SAAS_MULTI_TENANT` unset or not `1` / `true` / `yes` / `on` means off.
