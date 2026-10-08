@@ -72,11 +72,11 @@ def _passed_relay_read(label="Manatee (FL)", **over):
 # ── Committed state ─────────────────────────────────────────────────────────
 def test_home_counties_matrix_state_after_source_checks():
     text, summary = _build(B.DEFAULT_SMOKE_EVIDENCE)
-    for county in ("Lee", "Collier", "Glades", "DeSoto"):
+    for county in ("Lee", "Collier", "Glades"):
         assert _matrix_status(text, county) == "candidate_productive", county
-    for county in ("Charlotte", "Manatee", "Hendry"):
+    for county in ("Charlotte", "Manatee", "Hendry", "DeSoto"):
         assert _matrix_status(text, county) == "recon_only", county
-    assert "| FL | 67 | 67 | 4 | 19 | 27 | 0 | 17 |" in text
+    assert "| FL | 67 | 67 | 4 | 18 | 28 | 0 | 17 |" in text
 
 
 def test_no_home_county_is_promoted_in_health():
@@ -91,6 +91,10 @@ def test_committed_smoke_rows_are_requests_only_until_leads_ops_reports():
     by = {(r["label"], r["kind"]) for r in rows}
     assert ("Lee (FL)", "write_smoke") in by
     assert ("Collier (FL)", "write_smoke") in by
+    assert ("Glades (FL)", "write_smoke") in by
+    for r in rows:
+        if r["label"] in ("Collier (FL)", "Glades (FL)"):
+            assert r["blocked_on"].startswith("HOLD")
     for county in ("Charlotte (FL)", "Manatee (FL)"):
         assert (county, "relay_read") in by and (county, "relay_write") in by
     for r in rows:

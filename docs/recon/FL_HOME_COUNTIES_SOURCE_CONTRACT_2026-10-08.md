@@ -18,12 +18,12 @@ Scope: Lee, Collier, Charlotte, Manatee, Hendry, Glades and DeSoto. These are th
 | Lee | `sheriffleefl.org/public-api/bookings` (+ `/{bookingNumber}/charges`) | `bookingNumber`, 7 digits, unique | `bookingDate` date + time | `limit`/`offset` (max 50) | HTTP 200 JSON, plain GET | recon_only → **candidate_productive** | unverified |
 | Collier | `www2.colliersheriff.org/arrestsearch/Report.aspx` | `Booking Number`, 12 digits, 7 unique of 7 matches | `Booking Date` + arrest date | none: one daily report with a published "N matches found" | HTTP 200, plain GET + ordinary form postback | recon_only → **candidate_productive** | unverified |
 | Glades | `smartweb.gladessheriff.org/smartwebclient/Jail.aspx` | Booking No `GCSO<YY>JBN<NNNNNN>`, 28 of 28 unique | date + time on every card | legacy `AddMoreResults` (`scrapers/fl_smartweb.py`) | HTTP 200, no challenge | recon_only → **candidate_productive** | unverified |
-| DeSoto | `jail.desotosheriff.org/DCN/inmates` | DCN `bid` (opaque, stable across sessions, 161 of 161 unique) | detail Admit Date + Admit Time | DevExpress pager callback, 2 pages / 161 items (`scrapers/dcn_base.py`) | HTTP 200, no challenge, no browser needed | recon_only → **candidate_productive** (Darlington SC precedent) | unverified |
+| DeSoto | `jail.desotosheriff.org/DCN/inmates` | **none**. DCN `bid` is the jail site's internal record id (stable, 161 of 161 unique), not a booking number | detail Admit Date + Admit Time | DevExpress pager callback, 2 pages / 161 items (`scrapers/dcn_base.py`) | HTTP 200, no challenge, no browser needed | recon_only (unchanged, CoS review) | unverified |
 | Hendry | MyOCV S3 `inmates.json` | **none**. `inmateID` is `HCSO<YY>MNI<NNNNNN>`, a person id | Booked Date + time | single JSON file (288 rows) | HTTP 200 | recon_only (unchanged) | unverified |
 | Charlotte | `inmates.charlottecountyfl.revize.com/bookings` | Revize `Booking #` (per #119) | Arrest Date | Revize pager | **HTTP 403 `cf-mitigated: challenge`** from the box | recon_only (unchanged) | unverified |
 | Manatee | `manatee-sheriff.revize.com/bookings` | Revize `Booking #` (per #113) | Arrest Date | Revize pager | **HTTP 403 `cf-mitigated: challenge`** from the box | recon_only (unchanged) | unverified |
 
-FL aggregate after this change: verified public 4, candidate productive 19 (was 15), recon only 28 (was 32), fail closed 16.
+FL aggregate after this change (with #131's Nassau `fail_closed` merged in): verified public 4, candidate productive 18 (was 15), recon only 28 (was 31), fail closed 17.
 
 ### Lee
 - Bookings: givenName / middleName / surName, `bookingNumber`, `bookingDate`, `inCustody` / `inCustodyText`, `releaseDate`, `image`, `birthDate`, `address`, `housing`. `id` (14 digits) and `permId` (person) are not keys.
@@ -38,10 +38,10 @@ FL aggregate after this change: verified public 4, candidate productive 19 (was 
 - The shared SmartWEB helper read 28 current inmates. Every card had a booking date and time and charges; 18 had a bond figure.
 - `glades.py` does not use the shared helper yet. It uses curl_cffi `impersonate="chrome131"` and writes `"0"` for unknown bond. Moving it onto `fl_smartweb.py` is a follow-up PR.
 
-### DeSoto
+### DeSoto: not proven
 - The roster columns are Full Name / Age / Race / Sex / Admit Date. Each row links to `inmate-details?id=…&bid=…`.
 - The detail page has Admit Date and Admit Time, address and housing, and per charge: Offense Date, Court Type, Court Date, Docket Number, Bond, Bond Type and Charging/Arresting Agency.
-- No printed booking number is published. `bid` is the DCN booking id, the same key the verified Darlington SC scraper (`scrapers/counties_sc/darlington.py`) uses. If Brendan does not accept the DCN `bid`, DeSoto goes back to `recon_only`.
+- No printed booking number is published. **CoS review (2026-10-08): `bid` is the jail site's internal record id, not a booking number, and #136 rejects that same kind of id. DeSoto stays `recon_only`** until the source publishes a booking number.
 - `desoto.py` still drives DrissionPage. Moving it onto `DCNBaseScraper` (plain HTTPS, pager callback) is a follow-up PR. `DCNBaseScraper` also writes `"0"` for "No Bond", which the follow-up needs to handle.
 
 ### Hendry: not proven
@@ -86,7 +86,7 @@ The agent box has no `MONGODB_URI` and no residential exit, so these steps run o
    ```
    Expected: status `ok`, a MongoWriter result (new + updated ≥ 1), `booking_number_shapes` only `NNNNNNN`, duplicates 0, booking date and time on every row, charges filled, `bond.zero` 0 (empty or positive only), and mugshots present.
 
-### Collier: write smoke (after the Collier bond fix is merged and deployed)
+### Collier: write smoke (HOLD until the Collier/Glades bond PR is merged and deployed)
 ```bash
 MONGODB_URI=<prod> python main.py Collier     # copy the final "Result: {...}" line
 MONGODB_URI=<prod> python scripts/smoke_evidence_check.py --county Collier --state FL --hours 2
@@ -118,6 +118,15 @@ Expected: status `ok`, a MongoWriter result, `booking_number_shapes` only `NNNNN
    ```
    For a relay write, `result` is the `Relay result` dict plus `mongo_writer_results` (the number of entries in its `writer_results`) and `new_records` / `updated_records` from the MongoWriter entry.
 
-### Glades, DeSoto and Hendry
-- Glades and DeSoto: no smoke until their scrapers move onto the shared helpers (follow-up PRs). Today's modules would write `"0"` bonds.
+### Glades: write smoke (HOLD until the Collier/Glades bond PR is merged and deployed)
+```bash
+MONGODB_URI=<prod> python main.py Glades     # copy the final "Result: {...}" line
+MONGODB_URI=<prod> python scripts/smoke_evidence_check.py --county Glades --state FL --hours 2
+```
+Expected: status `ok`, a MongoWriter result, booking numbers only `GCSO<YY>JBN<NNNNNN>`, duplicates 0, booking date and time and charges on every row, bond empty or positive (`bond.zero` 0).
+
+Today `glades.py` writes `"0"` for an unknown bond and `collier.py` adds `$` figures from offense text into the bond, so neither smoke runs until that fix is live.
+
+### DeSoto and Hendry
+- DeSoto: no smoke. It stays `recon_only` (no source booking number).
 - Hendry: no smoke. It is not a proven contract.

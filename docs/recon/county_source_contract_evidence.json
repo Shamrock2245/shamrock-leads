@@ -699,10 +699,10 @@
     {
       "state": "FL",
       "county_fips": "027",
-      "passive_recommendation": "productive",
+      "passive_recommendation": "recon_only",
       "official_source_url": "https://jail.desotosheriff.org/DCN/inmates",
       "access_posture": "2026-10-08 ~8:05 AM ET from the agent box: DCN DevExpress roster over plain HTTPS (Cloudflare-fronted, no challenge), honest User-Agent; page 1 server-rendered (100 rows, \"Page 1 of 2\", 161 items), page 2 via the grid's own DevExpress pager callback (`scrapers/dcn_base.py`). No browser needed for the read; the current `desoto.py` still drives DrissionPage",
-      "evidence_note": "2026-10-08 source-contract check (`docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md`): roster lists Full Name / Age / Race / Sex / Admit Date with `inmate-details?id=&bid=` links; `bid` is an opaque DCN booking id, stable across two fresh sessions (100/100) and unique per row (161/161 through the pager), the same key the verified Darlington SC DCN scraper uses. Detail page shows Admit Date + Admit Time, address, housing, and per-charge Offense Date / Court Type / Court Date / Docket Number / Bond / Bond Type. No printed booking number is published; if Brendan does not accept the DCN `bid` (Darlington precedent) this row goes back to `recon_only`. Candidate only: Health stays `unverified`."
+      "evidence_note": "2026-10-08 source-contract check (`docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md`): roster lists Full Name / Age / Race / Sex / Admit Date with `inmate-details?id=&bid=` links; `bid` is stable across two fresh sessions (100/100) and unique per row (161/161 through the pager). Detail page shows Admit Date + Admit Time and per-charge Offense Date / Court Type / Court Date / Docket Number / Bond / Bond Type, but no printed booking number. CoS review 2026-10-08: `bid` is the jail site's internal record id, not a source booking number (same kind of id #136 rejects), so DeSoto stays `recon_only` until the source publishes a booking number. Health stays `unverified`."
     },
     {
       "state": "FL",
