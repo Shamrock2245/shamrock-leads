@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (Intake upsert keeps lifecycle fields)
+
+### Fixed
+- Repeat `POST /api/intake/submit` still updates identity fields. `status`, `created_at`, match fields, `paperwork_packet_id`, `paperwork_status`, `surety_id`, and `surety_unrecognized` are written with `$setOnInsert`, so a second save cannot revert a promoted or linked intake. The same split is used by the Wix webhook normalizer.
+
 ## [Unreleased] — 2026-10-07 (Telegram and Shannon intake tags)
 
 ### Added

@@ -59,3 +59,74 @@ def test_shannon_intake_submit_skips_matching(monkeypatch):
     sched.assert_called_once()
     saved = col.update_one.await_args.args[1]["$set"]
     assert saved["indemnitor_name"] == "Brendan O'Neal"
+
+
+def test_repeat_intake_submit_does_not_regress_lifecycle_fields(monkeypatch):
+    from dashboard.routers import intake as intake_mod
+
+    col = MagicMock()
+    col.update_one = AsyncMock()
+    monkeypatch.setattr(intake_mod, "get_collection", lambda name: col)
+
+    class Req:
+        headers = {}
+
+        async def json(self):
+            return {
+                "source": "shannon_voice",
+                "intakeId": "SH-2395550101-JANE-DOE",
+                "defendantName": "Jane Doe",
+                "indemnitorName": "Brendan O'Neal",
+                "indemnitorPhone": "2395550101",
+            }
+
+    with patch("dashboard.services.intake_fanout.schedule_after_save"):
+        result = asyncio.run(intake_mod.intake_submit(Req()))
+
+    assert result["success"] is True
+    update = col.update_one.await_args.args[1]
+    saved = update["$set"]
+    inserted = update["$setOnInsert"]
+    assert saved["indemnitor_name"] == "Brendan O'Neal"
+    assert saved["indemnitor_phone"] == "2395550101"
+    preserved = (
+        "status",
+        "created_at",
+        "matched_booking_number",
+        "matched_county",
+        "matched_defendant_id",
+        "match_confidence",
+        "match_strategy",
+        "match_timestamp",
+        "surety_id",
+        "surety_unrecognized",
+        "paperwork_packet_id",
+        "paperwork_status",
+    )
+    for key in preserved:
+        assert key not in saved, key
+        assert key in inserted, key
+    assert inserted["status"] == "pending"
+    assert inserted["surety_id"] is None
+    assert inserted["paperwork_packet_id"] is None
+    overlap = set(saved) & set(inserted)
+    assert overlap == set()
+
+
+def test_normalize_intake_preserves_lifecycle_fields(monkeypatch):
+    from dashboard.routers import intake as intake_mod
+
+    col = MagicMock()
+    col.update_one = AsyncMock()
+    monkeypatch.setattr(intake_mod, "get_collection", lambda name: col)
+    asyncio.run(intake_mod._normalize_intake(
+        {"intakeId": "WX-1", "indemnitorName": "Amy Roe"},
+        source="wix_webhook",
+    ))
+    update = col.update_one.await_args.args[1]
+    assert update["$set"]["indemnitor_name"] == "Amy Roe"
+    assert "status" not in update["$set"]
+    assert "created_at" not in update["$set"]
+    assert update["$setOnInsert"]["status"] == "pending"
+    assert "paperwork_packet_id" in update["$setOnInsert"]
+    assert "surety_id" in update["$setOnInsert"]

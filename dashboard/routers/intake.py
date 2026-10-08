@@ -262,6 +262,36 @@ def _extract_defendant(data: dict, apply_defaults: bool = True) -> dict:
     }
 
 
+# A later submit still refreshes identity. These fields are written only when
+# the intake is first inserted, so a repeat save cannot revert a promoted,
+# matched, or linked row back to a fresh pending intake.
+_INTAKE_INSERT_ONLY_FIELDS = frozenset({
+    "status",
+    "created_at",
+    "matched_booking_number",
+    "matched_county",
+    "matched_defendant_id",
+    "match_confidence",
+    "match_strategy",
+    "match_timestamp",
+    "surety_id",
+    "surety_unrecognized",
+    "paperwork_packet_id",
+    "paperwork_status",
+})
+
+
+def _intake_upsert_update(doc: dict) -> dict:
+    updates = {}
+    insert_only = {}
+    for key, value in doc.items():
+        if key in _INTAKE_INSERT_ONLY_FIELDS:
+            insert_only[key] = value
+        else:
+            updates[key] = value
+    return {"$set": updates, "$setOnInsert": insert_only}
+
+
 async def _normalize_intake(
     data: dict,
     source: str = "wix_webhook",
@@ -364,7 +394,7 @@ async def _normalize_intake(
     intake_queue = get_collection("intake_queue")
     await intake_queue.update_one(
         {"intake_id": intake_id},
-        {"$set": doc},
+        _intake_upsert_update(doc),
         upsert=True,
     )
     return intake_id, doc
@@ -540,10 +570,11 @@ async def intake_submit(request: Request):
 
     intake_queue = get_collection("intake_queue")
     try:
-        # Upsert by intake_id to prevent duplicates
+        # Upsert by intake_id. Lifecycle fields are insert-only so a repeat
+        # save cannot revert a promoted, matched, or linked intake.
         await intake_queue.update_one(
             {"intake_id": intake_id},
-            {"$set": doc},
+            _intake_upsert_update(doc),
             upsert=True,
         )
         logger.info("[intake] New intake stored: %s | source=%s", intake_id, source)
