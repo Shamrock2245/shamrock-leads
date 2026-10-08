@@ -9,6 +9,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Default lead views.** A county whose source contract is `fail_closed` in `SCRAPER_SOURCE_STATES` (Sarasota, Alachua, Hardee, St. Johns, Lee SC and the rest) no longer shows in the default `/api/leads` list, its CSV export, the bond-ready queue (`/api/ops/defendants`, Command Center), the per-state cards and strip, or the Write Book, SWFL and Florida presets. The rule is generic (`dashboard/services/source_state_filter.py`); there is no Sarasota special case. Rows are not deleted. Staff still see them by picking the county in the county filter or passing `include_fail_closed=true`. `WRITE_ELIGIBLE_COUNTIES`, which gates where the agency may write paper, is unchanged; only the preset list sent to the dashboard drops fail-closed counties. The lead-subscription seed already skipped fail-closed counties at runtime and now has a test.
 - **Presets load the fail_closed list first.** The SWFL, Florida and Write Book presets (Lead Explorer and Defendants) now load `/api/leads/fail-closed-counties` before seeding the county filter, so opening Defendants first no longer sends Sarasota or Hardee by name. Naming `Sarasota County (FL)` is now an opt-in like `Sarasota (FL)`.
 
+## [Unreleased] — 2026-10-08 (FL matrix/Health parity + FL 67 status)
+
+### Fixed
+- **Nassau (FL) fail closed.** Nassau is an owner hold, but Health showed `unverified` and the matrix `recon_only`, while the module still ran every 120 min with `verify=False` and curl_cffi impersonation and keyed every row on the `Booking History` heading (`History`). Re-checked 2026-10-08: the portal still sends only its leaf certificate (GoDaddy G2 intermediate missing). `nassau.py` is now `SOURCE_CONTRACT_VALIDATED=False` with no source fetch, Health `fail_closed`, evidence + live-evidence hold row added, matrix regenerated and Nassau added to the drift-test `HOLD_LABELS`. Prod rows keyed `History` need a Leads Ops cleanup; nothing was deleted.
+
+### Docs
+- **`docs/recon/FL_67_STATUS_2026-10-08.md`:** one status for each of the 67 FL counties (4 `verified_public`, 40 unverified awaiting Leads Ops smoke with source PR, 17 `fail_closed`, 6 no source), ranked by Census 2024 population, with the matrix-vs-Health parity findings, today's live Sarasota/Manatee/Charlotte checks (the Sarasota listing root is now Cloudflare-challenged too), the relay cadence gap (Leads Ops must schedule `python main.py --relay-only`), rule conflicts in older modules, and the next-PR queue. `tests/test_fl_67_status.py` (in CI) keeps the table consistent with Health.
+
+## [Unreleased] — 2026-10-08 (name without license falls back)
+
+### Fixed
+- **Palmetto appearance bonds.** A name that is not in `BOND_AGENTS` and has no license is not printed with a blank license. Resolution continues to the signed-in sub-agent, then the house pair (Brendan O'Neal / P139768). A short label such as Kayla L on Kayla Lukesic's session prints Kayla Lukesic / G356764, and the same label on a PIN-admin or machine path prints the house pair. A non-registry name is kept only when a non-registry license is also present. DocuSeal prefill, the bondsman submitter, the appearance bond, the print route, and the packet forms use that same pair. OSI appearance bonds are unchanged.
+
 ## [Unreleased] — 2026-10-08 (license-only agent pair)
 
 ### Fixed

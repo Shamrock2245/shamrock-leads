@@ -86,7 +86,11 @@ def writing_agent_name(data: Optional[dict]) -> str:
 
 
 def writing_agent_license(data: Optional[dict]) -> str:
-    """License already on the bond or session payload. Empty when absent."""
+    """License already on the bond or session payload. Empty when absent.
+
+    An empty license next to a name is not a printable pair. Appearance
+    fill and the print route resolve both through ``resolve_writing_agent``.
+    """
     if not isinstance(data, dict):
         return ""
     for key in (
