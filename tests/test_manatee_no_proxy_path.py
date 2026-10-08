@@ -138,10 +138,11 @@ def test_full_scrape_with_proxy_env_set_reaches_no_proxy_or_stealth_path(monkeyp
     import scrapers.cf_browser as cfb
     import scrapers.socks_proxy as sp
     for mod, attr in [(sp, "resolve_residential_proxy"), (sp, "validate_residential_proxy"),
-                      (sp, "get_socks_proxy_url"), (cfb, "launch_cf_browser"),
-                      (cfb, "new_stealth_context"), (cfb, "wait_past_cloudflare"),
-                      (cfb, "_launch_sync_playwright")]:
+                      (sp, "get_socks_proxy_url")]:
         monkeypatch.setattr(mod, attr, _explode(attr))
+    # The stealth launcher no longer exists at all (removed with Charlotte's cleanup).
+    for attr in ("launch_cf_browser", "new_stealth_context", "wait_past_cloudflare", "_launch_sync_playwright"):
+        assert not hasattr(cfb, attr)
 
     # Exit check: must ignore proxy env vars (httpx trust_env=False, no proxy kwarg).
     import httpx

@@ -1,0 +1,30 @@
+"""Counties that run only on the Leads Ops home relay (never on the VPS).
+
+Manatee and Charlotte (FL) sit behind Cloudflare on Revize CMS and run only from
+the relay's own US residential exit, with stock Playwright, no proxy and no
+stealth (Manatee #121, Charlotte 2026-10-07). The VPS/Hetzner scheduler keeps
+them registered, so ``python main.py Manatee`` still resolves, but it never puts
+them on an interval job. A dashboard run-now or custody-recheck trigger for one
+of them is marked ``relay_only`` on the VPS and is not run there.
+
+On the relay, Leads Ops runs them with ``python main.py --relay-only`` (each
+relay-only county once, then exit) or ``python main.py Manatee``. See
+docs/ops/REVIZE_RELAY_RUN.md.
+"""
+from __future__ import annotations
+
+from typing import Any
+
+RELAY_ONLY_LABELS = frozenset({"Manatee (FL)", "Charlotte (FL)"})
+
+
+def label_for(scraper: Any) -> str:
+    label = getattr(scraper, "county_label", None)
+    if isinstance(label, str) and label:
+        return label
+    state = (getattr(scraper, "state", None) or "FL").upper()
+    return f"{getattr(scraper, 'county', '')} ({state})"
+
+
+def is_relay_only(scraper: Any) -> bool:
+    return label_for(scraper) in RELAY_ONLY_LABELS

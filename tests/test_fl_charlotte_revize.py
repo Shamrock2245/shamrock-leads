@@ -195,38 +195,33 @@ def test_charlotte_live_cf_challenge_is_an_egress_block():
 
 def test_charlotte_direct_mode_refuses_unverified_exit(monkeypatch):
     monkeypatch.setenv("CHARLOTTE_EGRESS_MODE", "direct")
-    import scrapers.socks_proxy as sp
+    import scrapers.cf_browser as cfb
     # Rate-limited exit lookup -> org/country unknown -> not residential (#113 fix).
-    monkeypatch.setattr(sp, "validate_residential_proxy", lambda url, require_residential_exit=True: (
-        False, {"ip": "203.0.113.9", "org": "", "country": "", "error": "could not verify the exit IP"}))
+    monkeypatch.setattr(cfb, "check_exit_ip", lambda *a, **k: {
+        "ok": True, "ip": "203.0.113.9", "org": "", "country": "",
+        "exit_unverified": True, "residential_likely": False})
     with pytest.raises(EgressBlocked, match="egress_block: CHARLOTTE_EGRESS_MODE=direct"):
         charlotte.resolve_egress()
 
 
 def test_charlotte_direct_mode_never_resolves_a_proxy(monkeypatch):
-    monkeypatch.setenv("CHARLOTTE_EGRESS_MODE", "direct")
-    import scrapers.socks_proxy as sp
-    called = []
-    monkeypatch.setattr(sp, "validate_residential_proxy", lambda url, require_residential_exit=True: (
-        True, {"ip": "198.51.100.7", "org": "Comcast", "country": "US"}))
-    monkeypatch.setattr(sp, "resolve_residential_proxy", lambda *a, **k: called.append(1))
+    monkeypatch.delenv("CHARLOTTE_EGRESS_MODE", raising=False)  # default is direct
+    import scrapers.cf_browser as cfb
+    calls = []
+    monkeypatch.setattr(cfb, "check_exit_ip", lambda url, **k: calls.append((url, k)) or {
+        "ok": True, "ip": "198.51.100.7", "org": "AS7922 Comcast", "country": "US",
+        "residential_likely": True})
     assert charlotte.resolve_egress() == (None, "direct")
-    assert called == []
+    assert calls[0][0] is None and calls[0][1]["trust_env"] is False
 
 
-def test_charlotte_auto_mode_without_residential_exit_is_egress_block(monkeypatch):
-    monkeypatch.delenv("CHARLOTTE_EGRESS_MODE", raising=False)
-    import scrapers.socks_proxy as sp
-
-    def boom(*a, **k):
-        raise RuntimeError("No healthy residential egress available for WAF/CF scrapers.")
-
-    monkeypatch.setattr(sp, "resolve_residential_proxy", boom)
-    with pytest.raises(EgressBlocked, match="egress_block: no residential exit for Charlotte"):
-        charlotte.resolve_egress()
-    monkeypatch.setenv("CHARLOTTE_EGRESS_MODE", "proxyservice")
-    with pytest.raises(ValueError):
-        charlotte.egress_mode()
+def test_charlotte_auto_mode_is_removed_and_fails_loudly(monkeypatch):
+    for mode in ("auto", "proxyservice"):
+        monkeypatch.setenv("CHARLOTTE_EGRESS_MODE", mode)
+        with pytest.raises(ValueError, match="only 'direct'"):
+            charlotte.egress_mode()
+        with pytest.raises(ValueError):
+            charlotte.resolve_egress()
 
 
 class _FakeResp:
@@ -259,11 +254,10 @@ class _Closable:
 def test_charlotte_scrape_raises_egress_block_and_returns_nothing(monkeypatch):
     monkeypatch.setattr(charlotte, "resolve_egress", lambda scraper=None: (None, "direct"))
     monkeypatch.setenv("CHARLOTTE_EGRESS_MODE", "direct")
-    import scrapers.cf_browser as cfb
-    monkeypatch.setattr(cfb, "launch_cf_browser", lambda *a, **k: (_Closable(), _Closable(), "playwright"))
-    monkeypatch.setattr(cfb, "new_stealth_context",
-                        lambda b: type("C", (), {"new_page": lambda self: _FakePage()})())
-    monkeypatch.setattr(cfb, "wait_past_cloudflare", lambda page, label="", max_wait=45: False)
+    browser = type("B", (_Closable,), {
+        "new_context": lambda self: type("C", (), {"new_page": lambda self: _FakePage()})()})()
+    monkeypatch.setattr(charlotte, "launch_plain_browser", lambda: (_Closable(), browser))
+    monkeypatch.setattr(charlotte, "wait_for_page", lambda page, **k: False)
     with pytest.raises(EgressBlocked, match="egress_block: Charlotte page 1 .*Nothing written"):
         CharlotteCountyScraper().scrape()
 

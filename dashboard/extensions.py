@@ -35,8 +35,13 @@ def get_mongo_client():
     return _mongo_client
 
 
-def get_db():
-    """Return the database handle (Motor async)."""
+def get_raw_db():
+    """Return the Motor database with no tenant proxy.
+
+    Startup work and the membership lookup use this only when they are about
+    to bind a tenant themselves, or when they must read the platform directory
+    before a request tenant exists. Request and job paths stay on ``get_db``.
+    """
     global _mongo_db
     client = get_mongo_client()
     if _mongo_db is None:
@@ -45,7 +50,27 @@ def get_db():
     return _mongo_db
 
 
-# Convenience collection accessors
+def get_db():
+    """Return the database handle (Motor async).
+
+    This is the tenancy chokepoint, together with ``get_collection``.
+    ``SAAS_MULTI_TENANT`` defaults off, and this function then returns the
+    raw Motor database so Shamrock's queries are unchanged.
+
+    When the flag is on, the handle is a proxy: global collections (the
+    allowlist in ``dashboard.tenancy.constants``) stay raw, and every other
+    collection is pinned to the current tenant or rejected.
+    """
+    raw = get_raw_db()
+    from dashboard.tenancy.flag import multi_tenant_enabled
+    if not multi_tenant_enabled():
+        return raw
+    from dashboard.tenancy.scope import TenantScopedDatabase
+    return TenantScopedDatabase(raw)
+
+
+# Convenience collection accessors. Always go through get_db() so the flag
+# lives in one place. Do not open a second Motor client for request paths.
 def get_collection(name: str):
     return get_db()[name]
 

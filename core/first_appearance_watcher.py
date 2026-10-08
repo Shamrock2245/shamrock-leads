@@ -60,6 +60,7 @@ from pymongo import MongoClient, UpdateOne
 from config.settings import settings
 from config.write_counties import fa_query_county_values, resolve_fa_watch_counties
 from core.models import ArrestRecord
+from core.staff_edits import protect_scraped_update, staff_provenance
 from scoring.lead_scorer import LeadScorer
 
 logger = logging.getLogger(__name__)
@@ -257,6 +258,22 @@ def _is_no_bond(record_doc: Dict[str, Any]) -> bool:
         return True
 
     return False
+
+
+def _checked_update(doc: Dict[str, Any], now: datetime, mode: str) -> Dict[str, Any]:
+    """Failure / no-change timestamp write.
+
+    Goes through ``protect_scraped_update`` so a legacy
+    ``MANUAL_CHARGE_BONDS`` marker is copied onto ``staff_edits`` before
+    ``last_checked_mode`` moves on.
+    """
+    fields = {
+        "last_checked": now.isoformat(),
+        "last_checked_mode": mode,
+        "updated_at": now,
+    }
+    fields, _ = protect_scraped_update(fields, doc, now=now)
+    return fields
 
 
 def _parse_date(date_str: str) -> Optional[datetime]:
@@ -642,11 +659,7 @@ class FirstAppearanceWatcher:
                 # Still update last_checked so we don't re-query this record next cycle
                 operations.append(UpdateOne(
                     {"county": doc["county"], "booking_number": doc["booking_number"]},
-                    {"$set": {
-                        "last_checked": now.isoformat(),
-                        "last_checked_mode": "UPDATE_SKIPPED_RATELIMIT",
-                        "updated_at": now,
-                    }},
+                    {"$set": _checked_update(doc, now, "UPDATE_SKIPPED_RATELIMIT")},
                 ))
                 stats["no_change"] += 1
                 continue
@@ -664,11 +677,7 @@ class FirstAppearanceWatcher:
                     # Still update last_checked so we don't hammer failed URLs
                     operations.append(UpdateOne(
                         {"county": doc["county"], "booking_number": doc["booking_number"]},
-                        {"$set": {
-                            "last_checked": now.isoformat(),
-                            "last_checked_mode": "UPDATE",
-                            "updated_at": now,
-                        }},
+                        {"$set": _checked_update(doc, now, "UPDATE")},
                     ))
                     continue
 
@@ -677,13 +686,31 @@ class FirstAppearanceWatcher:
                 stats["rechecked"] += 1
                 new_bond = updated._parse_bond_numeric()
 
+                # ── Staff-set bond wins: keep the source value as scraped_* only ──
+                if staff_provenance(doc).bond and new_bond > 0:
+                    self._scorer.score_and_update(updated)
+                    mongo_doc = updated.to_mongo_doc()
+                    mongo_doc["updated_at"] = now
+                    mongo_doc, _ = protect_scraped_update(mongo_doc, doc, record=updated, now=now)
+                    operations.append(UpdateOne(
+                        {"county": updated.County, "booking_number": updated.Booking_Number},
+                        {"$set": mongo_doc},
+                        upsert=True,
+                    ))
+                    stats["no_change"] += 1
+                    logger.info(
+                        f"FirstAppearanceWatcher: {county}/{booking_id} source bond "
+                        f"${new_bond:,.0f} kept as scraped_bond_amount (staff bond stays)"
+                    )
+
                 # ── Detect bond upgrade ──────────────────────────────────────
-                if new_bond > 0 and old_bond == 0:
+                elif new_bond > 0 and old_bond == 0:
                     # 🎉 Bond was set at first appearance!
                     self._scorer.score_and_update(updated)
                     mongo_doc = updated.to_mongo_doc()
                     mongo_doc["updated_at"]  = now
                     mongo_doc["bond_set_at"] = now  # Permanent timestamp
+                    mongo_doc, _ = protect_scraped_update(mongo_doc, doc, record=updated, now=now)
                     operations.append(UpdateOne(
                         {"county": updated.County, "booking_number": updated.Booking_Number},
                         {"$set": mongo_doc},
@@ -702,6 +729,7 @@ class FirstAppearanceWatcher:
                     self._scorer.score_and_update(updated)
                     mongo_doc = updated.to_mongo_doc()
                     mongo_doc["updated_at"] = now
+                    mongo_doc, _ = protect_scraped_update(mongo_doc, doc, record=updated, now=now)
                     operations.append(UpdateOne(
                         {"county": updated.County, "booking_number": updated.Booking_Number},
                         {"$set": mongo_doc},
@@ -714,14 +742,10 @@ class FirstAppearanceWatcher:
                     )
 
                 else:
-                    # No change — just update the check timestamp
+                    # No change — timestamp only, still through staff-edit protection
                     operations.append(UpdateOne(
                         {"county": doc["county"], "booking_number": doc["booking_number"]},
-                        {"$set": {
-                            "last_checked": now.isoformat(),
-                            "last_checked_mode": "UPDATE",
-                            "updated_at": now,
-                        }},
+                        {"$set": _checked_update(doc, now, "UPDATE")},
                     ))
                     stats["no_change"] += 1
 

@@ -190,8 +190,17 @@ def arrest_bond_value(arrest: Optional[Dict[str, Any]]) -> Any:
     flags), so it is treated as unknown: Write Bond shows blank, never $0.
     Legacy Charlotte/Manatee docs carry a scraped ``"0"`` for a bond the
     roster never published; that is unknown too.
+
+    Staff values come first: ``staff_edits.bond`` (written by every staff
+    bond edit, see ``core/staff_edits.py``) is returned as-is, so a
+    staff-entered $0 hydrates as a known $0 even after rescrapes.
     """
     arrest = arrest if isinstance(arrest, dict) else {}
+    from core.staff_edits import staff_bond_value
+
+    staff_amount = staff_bond_value(arrest)
+    if staff_amount is not None:
+        return staff_amount
     if arrest.get("Bond_Amount") not in (None, ""):
         return arrest.get("Bond_Amount")
     numeric = arrest.get("bond_amount")
