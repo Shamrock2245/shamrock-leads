@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (Lee ingest + watcher: no Chrome impersonation)
+
+### Changed
+- **Lee URL ingest and FirstAppearanceWatcher use plain direct HTTPS** (`dashboard/services/url_ingest_service.py`, `core/first_appearance_watcher.py`), same as the scraper in #147: `requests` with `trust_env=False`, an honest User-Agent (`ShamrockLeads/1.0`), normal DNS. The `lee_origin` curl_cffi `impersonate="chrome131"` + DNS-pin path and the httpx `verify=False` fallback are removed. The shared Lee cooldown is still honoured.
+- **`scrapers/lee_origin.py` deleted** (no callers left) with its tests (`tests/test_lee_origin.py`, not in the CI list).
+
+### Tests
+- `tests/test_lee_ingest_watcher_no_stealth.py` (in CI): no `lee_origin`/`curl_cffi`/stealth import or call in either module; the module is gone; URL ingest and the watcher's Lee charges re-fetch run with proxy env vars set and only reach a `trust_env=False` session with `proxies={}` and the honest UA.
+
 ## [Unreleased] — 2026-10-08 (Lee direct fetch, no stealth)
 
 ### Changed

@@ -80,7 +80,7 @@ Dashboard updates
 | Auth | None (public) |
 | Interval | 30 min |
 | Charges | Separate API call per booking (charge enrichment) |
-| Notes | Reference implementation. Highest volume SWFL county. **Origin pin** (`scrapers/lee_origin.py`): www A-record can point at a dead host; pin Host/SNI to working apex IP via `CURLOPT_RESOLVE`. Optional `LEE_ORIGIN_IP` env override. |
+| Notes | Reference implementation. Highest volume SWFL county. **Plain direct HTTPS only** (2026-10-08, #147 + this PR): `requests` with an honest UA, normal DNS, `trust_env=False`. No StealthSession, no curl_cffi impersonation, no origin DNS pin (`lee_origin` removed). |
 
 #### Collier County ✅
 | Property | Value |
