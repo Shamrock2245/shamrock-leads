@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (start bond packet key)
+
+### Fixed
+- **Start bond packet (`SAAS_MULTI_TENANT` still default off).** The `paperwork_packets` upsert is keyed on `packet_id` (`idx_pkt_packet_id`), with `created_at` only in `$setOnInsert`. A signed or voided packet that shares the bond case is left in place.
+
+## [Unreleased] — 2026-10-08 (start bond packet upsert)
+
+### Fixed
+- **Start bond packet (`SAAS_MULTI_TENANT` still default off).** The `paperwork_packets` write is one `update_one` upsert, so a second submission for the same packet updates that row instead of inserting another.
+
 ## [Unreleased] — 2026-10-08 (lead fan-out Motor retry)
 
 ### Fixed
@@ -12,6 +22,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 - **Lead fan-out outbox (`SAAS_MULTI_TENANT` still default off).** `lead_fanout_retry` on the dashboard cron retries due `lead_fanout_outbox` rows with backoff. After five attempts a row is `dead` and is not retried. Dead letters, and an open outbox that is too deep or too old, post to `SLACK_WEBHOOK_ALERTS`. The job does nothing when the flag is off.
+
+## [Unreleased] — 2026-10-07 (start bond packet review)
+
+### Fixed
+- **Start bond packet (`SAAS_MULTI_TENANT` still default off).** Send passes the bond's binding fields into `create_submission_for_packet`, uses the chosen surety's published template for the current agency, and refuses a power that does not match preflight. After submission it creates or updates `paperwork_packets` and reads signer URLs from `submitters[].sign_url`. The screen shows the sign and pay links. It still does not text, charge, or mark the power used.
 
 ## [Unreleased] — 2026-10-07 (lead subscription review)
 
@@ -55,7 +70,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Backfill.** `scripts/backfill_tenant_id.py` stamps every tenant-owned collection the app opens, including `family_relationships`, `persons`, `osint_scans`, `docket_events`, and `intake_fanout_outbox`. A connected run also stamps any other present collection that is not on the global or platform allowlist. `tests/test_tenant_scope.py` fails if application code uses a collection that is neither tenant-owned nor allowlisted.
 - **Startup.** POA seeding and core index creation run inside a Shamrock tenant context, so a flag-on boot does not call the tenant proxy with no context. Flag off still writes the same unstamped seed.
 
-## [Unreleased] — 2026-10-07 (multi-tenant foundation through lead subscriptions)
+## [Unreleased] — 2026-10-07 (multi-tenant foundation through start bond packet)
 
 ### Added
 - **`SAAS_MULTI_TENANT` flag, default off.** `get_collection()` is the tenant chokepoint: tenant-owned collections are scoped by `tenant_id`, and an explicit global allowlist (jail rosters and scraper health) stays shared. A request or job with no tenant fails closed only when the flag is on. Shamrock routes are unchanged while the flag is off. The offline backfill script and the tenant index specs are in the repo and are not applied to production. The 90-day audit TTL is unchanged.
@@ -63,6 +78,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Stripe test-mode billing** (`/platform/billing`). Checkout refuses a live key and refuses a price that is not configured. MRR is the sum of stored cents from signed `invoice.paid` events on active agencies. The second failed invoice suspends packet send and texting. Shamrock is not billed. No card number is stored.
 - **Surety checklist** (`/platform/sureties`). OSI and Palmetto stay on for Shamrock. Inactive carriers cannot be enabled. Private templates are labels only. When the flag is on, packet finalize refuses a surety the agency is not enabled for.
 - **Lead subscriptions** (`/platform/leads`). Fail-closed counties, including the Ohio pilot, are not sold. Shared is the default. An exclusive county rejects a second subscriber. New arrests fan out only when the flag is on, as booking pointers without the defendant name. Shamrock's unsaved list is the key Florida desk.
+- **Start bond packet** (`/bond-packet`), four steps. It hydrates the roster, suggests an available power, and runs the existing write-bond preflight and DocuSeal with email off. It does not text, charge a card, or mark the power used. `POST /api/write-bond` stays retired (HTTP 410).
 
 ## [Unreleased] — 2026-10-07 (Charlotte FL Revize hardening)
 

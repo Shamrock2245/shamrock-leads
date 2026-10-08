@@ -94,8 +94,17 @@ class MemoryCollection:
                 doc.update(update.get("$set", {}))
                 for key in update.get("$unset") or {}:
                     doc.pop(key, None)
-                return SimpleNamespace(modified_count=1, matched_count=1)
-        return SimpleNamespace(modified_count=0, matched_count=0)
+                return SimpleNamespace(modified_count=1, matched_count=1, upserted_id=None)
+        if kwargs.get("upsert"):
+            created = {}
+            for key, expected in (filt or {}).items():
+                if isinstance(key, str) and not key.startswith("$") and not isinstance(expected, dict):
+                    created[key] = expected
+            created.update(dict(update.get("$setOnInsert") or {}))
+            created.update(dict(update.get("$set") or {}))
+            self.docs.append(created)
+            return SimpleNamespace(modified_count=0, matched_count=0, upserted_id="1")
+        return SimpleNamespace(modified_count=0, matched_count=0, upserted_id=None)
 
     async def update_many(self, filt, update, *args, **kwargs):
         count = 0
