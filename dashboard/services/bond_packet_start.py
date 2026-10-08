@@ -137,6 +137,7 @@ async def start_indemnitor_bond_packet(
     poa_record: Any = _POA_UNSET,
     docuseal: Any = None,
     session: Optional[Mapping[str, Any]] = None,
+    staff_test_case: bool = False,
 ) -> Dict[str, Any]:
     """
     Resolve, gate, and submit one indemnitor bond packet.
@@ -185,7 +186,10 @@ async def start_indemnitor_bond_packet(
         raise BondPacketStartError(str(exc), code="docuseal_packet_binding_invalid") from exc
 
     if not skip_bond_binding:
-        poa_doc = await _lookup_assigned_poa(hydrated) if poa_record is _POA_UNSET else poa_record
+        if staff_test_case:
+            poa_doc = poa_record if poa_record is not _POA_UNSET else None
+        else:
+            poa_doc = await _lookup_assigned_poa(hydrated) if poa_record is _POA_UNSET else poa_record
         blocked = poa_assignment_block(poa_doc, hydrated)
         if blocked:
             raise BondPacketStartError(blocked[1], code=blocked[0])
@@ -214,10 +218,11 @@ async def start_indemnitor_bond_packet(
         bond_data=hydrated,
         indemnitors=parties,
         defendant=defendant,
-        send_email=send_email,
+        send_email=False if staff_test_case else send_email,
         include_defendant=include_defendant,
         completed_redirect_url=completed_redirect_url,
         skip_bond_binding=skip_bond_binding,
+        staff_test_case=staff_test_case,
     )
     return {
         "template_id": template_id,

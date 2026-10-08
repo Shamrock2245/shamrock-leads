@@ -918,22 +918,6 @@ async def docuseal_webhook(request: Request, background_tasks: BackgroundTasks):
     if not isinstance(payload, dict):
         payload = {}
 
-    # Audit first (immutable) — strip oversized raw blobs later if needed
-    try:
-        audit_events = get_collection("audit_events")
-        await audit_events.insert_one(
-            {
-                "source": "docuseal_webhook",
-                "event_type": event_type,
-                "payload": data,
-                "timestamp": now_iso,
-            }
-        )
-    except Exception as audit_exc:
-        logger.warning("[docuseal_webhook] audit insert failed: %s", audit_exc)
-
-    logger.info("[docuseal_webhook] event=%s", event_type)
-
     submission_id = (
         payload.get("submission_id")
         or payload.get("id")
@@ -967,6 +951,43 @@ async def docuseal_webhook(request: Request, background_tasks: BackgroundTasks):
         if not pkt and packet_id_hint:
             pkt = await packets_col.find_one({"packet_id": packet_id_hint})
         return pkt
+
+    # Audit first (immutable). A PKT-TEST- packet, or one stored with is_test,
+    # is tagged so reports can leave it out. Other events stay the same shape.
+    packet_for_audit = None
+    try:
+        packet_for_audit = await _find_packet()
+    except Exception:
+        packet_for_audit = None
+    try:
+        from dashboard.services.staff_test_case import (
+            audit_test_marker,
+            docuseal_event_is_test,
+        )
+
+        audit_events = get_collection("audit_events")
+        audit_doc = {
+            "source": "docuseal_webhook",
+            "event_type": event_type,
+            "payload": data,
+            "timestamp": now_iso,
+        }
+        if docuseal_event_is_test(packet_for_audit, str(packet_id_hint or "")):
+            tagged_id = str(packet_id_hint or "")
+            booking = ""
+            if isinstance(packet_for_audit, dict):
+                tagged_id = str(packet_for_audit.get("packet_id") or tagged_id)
+                booking = str(
+                    packet_for_audit.get("booking_number")
+                    or packet_for_audit.get("defendant_booking_number")
+                    or ""
+                )
+            audit_doc.update(audit_test_marker(tagged_id, booking_number=booking))
+        await audit_events.insert_one(audit_doc)
+    except Exception as audit_exc:
+        logger.warning("[docuseal_webhook] audit insert failed: %s", audit_exc)
+
+    logger.info("[docuseal_webhook] event=%s", event_type)
 
     # Lifecycle events that do not complete the packet
     lifecycle_status_map = {
