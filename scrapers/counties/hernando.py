@@ -225,7 +225,7 @@ class HernandoCountyScraper(BaseScraper):
     def _enrich_from_details(self, session, rows: List[ArrestRecord]) -> List[ArrestRecord]:
         """Detail page per booking; skip (never blank) on fetch or shape failure."""
         out: List[ArrestRecord] = []
-        fetch_failures = drift = unreadable = 0
+        fetch_failures = drift = unreadable = no_charges = 0
         grids_seen = 0
         for rec in rows:
             time.sleep(REQUEST_PAUSE_S)
@@ -250,6 +250,11 @@ class HernandoCountyScraper(BaseScraper):
             rec.Status = detail["status"]
             rec.Release_Date = detail["release_date"]
             rec.Detail_URL = url
+            if not detail["charges"] and not (rec.Charges or "").strip():
+                # Blank roster Offenses cell and no detail charge grid: writing
+                # this row would $set blank charges over stored ones. Skip it.
+                no_charges += 1
+                continue
             if detail["charges"]:
                 rec.Charges = " | ".join(
                     " - ".join(x for x in (c["statute"], c["description"]) if x) for c in detail["charges"]
@@ -277,8 +282,8 @@ class HernandoCountyScraper(BaseScraper):
         if out and grids_seen == 0:
             raise HernandoDetailError("Hernando: no detail page in the run has a charge grid (markup drift)")
         logger.info(
-            "Hernando: %d records (%d fetch failures, %d drifted, %d unreadable custody skipped)",
-            len(out), fetch_failures, drift, unreadable,
+            "Hernando: %d records (%d fetch failures, %d drifted, %d unreadable custody, %d without charges skipped)",
+            len(out), fetch_failures, drift, unreadable, no_charges,
         )
         return out
 
@@ -375,7 +380,7 @@ class HernandoCountyScraper(BaseScraper):
                 Facility=FACILITY,
                 Race=race,
                 Sex=sex,
-                Charges=cell3,
+                Charges=cell3,  # may be blank; _enrich_from_details skips a row with no charges anywhere
                 Bond_Amount="",  # the results grid publishes no bond: unknown, never $0
                 Detail_URL=SEARCH_URL,
                 LastCheckedMode="INITIAL",

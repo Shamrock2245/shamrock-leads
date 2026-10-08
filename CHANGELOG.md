@@ -11,6 +11,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Charges, court case numbers and per-charge bonds now come from the detail page (`extra.charge_details`).
   - The total is set only when every charge publishes a positive amount. `$0.00` is the jail's "no bond set" placeholder (live: 29 of 30 all-$0.00 bookings were still in custody, on VOP and hold charges), so it is unknown. A `$0.00` charge marked ROR is a real $0.
   - A detail fetch failure or a drifted detail page skips that booking, so nothing blank is written over stored data. The run raises when every detail fetch fails, when no detail page is usable, or when no page in the run has a charge grid. Detail requests are paced (0.4 s) and use plain requests.
+  - A row whose roster Offenses cell is blank and whose detail page has no charge grid is skipped, instead of `$set`ting blank charges over stored ones.
 - Tests: `tests/test_fl_hernando_detail_status.py`.
 
 ## [Unreleased] — 2026-10-08 (Hernando unknown bond)

@@ -144,3 +144,38 @@ def test_run_raises_when_every_detail_fails_or_drifts_or_has_no_grid():
         s._enrich_from_details(
             _Session({b: _Resp(_detail(cases=[], booking=b)) for b in bks}), [_row(b) for b in bks]
         )
+
+
+def test_blank_offenses_row_is_skipped_unless_the_detail_has_charges():
+    """A blank roster Offenses cell must not $set blank charges over stored ones."""
+    blank = _row("HCSO26JBN000001")
+    blank.Charges = ""
+    blank_with_detail = _row("HCSO26JBN000002")
+    blank_with_detail.Charges = ""
+    roster_only = _row("HCSO26JBN000003")  # roster offenses, no detail grid
+    pages = {
+        "HCSO26JBN000001": _Resp(_detail(cases=[], booking="HCSO26JBN000001")),
+        "HCSO26JBN000002": _Resp(_detail(booking="HCSO26JBN000002")),
+        "HCSO26JBN000003": _Resp(_detail(cases=[], booking="HCSO26JBN000003")),
+    }
+    out = HernandoCountyScraper()._enrich_from_details(_Session(pages), [blank, blank_with_detail, roster_only])
+    by = {r.Booking_Number: r for r in out}
+    assert set(by) == {"HCSO26JBN000002", "HCSO26JBN000003"}
+    assert by["HCSO26JBN000002"].Charges == "843.02 - RESIST OFFICER"
+    assert by["HCSO26JBN000003"].Charges == "ROSTER"
+    assert by["HCSO26JBN000003"].Bond_Amount == ""  # no charge grid: unknown, never $0
+
+
+def test_roster_parse_keeps_blank_offenses_for_the_detail_guard():
+    html = (
+        "<html><table><tr><th></th><th>Inmate Name Race/Sex/DOB Booking Number</th><th>Booking Date</th>"
+        "<th>Offenses</th><th>Image</th></tr>"
+        + "".join(
+            f"<tr><td></td><td>DOE, JANE Q<br/>W/F- 08/09/1990<br/>HCSO26JBN00{i:04d}</td><td>10/06/2026</td>"
+            f"<td>{'' if i == 1 else 'BATTERY'}</td><td></td></tr>"
+            for i in range(1, 6)
+        )
+        + "</table></html>"
+    )
+    recs = HernandoCountyScraper()._parse(html)
+    assert {r.Booking_Number: r.Charges for r in recs}["HCSO26JBN000001"] == ""
