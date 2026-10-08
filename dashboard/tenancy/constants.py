@@ -57,9 +57,10 @@ PLATFORM_COLLECTIONS = frozenset(
     }
 )
 
-# Collection names referenced by application code (tests excluded), verified
-# 2026-10-07 by scanning get_collection()/db[] literals. Live Atlas may contain
-# more; those are still tenant-scoped by default because they are not allowlisted.
+# Collection names referenced by application code (tests and one-off scripts
+# excluded). dashboard/tenancy/inventory.py is the scan the tests enforce.
+# Live Atlas may contain more; those are still tenant-scoped by default because
+# they are not allowlisted, and the connected backfill stamps them too.
 KNOWN_APP_COLLECTIONS = frozenset(
     {
         "accounting_imports",
@@ -96,6 +97,7 @@ KNOWN_APP_COLLECTIONS = frozenset(
         "defendant_notes",
         "defendants",
         "discharge_queue",
+        "docket_events",
         "dnc_list",
         "document_deliveries",
         "domain_searches",
@@ -103,6 +105,7 @@ KNOWN_APP_COLLECTIONS = frozenset(
         "enrichment_data",
         "error_log",
         "family_graph",
+        "family_relationships",
         "family_trees",
         "financial_ledger",
         "forfeiture_remedies",
@@ -119,6 +122,7 @@ KNOWN_APP_COLLECTIONS = frozenset(
         "imessage_outreach",
         "indemnitors",
         "ingestion_log",
+        "intake_fanout_outbox",
         "intake_queue",
         "intake_recovery_log",
         "intakes",
@@ -131,6 +135,7 @@ KNOWN_APP_COLLECTIONS = frozenset(
         "missed_payment_alerts",
         "notifications",
         "osint_profiles",
+        "osint_scans",
         "osint_trape_sessions",
         "outbound_messages",
         "outreach_config",
@@ -144,6 +149,7 @@ KNOWN_APP_COLLECTIONS = frozenset(
         "payment_dispatches",
         "payment_plans",
         "payments",
+        "persons",
         "phone_validations",
         "poa_inventory",
         "portal_pins",
@@ -162,12 +168,18 @@ KNOWN_APP_COLLECTIONS = frozenset(
         "scraper_triggers",
         "sms_consent_ledger",
         "social_accounts",
+        "social_budget",
         "social_queue",
         "source_performance",
         "sub_agents",
+        "surety_template_files",
+        "surety_template_versions",
+        "swipesimple_invoice_claims",
+        "swipesimple_session_health",
         "system_config",
         "tasks",
         "transactions",
+        "wix_sync_log",
         "zip_lookups",
     }
 )

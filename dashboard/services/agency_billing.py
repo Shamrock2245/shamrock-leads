@@ -2,7 +2,8 @@
 
 Premium collection (SwipeSimple) is a different ledger and is not touched here.
 Prices are read from environment price ids. This module does not invent amounts.
-MRR is the sum of ``mrr_cents`` values stored from ``invoice.paid`` webhooks.
+MRR is the sum of recurring cents stored from ``invoice.paid`` on the agency's
+one subscription. Add-ons are items on that subscription, not a second customer.
 """
 
 from __future__ import annotations
@@ -13,11 +14,12 @@ import json
 import os
 import urllib.parse
 import urllib.request
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
 
 from dashboard.tenancy.constants import SHAMROCK_TENANT_ID
-from dashboard.tenancy.context import bind_platform_job, current_tenant_id
+from dashboard.tenancy.context import bind_job_tenant, bind_platform_job, current_tenant_id
 from dashboard.tenancy.flag import multi_tenant_enabled
 
 PLAN_CATALOG = (
@@ -28,9 +30,18 @@ PLAN_CATALOG = (
     {"code": "usage", "kind": "metered", "label": "Usage", "env_price": "STRIPE_PRICE_USAGE"},
 )
 _PLAN_BY_CODE = {row["code"]: row for row in PLAN_CATALOG}
-_MRR_REASONS = frozenset({"subscription_cycle", "subscription_create", "subscription_update"})
+_FULL_PERIOD_MRR = frozenset({"subscription_cycle", "subscription_create"})
 _ACTIVE_MRR = frozenset({"active"})
+_BLOCKED_ITEM_STATUS = frozenset({"past_due", "suspended", "canceled"})
 _SIGNATURE_TOLERANCE_SECONDS = 300
+_AUDIT_FIELDS = (
+    "status",
+    "mrr_cents",
+    "plan_code",
+    "failure_count",
+    "customer_id",
+    "subscription_id",
+)
 
 
 class BillingError(Exception):
@@ -111,6 +122,7 @@ def _blank_billing() -> dict[str, Any]:
         "failure_count": 0,
         "invoices": [],
         "event_ids": [],
+        "items": [],
         "comped_by": "",
     }
 
@@ -122,6 +134,7 @@ def _billing_of(doc: dict | None) -> dict[str, Any]:
         current.update({key: stored.get(key, current[key]) for key in current})
     current["invoices"] = list(current.get("invoices") or [])
     current["event_ids"] = list(current.get("event_ids") or [])
+    current["items"] = [dict(row) for row in (current.get("items") or []) if isinstance(row, dict)]
     try:
         current["mrr_cents"] = int(current.get("mrr_cents") or 0)
     except (TypeError, ValueError):
@@ -209,8 +222,70 @@ def _mark_event(billing: dict, event_id: str) -> bool:
     return False
 
 
+def livemode_explicitly_enabled() -> bool:
+    """Live Stripe events stay rejected unless an operator sets this on purpose."""
+    return (os.getenv("STRIPE_ALLOW_LIVEMODE") or "").strip() == "1"
+
+
+def _identity_conflict(billing: dict, *, customer: Any = "", subscription: Any = "") -> bool:
+    """True when the event names a different Customer or subscription than the one we store."""
+    incoming_customer = str(customer or "")
+    incoming_subscription = str(subscription or "")
+    stored_customer = str(billing.get("customer_id") or "")
+    stored_subscription = str(billing.get("subscription_id") or "")
+    if stored_customer and incoming_customer and stored_customer != incoming_customer:
+        return True
+    if stored_subscription and incoming_subscription and stored_subscription != incoming_subscription:
+        return True
+    return False
+
+
+def _remember_identity(billing: dict, *, customer: Any = "", subscription: Any = "") -> None:
+    incoming_customer = str(customer or "")
+    incoming_subscription = str(subscription or "")
+    if incoming_customer and not billing.get("customer_id"):
+        billing["customer_id"] = incoming_customer
+    elif incoming_customer and billing.get("customer_id") == incoming_customer:
+        billing["customer_id"] = incoming_customer
+    if incoming_subscription and not billing.get("subscription_id"):
+        billing["subscription_id"] = incoming_subscription
+    elif incoming_subscription and billing.get("subscription_id") == incoming_subscription:
+        billing["subscription_id"] = incoming_subscription
+
+
+def _subscription_mrr_cents(invoice: dict) -> int | None:
+    """Sum full-period recurring lines. Prorations and one-time lines are not MRR."""
+    lines = invoice.get("lines") or {}
+    data = lines.get("data") if isinstance(lines, dict) else None
+    if not isinstance(data, list) or not data:
+        return None
+    total = 0
+    saw = False
+    for line in data:
+        if not isinstance(line, dict) or line.get("proration") is True:
+            continue
+        price = line.get("price") if isinstance(line.get("price"), dict) else {}
+        recurring = bool(price.get("recurring")) or line.get("type") == "subscription"
+        if not recurring:
+            continue
+        saw = True
+        try:
+            total += int(line.get("amount") or 0)
+        except (TypeError, ValueError):
+            continue
+    return total if saw else None
+
+
+def _audit_slice(billing: dict) -> dict[str, Any]:
+    return {key: billing.get(key) for key in _AUDIT_FIELDS}
+
+
 def reduce_billing_event(doc: dict, event: dict, *, suspend_after: int | None = None) -> tuple[dict, str]:
-    """Apply one verified Stripe event. Returns the billing dict and an outcome token."""
+    """Apply one verified Stripe event. Returns the billing dict and an outcome token.
+
+    ``noted`` means the event was recorded and did not change access or MRR
+    (a different subscription must not cancel or reactivate this agency).
+    """
     if doc.get("tenant_id") == SHAMROCK_TENANT_ID:
         return _billing_of(doc), "ignored"
     billing = _billing_of(doc)
@@ -225,9 +300,10 @@ def reduce_billing_event(doc: dict, event: dict, *, suspend_after: int | None = 
         return billing, "ignored"
     threshold = suspend_after if suspend_after is not None else suspend_after_failures()
     if kind == "checkout.session.completed":
+        if _identity_conflict(billing, customer=obj.get("customer"), subscription=obj.get("subscription")):
+            return billing, "noted"
         billing["provider"] = "stripe_test"
-        billing["customer_id"] = str(obj.get("customer") or billing["customer_id"] or "")
-        billing["subscription_id"] = str(obj.get("subscription") or billing["subscription_id"] or "")
+        _remember_identity(billing, customer=obj.get("customer"), subscription=obj.get("subscription"))
         meta = obj.get("metadata") or {}
         plan_code = str(meta.get("plan_code") or billing["plan_code"] or "")
         if plan_code in _PLAN_BY_CODE:
@@ -238,32 +314,49 @@ def reduce_billing_event(doc: dict, event: dict, *, suspend_after: int | None = 
                 billing["status"] = "trialing" if meta.get("trial") == "1" else "unbilled"
         return billing, "applied"
     if kind == "invoice.paid":
+        if _identity_conflict(billing, customer=obj.get("customer"), subscription=obj.get("subscription")):
+            return billing, "noted"
         _remember_invoice(billing, obj)
         billing["provider"] = "stripe_test"
-        billing["customer_id"] = str(obj.get("customer") or billing["customer_id"] or "")
-        billing["subscription_id"] = str(obj.get("subscription") or billing["subscription_id"] or "")
+        _remember_identity(billing, customer=obj.get("customer"), subscription=obj.get("subscription"))
         billing["failure_count"] = 0
         billing["status"] = "active"
-        if obj.get("subscription") and str(obj.get("billing_reason") or "") in _MRR_REASONS:
+        mrr = _subscription_mrr_cents(obj)
+        if mrr is None and obj.get("subscription") and str(obj.get("billing_reason") or "") in _FULL_PERIOD_MRR:
             try:
-                billing["mrr_cents"] = int(obj.get("amount_paid") or 0)
+                mrr = int(obj.get("amount_paid") or 0)
             except (TypeError, ValueError):
-                billing["mrr_cents"] = billing["mrr_cents"]
+                mrr = None
+        if mrr is not None:
+            billing["mrr_cents"] = mrr
         billing["currency"] = str(obj.get("currency") or billing["currency"] or "usd")
         return billing, "applied"
     if kind == "invoice.payment_failed":
+        if _identity_conflict(billing, customer=obj.get("customer"), subscription=obj.get("subscription")):
+            return billing, "noted"
         _remember_invoice(billing, obj)
+        _remember_identity(billing, customer=obj.get("customer"), subscription=obj.get("subscription"))
         billing["failure_count"] = int(billing["failure_count"]) + 1
         billing["status"] = "suspended" if billing["failure_count"] >= threshold else "past_due"
         return billing, "applied"
     if kind == "customer.subscription.deleted":
+        deleted = str(obj.get("id") or "")
+        if _identity_conflict(billing, customer=obj.get("customer"), subscription=deleted):
+            return billing, "noted"
+        stored = str(billing.get("subscription_id") or "")
+        if stored and deleted and stored != deleted:
+            return billing, "noted"
         billing["status"] = "canceled"
         billing["mrr_cents"] = 0
-        billing["subscription_id"] = str(obj.get("id") or billing["subscription_id"] or "")
+        billing["items"] = []
+        if deleted:
+            billing["subscription_id"] = deleted
         return billing, "applied"
     if kind == "customer.subscription.updated":
+        if _identity_conflict(billing, customer=obj.get("customer"), subscription=obj.get("id")):
+            return billing, "noted"
         stripe_status = str(obj.get("status") or "")
-        billing["subscription_id"] = str(obj.get("id") or billing["subscription_id"] or "")
+        _remember_identity(billing, customer=obj.get("customer"), subscription=obj.get("id"))
         if stripe_status == "trialing":
             billing["status"] = "trialing"
             billing["trial_end"] = str(obj.get("trial_end") or "")
@@ -274,21 +367,12 @@ def reduce_billing_event(doc: dict, event: dict, *, suspend_after: int | None = 
         elif stripe_status == "canceled":
             billing["status"] = "canceled"
             billing["mrr_cents"] = 0
+            billing["items"] = []
         return billing, "applied"
     return billing, "ignored"
 
 
-def checkout_form(
-    *,
-    tenant_id: str,
-    plan_code: str,
-    quantity: int,
-    trial: bool,
-    success_url: str,
-    cancel_url: str,
-) -> dict[str, str]:
-    if tenant_id == SHAMROCK_TENANT_ID:
-        raise BillingError("internal_not_billed")
+def _validated_price(plan_code: str, quantity: int) -> tuple[dict, str, int]:
     plan = _PLAN_BY_CODE.get(plan_code)
     if plan is None:
         raise BillingError("plan_invalid")
@@ -304,6 +388,22 @@ def checkout_form(
             raise BillingError("quantity_invalid")
         if qty < 1 or qty > 200:
             raise BillingError("quantity_invalid")
+    return plan, price_id, qty
+
+
+def checkout_form(
+    *,
+    tenant_id: str,
+    plan_code: str,
+    quantity: int,
+    trial: bool,
+    success_url: str,
+    cancel_url: str,
+    customer_id: str = "",
+) -> dict[str, str]:
+    if tenant_id == SHAMROCK_TENANT_ID:
+        raise BillingError("internal_not_billed")
+    plan, price_id, qty = _validated_price(plan_code, quantity)
     mode = "payment" if plan["kind"] == "one_time" else "subscription"
     form = {
         "mode": mode,
@@ -315,6 +415,12 @@ def checkout_form(
         "metadata[tenant_id]": tenant_id,
         "metadata[plan_code]": plan_code,
     }
+    stored_customer = str(customer_id or "").strip()
+    if stored_customer:
+        form["customer"] = stored_customer
+    if mode == "subscription":
+        form["subscription_data[metadata][tenant_id]"] = tenant_id
+        form["subscription_data[metadata][plan_code]"] = plan_code
     if trial:
         days = trial_days()
         if days <= 0:
@@ -322,17 +428,50 @@ def checkout_form(
         if mode != "subscription":
             raise BillingError("trial_not_allowed")
         form["subscription_data[trial_period_days]"] = str(days)
+        form["subscription_data[metadata][trial]"] = "1"
         form["metadata[trial]"] = "1"
     return form
 
 
-def post_checkout_session(form: dict[str, str], api_key: str) -> dict:
-    """POST a Checkout Session. Callers must have already rejected live keys."""
+def subscription_item_form(
+    *,
+    tenant_id: str,
+    plan_code: str,
+    quantity: int,
+    subscription_id: str,
+    subscription_item_id: str = "",
+) -> dict[str, str]:
+    """Add or update one item on the agency's existing subscription."""
+    if tenant_id == SHAMROCK_TENANT_ID:
+        raise BillingError("internal_not_billed")
+    plan, price_id, qty = _validated_price(plan_code, quantity)
+    if plan["kind"] == "one_time":
+        raise BillingError("plan_invalid")
+    sub = str(subscription_id or "").strip()
+    if not sub:
+        raise BillingError("subscription_required")
+    form = {
+        "price": price_id,
+        "quantity": str(qty),
+        "metadata[tenant_id]": tenant_id,
+        "metadata[plan_code]": plan_code,
+        "proration_behavior": "create_prorations",
+    }
+    item_id = str(subscription_item_id or "").strip()
+    if item_id:
+        form["subscription_item_id"] = item_id
+    else:
+        form["subscription"] = sub
+    return form
+
+
+def _post_stripe(url: str, form: dict[str, str], api_key: str) -> dict:
+    """POST one Stripe test-mode form. Callers must have already rejected live keys."""
     if not str(api_key).startswith("sk_test_"):
         raise BillingError("stripe_test_key_required")
     data = urllib.parse.urlencode(form).encode()
     request = urllib.request.Request(
-        "https://api.stripe.com/v1/checkout/sessions",
+        url,
         data=data,
         headers={"Authorization": f"Bearer {api_key}"},
         method="POST",
@@ -342,6 +481,22 @@ def post_checkout_session(form: dict[str, str], api_key: str) -> dict:
     if not isinstance(body, dict):
         raise BillingError("checkout_rejected")
     return body
+
+
+def post_checkout_session(form: dict[str, str], api_key: str) -> dict:
+    """POST a Checkout Session. Callers must have already rejected live keys."""
+    return _post_stripe("https://api.stripe.com/v1/checkout/sessions", form, api_key)
+
+
+def post_subscription_item(form: dict[str, str], api_key: str) -> dict:
+    """Add or update one subscription item. Does not open a second Checkout subscription."""
+    item_id = str(form.get("subscription_item_id") or "").strip()
+    body = {key: value for key, value in form.items() if key != "subscription_item_id"}
+    if item_id:
+        url = f"https://api.stripe.com/v1/subscription_items/{urllib.parse.quote(item_id, safe='')}"
+    else:
+        url = "https://api.stripe.com/v1/subscription_items"
+    return _post_stripe(url, body, api_key)
 
 
 def _accept_checkout_url(url: str) -> str:
@@ -357,6 +512,81 @@ async def _tenants():
     return get_collection("tenants")
 
 
+def _upsert_item(
+    billing: dict,
+    *,
+    plan_code: str,
+    price_id: str,
+    quantity: int,
+    subscription_item_id: str,
+) -> None:
+    items = [dict(row) for row in billing.get("items") or [] if isinstance(row, dict)]
+    replaced = False
+    for row in items:
+        if row.get("plan_code") == plan_code or (
+            price_id and row.get("price_id") == price_id
+        ):
+            row["plan_code"] = plan_code
+            row["price_id"] = price_id
+            row["quantity"] = quantity
+            row["subscription_item_id"] = subscription_item_id
+            replaced = True
+            break
+    if not replaced:
+        items.append(
+            {
+                "plan_code": plan_code,
+                "price_id": price_id,
+                "quantity": quantity,
+                "subscription_item_id": subscription_item_id,
+            }
+        )
+    billing["items"] = items
+
+
+async def _load_agency(tenant_id: str) -> dict | None:
+    with bind_platform_job("agency_billing"):
+        col = await _tenants()
+        return await col.find_one({"tenant_id": tenant_id})
+
+
+async def _save_billing(tenant_id: str, billing: dict) -> None:
+    with bind_platform_job("agency_billing"):
+        col = await _tenants()
+        await col.update_one(
+            {"tenant_id": tenant_id},
+            {"$set": {"billing": billing, "updated_at": _now()}},
+        )
+
+
+async def _write_billing_audit(
+    *,
+    tenant_id: str,
+    actor: str,
+    reason: str,
+    action: str,
+    old_state: dict,
+    new_state: dict,
+) -> None:
+    """Immutable billing transition. Written on the agency, not the platform directory."""
+    from dashboard.extensions import get_collection
+
+    event = {
+        "event_id": str(uuid.uuid4()),
+        "entity_type": "tenant_billing",
+        "entity_id": tenant_id,
+        "action": action,
+        "actor": actor,
+        "reason": reason,
+        "old_state": old_state,
+        "new_state": new_state,
+        "timestamp": _now(),
+    }
+    with bind_job_tenant(tenant_id, job_name="agency_billing"):
+        col = get_collection("audit_events")
+        await col.insert_one(event)
+
+
 async def start_checkout(
     tenant_id: str,
     plan_code: str,
@@ -366,9 +596,63 @@ async def start_checkout(
     success_url: str,
     cancel_url: str,
     poster: Callable[[dict[str, str], str], dict] | None = None,
+    item_poster: Callable[[dict[str, str], str], dict] | None = None,
 ) -> dict[str, str]:
     if not multi_tenant_enabled():
         raise BillingDisabled()
+    found = None
+    if tenant_id != SHAMROCK_TENANT_ID:
+        found = await _load_agency(tenant_id)
+        if not found:
+            raise BillingError("not_found")
+    billing = _billing_of(found)
+    plan = _PLAN_BY_CODE.get(plan_code)
+    recurring = bool(plan and plan["kind"] != "one_time")
+    subscription_id = str(billing.get("subscription_id") or "")
+    if recurring and subscription_id and tenant_id != SHAMROCK_TENANT_ID:
+        if billing.get("status") in _BLOCKED_ITEM_STATUS:
+            raise BillingError("billing_not_current")
+        existing = next(
+            (row for row in billing["items"] if row.get("plan_code") == plan_code),
+            None,
+        )
+        form = subscription_item_form(
+            tenant_id=tenant_id,
+            plan_code=plan_code,
+            quantity=quantity,
+            subscription_id=subscription_id,
+            subscription_item_id=str((existing or {}).get("subscription_item_id") or ""),
+        )
+        key = _api_key()
+        send_item = item_poster or post_subscription_item
+        created = send_item(form, key)
+        item_id = str(created.get("id") or "")
+        if not item_id.startswith("si_"):
+            raise BillingError("checkout_rejected")
+        _upsert_item(
+            billing,
+            plan_code=plan_code,
+            price_id=form["price"],
+            quantity=int(form["quantity"]),
+            subscription_item_id=item_id,
+        )
+        before = _audit_slice(_billing_of(found))
+        await _save_billing(tenant_id, billing)
+        await _write_billing_audit(
+            tenant_id=tenant_id,
+            actor="stripe_checkout",
+            reason="subscription_item",
+            action="billing_subscription_item",
+            old_state=before,
+            new_state={**_audit_slice(billing), "items": list(billing.get("items") or [])},
+        )
+        return {
+            "mode": "subscription_item",
+            "checkout_url": "",
+            "session_id": "",
+            "subscription_item_id": item_id,
+            "plan_code": plan_code,
+        }
     form = checkout_form(
         tenant_id=tenant_id,
         plan_code=plan_code,
@@ -376,6 +660,7 @@ async def start_checkout(
         trial=trial,
         success_url=success_url,
         cancel_url=cancel_url,
+        customer_id=str(billing.get("customer_id") or ""),
     )
     key = _api_key()
     send = poster or post_checkout_session
@@ -384,7 +669,12 @@ async def start_checkout(
     session_id = str(created.get("id") or "")
     if not session_id.startswith("cs_test_"):
         raise BillingError("checkout_rejected")
-    return {"checkout_url": url, "session_id": session_id, "plan_code": plan_code}
+    return {
+        "mode": "checkout",
+        "checkout_url": url,
+        "session_id": session_id,
+        "plan_code": plan_code,
+    }
 
 
 async def comp_agency(tenant_id: str, *, actor: str, plan_code: str = "monthly") -> dict:
@@ -392,23 +682,30 @@ async def comp_agency(tenant_id: str, *, actor: str, plan_code: str = "monthly")
         raise BillingDisabled()
     if tenant_id == SHAMROCK_TENANT_ID or plan_code not in _PLAN_BY_CODE:
         raise BillingError("plan_invalid")
-    with bind_platform_job("agency_billing"):
-        col = await _tenants()
-        found = await col.find_one({"tenant_id": tenant_id})
-        if not found:
-            raise BillingError("not_found")
-        billing = _blank_billing()
-        billing.update(
-            {
-                "provider": "comp",
-                "plan_code": plan_code,
-                "status": "comped",
-                "mrr_cents": 0,
-                "comped_by": actor,
-            }
-        )
-        await col.update_one({"tenant_id": tenant_id}, {"$set": {"billing": billing, "updated_at": _now()}})
-        found["billing"] = billing
+    found = await _load_agency(tenant_id)
+    if not found:
+        raise BillingError("not_found")
+    before = _audit_slice(_billing_of(found))
+    billing = _blank_billing()
+    billing.update(
+        {
+            "provider": "comp",
+            "plan_code": plan_code,
+            "status": "comped",
+            "mrr_cents": 0,
+            "comped_by": actor,
+        }
+    )
+    await _save_billing(tenant_id, billing)
+    found["billing"] = billing
+    await _write_billing_audit(
+        tenant_id=tenant_id,
+        actor=actor,
+        reason="comp",
+        action="billing_comped",
+        old_state=before,
+        new_state=_audit_slice(billing),
+    )
     return public_billing_view(found)
 
 
@@ -491,6 +788,8 @@ async def apply_webhook_event(event: dict) -> dict[str, str]:
     key = (os.getenv("STRIPE_SECRET_KEY") or "").strip()
     if key.startswith("sk_live_") or key.startswith("rk_live_"):
         raise BillingError("live_key_rejected")
+    if event.get("livemode") is True and not livemode_explicitly_enabled():
+        raise BillingError("livemode_rejected")
     tenant_id = event_tenant_id(event)
     if not tenant_id or tenant_id == SHAMROCK_TENANT_ID:
         return {"status": "ignored"}
@@ -503,12 +802,24 @@ async def apply_webhook_event(event: dict) -> dict[str, str]:
                 found = await col.find_one({"billing.customer_id": customer, "tenant_id": tenant_id})
         if not found:
             return {"status": "ignored"}
+        before = _audit_slice(_billing_of(found))
         billing, outcome = reduce_billing_event(found, event)
-        if outcome == "applied":
+        if outcome in {"applied", "noted"}:
             await col.update_one(
                 {"tenant_id": tenant_id},
                 {"$set": {"billing": billing, "updated_at": _now()}},
             )
+    if outcome == "applied":
+        kind = str(event.get("type") or "billing")
+        event_id = str(event.get("id") or "")
+        await _write_billing_audit(
+            tenant_id=tenant_id,
+            actor="stripe_webhook",
+            reason=f"{kind}:{event_id}",
+            action="billing_" + kind.replace(".", "_"),
+            old_state=before,
+            new_state=_audit_slice(billing),
+        )
     return {"status": outcome, "billing_status": billing.get("status", "")}
 
 
