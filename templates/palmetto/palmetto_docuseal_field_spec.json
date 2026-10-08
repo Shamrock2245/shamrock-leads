@@ -500,9 +500,9 @@
       "role": "bondsman",
       "page": 1,
       "x": 0.764706,
-      "y": 0.002534,
+      "y": 0.0,
       "w": 0.22549,
-      "h": 0.015206,
+      "h": 0.016308,
       "data_source": "defendant_name",
       "required": true
     },
@@ -548,11 +548,14 @@
       "role": "bondsman",
       "page": 1,
       "x": 0.761438,
-      "y": 0.038014,
+      "y": 0.034466,
       "w": 0.228758,
-      "h": 0.015206,
+      "h": 0.01774,
       "data_source": "poa_number",
-      "required": true
+      "required": true,
+      "preferences": {
+        "valign": "bottom"
+      }
     },
     {
       "document": "defendant-application",
@@ -561,11 +564,14 @@
       "role": "bondsman",
       "page": 1,
       "x": 0.748366,
-      "y": 0.055754,
+      "y": 0.05322,
       "w": 0.24183,
-      "h": 0.015206,
+      "h": 0.015079,
       "data_source": "case_number",
-      "required": true
+      "required": true,
+      "preferences": {
+        "valign": "bottom"
+      }
     },
     {
       "document": "defendant-application",
@@ -708,7 +714,10 @@
       "w": 0.127451,
       "h": 0.00887,
       "data_source": "poa_number",
-      "required": false
+      "required": false,
+      "preferences": {
+        "valign": "bottom"
+      }
     },
     {
       "document": "defendant-application",
