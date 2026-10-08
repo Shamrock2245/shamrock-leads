@@ -248,3 +248,153 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `intake_fanout`: after the Mongo save, a non-blocking, retried copy to the GAS "Intake Ledger" sheet and Slack (`intake_fanout_outbox`, cron `intake_fanout_retry`).
 - `surety_registry` (OSI + Palmetto active; Lexington/Roche/Universal/Bankers inactive) and `GET /api/paperwork/sureties`; greyed-out "coming soon" pills in Write Bond.
 - `payment_links` (one place for pay-by-card links) and `GET /api/paperwork/payment-links`.
+- Kiosk: `/kiosk`, `POST /api/portal/kiosk-id-confirm`, idle wipe, `/done?kiosk=1` reset.
+
+### Fixed
+- Co-indemnitor kiosk ID scan overwrote the primary indemnitor's CRM record.
+- Unknown sureties silently became OSI in PDF/DocuSeal/Drive paths (now fail closed).
+- Applicant data was kept in the browser's localStorage on the shared tablet.
+
+## [Unreleased] — 2026-09-25 (TnCIS fail closed)
+
+### Changed
+- **TnCIS (TN): Obscura fallback OFF, fail closed (owner decision).** The Cloudflare-protected statewide portal has no proven public contract. The curl_cffi + residential/mobile proxy, Patchright stealth, and Obscura fallback chain was removed from `tennessee_tncis_v2_ape.py`. The scope is now `SOURCE_CONTRACT_VALIDATED = False` and `fail_closed` in `SCRAPER_SOURCE_STATES`, is added to `OBSCURA_HARD_DENY_LABELS`, and has a `hold` row in the live emitter evidence. A Cloudflare or anti-bot answer raises `AntiBotBlocked` (`anti_bot`, never retried). Rows without a source identifier are never emitted. The matrix was regenerated (TN unverified → fail_closed for the TnCIS scope). Tests: `tests/test_tncis_fail_closed.py`.
+
+## [Unreleased] — 2026-09-25 (Scraper self-heal / fail-loud)
+
+### Added
+- **BaseScraper resilience** (`scrapers/scraper_resilience.py`): transient `network` retry with 2s/4s/8s backoff (never 429, anti-bot, or an active per-county cooldown; Lee opts out), fixed error classes (`network`, `anti_bot`, `url_changed`, `parse_drift`, `unknown`), and immediate `#scraper-errors` schema-drift alerts.
+- **Auto-disable** after 5 consecutive failures, stored on `scraper_status`. Health shows ⛔ Auto-disabled. Re-enable happens through a successful canary (≥1 record), the Health button / `POST /api/scraper/enable`, or `scripts/scraper_reenable.py`. KEY FL counties alert but are never skipped.
+- **Obscura routing policy:** `OBSCURA_ROUTE_COUNTIES` opt-in, verified_public only; hard deny list for holds and fail_closed scopes. No county is routed by default.
+- **Matrix drift gate:** `scripts/build_recon_matrix.py --check`, `docs/recon/live_emitter_evidence.json`, and `tests/test_source_state_drift.py`, which run in CI through a bridge test in `test_source_contract_run_guard.py` until `ci.yml` lists them directly.
+- Runbook `docs/ops/SCRAPER_SELF_HEALING.md`.
+
+### Fixed
+- The Slack webhook URL could leak into logs through `requests` exception strings (`SlackNotifier`, `ErrorTracker`). Only the exception class is logged now. ErrorTracker no longer double-posts failures.
+- **Health registry drift:** 30 code-guarded scrapers added as `fail_closed`, and Broward (FL) added as `verified_public`.
+- **Hampton / Marlboro (SC):** now actually fail closed (they were fetching through proxy paths into a 403 and synthesizing keys).
+- `COUNTY_SOURCE_CONTRACT_MATRIX.md` regenerated from versioned evidence (SC verified_public 1 → 5).
+- Self-healing docs (AGENTS, README, ARCHITECTURE, Watchdog) now describe what exists. The URL pre-flight check, failure history, and `force_enable()` never existed.
+
+## [Unreleased] — 2026-09-23
+
+### Fixed
+- **Broward County, FL** — Turnstile Arrest Search path live after Mac write smoke (30 new). Pass `action=arrest_search` to SolveCaptcha; Health fail_closed lifted; requires `SOLVECAPTCHA_KEY`.
+- **Charleston County, SC** — ListView parser uses the source Inmate # (no `CHS_` hash keys). reCAPTCHA or navigation failure is `status=error`; only a loaded results page with zero Inmate # rows is empty. Health `verified_public`.
+- **Richland County, SC** and **Sumter County, SC** — fail closed. Richland JMSOnline is on a maintenance page and its list view has no source booking key. Sumter SmartCOP still synthesizes a booking number from name+date.
+- **Southern Software roster cards** — keep going when the index page is non-200 (agency id fallback), accept hyphen-less booking attributes and `BookingID=` comments, and drop agency text that is really the next field label.
+
+## [Unreleased] — 2026-08-28 (P0 gate update)
+
+### Changed
+- **D2** marked staff-confirmed working (dashboard iMessage).
+- **C3** recorded as owner-deferred, not a formal Stage 2 blocker; rotation still pending.
+- **B3** remains open until a real BondCase smoke is logged. Operator reports the path has worked.
+- D3 7-day `review` clock starts 2026-08-28. Do not enable `full_auto`.
+
+## [Unreleased] — 2026-08-28 (Clipboard / docs alignment)
+
+### Changed
+- **Docs:** `SECURITY.md` now lists DocuSeal (not SignNow) as the active e-sign secret and auth path. Public blog copy no longer names SignNow or the retired (239) 552-1349 CTA; voice NAP is (239) 332-2245.
+- **Platform truth:** `docs/PLATFORM.md` and `docs/ECOSYSTEM_PROD_CHECKLIST.md` C4 record the sibling portal factory as **V468 / @468**. Wix remains a non-issuing clipboard; Super CRM is the only packet authority.
+- This does **not** close B3/B5, C3, or D2, or mark Stage 2 production-hardened.
+
+## [Unreleased] — 2026-08-21 (Confirmed Lee booking intake)
+
+### Added
+- **Staff-confirmed Lee booking intake** — Palantir now accepts one official HTTPS Lee County booking URL, projects a minimized public booking preview, and requires staff acknowledgement plus exact booking-number re-entry before it creates or refreshes an **ArrestLead only**.
+- **Fail-closed source and write controls** — the route allows only the official Lee host and numeric booking ID, expires previews after 15 minutes, uses a server-side preview ID, protects the canonical booking/county/state identity, stops cross-jurisdiction collisions, and refuses protected downstream records.
+- **Data-minimization and audit controls** — the booking path removes address, DOB, phone, email, relative, household, raw-response, and enrichment data. It records only non-PII confirmation metadata and never starts an OSINT, bond, paperwork, signature, payment, outreach, surety, or POA flow.
+
+### Verified
+- Commits [`f1a151c`](https://github.com/Shamrock2245/shamrock-leads/commit/f1a151c1a1e297ddfecfb6cf41023213d96a4b01) and cache-safe asset revision [`bb1a1a8`](https://github.com/Shamrock2245/shamrock-leads/commit/bb1a1a83b0e478ee1773e774f306b04f3e15aef0) deployed successfully through Hetzner workflows [`32487310626`](https://github.com/Shamrock2245/shamrock-leads/actions/runs/32487310626) and [`32487698386`](https://github.com/Shamrock2245/shamrock-leads/actions/runs/32487698386).
+- Focused confirmed-booking and Palantir fail-closed tests passed (**11**); JavaScript syntax and diff checks passed. Final probes returned `200` for Auto-CRM `/health`, cache-safe Palantir v6 CSS/JavaScript, DocuSeal, Bail School, paperwork, and Postiz `/auth`.
+- The stable GAS URL is unavailable in this clean checkout, so GAS health was not re-probed. The strict local secrets check remains red without production environment files and sibling repositories; it is not treated as green. No real booking record, CRM record, bond, packet, signature, payment, or client message was created during implementation or validation.
+- This release does **not** close B3/B5, C3, or D2, enable `full_auto` outreach, or mark the platform production-hardened.
+
+## [Unreleased] — 2026-08-20 (Palantir Command HUD)
+
+### Added
+- **Palantir reactor HUD** — rebuilt the intelligence workspace as an interactive, read-only holographic command surface with exact CRM entity resolution, selectable relationship nodes, provenance and confidence inspection, and visual-layer filtering.
+- **Operational intelligence controls** — added OSIRIS county filtering, feed refresh, and stream-to-map focus; SPECTRA scan state rendering that distinguishes no result, provider unavailability, and absent verified geotags; and a CRM-bounded dossier command surface.
+
+### Verified
+- Commit `913d4ce` deployed successfully through Hetzner workflow [`32397812988`](https://github.com/Shamrock2245/shamrock-leads/actions/runs/32397812988). The v5 Palantir CSS and JavaScript assets returned `200`; final `/health`, DocuSeal, Bail School, paperwork, and Postiz `/auth` probes returned `200`.
+- The focused Palantir fail-closed suite passed (**6**); JavaScript syntax and diff checks passed. The stable GAS URL is unavailable in this clean checkout, so GAS health was not re-probed. The strict local secrets check remains red without production environment files and sibling repositories; it is not treated as green.
+- This user-interface release does **not** close B3/B5, C3, or D2, enable `full_auto` outreach, or mark the platform production-hardened. No person-level record, intake, bond, packet, signature, payment, or client contact was created during implementation or validation.
+
+## [Unreleased] — 2026-08-19 (Ohio source-contract guard pilot)
+
+### Added
+- **Ohio guarded pilot scopes** — registered Clermont, Clinton, and Huron under `scrapers/counties_oh/` with state-qualified scheduler IDs and dashboard labels. Each module is explicitly `fail_closed` and returns before source retrieval, scoring, persistence, alerts, outreach, matching, paperwork, signatures, payments, or bond-writing activity.
+- **Ohio contract and regression coverage** — added a non-PII source-contract record plus runtime, scheduler-key, registry, dashboard-state, and documentation tests. The separate Ohio guard inventory does not expand the existing ten-state 947-scope reconnaissance matrix or claim an OSI/Palmetto writing footprint.
+
+### Verified
+- Commit `3b3bee0` deployed successfully through Hetzner workflow `32290521634`.
+- Focused source-contract, scheduler, registry, source-key, and documentation tests passed (**32**, plus six subtests). Post-deploy public checks returned `200` for Auto-CRM `/health`, DocuSeal, Bail School, paperwork portal, and Postiz `/auth`.
+- The stable GAS URL was not available in the clean checkout, and the strict local secrets check remains red without production `.env` files and sibling repositories. Neither limitation is treated as green; no secret, person-level record, bond, packet, payment, signature, or client contact was created.
+- This release does **not** close B3/B5, C3, or D2, enable `full_auto` outreach, or mark the platform production-hardened.
+
+## [Unreleased] — 2026-08-19 (Dashboard completeness audit)
+
+### Fixed
+- **Client Portal check-in KPI completed** — the staff portal now renders the backed seven-day completed check-in count from `checkins_7d`; it no longer targets a nonexistent DOM node or leaves the card at a permanent placeholder value.
+- **FTA surrender guidance corrected** — the Level 3 surrender confirmation and result message no longer promise a retired SignNow authorization. They now state the actual path: `surrender_pending`, no e-sign packet, manual staff document review, and conditional iMessage delivery outcome.
+
+### Added
+- **Dashboard regression contracts** — focused API and source-contract coverage protects the seven-day portal metric and prevents the retired signature-provider copy from returning.
+
+### Verified
+- Commit `3c46234` deployed successfully through Hetzner workflow `32268562642`.
+- Focused dashboard, portal, and source-contract tests passed (**23**); updated JavaScript parsed successfully.
+- Post-deploy public checks returned `200` for Auto-CRM health, DocuSeal, Bail School, paperwork portal, and Postiz `/auth`.
+- This dashboard correction does **not** satisfy the still-open B3/B5, C3, or D2 human production gates.
+
+## [Unreleased] — 2026-08-18 (DocuSeal initial iMessage delivery gate)
+
+### Changed
+- **Packet delivery hardened** — commit `cd74b00` requires trusted direct self-hosted DocuSeal signer URLs, exact packet/role/external-ID bindings, and one evaluation per packet. Manual iMessage delivery now requires an authenticated staff session, active DocuSeal submission, and the exact role-bound signer; it returns no signing link and retains no phone or URL in delivery audit details.
+- **Defendant delivery gated** — the approved defendant template is staged, but `include_defendant=false` remains live. A future defendant automatic notice also requires an immutable packet snapshot of a staff-recorded `verified_opt_in` authorization bound to the exact `Defendant_ID`; phone or generic-packet data cannot satisfy this gate.
+- **Indemnitor/co-indemnitor delivery enabled** — the approved initial DocuSeal iMessage template is active for explicitly packet-bound indemnitors and co-indemnitors. Defendant delivery is explicitly disabled; its approved template is staged but cannot send while the role switch is off. The change was made through the protected Automations editor; it did not send a client message.
+- **Protected editor delivered** — the Initial DocuSeal Notice card now exposes a role-specific configuration modal rather than a generic toggle. Activation is rejected without an approved `{signing_link}` template, and defendant inclusion is rejected without separately approved defendant copy.
+
+### Added
+- **Narrow initial DocuSeal delivery exception** — after a valid packet is persisted, the platform can send one **iMessage-only** signing notice to each explicitly DocuSeal-bound indemnitor or co-indemnitor. The exception is disabled by default and requires approved recipient-specific copy containing `{signing_link}`. A defendant requires a separate opt-in and separate approved copy.
+- **Fail-closed delivery binding** — the sender requires a non-voided `pending_signature` packet, active DocuSeal submission, exact packet metadata plus external-ID binding, a signer-specific link, and a validated signer phone. It never falls back to generic packet phones, SMS, retries, or chase automation.
+- **Auditable control path** — authorized staff can configure the narrowly allowed settings through the automation control surface; unsupported fields and templates without `{signing_link}` are rejected.
+
+### Verified
+- Commits `cda89f9`, `97d3f17`, and `8819625` deployed successfully through Hetzner workflows `32146659635`, `32174712655`, and `32174980615`.
+- Focused DocuSeal, authorization, automation-control, paperwork, and portal tests passed (**62**). Public Auto-CRM health, DocuSeal, school, paperwork, and Postiz `/auth` each returned `200`; the established GAS deployment returned `success:true`, `V409`.
+- **No client message was sent** during configuration, hardening, or defendant-template staging. This is not a replacement for the staff-confirmed write-bond → paperwork (B3/B5) or outbound dashboard iMessage (D2) production smokes.
+
+## [Unreleased] — 2026-08-16 (Legacy e-sign retirement and DocuSeal binding gate)
+
+### Changed
+- **Legacy SignNow execution retired** — removed the Auto-CRM service modules, direct callbacks, direct signing-link delivery, release-stage generation, lifecycle poller/scheduler, and Node-RED tracking flows. Historical provider fields remain read-only for existing records.
+- **DocuSeal packet creation is fail closed** — a new submission now requires validated Match, bound BondCase, explicit OSI/Palmetto surety, assigned POA in the matching inventory tier, canonical recipient name/email, and a new packet ID. Packet-time identity, recipient, case, POA, and financial overrides are rejected.
+- **Signed-record safety** — packet ID collisions now return a conflict instead of replacing an existing packet version.
+
+### Verified
+- Focused DocuSeal service tests passed (**19**); commit `00c112c` deployed successfully through Hetzner workflow `31976473879`.
+- Public probes returned `200` for Auto-CRM, stable factory health, DocuSeal, school, paperwork, and Postiz `/auth`.
+- The platform is **not** marked production-hardened: staff workflow smoke tests and historical secret rotation remain open, and the strict local secrets check has no production environment files to inspect.
+
+## [Unreleased] — 2026-08-16 (August wave leftover guards)
+
+### Changed
+- **East Baton Rouge and Jefferson Parish, LA fail-closed** — removed residential stealth, Cloudflare/disclaimer browser walks, TLS fingerprinting, and name-derived `EBR_` / `JEF_` booking fallbacks.
+- **Lafayette Parish, LA fail-closed** — captcha-gated 365Labs path no longer probes Azure with TLS off, opens a browser, or invents `LAF_` keys.
+- **Ascension, Caddo, Livingston, and Ouachita Parish fail-closed** — speculative `/api/...` inmate endpoints are no longer fetched.
+- **Dashboard source-state registry** — those Louisiana jobs plus already-gated Forsyth (NC), Madison (AL), and Mobile (AL) are explicit `fail_closed` labels.
+- **Indemnitor save** — an unknown or ambiguous booking number no longer inserts a stub `prospective_bonds` card. The indemnitor is saved `unlinked`. Save & Do Paperwork does not open DocuSeal from an unlinked save.
+- **OCV inmate parser** — Lincoln and other OCV counties now require a source `inmateID` and booked date/time. A Mongo `_id` is not accepted as a booking number.
+
+## [Unreleased] — 2026-08-15 (Verified-public scraper health review)
+
+### Documented
+- **No working scraper implementation changed** — aggregate-only checks covered every `verified_public` path without writers, scoring, alerts, persistence, or PII output. Bossier, Tangipahoa, St. Mary, Lee (AL), Marshall, Etowah, and Rankin emitted records with source booking keys in the bounded checks. Putnam remained source-reachable but exceeded the bounded budget; Randall and St. Clair emitted zero records without exceptions, with St. Clair’s ordinary direct source check receiving HTTP `403`. These are observability findings only; no scraper was disabled, patched, or reclassified.
+
+## [Unreleased] — 2026-08-15 (Connecticut judicial-docket guard)
+
+### Changed
