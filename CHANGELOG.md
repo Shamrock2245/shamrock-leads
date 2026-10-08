@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-07 (Relay-only Manatee + Charlotte)
+
+### Changed
+- **Manatee + Charlotte (FL) are relay-only** (`config/relay_only.py`). The VPS/Hetzner scheduler keeps them registered but gives them no interval job. A dashboard run-now or custody-recheck trigger for either county is marked `relay_only` and is not run on the VPS. The new relay entry point `python main.py --relay-only` runs both once and exits non-zero on any failure; `python main.py <County>` still works. Ops: `docs/ops/REVIZE_RELAY_RUN.md`.
+- **Charlotte (FL):** got the same cleanup as Manatee #121. The APE/Warren + office SOCKS resolver (`CHARLOTTE_EGRESS_MODE=auto`, now a config error) and the Patchright stealth launcher / stealth context are removed. Charlotte now runs stock headless Playwright with `--no-proxy-server` and proxy env vars stripped. The exit check uses `trust_env=False`; an unknown exit is refused; egress blocks fail loud with nothing written. `tests/test_charlotte_no_proxy_path.py` proves no proxy or stealth path is reachable.
+
+### Removed
+- Dead code with no users left: `cf_browser.launch_cf_browser`, `new_stealth_context`, `wait_past_cloudflare`, `_launch_sync_playwright`, `require_residential_exit`, and `socks_proxy.to_playwright_proxy`, `to_httpx_proxy`, `require_socks_or_raise`. The shared resolver (`resolve_residential_proxy`, `validate_residential_proxy`, `curl_cffi_proxies`) stays for Marion and Hillsborough. `check_exit_ip` stays.
+- `docs/COUNTY_REGISTRY.md`: Manatee/Charlotte no longer list the APE/office SOCKS path.
+
 ## [Unreleased] — 2026-10-07 (Charlotte FL Revize hardening)
 
 ### Fixed
