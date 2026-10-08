@@ -83,6 +83,7 @@ jobs:
             tests/test_source_state_drift.py \
             tests/test_fl_smartweb_five.py \
             tests/test_fl_smartweb_legacy_paging.py \
+            tests/test_fl_smartweb_unknown_bond.py \
             tests/test_fl_brevard_newworld.py \
             tests/test_fl_indian_river_booking_search.py \
             tests/test_fl_okaloosa_api.py \
@@ -90,6 +91,7 @@ jobs:
             tests/test_fl_67_status.py \
             tests/test_fl_idle_eight.py \
             tests/test_fl_bond_charges_hydrate.py \
+            tests/test_fl_pinellas_bond_unknown.py \
             tests/test_fl_hernando_unknown_bond.py \
             tests/test_fl_hernando_detail_status.py \
             tests/test_miami_dade_scraper.py \
