@@ -230,3 +230,36 @@ def test_detail_request_failure_escapes(monkeypatch):
     with pytest.raises(requests.HTTPError):  # detail "2" returns 404 in the fake
         IndianRiverCountyScraper().scrape(lookback_days=1)
 
+
+
+def test_missing_booking_info_or_charges_heading_raises():
+    page = _detail()
+    with pytest.raises(IndianRiverContractError):
+        ir.parse_detail(page.replace("<h3>Charges</h3>", "<h3>Offenses</h3>"))
+    with pytest.raises(IndianRiverContractError):
+        ir.parse_detail(page.replace("<h3>Booking Info</h3>", "<h3>Booking</h3>"))
+    with pytest.raises(IndianRiverContractError):
+        ir.parse_detail("<h3>Booking Info</h3><h3>Charges</h3>")  # heading but no table
+    assert ir.parse_detail(page)["charges"] == ["BATTERY", "RESIST WITHOUT VIOLENCE"]
+
+
+def _run_with(monkeypatch, pages_html):
+    monkeypatch.setattr(ir, "datetime", _FixedDT)
+    ids = [str(i) for i in range(1, len(pages_html) + 1)]
+    _install(monkeypatch, {"10/07/2026": [ids]}, dict(zip(ids, pages_html)))
+    return IndianRiverCountyScraper().scrape(lookback_days=1)
+
+
+def test_run_raises_when_no_record_has_charges_or_a_recognized_bond(monkeypatch):
+    when = "October 7th, 2026 at 1:00 am"
+    no_cards = [_detail(booking=f"2026-0000000{i}", booked=when, charges=()) for i in (1, 2)]
+    with pytest.raises(IndianRiverContractError):
+        _run_with(monkeypatch, no_cards)
+    renamed_bond = [_detail(booking=f"2026-0000000{i}", booked=when).replace(">Bond<", ">Bail<") for i in (1, 2)]
+    with pytest.raises(IndianRiverContractError):
+        _run_with(monkeypatch, renamed_bond)
+    # one record with charges and one recognized bond is enough (others may lack them)
+    mixed = [_detail(booking="2026-00000001", booked=when, bond=None, charges=()),
+             _detail(booking="2026-00000002", booked=when, bond="No Bond")]
+    recs = _run_with(monkeypatch, mixed)
+    assert len(recs) == 2 and recs[1].Bond_Type == "NO BOND"

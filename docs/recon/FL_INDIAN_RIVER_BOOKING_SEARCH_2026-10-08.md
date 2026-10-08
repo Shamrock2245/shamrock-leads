@@ -64,3 +64,7 @@ Rows written before this PR are keyed on the portal id (`/booking-details/<id>`)
 - **Detail failures:** a detail GET that times out or returns an HTTP error now escapes, so BaseScraper retries, classifies and alerts. Rows are still dropped, and counted, only for content reasons: no key or date, a wrong day, or a duplicate.
 - Read smoke at 08:35 EDT: 60/60 unique rows, 59 with charges, 15 with a bond, 15 No Bond, 23 released, 50 s.
 
+## Shape guards (CoS, 2026-10-08)
+
+The writer `$set`s every field, so a page that loses its structure must not produce a record. `parse_detail` raises when the `Booking Info` heading or its table is missing, or when the `Charges` heading is missing. Per record, a missing `Bond` row is still legitimate: about half of live bookings have none, and it stays `""`. So the run-level guard raises if **no** record in the run has charges, or if **no** record has a recognized `Bond` value (`$amount` or `No Bond`, recorded as `extra_data.bond_published`). Live at 08:50 EDT: 60 rows, 59 with charges, 30 with a recognized bond.
+

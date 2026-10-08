@@ -132,13 +132,19 @@ def parse_detail(html: str) -> Dict[str, object]:
         label = _clean(tds[0].get_text(" ", strip=True)).rstrip(":")
         if label and label not in fields:
             fields[label] = _clean(tds[1].get_text(" ", strip=True))
-    charges: List[str] = []
+    # Page shape is part of the contract: without these the record would be
+    # written with blank charges/bond over the stored values.
+    info = soup.find(lambda t: t.name in ("h3", "h4") and _clean(t.get_text()) == "Booking Info")
+    if info is None or info.find_next("table") is None:
+        raise IndianRiverContractError("Indian River: booking-details page has no 'Booking Info' table")
     heading = soup.find(lambda t: t.name in ("h3", "h4") and _clean(t.get_text()) == "Charges")
-    if heading is not None:
-        for header in heading.find_all_next("div", class_="card-header"):
-            text = _clean(header.get_text(" ", strip=True))
-            if text:
-                charges.append(text)
+    if heading is None:
+        raise IndianRiverContractError("Indian River: booking-details page has no 'Charges' heading")
+    charges: List[str] = []
+    for header in heading.find_all_next("div", class_="card-header"):
+        text = _clean(header.get_text(" ", strip=True))
+        if text:
+            charges.append(text)
     return {"fields": fields, "charges": charges}
 
 
@@ -209,6 +215,8 @@ def build_record(detail: Dict[str, object], detail_url: str) -> Optional[ArrestR
         extra_data={
             "charge_details": [{"charge": c, "description": c, "bond_amount": None} for c in charges],
             "booking_date_origin": "IRCSO booking-details Booking Date",
+            # True when the Bond row carried a recognized value ($amount / No Bond)
+            "bond_published": bool(bond["amount"] or bond["type"]),
         },
     )
 
@@ -290,6 +298,12 @@ class IndianRiverCountyScraper(BaseScraper):
 
         if fetched and not records:
             raise IndianRiverContractError("Indian River: details fetched but none carry a source Booking Number")
+        # Run-level drift guards: a renamed card class or Bond label would blank
+        # every record's charges or bond without tripping a per-page check.
+        if records and not any(r.Charges for r in records):
+            raise IndianRiverContractError("Indian River: no record in the run has charges (card markup drift?)")
+        if records and not any(r.extra_data.get("bond_published") for r in records):
+            raise IndianRiverContractError("Indian River: no record in the run has a recognized Bond value (label drift?)")
         if dropped:
             logger.warning("Indian River: dropped %d/%d details (no key/date, wrong date or duplicate)", dropped, fetched)
         logger.info("Indian River: %d bookings over %d days (%d details)", len(records), days, fetched)
