@@ -9,7 +9,7 @@ import io
 
 import pytest
 
-from scrapers.counties import citrus, okaloosa
+from scrapers.counties import citrus
 from scrapers.counties.alachua import AlachuaCountyScraper
 from scrapers.counties.clay import ClayCountyScraper
 from scrapers.counties.columbia import ColumbiaCountyScraper
@@ -98,32 +98,8 @@ def test_citrus_extracts_pdf_url_from_iframe():
     assert "Arrests%20and%20Charges" in url or "Arrests and Charges" in url
 
 
-def test_okaloosa_parser_requires_source_booking_number():
-    html = """
-    <table>
-      <tr><th>NameTypeID</th><th>NameType</th><th>NameTitle</th><th>LastName</th>
-          <th>FirstName</th><th>MiddleName</th><th>NameSuffix</th><th>RTC</th><th></th>
-          <th>Eye</th><th>Hair</th><th>Skin</th><th></th><th></th><th></th><th></th>
-          <th></th><th></th><th></th><th>Booking#</th><th>SPN#</th><th>Name</th>
-          <th>DOB</th><th>Age</th><th>Sex</th><th>Race</th><th>Height</th><th>Weight</th>
-          <th>EligReleaseDate</th></tr>
-      <tr><td>1</td><td>0</td><td></td><td>DOE</td><td>JANE</td><td>Q</td><td></td><td></td><td></td>
-          <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
-          <td></td><td></td><td></td><td>2026005082</td><td>123</td><td>DOE,JANE</td>
-          <td>01/1990</td><td>36</td><td>F</td><td>W</td><td>505</td><td>120</td><td></td></tr>
-      <tr><td>2</td><td>0</td><td></td><td>ROE</td><td>JOHN</td><td></td><td></td><td></td><td></td>
-          <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
-          <td></td><td></td><td></td><td></td><td>456</td><td>ROE,JOHN</td>
-          <td>02/1991</td><td>35</td><td>M</td><td>W</td><td>510</td><td>180</td><td></td></tr>
-    </table>
-    """
-    from bs4 import BeautifulSoup
-
-    recs = okaloosa.OkaloosaCountyScraper()._parse_soup(BeautifulSoup(html, "html.parser"))
-    assert len(recs) == 1  # row without Booking# must be dropped
-    assert recs[0].Booking_Number == "2026005082"
-    assert recs[0].Last_Name.upper() == "DOE"
-    assert recs[0].First_Name.upper() == "JANE"
+# Okaloosa moved to the Inmate Locator JSON API on 2026-10-08: see
+# tests/test_fl_okaloosa_api.py.
 
 
 @pytest.mark.parametrize(

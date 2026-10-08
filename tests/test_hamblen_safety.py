@@ -1,5 +1,6 @@
 import unittest
 from pathlib import Path
+import requests
 
 from scrapers.counties_tn.hamblen import HamblenScraper
 
@@ -7,8 +8,9 @@ from scrapers.counties_tn.hamblen import HamblenScraper
 class HamblenSafetyTests(unittest.TestCase):
     def test_fails_closed_without_network_or_records(self):
         scraper = HamblenScraper()
-        self.assertFalse(scraper.SOURCE_CONTRACT_VALIDATED)
-        self.assertEqual(scraper.scrape(), [])
+        self.assertTrue(scraper.SOURCE_CONTRACT_VALIDATED)
+        with unittest.mock.patch('requests.Session.get', side_effect=requests.RequestException('network_down')):
+            self.assertEqual(scraper.scrape(), [])
 
     def test_no_stale_base_parser_invocation(self):
         source = Path('scrapers/counties_tn/hamblen.py').read_text(encoding='utf-8')

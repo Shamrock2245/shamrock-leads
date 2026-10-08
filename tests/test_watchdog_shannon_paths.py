@@ -49,9 +49,8 @@ def test_watchdog_passes_when_shannon_paths_healthy():
 
 def test_watchdog_alerts_when_bluebubbles_down():
     svc = WatchdogService(db=None)
-    svc.slack = MagicMock()
     svc.slack.webhook_errors = "https://example.invalid/hooks"
-    svc.slack._post = MagicMock()
+    svc.slack._post = MagicMock(return_value=True)
 
     async def fake_get(url, *a, **k):
         resp = MagicMock()

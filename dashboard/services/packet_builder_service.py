@@ -165,8 +165,9 @@ def _row_bond(item: Dict[str, Any]) -> Optional[float]:
 # before the 2026-10-07 audits, so a scraped zero there is unknown, not $0.
 # Rosters/layers that publish no bond: a scraped "0" there is unknown, never $0.
 # Miami-Dade's ArcGIS jail-bookings layer has no bond field (2026-10-07/08);
-# docs written before 2026-10-08 carry a scraped "0".
-NO_BOND_ROSTER_COUNTIES = frozenset({("FL", "charlotte"), ("FL", "manatee"), ("FL", "miami-dade")})
+# docs written before 2026-10-08 carry a scraped "0". Hernando's JailSearch
+# results grid has no bond either; its old "0" was hard-coded (2026-10-08).
+NO_BOND_ROSTER_COUNTIES = frozenset({("FL", "charlotte"), ("FL", "manatee"), ("FL", "miami-dade"), ("FL", "hernando")})
 
 
 def _scraped_zero_is_unknown(arrest: Dict[str, Any]) -> bool:
@@ -191,7 +192,7 @@ def arrest_bond_value(arrest: Optional[Dict[str, Any]]) -> Any:
     amount wins over a stale blank raw value. A zero alongside those flags is
     ambiguous (the next scrape rewrites ``bond_amount`` to 0.0 but leaves the
     flags), so it is treated as unknown: Write Bond shows blank, never $0.
-    Legacy Charlotte/Manatee/Miami-Dade docs carry a scraped ``"0"`` for a
+    Legacy Charlotte/Manatee/Miami-Dade/Hernando docs carry a scraped ``"0"`` for a
     bond the roster never published; that is unknown too.
 
     Staff values come first: ``staff_edits.bond`` (written by every staff

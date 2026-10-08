@@ -27,6 +27,7 @@ from dashboard.extensions import (
     resolve_scraper_status,
 )
 from dashboard.routers.helpers import attach_write_eligible
+from dashboard.services.source_state_filter import fail_closed_exclusion
 from dashboard.services.intel_population import (
     PRESETS,
     SAFE_BOND,
@@ -291,7 +292,11 @@ async def get_state_summary():
         total_fleet += total_counties
 
         # Same clause the defendant drawer uses, so the card count is the list.
+        # The drawer hides fail_closed source counties by default, so the card does too.
         state_match = state_clause(state)
+        hide_fail_closed = fail_closed_exclusion()
+        if hide_fail_closed:
+            state_match = {"$and": [state_match, hide_fail_closed]}
 
         arrests_24h = await arrests.count_documents({
             "$and": [state_match, _scraped_at_match(cutoff_24h)],
@@ -580,8 +585,13 @@ async def get_population_defendants(
     q: str = "",
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=40, ge=1, le=100),
+    include_fail_closed: bool = False,
 ):
-    """Page the defendants a state card, bond desk, or command chip counted."""
+    """Page the defendants a state card, bond desk, or command chip counted.
+
+    Fail-closed source counties are hidden unless named in ``county`` or
+    ``include_fail_closed=true``.
+    """
     try:
         spec = resolve_preset(
             preset,
@@ -602,6 +612,7 @@ async def get_population_defendants(
         q=q,
         page=page,
         limit=limit,
+        include_fail_closed=include_fail_closed,
     )
     payload["defendants"] = [attach_write_eligible(row) for row in payload["defendants"]]
     return payload
