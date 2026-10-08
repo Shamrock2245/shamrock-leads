@@ -192,7 +192,7 @@ class TestMiamiDadeNoBondLayer(unittest.TestCase):
         self.assertNotIn("Address", OUT_FIELDS)
         self.assertNotIn("DOB", OUT_FIELDS)
 
-    def test_parse_sets_bond_zero_and_reads_code2(self):
+    def test_parse_leaves_bond_unknown_and_reads_code2(self):
         from datetime import datetime, timezone
 
         scraper = MiamiDadeCountyScraper()
@@ -209,7 +209,7 @@ class TestMiamiDadeNoBondLayer(unittest.TestCase):
             }
         )
         self.assertIsNotNone(rec)
-        self.assertEqual(rec.Bond_Amount, "0")
+        self.assertEqual(rec.Bond_Amount, "")  # layer has no bond field: unknown, never $0
         self.assertEqual(rec.Charges, "BENCH WARRANT | FTA")
 
 
