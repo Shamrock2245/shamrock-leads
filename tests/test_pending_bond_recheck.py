@@ -112,7 +112,16 @@ class _NoScore:
         return record
 
 
+class _QuietNotifier:
+    def notify_bond_set(self, record):
+        return True
+
+    def notify_hot_lead(self, record):
+        return True
+
+
 def _worker(scrapers, w, **kw):
+    kw.setdefault("notifier", _QuietNotifier())
     kw.setdefault("sleep", lambda s: None)
     kw.setdefault("clock", lambda: NOW)
     kw.setdefault("scorer", _NoScore())
@@ -300,7 +309,7 @@ def test_released_and_sentenced_stop():
     assert arrests.one("R1")["status"] == "Released"
 
 
-def test_not_found_writes_nothing_and_is_never_released():
+def test_no_result_writes_nothing_never_stops_and_is_never_released():
     stored = _stored("B1", bond_raw="0", booked="10/07/2026")  # days 1, 2, 3: daily
     w, arrests, states = _mongo([stored])
     before = deepcopy(arrests.one("B1"))
@@ -309,18 +318,71 @@ def test_not_found_writes_nothing_and_is_never_released():
         _worker([scraper], w, clock=lambda i=i: NOW + timedelta(hours=21 * i)).run()
     assert arrests.one("B1") == before and arrests.sets == []
     st = states.one("B1")
-    assert st["not_found_streak"] == 3 and st["stop_reason"] == "not_found_on_source"
-    assert st["last_outcome"] == "not_found"
+    # A None can be an outage as well as a missing booking: never a stop.
+    assert st["no_result_streak"] == 3 and "stop_reason" not in st
+    assert st["last_outcome"] == "no_result" and len(scraper.calls) == 3
 
 
-def test_fetch_exception_writes_nothing():
+def test_fetch_exception_writes_nothing_and_is_classified():
     w, arrests, states = _mongo([_stored("B1")])
 
     def boom(bk):
-        raise RuntimeError("synthetic")
+        raise TimeoutError("synthetic")
 
-    _worker([FakeScraper(results={"B1": boom})], w).run()
-    assert arrests.sets == [] and states.one("B1")["not_found_streak"] == 1
+    stats = _worker([FakeScraper(results={"B1": boom})], w).run()
+    st = states.one("B1")
+    assert arrests.sets == [] and st["no_result_streak"] == 1 and "stop_reason" not in st
+    assert st["last_outcome"] == "fetch_error:TimeoutError" and stats["errors"] == 1
+
+
+def test_county_wide_no_result_is_flagged(caplog):
+    w, _, _ = _mongo([_stored("B1"), _stored("B2")])
+    with caplog.at_level(logging.WARNING):
+        _worker([FakeScraper(results={})], w).run()
+    assert any("no result for all 2 re-checks" in r.getMessage() for r in caplog.records)
+
+
+def test_stop_follows_what_was_persisted_not_what_was_fetched():
+    # Bond published but no charges: the writer keeps the stored charges/bond
+    # pair, so the bond is still pending in Mongo and the re-check continues.
+    w, arrests, states = _mongo([_stored("B1")])
+    fetched = _fetched("B1", bond="5000")
+    fetched.Charges = ""
+    scored = []
+
+    class Scorer:
+        def score_and_update(self, record):
+            scored.append(record.Bond_Amount)
+            return record
+
+    _worker([FakeScraper(results={"B1": fetched})], w, scorer=Scorer()).run()
+    doc = arrests.one("B1")
+    assert (doc["charges"], doc["bond_amount_raw"]) == ("843.02 - RESIST OFFICER", "")
+    assert scored == [""]  # scored on the pair that is actually stored
+    assert "stop_reason" not in states.one("B1")
+
+
+def test_published_bond_sends_the_bond_set_alert():
+    class Notifier:
+        def __init__(self):
+            self.calls = []
+
+        def notify_bond_set(self, record):
+            self.calls.append(("bond_set", record.Booking_Number, record.Bond_Amount))
+
+        def notify_hot_lead(self, record):
+            self.calls.append(("hot", record.Booking_Number))
+
+    class HotScorer:
+        def score_and_update(self, record):
+            record.Lead_Score, record.Lead_Status = 90, "Hot"
+            return record
+
+    w, _, _ = _mongo([_stored("B1"), _stored("B2")])
+    n = Notifier()
+    scraper = FakeScraper(results={"B1": _fetched("B1", bond="5000"), "B2": _fetched("B2", bond="")})
+    _worker([scraper], w, notifier=n, scorer=HotScorer()).run()
+    assert n.calls == [("bond_set", "B1", "5000"), ("hot", "B1")]
 
 
 def test_global_cap_skips_and_later_run_catches_up():

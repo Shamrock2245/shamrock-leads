@@ -23,8 +23,13 @@ How it works
 * The refreshed record keeps every stored non-bond field the source did not
   return, and is written only through ``MongoWriter.write_records``, so the
   charges/bond pair rule and the staff-edit protections apply. A fetch that
-  returns nothing (not found, failed, drifted page) writes nothing and never
-  counts as released.
+  returns nothing (not found, failed, drifted page) or raises writes nothing,
+  never counts as released and never stops the re-check; a county where every
+  re-check in a run comes back empty logs a warning.
+* The stop decision is read back from the persisted doc, so a bond the writer
+  held back (e.g. published without charges) keeps the booking on cadence. A
+  newly published bond sends the existing BOND SET alert (and the hot-lead
+  alert when Hot and >= $2,500), like the first-appearance watcher and a run.
 * Per-booking state (``last_checked_at``, ``check_count``, ``stop_reason``)
   lives in its own ``bond_rechecks`` collection, so arrests docs and staff
   edits are never touched by the bookkeeping.
@@ -90,14 +95,12 @@ SCAN_LIMIT_PER_COUNTY = _env_int("PENDING_BOND_RECHECK_SCAN_LIMIT", 2000)
 DAILY_DAYS = 3                          # days 1..3 after booking: daily
 DAILY_MIN_GAP = timedelta(hours=20)     # "daily" with slack for a 6h job
 WEEKLY_MIN_GAP = timedelta(days=7)      # after day 3: weekly
-MAX_NOT_FOUND_STREAK = 3                # source stopped listing it: stop asking
 
 # Stop reasons
 STOP_BOND_PUBLISHED = "bond_published"
 STOP_BOND_FINAL_ZERO = "bond_final_zero"
 STOP_RELEASED = "released"
 STOP_SENTENCED = "sentenced"
-STOP_NOT_FOUND = "not_found_on_source"
 
 _MONEY_RE = re.compile(r"^\$?\s*([0-9][0-9,]*(?:\.\d+)?)$")
 _SENTENCED_RE = re.compile(r"\bsentenc", re.I)
@@ -217,18 +220,40 @@ def is_due(day: Optional[int], last_checked: Optional[datetime], now: datetime) 
     return gap >= (DAILY_MIN_GAP if day <= DAILY_DAYS else WEEKLY_MIN_GAP)
 
 
-def stop_reason_for(record: ArrestRecord) -> Optional[str]:
-    """Why re-checking this booking should stop, from a freshly fetched record."""
-    if is_sentenced(record.Status, record.Bond_Type, record.Charges):
+def stop_reason_for_doc(doc: Dict[str, Any]) -> Optional[str]:
+    """Why re-checking should stop, from an arrests doc (the persisted one)."""
+    if is_sentenced(doc.get("status"), doc.get("bond_type"), doc.get("charges")):
         return STOP_SENTENCED
-    if is_released(record.Status, record.Release_Date):
+    if is_released(doc.get("status"), doc.get("release_date")):
         return STOP_RELEASED
-    amount = parse_bond(record.Bond_Amount)
+    raw = doc.get("bond_amount_raw")
+    amount = parse_bond(doc.get("bond_amount") if raw is None else raw)
     if amount is not None and amount > 0:
         return STOP_BOND_PUBLISHED
-    if amount == 0 and _zero_marked_final(record.extra_data):
+    if amount == 0 and _zero_marked_final(doc.get("extra")):
         return STOP_BOND_FINAL_ZERO
     return None  # still pending (a 0 the parser can't vouch for stays pending)
+
+
+def stop_reason_for(record: ArrestRecord) -> Optional[str]:
+    """Stop reason a fetched record would give if it were persisted as-is."""
+    return stop_reason_for_doc(record.to_mongo_doc())
+
+
+def keep_stored_pair_if_writer_would(record: ArrestRecord, stored_doc: Dict[str, Any]) -> bool:
+    """Mirror mongo_writer's pair rule before scoring.
+
+    With blank fetched charges and stored charges present (or a blank fetched
+    bond and a positive stored bond, which a target never has), the writer keeps
+    the stored charges/bond pair. Copy that pair onto the record so the lead
+    score is computed from what will actually be stored."""
+    charges_blank = not str(record.Charges or "").strip()
+    stored_charges = str(stored_doc.get("charges") or "").strip()
+    if charges_blank and stored_charges:
+        stored = ArrestRecord.from_mongo_doc(stored_doc)
+        record.Charges, record.Bond_Amount, record.Bond_Type = stored.Charges, stored.Bond_Amount, stored.Bond_Type
+        return True
+    return False
 
 
 def merge_with_stored(fetched: ArrestRecord, stored_doc: Dict[str, Any], now: datetime) -> ArrestRecord:
@@ -383,6 +408,7 @@ class PendingBondRecheck:
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         scorer: Any = None,
+        notifier: Any = None,
     ):
         self.scrapers = list(scrapers)
         self.mongo_writers = [w for w in writers if hasattr(w, "write_records") and hasattr(w, "arrests")]
@@ -393,6 +419,7 @@ class PendingBondRecheck:
         self._sleep = sleep
         self._clock = clock
         self._scorer = scorer
+        self._notifier = notifier
 
     # Mongo handles come from the MongoWriter: no separate connection.
     @property
@@ -431,9 +458,9 @@ class PendingBondRecheck:
             "$setOnInsert": {"state": state, "county": county, "booking_number": booking, "first_checked_at": now},
         }
         if found:
-            set_doc["not_found_streak"] = 0
+            set_doc["no_result_streak"] = 0
         else:
-            update["$inc"]["not_found_streak"] = 1
+            update["$inc"]["no_result_streak"] = 1
         self._state_coll().update_one(
             {"state": state, "county": county, "booking_number": booking}, update, upsert=True
         )
@@ -447,6 +474,19 @@ class PendingBondRecheck:
             self._scorer.score_and_update(record)
         except Exception as exc:  # keep the stored score
             logger.warning("bond-recheck: scoring skipped (%s)", type(exc).__name__)
+
+    def _notify_bond_set(self, record: ArrestRecord) -> None:
+        """Same alerts a regular scrape / the first-appearance watcher sends."""
+        try:
+            if self._notifier is None:
+                from writers.slack_notifier import SlackNotifier
+
+                self._notifier = SlackNotifier()
+            self._notifier.notify_bond_set(record)
+            if record.Lead_Status == "Hot" and record._parse_bond_numeric() >= 2500:
+                self._notifier.notify_hot_lead(record)
+        except Exception as exc:
+            logger.warning("bond-recheck: bond-set alert failed (%s)", type(exc).__name__)
 
     def select_due(self, scraper: Any, now: datetime) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
         """Due target docs for one county, oldest-checked first, plus skip counts."""
@@ -489,7 +529,7 @@ class PendingBondRecheck:
 
     def run(self) -> Dict[str, Any]:
         stats: Dict[str, Any] = {
-            "checked": 0, "written": 0, "not_found": 0, "stopped": {}, "skipped_over_cap": 0,
+            "checked": 0, "written": 0, "no_result": 0, "errors": 0, "stopped": {}, "skipped_over_cap": 0,
             "counties": {}, "excluded": {},
         }
         if not recheck_enabled():
@@ -519,16 +559,24 @@ class PendingBondRecheck:
             if over:
                 logger.info("bond-recheck: %s %d due over the cap, left for a later run", label, over)
             pause = county_pause(scraper, self.default_pause_s)
-            c_stats = {"due": len(due), "checked": 0, "written": 0, "not_found": 0, "skips": skips, "over_cap": over}
+            c_stats = {"due": len(due), "checked": 0, "written": 0, "no_result": 0, "errors": 0,
+                       "skips": skips, "over_cap": over}
             for i, doc in enumerate(batch):
                 if i:
                     self._sleep(pause)
                 self._recheck_one(scraper, label, doc, now, stats, c_stats)
+            if len(batch) >= 2 and c_stats["no_result"] == len(batch):
+                # Every re-check came back empty: likely an outage or drift, not
+                # missing bookings. Nothing was written and nothing was stopped.
+                logger.warning(
+                    "bond-recheck: %s returned no result for all %d re-checks (errors=%d); source may be down or drifted",
+                    label, len(batch), c_stats["errors"],
+                )
             budget -= len(batch)
             stats["counties"][label] = c_stats
         logger.info(
-            "bond-recheck: checked=%d written=%d not_found=%d stopped=%s over_cap=%d excluded=%d",
-            stats["checked"], stats["written"], stats["not_found"], stats["stopped"],
+            "bond-recheck: checked=%d written=%d no_result=%d errors=%d stopped=%s over_cap=%d excluded=%d",
+            stats["checked"], stats["written"], stats["no_result"], stats["errors"], stats["stopped"],
             stats["skipped_over_cap"], len(stats["excluded"]),
         )
         return stats
@@ -537,43 +585,47 @@ class PendingBondRecheck:
         state, county, bk = doc["state"], doc["county"], str(doc["booking_number"])
         stats["checked"] += 1
         c_stats["checked"] += 1
+        outcome = "no_result"
         try:
             fetched = scraper.fetch_bond_recheck(bk, doc.get("detail_url") or "")
         except Exception as exc:
-            logger.warning("bond-recheck: %s %s fetch error (%s); nothing written", label, bk, type(exc).__name__)
+            outcome = f"fetch_error:{type(exc).__name__}"
+            stats["errors"] += 1
+            c_stats["errors"] += 1
             fetched = None
         if fetched is None or str(fetched.Booking_Number or "").strip() != bk:
-            stats["not_found"] += 1
-            c_stats["not_found"] += 1
-            prev = 0
-            try:
-                prev = int((self._load_states(state, county, [bk]).get(bk) or {}).get("not_found_streak") or 0)
-            except Exception:
-                pass
-            stop = STOP_NOT_FOUND if prev + 1 >= MAX_NOT_FOUND_STREAK else None
-            logger.info("bond-recheck: %s %s not found on source; nothing written%s", label, bk,
-                        f" (stop={stop})" if stop else "")
-            self._save_state(state, county, bk, now, "not_found", stop, found=False, fields_changed=[])
-            if stop:
-                stats["stopped"][stop] = stats["stopped"].get(stop, 0) + 1
+            # None means "no usable result" (not found, timeout, 5xx, drift):
+            # the hooks can't always tell these apart, so nothing is written,
+            # nothing is stopped, and the booking stays on its cadence. Never
+            # treated as released.
+            stats["no_result"] += 1
+            c_stats["no_result"] += 1
+            logger.info("bond-recheck: %s %s %s; nothing written", label, bk, outcome)
+            self._save_state(state, county, bk, now, outcome, None, found=False, fields_changed=[])
             return
         full = self._writer.arrests.find_one({"state": state, "county": county, "booking_number": bk})
         if not full:
             logger.info("bond-recheck: %s %s stored doc vanished; nothing written", label, bk)
             return
         record = merge_with_stored(fetched, full, now)
+        kept_pair = keep_stored_pair_if_writer_would(record, full)
         self._score(record)
         changed = changed_fields(full, record)
-        stop = stop_reason_for(record)
         for w in self.mongo_writers:
             w.write_records([record], county)
         stats["written"] += 1
         c_stats["written"] += 1
+        # Stop only on what was actually persisted (the writer's pair rule and
+        # staff protections may have kept stored values).
+        persisted = self._writer.arrests.find_one({"state": state, "county": county, "booking_number": bk}) or {}
+        stop = stop_reason_for_doc(persisted)
         if stop:
             stats["stopped"][stop] = stats["stopped"].get(stop, 0) + 1
+        if stop == STOP_BOND_PUBLISHED:
+            self._notify_bond_set(ArrestRecord.from_mongo_doc(persisted))
         logger.info(
-            "bond-recheck: %s %s refreshed; changed=%s stop=%s",
-            label, bk, ",".join(changed) or "-", stop or "-",
+            "bond-recheck: %s %s refreshed; changed=%s stop=%s%s",
+            label, bk, ",".join(changed) or "-", stop or "-", " (stored charges/bond pair kept)" if kept_pair else "",
         )
         self._save_state(state, county, bk, now, "refreshed", stop, found=True, fields_changed=changed)
 
