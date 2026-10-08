@@ -207,9 +207,41 @@ def test_prepare_and_send_does_not_burn_the_power(monkeypatch):
     assert poa.packets.docs[0]["created_at"] == created_at
     assert "find_one" not in Path(packet.__file__).read_text(encoding="utf-8").split("async def _store_packet", 1)[1].split("async def send_packet", 1)[0]
     assert "upsert=True" in Path(packet.__file__).read_text(encoding="utf-8")
+    store = Path(packet.__file__).read_text(encoding="utf-8").split("async def _store_packet", 1)[1].split("async def send_packet", 1)[0]
+    assert '{"packet_id": packet_id}' in store
+    assert '{"bond_case_id": packet_id}' not in store
     unconfirmed = client.post("/api/bond-packet/send", json=_body(confirmed=False))
     assert unconfirmed.status_code == 400
     assert unconfirmed.json()["error"] == "staff_confirmation_required"
+
+
+def test_send_leaves_a_signed_packet_on_the_same_bond_case(monkeypatch):
+    poa = _install(monkeypatch)
+    poa.packets.docs.append(
+        {
+            "packet_id": "PKT-signed",
+            "bond_case_id": "BC-1",
+            "status": "signed",
+            "tenant_id": "shamrock",
+            "docuseal_submission_id": "sub-signed",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+    )
+    _patch_providers(monkeypatch)
+    sent = TestClient(_app()).post("/api/bond-packet/send", json=_body())
+    assert sent.status_code == 200
+    assert len(poa.packets.docs) == 2
+    signed = next(doc for doc in poa.packets.docs if doc["packet_id"] == "PKT-signed")
+    assert signed["status"] == "signed"
+    assert signed["bond_case_id"] == "BC-1"
+    assert signed["docuseal_submission_id"] == "sub-signed"
+    assert signed["created_at"] == "2026-01-01T00:00:00+00:00"
+    started = next(doc for doc in poa.packets.docs if doc["packet_id"] == "BC-1")
+    assert started["status"] == "sent"
+    assert started["bond_case_id"] == "BC-1"
+    assert started["docuseal_submission_id"] == "sub-1"
+    assert poa.packets.filters[-1]["packet_id"] == "BC-1"
+    assert "bond_case_id" not in poa.packets.filters[-1]
 
 
 def test_blocked_preflight_does_not_create_a_submission(monkeypatch):

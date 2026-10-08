@@ -305,7 +305,7 @@ async def _store_packet(binding: dict, template_id: str, submission: dict, links
     submission_id = str((submission or {}).get("submission_id") or "")
     col = get_collection("paperwork_packets")
     await col.update_one(
-        {"bond_case_id": packet_id},
+        {"packet_id": packet_id},
         {
             "$set": {
                 "packet_id": packet_id,

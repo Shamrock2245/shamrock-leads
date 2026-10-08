@@ -3,10 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (start bond packet key)
+
+### Fixed
+- **Start bond packet (`SAAS_MULTI_TENANT` still default off).** The `paperwork_packets` upsert is keyed on `packet_id` (`idx_pkt_packet_id`), with `created_at` only in `$setOnInsert`. A signed or voided packet that shares the bond case is left in place.
+
 ## [Unreleased] — 2026-10-08 (start bond packet upsert)
 
 ### Fixed
-- **Start bond packet (`SAAS_MULTI_TENANT` still default off).** The `paperwork_packets` write is one `update_one` upsert keyed on `bond_case_id`, so a second submission for the same bond case updates that row instead of inserting another.
+- **Start bond packet (`SAAS_MULTI_TENANT` still default off).** The `paperwork_packets` write is one `update_one` upsert, so a second submission for the same packet updates that row instead of inserting another.
 
 ## [Unreleased] — 2026-10-08 (lead fan-out Motor retry)
 
