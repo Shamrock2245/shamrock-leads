@@ -566,7 +566,10 @@ class ScraperScheduler:
             scraper = self._scrapers[job_id]
             logger.info(f"🏠 Relay run: {scraper.county}")
             try:
-                results[scraper.county] = scraper.run(writers=self._writers, force_canary=True)
+                from dashboard.tenancy.context import bind_platform_job
+
+                with bind_platform_job(job_name=job_id):
+                    results[scraper.county] = scraper.run(writers=self._writers, force_canary=True)
             except Exception as exc:  # noqa: BLE001 - one county must not stop the next
                 logger.error(f"❌ Relay run failed: {scraper.county}: {exc}")
                 results[scraper.county] = {"county": scraper.county, "error": str(exc)[:300]}
