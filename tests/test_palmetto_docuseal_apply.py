@@ -6,8 +6,10 @@ both SSA releases must survive unchanged.
 """
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
+import uuid
 from pathlib import Path
 
 import pytest
@@ -649,3 +651,53 @@ def test_committed_spec_matches_generated_spec():
     generated = module.spec_document()
     committed = json.loads(SPEC_JSON.read_text(encoding="utf-8"))
     assert committed == generated
+
+
+def _assert_put_identity(template, plan):
+    doc_uuids = {row["uuid"] for row in template["documents"]}
+    seen = []
+    for field in plan["fields"]:
+        field_uuid = field.get("uuid")
+        assert isinstance(field_uuid, str) and field_uuid.strip(), field.get("name")
+        seen.append(field_uuid)
+        areas = field.get("areas") or []
+        assert areas, field.get("name")
+        for area in areas:
+            assert area.get("attachment_uuid") in doc_uuids, (field.get("name"), area.get("attachment_uuid"))
+    assert len(seen) == len(set(seen))
+    return set(seen)
+
+
+def test_put_fields_have_unique_uuids_on_target_documents():
+    """DocuSeal keys prefill by field uuid. Every PUT field has one, and every area cites this template."""
+    template = _load()
+    source_uuids = {field["uuid"] for field in template["fields"]}
+    plan = plan_merge(template)
+    written = _assert_put_identity(template, plan)
+    kept = written & source_uuids
+    assert kept
+    for field in plan["fields"]:
+        if field["uuid"] not in source_uuids:
+            continue
+        original = next(item for item in template["fields"] if item["uuid"] == field["uuid"])
+        assert field["name"] == original["name"]
+        assert field["submitter_uuid"] == original["submitter_uuid"]
+    assert written - source_uuids
+
+
+def test_clone_areas_use_the_clone_document_uuids():
+    """A clone issues new document uuids. Areas follow those, and existing field uuids stay."""
+    source = _load()
+    template = copy.deepcopy(source)
+    for document in template["documents"]:
+        document["uuid"] = str(uuid.uuid4())
+    source_uuids = {field["uuid"] for field in source["fields"]}
+    source_documents = {document["uuid"] for document in source["documents"]}
+    plan = plan_merge(template)
+    written = _assert_put_identity(template, plan)
+    for field in plan["fields"]:
+        for area in field["areas"]:
+            assert area["attachment_uuid"] not in source_documents
+    assert written & source_uuids
+    assert written - source_uuids
+    assert "d8ae60c4-18e2-4677-b375-620d974a5421" in written

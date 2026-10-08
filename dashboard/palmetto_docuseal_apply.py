@@ -21,6 +21,7 @@ attachment on the template.
 from __future__ import annotations
 
 import copy
+import uuid
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from dashboard.palmetto_field_placement import docuseal_fields
@@ -200,35 +201,94 @@ class PalmettoApplyError(Exception):
     """The template cannot be updated without dropping or mis-routing a field."""
 
 
-def template_attachments(template: Mapping[str, Any]) -> List[Dict[str, str]]:
-    """Attachment rows in template order. Area uuids come from ``schema``."""
-    schema = template.get("schema") or []
-    documents = template.get("documents") or []
-    if isinstance(schema, dict):
-        schema = list(schema.values())
-    if isinstance(documents, dict):
-        documents = list(documents.values())
+def _as_list(value: Any) -> List[Any]:
+    if isinstance(value, dict):
+        return list(value.values())
+    if isinstance(value, list):
+        return value
+    return []
+
+
+def _attachment_catalog(template: Mapping[str, Any]) -> Tuple[List[Dict[str, str]], Dict[str, str]]:
+    """Attachment rows whose uuid is the target document uuid.
+
+    A clone keeps the schema order and gives every document a new uuid.
+    Areas are written with that document uuid. A schema attachment uuid is
+    only a lookup key onto the document in the same position.
+    """
+    schema = [item for item in _as_list(template.get("schema")) if isinstance(item, dict)]
+    documents = [item for item in _as_list(template.get("documents")) if isinstance(item, dict)]
     rows: List[Dict[str, str]] = []
-    if isinstance(schema, list) and schema:
+    remap: Dict[str, str] = {}
+    if schema:
         for index, item in enumerate(schema):
-            if not isinstance(item, dict):
-                continue
-            uuid = str(item.get("attachment_uuid") or item.get("uuid") or "").strip()
+            schema_uuid = str(item.get("attachment_uuid") or item.get("uuid") or "").strip()
+            document = documents[index] if index < len(documents) else {}
+            document_uuid = str(document.get("uuid") or document.get("attachment_uuid") or "").strip()
+            filename = str(document.get("filename") or document.get("name") or "").strip()
             name = str(item.get("name") or "").strip()
-            filename = ""
-            if isinstance(documents, list) and index < len(documents) and isinstance(documents[index], dict):
-                filename = str(documents[index].get("filename") or documents[index].get("name") or "").strip()
-            rows.append({"uuid": uuid, "name": name, "filename": filename or name})
-        return [row for row in rows if row["uuid"]]
-    if isinstance(documents, list):
-        for item in documents:
-            if not isinstance(item, dict):
+            canonical = document_uuid or schema_uuid
+            if not canonical:
                 continue
-            uuid = str(item.get("uuid") or item.get("attachment_uuid") or "").strip()
-            filename = str(item.get("filename") or item.get("name") or "").strip()
-            if uuid:
-                rows.append({"uuid": uuid, "name": filename, "filename": filename})
+            if schema_uuid:
+                remap[schema_uuid] = canonical
+            remap[canonical] = canonical
+            rows.append({"uuid": canonical, "name": name, "filename": filename or name})
+        return rows, remap
+    for item in documents:
+        document_uuid = str(item.get("uuid") or item.get("attachment_uuid") or "").strip()
+        filename = str(item.get("filename") or item.get("name") or "").strip()
+        if not document_uuid:
+            continue
+        remap[document_uuid] = document_uuid
+        rows.append({"uuid": document_uuid, "name": filename, "filename": filename})
+    return rows, remap
+
+
+def template_attachments(template: Mapping[str, Any]) -> List[Dict[str, str]]:
+    """Attachment rows in template order. The uuid is the document uuid."""
+    rows, _remap = _attachment_catalog(template)
     return rows
+
+
+def document_uuids(template: Mapping[str, Any]) -> set:
+    """Uuids of the documents on this template, which a clone regenerates."""
+    found = set()
+    for item in _as_list(template.get("documents")):
+        if not isinstance(item, dict):
+            continue
+        value = str(item.get("uuid") or item.get("attachment_uuid") or "").strip()
+        if value:
+            found.add(value)
+    return found
+
+
+def assert_put_identity(template: Mapping[str, Any], fields: Sequence[Mapping[str, Any]]) -> None:
+    """Refuse a PUT whose fields DocuSeal cannot key, or whose areas miss the target documents."""
+    allowed = document_uuids(template)
+    if not allowed:
+        raise PalmettoApplyError(
+            "Target template has no document uuids. Refusing to write fields."
+        )
+    seen = set()
+    for field in fields:
+        name = str(field.get("name") or "").strip() or "(unnamed)"
+        field_uuid = str(field.get("uuid") or "").strip()
+        if not field_uuid:
+            raise PalmettoApplyError(f"Field {name} has no uuid.")
+        if field_uuid in seen:
+            raise PalmettoApplyError(f"Field uuid {field_uuid} is duplicated ({name}).")
+        seen.add(field_uuid)
+        areas = [area for area in (field.get("areas") or []) if isinstance(area, dict)]
+        if not areas:
+            raise PalmettoApplyError(f"Field {name} has no area.")
+        for area in areas:
+            attachment = str(area.get("attachment_uuid") or "").strip()
+            if attachment not in allowed:
+                raise PalmettoApplyError(
+                    f"Field {name} attachment {attachment or '(blank)'} "
+                    "is not a document on the target template."
+                )
 
 
 def _score(slug: str, blob: str) -> int:
@@ -404,10 +464,11 @@ def _build_field(
     if len(kinds) != 1:
         raise PalmettoApplyError(f"Spec field {name} has conflicting types.")
     kind = _emitted_type(spec_group, name)
-    payload: Dict[str, Any] = {}
-    if existing_uuid:
-        payload["uuid"] = existing_uuid
-    payload["submitter_uuid"] = submitter_uuid
+    kept_uuid = str(existing_uuid or "").strip()
+    payload: Dict[str, Any] = {
+        "uuid": kept_uuid or str(uuid.uuid4()),
+        "submitter_uuid": submitter_uuid,
+    }
     payload["name"] = name
     payload["type"] = kind
     if kind == "signature":
@@ -455,8 +516,8 @@ def plan_merge(
     Wholly uncovered fields compare equal to the input field.
     """
     spec_fields = list(spec_fields if spec_fields is not None else docuseal_fields())
+    attachments, remap = _attachment_catalog(template)
     matched = match_attachments(template)
-    attachments = template_attachments(template)
     known = {row["uuid"] for row in attachments}
     covered_uuids = {
         row["uuid"]
@@ -467,7 +528,18 @@ def plan_merge(
     page_delta = live_page_delta(template)
     submitters = _submitters(template)
 
-    original_fields = [field for field in (template.get("fields") or []) if isinstance(field, dict)]
+    original_fields = []
+    for source in template.get("fields") or []:
+        if not isinstance(source, dict):
+            continue
+        field = copy.deepcopy(source)
+        for area in field.get("areas") or []:
+            if not isinstance(area, dict):
+                continue
+            current = str(area.get("attachment_uuid") or "").strip()
+            if current in remap:
+                area["attachment_uuid"] = remap[current]
+        original_fields.append(field)
     for field in original_fields:
         areas = [area for area in (field.get("areas") or []) if isinstance(area, dict)]
         uuids = _area_uuids(field)
@@ -631,6 +703,7 @@ def plan_merge(
         if row["uuid"] in covered_uuids:
             _emit(row["uuid"])
 
+    assert_put_identity(template, payload)
     return {
         "recommended": "clone",
         "clone_name": CLONE_NAME,

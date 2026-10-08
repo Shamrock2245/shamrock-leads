@@ -27,7 +27,12 @@ import urllib.error
 import urllib.request
 from typing import Any, List, Optional
 
-from dashboard.palmetto_docuseal_apply import CLONE_NAME, PalmettoApplyError, plan_merge
+from dashboard.palmetto_docuseal_apply import (
+    CLONE_NAME,
+    PalmettoApplyError,
+    assert_put_identity,
+    plan_merge,
+)
 from dashboard.palmetto_field_placement import PACKET_INVENTORY, QUESTIONS, docuseal_fields
 
 
@@ -208,6 +213,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             current = _request("GET", f"{base}/api/templates/{source_id}", token)
             target_id = source_id
         plan = plan_merge(current)
+        assert_put_identity(current, plan["fields"])
     except urllib.error.HTTPError as exc:
         print(f"DocuSeal request failed: {exc.code}. Stopping.", file=sys.stderr)
         return 2
