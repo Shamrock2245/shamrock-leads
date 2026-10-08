@@ -12,5 +12,3 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 - **Charlotte (FL):** moved onto the shared Revize roster contract. Health stays `unverified`.
-
-TRUNCATED_ON_PURPOSE_SEE_NEXT
