@@ -130,11 +130,16 @@ def _application() -> List[Dict[str, Any]]:
     agent_license, license_prefs = AGENT_LINE_BOXES[d]["license"]
     rows: List[Dict[str, Any]] = [
         # Right-hand bond box. Values start after each printed label.
-        _f(d, "app_defendant_name", "text", df, 468, 2, 138, 12, "defendant_name", required=True),
+        # No preferences: centered alignment and auto-size print this at 7pt,
+        # with the baseline clear of the underline. A worst-case real name is
+        # 160pt at 11pt, and this line only has room for about 138pt.
+        _f(d, "app_defendant_name", "text", df, 468, 0, 138, 12.87, "defendant_name", required=True),
         _f(d, "app_agent_name", "text", bd, *agent_name, "agent_name", required=True, preferences=name_prefs),
         _f(d, "app_agent_license", "text", bd, *agent_license, "agent_license", preferences=license_prefs),
-        _f(d, "app_power_number", "text", bd, 466, 30, 140, 12, "poa_number", required=True),
-        _f(d, "app_case_number", "text", bd, 458, 44, 148, 12, "case_number", required=True),
+        # Height 14 or more auto-sizes to 11pt. font_size is not locked.
+        _f(d, "app_power_number", "text", bd, 466, 27.2, 140, 14, "poa_number", required=True, preferences={"valign": "bottom"}),
+        # Under 13.98pt, so this auto-sizes to 7pt. An 11pt box would cross POWER NO.
+        _f(d, "app_case_number", "text", bd, 458, 42, 148, 11.9, "case_number", required=True, preferences={"valign": "bottom"}),
         _f(d, "app_execution_date", "text", bd, 488, 58, 118, 12, "today_date", required=True),
         _f(d, "app_contacted_by", "text", bd, 482, 72, 124, 12, "contacted_by"),
         _f(d, "app_contact_address", "text", bd, 458, 86, 148, 12, "defendant_address"),
@@ -147,7 +152,8 @@ def _application() -> List[Dict[str, Any]]:
         _f(d, "app_charge", "text", df, 82, 78, 310, 12, "charge_line_1", required=True),
         # Bond No. underline is y=150; the premium underline is y=158.
         # A 12pt box on that 8pt pitch covered the next line.
-        _f(d, "app_bond_no", "text", df, 340, 143, 78, 7, "poa_number"),
+        # Same poa_number field as POWER NO. DocuSeal stores preferences per field.
+        _f(d, "app_bond_no", "text", df, 340, 143, 78, 7, "poa_number", preferences={"valign": "bottom"}),
         _f(d, "app_bond_date", "text", df, 441, 143, 100, 7, "today_date"),
         _f(d, "app_premium_words", "text", df, 318, 151, 122, 7, "premium_words", required=True),
         _f(d, "app_premium_numeric", "text", df, 476, 151, 94, 7, "premium_numeric", required=True),

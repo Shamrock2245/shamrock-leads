@@ -13,6 +13,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - A detail fetch failure or a drifted detail page skips that booking, so nothing blank is written over stored data. The run raises when every detail fetch fails, when no detail page is usable, or when no page in the run has a charge grid. Detail requests are paced (0.4 s) and use plain requests.
   - A row whose roster Offenses cell is blank and whose detail page has no charge grid is skipped, instead of `$set`ting blank charges over stored ones.
 - Tests: `tests/test_fl_hernando_detail_status.py`.
+## [Unreleased] — 2026-10-08 (Palmetto application header placement)
+
+### Changed
+- **Palmetto application.** The header DEFENDANT line (`app_defendant_name`) is `468, 0, 138, 12.87` with no preferences, so it auto-sizes to 7pt and the baseline stays clear of the underline. POWER NO. (`app_power_number`) is `466, 27.2, 140, 14` with `valign: bottom` and no locked font size, so the 14pt box auto-sizes to 11pt. Bond No. (`app_bond_no`) keeps its box and sets the same `valign: bottom`, because both boxes are the `poa_number` field and DocuSeal stores preferences once per field. CASE NO. (`app_case_number`) is `458, 42, 148, 11.9` with `valign: bottom` and no locked font size, so the box stays under 13.98pt and auto-sizes to 7pt. An 11pt box would cross into POWER NO. `app_def_name`, the AGENT line, and the indemnity case number are unchanged. Templates 1 and 5 are not changed by this commit.
 
 ## [Unreleased] — 2026-10-08 (Hernando unknown bond)
 
