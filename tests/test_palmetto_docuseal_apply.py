@@ -14,6 +14,7 @@ import pytest
 
 from dashboard.palmetto_docuseal_apply import (
     BLANK_BY_DESIGN,
+    ROLE_CHANGES,
     SIGNATURE_GEOMETRY_EXCEPTIONS,
     PalmettoApplyError,
     keeps_live_geometry,
@@ -24,6 +25,7 @@ from dashboard.services.docuseal_service import DocuSealService
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests" / "fixtures" / "docuseal" / "template_5.json"
 SCRIPT = ROOT / "scripts" / "apply_palmetto_docuseal_fields.py"
+SPEC_JSON = ROOT / "templates" / "palmetto" / "palmetto_docuseal_field_spec.json"
 
 # schema attachment uuids for documents the spec does not replace
 UNCOVERED = {
@@ -517,3 +519,133 @@ def test_clone_puts_the_clone_and_prints_its_id(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "clone_template_id=99" in out
     assert "source_template_id=5" in out
+
+
+def _overlap_ratio(left: dict, right: dict) -> float:
+    """Intersection area divided by the smaller box. 0 when they miss."""
+    ax0, ay0 = float(left["x"]), float(left["y"])
+    ax1, ay1 = ax0 + float(left["w"]), ay0 + float(left["h"])
+    bx0, by0 = float(right["x"]), float(right["y"])
+    bx1, by1 = bx0 + float(right["w"]), by0 + float(right["h"])
+    ix = max(0.0, min(ax1, bx1) - max(ax0, bx0))
+    iy = max(0.0, min(ay1, by1) - max(ay0, by0))
+    inter = ix * iy
+    if inter <= 0:
+        return 0.0
+    smaller = min(float(left["w"]) * float(left["h"]), float(right["w"]) * float(right["h"]))
+    if smaller <= 0:
+        return 0.0
+    return inter / smaller
+
+
+def test_rebuilt_text_boxes_do_not_stack():
+    """Text and prefill-date boxes on one page stay clear of each other and of live signature boxes.
+
+    More than about 10% of the smaller box is a fail. Any overlap with a
+    live signature, initials, or date-signed box is a fail. The Receipt Date
+    blank is the live defendant date (uuid 3b8faaa0); a prefilled today_date
+    must not sit on it.
+    """
+    template = _load()
+    plan = plan_merge(template)
+    texts = []
+    locked = []
+    for field in plan["fields"]:
+        kind = str(field.get("type") or "")
+        for area in field.get("areas") or []:
+            if area.get("attachment_uuid") not in COVERED:
+                continue
+            row = (field, area)
+            if kind in ("text", "date") and not keeps_live_geometry(field):
+                texts.append(row)
+            elif kind in ("signature", "initials") or keeps_live_geometry(field):
+                locked.append(row)
+    assert len(texts) >= 100
+    stacked = []
+    for index, (left_field, left) in enumerate(texts):
+        for right_field, right in texts[index + 1:]:
+            if left.get("attachment_uuid") != right.get("attachment_uuid"):
+                continue
+            if left.get("page") != right.get("page"):
+                continue
+            ratio = _overlap_ratio(left, right)
+            if ratio > 0.10:
+                stacked.append((ratio, left_field.get("name"), right_field.get("name")))
+    assert stacked == []
+    on_signature = []
+    for text_field, text_area in texts:
+        for lock_field, lock_area in locked:
+            if text_area.get("attachment_uuid") != lock_area.get("attachment_uuid"):
+                continue
+            if text_area.get("page") != lock_area.get("page"):
+                continue
+            ratio = _overlap_ratio(text_area, lock_area)
+            if ratio > 0.005:
+                on_signature.append((ratio, text_field.get("name"), lock_field.get("name"), lock_field.get("type")))
+    assert on_signature == []
+    collateral = "38b6ffec-51c5-4016-90a1-80d62859cab1"
+    live_date = next(field for field in template["fields"] if str(field.get("uuid") or "").startswith("3b8faaa0"))
+    live_area = next(area for area in live_date["areas"] if area.get("attachment_uuid") == collateral)
+    for field, area in texts:
+        if area.get("attachment_uuid") != collateral or field.get("name") != "today_date":
+            continue
+        assert _overlap_ratio(area, live_area) <= 0.005
+
+
+def test_rebuilt_text_and_date_keep_the_live_role():
+    """Prefill boxes stay on the live template 5 submitter unless ROLE_CHANGES says why."""
+    for name, reason in ROLE_CHANGES.items():
+        assert str(name).strip()
+        assert str(reason).strip()
+    template = _load()
+    submitters = {row["uuid"]: row["name"] for row in template["submitters"]}
+    live_roles = {}
+    for field in template["fields"]:
+        if field.get("type") not in ("text", "date", "number"):
+            continue
+        role = submitters[field["submitter_uuid"]]
+        for area in field.get("areas") or []:
+            if area.get("attachment_uuid") not in COVERED:
+                continue
+            live_roles.setdefault((area["attachment_uuid"], field.get("name") or ""), set()).add(role)
+    plan = plan_merge(template)
+    checked = 0
+    changed = []
+    for field in plan["fields"]:
+        if field.get("type") not in ("text", "date"):
+            continue
+        if keeps_live_geometry(field):
+            continue
+        role = submitters[field["submitter_uuid"]]
+        seen = set()
+        for area in field.get("areas") or []:
+            attachment = area.get("attachment_uuid")
+            if attachment not in COVERED or attachment in seen:
+                continue
+            seen.add(attachment)
+            name = field.get("name") or ""
+            known = live_roles.get((attachment, name))
+            if not known:
+                expected = "bondsman"
+                matches = role == expected
+            elif len(known) == 1:
+                expected = next(iter(known))
+                matches = role == expected
+            else:
+                expected = known
+                matches = role in known
+            if name in ROLE_CHANGES:
+                assert not matches, f"{name} is listed as a role change but still matches live {expected}"
+                changed.append(name)
+                continue
+            assert matches, f"{name} role {role} does not match live {expected}"
+            checked += 1
+    assert checked >= 100
+    assert changed == []
+
+
+def test_committed_spec_matches_generated_spec():
+    module = _script()
+    generated = module.spec_document()
+    committed = json.loads(SPEC_JSON.read_text(encoding="utf-8"))
+    assert committed == generated

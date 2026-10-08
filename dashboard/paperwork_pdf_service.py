@@ -326,17 +326,56 @@ def place_text_by_anchor(
     anchor_rect = hits[index]
     baseline = anchor_rect.y0 + dy
     left = anchor_rect.x1 + dx
-    box = fitz.Rect(left, baseline - font_size, page.rect.x1 - 2, baseline + 2)
+    # insert_textbox needs about 1.37x the font size. A box of font_size+2
+    # (12pt at 10pt) returns a negative spare and writes nothing.
+    box = fitz.Rect(
+        left,
+        baseline - font_size * 1.2,
+        page.rect.x1 - 2,
+        baseline + font_size * 0.5,
+    )
     box = box & page.rect
-    if box.is_empty or box.width < 8 or box.height < 4:
+    if box.is_empty or box.width < 8 or box.height < font_size * 1.2:
+        _insert_text_on_page(page, left, baseline, value, font_size)
         return
-    page.insert_textbox(
+    spare = page.insert_textbox(
         box,
         value,
         fontsize=font_size,
         fontname="helv",
         color=(0, 0, 0),
         align=fitz.TEXT_ALIGN_LEFT,
+    )
+    if spare < 0:
+        smaller = max(6.0, font_size - 1)
+        spare = page.insert_textbox(
+            box,
+            value,
+            fontsize=smaller,
+            fontname="helv",
+            color=(0, 0, 0),
+            align=fitz.TEXT_ALIGN_LEFT,
+        )
+    if spare < 0:
+        _insert_text_on_page(page, box.x0, baseline, value, max(6.0, font_size - 1))
+
+
+def _insert_text_on_page(
+    page: fitz.Page,
+    x: float,
+    baseline: float,
+    value: str,
+    font_size: float,
+) -> None:
+    """Baseline fallback when a text box is too short for the font."""
+    y = min(max(baseline, page.rect.y0 + font_size), page.rect.y1 - 1)
+    x = min(max(x, page.rect.x0), page.rect.x1 - 4)
+    page.insert_text(
+        fitz.Point(x, y),
+        value,
+        fontsize=font_size,
+        fontname="helv",
+        color=(0, 0, 0),
     )
 
 
@@ -421,7 +460,17 @@ def _hydrate_common_fields(
 
     place_text_by_anchor(page, "(Defendant/Principal)", def_name, dx=5, dy=-15)
     place_text_by_anchor(page, "Defendant", def_name, dx=10, dy=10, index=0)
-    place_text_by_anchor(page, "Name", person.get("name") or def_name, dx=10, dy=10)
+    indemnitor_name = (person.get("name") or "").strip()
+    # "Name" is skipped when it only appears in the agent header. A real
+    # Indemnitor label gets the indemnitor. A form with neither (the OSI
+    # application text layer) still prints the name under the defendant line,
+    # clear of that header.
+    if indemnitor_name:
+        if _anchor_hits(page, "Indemnitor"):
+            place_text_by_anchor(page, "Indemnitor", indemnitor_name, dx=8, dy=2)
+        elif not _anchor_hits(page, "Name"):
+            place_text_by_anchor(page, "Defendant", indemnitor_name, dx=10, dy=24, index=0)
+    place_text_by_anchor(page, "Name", indemnitor_name or def_name, dx=10, dy=10)
     place_text_by_anchor(page, "Address", person.get("address") or "", dx=10, dy=10)
     place_text_by_anchor(page, "Case", str(case_no), dx=10, dy=10)
     place_text_by_anchor(page, "County", str(county), dx=10, dy=10)

@@ -219,7 +219,8 @@ def test_osi_stitch_does_not_stamp_the_agent_block():
 
     The five OSI forms that share the 'Agent name, Address, Phone & License #'
     line used to take the first case-insensitive 'Name' / 'Address' hit, which
-    is that header. Raw {{...}} tags must not be printed either.
+    is that header. Raw {{...}} tags must not be printed either. The defendant
+    and indemnitor names must still print on each form, outside that header.
     """
     name = "ZZTESTINDEMNITOR"
     address = "ZZTESTADDRESSLANE"
@@ -251,8 +252,10 @@ def test_osi_stitch_does_not_stamp_the_agent_block():
         assert raw, slug
         doc = fitz.open(stream=raw, filetype="pdf")
         try:
+            page_text = []
             for page in doc:
-                assert "{{" not in page.get_text(), slug
+                page_text.append(page.get_text())
+                assert "{{" not in page_text[-1], slug
                 for hit in page.search_for("Agent name"):
                     clip = fitz.Rect(
                         hit.x0 - 40,
@@ -270,5 +273,8 @@ def test_osi_stitch_does_not_stamp_the_agent_block():
                         assert page.rect.y0 - 1 <= rect.y0 <= page.rect.y1 + 1, slug
                         assert rect.x1 <= page.rect.x1 + 1, slug
                         assert rect.y1 <= page.rect.y1 + 1, slug
+            stamped = "\n".join(page_text)
+            assert defendant in stamped, slug
+            assert name in stamped, slug
         finally:
             doc.close()

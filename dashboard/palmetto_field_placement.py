@@ -104,7 +104,8 @@ def _appearance() -> List[Dict[str, Any]]:
 
 def _application() -> List[Dict[str, Any]]:
     d = "defendant-application"
-    df = ROLE_DEFENDANT
+    # Live template 5 puts every prefilled text and date box on bondsman.
+    df = ROLE_BONDSMAN
     bd = ROLE_BONDSMAN
     rows: List[Dict[str, Any]] = [
         # Right-hand bond box. Values start after each printed label.
@@ -122,10 +123,12 @@ def _application() -> List[Dict[str, Any]]:
         _f(d, "app_court_name", "text", df, 58, 64, 136, 12, "court_type", required=True),
         _f(d, "app_court_county", "text", df, 228, 64, 128, 12, "county", required=True),
         _f(d, "app_charge", "text", df, 82, 78, 310, 12, "charge_line_1", required=True),
-        _f(d, "app_bond_no", "text", df, 342, 143, 76, 12, "poa_number"),
-        _f(d, "app_bond_date", "text", df, 442, 143, 98, 12, "today_date"),
-        _f(d, "app_premium_words", "text", df, 318, 151, 122, 12, "premium_words", required=True),
-        _f(d, "app_premium_numeric", "text", df, 478, 151, 90, 12, "premium_numeric", required=True),
+        # Bond No. underline is y=150; the premium underline is y=158.
+        # A 12pt box on that 8pt pitch covered the next line.
+        _f(d, "app_bond_no", "text", df, 340, 143, 78, 7, "poa_number"),
+        _f(d, "app_bond_date", "text", df, 441, 143, 100, 7, "today_date"),
+        _f(d, "app_premium_words", "text", df, 318, 151, 122, 7, "premium_words", required=True),
+        _f(d, "app_premium_numeric", "text", df, 476, 151, 94, 7, "premium_numeric", required=True),
         _f(d, "app_def_name", "text", df, 112, 188, 190, 12, "defendant_name", required=True),
         _f(d, "app_alias", "text", df, 372, 188, 220, 12, "defendant_alias"),
         _f(d, "app_street", "text", df, 96, 203, 155, 12, "defendant_address", required=True),
@@ -177,7 +180,7 @@ def _application() -> List[Dict[str, Any]]:
         # Live template 5 agent_signature_5 / defendant_signature_3. The measured
         # guess sat left of the AGENT WITNESS line; these are the live areas.
         _f(d, "app_agent_signature", "signature", bd, 130.97, 736.30, 155.45, 22.89, ""),
-        _f(d, "app_defendant_signature", "signature", df, 403.31, 736.30, 168.30, 20.52, ""),
+        _f(d, "app_defendant_signature", "signature", ROLE_DEFENDANT, 403.31, 736.30, 168.30, 20.52, ""),
     ]
     relatives = [
         (385, "app_parent", "def_parent_name", "def_parent_address", "def_parent_phone"),
@@ -197,7 +200,8 @@ def _application() -> List[Dict[str, Any]]:
 
 def _indemnity() -> List[Dict[str, Any]]:
     d = "indemnity-agreement"
-    ind = ROLE_INDEMNITOR
+    # Live template 5 puts every prefilled text and date box on bondsman.
+    ind = ROLE_BONDSMAN
     df = ROLE_DEFENDANT
     co = ROLE_COINDEMNITOR
     bd = ROLE_BONDSMAN
@@ -206,50 +210,57 @@ def _indemnity() -> List[Dict[str, Any]]:
         _f(d, "ind_power_number", "text", bd, 468, 36, 130, 13, "poa_number", required=True),
         _f(d, "ind_case_number", "text", bd, 460, 54, 140, 13, "case_number", required=True),
         _f(d, "ind_execution_date", "text", bd, 490, 72, 110, 13, "today_date", required=True),
-        _f(d, "ind_first_name", "text", ind, 128, 96, 72, 12, "indemnitor_first", required=True),
-        _f(d, "ind_middle_name", "text", ind, 204, 96, 70, 12, "indemnitor_middle"),
-        _f(d, "ind_last_name", "text", ind, 278, 96, 58, 12, "indemnitor_last", required=True),
-        _f(d, "ind_phone", "text", ind, 372, 94, 66, 12, "indemnitor_phone"),
-        _f(d, "ind_dob", "text", ind, 500, 94, 100, 12, "indemnitor_dob", required=True),
-        _f(d, "ind_address", "text", ind, 118, 112, 188, 12, "indemnitor_address", required=True),
-        _f(d, "ind_city", "text", ind, 336, 112, 90, 12, "indemnitor_city"),
-        _f(d, "ind_state", "text", ind, 460, 112, 46, 12, "indemnitor_state"),
-        _f(d, "ind_zip", "text", ind, 528, 112, 70, 12, "indemnitor_zip"),
-        _f(d, "ind_ssn", "text", ind, 118, 122, 100, 12, "indemnitor_ssn"),
-        _f(d, "ind_email", "text", ind, 258, 122, 175, 12, "indemnitor_email"),
-        _f(d, "ind_phone_2", "text", ind, 474, 122, 120, 12, "indemnitor_phone2"),
-        _f(d, "ind_employer", "text", ind, 94, 132, 125, 12, "indemnitor_employer"),
-        _f(d, "ind_employer_address", "text", ind, 268, 132, 320, 12, "indemnitor_employer_address"),
-        _f(d, "ind_spouse_name", "text", ind, 100, 142, 120, 12, "indemnitor_spouse_name"),
-        _f(d, "ind_spouse_dob", "text", ind, 286, 142, 58, 12, "indemnitor_spouse_dob"),
-        _f(d, "ind_spouse_email", "text", ind, 380, 142, 210, 12, "indemnitor_spouse_email"),
-        _f(d, "ind_spouse_employer", "text", ind, 94, 152, 160, 12, "indemnitor_spouse_employer"),
-        _f(d, "ind_spouse_employer_address", "text", ind, 305, 152, 280, 12, "indemnitor_spouse_employer_address"),
-        _f(d, "ind_parents", "text", ind, 76, 162, 180, 12, "def_parent_name"),
-        _f(d, "ind_parents_address", "text", ind, 305, 162, 280, 12, "def_parent_address"),
-        _f(d, "ind_bond_words", "text", ind, 212, 408, 120, 12, "bond_amount_words", required=True),
-        _f(d, "ind_bond_numeric", "text", ind, 374, 408, 124, 12, "bond_amount_numeric", required=True),
-        _f(d, "ind_poa_1", "text", ind, 170, 416, 80, 12, "poa_1", required=True),
-        _f(d, "ind_poa_2", "text", ind, 266, 416, 88, 12, "poa_2"),
-        _f(d, "ind_poa_3", "text", ind, 370, 416, 88, 12, "poa_3"),
-        _f(d, "ind_poa_4", "text", ind, 474, 416, 110, 12, "poa_4"),
-        _f(d, "ind_signed_day", "text", ind, 252, 628, 58, 12, "day", required=True),
-        _f(d, "ind_signed_month", "text", ind, 340, 628, 155, 12, "month", required=True),
-        _f(d, "ind_signed_year", "text", ind, 510, 628, 80, 12, "year", required=True),
+        # Identity rows are about 10pt apart. Height 8 sits on the line
+        # without covering the row below.
+        _f(d, "ind_first_name", "text", ind, 128, 97, 72, 8, "indemnitor_first", required=True),
+        _f(d, "ind_middle_name", "text", ind, 204, 97, 70, 8, "indemnitor_middle"),
+        _f(d, "ind_last_name", "text", ind, 278, 97, 58, 8, "indemnitor_last", required=True),
+        _f(d, "ind_phone", "text", ind, 372, 97, 66, 8, "indemnitor_phone"),
+        _f(d, "ind_dob", "text", ind, 500, 97, 100, 8, "indemnitor_dob", required=True),
+        _f(d, "ind_address", "text", ind, 118, 114, 188, 8, "indemnitor_address", required=True),
+        _f(d, "ind_city", "text", ind, 336, 114, 90, 8, "indemnitor_city"),
+        _f(d, "ind_state", "text", ind, 460, 114, 46, 8, "indemnitor_state"),
+        _f(d, "ind_zip", "text", ind, 528, 114, 70, 8, "indemnitor_zip"),
+        _f(d, "ind_ssn", "text", ind, 118, 124, 100, 8, "indemnitor_ssn"),
+        _f(d, "ind_email", "text", ind, 258, 124, 175, 8, "indemnitor_email"),
+        _f(d, "ind_phone_2", "text", ind, 474, 124, 120, 8, "indemnitor_phone2"),
+        _f(d, "ind_employer", "text", ind, 94, 134, 125, 8, "indemnitor_employer"),
+        _f(d, "ind_employer_address", "text", ind, 268, 134, 320, 8, "indemnitor_employer_address"),
+        _f(d, "ind_spouse_name", "text", ind, 100, 144, 120, 8, "indemnitor_spouse_name"),
+        _f(d, "ind_spouse_dob", "text", ind, 286, 144, 58, 8, "indemnitor_spouse_dob"),
+        _f(d, "ind_spouse_email", "text", ind, 380, 144, 210, 8, "indemnitor_spouse_email"),
+        _f(d, "ind_spouse_employer", "text", ind, 94, 154, 160, 8, "indemnitor_spouse_employer"),
+        _f(d, "ind_spouse_employer_address", "text", ind, 305, 154, 280, 8, "indemnitor_spouse_employer_address"),
+        _f(d, "ind_parents", "text", ind, 76, 165, 180, 8, "def_parent_name"),
+        _f(d, "ind_parents_address", "text", ind, 305, 165, 280, 8, "def_parent_address"),
+        # WHEREAS lines are ~7.3pt apart. Boxes sit on the underline and
+        # stop before the printed words ("of" / "Dollars" / "($" / "number(s)").
+        _f(d, "ind_bond_words", "text", ind, 210, 413, 122, 7, "bond_amount_words", required=True),
+        _f(d, "ind_bond_numeric", "text", ind, 373, 413, 129, 7, "bond_amount_numeric", required=True),
+        _f(d, "ind_poa_1", "text", ind, 168, 421, 84, 6.5, "poa_1", required=True),
+        _f(d, "ind_poa_2", "text", ind, 266, 421, 88, 6.5, "poa_2"),
+        _f(d, "ind_poa_3", "text", ind, 370, 421, 92, 6.5, "poa_3"),
+        _f(d, "ind_poa_4", "text", ind, 474, 421, 96, 6.5, "poa_4"),
+        # Stop above the WITNESSES signature row at y=639.7.
+        _f(d, "ind_signed_day", "text", ind, 252, 628, 58, 8, "day", required=True),
+        _f(d, "ind_signed_month", "text", ind, 340, 628, 155, 8, "month", required=True),
+        _f(d, "ind_signed_year", "text", ind, 510, 628, 80, 8, "year", required=True),
         # Live template 5 rows. The previous y values sat one line too high.
         _f(d, "ind_defendant_signature", "signature", df, 322.93, 641.31, 250.15, 19.14, ""),
-        _f(d, "ind_indemnitor_signature", "signature", ind, 322.32, 659.66, 250.15, 19.14, ""),
+        _f(d, "ind_indemnitor_signature", "signature", ROLE_INDEMNITOR, 322.32, 659.66, 250.15, 19.14, ""),
         _f(d, "ind_coindemnitor_signature", "signature", co, 321.71, 677.20, 250.15, 19.14, ""),
         # Three WITNESSES lines. Live field agent_signature_4 (also on the waiver).
         _f(d, "agent_signature_4", "signature", bd, 95.41, 639.72, 190.82, 19.94, ""),
         _f(d, "agent_signature_4", "signature", bd, 96.02, 659.66, 190.82, 19.94, ""),
         _f(d, "agent_signature_4", "signature", bd, 95.41, 679.60, 190.82, 19.94, ""),
-        _f(d, "ind_notary_state", "text", ind, 76, 700, 200, 12, "state"),
-        _f(d, "ind_notary_county", "text", ind, 84, 708, 200, 12, "county"),
-        _f(d, "ind_notary_day", "text", ind, 74, 722, 42, 12, "day"),
-        _f(d, "ind_notary_month", "text", ind, 146, 722, 80, 12, "month"),
-        _f(d, "ind_notary_year", "text", ind, 240, 722, 48, 12, "year"),
-        _f(d, "ind_notary_appeared", "text", ind, 40, 732, 320, 12, "indemnitor_name"),
+        # State underline y=709, county y=718, day/month/year y=731.
+        # 12pt boxes on that pitch overlapped each other.
+        _f(d, "ind_notary_state", "text", ind, 76, 701, 104, 8, "state"),
+        _f(d, "ind_notary_county", "text", ind, 84, 710, 98, 8, "county"),
+        _f(d, "ind_notary_day", "text", ind, 70, 724, 46, 7, "day"),
+        _f(d, "ind_notary_month", "text", ind, 146, 724, 80, 7, "month"),
+        _f(d, "ind_notary_year", "text", ind, 246, 724, 42, 7, "year"),
+        _f(d, "ind_notary_appeared", "text", ind, 40, 739, 320, 7, "indemnitor_name"),
     ]
     for i, y in enumerate((193, 205, 217), start=1):
         rows.append(_f(d, f"ind_ref_{i}_name", "text", ind, 55, y, 230, 11, f"reference_{i}_name"))
@@ -265,16 +276,18 @@ def _collateral() -> List[Dict[str, Any]]:
     bd = ROLE_BONDSMAN
     return [
         # Promissory note occupies the top of this carrier page (Palmetto has
-        # no separate promissory-note PDF).
-        _f(d, "note_amount_numeric", "text", ind, 40, 18, 200, 14, "bond_amount_numeric", required=True),
-        _f(d, "note_amount_words", "text", ind, 36, 70, 480, 14, "bond_amount_words", required=True),
-        _f(d, "note_defendant", "text", df, 76, 166, 400, 14, "defendant_name", required=True),
-        _f(d, "note_date", "text", ind, 56, 228, 160, 14, "today_date", required=True),
+        # no separate promissory-note PDF). Text stays on bondsman, matching
+        # live template 5. The $ underline ends at x=129, before City and State.
+        _f(d, "note_amount_numeric", "text", bd, 41, 22, 86, 8, "bond_amount_numeric", required=True),
+        _f(d, "note_amount_words", "text", bd, 36, 70, 480, 14, "bond_amount_words", required=True),
+        _f(d, "note_defendant", "text", bd, 76, 166, 400, 14, "defendant_name", required=True),
+        _f(d, "note_date", "text", bd, 56, 228, 160, 14, "today_date", required=True),
         _f(d, "note_defendant_signature", "signature", df, 340, 206, 220, 16, ""),
         _f(d, "note_indemnitor_signature", "signature", ind, 340, 226, 220, 16, ""),
         _f(d, "note_coindemnitor_signature", "signature", ROLE_COINDEMNITOR, 340, 244, 220, 16, ""),
         _f(d, "cr_number", "text", bd, 476, 296, 110, 14, "collateral_receipt_number", required=True),
-        _f(d, "cr_receipt_date", "text", bd, 452, 318, 140, 14, "today_date", required=True),
+        # Receipt Date is the live defendant date-signed box (uuid 3b8faaa0).
+        # No second blank exists, so a prefilled today_date is not placed there.
         _f(d, "cr_promissory_note", "checkbox", bd, 42, 346, 11, 11, "collateral_promissory_note"),
         _f(d, "cr_indemnity", "checkbox", bd, 221, 346, 11, 11, "collateral_indemnity"),
         _f(d, "cr_mortgage", "checkbox", bd, 366, 346, 11, 11, "collateral_mortgage"),
@@ -285,16 +298,16 @@ def _collateral() -> List[Dict[str, Any]]:
         _f(d, "cr_credit_card", "checkbox", bd, 215, 422, 11, 11, ""),
         _f(d, "cr_other", "checkbox", bd, 446, 422, 11, 11, ""),
         _f(d, "cr_card_amount", "text", bd, 328, 420, 110, 12, "premium_numeric"),
-        _f(d, "cr_received_from", "text", ind, 120, 444, 460, 14, "indemnitor_name", required=True),
-        _f(d, "cr_address", "text", ind, 82, 461, 500, 14, "indemnitor_address", required=True),
-        _f(d, "cr_defendant", "text", df, 90, 490, 290, 14, "defendant_name", required=True),
+        _f(d, "cr_received_from", "text", bd, 120, 444, 460, 14, "indemnitor_name", required=True),
+        _f(d, "cr_address", "text", bd, 82, 461, 500, 14, "indemnitor_address", required=True),
+        _f(d, "cr_defendant", "text", bd, 90, 490, 290, 14, "defendant_name", required=True),
         _f(d, "cr_bond_amount", "text", bd, 450, 490, 140, 14, "bond_amount_numeric", required=True),
         _f(d, "cr_power", "text", bd, 78, 507, 200, 14, "poa_number", required=True),
         _f(d, "cr_court", "text", bd, 326, 507, 250, 14, "court_type"),
         _f(d, "cr_charge", "text", bd, 102, 524, 480, 14, "charge_line_1", required=True),
         _f(d, "cr_card_fee_pct", "text", bd, 186, 541, 100, 12, "card_fee_percent"),
-        _f(d, "cr_received_by", "text", bd, 438, 552, 160, 14, "agent_name", required=True),
-        _f(d, "cr_in_trust_for", "text", bd, 432, 568, 50, 14, "indemnitor_name"),
+        # Received By is the signature line (agent_signature_4). There is no
+        # printed name line. In Trust for has no underline clear of the palm logo.
         # Live template 5. Received By is agent_signature_4. The return block is
         # agent_signature_5 (agent) and the bottom agent line is agent_signature_6.
         _f(d, "agent_signature_4", "signature", bd, 433.36, 540.59, 155.25, 23.68, ""),
@@ -315,7 +328,7 @@ def _information_sheet() -> List[Dict[str, Any]]:
     d = "bail-bond-information-sheet-palmetto"
     return [
         # Left underline under BOND DEFENDANT:, y=182, x=21.5–230.
-        _f(d, "bbis_defendant", "text", ROLE_DEFENDANT, 24, 168, 204, 13, "defendant_name", required=True),
+        _f(d, "bbis_defendant", "text", ROLE_BONDSMAN, 24, 168, 204, 13, "defendant_name", required=True),
         # Two right-hand underlines under POWER OF ATTORNEY NUMBER(S):.
         _f(d, "bbis_poa_1", "text", ROLE_BONDSMAN, 350, 154, 226, 13, "poa_1", required=True),
         _f(d, "bbis_poa_2", "text", ROLE_BONDSMAN, 350, 168, 228, 13, "poa_2"),
@@ -572,6 +585,50 @@ QUESTIONS: List[Dict[str, str]] = [
         "page_image": "/opt/cursor/artifacts/palmetto-rebuild/pages/osi-surety-terms_p1.png",
     },
     {
+        "topic": "Collateral receipt return-footer date",
+        "detail": (
+            "Still open. Live template 5 has no date widget on the "
+            "return-of-collateral footer. The unnamed defendant date "
+            "(uuid 3b8faaa0) is the Receipt Date blank and also spans the "
+            "SSA release. It is copied through unchanged. No date was added "
+            "on the footer."
+        ),
+        "page_image": "/opt/cursor/artifacts/palmetto-rebuild/pages/collateral-receipt_p1.png",
+    },
+    {
+        "topic": "Collateral Receipt Date prefill",
+        "detail": (
+            "The Receipt Date underline is already the live defendant "
+            "date-signed box (uuid 3b8faaa0). A bondsman today_date on that "
+            "blank would print a second date in the same space. The form has "
+            "no other Receipt Date blank, so the prefill was not placed. "
+            "The promissory-note Date line still receives today_date. "
+            "Confirm whether Receipt Date should stay the signer's date only."
+        ),
+        "page_image": "/opt/cursor/artifacts/palmetto-rebuild/pages/collateral-receipt_p1.png",
+    },
+    {
+        "topic": "Collateral Received By name",
+        "detail": (
+            "Received By is the signature line (live agent_signature_4, "
+            "uuid 21ba7f86). There is no separate printed name line. The "
+            "typed agent_name box was removed so it does not sit inside the "
+            "signature. Say if a name belongs somewhere else on this form."
+        ),
+        "page_image": "/opt/cursor/artifacts/palmetto-rebuild/pages/collateral-receipt_p1.png",
+    },
+    {
+        "topic": "Collateral In Trust for name",
+        "detail": (
+            "In Trust for: has no underline clear of the palm-tree logo. "
+            "The logo occupies the blank to the right of the label, and the "
+            "Palmetto address block starts immediately after the logo. The "
+            "indemnitor_name box was removed so it does not cover the logo. "
+            "Say where that name should go."
+        ),
+        "page_image": "/opt/cursor/artifacts/palmetto-rebuild/pages/collateral-receipt_p1.png",
+    },
+    {
         "topic": "Promissory-note dollar amount",
         "detail": (
             "The note's $ line and DOLLARS line are filled with the penal bond "
@@ -603,9 +660,9 @@ QUESTIONS: List[Dict[str, str]] = [
         "detail": (
             "Palmetto application asks for social-media login, contacted-by, "
             "and a witness line. Palmetto collateral receipt combines the "
-            "promissory note, a credit-card fee percent, and in-trust-for. "
+            "promissory note and a credit-card fee percent. "
             "Those widgets are Palmetto-only and stay blank unless the payload "
-            "already has a value."
+            "already has a value. In Trust for has no clear underline; see that question."
         ),
         "page_image": "/opt/cursor/artifacts/palmetto-rebuild/pages/defendant-application_p1.png",
     },

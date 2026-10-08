@@ -132,6 +132,13 @@ _WIDGET_NAMES = {
 # today_date is a prefill execution date, not a signature date.
 SIGNATURE_GEOMETRY_EXCEPTIONS: Dict[str, str] = {}
 
+# Resolved field name -> reason, when a rebuilt text or date box does not
+# use the live template 5 submitter for that name on that document.
+# Empty means every prefilled text and date stays on the live role.
+# On the rebuilt documents that live role is bondsman. The unnamed
+# defendant date-signed box is not in this map; it is copied unchanged.
+ROLE_CHANGES: Dict[str, str] = {}
+
 # Text, number, and date boxes the prefill does not populate. Left blank.
 # Do not invent a value for these.
 BLANK_BY_DESIGN = frozenset({
