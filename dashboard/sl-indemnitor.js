@@ -635,7 +635,9 @@ const SLIndemnitor = (() => {
       if (d.success) {
         const el = $('indPaymentLink');
         if (el) el.innerHTML = `<a href="${d.payment_link}" target="_blank" class="ind-link">${d.payment_link}</a>`;
-        toast(`💳 Payment link generated — ${money(d.premium)} premium`, 'success');
+        toast(d.amount_locked
+          ? `💳 Invoice link — ${money(d.premium)} premium (locked)`
+          : '💳 Pay-by-card link (amount not locked — stage the bond invoice first)', 'success');
       } else toast(d.error||'Failed', 'error');
     } catch(e) { toast('Error: '+e.message, 'error'); }
   }
