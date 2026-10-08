@@ -60,6 +60,7 @@ jobs:
             tests/test_agency_onboarding.py \
             tests/test_agency_billing.py \
             tests/test_surety_entitlements.py \
+            tests/test_lead_subscriptions.py \
             tests/test_secret_scanner.py \
             tests/test_brand_contacts.py \
             tests/test_prod_uptime_watchdog.py \

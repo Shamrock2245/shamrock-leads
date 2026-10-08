@@ -354,6 +354,13 @@ class MongoWriter:
             f"(of {stats['total_records']} written"
             f"{f', {skipped_invalid} skipped' if skipped_invalid else ''})"
         )
+        if new_record_indexes:
+            try:
+                from dashboard.services.lead_subscriptions import record_lead_fanout
+
+                record_lead_fanout(self.db, [records[i] for i in new_record_indexes])
+            except Exception:
+                logger.exception("lead fan-out skipped")
         return stats
 
     def get_arrests_by_county(

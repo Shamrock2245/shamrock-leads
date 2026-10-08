@@ -41,6 +41,7 @@ GLOBAL_COLLECTIONS = frozenset(
         "scraper_run_log",
         "scraper_triggers",
         "ingestion_log",
+        "lead_fanout_outbox",
         "error_log",
         "source_performance",
         "alpr_worker_status",
@@ -54,6 +55,7 @@ PLATFORM_COLLECTIONS = frozenset(
     {
         "tenants",
         "tenant_memberships",
+        "lead_county_claims",
     }
 )
 
@@ -126,6 +128,7 @@ KNOWN_APP_COLLECTIONS = frozenset(
         "intake_queue",
         "intake_recovery_log",
         "intakes",
+        "lead_fanout_outbox",
         "leads",
         "lee_county_config",
         "lee_county_outreach_log",
