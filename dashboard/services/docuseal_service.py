@@ -2140,9 +2140,9 @@ def _pair_from_agent_source(source: Any) -> Optional[tuple]:
     A registry name returns that entry's own license. A registered license
     with no usable name returns that holder's full ``BOND_AGENTS`` pair.
     A name that misses the registry is kept only with a license that is not
-    registered. An unregistered license with no name returns a blank name
-    and that license, and does not invent an agent. Filtered labels are
-    skipped so the next name key can match.
+    registered. An unregistered license with no usable name returns None so
+    resolution can continue to the signed-in sub-agent or the house pair.
+    Filtered labels are skipped so the next name key can match.
     """
     if not isinstance(source, Mapping):
         return None
@@ -2158,7 +2158,7 @@ def _pair_from_agent_source(source: Any) -> Optional[tuple]:
         return by_license
     if clean_name:
         return clean_name, raw_license
-    return "", raw_license
+    return None
 
 
 def resolve_writing_agent(
@@ -2173,7 +2173,8 @@ def resolve_writing_agent(
        labels are skipped and the next name key is used. A registered license
        alone returns that holder's name and license. A non-registry name is
        kept only with a license that is not in ``BOND_AGENTS``. An
-       unregistered license with no name stays blank.
+       unregistered license with no usable name is dropped so the session
+       or the house pair can fill the agent.
     2. Signed-in sub-agent, matched to ``BOND_AGENTS`` by license or name.
     3. Staff login with no agent on the session, and machine paths, use
        ``house_default_agent``.
