@@ -461,6 +461,11 @@ class _Run:
     async def execute(self) -> Dict[str, Any]:
         try:
             await self._init_record()
+            from dashboard.services.staff_test_case import packet_is_staff_test
+
+            staff_test_packet = packet_is_staff_test(self.doc)
+            if staff_test_packet:
+                self.result["staff_test_case"] = True
             for step, fn in (
                 (STEP_DRIVE, self.step_drive),
                 (STEP_PACKET, self.step_packet),
@@ -472,6 +477,9 @@ class _Run:
                 (STEP_SLACK, self.step_slack),
             ):
                 if step != STEP_LEGACY and _is_terminal(self.doc, step):
+                    continue
+                if staff_test_packet:
+                    await self.stamp(step, "skipped", reason="staff_test_case")
                     continue
                 try:
                     await fn()
