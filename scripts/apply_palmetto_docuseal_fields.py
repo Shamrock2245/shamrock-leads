@@ -65,6 +65,26 @@ def _request(method: str, url: str, token: str, body: Optional[dict] = None) -> 
     return json.loads(raw) if raw else {}
 
 
+def _spec_field(field: dict) -> dict:
+    row = {
+        "document": field["document"],
+        "name": field["name"],
+        "type": field["type"],
+        "role": field["role"],
+        "page": field["page"],
+        "x": field["x_norm"],
+        "y": field["y_norm"],
+        "w": field["w_norm"],
+        "h": field["h_norm"],
+        "data_source": field["data_source"],
+        "required": field["required"],
+    }
+    preferences = field.get("preferences")
+    if preferences:
+        row["preferences"] = preferences
+    return row
+
+
 def spec_document() -> dict:
     return {
         "template_id_env": "DOCUSEAL_TEMPLATE_ID_PALMETTO",
@@ -73,22 +93,7 @@ def spec_document() -> dict:
         "clone_name": CLONE_NAME,
         "inventory": PACKET_INVENTORY,
         "questions": QUESTIONS,
-        "fields": [
-            {
-                "document": field["document"],
-                "name": field["name"],
-                "type": field["type"],
-                "role": field["role"],
-                "page": field["page"],
-                "x": field["x_norm"],
-                "y": field["y_norm"],
-                "w": field["w_norm"],
-                "h": field["h_norm"],
-                "data_source": field["data_source"],
-                "required": field["required"],
-            }
-            for field in docuseal_fields()
-        ],
+        "fields": [_spec_field(field) for field in docuseal_fields()],
     }
 
 

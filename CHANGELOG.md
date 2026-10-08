@@ -8,6 +8,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 - **Hendry (FL) fail closed.** The public MyOCV `inmates.json` identifies rows only by `inmateID` = `HCSO<YY>MNI<NNNNNN>`, a Master Name Index person id, not a booking number. Its year runs 00-26 whatever the booked year is, so a re-booking collides with the person's old row. CoS approved on 2026-10-08. `hendry.py` is now `SOURCE_CONTRACT_VALIDATED=False` with no fetch, Health is `fail_closed`, the evidence row and a `hold` row are recorded, and the matrix, `FL_67_STATUS` and `COUNTY_REGISTRY` are updated. Rows already stored under MNI keys are not touched; any cleanup waits on Brendan. Hendry also drops out of the sellable lead-subscription seed, and with #133 out of the default lead list (picking it by name still shows its rows).
 
+## [Unreleased] — 2026-10-08 (Palmetto agent license boxes)
+
+### Added
+- **Palmetto application and indemnity.** Each AGENT line keeps `agent_name` and adds `agent_license` on the same row, filled from that same `BOND_AGENTS` pair. The boxes are the template 6 placement verified at 08:27 ET (`AGENT_LINE_BOXES`). The application name and license set `valign: bottom` and `font_size: 11`. Both license boxes set `align: right`. An omitted `preferences` dict leaves the field unchanged. Templates 1 and 5 are not changed by this commit.
+
 ## [Unreleased] — 2026-10-08 (staff test-case Write Bond smoke)
 
 ### Added

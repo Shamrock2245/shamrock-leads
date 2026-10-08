@@ -140,6 +140,20 @@ SIGNATURE_GEOMETRY_EXCEPTIONS: Dict[str, str] = {}
 # defendant date-signed box is not in this map; it is copied unchanged.
 ROLE_CHANGES: Dict[str, str] = {}
 
+# plan_merge fields that touch each covered form on the template 5 export.
+# Application and indemnity each include the agent_license box: one more
+# field than the plan before that box existed. The PUT total is +2.
+TEMPLATE_5_FORM_FIELD_COUNTS = {
+    "defendant-application": 85,
+    "indemnity-agreement": 51,
+    "collateral-receipt": 30,
+    "bail-bond-information-sheet-palmetto": 6,
+}
+TEMPLATE_5_PUT_FIELD_COUNT = 195
+
+_TEXT_ALIGNS = frozenset({"left", "center", "right"})
+_TEXT_VALIGNS = frozenset({"top", "center", "bottom"})
+
 # Text, number, and date boxes the prefill does not populate. Left blank.
 # Do not invent a value for these.
 BLANK_BY_DESIGN = frozenset({
@@ -449,6 +463,66 @@ def _groups_for(
     return [(name, role, grouped[(name, role)]) for name, role in order]
 
 
+def _validated_preferences(name: str, raw: Mapping[str, Any]) -> Dict[str, Any]:
+    """DocuSeal 3.3.1 text preferences. font_size is an integer."""
+    out: Dict[str, Any] = {}
+    for key, value in raw.items():
+        if key == "align":
+            text = str(value or "").strip().lower()
+            if text not in _TEXT_ALIGNS:
+                raise PalmettoApplyError(f"Spec field {name} has unknown alignment {text!r}.")
+            out["align"] = text
+        elif key == "valign":
+            text = str(value or "").strip().lower()
+            if text not in _TEXT_VALIGNS:
+                raise PalmettoApplyError(
+                    f"Spec field {name} has unknown vertical alignment {text!r}."
+                )
+            out["valign"] = text
+        elif key == "font_size":
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise PalmettoApplyError(
+                    f"Spec field {name} font_size must be an integer, not {value!r}."
+                )
+            number = float(value)
+            if number <= 0 or not number.is_integer():
+                raise PalmettoApplyError(
+                    f"Spec field {name} font_size must be a positive integer, not {value!r}."
+                )
+            out["font_size"] = int(number)
+        else:
+            raise PalmettoApplyError(f"Spec field {name} has unknown preference {key!r}.")
+    return out
+
+
+def _text_preferences(
+    name: str,
+    spec_group: Sequence[Mapping[str, Any]],
+    kind: str,
+) -> Dict[str, Any]:
+    """DocuSeal preferences. An omitted preferences dict leaves the previous output."""
+    preferences: Dict[str, Any] = {}
+    if kind == "date":
+        preferences["format"] = "MM/DD/YYYY"
+    blobs: List[Dict[str, Any]] = []
+    for field in spec_group:
+        raw = field.get("preferences")
+        if not raw:
+            continue
+        if not isinstance(raw, dict):
+            raise PalmettoApplyError(f"Spec field {name} preferences must be an object.")
+        blob = _validated_preferences(name, raw)
+        if blob not in blobs:
+            blobs.append(blob)
+    if len(blobs) > 1:
+        raise PalmettoApplyError(f"Spec field {name} has conflicting preferences.")
+    if blobs:
+        preferences.update(blobs[0])
+        if kind == "date":
+            preferences["format"] = "MM/DD/YYYY"
+    return preferences
+
+
 def _build_field(
     name: str,
     spec_group: Sequence[Mapping[str, Any]],
@@ -475,10 +549,7 @@ def _build_field(
         payload["required"] = False
     else:
         payload["required"] = any(bool(field.get("required")) for field in spec_group)
-    if kind == "date":
-        payload["preferences"] = {"format": "MM/DD/YYYY"}
-    else:
-        payload["preferences"] = {}
+    payload["preferences"] = _text_preferences(name, spec_group, kind)
     payload["areas"] = [
         {
             "x": field["x_norm"],
