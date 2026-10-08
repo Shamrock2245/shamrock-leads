@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (Pinellas fail closed: no plain-HTTP listing)
+
+### Changed
+- **Pinellas (FL) fail closed, pending Brendan's decision.** Per the CoS rule (same as Lee #147), a direct plain-requests read of Who's In Jail was tried first from the box (honest User-Agent, no browser, impersonation, proxy or captcha). `GET /` returns HTTP 200 with only the Blazor Server app shell (5,971 bytes, `blazor.server.js`): 0 forms, 0 inputs, 0 tables and 0 booking numbers. `/api` returns the same shell, `/swagger` and `/robots.txt` are 404, and the legacy `InmateBooking` roster is 503. Rows only arrive over the app's SignalR circuit, which needs a browser, and the module's patchright browser path is not allowed (no stealth). So `pinellas.py` is `SOURCE_CONTRACT_VALIDATED=False` (no source request from `run()`, and `scrape()` returns `[]` without launching a browser), Health is `fail_closed`, the evidence row is `fail_closed` and the live-emitter row becomes a `hold`. The matrix, `FL_67_STATUS` (unverified 39→38, fail_closed 18→19) and `COUNTY_REGISTRY` are updated. The #142 parser and bond rules are kept unchanged for a reopen. Stored Pinellas rows are untouched; with #133, Pinellas drops out of the default lead list and the sellable seed. Evidence and options in `docs/recon/FL_PINELLAS_FAIL_CLOSED_2026-10-08.md`.
+
+### Tests
+- `tests/test_pinellas_fail_closed.py` (added to the `ci.yml` list): Health and code guard agree, `scrape()` refuses with network and browser imports blocked, the unknown-bond parser contract is kept, the hold/evidence/matrix rows agree, and Pinellas leaves the sellable seed. `tests/test_source_state_drift.py`: Pinellas moves from the `live_write` list to the hold list. `tests/test_home_county_smoke_evidence.py`: FL summary row now reads recon_only 24, fail_closed 19.
+
 ## [Unreleased] — 2026-10-08 (Indian River charge headers + Bond-row guard)
 
 ### Fixed

@@ -28,6 +28,7 @@ HOLD_LABELS = {
     "Clay (FL)", "Columbia (FL)", "Okeechobee (FL)",
     "Hardee (FL)", "St. Johns (FL)", "Alachua (FL)", "Nassau (FL)",
     "Oconee (SC)", "Pickens (SC)",
+    "Pinellas (FL)",
 }
 LIVE_SC = {"Charleston (SC)", "Dorchester (SC)", "Chesterfield (SC)", "Aiken (SC)", "Darlington (SC)"}
 
@@ -109,9 +110,9 @@ def test_brief_live_scopes_match_registry():
     for label in sorted(LIVE_SC | {"Broward (FL)"}):
         assert SCRAPER_SOURCE_STATES.get(label) == "verified_public", label
     matrix = (ROOT / "docs" / "recon" / "COUNTY_SOURCE_CONTRACT_MATRIX.md").read_text()
-    for label in ("Pinellas (FL)", "Seminole (FL)", "Lee (FL)"):
+    for label in ("Seminole (FL)", "Lee (FL)"):
         assert f"| {label} | unverified | live_write |" in matrix
-    for label in ("Richland (SC)", "Sumter (SC)", "Hampton (SC)", "Marlboro (SC)"):
+    for label in ("Richland (SC)", "Sumter (SC)", "Hampton (SC)", "Marlboro (SC)", "Pinellas (FL)"):
         assert f"| {label} | fail_closed | hold |" in matrix
 
 

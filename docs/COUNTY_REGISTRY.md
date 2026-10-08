@@ -32,7 +32,7 @@
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 8 | **Hillsborough** | httpx direct-first + reCAPTCHA + SOLVECAPTCHA (HCSO login) | `hillsborough.py` | ✅ Active (needs HCSO_* + SOLVECAPTCHA_KEY) | 90 min | 2026-07-24 |
-| 9 | **Pinellas** | DrissionPage — date search | `pinellas.py` | ✅ Active | 90 min | 2026-04-27 |
+| 9 | **Pinellas** | Who's In Jail (Blazor Server) — date search; plain HTTP gets only the JS shell, rows need the SignalR circuit (browser) | `pinellas.py` | 🔴 Fail closed (`SOURCE_CONTRACT_VALIDATED=False`; patchright path not allowed, no plain-HTTP listing). See `docs/recon/FL_PINELLAS_FAIL_CLOSED_2026-10-08.md` | 90 min | 2026-10-08 |
 | 10 | **Seminole** | Custom | `seminole.py` | ✅ Active | 90 min | 2026-04-27 |
 | 11 | **Orange** | BestJail public JSON — getInmates/<letter> roster + getInmateDetails/getCharges per booking (plain requests, newest first, 7-day window) | `orange.py` | ✅ Active (unverified until write smoke; source `bookingNumber` 8 digits). See `docs/recon/FL_ORANGE_BESTJAIL_2026-10-08.md` | 90 min | 2026-10-08 |
 | 12 | **Pasco** | DrissionPage — Cloudflare bypass | `pasco.py` | ✅ Active | 90 min | 2026-04-27 |
@@ -209,7 +209,7 @@ Approach:   Query the anonymous FeatureServer directly with `ObjectId,GlobalID,B
 
 ### DrissionPage (Browser Automation)
 - **Pattern**: Chromium headless — JS rendering or Cloudflare bypass required
-- **Active Counties**: Charlotte, Palm Beach, Volusia, Duval, Pasco, Pinellas, Polk, Osceola, Lake, Manatee, Sarasota, Martin
+- **Active Counties**: Charlotte, Palm Beach, Volusia, Duval, Pasco, Polk, Osceola, Lake, Manatee, Sarasota, Martin
 
 ### Custom / In-House
 - **Pattern**: Varies — GET requests, HTML parsing, API reverse-engineering

@@ -1011,10 +1011,10 @@
     {
       "state": "FL",
       "county_fips": "103",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "fail_closed",
+      "official_source_url": "https://whosinjail.pinellassheriff.gov/",
+      "access_posture": "2026-10-08 ~11:42 AM ET from the agent box: plain HTTPS GET with an honest User-Agent, HTTP 200 text/html (~6 KB) Blazor Server app shell; no challenge or 403, but no data without running the app's JavaScript (SignalR circuit)",
+      "evidence_note": "2026-10-08 plain-requests read (`docs/recon/FL_PINELLAS_FAIL_CLOSED_2026-10-08.md`): the root returns only the Blazor Server shell (title WhosInJailWebSite, loads `_framework/blazor.server.js`): 0 form, 0 input, 0 table elements and 0 booking numbers. `/api` returns the same shell (200), `/swagger/index.html` and `/robots.txt` are 404, and the legacy `www.pinellassheriff.gov/InmateBooking/` is 503. Rows (booking number, charges, Bond Assessed) are rendered only over the SignalR circuit, so there is no plain-HTTP listing; the patchright browser path is not allowed (no stealth, Lee #147 rule). Fail closed pending Brendan's decision. Stored rows are untouched."
     },
     {
       "state": "FL",

@@ -4,6 +4,17 @@ Source: Pinellas County Sheriff's Office
 URL: https://whosinjail.pinellassheriff.gov/
 Method: Patchright Chrome — date search + Next pagination.
 
+FAIL CLOSED (2026-10-08, docs/recon/FL_PINELLAS_FAIL_CLOSED_2026-10-08.md):
+a plain-requests read from the agent box (honest User-Agent, no browser, no
+impersonation, no proxy) gets HTTP 200 with only the Blazor Server app shell:
+no search form, no table, no booking numbers. Every row is rendered over the
+Blazor SignalR circuit by the app's JavaScript, so there is no plain-HTTP
+listing to read, and the patchright browser path is not allowed under the
+no-stealth rule (same rule as Lee #147). ``SOURCE_CONTRACT_VALIDATED=False``
+stops ``run()`` before any source request, and ``scrape()`` refuses on its own
+for direct callers. The parser below is kept unchanged so a reopen decision
+(Brendan) only has to flip the guard and pick an allowed fetch path.
+
 HISTORY:
 - v1: ASP.NET InmateBooking at pinellassheriff.gov/InmateBooking/ (ViewState POST)
 - v2 (current): Old app pool returns HTTP 503. Site now points to Who's In Jail
@@ -43,6 +54,14 @@ FACILITY = "Pinellas County Jail"
 
 
 class PinellasCountyScraper(BaseScraper):
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "Who's In Jail is a Blazor Server app: a plain-requests GET returns only the "
+        "JS app shell (no form, table or booking numbers); rows arrive over the "
+        "SignalR circuit, which needs a browser, and the patchright path is not "
+        "allowed (no stealth). Fail closed pending Brendan's decision."
+    )
+
     @property
     def county(self) -> str:
         return "Pinellas"
@@ -52,6 +71,11 @@ class PinellasCountyScraper(BaseScraper):
         return "FL"
 
     def scrape(self) -> List[ArrestRecord]:
+        if not self.SOURCE_CONTRACT_VALIDATED:
+            # Direct callers (relay, ad-hoc) get the same refusal as run():
+            # no browser is launched and no source request is made.
+            logger.warning("[Pinellas] fail closed: %s", self.SOURCE_CONTRACT_REASON)
+            return []
         from patchright.sync_api import sync_playwright
 
         all_records: List[ArrestRecord] = []

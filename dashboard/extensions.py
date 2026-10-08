@@ -814,6 +814,10 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     # Hendry's MyOCV inmates.json has only inmateID = HCSO<YY>MNI<NNNNNN>, a
     # person (Master Name Index) id, not a booking number. CoS approved.
     "Hendry (FL)": "fail_closed",
+    # 2026-10-08 (docs/recon/FL_PINELLAS_FAIL_CLOSED_2026-10-08.md): Who's In
+    # Jail is Blazor Server; plain requests get only the JS shell (no rows), and
+    # the patchright browser path is not allowed. Pending Brendan's decision.
+    "Pinellas (FL)": "fail_closed",
     # Ohio pilot scopes are registered for truthful health visibility only.
     # They remain blocked before source fetch until county-specific approval.
     "Clermont (OH)": "fail_closed",
