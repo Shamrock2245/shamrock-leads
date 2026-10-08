@@ -3,6 +3,11 @@
 ShamrockLeads — Notification Center API
 Centralized alert aggregation from all subsystems.
 
+Representative tenant-scoped route. Reads and writes go through
+``get_collection("notifications")``. With SAAS_MULTI_TENANT off that is the
+raw Motor collection (Shamrock, unchanged). With the flag on, the chokepoint
+in dashboard/extensions.py pins every query to the request tenant.
+
 Endpoints:
   GET  /notifications             — Get recent notifications (paginated)
   POST /notifications             — Create a notification
