@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from pymongo.errors import DuplicateKeyError
@@ -37,6 +37,12 @@ logger = logging.getLogger(__name__)
 _MODES = frozenset({"shared", "exclusive"})
 LEAD_FANOUT_OUTBOX = "lead_fanout_outbox"
 LEAD_COUNTY_CLAIMS = "lead_county_claims"
+LEAD_FANOUT_MAX_ATTEMPTS = 5
+LEAD_FANOUT_BACKOFF_SECONDS = (60, 300, 900, 3600, 21600)
+LEAD_FANOUT_DEPTH_ALERT = 25
+LEAD_FANOUT_AGE_ALERT_SECONDS = 3600
+LEAD_FANOUT_ALERT_COOLDOWN = 1800
+_alert_state = {"depth_at": None}
 
 
 class LeadSubscriptionError(Exception):
@@ -462,7 +468,10 @@ def enqueue_lead_fanout(db: Any, records: list[Any]) -> int:
                     "county": pointer["county"],
                     "booking_number": pointer["booking_number"],
                     "status": "pending",
+                    "attempts": 0,
+                    "next_attempt_at": now,
                     "enqueued_at": now,
+                    "last_error": "",
                 }
             },
             upsert=True,
@@ -547,14 +556,87 @@ def record_lead_fanout(db: Any, records: list[Any]) -> list[str]:
         return []
 
 
-def retry_lead_fanout(db: Any) -> int:
-    """Re-deliver pending pointers. A row stays pending until every subscriber write succeeds."""
-    if not multi_tenant_enabled():
+def _parse_time(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+async def _collect(cursor) -> list:
+    if hasattr(cursor, "__aiter__"):
+        return [doc async for doc in cursor]
+    return list(cursor)
+
+
+async def _finish(value):
+    if hasattr(value, "__await__"):
+        return await value
+    return value
+
+
+def _open_status(row: dict) -> bool:
+    return row.get("status") in {"pending", "failed"}
+
+
+def _due(row: dict, now: datetime) -> bool:
+    if not _open_status(row):
+        return False
+    nxt = _parse_time(row.get("next_attempt_at"))
+    if nxt is None:
+        return True
+    return nxt <= now
+
+
+def _age_seconds(row: dict, now: datetime) -> float:
+    stamped = _parse_time(row.get("enqueued_at"))
+    if stamped is None:
         return 0
+    return max(0, (now - stamped).total_seconds())
+
+
+async def _alert_outbox(*, dead: int, depth: int, oldest_seconds: float, arrest_ids: list[str]) -> bool:
+    """Ops alert on the existing alerts webhook. Counts and booking pointers only."""
+    minutes = int(oldest_seconds // 60)
+    lines = [
+        "Lead fan-out outbox needs attention.",
+        f"Dead-lettered this sweep: {dead}.",
+        f"Open rows: {depth}.",
+        f"Oldest open age: {minutes} min.",
+    ]
+    if arrest_ids:
+        lines.append("Dead pointers: " + ", ".join(arrest_ids[:5]))
+    lines.append("Booking pointers only.")
+    from dashboard.services.automation_digest import post_slack
+
+    return await post_slack("\n".join(lines), webhook_env="SLACK_WEBHOOK_ALERTS")
+
+
+async def retry_lead_fanout(db: Any) -> dict[str, Any]:
+    """Retry due outbox rows. Flag off does not read the outbox or alert.
+
+    A failed write stays ``failed`` until its backoff elapses. After
+    ``LEAD_FANOUT_MAX_ATTEMPTS`` the row becomes ``dead`` and is not retried.
+    """
+    if not multi_tenant_enabled():
+        return {"delivered": 0, "failed": 0, "dead": 0, "pending": 0, "alerted": False}
     col = db[LEAD_FANOUT_OUTBOX]
-    done = 0
-    for row in list(col.find({"status": "pending"})):
-        if not isinstance(row, dict):
+    now = datetime.now(timezone.utc)
+    delivered = 0
+    failed = 0
+    dead = 0
+    dead_ids: list[str] = []
+    for row in await _collect(col.find({})):
+        if not isinstance(row, dict) or not _due(row, now):
             continue
         pointer = {
             "arrest_id": str(row.get("arrest_id") or ""),
@@ -564,12 +646,62 @@ def retry_lead_fanout(db: Any) -> int:
         }
         if not pointer["arrest_id"] or not pointer["county"] or not pointer["booking_number"]:
             continue
-        _written, failed = _deliver_pointer(db, pointer)
-        if failed:
+        _written, write_failed = _deliver_pointer(db, pointer)
+        stamp = now.replace(microsecond=0).isoformat()
+        if not write_failed:
+            await _finish(col.update_one(
+                {"arrest_id": pointer["arrest_id"], "status": row.get("status")},
+                {"$set": {"status": "delivered", "updated_at": stamp, "last_error": ""}},
+            ))
+            delivered += 1
             continue
-        col.update_one(
-            {"arrest_id": pointer["arrest_id"], "status": "pending"},
-            {"$set": {"status": "delivered"}},
+        attempts = int(row.get("attempts") or 0) + 1
+        if attempts >= LEAD_FANOUT_MAX_ATTEMPTS:
+            status = "dead"
+            dead += 1
+            dead_ids.append(pointer["arrest_id"])
+            nxt = stamp
+        else:
+            status = "failed"
+            failed += 1
+            delay = LEAD_FANOUT_BACKOFF_SECONDS[min(attempts - 1, len(LEAD_FANOUT_BACKOFF_SECONDS) - 1)]
+            nxt = (now + timedelta(seconds=delay)).replace(microsecond=0).isoformat()
+        await _finish(col.update_one(
+            {"arrest_id": pointer["arrest_id"], "status": row.get("status")},
+            {"$set": {
+                "status": status,
+                "attempts": attempts,
+                "next_attempt_at": nxt,
+                "last_error": "tenant_write_failed",
+                "updated_at": stamp,
+            }},
+        ))
+    open_rows = [
+        row for row in await _collect(col.find({}))
+        if isinstance(row, dict) and _open_status(row)
+    ]
+    depth = len(open_rows)
+    oldest = max((_age_seconds(row, now) for row in open_rows), default=0)
+    alert = False
+    if dead:
+        alert = True
+    elif depth >= LEAD_FANOUT_DEPTH_ALERT or oldest >= LEAD_FANOUT_AGE_ALERT_SECONDS:
+        last = _alert_state.get("depth_at")
+        if last is None or (now - last).total_seconds() >= LEAD_FANOUT_ALERT_COOLDOWN:
+            alert = True
+            _alert_state["depth_at"] = now
+    alerted = False
+    if alert:
+        alerted = await _alert_outbox(
+            dead=dead,
+            depth=depth,
+            oldest_seconds=oldest,
+            arrest_ids=dead_ids,
         )
-        done += 1
-    return done
+    return {
+        "delivered": delivered,
+        "failed": failed,
+        "dead": dead,
+        "pending": depth,
+        "alerted": bool(alerted),
+    }

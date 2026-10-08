@@ -11,6 +11,8 @@ from fastapi.testclient import TestClient
 from dashboard.routers.platform_leads import router
 from pymongo.errors import DuplicateKeyError
 
+from dashboard.cron import CRON_REGISTRY, _run_lead_fanout_retry
+from dashboard.services import lead_subscriptions as lead_mod
 from dashboard.services.lead_subscriptions import (
     LEAD_COUNTY_CLAIMS,
     fan_out_if_enabled,
@@ -224,10 +226,12 @@ def test_failed_tenant_write_is_queued_and_retried(monkeypatch):
     assert "Hidden Person" not in queued
     assert "B-200" in queued
     assert outbox.docs[0]["status"] == "pending"
-    assert retry_lead_fanout(db) == 1
+    assert outbox.docs[0]["attempts"] == 0
+    first = asyncio.run(retry_lead_fanout(db))
+    assert first["delivered"] == 1
     assert {doc["tenant_id"] for doc in leads.docs} == {"shamrock", "gulf_coast_bail"}
     assert outbox.docs[0]["status"] == "delivered"
-    assert retry_lead_fanout(db) == 0
+    assert asyncio.run(retry_lead_fanout(db))["delivered"] == 0
     assert "Hidden Person" not in json.dumps(leads.docs)
 
 
@@ -305,6 +309,117 @@ def test_exclusive_claim_is_unique_and_a_duplicate_key_is_rejected(monkeypatch):
     assert opts["name"] == "lead_county_claim_unique"
     stored = next(doc for doc in tenants.docs if doc["tenant_id"] == "gulf_coast_bail")
     assert "lead_subscriptions" not in stored
+
+
+def test_lead_fanout_retry_job_is_registered():
+    job = next(row for row in CRON_REGISTRY if row.name == "lead_fanout_retry")
+    assert job.run is _run_lead_fanout_retry
+    assert job.default_enabled is True
+    assert job.interval == 300
+
+
+def test_retry_job_noops_when_flag_off(monkeypatch):
+    monkeypatch.delenv("SAAS_MULTI_TENANT", raising=False)
+
+    class Boom(dict):
+        def __getitem__(self, key):
+            raise AssertionError("outbox touched")
+
+    async def refuse(*_args, **_kwargs):
+        raise AssertionError("alert sent")
+
+    monkeypatch.setattr("dashboard.services.automation_digest.post_slack", refuse)
+    monkeypatch.setattr(
+        "dashboard.extensions.get_raw_db",
+        lambda: (_ for _ in ()).throw(AssertionError("raw db")),
+    )
+    assert asyncio.run(retry_lead_fanout(Boom()))["delivered"] == 0
+    assert asyncio.run(_run_lead_fanout_retry()) is None
+
+
+def test_retry_waits_for_backoff_then_dead_letters_and_alerts(monkeypatch):
+    monkeypatch.setenv("SAAS_MULTI_TENANT", "1")
+    monkeypatch.setattr(lead_mod, "LEAD_FANOUT_MAX_ATTEMPTS", 2)
+    monkeypatch.setattr(lead_mod, "LEAD_FANOUT_BACKOFF_SECONDS", (0,))
+    monkeypatch.setattr(lead_mod, "LEAD_FANOUT_DEPTH_ALERT", 1000)
+    monkeypatch.setattr(lead_mod, "LEAD_FANOUT_AGE_ALERT_SECONDS", 10**9)
+    lead_mod._alert_state["depth_at"] = None
+    sent = []
+
+    async def capture(text, webhook_env="SLACK_WEBHOOK_LEADS"):
+        sent.append((webhook_env, text))
+        return True
+
+    monkeypatch.setattr("dashboard.services.automation_digest.post_slack", capture)
+    leads = _FlakyLeads()
+    leads.failures = 10
+    outbox = _Outbox()
+    db = _lee_db(leads, outbox)
+    fan_out_if_enabled(db, [_Arrest("Lee", "B-400", name="Hidden Person")])
+    waiting = asyncio.run(retry_lead_fanout(db))
+    assert waiting["failed"] == 1
+    assert waiting["dead"] == 0
+    assert waiting["alerted"] is False
+    assert outbox.docs[0]["status"] == "failed"
+    assert outbox.docs[0]["attempts"] == 1
+    assert outbox.docs[0]["last_error"] == "tenant_write_failed"
+    finished = asyncio.run(retry_lead_fanout(db))
+    assert finished["dead"] == 1
+    assert finished["alerted"] is True
+    assert outbox.docs[0]["status"] == "dead"
+    assert sent[0][0] == "SLACK_WEBHOOK_ALERTS"
+    assert "Dead-lettered this sweep: 1" in sent[0][1]
+    assert "Hidden Person" not in sent[0][1]
+    assert asyncio.run(retry_lead_fanout(db))["dead"] == 0
+
+
+def test_outbox_depth_and_age_alert(monkeypatch):
+    monkeypatch.setenv("SAAS_MULTI_TENANT", "1")
+    monkeypatch.setattr(lead_mod, "LEAD_FANOUT_DEPTH_ALERT", 2)
+    monkeypatch.setattr(lead_mod, "LEAD_FANOUT_AGE_ALERT_SECONDS", 60)
+    lead_mod._alert_state["depth_at"] = None
+    sent = []
+
+    async def capture(text, webhook_env="SLACK_WEBHOOK_LEADS"):
+        sent.append((webhook_env, text))
+        return True
+
+    monkeypatch.setattr("dashboard.services.automation_digest.post_slack", capture)
+    future = "2999-01-01T00:00:00+00:00"
+    old = "2000-01-01T00:00:00+00:00"
+    outbox = _Outbox()
+    outbox.docs = [
+        {
+            "arrest_id": "FL|Lee|B-1",
+            "state": "FL",
+            "county": "Lee",
+            "booking_number": "B-1",
+            "status": "pending",
+            "attempts": 0,
+            "next_attempt_at": future,
+            "enqueued_at": old,
+        },
+        {
+            "arrest_id": "FL|Lee|B-2",
+            "state": "FL",
+            "county": "Lee",
+            "booking_number": "B-2",
+            "status": "failed",
+            "attempts": 1,
+            "next_attempt_at": future,
+            "enqueued_at": old,
+        },
+    ]
+    db = {"tenants": SyncCol(), "leads": SyncCol(), "lead_fanout_outbox": outbox}
+    result = asyncio.run(retry_lead_fanout(db))
+    assert result["delivered"] == 0
+    assert result["pending"] == 2
+    assert result["alerted"] is True
+    assert sent[0][0] == "SLACK_WEBHOOK_ALERTS"
+    assert "Open rows: 2" in sent[0][1]
+    again = asyncio.run(retry_lead_fanout(db))
+    assert again["alerted"] is False
+    assert len(sent) == 1
 
 
 def test_subscription_save_writes_an_audit_row(monkeypatch):
