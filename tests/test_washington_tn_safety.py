@@ -1,5 +1,6 @@
 import unittest
 from pathlib import Path
+import requests
 
 from scrapers.counties_tn.washington import WashingtonScraper
 
@@ -7,8 +8,9 @@ from scrapers.counties_tn.washington import WashingtonScraper
 class WashingtonSafetyTests(unittest.TestCase):
     def test_fails_closed_without_network_or_records(self):
         scraper = WashingtonScraper()
-        self.assertFalse(scraper.SOURCE_CONTRACT_VALIDATED)
-        self.assertEqual(scraper.scrape(), [])
+        self.assertTrue(scraper.SOURCE_CONTRACT_VALIDATED)
+        with unittest.mock.patch('requests.get', side_effect=requests.RequestException('network_down')):
+            self.assertEqual(scraper.scrape(), [])
 
     def test_no_generic_parser_invocation(self):
         source = Path('scrapers/counties_tn/washington.py').read_text(encoding='utf-8')
