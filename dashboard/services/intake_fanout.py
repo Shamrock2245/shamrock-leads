@@ -219,7 +219,7 @@ def slack_text(doc: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-# ── Senders (return (ok, error, unconfigured)) ────────────────────────────────
+# ── Senders (return (ok, error, unconfigured)) ────────────────────────────────────────────────────────────────
 
 async def _send_sheets(row: Dict[str, Any]) -> tuple[bool, str, bool]:
     url = (os.getenv("GAS_WEB_APP_URL") or "").strip()
@@ -262,7 +262,7 @@ async def _deliver(target: str, payload: Dict[str, Any]) -> tuple[bool, str, boo
         return False, f"{type(exc).__name__}: {str(exc)[:200]}", False
 
 
-# ── Outbox ──────────────────────────────────────────────────────────────────────────
+# ── Outbox ──────────────────────────────────────────────────────────────────────────────
 
 def _outbox():
     from dashboard.extensions import get_collection
