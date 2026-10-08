@@ -1,53 +1,244 @@
 """
-Okaloosa County (FL) Arrest Scraper — Inmate Locator (ProPhoenix / Infragistics).
+Okaloosa County (FL) Arrest Scraper — Inmate Locator public JSON API (ProPhoenix).
 
-Source contract (recon 2026-10-07, docs/recon/FL_IDLE_EIGHT_2026-10-07.md):
-  * URL: https://okaloosacountyjail.myokaloosa.com/InmateLocator/Default.aspx
-    (linked from https://www.sheriff-okaloosa.org/)
-  * Plain HTTPS ASP.NET WebForms search; A–Z last-name sweeps cover the roster.
-  * Source-issued Booking# is a 10-digit value (YYYY + sequence, e.g. 2026005082).
-  * Rows without Booking# are dropped — no invented keys.
-  * The root ``/InmateLocator/`` path is an Angular shell; the public roster is the
-    legacy Default.aspx form, not the SPA.
+Source contract (recon 2026-10-08, docs/recon/FL_OKALOOSA_API_2026-10-08.md):
+  * The official Inmate Locator (https://okaloosacountyjail.myokaloosa.com/InmateLocator/,
+    linked from https://www.sheriff-okaloosa.org/) is an Angular app. Its
+    ``config.json`` names the public API base
+    ``https://okaloosacountyjail.myokaloosa.com/InmateLocatorAPI``, and the app
+    itself calls:
+      - ``GET /api/Inmates/search?page=N&pageSize=M``: the current roster,
+        ``{total, page, pageSize, data: [{bookingNo, fullName, custodyDate,
+        totalBondAmt, status, sex, race, dobDttm, spnNo, nameID, ...}]}``;
+      - ``GET /api/Inmates/<bookingNo>``: one booking with ``charges`` rows
+        ``{charge (statute), chargeDesc, severity, bailAmt, bailType, caseNbr,
+        courtDate}``.
+    Plain ``requests``, TLS verification on; no login, CAPTCHA or WAF.
+  * The old module scraped the legacy Default.aspx Infragistics grid by walking
+    flattened cells. That grid has no booking date, so rows were saved with no
+    booking date (2026-10-07 note). ``custodyDate`` is the booking timestamp.
+  * Booking_Number = source ``bookingNo`` (10 digits, ``YYYY`` + sequence).
+    Paging must reach ``total`` with unique booking numbers, or it raises.
+  * Only ``status == "1"`` rows are emitted as In Custody (781 of 783 on
+    2026-10-08). Any other status code is undocumented, so those rows are skipped
+    and counted, not guessed.
+  * Bond: the roster ``totalBondAmt`` equals the sum of the detail ``bailAmt``
+    values when any are published (24/24 checked); when none are, both are
+    0/null. The bond is the sum of the detail ``bailAmt`` only when every
+    charge publishes a positive one (a 0 is read as unpublished, like the
+    roster's 0). Any blank charge, which can be a hold, makes the total
+    ``""``. ``Bond_Type`` joins the distinct published ``bailType`` values. Without a detail (outside the window)
+    the bond is ``""``: the roster total cannot show a blank charge, so it is
+    not used.
+  * Only bookings within ``LOOKBACK_DAYS`` (newest first, at most
+    ``MAX_DETAILS``) with a fetched detail are emitted, so an older booking is
+    never rewritten with blank charges. A detail request failure raises; a
+    detail naming another booking skips that booking (all of them: raise).
+  * Health stays ``unverified`` until a Leads Ops write smoke.
 """
 from __future__ import annotations
 
 import logging
 import re
-import string
 import time
-from typing import List
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-from bs4 import BeautifulSoup
 
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://okaloosacountyjail.myokaloosa.com"
-SEARCH_URL = f"{BASE_URL}/InmateLocator/Default.aspx"
+PORTAL_URL = "https://okaloosacountyjail.myokaloosa.com/InmateLocator/"
+API_BASE = "https://okaloosacountyjail.myokaloosa.com/InmateLocatorAPI"
+SEARCH_URL = f"{API_BASE}/api/Inmates/search"
+DETAIL_URL = f"{API_BASE}/api/Inmates"
 FACILITY = "Okaloosa County Jail"
+PAGE_SIZE = 100
+MAX_PAGES = 40
+LOOKBACK_DAYS = 7
+MAX_DETAILS = 300
+REQUEST_TIMEOUT = 30
+REQUEST_PAUSE_S = 0.1
+IN_CUSTODY_STATUS = "1"
+
+BOOKING_RE = re.compile(r"^\d{10}$")
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Content-Type": "application/x-www-form-urlencoded",
-    "Referer": SEARCH_URL,
+    "Accept": "application/json, text/plain, */*",
+    "Referer": PORTAL_URL,
 }
 
-LAST_NAME_FIELD = "_ctl0:CpnlMain:ctrlUsrSrchTools:txtLastName"
-FIRST_NAME_FIELD = "_ctl0:CpnlMain:ctrlUsrSrchTools:txtFirstName"
-DOB_FIELD = "_ctl0:CpnlMain:ctrlUsrSrchTools:txtDOB"
-SEARCH_BTN = "_ctl0:CpnlMain:ctrlUsrSrchTools:cmdSearch"
-_BOOKING_RE = re.compile(r"^\d{8,12}$")
+
+class OkaloosaContractError(RuntimeError):
+    """The Inmate Locator API no longer matches the verified contract."""
+
+
+def _clean(value: Any) -> str:
+    return " ".join(str(value if value is not None else "").split())
+
+
+def _money(value: Any) -> Optional[float]:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    try:
+        return float(str(value).replace(",", "").replace("$", ""))
+    except ValueError:
+        return None
+
+
+def parse_custody_date(value: Any) -> Optional[datetime]:
+    text = _clean(value)
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def parse_search_page(data: Any) -> Tuple[int, List[Dict[str, Any]]]:
+    if not isinstance(data, dict) or not isinstance(data.get("data"), list) or not isinstance(data.get("total"), int):
+        raise OkaloosaContractError("Okaloosa: search reply shape drift")
+    for row in data["data"]:
+        if not isinstance(row, dict) or "bookingNo" not in row or "custodyDate" not in row:
+            raise OkaloosaContractError("Okaloosa: search row drift")
+    return data["total"], data["data"]
+
+
+# Every charge row carried these keys on 2026-10-08 (71/71 rows, 40 details).
+CHARGE_ROW_KEYS = ("chargeDesc", "charge", "bailAmt", "bailType")
+
+
+def parse_detail(data: Any, booking: str) -> Optional[Dict[str, Any]]:
+    """Charges + bond for ``booking``; None when missing or naming another booking.
+
+    Shape drift raises: no ``charges`` list, or a charge row that is not an
+    object with ``chargeDesc``/``charge``/``bailAmt``/``bailType``."""
+    if not isinstance(data, dict) or _clean(data.get("bookingNo")) != booking:
+        return None
+    charges: List[str] = []
+    details: List[Dict[str, Any]] = []
+    amounts: List[float] = []
+    any_unpublished = False
+    bond_types: List[str] = []
+    cases: List[str] = []
+    rows = data.get("charges")
+    if not isinstance(rows, list):
+        # A renamed/dropped key would otherwise blank every booking's charges.
+        raise OkaloosaContractError(f"Okaloosa: detail {booking} has no 'charges' list")
+    for row in rows:
+        if not isinstance(row, dict) or any(k not in row for k in CHARGE_ROW_KEYS):
+            raise OkaloosaContractError(f"Okaloosa: detail {booking} charge row drift")
+        desc = _clean(row.get("chargeDesc"))
+        statute = _clean(row.get("charge"))
+        amount = _money(row.get("bailAmt"))
+        if amount is not None and amount <= 0:
+            # The source shows an unpublished bail as null (82/82 on 2026-10-08)
+            # and the roster uses 0 for "nothing published"; a 0 is unknown here.
+            amount = None
+        if amount is not None:
+            amounts.append(amount)
+        else:
+            any_unpublished = True  # blank bailAmt: may be a hold
+        bail_type = _clean(row.get("bailType")).upper()
+        if bail_type and bail_type not in bond_types:
+            bond_types.append(bail_type)
+        case = _clean(row.get("caseNbr"))
+        if case and case not in cases:
+            cases.append(case)
+        text = desc or statute
+        if not text:
+            continue
+        charges.append(text)
+        details.append(
+            {
+                "charge": text,
+                "description": desc,
+                "statute": statute,
+                "degree": _clean(row.get("severity")),
+                "bond_amount": amount,  # None = not published
+                "bond_type": _clean(row.get("bailType")),
+                "case_number": case,
+                "court_date": _clean(row.get("courtDate")),
+            }
+        )
+    return {
+        "charges": charges,
+        "details": details,
+        # Total only when every charge publishes bailAmt; a blank can be a hold,
+        # so a partial sum would understate the bond. "" = unknown.
+        "bond": f"{sum(amounts):.2f}" if amounts and not any_unpublished else "",
+        "case_numbers": cases,
+        "bond_type": " | ".join(bond_types),  # distinct published bailType values
+        "release_date": _clean(data.get("releaseDate")),
+    }
+
+
+def _split_name(name: str) -> Tuple[str, str, str]:
+    name = _clean(name)
+    if "," in name:
+        last, rest = [p.strip() for p in name.split(",", 1)]
+        parts = rest.split()
+        return (parts[0] if parts else ""), " ".join(parts[1:]), last
+    parts = name.split()
+    if len(parts) < 2:
+        return (parts[0] if parts else ""), "", ""
+    return parts[0], " ".join(parts[1:-1]), parts[-1]
+
+
+def build_record(row: Dict[str, Any], detail: Optional[Dict[str, Any]]) -> Optional[ArrestRecord]:
+    booking = _clean(row.get("bookingNo"))
+    booked_at = parse_custody_date(row.get("custodyDate"))
+    full_name = _clean(row.get("fullName"))
+    if not BOOKING_RE.fullmatch(booking) or booked_at is None or not full_name:
+        return None
+    first, middle, last = _split_name(full_name)
+    # Only the detail can show whether every charge published a bailAmt. The
+    # roster totalBondAmt is the sum of the published ones (on 2026-10-08, 9 of
+    # 60 sampled bookings mixed a blank charge with a positive total), so it
+    # understates a bond with a blank (maybe a hold) and is never used.
+    bond = detail["bond"] if detail is not None else ""
+    sex = _clean(row.get("sex")).upper()[:1]
+    dob = parse_custody_date(row.get("dobDttm"))
+    extra: Dict[str, Any] = {"booking_date_origin": "Inmate Locator API custodyDate"}
+    if detail is not None:
+        extra["charge_details"] = detail["details"]
+        if detail["release_date"]:
+            extra["source_release_date"] = detail["release_date"]
+    return ArrestRecord(
+        County="Okaloosa",
+        State="FL",
+        Facility=FACILITY,
+        Booking_Number=booking,
+        Person_ID=_clean(row.get("spnNo")),
+        Full_Name=full_name,
+        First_Name=first,
+        Middle_Name=middle,
+        Last_Name=last,
+        DOB=dob.strftime("%m/%d/%Y") if dob else "",
+        Sex=sex if sex in ("M", "F") else "",
+        Race=_clean(row.get("race")),
+        Booking_Date=booked_at.strftime("%m/%d/%Y"),
+        Booking_Time=booked_at.strftime("%I:%M %p"),
+        Charges=" | ".join(detail["charges"]) if detail else "",
+        Bond_Amount=bond,
+        Bond_Type=detail["bond_type"] if detail else "",
+        Case_Number=" | ".join(detail["case_numbers"]) if detail else "",
+        Status="In Custody",
+        Detail_URL=PORTAL_URL,
+        LastCheckedMode="INITIAL",
+        extra_data=extra,
+    )
 
 
 class OkaloosaCountyScraper(BaseScraper):
-    """Okaloosa County (FL) — Inmate Locator Default.aspx (Crestview)."""
+    """Okaloosa County (FL) — Inmate Locator public JSON (Crestview)."""
 
     SOURCE_CONTRACT_VALIDATED = True
 
@@ -59,191 +250,83 @@ class OkaloosaCountyScraper(BaseScraper):
     def state(self) -> str:
         return "FL"
 
-    def scrape(self) -> List[ArrestRecord]:
+    def _get_json(self, session: requests.Session, url: str, params: Optional[dict] = None) -> Any:
+        resp = session.get(url, params=params, timeout=REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json()
+
+    def fetch_roster(self, session: requests.Session) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+        total = None
+        for page in range(1, MAX_PAGES + 1):
+            try:
+                data = self._get_json(session, SEARCH_URL, {"page": page, "pageSize": PAGE_SIZE})
+            except (requests.RequestException, ValueError) as exc:
+                raise OkaloosaContractError(f"Okaloosa: search page {page} failed: {exc}") from exc
+            page_total, page_rows = parse_search_page(data)
+            if total is None:
+                total = page_total
+            elif page_total != total:
+                raise OkaloosaContractError("Okaloosa: roster total changed while paging")
+            rows.extend(page_rows)
+            if len(rows) >= total or not page_rows:
+                break
+        else:
+            raise OkaloosaContractError(f"Okaloosa: MAX_PAGES={MAX_PAGES} reached before total")
+        bookings = [_clean(r.get("bookingNo")) for r in rows]
+        if not total or len(rows) != total:
+            raise OkaloosaContractError(f"Okaloosa: walked {len(rows)} rows, source total {total}")
+        if len(set(bookings)) != len(bookings):
+            raise OkaloosaContractError("Okaloosa: duplicate bookingNo across pages")
+        bad = [b for b in bookings if not BOOKING_RE.fullmatch(b)]
+        if bad:
+            raise OkaloosaContractError(f"Okaloosa: {len(bad)} malformed bookingNo values")
+        return rows
+
+    def scrape(self, lookback_days: Optional[int] = None) -> List[ArrestRecord]:
+        days = lookback_days or LOOKBACK_DAYS
         session = requests.Session()
         session.headers.update(HEADERS)
-        resp = session.get(SEARCH_URL, timeout=30)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-        base_post = self._hidden_fields(soup)
-        if "__VIEWSTATE" not in base_post:
-            raise RuntimeError("Okaloosa: Default.aspx search form missing __VIEWSTATE")
+        rows = self.fetch_roster(session)
 
-        all_records: List[ArrestRecord] = []
-        seen: set[str] = set()
-        for letter in string.ascii_uppercase:
-            post = dict(base_post)
-            post[LAST_NAME_FIELD] = letter
-            post[FIRST_NAME_FIELD] = ""
-            post[DOB_FIELD] = ""
-            post[SEARCH_BTN] = "Search"
-            try:
-                resp = session.post(SEARCH_URL, data=post, timeout=45)
-                if resp.status_code != 200:
-                    logger.warning("Okaloosa letter %s HTTP %s", letter, resp.status_code)
-                    continue
-                soup_post = BeautifulSoup(resp.text, "html.parser")
-                base_post.update(self._hidden_fields(soup_post))
-                for rec in self._parse_soup(soup_post):
-                    key = rec.Booking_Number
-                    if not key or key in seen:
-                        continue
-                    seen.add(key)
-                    all_records.append(rec)
-            except Exception as exc:
-                logger.warning("Okaloosa letter %s failed: %s", letter, exc)
-            time.sleep(0.25)
+        cutoff = datetime.now() - timedelta(days=days)
+        current = [r for r in rows if _clean(r.get("status")) == IN_CUSTODY_STATUS]
+        skipped_status = len(rows) - len(current)
+        current.sort(key=lambda r: _clean(r.get("bookingNo")), reverse=True)
 
-        logger.info("Okaloosa: %d total records from A-Z search", len(all_records))
-        return all_records
-
-    @staticmethod
-    def _hidden_fields(soup) -> dict:
-        out = {}
-        for inp in soup.find_all("input"):
-            name = inp.get("name") or ""
-            if not name:
-                continue
-            typ = (inp.get("type") or "").lower()
-            if typ == "hidden" or name.startswith("__"):
-                out[name] = inp.get("value") or ""
-        return out
-
-    def _parse_soup(self, soup) -> List[ArrestRecord]:
-        """Parse Infragistics search-results tables.
-
-        The grid flattens header captions and inmate fields into long ``<td>``
-        streams. Each inmate exposes a source Booking# (10-digit ``20YY######``),
-        often duplicated a few cells later. We anchor on Booking# and walk
-        backward for name parts — never invent keys.
-        """
+        # Only bookings with a fetched detail are emitted: a row without one
+        # would carry blank charges/case/bond that the writer $sets over values
+        # captured when the booking was new (and rescoring would drop them).
         records: List[ArrestRecord] = []
-        seen: set[str] = set()
-
-        best: list[str] = []
-        for table in soup.find_all("table"):
-            cells = [c.get_text(strip=True) for c in table.find_all(["th", "td"])]
-            if "Booking#" in cells and "LastName" in cells and len(cells) > len(best):
-                best = cells
-        if not best:
-            return []
-
-        # Data begins after the last header caption block.
-        try:
-            booking_caption = len(best) - 1 - best[::-1].index("Booking#")
-        except ValueError:
-            return []
-        header_end = booking_caption
-        for label in ("EligReleaseDate", "Weight", "Height", "Race", "Sex", "Age", "DOB", "Name", "SPN#"):
-            if label in best[booking_caption : booking_caption + 12]:
-                header_end = best.index(label, booking_caption)
-                break
-        data = best[header_end + 1 :]
-
-        booking_idxs = [i for i, c in enumerate(data) if _BOOKING_RE.match(c)]
-        # Prefer the first of each duplicate pair (same value ~7 cells later).
-        primaries: list[int] = []
-        skip: set[int] = set()
-        for i in booking_idxs:
-            if i in skip:
+        details = detail_failures = 0
+        for row in current:
+            booking = _clean(row.get("bookingNo"))
+            booked_at = parse_custody_date(row.get("custodyDate"))
+            if booked_at is None or booked_at < cutoff or details >= MAX_DETAILS:
                 continue
-            if i + 7 < len(data) and data[i + 7] == data[i]:
-                primaries.append(i)
-                skip.add(i + 7)
-            elif i - 7 >= 0 and data[i - 7] == data[i]:
+            details += 1
+            # A request failure escapes (BaseScraper retries, classifies, alerts)
+            # instead of silently dropping the booking.
+            detail = parse_detail(self._get_json(session, f"{DETAIL_URL}/{booking}"), booking)
+            time.sleep(REQUEST_PAUSE_S)
+            if detail is None:
+                detail_failures += 1
                 continue
-            else:
-                primaries.append(i)
+            rec = build_record(row, detail)
+            if rec is not None:
+                records.append(rec)
 
-        captions = {
-            "nametypeid", "nametype", "nametitle", "lastname", "firstname", "middlename",
-            "namesuffix", "rtc", "eye", "hair", "skin", "booking#", "booking", "spn#",
-            "spn", "name", "dob", "age", "sex", "race", "height", "weight", "eligreleasedate",
-        }
-
-        for bi in primaries:
-            booking_num = data[bi]
-            if booking_num in seen:
-                continue
-            # Walk backward for LastName / FirstName / MiddleName.
-            window = data[max(0, bi - 16) : bi]
-            # Prefer a LAST,FIRST display name after the booking when present.
-            full_name = ""
-            for c in data[bi + 1 : bi + 6]:
-                if "," in c and re.search(r"[A-Za-z]", c) and len(c) < 60:
-                    full_name = c
-                    break
-            last_name = first_name = middle_name = ""
-            # Candidate name tokens: alphabetic, not captions, not dates/colors.
-            name_tokens = []
-            for c in window:
-                cl = c.lower()
-                if not c or cl in captions or _BOOKING_RE.match(c):
-                    continue
-                if re.match(r"^\d{1,2}/\d{1,2}/\d{2,4}$", c):
-                    continue
-                if re.match(r"^[A-Z]{3}$", c):  # eye/hair codes
-                    continue
-                if re.fullmatch(r"\d+", c):
-                    continue
-                if re.search(r"[A-Za-z]", c) and len(c) <= 40:
-                    name_tokens.append(c)
-            if full_name:
-                first_name, middle_name, last_name = self._pn(full_name)
-            elif len(name_tokens) >= 2:
-                last_name, first_name = name_tokens[0], name_tokens[1]
-                middle_name = name_tokens[2] if len(name_tokens) > 2 else ""
-            else:
-                continue
-            if not last_name or not first_name:
-                continue
-            if not full_name:
-                full_name = f"{last_name}, {first_name}"
-                if middle_name:
-                    full_name += f" {middle_name}"
-
-            dob = ""
-            for c in data[bi + 1 : bi + 8]:
-                if re.match(r"^\d{1,2}/\d{2,4}$", c) or re.match(r"^\d{1,2}/\d{1,2}/\d{2,4}$", c):
-                    dob = c
-                    break
-            sex = next((c for c in data[bi + 1 : bi + 10] if c in ("M", "F")), "")
-            race = ""
-            for c in data[bi + 1 : bi + 12]:
-                if c in ("W", "B", "H", "A", "I", "O", "U") and c != sex:
-                    race = c
-                    break
-
-            seen.add(booking_num)
-            records.append(
-                ArrestRecord(
-                    County=self.county,
-                    State="FL",
-                    Booking_Number=booking_num,
-                    Full_Name=full_name,
-                    First_Name=first_name,
-                    Middle_Name=middle_name,
-                    Last_Name=last_name,
-                    DOB=dob,
-                    Sex=sex,
-                    Race=race,
-                    Status="In Custody",
-                    Facility=FACILITY,
-                    Detail_URL=SEARCH_URL,
-                    LastCheckedMode="INITIAL",
-                )
+        if details and detail_failures == details:
+            raise OkaloosaContractError("Okaloosa: every detail was missing or named another booking")
+        if current and not records:
+            raise OkaloosaContractError(f"Okaloosa: no in-custody booking within {days} days carried a detail")
+        if skipped_status or detail_failures:
+            logger.warning(
+                "Okaloosa: skipped %d rows with non-custody status; %d/%d detail fetches failed",
+                skipped_status, detail_failures, details,
             )
+        logger.info(
+            "Okaloosa: %d roster rows, %d emitted, %d details (%d-day window)",
+            len(rows), len(records), details, days,
+        )
         return records
-
-    @staticmethod
-    def _pn(n: str):
-        if not n:
-            return "", "", ""
-        n = " ".join(n.strip().split())
-        if "," in n:
-            p = n.split(",", 1)
-            l = p[0].strip()
-            fm = p[1].strip().split()
-            return (fm[0] if fm else ""), (" ".join(fm[1:]) if len(fm) > 1 else ""), l
-        p = n.split()
-        return p[0], (" ".join(p[2:]) if len(p) > 2 else ""), (p[-1] if len(p) >= 2 else "")
