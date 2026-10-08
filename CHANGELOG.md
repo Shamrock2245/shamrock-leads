@@ -8,6 +8,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 - Repeat `POST /api/intake/submit` still updates identity fields. `status`, `created_at`, match fields, `paperwork_packet_id`, `paperwork_status`, `surety_id`, and `surety_unrecognized` are written with `$setOnInsert`, so a second save cannot revert a promoted or linked intake. The same split is used by the Wix webhook normalizer.
 
+## [Unreleased] — 2026-10-08 (OSI local stitch positions)
+
+### Fixed
+- **OSI local one-PDF stitch:** the application, promissory note, disclosure, surety terms, collateral receipt, and indemnity agreement place each value in a measured blank. The promissory note Defendant's Name cell receives the defendant. A form with no blank for a value is left empty. The stamp does not cover body text, the agent block, or print raw `{{ }}` tags.
+
 ## [Unreleased] — 2026-10-07 (Telegram and Shannon intake tags)
 
 ### Added
