@@ -76,7 +76,7 @@ def test_home_counties_matrix_state_after_source_checks():
         assert _matrix_status(text, county) == "candidate_productive", county
     for county in ("Charlotte", "Manatee", "Hendry"):
         assert _matrix_status(text, county) == "recon_only", county
-    assert "| FL | 67 | 67 | 4 | 19 | 28 | 0 | 16 |" in text
+    assert "| FL | 67 | 67 | 4 | 19 | 27 | 0 | 17 |" in text
 
 
 def test_no_home_county_is_promoted_in_health():
