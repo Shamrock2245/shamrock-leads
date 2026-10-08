@@ -281,14 +281,48 @@ _INTAKE_INSERT_ONLY_FIELDS = frozenset({
 })
 
 
+def _intake_value_blank(value) -> bool:
+    """True when a later submit must not overwrite a value already stored.
+
+    ``False`` and numeric ``0`` are real answers. Missing text, ``None``, and
+    empty lists or objects are not.
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, dict)):
+        return len(value) == 0
+    return False
+
+
+def _place_intake_value(updates: dict, insert_only: dict, key: str, value) -> None:
+    if _intake_value_blank(value):
+        insert_only[key] = value
+    else:
+        updates[key] = value
+
+
 def _intake_upsert_update(doc: dict) -> dict:
+    """Split a new intake into ``$set`` and ``$setOnInsert``.
+
+    Lifecycle fields stay insert-only. Indemnitor and defendant sections are
+    dotted paths (``indemnitor.email``) so a blank later submit cannot replace
+    the whole sub-document. A blank path is insert-only; a non-empty path still
+    updates. The same path is never in both operators, and a parent object is
+    never written next to its children.
+    """
     updates = {}
     insert_only = {}
     for key, value in doc.items():
         if key in _INTAKE_INSERT_ONLY_FIELDS:
             insert_only[key] = value
-        else:
-            updates[key] = value
+            continue
+        if key in ("indemnitor", "defendant") and isinstance(value, dict) and value:
+            for child, child_value in value.items():
+                _place_intake_value(updates, insert_only, f"{key}.{child}", child_value)
+            continue
+        _place_intake_value(updates, insert_only, key, value)
     return {"$set": updates, "$setOnInsert": insert_only}
 
 

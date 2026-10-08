@@ -6,6 +6,22 @@ import re
 from typing import Any, Dict, List
 
 
+def _set_path(doc: Dict[str, Any], key: str, value: Any) -> None:
+    """Write a Mongo update path, including dotted fields such as indemnitor.email."""
+    if "." not in key:
+        doc[key] = value
+        return
+    parts = key.split(".")
+    node = doc
+    for part in parts[:-1]:
+        child = node.get(part)
+        if not isinstance(child, dict):
+            child = {}
+            node[part] = child
+        node = child
+    node[parts[-1]] = value
+
+
 def _get(doc: Dict[str, Any], key: str):
     cur: Any = doc
     for part in key.split("."):
@@ -111,16 +127,23 @@ class FakeCollection:
 
     def _apply(self, d, update, inserting):
         for k, v in (update.get("$set") or {}).items():
-            d[k] = copy.deepcopy(v)
+            _set_path(d, k, copy.deepcopy(v))
         for k, v in (update.get("$push") or {}).items():
-            bucket = d.get(k)
-            if not isinstance(bucket, list):
-                bucket = []
-                d[k] = bucket
-            bucket.append(copy.deepcopy(v))
+            if "." in k:
+                bucket = _get(d, k)
+                if not isinstance(bucket, list):
+                    bucket = []
+                    _set_path(d, k, bucket)
+                bucket.append(copy.deepcopy(v))
+            else:
+                bucket = d.get(k)
+                if not isinstance(bucket, list):
+                    bucket = []
+                    d[k] = bucket
+                bucket.append(copy.deepcopy(v))
         if inserting:
             for k, v in (update.get("$setOnInsert") or {}).items():
-                d[k] = copy.deepcopy(v)
+                _set_path(d, k, copy.deepcopy(v))
 
     async def update_one(self, flt, update, upsert=False):
         for d in self.docs:
