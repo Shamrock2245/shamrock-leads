@@ -65,8 +65,44 @@ def test_record_uses_detail_booking_number_not_portal_id():
 def test_bond_no_bond_and_unknown_never_zero():
     assert ir.build_record(ir.parse_detail(_detail(bond="No Bond")), "u").Bond_Amount == ""
     assert ir.build_record(ir.parse_detail(_detail(bond="No Bond")), "u").Bond_Type == "NO BOND"
-    assert ir.build_record(ir.parse_detail(_detail(bond=None)), "u").Bond_Amount == ""
+    # Unrecognised value is unknown (empty), not invented.
     assert ir.build_record(ir.parse_detail(_detail(bond="Pending")), "u").Bond_Amount == ""
+
+
+def test_charge_headers_stop_at_next_page_section():
+    """Footer Visitation / Employee Services cards must not become charges."""
+    page = (_detail(charges=("BATTERY",))
+            + '<h4>Visitation</h4><div class="card"><div class="card-header">Visitation Schedule</div></div>'
+            + '<h4>Employee Services</h4><div class="card"><div class="card-header">Employee Login</div></div>')
+    assert ir.parse_detail(page)["charges"] == ["BATTERY"]
+    # A heading buried inside a charge card does not end the section early.
+    base = _detail(charges=()).replace("<h3>Charges</h3>", "")
+    nested = (base + "<h3>Charges</h3>"
+              + '<div class="card"><div class="card-header">THEFT</div>'
+              + '<div class="card-body"><h4>Notes</h4></div></div>'
+              + '<div class="card"><div class="card-header">BATTERY</div></div>'
+              + '<h4>Visitation</h4><div class="card"><div class="card-header">Hours</div></div>')
+    assert ir.parse_detail(nested)["charges"] == ["THEFT", "BATTERY"]
+
+
+def test_scrape_skips_detail_with_no_bond_row(monkeypatch):
+    """Missing Bond label → skip the record (do not write Bond_Amount="")."""
+    monkeypatch.setattr(ir, "datetime", _FixedDT)
+    when = "October 7th, 2026 at 1:00 am"
+    pages = {
+        "1": _detail(booking="2026-00000001", booked=when, bond=None),
+        "2": _detail(booking="2026-00000002", booked=when, bond="$1,000.00"),
+    }
+    _install(monkeypatch, {"10/07/2026": [["1", "2"]]}, pages)
+    recs = IndianRiverCountyScraper().scrape(lookback_days=1)
+    assert [r.Booking_Number for r in recs] == ["2026-00000002"]
+    assert recs[0].Bond_Amount == "1000.00"
+
+
+def test_recheck_without_bond_row_returns_none(monkeypatch):
+    _install(monkeypatch, {}, {"9": _detail(bond=None)})
+    assert IndianRiverCountyScraper()._fetch_single_booking(
+        "2026-00001234", "https://www.ircsheriff.org/booking-details/9") is None
 
 
 def test_release_date_marks_released():
@@ -258,8 +294,8 @@ def test_run_raises_when_no_record_has_charges_or_a_recognized_bond(monkeypatch)
     renamed_bond = [_detail(booking=f"2026-0000000{i}", booked=when).replace(">Bond<", ">Bail<") for i in (1, 2)]
     with pytest.raises(IndianRiverContractError):
         _run_with(monkeypatch, renamed_bond)
-    # one record with charges and one recognized bond is enough (others may lack them)
-    mixed = [_detail(booking="2026-00000001", booked=when, bond=None, charges=()),
+    # A missing Bond row is skipped; a No Bond page still counts as recognized.
+    mixed = [_detail(booking="2026-00000001", booked=when, bond=None),
              _detail(booking="2026-00000002", booked=when, bond="No Bond")]
     recs = _run_with(monkeypatch, mixed)
-    assert len(recs) == 2 and recs[1].Bond_Type == "NO BOND"
+    assert [r.Booking_Number for r in recs] == ["2026-00000002"] and recs[0].Bond_Type == "NO BOND"
