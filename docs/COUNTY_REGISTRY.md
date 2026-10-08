@@ -61,7 +61,7 @@
 | 23 | **Broward** | Official BSO arrest search | `broward.py` | ✅ Live — Turnstile Arrest Search name-prefix + paged grid; Mac smoke 2026-09-23 (30 new / status=ok; action=arrest_search); needs `SOLVECAPTCHA_KEY` | 60 min | Writes enabled after contract validation |
 | 24 | **Martin** | Direct Tyler Technologies REST API | `martin.py` | ✅ Active | 120 min | 2026-05-24 |
 | 25 | **St. Lucie** | requests POST — PHP table | `st_lucie.py` | ✅ Active | 90 min | 2026-04-27 |
-| 26 | **Indian River** | requests GET — BS4 card list | `indian_river.py` | ✅ Active | 120 min | 2026-04-27 |
+| 26 | **Indian River** | IRCSO booking-date search (form POST + `?page=N`) → `/booking-details/<id>` Booking Info (source Booking Number `YYYY-NNNNNNNN`) — plain requests | `indian_river.py` | ✅ Active (unverified until write smoke). See `docs/recon/FL_INDIAN_RIVER_BOOKING_SEARCH_2026-10-08.md` | 180 min | 2026-10-08 |
 | 27 | **Okeechobee** | Wix shell page — no public data source | `okeechobee.py` | 🔴 No public roster URL | 120 min | 2026-07-24 |
 
 ---
