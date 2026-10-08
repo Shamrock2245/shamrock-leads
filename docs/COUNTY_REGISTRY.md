@@ -34,7 +34,7 @@
 | 8 | **Hillsborough** | httpx direct-first + reCAPTCHA + SOLVECAPTCHA (HCSO login) | `hillsborough.py` | ✅ Active (needs HCSO_* + SOLVECAPTCHA_KEY) | 90 min | 2026-07-24 |
 | 9 | **Pinellas** | DrissionPage — date search | `pinellas.py` | ✅ Active | 90 min | 2026-04-27 |
 | 10 | **Seminole** | Custom | `seminole.py` | ✅ Active | 90 min | 2026-04-27 |
-| 11 | **Orange** | requests GET — getInmates API | `orange.py` | ✅ Active | 90 min | 2026-04-27 |
+| 11 | **Orange** | BestJail public JSON — getInmates/<letter> roster + getInmateDetails/getCharges per booking (plain requests, newest first, 7-day window) | `orange.py` | ✅ Active (unverified until write smoke; source `bookingNumber` 8 digits). See `docs/recon/FL_ORANGE_BESTJAIL_2026-10-08.md` | 90 min | 2026-10-08 |
 | 12 | **Pasco** | DrissionPage — Cloudflare bypass | `pasco.py` | ✅ Active | 90 min | 2026-04-27 |
 | 13 | **Lake** | requests POST `recent_data` + Turnstile token (SolveCaptcha, owner-approved; shared `scrapers/solvecaptcha.py`) | `lake.py` | ✅ `verified_public` (Mac write smoke 17 new; needs SOLVECAPTCHA_KEY) | 90 min | 2026-09-25 |
 | 14 | **Hernando** | Custom HTML | `hernando.py` | ✅ Active | 90 min | 2026-04-27 |
@@ -102,7 +102,7 @@
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 40 | **Escambia** | SmartWEB JAIL View (`ECC<YY>JBN######`) — plain requests | `escambia.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
-| 41 | **Okaloosa** | Inmate Locator `Default.aspx` (source Booking# 10-digit) — plain requests A–Z | `okaloosa.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
+| 41 | **Okaloosa** | Inmate Locator public JSON API (`/InmateLocatorAPI/api/Inmates/search` + `/api/Inmates/<bookingNo>`; source bookingNo 10-digit, custodyDate) — plain requests | `okaloosa.py` | ✅ Active (unverified until write smoke). See `docs/recon/FL_OKALOOSA_API_2026-10-08.md` | 120 min | 2026-10-08 |
 | 42 | **Bay** | Custom HTML | `bay.py` | ✅ Active | 120 min | 2026-04-27 |
 | 43 | **Santa Rosa** | SmartWEB JAIL View (`SRSO<YY>JBN######`) — plain requests | `santa_rosa.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
 | 44 | **Walton** | New World InmateInquiry (`InCustody=True` + detail open `Booking` `YYYY-NNNNNNNN`; shared `fl_newworld`) — plain requests | `walton.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
