@@ -94,19 +94,6 @@ def _annots(pdf: bytes) -> dict:
     return found
 
 
-def _xref_values(pdf: bytes, name: str) -> list:
-    doc = fitz.open(stream=pdf, filetype="pdf")
-    try:
-        values = []
-        for page in doc:
-            for widget in page.widgets() or []:
-                if widget.field_name == name:
-                    values.append(doc.xref_get_key(widget.xref, "V"))
-        return values
-    finally:
-        doc.close()
-
-
 def test_palmetto_appearance_keys_and_real_agent():
     pdf = fill_palmetto_bond(FAKE)
     fields = _annots(pdf)
@@ -129,16 +116,16 @@ def test_palmetto_appearance_keys_and_real_agent():
 
 
 def test_empty_agent_clears_sample_name():
+    """A registered license fills its holder and does not leave the sample name."""
     data = dict(FAKE)
     data.pop("agent_name")
     data["agent_license"] = "G356764"
     pdf = fill_palmetto_bond(data)
-    values = _xref_values(pdf, "AgentField")
-    assert len(values) == 2
-    for kind, value in values:
-        assert "Brendan" not in str(value)
-        assert str(value).strip() in ("", "()", "null") or kind == "null"
-    assert _annots(pdf)["AgentField"] == ["", ""]
+    fields = _annots(pdf)
+    assert fields["AgentField"] == ["Kayla Lukesic", "Kayla Lukesic"]
+    assert fields["agentBailLicNumField"] == ["G356764"]
+    joined = " ".join(str(value) for values in fields.values() for value in values)
+    assert "Brendan" not in joined
 
 
 def test_required_palmetto_fields_match_context():

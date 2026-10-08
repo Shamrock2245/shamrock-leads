@@ -119,7 +119,7 @@ def build_palmetto_context(data: Optional[dict]) -> Dict[str, str]:
 
     from dashboard.services.docuseal_service import resolve_writing_agent
 
-    agent, license_no = resolve_writing_agent(data, blank_when_license_only=True)
+    agent, license_no = resolve_writing_agent(data)
 
     county = str(data.get("county") or data.get("defendant_county") or "").strip()
     address = str(

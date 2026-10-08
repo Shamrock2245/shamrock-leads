@@ -1381,8 +1381,10 @@ def _attach_session_writing_agent(request: Request, payload: dict) -> dict:
     """Pair the writing agent on a print payload.
 
     An explicit registry agent on the payload keeps that entry's own license.
-    A signed-in sub-agent uses that entry. PIN admin and a payload with no
-    agent use the house pair. A license is not filled in by itself.
+    A signed-in sub-agent uses that entry. A registered license with no name
+    uses that holder's pair. An unregistered license with no usable name is
+    dropped. PIN admin and a payload with no agent then use the house pair.
+    A signed-in sub-agent is used before that house pair.
     """
     from dashboard.auth.agent_scope import agent_identity
     from dashboard.services.docuseal_service import apply_writing_agent, resolve_writing_agent
@@ -1391,9 +1393,7 @@ def _attach_session_writing_agent(request: Request, payload: dict) -> dict:
     session = None
     if getattr(request, "cookies", None) is not None:
         session = agent_identity(request)
-    name, license_no = resolve_writing_agent(
-        out, session=session, blank_when_license_only=True,
-    )
+    name, license_no = resolve_writing_agent(out, session=session)
     return apply_writing_agent(out, name, license_no)
 
 

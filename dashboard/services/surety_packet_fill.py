@@ -80,7 +80,7 @@ def _paired_writing_agent(data: Mapping[str, Any]) -> tuple:
     """Name and license from one BOND_AGENTS lookup. Empty when the record has neither."""
     from dashboard.services.docuseal_service import _pair_from_agent_source
 
-    pair = _pair_from_agent_source(data, blank_when_license_only=False)
+    pair = _pair_from_agent_source(data)
     if not pair:
         return "", ""
     return str(pair[0] or ""), str(pair[1] or "")

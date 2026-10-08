@@ -18,6 +18,7 @@ from dashboard.bond_pdf_service import (
     AGENT_NAME,
     build_osi_field_values,
     build_palmetto_field_values,
+    writing_agent_name,
 )
 from dashboard.palmetto_packet_fill import build_palmetto_context
 from dashboard.routers.bonds import _attach_session_writing_agent
@@ -366,13 +367,13 @@ def test_palmetto_print_does_not_borrow_the_house_license():
     blank = build_palmetto_field_values({"name": "SAMPLE", "bond_amount": 1000})[0]
     assert blank["AgentField"] == HOUSE_NAME
     assert blank["agentBailLicNumField"] == HOUSE_LICENSE
-    # A license left on the payload with no name still clears the sample name.
+    # A registered license with no name prints that holder's pair.
     cleared = build_palmetto_field_values({
         "name": "SAMPLE",
         "bond_amount": 1000,
         "agent_license": "G356764",
     })[0]
-    assert cleared["AgentField"] == ""
+    assert cleared["AgentField"] == "Kayla Lukesic"
     assert cleared["agentBailLicNumField"] == "G356764"
     assert SAMPLE not in cleared["AgentField"]
 
@@ -395,6 +396,118 @@ def test_attach_session_uses_house_or_the_sub_agent():
     assert labeled["agent_license"] == HOUSE_LICENSE
     _no_sample(admin)
     _no_sample(kayla)
+
+
+@pytest.mark.parametrize(
+    "license_no,owner_name",
+    (("G356764", "Kayla Lukesic"), ("W214323", "Jason Taylor")),
+)
+def test_license_only_record_prints_the_registered_holder(license_no, owner_name):
+    payload = {"agent_license": license_no, "county": "Lee"}
+    recipe = build_palmetto_field_values({"name": "SAMPLE", "bond_amount": 1000, **payload})[0]
+    assert recipe["AgentField"] == owner_name
+    assert recipe["agentBailLicNumField"] == license_no
+    printed = _attach_session_writing_agent(_Request(None), payload)
+    assert printed["agent_name"] == owner_name
+    assert printed["writing_agent_name"] == owner_name
+    assert printed["agent_license"] == license_no
+    assert printed["bondsman_license"] == license_no
+    ctx = build_palmetto_context({"defendant_name": "SAMPLE", **payload})
+    assert ctx["agent_name"] == owner_name
+    assert ctx["agent_license"] == license_no
+    assert SAMPLE not in recipe["AgentField"]
+    assert HOUSE_NAME not in recipe["AgentField"] or owner_name == HOUSE_NAME
+
+
+@pytest.mark.parametrize("label", ("Shamrock Bail Bonds", "Master Admin"))
+def test_filtered_label_does_not_hide_the_next_name(label):
+    payload = {"writing_agent_name": label, "agent_name": "Kayla Lukesic"}
+    assert writing_agent_name(payload) == "Kayla Lukesic"
+    assert resolve_writing_agent(payload) == ("Kayla Lukesic", "G356764")
+    recipe = build_palmetto_field_values({"name": "SAMPLE", "bond_amount": 1000, **payload})[0]
+    assert recipe["AgentField"] == "Kayla Lukesic"
+    assert recipe["agentBailLicNumField"] == "G356764"
+    ctx = build_palmetto_context({"defendant_name": "SAMPLE", **payload})
+    assert ctx["agent_name"] == "Kayla Lukesic"
+    assert ctx["agent_license"] == "G356764"
+    printed = _attach_session_writing_agent(_Request(None), payload)
+    assert printed["agent_name"] == "Kayla Lukesic"
+    assert printed["agent_license"] == "G356764"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    (
+        {"agent_license": "X100000"},
+        {"writing_agent_name": "Master Admin", "agent_license": "X100000"},
+    ),
+)
+@pytest.mark.parametrize(
+    "kind",
+    ("machine", "pin_admin", "kayla"),
+)
+async def test_unregistered_license_without_a_name_uses_session_or_house(payload, kind):
+    """An unknown license is dropped. Session, then the house pair, fills the agent."""
+    if kind == "kayla":
+        session = _session("sub_agent", "Kayla Lukesic", "G356764")
+        cookies = _cookie("sub_agent", "Kayla Lukesic", "G356764")
+        name, license_no = "Kayla Lukesic", "G356764"
+    elif kind == "pin_admin":
+        session = _session("god_admin")
+        cookies = _cookie("god_admin")
+        name, license_no = HOUSE_NAME, HOUSE_LICENSE
+    else:
+        session = None
+        cookies = None
+        name, license_no = HOUSE_NAME, HOUSE_LICENSE
+
+    assert resolve_writing_agent(payload, session=session) == (name, license_no)
+    built = build_bond_data_from_dashboard(ctx=_bound(), body=payload, session=session)
+    assert built["bondsman_name"] == name
+    assert built["bondsman_license"] == license_no
+    values = _prefill(built)
+    assert values["agent_name"] == name
+    assert values["bondsman_name"] == name
+    assert values["agent_license"] == license_no
+    assert values["bondsman_license"] == license_no
+    bond = _bound(**payload, shannon_voice=True)
+    for key in (
+        "agent_name", "bondsman_name", "writing_agent_name", "writing_agent",
+        "agent_license", "bondsman_license", "writing_agent_license", "license_number",
+    ):
+        bond[key] = built[key]
+    if kind == "machine":
+        bond = _bound(**payload, shannon_voice=True)
+    submitted = await _submit(bond)
+    bondsman = _bondsman(submitted["submitters"])
+    assert bondsman["name"] == name
+    assert bondsman["values"]["agent_name"] == name
+    assert bondsman["values"]["agent_license"] == license_no
+    printed = _attach_session_writing_agent(_Request(cookies), dict(payload))
+    assert printed["agent_name"] == name
+    assert printed["agent_license"] == license_no
+    recipe = build_palmetto_field_values({"name": "SAMPLE", "bond_amount": 1000, **printed})[0]
+    assert recipe["AgentField"] == name
+    assert recipe["agentBailLicNumField"] == license_no
+    ctx = build_palmetto_context({"defendant_name": "SAMPLE", **printed})
+    assert ctx["agent_name"] == name
+    assert ctx["agent_license"] == license_no
+    for blob in (
+        resolved_blob := f"{name} {license_no}",
+        bondsman["name"],
+        bondsman["values"]["agent_name"],
+        bondsman["values"]["agent_license"],
+        recipe["AgentField"],
+        recipe["agentBailLicNumField"],
+        ctx["agent_name"],
+        ctx["agent_license"],
+        values["agent_name"],
+        values["agent_license"],
+    ):
+        assert blob
+        assert "X100000" not in str(blob)
+    assert "X100000" not in resolved_blob
 
 
 def test_osi_appearance_output_is_unchanged():

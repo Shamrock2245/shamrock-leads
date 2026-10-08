@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (license-only agent pair)
+
+### Fixed
+- **Palmetto appearance bonds.** A license with no name prints that `BOND_AGENTS` holder on the appearance bond, the print route, and the packet forms. `G356764` is Kayla Lukesic and `W214323` is Jason Taylor. An unregistered license with no usable name is dropped, and the signed-in sub-agent or the house pair (Brendan O'Neal / P139768) is printed, including on DocuSeal. A filtered label such as Shamrock Bail Bonds or Master Admin is skipped, and the next name field is used, so Kayla Lukesic on `agent_name` is kept when `writing_agent_name` is the business label. OSI appearance bonds are unchanged.
+
 ## [Unreleased] — 2026-10-08 (writing agent pair)
 
 ### Fixed
