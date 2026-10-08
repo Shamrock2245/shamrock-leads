@@ -701,3 +701,322 @@ def test_clone_areas_use_the_clone_document_uuids():
     assert written & source_uuids
     assert written - source_uuids
     assert "d8ae60c4-18e2-4677-b375-620d974a5421" in written
+
+
+def _fields_touching(plan, slug):
+    document = _doc(plan, slug)
+    attachment = document["attachment_uuid"]
+    return [
+        field for field in plan["fields"]
+        if any(
+            area.get("attachment_uuid") == attachment
+            for area in field.get("areas") or []
+        )
+    ]
+
+
+def _areas_for(field, attachment):
+    return [
+        area for area in field.get("areas") or []
+        if area.get("attachment_uuid") == attachment
+    ]
+
+
+def test_agent_license_is_one_right_aligned_bondsman_field_per_form():
+    """Application and indemnity each gain one house-filled license box.
+
+    It sits on the bondsman role, on the same line as agent_name and to its
+    right, and does not cover that name or any other box on the page.
+    """
+    import dashboard.palmetto_docuseal_apply as apply_mod
+    from dashboard.services.docuseal_signing_ux import (
+        STAFF_READONLY_FIELD_NAMES,
+        submission_fields_from_values,
+    )
+
+    counts = getattr(apply_mod, "TEMPLATE_5_FORM_FIELD_COUNTS", None)
+    put_count = getattr(apply_mod, "TEMPLATE_5_PUT_FIELD_COUNT", None)
+    assert counts == {
+        "defendant-application": 85,
+        "indemnity-agreement": 51,
+        "collateral-receipt": 30,
+        "bail-bond-information-sheet-palmetto": 6,
+    }
+    assert put_count == 195
+
+    template = _load()
+    plan = plan_merge(template)
+    assert len(plan["fields"]) == put_count
+    for slug, expected in counts.items():
+        assert len(_fields_touching(plan, slug)) == expected, slug
+
+    submitters = {row["uuid"]: row["name"] for row in template["submitters"]}
+    licenses = [field for field in plan["fields"] if field.get("name") == "agent_license"]
+    assert len(licenses) == 2
+    by_slug = {}
+    for slug in ("defendant-application", "indemnity-agreement"):
+        document = _doc(plan, slug)
+        attachment = document["attachment_uuid"]
+        on_form = [
+            field for field in licenses
+            if _areas_for(field, attachment)
+        ]
+        assert len(on_form) == 1, slug
+        license_field = on_form[0]
+        by_slug[slug] = (license_field, _areas_for(license_field, attachment))
+        assert submitters[license_field["submitter_uuid"]] == "bondsman"
+        assert license_field["required"] is False
+        assert license_field["preferences"] == _AGENT_LINE_PREFERENCES[slug]["agent_license"]
+
+        names = [
+            field for field in plan["fields"]
+            if field.get("name") == "agent_name" and _areas_for(field, attachment)
+        ]
+        assert len(names) == 1
+        name_field = names[0]
+        assert submitters[name_field["submitter_uuid"]] == "bondsman"
+        assert name_field["preferences"] == _AGENT_LINE_PREFERENCES[slug]["agent_name"]
+        name_areas = _areas_for(name_field, attachment)
+        assert len(name_areas) == 1
+        name_area = name_areas[0]
+        license_area = by_slug[slug][1][0]
+        assert license_area["page"] == name_area["page"]
+        assert license_area["y"] == name_area["y"]
+        assert license_area["h"] == name_area["h"]
+        assert float(license_area["x"]) >= float(name_area["x"]) + float(name_area["w"]) - 1e-9
+        assert (name_area["x"], name_area["y"], name_area["w"], name_area["h"]) == (
+            _AGENT_LINE_AREAS[slug]["agent_name"]
+        )
+        assert (license_area["x"], license_area["y"], license_area["w"], license_area["h"]) == (
+            _AGENT_LINE_AREAS[slug]["agent_license"]
+        )
+
+        others = []
+        for field in plan["fields"]:
+            for area in field.get("areas") or []:
+                if area.get("attachment_uuid") != attachment:
+                    continue
+                if area.get("page") != license_area["page"]:
+                    continue
+                if field is license_field:
+                    continue
+                others.append((field, area))
+        overlapped = [
+            (field.get("name"), _overlap_ratio(license_area, area))
+            for field, area in others
+            if _overlap_ratio(license_area, area) > 1e-6
+        ]
+        assert overlapped == []
+
+    signer_roles = {"defendant", "indemnitor", "coindemnitor"}
+    for field in plan["fields"]:
+        if field.get("name") != "agent_license":
+            continue
+        assert submitters[field["submitter_uuid"]] not in signer_roles
+
+    assert "agent_license" in STAFF_READONLY_FIELD_NAMES
+    values = DocuSealService(
+        base_url="https://sign.example.invalid",
+        api_key="test",
+    ).prefill_values_from_bond(_full_bond())
+    assert values["agent_name"] == "FAKE AGENT RIVERA"
+    assert values["agent_license"] == "X100000"
+    submitted = submission_fields_from_values(values)
+    license_value = next(row for row in submitted if row["name"] == "agent_license")
+    assert license_value["readonly"] is True
+    assert license_value["default_value"] == values["agent_license"]
+
+    spec = json.loads(SPEC_JSON.read_text(encoding="utf-8"))
+    spec_by_name = {
+        row["name"]: row
+        for row in spec["fields"]
+        if row["name"] in (
+            "app_agent_name",
+            "app_agent_license",
+            "ind_agent_name",
+            "ind_agent_license",
+        )
+    }
+    assert set(spec_by_name) == {
+        "app_agent_name",
+        "app_agent_license",
+        "ind_agent_name",
+        "ind_agent_license",
+    }
+    for placement_name, data_source, required, slug, source in (
+        ("app_agent_name", "agent_name", True, "defendant-application", "agent_name"),
+        ("app_agent_license", "agent_license", False, "defendant-application", "agent_license"),
+        ("ind_agent_name", "agent_name", True, "indemnity-agreement", "agent_name"),
+        ("ind_agent_license", "agent_license", False, "indemnity-agreement", "agent_license"),
+    ):
+        row = spec_by_name[placement_name]
+        assert row["data_source"] == data_source
+        assert row["role"] == "bondsman"
+        assert row["required"] is required
+        assert "align" not in row
+        assert "valign" not in row
+        assert "font_size" not in row
+        expected = _AGENT_LINE_PREFERENCES[slug][source]
+        if expected:
+            assert row["preferences"] == expected
+        else:
+            assert "preferences" not in row
+        assert (row["x"], row["y"], row["w"], row["h"]) == _AGENT_LINE_AREAS[slug][source]
+
+
+# Template 6 areas, origin top-left, rounded to 6 decimals.
+_AGENT_LINE_AREAS = {
+    "defendant-application": {
+        "agent_name": (0.728758, 0.017740, 0.137255, 0.016473),
+        "agent_license": (0.872549, 0.017740, 0.080065, 0.016473),
+    },
+    "indemnity-agreement": {
+        "agent_name": (0.729223, 0.020059, 0.137342, 0.017552),
+        "agent_license": (0.873105, 0.020059, 0.080116, 0.017552),
+    },
+}
+_AGENT_LINE_PREFERENCES = {
+    "defendant-application": {
+        "agent_name": {"valign": "bottom", "font_size": 11},
+        "agent_license": {"align": "right", "valign": "bottom", "font_size": 11},
+    },
+    "indemnity-agreement": {
+        "agent_name": {},
+        "agent_license": {"align": "right"},
+    },
+}
+
+
+def test_preferences_pass_through_when_set():
+    """An omitted preferences dict stays off the field. A set dict reaches DocuSeal."""
+    from dashboard.palmetto_docuseal_apply import _build_field
+    from dashboard.palmetto_field_placement import _f
+
+    plain = _f(
+        "defendant-application", "app_agent_name", "text", "bondsman",
+        446, 16, 84, 14, "agent_name", required=True,
+    )
+    assert "preferences" not in plain
+    assert "align" not in plain
+    assert "valign" not in plain
+    assert "font_size" not in plain
+    plain_field = _build_field("agent_name", [plain], "attachment", "submitter", -1, "")
+    assert plain_field["preferences"] == {}
+
+    wanted = {"align": "right", "valign": "bottom", "font_size": 11}
+    placed = _f(
+        "defendant-application", "app_agent_license", "text", "bondsman",
+        534, 14, 49, 13, "agent_license",
+        preferences=wanted,
+    )
+    assert placed["preferences"] == wanted
+    assert "align" not in placed
+    module = _script()
+    recorded = module._spec_field(placed)
+    assert recorded["preferences"] == wanted
+    assert "align" not in recorded
+    assert "valign" not in recorded
+    assert "font_size" not in recorded
+    built = _build_field("agent_license", [placed], "attachment", "submitter", -1, "")
+    assert built["preferences"] == wanted
+    assert isinstance(built["preferences"]["font_size"], int)
+    assert built["name"] == "agent_license"
+    assert built["required"] is False
+
+    bad = dict(placed)
+    bad["preferences"] = {"valign": "middle"}
+    with pytest.raises(PalmettoApplyError, match="vertical alignment"):
+        _build_field("agent_license", [bad], "attachment", "submitter", -1, "")
+
+
+# Live-render widths (pt) for the registered writing agents. A box shorter
+# than one 11pt line (13.98pt) prints at 7pt unless preferences.font_size is set.
+_ELEVEN_PT_LINE_PT = 13.98
+_MEASURED_TEXT_WIDTH = {
+    7: {
+        "Brendan O'Neal": 52.1,
+        "Kayla Lukesic": 43.6,
+        "Jason Taylor": 39.9,
+        "P139768": 28.3,
+        "G356764": 29.1,
+        "W214323": 30.5,
+    },
+    11: {
+        "Brendan O'Neal": 81.9,
+        "Kayla Lukesic": 68.5,
+        "Jason Taylor": 62.7,
+        "P139768": 44.4,
+        "G356764": 45.8,
+        "W214323": 48.0,
+    },
+}
+
+
+def _print_pt(box_h: float, font_size=None) -> int:
+    """Print size for one box. An explicit font_size wins over the height rule."""
+    if font_size not in (None, ""):
+        return int(float(font_size))
+    if float(box_h) < _ELEVEN_PT_LINE_PT:
+        return 7
+    return 11
+
+
+def _text_width(text: str, size: int) -> float:
+    import fitz
+
+    drawn = fitz.Font("helv").text_length(text, fontsize=size)
+    measured = _MEASURED_TEXT_WIDTH.get(size, {}).get(text)
+    if measured is None:
+        # Helvetica under-measures the live render. Pad an unlisted size.
+        return drawn * (52.1 / 49.58)
+    return max(drawn, measured)
+
+
+def test_agent_line_text_fits_at_the_print_size():
+    """Longest registered name and widest license fit the placed boxes.
+
+    Height under 13.98pt prints at 7pt. The application boxes are 13pt tall,
+    so the height rule is 7pt, and preferences.font_size 11 is what is checked.
+    The indemnity boxes are 14pt with no font_size, so they print at 11pt.
+    """
+    from dashboard.palmetto_field_placement import PAGE_SIZE, fields_for
+    from dashboard.services.docuseal_service import BOND_AGENTS
+
+    assert PAGE_SIZE["defendant-application"] == (612.0, 789.18)
+    assert PAGE_SIZE["indemnity-agreement"][0] == 611.61
+    assert _print_pt(13) == 7
+    assert _print_pt(13.97) == 7
+    assert _print_pt(13.98) == 11
+    assert _print_pt(13, 11) == 11
+    assert _print_pt(14) == 11
+
+    for slug in ("defendant-application", "indemnity-agreement"):
+        page_w = PAGE_SIZE[slug][0]
+        rows = {
+            field["data_source"]: field
+            for field in fields_for(slug)
+            if field["name"].endswith("agent_name") or field["name"].endswith("agent_license")
+        }
+        assert set(rows) == {"agent_name", "agent_license"}
+        name_box = rows["agent_name"]
+        license_box = rows["agent_license"]
+        assert name_box["y"] == license_box["y"]
+        assert name_box["h"] == license_box["h"]
+        name_size = (name_box.get("preferences") or {}).get("font_size")
+        license_size = (license_box.get("preferences") or {}).get("font_size")
+        assert _print_pt(name_box["h"]) == (7 if slug == "defendant-application" else 11)
+        size = _print_pt(name_box["h"], name_size)
+        assert size == 11
+        assert size == _print_pt(license_box["h"], license_size)
+        expected_name = _AGENT_LINE_PREFERENCES[slug]["agent_name"]
+        if expected_name:
+            assert name_box["preferences"] == expected_name
+        else:
+            assert "preferences" not in name_box
+        assert license_box["preferences"] == _AGENT_LINE_PREFERENCES[slug]["agent_license"]
+        for license_no, entry in BOND_AGENTS.items():
+            agent_name = entry["agent_name"]
+            assert _text_width(agent_name, size) <= name_box["w"]
+            assert _text_width(license_no, size) <= license_box["w"]
+        assert name_box["x"] + name_box["w"] <= license_box["x"]
+        assert license_box["x"] + license_box["w"] <= page_w
