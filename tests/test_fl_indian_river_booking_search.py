@@ -23,7 +23,10 @@ LANDING = """
 
 
 def _results(ids):
-    return "".join(f'<a href="https://www.ircsheriff.org/booking-details/{i}">DOE, JANE</a>' for i in ids)
+    if not ids:
+        return "<p>Current Inmates: 508</p><p>No results found!</p>"
+    return "".join(f'<div class="inmate inmate-list clearfix"><a href="https://www.ircsheriff.org/booking-details/{i}">DOE, JANE</a></div>'
+                   for i in ids)
 
 
 def _detail(booking="2026-00001234", booked="October 6th, 2026 at 9:05 pm", bond="$2,500.00", release=None,
@@ -103,7 +106,7 @@ def _install(monkeypatch, by_date, details):
         def post(self, url, data=None, timeout=None):
             assert data["_token"] == "tok123"
             pages = by_date.get(data["booking_date"], [])
-            return _Resp(_results(pages[0]) if pages else "")
+            return _Resp(_results(pages[0] if pages else []))
 
     monkeypatch.setattr(ir.requests, "Session", _S)
     monkeypatch.setattr(ir.time, "sleep", lambda *_: None)
@@ -201,3 +204,29 @@ def test_custody_recheck_of_legacy_portal_id_row_changes_nothing(monkeypatch):
     found = [w[1] for w in rechecks.writes if w[0] == "insert_one"]
     assert len(found) == 1 and found[0]["source_found"] is False  # a recheck note only
     assert ("update_one", {"_id": "t1"}, {"$set": {"total_checked": 1, "changes_found": 0, "not_found_count": 1}}) in triggers.writes
+
+
+def test_first_results_page_needs_cards_or_no_results_text():
+    assert ir.parse_first_results_page(_results(["1", "2"])) == ["1", "2"]
+    assert ir.parse_first_results_page(_results([])) == []
+    with pytest.raises(IndianRiverContractError):  # 200 page, no cards, no marker (drift)
+        ir.parse_first_results_page("<html><body>Maintenance</body></html>")
+    with pytest.raises(IndianRiverContractError):  # detail links but the card markup changed
+        ir.parse_first_results_page('<a href="https://www.ircsheriff.org/booking-details/1">X</a>')
+
+
+def test_scrape_raises_when_every_day_is_unrecognized(monkeypatch):
+    monkeypatch.setattr(ir, "datetime", _FixedDT)
+    _install(monkeypatch, {}, {})
+    monkeypatch.setattr(ir, "parse_result_ids", lambda html: [])
+    monkeypatch.setattr(ir, "NO_RESULTS_MARKER", "marker-that-is-not-there")
+    with pytest.raises(IndianRiverContractError):
+        IndianRiverCountyScraper().scrape(lookback_days=2)
+
+
+def test_detail_request_failure_escapes(monkeypatch):
+    monkeypatch.setattr(ir, "datetime", _FixedDT)
+    _install(monkeypatch, {"10/07/2026": [["1", "2"]]}, {"1": _detail(booking="2026-00000001", booked="October 7th, 2026 at 1:00 am")})
+    with pytest.raises(requests.HTTPError):  # detail "2" returns 404 in the fake
+        IndianRiverCountyScraper().scrape(lookback_days=1)
+

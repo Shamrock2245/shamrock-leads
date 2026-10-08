@@ -87,9 +87,27 @@ def parse_token(html: str) -> str:
     return token["value"]
 
 
+NO_RESULTS_MARKER = "No results found"  # IRCSO empty-search text (2026-10-08)
+RESULTS_MARKER = "inmate-list"  # class on each result card (2026-10-08)
+
+
 def parse_result_ids(html: str) -> List[str]:
     """Portal detail ids on one results page, in page order."""
     return list(dict.fromkeys(_DETAIL_ID_RE.findall(html)))
+
+
+def parse_first_results_page(html: str) -> List[str]:
+    """Ids on the first page of a date search. Zero ids are accepted only when
+    the page carries the site's "No results found" text; a 200 page with
+    neither result cards nor that text is drift and raises."""
+    ids = parse_result_ids(html)
+    if ids:
+        if RESULTS_MARKER not in html:
+            raise IndianRiverContractError("Indian River: result links without inmate-list cards")
+        return ids
+    if NO_RESULTS_MARKER not in html:
+        raise IndianRiverContractError("Indian River: search page has no results and no 'No results found' text")
+    return []
 
 
 def parse_source_datetime(text: str) -> Optional[datetime]:
@@ -222,7 +240,7 @@ class IndianRiverCountyScraper(BaseScraper):
             timeout=REQUEST_TIMEOUT,
         )
         resp.raise_for_status()
-        ids = parse_result_ids(resp.text)
+        ids = parse_first_results_page(resp.text)
         for page in range(2, MAX_PAGES_PER_DAY + 1):
             if not ids or len(ids) < 10 * (page - 1):
                 break
@@ -258,13 +276,11 @@ class IndianRiverCountyScraper(BaseScraper):
         for detail_id, day in wanted[:MAX_DETAILS]:
             url = f"{DETAIL_URL}/{detail_id}"
             fetched += 1
-            try:
-                resp = session.get(url, timeout=REQUEST_TIMEOUT)
-                resp.raise_for_status()
-                rec = build_record(parse_detail(resp.text), url)
-            except requests.RequestException as exc:
-                logger.debug("Indian River detail failed (%s): %s", url, exc)
-                rec = None
+            # A request failure escapes (BaseScraper retries, classifies and
+            # alerts) instead of silently dropping the booking.
+            resp = session.get(url, timeout=REQUEST_TIMEOUT)
+            resp.raise_for_status()
+            rec = build_record(parse_detail(resp.text), url)
             if rec is None or rec.Booking_Number in seen or datetime.strptime(rec.Booking_Date, "%m/%d/%Y").date() != day:
                 dropped += 1
             else:
@@ -275,7 +291,7 @@ class IndianRiverCountyScraper(BaseScraper):
         if fetched and not records:
             raise IndianRiverContractError("Indian River: details fetched but none carry a source Booking Number")
         if dropped:
-            logger.warning("Indian River: dropped %d/%d details (no key/date, wrong date or failed)", dropped, fetched)
+            logger.warning("Indian River: dropped %d/%d details (no key/date, wrong date or duplicate)", dropped, fetched)
         logger.info("Indian River: %d bookings over %d days (%d details)", len(records), days, fetched)
         return records
 

@@ -58,3 +58,9 @@ Rows written before this PR are keyed on the portal id (`/booking-details/<id>`)
 - `refresh-from-source` parses the stored page with the generic parser and queues the same scheduler recheck; it never calls `_fetch_single_booking`.
 - No release sweep or purge acts on an empty recheck. The retention and hygiene routers work on age and explicit admin actions only.
 
+## Codex follow-up (2026-10-08)
+
+- **Empty pages:** a live search for a date with no bookings (10/20/2026, 08:33 EDT) returns HTTP 200 with "No results found!". A day with bookings shows `inmate inmate-list clearfix` cards. The first results page must show one or the other, or the run raises `IndianRiverContractError`.
+- **Detail failures:** a detail GET that times out or returns an HTTP error now escapes, so BaseScraper retries, classifies and alerts. Rows are still dropped, and counted, only for content reasons: no key or date, a wrong day, or a duplicate.
+- Read smoke at 08:35 EDT: 60/60 unique rows, 59 with charges, 15 with a bond, 15 No Bond, 23 released, 50 s.
+
