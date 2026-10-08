@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (Okaloosa FL Inmate Locator API)
+
+### Fixed
+- **Okaloosa (FL):** rows were saved with no booking date, because the legacy `Default.aspx` grid publishes none and was parsed by walking flattened cells. The scraper now uses the official Inmate Locator's public JSON API with plain `requests`. The roster comes from `/api/Inmates/search`, paged to the source `total` (it raises on a short walk or duplicate keys) and keyed on the source 10-digit `bookingNo`, with `custodyDate` as the booking timestamp. Bond is `totalBondAmt` when greater than 0, and unknown (`""`) otherwise (0 means nothing was published). Charges, statute, degree and per-charge bond come from `/api/Inmates/<bookingNo>` for the last 7 days. Only status `1` (in custody) is emitted. Box read smoke: 781 rows / 781 unique, booking date on all, 11 s. Health stays `unverified` until a Leads Ops write smoke (`docs/recon/FL_OKALOOSA_API_2026-10-08.md`).
+
 ## [Unreleased] — 2026-10-08 (license-only agent pair)
 
 ### Fixed

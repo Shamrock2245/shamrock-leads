@@ -964,9 +964,9 @@
       "state": "FL",
       "county_fips": "091",
       "passive_recommendation": "productive",
-      "official_source_url": "https://okaloosacountyjail.myokaloosa.com/InmateLocator/Default.aspx",
-      "access_posture": "Ordinary public HTTPS ASP.NET Inmate Locator (linked from sheriff-okaloosa.org)",
-      "evidence_note": "2026-10-07 idle-eight recon: Default.aspx A\u2013Z last-name search returns Booking# (10-digit YYYY+seq), name, demographics. SPA root /InmateLocator/ is not the roster."
+      "official_source_url": "https://okaloosacountyjail.myokaloosa.com/InmateLocator/",
+      "access_posture": "Ordinary public HTTPS Inmate Locator (Angular, linked from sheriff-okaloosa.org); its config.json names the public InmateLocatorAPI; /api/Inmates/search pages the current roster and /api/Inmates/<bookingNo> returns charges; no login/CAPTCHA/WAF",
+      "evidence_note": "2026-10-08 Okaloosa API recon (docs/recon/FL_OKALOOSA_API_2026-10-08.md): search total 783, 8 pages of 100 in <1 s, 783 unique 10-digit bookingNo (YYYY+seq), custodyDate (booking timestamp) on every row; roster totalBondAmt equals the sum of detail bailAmt when published (24/24), else 0/null. Box read smoke 2026-10-08 ~08:04 EDT: 781 status-1 rows / 781 unique, booking date+time 781/781, bond >0 on 429, unknown 352, charges for the 70 bookings in the 7-day window; 11 s. Replaces the 2026-10-07 Default.aspx grid parser, which saved rows with no booking date. Health stays unverified until a Leads Ops write smoke."
     },
     {
       "state": "FL",
