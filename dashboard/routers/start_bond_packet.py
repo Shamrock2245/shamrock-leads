@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from dashboard.auth.agent_scope import poa_scope_query
 from dashboard.services.start_bond_packet import (
+    PacketStartConflict,
     PacketStartDisabled,
     PacketStartError,
     prepare_packet,
@@ -66,6 +67,11 @@ async def api_send(request: Request):
         result = await send_packet(payload if isinstance(payload, dict) else {}, poa_filter=_poa_filter(request))
     except PacketStartDisabled:
         return _disabled()
+    except PacketStartConflict as exc:
+        return JSONResponse(
+            {"error": exc.code, "message": exc.message, "packet_id": exc.packet_id},
+            status_code=409,
+        )
     except PacketStartError as exc:
         return JSONResponse({"error": exc.code}, status_code=400)
     status = 200 if result.get("state") == "ready_for_staff_send" else 409

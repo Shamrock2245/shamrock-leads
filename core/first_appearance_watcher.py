@@ -260,6 +260,22 @@ def _is_no_bond(record_doc: Dict[str, Any]) -> bool:
     return False
 
 
+def _checked_update(doc: Dict[str, Any], now: datetime, mode: str) -> Dict[str, Any]:
+    """Failure / no-change timestamp write.
+
+    Goes through ``protect_scraped_update`` so a legacy
+    ``MANUAL_CHARGE_BONDS`` marker is copied onto ``staff_edits`` before
+    ``last_checked_mode`` moves on.
+    """
+    fields = {
+        "last_checked": now.isoformat(),
+        "last_checked_mode": mode,
+        "updated_at": now,
+    }
+    fields, _ = protect_scraped_update(fields, doc, now=now)
+    return fields
+
+
 def _parse_date(date_str: str) -> Optional[datetime]:
     """Try to parse a date string in common formats. Returns UTC datetime or None."""
     if not date_str:
@@ -643,11 +659,7 @@ class FirstAppearanceWatcher:
                 # Still update last_checked so we don't re-query this record next cycle
                 operations.append(UpdateOne(
                     {"county": doc["county"], "booking_number": doc["booking_number"]},
-                    {"$set": {
-                        "last_checked": now.isoformat(),
-                        "last_checked_mode": "UPDATE_SKIPPED_RATELIMIT",
-                        "updated_at": now,
-                    }},
+                    {"$set": _checked_update(doc, now, "UPDATE_SKIPPED_RATELIMIT")},
                 ))
                 stats["no_change"] += 1
                 continue
@@ -665,11 +677,7 @@ class FirstAppearanceWatcher:
                     # Still update last_checked so we don't hammer failed URLs
                     operations.append(UpdateOne(
                         {"county": doc["county"], "booking_number": doc["booking_number"]},
-                        {"$set": {
-                            "last_checked": now.isoformat(),
-                            "last_checked_mode": "UPDATE",
-                            "updated_at": now,
-                        }},
+                        {"$set": _checked_update(doc, now, "UPDATE")},
                     ))
                     continue
 
@@ -734,14 +742,10 @@ class FirstAppearanceWatcher:
                     )
 
                 else:
-                    # No change — just update the check timestamp
+                    # No change — timestamp only, still through staff-edit protection
                     operations.append(UpdateOne(
                         {"county": doc["county"], "booking_number": doc["booking_number"]},
-                        {"$set": {
-                            "last_checked": now.isoformat(),
-                            "last_checked_mode": "UPDATE",
-                            "updated_at": now,
-                        }},
+                        {"$set": _checked_update(doc, now, "UPDATE")},
                     ))
                     stats["no_change"] += 1
 

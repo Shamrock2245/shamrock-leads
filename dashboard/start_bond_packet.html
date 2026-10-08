@@ -71,7 +71,7 @@
     });
   }
   function fail(data) {
-    document.getElementById("error").textContent = (data && data.error) || "Could not continue";
+    document.getElementById("error").textContent = (data && (data.message || data.error)) || "Could not continue";
   }
   document.getElementById("lookup").onclick = function () {
     document.getElementById("error").textContent = "";

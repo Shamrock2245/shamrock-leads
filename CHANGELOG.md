@@ -3,6 +3,12 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (packet versions and first-appearance marker)
+
+### Fixed
+- **Start bond packet (`SAAS_MULTI_TENANT` still default off).** Each send stores a new `PKT-<bond case>-v<n>` packet and keeps the `packet_id` upsert. A second send returns 409 while a non-voided packet from this flow is sent or signed, and tells staff to void it first. A sent, signed, or voided packet is not edited.
+- **First Appearance watcher.** The failure and no-change timestamp writes go through `protect_scraped_update`, so a legacy `MANUAL_CHARGE_BONDS` marker is recorded on `staff_edits` before `last_checked_mode` moves on.
+
 ## [Unreleased] — 2026-10-08 (start bond packet key)
 
 ### Fixed

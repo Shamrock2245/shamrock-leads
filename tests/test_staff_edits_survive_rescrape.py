@@ -413,6 +413,58 @@ def test_first_appearance_watcher_still_sets_bond_without_staff_edits():
     assert arrests.one("F2")["bond_amount"] == 15000.0 and stats["bond_set"] == 1
 
 
+def test_first_appearance_failure_and_no_change_keep_manual_charge_marker():
+    """Timestamp writes must not drop a legacy MANUAL_CHARGE_BONDS marker."""
+    rows = [{"charge": "BATTERY", "bond_amount": 500.0}]
+
+    def manual(booking):
+        return _base(
+            booking,
+            bond_amount=0.0,
+            charges="BATTERY",
+            charge_details=rows,
+            last_checked_mode="MANUAL_CHARGE_BONDS",
+        )
+
+    unchanged = manual("F3")
+    arrests = FakeArrests([deepcopy(unchanged)])
+    stats = _fa_watcher(arrests, [deepcopy(unchanged)], _rec("F3", bond="0")).run()
+    saved = arrests.one("F3")
+    assert stats["no_change"] == 1 and stats["errors"] == 0
+    assert saved["last_checked_mode"] == "UPDATE"
+    assert saved["charge_details"] == rows
+    assert saved["bond_amount"] == 0.0
+    assert saved["staff_edits"]["charges"]["inferred_from"] == "MANUAL_CHARGE_BONDS"
+
+    failed = manual("F4")
+    arrests = FakeArrests([deepcopy(failed)])
+    stats = _fa_watcher(arrests, [deepcopy(failed)], None).run()
+    saved = arrests.one("F4")
+    assert stats["errors"] == 1
+    assert saved["last_checked_mode"] == "UPDATE"
+    assert saved["charge_details"] == rows
+    assert saved["staff_edits"]["charges"]["inferred_from"] == "MANUAL_CHARGE_BONDS"
+
+    skipped = manual("F5")
+    fillers = [_base(booking, bond_amount=0.0) for booking in ("F6", "F7", "F8")]
+    arrests = FakeArrests([deepcopy(doc) for doc in (*fillers, skipped)])
+
+    def refetch(candidate):
+        if candidate["booking_number"] == "F5":
+            raise AssertionError("rate-limited record was refetched")
+        return None
+
+    watcher = _fa_watcher(arrests, [deepcopy(doc) for doc in (*fillers, skipped)], None)
+    watcher._refetch_record = refetch
+    stats = watcher.run()
+    saved = arrests.one("F5")
+    assert stats["errors"] == 3
+    assert saved["last_checked_mode"] == "UPDATE_SKIPPED_RATELIMIT"
+    assert saved["charge_details"] == rows
+    assert saved["staff_edits"]["charges"]["inferred_from"] == "MANUAL_CHARGE_BONDS"
+    assert "staff_edits" not in arrests.one("F6")
+
+
 # ── Lee jail refresh (lee_clerk_watch) ───────────────────────────────────────
 def test_lee_jail_refresh_keeps_staff_bond_and_rows():
     from dashboard.services import lee_clerk_watch
