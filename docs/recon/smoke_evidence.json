@@ -19,7 +19,7 @@
       "requested_on": "2026-10-08",
       "command": "MONGODB_URI=<prod> python main.py Collier  (copy the final 'Result: {...}' log line), then MONGODB_URI=<prod> python scripts/smoke_evidence_check.py --county Collier --state FL --hours 24",
       "expect": "Result status ok with a MongoWriter result (new_records + updated_records >= 1); booking_number_shapes only NNNNNNNNNNNN (12 digits), duplicates 0, rows equal the report's 'N matches found', with_charges == rows, bond only empty or positive (never a figure copied from offense text), with_mugshot > 0",
-      "blocked_on": "HOLD: run only after the Collier/Glades bond PR is merged and deployed. Today collier.py adds $ figures from offense text into the bond and writes 0 for unknown bond.",
+      "blocked_on": "HOLD: run only after the Collier/Glades bond PR (#139) is merged and deployed. Today collier.py adds $ figures from offense text into the bond and writes 0 for unknown bond.",
       "source": "docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md"
     },
     {
@@ -29,7 +29,7 @@
       "requested_on": "2026-10-08",
       "command": "MONGODB_URI=<prod> python main.py Glades  (copy the final 'Result: {...}' log line), then MONGODB_URI=<prod> python scripts/smoke_evidence_check.py --county Glades --state FL --hours 24",
       "expect": "Result status ok with a MongoWriter result (new_records + updated_records >= 1); booking numbers only GCSO<YY>JBN<NNNNNN>, duplicates 0, booking date and time and charges on every row, bond only empty or positive (bond.zero 0)",
-      "blocked_on": "HOLD: run only after the Collier/Glades bond PR is merged and deployed. Today glades.py writes 0 for an unknown bond.",
+      "blocked_on": "HOLD: run only after the Collier/Glades bond PR (#139) is merged and deployed. Today glades.py writes 0 for an unknown bond.",
       "source": "docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md"
     },
     {

@@ -86,7 +86,7 @@ The agent box has no `MONGODB_URI` and no residential exit, so these steps run o
    ```
    Expected: status `ok`, a MongoWriter result (new + updated ≥ 1), `booking_number_shapes` only `NNNNNNN`, duplicates 0, booking date and time on every row, charges filled, `bond.zero` 0 (empty or positive only), and mugshots present.
 
-### Collier: write smoke (HOLD until the Collier/Glades bond PR is merged and deployed)
+### Collier: write smoke (HOLD until the Collier/Glades bond PR #139 is merged and deployed)
 ```bash
 MONGODB_URI=<prod> python main.py Collier     # copy the final "Result: {...}" line
 MONGODB_URI=<prod> python scripts/smoke_evidence_check.py --county Collier --state FL --hours 2
@@ -118,7 +118,7 @@ Expected: status `ok`, a MongoWriter result, `booking_number_shapes` only `NNNNN
    ```
    For a relay write, `result` is the `Relay result` dict plus `mongo_writer_results` (the number of entries in its `writer_results`) and `new_records` / `updated_records` from the MongoWriter entry.
 
-### Glades: write smoke (HOLD until the Collier/Glades bond PR is merged and deployed)
+### Glades: write smoke (HOLD until the Collier/Glades bond PR #139 is merged and deployed)
 ```bash
 MONGODB_URI=<prod> python main.py Glades     # copy the final "Result: {...}" line
 MONGODB_URI=<prod> python scripts/smoke_evidence_check.py --county Glades --state FL --hours 2
