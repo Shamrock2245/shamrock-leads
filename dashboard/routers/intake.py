@@ -398,3 +398,211 @@ def _has_intake_anchor(indemnitor: dict, defendant: dict) -> bool:
 #  Accept a new indemnitor intake from any source
 # ═══════════════════════════════════════════════════════════════════════════════
 @intake_bp.post("/intake/submit")
+async def intake_submit(request: Request):
+    """
+    Accept indemnitor intake from any source (Wix, Telegram, manual, walk-in, phone).
+    Stores in MongoDB `intake_queue` collection.
+    Mirrors handleNewIntake() / storeIntakeInQueue() from GAS WixPortalIntegration.js.
+    After storing, auto-triggers Phase 4 matching engine, then the same Sheets +
+    Slack fan-out the website webhook uses. County, state, and surety are never
+    invented here.
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"success": False, "error": "Invalid or empty JSON body"}, status_code=400)
+    if not isinstance(data, dict) or not data:
+        return JSONResponse({"success": False, "error": "Empty or invalid JSON body"}, status_code=400)
+
+    source_raw = (
+        data.get("source")
+        or data.get("platform")
+        or data.get("action", "")
+        or "manual_entry"
+    )
+    source = _normalize_source(source_raw)
+
+    # ── Auth Gate for external Wix Portal submissions ─────────────────────────
+    if source == "wix_portal":
+        wix_secret = (os.getenv("WIX_WEBHOOK_SECRET") or os.getenv("GAS_API_KEY") or "").strip()
+        provided = (
+            request.headers.get("X-Wix-Webhook-Secret", "")
+            or request.headers.get("X-Api-Key", "")
+            or data.get("apiKey", "")
+            or data.get("secret", "")
+            or ""
+        )
+        if not wix_secret:
+            logger.error("[intake_submit] WIX_WEBHOOK_SECRET/GAS_API_KEY not configured")
+            return JSONResponse({"success": False, "error": "Webhook auth not configured"}, status_code=503)
+        if not hmac.compare_digest(str(provided).encode(), wix_secret.encode()):
+            logger.warning("[intake_submit] Unauthorized wix_portal submission — invalid or missing secret")
+            return JSONResponse({"success": False, "error": "Unauthorized: Invalid or missing webhook secret"}, status_code=401)
+
+    # No county / state / DL-state defaults. Staff set those at Write Bond.
+    indemnitor = _extract_indemnitor(data, apply_defaults=False)
+    defendant = _extract_defendant(data, apply_defaults=False)
+    if not _has_intake_anchor(indemnitor, defendant):
+        return JSONResponse(
+            {"success": False, "error": "A name, phone, or booking number is required"},
+            status_code=400,
+        )
+
+    # Build a full name for display
+    ind_full_name = (
+        " ".join(
+            filter(
+                None,
+                [indemnitor.get("firstName"), indemnitor.get("middleName"), indemnitor.get("lastName")],
+            )
+        )
+        or str(data.get("indemnitorName") or data.get("indemnitor_name") or data.get("caller_name") or "").strip()
+        or "Unknown"
+    )
+    def_full_name = defendant["name"] or " ".join(filter(None, [defendant["firstName"], defendant["lastName"]])) or "Unknown"
+
+    # Generate unique intake ID (TG- prefix for Telegram, WX- for Wix, IN- for others)
+    prefix_map = {
+        "telegram": "TG",
+        "telegram_mini_app": "TG",
+        "telegram_miniapp": "TG",
+        "wix_portal": "WX",
+        "walk_in": "WI",
+        "phone_call": "PC",
+        "elevenlabs_voice": "SH",
+        "shannon": "SH",
+        "shannon_voice": "SH",
+        "bookmarklet": "BK",
+        "manual_entry": "ME",
+        "shamrock-leads-dashboard": "SL",
+    }
+    prefix = prefix_map.get(source, "IN")
+    # Allow caller to supply their own ID (e.g. Wix caseId, Telegram TG-xxx)
+    intake_id = (
+        data.get("intakeId")
+        or data.get("caseId")
+        or data.get("intake_id")
+        or f"{prefix}-{uuid.uuid4().hex[:10].upper()}"
+    )
+
+    now = datetime.now(timezone.utc)
+
+    doc = {
+        "intake_id": intake_id,
+        "source": source,
+        "source_label": SOURCE_LABELS.get(source, source),
+        "status": "pending",
+        "created_at": now,
+        "updated_at": now,
+        # Indemnitor
+        "indemnitor": indemnitor,
+        "indemnitor_name": ind_full_name,
+        "indemnitor_email": indemnitor.get("email", ""),
+        "indemnitor_phone": indemnitor.get("phone", ""),
+        # Defendant
+        "defendant": defendant,
+        "defendant_name": def_full_name,
+        "defendant_booking_number": defendant.get("bookingNumber", ""),
+        "defendant_county": defendant.get("county", ""),
+        "defendant_facility": defendant.get("facility", ""),
+        # Consent & Meta
+        "consent_given": bool(data.get("consent") or data.get("consentGiven")),
+        "consent_timestamp": data.get("consentTimestamp", now.isoformat()),
+        "telegram_user_id": data.get("telegramUserId", ""),
+        "telegram_username": data.get("telegramUsername", ""),
+        "gps_latitude": data.get("gpsLatitude"),
+        "gps_longitude": data.get("gpsLongitude"),
+        "manual_location": data.get("manualLocation"),
+        # AI fields (populated later by risk engine)
+        "ai_risk": "",
+        "ai_score": None,
+        "ai_rationale": "",
+        # GAS sync status
+        "gas_sync_status": "pending",
+        "gas_sync_timestamp": None,
+        # Matching fields (populated by Phase 4 matching engine)
+        "matched_booking_number": None,
+        "matched_county": None,
+        "matched_defendant_id": None,
+        "match_confidence": None,
+        "match_strategy": None,
+        "match_timestamp": None,
+        # Surety company routing — 'osi' or 'palmetto' only when the source
+        # names one explicitly. Missing/unknown stays None; staff pick at Write Bond.
+        "surety_id": _intake_surety(data),
+        "surety_unrecognized": _intake_surety_unrecognized(data),
+        # Paperwork fields (populated by Phase 6)
+        "paperwork_packet_id": None,
+        "paperwork_status": None,
+        # Raw payload preserved for full hydration (credentials stripped)
+        "_raw": _strip_secrets(data),
+    }
+
+    intake_queue = get_collection("intake_queue")
+    try:
+        # Upsert by intake_id to prevent duplicates
+        await intake_queue.update_one(
+            {"intake_id": intake_id},
+            {"$set": doc},
+            upsert=True,
+        )
+        logger.info("[intake] New intake stored: %s | source=%s", intake_id, source)
+
+        # Shannon's create_intake webhook has a short ElevenLabs deadline.
+        # Matching can run later from the desk; do not block the voice turn.
+        match_result = None
+        # Voice tools have a short turn budget. Match-review still runs from the
+        # desk; these sources do not block the call on the matcher.
+        skip_match = bool(data.get("skip_match")) or source in ("elevenlabs_voice", "shannon", "shannon_voice")
+        if not skip_match:
+            try:
+                from dashboard.services.matching_engine import MatchingEngine
+                engine = MatchingEngine(get_db())
+                match_result = await engine.match_intake(doc)
+                logger.info(
+                    "[intake] Auto-match for %s: confidence=%s strategy=%s auto_linked=%s",
+                    intake_id,
+                    match_result.get("confidence"),
+                    match_result.get("strategy"),
+                    match_result.get("auto_linked"),
+                )
+            except Exception as match_err:
+                logger.warning("[intake] Auto-match failed for %s: %s", intake_id, match_err)
+
+        try:
+            from dashboard.routers.events import publish_event
+            await publish_event("new_intake", {
+                "intake_id": intake_id,
+                "defendant_name": def_full_name if def_full_name != "Unknown" else "",
+                "county": doc.get("defendant_county", ""),
+                "booking_number": doc.get("defendant_booking_number", ""),
+                "source": source,
+            })
+        except Exception:
+            pass
+
+        # Same post-save copy as the website webhook: Sheets ledger + Slack.
+        # Fire-and-forget; a fan-out failure never fails the intake.
+        try:
+            from dashboard.services.intake_fanout import intake_for_fanout, schedule_after_save
+            fanout_doc = await intake_for_fanout(intake_queue, intake_id, doc, match_result)
+            schedule_after_save(fanout_doc)
+        except Exception as exc:
+            logger.error("[intake] fan-out scheduling failed (non-fatal): %s", exc)
+
+        from dashboard.services.payment_links import payment_link_for
+
+        return {
+            "success": True,
+            "intake_id": intake_id,
+            "source": source,
+            "defendant_name": def_full_name,
+            "indemnitor_name": ind_full_name,
+            "message": f"Intake received from {SOURCE_LABELS.get(source, source)}",
+            "match": match_result,
+            "payment_link": payment_link_for(source),
+        }
+    except Exception as e:
+        logger.error(f"[intake] Failed to store intake {intake_id}: {e}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
