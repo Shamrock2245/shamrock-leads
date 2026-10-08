@@ -91,6 +91,7 @@ jobs:
             tests/test_fl_okaloosa_api.py \
             tests/test_fl_orange_bestjail.py \
             tests/test_fl_67_status.py \
+            tests/test_hendry_fail_closed.py \
             tests/test_fl_idle_eight.py \
             tests/test_fl_bond_charges_hydrate.py \
             tests/test_fl_pinellas_bond_unknown.py \

@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (Hendry fail closed: person id only)
+
+### Fixed
+- **Hendry (FL) fail closed.** The public MyOCV `inmates.json` identifies rows only by `inmateID` = `HCSO<YY>MNI<NNNNNN>`, a Master Name Index person id, not a booking number. Its year runs 00-26 whatever the booked year is, so a re-booking collides with the person's old row. CoS approved on 2026-10-08. `hendry.py` is now `SOURCE_CONTRACT_VALIDATED=False` with no fetch, Health is `fail_closed`, the evidence row and a `hold` row are recorded, and the matrix, `FL_67_STATUS` and `COUNTY_REGISTRY` are updated. Rows already stored under MNI keys are not touched; any cleanup waits on Brendan. Hendry also drops out of the sellable lead-subscription seed, and with #133 out of the default lead list (picking it by name still shows its rows).
+
 ## [Unreleased] — 2026-10-08 (Collier and Glades publish-only bonds)
 
 ### Fixed

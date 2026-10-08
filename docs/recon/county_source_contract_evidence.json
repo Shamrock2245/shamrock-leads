@@ -795,10 +795,10 @@
     {
       "state": "FL",
       "county_fips": "051",
-      "passive_recommendation": "recon_only",
+      "passive_recommendation": "fail_closed",
       "official_source_url": "https://myocv.s3.amazonaws.com/ocvapps/a102933935/inmates.json",
-      "access_posture": "2026-10-08 ~8:04 AM ET from the agent box: official MyOCV S3 JSON feed, plain HTTPS GET with an honest User-Agent, HTTP 200 (288 rows); no access control",
-      "evidence_note": "2026-10-08 source-contract check (`docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md`): the only identifier is `inmateID` = `HCSO<YY>MNI<NNNNNN>`, a Master Name Index person id (its year runs 00\u201326 independent of the Booked Date year, so it is not a booking key). Booked Date (date + time) and custody IN/OUT are present; `chargeArray` is schema-only (no charges, no bond). No source booking number is published, so the contract is not proven. `hendry.py` currently keys rows on the MNI and writes \"0\" bonds; a fail_closed change (Alachua precedent) is proposed separately."
+      "access_posture": "2026-10-08 ~8:00 AM ET from the agent box: plain HTTPS GET, HTTP 200 JSON, no challenge; not an access problem, an identifier problem",
+      "evidence_note": "2026-10-08 source-contract check (`docs/recon/FL_HENDRY_FAIL_CLOSED_2026-10-08.md`): the public MyOCV inmates.json (HTTP 200, 288 rows) identifies rows only by `inmateID` = `HCSO<YY>MNI<NNNNNN>`, a Master Name Index person id (its year runs 00-26 whatever the booked year is), not a source booking number. `chargeArray` is schema-only and no bond is published. Fail closed under the person-id rule (Alachua #107); CoS approved 2026-10-08. `hendry.py` is `SOURCE_CONTRACT_VALIDATED=False` and fetches nothing. Rows already stored under MNI keys are untouched; cleanup waits on Brendan."
     },
     {
       "state": "FL",
