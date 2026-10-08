@@ -173,7 +173,19 @@ async def portal_payment_link(token: str):
 
     from dashboard.services.payment_links import payment_link_for
 
-    swipesimple_link = payment_link_for(token_data.get("intake_source") or token_data.get("source"))
+    # The bond's own staged SwipeSimple invoice link (locked amount) wins;
+    # otherwise the per-source static link (same as every other source).
+    bond = None
+    try:
+        bond = await get_collection("active_bonds").find_one(
+            {"booking_number": token_data["booking_number"]}
+        )
+    except Exception:
+        bond = None
+    swipesimple_link = payment_link_for(
+        token_data.get("intake_source") or token_data.get("source"),
+        bond if isinstance(bond, dict) else None,
+    )
 
     return {
         "payment_link": swipesimple_link,
