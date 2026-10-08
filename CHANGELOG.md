@@ -14,6 +14,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Relay header set.** The Revize walk meta for Charlotte and Manatee now carries the page-1 column names so relay evidence can show the live table shape.
 - `docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md` with per-county results and the Leads Ops handoff.
 
+## [Unreleased] — 2026-10-08 (name without license falls back)
+
+### Fixed
+- **Palmetto appearance bonds.** A name that is not in `BOND_AGENTS` and has no license is not printed with a blank license. Resolution continues to the signed-in sub-agent, then the house pair (Brendan O'Neal / P139768). A short label such as Kayla L on Kayla Lukesic's session prints Kayla Lukesic / G356764, and the same label on a PIN-admin or machine path prints the house pair. A non-registry name is kept only when a non-registry license is also present. DocuSeal prefill, the bondsman submitter, the appearance bond, the print route, and the packet forms use that same pair. OSI appearance bonds are unchanged.
+
 ## [Unreleased] — 2026-10-08 (license-only agent pair)
 
 ### Fixed
