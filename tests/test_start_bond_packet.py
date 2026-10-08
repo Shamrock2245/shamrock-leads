@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -193,18 +194,23 @@ def test_prepare_and_send_does_not_burn_the_power(monkeypatch):
     assert calls["submit_kwargs"]["defendant"]["email"] == "ada@example.com"
     assert calls["submit_kwargs"]["indemnitors"][0]["email"] == "pat@example.com"
     assert poa.docs[0]["status"] == "available"
+    assert calls["submit_kwargs"]["packet_id"] == "PKT-BC-1-v1"
     assert len(poa.packets.docs) == 1
     stored = poa.packets.docs[0]
-    assert stored["packet_id"] == "BC-1"
+    assert stored["packet_id"] == "PKT-BC-1-v1"
+    assert stored["packet_version"] == 1
     assert stored["bond_case_id"] == "BC-1"
     assert stored["docuseal_submission_id"] == "sub-1"
     assert stored["docuseal_template_id"] == "42"
     assert stored["tenant_id"] == "shamrock"
     created_at = stored["created_at"]
     again = client.post("/api/bond-packet/send", json=_body(template_id="999"))
-    assert again.status_code == 200
+    assert again.status_code == 409
+    assert "void" in again.json()["message"].lower()
+    assert calls["submit"] == 1
     assert len(poa.packets.docs) == 1
     assert poa.packets.docs[0]["created_at"] == created_at
+    assert poa.packets.docs[0]["docuseal_submission_id"] == "sub-1"
     assert "find_one" not in Path(packet.__file__).read_text(encoding="utf-8").split("async def _store_packet", 1)[1].split("async def send_packet", 1)[0]
     assert "upsert=True" in Path(packet.__file__).read_text(encoding="utf-8")
     store = Path(packet.__file__).read_text(encoding="utf-8").split("async def _store_packet", 1)[1].split("async def send_packet", 1)[0]
@@ -236,12 +242,112 @@ def test_send_leaves_a_signed_packet_on_the_same_bond_case(monkeypatch):
     assert signed["bond_case_id"] == "BC-1"
     assert signed["docuseal_submission_id"] == "sub-signed"
     assert signed["created_at"] == "2026-01-01T00:00:00+00:00"
-    started = next(doc for doc in poa.packets.docs if doc["packet_id"] == "BC-1")
+    started = next(doc for doc in poa.packets.docs if doc["packet_id"] == "PKT-BC-1-v1")
     assert started["status"] == "sent"
     assert started["bond_case_id"] == "BC-1"
     assert started["docuseal_submission_id"] == "sub-1"
-    assert poa.packets.filters[-1]["packet_id"] == "BC-1"
+    assert poa.packets.filters[-1]["packet_id"] == "PKT-BC-1-v1"
     assert "bond_case_id" not in poa.packets.filters[-1]
+
+
+def test_each_send_is_a_new_version_and_an_open_packet_blocks(monkeypatch):
+    poa = _install(monkeypatch)
+    calls = _patch_providers(monkeypatch)
+
+    async def submit(**kwargs):
+        calls["submit"] += 1
+        calls["submit_kwargs"] = kwargs
+        n = calls["submit"]
+        return {
+            "submission_id": f"sub-{n}",
+            "submitters": [
+                {"role": "Indemnitor", "sign_url": "https://sign.example/indemnitor"},
+                {"role": "Defendant", "sign_url": "https://sign.example/defendant"},
+            ],
+        }
+
+    monkeypatch.setattr(packet, "_default_submit", submit)
+    client = TestClient(_app())
+
+    first = client.post("/api/bond-packet/send", json=_body())
+    assert first.status_code == 200
+    assert first.json()["packet_id"] == "PKT-BC-1-v1"
+    assert calls["submit_kwargs"]["packet_id"] == "PKT-BC-1-v1"
+    v1 = deepcopy(poa.packets.docs[0])
+    assert v1["packet_version"] == 1
+    assert v1["status"] == "sent"
+    assert v1["docuseal_submission_id"] == "sub-1"
+    assert v1["bond_case_id"] == "BC-1"
+
+    again = client.post("/api/bond-packet/send", json=_body())
+    assert again.status_code == 409
+    body = again.json()
+    assert body["error"] == "void_required"
+    assert body["packet_id"] == "PKT-BC-1-v1"
+    assert "void" in body["message"].lower()
+    assert calls["submit"] == 1
+    assert poa.packets.docs == [v1]
+
+    poa.packets.docs[0]["status"] = "signed"
+    poa.packets.docs[0]["docuseal_status"] = "completed"
+    signed = deepcopy(poa.packets.docs[0])
+    still = client.post("/api/bond-packet/send", json=_body())
+    assert still.status_code == 409
+    assert calls["submit"] == 1
+    assert poa.packets.docs == [signed]
+
+    poa.packets.docs[0]["voided"] = True
+    poa.packets.docs[0]["status"] = "voided"
+    poa.packets.docs[0]["void_reason"] = "staff void"
+    voided = deepcopy(poa.packets.docs[0])
+    resent = client.post("/api/bond-packet/send", json=_body())
+    assert resent.status_code == 200
+    assert resent.json()["packet_id"] == "PKT-BC-1-v2"
+    assert calls["submit"] == 2
+    assert calls["submit_kwargs"]["packet_id"] == "PKT-BC-1-v2"
+    assert len(poa.packets.docs) == 2
+    kept = next(doc for doc in poa.packets.docs if doc["packet_id"] == "PKT-BC-1-v1")
+    created = next(doc for doc in poa.packets.docs if doc["packet_id"] == "PKT-BC-1-v2")
+    assert kept == voided
+    assert created["packet_version"] == 2
+    assert created["status"] == "sent"
+    assert created["docuseal_submission_id"] == "sub-2"
+    assert created["bond_case_id"] == "BC-1"
+    assert poa.packets.filters[-1] == {"packet_id": "PKT-BC-1-v2", "tenant_id": "shamrock"}
+
+
+def test_legacy_bond_case_packet_blocks_until_voided(monkeypatch):
+    poa = _install(monkeypatch)
+    poa.packets.docs.append(
+        {
+            "packet_id": "BC-1",
+            "bond_case_id": "BC-1",
+            "status": "sent",
+            "docuseal_submission_id": "sub-legacy",
+            "tenant_id": "shamrock",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+    )
+    calls = _patch_providers(monkeypatch)
+    client = TestClient(_app())
+    blocked = client.post("/api/bond-packet/send", json=_body())
+    assert blocked.status_code == 409
+    assert "void" in blocked.json()["message"].lower()
+    assert calls["submit"] == 0
+    assert len(poa.packets.docs) == 1
+    assert poa.packets.docs[0]["packet_id"] == "BC-1"
+    assert poa.packets.docs[0]["docuseal_submission_id"] == "sub-legacy"
+    assert poa.packets.docs[0]["status"] == "sent"
+
+    poa.packets.docs[0]["voided"] = True
+    poa.packets.docs[0]["status"] = "voided"
+    voided = deepcopy(poa.packets.docs[0])
+    sent = client.post("/api/bond-packet/send", json=_body())
+    assert sent.status_code == 200
+    assert sent.json()["packet_id"] == "PKT-BC-1-v1"
+    assert calls["submit"] == 1
+    kept = next(doc for doc in poa.packets.docs if doc["packet_id"] == "BC-1")
+    assert kept == voided
 
 
 def test_blocked_preflight_does_not_create_a_submission(monkeypatch):

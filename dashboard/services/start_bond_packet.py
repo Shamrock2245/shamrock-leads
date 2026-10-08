@@ -1,8 +1,10 @@
 """Four-step start-bond-packet helper.
 
 Reuses hydrate-from-roster, write-bond preflight, and DocuSeal submission.
-It does not send a text, charge a card, or mark a POA used. Flag off, the
-router hides it. ``POST /api/write-bond`` stays retired.
+Each send stores a new paperwork packet (``PKT-<bond case>-v<n>``). A sent
+or signed packet from this flow is not edited; staff void it before another
+send. It does not send a text, charge a card, or mark a POA used. Flag off,
+the router hides it. ``POST /api/write-bond`` stays retired.
 """
 
 from __future__ import annotations
@@ -26,6 +28,24 @@ class PacketStartError(Exception):
 class PacketStartDisabled(PacketStartError):
     def __init__(self):
         super().__init__("disabled")
+
+
+class PacketStartConflict(PacketStartError):
+    """A non-voided packet from this flow is already sent or signed."""
+
+    def __init__(self, packet_id: str):
+        self.packet_id = packet_id
+        self.message = (
+            f"Packet {packet_id} is already sent or signed. "
+            "Void it before sending a new packet."
+        )
+        super().__init__("void_required")
+
+
+_FLOW = "start_bond_packet"
+_OPEN_STATUSES = frozenset({"sent", "signed"})
+_OPEN_DOCUSEAL = frozenset({"sent", "signed", "completed"})
+_VOID_STATUSES = frozenset({"voided", "cancelled", "canceled"})
 
 
 def _name_from_arrest(doc: dict) -> str:
@@ -297,11 +317,91 @@ def _sign_links(submission: Any) -> list[dict[str, str]]:
     return links
 
 
-async def _store_packet(binding: dict, template_id: str, submission: dict, links: list[dict]) -> str:
+def _version_number(packet_id: str, bond_case_id: str) -> int | None:
+    prefix = f"PKT-{bond_case_id}-v"
+    if not packet_id.startswith(prefix):
+        return None
+    tail = packet_id[len(prefix):]
+    if not tail.isdigit() or int(tail) < 1:
+        return None
+    return int(tail)
+
+
+def _from_this_flow(doc: dict, bond_case_id: str) -> bool:
+    """Packets this flow created, including the pre-version bond-case id."""
+    if str(doc.get("packet_flow") or "") == _FLOW:
+        return True
+    packet_id = str(doc.get("packet_id") or "")
+    if packet_id == bond_case_id:
+        return True
+    return _version_number(packet_id, bond_case_id) is not None
+
+
+def _is_voided(doc: dict) -> bool:
+    if doc.get("voided") is True:
+        return True
+    return str(doc.get("status") or "").strip().lower() in _VOID_STATUSES
+
+
+def _blocks_new_send(doc: dict) -> bool:
+    if _is_voided(doc):
+        return False
+    status = str(doc.get("status") or "").strip().lower()
+    docuseal = str(doc.get("docuseal_status") or "").strip().lower()
+    return status in _OPEN_STATUSES or docuseal in _OPEN_DOCUSEAL
+
+
+def _occupied_version(doc: dict, bond_case_id: str) -> int:
+    parsed = _version_number(str(doc.get("packet_id") or ""), bond_case_id)
+    if parsed:
+        return parsed
+    stored = doc.get("packet_version")
+    if isinstance(stored, int) and not isinstance(stored, bool) and stored > 0:
+        return stored
+    return 0
+
+
+async def _packets_for_case(bond_case_id: str) -> list[dict]:
+    from dashboard.extensions import get_collection
+
+    cursor = get_collection("paperwork_packets").find({"bond_case_id": bond_case_id})
+    rows = await _rows(cursor)
+    return [row for row in rows if isinstance(row, dict)]
+
+
+async def _reserve_packet_id(bond_case_id: str) -> tuple[str, int]:
+    """Next ``PKT-<bond case>-v<n>``.
+
+    A non-voided sent or signed packet from this flow blocks the send.
+    The id is one this collection does not already hold, so the packet_id
+    upsert cannot edit a sent, signed, or voided row.
+    """
+    rows = await _packets_for_case(bond_case_id)
+    ours = [row for row in rows if _from_this_flow(row, bond_case_id)]
+    blocking = [row for row in ours if _blocks_new_send(row)]
+    if blocking:
+        blocking.sort(key=lambda row: _occupied_version(row, bond_case_id))
+        raise PacketStartConflict(str(blocking[-1].get("packet_id") or bond_case_id))
+    version = 1 + max((_occupied_version(row, bond_case_id) for row in ours), default=0)
+    taken = {str(row.get("packet_id") or "") for row in rows}
+    packet_id = f"PKT-{bond_case_id}-v{version}"
+    while packet_id in taken:
+        version += 1
+        packet_id = f"PKT-{bond_case_id}-v{version}"
+    return packet_id, version
+
+
+async def _store_packet(
+    binding: dict,
+    template_id: str,
+    submission: dict,
+    links: list[dict],
+    packet_id: str,
+    version: int,
+) -> str:
     from dashboard.extensions import get_collection
 
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-    packet_id = binding["bond_case_id"]
     submission_id = str((submission or {}).get("submission_id") or "")
     col = get_collection("paperwork_packets")
     await col.update_one(
@@ -309,7 +409,9 @@ async def _store_packet(binding: dict, template_id: str, submission: dict, links
         {
             "$set": {
                 "packet_id": packet_id,
-                "bond_case_id": packet_id,
+                "bond_case_id": binding["bond_case_id"],
+                "packet_version": version,
+                "packet_flow": _FLOW,
                 "booking_number": binding["booking_number"],
                 "case_number": binding["case_number"],
                 "match_id": binding["match_id"],
@@ -391,10 +493,11 @@ async def send_packet(
     template_id = resolve_template_id_for_surety(prepared["surety_id"], current_tenant_id())
     if not template_id:
         raise PacketStartError("template_unavailable")
+    packet_id, version = await _reserve_packet_id(binding["bond_case_id"])
     submit_fn = submit or _default_submit
     submission = await submit_fn(
         template_id=template_id,
-        packet_id=binding["bond_case_id"],
+        packet_id=packet_id,
         bond_data={
             "bond_case_id": binding["bond_case_id"],
             "match_id": binding["match_id"],
@@ -414,7 +517,14 @@ async def send_packet(
         send_email=False,
     )
     links = _sign_links(submission)
-    packet_id = await _store_packet(binding, template_id, submission if isinstance(submission, dict) else {}, links)
+    packet_id = await _store_packet(
+        binding,
+        template_id,
+        submission if isinstance(submission, dict) else {},
+        links,
+        packet_id,
+        version,
+    )
     pay = await _pay_link(prepared["defendant"]["booking_number"])
     return {
         "state": "ready_for_staff_send",
