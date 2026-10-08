@@ -12,6 +12,10 @@ are omitted when that PDF is not an attachment (it is print/wet-ink).
 
 Reads DOCUSEAL_URL or DOCUSEAL_SERVER, DOCUSEAL_API_KEY, and
 DOCUSEAL_TEMPLATE_ID_PALMETTO (default 5). Never creates a submission.
+
+DOCUSEAL_URL must be the origin only, ``https://sign.shamrockbailbonds.biz``.
+This script appends ``/api`` itself. A URL that already ends in ``/api``
+would call ``/api/api/...`` and fail.
 """
 from __future__ import annotations
 
@@ -120,7 +124,9 @@ def _credentials() -> tuple:
     token = _token()
     if not base or not token:
         print(
-            "DOCUSEAL_URL/DOCUSEAL_SERVER and DOCUSEAL_API_KEY are required.",
+            "DOCUSEAL_URL or DOCUSEAL_SERVER must be the origin "
+            "https://sign.shamrockbailbonds.biz (this script appends /api). "
+            "DOCUSEAL_API_KEY is required.",
             file=sys.stderr,
         )
         return "", ""
@@ -128,7 +134,13 @@ def _credentials() -> tuple:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Apply Palmetto DocuSeal field placement")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Apply Palmetto DocuSeal field placement. "
+            "Set DOCUSEAL_URL to https://sign.shamrockbailbonds.biz "
+            "(origin only; this script appends /api)."
+        )
+    )
     parser.add_argument("--apply", action="store_true", help="PUT the source template. Prefer --clone.")
     parser.add_argument(
         "--clone",

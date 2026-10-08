@@ -2,12 +2,20 @@
 
 A DocuSeal field update replaces the template's whole field list. Documents
 this spec does not cover (paperwork header, FAQ pages, master waiver,
-SSA release) must keep every existing field object unchanged. Covered
-carrier documents are replaced. The appearance bond is print/wet-ink and
-is omitted when it is not an attachment on the template.
+SSA release) keep every existing area. A field whose areas sit on more than
+one document is split: areas on uncovered documents stay on the original
+field object (same uuid, name, and submitter). Areas on covered documents
+are replaced by the spec.
+
+Covered text, date, and number boxes keep a live template 5 name when that
+name is one ``prefill_values_from_bond`` already sends. The placement spec's
+``app_*`` / ``ind_*`` / ``cr_*`` / ``bbis_*`` names are not what gets written.
+The appearance bond is print/wet-ink and is omitted when it is not an
+attachment on the template.
 """
 from __future__ import annotations
 
+import copy
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from dashboard.palmetto_field_placement import docuseal_fields
@@ -63,6 +71,89 @@ _DOC_HINTS = {
 }
 
 _AREA_DECIMALS = 4
+
+# Placement ``data_source`` values that are not themselves a prefill key.
+# The right-hand side is the key ``prefill_values_from_bond`` already emits,
+# which is also the live template 5 spelling where that spelling exists.
+_SOURCE_NAMES = {
+    "bond_amount_numeric": "numeric_full_bond_amount",
+    "premium_numeric": "numeric_premium",
+    "premium_words": "written_premium",
+    "charge_line_1": "charges_summary",
+    "day": "today_day",
+    "month": "today_month",
+    "year": "today_year_2digit",
+    "poa_1": "poa_number_1",
+    "poa_2": "poa_number_2",
+    "poa_3": "poa_number_3",
+    "poa_4": "poa_number_4",
+    "indemnitor_first": "indemnitor_first_name",
+    "indemnitor_middle": "indemnitor_middle_name",
+    "indemnitor_last": "indemnitor_last_name",
+    "defendant_former_how_long": "defendant_former_address_how_long",
+    "defendant_previous_how_long": "defendant_previous_employment_how_long",
+    "defendant_social_login": "defendant_social_media_login",
+    "defendant_social_password": "defendant_social_media_password",
+}
+
+# Signature and checkbox widgets. Empty data_source, so the placement name
+# is translated to the live template 5 name. A name with no live equivalent
+# stays as the placement name (a genuinely new box).
+_WIDGET_NAMES = {
+    "app_agent_signature": "agent_signature_5",
+    "app_defendant_signature": "defendant_signature_3",
+    "ind_defendant_signature": "defendant_signature_2",
+    "ind_indemnitor_signature": "indemnitor_signature_2",
+    "ind_coindemnitor_signature": "coindemnitor_signature_2",
+    "bbis_sign_left": "defendant_signature_3",
+    "bbis_sign_right": "indemnitor_signature_3",
+    "note_defendant_signature": "defendant_signature_2",
+    "note_indemnitor_signature": "indemnitor_signature",
+    "note_coindemnitor_signature": "coidemnitor_signature",
+    "cr_agent_signature": "agent_signature_6",
+    "cr_indemnitor_signature": "indemnitor_signature_1",
+    "cr_promissory_note": "promissory_note_checkbox",
+    "cr_indemnity": "indemnity_agreement_checkbox",
+    "cr_mortgage": "mortgage_agreement_checkbox",
+    "cr_cash": "collateral_cash_checkbox",
+    "cr_check": "collateral_check_checkbox",
+    "cr_money_order": "collateral_money_order_checkbox",
+    "cr_credit_card": "collateral_credit_card_checkbox",
+}
+
+# Text, number, and date boxes the prefill does not populate. Left blank.
+# Do not invent a value for these.
+BLANK_BY_DESIGN = frozenset({
+    "contacted_by",
+    "court_time",
+    "defendant_social_media_login",
+    "defendant_social_media_password",
+    "card_fee_percent",
+    "collateral_description",
+    "indemnitor_spouse_dob",
+    "indemnitor_spouse_email",
+    "reference_3_name",
+    "reference_3_address",
+    "reference_3_phone",
+})
+
+
+def resolved_docuseal_name(field: Mapping[str, Any]) -> str:
+    """DocuSeal field name for one placement row.
+
+    Live names that prefill already sends win. A data source that is itself
+    a prefill key is used as the name. Signature and checkbox rows use the
+    live widget name when one exists.
+    """
+    spec_name = str(field.get("name") or "")
+    if spec_name in _WIDGET_NAMES:
+        return _WIDGET_NAMES[spec_name]
+    source = str(field.get("data_source") or "").strip()
+    if source:
+        return _SOURCE_NAMES.get(source, source)
+    if not spec_name:
+        raise PalmettoApplyError("Spec field is missing a name.")
+    return spec_name
 
 
 class PalmettoApplyError(Exception):
@@ -187,25 +278,18 @@ def _round_area(x: Any, y: Any, w: Any, h: Any, page: Any, uuid: str) -> Tuple:
     )
 
 
-def _same_geometry(
-    existing: Mapping[str, Any],
-    spec_group: Sequence[Mapping[str, Any]],
-    attachment_uuid: str,
-    page_delta: int,
-) -> bool:
-    live = [
-        _round_area(
-            area.get("x"),
-            area.get("y"),
-            area.get("w"),
-            area.get("h"),
-            area.get("page") or 0,
-            str(area.get("attachment_uuid") or ""),
-        )
-        for area in existing.get("areas") or []
-        if isinstance(area, dict)
-    ]
-    wanted = [
+def _docuseal_type(kind: str) -> str:
+    return {"text": "text", "checkbox": "checkbox", "signature": "signature"}.get(kind, "text")
+
+
+def _emitted_type(spec_group: Sequence[Mapping[str, Any]], name: str) -> str:
+    if name == "today_date":
+        return "date"
+    return _docuseal_type(str(spec_group[0].get("type") or "text"))
+
+
+def _spec_areas(spec_group: Sequence[Mapping[str, Any]], attachment_uuid: str, page_delta: int) -> List[Tuple]:
+    return [
         _round_area(
             field["x_norm"],
             field["y_norm"],
@@ -216,42 +300,84 @@ def _same_geometry(
         )
         for field in spec_group
     ]
-    if len(live) != len(wanted):
-        return False
-    same_type = str(existing.get("type") or "text") == _docuseal_type(str(spec_group[0].get("type") or "text"))
-    return same_type and sorted(live) == sorted(wanted)
 
 
-def _docuseal_type(kind: str) -> str:
-    return {"text": "text", "checkbox": "checkbox", "signature": "signature"}.get(kind, "text")
+def _live_areas(areas: Iterable[Mapping[str, Any]], attachment_uuid: str) -> List[Tuple]:
+    found = []
+    for area in areas:
+        if not isinstance(area, dict):
+            continue
+        if str(area.get("attachment_uuid") or "") != attachment_uuid:
+            continue
+        found.append(
+            _round_area(
+                area.get("x"),
+                area.get("y"),
+                area.get("w"),
+                area.get("h"),
+                area.get("page") or 0,
+                attachment_uuid,
+            )
+        )
+    return found
 
 
-def _spec_groups(spec_fields: Iterable[Mapping[str, Any]]) -> Dict[Tuple[str, str], List[Mapping[str, Any]]]:
-    groups: Dict[Tuple[str, str], List[Mapping[str, Any]]] = {}
+def _groups_for(
+    slug: str,
+    spec_fields: Iterable[Mapping[str, Any]],
+) -> List[Tuple[str, str, List[Mapping[str, Any]]]]:
+    """Placement rows grouped by DocuSeal name and role.
+
+    One DocuSeal field has one submitter. Two boxes that share a name but
+    not a role stay two fields (live template 5 already does this).
+    """
+    grouped: Dict[Tuple[str, str], List[Mapping[str, Any]]] = {}
+    order: List[Tuple[str, str]] = []
+    resolve = slug in COVERED_SLUGS
     for field in spec_fields:
-        groups.setdefault((str(field["document"]), str(field["name"])), []).append(field)
-    return groups
+        if str(field.get("document") or "") != slug:
+            continue
+        name = resolved_docuseal_name(field) if resolve else str(field.get("name") or "")
+        role = str(field.get("role") or "").strip().lower()
+        if not name:
+            raise PalmettoApplyError(f"Spec field on {slug} is missing a name.")
+        key = (name, role)
+        if key not in grouped:
+            order.append(key)
+            grouped[key] = []
+        grouped[key].append(field)
+    return [(name, role, grouped[(name, role)]) for name, role in order]
 
 
 def _build_field(
+    name: str,
     spec_group: Sequence[Mapping[str, Any]],
     attachment_uuid: str,
     submitter_uuid: str,
     page_delta: int,
     existing_uuid: str,
 ) -> Dict[str, Any]:
-    first = spec_group[0]
-    kind = _docuseal_type(str(first.get("type") or "text"))
+    roles = {str(field.get("role") or "").strip().lower() for field in spec_group}
+    if len(roles) != 1 or not next(iter(roles)):
+        raise PalmettoApplyError(f"Spec field {name} has conflicting roles.")
+    kinds = {_docuseal_type(str(field.get("type") or "text")) for field in spec_group}
+    if len(kinds) != 1:
+        raise PalmettoApplyError(f"Spec field {name} has conflicting types.")
+    kind = _emitted_type(spec_group, name)
     payload: Dict[str, Any] = {}
     if existing_uuid:
         payload["uuid"] = existing_uuid
     payload["submitter_uuid"] = submitter_uuid
-    payload["name"] = first["name"]
+    payload["name"] = name
     payload["type"] = kind
-    payload["required"] = bool(first.get("required")) if kind != "signature" else False
-    source = str(first.get("data_source") or "")
-    if source:
-        payload["preferences"] = {"data_source": source}
+    if kind == "signature":
+        payload["required"] = False
+    else:
+        payload["required"] = any(bool(field.get("required")) for field in spec_group)
+    if kind == "date":
+        payload["preferences"] = {"format": "MM/DD/YYYY"}
+    else:
+        payload["preferences"] = {}
     payload["areas"] = [
         {
             "x": field["x_norm"],
@@ -266,13 +392,26 @@ def _build_field(
     return payload
 
 
+def _names_on(fields: Sequence[Mapping[str, Any]], attachment_uuid: str) -> List[str]:
+    names: List[str] = []
+    for field in fields:
+        if any(
+            isinstance(area, dict) and str(area.get("attachment_uuid") or "") == attachment_uuid
+            for area in field.get("areas") or []
+        ):
+            names.append(str(field.get("name") or ""))
+    return names
+
+
 def plan_merge(
     template: Mapping[str, Any],
     spec_fields: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Return the PUT field list and a per-document added/moved/removed/kept plan.
 
-    Uncovered field dicts in ``fields`` are the same objects as ``template['fields']``.
+    Areas on documents the spec does not cover are copied onto the original
+    field object. The caller's template is not mutated. Wholly uncovered
+    fields compare equal to the input field.
     """
     spec_fields = list(spec_fields if spec_fields is not None else docuseal_fields())
     matched = match_attachments(template)
@@ -286,12 +425,12 @@ def plan_merge(
     slug_by_uuid = {row["uuid"]: slug for slug, row in matched.items()}
     page_delta = live_page_delta(template)
     submitters = _submitters(template)
-    groups = _spec_groups(spec_fields)
 
     original_fields = [field for field in (template.get("fields") or []) if isinstance(field, dict)]
     for field in original_fields:
+        areas = [area for area in (field.get("areas") or []) if isinstance(area, dict)]
         uuids = _area_uuids(field)
-        if not uuids:
+        if not uuids or len(uuids) != len(areas):
             raise PalmettoApplyError(
                 f"Field {field.get('name') or field.get('uuid') or '(unnamed)'} has no attachment area."
             )
@@ -300,26 +439,10 @@ def plan_merge(
             raise PalmettoApplyError(
                 f"Field {field.get('name')} references unknown attachment(s): {', '.join(unknown)}."
             )
-        unique = list(dict.fromkeys(uuids))
-        on_covered = [uuid for uuid in unique if uuid in covered_uuids]
-        on_open = [uuid for uuid in unique if uuid not in covered_uuids]
-        if on_covered and on_open:
-            raise PalmettoApplyError(
-                f"Field {field.get('name')} spans a covered document and a document the spec does not cover."
-            )
-        if len(on_covered) > 1:
-            raise PalmettoApplyError(
-                f"Field {field.get('name')} spans more than one covered document."
-            )
 
-    by_attachment: Dict[str, List[dict]] = {row["uuid"]: [] for row in attachments}
-    for field in original_fields:
-        unique = list(dict.fromkeys(_area_uuids(field)))
-        if len(unique) == 1:
-            by_attachment.setdefault(unique[0], []).append(field)
-
-    def _names(fields: Sequence[Mapping[str, Any]]) -> List[str]:
-        return [str(field.get("name") or "") for field in fields]
+    def _wholly_here(field: Mapping[str, Any], attachment_uuid: str) -> bool:
+        uuids = list(dict.fromkeys(_area_uuids(field)))
+        return uuids == [attachment_uuid]
 
     documents: List[Dict[str, Any]] = []
     replacements: Dict[str, List[dict]] = {}
@@ -327,7 +450,6 @@ def plan_merge(
     for row in attachments:
         uuid = row["uuid"]
         slug = slug_by_uuid.get(uuid, "")
-        existing = by_attachment.get(uuid) or []
         if uuid not in covered_uuids:
             documents.append({
                 "document": row["name"] or row["filename"],
@@ -338,42 +460,64 @@ def plan_merge(
                 "added": [],
                 "moved": [],
                 "removed": [],
-                "kept": _names(existing),
+                "kept": _names_on(original_fields, uuid),
             })
             continue
 
-        spec_for_doc = [(name, group) for (doc_slug, name), group in groups.items() if doc_slug == slug]
-        existing_by_name: Dict[str, List[dict]] = {}
-        for field in existing:
-            existing_by_name.setdefault(str(field.get("name") or ""), []).append(field)
-        spec_names = {name for name, _group in spec_for_doc}
+        spec_for_doc = _groups_for(slug, spec_fields)
+        live_by_name: Dict[str, List[dict]] = {}
+        live_fields: List[dict] = []
+        for field in original_fields:
+            if not any(
+                isinstance(area, dict) and str(area.get("attachment_uuid") or "") == uuid
+                for area in field.get("areas") or []
+            ):
+                continue
+            live_fields.append(field)
+            live_by_name.setdefault(str(field.get("name") or ""), []).append(field)
+
         added: List[str] = []
         moved: List[str] = []
         removed: List[str] = []
         kept: List[str] = []
         built: List[dict] = []
-        for name, group in spec_for_doc:
-            role = str(group[0].get("role") or "").strip().lower()
+        spec_pairs = set()
+        for name, role, group in spec_for_doc:
             submitter_uuid = submitters.get(role, "")
             if not submitter_uuid:
                 known_roles = ", ".join(sorted(submitters)) or "(none)"
                 raise PalmettoApplyError(
                     f"Spec field {name} role {role or '(blank)'} is not a template submitter ({known_roles})."
                 )
-            prior = existing_by_name.get(name) or []
-            existing_uuid = str(prior[0].get("uuid") or "") if prior else ""
-            if not prior:
+            spec_pairs.add((name, submitter_uuid))
+            priors = [
+                field for field in live_by_name.get(name) or []
+                if str(field.get("submitter_uuid") or "") == submitter_uuid
+            ]
+            donors = [field for field in priors if _wholly_here(field, uuid)]
+            existing_uuid = str(donors[0].get("uuid") or "") if donors else ""
+            emitted = _emitted_type(group, name)
+            live_sig: List[Tuple] = []
+            live_types = set()
+            for field in priors:
+                live_sig.extend(_live_areas(field.get("areas") or [], uuid))
+                live_types.add(str(field.get("type") or "text"))
+            wanted = _spec_areas(group, uuid, page_delta)
+            if not priors:
                 added.append(name)
-            elif _same_geometry(prior[0], group, uuid, page_delta):
+            elif live_types == {emitted} and sorted(live_sig) == sorted(wanted):
                 kept.append(name)
             else:
                 moved.append(name)
-            if len(prior) > 1:
-                removed.extend([name] * (len(prior) - 1))
-            built.append(_build_field(group, uuid, submitter_uuid, page_delta, existing_uuid))
-        for name, priors in existing_by_name.items():
-            if name not in spec_names:
-                removed.extend(_names(priors))
+            built.append(_build_field(name, group, uuid, submitter_uuid, page_delta, existing_uuid))
+        seen_pairs = set()
+        for field in live_fields:
+            pair = (str(field.get("name") or ""), str(field.get("submitter_uuid") or ""))
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            if pair not in spec_pairs:
+                removed.append(pair[0])
         replacements[uuid] = built
         documents.append({
             "document": row["name"] or row["filename"],
@@ -387,39 +531,47 @@ def plan_merge(
             "kept": kept,
         })
 
-    for slug in PRINT_ONLY_SLUGS:
-        if slug in matched:
-            continue
-        names = [name for (doc_slug, name) in groups if doc_slug == slug]
+    appearance_groups = _groups_for("appearance-bond", spec_fields)
+    if "appearance-bond" not in matched:
         documents.append({
-            "document": slug,
+            "document": "appearance-bond",
             "filename": "",
             "attachment_uuid": "",
-            "slug": slug,
+            "slug": "appearance-bond",
             "coverage": "not_on_template",
-            "added": names,
+            "added": [name for name, _role, _group in appearance_groups],
             "moved": [],
             "removed": [],
             "kept": [],
         })
 
     payload: List[dict] = []
-    emitted = set()
+    emitted_docs: set = set()
+
+    def _emit(attachment_uuid: str) -> None:
+        if attachment_uuid not in emitted_docs:
+            payload.extend(replacements.get(attachment_uuid) or [])
+            emitted_docs.add(attachment_uuid)
+
     for field in original_fields:
         unique = list(dict.fromkeys(_area_uuids(field)))
-        if len(unique) == 1 and unique[0] in covered_uuids:
-            uuid = unique[0]
-            if uuid not in emitted:
-                payload.extend(replacements.get(uuid) or [])
-                emitted.add(uuid)
-            continue
-        payload.append(field)
+        on_covered = [item for item in unique if item in covered_uuids]
+        on_open = [item for item in unique if item not in covered_uuids]
+        if on_open:
+            kept_field = copy.deepcopy(field)
+            if on_covered:
+                kept_field["areas"] = [
+                    area
+                    for area in kept_field.get("areas") or []
+                    if str(area.get("attachment_uuid") or "") not in covered_uuids
+                ]
+            payload.append(kept_field)
+        for attachment_uuid in on_covered:
+            _emit(attachment_uuid)
 
     for row in attachments:
-        uuid = row["uuid"]
-        if uuid in covered_uuids and uuid not in emitted:
-            payload.extend(replacements.get(uuid) or [])
-            emitted.add(uuid)
+        if row["uuid"] in covered_uuids:
+            _emit(row["uuid"])
 
     return {
         "recommended": "clone",
