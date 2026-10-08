@@ -334,6 +334,11 @@ class PinAuthMiddleware(BaseHTTPMiddleware):
             _attach_session(request, recovery_sess)
             return await call_next(request)
 
+        # Public agency signup. The handler 404s unless SAAS_MULTI_TENANT is on,
+        # and it never sends mail or stores a raw secret. Staff /platform stays gated.
+        if path in {"/signup", "/api/public/signup"}:
+            return await call_next(request)
+
         if path in OPEN_PATHS or any(path.startswith(p) for p in OPEN_PREFIXES):
             return await call_next(request)
 
