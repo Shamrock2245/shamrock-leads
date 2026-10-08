@@ -83,9 +83,13 @@ jobs:
             tests/test_fl_smartweb_legacy_paging.py \
             tests/test_fl_smartweb_unknown_bond.py \
             tests/test_fl_brevard_newworld.py \
+            tests/test_fl_indian_river_booking_search.py \
+            tests/test_fl_okaloosa_api.py \
+            tests/test_fl_orange_bestjail.py \
             tests/test_fl_67_status.py \
             tests/test_fl_idle_eight.py \
             tests/test_fl_bond_charges_hydrate.py \
+            tests/test_fl_hernando_unknown_bond.py \
             tests/test_miami_dade_scraper.py \
             tests/test_fl_miami_dade_arcgis_contract.py \
             tests/test_fl_sarasota_manatee_audit.py \
