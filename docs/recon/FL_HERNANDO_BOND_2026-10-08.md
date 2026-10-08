@@ -32,3 +32,13 @@ Live survey (7-day window, 82 bookings, counts only):
 So **`$0.00` is the "no bond set" placeholder, not a published $0**. It is unknown unless the row says ROR. Hernando stays in `NO_BOND_ROSTER_COUNTIES`; a detail-derived amount sets `extra.bond_published` true.
 
 Scraper live run with the fix: 82 records, all keyed on source booking numbers. 53 In Custody and 29 Released (all 29 with a Release_Date). 81 have charges and 54 a court case number. 41 have a complete positive bond and 41 are unknown; none is `"0"`.
+
+## Contract exception: Hernando `$0.00` is unknown (CoS-approved 2026-10-08)
+- **Zero bond:** a detail-page charge `Bond Amount` of `$0.00` is the jail's "no bond set" placeholder, not a published $0, so it is emitted as unknown (`""`). The only real $0 is a `$0.00` row whose Other Information says `ROR`.
+- **Evidence (7-day window, 82 bookings, counts only):**
+  - 59 of 152 charge cells were `$0.00`.
+  - 30 bookings had every charge at `$0.00`; 29 of them were still in custody and 1 was released.
+  - The `$0.00` statutes were mostly 948.06 (VOP, 9), 00.00 (holds/warrants, 9) and 784.03 (8).
+  - 1 `$0.00` row was marked ROR.
+- **Effect on totals:** any `$0.00` charge without ROR makes the booking total `""`, so it never understates the bond. This is the same reasoning as Okaloosa's zero-bail rule; it differs from Orange, Pinellas and SmartWEB, where a `$0.00` cell is real.
+- **Custody:** `Release Date/Time: -` is In Custody (53 of 82) and a date is Released (29 of 82). Anything else is skipped, never defaulted to In Custody.
