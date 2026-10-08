@@ -13,6 +13,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - A run in which no booking has charges raises instead of `$set`ting blank charges over stored rows.
   - These counties publish real `$0.00`, so they are **not** added to `NO_BOND_ROSTER_COUNTIES`.
 - Tests: `tests/test_fl_smartweb_unknown_bond.py`.
+## [Unreleased] — 2026-10-08 (Palmetto application header placement)
+
+### Changed
+- **Palmetto application.** The header DEFENDANT line (`app_defendant_name`) is `468, 0, 138, 12.87` with no preferences, so it auto-sizes to 7pt and the baseline stays clear of the underline. POWER NO. (`app_power_number`) is `466, 27.2, 140, 14` with `valign: bottom` and no locked font size, so the 14pt box auto-sizes to 11pt. Bond No. (`app_bond_no`) keeps its box and sets the same `valign: bottom`, because both boxes are the `poa_number` field and DocuSeal stores preferences once per field. CASE NO. (`app_case_number`) is `458, 42, 148, 11.9` with `valign: bottom` and no locked font size, so the box stays under 13.98pt and auto-sizes to 7pt. An 11pt box would cross into POWER NO. `app_def_name`, the AGENT line, and the indemnity case number are unchanged. Templates 1 and 5 are not changed by this commit.
 
 ## [Unreleased] — 2026-10-08 (Hernando unknown bond)
 

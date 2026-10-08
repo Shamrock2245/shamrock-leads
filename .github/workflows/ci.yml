@@ -56,6 +56,8 @@ jobs:
           SECRET_KEY: ci-not-a-real-secret
         # Palmetto agent-line placement is test_palmetto_packet_fields,
         # test_agent_name_fallback, and test_palmetto_docuseal_apply.
+        # Application DEFENDANT, POWER NO., and CASE NO. placement is
+        # test_palmetto_application_header_placement.
         run: |
           pytest -q \
             tests/test_tenant_scope.py \
@@ -157,6 +159,7 @@ jobs:
             tests/test_palmetto_packet_fields.py \
             tests/test_agent_name_fallback.py \
             tests/test_palmetto_docuseal_apply.py \
+            tests/test_palmetto_application_header_placement.py \
             tests/test_paperwork_template_paths.py \
             tests/test_bond_packet_start.py \
             tests/test_staff_test_case_write_bond.py \
