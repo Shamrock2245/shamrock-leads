@@ -2060,6 +2060,25 @@ def _agent_text(data: Mapping[str, Any], keys: tuple) -> str:
     return ""
 
 
+def _usable_agent_name(source: Mapping[str, Any]) -> str:
+    """First name key that is a person, skipping filtered labels.
+
+    Order is writing_agent_name, agent_name, bondsman_name, writing_agent.
+    Shamrock Bail Bonds, Master Admin, staff, and dashboard are not agents.
+    """
+    if not isinstance(source, Mapping):
+        return ""
+    for key in _AGENT_NAME_KEYS:
+        value = source.get(key)
+        if value is None or isinstance(value, (dict, list, tuple, set, bool)):
+            continue
+        text = str(value).strip()
+        if not text or _ignored_writing_label(text):
+            continue
+        return text
+    return ""
+
+
 def _is_template_sample_name(name: str) -> bool:
     """Baked-in blank text without an apostrophe. Never a writing agent."""
     raw = str(name or "")
@@ -2115,60 +2134,52 @@ def house_default_agent(tenant=None) -> tuple:
     return str(entry["agent_name"]).strip(), _HOUSE_AGENT_LICENSE
 
 
-def _pair_from_agent_source(source: Any, *, blank_when_license_only: bool) -> Optional[tuple]:
-    """One source's writing agent, or None when this source has no usable fact.
+def _pair_from_agent_source(source: Any) -> Optional[tuple]:
+    """One source's writing agent, or None when this source has no agent fact.
 
-    A registry name always returns that entry's own license. When the name
-    misses the registry, a license that is a ``BOND_AGENTS`` key returns that
-    entry's name and license. ``(name, license)`` is kept only when the
-    license is not registered. A filtered label is not a name. Appearance
-    blanks still clear a missing name instead of inventing one from a license
-    left on the payload.
+    A registry name returns that entry's own license. A registered license
+    with no usable name returns that holder's full ``BOND_AGENTS`` pair.
+    A name that misses the registry is kept only with a license that is not
+    registered. An unregistered license with no name returns a blank name
+    and that license, and does not invent an agent. Filtered labels are
+    skipped so the next name key can match.
     """
     if not isinstance(source, Mapping):
         return None
-    raw_name = _agent_text(source, _AGENT_NAME_KEYS)
+    clean_name = _usable_agent_name(source)
     raw_license = _agent_text(source, _AGENT_LICENSE_KEYS)
-    if not raw_name and not raw_license:
+    if not clean_name and not raw_license:
         return None
-    ignored = _ignored_writing_label(raw_name)
-    clean_name = "" if ignored else raw_name
     by_name = _registry_pair_for_name(clean_name)
     if by_name:
         return by_name
     by_license = _registry_pair_for_license(raw_license)
     if by_license:
-        if clean_name:
-            return by_license
-        # Appearance blanks clear a missing name instead of inventing one
-        # from a license that was left on the payload. DocuSeal sends do not.
-        if blank_when_license_only and not ignored:
-            return "", by_license[1]
         return by_license
     if clean_name:
         return clean_name, raw_license
-    return None
+    return "", raw_license
 
 
 def resolve_writing_agent(
     *sources: Any,
     session: Optional[Mapping[str, Any]] = None,
     tenant=None,
-    blank_when_license_only: bool = False,
 ) -> tuple:
     """Name and license from the same agent entry.
 
     1. Explicit writing agent on body, case context, or intake when it is a
-       ``BOND_AGENTS`` pair (license or exact case-insensitive name). A
-       filtered label falls through. A name that misses the registry yields
-       the registered license's own entry. A non-registry name is kept only
-       with a license that is not in ``BOND_AGENTS``.
+       ``BOND_AGENTS`` pair (license or exact case-insensitive name). Filtered
+       labels are skipped and the next name key is used. A registered license
+       alone returns that holder's name and license. A non-registry name is
+       kept only with a license that is not in ``BOND_AGENTS``. An
+       unregistered license with no name stays blank.
     2. Signed-in sub-agent, matched to ``BOND_AGENTS`` by license or name.
     3. Staff login with no agent on the session, and machine paths, use
        ``house_default_agent``.
     """
     for source in sources:
-        pair = _pair_from_agent_source(source, blank_when_license_only=blank_when_license_only)
+        pair = _pair_from_agent_source(source)
         if pair is not None:
             return pair
     if isinstance(session, Mapping) and str(session.get("role") or "") != "recovery":
@@ -2177,7 +2188,6 @@ def resolve_writing_agent(
                 "agent_name": session.get("agent_name") or "",
                 "license_number": session.get("license_number") or session.get("agent_license") or "",
             },
-            blank_when_license_only=False,
         )
         if pair is not None and pair[0]:
             return pair

@@ -18,6 +18,7 @@ from dashboard.bond_pdf_service import (
     AGENT_NAME,
     build_osi_field_values,
     build_palmetto_field_values,
+    writing_agent_name,
 )
 from dashboard.palmetto_packet_fill import build_palmetto_context
 from dashboard.routers.bonds import _attach_session_writing_agent
@@ -366,13 +367,13 @@ def test_palmetto_print_does_not_borrow_the_house_license():
     blank = build_palmetto_field_values({"name": "SAMPLE", "bond_amount": 1000})[0]
     assert blank["AgentField"] == HOUSE_NAME
     assert blank["agentBailLicNumField"] == HOUSE_LICENSE
-    # A license left on the payload with no name still clears the sample name.
+    # A registered license with no name prints that holder's pair.
     cleared = build_palmetto_field_values({
         "name": "SAMPLE",
         "bond_amount": 1000,
         "agent_license": "G356764",
     })[0]
-    assert cleared["AgentField"] == ""
+    assert cleared["AgentField"] == "Kayla Lukesic"
     assert cleared["agentBailLicNumField"] == "G356764"
     assert SAMPLE not in cleared["AgentField"]
 
@@ -395,6 +396,58 @@ def test_attach_session_uses_house_or_the_sub_agent():
     assert labeled["agent_license"] == HOUSE_LICENSE
     _no_sample(admin)
     _no_sample(kayla)
+
+
+@pytest.mark.parametrize(
+    "license_no,owner_name",
+    (("G356764", "Kayla Lukesic"), ("W214323", "Jason Taylor")),
+)
+def test_license_only_record_prints_the_registered_holder(license_no, owner_name):
+    payload = {"agent_license": license_no, "county": "Lee"}
+    recipe = build_palmetto_field_values({"name": "SAMPLE", "bond_amount": 1000, **payload})[0]
+    assert recipe["AgentField"] == owner_name
+    assert recipe["agentBailLicNumField"] == license_no
+    printed = _attach_session_writing_agent(_Request(None), payload)
+    assert printed["agent_name"] == owner_name
+    assert printed["writing_agent_name"] == owner_name
+    assert printed["agent_license"] == license_no
+    assert printed["bondsman_license"] == license_no
+    ctx = build_palmetto_context({"defendant_name": "SAMPLE", **payload})
+    assert ctx["agent_name"] == owner_name
+    assert ctx["agent_license"] == license_no
+    assert SAMPLE not in recipe["AgentField"]
+    assert HOUSE_NAME not in recipe["AgentField"] or owner_name == HOUSE_NAME
+
+
+@pytest.mark.parametrize("label", ("Shamrock Bail Bonds", "Master Admin"))
+def test_filtered_label_does_not_hide_the_next_name(label):
+    payload = {"writing_agent_name": label, "agent_name": "Kayla Lukesic"}
+    assert writing_agent_name(payload) == "Kayla Lukesic"
+    assert resolve_writing_agent(payload) == ("Kayla Lukesic", "G356764")
+    recipe = build_palmetto_field_values({"name": "SAMPLE", "bond_amount": 1000, **payload})[0]
+    assert recipe["AgentField"] == "Kayla Lukesic"
+    assert recipe["agentBailLicNumField"] == "G356764"
+    ctx = build_palmetto_context({"defendant_name": "SAMPLE", **payload})
+    assert ctx["agent_name"] == "Kayla Lukesic"
+    assert ctx["agent_license"] == "G356764"
+    printed = _attach_session_writing_agent(_Request(None), payload)
+    assert printed["agent_name"] == "Kayla Lukesic"
+    assert printed["agent_license"] == "G356764"
+
+
+def test_unregistered_license_without_a_name_stays_blank():
+    payload = {"agent_license": "X100000"}
+    assert resolve_writing_agent(payload) == ("", "X100000")
+    recipe = build_palmetto_field_values({"name": "SAMPLE", "bond_amount": 1000, **payload})[0]
+    assert recipe["AgentField"] == ""
+    assert recipe["agentBailLicNumField"] == "X100000"
+    assert HOUSE_NAME not in recipe["AgentField"]
+    ctx = build_palmetto_context({"defendant_name": "SAMPLE", **payload})
+    assert ctx["agent_name"] == ""
+    assert ctx["agent_license"] == "X100000"
+    printed = _attach_session_writing_agent(_Request(None), payload)
+    assert printed["agent_name"] == ""
+    assert printed["agent_license"] == "X100000"
 
 
 def test_osi_appearance_output_is_unchanged():

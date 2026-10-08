@@ -65,7 +65,10 @@ def writing_agent_name(data: Optional[dict]) -> str:
     """Writing agent already on the bond or session payload.
 
     Empty when none is present. Never substitutes the template sample
-    ``Brendan ONeal`` or the constant ``AGENT_NAME``.
+    ``Brendan ONeal`` or the constant ``AGENT_NAME``. A filtered label
+    (Shamrock Bail Bonds, Master Admin, staff, dashboard, and the rest of
+    ``_NOT_WRITING_AGENT``) is skipped and the next key is tried:
+    writing_agent_name, agent_name, bondsman_name, writing_agent.
     """
     if not isinstance(data, dict):
         return ""
@@ -956,9 +959,7 @@ def build_palmetto_field_values(data: dict) -> tuple[dict, dict]:
 
     from dashboard.services.docuseal_service import resolve_writing_agent
 
-    agent_name, agent_license = resolve_writing_agent(
-        data, blank_when_license_only=True,
-    )
+    agent_name, agent_license = resolve_writing_agent(data)
     field_values = {
         "defendantNameField": full_name,
         "countyField": county,
