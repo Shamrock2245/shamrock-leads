@@ -102,7 +102,7 @@
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 40 | **Escambia** | SmartWEB JAIL View (`ECC<YY>JBN######`) — plain requests | `escambia.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
-| 41 | **Okaloosa** | Inmate Locator `Default.aspx` (source Booking# 10-digit) — plain requests A–Z | `okaloosa.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
+| 41 | **Okaloosa** | Inmate Locator public JSON API (`/InmateLocatorAPI/api/Inmates/search` + `/api/Inmates/<bookingNo>`; source bookingNo 10-digit, custodyDate) — plain requests | `okaloosa.py` | ✅ Active (unverified until write smoke). See `docs/recon/FL_OKALOOSA_API_2026-10-08.md` | 120 min | 2026-10-08 |
 | 42 | **Bay** | Custom HTML | `bay.py` | ✅ Active | 120 min | 2026-04-27 |
 | 43 | **Santa Rosa** | SmartWEB JAIL View (`SRSO<YY>JBN######`) — plain requests | `santa_rosa.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
 | 44 | **Walton** | New World InmateInquiry (`InCustody=True` + detail open `Booking` `YYYY-NNNNNNNN`; shared `fl_newworld`) — plain requests | `walton.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
