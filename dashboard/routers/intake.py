@@ -618,3 +618,183 @@ async def intake_queue_list(
     source: str = Query(default=""),
     counties: str = Query(default=""),
 ):
+    """
+    Return pending intakes for the staff dashboard queue.
+    Mirrors getWixIntakeQueue() from GAS WixPortalIntegration.js.
+    Returns the same schema expected by Queue.render() in Dashboard.html.
+    """
+    intake_queue = get_collection("intake_queue")
+    status_filter = status
+    limit = min(limit, 200)
+    source_filter = source
+
+    query: dict = {}
+    if status_filter == "dismissed":
+        query["desk_dismissed"] = True
+    else:
+        query["desk_dismissed"] = {"$ne": True}
+        if status_filter and status_filter != "all":
+            query["status"] = status_filter
+    if source_filter:
+        query["source"] = _normalize_source(source_filter)
+    if counties:
+        county_list = [c.strip() for c in counties.split(",") if c.strip()]
+        if county_list:
+            # Match bare "Lee" or labeled "Lee (FL)"
+            regex_list = []
+            for c in county_list:
+                bare = re.sub(r"\s*\([A-Za-z]{2}\)$", "", c).strip()
+                regex_list.append(
+                    re.compile(rf"^{re.escape(bare)}(\s*\([A-Za-z]{{2}}\))?$", re.IGNORECASE)
+                )
+            query["defendant_county"] = {"$in": regex_list}
+
+    try:
+        cursor = intake_queue.find(query, {"_id": 0}).sort("created_at", -1).limit(limit)
+        items = await cursor.to_list(length=limit)
+
+        # Transform to Dashboard.html Queue.render() schema
+        result = []
+        for item in items:
+            ind = item.get("indemnitor", {})
+            def_ = item.get("defendant", {})
+            raw = item.get("_raw", {})
+            result.append({
+                "IntakeID": item["intake_id"],
+                "DefendantName": item.get("defendant_name", "Unknown"),
+                "FullName": item.get("indemnitor_name", "Unknown"),
+                "FirstName": ind.get("firstName", ""),
+                "LastName": ind.get("lastName", ""),
+                "Email": item.get("indemnitor_email", ""),
+                "Phone": item.get("indemnitor_phone", ""),
+                "Role": ind.get("relationship", "Indemnitor"),
+                "Status": item.get("status", "pending"),
+                "Timestamp": item["created_at"].isoformat() if hasattr(item.get("created_at"), "isoformat") else str(item.get("created_at", "")),
+                "Source": item.get("source", ""),
+                "SourceLabel": item.get("source_label", ""),
+                "County": item.get("defendant_county", ""),
+                "BookingNumber": item.get("defendant_booking_number", ""),
+                # Matching fields
+                "MatchedBookingNumber": item.get("matched_booking_number"),
+                "MatchConfidence": item.get("match_confidence"),
+                "MatchStrategy": item.get("match_strategy"),
+                # Paperwork fields
+                "PaperworkPacketId": item.get("paperwork_packet_id"),
+                "PaperworkStatus": item.get("paperwork_status"),
+                # AI fields
+                "AI_Risk": item.get("ai_risk", ""),
+                "AI_Score": item.get("ai_score"),
+                "AI_Rationale": item.get("ai_rationale", ""),
+                # Full indemnitor data for hydration
+                "_original": {
+                    **raw,
+                    # Ensure all normalized indemnitor fields are present
+                    "indemnitorFirstName": ind.get("firstName", ""),
+                    "indemnitorMiddleName": ind.get("middleName", ""),
+                    "indemnitorLastName": ind.get("lastName", ""),
+                    "indemnitorDOB": ind.get("dob", ""),
+                    "indemnitorSSN": ind.get("ssn", ""),
+                    "indemnitorDL": ind.get("dl", ""),
+                    "indemnitorDLState": ind.get("dlState", "FL"),
+                    "indemnitorStreetAddress": ind.get("address", ""),
+                    "indemnitorCity": ind.get("city", ""),
+                    "indemnitorState": ind.get("state", "FL"),
+                    "indemnitorZipCode": ind.get("zip", ""),
+                    "indemnitorPhone": ind.get("phone", ""),
+                    "indemnitorEmail": ind.get("email", ""),
+                    "indemnitorEmployerName": ind.get("employer", ""),
+                    "indemnitorEmployerPhone": ind.get("employerPhone", ""),
+                    "indemnitorEmployerCity": ind.get("employerCity", ""),
+                    "indemnitorEmployerState": ind.get("employerState", ""),
+                    "indemnitorSupervisorName": ind.get("supervisor", ""),
+                    "indemnitorSupervisorPhone": ind.get("supervisorPhone", ""),
+                    "reference1Name": ind.get("ref1Name", ""),
+                    "reference1Relation": ind.get("ref1Relation", ""),
+                    "reference1Phone": ind.get("ref1Phone", ""),
+                    "reference1Address": ind.get("ref1Address", ""),
+                    "reference2Name": ind.get("ref2Name", ""),
+                    "reference2Relation": ind.get("ref2Relation", ""),
+                    "reference2Phone": ind.get("ref2Phone", ""),
+                    "reference2Address": ind.get("ref2Address", ""),
+                },
+            })
+
+        return {
+            "success": True,
+            "intakes": result,
+            "count": len(result),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"[intake] queue list error: {e}")
+        return JSONResponse({"success": False, "error": str(e), "intakes": []}, status_code=500)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  GET /api/intake/<intake_id>
+#  Get a single intake record by ID
+# ═══════════════════════════════════════════════════════════════════════════════
+@intake_bp.get("/intake/{intake_id}")
+async def intake_get(intake_id: str):
+    """Fetch a single intake record by ID."""
+    intake_queue = get_collection("intake_queue")
+    try:
+        item = await intake_queue.find_one({"intake_id": intake_id}, {"_id": 0})
+        if not item:
+            return JSONResponse({"success": False, "error": f"Intake {intake_id} not found"}, status_code=404)
+        # Serialize datetime
+        if hasattr(item.get("created_at"), "isoformat"):
+            item["created_at"] = item["created_at"].isoformat()
+        if hasattr(item.get("updated_at"), "isoformat"):
+            item["updated_at"] = item["updated_at"].isoformat()
+        return {"success": True, "intake": item}
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  POST /api/intake/<intake_id>/match
+#  Phase 4: Run the matching engine on a specific intake record
+# ═══════════════════════════════════════════════════════════════════════════════
+@intake_bp.post("/intake/{intake_id}/match")
+async def intake_match(intake_id: str):
+    """
+    Run the Phase 4 matching engine on a specific intake record.
+    Returns best match + candidates for staff review.
+    """
+    intake_queue = get_collection("intake_queue")
+    try:
+        intake_doc = await intake_queue.find_one({"intake_id": intake_id}, {"_id": 0})
+        if not intake_doc:
+            return JSONResponse({"success": False, "error": f"Intake {intake_id} not found"}, status_code=404)
+
+        from dashboard.services.matching_engine import MatchingEngine
+        engine = MatchingEngine(get_db())
+        result = await engine.match_intake(intake_doc)
+        return {"success": True, **result}
+    except Exception as e:
+        logger.error(f"[intake] match error for {intake_id}: {e}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  POST /api/intake/<intake_id>/process
+#  Mark intake as in_progress and return full hydration payload
+# ═══════════════════════════════════════════════════════════════════════════════
+@intake_bp.post("/intake/{intake_id}/process")
+async def intake_process(intake_id: str):
+    """
+    Mark intake as in_progress and return the full hydration payload.
+    Called when staff clicks 'Process' in the queue.
+    Mirrors Queue.process() from Dashboard.html.
+    """
+    intake_queue = get_collection("intake_queue")
+    try:
+        now = datetime.now(timezone.utc)
+        result = await intake_queue.find_one_and_update(
+            {"intake_id": intake_id},
+            {"$set": {"status": "in_progress", "updated_at": now, "processed_at": now}},
+            return_document=True,
+        )
+        if not result:
+            return JSONResponse({"success": False, "error": f"Intake {intake_id} not found"}, status_code=404)
