@@ -24,9 +24,11 @@ Source contract (recon 2026-10-08, docs/recon/FL_OKALOOSA_API_2026-10-08.md):
     and counted, not guessed.
   * Bond: the roster ``totalBondAmt`` equals the sum of the detail ``bailAmt``
     values when any are published (24/24 checked); when none are, both are
-    0/null. So ``totalBondAmt > 0`` is the bond, and ``0`` means unknown
-    (``Bond_Amount=""``), never ``$0``. With a detail, the sum of the
-    non-null ``bailAmt`` wins.
+    0/null. The bond is the sum of the detail ``bailAmt`` only when every
+    charge publishes one (a published 0 counts). Any blank charge, which can
+    be a hold, makes the total ``""``. Without a detail (outside the window)
+    the bond is ``""``: the roster total cannot show a blank charge, so it is
+    not used.
   * Charges come from the detail, fetched only for bookings within
     ``LOOKBACK_DAYS`` (newest first, at most ``MAX_DETAILS``). A failed or
     mismatched detail leaves charges empty; it is never invented.
@@ -114,6 +116,7 @@ def parse_detail(data: Any, booking: str) -> Optional[Dict[str, Any]]:
     charges: List[str] = []
     details: List[Dict[str, Any]] = []
     amounts: List[float] = []
+    any_unpublished = False
     cases: List[str] = []
     for row in data.get("charges") or []:
         if not isinstance(row, dict):
@@ -123,6 +126,8 @@ def parse_detail(data: Any, booking: str) -> Optional[Dict[str, Any]]:
         amount = _money(row.get("bailAmt"))
         if amount is not None:
             amounts.append(amount)
+        else:
+            any_unpublished = True  # blank bailAmt: may be a hold
         case = _clean(row.get("caseNbr"))
         if case and case not in cases:
             cases.append(case)
@@ -145,7 +150,9 @@ def parse_detail(data: Any, booking: str) -> Optional[Dict[str, Any]]:
     return {
         "charges": charges,
         "details": details,
-        "bond": f"{sum(amounts):.2f}" if amounts else None,
+        # Total only when every charge publishes bailAmt; a blank can be a hold,
+        # so a partial sum would understate the bond. "" = unknown.
+        "bond": f"{sum(amounts):.2f}" if amounts and not any_unpublished else "",
         "case_numbers": cases,
         "release_date": _clean(data.get("releaseDate")),
     }
@@ -170,11 +177,11 @@ def build_record(row: Dict[str, Any], detail: Optional[Dict[str, Any]]) -> Optio
     if not BOOKING_RE.fullmatch(booking) or booked_at is None or not full_name:
         return None
     first, middle, last = _split_name(full_name)
-    if detail is not None and detail["bond"] is not None:
-        bond = detail["bond"]
-    else:
-        total = _money(row.get("totalBondAmt"))
-        bond = f"{total:.2f}" if total and total > 0 else ""  # 0 = nothing published
+    # Only the detail can show whether every charge published a bailAmt. The
+    # roster totalBondAmt is the sum of the published ones (on 2026-10-08, 9 of
+    # 60 sampled bookings mixed a blank charge with a positive total), so it
+    # understates a bond with a blank (maybe a hold) and is never used.
+    bond = detail["bond"] if detail is not None else ""
     sex = _clean(row.get("sex")).upper()[:1]
     dob = parse_custody_date(row.get("dobDttm"))
     extra: Dict[str, Any] = {"booking_date_origin": "Inmate Locator API custodyDate"}

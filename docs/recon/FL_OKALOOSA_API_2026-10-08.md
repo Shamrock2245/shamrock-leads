@@ -38,3 +38,8 @@
 1. Write smoke: `python main.py Okaloosa` with `MONGODB_URI`. Check for 10-digit booking numbers, booking dates filled in, and a blank `bond_amount_raw` where nothing was published.
 2. If it is clean, CoS sets `SCRAPER_SOURCE_STATES["Okaloosa (FL)"] = "verified_public"` and adds a `live_emitter_evidence.json` row.
 3. Older Okaloosa prod rows with no booking date get the date on the next rescrape of the same booking key. Staff edits survive (#123).
+
+## Total bond only when complete (CoS, 2026-10-08)
+
+A blank `bailAmt` can be a hold, so the booking's `Bond_Amount` is the sum of the detail `bailAmt` only when **every** charge publishes one (a published 0 counts). Otherwise it is `""`. The roster `totalBondAmt` is only the sum of the published charges. In a box probe (08:20 EDT, 60 bookings) 11 were all known, 40 all blank and 9 mixed, and all 9 mixed bookings had a positive roster total that understates the bond. So the roster total is no longer used. Bookings without a detail (outside the 7-day window) carry an unknown bond, and the smoke figure above ("Bond > 0: 429") predates this rule and will now be lower. Per-charge known amounts stay in `charge_details`.
+

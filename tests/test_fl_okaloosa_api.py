@@ -40,7 +40,7 @@ def test_record_uses_source_booking_and_custody_date():
     assert rec.Booking_Date == "10/07/2026" and rec.Booking_Time == "09:05 PM"
     assert rec.Last_Name == "DOE" and rec.First_Name == "JANE" and rec.Middle_Name == "Q"
     assert rec.DOB == "01/15/1990" and rec.Sex == "F" and rec.Person_ID == "12345"
-    assert rec.Bond_Amount == "2500.00" and rec.Status == "In Custody"
+    assert rec.Bond_Amount == "" and rec.Status == "In Custody"  # no detail: roster total not trusted
 
 
 def test_zero_roster_bond_is_unknown_not_zero():
@@ -62,16 +62,35 @@ def test_detail_charges_bond_and_mismatch():
         {"charge": "843.02", "chargeDesc": "RESIST W/O VIOLENCE", "severity": "MF", "bailAmt": None, "bailType": "", "caseNbr": "26-000001", "courtDate": None},
     ]), "2026000001")
     assert det["charges"] == ["BATTERY", "RESIST W/O VIOLENCE"]
-    assert det["bond"] == "1500.00"
+    assert det["bond"] == ""  # one blank charge (maybe a hold): total unknown, not 1500.00
     assert [d["bond_amount"] for d in det["details"]] == [1500.0, None]
     assert det["details"][0]["statute"] == "784.03" and det["details"][0]["degree"] == "MF"
     assert det["case_numbers"] == ["26-000001"]
     assert okaloosa.parse_detail(_detail("2026000002", []), "2026000001") is None
     none_published = okaloosa.parse_detail(_detail("2026000001", [{"chargeDesc": "VOP", "bailAmt": None}]), "2026000001")
-    assert none_published["bond"] is None
+    assert none_published["bond"] == ""
     rec = okaloosa.build_record(_row("2026000001", datetime(2026, 10, 7), bond=0), none_published)
     assert rec.Bond_Amount == "" and rec.Charges == "VOP"
     assert rec.extra_data["charge_details"][0]["bond_amount"] is None
+
+
+def _bonds(*amts):
+    return okaloosa.parse_detail(
+        _detail("2026000001", [{"chargeDesc": f"C{i}", "bailAmt": a} for i, a in enumerate(amts)]), "2026000001")
+
+
+def test_total_bond_empty_when_any_charge_bond_is_blank():
+    mixed = _bonds(1500.0, None)
+    assert mixed["bond"] == ""
+    assert [d["bond_amount"] for d in mixed["details"]] == [1500.0, None]  # known per-charge amount kept
+    assert _bonds(1500.0, 250.0)["bond"] == "1750.00"
+    assert _bonds(None, None)["bond"] == ""
+    assert _bonds(0.0, 1500.0)["bond"] == "1500.00"  # published $0 is known
+    # the roster total (sum of published bailAmt) must not fill in for a blank charge
+    rec = okaloosa.build_record(_row("2026000001", datetime(2026, 10, 7), bond=1500.0), mixed)
+    assert rec.Bond_Amount == ""
+    # no detail fetched (outside the window): the roster total cannot show a blank charge
+    assert okaloosa.build_record(_row("2026000001", datetime(2026, 10, 7), bond=1500.0), None).Bond_Amount == ""
 
 
 class _Resp:
