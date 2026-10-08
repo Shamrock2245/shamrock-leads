@@ -12,6 +12,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **DocuSeal apply:** a field update keeps every area on documents the spec does not cover. A text field that also has areas on a covered document is split: the uncovered areas stay on the original field (same uuid, name, and role) and the covered areas are replaced. Signature, initials, and date-signed boxes are copied from live template 5 (same uuid, role, and area), including when they also sit on a covered document. `today_date` is still the prefilled execution date. `SIGNATURE_GEOMETRY_EXCEPTIONS` is empty: no signature box is moved or dropped. Covered text, date, and number boxes keep the live template 5 names `prefill_values_from_bond` already sends (`defendant_name`, `poa_number`, `numeric_full_bond_amount`, and the rest). A live synonym the prefill does not send is renamed to that prefill key. Boxes with no source (social password, contacted-by, and the other blank-by-design names) stay empty. Dry-run (`--live`) lists fields added, moved, removed, and kept per document. `--clone` copies template 5 and writes the merge onto the copy. `DOCUSEAL_URL` is the origin `https://sign.shamrockbailbonds.biz`; the script appends `/api`.
 - **OSI local stitch:** `place_text_by_anchor` matches a whole word or an exact label and skips the agent header (`Agent name, Address, Phone & License #`) and the company letterhead. Indemnitor name and address are no longer stamped on that header on the application, promissory note, disclosure, terms, or collateral receipt. Raw `{{...}}` tags are not printed, and the stamp is clipped to the page. DocuSeal remains the signing path.
 
+## [Unreleased] — 2026-10-08 (packet versions and first-appearance marker)
+
+### Fixed
+- **Start bond packet (`SAAS_MULTI_TENANT` still default off).** Each send stores a new `PKT-<bond case>-v<n>` packet and keeps the `packet_id` upsert. A second send returns 409 while a non-voided packet from this flow is sent or signed, and tells staff to void it first. A sent, signed, or voided packet is not edited.
+- **First Appearance watcher.** The failure and no-change timestamp writes go through `protect_scraped_update`, so a legacy `MANUAL_CHARGE_BONDS` marker is recorded on `staff_edits` before `last_checked_mode` moves on.
+
 ## [Unreleased] — 2026-10-08 (start bond packet key)
 
 ### Fixed
