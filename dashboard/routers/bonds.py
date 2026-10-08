@@ -1378,28 +1378,23 @@ def _build_appearance_bond_data(d: dict):
 
 
 def _attach_session_writing_agent(request: Request, payload: dict) -> dict:
-    """Use the signed-in agent only when the payload has no writing agent."""
+    """Pair the writing agent on a print payload.
+
+    An explicit registry agent on the payload keeps that entry's own license.
+    A signed-in sub-agent uses that entry. PIN admin and a payload with no
+    agent use the house pair. A license is not filled in by itself.
+    """
     from dashboard.auth.agent_scope import agent_identity
-    from dashboard.bond_pdf_service import writing_agent_license, writing_agent_name
+    from dashboard.services.docuseal_service import apply_writing_agent, resolve_writing_agent
 
     out = dict(payload or {})
-    if writing_agent_name(out):
-        return out
-    # Entitlement checks call this route with a JSON body and no session.
-    # No cookie means there is no signed-in agent to copy.
-    if getattr(request, "cookies", None) is None:
-        return out
-    ident = agent_identity(request)
-    name = writing_agent_name({"agent_name": ident.get("agent_name")})
-    if name:
-        out["writing_agent_name"] = name
-        out["agent_name"] = name
-    if not writing_agent_license(out):
-        lic = writing_agent_license({"license_number": ident.get("license_number")})
-        if lic:
-            out["writing_agent_license"] = lic
-            out["agent_license"] = lic
-    return out
+    session = None
+    if getattr(request, "cookies", None) is not None:
+        session = agent_identity(request)
+    name, license_no = resolve_writing_agent(
+        out, session=session, blank_when_license_only=True,
+    )
+    return apply_writing_agent(out, name, license_no)
 
 
 @bonds_bp.api_route("/appearance-bond-pdf", methods=["GET", "POST"])

@@ -953,8 +953,11 @@ def build_palmetto_field_values(data: dict) -> tuple[dict, dict]:
     else:
         court_datetime = court_date
 
-    agent_name = writing_agent_name(data)
-    agent_license = writing_agent_license(data) or AGENT_LICENSE
+    from dashboard.services.docuseal_service import resolve_writing_agent
+
+    agent_name, agent_license = resolve_writing_agent(
+        data, blank_when_license_only=True,
+    )
     field_values = {
         "defendantNameField": full_name,
         "countyField": county,

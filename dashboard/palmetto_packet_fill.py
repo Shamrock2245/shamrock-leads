@@ -14,7 +14,6 @@ import fitz
 
 from dashboard.bond_pdf_service import (
     AGENCY_NAME,
-    AGENT_LICENSE,
     _amount_to_words,
     _apply_field_values,
     _clear_widget_value,
@@ -24,8 +23,6 @@ from dashboard.bond_pdf_service import (
     _split_charge,
     _split_court_datetime,
     fill_palmetto_bond,
-    writing_agent_license,
-    writing_agent_name,
 )
 from dashboard.palmetto_field_placement import PAGE_SIZE, fields_for
 from dashboard.paperwork_pdf_service import get_template_path
@@ -120,8 +117,9 @@ def build_palmetto_context(data: Optional[dict]) -> Dict[str, str]:
     digits = "".join(ch for ch in (poa_slots[0] or poa) if ch.isdigit())
     receipt_no = digits[-6:] if digits else ""
 
-    agent = writing_agent_name(data)
-    license_no = writing_agent_license(data) or AGENT_LICENSE
+    from dashboard.services.docuseal_service import resolve_writing_agent
+
+    agent, license_no = resolve_writing_agent(data, blank_when_license_only=True)
 
     county = str(data.get("county") or data.get("defendant_county") or "").strip()
     address = str(

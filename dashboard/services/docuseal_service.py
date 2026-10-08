@@ -22,7 +22,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 import re
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Mapping, Optional, Union
 from urllib.parse import urljoin
 
 import httpx
@@ -1014,6 +1014,7 @@ class DocuSealService:
         today_day = str(now.day)                                  # e.g. 7
         today_month = now.strftime("%B")                          # e.g. August
         today_year_2digit = now.strftime("%y")                    # e.g. 26
+        agent_name, agent_license = resolve_writing_agent(bond_data)
 
         raw_bond_amt = (
             bond_data.get("bond_amount")
@@ -1228,12 +1229,12 @@ class DocuSealService:
             ),
             "AgencyName": "Shamrock Bail Bonds",
             "agency_name": "Shamrock Bail Bonds",
-            "AgentName": _writing_agent_name(bond_data),
-            "agent_name": _writing_agent_name(bond_data),
-            "AgentLicense": _writing_agent_license(bond_data),
-            "agent_license": _writing_agent_license(bond_data),
-            "bondsman_name": _writing_agent_name(bond_data),
-            "bondsman_license": _writing_agent_license(bond_data),
+            "AgentName": agent_name,
+            "agent_name": agent_name,
+            "AgentLicense": agent_license,
+            "agent_license": agent_license,
+            "bondsman_name": agent_name,
+            "bondsman_license": agent_license,
         }
 
         def_first, def_middle, def_last = _split_full_name(defendant_name)
@@ -1650,6 +1651,9 @@ class DocuSealService:
                 defendant=defendant,
                 include_defendant=include_defendant,
             )
+        bond_data = dict(bond_data or {})
+        agent_name, agent_license = resolve_writing_agent(bond_data)
+        apply_writing_agent(bond_data, agent_name, agent_license)
         raw_values = self.prefill_values_from_bond(bond_data)
         # Published "mapped" sureties add their PDF field names. OSI/Palmetto
         # seeds stay on canonical_prefill, so this dict is unchanged for them.
@@ -1715,7 +1719,6 @@ class DocuSealService:
                 "0", "false", "no",
             )
         if include_bondsman:
-            agent_name = _writing_agent_name(bond_data)
             agent_email = (
                 bond_data.get("bondsman_email")
                 or os.getenv("BOND_AGENT_EMAIL", "admin@shamrockbailbonds.biz")
@@ -2033,6 +2036,175 @@ BOND_AGENTS = {
     },
 }
 
+
+_HOUSE_AGENT_LICENSE = "P139768"
+_AGENT_NAME_KEYS = ("writing_agent_name", "agent_name", "bondsman_name", "writing_agent")
+_AGENT_LICENSE_KEYS = (
+    "writing_agent_license",
+    "agent_license",
+    "bondsman_license",
+    "license_number",
+)
+
+
+def _agent_text(data: Mapping[str, Any], keys: tuple) -> str:
+    if not isinstance(data, Mapping):
+        return ""
+    for key in keys:
+        value = data.get(key)
+        if value is None or isinstance(value, (dict, list, tuple, set, bool)):
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
+def _is_template_sample_name(name: str) -> bool:
+    """Baked-in blank text without an apostrophe. Never a writing agent."""
+    raw = str(name or "")
+    compact = re.sub(r"\s+", "", raw).casefold()
+    if compact != "brendanoneal":
+        return False
+    return "'" not in raw and "\u2019" not in raw
+
+
+def _ignored_writing_label(name: str) -> bool:
+    raw = str(name or "").strip()
+    if not raw:
+        return False
+    if _is_template_sample_name(raw):
+        return True
+    from dashboard.bond_pdf_service import writing_agent_name
+
+    return writing_agent_name({"agent_name": raw}) == ""
+
+
+def _registry_pair_for_license(license_no: str) -> Optional[tuple]:
+    key = str(license_no or "").strip().upper()
+    entry = BOND_AGENTS.get(key)
+    if not entry:
+        return None
+    return str(entry.get("agent_name") or "").strip(), key
+
+
+def _registry_pair_for_name(name: str) -> Optional[tuple]:
+    raw = str(name or "").strip()
+    if not raw or _ignored_writing_label(raw):
+        return None
+    for license_no, entry in BOND_AGENTS.items():
+        if str(entry.get("agent_name") or "").strip().lower() == raw.lower():
+            return str(entry.get("agent_name") or "").strip(), license_no
+    return None
+
+
+def house_default_agent(tenant=None) -> tuple:
+    """House writing agent as one name + license pair.
+
+    ``tenant`` is a hook for a later per-tenant pair. The default is the
+    ``BOND_AGENTS`` house row. ``BOND_AGENT_NAME`` and ``BOND_AGENT_LICENSE``
+    override that row only when both are non-empty. A half-set env is ignored.
+    The template sample name is never returned.
+    """
+    _ = tenant
+    env_name = (os.getenv("BOND_AGENT_NAME") or "").strip()
+    env_license = (os.getenv("BOND_AGENT_LICENSE") or "").strip()
+    if env_name and env_license and not _is_template_sample_name(env_name):
+        return env_name, env_license
+    entry = BOND_AGENTS[_HOUSE_AGENT_LICENSE]
+    return str(entry["agent_name"]).strip(), _HOUSE_AGENT_LICENSE
+
+
+def _pair_from_agent_source(source: Any, *, blank_when_license_only: bool) -> Optional[tuple]:
+    """One source's writing agent, or None when this source has no usable fact.
+
+    A registry name always returns that entry's own license. A filtered label
+    is not a name. An explicit non-registry name is kept with the license on
+    that same source.
+    """
+    if not isinstance(source, Mapping):
+        return None
+    raw_name = _agent_text(source, _AGENT_NAME_KEYS)
+    raw_license = _agent_text(source, _AGENT_LICENSE_KEYS)
+    if not raw_name and not raw_license:
+        return None
+    ignored = _ignored_writing_label(raw_name)
+    clean_name = "" if ignored else raw_name
+    by_name = _registry_pair_for_name(clean_name)
+    if by_name:
+        return by_name
+    if clean_name:
+        return clean_name, raw_license
+    by_license = _registry_pair_for_license(raw_license)
+    if by_license:
+        # Appearance blanks clear a missing name instead of inventing one
+        # from a license that was left on the payload. DocuSeal sends do not.
+        if blank_when_license_only and not ignored:
+            return "", by_license[1]
+        return by_license
+    return None
+
+
+def resolve_writing_agent(
+    *sources: Any,
+    session: Optional[Mapping[str, Any]] = None,
+    tenant=None,
+    blank_when_license_only: bool = False,
+) -> tuple:
+    """Name and license from the same agent entry.
+
+    1. Explicit writing agent on body, case context, or intake when it is a
+       ``BOND_AGENTS`` pair (license or exact case-insensitive name). A
+       filtered label falls through. A non-registry name already on that
+       source is kept with the license on the same source.
+    2. Signed-in sub-agent, matched to ``BOND_AGENTS`` by license or name.
+    3. Staff login with no agent on the session, and machine paths, use
+       ``house_default_agent``.
+    """
+    for source in sources:
+        pair = _pair_from_agent_source(source, blank_when_license_only=blank_when_license_only)
+        if pair is not None:
+            return pair
+    if isinstance(session, Mapping) and str(session.get("role") or "") != "recovery":
+        pair = _pair_from_agent_source(
+            {
+                "agent_name": session.get("agent_name") or "",
+                "license_number": session.get("license_number") or session.get("agent_license") or "",
+            },
+            blank_when_license_only=False,
+        )
+        if pair is not None and pair[0]:
+            return pair
+    return house_default_agent(tenant)
+
+
+def apply_writing_agent(target: Dict[str, Any], name: str, license_no: str) -> Dict[str, Any]:
+    """Write one resolved pair onto every agent key the packet readers check."""
+    target["writing_agent_name"] = name
+    target["agent_name"] = name
+    target["bondsman_name"] = name
+    target["writing_agent"] = name
+    target["writing_agent_license"] = license_no
+    target["agent_license"] = license_no
+    target["bondsman_license"] = license_no
+    target["license_number"] = license_no
+    return target
+
+
+def _registry_contact(name: str, license_no: str) -> tuple:
+    """Email and phone for this pair. Never another agent's contact."""
+    entry = BOND_AGENTS.get(str(license_no or "").strip().upper()) or {}
+    same = str(entry.get("agent_name") or "").strip().lower() == str(name or "").strip().lower()
+    if same and entry:
+        email = entry.get("agent_email") or os.getenv("BOND_AGENT_EMAIL", "admin@shamrockbailbonds.biz")
+        phone = entry.get("agent_phone") or os.getenv("BOND_AGENT_PHONE", "2393322245")
+        return email, phone
+    return (
+        os.getenv("BOND_AGENT_EMAIL", "admin@shamrockbailbonds.biz"),
+        os.getenv("BOND_AGENT_PHONE", "2393322245"),
+    )
+
+
 def build_bond_data_from_dashboard(
     *,
     ctx: Optional[Dict[str, Any]] = None,
@@ -2040,6 +2212,7 @@ def build_bond_data_from_dashboard(
     field_overrides: Optional[Dict[str, Any]] = None,
     body: Optional[Dict[str, Any]] = None,
     surety_id: str = "osi",
+    session: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Merge packet-builder context + UI overrides into the shape expected by
@@ -2083,30 +2256,21 @@ def build_bond_data_from_dashboard(
     poa = ctx.get("poa_number") or ""
     poa_numbers = ctx.get("poa_numbers") or poa
 
-    agent_name_session = body.get("agent_name") or ctx.get("agent_name") or ""
-    agent_license_session = body.get("license_number") or body.get("agent_license") or ctx.get("license_number") or ctx.get("agent_license") or ""
-
-    agent_reg = {}
-    if agent_license_session:
-        agent_reg = BOND_AGENTS.get(agent_license_session.upper(), {})
-    elif agent_name_session:
-        for k, v in BOND_AGENTS.items():
-            if v["agent_name"].lower() == agent_name_session.lower():
-                agent_reg = v
-                agent_license_session = k
-                break
-
-    bondsman_name = agent_reg.get("agent_name") or _writing_agent_name({"agent_name": agent_name_session})
-    bondsman_license = agent_license_session or (
-        os.getenv("BOND_AGENT_LICENSE", "P139768") if bondsman_name else ""
+    bondsman_name, bondsman_license = resolve_writing_agent(
+        body, ctx, intake_doc, session=session,
     )
-    bondsman_email = agent_reg.get("agent_email") or os.getenv("BOND_AGENT_EMAIL", "admin@shamrockbailbonds.biz")
-    bondsman_phone = agent_reg.get("agent_phone") or os.getenv("BOND_AGENT_PHONE", "2393322245")
+    bondsman_email, bondsman_phone = _registry_contact(bondsman_name, bondsman_license)
 
     bond_data: Dict[str, Any] = {
         **intake_doc,
         "bondsman_name": bondsman_name,
         "bondsman_license": bondsman_license,
+        "agent_name": bondsman_name,
+        "agent_license": bondsman_license,
+        "writing_agent_name": bondsman_name,
+        "writing_agent_license": bondsman_license,
+        "writing_agent": bondsman_name,
+        "license_number": bondsman_license,
         "bondsman_email": bondsman_email,
         "bondsman_phone": bondsman_phone,
         "surety_id": (surety_id or ctx.get("surety_id") or "").lower(),
