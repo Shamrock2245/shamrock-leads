@@ -101,10 +101,10 @@ Dashboard updates
 | Class | `CharlotteCountyScraper` |
 | JMS Vendor | Custom (Revize platform) |
 | Base URL | `https://inmates.charlottecountyfl.revize.com` |
-| Method | GET `/bookings` → HTML table parsing |
+| Method | GET `/bookings` → HTML table parsing (stock Playwright, no proxy/stealth) |
 | Auth | None |
-| Interval | 45 min |
-| Notes | Revize platform. Relative URLs need `BASE_URL` prefix. |
+| Interval | Relay-only: Leads Ops home relay, `python main.py --relay-only` (not on the VPS scheduler) |
+| Notes | Revize platform behind Cloudflare. See `docs/ops/REVIZE_RELAY_RUN.md`. |
 
 #### Hendry County ✅
 | Property | Value |

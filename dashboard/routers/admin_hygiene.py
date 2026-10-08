@@ -281,9 +281,18 @@ async def patch_arrest(request: Request, body: ArrestPatch):
     for k, v in field_map.items():
         if v is not None:
             sets[k] = v
+    from core.staff_edits import staff_bond_marker, staff_charges_marker, staff_rows_from_text
+
+    who = sess.get("email") or "superadmin"
     if body.bond_amount is not None:
         sets["bond_amount"] = float(body.bond_amount)
         sets["bond_amount_raw"] = str(body.bond_amount)
+        sets.update(staff_bond_marker(float(body.bond_amount), bond_type=existing.get("bond_type") or "",
+                                      by=who, source="admin-hygiene"))
+    if body.charges is not None and str(body.charges).strip():
+        rows = staff_rows_from_text(str(body.charges), existing.get("charge_details"))
+        sets["charge_details"] = rows
+        sets.update(staff_charges_marker(existing, rows, by=who, source="admin-hygiene"))
     if body.new_booking_number:
         sets["booking_number"] = body.new_booking_number.strip()
     if body.new_county:

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agency billing</title>
+  <style>
+    :root { color-scheme: light; --green: #0b6b3a; }
+    body { font-family: Georgia, "Iowan Old Style", serif; margin: 0; background: #f6f4ef; color: #1c1915; }
+    main { max-width: 52rem; margin: 2rem auto; padding: 1.5rem; background: #fff; border: 1px solid #e4dfd4; }
+    h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
+    .mrr { font-size: 2rem; margin: .4rem 0; }
+    .plans { display: flex; flex-wrap: wrap; gap: .5rem; }
+    .card { border: 1px solid #e4dfd4; padding: .6rem .8rem; min-width: 9rem; }
+    table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+    td, th { text-align: left; border-bottom: 1px solid #eee; padding: .35rem; }
+    button { font: inherit; background: var(--green); color: #fff; border: 0; padding: .35rem .7rem; }
+    button.secondary { background: #fff; color: var(--green); border: 1px solid var(--green); }
+    .error { color: #8c1d1d; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Agency billing</h1>
+  <p>Stripe test mode. Prices stay blank until a price id is configured. Cards are collected by Stripe Checkout, not this page.</p>
+  <p class="mrr" id="mrr">MRR —</p>
+  <p class="error" id="error"></p>
+  <div class="plans" id="plans"></div>
+  <p><button type="button" class="secondary" id="filter">Show past due only</button></p>
+  <table>
+    <thead><tr><th>Agency</th><th>Status</th><th>Monthly</th><th>Card</th><th>Trial end</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</main>
+<script>
+(function () {
+  var all = [];
+  var pastDueOnly = false;
+  function money(cents) {
+    var n = Number(cents || 0);
+    return "$" + (n / 100).toFixed(2);
+  }
+  function paint() {
+    var body = document.getElementById("rows");
+    body.innerHTML = "";
+    all.filter(function (row) { return !pastDueOnly || row.past_due; }).forEach(function (row) {
+      var tr = document.createElement("tr");
+      tr.innerHTML = "<td></td><td></td><td></td><td></td><td></td>";
+      tr.children[0].textContent = row.legal_name || row.tenant_id || "";
+      tr.children[1].textContent = row.status || "";
+      tr.children[2].textContent = money(row.stored_mrr_cents);
+      tr.children[3].textContent = row.card_last4 ? ((row.card_brand || "card") + " " + row.card_last4) : "";
+      tr.children[4].textContent = row.trial_end || "";
+      body.appendChild(tr);
+    });
+  }
+  document.getElementById("filter").onclick = function () {
+    pastDueOnly = !pastDueOnly;
+    this.textContent = pastDueOnly ? "Show every agency" : "Show past due only";
+    paint();
+  };
+  fetch("/api/platform/billing").then(function (res) {
+    if (!res.ok) {
+      document.getElementById("error").textContent = "Billing is unavailable";
+      return null;
+    }
+    return res.json();
+  }).then(function (data) {
+    if (!data) return;
+    document.getElementById("mrr").textContent = "MRR " + money(data.mrr_cents);
+    var plans = document.getElementById("plans");
+    (data.plans || []).forEach(function (plan) {
+      var card = document.createElement("div");
+      card.className = "card";
+      card.textContent = plan.label + (plan.configured ? "" : " — price not set");
+      plans.appendChild(card);
+    });
+    all = data.agencies || [];
+    paint();
+  });
+})();
+</script>
+</body>
+</html>

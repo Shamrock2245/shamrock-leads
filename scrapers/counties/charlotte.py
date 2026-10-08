@@ -3,8 +3,10 @@ Charlotte County Arrest Scraper: Revize CMS roster, residential egress only
 ===========================================================================
 Source: Charlotte County Sheriff's Office (CCSO)
 URL: https://inmates.charlottecountyfl.revize.com/bookings
-Method: Playwright/Patchright page load of the public roster table from a US
-residential exit. No new proxy, CAPTCHA solver or stealth path is added here.
+Method: stock Playwright Chromium (no Patchright, no stealth context, no proxy)
+loading the public roster table from a host whose own exit is US residential:
+the Leads Ops home relay. There is no proxy, SOCKS, APE/Warren, CAPTCHA-solver
+or stealth path in this module (same cleanup as Manatee #121).
 
 The roster contract (header-mapped columns, source Booking # cross-checked
 against its link, all charges per booking, required Released column, bond
@@ -13,14 +15,20 @@ unknown = "" never "0", fail-closed paging) lives in
 Detail pages are Cloudflare-blocked, so bond, statute, degree, DOB and address
 are not collected.
 
-A Cloudflare challenge/block page, or no usable residential exit, raises
+A Cloudflare challenge/block page, or no verified residential exit, raises
 ``EgressBlocked`` (``anti_bot`` + ``egress_block``); nothing is written.
 
-Egress (``CHARLOTTE_EGRESS_MODE``):
-    auto    (default) existing resolver (env SOCKS -> APE/Warren residential ->
-            office/Tailscale SOCKS -> direct only when this host is residential).
-    direct  Leads Ops residential egress: no proxy at all; the host exit must be
-            verified US residential or the run raises before touching the source.
+Egress (``CHARLOTTE_EGRESS_MODE``, default and only value ``direct``):
+    The host's own exit must be verified US residential (known ISP org,
+    country US) or the run raises EgressBlocked before touching the source.
+    Proxy environment variables are ignored: the exit check runs with
+    ``trust_env=False`` and Chromium is launched with ``--no-proxy-server``
+    and a proxy-free env. The old ``auto`` value (APE/Warren + office SOCKS
+    resolver) was removed 2026-10-07 and now fails loudly as a config error.
+
+Scheduling: relay-only (``config/relay_only.py``). The VPS scheduler never
+runs Charlotte; Leads Ops runs it with ``python main.py --relay-only`` or
+``python main.py Charlotte`` (docs/ops/REVIZE_RELAY_RUN.md).
 
 Live check from the box, 2026-10-07 7:12 PM ET: ``/``, ``/bookings`` and
 ``/bookings?page=2`` -> 403 ``cf-mitigated: challenge``, ``server: cloudflare``,
@@ -31,13 +39,13 @@ HISTORY:
 - v5: roster table extraction via office SOCKS tunnel
 - v6: APE-first residential proxy + SOCKS fallback
 - v7: exit-IP preflight + Patchright + sticky Warren session
-- v8 (current): shared fail-closed Revize contract, egress blocks fail loud
+- v8: shared fail-closed Revize contract, egress blocks fail loud
+- v9 (current): proxy/stealth removed; relay-only, direct residential egress
 """
 from __future__ import annotations
 
 import logging
-import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from core.models import ArrestRecord
 from scrapers.base_scraper import BaseScraper
@@ -46,7 +54,9 @@ from scrapers.revize_roster import (
     RevizeRoster,
     check_page_egress,
     egress_mode as _egress_mode,
+    launch_plain_browser,
     resolve_egress as _resolve_egress,
+    wait_for_page,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,10 +78,8 @@ def egress_mode() -> str:
     return _egress_mode(EGRESS_ENV)
 
 
-def resolve_egress(scraper: Any = None) -> Tuple[Optional[str], str]:
-    return _resolve_egress(
-        scraper, county="Charlotte", env_var=EGRESS_ENV, sticky_session="fl-charlotte"
-    )
+def resolve_egress(scraper: Any = None) -> Tuple[None, str]:
+    return _resolve_egress(scraper, county="Charlotte", env_var=EGRESS_ENV)
 
 
 class CharlotteCountyScraper(BaseScraper):
@@ -81,58 +89,43 @@ class CharlotteCountyScraper(BaseScraper):
         return "Charlotte"
 
     def scrape(self) -> List[ArrestRecord]:
-        from scrapers.cf_browser import launch_cf_browser, new_stealth_context, wait_past_cloudflare
-
-        proxy_url, proxy_source = resolve_egress(self)
-        logger.info("[Charlotte] egress mode=%s source=%s", egress_mode(), proxy_source)
+        _, egress_source = resolve_egress(self)
+        logger.info("[Charlotte] egress mode=%s source=%s", egress_mode(), egress_source)
 
         pw = browser = None
-        t0 = time.time()
         try:
-            pw, browser, engine = launch_cf_browser(
-                proxy_url,
-                label="Charlotte",
-                verify_residential=(proxy_source != "direct"),
-            )
-            context = new_stealth_context(browser)
-            page = context.new_page()
+            pw, browser = launch_plain_browser()
+            page = browser.new_context().new_page()
 
             def fetch_page(url: str, pg: int) -> Dict[str, Any]:
-                logger.info("[Charlotte] roster page %s (engine=%s)", pg, engine)
+                logger.info("[Charlotte] roster page %s", pg)
                 resp = page.goto(url, wait_until="domcontentloaded", timeout=60000)
                 status = getattr(resp, "status", None) if resp is not None else None
                 try:
                     headers = dict(resp.headers) if resp is not None else {}
                 except Exception:
                     headers = {}
-                cleared = wait_past_cloudflare(page, label=f"Charlotte page {pg}", max_wait=45)
+                cleared = wait_for_page(page)
                 payload = page.evaluate(EXTRACT_JS)
                 check_page_egress(
                     county="Charlotte", pg=pg, cleared=cleared, payload=payload,
                     status=status, headers=headers,
                     body=page.content() if not payload.get("has_table") else "",
-                    egress_source=proxy_source, env_var=EGRESS_ENV,
+                    egress_source=egress_source, env_var=EGRESS_ENV,
                 )
                 return payload
 
             records, meta = ROSTER.walk(fetch_page)
-            meta["egress_source"] = proxy_source
+            meta["egress_source"] = egress_source
             self.last_walk_meta = meta
             logger.info(
                 "[Charlotte] %s bookings from %s rows over %s pages (published total=%s, egress=%s)",
-                meta["bookings"], meta["rows"], meta["pages"], meta["published_total"], proxy_source,
+                meta["bookings"], meta["rows"], meta["pages"], meta["published_total"], egress_source,
             )
-            if records and proxy_source == "ape":
-                self.record_proxy_success(proxy_url, (time.time() - t0) * 1000)
             return records
 
         except Exception as e:
             logger.error("[Charlotte] run failed: %s", e)
-            if proxy_source == "ape":
-                try:
-                    self.record_proxy_failure(proxy_url)
-                except Exception:
-                    pass
             raise
         finally:
             if browser is not None:

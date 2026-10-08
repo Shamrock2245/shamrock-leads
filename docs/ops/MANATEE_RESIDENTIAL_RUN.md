@@ -10,7 +10,7 @@ Manatee's public roster (`https://manatee-sheriff.revize.com/bookings`) sits beh
 - The stealth browser launcher (Patchright and the stealth context with init-script patches). Manatee now launches stock Playwright Chromium, headless, with `--no-proxy-server` and with every `*PROXY*` environment variable removed from the browser's environment.
 - Proxy success/failure bookkeeping for Manatee.
 
-Proxy environment variables (`HTTP(S)_PROXY`, `ALL_PROXY`, `SCRAPER_SOCKS_PROXY`, `WARREN_*`) are ignored by Manatee. The exit-IP check runs with `trust_env=False`. `tests/test_manatee_no_proxy_path.py` proves no proxy, SOCKS, APE or stealth helper is reachable. Do not add proxy credentials, CAPTCHA solvers or stealth tooling for Manatee. Charlotte is unchanged by this cleanup.
+Proxy environment variables (`HTTP(S)_PROXY`, `ALL_PROXY`, `SCRAPER_SOCKS_PROXY`, `WARREN_*`) are ignored by Manatee. The exit-IP check runs with `trust_env=False`. `tests/test_manatee_no_proxy_path.py` proves no proxy, SOCKS, APE or stealth helper is reachable. Do not add proxy credentials, CAPTCHA solvers or stealth tooling for Manatee. Charlotte got the same cleanup later on 2026-10-07 (`tests/test_charlotte_no_proxy_path.py`).
 
 ## What the scraper does now
 
@@ -21,7 +21,11 @@ Proxy environment variables (`HTTP(S)_PROXY`, `ALL_PROXY`, `SCRAPER_SOCKS_PROXY`
 | Missing table or column, unknown `Released` value, empty or repeated page, `MAX_PAGES` stop, total mismatch, booking-number collision | `ParseDriftError`, nothing written | `error`, class `parse_drift` (alerts #scraper-errors) |
 | Roster read cleanly | records written (bond blank, never `0`) | `ok` |
 
-An egress block is never reported as `empty` or `ok`. The VPS scheduler still has Manatee registered, so a VPS run now stops with `egress_block` every interval. That is expected: the VPS is not a residential exit.
+An egress block is never reported as `empty` or `ok`.
+
+## Relay-only scheduling
+
+Manatee is **relay-only** (`config/relay_only.py`, together with Charlotte). The VPS/Hetzner scheduler keeps Manatee registered but never gives it an interval job. A dashboard run-now or custody-recheck trigger for Manatee is marked `relay_only` on the VPS and is not run there. Leads Ops runs it from the relay with `python main.py --relay-only`, which runs Manatee and Charlotte once each and exits non-zero if either fails. `python main.py Manatee` runs Manatee alone. See `docs/ops/REVIZE_RELAY_RUN.md` for the shared runner.
 
 ## Egress setting
 

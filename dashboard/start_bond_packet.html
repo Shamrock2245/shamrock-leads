@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Start bond packet</title>
+  <style>
+    :root { color-scheme: light; --green: #0b6b3a; }
+    body { font-family: Georgia, "Iowan Old Style", serif; margin: 0; background: #f6f4ef; color: #1c1915; }
+    main { max-width: 40rem; margin: 2rem auto; padding: 1.5rem; background: #fff; border: 1px solid #e4dfd4; }
+    h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
+    ol.steps { display: flex; gap: .5rem; padding: 0; list-style: none; font-size: .85rem; }
+    ol.steps li { padding: .2rem .4rem; border-bottom: 2px solid #ddd; }
+    ol.steps li.on { border-color: var(--green); font-weight: 700; }
+    label { display: block; margin: .7rem 0 .2rem; }
+    input, select { width: 100%; box-sizing: border-box; padding: .45rem; font: inherit; }
+    button { font: inherit; background: var(--green); color: #fff; border: 0; padding: .55rem 1rem; margin-top: 1rem; }
+    .hidden { display: none; }
+    .error { color: #8c1d1d; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Start bond packet</h1>
+  <p>Four steps. Nothing is texted or charged from this screen. A power is suggested, not used, until you confirm it.</p>
+  <ol class="steps" id="stepper">
+    <li data-step="1">Booking</li>
+    <li data-step="2">Defendant</li>
+    <li data-step="3">Indemnitor</li>
+    <li data-step="4">Power and send</li>
+  </ol>
+  <p class="error" id="error"></p>
+  <section data-step="1">
+    <label for="booking">Booking number</label>
+    <input id="booking" maxlength="40">
+    <label for="surety">Surety</label>
+    <select id="surety"><option value="osi">OSI</option><option value="palmetto">Palmetto</option></select>
+    <button type="button" id="lookup">Look up defendant</button>
+  </section>
+  <section data-step="2" class="hidden">
+    <p id="defendant"></p>
+    <button type="button" id="confirm-defendant">Confirm defendant</button>
+  </section>
+  <section data-step="3" class="hidden">
+    <label for="indemnitor-name">Indemnitor name</label>
+    <input id="indemnitor-name" maxlength="120">
+    <label for="indemnitor-email">Indemnitor email</label>
+    <input id="indemnitor-email" type="email">
+    <button type="button" id="to-poa">Choose a power</button>
+  </section>
+  <section data-step="4" class="hidden">
+    <div id="powers"></div>
+    <label><input id="confirmed" type="checkbox" style="width:auto"> I confirm this power. Do not mark it used yet.</label>
+    <button type="button" id="prepare">Prepare sign and pay links</button>
+  </section>
+  <section id="done" class="hidden">
+    <h2 id="done-title"></h2>
+    <p id="done-body"></p>
+    <div id="done-links"></div>
+  </section>
+</main>
+<script>
+(function () {
+  var prepared = null;
+  function show(step) {
+    Array.prototype.forEach.call(document.querySelectorAll("section[data-step]"), function (sec) {
+      sec.classList.toggle("hidden", sec.getAttribute("data-step") !== String(step));
+    });
+    Array.prototype.forEach.call(document.querySelectorAll("#stepper li"), function (li) {
+      li.classList.toggle("on", li.getAttribute("data-step") === String(step));
+    });
+  }
+  function fail(data) {
+    document.getElementById("error").textContent = (data && data.error) || "Could not continue";
+  }
+  document.getElementById("lookup").onclick = function () {
+    document.getElementById("error").textContent = "";
+    fetch("/api/bond-packet/prepare", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        booking_number: document.getElementById("booking").value.trim(),
+        surety_id: document.getElementById("surety").value
+      })
+    }).then(function (res) { return res.json().then(function (body) { return {ok: res.ok, body: body}; }); })
+      .then(function (result) {
+        if (!result.ok) return fail(result.body);
+        prepared = result.body;
+        document.getElementById("defendant").textContent = prepared.defendant.defendant_name + " · " + prepared.defendant.booking_number;
+        show(2);
+      });
+  };
+  document.getElementById("confirm-defendant").onclick = function () { show(3); };
+  document.getElementById("to-poa").onclick = function () {
+    var box = document.getElementById("powers");
+    box.innerHTML = "";
+    (prepared.poa_suggestions || []).forEach(function (row) {
+      var label = document.createElement("label");
+      var input = document.createElement("input");
+      input.type = "radio";
+      input.name = "poa";
+      input.value = row.poa_number;
+      input.style.width = "auto";
+      label.appendChild(input);
+      label.appendChild(document.createTextNode(" " + row.poa_number));
+      box.appendChild(label);
+    });
+    if (!box.childNodes.length) {
+      document.getElementById("error").textContent = "No available powers for that surety";
+      return;
+    }
+    show(4);
+  };
+  document.getElementById("prepare").onclick = function () {
+    var chosen = document.querySelector("input[name=poa]:checked");
+    if (!chosen || !document.getElementById("confirmed").checked) {
+      document.getElementById("error").textContent = "Choose a power and confirm it";
+      return;
+    }
+    fetch("/api/bond-packet/send", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        booking_number: prepared.defendant.booking_number,
+        surety_id: prepared.surety_id,
+        poa_number: chosen.value,
+        confirmed: true,
+        indemnitor: {
+          name: document.getElementById("indemnitor-name").value.trim(),
+          email: document.getElementById("indemnitor-email").value.trim()
+        }
+      })
+    }).then(function (res) { return res.json().then(function (body) { return {ok: res.ok, body: body}; }); })
+      .then(function (result) {
+        if (!result.ok) return fail(result.body);
+        document.querySelector("section[data-step='4']").classList.add("hidden");
+        document.getElementById("done").classList.remove("hidden");
+        document.getElementById("done-title").textContent = "Ready for you to send";
+        document.getElementById("done-body").textContent = "Messages sent: " + result.body.messages_sent + ". Power status: " + result.body.poa_status + ".";
+        var links = document.getElementById("done-links");
+        links.innerHTML = "";
+        (result.body.sign_links || []).forEach(function (row) {
+          if (!row || !row.sign_url) return;
+          var anchor = document.createElement("a");
+          anchor.href = row.sign_url;
+          anchor.rel = "noopener";
+          anchor.textContent = "Sign (" + (row.role || "signer") + ")";
+          links.appendChild(anchor);
+        });
+        if (result.body.pay_url) {
+          var pay = document.createElement("a");
+          pay.href = result.body.pay_url;
+          pay.rel = "noopener";
+          pay.textContent = "Pay";
+          links.appendChild(pay);
+        }
+      });
+  };
+  show(1);
+})();
+</script>
+</body>
+</html>

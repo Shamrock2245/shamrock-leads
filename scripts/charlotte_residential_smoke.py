@@ -30,7 +30,7 @@ from scrapers.scraper_resilience import EgressBlocked, ParseDriftError  # noqa: 
 def main() -> int:
     from scrapers.counties.charlotte import CharlotteCountyScraper, egress_mode
 
-    out = {"county": "Charlotte (FL)", "egress_mode": os.getenv("CHARLOTTE_EGRESS_MODE", "auto")}
+    out = {"county": "Charlotte (FL)", "egress_mode": os.getenv("CHARLOTTE_EGRESS_MODE", "direct")}
     scraper = CharlotteCountyScraper()
     try:
         out["egress_mode"] = egress_mode()
