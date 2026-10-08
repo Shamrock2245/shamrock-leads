@@ -81,6 +81,7 @@ jobs:
             tests/test_source_state_drift.py \
             tests/test_fl_smartweb_five.py \
             tests/test_fl_smartweb_legacy_paging.py \
+            tests/test_fl_smartweb_unknown_bond.py \
             tests/test_fl_brevard_newworld.py \
             tests/test_fl_67_status.py \
             tests/test_fl_idle_eight.py \

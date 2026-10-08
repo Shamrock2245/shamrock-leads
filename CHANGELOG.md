@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (SmartWEB unknown bond stays empty)
+
+### Fixed
+- **SmartWEB JAIL View bond** (`scrapers/fl_smartweb.py`). This covers Escambia, Santa Rosa, Putnam, Sumter, Bradford, Dixie, Taylor, Gilchrist, Hamilton and Madison.
+  - Each charge row's bond cell is now a published amount or unknown. NO BOND, HOLD, blank and non-money text were read as `0.0`; they are now unknown.
+  - The booking total is set only when every charge row publishes an amount. A real published `$0.00` is kept, both alone (`"0"`) and in a sum. Otherwise the total is `""`; before, it was a partial sum or an invented `"0"`.
+  - The card-level `Bond Amount:` is used only when the card has no charge rows, and only when it is positive. A card-level `$0.00` is the JAIL View default (live: bookings with no charges entered yet), so it stays unknown.
+  - A run in which no booking has charges raises instead of `$set`ting blank charges over stored rows.
+  - These counties publish real `$0.00`, so they are **not** added to `NO_BOND_ROSTER_COUNTIES`.
+- Tests: `tests/test_fl_smartweb_unknown_bond.py`.
+
 ## [Unreleased] — 2026-10-08 (Palmetto agent license boxes)
 
 ### Added

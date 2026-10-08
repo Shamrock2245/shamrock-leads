@@ -194,8 +194,38 @@ def scrape_smartweb_jail_view(
         if attempted and returned < attempted:
             break
 
+    if all_records and not any(r.Charges for r in all_records):
+        # A changed charges-grid markup would otherwise $set blank charges on
+        # every booking.
+        raise RuntimeError(f"{prefix}: no booking in the run has charges (JailViewCharges markup drift?)")
     logger.info("%s: %d source bookings from %d cards", prefix, len(all_records), loaded)
     return all_records
+
+
+def _charge_bond_amount(bond_str: str) -> Optional[float]:
+    """A charge row's published dollar amount, else None (unknown).
+
+    "$2,500.00 SURETY" is a dollar amount plus a type word; require a ``$`` or
+    a pure numeric cell so a reference id in the bond column is not summed.
+    NO BOND / HOLD / NONE / N/A / blank are not amounts."""
+    text = (bond_str or "").strip()
+    if not text:
+        return None
+    compact = re.sub(r"\s", "", text.upper())
+    if any(t in compact for t in ("NOBOND", "NONE", "N/A", "HOLD")):
+        return None
+    money = re.search(r"([0-9][0-9,]*(?:\.\d+)?)", text)
+    pure = re.fullmatch(r"[0-9][0-9,]*(?:\.\d+)?", text)
+    if money and ("$" in text or pure):
+        try:
+            return float(money.group(1).replace(",", ""))
+        except ValueError:
+            return None
+    return None
+
+
+def _fmt_amount(value: float) -> str:
+    return str(int(value)) if float(value).is_integer() else f"{value:.2f}"
 
 
 def _parse_name_from_header(header_text: str) -> tuple[str, str, str, str]:
@@ -326,7 +356,7 @@ def _parse_html(
         address = addr_m.group(1).strip() if addr_m else ""
 
         charges_list: list[str] = []
-        total_bond = 0.0
+        charge_bonds: list[Optional[float]] = []
         charges_tables = []
         row = img.find_parent("tr")
         if row:
@@ -354,32 +384,26 @@ def _parse_html(
                     if statute or desc:
                         item = f"{statute} - {desc}" if statute and desc else statute or desc
                         charges_list.append(item)
-                    bond_val = 0.0
-                    if bond_str:
-                        compact = re.sub(r"[\s]", "", bond_str.strip().upper())
-                        if any(t in compact for t in ("NOBOND", "NONE", "N/A", "HOLD")):
-                            bond_val = 0.0
-                        else:
-                            # "$2,500.00 SURETY" is a published dollar amount plus a
-                            # type word. Require a $ or a pure numeric cell so a
-                            # reference id in the bond column is not summed.
-                            money = re.search(r"([0-9][0-9,]*(?:\.\d+)?)", bond_str)
-                            pure = re.fullmatch(r"[0-9][0-9,]*(?:\.\d+)?", bond_str.strip())
-                            if money and ("$" in bond_str or pure):
-                                try:
-                                    bond_val = float(money.group(1).replace(",", ""))
-                                except ValueError:
-                                    pass
-                    total_bond += bond_val
+                    charge_bonds.append(_charge_bond_amount(bond_str))
 
-        # Listing-level Bond Amount is source text when no charge-grid bonds exist.
-        if total_bond == 0.0:
-            card_bond = re.search(r"Bond Amount:\s*\$?\s*([0-9,]+\.?\d*)", block_text, re.I)
+        # Total only when every charge row publishes a dollar amount (a published
+        # $0.00 counts; live 2026-10-08: 19 of ~150 cells were $0.00). NO BOND,
+        # HOLD, blank or any other text makes the total unknown ("") — a partial
+        # sum would understate the bond, and an unknown is never written as $0.
+        bond_amount = ""
+        if charge_bonds:
+            if all(b is not None for b in charge_bonds):
+                bond_amount = _fmt_amount(sum(charge_bonds))  # type: ignore[arg-type]
+        else:
+            # No charge grid: a positive card-level "Bond Amount: $N" is the
+            # source total. A card-level $0.00 is the JAIL View default (live:
+            # Santa Rosa/Escambia bookings with no charges entered yet, and
+            # cards reading $0.00 above a $250 charge), so it stays unknown.
+            card_bond = re.search(r"Bond Amount:\s*\$\s*([0-9][0-9,]*(?:\.\d+)?)", block_text, re.I)
             if card_bond:
-                try:
-                    total_bond = float(card_bond.group(1).replace(",", ""))
-                except ValueError:
-                    pass
+                card_value = float(card_bond.group(1).replace(",", ""))
+                if card_value > 0:
+                    bond_amount = _fmt_amount(card_value)
 
         records.append(
             ArrestRecord(
@@ -397,7 +421,7 @@ def _parse_html(
                 Booking_Date=booking_date,
                 Booking_Time=booking_time,
                 Charges=" | ".join(charges_list),
-                Bond_Amount=str(int(total_bond)) if total_bond.is_integer() else f"{total_bond:.2f}",
+                Bond_Amount=bond_amount,  # "" = unknown, never $0
                 Address=address,
                 Status=status,
                 Detail_URL=detail_url,
