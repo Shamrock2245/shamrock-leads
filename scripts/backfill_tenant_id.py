@@ -33,6 +33,7 @@ from dashboard.tenancy.constants import (  # noqa: E402
     SHAMROCK_TENANT_ID,
     TENANT_FIELD,
     TENANT_OWNED_COLLECTIONS,
+    is_tenant_owned,
 )
 from dashboard.tenancy.indexes import tenant_index_specs  # noqa: E402
 from dashboard.tenancy.model import (  # noqa: E402
@@ -150,6 +151,19 @@ def seed_directory(db, *, dry_run: bool) -> dict:
     return {"would_seed": [], "seeded": ["tenants", "tenant_memberships"]}
 
 
+def backfill_collection_names(present: set[str] | None = None) -> list[str]:
+    """Known tenant-owned names, plus any live collection that is not allowlisted.
+
+    A collection the proxy will treat as tenant-owned has to be stamped even
+    when it was missing from the inventory. Global and platform names are not
+    stamped.
+    """
+    names = set(TENANT_OWNED_COLLECTIONS)
+    if present is not None:
+        names.update(name for name in present if is_tenant_owned(name))
+    return sorted(names)
+
+
 def run_against(db, *, dry_run: bool, down: bool) -> dict:
     present = set(_collection_names(db))
     report = {
@@ -159,7 +173,7 @@ def run_against(db, *, dry_run: bool, down: bool) -> dict:
         "collections": {},
         "skipped_missing": [],
     }
-    for name in sorted(TENANT_OWNED_COLLECTIONS):
+    for name in backfill_collection_names(present):
         if name not in present:
             report["skipped_missing"].append(name)
             continue

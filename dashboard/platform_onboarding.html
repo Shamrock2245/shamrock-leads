@@ -17,6 +17,9 @@
     input, select { width: 100%; box-sizing: border-box; padding: .45rem; font: inherit; }
     .row { display: flex; gap: .5rem; }
     button { font: inherit; background: var(--green); color: #fff; border: 0; padding: .55rem 1rem; margin-top: 1rem; }
+    button.tiny { margin: 0 .25rem 0 0; padding: .25rem .5rem; font-size: .85rem; }
+    button.danger { background: #8c1d1d; }
+    td input { width: 12rem; margin: 0; padding: .2rem; }
     button.secondary { background: #fff; color: var(--green); border: 1px solid var(--green); }
     .hidden { display: none; }
     .error { color: #8c1d1d; }
@@ -106,7 +109,7 @@
   <section id="queue">
     <h2>Agencies</h2>
     <table>
-      <thead><tr><th>Agency</th><th>Status</th><th>State</th></tr></thead>
+      <thead><tr><th>Agency</th><th>Status</th><th>State</th><th>Decision</th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
   </section>
@@ -182,12 +185,48 @@
     body.innerHTML = "";
     (rows || []).forEach(function (row) {
       var tr = document.createElement("tr");
-      tr.innerHTML = "<td></td><td></td><td></td>";
+      tr.innerHTML = "<td></td><td></td><td></td><td></td>";
       tr.children[0].textContent = row.legal_name || "";
       tr.children[1].textContent = row.status || "";
       tr.children[2].textContent = row.home_state || "";
+      if (mode === "admin" && row.status === "pending_approval" && row.tenant_id) {
+        var approve = document.createElement("button");
+        approve.type = "button";
+        approve.className = "tiny";
+        approve.textContent = "Approve";
+        approve.setAttribute("data-action", "approve");
+        approve.onclick = function () { decide(row.tenant_id, "approve", ""); };
+        var reason = document.createElement("input");
+        reason.type = "text";
+        reason.maxLength = 300;
+        reason.placeholder = "Rejection reason";
+        reason.setAttribute("aria-label", "Rejection reason");
+        var reject = document.createElement("button");
+        reject.type = "button";
+        reject.className = "tiny danger";
+        reject.textContent = "Reject";
+        reject.setAttribute("data-action", "reject");
+        reject.onclick = function () { decide(row.tenant_id, "reject", reason.value); };
+        tr.children[3].appendChild(approve);
+        tr.children[3].appendChild(reason);
+        tr.children[3].appendChild(reject);
+      }
       body.appendChild(tr);
     });
+  }
+  async function decide(tenantId, action, reason) {
+    document.getElementById("error").textContent = "";
+    var res = await fetch("/api/platform/tenants/" + encodeURIComponent(tenantId) + "/" + action, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({reason: reason || ""})
+    });
+    var data = await res.json().catch(function () { return {}; });
+    if (!res.ok) {
+      document.getElementById("error").textContent = data.error || "Could not update";
+      return;
+    }
+    refresh();
   }
   async function refresh() {
     if (mode !== "admin") return;

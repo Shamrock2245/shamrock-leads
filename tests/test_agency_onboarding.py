@@ -41,8 +41,13 @@ def _payload(**overrides):
 
 def _install_db(monkeypatch):
     tenants = MemoryCollection()
+    audits = MemoryCollection()
+    tenants.audits = audits
     monkeypatch.setattr("dashboard.extensions.get_mongo_client", lambda: object())
-    monkeypatch.setattr("dashboard.extensions._mongo_db", {"tenants": tenants})
+    monkeypatch.setattr(
+        "dashboard.extensions._mongo_db",
+        {"tenants": tenants, "audit_events": audits},
+    )
     return tenants
 
 
@@ -222,9 +227,95 @@ def test_signup_bypasses_pin_and_platform_stays_gated(monkeypatch):
 
 
 def test_duplicate_slug_is_rejected(monkeypatch):
-    _install_db(monkeypatch)
+    tenants = _install_db(monkeypatch)
     client = _client(monkeypatch, admin=True, flag=True)
     assert client.post("/api/platform/tenants", json=_payload()).status_code == 201
     again = client.post("/api/platform/tenants", json=_payload())
     assert again.status_code == 400
     assert again.json()["error"] == "slug_taken"
+    names = {kwargs.get("name") for _args, kwargs in tenants.indexes}
+    assert names == {"tenant_id_unique", "tenant_slug_unique"}
+    assert all(kwargs.get("unique") is True for _args, kwargs in tenants.indexes)
+
+
+def test_duplicate_key_from_mongo_is_slug_taken(monkeypatch):
+    from pymongo.errors import DuplicateKeyError
+
+    tenants = _install_db(monkeypatch)
+
+    async def find_one(filt=None, *args, **kwargs):
+        return None
+
+    async def insert_one(doc, *args, **kwargs):
+        raise DuplicateKeyError("E11000 duplicate key error collection: tenants index: tenant_id_unique")
+
+    tenants.find_one = find_one
+    tenants.insert_one = insert_one
+    client = _client(monkeypatch, admin=True, flag=True)
+    created = client.post("/api/platform/tenants", json=_payload())
+    assert created.status_code == 400
+    assert created.json()["error"] == "slug_taken"
+    assert tenants.docs == []
+
+
+def test_owner_keeps_owner_role_when_listed_as_coworker(monkeypatch):
+    tenants = _install_db(monkeypatch)
+    client = _client(monkeypatch, admin=True, flag=True)
+    created = client.post(
+        "/api/platform/tenants",
+        json=_payload(invites=[{"email": "ada@gulf.example", "role": "staff"}]),
+    )
+    assert created.status_code == 201
+    owner_rows = [
+        row for row in tenants.docs[0]["invites"] if row["email"] == "ada@gulf.example"
+    ]
+    assert len(owner_rows) == 1
+    assert owner_rows[0]["role"] == "owner"
+
+
+def test_decisions_are_atomic_and_audited(monkeypatch):
+    tenants = _install_db(monkeypatch)
+    client = _client(monkeypatch, admin=True, flag=True)
+    assert client.post("/api/public/signup", json=_payload()).status_code == 201
+    rejected = client.post(
+        "/api/platform/tenants/gulf_coast_bail/reject",
+        json={"reason": "License number does not match the owner name"},
+    )
+    assert rejected.status_code == 200
+    assert {"tenant_id": "gulf_coast_bail", "status": "pending_approval"} in tenants.filters
+    audit = tenants.audits.docs[0]
+    assert audit["actor"] == "admin@shamrockbailbonds.biz"
+    assert audit["reason"] == "License number does not match the owner name"
+    assert audit["old_state"]["status"] == "pending_approval"
+    assert audit["new_state"]["status"] == "rejected"
+    assert audit["tenant_id"] == "gulf_coast_bail"
+    assert audit["event_id"]
+    assert audit["timestamp"]
+    again = client.post("/api/platform/tenants/gulf_coast_bail/approve")
+    assert again.status_code == 400
+    assert again.json()["error"] == "not_pending"
+    assert len(tenants.audits.docs) == 1
+
+    assert client.post("/api/public/signup", json=_payload(legal_name="Second Desk")).status_code == 201
+    approved = client.post("/api/platform/tenants/second_desk/approve")
+    assert approved.status_code == 200
+    decision = tenants.audits.docs[-1]
+    assert decision["actor"] == "admin@shamrockbailbonds.biz"
+    assert decision["old_state"]["status"] == "pending_approval"
+    assert decision["new_state"]["status"] == "active"
+    assert decision["tenant_id"] == "second_desk"
+    assert tenants.docs[1]["status"] == "rejected" or any(
+        doc.get("tenant_id") == "gulf_coast_bail" and doc.get("status") == "rejected"
+        for doc in tenants.docs
+    )
+
+
+def test_platform_queue_has_approve_and_reject(monkeypatch):
+    _install_db(monkeypatch)
+    client = _client(monkeypatch, admin=True, flag=True)
+    page = client.get("/platform")
+    assert page.status_code == 200
+    assert "Approve" in page.text
+    assert "Reject" in page.text
+    assert "Rejection reason" in page.text
+    assert "/api/platform/tenants/" in page.text
