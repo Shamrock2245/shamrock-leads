@@ -798,3 +798,203 @@ async def intake_process(intake_id: str):
         )
         if not result:
             return JSONResponse({"success": False, "error": f"Intake {intake_id} not found"}, status_code=404)
+
+        ind = result.get("indemnitor", {})
+        def_ = result.get("defendant", {})
+
+        # Return the hydration payload that the frontend uses to populate the bond form
+        return {
+            "success": True,
+            "intake_id": intake_id,
+            "status": "in_progress",
+            "hydration": {
+                "indemnitor": {
+                    "firstName": ind.get("firstName", ""),
+                    "middleName": ind.get("middleName", ""),
+                    "lastName": ind.get("lastName", ""),
+                    "relationship": ind.get("relationship", ""),
+                    "dob": ind.get("dob", ""),
+                    "ssn": ind.get("ssn", ""),
+                    "dl": ind.get("dl", ""),
+                    "dlState": ind.get("dlState", "FL"),
+                    "phone": ind.get("phone", ""),
+                    "email": ind.get("email", ""),
+                    "address": ind.get("address", ""),
+                    "city": ind.get("city", ""),
+                    "state": ind.get("state", "FL"),
+                    "zip": ind.get("zip", ""),
+                    "employer": ind.get("employer", ""),
+                    "employerPhone": ind.get("employerPhone", ""),
+                    "employerCity": ind.get("employerCity", ""),
+                    "employerState": ind.get("employerState", ""),
+                    "supervisor": ind.get("supervisor", ""),
+                    "supervisorPhone": ind.get("supervisorPhone", ""),
+                    "ref1Name": ind.get("ref1Name", ""),
+                    "ref1Relation": ind.get("ref1Relation", ""),
+                    "ref1Phone": ind.get("ref1Phone", ""),
+                    "ref1Address": ind.get("ref1Address", ""),
+                    "ref2Name": ind.get("ref2Name", ""),
+                    "ref2Relation": ind.get("ref2Relation", ""),
+                    "ref2Phone": ind.get("ref2Phone", ""),
+                    "ref2Address": ind.get("ref2Address", ""),
+                },
+                "defendant": {
+                    "name": def_.get("name", ""),
+                    "firstName": def_.get("firstName", ""),
+                    "lastName": def_.get("lastName", ""),
+                    "dob": def_.get("dob", ""),
+                    "facility": def_.get("facility", ""),
+                    "county": def_.get("county", ""),
+                    "bookingNumber": def_.get("bookingNumber", ""),
+                    "charges": def_.get("charges", ""),
+                    "bondAmount": def_.get("bondAmount", ""),
+                },
+                "source": result.get("source", ""),
+                "source_label": result.get("source_label", ""),
+                "consent_given": result.get("consent_given", False),
+                "gps_latitude": result.get("gps_latitude"),
+                "gps_longitude": result.get("gps_longitude"),
+                # Matching context
+                "matched_booking_number": result.get("matched_booking_number"),
+                "match_confidence": result.get("match_confidence"),
+                "match_strategy": result.get("match_strategy"),
+            },
+        }
+    except Exception as e:
+        logger.error(f"[intake] process error for {intake_id}: {e}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  POST /api/intake/<intake_id>/archive
+#  Mark intake as done / archived (remove from queue)
+# ═══════════════════════════════════════════════════════════════════════════════
+@intake_bp.post("/intake/{intake_id}/archive")
+async def intake_archive(intake_id: str):
+    """
+    Mark intake as archived (done).
+    Mirrors Queue.archive() from Dashboard.html.
+    """
+    intake_queue = get_collection("intake_queue")
+    try:
+        now = datetime.now(timezone.utc)
+        result = await intake_queue.update_one(
+            {"intake_id": intake_id},
+            {"$set": {"status": "archived", "updated_at": now, "archived_at": now}},
+        )
+        if result.matched_count == 0:
+            return JSONResponse({"success": False, "error": f"Intake {intake_id} not found"}, status_code=404)
+        return {"success": True, "intake_id": intake_id, "status": "archived"}
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PATCH /api/intake/<intake_id>
+#  Update intake fields (e.g., AI risk score, GAS sync status)
+# ═══════════════════════════════════════════════════════════════════════════════
+@intake_bp.patch("/intake/{intake_id}")
+async def intake_update(request: Request, intake_id: str):
+    """Update intake fields. Used by AI risk engine and GAS sync callbacks."""
+    intake_queue = get_collection("intake_queue")
+    data = await request.json() or {}
+    allowed_fields = {
+        "status", "ai_risk", "ai_score", "ai_rationale",
+        "gas_sync_status", "gas_sync_timestamp",
+        "defendant_booking_number", "defendant_county",
+        "notes", "matched_booking_number",
+        "paperwork_packet_id", "paperwork_status",
+        "full_name", "email", "phone", "defendant_name", "county", "booking_number"
+    }
+    updates = {k: v for k, v in data.items() if k in allowed_fields}
+    if not updates:
+        return JSONResponse({"success": False, "error": "No valid fields to update"}, status_code=400)
+    updates["updated_at"] = datetime.now(timezone.utc)
+    try:
+        result = await intake_queue.update_one(
+            {"intake_id": intake_id},
+            {"$set": updates},
+        )
+        if result.matched_count == 0:
+            return JSONResponse({"success": False, "error": f"Intake {intake_id} not found"}, status_code=404)
+        return {"success": True, "intake_id": intake_id, "updated": list(updates.keys())}
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  GET /api/intake/stats
+#  Queue statistics by source and status
+# ═══════════════════════════════════════════════════════════════════════════════
+@intake_bp.get("/intake/stats")
+async def intake_stats():
+    """Return queue statistics — count by source and status."""
+    intake_queue = get_collection("intake_queue")
+    try:
+        pipeline = [
+            {"$group": {
+                "_id": {"source": "$source", "status": "$status"},
+                "count": {"$sum": 1},
+            }},
+            {"$sort": {"_id.source": 1, "_id.status": 1}},
+        ]
+        cursor = intake_queue.aggregate(pipeline)
+        rows = await cursor.to_list(length=200)
+
+        total_pending = await intake_queue.count_documents({"status": "pending"})
+        total_all = await intake_queue.estimated_document_count()
+        total_matched = await intake_queue.count_documents(
+            {"matched_booking_number": {"$exists": True, "$ne": None}}
+        )
+
+        by_source: dict = {}
+        by_status: dict = {}
+        for row in rows:
+            src = row["_id"]["source"]
+            sts = row["_id"]["status"]
+            cnt = row["count"]
+            by_source.setdefault(src, 0)
+            by_source[src] += cnt
+            by_status.setdefault(sts, 0)
+            by_status[sts] += cnt
+
+        return {
+            "success": True,
+            "total": total_all,
+            "pending": total_pending,
+            "matched": total_matched,
+            "by_source": by_source,
+            "by_status": by_status,
+        }
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+async def _promote_auto_payment_link(
+    *,
+    bond_doc: dict,
+    intake_doc: dict,
+    matched_booking: str,
+    defendant_name: str,
+) -> dict:
+    """Intake-promote legacy payment-link auto send.
+
+    Behind DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK (DEFAULT OFF; any enabled
+    value — webhook-style or "all" — enables this path). Even when on, the
+    service sends only with a staff-confirmed premium (premium_confirmed_*);
+    the 10% ``premium`` estimate on bond_doc never counts → premium_unconfirmed.
+    No amount is passed: auto sends ignore caller-supplied amounts.
+    """
+    from dashboard.services.legacy_payment_link_switch import (
+        legacy_payment_link_enabled,
+    )
+
+    if not legacy_payment_link_enabled():
+        return {"skipped": True, "reason": "switch_off", "source": "intake_promote"}
+    from dashboard.services.packet_payment_link_service import (
+        maybe_send_packet_payment_link,
+    )
+
+    return await maybe_send_packet_payment_link(
+        packet_id=str(bond_doc.get("paperwork_packet_id") or "").strip(),
+        booking_number=matched_booking,
