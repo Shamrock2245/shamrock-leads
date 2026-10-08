@@ -3,6 +3,10 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (Hernando unknown bond)
+
+### Fixed
+- **Hernando (FL):** the JailSearch results grid publishes no bond, yet every row was written with `Bond_Amount="0"`. Now it is `""` (unknown), and old Hernando `"0"` rows hydrate as unknown (`NO_BOND_ROSTER_COUNTIES`). Rows without a source `HCSO<YY>JBN<NNNNNN>` booking number are skipped instead of being keyed on the name. A response without the results table, or with no keyed rows, raises instead of returning an empty success. The scraper uses plain `requests` (curl_cffi impersonation retired). Live 7-day read: 82/82 rows with source keys, 81 with offenses, 0 bonds (`docs/recon/FL_HERNANDO_BOND_2026-10-08.md`).
 ## [Unreleased] — 2026-10-08 (Indian River FL booking search)
 
 ### Fixed
