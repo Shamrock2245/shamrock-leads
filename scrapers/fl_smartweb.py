@@ -255,24 +255,32 @@ def _parse_name_from_header(header_text: str) -> tuple[str, str, str, str]:
     return full_name, race, sex, dob
 
 
+def _card_rows(img) -> list:
+    """Rows that belong to this inmate card only.
+
+    Starts at the photo row and walks next siblings until the next
+    ``bookno=`` photo (or the end of the table). A card with no Bond label
+    and no charge grid therefore cannot read the next card's amount.
+    """
+    row = img.find_parent("tr")
+    if row is None:
+        return []
+    rows = [row]
+    sib = row.find_next_sibling("tr")
+    while sib is not None:
+        if sib.find("img", src=re.compile(r"bookno=")):
+            break
+        rows.append(sib)
+        sib = sib.find_next_sibling("tr")
+    return rows
+
+
 def _header_text_for_card(img) -> str:
     """Prefer the inmate SearchHeader cell; fall back to nearby row text."""
-    row = img.find_parent("tr")
-    if row:
+    for row in _card_rows(img)[:4]:
         sh = row.select_one(".SearchHeader") or row.find(class_="SearchHeader")
         if sh and sh.get_text(strip=True):
             return sh.get_text(" ", strip=True)
-        # SearchHeader sometimes sits one sibling down from the photo row
-        sib = row.find_next_sibling("tr")
-        for _ in range(3):
-            if not sib:
-                break
-            sh = sib.select_one(".SearchHeader") or sib.find(class_="SearchHeader")
-            if sh and sh.get_text(strip=True):
-                return sh.get_text(" ", strip=True)
-            if sib.find("img", src=re.compile(r"bookno=")):
-                break
-            sib = sib.find_next_sibling("tr")
     return ""
 
 
@@ -297,22 +305,8 @@ def _parse_html(
         if booking_num in seen:
             continue
 
-        block_text = ""
-        try:
-            row = img.find_parent("tr")
-            current = row
-            for _ in range(15):
-                if not current:
-                    break
-                # Stop at the next card: its "Bond Amount:" must never be read
-                # as this card's (a card without charges falls back to it).
-                if current is not row and current.find("img", src=re.compile(r"bookno=")):
-                    break
-                block_text += " " + current.get_text(" ", strip=True)
-                current = current.find_next_sibling("tr")
-        except Exception:
-            pass
-
+        card_rows = _card_rows(img)
+        block_text = " ".join(r.get_text(" ", strip=True) for r in card_rows)
         block_text = " ".join(block_text.split())
         block_text = re.sub(r"(?i)\benlarge\s+photo\b", " ", block_text)
         block_text = " ".join(block_text.split())
@@ -363,19 +357,13 @@ def _parse_html(
         charges_list: list[str] = []
         charge_bonds: list[Optional[float]] = []
         charges_tables = []
-        row = img.find_parent("tr")
-        if row:
-            sibling = row.find_next_sibling("tr")
-            while sibling:
-                if sibling.find("img", src=re.compile(r"bookno=")):
-                    break
-                for table_el in sibling.find_all("table", class_="JailViewCharges"):
-                    first_row = table_el.find("tr")
-                    title = first_row.get_text(" ", strip=True).upper() if first_row else ""
-                    if title.startswith("HOLDS"):
-                        continue
-                    charges_tables.append(table_el)
-                sibling = sibling.find_next_sibling("tr")
+        for sibling in card_rows[1:]:
+            for table_el in sibling.find_all("table", class_="JailViewCharges"):
+                first_row = table_el.find("tr")
+                title = first_row.get_text(" ", strip=True).upper() if first_row else ""
+                if title.startswith("HOLDS"):
+                    continue
+                charges_tables.append(table_el)
 
         for charges_table in charges_tables:
             for chg_row in charges_table.find_all("tr"):

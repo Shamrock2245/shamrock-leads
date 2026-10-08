@@ -74,17 +74,23 @@ def test_home_counties_matrix_state_after_source_checks():
     text, summary = _build(B.DEFAULT_SMOKE_EVIDENCE)
     for county in ("Lee", "Collier", "Glades"):
         assert _matrix_status(text, county) == "candidate_productive", county
-    for county in ("Charlotte", "Manatee", "Hendry", "DeSoto"):
+    for county in ("Charlotte", "Manatee", "DeSoto"):
         assert _matrix_status(text, county) == "recon_only", county
-    # 2026-10-08: main also moved Orange (#134) and Indian River (#136) to candidate_productive.
-    assert "| FL | 67 | 67 | 4 | 20 | 26 | 0 | 17 |" in text
+    # Hendry: MyOCV feed has only a person-level MNI id, no booking number (#143).
+    assert _matrix_status(text, "Hendry") == "fail_closed"
+    # 2026-10-08: main also moved Orange (#134) and Indian River (#136) to candidate_productive;
+    # #143 moved Hendry from recon_only to fail_closed.
+    assert "| FL | 67 | 67 | 4 | 20 | 25 | 0 | 18 |" in text
 
 
 def test_no_home_county_is_promoted_in_health():
     from dashboard.extensions import SCRAPER_SOURCE_STATES
 
     for county in HOME:
-        assert SCRAPER_SOURCE_STATES.get(f"{county} (FL)", "unverified") == "unverified", county
+        state = SCRAPER_SOURCE_STATES.get(f"{county} (FL)", "unverified")
+        assert state != "verified_public", county
+        # Hendry is held fail_closed (#143: person-level MNI id, no booking number).
+        assert state == ("fail_closed" if county == "Hendry" else "unverified"), county
 
 
 def test_committed_smoke_rows_are_requests_only_until_leads_ops_reports():

@@ -8,9 +8,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 - **Glades (FL) drops curl_cffi impersonation.** `scrapers/counties/glades.py` now reads the SmartWEB JAIL View through the shared plain-`requests` `scrapers/fl_smartweb.py` helper (booking-date window of 365 days + Current Inmates Only, then AddMoreResults). Live 2026-10-08: plain GET 200, no challenge, 28/28 current cards keyed on the source `GCSO<YY>JBN<NNNNNN>`, 28 with charges and booking date, 10 positive bonds, 18 unknown, none "0". The bond rules are unchanged from #139: a printed charge `$0.00` is a real 0, a card-level `$0.00` stays unknown, and any NO BOND charge makes the total unknown.
 
+### Tests
+- `tests/test_glades_no_impersonation_path.py` (added to the `ci.yml` list). The shared card-boundary fix this branch carried is dropped in favour of main's version from #150.
+
+## [Unreleased] — 2026-10-08 (SmartWEB bond bleed: card text bound to its own card)
+
 ### Fixed
-- **SmartWEB card text no longer runs into the next card** (`scrapers/fl_smartweb.py`). The card-text walk now stops at the next card's photo row. A card without charges falls back to its own "Bond Amount:" and could otherwise read the next card's figure.
-- Tests: `tests/test_glades_no_impersonation_path.py`, plus a new case in `tests/test_fl_smartweb_unknown_bond.py`.
+- **SmartWEB JAIL View (FL shared helper `scrapers/fl_smartweb.py`):** the card text walk read up to 15 following table rows, past the next inmate's photo row. A card with no charge grid (and no money on its own `Bond Amount:` label) fell back to the next card's `Bond Amount:`, so that booking was written with someone else's bond. The card is now the photo row plus following rows up to the next `bookno=` photo (`_card_rows`), and the header, card-level bond and charge grid all read only those rows. A card with no published bond stays `""`. Folds in the earlier unmerged branch `fix/smartweb-bound-card-bond` (88ab5e5). Affects every county on the helper: Bradford, Dixie, Escambia, Gilchrist, Hamilton, Madison, Putnam, Santa Rosa, Sumter, Taylor (and Glades once it moves onto the helper); stored rows already written with a bled bond need a Leads Ops correction (read-only key list prepared separately, no data changed here).
+
+### Tests
+- `tests/test_fl_smartweb_unknown_bond.py` (already in the `ci.yml` list): empty card next to a rich card stays `""`; card-level `$0.00` stays unknown when the next card is positive; a `NO BOND` card with no charges does not take the next card's `$15,000`. The first and third fail on main; the `$0.00` one is a guard that already passes.
+
+## [Unreleased] — 2026-10-08 (Collier/Glades bond cleanup prep, NOT RUN)
+
+### Added
+- **`scripts/collier_glades_bad_bond_count.py`.** A read-only count of Collier and Glades rows whose stored bond the source never published. Collier: every non-empty bond, split into `"0"` and positive values taken from charge text. Glades: `"0"` / `"0.00"`, with positive values counted as unattributable (stored rows keep no per-charge bonds, so a next-card figure cannot be traced). Staff-provenance rows and rows scraped after the #139 deploy are skipped. It prints counts only and needs `MONGODB_URI`. `--print-filter` prints the affected-rows filter used by the plan.
+- **`docs/ops/COLLIER_GLADES_BOND_CLEANUP_PLAN.md`** (NOT RUN, awaiting Brendan's OK). The plan: count, `mongoexport` backup, blank to `""` while keeping the old values in `bond_cleanup_2026_10`, skip `staff_edits` rows, verify the counts, and a rollback.
+
+## [Unreleased] — 2026-10-08 (Hendry fail closed: person id only)
+
+### Fixed
+- **Hendry (FL) fail closed.** The public MyOCV `inmates.json` identifies rows only by `inmateID` = `HCSO<YY>MNI<NNNNNN>`, a Master Name Index person id, not a booking number. Its year runs 00-26 whatever the booked year is, so a re-booking collides with the person's old row. CoS approved on 2026-10-08. `hendry.py` is now `SOURCE_CONTRACT_VALIDATED=False` with no fetch, Health is `fail_closed`, the evidence row and a `hold` row are recorded, and the matrix, `FL_67_STATUS` and `COUNTY_REGISTRY` are updated. Rows already stored under MNI keys are not touched; any cleanup waits on Brendan. Hendry also drops out of the sellable lead-subscription seed, and with #133 out of the default lead list (picking it by name still shows its rows).
 
 ## [Unreleased] — 2026-10-08 (Collier and Glades publish-only bonds)
 
