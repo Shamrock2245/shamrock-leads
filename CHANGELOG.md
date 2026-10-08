@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (Lee direct fetch, no stealth)
+
+### Changed
+- **Lee FL fetches with a plain direct GET only** (`scrapers/counties/lee.py`). One `requests` session with an honest User-Agent (`ShamrockLeads/1.0`), normal DNS and `trust_env=False`, so `HTTP(S)_PROXY`/`ALL_PROXY` env vars are ignored. The APE StealthSession, curl_cffi Chrome impersonation, the origin DNS pin (`lee_origin`), the Scrapfly fallback and the SOCKS/APE proxy path are removed from the scraper, the same way as Manatee (#121) and Charlotte (#124). `LEE_PREFER_RESIDENTIAL`, `LEE_ALLOW_DIRECT` and `SOCKS_PROXY` no longer affect Lee. The durable cooldown, 429 stop, 5xx retry and honest empty/error handling are unchanged. If the source blocks, challenges or empties the direct path, the scrape reports an error; it never escalates to stealth.
+- **`tests/test_lee_no_proxy_path.py`** (in CI) proves no proxy/stealth module, helper or string is reachable, and runs a full scrape with proxy env vars set and every proxy/stealth helper patched to explode.
+- **`scripts/lee_direct_smoke.py`**: read-only direct smoke for Leads Ops on the VPS. Prints one JSON line of counts, HTTP status per page, booking-number shapes and charges-API status (no names, booking numbers or other PII). Exit 0 ok, 2 blocked/challenged/rate-limited, 3 empty or drift, 1 other. Not mergeable until the VPS read passes.
+
+### Docs
+- `docs/COUNTY_REGISTRY.md` Lee row and `docs/recon/LEE_SELF_HEALING_2026-09-23.md` egress/env sections updated for the direct-only path.
+
 ## [Unreleased] — 2026-10-08 (Palmetto agent license boxes)
 
 ### Added

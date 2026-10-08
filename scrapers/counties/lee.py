@@ -9,9 +9,12 @@ Features:
 - Paginated booking fetch with API query variants
 - Per-booking charges API enrichment (bond, court, case data)
 - Base64 mugshot detection (v8.4 fix)
-- Stealth stack: APE StealthSession (curl_cffi Chrome JA3 + Warren/S5W2C/Stormsia)
-- Origin DNS pin: www A-record can point at a dead host; pin Host/SNI to working apex IP
-  via CURLOPT_RESOLVE (see scrapers/lee_origin.py)
+- Plain direct HTTPS only (2026-10-08, CoS order): one ``requests`` session,
+  an honest User-Agent, normal DNS, ``trust_env=False`` so HTTP(S)_PROXY /
+  ALL_PROXY env vars are ignored. No StealthSession, no TLS impersonation, no
+  Scrapfly, no SOCKS/APE/Warren proxy and no origin DNS pin. If the source
+  blocks, challenges or empties this path the scrape reports status=error;
+  it never escalates to stealth.
 """
 
 import logging
@@ -21,17 +24,12 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional, Set, Tuple
 
-import urllib.parse
 import os
+
+import requests
 
 from scrapers.base_scraper import BaseScraper
 from scrapers.scraper_resilience import SourceCooldownActive
-from scrapers.lee_origin import (
-    LEE_BASE_URL,
-    invalidate_lee_origin_cache,
-    lee_curl_options,
-    lee_api_get,
-)
 from scrapers.lee_rate_limit import (
     is_cooled_down,
     note_response,
@@ -45,12 +43,11 @@ logger = logging.getLogger(__name__)
 # ── Config ──
 # CRITICAL (2026-08): Lee public-api enforces ~480k req / 12h per source IP.
 # Burning past that freezes scrapes (dashboard stuck on last good booking).
-# Defaults are intentionally lean; raise only with residential egress + monitoring.
-BASE_URL = LEE_BASE_URL  # https://www.sheriffleefl.org (DNS may be pinned — see lee_origin)
+# Defaults are intentionally lean; raise only with monitoring.
+BASE_URL = "https://www.sheriffleefl.org"  # normal DNS, no origin pin
 BOOKINGS_API = "/public-api/bookings"
 CHARGES_API = "/public-api/bookings/{booking_id}/charges"
 DETAIL_PAGE = "/booking/"
-SOCKS_PROXY = os.getenv("SOCKS_PROXY", "")  # Optional env override when APE offline
 
 DAYS_BACK = int(os.getenv("LEE_DAYS_BACK", "3"))  # catch-up window (was 30 — too expensive)
 PAGE_SIZE = 50                 # Fixed: Lee API clamps max records per page to 50
@@ -58,29 +55,18 @@ MAX_PAGES = int(os.getenv("LEE_MAX_PAGES", "6"))  # 6×50 = 300 (was 30 — 1500
 MAX_ENRICH = int(os.getenv("LEE_MAX_ENRICH", "8"))  # was 25 — charges API is the quota killer
 DETAIL_DELAY_S = float(os.getenv("LEE_DETAIL_DELAY_S", "10.0"))
 DETAIL_JITTER_S = float(os.getenv("LEE_DETAIL_JITTER_S", "4.0"))
-RETRY_LIMIT = 2                # Outer retries (StealthSession also rotates proxies)
+RETRY_LIMIT = 2                # Outer retries + per-request 5xx/connect retries
 BACKOFF_BASE_S = 8.0
 MAX_EXECUTION_S = 330
 CIRCUIT_BREAKER_THRESHOLD = 2
 CIRCUIT_BREAKER_COOLDOWN_S = 120
 VARIANT_DELAY_S = float(os.getenv("LEE_VARIANT_DELAY_S", "20"))
 PAGE_DELAY_S = float(os.getenv("LEE_PAGE_DELAY_S", "3.0"))
-# Prefer residential egress so we don't share the VPS /32 throttle bucket
-LEE_PREFER_RESIDENTIAL = os.getenv("LEE_PREFER_RESIDENTIAL", "true").strip().lower() in {
-    "1", "true", "yes", "on",
-}
-# When rate-limited, refuse bare direct IP entirely
-LEE_ALLOW_DIRECT = os.getenv("LEE_ALLOW_DIRECT", "true").strip().lower() in {
-    "1", "true", "yes", "on",
-}
-
-# Site-specific only — TLSFingerprinter / StealthSession owns User-Agent
+# Honest, identifiable client. No browser impersonation.
+LEE_USER_AGENT = "ShamrockLeads/1.0 (+https://www.shamrockbailbonds.biz)"
 SITE_HEADERS = {
-    "Accept": "application/json, text/html, */*;q=0.8",
-    "Referer": f"{BASE_URL}/",
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-origin",
+    "User-Agent": LEE_USER_AGENT,
+    "Accept": "application/json",
 }
 
 
@@ -88,7 +74,7 @@ class LeeCountyScraper(BaseScraper):
     """Lee County (FL) arrest scraper — API-first with charges enrichment.
 
     KEY FL county — registered in main.py at 30-minute interval. Must stay on.
-    HTTP path uses APE StealthSession for TLS fingerprint + residential failover.
+    HTTP path is a plain direct ``requests`` GET (no proxy, no stealth).
     """
 
     # Lee already runs its own cooldown-aware outer retry in scrape(); a
@@ -102,8 +88,8 @@ class LeeCountyScraper(BaseScraper):
 
     def __init__(self):
         super().__init__()
-        # Lazy StealthSession; sticky IP across pagination/enrichment
-        self._stealth = None  # None=uninit, False=unavailable, else session
+        # Lazy plain requests.Session (direct egress only)
+        self._session: Optional[requests.Session] = None
         # Per-run fetch telemetry — distinguishes true empty vs blocked/failed
         self._fetch_ok_pages = 0
         self._fetch_errors: List[str] = []
@@ -145,7 +131,6 @@ class LeeCountyScraper(BaseScraper):
                     sleep_s,
                     exc,
                 )
-                invalidate_lee_origin_cache()
                 self._cleanup()
                 time.sleep(sleep_s)
             except Exception:
@@ -181,12 +166,11 @@ class LeeCountyScraper(BaseScraper):
             start_date = end_date - timedelta(days=DAYS_BACK)
 
             logger.info(
-                "📅 Date range: %s to %s (max_pages=%s enrich=%s residential=%s)",
+                "📅 Date range: %s to %s (max_pages=%s enrich=%s egress=direct)",
                 start_date.strftime("%Y-%m-%d"),
                 end_date.strftime("%Y-%m-%d"),
                 MAX_PAGES,
                 MAX_ENRICH,
-                LEE_PREFER_RESIDENTIAL,
             )
 
             # Fetch raw bookings from API (try multiple query variants)
@@ -736,56 +720,34 @@ class LeeCountyScraper(BaseScraper):
             extra_data={"charge_details": n.get("charge_details", [])},
         )
 
-    # ── HTTP (APE StealthSession primary) ──
+    # ── HTTP (plain direct only) ──
 
-    def _get_stealth(self):
-        """Lazy-init sticky StealthSession (curl_cffi Chrome JA3 + APE residential).
-
-        Pins www.sheriffleefl.org to a working origin IP so a dead www A-record
-        cannot black-hole the whole run (see scrapers/lee_origin.py).
-        """
-        if self._stealth is False:
-            return None
-        if self._stealth is not None:
-            return self._stealth
-        try:
-            from scrapers.proxy_engine import create_stealth_session
-
-            curl_opts = lee_curl_options()
-            # Residential preferred: VPS /32 burns Lee's 480k/12h quota and freezes
-            # the whole county. allow_direct only when not already rate-limited.
-            allow_direct = LEE_ALLOW_DIRECT and not is_cooled_down()
-            self._stealth = create_stealth_session(
-                sticky_session_id="fl-lee-api",
-                prefer_residential=LEE_PREFER_RESIDENTIAL,
-                allow_direct=allow_direct,
-                timeout=30,
-                impersonate="chrome131",
-                curl_options=curl_opts or None,
-            )
-            proxy = getattr(self._stealth, "proxy", None) or "direct"
-            pin = "pinned" if curl_opts else "dns-default"
-            logger.info(
-                "[Lee] StealthSession ready (proxy=%s, origin=%s)",
-                (proxy[:60] if proxy else "direct"),
-                pin,
-            )
-            return self._stealth
-        except Exception as exc:
-            logger.warning("[Lee] StealthSession unavailable (%s) — using fallbacks", exc)
-            self._stealth = False
-            return None
+    def _get_session(self) -> requests.Session:
+        """Plain requests session. ``trust_env=False`` ignores proxy env vars."""
+        if self._session is None:
+            sess = requests.Session()
+            sess.trust_env = False
+            sess.proxies = {}
+            sess.headers.update(SITE_HEADERS)
+            self._session = sess
+        return self._session
 
     def _cleanup(self):
-        if self._stealth and self._stealth is not False:
+        if self._session is not None:
             try:
-                self._stealth.close()
+                self._session.close()
             except Exception:
                 pass
-        self._stealth = None
+        self._session = None
 
     def _http_fetch(self, url: str, params: Dict[str, Any] = None):
-        """Fetch via APE StealthSession; fall back to origin-pinned curl / Scrapfly."""
+        """One plain direct GET (honest UA, normal DNS, no proxy, no stealth).
+
+        Returns the response for 200 and 429 (the caller and ``note_response``
+        handle the cooldown), retries 5xx / connect errors up to RETRY_LIMIT,
+        and otherwise returns the non-200 response so the caller records it.
+        Returns None only when every attempt raised or a cooldown is active.
+        """
         if is_cooled_down():
             logger.warning(
                 "[Lee] _http_fetch blocked — rate-limit cooldown (%.0fs left)",
@@ -793,190 +755,28 @@ class LeeCountyScraper(BaseScraper):
             )
             return None
 
-        if params:
-            qs = urllib.parse.urlencode(params)
-            full_url = f"{url}?{qs}"
-        else:
-            full_url = url
-
-        # ── Path 1: Stealth stack (preferred — sticky proxy + origin pin) ──
-        stealth = self._get_stealth()
-        if stealth is not None:
-            try:
-                resp = stealth.get(
-                    full_url,
-                    headers=SITE_HEADERS,
-                    max_retries=max(2, RETRY_LIMIT),
-                    timeout=30,
-                )
-                if resp is not None and note_response(resp):
-                    return resp  # 429 — do not cascade to other paths
-                if resp is not None and getattr(resp, "status_code", 0) == 200:
-                    return resp
-                code = getattr(resp, "status_code", "unknown") if resp else "none"
-                logger.warning("[Lee] StealthSession non-200: HTTP %s", code)
-                if code in (403, 503) and hasattr(stealth, "rotate_proxy"):
-                    stealth.rotate_proxy()
-            except Exception as exc:
-                err = str(exc).lower()
-                # Dead www A-record / conn-refused → refresh origin pin
-                if any(
-                    token in err
-                    for token in (
-                        "couldn't connect",
-                        "connection refused",
-                        "failed to connect",
-                        "could not connect",
-                        "couldnt resolve",
-                        "couldn't resolve",
-                    )
-                ):
-                    logger.warning(
-                        "[Lee] StealthSession connect error (likely dead www DNS): %s — "
-                        "invalidating origin pin and re-initing session",
-                        exc,
-                    )
-                    invalidate_lee_origin_cache()
-                    try:
-                        stealth.close()
-                    except Exception:
-                        pass
-                    self._stealth = None  # allow re-init with fresh pin on next call
-                elif any(
-                    token in err
-                    for token in ("connect tunnel", "tunnel failed", "proxy", "502")
-                ):
-                    # APE/Warren CONNECT failure — drop sticky proxy, keep pin, try direct next
-                    logger.warning(
-                        "[Lee] StealthSession proxy tunnel error: %s — forcing direct origin pin",
-                        exc,
-                    )
-                    try:
-                        if hasattr(stealth, "_apply_proxy"):
-                            stealth._apply_proxy(None)
-                        elif hasattr(stealth, "rotate_proxy"):
-                            stealth.rotate_proxy()
-                    except Exception:
-                        pass
-                else:
-                    logger.warning(
-                        "[Lee] StealthSession error: %s — falling back to origin-pinned path",
-                        exc,
-                    )
-                    # Do not permanently disable; Path 2 will serve this request.
-                    # Next call can still retry stealth.
-
-        # ── Path 2: Origin-pinned direct curl_cffi (bypasses dead www A-record) ──
-        # Skip bare-direct when already rate-limited or ops disabled direct.
-        if is_cooled_down():
-            return None
-        if not LEE_ALLOW_DIRECT:
-            logger.info("[Lee] LEE_ALLOW_DIRECT=false — skipping direct origin path")
-        else:
-            try:
-                resp = lee_api_get(full_url, headers=SITE_HEADERS, timeout=30, max_retries=1)
-                if resp is not None and note_response(resp):
-                    return resp  # 429 — stop cascade
-                if resp is not None and getattr(resp, "status_code", 0) == 200:
-                    return resp
-                code = getattr(resp, "status_code", "unknown") if resp else "none"
-                logger.warning("[Lee] origin-pinned GET non-200: HTTP %s", code)
-                if code in (503,):
-                    time.sleep(CIRCUIT_BREAKER_COOLDOWN_S)
-            except Exception as exc:
-                logger.warning("[Lee] origin-pinned GET failed: %s", exc)
-
-        # ── Path 3: Scrapfly (optional env) ──
-        scrapfly_key = os.getenv("SCRAPFLY_API_KEY", "")
-        if scrapfly_key:
-            try:
-                from curl_cffi import requests as cffi_requests
-
-                scrapfly_url = (
-                    "https://api.scrapfly.io/scrape"
-                    f"?key={scrapfly_key}&url={urllib.parse.quote(full_url)}&asp=true"
-                )
-                resp = cffi_requests.get(
-                    scrapfly_url, impersonate="chrome131", timeout=45
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    content = data.get("result", {}).get("content", "{}")
-
-                    class MockScrapflyResp:
-                        def __init__(self, text):
-                            self.text = text
-                            self.status_code = 200
-
-                        def json(self):
-                            import json
-
-                            return json.loads(self.text)
-
-                    return MockScrapflyResp(content)
-            except Exception as exc:
-                logger.warning("[Lee] Scrapfly fallback failed: %s", exc)
-
-        # ── Path 4: curl_cffi + SOCKS_PROXY / APE one-shot (also origin-pinned) ──
+        sess = self._get_session()
         for attempt in range(RETRY_LIMIT):
             try:
-                proxy = None
-                if SOCKS_PROXY:
-                    proxy = SOCKS_PROXY
-                elif getattr(self, "ape", None):
-                    try:
-                        proxy = self.get_proxy(prefer_residential=True)
-                    except Exception:
-                        proxy = None
-                proxies = {"http": proxy, "https": proxy} if proxy else None
-                resp = lee_api_get(
-                    full_url,
-                    headers={
-                        **SITE_HEADERS,
-                        "User-Agent": (
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) "
-                            "Chrome/131.0.0.0 Safari/537.36"
-                        ),
-                    },
-                    timeout=30,
-                    proxies=proxies,
-                    max_retries=1,
-                )
-                if resp is not None and resp.status_code == 200:
-                    if proxy:
-                        self.record_proxy_success(proxy)
-                    return resp
-                if proxy and resp is not None and resp.status_code in (403, 429, 503):
-                    self.record_proxy_failure(proxy)
-                if resp is not None and resp.status_code in (429, 500, 502, 503):
-                    sleep_s = BACKOFF_BASE_S * (2 ** attempt) + random.uniform(
-                        0, BACKOFF_BASE_S
-                    )
-                    logger.warning(
-                        "[Lee] HTTP %s retry in %.1fs", resp.status_code, sleep_s
-                    )
+                resp = sess.get(url, params=params, timeout=30, proxies={})
+            except requests.RequestException as exc:
+                if attempt < RETRY_LIMIT - 1:
+                    sleep_s = BACKOFF_BASE_S * (2 ** attempt)
+                    logger.warning("[Lee] direct GET error, retry in %.1fs: %s", sleep_s, exc)
                     time.sleep(sleep_s)
                     continue
-
-                class MockEmptyResp:
-                    status_code = resp.status_code if resp is not None else 0
-
-                    def json(self):
-                        return {}
-
-                return MockEmptyResp()
-            except Exception as e:
-                sleep_s = BACKOFF_BASE_S * (2 ** attempt)
-                if attempt < RETRY_LIMIT - 1:
-                    logger.warning(
-                        "[Lee] HTTP error, retrying in %.1fs: %s", sleep_s, e
-                    )
-                    invalidate_lee_origin_cache()
-                    time.sleep(sleep_s)
-                else:
-                    logger.error("[Lee] HTTP fetch failed after retries: %s", full_url)
-                    return None
+                logger.error("[Lee] direct GET failed after retries: %s", exc)
+                return None
+            if note_response(resp):
+                return resp  # 429 — cooldown recorded; never retry into it
+            if resp.status_code in (500, 502, 503, 504) and attempt < RETRY_LIMIT - 1:
+                sleep_s = BACKOFF_BASE_S * (2 ** attempt) + random.uniform(0, BACKOFF_BASE_S)
+                logger.warning("[Lee] HTTP %s, retry in %.1fs", resp.status_code, sleep_s)
+                time.sleep(sleep_s)
+                continue
+            if resp.status_code != 200:
+                logger.warning("[Lee] direct GET non-200: HTTP %s", resp.status_code)
+            return resp
         return None
 
     # ── Utilities ──
