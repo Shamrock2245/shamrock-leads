@@ -53,6 +53,44 @@ REACTIONS = {
 }
 
 
+_OUTBOUND_SEND_PREFIXES = (
+    "/api/v1/message/text",
+    "/api/v1/message/attachment",
+    "/api/v1/message/schedule",
+    "/api/v1/message/react",
+    "/api/v1/message/multipart",
+    "/api/v1/chat/new",
+)
+
+
+def _outbound_send_path(method: str, path: str) -> bool:
+    """True for BlueBubbles calls that deliver a message or a typing indicator."""
+    if str(method or "").upper() != "POST":
+        return False
+    target = str(path or "")
+    if any(target.startswith(prefix) for prefix in _OUTBOUND_SEND_PREFIXES):
+        return True
+    return target.endswith("/typing")
+
+
+async def _suspended_send_result() -> dict | None:
+    """Block every outbound send when the current agency is suspended.
+
+    Flag off and Shamrock return None, so those paths are unchanged.
+    """
+    from dashboard.services.agency_billing import suspension_block
+
+    if await suspension_block():
+        return {
+            "success": False,
+            "sent": False,
+            "queued": False,
+            "channel": "failed",
+            "error": "tenant_suspended",
+        }
+    return None
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  BlueBubbles Async Client
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -93,6 +131,10 @@ class BlueBubblesClient:
                        params: dict | None = None,
                        json_body: dict | None = None) -> dict:
         """Execute an HTTP request against the BlueBubbles server."""
+        if _outbound_send_path(method, path):
+            blocked = await _suspended_send_result()
+            if blocked:
+                return blocked
         url = f"{self.base_url}{path}"
         merged_params = self._params(params)
         try:
@@ -443,7 +485,10 @@ class BlueBubblesClient:
         3. Send the message
         4. Mark chat as read (optional)
         """
-        # 0. Consent gate before *any* contact (typing indicator included)
+        # 0. Suspension, then consent, before *any* contact (typing indicator included)
+        suspended = await _suspended_send_result()
+        if suspended:
+            return suspended
         blocked = await self._consent_gate(chat_guid, purpose or "send_human_like")
         if blocked:
             return blocked

@@ -220,7 +220,7 @@ Suggested plan shape, not a price list:
 | Trial | Time-boxed `tenants.status = trialing` |
 | Failure | Stripe `invoice.payment_failed` → `past_due` → after the grace rule, `suspended` |
 
-The grace rule in code is `STRIPE_SUSPEND_AFTER_FAILURES`, default 2: the first failed invoice is `past_due` and the desk still works; the next one is `suspended`. Prices are Stripe price ids (`STRIPE_PRICE_SETUP`, `STRIPE_PRICE_MONTHLY`, `STRIPE_PRICE_COUNTY`, `STRIPE_PRICE_STATE`, `STRIPE_PRICE_USAGE`). Until those are set, the console says "price not set" and Checkout refuses. A `sk_live_` key is rejected and no request is sent. Trial length is `STRIPE_TRIAL_DAYS`; unset means no trial.
+The grace rule in code is `STRIPE_SUSPEND_AFTER_FAILURES`, default 2: the first failed invoice is `past_due` and the desk still works; the next one is `suspended`. Prices are Stripe price ids (`STRIPE_PRICE_SETUP`, `STRIPE_PRICE_MONTHLY`, `STRIPE_PRICE_COUNTY`, `STRIPE_PRICE_STATE`, `STRIPE_PRICE_USAGE`). Until those are set, the console says "price not set" and Checkout refuses. A `sk_live_` key is rejected and no request is sent. Trial length is `STRIPE_TRIAL_DAYS`; unset means no trial. Recurring Checkout copies `tenant_id` onto `subscription_data[metadata]` so invoice and subscription events stay tied to the agency. One Stripe Customer is reused. The first recurring Checkout creates the subscription; later add-ons are subscription items on that same subscription, not a second Customer. An add-on is refused while the agency is `past_due`, `suspended`, or `canceled`. A webhook for a different subscription does not change status or MRR, and deleting a different subscription does not cancel the agency. Events with `livemode: true` are rejected unless `STRIPE_ALLOW_LIVEMODE=1` (left unset). Comps and billing transitions write `audit_events`. Suspension is enforced inside `BlueBubblesClient` on every outbound send, including a direct `send_human_like`.
 
 Suspended tenants can log in and export. They cannot send paperwork (`create_submission_for_packet` and write-bond preflight), texts (`send_message_universal`), or new packets. Scrapers do not stop; they are platform jobs. Shamrock's plan is `internal` and is not invoiced, and the suspension gate does not apply to tenant `shamrock`.
 
@@ -335,7 +335,7 @@ Shamrock is not sent through this wizard. It is the seed document.
 
 ### 11.2 Charge agencies to join and stay
 
-**Shipped behind `SAAS_MULTI_TENANT`.** `GET /platform/billing` and `/api/platform/billing` show MRR, plan cards, and each agency's status. Checkout is `POST /api/platform/tenants/{id}/billing/checkout` and only builds a Stripe test-mode session. `POST /api/webhooks/stripe-billing` verifies `Stripe-Signature` and then stores invoice amounts. Comp is a super-admin action that sets MRR to 0. Flag off returns 404. No card form is rendered.
+**Shipped behind `SAAS_MULTI_TENANT`.** `GET /platform/billing` and `/api/platform/billing` show MRR, plan cards, and each agency's status. Checkout is `POST /api/platform/tenants/{id}/billing/checkout` and only builds a Stripe test-mode session, reusing the stored Customer. A later recurring plan is added as a subscription item. `POST /api/webhooks/stripe-billing` verifies `Stripe-Signature`, rejects `livemode: true` unless explicitly enabled, and then stores invoice amounts. Comp is a super-admin action that sets MRR to 0 and writes an audit row. Flag off returns 404. No card form is rendered.
 
 ```mermaid
 flowchart LR

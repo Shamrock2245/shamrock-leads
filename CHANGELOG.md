@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-07 (agency billing review)
+
+### Fixed
+- **Stripe test-mode billing (`SAAS_MULTI_TENANT` still default off).** Recurring Checkout puts `tenant_id` on `subscription_data[metadata]` so later invoice and subscription events resolve the agency. One Stripe Customer is reused. County, state, usage, and any later recurring plan are added as items on that subscription instead of a second Customer or subscription. An add-on is refused while the agency is past due, suspended, or canceled. A webhook for a different subscription does not change status or MRR, and deleting it does not cancel the agency. `livemode: true` events are rejected unless `STRIPE_ALLOW_LIVEMODE=1`, which stays unset. Comps and billing transitions write an `audit_events` row with the actor, reason, and old and new state. Suspension is enforced in the BlueBubbles client on every outbound send path, including a direct `send_human_like`.
+
 ## [Unreleased] — 2026-10-07 (agency onboarding review)
 
 ### Fixed
