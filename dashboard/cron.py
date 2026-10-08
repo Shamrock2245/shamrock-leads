@@ -372,6 +372,29 @@ async def _run_intake_fanout_retry():
         logger.info("[IntakeFanout] retry sweep: %s", counts)
 
 
+async def _run_lead_fanout_retry():
+    """Retry tenant lead pointers that failed after the arrest upsert.
+
+    Flag off returns without reading the outbox. The raw database is required
+    because one sweep writes lead pointers for more than one agency.
+    """
+    from dashboard.tenancy.flag import multi_tenant_enabled
+
+    if not multi_tenant_enabled():
+        return
+    from dashboard.extensions import get_raw_db
+    from dashboard.services.lead_subscriptions import retry_lead_fanout
+
+    result = await retry_lead_fanout(get_raw_db())
+    if result.get("delivered") or result.get("dead"):
+        logger.info(
+            "[LeadFanout] delivered=%s dead=%s pending=%s",
+            result.get("delivered"),
+            result.get("dead"),
+            result.get("pending"),
+        )
+
+
 async def _run_intake_recovery():
     from dashboard.services.intake_recovery_service import IntakeRecoveryService
     from dashboard.services.automation_config import get_automation_config
@@ -801,6 +824,7 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("paperwork_chase",    "PaperworkChase",     3600, 150, _run_paperwork_chase, default_enabled=True),
     CronDef("intake_recovery",    "IntakeRecovery",     3600, 200, _run_intake_recovery, default_enabled=True),
     CronDef("intake_fanout_retry", "IntakeFanout",       300,  75, _run_intake_fanout_retry, default_enabled=True),
+    CronDef("lead_fanout_retry",  "LeadFanout",          300,  90, _run_lead_fanout_retry, default_enabled=True),
     CronDef("poa_low_stock",      "POALowStock",       21600, 240, _run_poa_low_stock, default_enabled=True),
     CronDef("surety_weekly_reports", "SuretyWeekly",  604800, 600, _run_surety_weekly_reports, default_enabled=True),
     CronDef("overdue_tasks",      "OverdueTasks",       3600, 180, _run_overdue_tasks),

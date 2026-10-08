@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (lead fan-out retry job)
+
+### Fixed
+- **Lead fan-out outbox (`SAAS_MULTI_TENANT` still default off).** `lead_fanout_retry` on the dashboard cron retries due `lead_fanout_outbox` rows with backoff. After five attempts a row is `dead` and is not retried. Dead letters, and an open outbox that is too deep or too old, post to `SLACK_WEBHOOK_ALERTS`. The job does nothing when the flag is off.
+
 ## [Unreleased] — 2026-10-07 (start bond packet review)
 
 ### Fixed
