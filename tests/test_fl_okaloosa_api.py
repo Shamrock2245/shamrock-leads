@@ -85,7 +85,9 @@ def test_total_bond_empty_when_any_charge_bond_is_blank():
     assert [d["bond_amount"] for d in mixed["details"]] == [1500.0, None]  # known per-charge amount kept
     assert _bonds(1500.0, 250.0)["bond"] == "1750.00"
     assert _bonds(None, None)["bond"] == ""
-    assert _bonds(0.0, 1500.0)["bond"] == "1500.00"  # published $0 is known
+    # Okaloosa shows unpublished bail as null and the roster uses 0 for "none
+    # published", so a 0 bailAmt is unknown here (never a $0, never understated)
+    assert _bonds(0.0, 1500.0)["bond"] == ""
     # the roster total (sum of published bailAmt) must not fill in for a blank charge
     rec = okaloosa.build_record(_row("2026000001", datetime(2026, 10, 7), bond=1500.0), mixed)
     assert rec.Bond_Amount == ""
@@ -140,10 +142,10 @@ def test_scrape_pages_to_total_details_only_recent_and_skips_unknown_status(monk
     calls: list = []
     _install(monkeypatch, pages, details, calls)
     recs = OkaloosaCountyScraper().scrape(lookback_days=7)
-    assert [r.Booking_Number for r in recs] == ["2026000004", "2026000003", "2025000002"]
+    # the 200-day-old booking has no detail, so it is not emitted (no blank overwrite)
+    assert [r.Booking_Number for r in recs] == ["2026000004", "2026000003"]
     by = {r.Booking_Number: r for r in recs}
     assert by["2026000004"].Bond_Amount == "500.00" and by["2026000004"].Charges == "DUI"
-    assert by["2025000002"].Bond_Amount == "" and by["2025000002"].Charges == ""
     detail_calls = [u for u, _ in calls if u != okaloosa.SEARCH_URL]
     assert sorted(u.rsplit("/", 1)[-1] for u in detail_calls) == ["2026000003", "2026000004"]
 
@@ -168,3 +170,49 @@ def test_module_uses_plain_requests_only():
     src = open(okaloosa.__file__).read().split('"""', 2)[2]
     for banned in ("curl_cffi", "impersonate", "verify=False", "DrissionPage", "proxy", "captcha", "Default.aspx"):
         assert banned not in src, banned
+
+
+def test_bond_type_from_detail_bail_types():
+    det = okaloosa.parse_detail(_detail("2026000001", [
+        {"chargeDesc": "THEFT", "bailAmt": 500.0, "bailType": "Cash"},
+        {"chargeDesc": "DUI", "bailAmt": 250.0, "bailType": "Cash"},
+    ]), "2026000001")
+    rec = okaloosa.build_record(_row("2026000001", datetime(2026, 10, 7)), det)
+    assert rec.Bond_Type == "CASH" and rec.Bond_Amount == "750.00"
+    hold = okaloosa.parse_detail(_detail("2026000001", [
+        {"chargeDesc": "THEFT", "bailAmt": 500.0, "bailType": "Cash"},
+        {"chargeDesc": "VOP", "bailAmt": None, "bailType": "No Bond"},
+    ]), "2026000001")
+    rec = okaloosa.build_record(_row("2026000001", datetime(2026, 10, 7)), hold)
+    assert rec.Bond_Type == "CASH | NO BOND" and rec.Bond_Amount == ""
+    blank = okaloosa.parse_detail(_detail("2026000001", [{"chargeDesc": "VOP", "bailAmt": None, "bailType": ""}]), "2026000001")
+    assert okaloosa.build_record(_row("2026000001", datetime(2026, 10, 7)), blank).Bond_Type == ""
+
+
+def test_detail_request_failure_raises_and_mismatch_skips(monkeypatch):
+    now = datetime.now()
+    rows = [_row("2026000002", now - timedelta(hours=1)), _row("2026000001", now - timedelta(hours=2))]
+    pages = [{"total": 2, "page": 1, "pageSize": 100, "data": rows}]
+
+    class _Down:
+        def __init__(self):
+            self.headers = {}
+
+        def get(self, url, params=None, timeout=None):
+            if url == okaloosa.SEARCH_URL:
+                return _Resp(pages[0])
+            raise requests.ConnectionError("detail down")
+
+    monkeypatch.setattr(okaloosa.requests, "Session", _Down)
+    monkeypatch.setattr(okaloosa.time, "sleep", lambda *_: None)
+    with pytest.raises(requests.ConnectionError):
+        OkaloosaCountyScraper().scrape(lookback_days=7)
+
+    details = {"2026000002": _detail("2026000002", [{"chargeDesc": "DUI", "bailAmt": 500.0}]),
+               "2026000001": _detail("2026009999", [])}  # names another booking
+    _install(monkeypatch, pages, details, [])
+    assert [r.Booking_Number for r in OkaloosaCountyScraper().scrape(lookback_days=7)] == ["2026000002"]
+    _install(monkeypatch, pages, {"2026000002": _detail("2026009998", []), "2026000001": _detail("2026009999", [])}, [])
+    with pytest.raises(OkaloosaContractError):
+        OkaloosaCountyScraper().scrape(lookback_days=7)
+

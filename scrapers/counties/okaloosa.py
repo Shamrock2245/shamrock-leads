@@ -25,13 +25,15 @@ Source contract (recon 2026-10-08, docs/recon/FL_OKALOOSA_API_2026-10-08.md):
   * Bond: the roster ``totalBondAmt`` equals the sum of the detail ``bailAmt``
     values when any are published (24/24 checked); when none are, both are
     0/null. The bond is the sum of the detail ``bailAmt`` only when every
-    charge publishes one (a published 0 counts). Any blank charge, which can
-    be a hold, makes the total ``""``. Without a detail (outside the window)
+    charge publishes a positive one (a 0 is read as unpublished, like the
+    roster's 0). Any blank charge, which can be a hold, makes the total
+    ``""``. ``Bond_Type`` joins the distinct published ``bailType`` values. Without a detail (outside the window)
     the bond is ``""``: the roster total cannot show a blank charge, so it is
     not used.
-  * Charges come from the detail, fetched only for bookings within
-    ``LOOKBACK_DAYS`` (newest first, at most ``MAX_DETAILS``). A failed or
-    mismatched detail leaves charges empty; it is never invented.
+  * Only bookings within ``LOOKBACK_DAYS`` (newest first, at most
+    ``MAX_DETAILS``) with a fetched detail are emitted, so an older booking is
+    never rewritten with blank charges. A detail request failure raises; a
+    detail naming another booking skips that booking (all of them: raise).
   * Health stays ``unverified`` until a Leads Ops write smoke.
 """
 from __future__ import annotations
@@ -117,6 +119,7 @@ def parse_detail(data: Any, booking: str) -> Optional[Dict[str, Any]]:
     details: List[Dict[str, Any]] = []
     amounts: List[float] = []
     any_unpublished = False
+    bond_types: List[str] = []
     cases: List[str] = []
     for row in data.get("charges") or []:
         if not isinstance(row, dict):
@@ -124,10 +127,17 @@ def parse_detail(data: Any, booking: str) -> Optional[Dict[str, Any]]:
         desc = _clean(row.get("chargeDesc"))
         statute = _clean(row.get("charge"))
         amount = _money(row.get("bailAmt"))
+        if amount is not None and amount <= 0:
+            # The source shows an unpublished bail as null (82/82 on 2026-10-08)
+            # and the roster uses 0 for "nothing published"; a 0 is unknown here.
+            amount = None
         if amount is not None:
             amounts.append(amount)
         else:
             any_unpublished = True  # blank bailAmt: may be a hold
+        bail_type = _clean(row.get("bailType")).upper()
+        if bail_type and bail_type not in bond_types:
+            bond_types.append(bail_type)
         case = _clean(row.get("caseNbr"))
         if case and case not in cases:
             cases.append(case)
@@ -154,6 +164,7 @@ def parse_detail(data: Any, booking: str) -> Optional[Dict[str, Any]]:
         # so a partial sum would understate the bond. "" = unknown.
         "bond": f"{sum(amounts):.2f}" if amounts and not any_unpublished else "",
         "case_numbers": cases,
+        "bond_type": " | ".join(bond_types),  # distinct published bailType values
         "release_date": _clean(data.get("releaseDate")),
     }
 
@@ -206,6 +217,7 @@ def build_record(row: Dict[str, Any], detail: Optional[Dict[str, Any]]) -> Optio
         Booking_Time=booked_at.strftime("%I:%M %p"),
         Charges=" | ".join(detail["charges"]) if detail else "",
         Bond_Amount=bond,
+        Bond_Type=detail["bond_type"] if detail else "",
         Case_Number=" | ".join(detail["case_numbers"]) if detail else "",
         Status="In Custody",
         Detail_URL=PORTAL_URL,
@@ -271,27 +283,32 @@ class OkaloosaCountyScraper(BaseScraper):
         skipped_status = len(rows) - len(current)
         current.sort(key=lambda r: _clean(r.get("bookingNo")), reverse=True)
 
+        # Only bookings with a fetched detail are emitted: a row without one
+        # would carry blank charges/case/bond that the writer $sets over values
+        # captured when the booking was new (and rescoring would drop them).
         records: List[ArrestRecord] = []
         details = detail_failures = 0
         for row in current:
             booking = _clean(row.get("bookingNo"))
             booked_at = parse_custody_date(row.get("custodyDate"))
-            detail = None
-            if booked_at is not None and booked_at >= cutoff and details < MAX_DETAILS:
-                details += 1
-                try:
-                    detail = parse_detail(self._get_json(session, f"{DETAIL_URL}/{booking}"), booking)
-                except (requests.RequestException, ValueError) as exc:
-                    logger.debug("Okaloosa detail failed (%s): %s", booking, exc)
-                if detail is None:
-                    detail_failures += 1
-                time.sleep(REQUEST_PAUSE_S)
+            if booked_at is None or booked_at < cutoff or details >= MAX_DETAILS:
+                continue
+            details += 1
+            # A request failure escapes (BaseScraper retries, classifies, alerts)
+            # instead of silently dropping the booking.
+            detail = parse_detail(self._get_json(session, f"{DETAIL_URL}/{booking}"), booking)
+            time.sleep(REQUEST_PAUSE_S)
+            if detail is None:
+                detail_failures += 1
+                continue
             rec = build_record(row, detail)
             if rec is not None:
                 records.append(rec)
 
+        if details and detail_failures == details:
+            raise OkaloosaContractError("Okaloosa: every detail was missing or named another booking")
         if current and not records:
-            raise OkaloosaContractError("Okaloosa: roster rows present but none carry booking key + date")
+            raise OkaloosaContractError(f"Okaloosa: no in-custody booking within {days} days carried a detail")
         if skipped_status or detail_failures:
             logger.warning(
                 "Okaloosa: skipped %d rows with non-custody status; %d/%d detail fetches failed",

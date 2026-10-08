@@ -43,3 +43,10 @@
 
 A blank `bailAmt` can be a hold, so the booking's `Bond_Amount` is the sum of the detail `bailAmt` only when **every** charge publishes one (a published 0 counts). Otherwise it is `""`. The roster `totalBondAmt` is only the sum of the published charges. In a box probe (08:20 EDT, 60 bookings) 11 were all known, 40 all blank and 9 mixed, and all 9 mixed bookings had a positive roster total that understates the bond. So the roster total is no longer used. Bookings without a detail (outside the 7-day window) carry an unknown bond, and the smoke figure above ("Bond > 0: 429") predates this rule and will now be lower. Per-charge known amounts stay in `charge_details`.
 
+## Codex follow-up (2026-10-08)
+
+- **No destructive blanks:** only bookings within `LOOKBACK_DAYS` that have a fetched detail are emitted. Older in-custody bookings were captured with charges when they were new, and rows without a detail would have `$set` blank charges, case numbers and bond over those values. That removes the roster-wide 781-row emit described above. The run now emits the 7-day window: 70 rows at 08:33 EDT, all 70 with charges, 15 complete bonds, 55 unknown.
+- **Failures:** a detail request failure (network, HTTP or JSON) raises, so BaseScraper retries, classifies and alerts. A detail whose `bookingNo` differs skips that booking, and if every detail does, the run raises.
+- **Bond type:** `Bond_Type` is the distinct published `bailType` values joined with ` | ` (upper-cased). In the 08:20 EDT probe, 24 charges were `Cash` with an amount and 82 were blank with a null amount. A `NO BOND`/`HOLD` value scores as a hold.
+- **Zero bail:** the source shows an unpublished bail as null (82/82) and the roster uses 0 for "none published", so a detail `bailAmt` of 0 is read as unpublished. This differs from Orange, where a published `0.00` cell is real (70 rows). With a 0, the total is `""`, so it can never understate the bond.
+
