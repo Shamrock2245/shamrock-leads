@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 - **Orange (FL):** the BestJail scraper timed out (it fetched details and charges for all ~2,400 current-year inmates). It also wrote `$0.00` when no bond was published and stored the age (`BIRTH`) as the DOB. It now uses plain `requests` (curl_cffi impersonation retired) on the county's public JSON endpoints: a 26-letter roster (any failed letter raises), deduped on the source 8-digit `bookingNumber` (the roster repeats a booking once per alias). It walks the newest bookings first and stops after the 7-day window. Bond is the sum of published `BondAmount` cells, and an unknown bond stays empty. Charges come with per-charge `charge_details`, and the age goes to `Age_At_Arrest`. Box read smoke: 303 rows / 303 unique in 37 s. Health stays `unverified` until a Leads Ops write smoke (`docs/recon/FL_ORANGE_BESTJAIL_2026-10-08.md`).
+## [Unreleased] — 2026-10-08 (name without license falls back)
+
+### Fixed
+- **Palmetto appearance bonds.** A name that is not in `BOND_AGENTS` and has no license is not printed with a blank license. Resolution continues to the signed-in sub-agent, then the house pair (Brendan O'Neal / P139768). A short label such as Kayla L on Kayla Lukesic's session prints Kayla Lukesic / G356764, and the same label on a PIN-admin or machine path prints the house pair. A non-registry name is kept only when a non-registry license is also present. DocuSeal prefill, the bondsman submitter, the appearance bond, the print route, and the packet forms use that same pair. OSI appearance bonds are unchanged.
 
 ## [Unreleased] — 2026-10-08 (license-only agent pair)
 
