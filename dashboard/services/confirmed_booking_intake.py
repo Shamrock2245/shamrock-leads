@@ -308,6 +308,12 @@ async def confirm_preview(
         "updated_at": now,
     })
     created = same_jurisdiction is None
+    if not created:
+        # The booking page is source data: staff bond / charge edits win and
+        # the page's values land in scraped_* for drift review.
+        from core.staff_edits import protect_scraped_update
+
+        safe_fields, _ = protect_scraped_update(safe_fields, same_jurisdiction, now=now)
     filter_doc = {"booking_dedup_key": facts["booking_dedup_key"]} if created else {"_id": same_jurisdiction["_id"]}
     await arrests_collection.update_one(
         filter_doc,

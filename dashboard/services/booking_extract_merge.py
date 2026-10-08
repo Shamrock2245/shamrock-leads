@@ -468,6 +468,14 @@ async def merge_booking_extract(payload: dict, *, actor: str = "dashboard_user")
     rec = ArrestRecord.from_mongo_doc(rec_dict)
     LeadScorer().score_and_update(rec)
 
+    from core.staff_edits import protect_scraped_update, staff_provenance
+
+    staff_prov = staff_provenance(existing)
+    if staff_prov.charges:
+        # Staff rows win; only the page's own rows are offered as scraped.
+        merged_rows = incoming_rows
+        charges_raw = " | ".join(r["charge"] for r in incoming_rows) or extract["charges"]
+
     updates: dict[str, Any] = {
         "bond_amount": total_bond,
         "bond_type": primary_bond_type,
@@ -500,6 +508,17 @@ async def merge_booking_extract(payload: dict, *, actor: str = "dashboard_user")
     _fill_if_empty(existing, updates, "weight", extract["weight"])
     _fill_if_empty(existing, updates, "facility", extract["facility"])
     _fill_if_empty(existing, updates, "state", extract["state"])
+
+    if not created:
+        # The booking page is source data: staff bond / charge edits win and
+        # the page's values land in scraped_* for drift review.
+        updates, staff_prov = protect_scraped_update(updates, existing, record=rec)
+        if staff_prov.bond:
+            total_bond = float(staff_prov.bond_amount or 0)
+            rec.Lead_Score = updates.get("lead_score", rec.Lead_Score)
+            rec.Lead_Status = updates.get("lead_status", rec.Lead_Status)
+        if staff_prov.charges:
+            merged_rows = updates.get("charge_details") or merged_rows
 
     has_active_bond = False
     try:

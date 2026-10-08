@@ -294,6 +294,8 @@ class ScraperScheduler:
             "booking_number": 1, "full_name": 1, "status": 1,
             "bond_amount": 1, "charges": 1, "bond_type": 1,
             "detail_url": 1, "county": 1,
+            # staff provenance, so the live-roster update can't replace staff edits
+            "staff_edits": 1, "bond_override": 1, "last_checked_mode": 1, "charge_details": 1,
         }))
 
         logger.info(f"🔍 Checking {len(defendants)} defendants in {county}")
@@ -379,6 +381,10 @@ class ScraperScheduler:
                     update_fields[d["field"]] = d["new"]
                 update_fields["last_custody_recheck"] = now.isoformat()
                 update_fields["custody_recheck_source"] = "live_roster"
+                # Staff bond / charge edits win; live values go to scraped_*.
+                from core.staff_edits import protect_scraped_update
+
+                update_fields, _ = protect_scraped_update(update_fields, old_doc, now=now)
 
                 arrests_col.update_one(
                     {"booking_number": bk, "county": county},

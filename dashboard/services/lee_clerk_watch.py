@@ -193,11 +193,20 @@ async def _refresh_jail_source(arrest: Dict[str, Any]) -> Dict[str, Any]:
             fields[key] = data[key]
     if data.get("bond_amount") is not None:
         fields["total_bond_amount"] = data.get("bond_amount")
+    # Staff bond / charge edits win; the jail page's values go to scraped_*.
+    from core.staff_edits import protect_scraped_update
+
+    fields, prov = protect_scraped_update(fields, arrest)
     await get_collection("arrests").update_one(
         {"booking_number": booking},
         {"$set": fields},
     )
-    return {"attempted": True, "updated": True, "bond_amount": data.get("bond_amount")}
+    return {
+        "attempted": True,
+        "updated": True,
+        "bond_amount": data.get("bond_amount"),
+        "staff_bond_kept": prov.bond,
+    }
 
 
 def _written_anchor(doc: Dict[str, Any]) -> Any:

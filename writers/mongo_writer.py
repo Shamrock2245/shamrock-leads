@@ -17,6 +17,7 @@ from pymongo.collection import Collection
 from pymongo.errors import OperationFailure
 
 from core.models import ArrestRecord
+from core.staff_edits import fetch_provenance_docs, protect_scraped_update
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -234,6 +235,7 @@ class MongoWriter:
         skipped_invalid = 0
         # Map bulk op index → original record index (after filtering invalids)
         op_to_record_idx: list[int] = []
+        pending: list = []
 
         for idx, record in enumerate(records):
             booking = (record.Booking_Number or "").strip()
@@ -277,7 +279,21 @@ class MongoWriter:
             # Ensure created_at / first_seen_at are NEVER overwritten in $set
             doc.pop("created_at", None)
             doc.pop("first_seen_at", None)
+            pending.append((idx, record, (state, county_name, booking), doc))
 
+        # ── Staff edits survive rescrapes (core/staff_edits.py) ──
+        # One read per (state, county) for docs that may carry staff bond or
+        # charge edits; their $set is rewritten so scraped values land in
+        # scraped_* fields instead of replacing staff values. A failed read
+        # raises: writing blind could clobber staff edits.
+        staff_docs = fetch_provenance_docs(self.arrests, [key for _, _, key, _ in pending]) if pending else {}
+        protected = 0
+        for idx, record, key, doc in pending:
+            existing = staff_docs.get(key)
+            if existing:
+                doc, prov = protect_scraped_update(doc, existing, record=record, now=now)
+                protected += int(prov.any)
+            state, county_name, booking = key
             operations.append(
                 UpdateOne(
                     {
@@ -297,6 +313,8 @@ class MongoWriter:
                 )
             )
             op_to_record_idx.append(idx)
+        if protected:
+            logger.info("%s: kept staff bond/charge edits on %d record(s)", county, protected)
 
         if not operations:
             return {

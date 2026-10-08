@@ -3657,7 +3657,7 @@ async function openChargeBondsModal(bookingNumber) {
       <td style="padding:8px">
         <div style="display:flex;align-items:center;gap:4px">
           <span style="color:var(--muted)">$</span>
-          <input type="number" class="ci-input charge-bond-input" value="${item.bond_amount || 0}" min="0" step="100" style="width:110px;font-size:13px;font-weight:700;background:rgba(0,0,0,0.3);color:var(--emerald,#10b981);border:1px solid var(--border);border-radius:4px;padding:4px 8px" oninput="recalcChargeBondsTotal()">
+          <input type="number" class="ci-input charge-bond-input" value="${(item.bond_amount === null || item.bond_amount === undefined || item.bond_amount === '') ? '' : item.bond_amount}" placeholder="unknown" min="0" step="100" style="width:110px;font-size:13px;font-weight:700;background:rgba(0,0,0,0.3);color:var(--emerald,#10b981);border:1px solid var(--border);border-radius:4px;padding:4px 8px" oninput="recalcChargeBondsTotal()">
         </div>
       </td>
       <td style="padding:8px;text-align:center">
@@ -3744,7 +3744,7 @@ function addChargeBondRow() {
     <td style="padding:8px">
       <div style="display:flex;align-items:center;gap:4px">
         <span style="color:var(--muted)">$</span>
-        <input type="number" class="ci-input charge-bond-input" value="0" min="0" step="100" style="width:110px;font-size:13px;font-weight:700;background:rgba(0,0,0,0.3);color:var(--emerald,#10b981);border:1px solid var(--border);border-radius:4px;padding:4px 8px" oninput="recalcChargeBondsTotal()">
+        <input type="number" class="ci-input charge-bond-input" value="" placeholder="unknown" min="0" step="100" style="width:110px;font-size:13px;font-weight:700;background:rgba(0,0,0,0.3);color:var(--emerald,#10b981);border:1px solid var(--border);border-radius:4px;padding:4px 8px" oninput="recalcChargeBondsTotal()">
       </div>
     </td>
     <td style="padding:8px;text-align:center">
@@ -3768,7 +3768,9 @@ async function saveChargeBondsFromModal() {
     const charge = tr.querySelector('.charge-name-input')?.value?.trim();
     const caseNum = tr.querySelector('.charge-case-input')?.value?.trim() || '';
     const bondType = tr.querySelector('.charge-type-select')?.value || 'Surety';
-    const bondAmt = parseFloat(tr.querySelector('.charge-bond-input')?.value) || 0;
+    // Blank stays blank (unknown); a typed 0 is a known $0.
+    const bondRaw = (tr.querySelector('.charge-bond-input')?.value ?? '').toString().trim();
+    const bondAmt = bondRaw === '' || Number.isNaN(parseFloat(bondRaw)) ? null : parseFloat(bondRaw);
     if (charge) {
       details.push({
         charge: charge,

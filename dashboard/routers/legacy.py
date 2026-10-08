@@ -33,6 +33,12 @@ from dashboard.extensions import (
     update_bb_url, BB_CONFIG_API_KEY,
 )
 from dashboard.routers.helpers import serialize_doc
+from core.staff_edits import (
+    protect_scraped_update,
+    staff_bond_marker,
+    staff_charges_marker,
+    staff_rows_from_text,
+)
 
 legacy_bp = APIRouter(prefix="/api", tags=["legacy"])
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -322,6 +328,9 @@ async def update_bond_amount(request: Request):
             "bond_override_at": now_iso,
             "bond_override_by": changed_by,
             "updated_at": now_iso,
+            # Durable staff provenance: rescrapes keep this amount (a $0 stays $0).
+            **staff_bond_marker(new_amount, bond_type=new_type, by=changed_by,
+                                source="update-bond-amount", now=now),
         }
         if new_type:
             set_fields["bond_type"] = new_type
@@ -443,6 +452,7 @@ async def update_charge_bonds(request: Request):
     total_bond = 0.0
     charge_descs = []
     bond_types = set()
+    any_amount_entered = False
 
     for item in charge_details:
         if not isinstance(item, dict):
@@ -450,15 +460,31 @@ async def update_charge_bonds(request: Request):
         c_desc = str(item.get("charge") or "").strip()
         if not c_desc:
             continue
-        try:
-            c_bond = float(item.get("bond_amount") or 0)
-        except (ValueError, TypeError):
-            c_bond = 0.0
+        raw_bond = item.get("bond_amount")
+        if raw_bond is None or (isinstance(raw_bond, str) and not raw_bond.strip()):
+            c_bond = None  # left blank: unknown, not $0
+        else:
+            try:
+                c_bond = float(str(raw_bond).replace(",", "").replace("$", ""))
+                any_amount_entered = True
+            except (ValueError, TypeError):
+                c_bond = None
         c_type = str(item.get("bond_type") or "Surety").strip()
         c_case = str(item.get("case_number") or "").strip()
         c_poa = str(item.get("poa_number") or item.get("poa_full") or "").strip()
+        if not c_poa and "poa_number" not in item and "poa_full" not in item:
+            # The Write Bond modal does not send POAs; keep the saved one.
+            prior = next(
+                (r for r in (existing.get("charge_details") or [])
+                 if isinstance(r, dict)
+                 and str(r.get("charge") or "").strip().upper() == c_desc.upper()
+                 and (r.get("poa_number") or r.get("poa_full"))),
+                None,
+            )
+            if prior:
+                c_poa = str(prior.get("poa_number") or prior.get("poa_full") or "").strip()
 
-        total_bond += max(0.0, c_bond)
+        total_bond += max(0.0, c_bond or 0.0)
         charge_descs.append(c_desc)
         if c_type:
             bond_types.add(c_type)
@@ -470,6 +496,7 @@ async def update_charge_bonds(request: Request):
             "bond_amount": c_bond,
             "bond_type": c_type,
             "case_number": c_case,
+            "source": "staff",
         }
         if c_poa:
             row["poa_number"] = c_poa
@@ -479,8 +506,10 @@ async def update_charge_bonds(request: Request):
 
     from core.models import ArrestRecord
     rec_dict = dict(existing)
-    rec_dict["bond_amount"] = f"{total_bond:.2f}"
-    rec_dict["bond_type"] = primary_bond_type
+    if any_amount_entered:
+        rec_dict["bond_amount"] = f"{total_bond:.2f}"
+        rec_dict["bond_amount_raw"] = f"{total_bond:.2f}"
+        rec_dict["bond_type"] = primary_bond_type
     if charge_descs:
         rec_dict["charges"] = " | ".join(charge_descs)
 
@@ -490,29 +519,37 @@ async def update_charge_bonds(request: Request):
     scorer.score_and_update(rec)
 
     update_fields = {
-        "bond_amount": total_bond,
-        "bond_type": primary_bond_type,
         "charge_details": clean_details,
         "lead_score": rec.Lead_Score,
         "lead_status": rec.Lead_Status,
         "updated_at": now,
         "last_checked": now_iso,
         "last_checked_mode": "MANUAL_CHARGE_BONDS",
+        # Durable staff provenance: rescrapes keep these rows (and removals).
+        **staff_charges_marker(existing, clean_details, by=changed_by,
+                               source="update-charge-bonds", now=now),
     }
+    if any_amount_entered:
+        # Only amounts staff actually entered become a staff bond (a $0 stays
+        # $0); all-blank rows leave the bond unknown instead of writing $0.
+        update_fields.update({
+            "bond_amount": total_bond,
+            "bond_type": primary_bond_type,
+            **staff_bond_marker(total_bond, bond_type=primary_bond_type, by=changed_by,
+                                source="update-charge-bonds", now=now),
+        })
     if charge_descs:
         update_fields["charges"] = " | ".join(charge_descs)
 
     await arrests.update_one({"booking_number": booking_number}, {"$set": update_fields})
 
     try:
+        p_set = {"lead_score": rec.Lead_Score, "updated_at": now}
+        if any_amount_entered:
+            p_set.update({"bond_amount": total_bond, "bond_type": primary_bond_type})
         await get_collection("prospective_bonds").update_many(
             {"booking_number": booking_number},
-            {"$set": {
-                "bond_amount": total_bond,
-                "bond_type": primary_bond_type,
-                "lead_score": rec.Lead_Score,
-                "updated_at": now,
-            }}
+            {"$set": p_set}
         )
     except Exception as e:
         logger.warning("[update-charge-bonds] prospective sync error: %s", e)
@@ -657,6 +694,13 @@ async def refresh_from_source(request: Request):
                 if parsed_data.get("dob"):
                     update_fields["dob"] = parsed_data["dob"]
 
+                # Staff bond / charge edits win; source values go to scraped_*.
+                update_fields, staff_prov = protect_scraped_update(update_fields, doc)
+                immediate["staff_bond_kept"] = staff_prov.bond
+                immediate["staff_charges_kept"] = staff_prov.charges
+                if staff_prov.bond:
+                    found_bond = float(staff_prov.bond_amount or 0)
+
                 await arrests.update_one({"booking_number": booking_number}, {"$set": update_fields})
                 updated_doc = await arrests.find_one({"booking_number": booking_number})
 
@@ -765,13 +809,23 @@ async def update_lead_details(request: Request):
 
     if "charges" in body and body["charges"]:
         set_fields["charges"] = body["charges"].strip()
+        # Staff-edited charge text becomes staff rows (keeping per-row bond /
+        # case / POA for unchanged descriptions) so rescrapes keep it.
+        staff_rows = staff_rows_from_text(set_fields["charges"], existing.get("charge_details"))
+        set_fields["charge_details"] = staff_rows
+        set_fields.update(staff_charges_marker(existing, staff_rows, by=changed_by,
+                                               source="update-lead-details", now=now))
 
-    if "bond_amount" in body and body["bond_amount"] is not None:
+    if "bond_amount" in body and body["bond_amount"] is not None and str(body["bond_amount"]).strip() != "":
         try:
             amt = float(str(body["bond_amount"]).replace(",", "").replace("$", ""))
             set_fields["bond_amount"] = amt
             set_fields["total_bond_amount"] = amt
             set_fields["bond_override"] = True
+            set_fields.update(staff_bond_marker(
+                amt, bond_type=str(body.get("bond_type") or existing.get("bond_type") or "").strip(),
+                by=changed_by, source="update-lead-details", now=now,
+            ))
         except (ValueError, TypeError):
             pass
 
