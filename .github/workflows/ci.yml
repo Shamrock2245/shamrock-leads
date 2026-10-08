@@ -92,7 +92,6 @@ jobs:
             tests/test_fl_orange_bestjail.py \
             tests/test_fl_67_status.py \
             tests/test_hendry_fail_closed.py \
-            tests/test_pinellas_fail_closed.py \
             tests/test_fl_idle_eight.py \
             tests/test_fl_bond_charges_hydrate.py \
             tests/test_fl_pinellas_bond_unknown.py \
@@ -112,6 +111,7 @@ jobs:
             tests/test_manatee_no_proxy_path.py \
             tests/test_charlotte_no_proxy_path.py \
             tests/test_relay_only_scheduling.py \
+            tests/test_pinellas_relay_only.py \
             tests/test_staff_edits_survive_rescrape.py \
             tests/test_mongo_writer_keeps_stored_values.py \
             tests/test_putnam_parser.py \

@@ -79,9 +79,8 @@ def test_home_counties_matrix_state_after_source_checks():
     # Hendry: MyOCV feed has only a person-level MNI id, no booking number (#143).
     assert _matrix_status(text, "Hendry") == "fail_closed"
     # 2026-10-08: main also moved Orange (#134) and Indian River (#136) to candidate_productive;
-    # #143 moved Hendry from recon_only to fail_closed; Pinellas followed
-    # (recon_only -> fail_closed, 2026-10-08, no plain-HTTP listing).
-    assert "| FL | 67 | 67 | 4 | 20 | 24 | 0 | 19 |" in text
+    # #143 moved Hendry from recon_only to fail_closed.
+    assert "| FL | 67 | 67 | 4 | 20 | 25 | 0 | 18 |" in text
 
 
 def test_no_home_county_is_promoted_in_health():

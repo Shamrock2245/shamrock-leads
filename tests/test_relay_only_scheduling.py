@@ -1,4 +1,4 @@
-"""Manatee + Charlotte are relay-only: never on the VPS scheduler (2026-10-07)."""
+"""Manatee + Charlotte (2026-10-07) and Pinellas (2026-10-08) are relay-only: never on the VPS scheduler."""
 from __future__ import annotations
 
 import ast
@@ -28,8 +28,9 @@ def _sched():
     return ScraperScheduler(max_workers=1)
 
 
-def test_relay_only_set_is_manatee_and_charlotte_fl():
-    assert RELAY_ONLY_LABELS == {"Manatee (FL)", "Charlotte (FL)"}
+def test_relay_only_set_is_manatee_charlotte_and_pinellas_fl():
+    # Pinellas joined 2026-10-08 (owner exception, docs/ops/PINELLAS_RELAY_RUN.md).
+    assert RELAY_ONLY_LABELS == {"Manatee (FL)", "Charlotte (FL)", "Pinellas (FL)"}
     assert is_relay_only(_Fake("Manatee")) and is_relay_only(_Fake("Charlotte"))
     assert not is_relay_only(_Fake("Charlotte", "NC"))  # Charlotte NC (Mecklenburg) is not this
     assert not is_relay_only(_Fake("Lee"))
@@ -111,5 +112,5 @@ def test_main_registers_relay_only_and_has_relay_entry_point():
         if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "register_scraper":
             arg = node.args[0]
             name = getattr(getattr(arg, "func", None), "id", "")
-            if name in ("ManateeCountyScraper", "CharlotteCountyScraper"):
+            if name in ("ManateeCountyScraper", "CharlotteCountyScraper", "PinellasCountyScraper"):
                 assert not node.keywords, f"{name} must not carry a VPS interval"

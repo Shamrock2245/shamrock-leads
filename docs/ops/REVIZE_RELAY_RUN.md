@@ -19,13 +19,13 @@ Any other egress mode, including the old `auto`, is a config error. The shared p
 
 - The **VPS/Hetzner scheduler** (`python main.py` with no arguments) registers both counties but never gives them an interval job. Its status lists them under `relay_only`.
 - A **dashboard trigger** for either county (run-now, or the custody recheck that refresh-from-source queues) is marked `status: relay_only` on the VPS and is not run there.
-- The **relay entry point** runs Manatee and Charlotte once each, then exits:
+- The **relay entry point** runs every relay-only county once (Manatee, Charlotte, and since 2026-10-08 Pinellas: see `docs/ops/PINELLAS_RELAY_RUN.md`), then exits:
 
   ```bash
   python main.py --relay-only
   ```
 
-  The exit code is `0` when both runs succeed and `1` when either run errors, including an `egress_block`. Schedule it from the relay with launchd or cron. The old VPS intervals were 75 min for Manatee and 90 min for Charlotte. A single county can also be run on its own: `python main.py Manatee` or `python main.py Charlotte`.
+  The exit code is `0` when every run succeeds and `1` when any run errors, including an `egress_block`. Schedule it from the relay with launchd or cron. The old VPS intervals were 75 min for Manatee and 90 min for Charlotte. A single county can also be run on its own: `python main.py Manatee` or `python main.py Charlotte`.
 
 Before the first relay write, run the read smokes. They write nothing and print aggregates only:
 

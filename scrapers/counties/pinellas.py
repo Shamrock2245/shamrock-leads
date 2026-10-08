@@ -2,23 +2,32 @@
 Pinellas County Arrest Scraper — Who's In Jail (Blazor Server).
 Source: Pinellas County Sheriff's Office
 URL: https://whosinjail.pinellassheriff.gov/
-Method: Patchright Chrome — date search + Next pagination.
+Method: stock Playwright Chromium on the Leads Ops home relay only —
+        booking-date search + Next pagination.
 
-FAIL CLOSED (2026-10-08, docs/recon/FL_PINELLAS_FAIL_CLOSED_2026-10-08.md):
-a plain-requests read from the agent box (honest User-Agent, no browser, no
-impersonation, no proxy) gets HTTP 200 with only the Blazor Server app shell:
-no search form, no table, no booking numbers. Every row is rendered over the
-Blazor SignalR circuit by the app's JavaScript, so there is no plain-HTTP
-listing to read, and the patchright browser path is not allowed under the
-no-stealth rule (same rule as Lee #147). ``SOURCE_CONTRACT_VALIDATED=False``
-stops ``run()`` before any source request, and ``scrape()`` refuses on its own
-for direct callers. The parser below is kept unchanged so a reopen decision
-(Brendan) only has to flip the guard and pick an allowed fetch path.
+RELAY-ONLY (owner exception, Brendan 2026-10-08 1:38 PM ET; CoS agreed):
+"we will connect at home, with residential egress." Who's In Jail is a Blazor
+Server app; a plain-requests read gets only the JS shell (no form, table or
+booking numbers; docs/recon/FL_PINELLAS_RELAY_ONLY_2026-10-08.md), so the rows
+need a browser. The exception allows a NON-stealth browser on the residential
+relay only:
+- stock Playwright Chromium (bundled, not ``channel="chrome"``), headless,
+  ``--no-proxy-server``, proxy env vars stripped, and an honest User-Agent that
+  names the bot (``USER_AGENT``); no patchright, stealth plugins, proxy,
+  impersonation or challenge solving;
+- ``config/relay_only.py`` lists Pinellas, so the VPS/Hetzner scheduler never
+  gives it an interval job and a dashboard trigger is not run there;
+- ``scrape()`` first verifies this host's own exit is US residential
+  (``PINELLAS_EGRESS_MODE=direct``, the only value) and raises
+  ``EgressBlocked`` before any browser start or source request otherwise.
+Health stays ``unverified`` until a Leads Ops write smoke through the relay.
 
 HISTORY:
 - v1: ASP.NET InmateBooking at pinellassheriff.gov/InmateBooking/ (ViewState POST)
-- v2 (current): Old app pool returns HTTP 503. Site now points to Who's In Jail
-  Blazor Server (SignalR; no public REST). Scrape via booking-date search.
+- v2: Old app pool returns HTTP 503. Site now points to Who's In Jail
+  Blazor Server (SignalR; no public REST). Patchright Chrome booking-date search.
+- v3 (current, 2026-10-08): patchright removed; stock Playwright Chromium,
+  honest User-Agent, relay-only with direct residential egress.
 
 Public roster covers current inmates + releases within ~30 days.
 
@@ -39,29 +48,41 @@ import logging
 import re
 import time
 from datetime import datetime, timedelta
-from typing import List, Optional, Set
+from typing import Any, List, Optional, Set, Tuple
 
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
-from scrapers.chromium_flags import playwright_launch_kwargs
+from scrapers.revize_roster import (
+    egress_mode as _egress_mode,
+    launch_plain_browser,
+    resolve_egress as _resolve_egress,
+)
 
 logger = logging.getLogger(__name__)
 
 SEARCH_URL = "https://whosinjail.pinellassheriff.gov/"
-DAYS_BACK = 3  # Runs every 90 min — 3 days covers plenty of ground
+DAYS_BACK = 3  # Relay runs on a launchd/cron cadence; 3 days covers plenty of ground
 MAX_PAGES_PER_DAY = 40
 FACILITY = "Pinellas County Jail"
+EGRESS_ENV = "PINELLAS_EGRESS_MODE"
+# Honest User-Agent: names the bot and its operator; no Chrome spoofing.
+USER_AGENT = (
+    "ShamrockLeadsBot/1.0 (+https://shamrockbailbonds.biz; "
+    "Pinellas public jail roster via residential relay; stock Playwright Chromium)"
+)
+
+
+def egress_mode() -> str:
+    return _egress_mode(EGRESS_ENV)
+
+
+def resolve_egress(scraper: Any = None) -> Tuple[None, str]:
+    """Verify this host's own exit is US residential or raise ``EgressBlocked``
+    (before any browser start or request to the source)."""
+    return _resolve_egress(scraper, county="Pinellas", env_var=EGRESS_ENV)
 
 
 class PinellasCountyScraper(BaseScraper):
-    SOURCE_CONTRACT_VALIDATED = False
-    SOURCE_CONTRACT_REASON = (
-        "Who's In Jail is a Blazor Server app: a plain-requests GET returns only the "
-        "JS app shell (no form, table or booking numbers); rows arrive over the "
-        "SignalR circuit, which needs a browser, and the patchright path is not "
-        "allowed (no stealth). Fail closed pending Brendan's decision."
-    )
-
     @property
     def county(self) -> str:
         return "Pinellas"
@@ -71,35 +92,20 @@ class PinellasCountyScraper(BaseScraper):
         return "FL"
 
     def scrape(self) -> List[ArrestRecord]:
-        if not self.SOURCE_CONTRACT_VALIDATED:
-            # Direct callers (relay, ad-hoc) get the same refusal as run():
-            # no browser is launched and no source request is made.
-            logger.warning("[Pinellas] fail closed: %s", self.SOURCE_CONTRACT_REASON)
-            return []
-        from patchright.sync_api import sync_playwright
+        # Relay gate first: off the residential relay this raises EgressBlocked
+        # and no browser is started and no source request is made.
+        _, egress_source = resolve_egress(self)
+        logger.info("[Pinellas] egress mode=%s source=%s", egress_mode(), egress_source)
 
         all_records: List[ArrestRecord] = []
         seen: Set[str] = set()
         self._modal_attempts = self._modal_failures = 0
 
-        with sync_playwright() as pw:
-            # Prefer system Chrome when present (Mac / desktop smokes); fall back
-            # to bundled Chromium on VPS images without channel="chrome".
+        pw, browser = launch_plain_browser()
+        try:
             try:
-                browser = pw.chromium.launch(
-                    **playwright_launch_kwargs(channel="chrome")
-                )
-            except Exception as chrome_err:
-                logger.warning(
-                    "[Pinellas] channel=chrome failed (%s) — using bundled Chromium",
-                    chrome_err,
-                )
-                browser = pw.chromium.launch(**playwright_launch_kwargs())
-
-            try:
-                # Plain context: Pinellas has no CF; stealth init-scripts have broken
-                # DNS on some residential egress paths.
-                page = browser.new_page()
+                # Stock context with an honest User-Agent; no init scripts.
+                page = browser.new_context(user_agent=USER_AGENT).new_page()
                 try:
                     page.goto(SEARCH_URL, wait_until="domcontentloaded", timeout=90000)
                     page.wait_for_selector("#booking-date", timeout=60000)
@@ -131,6 +137,11 @@ class PinellasCountyScraper(BaseScraper):
                     browser.close()
                 except Exception:
                     pass
+        finally:
+            try:
+                pw.stop()
+            except Exception:
+                pass
 
         self._check_modal_failures()
         logger.info("[Pinellas] Scraped %d total records", len(all_records))

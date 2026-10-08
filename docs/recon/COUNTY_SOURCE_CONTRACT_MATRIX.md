@@ -23,7 +23,7 @@
 |---|---:|---:|---:|---:|---:|---:|---:|
 | AL | 67 | 16 | 4 | 0 | 0 | 51 | 12 |
 | CT | 12 | 6 | 0 | 0 | 6 | 1 | 5 |
-| FL | 67 | 67 | 4 | 20 | 24 | 0 | 19 |
+| FL | 67 | 67 | 4 | 20 | 25 | 0 | 18 |
 | GA | 159 | 85 | 0 | 0 | 148 | 0 | 11 |
 | LA | 64 | 13 | 3 | 1 | 4 | 46 | 10 |
 | MS | 82 | 9 | 1 | 0 | 4 | 69 | 8 |
@@ -32,7 +32,7 @@
 | TN | 96 | 22 | 9 | 0 | 74 | 0 | 13 |
 | TX | 254 | 34 | 2 | 0 | 0 | 252 | 0 |
 
-**Aggregate matrix counts:** verified public 33; candidate productive 36; recon only 260; unverified 489; fail closed 129.
+**Aggregate matrix counts:** verified public 33; candidate productive 36; recon only 261; unverified 489; fail closed 128.
 
 ## County matrix
 
@@ -168,7 +168,7 @@
 | FL | 097 | Osceola County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 099 | Palm Beach County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 101 | Pasco County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
-| FL | 103 | Pinellas County | OSI + Palmetto | registered | fail_closed | https://whosinjail.pinellassheriff.gov/ | 2026-10-08 ~11:42 AM ET from the agent box: plain HTTPS GET with an honest User-Agent, HTTP 200 text/html (~6 KB) Blazor Server app shell; no challenge or 403, but no data without running the app's JavaScript (SignalR circuit) | 2026-10-08 plain-requests read (`docs/recon/FL_PINELLAS_FAIL_CLOSED_2026-10-08.md`): the root returns only the Blazor Server shell (title WhosInJailWebSite, loads `_framework/blazor.server.js`): 0 form, 0 input, 0 table elements and 0 booking numbers. `/api` returns the same shell (200), `/swagger/index.html` and `/robots.txt` are 404, and the legacy `www.pinellassheriff.gov/InmateBooking/` is 503. Rows (booking number, charges, Bond Assessed) are rendered only over the SignalR circuit, so there is no plain-HTTP listing; the patchright browser path is not allowed (no stealth, Lee #147 rule). Fail closed pending Brendan's decision. Stored rows are untouched. |
+| FL | 103 | Pinellas County | OSI + Palmetto | registered | recon_only | https://whosinjail.pinellassheriff.gov/ | Who's In Jail is a Blazor Server app. 2026-10-08 ~11:42 AM ET plain-requests read from the agent box (honest User-Agent, no browser/proxy/impersonation): GET / HTTP 200 text/html 5,971-byte JS app shell (0 form/input/table elements, 0 booking numbers), /api same shell, /swagger and /robots.txt 404, legacy www.pinellassheriff.gov/InmateBooking/ 503; no challenge or 403, but rows render only over the SignalR circuit. Owner exception (Brendan 2026-10-08 1:38 PM ET, CoS agreed): non-stealth stock Playwright Chromium with an honest bot User-Agent, on the Leads Ops home relay's own residential exit only (`PINELLAS_EGRESS_MODE=direct`, the only mode; relay-only in config/relay_only.py, no VPS interval); patchright, stealth, proxy, impersonation and challenge solving are not used; a non-residential exit raises EgressBlocked before any browser start or source request | 2026-10-08 (`docs/recon/FL_PINELLAS_RELAY_ONLY_2026-10-08.md`): no plain-HTTP listing, so the roster is read in a stock browser on the residential relay only (owner exception above). Booking-date search keyed on the source booking number; Subject Charge Report modal gives Offense Description and per-charge Bond Assessed. Bond rules from #142 unchanged: total only when every charge publishes an amount, a published $0.00 is "0" (33 of 82 cells on 2026-10-06/07), unknown is "" never "0"; a booking whose modal does not render is skipped. The 2026-09-23 live writes came from the retired patchright path. Health stays `unverified` until a Leads Ops write smoke goes through the relay; not `verified_public`. |
 | FL | 105 | Polk County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 107 | Putnam County | OSI + Palmetto | registered | candidate_productive | https://smartweb.pcso.us/smartwebclient/Jail.aspx | Ordinary public HTTPS SmartWEB JAIL View (legacy AddMoreResults page method) | 2026-10-07 SmartWEB legacy-paging recon: Booking No PCSO<YY>JBN<NNNNNN>, booking date/time, charges, bond via booking-date window + Current Inmates Only. 30-day read smoke 123 rows / 123 unique source Booking No (was capped at 20 first-page cards: % wildcard + wrong AJAX payload). curl_cffi/verify=False retired; shared fl_smartweb. See docs/recon/FL_SMARTWEB_LEGACY_PAGING_2026-10-07.md. |
 | FL | 113 | Santa Rosa County | OSI + Palmetto | registered | candidate_productive | https://jailview.srso.net/SmartWebClient/jail.aspx | Ordinary public HTTPS SmartWEB JAIL View | 2026-10-07 SmartWEB-five recon: Booking No SRSO<YY>JBN<NNNNNN>, booking date/time, charges when published. curl_cffi retired. 2026-10-07 legacy-paging fix: bare-SearchVals AddMoreResults now pages (30-day read smoke 153 rows, was 50). |
@@ -988,7 +988,7 @@
 
 ## Live emitter evidence
 
-Documented live writes and holds for scopes named in the latest executive brief. This table is evidence only: `live_write` does **not** promote a Health source state (Seminole and Lee stay `unverified` until a verified_public decision is documented; Pinellas is a `hold` since 2026-10-08). The builder refuses to run if a `live_write` scope is `fail_closed` or a `hold` scope is not `fail_closed`.
+Documented live writes and holds for scopes named in the latest executive brief. This table is evidence only: `live_write` does **not** promote a Health source state (Pinellas, Seminole, and Lee stay `unverified` until a verified_public decision is documented). The builder refuses to run if a `live_write` scope is `fail_closed` or a `hold` scope is not `fail_closed`.
 
 | County (ST) | Health source state | Emitter | Evidence | Source |
 |---|---|---|---|---|
@@ -1006,7 +1006,7 @@ Documented live writes and holds for scopes named in the latest executive brief.
 | Bay (FL) | verified_public | live_write | 2026-09-25 Mac write smoke 940 new / 0 updated, status ok (source Booking # YYYY-NNNNNN) | `docs/recon/FL_GAP_QUEUE_2026-09-25.md` |
 | Suwannee (FL) | verified_public | live_write | 2026-09-25 Mac write smoke 44 new / 0 updated, status ok (source Booking No SCSO<YY>JBN<NNNNNN>) | `docs/recon/FL_GAP_QUEUE_2026-09-25.md` |
 | Broward (FL) | verified_public | live_write | 2026-09-23 BSO Arrest Search write smoke 30 new (JMS_NUMBER); live per 2026-09-25 brief | `docs/COUNTY_REGISTRY.md` |
-| Pinellas (FL) | fail_closed | hold | Who's In Jail is Blazor Server: plain-requests GET 200 returns only the JS app shell (0 forms/tables/booking numbers); rows need the SignalR circuit (browser) and the patchright path is not allowed. Fail closed 2026-10-08 pending Brendan. The 2026-09-23 48h Mongo writes came from the patchright browser path | `docs/recon/FL_PINELLAS_FAIL_CLOSED_2026-10-08.md` |
+| Pinellas (FL) | unverified | live_write | 48h Mongo write evidence 2026-09-23; Who's In Jail roster Mac smoke 149 ok; live per 2026-09-25 brief (retired patchright path). 2026-10-08: relay-only with stock Playwright Chromium per owner exception (Brendan 1:38 PM ET); Health stays unverified until a Leads Ops write smoke through the relay | `docs/recon/PALMETTO_READ_WRITE_HEALTH_2026-09-23.md` |
 | Seminole (FL) | unverified | live_write | 48h Mongo write evidence 2026-09-23; DoSearch A-Z Mac smoke 60 new; live per 2026-09-25 brief. Health stays unverified: no documented verified_public decision yet | `docs/recon/PALMETTO_READ_WRITE_HEALTH_2026-09-23.md` |
 | Lee (FL) | unverified | live_write | 48h Mongo write evidence 2026-09-23; KEY FL county with file-backed /32 cooldown; live per 2026-09-25 brief. Health stays unverified: no documented verified_public decision yet | `docs/recon/LEE_SELF_HEALING_2026-09-23.md` |
 | Richland (SC) | fail_closed | hold | JMSOnline maintenance; list view has no source booking key (synthetic RIC_ forbidden) | `docs/recon/SC_WRITE_SMOKE_2026-09-24.md` |

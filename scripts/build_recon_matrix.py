@@ -449,7 +449,7 @@ def build_matrix(
             "",
             "## Live emitter evidence",
             "",
-            "Documented live writes and holds for scopes named in the latest executive brief. This table is evidence only: `live_write` does **not** promote a Health source state (Seminole and Lee stay `unverified` until a verified_public decision is documented; Pinellas is a `hold` since 2026-10-08). The builder refuses to run if a `live_write` scope is `fail_closed` or a `hold` scope is not `fail_closed`.",
+            "Documented live writes and holds for scopes named in the latest executive brief. This table is evidence only: `live_write` does **not** promote a Health source state (Pinellas, Seminole, and Lee stay `unverified` until a verified_public decision is documented). The builder refuses to run if a `live_write` scope is `fail_closed` or a `hold` scope is not `fail_closed`.",
             "",
             "| County (ST) | Health source state | Emitter | Evidence | Source |",
             "|---|---|---|---|---|",
