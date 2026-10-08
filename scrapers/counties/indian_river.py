@@ -340,6 +340,11 @@ class IndianRiverCountyScraper(BaseScraper):
         logger.info("Indian River: %d bookings over %d days (%d details)", len(records), days, fetched)
         return records
 
+    def fetch_bond_recheck(self, booking_id: str, detail_url: str = "") -> Optional[ArrestRecord]:
+        """Pending-bond re-check (core/pending_bond_recheck.py): the same
+        plain-requests detail read as the custody recheck."""
+        return self._fetch_single_booking(booking_id, detail_url)
+
     def _fetch_single_booking(self, booking_id: str, detail_url: str) -> Optional[ArrestRecord]:
         """Custody recheck: re-read one stored booking. None unless the page still
         shows the same source Booking Number (legacy rows keyed on the portal id

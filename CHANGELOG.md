@@ -3,6 +3,21 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (pending-bond re-check worker)
+
+### Added
+- **Pending-bond re-check worker** (`core/pending_bond_recheck.py`, Brendan 2026-10-08). A blank, not-final `"0"`, or no-bond / not-set bond on an in-custody booking usually means the bond is still pending. The worker re-reads those bookings daily on days 1-3 after booking (at least 20 h apart), then weekly while the person is in custody. Day 0 is left to the regular scrape and the first-appearance watcher; a booking with no usable date is never guessed at.
+- **Stops** when a real bond is published (positive, or a `0` the parser marks as published in `extra.bond_published`, e.g. Hernando ROR), the person is released, or a sentencing status shows up (status, bond type or charges). A `0` the parser can't vouch for stays pending. A fetch that returns nothing writes nothing and is never treated as released; after 3 consecutive misses the booking stops as `not_found_on_source`.
+- **Targets:** stored `arrests` docs in custody, with a source booking key, a pending bond and no staff bond edit, in counties whose scraper is registered, not `fail_closed`, `SOURCE_CONTRACT_VALIDATED`, not auto-disabled, not relay-only (unless run on the relay), and opted in with `fetch_bond_recheck(booking_id, detail_url)`. Opted in: Hernando (new hook on the existing `JailSearchDetails.aspx?BookNo=` detail path and parser) and Indian River (the existing custody-recheck single fetch). Lee and Collier are not opted in because their single-booking paths use stealth / TLS impersonation / a proxy.
+- **Writes** go only through `MongoWriter.write_records`, so the charges/bond pair rule and staff-edit protections apply. Fields the detail page does not return (name, DOB, booking date, lead score, ...) are filled from the stored doc first, so a detail-only refresh never blanks them. Unknown bond stays `""`; no bond is invented.
+- **State** per booking (`last_checked_at`, `check_count`, `not_found_streak`, `stop_reason`, `last_outcome`) lives in a new global `bond_rechecks` collection (classified in `dashboard/tenancy/constants.py`), so arrests docs and staff edits are never touched by the bookkeeping.
+- **Caps and pacing:** global `PENDING_BOND_RECHECK_MAX_PER_RUN` (default 60) and per county the smaller of `PENDING_BOND_RECHECK_PER_COUNTY` (default 25) and the county module's `MAX_DETAILS_PER_RUN` / `MAX_DETAILS`. Due bookings over a cap are skipped and picked up by a later run (never-checked first). The pause between fetches is the slower of the county's `REQUEST_PAUSE_S` and `PENDING_BOND_RECHECK_PAUSE_S` (default 1 s).
+- **Scheduling:** `main.py` registers `pending_bond_recheck` on the existing APScheduler every `PENDING_BOND_RECHECK_INTERVAL_HOURS` (default 6), first run 15 min after start, one instance at a time. Kill switch: `PENDING_BOND_RECHECK_ENABLED=0`. No deploy workflow change.
+- Logs carry county labels, booking keys, field names and counts only, never person data.
+
+### Tests
+- `tests/test_pending_bond_recheck.py` (added to the `ci.yml` list): cadence math, pending detection, stop conditions (published, final zero, released, sentenced, not found), target selection (staff bond, no key, not in custody), fail_closed / relay-only / unvalidated / auto-disabled / no-path exclusion, global and per-county caps with catch-up, pacing, kill switch, writes through MongoWriter without blanking stored fields, no names in logs, the Hernando hook (existing detail URL, `$0.00` unknown, ROR final, drift / unreadable / no grid / HTTP error return `None`, non-source key makes no request), job registration, and collection classification. Synthetic data only. `tests/test_tenant_scope.py` counts the new global collection (120 known / 13 global).
+
 ## [Unreleased] — 2026-10-08 (Indian River charge headers + Bond-row guard)
 
 ### Fixed
