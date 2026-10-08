@@ -79,14 +79,9 @@ def _spec_field(field: dict) -> dict:
         "data_source": field["data_source"],
         "required": field["required"],
     }
-    align = str(field.get("align") or "").strip().lower()
-    if align:
-        row["align"] = align
-    valign = str(field.get("valign") or "").strip().lower()
-    if valign:
-        row["valign"] = valign
-    if field.get("font_size") is not None:
-        row["font_size"] = field["font_size"]
+    preferences = field.get("preferences")
+    if preferences:
+        row["preferences"] = preferences
     return row
 
 

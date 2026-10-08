@@ -766,9 +766,7 @@ def test_agent_license_is_one_right_aligned_bondsman_field_per_form():
         by_slug[slug] = (license_field, _areas_for(license_field, attachment))
         assert submitters[license_field["submitter_uuid"]] == "bondsman"
         assert license_field["required"] is False
-        assert license_field["preferences"] == {"align": "right"}
-        assert "valign" not in license_field["preferences"]
-        assert "font_size" not in license_field["preferences"]
+        assert license_field["preferences"] == _AGENT_LINE_PREFERENCES[slug]["agent_license"]
 
         names = [
             field for field in plan["fields"]
@@ -777,7 +775,7 @@ def test_agent_license_is_one_right_aligned_bondsman_field_per_form():
         assert len(names) == 1
         name_field = names[0]
         assert submitters[name_field["submitter_uuid"]] == "bondsman"
-        assert name_field["preferences"] == {}
+        assert name_field["preferences"] == _AGENT_LINE_PREFERENCES[slug]["agent_name"]
         name_areas = _areas_for(name_field, attachment)
         assert len(name_areas) == 1
         name_area = name_areas[0]
@@ -786,6 +784,12 @@ def test_agent_license_is_one_right_aligned_bondsman_field_per_form():
         assert license_area["y"] == name_area["y"]
         assert license_area["h"] == name_area["h"]
         assert float(license_area["x"]) >= float(name_area["x"]) + float(name_area["w"]) - 1e-9
+        assert (name_area["x"], name_area["y"], name_area["w"], name_area["h"]) == (
+            _AGENT_LINE_AREAS[slug]["agent_name"]
+        )
+        assert (license_area["x"], license_area["y"], license_area["w"], license_area["h"]) == (
+            _AGENT_LINE_AREAS[slug]["agent_license"]
+        )
 
         others = []
         for field in plan["fields"]:
@@ -823,71 +827,111 @@ def test_agent_license_is_one_right_aligned_bondsman_field_per_form():
     assert license_value["default_value"] == values["agent_license"]
 
     spec = json.loads(SPEC_JSON.read_text(encoding="utf-8"))
-    spec_licenses = [
-        row for row in spec["fields"]
-        if row["name"] in ("app_agent_license", "ind_agent_license")
-    ]
-    assert {row["name"] for row in spec_licenses} == {"app_agent_license", "ind_agent_license"}
-    for row in spec_licenses:
-        assert row["data_source"] == "agent_license"
+    spec_by_name = {
+        row["name"]: row
+        for row in spec["fields"]
+        if row["name"] in (
+            "app_agent_name",
+            "app_agent_license",
+            "ind_agent_name",
+            "ind_agent_license",
+        )
+    }
+    assert set(spec_by_name) == {
+        "app_agent_name",
+        "app_agent_license",
+        "ind_agent_name",
+        "ind_agent_license",
+    }
+    for placement_name, data_source, required, slug, source in (
+        ("app_agent_name", "agent_name", True, "defendant-application", "agent_name"),
+        ("app_agent_license", "agent_license", False, "defendant-application", "agent_license"),
+        ("ind_agent_name", "agent_name", True, "indemnity-agreement", "agent_name"),
+        ("ind_agent_license", "agent_license", False, "indemnity-agreement", "agent_license"),
+    ):
+        row = spec_by_name[placement_name]
+        assert row["data_source"] == data_source
         assert row["role"] == "bondsman"
-        assert row["required"] is False
-        assert row["align"] == "right"
+        assert row["required"] is required
+        assert "align" not in row
         assert "valign" not in row
         assert "font_size" not in row
-    spec_names = [
-        row for row in spec["fields"]
-        if row["name"] in ("app_agent_name", "ind_agent_name")
-    ]
-    assert len(spec_names) == 2
-    for row in spec_names:
-        assert row["data_source"] == "agent_name"
-        assert row["required"] is True
-        assert "align" not in row
+        expected = _AGENT_LINE_PREFERENCES[slug][source]
+        if expected:
+            assert row["preferences"] == expected
+        else:
+            assert "preferences" not in row
+        assert (row["x"], row["y"], row["w"], row["h"]) == _AGENT_LINE_AREAS[slug][source]
 
 
-def test_align_valign_and_font_size_pass_through_when_set():
-    """Unset preferences stay off the field. Set ones reach the DocuSeal payload."""
+# Template 6 areas, origin top-left, rounded to 6 decimals.
+_AGENT_LINE_AREAS = {
+    "defendant-application": {
+        "agent_name": (0.728758, 0.017740, 0.137255, 0.016473),
+        "agent_license": (0.872549, 0.017740, 0.080065, 0.016473),
+    },
+    "indemnity-agreement": {
+        "agent_name": (0.729223, 0.020059, 0.137342, 0.017552),
+        "agent_license": (0.873105, 0.020059, 0.080116, 0.017552),
+    },
+}
+_AGENT_LINE_PREFERENCES = {
+    "defendant-application": {
+        "agent_name": {"valign": "bottom", "font_size": 11},
+        "agent_license": {"align": "right", "valign": "bottom", "font_size": 11},
+    },
+    "indemnity-agreement": {
+        "agent_name": {},
+        "agent_license": {"align": "right"},
+    },
+}
+
+
+def test_preferences_pass_through_when_set():
+    """An omitted preferences dict stays off the field. A set dict reaches DocuSeal."""
     from dashboard.palmetto_docuseal_apply import _build_field
     from dashboard.palmetto_field_placement import _f
 
     plain = _f(
         "defendant-application", "app_agent_name", "text", "bondsman",
-        446, 14, 94, 12, "agent_name", required=True,
+        446, 16, 84, 14, "agent_name", required=True,
     )
+    assert "preferences" not in plain
     assert "align" not in plain
     assert "valign" not in plain
     assert "font_size" not in plain
     plain_field = _build_field("agent_name", [plain], "attachment", "submitter", -1, "")
     assert plain_field["preferences"] == {}
 
+    wanted = {"align": "right", "valign": "bottom", "font_size": 11}
     placed = _f(
         "defendant-application", "app_agent_license", "text", "bondsman",
         534, 14, 49, 13, "agent_license",
-        align="right", valign="bottom", font_size=11,
+        preferences=wanted,
     )
-    assert placed["align"] == "right"
-    assert placed["valign"] == "bottom"
-    assert placed["font_size"] == 11
+    assert placed["preferences"] == wanted
+    assert "align" not in placed
     module = _script()
     recorded = module._spec_field(placed)
-    assert recorded["align"] == "right"
-    assert recorded["valign"] == "bottom"
-    assert recorded["font_size"] == 11
+    assert recorded["preferences"] == wanted
+    assert "align" not in recorded
+    assert "valign" not in recorded
+    assert "font_size" not in recorded
     built = _build_field("agent_license", [placed], "attachment", "submitter", -1, "")
-    assert built["preferences"] == {"align": "right", "valign": "bottom", "font_size": 11}
+    assert built["preferences"] == wanted
+    assert isinstance(built["preferences"]["font_size"], int)
     assert built["name"] == "agent_license"
     assert built["required"] is False
 
     bad = dict(placed)
-    bad["valign"] = "middle"
+    bad["preferences"] = {"valign": "middle"}
     with pytest.raises(PalmettoApplyError, match="vertical alignment"):
         _build_field("agent_license", [bad], "attachment", "submitter", -1, "")
 
 
 # Live-render widths (pt) for the registered writing agents. A box shorter
-# than one 11pt line prints at 7pt. Fourteen points holds that line.
-_ELEVEN_PT_LINE_PT = 14.0
+# than one 11pt line (13.98pt) prints at 7pt unless preferences.font_size is set.
+_ELEVEN_PT_LINE_PT = 13.98
 _MEASURED_TEXT_WIDTH = {
     7: {
         "Brendan O'Neal": 52.1,
@@ -931,20 +975,20 @@ def _text_width(text: str, size: int) -> float:
 def test_agent_line_text_fits_at_the_print_size():
     """Longest registered name and widest license fit the placed boxes.
 
-    The size comes from box height, unless the field sets font_size.
-    A 12pt box is under one 11pt line and prints at 7pt. A 14pt box prints
-    at 11pt. An explicit font_size is used even when the height disagrees.
+    Height under 13.98pt prints at 7pt. The application boxes are 13pt tall,
+    so the height rule is 7pt, and preferences.font_size 11 is what is checked.
+    The indemnity boxes are 14pt with no font_size, so they print at 11pt.
     """
     from dashboard.palmetto_field_placement import PAGE_SIZE, fields_for
     from dashboard.services.docuseal_service import BOND_AGENTS
 
     assert PAGE_SIZE["defendant-application"] == (612.0, 789.18)
     assert PAGE_SIZE["indemnity-agreement"][0] == 611.61
-    assert _print_pt(12) == 7
-    assert _print_pt(13.9) == 7
+    assert _print_pt(13) == 7
+    assert _print_pt(13.97) == 7
+    assert _print_pt(13.98) == 11
+    assert _print_pt(13, 11) == 11
     assert _print_pt(14) == 11
-    assert _print_pt(12, 11) == 11
-    assert _print_pt(14, 7) == 7
 
     for slug in ("defendant-application", "indemnity-agreement"):
         page_w = PAGE_SIZE[slug][0]
@@ -958,12 +1002,18 @@ def test_agent_line_text_fits_at_the_print_size():
         license_box = rows["agent_license"]
         assert name_box["y"] == license_box["y"]
         assert name_box["h"] == license_box["h"]
-        assert "font_size" not in name_box
-        assert "font_size" not in license_box
-        size = _print_pt(name_box["h"], name_box.get("font_size"))
-        assert size == _print_pt(license_box["h"], license_box.get("font_size"))
-        # The same explicit size would be used if CoS sets font_size later.
-        assert _print_pt(name_box["h"], 11) == 11
+        name_size = (name_box.get("preferences") or {}).get("font_size")
+        license_size = (license_box.get("preferences") or {}).get("font_size")
+        assert _print_pt(name_box["h"]) == (7 if slug == "defendant-application" else 11)
+        size = _print_pt(name_box["h"], name_size)
+        assert size == 11
+        assert size == _print_pt(license_box["h"], license_size)
+        expected_name = _AGENT_LINE_PREFERENCES[slug]["agent_name"]
+        if expected_name:
+            assert name_box["preferences"] == expected_name
+        else:
+            assert "preferences" not in name_box
+        assert license_box["preferences"] == _AGENT_LINE_PREFERENCES[slug]["agent_license"]
         for license_no, entry in BOND_AGENTS.items():
             agent_name = entry["agent_name"]
             assert _text_width(agent_name, size) <= name_box["w"]

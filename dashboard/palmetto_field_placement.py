@@ -35,16 +35,16 @@ ROLE_COINDEMNITOR = "coindemnitor"
 ROLE_BONDSMAN = "bondsman"
 
 # AGENT row on the application and indemnity headers.
-# (x, y, w, h) in PDF points, origin top-left. Verified on template 6
-# at 08:20 ET. The license box is right-aligned. Change one line per box.
+# Each box is ((x, y, w, h) in PDF points, preferences or None).
+# Verified on template 6 at 08:27 ET. Change one line per box.
 AGENT_LINE_BOXES: Dict[str, Dict[str, tuple]] = {
     "defendant-application": {
-        "name": (446, 14, 94, 12),
-        "license": (543.2, 14, 32, 12),
+        "name": ((446, 14, 84, 13), {"valign": "bottom", "font_size": 11}),
+        "license": ((534, 14, 49, 13), {"align": "right", "valign": "bottom", "font_size": 11}),
     },
     "indemnity-agreement": {
-        "name": (446, 16, 84, 14),
-        "license": (534, 16, 49, 14),
+        "name": ((446, 16, 84, 14), None),
+        "license": ((534, 16, 49, 14), {"align": "right"}),
     },
 }
 
@@ -63,9 +63,7 @@ def _f(
     required: bool = False,
     docuseal: bool = True,
     page: int = 1,
-    align: Optional[str] = None,
-    valign: Optional[str] = None,
-    font_size: Optional[float] = None,
+    preferences: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     pw, ph = PAGE_SIZE[document]
     row = {
@@ -86,16 +84,9 @@ def _f(
         "required": required,
         "docuseal": docuseal,
     }
-    # Omitted align, valign, and font_size keep the previous field dict.
-    # DocuSeal then uses its own defaults.
-    text_align = str(align or "").strip().lower()
-    if text_align:
-        row["align"] = text_align
-    text_valign = str(valign or "").strip().lower()
-    if text_valign:
-        row["valign"] = text_valign
-    if font_size is not None:
-        row["font_size"] = font_size
+    # Omitted preferences keep the previous field dict. DocuSeal then uses its defaults.
+    if preferences:
+        row["preferences"] = dict(preferences)
     return row
 
 
@@ -135,13 +126,13 @@ def _application() -> List[Dict[str, Any]]:
     # Live template 5 puts every prefilled text and date box on bondsman.
     df = ROLE_BONDSMAN
     bd = ROLE_BONDSMAN
-    agent_name = AGENT_LINE_BOXES[d]["name"]
-    agent_license = AGENT_LINE_BOXES[d]["license"]
+    agent_name, name_prefs = AGENT_LINE_BOXES[d]["name"]
+    agent_license, license_prefs = AGENT_LINE_BOXES[d]["license"]
     rows: List[Dict[str, Any]] = [
         # Right-hand bond box. Values start after each printed label.
         _f(d, "app_defendant_name", "text", df, 468, 2, 138, 12, "defendant_name", required=True),
-        _f(d, "app_agent_name", "text", bd, *agent_name, "agent_name", required=True),
-        _f(d, "app_agent_license", "text", bd, *agent_license, "agent_license", align="right"),
+        _f(d, "app_agent_name", "text", bd, *agent_name, "agent_name", required=True, preferences=name_prefs),
+        _f(d, "app_agent_license", "text", bd, *agent_license, "agent_license", preferences=license_prefs),
         _f(d, "app_power_number", "text", bd, 466, 30, 140, 12, "poa_number", required=True),
         _f(d, "app_case_number", "text", bd, 458, 44, 148, 12, "case_number", required=True),
         _f(d, "app_execution_date", "text", bd, 488, 58, 118, 12, "today_date", required=True),
@@ -236,11 +227,11 @@ def _indemnity() -> List[Dict[str, Any]]:
     df = ROLE_DEFENDANT
     co = ROLE_COINDEMNITOR
     bd = ROLE_BONDSMAN
-    agent_name = AGENT_LINE_BOXES[d]["name"]
-    agent_license = AGENT_LINE_BOXES[d]["license"]
+    agent_name, name_prefs = AGENT_LINE_BOXES[d]["name"]
+    agent_license, license_prefs = AGENT_LINE_BOXES[d]["license"]
     rows = [
-        _f(d, "ind_agent_name", "text", bd, *agent_name, "agent_name", required=True),
-        _f(d, "ind_agent_license", "text", bd, *agent_license, "agent_license", align="right"),
+        _f(d, "ind_agent_name", "text", bd, *agent_name, "agent_name", required=True, preferences=name_prefs),
+        _f(d, "ind_agent_license", "text", bd, *agent_license, "agent_license", preferences=license_prefs),
         _f(d, "ind_power_number", "text", bd, 468, 36, 130, 13, "poa_number", required=True),
         _f(d, "ind_case_number", "text", bd, 460, 54, 140, 13, "case_number", required=True),
         _f(d, "ind_execution_date", "text", bd, 490, 72, 110, 13, "today_date", required=True),

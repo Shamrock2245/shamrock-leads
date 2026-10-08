@@ -514,10 +514,14 @@
       "page": 1,
       "x": 0.728758,
       "y": 0.01774,
-      "w": 0.153595,
-      "h": 0.015206,
+      "w": 0.137255,
+      "h": 0.016473,
       "data_source": "agent_name",
-      "required": true
+      "required": true,
+      "preferences": {
+        "valign": "bottom",
+        "font_size": 11
+      }
     },
     {
       "document": "defendant-application",
@@ -525,13 +529,17 @@
       "type": "text",
       "role": "bondsman",
       "page": 1,
-      "x": 0.887582,
+      "x": 0.872549,
       "y": 0.01774,
-      "w": 0.052288,
-      "h": 0.015206,
+      "w": 0.080065,
+      "h": 0.016473,
       "data_source": "agent_license",
       "required": false,
-      "align": "right"
+      "preferences": {
+        "align": "right",
+        "valign": "bottom",
+        "font_size": 11
+      }
     },
     {
       "document": "defendant-application",
@@ -1689,7 +1697,9 @@
       "h": 0.017552,
       "data_source": "agent_license",
       "required": false,
-      "align": "right"
+      "preferences": {
+        "align": "right"
+      }
     },
     {
       "document": "indemnity-agreement",
