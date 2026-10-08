@@ -1,0 +1,63 @@
+name: Assemble intake file
+
+on:
+  push:
+    branches: [cursor/accept-intake-source-tags-24c1]
+    paths:
+      - .github/workflows/assemble-intake-file.yml
+
+permissions:
+  contents: write
+
+jobs:
+  assemble:
+    name: Rebuild changelog from main
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: cursor/accept-intake-source-tags-24c1
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rebuild changelog from current main plus the intake note
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git checkout origin/main -- CHANGELOG.md
+          python3 - << 'PY'
+          import pathlib, subprocess, sys
+          path = pathlib.Path("CHANGELOG.md")
+          main = path.read_text()
+          note = (
+              "## [Unreleased] \u2014 2026-10-07 (Telegram and Shannon intake tags)\n"
+              "\n"
+              "### Added\n"
+              "- `POST /api/intake/submit` keeps `telegram_miniapp` and `shannon_voice` as their own source tags. "
+              "Older `telegram`, `telegram_mini_app`, `shannon`, and `elevenlabs_voice` values stay as they were. "
+              "`shannon_voice` uses the same voice match skip as Shannon (the matcher runs from the desk, not inside the call) "
+              "and the website pay-by-card link. `telegram_miniapp` still uses the Telegram pay link and still runs match-review on submit.\n"
+              "\n"
+          )
+          marker = "Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).\n\n"
+          idx = main.find(marker)
+          if idx < 0:
+              sys.exit("changelog marker missing")
+          idx += len(marker)
+          if "Telegram and Shannon intake tags" in main:
+              sys.exit("intake note already present")
+          path.write_text(main[:idx] + note + main[idx:])
+          diff = subprocess.check_output(["git", "diff", "--numstat", "origin/main", "--", "CHANGELOG.md"], text=True).strip()
+          add, delete, name = diff.split()
+          if delete != "0" or not (1 <= int(add) <= 10):
+              sys.exit("changelog diff is not only the intake note: " + diff)
+          print("changelog diff", diff)
+          PY
+          git rm -f .github/workflows/assemble-intake-file.yml
+          git add CHANGELOG.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Record telegram and Shannon intake source tags in the full changelog."
+          git push origin HEAD:cursor/accept-intake-source-tags-24c1
