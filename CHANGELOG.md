@@ -32,6 +32,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Agency onboarding** (`/platform`, `/signup`). A super-admin records the agency, Florida license numbers, branding, staff invites, and `env:` secret refs. Invites are stored and are not emailed. Self-serve signup stays pending until that super-admin approves it.
 - **Stripe test-mode billing** (`/platform/billing`). Checkout refuses a live key and refuses a price that is not configured. MRR is the sum of stored cents from signed `invoice.paid` events on active agencies. The second failed invoice suspends packet send and texting. Shamrock is not billed. No card number is stored.
 - **Surety checklist** (`/platform/sureties`). OSI and Palmetto stay on for Shamrock. Inactive carriers cannot be enabled. Private templates are labels only. When the flag is on, packet finalize refuses a surety the agency is not enabled for.
+
 ## [Unreleased] — 2026-10-07 (Charlotte FL Revize hardening)
 
 ### Fixed
