@@ -14,6 +14,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Relay header set.** The Revize walk meta for Charlotte and Manatee now carries the page-1 column names so relay evidence can show the live table shape.
 - `docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md` with per-county results and the Leads Ops handoff.
 
+## [Unreleased] — 2026-10-08 (Palmetto agent license boxes)
+
+### Added
+- **Palmetto application and indemnity.** Each AGENT line keeps `agent_name` and adds `agent_license` on the same row, filled from that same `BOND_AGENTS` pair. The boxes are the template 6 placement verified at 08:27 ET (`AGENT_LINE_BOXES`). The application name and license set `valign: bottom` and `font_size: 11`. Both license boxes set `align: right`. An omitted `preferences` dict leaves the field unchanged. Templates 1 and 5 are not changed by this commit.
+
+## [Unreleased] — 2026-10-08 (staff test-case Write Bond smoke)
+
+### Added
+- **Staff test-case mode for Write Bond finalize** (`POST /api/paperwork/packet/finalize`). Off unless `STAFF_TEST_CASE_MODE=1` and the request sets `test_case` true, and only for a PIN admin/staff session, a dashboard PIN header, or a machine token. A test booking and case must be prefixed `TEST-`, and the packet id `PKT-TEST-`. Those rows are stored with `is_test`. A real booking or a real arrest cannot be flagged as a test. Without the flag, finalize is unchanged.
+- **No customer contact and no inventory draw.** Every DocuSeal submitter email is `admin@shamrockbailbonds.biz`. Phones are removed. `send_email` and `send_sms` are false. Initial DocuSeal link delivery, SwipeSimple, and other customer notifications are skipped. The power is a fake `TEST-` number. Inventory is not read, reserved, or consumed.
+- **Test audit tags.** Finalize audit rows and DocuSeal webhook audit rows for a `PKT-TEST-` or `is_test` packet include `is_test`, `test_case`, and the `PKT-TEST-` packet id. Completion side effects (Drive, payment link, share invoice, court sync, Slack) are skipped for those packets. Bordereau, the daily ledger, and dashboard counts do not read these packet or audit rows today; filtering every reader is a follow-up. See `docs/runbooks/STAFF_TEST_CASE_WRITE_BOND.md`.
+
 ## [Unreleased] — 2026-10-08 (Miami-Dade unknown bond, fail loud)
 
 ### Fixed
