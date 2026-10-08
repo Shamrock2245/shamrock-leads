@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-07 (agency onboarding review)
+
+### Fixed
+- **Agency onboarding (`SAAS_MULTI_TENANT` still default off).** `tenants.tenant_id` and `tenants.slug` each have a unique index, and a duplicate-key error from a concurrent insert is `slug_taken`. Approve and reject are a single compare-and-set on `status: pending_approval`; a second decision returns `not_pending`. The declared owner stays `owner` when that email is also submitted as a coworker. The platform queue has Approve and Reject controls plus a rejection reason. Each decision writes an `audit_events` row with the actor, reason, and old and new state.
+
 ## [Unreleased] — 2026-10-07 (tenant host membership and backfill)
 
 ### Fixed
@@ -10,6 +15,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Backfill.** `scripts/backfill_tenant_id.py` stamps every tenant-owned collection the app opens, including `family_relationships`, `persons`, `osint_scans`, `docket_events`, and `intake_fanout_outbox`. A connected run also stamps any other present collection that is not on the global or platform allowlist. `tests/test_tenant_scope.py` fails if application code uses a collection that is neither tenant-owned nor allowlisted.
 - **Startup.** POA seeding and core index creation run inside a Shamrock tenant context, so a flag-on boot does not call the tenant proxy with no context. Flag off still writes the same unstamped seed.
 
+## [Unreleased] — 2026-10-07 (multi-tenant foundation and agency onboarding)
+
+### Added
+- **`SAAS_MULTI_TENANT` flag, default off.** `get_collection()` is the tenant chokepoint: tenant-owned collections are scoped by `tenant_id`, and an explicit global allowlist (jail rosters and scraper health) stays shared. A request or job with no tenant fails closed only when the flag is on. Shamrock routes are unchanged while the flag is off. The offline backfill script and the tenant index specs are in the repo and are not applied to production. The 90-day audit TTL is unchanged.
+- **Agency onboarding** (`/platform`, `/signup`). A super-admin records the agency, Florida license numbers, branding, staff invites, and `env:` secret refs. Invites are stored and are not emailed. Self-serve signup stays pending until that super-admin approves it.
 ## [Unreleased] — 2026-10-07 (Charlotte FL Revize hardening)
 
 ### Fixed
