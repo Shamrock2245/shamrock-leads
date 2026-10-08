@@ -13,6 +13,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Dead code with no users left: `cf_browser.launch_cf_browser`, `new_stealth_context`, `wait_past_cloudflare`, `_launch_sync_playwright`, `require_residential_exit`, and `socks_proxy.to_playwright_proxy`, `to_httpx_proxy`, `require_socks_or_raise`. The shared resolver (`resolve_residential_proxy`, `validate_residential_proxy`, `curl_cffi_proxies`) stays for Marion and Hillsborough. `check_exit_ip` stays.
 - `docs/COUNTY_REGISTRY.md`: Manatee/Charlotte no longer list the APE/office SOCKS path.
 
+## [Unreleased] — 2026-10-07 (Staff edits survive rescrapes)
+
+### Fixed
+- **All counties:** a staff-set bond (update-bond-amount, update-charge-bonds, update-lead-details, admin patch) and staff-edited charge rows (per-charge amounts, case numbers, POAs, added or removed charges) now survive every rescrape. One module, `core/staff_edits.py`, protects each write path that puts source data on an existing arrest: the shared MongoWriter (every county, including the SSW and SmartWEB helpers), the First Appearance watcher, the custody recheck, the Lee jail refresh, refresh-from-source, the bookmarklet merge and the confirmed-booking refresh. Source values that disagree are kept in `scraped_bond_amount` / `scraped_bond_type` / `scraped_charges` / `scraped_charge_details`. A scraped charge that staff have not seen, removed or replaced is still added. A staff-entered $0 is stored in `staff_edits.bond` and hydrates as a known $0. Existing records are read under their `bond_override` / `MANUAL_CHARGE_BONDS` flags; there is no backfill. In the Write Bond modal a blank per-charge amount stays unknown (it used to be saved as $0), and a POA the modal does not send is kept. Two related fixes. First, the custody recheck read every live field as blank, because `ArrestRecord` has no `to_dict()`, so a recheck could wipe status, bond and charges. It now compares against `to_mongo_doc()` and never writes a value the source did not publish. Second, refresh-from-source no longer writes an unparsed bond as $0. Design note: `docs/STAFF_EDITS_SURVIVE_RESCRAPE.md`.
+
 ## [Unreleased] — 2026-10-07 (surety entitlement review)
 
 ### Fixed
