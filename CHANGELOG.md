@@ -398,3 +398,103 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased] — 2026-08-15 (Connecticut judicial-docket guard)
 
 ### Changed
+- **Connecticut court dockets fail-closed** — the Statewide, Bridgeport, Hartford, New Haven, and Stamford judicial-docket jobs now stop before source access. A criminal docket number and hearing date are not a source-issued arrest booking identifier or arrest-time contract, so court cases cannot be emitted as arrest intelligence.
+
+## [Unreleased] — 2026-08-15 (South Carolina source-contract guard batch)
+
+### Changed
+- **Fourteen South Carolina county paths fail-closed** — Anderson, Bamberg, Beaufort, Berkeley, Greenville, Horry, Jasper, Kershaw, Laurens, Lee, Marion, Saluda, Union, and York now make no source request and emit no records while their complete public broad-listing contracts remain unproven. Existing guards are reflected in the dashboard source-state registry; the remaining modules use the shared pre-scrape gate.
+
+## [Unreleased] — 2026-08-15 (North Carolina source-contract guard batch)
+
+### Changed
+- **Ten North Carolina county paths fail-closed** — Caldwell, Chatham, Cumberland, Davidson, Guilford, Halifax, Randolph, Scotland, Union, and Wake now make no source request and emit no records while their complete public broad-listing contracts remain unproven. Union’s existing P2C guard is now represented explicitly in the dashboard source-state registry; the other nine paths use the shared pre-scrape gate.
+
+## [Unreleased] — 2026-08-15 (Tennessee source-contract guard batch)
+
+### Changed
+- **Shared pre-scrape source-contract gate** — `BaseScraper.run()` now exits before any source fetch, scoring, persistence, broadcast, or alert when a county explicitly declares `SOURCE_CONTRACT_VALIDATED = False`.
+- **Nine Tennessee county paths fail-closed** — Davidson, Hamilton, Knox, Montgomery, Rutherford, Shelby, Sumner, Williamson, and Wilson now make no source request and emit no records while their complete public broad-listing contracts remain unproven. The decision is documented in the 947-scope matrix and Tennessee validation note.
+
+## [Unreleased] — 2026-08-15 (Orleans and St. Tammany source-contract guards)
+
+### Changed
+- **Orleans Parish, LA fail-closed** — removed speculative endpoint probing, browser navigation, TLS-bypass behavior, and name-derived booking fallbacks after the reachable OPSO public origin did not establish a compliant broad booking roster through ordinary access.
+- **St. Tammany Parish, LA fail-closed** — retired the prior `/api/inmates/recent` path after it returned public HTTP `403`. The registered scraper now makes no source request and emits no records until a booking-safe broad roster contract is revalidated.
+
+## [Unreleased] — 2026-08-15 (Calcasieu source-contract guard)
+
+### Changed
+- **Calcasieu Parish, LA fail-closed** — retired the prior `/api/inmates/roster` request path after it returned public HTTP `404`. The registered scraper now performs no source fetch and emits no records until the current public API, complete displayed name, source-issued identifier, booking time, and bounded pagination are revalidated. Scraper Health and the 947-scope matrix now state `fail_closed`.
+
+## [Unreleased] — 2026-08-15 (complete source-contract reconnaissance)
+
+### Added
+- **Runtime-inclusive source-contract matrix** — added `docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md` covering **947 scopes**: all 942 Census county-equivalents across the ten repository states plus five registered non-county scopes. The matrix separates repository registration from source posture: `verified_public`, `candidate_productive`, `recon_only`, `unverified`, and deployed `fail_closed` guards.
+- **Versioned non-PII reconnaissance evidence** — added the Census-based inventory, 942-row evidence file, reproducible inventory/evidence/matrix scripts, and contract tests. Evidence contains source-contract posture and public source references only; it does not contain arrest records, images, profiles, or contact data.
+- **Louisiana bounded validation note** — recorded ordinary-public-listing contract findings for Beauregard, Calcasieu, and St. Mary. These findings do not create new runtime parsers or claim persistence, alert, payment, or bond telemetry.
+
+### Changed
+- **Active coverage documentation synchronized** — README, AGENTS, and the multi-state roadmap now reflect the canonical **358** registered labels and active surety policy: OSI in Florida; Palmetto in FL, SC, NC, TN, TX, CT, LA, and MS. Georgia and Alabama are correctly distinguished as adjacent repository coverage rather than Palmetto license assertions.
+
+## [Unreleased] — 2026-08-15 (scraper registry integrity)
+
+### Added
+- **Registered-county scaffold contract test** — statically validates all **358** canonical `County (ST)` labels (67 FL, 85 GA, 60 NC, 46 SC, 34 TX, 22 TN, 16 AL, 13 LA, 9 MS, and 6 CT) have a local scraper module and a corresponding `main.register_scrapers` entry. The test does not import modules or contact county sources.
+- **Hendry source-key regression tests** — verify that an OCV row without the source-issued inmate identifier is skipped and that a present source identifier is preserved as the immutable `County + Booking_Number` key.
+
+### Fixed
+- **Hendry and Monroe booking-key safety** — removed name, date, and document-derived booking fallbacks. Hendry now requires the official OCV `inmateID`; Monroe requires an MNI from the source mugshot filename, the official offense number, or the official CAD number. Rows that lack these identifiers fail closed before a record is returned.
+- **Florida coverage documentation and regression expectation** — corrected the stale “not yet scraped” wording to distinguish full 67-county scaffold/scheduler coverage from source-contract validation, and aligned the legacy total-fleet test with the current 358 registered labels.
+
+## [Unreleased] — 2026-08-15 (Paperwork from recorded bond)
+
+### Added
+- **Do Paperwork** on Edit Bond, Active Bonds rows/cards, and New Indemnitor (`Save & Do Paperwork`). Opens the OSI/Palmetto DocuSeal packet builder with booking, POA, case #, and names filled — for cases re-added after a scraper purge.
+
+## [Unreleased] — 2026-08-14 (OpenCut overlay)
+
+### Added
+- **OpenCut editor overlay** — transitions, stylize/glow effects, text presets, timeline drag types, and an Auto/AI assets tab. Copied onto `opencut-classic` at image build (`opencut/overlay/`).
+
+## [Unreleased] — 2026-08-14 (Bond Intelligence)
+
+### Changed
+- **Bond Intelligence tab rebuilt** as a work desk: estimated statutory premium, in-custody writable count, hot leads, capture rate, a 48-hour write queue, state money map, and counties ranked by premium. Old stacked KPI dump and white filter pills are gone. Stylesheet is now actually linked.
+
+## [Unreleased] — 2026-08-14 (Record Bond)
+
+### Fixed
+- **Record Bond premium** — $100 minimum per criminal charge; 10% of penal when a charge is above $1,000. A $500 single-charge bond is $100, not $50.
+- **Lee URL auto-fill** — DOB and defendant address now populate from the sheriff booking API (`dob` / composed street+city+state+zip). The modal was only reading `date_of_birth` and never set the address field.
+
+## [Unreleased] — 2026-08-14 (OSINT)
+
+### Added
+- **Holehe** OSINT chip — email → registered accounts on 120+ sites (same pattern as Ignorant for phones). Auto-selects when an email is entered. Single-engine test accepts `user@domain`. Does not notify the target.
+- **HIBF** OSINT chip — license plate → public Flock LE *search audit* logs via Have I Been Flocked (`POST /api/search/text` with SHA-256 plate prefixes). Incomplete FOIA data, not a live camera hit. Does not log the raw plate.
+
+### Changed
+- Removed unused **Snoop** from the OSINT matrix, worker probe, and valid-engine list (package was never installed). Not adding OpenOSINT / bbot / social-analyzer — they overlap Maigret/Sherlock or are too heavy for this VPS.
+
+## [Unreleased] — 2026-08-14 (disk)
+
+### Added
+- **St. Mary Parish, LA public-roster scraper** — parses the official sheriff-site current roster with source-issued booking numbers, booking timestamps, public-card charges and bond amounts, bounded pagination, and no profile-page collection or access-control workaround. Registered as `scraper_la_st_mary` every 120 minutes and added to `REGISTERED_COUNTIES`.
+- **St. Mary Parish parser regression tests** — verify public-card mapping, source-issued booking-key handling, fail-closed missing fields, and explicit pagination. A bounded local two-page official-source smoke parsed 40 records on 2026-08-14. The `4a6fe7f` rollout subsequently completed successfully and public host checks passed; St. Mary-specific Mongo upsert and alert delivery remain unclaimed until telemetry is observed.
+- **Bossier Parish, LA public-roster scraper** — added a bounded parser for the official Sheriff public listing. It reads only public Flight-card fields: complete source name, source-issued Inmate ID, and Booked Date/time. It requires all source fields, preserves booking date/time, uses listing-only pagination, omits images and profile access, and stops on empty or duplicate-only pages. Registered as `scraper_la_bossier` every 120 minutes with a state-qualified dashboard label. Deterministic tests passed and a bounded two-page aggregate-only official-source smoke parsed 20 unique records with state, parish, source-key, booking date/time, deduplication, and listing-only invariants passing. Deployment run `31852987527` completed successfully; public leads `/health`, sign, school, paperwork, and social `/auth` checks were healthy. Parish-specific persistence and alert delivery remain unproven.
+- **Rapides Parish, LA source revalidation** — rechecked the Sheriff-linked NewWorld public inmate inquiry through normal access. Broad results still expose only complete name, Subject Number, custody, and facility; they do not provide a source-issued booking key or booking date/time. Booking-related form fields are search controls rather than bulk listing data. Rapides remains recon-only and unregistered; no profile access, synthetic identity, source scraper, scheduler job, dashboard label, write, or alert was added.
+- **St. Landry Parish, LA source revalidation** — verified the Sheriff-branded public Show All roster through normal access. Its broad rows expose complete name, DOB, race, gender, and an empty arrest-date column, but no source-issued booking/inmate identifier or usable booking/arrest timestamp. St. Landry remains recon-only and unregistered; no DOB collection, profile access, inferred identity, source scraper, scheduler job, dashboard label, write, or alert was added.
+- **Terrebonne Parish, LA source revalidation** — verified the Sheriff-published CentralSquare public Inmates portal through normal access. Broad results expose mugshot, complete name, race, sex, arrest date, held-for agency, age, and charge/bond text, but no labelled source-issued booking or inmate identifier. The arrest date cannot be used to manufacture an identity key. Terrebonne remains recon-only and unregistered; no profile collection, inferred identity, source scraper, scheduler job, dashboard label, write, or alert was added.
+- **Grant and Union Parish, LA source revalidation** — verified the current official LCLE LA VINE parish roster directory and each parish sheriff public site. Neither parish is listed in the directory, and the sheriff public pages expose no alternate broad roster or booking-safe field contract. Both remain recon-only and unregistered; no source scraper, scheduler job, dashboard label, inferred identity, write, or alert was added.
+- **Adams County, MS source revalidation** — rechecked the official public ISOMS portal through normal access. It continues to expose identity and intake timing but no verified broad source-issued booking or inmate identifier. Intake timing cannot be used to manufacture an identity key. Adams remains recon-only and unregistered; no profile collection, inferred identity, source scraper, scheduler job, dashboard label, write, or alert was added.
+- **Lafayette County, MS source revalidation** — rechecked the official sheriff public page through normal access. It confirms jail administration but publishes no broad inmate or booking roster link and no booking-safe fields. A single integrated-AI classification was run only on non-PII source-contract facts and independently returned `recon_only`; it did not retrieve or infer any person data. Lafayette remains recon-only and unregistered; no source scraper, scheduler job, dashboard label, write, or alert was added.
+- **Lowndes County, MS source revalidation** — verified the official Tyler Jail Records page through normal access. The portal requires a known Defendant or Booking Number and offers DOB, booking-date, and release-date filters, but no broad current roster. A blank search was not submitted. Lowndes remains recon-only and unregistered; no source scraper, scheduler job, dashboard label, inferred identity, write, or alert was added.
+- **Oktibbeha County, MS source revalidation** — verified the official paginated roster through normal access. Listing rows expose names plus View Charges and notification actions, but not a source-issued booking/inmate identifier or booking timestamp. Those individual actions were not used to construct a bulk contract. Oktibbeha remains recon-only and unregistered; no source scraper, scheduler job, dashboard label, inferred identity, write, or alert was added.
+- **Warren County, MS source revalidation** — verified the official sheriff page through normal access. It publishes office information only and exposes no current inmate roster, booking list, or booking-safe public fields. Warren remains recon-only and unregistered; no source scraper, scheduler job, dashboard label, inferred identity, write, or alert was added.
+- **St. Clair County, AL public-roster scraper** — added a source-faithful parser for the official sheriff current roster using complete public names, source-issued Booking # values, and booking timestamps. The scraper uses bounded public pagination, does not collect profile details or mugshot URLs, and fails closed when a required source field is absent. Registered as `scraper_al_st_clair` every 120 minutes and added to the state-qualified dashboard registry. A bounded two-page local smoke parsed 40 unique records with state/county, booking-number, booking-date, and deduplication invariants passing. The `445edba` rollout completed successfully and all required public host checks returned 200; St. Clair persistence and alert delivery remain unproven until telemetry is observed.
+- **Etowah County, AL official-roster repair** — replaced the unsupported CAPTCHA-solving JailTracker path with the official sheriff current-roster parser. The repaired path uses only roster-card data, source-issued Booking # values, booking timestamps, bounded `grp` pagination, and no profile or image collection. A two-page aggregate smoke parsed 20 unique records with state/county, booking-number, booking-date, and deduplication invariants passing. The `2389a78` rollout completed successfully and required public host checks returned 200; production persistence and alert delivery remain unproven.
+- **Sarasota County, FL source-safety repair** — retired the third-party mirror, residential-proxy, CAPTCHA/JailTracker, Revize profile, DOB, mugshot, and synthetic-identifier paths because no official booking-safe broad roster contract is verified through normal access. `scraper_sarasota` now fails closed without making a network request. Added deterministic no-network regression tests. Deployment run `31843789326` completed successfully; public leads `/health`, sign, school, paperwork, and social `/auth` probes returned healthy responses. Sarasota-specific persistence and alert delivery remain unproven, and the guard intentionally emits no records.
+
+### Changed
+- **South Carolina Zuercher source-safety hardening** — hardened `ZuercherBaseScraper` to reject synthetic name-and-arrest-date booking keys, require source-issued booking/inmate IDs plus source booking dates, and preserve custody as unknown unless explicitly supplied. Anderson, Cherokee, Colleton, Kershaw, and Laurens now fail closed before any network request because their official portals are search-only, unavailable, or lack a booking-safe source boundary. Added deterministic no-network and source-issued mapping tests; see `docs/SC_ZUERCHER_SOURCE_SAFETY.md`. The `7718bf8` rollout completed successfully and all required public host checks returned 200; per-scraper persistence and alert telemetry remain unproven.
