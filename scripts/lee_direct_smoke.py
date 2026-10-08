@@ -10,6 +10,12 @@ Run on the Leads Ops VPS (the prod scraper's egress):
 
     python scripts/lee_direct_smoke.py
 
+The smoke never touches the live cooldown file: unless
+``LEE_RATE_LIMIT_PERSIST`` / ``LEE_RATE_LIMIT_STATE_PATH`` is set by the
+caller, it runs with persistence off (memory-only cooldown). It therefore
+also does not see a cooldown the scheduler has persisted; check that file
+separately if a 429 is suspected.
+
 Options: ``--pages N`` (default 2) caps listing pages per variant,
 ``--charges N`` (default 2) caps charges calls. Defaults cost at most
 6 requests against Lee's per-IP quota.
@@ -17,7 +23,7 @@ Options: ``--pages N`` (default 2) caps listing pages per variant,
 Exit codes:
     0 direct read ok: 200 JSON rows, booking numbers all digits, no dupes
     2 blocked / challenged / rate-limited (403, 429, 503, HTML challenge,
-      connect failure) or a Lee cooldown is already active
+      connect failure) or a Lee cooldown is already active in this process
     3 empty or drift (200 but no rows, non-JSON body, odd booking shapes,
       duplicate booking numbers)
     1 anything else
@@ -29,6 +35,7 @@ warnings.filterwarnings("ignore")
 
 import argparse
 import json
+import os
 import re
 import socket
 import sys
@@ -37,6 +44,23 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
+def isolate_cooldown_state(environ=None) -> str:
+    """Keep the smoke away from the live Lee cooldown file.
+
+    Must run before ``scrapers.lee_rate_limit`` is imported (it reads these at
+    import). Unless the caller set ``LEE_RATE_LIMIT_PERSIST`` or
+    ``LEE_RATE_LIMIT_STATE_PATH`` explicitly, persistence is turned off and the
+    state path is cleared, so a 429 seen by the smoke stays in this process and
+    never writes or reads the VPS cooldown file. Returns the mode used.
+    """
+    env = os.environ if environ is None else environ
+    if "LEE_RATE_LIMIT_PERSIST" in env or "LEE_RATE_LIMIT_STATE_PATH" in env:
+        return "caller_override"
+    env["LEE_RATE_LIMIT_PERSIST"] = "false"
+    env["LEE_RATE_LIMIT_STATE_PATH"] = ""
+    return "memory_only"
 
 PROXY_ENV_NAMES = (
     "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy",
@@ -89,15 +113,20 @@ def main(argv=None) -> int:
     ap.add_argument("--charges", type=int, default=2)
     args = ap.parse_args(argv)
 
-    import os
+    cooldown_mode = isolate_cooldown_state()
     from scrapers import lee_rate_limit
     from scrapers.counties import lee
+    # Force memory-only even if something else imported lee_rate_limit first
+    # (module-level env is read once at import).
+    if cooldown_mode == "memory_only":
+        lee_rate_limit.reset_for_tests(state_path="")
 
     out = {
         "county": "Lee (FL)",
         "egress": "direct (requests, trust_env=False, no proxy, no stealth)",
         "user_agent": lee.LEE_USER_AGENT,
         "proxy_env_present_but_ignored": [n for n in PROXY_ENV_NAMES if os.getenv(n)],
+        "cooldown_state": cooldown_mode,
         "checked_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     try:

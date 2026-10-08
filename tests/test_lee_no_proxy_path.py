@@ -218,3 +218,15 @@ def test_direct_smoke_exit_codes_and_shapes():
     assert s.evaluate(ok, {"inCustody": ["1000001", "1000001"]}) == ("drift", 3)
     assert s.evaluate(ok, {"inCustody": ["A100"]}) == ("drift", 3)
     assert s.evaluate(ok, {"inCustody": [""]}) == ("drift", 3)
+
+
+
+def test_direct_smoke_isolates_cooldown_unless_overridden():
+    s = _smoke()
+    env = {"PATH": "/usr/bin"}
+    assert s.isolate_cooldown_state(env) == "memory_only"
+    assert env["LEE_RATE_LIMIT_PERSIST"] == "false"
+    assert env["LEE_RATE_LIMIT_STATE_PATH"] == ""
+    env2 = {"LEE_RATE_LIMIT_PERSIST": "true", "LEE_RATE_LIMIT_STATE_PATH": "/tmp/keep.json"}
+    assert s.isolate_cooldown_state(env2) == "caller_override"
+    assert env2["LEE_RATE_LIMIT_PERSIST"] == "true"
