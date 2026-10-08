@@ -7,7 +7,11 @@ Features:
 - Date-based filtering to only fetch recent bookings
 - Data-minimized public-field retrieval (no address or ZIP fields)
 - Fail-closed identity and booking-date validation
-- ArcGIS layer has NO bond/bail fields (confirmed 2026-10-07) — Bond_Amount stays "0"
+- ArcGIS layer has NO bond/bail fields (confirmed 2026-10-07, 2026-10-08), so
+  Bond_Amount stays "" (unknown) and is never written as $0
+- Plain ``requests``; any HTTP/ArcGIS error, field drift or short page walk
+  raises ``MiamiDadeContractError`` (BaseScraper alerts) instead of returning
+  a silently truncated batch
 """
 
 import logging
@@ -15,12 +19,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 
-try:
-    from curl_cffi import requests as cffi_requests
-    HAS_CFFI = True
-except ImportError:
-    import requests as cffi_requests
-    HAS_CFFI = False
+import requests
 
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
@@ -32,7 +31,8 @@ ARCGIS_BASE_URL = "https://services.arcgis.com/8Pc9XBTAsYuxx9Ny/ArcGIS/rest/serv
 QUERY_ENDPOINT = f"{ARCGIS_BASE_URL}/query"
 DAYS_BACK = 3  # Fetch bookings from the last 3 days
 PAGE_SIZE = 200
-MAX_PAGES = 10
+MAX_PAGES = 10  # 2,000 rows; the layer adds ~160 bookings/day (476 for 3 days on 2026-10-08)
+REQUEST_TIMEOUT = 30
 # Retrieve only source fields needed for identity, booking deduplication, and charges.
 OUT_FIELDS = "ObjectId,GlobalID,BookDate,Defendant,Charge1,Code2,Charge3"
 
@@ -44,7 +44,12 @@ HEADERS = {
     "Origin": "https://gis-mdc.opendata.arcgis.com",
 }
 
-IMPERSONATE = "chrome131"
+REQUIRED_FIELDS = ("ObjectId", "GlobalID", "BookDate", "Defendant", "Charge1", "Code2", "Charge3")
+
+
+class MiamiDadeContractError(RuntimeError):
+    """The ArcGIS jail-bookings layer no longer matches the verified contract."""
+
 
 class MiamiDadeCountyScraper(BaseScraper):
     """Miami-Dade County (FL) arrest scraper — ArcGIS Open Data API."""
@@ -72,54 +77,79 @@ class MiamiDadeCountyScraper(BaseScraper):
         all_records = []
         offset = 0
         
-        session = cffi_requests.Session(impersonate=IMPERSONATE) if HAS_CFFI else cffi_requests.Session()
+        session = requests.Session()
         session.headers.update(HEADERS)
 
+        expected = self._count(session, where_clause)
+        if expected > PAGE_SIZE * MAX_PAGES:
+            raise MiamiDadeContractError(
+                f"Miami-Dade: {expected} bookings in {DAYS_BACK} days exceeds the {PAGE_SIZE * MAX_PAGES}-row page cap"
+            )
+
+        seen = set()
+        fetched = 0
         for page in range(MAX_PAGES):
+            if fetched >= expected:
+                break
             params = {
                 "where": where_clause,
                 "outFields": OUT_FIELDS,
                 "orderByFields": "BookDate DESC, ObjectId DESC",
                 "resultOffset": offset,
                 "resultRecordCount": PAGE_SIZE,
-                "f": "json"
+                "f": "json",
             }
-            
-            try:
-                logger.debug(f"[{self.county}] Fetching page {page+1} (offset {offset})...")
-                resp = session.get(QUERY_ENDPOINT, params=params, timeout=15)
-                resp.raise_for_status()
-                data = resp.json()
-                
-                if "error" in data:
-                    logger.error(f"[{self.county}] ArcGIS API Error: {data['error']}")
-                    break
-                    
-                features = data.get("features", [])
-                if not features:
-                    logger.info(f"[{self.county}] No more features found at offset {offset}.")
-                    break
-                    
-                for feature in features:
-                    attrs = feature.get("attributes", {})
-                    record = self._parse_record(attrs)
-                    if record:
-                        all_records.append(record)
-                        
-                exceeded = data.get("exceededTransferLimit", False)
-                if not exceeded:
-                    logger.debug(f"[{self.county}] Reached end of dataset (exceededTransferLimit=False).")
-                    break
-                    
-                offset += PAGE_SIZE
-                time.sleep(1.0)  # Be nice to the API
-                
-            except Exception as e:
-                logger.error(f"[{self.county}] Error fetching page {page+1}: {e}")
+            logger.debug(f"[{self.county}] Fetching page {page+1} (offset {offset})...")
+            data = self._get_json(session, params)
+            features = data.get("features")
+            if not isinstance(features, list):
+                raise MiamiDadeContractError("Miami-Dade: query response has no features list")
+            if not features:
                 break
+            for feature in features:
+                attrs = feature.get("attributes") if isinstance(feature, dict) else None
+                if not isinstance(attrs, dict) or any(k not in attrs for k in REQUIRED_FIELDS):
+                    raise MiamiDadeContractError("Miami-Dade: feature attribute drift")
+                oid = attrs.get("ObjectId")
+                if oid in seen:
+                    raise MiamiDadeContractError(f"Miami-Dade: ObjectId {oid} repeated across pages")
+                seen.add(oid)
+                fetched += 1
+                record = self._parse_record(attrs)
+                if record:
+                    all_records.append(record)
+            if not data.get("exceededTransferLimit", False) and fetched < expected:
+                break
+            offset += PAGE_SIZE
+            time.sleep(1.0)  # Be nice to the API
+
+        if fetched != expected:
+            raise MiamiDadeContractError(
+                f"Miami-Dade: walked {fetched} of {expected} bookings (layer changed mid-walk or paging drift)"
+            )
 
         logger.info(f"[{self.county}] Scrape complete. Found {len(all_records)} records in {time.time() - start_time:.1f}s.")
         return all_records
+
+    def _get_json(self, session: requests.Session, params: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            resp = session.get(QUERY_ENDPOINT, params=params, timeout=REQUEST_TIMEOUT)
+            resp.raise_for_status()
+            data = resp.json()
+        except (requests.RequestException, ValueError) as exc:
+            raise MiamiDadeContractError(f"Miami-Dade: ArcGIS query failed: {exc}") from exc
+        if not isinstance(data, dict):
+            raise MiamiDadeContractError("Miami-Dade: ArcGIS response is not a JSON object")
+        if "error" in data:
+            raise MiamiDadeContractError(f"Miami-Dade: ArcGIS error {data['error'].get('code') if isinstance(data['error'], dict) else data['error']}")
+        return data
+
+    def _count(self, session: requests.Session, where_clause: str) -> int:
+        data = self._get_json(session, {"where": where_clause, "returnCountOnly": "true", "f": "json"})
+        count = data.get("count")
+        if not isinstance(count, int) or count < 0:
+            raise MiamiDadeContractError("Miami-Dade: returnCountOnly gave no count")
+        return count
 
     def _parse_record(self, attrs: Dict[str, Any]) -> Optional[ArrestRecord]:
         """Convert an ArcGIS feature attribute dict into an ArrestRecord."""
@@ -143,7 +173,7 @@ class MiamiDadeCountyScraper(BaseScraper):
                 if charge and str(charge).strip():
                     charges_list.append(str(charge).strip())
 
-            charges_str = " | ".join(charges_list) if charges_list else "UNKNOWN CHARGE"
+            charges_str = " | ".join(charges_list)  # "" when the layer lists none; never a placeholder
             
             # GlobalID is preferred; ObjectId is a source-issued fallback. Both are
             # stored only as the booking deduplication token for this county source.
@@ -163,12 +193,15 @@ class MiamiDadeCountyScraper(BaseScraper):
                 Last_Name=last_name,
                 Booking_Date=booking_date_str,
                 Charges=charges_str,
-                # ArcGIS miamidade_jail_data has no bond/bail fields.
-                Bond_Amount="0",
+                # ArcGIS miamidade_jail_data has no bond/bail fields: unknown, never $0.
+                Bond_Amount="",
                 Status="Unknown",
                 Facility="Miami-Dade Corrections",
                 LastCheckedMode="INITIAL",
-                extra_data={"booking_key_origin": "official public ArcGIS GlobalID/ObjectId"},
+                extra_data={
+                    "booking_key_origin": "official public ArcGIS GlobalID/ObjectId",
+                    "bond_published": False,
+                },
             )
         except Exception as e:
             logger.warning(f"[{self.county}] Error parsing record {attrs.get('ObjectId')}: {e}")
