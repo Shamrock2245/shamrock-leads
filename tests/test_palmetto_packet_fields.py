@@ -14,6 +14,7 @@ from dashboard.bond_pdf_service import (
 )
 from dashboard.palmetto_field_placement import required_text_fields
 from dashboard.palmetto_packet_fill import build_palmetto_context, fill_palmetto_packet_forms
+from dashboard.paperwork_pdf_service import _doc_bytes_for_slug
 
 FAKE = {
     "name": "SAMPLE, NOT A PERSON",
@@ -211,3 +212,63 @@ def test_osi_writer_keys_still_match_widgets():
         assert key in fields
     assert fields["DefCharge1"] == ["SAMPLE CHARGE ONLY"]
     assert "WrittenPremiumAmount" in fields
+
+
+def test_osi_stitch_does_not_stamp_the_agent_block():
+    """Indemnitor name and address must not land on the printed agent header.
+
+    The five OSI forms that share the 'Agent name, Address, Phone & License #'
+    line used to take the first case-insensitive 'Name' / 'Address' hit, which
+    is that header. Raw {{...}} tags must not be printed either.
+    """
+    name = "ZZTESTINDEMNITOR"
+    address = "ZZTESTADDRESSLANE"
+    defendant = "ZZTESTDEFENDANT"
+    data = {
+        "defendant_name": defendant,
+        "case_number": "00-SAMPLE-000",
+        "county": "Sample",
+        "bond_amount": "1000",
+        "poa_number": "SAMPLE-POA",
+    }
+    person = {"name": name, "address": address}
+    slugs = (
+        "defendant-application",
+        "promissory-note",
+        "disclosure-form",
+        "surety-terms",
+        "collateral-receipt",
+    )
+    for slug in slugs:
+        raw = _doc_bytes_for_slug(
+            slug,
+            data,
+            "osi",
+            person=person,
+            role="Indemnitor 1",
+            role_index=0,
+        )
+        assert raw, slug
+        doc = fitz.open(stream=raw, filetype="pdf")
+        try:
+            for page in doc:
+                assert "{{" not in page.get_text(), slug
+                for hit in page.search_for("Agent name"):
+                    clip = fitz.Rect(
+                        hit.x0 - 40,
+                        hit.y0 - 24,
+                        page.rect.x1,
+                        hit.y1 + 40,
+                    ) & page.rect
+                    stamped = page.get_text(clip=clip)
+                    assert name not in stamped, slug
+                    assert address not in stamped, slug
+                    assert defendant not in stamped, slug
+                for token in (name, address, defendant):
+                    for rect in page.search_for(token):
+                        assert page.rect.x0 - 1 <= rect.x0 <= page.rect.x1 + 1, slug
+                        assert page.rect.y0 - 1 <= rect.y0 <= page.rect.y1 + 1, slug
+                        assert rect.x1 <= page.rect.x1 + 1, slug
+                        assert rect.y1 <= page.rect.y1 + 1, slug
+        finally:
+            doc.close()
