@@ -422,6 +422,104 @@ def test_outbox_depth_and_age_alert(monkeypatch):
     assert len(sent) == 1
 
 
+class _AsyncCursor:
+    """Stands in for Motor: sync iteration raises, async iteration yields."""
+
+    def __init__(self, docs):
+        self._docs = [dict(doc) for doc in docs]
+
+    def __iter__(self):
+        raise TypeError("'AsyncIOMotorCursor' object is not iterable")
+
+    def __aiter__(self):
+        async def _gen():
+            for doc in self._docs:
+                yield doc
+
+        return _gen()
+
+
+class _AsyncCol:
+    """``update_one`` writes only when the returned coroutine is awaited."""
+
+    def __init__(self, docs=None):
+        self.docs = [dict(doc) for doc in (docs or [])]
+        self.writes = 0
+
+    def find(self, filt=None, projection=None):
+        rows = []
+        for doc in self.docs:
+            if filt and any(
+                doc.get(key) != value
+                for key, value in filt.items()
+                if not isinstance(value, dict)
+            ):
+                continue
+            rows.append(doc)
+        return _AsyncCursor(rows)
+
+    def update_one(self, filt, update, upsert=False):
+        async def _apply():
+            self.writes += 1
+            for doc in self.docs:
+                if all(doc.get(key) == value for key, value in (filt or {}).items()):
+                    doc.update(update.get("$set") or {})
+                    return
+            if upsert:
+                row = dict(update.get("$setOnInsert") or {})
+                row.update(update.get("$set") or {})
+                self.docs.append(row)
+
+        return _apply()
+
+
+def test_retry_on_async_driver_writes_the_pointer_before_delivery(monkeypatch):
+    monkeypatch.setenv("SAAS_MULTI_TENANT", "1")
+    tenants = _AsyncCol(
+        [
+            {"tenant_id": "shamrock"},
+            {
+                "tenant_id": "gulf_coast_bail",
+                "lead_subscriptions": [
+                    {"state": "FL", "county": "Lee", "mode": "shared", "price_cents": None}
+                ],
+            },
+        ]
+    )
+    leads = _AsyncCol()
+    outbox = _AsyncCol(
+        [
+            {
+                "arrest_id": "FL|Lee|B-500",
+                "state": "FL",
+                "county": "Lee",
+                "booking_number": "B-500",
+                "status": "pending",
+                "attempts": 0,
+                "next_attempt_at": "2000-01-01T00:00:00+00:00",
+            }
+        ]
+    )
+    try:
+        list(tenants.find({}))
+    except TypeError as exc:
+        assert "not iterable" in str(exc)
+    else:
+        raise AssertionError("async find() was iterable")
+    pending = outbox.update_one({"arrest_id": "missing"}, {"$set": {"status": "nope"}})
+    assert outbox.writes == 0
+    asyncio.run(pending)
+    db = {"tenants": tenants, "leads": leads, "lead_fanout_outbox": outbox}
+    result = asyncio.run(retry_lead_fanout(db))
+    assert result["delivered"] == 1
+    assert leads.writes >= 1
+    assert {doc["tenant_id"] for doc in leads.docs} == {"shamrock", "gulf_coast_bail"}
+    assert {doc["booking_number"] for doc in leads.docs} == {"B-500"}
+    assert {doc["arrest_id"] for doc in leads.docs} == {"FL|Lee|B-500"}
+    assert outbox.docs[0]["status"] == "delivered"
+    assert "Hidden Person" not in json.dumps(leads.docs)
+
+
 def test_subscription_save_writes_an_audit_row(monkeypatch):
     tenants = _install(monkeypatch)
     client = _client()

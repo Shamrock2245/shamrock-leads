@@ -584,6 +584,56 @@ async def _finish(value):
     return value
 
 
+async def _subscribers_for_async(db: Any, *, state: str, county: str) -> list[str]:
+    """Motor-safe lookup for the retry sweep. The arrest writer stays on ``subscribers_for``."""
+    if _sellable_key(state, county) is None:
+        return []
+    docs = await _collect(
+        db["tenants"].find({}, {"tenant_id": 1, "lead_subscriptions": 1, "legal_name": 1})
+    )
+    found = []
+    for doc in docs:
+        tenant_id = doc.get("tenant_id")
+        if not tenant_id:
+            continue
+        for row in effective_subscriptions(doc):
+            if row.get("state") == state and str(row.get("county") or "").lower() == county.lower():
+                found.append(tenant_id)
+                break
+    return found
+
+
+async def _write_lead_pointer_async(db: Any, tenant_id: str, pointer: dict[str, str], now: str) -> None:
+    await _finish(db["leads"].update_one(
+        {"arrest_id": pointer["arrest_id"], "tenant_id": tenant_id},
+        {
+            "$setOnInsert": {
+                "tenant_id": tenant_id,
+                "arrest_id": pointer["arrest_id"],
+                "state": pointer["state"],
+                "county": pointer["county"],
+                "booking_number": pointer["booking_number"],
+                "routed_at": now,
+            }
+        },
+        upsert=True,
+    ))
+
+
+async def _deliver_pointer_async(db: Any, pointer: dict[str, str]) -> tuple[list[str], bool]:
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    routed: list[str] = []
+    failed = False
+    for tenant_id in await _subscribers_for_async(db, state=pointer["state"], county=pointer["county"]):
+        try:
+            await _write_lead_pointer_async(db, tenant_id, pointer, now)
+            routed.append(tenant_id)
+        except Exception:
+            logger.exception("lead fan-out tenant write failed")
+            failed = True
+    return routed, failed
+
+
 def _open_status(row: dict) -> bool:
     return row.get("status") in {"pending", "failed"}
 
@@ -646,7 +696,7 @@ async def retry_lead_fanout(db: Any) -> dict[str, Any]:
         }
         if not pointer["arrest_id"] or not pointer["county"] or not pointer["booking_number"]:
             continue
-        _written, write_failed = _deliver_pointer(db, pointer)
+        _written, write_failed = await _deliver_pointer_async(db, pointer)
         stamp = now.replace(microsecond=0).isoformat()
         if not write_failed:
             await _finish(col.update_one(

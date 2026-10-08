@@ -8,6 +8,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 - **Start bond packet (`SAAS_MULTI_TENANT` still default off).** The `paperwork_packets` write is one `update_one` upsert keyed on `bond_case_id`, so a second submission for the same bond case updates that row instead of inserting another.
 
+## [Unreleased] — 2026-10-08 (lead fan-out Motor retry)
+
+### Fixed
+- **Lead fan-out retry (`SAAS_MULTI_TENANT` still default off).** The cron sweep runs on the Motor database. Tenant lookup and the lead pointer write are awaited, so a due outbox row is written before it is marked delivered. The arrest writer still uses the sync helpers.
+
 ## [Unreleased] — 2026-10-08 (lead fan-out retry job)
 
 ### Fixed
