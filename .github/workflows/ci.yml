@@ -56,6 +56,8 @@ jobs:
           SECRET_KEY: ci-not-a-real-secret
         # Palmetto agent-line placement is test_palmetto_packet_fields,
         # test_agent_name_fallback, and test_palmetto_docuseal_apply.
+        # Application DEFENDANT, POWER NO., and CASE NO. placement is
+        # test_palmetto_application_header_placement.
         run: |
           pytest -q \
             tests/test_tenant_scope.py \
@@ -82,10 +84,17 @@ jobs:
             tests/test_source_state_drift.py \
             tests/test_fl_smartweb_five.py \
             tests/test_fl_smartweb_legacy_paging.py \
+            tests/test_fl_smartweb_unknown_bond.py \
             tests/test_fl_brevard_newworld.py \
+            tests/test_fl_indian_river_booking_search.py \
+            tests/test_fl_okaloosa_api.py \
+            tests/test_fl_orange_bestjail.py \
             tests/test_fl_67_status.py \
             tests/test_fl_idle_eight.py \
             tests/test_fl_bond_charges_hydrate.py \
+            tests/test_fl_pinellas_bond_unknown.py \
+            tests/test_fl_hernando_unknown_bond.py \
+            tests/test_fl_hernando_detail_status.py \
             tests/test_miami_dade_scraper.py \
             tests/test_fl_miami_dade_arcgis_contract.py \
             tests/test_fl_sarasota_manatee_audit.py \
@@ -153,6 +162,7 @@ jobs:
             tests/test_palmetto_packet_fields.py \
             tests/test_agent_name_fallback.py \
             tests/test_palmetto_docuseal_apply.py \
+            tests/test_palmetto_application_header_placement.py \
             tests/test_paperwork_template_paths.py \
             tests/test_bond_packet_start.py \
             tests/test_staff_test_case_write_bond.py \
