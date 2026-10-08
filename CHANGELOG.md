@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (Palmetto agent license boxes)
+
+### Added
+- **Palmetto application and indemnity.** Each AGENT line keeps `agent_name` and adds `agent_license` on the same row, filled from that same `BOND_AGENTS` pair. The boxes are the template 6 placement verified at 08:27 ET (`AGENT_LINE_BOXES`). The application name and license set `valign: bottom` and `font_size: 11`. Both license boxes set `align: right`. An omitted `preferences` dict leaves the field unchanged. Templates 1 and 5 are not changed by this commit.
+
 ## [Unreleased] — 2026-10-08 (staff test-case Write Bond smoke)
 
 ### Added
