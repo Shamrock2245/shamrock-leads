@@ -106,3 +106,9 @@ def test_run_raises_when_no_booking_has_charges(monkeypatch):
         fl_smartweb.scrape_smartweb_jail_view(
             county="Escambia", facility="X", base_url="https://example.test", lookback_days=1
         )
+
+
+def test_card_without_charges_never_reads_the_next_cards_bond():
+    html = "<table>" + _card("ECC26JBN000010", [], "NO BOND") + _card("ECC26JBN000011", ["$15,000.00"], "$15,000.00") + "</table>"
+    recs = fl_smartweb._parse_html(html, set(), county="Escambia", facility="X", detail_url="https://example.test/")
+    assert {r.Booking_Number: r.Bond_Amount for r in recs} == {"ECC26JBN000010": "", "ECC26JBN000011": "15000"}

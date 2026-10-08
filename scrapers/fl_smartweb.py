@@ -302,9 +302,14 @@ def _parse_html(
             row = img.find_parent("tr")
             current = row
             for _ in range(15):
-                if current:
-                    block_text += " " + current.get_text(" ", strip=True)
-                    current = current.find_next_sibling("tr")
+                if not current:
+                    break
+                # Stop at the next card: its "Bond Amount:" must never be read
+                # as this card's (a card without charges falls back to it).
+                if current is not row and current.find("img", src=re.compile(r"bookno=")):
+                    break
+                block_text += " " + current.get_text(" ", strip=True)
+                current = current.find_next_sibling("tr")
         except Exception:
             pass
 
