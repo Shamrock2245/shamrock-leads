@@ -214,12 +214,33 @@ def _smoke_rows(path: Path | None, runtime_states: dict[str, str]) -> list[dict]
                 if kind in {"write_smoke", "relay_write"}:
                     if state == "fail_closed":
                         raise RuntimeError(f"{where}: fail_closed scope cannot have a passed write")
-                    written = int(result.get("new_records") or 0) + int(result.get("updated_records") or 0)
-                    if result.get("status") != "ok" or int(result.get("mongo_writer_results") or 0) < 1 or written < 1:
-                        raise RuntimeError(
-                            f"{where}: a passed write needs status ok, a Mongo writer result "
-                            "and at least one new or updated row"
-                        )
+                    if raw.get("method") == "prod_mongo_aggregate":
+                        # Rows the deployed scraper already wrote, read back by
+                        # scripts/smoke_evidence_check.py; no writer stats exist.
+                        if kind != "write_smoke":
+                            raise RuntimeError(f"{where}: prod_mongo_aggregate is only for write_smoke")
+                        try:
+                            hours = float(result.get("window_hours"))
+                        except (TypeError, ValueError):
+                            hours = 0.0
+                        if (
+                            result.get("status") != "ok"
+                            or int(result.get("rows") or 0) < 1
+                            or not 0 < hours <= 48
+                            or int(result.get("booking_number_blank", 1)) != 0
+                            or int(result.get("booking_number_duplicates", 1)) != 0
+                        ):
+                            raise RuntimeError(
+                                f"{where}: a passed prod aggregate needs status ok, rows >= 1, "
+                                "window_hours <= 48, and no blank or duplicate booking numbers"
+                            )
+                    else:
+                        written = int(result.get("new_records") or 0) + int(result.get("updated_records") or 0)
+                        if result.get("status") != "ok" or int(result.get("mongo_writer_results") or 0) < 1 or written < 1:
+                            raise RuntimeError(
+                                f"{where}: a passed write needs status ok, a Mongo writer result "
+                                "and at least one new or updated row"
+                            )
                 if kind == "relay_read":
                     if result.get("status") != "ok" or int(result.get("bookings") or 0) < 1:
                         raise RuntimeError(f"{where}: a passed relay read needs status ok and bookings >= 1")
@@ -256,7 +277,7 @@ def _smoke_summary(status: str, result: dict | None, raw: dict) -> str:
         blocked = str(raw.get("blocked_on") or "").strip()
         return f"Awaiting Leads Ops. {blocked}".strip() if blocked else "Awaiting Leads Ops."
     parts = [f"status {result.get('status')}"]
-    for key in ("records_scraped", "bookings", "new_records", "updated_records"):
+    for key in ("records_scraped", "bookings", "rows", "window_hours", "new_records", "updated_records"):
         if key in result:
             parts.append(f"{key.replace('_', ' ')} {result[key]}")
     if result.get("columns"):

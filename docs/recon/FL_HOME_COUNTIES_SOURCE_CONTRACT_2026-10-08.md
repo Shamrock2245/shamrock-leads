@@ -78,7 +78,7 @@ The agent box has no `MONGODB_URI` and no residential exit, so these steps run o
    ```bash
    MONGODB_URI=<prod> python scripts/smoke_evidence_check.py --county Lee --state FL --hours 24
    ```
-   Record it as `method: prod_mongo_aggregate`, `egress: vps`, with the deployed SHA.
+   Record it as `method: prod_mongo_aggregate`, `egress: vps`, with the deployed SHA. `result` is the script's JSON with `status` set to its `result` (`ok`). A passed aggregate needs `rows` >= 1, `window_hours` <= 48, and `booking_number_blank` and `booking_number_duplicates` both 0. No writer stats are needed for this method.
 2. Or a one-shot run on the Mac, but only if Brendan is fine with Lee's current APE/Scrapfly path:
    ```bash
    MONGODB_URI=<prod> python main.py Lee        # copy the final "Result: {...}" line

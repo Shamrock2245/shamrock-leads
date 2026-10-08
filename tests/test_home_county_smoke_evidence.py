@@ -142,6 +142,35 @@ def test_a_write_without_a_mongo_writer_does_not_count(tmp_path):
         _build(_write(tmp_path, [_passed_write(status="error")]))
 
 
+def _prod_aggregate(**result):
+    res = {"status": "ok", "rows": 240, "window_hours": 24, "booking_number_blank": 0,
+           "booking_number_duplicates": 0, "booking_number_shapes": {"NNNNNNN": 240}}
+    res.update(result)
+    return {**BASE, "label": "Lee (FL)", "kind": "write_smoke", "status": "passed", "run_on": "2026-10-09",
+            "commit": "abc1234", "egress": "vps", "method": "prod_mongo_aggregate", "result": res}
+
+
+def test_documented_prod_aggregate_evidence_is_accepted(tmp_path):
+    text, _ = _build(_write(tmp_path, [_prod_aggregate()]))
+    assert "| Lee (FL) | unverified | write_smoke | passed | 2026-10-09 | abc1234 | vps |" in text
+
+
+@pytest.mark.parametrize("over", [
+    {"rows": 0}, {"status": "no_rows"}, {"window_hours": 168}, {"window_hours": None},
+    {"booking_number_blank": 3}, {"booking_number_duplicates": 2},
+])
+def test_prod_aggregate_evidence_has_its_own_gate(tmp_path, over):
+    with pytest.raises(RuntimeError, match="prod aggregate"):
+        _build(_write(tmp_path, [_prod_aggregate(**over)]))
+
+
+def test_prod_aggregate_is_not_relay_evidence(tmp_path):
+    row = _prod_aggregate()
+    row.update(label="Manatee (FL)", kind="relay_write", egress="residential_relay")
+    with pytest.raises(RuntimeError, match="only for write_smoke"):
+        _build(_write(tmp_path, [row]))
+
+
 def test_relay_evidence_must_come_from_the_residential_relay(tmp_path):
     with pytest.raises(RuntimeError, match="residential_relay"):
         _build(_write(tmp_path, [_passed_relay_read(egress="vps")]))
