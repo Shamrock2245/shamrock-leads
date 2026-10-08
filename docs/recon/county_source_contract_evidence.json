@@ -955,10 +955,10 @@
     {
       "state": "FL",
       "county_fips": "089",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "fail_closed",
+      "official_source_url": "https://dssinmate.nassauso.com/NewWorld.InmateInquiry/nassau",
+      "access_posture": "Fail closed: portal sends only its leaf certificate (GoDaddy G2 intermediate missing), so ordinary verified HTTPS fails",
+      "evidence_note": "2026-10-07 Brevard/New World recon: same New World contract as Walton/Flagler; old module used curl_cffi + verify=False and keyed every row on the Booking History heading (\"History\"). 2026-10-08 07:54 EDT re-check from box: curl verification fails (unable to get local issuer certificate); openssl shows only the *.nassauso.com leaf. Owner hold: nassau.py SOURCE_CONTRACT_VALIDATED=False and SCRAPER_SOURCE_STATES fail_closed until the chain is fixed or the GoDaddy G2 intermediate is approved. See docs/recon/FL_67_STATUS_2026-10-08.md."
     },
     {
       "state": "FL",
@@ -1061,7 +1061,7 @@
       "county_fips": "115",
       "passive_recommendation": "recon_only",
       "official_source_url": "https://cms.revize.com/revize/apps/sarasota/",
-      "access_posture": "2026-10-07 live: listing root 200 (plain HTTPS); sheriff-linked `index.php`, `viewInmate.php` and `personSearch.php` return HTTP 403 `cf-mitigated: challenge`. Fail closed in `sarasota.py` (`SOURCE_CONTRACT_VALIDATED=False`) and `SCRAPER_SOURCE_STATES`; no network fetch",
+      "access_posture": "2026-10-07 live: listing root 200 (plain HTTPS); 2026-10-08 07:54 EDT re-check: listing root now also HTTP 403 `cf-mitigated: challenge` from the box; sheriff-linked `index.php`, `viewInmate.php` and `personSearch.php` return HTTP 403 `cf-mitigated: challenge`. Fail closed in `sarasota.py` (`SOURCE_CONTRACT_VALIDATED=False`) and `SCRAPER_SOURCE_STATES`; no network fetch",
       "evidence_note": "2026-10-07 audit (`docs/recon/FL_SARASOTA_MANATEE_AUDIT_2026-10-07.md`): official \"Current Inmate Population\" listing has 1,081 entries, each only an opaque 10-digit `viewInmate.php?id=` link id + name + date of birth; no booking number and no booking date/time (same block as Alachua/Clay). Reopen gate encoded in `scrapers/counties/sarasota_contract.py`. Third-party mirror / JailTracker CAPTCHA / proxy paths stay retired. Reopen only after an official listing or ordinary-access detail page proves a source booking number + booking timestamp. See `SWFL_SOURCE_CONTRACT_QUEUE.md`."
     },
     {
