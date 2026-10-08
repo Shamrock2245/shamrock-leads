@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import re
 import secrets
+import uuid
 from datetime import datetime, timezone
 from typing import Any
+
+from pymongo.errors import DuplicateKeyError
 
 from dashboard.tenancy.constants import SHAMROCK_TENANT_ID
 from dashboard.tenancy.context import bind_platform_job, normalize_slug
@@ -132,6 +135,10 @@ def _invites(raw: Any, owner_email: str) -> list[dict[str, str]]:
             raise OnboardingError("invites_invalid")
         email = _email(item.get("email"))
         role = str(item.get("role") or "").strip().lower()
+        # The declared owner keeps the owner role even when the same address
+        # is also submitted as a coworker.
+        if email == owner_email:
+            role = "owner"
         if role not in _ROLES or email in seen:
             raise OnboardingError("invites_invalid")
         seen.add(email)
@@ -202,8 +209,10 @@ def build_agency_record(
     if approve_now and source == "super_admin":
         status = "active"
         approved_at = now
+    slug = _slug_for(payload, legal_name)
     return {
-        "tenant_id": _slug_for(payload, legal_name),
+        "tenant_id": slug,
+        "slug": slug,
         "legal_name": legal_name,
         "status": status,
         "plan": "unbilled",
@@ -258,10 +267,52 @@ def public_agency_view(doc: dict, *, include_invites: bool) -> dict[str, Any]:
     return view
 
 
+_TENANT_INDEXES = (
+    ("tenant_id", "tenant_id_unique"),
+    ("slug", "tenant_slug_unique"),
+)
+
+
 async def _tenants():
     from dashboard.extensions import get_collection
 
     return get_collection("tenants")
+
+
+async def _ensure_directory_indexes(col) -> None:
+    """Unique tenant_id and slug. create_index is idempotent."""
+    for field, name in _TENANT_INDEXES:
+        created = col.create_index([(field, 1)], unique=True, name=name)
+        if hasattr(created, "__await__"):
+            await created
+
+
+async def _write_decision_audit(
+    *,
+    tenant_id: str,
+    actor: str,
+    reason: str,
+    old_state: dict,
+    new_state: dict,
+) -> None:
+    """Immutable row on the agency's audit trail. Fail closed if it cannot be written."""
+    from dashboard.extensions import get_collection
+    from dashboard.tenancy.context import bind_job_tenant
+
+    event = {
+        "event_id": str(uuid.uuid4()),
+        "entity_type": "tenant",
+        "entity_id": tenant_id,
+        "action": "agency_" + str(new_state.get("status") or "decision"),
+        "actor": actor,
+        "reason": reason,
+        "old_state": old_state,
+        "new_state": new_state,
+        "timestamp": _now(),
+    }
+    with bind_job_tenant(tenant_id, job_name="agency_decision"):
+        col = get_collection("audit_events")
+        await col.insert_one(event)
 
 
 async def create_agency(payload: dict, *, source: str, actor: str, approve_now: bool = False) -> dict:
@@ -274,10 +325,22 @@ async def create_agency(payload: dict, *, source: str, actor: str, approve_now: 
     record = build_agency_record(payload, source=source, actor=actor, approve_now=approve_now)
     with bind_platform_job("agency_onboarding"):
         col = await _tenants()
+        await _ensure_directory_indexes(col)
         existing = await col.find_one({"tenant_id": record["tenant_id"]})
         if existing:
             raise OnboardingError("slug_taken")
-        await col.insert_one(record)
+        try:
+            await col.insert_one(record)
+        except DuplicateKeyError:
+            raise OnboardingError("slug_taken") from None
+    if record["status"] == "active":
+        await _write_decision_audit(
+            tenant_id=record["tenant_id"],
+            actor=actor,
+            reason="approved_at_create",
+            old_state={"status": ""},
+            new_state={"status": "active"},
+        )
     return public_agency_view(record, include_invites=source == "super_admin")
 
 
@@ -317,11 +380,27 @@ async def decide_agency(tenant_id: str, *, approve: bool, actor: str, reason: st
     }
     with bind_platform_job("agency_onboarding"):
         col = await _tenants()
-        found = await col.find_one({"tenant_id": slug})
-        if not found:
-            raise OnboardingError("not_found")
-        if found.get("status") != "pending_approval":
+        result = await col.update_one(
+            {"tenant_id": slug, "status": "pending_approval"},
+            {"$set": update},
+        )
+        if getattr(result, "matched_count", 0) == 0:
+            found = await col.find_one({"tenant_id": slug})
+            if not found:
+                raise OnboardingError("not_found")
             raise OnboardingError("not_pending")
-        await col.update_one({"tenant_id": slug}, {"$set": update})
-        found.update(update)
+        found = await col.find_one({"tenant_id": slug})
+    if not found:
+        raise OnboardingError("not_found")
+    await _write_decision_audit(
+        tenant_id=slug,
+        actor=actor,
+        reason=reason,
+        old_state={"status": "pending_approval"},
+        new_state={
+            "status": update["status"],
+            "rejected_reason": update["rejected_reason"],
+            "approved_by": update["approved_by"],
+        },
+    )
     return public_agency_view(found, include_invites=True)

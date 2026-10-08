@@ -35,6 +35,21 @@ def get_mongo_client():
     return _mongo_client
 
 
+def get_raw_db():
+    """Return the Motor database with no tenant proxy.
+
+    Startup work and the membership lookup use this only when they are about
+    to bind a tenant themselves, or when they must read the platform directory
+    before a request tenant exists. Request and job paths stay on ``get_db``.
+    """
+    global _mongo_db
+    client = get_mongo_client()
+    if _mongo_db is None:
+        db_name = os.getenv("MONGODB_DB_NAME", "ShamrockBailDB")
+        _mongo_db = client[db_name]
+    return _mongo_db
+
+
 def get_db():
     """Return the database handle (Motor async).
 
@@ -46,16 +61,12 @@ def get_db():
     allowlist in ``dashboard.tenancy.constants``) stay raw, and every other
     collection is pinned to the current tenant or rejected.
     """
-    global _mongo_db
-    client = get_mongo_client()
-    if _mongo_db is None:
-        db_name = os.getenv("MONGODB_DB_NAME", "ShamrockBailDB")
-        _mongo_db = client[db_name]
+    raw = get_raw_db()
     from dashboard.tenancy.flag import multi_tenant_enabled
     if not multi_tenant_enabled():
-        return _mongo_db
+        return raw
     from dashboard.tenancy.scope import TenantScopedDatabase
-    return TenantScopedDatabase(_mongo_db)
+    return TenantScopedDatabase(raw)
 
 
 # Convenience collection accessors. Always go through get_db() so the flag

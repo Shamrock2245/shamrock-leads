@@ -51,6 +51,11 @@ def tenant_index_specs() -> tuple[IndexSpec, ...]:
       (the only tenant_id index that already exists; queries still do not filter)
     """
     return (
+        # tenants.tenant_id is the agency slug. Both keys are unique so two
+        # directory rows cannot share a slug. No partial filter: this collection
+        # has no legacy rows.
+        IndexSpec("tenants", (("tenant_id", 1),), "tenant_id_unique", True, None),
+        IndexSpec("tenants", (("slug", 1),), "tenant_slug_unique", True, None),
         IndexSpec("poa_inventory", (("tenant_id", 1), ("poa_number", 1)), "tenant_poa_number", True),
         IndexSpec(
             "active_bonds",
