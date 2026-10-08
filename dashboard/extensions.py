@@ -805,6 +805,11 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     # View All grid has no source booking number (person-level MNI only); the
     # old parser keyed rows on FirstName. Person IDs are not booking keys.
     "Alachua (FL)": "fail_closed",
+    # 2026-10-08 (docs/recon/FL_67_STATUS_2026-10-08.md): Nassau is an owner
+    # hold. dssinmate.nassauso.com sends only its leaf cert (GoDaddy G2
+    # intermediate missing); the old verify=False parser keyed every row on
+    # "History". Closed until the chain is fixed or the intermediate is approved.
+    "Nassau (FL)": "fail_closed",
     # Ohio pilot scopes are registered for truthful health visibility only.
     # They remain blocked before source fetch until county-specific approval.
     "Clermont (OH)": "fail_closed",

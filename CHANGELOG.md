@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 - **Okaloosa (FL):** rows were saved with no booking date, because the legacy `Default.aspx` grid publishes none and was parsed by walking flattened cells. The scraper now uses the official Inmate Locator's public JSON API with plain `requests`. The roster comes from `/api/Inmates/search`, paged to the source `total` (it raises on a short walk or duplicate keys) and keyed on the source 10-digit `bookingNo`, with `custodyDate` as the booking timestamp. The bond is the sum of the detail `bailAmt` only when every charge publishes one (a published 0 counts). If any charge is blank, which can mean a hold, the total is unknown (`""`). The roster `totalBondAmt` is never used, because it is only the sum of the published charges (on 2026-10-08, 9 of 60 sampled bookings mixed a blank charge with a positive total), so bookings without a detail (outside the window) have an unknown bond. Charges, statute, degree and per-charge bond come from `/api/Inmates/<bookingNo>` for the last 7 days. Only status `1` (in custody) is emitted. Box read smoke: 781 rows / 781 unique, booking date on all, 11 s. Health stays `unverified` until a Leads Ops write smoke (`docs/recon/FL_OKALOOSA_API_2026-10-08.md`).
+## [Unreleased] — 2026-10-08 (FL matrix/Health parity + FL 67 status)
+
+### Fixed
+- **Nassau (FL) fail closed.** Nassau is an owner hold, but Health showed `unverified` and the matrix `recon_only`, while the module still ran every 120 min with `verify=False` and curl_cffi impersonation and keyed every row on the `Booking History` heading (`History`). Re-checked 2026-10-08: the portal still sends only its leaf certificate (GoDaddy G2 intermediate missing). `nassau.py` is now `SOURCE_CONTRACT_VALIDATED=False` with no source fetch, Health `fail_closed`, evidence + live-evidence hold row added, matrix regenerated and Nassau added to the drift-test `HOLD_LABELS`. Prod rows keyed `History` need a Leads Ops cleanup; nothing was deleted.
+
+### Docs
+- **`docs/recon/FL_67_STATUS_2026-10-08.md`:** one status for each of the 67 FL counties (4 `verified_public`, 40 unverified awaiting Leads Ops smoke with source PR, 17 `fail_closed`, 6 no source), ranked by Census 2024 population, with the matrix-vs-Health parity findings, today's live Sarasota/Manatee/Charlotte checks (the Sarasota listing root is now Cloudflare-challenged too), the relay cadence gap (Leads Ops must schedule `python main.py --relay-only`), rule conflicts in older modules, and the next-PR queue. `tests/test_fl_67_status.py` (in CI) keeps the table consistent with Health.
 ## [Unreleased] — 2026-10-08 (name without license falls back)
 
 ### Fixed
