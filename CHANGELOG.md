@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (Collier and Glades publish-only bonds)
+
+### Fixed
+- **Collier bond.** The daily report publishes no bond amount, but `collier.py` added `$` figures from offense text into the bond (for example "GRAND THEFT PROPERTY VALUE $750-$5K" became a $750 bond; 2 of 7 live rows on 2026-10-08) and wrote `"0"` for the rest. A bond now counts only when this person's own `lblBondAmount` / `lblBondSummary` span prints a `$` figure. Unknown bond is `""`. Bond spans are read by the person's own `gvReport_ctlNN_ReportUC_` id, so a neighbour's span is never used. With no id prefix, no bond span is read and the bond is `""`.
+- **Glades bond.** `glades.py` read the first "Bond...: <number>" in a 15-row window that ran into the next inmates, so a "NO BOND" card took the next card's figure and a card with $245,000 in charge bonds was saved as `0.00`. The bond now comes only from this card's own charge grid. Any "NO BOND" charge (a hold) or an unreadable bond cell makes the total `""`. Otherwise the printed figures are summed, and a printed charge `$0.00` is a real `"0"`. With no charge grid, the card's own "Bond Amount:" counts only when positive: the card prints `$0.00` there even when its charges publish $15,000 to $245,000 (live check, 2026-10-08), so that `$0.00` stays `""`.
+- The Collier and Glades write smokes in `docs/recon/smoke_evidence.json` (#138) are on hold until this merges and deploys.
+
+### Docs
+- **Glades $0.00 evidence** (`docs/recon/FL_GLADES_BOND_ZERO_2026-10-08.md`, matrix + `county_source_contract_evidence.json`): live 2026-10-08, 20 cards, counts only. Card-level Bond Amount was NO BOND on 14 (all with NO BOND charges) and $0.00 on 6 (all with positive charge bonds, $15k–$245k); never a positive card figure; charge-level $0.00 once, beside a positive charge. CoS: card-level $0.00 → `""`; charge-level $0.00 stays `0`.
+
 ## [Unreleased] — 2026-10-08 (fail-closed counties out of the default lead list)
 
 ### Fixed
