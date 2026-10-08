@@ -8,6 +8,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 - **All counties:** a staff-set bond (update-bond-amount, update-charge-bonds, update-lead-details, admin patch) and staff-edited charge rows (per-charge amounts, case numbers, POAs, added or removed charges) now survive every rescrape. One module, `core/staff_edits.py`, protects each write path that puts source data on an existing arrest: the shared MongoWriter (every county, including the SSW and SmartWEB helpers), the First Appearance watcher, the custody recheck, the Lee jail refresh, refresh-from-source, the bookmarklet merge and the confirmed-booking refresh. Source values that disagree are kept in `scraped_bond_amount` / `scraped_bond_type` / `scraped_charges` / `scraped_charge_details`. A scraped charge that staff have not seen, removed or replaced is still added. A staff-entered $0 is stored in `staff_edits.bond` and hydrates as a known $0. Existing records are read under their `bond_override` / `MANUAL_CHARGE_BONDS` flags; there is no backfill. In the Write Bond modal a blank per-charge amount stays unknown (it used to be saved as $0), and a POA the modal does not send is kept. Two related fixes. First, the custody recheck read every live field as blank, because `ArrestRecord` has no `to_dict()`, so a recheck could wipe status, bond and charges. It now compares against `to_mongo_doc()` and never writes a value the source did not publish. Second, refresh-from-source no longer writes an unparsed bond as $0. Design note: `docs/STAFF_EDITS_SURVIVE_RESCRAPE.md`.
 
+## [Unreleased] — 2026-10-07 (surety entitlement review)
+
+### Fixed
+- **Surety checklist (`SAAS_MULTI_TENANT` still default off).** `POST /api/paperwork/generate/{intake_id}`, the paperwork preview, DocuSeal prefill and push, booking hydrate, and the appearance-bond print routes refuse a surety the agency is not enabled for before any carrier PDF is rendered. Changing the checklist writes an `audit_events` row with the actor, reason, and old and new enabled set.
+
 ## [Unreleased] — 2026-10-07 (agency billing review)
 
 ### Fixed
@@ -25,12 +30,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Backfill.** `scripts/backfill_tenant_id.py` stamps every tenant-owned collection the app opens, including `family_relationships`, `persons`, `osint_scans`, `docket_events`, and `intake_fanout_outbox`. A connected run also stamps any other present collection that is not on the global or platform allowlist. `tests/test_tenant_scope.py` fails if application code uses a collection that is neither tenant-owned nor allowlisted.
 - **Startup.** POA seeding and core index creation run inside a Shamrock tenant context, so a flag-on boot does not call the tenant proxy with no context. Flag off still writes the same unstamped seed.
 
-## [Unreleased] — 2026-10-07 (multi-tenant foundation, onboarding, and test-mode billing)
+## [Unreleased] — 2026-10-07 (multi-tenant foundation through surety entitlements)
 
 ### Added
 - **`SAAS_MULTI_TENANT` flag, default off.** `get_collection()` is the tenant chokepoint: tenant-owned collections are scoped by `tenant_id`, and an explicit global allowlist (jail rosters and scraper health) stays shared. A request or job with no tenant fails closed only when the flag is on. Shamrock routes are unchanged while the flag is off. The offline backfill script and the tenant index specs are in the repo and are not applied to production. The 90-day audit TTL is unchanged.
 - **Agency onboarding** (`/platform`, `/signup`). A super-admin records the agency, Florida license numbers, branding, staff invites, and `env:` secret refs. Invites are stored and are not emailed. Self-serve signup stays pending until that super-admin approves it.
 - **Stripe test-mode billing** (`/platform/billing`). Checkout refuses a live key and refuses a price that is not configured. MRR is the sum of stored cents from signed `invoice.paid` events on active agencies. The second failed invoice suspends packet send and texting. Shamrock is not billed. No card number is stored.
+- **Surety checklist** (`/platform/sureties`). OSI and Palmetto stay on for Shamrock. Inactive carriers cannot be enabled. Private templates are labels only. When the flag is on, packet finalize refuses a surety the agency is not enabled for.
 
 ## [Unreleased] — 2026-10-07 (Charlotte FL Revize hardening)
 
