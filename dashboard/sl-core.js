@@ -103,6 +103,27 @@ function dropFailClosed(labels) {
   });
 }
 
+/** Load fail_closed labels once, before any preset is applied. A preset sends
+ *  its counties by name, and a named county is an opt-in on /api/leads, so the
+ *  list must be known even when Lead Explorer has not loaded yet. */
+let _failClosedLoad = null;
+function ensureFailClosedCounties() {
+  if (SL_STATE.failClosedLoaded) return Promise.resolve();
+  if (!_failClosedLoad) {
+    _failClosedLoad = fetch(`${API}/api/leads/fail-closed-counties`, { credentials: 'same-origin' })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(d) {
+        if (d && Array.isArray(d.fail_closed_counties)) {
+          SL_STATE.failClosedCounties = d.fail_closed_counties;
+          SL_STATE.failClosedLoaded = true;
+        }
+      })
+      .catch(function() {})
+      .then(function() { _failClosedLoad = null; });
+  }
+  return _failClosedLoad;
+}
+
 function writeBookLabels() {
   const names = (SL_STATE.writeCounties && SL_STATE.writeCounties.length)
     ? SL_STATE.writeCounties
@@ -885,7 +906,8 @@ function filterDefCountyOptions(q) {
   });
 }
 
-function applyDefCountyPreset(name) {
+async function applyDefCountyPreset(name) {
+  await ensureFailClosedCounties();
   const counties = SL_STATE.counties || [];
   if (name === 'clear' || name === 'all' || name === 'none') {
     SL_STATE.defSelectedCounties = [];
@@ -1014,7 +1036,9 @@ function filterCountyOptions(q) {
     o.style.display = o.textContent.toLowerCase().includes(q.toLowerCase()) ? '' : 'none';
   });
 }
-function applyPreset(name) {
+async function applyPreset(name) {
+  const clicked = (typeof event !== 'undefined' && event && event.target) ? event.target.closest('.preset-btn') : null;
+  await ensureFailClosedCounties();
   document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
   if (name === 'all' || name === 'none') {
     SL_STATE.selectedCounties = [];
@@ -1025,10 +1049,7 @@ function applyPreset(name) {
   } else {
     SL_STATE.selectedCounties = dropFailClosed([...(PRESETS[name] || [])]);
   }
-  if (event && event.target) {
-    const btn = event.target.closest('.preset-btn');
-    if (btn) btn.classList.add('active');
-  }
+  if (clicked) clicked.classList.add('active');
 
   // Newest first (scraped_at = live catch-up order)
   SL_STATE.sort = 'scraped_at';

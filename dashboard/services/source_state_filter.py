@@ -48,7 +48,8 @@ def _named(explicit_counties: Iterable[str]) -> tuple[set[str], set[tuple[str, s
         if not raw:
             continue
         bare, st = parse_registered_county(raw)
-        key = bare.casefold()
+        # "Sarasota County (FL)" from a legacy suffixed row names Sarasota.
+        key = re.sub(r"\s+county$", "", bare, flags=re.IGNORECASE).strip().casefold()
         if st:
             pairs.add((key, st.upper()))
         else:

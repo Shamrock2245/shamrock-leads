@@ -285,3 +285,33 @@ def test_lead_subscription_seed_excludes_fail_closed():
 ])
 def test_is_fail_closed(county, state, expected):
     assert _filters().is_fail_closed(county, state) is expected
+
+
+# ── Codex review follow-ups ─────────────────────────────────────────────────
+def test_naming_a_suffixed_county_label_is_still_an_opt_in():
+    # "Sarasota County (FL)" comes from the county-list merger for legacy rows.
+    clause = _filters().fail_closed_exclusion(["Sarasota County (FL)"])
+    sar = _row("SAR-3", "Sarasota County", "FL")
+    assert matches(sar, clause)
+    assert not matches(_row("ALA-1", "Alachua", "FL"), clause)
+    clause = _filters().fail_closed_exclusion(["Sarasota County"])
+    assert matches(_row("SAR-2", "Sarasota"), clause)
+
+
+def test_presets_load_fail_closed_labels_before_seeding_counties():
+    import asyncio
+    from pathlib import Path
+
+    out = asyncio.run(stats_router.api_leads_fail_closed_counties())
+    assert "Sarasota (FL)" in out["fail_closed_counties"]
+    assert set(out["fail_closed_counties"]) == set(_filters().fail_closed_labels())
+
+    paths = [r.path for r in stats_router.router.routes]
+    assert paths.index("/api/leads/fail-closed-counties") < paths.index("/api/leads/{booking_number}")
+
+    js = (Path(__file__).resolve().parents[1] / "dashboard" / "sl-core.js").read_text()
+    assert "/api/leads/fail-closed-counties" in js
+    for fn in ("async function applyPreset(name) {", "async function applyDefCountyPreset(name) {"):
+        body = js[js.index(fn):]
+        body = body[:body.index("\n}\n")]
+        assert body.index("await ensureFailClosedCounties();") < body.index("SL_STATE.")

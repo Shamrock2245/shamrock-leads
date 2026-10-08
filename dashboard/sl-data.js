@@ -150,6 +150,7 @@ async function applyFilters() {
     }
     if (Array.isArray(d.fail_closed_counties)) {
       SL_STATE.failClosedCounties = d.fail_closed_counties;
+      SL_STATE.failClosedLoaded = true;
     }
     const badge = document.getElementById('leadsBadge');
     if (badge) badge.textContent = SL_STATE.total.toLocaleString();

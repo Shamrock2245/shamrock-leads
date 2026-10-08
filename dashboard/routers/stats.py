@@ -575,6 +575,19 @@ async def api_leads_export(
         return {"error": str(e)}
 
 
+@router.get("/leads/fail-closed-counties")
+async def api_leads_fail_closed_counties():
+    """Labels the lead presets must drop (no proven source booking key).
+
+    The SWFL / Florida / Write Book presets load this before seeding the
+    county filter, so a preset never names a fail_closed county (a named
+    county is an opt-in on ``/api/leads``).
+    """
+    from dashboard.services.source_state_filter import fail_closed_labels
+
+    return {"fail_closed_counties": list(fail_closed_labels())}
+
+
 @router.get("/leads/{booking_number}")
 async def api_lead_detail(booking_number: str):
     arrests = get_collection("arrests")
