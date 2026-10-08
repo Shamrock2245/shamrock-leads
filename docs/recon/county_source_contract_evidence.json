@@ -979,10 +979,10 @@
     {
       "state": "FL",
       "county_fips": "095",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://netapps.ocfl.net/BestJail/Home/Inmates",
+      "access_posture": "Ordinary public HTTPS Orange County BestJail inmate search; the page script calls public JSON endpoints getInmates/<letter>, getInmateDetails/<booking>, getCharges/<booking>; no login/CAPTCHA/WAF",
+      "evidence_note": "2026-10-08 Orange BestJail recon (docs/recon/FL_ORANGE_BESTJAIL_2026-10-08.md): 26 letter roster calls all 200 (~1 s), 2,863 current bookings, source bookingNumber 8 digits YY+sequence (alias rows deduped on booking); detail BOOKING equals the requested booking; booking numbers sequential (dates non-increasing over 317 newest). Box read smoke 2026-10-08 ~08:00 EDT, 7-day window: 303 rows / 303 unique, booking date+time 303/303, charges 287, bond published >0 on 200, published 0.00 on 70, unknown (blank) 33; 37 s. Old module (curl_cffi impersonation, every current-year detail) timed out at 400 s and wrote $0.00 for unknown bond and age as DOB. Health stays unverified until a Leads Ops write smoke."
     },
     {
       "state": "FL",
