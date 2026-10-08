@@ -149,6 +149,14 @@ def _build_leads_query(query: LeadsQueryModel):
                 q["$and"] = [{"$or": existing}, {"$or": sor}]
         else:
             q["$or"] = sor
+    from dashboard.services.source_state_filter import fail_closed_exclusion
+
+    named = [c.strip() for c in (query.county or "").split(",") if c.strip()]
+    hide = fail_closed_exclusion(
+        named, include_fail_closed=bool(getattr(query, "include_fail_closed", False)),
+    )
+    if hide:
+        q["$nor"] = hide["$nor"]
     return q
 
 
@@ -499,11 +507,17 @@ async def api_leads(
             total = total + added
 
         from config.write_counties import WRITE_ELIGIBLE_COUNTIES
+        from dashboard.services.source_state_filter import (
+            default_write_book_counties,
+            fail_closed_labels,
+        )
         return {
             "leads": leads_list, "total": total, "page": query.page, "limit": query.limit,
             "pages": max(1, (total + query.limit - 1) // query.limit),
             "counties": counties_list,
-            "write_counties": list(WRITE_ELIGIBLE_COUNTIES),
+            "write_counties": default_write_book_counties(WRITE_ELIGIBLE_COUNTIES),
+            "fail_closed_counties": list(fail_closed_labels()),
+            "include_fail_closed": bool(query.include_fail_closed),
             "activity": {
                 "scraped_last_hour": scraped_last_hour,
             },

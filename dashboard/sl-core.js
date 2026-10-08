@@ -3,7 +3,7 @@
    sound alerts, activity feed auto-update, keyboard shortcuts
 */
 window.SL_STATE = {
-  counties: [], writeCounties: [], selectedCounties: [], days: 0, custody: '', status: '',
+  counties: [], writeCounties: [], failClosedCounties: [], selectedCounties: [], days: 0, custody: '', status: '',
   stateCode: '', minBond: 0, search: '', sort: 'scraped_at', order: 'desc',
   page: 1, limit: 50, leads: [], total: 0, pages: 1,
   defSort: 'bond_amount', defOrder: 'desc', defCustody: '', defCounty: '', defSelectedCounties: [], defBond: 0, defPage: 1, defLimit: 48,
@@ -91,17 +91,29 @@ const PRESETS = {
   all: [], none: []
 };
 
+/** Presets never seed fail_closed source counties (no proven booking key).
+ *  Picking the county by hand still shows its rows. */
+function dropFailClosed(labels) {
+  const closed = (SL_STATE.failClosedCounties || []).map(function(c) { return String(c).toLowerCase(); });
+  if (!closed.length) return labels;
+  return labels.filter(function(c) {
+    const s = String(c);
+    const labeled = /\([A-Za-z]{2}\)$/.test(s) ? s : s + ' (FL)';
+    return closed.indexOf(labeled.toLowerCase()) === -1;
+  });
+}
+
 function writeBookLabels() {
   const names = (SL_STATE.writeCounties && SL_STATE.writeCounties.length)
     ? SL_STATE.writeCounties
     : ['Lee','Charlotte','Collier','Sarasota','Manatee','Hendry','DeSoto','Glades','Palm Beach','Broward','Miami-Dade','Monroe','Martin','St. Lucie','Indian River','Okeechobee','Highlands','Hardee'];
   const counties = SL_STATE.counties || [];
-  return names.map(function(n) {
+  return dropFailClosed(names.map(function(n) {
     const labeled = n + ' (FL)';
     if (counties.indexOf(labeled) !== -1) return labeled;
     if (counties.indexOf(n) !== -1) return n;
     return labeled;
-  });
+  }));
 }
 const SWFL_COUNTIES_LIST = ['Lee', 'Collier', 'Charlotte', 'DeSoto', 'Hendry', 'Sarasota', 'Manatee'];
 /** Per-county cooldown so clicking the same county doesn't spam the trigger bus */
@@ -900,6 +912,7 @@ function applyDefCountyPreset(name) {
   } else {
     SL_STATE.defSelectedCounties = [...(PRESETS[name] || [])];
   }
+  SL_STATE.defSelectedCounties = dropFailClosed(SL_STATE.defSelectedCounties);
   // Newest first after preset
   SL_STATE.defSort = 'scraped_at';
   SL_STATE.defOrder = 'desc';
@@ -1006,11 +1019,11 @@ function applyPreset(name) {
   if (name === 'all' || name === 'none') {
     SL_STATE.selectedCounties = [];
   } else if (name === 'fl') {
-    SL_STATE.selectedCounties = (SL_STATE.counties || []).filter(c => /\(FL\)$/i.test(c));
+    SL_STATE.selectedCounties = dropFailClosed((SL_STATE.counties || []).filter(c => /\(FL\)$/i.test(c)));
   } else if (name === 'write_book') {
     SL_STATE.selectedCounties = writeBookLabels();
   } else {
-    SL_STATE.selectedCounties = [...(PRESETS[name] || [])];
+    SL_STATE.selectedCounties = dropFailClosed([...(PRESETS[name] || [])]);
   }
   if (event && event.target) {
     const btn = event.target.closest('.preset-btn');
