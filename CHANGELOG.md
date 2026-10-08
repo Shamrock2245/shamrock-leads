@@ -8,6 +8,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 - **DocuSeal packets.** Write Bond finalize, push to DocuSeal, and Shannon voice no longer send a blank agent. The bondsman name and license are one pair: the explicit writing agent when that name or license is a `BOND_AGENTS` entry, otherwise the signed-in sub-agent's own entry, otherwise the house row (Brendan O'Neal / P139768). `BOND_AGENT_NAME` and `BOND_AGENT_LICENSE` override the house row only when both are set. A filtered label such as Master Admin or Shamrock Bail Bonds is not printed. The template sample `Brendan ONeal` is not used. A name that is not in `BOND_AGENTS` does not keep a registered license: that license's own row is printed (a typo of Kayla with Jason's license prints Jason Taylor / W214323). An unregistered license can still keep the name on the record. Palmetto appearance bonds no longer print P139768 under a different name; OSI appearance bonds are unchanged.
 
+## [Unreleased] — 2026-10-08 (Intake upsert keeps lifecycle fields)
+
+### Fixed
+- Repeat `POST /api/intake/submit` still updates identity fields. `status`, `created_at`, match fields, `paperwork_packet_id`, `paperwork_status`, `surety_id`, and `surety_unrecognized` are written with `$setOnInsert`, so a second save cannot revert a promoted or linked intake. Indemnitor and defendant sections are dotted paths (`indemnitor.email`, `defendant.charges`). Only a non-empty value is `$set`, so a thinner later submit cannot erase an email, address, date of birth, license, employer, reference, charge, or bond stored earlier. A new non-empty value still updates, and the first insert still stores the full document, including blanks. The same split is used by the Wix webhook normalizer.
+
 ## [Unreleased] — 2026-10-08 (OSI local stitch positions)
 
 ### Fixed
