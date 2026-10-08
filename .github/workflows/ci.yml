@@ -75,6 +75,7 @@ jobs:
             tests/test_registered_counties_coverage.py \
             tests/test_recon_documentation_contract.py \
             tests/test_recon_evidence_contract.py \
+            tests/test_home_county_smoke_evidence.py \
             tests/test_subdomains.py \
             tests/test_unhandled_exception_privacy.py \
             tests/test_dashboard_source_states.py \

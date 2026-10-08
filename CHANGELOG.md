@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (home counties out of recon_only)
+
+### Changed
+- **Home counties source checks.** Lee, Collier and Glades now show as `candidate_productive` in the recon matrix. Each was checked live from the box on 2026-10-08 with plain HTTPS: Lee has a 7-digit and Collier a 12-digit public booking number, and Glades has `GCSO<YY>JBN<6>` booking numbers. Health is unchanged, so none of them is `verified_public` before a Leads Ops write smoke. DeSoto stays `recon_only`: its DCN `bid` is the jail site's internal record id, not a booking number. Hendry stays `recon_only` because `inmateID` is a person ID (MNI). Charlotte and Manatee stay `recon_only`; the box still gets a Cloudflare 403 (8:07 AM ET). The Collier and Glades write smokes are on hold until the bond fix for those two scrapers (#139) merges.
+
+### Added
+- **Smoke and relay evidence slot.** `docs/recon/smoke_evidence.json` holds dated Leads Ops requests and results: Lee, Collier and Glades write smokes, Charlotte and Manatee relay read and relay write. The matrix builder refuses a result with no run date, commit, egress or method, a write with no Mongo writer result (a `prod_mongo_aggregate` write instead needs rows >= 1 in a window of 48 hours or less, with no blank or duplicate booking numbers), a relay row that did not run from the residential relay, a relay read with no live header set, a passed write on a `fail_closed` county, and a listed `verified_public` county with no passed write. The matrix shows the slot as a new table.
+- **`scripts/smoke_evidence_check.py`.** A read-only Mongo aggregate for one county: key shapes, duplicates, bond buckets (empty, zero, positive), charges, dates and status. It prints no names or other PII.
+- **Relay header set.** The Revize walk meta for Charlotte and Manatee now carries the page-1 column names so relay evidence can show the live table shape.
+- `docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md` with per-county results and the Leads Ops handoff.
+
 ## [Unreleased] — 2026-10-08 (Hernando real custody status and per-case bonds)
 
 ### Fixed
@@ -83,6 +94,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Docs
 - **`docs/recon/FL_67_STATUS_2026-10-08.md`:** one status for each of the 67 FL counties (4 `verified_public`, 40 unverified awaiting Leads Ops smoke with source PR, 17 `fail_closed`, 6 no source), ranked by Census 2024 population, with the matrix-vs-Health parity findings, today's live Sarasota/Manatee/Charlotte checks (the Sarasota listing root is now Cloudflare-challenged too), the relay cadence gap (Leads Ops must schedule `python main.py --relay-only`), rule conflicts in older modules, and the next-PR queue. `tests/test_fl_67_status.py` (in CI) keeps the table consistent with Health.
+
 ## [Unreleased] — 2026-10-08 (name without license falls back)
 
 ### Fixed
