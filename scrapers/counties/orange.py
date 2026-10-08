@@ -144,8 +144,8 @@ def parse_charges(data: Any) -> Dict[str, Any]:
     The total bond is the sum of ``BondAmount`` only when every charge row
     publishes an amount (a published 0.00 counts). If any cell is blank or
     unparsed, the total is '' (unknown), and per-charge amounts stay in
-    ``details``. ``None`` means the per-booking
-    fetch itself failed (bond and charges unknown for that booking). Any other
+    ``details``. The scraper skips a booking
+    whose fetch failed rather than calling this with ``None``. Any other
     shape, or a row without ``Charge``/``BondAmount``, is contract drift and
     raises, so a changed response can never blank known charges or bonds.
     """
@@ -298,7 +298,7 @@ class OrangeCountyScraper(BaseScraper):
         cutoff = datetime.now() - timedelta(days=days)
         records: List[ArrestRecord] = []
         older_in_a_row = 0
-        details = detail_failures = charge_failures = 0
+        details = detail_failures = charge_failures = charge_attempts = 0
         for booking, name in roster:
             if details >= MAX_DETAILS or older_in_a_row >= STOP_AFTER_OLDER:
                 break
@@ -321,24 +321,26 @@ class OrangeCountyScraper(BaseScraper):
                 continue
             older_in_a_row = 0
             time.sleep(REQUEST_PAUSE_S)
+            charge_attempts += 1
             try:
                 charge_data = self._get_json(session, f"{CHARGES_URL}/{booking}")
             except (requests.RequestException, ValueError) as exc:
+                # Skip the booking: emitting it would $set blank charges/bond
+                # over the values already stored for it.
                 logger.debug("Orange charges failed (%s): %s", booking, exc)
-                charge_data = None
                 charge_failures += 1
+                continue
             rec = build_record(booking, name, detail, parse_charges(charge_data))
             if rec is not None:
                 records.append(rec)
 
         if details and detail_failures == details:
             raise OrangeContractError("Orange: every detail fetch failed or mismatched its booking")
-        in_window = len(records)
-        if in_window and charge_failures >= in_window:
+        if charge_attempts and charge_failures == charge_attempts:
             raise OrangeContractError("Orange: every getCharges fetch failed")
         if detail_failures or charge_failures:
             logger.warning(
-                "Orange: %d detail and %d charge fetches failed (those bookings skipped / bond unknown)",
+                "Orange: %d detail and %d charge fetches failed (those bookings skipped, not written)",
                 detail_failures, charge_failures,
             )
         logger.info(

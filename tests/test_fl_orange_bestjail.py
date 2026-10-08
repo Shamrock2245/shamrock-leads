@@ -236,3 +236,25 @@ def test_roster_and_detail_requests_are_paced(monkeypatch):
     assert sleeps.count(orange.ROSTER_PAUSE_S) >= 25  # between every getInmates letter
     later = [c for c in calls if "/getInmates/" not in c]
     assert len([s for s in sleeps if s == orange.REQUEST_PAUSE_S]) >= len(later)  # one pause per detail/charges call
+
+
+def test_one_failed_charges_fetch_skips_that_booking_not_blanks_it(monkeypatch):
+    now = datetime.now()
+    books = ["26000003", "26000002"]
+    pages = _pages({"d": [{"bookingNumber": b, "inmateName": "DOE, J"} for b in books]})
+    details = {b: _detail(b, now - timedelta(hours=1)) for b in books}
+    charges = {"26000002": [{"Charge": "BATTERY", "BondAmount": "500.00"}]}
+    _fake_session(monkeypatch, pages, details, charges, [])
+    _orig = OrangeCountyScraper._get_json
+
+    def _get_json(self, session, url):
+        if url.endswith("/getCharges/26000003"):
+            raise requests.ConnectionError("down")
+        return _orig(self, session, url)
+
+    monkeypatch.setattr(OrangeCountyScraper, "_get_json", _get_json)
+    recs = OrangeCountyScraper().scrape(lookback_days=7)
+    # 26000003 is not emitted at all (no blank charges/bond written over stored values)
+    assert [r.Booking_Number for r in recs] == ["26000002"]
+    assert recs[0].Charges == "BATTERY" and recs[0].Bond_Amount == "500.00"
+
