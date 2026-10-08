@@ -55,6 +55,7 @@ _SOURCE_ALIASES = {
     "web": "website", "site": "website", "wix_wizard": "website",
     "telegram_bot": "telegram", "telegram_miniapp": "telegram",
     "telegram_mini_app": "telegram", "tg": "telegram", "mini_app": "telegram",
+    "shannon_voice": "shannon",
     "in_office": "kiosk", "tablet": "kiosk", "lobby": "kiosk",
     "pin_portal": "portal", "paperwork_portal": "portal",
     "walk_in": "manual", "staff": "manual", "dashboard": "manual",
