@@ -661,8 +661,8 @@
       "county_fips": "015",
       "passive_recommendation": "recon_only",
       "official_source_url": "https://inmates.charlottecountyfl.revize.com/bookings",
-      "access_posture": "Revize CMS roster behind Cloudflare; 2026-10-07 7:12 PM ET box/datacenter egress gets HTTP 403 `cf-mitigated: challenge` (title \"Just a moment...\") on /, /bookings and /bookings?page=2. Runs only from residential egress (Leads Ops residential host via `CHARLOTTE_EGRESS_MODE=direct`, or the existing APE/office SOCKS resolver); CF challenge or non-residential/unverified exit raises EgressBlocked (anti_bot + egress_block), never a silent empty run",
-      "evidence_note": "2026-10-07 hardening (`docs/recon/FL_CHARLOTTE_REVIZE_2026-10-07.md`): parser now uses the shared Revize contract (`scrapers/revize_roster.py`, same as Manatee #113): Booking # / Last / First / Middle / Charge / Arrest Date / Released mapped by header, keyed on the source Booking # (checked against the /bookings/<id> link; collisions fail closed), every charge row kept per booking, bond unknown (`\"\"`, roster has no bond; was `\"0\"`), Released required with unrecognised values failing closed, and paging drift failing closed (missing table/column, empty or repeated page, MAX_PAGES, published-total mismatch). Live roster columns not re-verified from the box (CF); the pre-audit parser assumed six columns with no Released, so the first residential smoke must confirm it. Health stays `unverified` until a Leads Ops residential read + prod write smoke. Candidate roster is **not** `verified_public`; see `SWFL_SOURCE_CONTRACT_QUEUE.md`."
+      "access_posture": "Revize CMS roster behind Cloudflare; 2026-10-07 7:12 PM ET box/datacenter egress gets HTTP 403 `cf-mitigated: challenge` (title \"Just a moment...\") on /, /bookings and /bookings?page=2. Runs only from residential egress (Leads Ops residential host via `CHARLOTTE_EGRESS_MODE=direct`, or the existing APE/office SOCKS resolver); CF challenge or non-residential/unverified exit raises EgressBlocked (anti_bot + egress_block), never a silent empty run; re-checked 2026-10-08 8:07 AM ET from the agent box: still HTTP 403 `cf-mitigated: challenge`",
+      "evidence_note": "2026-10-07 hardening (`docs/recon/FL_CHARLOTTE_REVIZE_2026-10-07.md`): parser now uses the shared Revize contract (`scrapers/revize_roster.py`, same as Manatee #113): Booking # / Last / First / Middle / Charge / Arrest Date / Released mapped by header, keyed on the source Booking # (checked against the /bookings/<id> link; collisions fail closed), every charge row kept per booking, bond unknown (`\"\"`, roster has no bond; was `\"0\"`), Released required with unrecognised values failing closed, and paging drift failing closed (missing table/column, empty or repeated page, MAX_PAGES, published-total mismatch). Live roster columns not re-verified from the box (CF); the pre-audit parser assumed six columns with no Released, so the first residential smoke must confirm it. Health stays `unverified` until a Leads Ops residential read + prod write smoke. Candidate roster is **not** `verified_public`; see `SWFL_SOURCE_CONTRACT_QUEUE.md`. Dated relay evidence slot (relay_read / relay_write, `python main.py --relay-only`): `docs/recon/smoke_evidence.json`, steps in `docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md`."
     },
     {
       "state": "FL",
@@ -683,10 +683,10 @@
     {
       "state": "FL",
       "county_fips": "021",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://www2.colliersheriff.org/arrestsearch/Report.aspx",
+      "access_posture": "2026-10-08 ~8:00 AM ET from the agent box: plain HTTPS GET + ordinary ASP.NET form postback (`__EVENTTARGET=timerLoad`), honest User-Agent, no proxy, no CAPTCHA; HTTP 200. Daily public arrest report (`lblDate`, `lblReturnCount` \"N matches found\"), not a full in-custody roster",
+      "evidence_note": "2026-10-08 source-contract check (`docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md`): each report card publishes the source `Booking Number` (12 digits; `lblBookingNbr`, 7 unique of 7 matches), `Booking Date`, arrest date (`lblArrestDT`), A# and PIN (person; not keys), custody (`lblInCustody`), bond summary (`lblBondSummary`, e.g. \"No information available.\" or a BONDED date), a charge grid (Charged / Count / Offense / Hold For / Case Number / Court Date) and a PicThumb mugshot. No paging: one report per day with a published match count. Known parser gap: `collier.py` adds `$` figures from offense text (\"GRAND THEFT PROPERTY VALUE $750-$5K\") into Bond_Amount and writes \"0\" for unknown bond; fix before the write smoke. Candidate only: Health stays `unverified`."
     },
     {
       "state": "FL",
@@ -700,9 +700,9 @@
       "state": "FL",
       "county_fips": "027",
       "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "official_source_url": "https://jail.desotosheriff.org/DCN/inmates",
+      "access_posture": "2026-10-08 ~8:05 AM ET from the agent box: DCN DevExpress roster over plain HTTPS (Cloudflare-fronted, no challenge), honest User-Agent; page 1 server-rendered (100 rows, \"Page 1 of 2\", 161 items), page 2 via the grid's own DevExpress pager callback (`scrapers/dcn_base.py`). No browser needed for the read; the current `desoto.py` still drives DrissionPage",
+      "evidence_note": "2026-10-08 source-contract check (`docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md`): roster lists Full Name / Age / Race / Sex / Admit Date with `inmate-details?id=&bid=` links; `bid` is stable across two fresh sessions (100/100) and unique per row (161/161 through the pager). Detail page shows Admit Date + Admit Time and per-charge Offense Date / Court Type / Court Date / Docket Number / Bond / Bond Type, but no printed booking number. CoS review 2026-10-08: `bid` is the jail site's internal record id, not a source booking number (same kind of id #136 rejects), so DeSoto stays `recon_only` until the source publishes a booking number. Health stays `unverified`."
     },
     {
       "state": "FL",
@@ -763,10 +763,10 @@
     {
       "state": "FL",
       "county_fips": "043",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://smartweb.gladessheriff.org/smartwebclient/Jail.aspx",
+      "access_posture": "2026-10-08 ~8:03 AM ET from the agent box: SmartCOP SmartWEB JAIL View over plain HTTPS (Cloudflare-fronted but no challenge), ordinary search postback + legacy `AddMoreResults` page method via the shared `scrapers/fl_smartweb.py` helper (plain `requests`, no proxy, no stealth)",
+      "evidence_note": "2026-10-08 source-contract check (`docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md`): 28 current-inmate cards over a 365-day booking window, 28 unique source Booking No `GCSO<YY>JBN<NNNNNN>` (same SmartWEB booking-number family as Suwannee/Putnam/Bradford), booking date + time on every card, charges on every card, bond on the card. `glades.py` still uses its own curl_cffi impersonating parser and writes \"0\" for unknown bond; moving it onto `fl_smartweb.py` is a follow-up. Candidate only: Health stays `unverified`."
     },
     {
       "state": "FL",
@@ -796,9 +796,9 @@
       "state": "FL",
       "county_fips": "051",
       "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "official_source_url": "https://myocv.s3.amazonaws.com/ocvapps/a102933935/inmates.json",
+      "access_posture": "2026-10-08 ~8:04 AM ET from the agent box: official MyOCV S3 JSON feed, plain HTTPS GET with an honest User-Agent, HTTP 200 (288 rows); no access control",
+      "evidence_note": "2026-10-08 source-contract check (`docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md`): the only identifier is `inmateID` = `HCSO<YY>MNI<NNNNNN>`, a Master Name Index person id (its year runs 00\u201326 independent of the Booked Date year, so it is not a booking key). Booked Date (date + time) and custody IN/OUT are present; `chargeArray` is schema-only (no charges, no bond). No source booking number is published, so the contract is not proven. `hendry.py` currently keys rows on the MNI and writes \"0\" bonds; a fail_closed change (Alachua precedent) is proposed separately."
     },
     {
       "state": "FL",
@@ -835,10 +835,10 @@
     {
       "state": "FL",
       "county_fips": "061",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://www.ircsheriff.org/inmate-search",
+      "access_posture": "Ordinary public HTTPS IRCSO inmate search; the page form (POST /booking-search/search with its _token and booking_date) lists bookings for a date, 10 per page; /booking-details/<portal id> carries the Booking Info table; no login/CAPTCHA/WAF; TLS verifies",
+      "evidence_note": "2026-10-08 Indian River recon (docs/recon/FL_INDIAN_RIVER_BOOKING_SEARCH_2026-10-08.md): detail Booking Number YYYY-NNNNNNNN (the old module keyed rows on the /booking-details portal id and wrote bond 0), Booking Date matches the searched date (15/15 on 10/06), Bond as $amount / No Bond / absent, Charges cards, Release Date once released. Box read smoke 2026-10-08 ~08:06 EDT, 7 booking dates: 59 rows / 59 unique source Booking Numbers, booking date+time 59/59, charges 59/59, bond amount 15, No Bond 15, unknown 29, released 23; 0 dropped; ~51 s. Health stays unverified until a Leads Ops write smoke."
     },
     {
       "state": "FL",
@@ -875,10 +875,10 @@
     {
       "state": "FL",
       "county_fips": "071",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://www.sheriffleefl.org/public-api/bookings",
+      "access_posture": "2026-10-08 ~7:58 AM ET from the agent box: plain HTTPS GET with an honest User-Agent, no proxy, no cookies, no impersonation; /public-api/bookings?inCustody=true&limit=5&offset=0 and /public-api/bookings/<bookingNumber>/charges both HTTP 200 JSON. Source enforces a per-IP quota (~480k req / 12h, `scrapers/lee_rate_limit.py`); the www A-record can point at a dead origin (`scrapers/lee_origin.py`)",
+      "evidence_note": "2026-10-08 source-contract check (`docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md`): sheriff-published bookings API lists givenName/middleName/surName, source `bookingNumber` (7 digits, unique per row), `bookingDate` (date + time), `inCustody`, `releaseDate`, `image`, `birthDate`, `address`; per-booking charges API gives `offenseDescription`, `section`, `offenseCode`, `bondAmount`, `bondTypeName`, `caseNumber`, `courtLocation`, `hearingDate`. Paging is `limit`/`offset` (max 50). `id` (14 digits) and `permId` (person) are not used as keys. Candidate only: Health stays `unverified` until the Leads Ops write smoke in `smoke_evidence.json` is recorded. The scraper's own APE StealthSession / Scrapfly fallbacks are a separate owner decision and were not used for this check."
     },
     {
       "state": "FL",
@@ -917,8 +917,8 @@
       "county_fips": "081",
       "passive_recommendation": "recon_only",
       "official_source_url": "https://manatee-sheriff.revize.com/bookings",
-      "access_posture": "Revize CMS roster behind Cloudflare; 2026-10-07 box/datacenter egress gets HTTP 403 `cf-mitigated: challenge` on /, /bookings and /bookings?page=2. Runs only on the Leads Ops home relay's own residential exit (`MANATEE_EGRESS_MODE=direct`, the only mode; the APE/office SOCKS resolver and the stealth browser launcher were removed 2026-10-07, proxy env vars ignored); CF challenge or non-residential exit raises EgressBlocked (anti_bot + egress_block), never a silent empty run",
-      "evidence_note": "2026-10-07 audit (`docs/recon/FL_SARASOTA_MANATEE_AUDIT_2026-10-07.md`): parser now maps Booking # / Last / First / Middle / Charge / Arrest Date / Released by header, keys on the source Booking # (checked against the /bookings/<id> link; collisions fail closed), groups charge rows per booking, keeps bond unknown (`\"\"`, roster has no bond), fails closed on unrecognised Released values and on paging drift (missing table/column, empty or repeated page, MAX_PAGES, published-total mismatch). Live roster columns not re-verified from the box (CF); Health stays `unverified` until a Leads Ops residential read + prod write smoke. Candidate roster is **not** `verified_public`; see `SWFL_SOURCE_CONTRACT_QUEUE.md`."
+      "access_posture": "Revize CMS roster behind Cloudflare; 2026-10-07 box/datacenter egress gets HTTP 403 `cf-mitigated: challenge` on /, /bookings and /bookings?page=2. Runs only on the Leads Ops home relay's own residential exit (`MANATEE_EGRESS_MODE=direct`, the only mode; the APE/office SOCKS resolver and the stealth browser launcher were removed 2026-10-07, proxy env vars ignored); CF challenge or non-residential exit raises EgressBlocked (anti_bot + egress_block), never a silent empty run; re-checked 2026-10-08 8:07 AM ET from the agent box: still HTTP 403 `cf-mitigated: challenge`",
+      "evidence_note": "2026-10-07 audit (`docs/recon/FL_SARASOTA_MANATEE_AUDIT_2026-10-07.md`): parser now maps Booking # / Last / First / Middle / Charge / Arrest Date / Released by header, keys on the source Booking # (checked against the /bookings/<id> link; collisions fail closed), groups charge rows per booking, keeps bond unknown (`\"\"`, roster has no bond), fails closed on unrecognised Released values and on paging drift (missing table/column, empty or repeated page, MAX_PAGES, published-total mismatch). Live roster columns not re-verified from the box (CF); Health stays `unverified` until a Leads Ops residential read + prod write smoke. Candidate roster is **not** `verified_public`; see `SWFL_SOURCE_CONTRACT_QUEUE.md`. Dated relay evidence slot (relay_read / relay_write, `python main.py --relay-only`): `docs/recon/smoke_evidence.json`, steps in `docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md`."
     },
     {
       "state": "FL",
@@ -964,9 +964,9 @@
       "state": "FL",
       "county_fips": "091",
       "passive_recommendation": "productive",
-      "official_source_url": "https://okaloosacountyjail.myokaloosa.com/InmateLocator/Default.aspx",
-      "access_posture": "Ordinary public HTTPS ASP.NET Inmate Locator (linked from sheriff-okaloosa.org)",
-      "evidence_note": "2026-10-07 idle-eight recon: Default.aspx A\u2013Z last-name search returns Booking# (10-digit YYYY+seq), name, demographics. SPA root /InmateLocator/ is not the roster."
+      "official_source_url": "https://okaloosacountyjail.myokaloosa.com/InmateLocator/",
+      "access_posture": "Ordinary public HTTPS Inmate Locator (Angular, linked from sheriff-okaloosa.org); its config.json names the public InmateLocatorAPI; /api/Inmates/search pages the current roster and /api/Inmates/<bookingNo> returns charges; no login/CAPTCHA/WAF",
+      "evidence_note": "2026-10-08 Okaloosa API recon (docs/recon/FL_OKALOOSA_API_2026-10-08.md): search total 783, 8 pages of 100 in <1 s, 783 unique 10-digit bookingNo (YYYY+seq), custodyDate (booking timestamp) on every row; roster totalBondAmt equals the sum of detail bailAmt when published (24/24), else 0/null. Box read smoke 2026-10-08 ~08:04 EDT: 781 status-1 rows / 781 unique, booking date+time 781/781, bond >0 on 429, unknown 352, charges for the 70 bookings in the 7-day window; 11 s. Replaces the 2026-10-07 Default.aspx grid parser, which saved rows with no booking date. Health stays unverified until a Leads Ops write smoke."
     },
     {
       "state": "FL",
@@ -979,10 +979,10 @@
     {
       "state": "FL",
       "county_fips": "095",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://netapps.ocfl.net/BestJail/Home/Inmates",
+      "access_posture": "Ordinary public HTTPS Orange County BestJail inmate search; the page script calls public JSON endpoints getInmates/<letter>, getInmateDetails/<booking>, getCharges/<booking>; no login/CAPTCHA/WAF",
+      "evidence_note": "2026-10-08 Orange BestJail recon (docs/recon/FL_ORANGE_BESTJAIL_2026-10-08.md): 26 letter roster calls all 200 (~1 s), 2,863 current bookings, source bookingNumber 8 digits YY+sequence (alias rows deduped on booking); detail BOOKING equals the requested booking; booking numbers sequential (dates non-increasing over 317 newest). Box read smoke 2026-10-08 ~08:00 EDT, 7-day window: 303 rows / 303 unique, booking date+time 303/303, charges 287, bond published >0 on 200, published 0.00 on 70, unknown (blank) 33; 37 s. Old module (curl_cffi impersonation, every current-year detail) timed out at 400 s and wrote $0.00 for unknown bond and age as DOB. Health stays unverified until a Leads Ops write smoke."
     },
     {
       "state": "FL",
