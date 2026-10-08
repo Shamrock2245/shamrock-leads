@@ -106,3 +106,49 @@ def test_run_raises_when_no_booking_has_charges(monkeypatch):
         fl_smartweb.scrape_smartweb_jail_view(
             county="Escambia", facility="X", base_url="https://example.test", lookback_days=1
         )
+
+
+def test_card_text_stops_before_next_booking():
+    """A card with no Bond label and no charge grid must not take the next card's amount."""
+    empty = _card("ECC26JBN000001", [], card_bond="")
+    rich = _card("ECC26JBN000002", [], card_bond="$9,999.00")
+    # Also cover a published charge total on the second card.
+    rich_charges = _card("ECC26JBN000003", ["$500.00"], card_bond="$9,999.00")
+    html = "<table>" + empty + rich + rich_charges + "</table>"
+    recs = fl_smartweb._parse_html(
+        html, set(), county="Escambia", facility="X", detail_url="https://example.test/",
+    )
+    by_bn = {r.Booking_Number: r for r in recs}
+    assert by_bn["ECC26JBN000001"].Bond_Amount == ""
+    assert by_bn["ECC26JBN000002"].Bond_Amount == "9999"
+    assert by_bn["ECC26JBN000003"].Bond_Amount == "500"
+
+
+def test_card_level_bond_ignores_next_card_when_own_label_is_zero():
+    """Card-level $0.00 stays unknown even when the next card publishes a positive total."""
+    zero = _card("ECC26JBN000010", [], card_bond="$0.00")
+    next_card = _card("ECC26JBN000011", [], card_bond="$2,500.00")
+    recs = fl_smartweb._parse_html(
+        "<table>" + zero + next_card + "</table>",
+        set(), county="Escambia", facility="X", detail_url="https://example.test/",
+    )
+    by_bn = {r.Booking_Number: r for r in recs}
+    assert by_bn["ECC26JBN000010"].Bond_Amount == ""
+    assert by_bn["ECC26JBN000011"].Bond_Amount == "2500"
+
+
+def test_card_without_charges_never_reads_the_next_cards_bond():
+    """No charge grid and a non-money card label: the next card's $15,000 must not bleed in."""
+    html = (
+        "<table>"
+        + _card("ECC26JBN000020", [], "NO BOND")
+        + _card("ECC26JBN000021", ["$15,000.00"], "$15,000.00")
+        + "</table>"
+    )
+    recs = fl_smartweb._parse_html(
+        html, set(), county="Escambia", facility="X", detail_url="https://example.test/",
+    )
+    assert {r.Booking_Number: r.Bond_Amount for r in recs} == {
+        "ECC26JBN000020": "",
+        "ECC26JBN000021": "15000",
+    }
