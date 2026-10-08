@@ -4,6 +4,10 @@ Source: Glades County Sheriff's Office
 URL: https://smartweb.gladessheriff.org/smartwebclient/Jail.aspx
 Method: curl_cffi POST to Jail.aspx/AddMoreResults (ASP.NET PageMethods AJAX)
 Fix 2026-05-18: Replaced broken form POST with AJAX endpoint (same pattern as Suwannee/Putnam)
+Fix 2026-10-08: bond comes only from this card's own charge grid BOND column
+(or the card's own "Bond Amount:" cell when it prints a positive figure).
+"NO BOND", "$0.00" and a missing bond stay "" (unknown), never "0", and a
+card never takes the next card's bond.
 """
 import logging
 import re
@@ -175,8 +179,7 @@ class GladesCountyScraper(BaseScraper):
 
             charges = " | ".join(re.findall(r"Charge(?:\s+\d+)?:\s*([^\n\r]+)", block_text))
 
-            bond_m = re.search(r"Bond[^:]*:\s*\$?([\d,\.]+)", block_text)
-            bond = bond_m.group(1).replace(",", "") if bond_m else "0"
+            bond = self._card_bond(img)
 
             # Parse status from block text
             status_m = re.search(r"Status:\s*([a-zA-Z\s]+)", block_text)
@@ -206,3 +209,55 @@ class GladesCountyScraper(BaseScraper):
             ))
 
         return records
+
+    @staticmethod
+    def _money(text: str):
+        """A published dollar figure ("$5,000.00" or "5000"), else None."""
+        t = (text or "").strip()
+        m = re.fullmatch(r"\$?\s*([0-9][0-9,]*(?:\.\d{1,2})?)", t)
+        if not m:
+            return None  # "NO BOND", "BOND", blank, reference ids
+        try:
+            return float(m.group(1).replace(",", ""))
+        except ValueError:
+            return None
+
+    @classmethod
+    def _card_bond(cls, img) -> str:
+        """Sum of positive BOND cells in this card's own charge grids.
+
+        Walks the document from this card's photo to the next card's photo, so
+        charge tables of later inmates are never read. Falls back to the
+        card's own "Bond Amount:" cell when it is a positive figure. Returns
+        "" when the source publishes no positive bond.
+        """
+        total = 0.0
+        for el in img.next_elements:
+            name = getattr(el, "name", None)
+            if name == "img" and "bookno=" in (el.get("src") or ""):
+                break
+            if name != "table" or "JailViewCharges" not in (el.get("class") or []):
+                continue
+            bond_idx = None
+            for tr in el.find_all("tr"):
+                cells = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
+                if bond_idx is None:
+                    if "BOND" in cells:
+                        bond_idx = cells.index("BOND")
+                    continue
+                if len(cells) > bond_idx:
+                    val = cls._money(cells[bond_idx])
+                    if val and val > 0:
+                        total += val
+        if total <= 0:
+            card = img.find_parent("tr")
+            for td in card.find_all("td") if card is not None else []:
+                if td.get_text(strip=True) == "Bond Amount:":
+                    nxt = td.find_next_sibling("td")
+                    val = cls._money(nxt.get_text(" ", strip=True)) if nxt is not None else None
+                    if val and val > 0:
+                        total = val
+                    break
+        if total <= 0:
+            return ""
+        return str(int(total)) if total.is_integer() else f"{total:.2f}"

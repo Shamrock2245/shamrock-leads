@@ -85,6 +85,7 @@ jobs:
             tests/test_fl_bond_charges_hydrate.py \
             tests/test_fl_sarasota_manatee_audit.py \
             tests/test_fl_charlotte_revize.py \
+            tests/test_collier_glades_published_bond.py \
             tests/test_sarasota_safety.py \
             tests/test_packet_builder_service.py \
             tests/test_cf_browser.py \

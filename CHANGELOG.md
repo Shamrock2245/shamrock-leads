@@ -3,6 +3,13 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (Collier and Glades publish-only bonds)
+
+### Fixed
+- **Collier bond.** The daily report publishes no bond amount, but `collier.py` added `$` figures from offense text into the bond (for example "GRAND THEFT PROPERTY VALUE $750-$5K" became a $750 bond; 2 of 7 live rows on 2026-10-08) and wrote `"0"` for the rest. A bond now counts only when this person's own `lblBondAmount` / `lblBondSummary` span prints a `$` figure. Unknown bond is `""`. Bond spans are read by the person's own `gvReport_ctlNN_ReportUC_` id, so a neighbour's span is never used.
+- **Glades bond.** `glades.py` read the first "Bond...: <number>" in a 15-row window that ran into the next inmates, so a "NO BOND" card took the next card's figure and a card with $245,000 in charge bonds was saved as `0.00`. The bond is now the sum of positive BOND cells in this card's own charge grid, or the card's own "Bond Amount:" when it is the only positive figure. "NO BOND", "$0.00" and a missing bond stay `""`, never `"0"`.
+- The Collier and Glades write smokes in `docs/recon/smoke_evidence.json` (#138) are on hold until this merges and deploys.
+
 ## [Unreleased] — 2026-10-08 (FL matrix/Health parity + FL 67 status)
 
 ### Fixed
