@@ -65,6 +65,7 @@ class ScraperScheduler:
             },
         )
         self._scrapers: Dict[str, BaseScraper] = {}
+        self._relay_only: set = set()
         self._writers: list = []
         self._job_history: List[Dict] = []
         self._registration_count: int = 0
@@ -90,6 +91,18 @@ class ScraperScheduler:
         job_id = scraper.scraper_id
 
         self._scrapers[job_id] = scraper
+
+        # Relay-only counties (config/relay_only.py) stay registered for
+        # ``main.py <County>`` / ``--relay-only`` but never get an interval job.
+        from config.relay_only import is_relay_only
+
+        if is_relay_only(scraper):
+            self._relay_only.add(job_id)
+            logger.info(
+                f"📋 Registered {scraper.county} scraper as RELAY-ONLY "
+                f"(no VPS schedule; Leads Ops relay runs `python main.py --relay-only`, job_id={job_id})"
+            )
+            return
 
         # Stagger first run: county 0 starts at +10s, county 1 at +25s, etc.
         stagger_offset = 10 + (self._registration_count * STAGGER_SECONDS)
@@ -179,6 +192,22 @@ class ScraperScheduler:
                 county = doc.get("county", "")
                 job_id = self._resolve_job_id(county) or f"scraper_{county.lower().replace(' ', '_')}"
                 scraper = self._scrapers.get(job_id)
+
+                # Relay-only counties never run on this host from a trigger.
+                if scraper is not None and job_id in self._relay_only:
+                    logger.warning(f"⛔ Trigger for relay-only county {county} not run here")
+                    col.update_one(
+                        {"_id": doc["_id"]},
+                        {"$set": {
+                            "status": "relay_only",
+                            "completed_at": datetime.now(timezone.utc),
+                            "message": (
+                                f"{county} runs only on the Leads Ops home relay "
+                                "(python main.py --relay-only). Not run on the VPS."
+                            ),
+                        }},
+                    )
+                    continue
 
                 # ── Custody Recheck Trigger ──
                 if trigger_type == "custody_recheck":
@@ -547,6 +576,26 @@ class ScraperScheduler:
             return None
         return None
 
+    def relay_only_job_ids(self) -> List[str]:
+        """Job ids registered as relay-only (no interval job on this host)."""
+        return sorted(self._relay_only)
+
+    def run_relay_only(self) -> Dict[str, Optional[dict]]:
+        """Run every relay-only county once (the Leads Ops relay entry point)."""
+        results: Dict[str, Optional[dict]] = {}
+        for job_id in self.relay_only_job_ids():
+            scraper = self._scrapers[job_id]
+            logger.info(f"🏠 Relay run: {scraper.county}")
+            try:
+                from dashboard.tenancy.context import bind_platform_job
+
+                with bind_platform_job(job_name=job_id):
+                    results[scraper.county] = scraper.run(writers=self._writers, force_canary=True)
+            except Exception as exc:  # noqa: BLE001 - one county must not stop the next
+                logger.error(f"❌ Relay run failed: {scraper.county}: {exc}")
+                results[scraper.county] = {"county": scraper.county, "error": str(exc)[:300]}
+        return results
+
     def run_now(self, county: str) -> Optional[dict]:
         """Trigger an immediate run for a specific county (optionally state-prefixed)."""
         job_id = self._resolve_job_id(county)
@@ -572,6 +621,9 @@ class ScraperScheduler:
 
         return {
             "running": self.scheduler.running,
+            "relay_only": sorted(
+                self._scrapers[j].county for j in self._relay_only if j in self._scrapers
+            ),
             "total_scrapers": len(self._scrapers),
             "max_workers": self.max_workers,
             "jobs": jobs,
