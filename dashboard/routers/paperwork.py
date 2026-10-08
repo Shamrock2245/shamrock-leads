@@ -204,7 +204,6 @@ async def save_doc_rules_config(request: Request):
 async def paperwork_preview(bond_case_id: str):
     """Generate an instant mobile PDF preview stream for a bond case or intake."""
     from fastapi.responses import Response
-    from dashboard.bond_pdf_service import generate_appearance_bond
 
     def _id_clauses(value: str) -> list[dict]:
         clauses: list[dict] = [
@@ -255,6 +254,22 @@ async def paperwork_preview(bond_case_id: str):
                 "court_date": case_doc.get("court_date") or "",
                 "address": case_doc.get("defendant_address") or case_doc.get("address") or "",
             }
+
+        from dashboard.services.surety_entitlements import entitlement_denial
+
+        surety_for_pdf = (
+            bond_data.get("surety")
+            or bond_data.get("surety_id")
+            or case_doc.get("surety")
+            or case_doc.get("surety_id")
+            or case_doc.get("template")
+            or ""
+        )
+        denied = await entitlement_denial(surety_for_pdf)
+        if denied:
+            return JSONResponse(denied, status_code=403)
+
+        from dashboard.bond_pdf_service import generate_appearance_bond
 
         pdf_bytes = generate_appearance_bond(bond_data)
         if not pdf_bytes:
@@ -356,6 +371,11 @@ async def generate_packet(request: Request, intake_id: str):
         data = (await request.json()) or {}
         packet_type = data.get("packet_type", "full")
         template = data.get("template", "osi")  # "osi" or "palmetto"
+        from dashboard.services.surety_entitlements import entitlement_denial
+
+        denied = await entitlement_denial(template)
+        if denied:
+            return JSONResponse(denied, status_code=403)
 
         intake = await _load_intake(intake_id)
         if not intake:
@@ -618,9 +638,10 @@ async def list_sureties():
     ``selectable: false`` so the UI renders them greyed out. Every paperwork
     path still fails closed on inactive/unknown sureties server-side.
     """
+    from dashboard.services.surety_entitlements import annotate_picker
     from dashboard.services.surety_registry import picker_options
 
-    return {"success": True, "sureties": picker_options()}
+    return {"success": True, "sureties": await annotate_picker(picker_options())}
 
 
 @paperwork_bp.get("/paperwork/payment-links")
@@ -1328,12 +1349,24 @@ async def packet_builder_finalize(request: Request):
                 )
         # Fail closed on surety BEFORE any document, POA, or template work.
         # A missing or unknown surety must never become OSI.
+        from dashboard.services.surety_entitlements import SuretyEntitlementError, assert_entitled
         from dashboard.services.surety_registry import (
             UnsupportedSuretyError,
             require_surety,
         )
         try:
             finalize_surety = require_surety(body.get("surety_id") or ctx.get("surety_id"))
+            await assert_entitled(finalize_surety)
+        except SuretyEntitlementError as ent_exc:
+            return JSONResponse(
+                {
+                    "success": False,
+                    "error": ent_exc.code,
+                    "message": "This agency is not enabled for that surety.",
+                    "surety_id": body.get("surety_id") or ctx.get("surety_id"),
+                },
+                status_code=403,
+            )
         except UnsupportedSuretyError as surety_exc:
             return JSONResponse(
                 {
@@ -2138,6 +2171,12 @@ async def hydrate_from_booking(request: Request):
             },
             status_code=400,
         )
+    if surety_id:
+        from dashboard.services.surety_entitlements import entitlement_denial
+
+        denied = await entitlement_denial(surety_id)
+        if denied:
+            return JSONResponse(denied, status_code=403)
     ctx["surety_id"] = surety_id
 
     bond_data = build_bond_data_from_dashboard(
@@ -2254,6 +2293,8 @@ async def docuseal_prefill_preview(request: Request):
     )
 
     from dashboard.services.surety_registry import normalize_surety, is_supported_surety
+    from dashboard.services.surety_entitlements import entitlement_denial
+
     surety_id = normalize_surety(body.get("surety_id"))
     if surety_id and not is_supported_surety(surety_id):
         return JSONResponse(
@@ -2264,6 +2305,10 @@ async def docuseal_prefill_preview(request: Request):
             },
             status_code=400,
         )
+    if surety_id:
+        denied = await entitlement_denial(surety_id)
+        if denied:
+            return JSONResponse(denied, status_code=403)
 
     ctx = await resolve_case_context(
         intake_id=body.get("intake_id"),
@@ -3058,6 +3103,11 @@ async def paperwork_push_docuseal(packet_id: str, request: Request):
         body = {}
 
     surety_for_template = (packet.get("surety_id") or packet.get("template") or body.get("surety_id") or "osi").lower()
+    from dashboard.services.surety_entitlements import entitlement_denial
+
+    denied = await entitlement_denial(surety_for_template)
+    if denied:
+        return JSONResponse(denied, status_code=403)
     template_id = resolve_template_id_for_surety(surety_for_template)
     if not template_id:
         return JSONResponse(
