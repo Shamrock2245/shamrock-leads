@@ -9,6 +9,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **`scripts/collier_glades_bad_bond_count.py`.** A read-only count of Collier and Glades rows whose stored bond the source never published. Collier: every non-empty bond, split into `"0"` and positive values taken from charge text. Glades: `"0"` / `"0.00"`, with positive values counted as unattributable (stored rows keep no per-charge bonds, so a next-card figure cannot be traced). Staff-provenance rows and rows scraped after the #139 deploy are skipped. It prints counts only and needs `MONGODB_URI`. `--print-filter` prints the affected-rows filter used by the plan.
 - **`docs/ops/COLLIER_GLADES_BOND_CLEANUP_PLAN.md`** (NOT RUN, awaiting Brendan's OK). The plan: count, `mongoexport` backup, blank to `""` while keeping the old values in `bond_cleanup_2026_10`, skip `staff_edits` rows, verify the counts, and a rollback.
 
+## [Unreleased] — 2026-10-08 (Palmetto agent license boxes)
+
+### Added
+- **Palmetto application and indemnity.** Each AGENT line keeps `agent_name` and adds `agent_license` on the same row, filled from that same `BOND_AGENTS` pair. The boxes are the template 6 placement verified at 08:27 ET (`AGENT_LINE_BOXES`). The application name and license set `valign: bottom` and `font_size: 11`. Both license boxes set `align: right`. An omitted `preferences` dict leaves the field unchanged. Templates 1 and 5 are not changed by this commit.
+
 ## [Unreleased] — 2026-10-08 (staff test-case Write Bond smoke)
 
 ### Added
