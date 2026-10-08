@@ -940,9 +940,9 @@
       "state": "FL",
       "county_fips": "086",
       "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "official_source_url": "[Miami-Dade Open Data: Jail Bookings, May 29, 2015 to current](https://gis-mdc.opendata.arcgis.com/datasets/c2275711ced240c6bc4e998ee1910e85/about)",
+      "access_posture": "Anonymous public ArcGIS FeatureServer query (plain HTTPS, no challenge), checked from the box 2026-10-08 08:10 EDT; the MDCR inmate search itself has reCAPTCHA v2 and is not used",
+      "evidence_note": "Layer miamidade_jail_data/FeatureServer/0 publishes BookDate (date only), Defendant and Charge1/Code2/Charge3 as daily bookings (516,951 rows; newest BookDate 2026-10-07). There is no bond field and no custody status, so bond stays unknown. There is no source booking number either: the scraper keys on the layer's GlobalID. schemaLastEditDate equals dataLastEditDate (the layer was overwritten 2026-10-08 08:05 EDT) and ObjectIds run 1..516951, so a daily overwrite may reissue GlobalIDs. Key stability is unproven, so this stays recon_only until two snapshots on different days show the same GlobalID for the same booking row."
     },
     {
       "state": "FL",
