@@ -93,7 +93,7 @@
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 36 | **Duval** | DrissionPage — API interception (jaxsheriff.org) | `duval.py` | ✅ Active | 90 min | 2026-04-27 |
 | 37 | **St. Johns** | Stub — `st_johns.py` returns no rows; sjso.org links `/smartwebclient/jail.aspx` but it answers **403** (Cloudflare/nginx) to ordinary access | `st_johns.py` | 🔴 No reachable public roster (hold; no WAF bypass) | 120 min | 2026-10-07 |
-| 38 | **Nassau** | New World InmateInquiry GET (curl_cffi, `verify=False`) | `nassau.py` | ⚠️ Keys broken (every row keyed `History`); not migrated — portal serves an incomplete TLS chain (leaf only, GoDaddy G2 intermediate missing). See `docs/recon/FL_BREVARD_NEWWORLD_2026-10-07.md` | 120 min | 2026-10-07 |
+| 38 | **Nassau** | New World InmateInquiry — portal serves an incomplete TLS chain (leaf only, GoDaddy G2 intermediate missing); old module used `verify=False` and keyed every row `History` | `nassau.py` | 🔴 Fail closed (`SOURCE_CONTRACT_VALIDATED=False`; owner hold until the chain is fixed or the intermediate is approved). See `docs/recon/FL_67_STATUS_2026-10-08.md` | 120 min | 2026-10-08 |
 | 39 | **Clay** | Public detention listing has Name/Booking Date only — no source booking ID | `clay.py` | 🔴 Fail closed (no invented name keys) | 120 min | 2026-10-07 |
 
 ---
@@ -201,7 +201,7 @@ Approach:   Query the anonymous FeatureServer directly with `ObjectId,GlobalID,B
 
 ### New World / InmateInquiry (Tyler Technologies)
 - **Pattern**: Server-rendered HTML listing + detail pages (GET)
-- **Active Counties**: Hillsborough, Nassau, Walton, Flagler
+- **Active Counties**: Hillsborough, Walton, Flagler. Nassau is fail closed (TLS chain hold, 2026-10-08).
 
 ### SmartWeb (Black Creek ISC)
 - **Pattern**: ASP.NET POST form with ViewState, returns HTML table
