@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-07 (start bond packet review)
+
+### Fixed
+- **Start bond packet (`SAAS_MULTI_TENANT` still default off).** Send passes the bond's binding fields into `create_submission_for_packet`, uses the chosen surety's published template for the current agency, and refuses a power that does not match preflight. After submission it creates or updates `paperwork_packets` and reads signer URLs from `submitters[].sign_url`. The screen shows the sign and pay links. It still does not text, charge, or mark the power used.
+
 ## [Unreleased] — 2026-10-07 (lead subscription review)
 
 ### Fixed

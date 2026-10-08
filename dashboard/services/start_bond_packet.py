@@ -7,6 +7,7 @@ router hides it. ``POST /api/write-bond`` stays retired.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from dashboard.services.surety_entitlements import SuretyEntitlementError, assert_entitled, entitled_ids
@@ -142,13 +143,194 @@ async def prepare_packet(booking_number: str, surety_id: str, *, poa_filter: dic
         for row in picker_options()
         if row["id"] in allowed and row.get("active")
     ]
+    suggestions = await suggest_poa(sid, poa_filter)
+    suggestions = await _with_bond_poa(suggestions, defendant["booking_number"], sid)
     return {
         "defendant": defendant,
         "surety_id": sid,
         "sureties": sureties,
-        "poa_suggestions": await suggest_poa(sid, poa_filter),
+        "poa_suggestions": suggestions,
         "messages_sent": 0,
     }
+
+
+def _text(doc: dict | None, *keys: str) -> str:
+    for key in keys:
+        value = str((doc or {}).get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _party_name(doc: dict | None) -> str:
+    full = _text(doc, "name", "full_name", "Full_Name")
+    if full:
+        return full
+    return " ".join(
+        part for part in (_text(doc, "first_name", "First_Name"), _text(doc, "last_name", "Last_Name")) if part
+    )
+
+
+async def _find_one(name: str, filt: dict) -> dict | None:
+    from dashboard.extensions import get_collection
+
+    doc = await get_collection(name).find_one(filt)
+    return doc if isinstance(doc, dict) else None
+
+
+async def _bond_doc(booking_number: str, bond_case_id: str = "") -> dict | None:
+    if bond_case_id:
+        doc = await _find_one(
+            "active_bonds",
+            {"$or": [{"Bond_Case_ID": bond_case_id}, {"bond_case_id": bond_case_id}]},
+        )
+        if doc:
+            return doc
+        return await _find_one(
+            "bond_cases",
+            {"$or": [{"Bond_Case_ID": bond_case_id}, {"bond_case_id": bond_case_id}]},
+        )
+    return await _find_one(
+        "active_bonds",
+        {"$or": [{"Booking_Number": booking_number}, {"booking_number": booking_number}]},
+    )
+
+
+async def _with_bond_poa(suggestions: list[dict], booking_number: str, surety_id: str) -> list[dict]:
+    """Keep the power already on the bond selectable so it can match preflight."""
+    bond = await _bond_doc(booking_number)
+    number = _text(bond, "POA_Number", "poa_number")
+    bound_surety = _text(bond, "Surety_ID", "surety_id").lower()
+    if not number or (bound_surety and bound_surety != surety_id):
+        return suggestions
+    if any(row.get("poa_number") == number for row in suggestions):
+        return suggestions
+    row = await _find_one("poa_inventory", {"poa_number": number, "surety_id": surety_id})
+    status = _text(row, "status")
+    if status not in {"available", "assigned", "used"}:
+        return suggestions
+    return [
+        {
+            "poa_number": number,
+            "surety_id": surety_id,
+            "max_bond_value": (row or {}).get("max_bond_value"),
+            "status": status,
+        },
+        *suggestions,
+    ][:5]
+
+
+async def _authoritative_binding(
+    *,
+    booking_number: str,
+    bond_case_id: str,
+    surety_id: str,
+    poa_number: str,
+    staff_email: str,
+) -> dict[str, Any]:
+    """Fields create_submission_for_packet requires, taken from the bond and parties."""
+    bond = await _bond_doc(booking_number, bond_case_id)
+    if not bond:
+        raise PacketStartError("binding_incomplete")
+    data = {
+        "bond_case_id": _text(bond, "Bond_Case_ID", "bond_case_id"),
+        "booking_number": _text(bond, "Booking_Number", "booking_number") or booking_number,
+        "case_number": _text(bond, "Case_Number", "case_number"),
+        "surety_id": _text(bond, "Surety_ID", "surety_id").lower(),
+        "poa_number": _text(bond, "POA_Number", "poa_number"),
+        "defendant_id": _text(bond, "Defendant_ID", "defendant_id"),
+        "indemnitor_id": _text(bond, "Indemnitor_ID", "indemnitor_id"),
+        "match_id": _text(bond, "Match_ID", "match_id"),
+    }
+    if data["surety_id"] != surety_id or data["poa_number"] != poa_number:
+        raise PacketStartError("poa_not_available")
+    if any(not data[key] for key in data):
+        raise PacketStartError("binding_incomplete")
+    match = await _find_one(
+        "matches",
+        {"$or": [{"Match_ID": data["match_id"]}, {"match_id": data["match_id"]}]},
+    )
+    if _text(match, "Status", "status").lower() != "validated":
+        raise PacketStartError("binding_incomplete")
+    defendant = await _find_one(
+        "defendants",
+        {"$or": [{"Defendant_ID": data["defendant_id"]}, {"defendant_id": data["defendant_id"]}]},
+    )
+    indemnitor = await _find_one(
+        "indemnitors",
+        {"$or": [{"Indemnitor_ID": data["indemnitor_id"]}, {"indemnitor_id": data["indemnitor_id"]}]},
+    )
+    defendant_name = _party_name(defendant)
+    defendant_email = _text(defendant, "email", "Email")
+    indemnitor_name = _party_name(indemnitor)
+    indemnitor_email = _text(indemnitor, "email", "Email")
+    if "@" not in defendant_email or "@" not in indemnitor_email or not defendant_name or not indemnitor_name:
+        raise PacketStartError("binding_incomplete")
+    if staff_email.strip().lower() != indemnitor_email.lower():
+        raise PacketStartError("indemnitor_required")
+    data["match_status"] = "validated"
+    data["defendant_name"] = defendant_name
+    data["indemnitor_name"] = indemnitor_name
+    data["indemnitor_email"] = indemnitor_email
+    data["defendant"] = {"name": defendant_name, "email": defendant_email}
+    data["indemnitor"] = {
+        "name": indemnitor_name,
+        "email": indemnitor_email,
+        "phone": _text(indemnitor, "phone", "Phone"),
+    }
+    return data
+
+
+def _sign_links(submission: Any) -> list[dict[str, str]]:
+    """Signer URLs live on submitters[].sign_url. A top-level signing_url is ignored."""
+    submitters = submission.get("submitters") if isinstance(submission, dict) else None
+    if not isinstance(submitters, list):
+        return []
+    links = []
+    for item in submitters:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("sign_url") or "")
+        if not url.startswith("https://"):
+            continue
+        links.append({"role": str(item.get("role") or ""), "sign_url": url})
+    return links
+
+
+async def _store_packet(binding: dict, template_id: str, submission: dict, links: list[dict]) -> str:
+    from dashboard.extensions import get_collection
+
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    packet_id = binding["bond_case_id"]
+    doc = {
+        "packet_id": packet_id,
+        "bond_case_id": binding["bond_case_id"],
+        "booking_number": binding["booking_number"],
+        "case_number": binding["case_number"],
+        "match_id": binding["match_id"],
+        "match_status": "validated",
+        "defendant_id": binding["defendant_id"],
+        "indemnitor_id": binding["indemnitor_id"],
+        "surety_id": binding["surety_id"],
+        "poa_number": binding["poa_number"],
+        "esign_provider": "docuseal",
+        "docuseal_template_id": str(template_id),
+        "docuseal_submission_id": str((submission or {}).get("submission_id") or ""),
+        "docuseal_submitters": (submission or {}).get("submitters") if isinstance(submission, dict) else [],
+        "docuseal_status": "sent",
+        "docuseal_sent_at": now,
+        "status": "sent",
+        "updated_at": now,
+        "sign_links": links,
+    }
+    col = get_collection("paperwork_packets")
+    existing = await col.find_one({"packet_id": packet_id})
+    if existing:
+        await col.update_one({"packet_id": packet_id}, {"$set": doc})
+    else:
+        doc["created_at"] = now
+        await col.insert_one(doc)
+    return packet_id
 
 
 async def send_packet(
@@ -191,32 +373,54 @@ async def send_packet(
             "messages_sent": 0,
             "poa_status": "available",
         }
+    details = pre.get("details") if isinstance(pre.get("details"), dict) else {}
+    if str(details.get("poa_number") or "").strip() != poa_number:
+        raise PacketStartError("poa_not_available")
+    binding = await _authoritative_binding(
+        booking_number=prepared["defendant"]["booking_number"],
+        bond_case_id=str(details.get("bond_case_id") or payload.get("bond_case_id") or ""),
+        surety_id=prepared["surety_id"],
+        poa_number=poa_number,
+        staff_email=email,
+    )
+    from dashboard.services.docuseal_service import resolve_template_id_for_surety
+    from dashboard.tenancy.context import current_tenant_id
+
+    template_id = resolve_template_id_for_surety(prepared["surety_id"], current_tenant_id())
+    if not template_id:
+        raise PacketStartError("template_unavailable")
     submit_fn = submit or _default_submit
     submission = await submit_fn(
-        template_id=payload.get("template_id") or "template",
-        packet_id=str(payload.get("packet_id") or prepared["defendant"]["booking_number"]),
+        template_id=template_id,
+        packet_id=binding["bond_case_id"],
         bond_data={
-            "surety_id": prepared["surety_id"],
-            "booking_number": prepared["defendant"]["booking_number"],
-            "defendant_name": prepared["defendant"]["defendant_name"],
-            "indemnitor_name": name,
-            "indemnitor_email": email,
-            "poa_number": poa_number,
+            "bond_case_id": binding["bond_case_id"],
+            "match_id": binding["match_id"],
+            "match_status": binding["match_status"],
+            "defendant_id": binding["defendant_id"],
+            "indemnitor_id": binding["indemnitor_id"],
+            "case_number": binding["case_number"],
+            "poa_number": binding["poa_number"],
+            "booking_number": binding["booking_number"],
+            "surety_id": binding["surety_id"],
+            "defendant_name": binding["defendant_name"],
+            "indemnitor_name": binding["indemnitor_name"],
+            "indemnitor_email": binding["indemnitor_email"],
         },
-        indemnitors=[{"name": name, "email": email, "phone": str(indemnitor.get("phone") or "")}],
+        indemnitors=[binding["indemnitor"]],
+        defendant=binding["defendant"],
         send_email=False,
     )
-    signing_url = ""
-    if isinstance(submission, dict):
-        signing_url = str(submission.get("signing_url") or submission.get("url") or "")
-        if signing_url and not signing_url.startswith("https://"):
-            signing_url = ""
+    links = _sign_links(submission)
+    packet_id = await _store_packet(binding, template_id, submission if isinstance(submission, dict) else {}, links)
     pay = await _pay_link(prepared["defendant"]["booking_number"])
     return {
         "state": "ready_for_staff_send",
         "sent": False,
         "messages_sent": 0,
-        "signing_url": signing_url,
+        "packet_id": packet_id,
+        "signing_url": links[0]["sign_url"] if links else "",
+        "sign_links": links,
         "pay_url": pay["pay_url"],
         "pay_status": pay["pay_status"],
         "poa_number": poa_number,

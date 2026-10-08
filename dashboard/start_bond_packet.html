@@ -56,6 +56,7 @@
   <section id="done" class="hidden">
     <h2 id="done-title"></h2>
     <p id="done-body"></p>
+    <div id="done-links"></div>
   </section>
 </main>
 <script>
@@ -136,6 +137,23 @@
         document.getElementById("done").classList.remove("hidden");
         document.getElementById("done-title").textContent = "Ready for you to send";
         document.getElementById("done-body").textContent = "Messages sent: " + result.body.messages_sent + ". Power status: " + result.body.poa_status + ".";
+        var links = document.getElementById("done-links");
+        links.innerHTML = "";
+        (result.body.sign_links || []).forEach(function (row) {
+          if (!row || !row.sign_url) return;
+          var anchor = document.createElement("a");
+          anchor.href = row.sign_url;
+          anchor.rel = "noopener";
+          anchor.textContent = "Sign (" + (row.role || "signer") + ")";
+          links.appendChild(anchor);
+        });
+        if (result.body.pay_url) {
+          var pay = document.createElement("a");
+          pay.href = result.body.pay_url;
+          pay.rel = "noopener";
+          pay.textContent = "Pay";
+          links.appendChild(pay);
+        }
       });
   };
   show(1);
