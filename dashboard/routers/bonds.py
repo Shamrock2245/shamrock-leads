@@ -1212,6 +1212,19 @@ async def api_active_bonds_process_missed():
 # APPEARANCE BOND PDF
 # ═══════════════════════════════════════════════════════════════════════════════
 
+async def _deny_named_surety(payload: dict):
+    """Refuse a carrier the request already names, before any PDF import."""
+    raw = (payload or {}).get("surety") or (payload or {}).get("surety_id")
+    if not raw:
+        return None
+    from dashboard.services.surety_entitlements import entitlement_denial
+
+    denied = await entitlement_denial(raw)
+    if denied:
+        return JSONResponse(denied, status_code=403)
+    return None
+
+
 def _build_appearance_bond_data(d: dict):
     """
     Normalize a (preferably hydrated) request dict into bond_data for PDF fill.
@@ -1370,14 +1383,6 @@ async def api_appearance_bond_pdf(request: Request):
     buttons get the same charge/case/court fill as print-package.
     """
     try:
-        from dashboard.bond_pdf_service import (
-            generate_appearance_bonds,
-            generate_safe_filename,
-            merge_uncollated_bonds,
-            store_appearance_bond_pdfs,
-            appearance_bond_procedure_meta,
-        )
-
         _qp = dict(request.query_params)
         d: dict = {}
         if request.method == "POST":
@@ -1411,6 +1416,9 @@ async def api_appearance_bond_pdf(request: Request):
         )
         if blocked:
             return blocked
+        named = await _deny_named_surety(d)
+        if named:
+            return named
         data, err = _build_appearance_bond_data(d)
         if err:
             return JSONResponse(
@@ -1419,6 +1427,18 @@ async def api_appearance_bond_pdf(request: Request):
             )
 
         surety = data.get("surety")  # validated by _build_appearance_bond_data
+        from dashboard.services.surety_entitlements import entitlement_denial
+
+        denied = await entitlement_denial(surety)
+        if denied:
+            return JSONResponse(denied, status_code=403)
+        from dashboard.bond_pdf_service import (
+            generate_appearance_bonds,
+            generate_safe_filename,
+            merge_uncollated_bonds,
+            store_appearance_bond_pdfs,
+            appearance_bond_procedure_meta,
+        )
         try:
             copies_count = int(d.get("copies") or d.get("copies_per_charge") or "2")
         except (TypeError, ValueError):
@@ -1500,11 +1520,6 @@ async def api_appearance_bond_batch(request: Request):
     Never e-signed. Hydrates arrest data when booking is present.
     """
     try:
-        from dashboard.bond_pdf_service import (
-            generate_appearance_bonds,
-            merge_uncollated_bonds,
-            store_appearance_bond_pdfs,
-        )
         d = await request.json() or {}
         d = await _hydrate_appearance_bond_payload(d)
         from dashboard.routers.helpers import reject_unless_write_book
@@ -1518,10 +1533,23 @@ async def api_appearance_bond_batch(request: Request):
         )
         if blocked:
             return blocked
+        named = await _deny_named_surety(d)
+        if named:
+            return named
         b_data, err = _build_appearance_bond_data(d)
         if err:
             return JSONResponse({"error": err}, status_code=400)
         surety = b_data.get("surety")  # validated by _build_appearance_bond_data
+        from dashboard.services.surety_entitlements import entitlement_denial
+
+        denied = await entitlement_denial(surety)
+        if denied:
+            return JSONResponse(denied, status_code=403)
+        from dashboard.bond_pdf_service import (
+            generate_appearance_bonds,
+            merge_uncollated_bonds,
+            store_appearance_bond_pdfs,
+        )
         try:
             copies = int(d.get("copies", 2) or 2)
         except (TypeError, ValueError):
@@ -1905,14 +1933,6 @@ async def api_appearance_bonds_print_package(request: Request):
     default 2 copies per charge (office file + jail). UNSIGNED / wet-ink only.
     """
     try:
-        from dashboard.bond_pdf_service import (
-            generate_appearance_bonds,
-            merge_uncollated_bonds,
-            store_appearance_bond_pdfs,
-            describe_appearance_bonds,
-            appearance_bond_procedure_meta,
-        )
-
         d = await request.json() or {}
         d = await _hydrate_appearance_bond_payload(d)
         from dashboard.routers.helpers import reject_unless_write_book
@@ -1934,6 +1954,9 @@ async def api_appearance_bonds_print_package(request: Request):
         if copies < 1:
             copies = 1
 
+        named = await _deny_named_surety(d)
+        if named:
+            return named
         b_data, err = _build_appearance_bond_data(d)
         if err:
             return JSONResponse(
@@ -1944,6 +1967,18 @@ async def api_appearance_bonds_print_package(request: Request):
                 status_code=400,
             )
         surety = b_data.get("surety")  # validated by _build_appearance_bond_data
+        from dashboard.services.surety_entitlements import entitlement_denial
+
+        denied = await entitlement_denial(surety)
+        if denied:
+            return JSONResponse(denied, status_code=403)
+        from dashboard.bond_pdf_service import (
+            generate_appearance_bonds,
+            merge_uncollated_bonds,
+            store_appearance_bond_pdfs,
+            describe_appearance_bonds,
+            appearance_bond_procedure_meta,
+        )
         b_data["copies_per_charge"] = copies
 
         plan = describe_appearance_bonds(b_data)

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Surety access</title>
+  <style>
+    :root { color-scheme: light; --green: #0b6b3a; }
+    body { font-family: Georgia, "Iowan Old Style", serif; margin: 0; background: #f6f4ef; color: #1c1915; }
+    main { max-width: 52rem; margin: 2rem auto; padding: 1.5rem; background: #fff; border: 1px solid #e4dfd4; }
+    h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
+    article { border-top: 1px solid #eee; padding: 1rem 0; }
+    label { display: block; margin: .25rem 0; }
+    button { font: inherit; background: var(--green); color: #fff; border: 0; padding: .4rem .8rem; }
+    .muted { color: #4a453c; }
+    .error { color: #8c1d1d; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Surety access</h1>
+  <p>An agency can generate paperwork only for sureties checked here. Inactive carriers stay unavailable. Private template names are recorded for the upload desk and are not packets yet.</p>
+  <p class="error" id="error"></p>
+  <div id="agencies"></div>
+</main>
+<script>
+(function () {
+  function box(agency, row) {
+    var id = agency.tenant_id + "-" + row.id;
+    var locked = (agency.locked || []).indexOf(row.id) !== -1;
+    var on = (agency.enabled || []).indexOf(row.id) !== -1 || locked;
+    var input = document.createElement("input");
+    input.type = "checkbox";
+    input.id = id;
+    input.checked = on;
+    input.disabled = locked || !row.can_enable;
+    input.dataset.surety = row.id;
+    var label = document.createElement("label");
+    label.appendChild(input);
+    label.appendChild(document.createTextNode(" " + row.short + (row.can_enable ? "" : " — not available yet")));
+    return label;
+  }
+  function paint(data) {
+    var root = document.getElementById("agencies");
+    root.innerHTML = "";
+    (data.agencies || []).forEach(function (agency) {
+      var article = document.createElement("article");
+      var title = document.createElement("h2");
+      title.textContent = agency.legal_name || agency.tenant_id;
+      article.appendChild(title);
+      (data.catalog || []).forEach(function (row) { article.appendChild(box(agency, row)); });
+      var priv = document.createElement("p");
+      priv.className = "muted";
+      var names = (agency.private_templates || []).map(function (item) { return item.label; });
+      priv.textContent = names.length ? ("Private templates: " + names.join(", ")) : "No private templates.";
+      article.appendChild(priv);
+      var labelInput = document.createElement("input");
+      labelInput.placeholder = "Private template label";
+      labelInput.maxLength = 80;
+      article.appendChild(labelInput);
+      var save = document.createElement("button");
+      save.type = "button";
+      save.textContent = "Save";
+      save.onclick = function () {
+        var enabled = [];
+        article.querySelectorAll("input[type=checkbox]").forEach(function (input) {
+          if (input.checked && !input.disabled) enabled.push(input.dataset.surety);
+        });
+        var privateTemplates = (agency.private_templates || []).map(function (item) {
+          return {label: item.label};
+        });
+        if (labelInput.value.trim()) privateTemplates.push({label: labelInput.value.trim()});
+        fetch("/api/platform/tenants/" + encodeURIComponent(agency.tenant_id) + "/sureties", {
+          method: "PUT",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({enabled: enabled, private_templates: privateTemplates})
+        }).then(function (res) { return res.json().then(function (body) { return {ok: res.ok, body: body}; }); })
+          .then(function (result) {
+            document.getElementById("error").textContent = result.ok ? "" : (result.body.error || "Could not save");
+            if (result.ok) load();
+          });
+      };
+      article.appendChild(save);
+      root.appendChild(article);
+    });
+  }
+  function load() {
+    fetch("/api/platform/sureties").then(function (res) {
+      if (!res.ok) {
+        document.getElementById("error").textContent = "Surety access is unavailable";
+        return null;
+      }
+      return res.json();
+    }).then(function (data) { if (data) paint(data); });
+  }
+  load();
+})();
+</script>
+</body>
+</html>
