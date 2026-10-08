@@ -302,6 +302,8 @@ class ScraperScheduler:
             "booking_number": 1, "full_name": 1, "status": 1,
             "bond_amount": 1, "charges": 1, "bond_type": 1,
             "detail_url": 1, "county": 1,
+            # staff provenance, so the live-roster update can't replace staff edits
+            "staff_edits": 1, "bond_override": 1, "last_checked_mode": 1, "charge_details": 1,
         }))
 
         logger.info(f"🔍 Checking {len(defendants)} defendants in {county}")
@@ -351,11 +353,26 @@ class ScraperScheduler:
 
             # Compare old vs new
             diffs = []
-            new_dict = new_record.to_dict() if hasattr(new_record, "to_dict") else {}
+            # ArrestRecord has no to_dict(); without to_mongo_doc() every field
+            # read as "" and the recheck blanked status/bond/charges.
+            if hasattr(new_record, "to_dict"):
+                new_dict = new_record.to_dict()
+            elif hasattr(new_record, "to_mongo_doc"):
+                new_dict = new_record.to_mongo_doc()
+            else:
+                new_dict = {}
 
             for field in DIFF_FIELDS:
                 old_val = old_doc.get(field, "")
                 new_val = new_dict.get(field, "")
+                # A value the source did not publish is unknown, not a change
+                # (an unknown bond is never written as 0).
+                if field == "bond_amount" and "bond_amount_raw" in new_dict and not str(
+                    new_dict.get("bond_amount_raw") or ""
+                ).strip():
+                    continue
+                if new_val is None or (isinstance(new_val, str) and not new_val.strip()):
+                    continue
                 # Normalize for comparison
                 if isinstance(old_val, (int, float)) and isinstance(new_val, (int, float)):
                     if old_val != new_val:
@@ -387,6 +404,10 @@ class ScraperScheduler:
                     update_fields[d["field"]] = d["new"]
                 update_fields["last_custody_recheck"] = now.isoformat()
                 update_fields["custody_recheck_source"] = "live_roster"
+                # Staff bond / charge edits win; live values go to scraped_*.
+                from core.staff_edits import protect_scraped_update
+
+                update_fields, _ = protect_scraped_update(update_fields, old_doc, now=now)
 
                 arrests_col.update_one(
                     {"booking_number": bk, "county": county},

@@ -60,6 +60,7 @@ from pymongo import MongoClient, UpdateOne
 from config.settings import settings
 from config.write_counties import fa_query_county_values, resolve_fa_watch_counties
 from core.models import ArrestRecord
+from core.staff_edits import protect_scraped_update, staff_provenance
 from scoring.lead_scorer import LeadScorer
 
 logger = logging.getLogger(__name__)
@@ -677,13 +678,31 @@ class FirstAppearanceWatcher:
                 stats["rechecked"] += 1
                 new_bond = updated._parse_bond_numeric()
 
+                # ── Staff-set bond wins: keep the source value as scraped_* only ──
+                if staff_provenance(doc).bond and new_bond > 0:
+                    self._scorer.score_and_update(updated)
+                    mongo_doc = updated.to_mongo_doc()
+                    mongo_doc["updated_at"] = now
+                    mongo_doc, _ = protect_scraped_update(mongo_doc, doc, record=updated, now=now)
+                    operations.append(UpdateOne(
+                        {"county": updated.County, "booking_number": updated.Booking_Number},
+                        {"$set": mongo_doc},
+                        upsert=True,
+                    ))
+                    stats["no_change"] += 1
+                    logger.info(
+                        f"FirstAppearanceWatcher: {county}/{booking_id} source bond "
+                        f"${new_bond:,.0f} kept as scraped_bond_amount (staff bond stays)"
+                    )
+
                 # ── Detect bond upgrade ──────────────────────────────────────
-                if new_bond > 0 and old_bond == 0:
+                elif new_bond > 0 and old_bond == 0:
                     # 🎉 Bond was set at first appearance!
                     self._scorer.score_and_update(updated)
                     mongo_doc = updated.to_mongo_doc()
                     mongo_doc["updated_at"]  = now
                     mongo_doc["bond_set_at"] = now  # Permanent timestamp
+                    mongo_doc, _ = protect_scraped_update(mongo_doc, doc, record=updated, now=now)
                     operations.append(UpdateOne(
                         {"county": updated.County, "booking_number": updated.Booking_Number},
                         {"$set": mongo_doc},
@@ -702,6 +721,7 @@ class FirstAppearanceWatcher:
                     self._scorer.score_and_update(updated)
                     mongo_doc = updated.to_mongo_doc()
                     mongo_doc["updated_at"] = now
+                    mongo_doc, _ = protect_scraped_update(mongo_doc, doc, record=updated, now=now)
                     operations.append(UpdateOne(
                         {"county": updated.County, "booking_number": updated.Booking_Number},
                         {"$set": mongo_doc},
