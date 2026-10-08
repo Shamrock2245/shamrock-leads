@@ -75,9 +75,11 @@ jobs:
             tests/test_registered_counties_coverage.py \
             tests/test_recon_documentation_contract.py \
             tests/test_recon_evidence_contract.py \
+            tests/test_home_county_smoke_evidence.py \
             tests/test_subdomains.py \
             tests/test_unhandled_exception_privacy.py \
             tests/test_dashboard_source_states.py \
+            tests/test_fail_closed_default_leads.py \
             tests/test_scraper_resilience.py \
             tests/test_base_scraper_self_heal.py \
             tests/test_source_state_drift.py \
@@ -89,14 +91,18 @@ jobs:
             tests/test_fl_okaloosa_api.py \
             tests/test_fl_orange_bestjail.py \
             tests/test_fl_67_status.py \
+            tests/test_hendry_fail_closed.py \
             tests/test_fl_idle_eight.py \
             tests/test_fl_bond_charges_hydrate.py \
             tests/test_fl_pinellas_bond_unknown.py \
             tests/test_fl_hernando_unknown_bond.py \
+            tests/test_fl_hernando_detail_status.py \
             tests/test_miami_dade_scraper.py \
             tests/test_fl_miami_dade_arcgis_contract.py \
             tests/test_fl_sarasota_manatee_audit.py \
             tests/test_fl_charlotte_revize.py \
+            tests/test_collier_glades_published_bond.py \
+            tests/test_glades_no_impersonation_path.py \
             tests/test_sarasota_safety.py \
             tests/test_packet_builder_service.py \
             tests/test_cf_browser.py \
@@ -168,6 +174,7 @@ jobs:
             tests/test_surety_review_fixes.py \
             tests/test_wix_intake_webhook.py \
             tests/test_intake_fanout.py \
+            tests/test_collier_glades_bad_bond_count.py \
             tests/test_workflow_endpoints.py \
             tests/test_kiosk_privacy_and_confirm.py \
             --tb=short

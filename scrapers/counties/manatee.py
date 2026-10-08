@@ -434,6 +434,7 @@ def walk_roster(
     published_total: Optional[int] = None
     advertised_max = 1
     pages_walked = 0
+    columns: List[str] = []
 
     for pg in range(1, max_pages + 1):
         if url in seen_urls:
@@ -442,6 +443,10 @@ def walk_roster(
         payload = fetch_page(url, pg)
         rows = parse_roster_page(payload, page_no=pg)
         pages_walked = pg
+        if pg == 1:
+            # Column names only (no row data): the relay read smoke records
+            # the live header set as dated evidence (docs/recon/smoke_evidence.json).
+            columns = [str(h).strip() for h in (payload.get("headers") or [])]
         if not rows:
             if pg == 1:
                 raise ParseDriftError("Manatee: roster table is empty on page 1")
@@ -489,6 +494,7 @@ def walk_roster(
         "rows": len(all_rows),
         "bookings": len(records),
         "published_total": published_total,
+        "columns": columns,
     }
     return records, meta
 

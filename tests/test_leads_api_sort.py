@@ -20,8 +20,10 @@ def test_leads_query_model_defaults_scraped_at():
 
 
 def test_build_leads_query_empty_filters():
-    q = LeadsQueryModel()
+    q = LeadsQueryModel(include_fail_closed=True)
     assert _build_leads_query(q) == {}
+    # The default list hides fail_closed source counties and nothing else.
+    assert set(_build_leads_query(LeadsQueryModel())) == {"$nor"}
 
 
 def test_build_leads_query_days_uses_scraped_at():
