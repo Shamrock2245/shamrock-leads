@@ -9,11 +9,13 @@ upload-and-map desk; this module does not render them.
 
 from __future__ import annotations
 
+import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from dashboard.services.surety_registry import SURETY_REGISTRY, normalize_surety
 from dashboard.tenancy.constants import SHAMROCK_TENANT_ID
-from dashboard.tenancy.context import bind_platform_job, current_tenant_id
+from dashboard.tenancy.context import bind_job_tenant, bind_platform_job, current_tenant_id
 from dashboard.tenancy.flag import multi_tenant_enabled
 
 SHAMROCK_SURETIES = frozenset({"osi", "palmetto"})
@@ -136,6 +138,20 @@ async def assert_entitled(surety_id: str) -> None:
         raise SuretyEntitlementError("surety_not_entitled")
 
 
+async def entitlement_denial(surety_id: str) -> dict[str, str] | None:
+    """JSON body when this agency cannot generate that carrier. Flag off is None."""
+    try:
+        await assert_entitled(surety_id)
+    except SuretyEntitlementError as exc:
+        return {
+            "success": False,
+            "error": exc.code,
+            "message": "This agency is not enabled for that surety.",
+            "surety_id": str(surety_id or ""),
+        }
+    return None
+
+
 async def annotate_picker(rows: list[dict]) -> list[dict]:
     if not multi_tenant_enabled():
         return rows
@@ -168,7 +184,40 @@ async def list_access() -> dict[str, Any]:
     return {"catalog": catalog_rows(), "agencies": agencies}
 
 
-async def set_access(tenant_id: str, payload: dict) -> dict:
+def _access_state(view: dict) -> dict[str, Any]:
+    return {
+        "enabled": list(view.get("enabled") or []),
+        "private_templates": list(view.get("private_templates") or []),
+    }
+
+
+async def _write_access_audit(
+    *,
+    tenant_id: str,
+    actor: str,
+    reason: str,
+    old_state: dict,
+    new_state: dict,
+) -> None:
+    from dashboard.extensions import get_collection
+
+    event = {
+        "event_id": str(uuid.uuid4()),
+        "entity_type": "tenant_surety_access",
+        "entity_id": tenant_id,
+        "action": "surety_access_updated",
+        "actor": actor or "platform",
+        "reason": reason or "surety_access_update",
+        "old_state": old_state,
+        "new_state": new_state,
+        "timestamp": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+    }
+    with bind_job_tenant(tenant_id, job_name="surety_entitlements"):
+        col = get_collection("audit_events")
+        await col.insert_one(event)
+
+
+async def set_access(tenant_id: str, payload: dict, *, actor: str = "", reason: str = "") -> dict:
     if not multi_tenant_enabled():
         raise SuretyEntitlementsDisabled()
     if not isinstance(payload, dict):
@@ -182,7 +231,16 @@ async def set_access(tenant_id: str, payload: dict) -> dict:
         found = await col.find_one({"tenant_id": tenant_id})
         if not found:
             raise SuretyEntitlementError("not_found")
+        before = _access_state(access_view(found))
         access = {"enabled": enabled, "private_templates": private_templates}
         await col.update_one({"tenant_id": tenant_id}, {"$set": {"surety_access": access}})
         found["surety_access"] = access
-    return access_view(found)
+    view = access_view(found)
+    await _write_access_audit(
+        tenant_id=tenant_id,
+        actor=actor,
+        reason=reason or str(payload.get("reason") or "surety_access_update"),
+        old_state=before,
+        new_state=_access_state(view),
+    )
+    return view

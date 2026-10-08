@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-07 (surety entitlement review)
+
+### Fixed
+- **Surety checklist (`SAAS_MULTI_TENANT` still default off).** `POST /api/paperwork/generate/{intake_id}`, the paperwork preview, DocuSeal prefill and push, booking hydrate, and the appearance-bond print routes refuse a surety the agency is not enabled for before any carrier PDF is rendered. Changing the checklist writes an `audit_events` row with the actor, reason, and old and new enabled set.
+
 ## [Unreleased] — 2026-10-07 (agency billing review)
 
 ### Fixed
