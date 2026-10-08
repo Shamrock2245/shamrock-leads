@@ -48,6 +48,24 @@ logger.addFilter(SensitiveDataRedactionFilter())
 DASHBOARD_DIR = os.path.dirname(__file__)
 
 
+async def run_startup_database_tasks():
+    """Seed POA rows and verify core indexes as tenant #1.
+
+    With the flag on, ``get_db()`` is a tenant proxy. Calling it from the
+    lifespan with no request and no job context raises ``tenant_required``,
+    and both helpers swallow that and skip the work. Bind Shamrock first.
+    Flag off, the proxy is not installed, so the bind does not stamp rows
+    or change filters.
+    """
+    from dashboard.tenancy.constants import SHAMROCK_TENANT_ID
+    from dashboard.tenancy.context import bind_job_tenant
+    from dashboard.extensions import _seed_poa_inventory_async
+
+    with bind_job_tenant(SHAMROCK_TENANT_ID, job_name="startup"):
+        await _seed_poa_inventory_async()
+        await _ensure_core_indexes_async()
+
+
 async def _ensure_core_indexes_async():
     """Ensure high-performance MongoDB indices on startup for M0 tier hygiene."""
     try:
@@ -104,9 +122,9 @@ async def lifespan(app: FastAPI):
     init_bluebubbles()
 
     # ── Seed POA inventory & verify core MongoDB indexes ──
-    from dashboard.extensions import _seed_poa_inventory_async
-    await _seed_poa_inventory_async()
-    await _ensure_core_indexes_async()
+    # Bound to Shamrock so a flag-on boot does not touch the scoped proxy
+    # with an empty tenant context. Flag off stays the raw database.
+    await run_startup_database_tasks()
 
     # ── Start background cron loops ──
     from dashboard.cron import start_all_crons

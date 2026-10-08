@@ -15,15 +15,18 @@ from dashboard.tenancy.constants import (
     AUDIT_TTL_CURRENT_SECONDS,
     GLOBAL_COLLECTIONS,
     KNOWN_APP_COLLECTIONS,
+    PLATFORM_COLLECTIONS,
     SHAMROCK_TENANT_ID,
     TENANT_OWNED_COLLECTIONS,
 )
 from dashboard.tenancy.context import (
     bind_job_tenant,
     bind_platform_job,
+    classify_tenant_request,
     current_tenant_id,
     resolve_tenant_id,
 )
+from dashboard.tenancy.inventory import used_collection_names
 from dashboard.tenancy.indexes import audit_retention_policy, tenant_index_specs
 from dashboard.tenancy.scope import TenantScopeError, TenantScopedCollection
 
@@ -39,6 +42,7 @@ class MemoryCollection:
         self.docs = [dict(doc) for doc in (docs or [])]
         self.filters = []
         self.pipelines = []
+        self.indexes = []
 
     def _match(self, doc, filt):
         if not filt:
@@ -84,11 +88,14 @@ class MemoryCollection:
         return SimpleNamespace(inserted_ids=["1"])
 
     async def update_one(self, filt, update, *args, **kwargs):
+        self.filters.append(filt)
         for doc in self.docs:
             if self._match(doc, filt or {}):
                 doc.update(update.get("$set", {}))
-                return SimpleNamespace(modified_count=1)
-        return SimpleNamespace(modified_count=0)
+                for key in update.get("$unset") or {}:
+                    doc.pop(key, None)
+                return SimpleNamespace(modified_count=1, matched_count=1)
+        return SimpleNamespace(modified_count=0, matched_count=0)
 
     async def update_many(self, filt, update, *args, **kwargs):
         count = 0
@@ -121,6 +128,7 @@ class MemoryCollection:
         raise AssertionError("estimated_document_count leaks across tenants")
 
     def create_index(self, *args, **kwargs):
+        self.indexes.append((args, kwargs))
         return "ok"
 
 
@@ -136,8 +144,37 @@ def test_known_collection_split_is_fail_closed():
     assert "notifications" in TENANT_OWNED_COLLECTIONS
     assert GLOBAL_COLLECTIONS.isdisjoint(TENANT_OWNED_COLLECTIONS)
     assert TENANT_OWNED_COLLECTIONS <= KNOWN_APP_COLLECTIONS
-    assert len(KNOWN_APP_COLLECTIONS) == 107
-    assert len(GLOBAL_COLLECTIONS) == 11
+    assert len(KNOWN_APP_COLLECTIONS) == 119
+    assert len(GLOBAL_COLLECTIONS) == 12
+    for name in (
+        "docket_events",
+        "family_relationships",
+        "osint_scans",
+        "persons",
+        "intake_fanout_outbox",
+    ):
+        assert name in TENANT_OWNED_COLLECTIONS
+
+
+def test_used_collections_are_tenant_owned_or_allowlisted():
+    """A collection the app opens must be tenant-owned or explicitly allowlisted.
+
+    Global collections are the shared allowlist. Platform collections are the
+    directory (tenants, tenant_memberships) and are not Shamrock's book.
+    Anything else the scan finds has to be in the tenant-owned set the
+    backfill stamps. This fails when a new collection is used and forgotten.
+    """
+    used = used_collection_names(ROOT)
+    allowed = GLOBAL_COLLECTIONS | TENANT_OWNED_COLLECTIONS | PLATFORM_COLLECTIONS
+    missing = sorted(set(used) - allowed)
+    assert missing == [], (
+        "collection used by the app but neither tenant-owned nor allowlisted: "
+        + ", ".join(
+            f"{name} ({used[name][0]})" for name in missing
+        )
+    )
+    tenant_used = set(used) - GLOBAL_COLLECTIONS - PLATFORM_COLLECTIONS
+    assert tenant_used <= TENANT_OWNED_COLLECTIONS
 
 
 def test_flag_off_leaves_filters_and_documents_unchanged(monkeypatch):
@@ -343,6 +380,32 @@ def test_request_resolution_flag_on(monkeypatch):
         )
         == "acme"
     )
+    customer = classify_tenant_request(
+        host="acme.app.shamrockbailbonds.biz",
+        session_tenant=None,
+        header_tenant=None,
+        is_platform_admin=False,
+        session_email="owner@acme.test",
+    )
+    assert customer.tenant_id == "acme"
+    assert customer.membership_required is True
+    anonymous_home = classify_tenant_request(
+        host="leads.shamrockbailbonds.biz",
+        session_tenant=None,
+        header_tenant=None,
+        is_platform_admin=False,
+        session_email=None,
+    )
+    assert anonymous_home.membership_required is False
+    signed_in_home = classify_tenant_request(
+        host="leads.shamrockbailbonds.biz",
+        session_tenant=None,
+        header_tenant=None,
+        is_platform_admin=False,
+        session_email="clerk@shamrockbailbonds.biz",
+    )
+    assert signed_in_home.tenant_id == SHAMROCK_TENANT_ID
+    assert signed_in_home.membership_required is True
     assert (
         resolve_tenant_id(
             host="evil.example",
@@ -392,11 +455,137 @@ def test_middleware_fail_closed_only_when_flag_on(monkeypatch):
     assert denied.get("/who").status_code == 403
     assert denied.get("/who").json() == {"error": "tenant_required"}
 
+    calls = []
+
+    async def _membership(email, tenant_id):
+        calls.append((email, tenant_id))
+        return (email, tenant_id) in {
+            ("owner@acme.test", "acme"),
+            ("admin@shamrockbailbonds.biz", "shamrock"),
+        }
+
+    monkeypatch.setattr(
+        "dashboard.tenancy.membership.has_active_membership",
+        _membership,
+    )
+
     home = TestClient(app, base_url="http://leads.shamrockbailbonds.biz")
     assert home.get("/who").json()["tenant"] == SHAMROCK_TENANT_ID
+    assert calls == []
 
+    # Host is routing only. No authenticated membership, no tenant.
     customer = TestClient(app, base_url="http://acme.app.shamrockbailbonds.biz")
-    assert customer.get("/who").json()["tenant"] == "acme"
+    assert customer.get("/who").status_code == 403
+    assert customer.get("/who").json() == {"error": "tenant_required"}
+
+
+def _app_with_session(email: str, role: str = "staff"):
+    from dashboard.tenancy.context import TenantContextMiddleware
+    from starlette.middleware.base import BaseHTTPMiddleware
+
+    app = FastAPI()
+
+    class _Stamp(BaseHTTPMiddleware):
+        async def dispatch(self, request, call_next):
+            request.state.sl_email = email
+            request.state.sl_role = role
+            request.state.sl_tenant_id = SHAMROCK_TENANT_ID
+            return await call_next(request)
+
+    app.add_middleware(TenantContextMiddleware)
+    app.add_middleware(_Stamp)
+
+    @app.get("/who")
+    def who():
+        return {"tenant": current_tenant_id()}
+
+    return app
+
+
+def test_membership_lookup_is_exact_and_fails_closed(monkeypatch):
+    queries = []
+
+    class _Col:
+        async def find_one(self, filt):
+            queries.append(filt)
+            if (
+                filt.get("email") == "owner@acme.test"
+                and filt.get("tenant_id") == "acme"
+                and filt.get("status") == "active"
+            ):
+                return {"email": "owner@acme.test", "status": "active"}
+            return None
+
+    class _Db:
+        def __getitem__(self, name):
+            assert name == "tenant_memberships"
+            return _Col()
+
+    monkeypatch.setattr("dashboard.extensions.get_raw_db", lambda: _Db())
+    from dashboard.tenancy.membership import has_active_membership
+
+    assert _run(has_active_membership("Owner@Acme.test", "acme")) is True
+    assert queries[0]["email"] == "owner@acme.test"
+    assert _run(has_active_membership("owner@acme.test", "beta")) is False
+    assert _run(has_active_membership("", "acme")) is False
+    assert _run(has_active_membership("owner@acme.test", "!!!")) is False
+
+    class _Boom:
+        def __getitem__(self, name):
+            raise RuntimeError("directory down")
+
+    monkeypatch.setattr("dashboard.extensions.get_raw_db", lambda: _Boom())
+    assert _run(has_active_membership("owner@acme.test", "acme")) is False
+
+
+def test_host_selection_requires_matching_membership(monkeypatch):
+    monkeypatch.setenv("SAAS_MULTI_TENANT", "1")
+    seen = []
+
+    async def _membership(email, tenant_id):
+        seen.append((email, tenant_id))
+        return email == "owner@acme.test" and tenant_id == "acme"
+
+    monkeypatch.setattr(
+        "dashboard.tenancy.membership.has_active_membership",
+        _membership,
+    )
+
+    member = TestClient(
+        _app_with_session("owner@acme.test"),
+        base_url="http://acme.app.shamrockbailbonds.biz",
+    )
+    assert member.get("/who").status_code == 200
+    assert member.get("/who").json()["tenant"] == "acme"
+
+    other_host = TestClient(
+        _app_with_session("owner@acme.test"),
+        base_url="http://beta.app.shamrockbailbonds.biz",
+    )
+    denied = other_host.get("/who")
+    assert denied.status_code == 403
+    assert denied.json() == {"error": "tenant_required"}
+
+    # Replaying an Acme session against Shamrock's host does not bind Shamrock.
+    shamrock_host = TestClient(
+        _app_with_session("owner@acme.test"),
+        base_url="http://leads.shamrockbailbonds.biz",
+    )
+    assert shamrock_host.get("/who").status_code == 403
+    assert ("owner@acme.test", "acme") in seen
+    assert ("owner@acme.test", "shamrock") in seen
+    assert ("owner@acme.test", "beta") in seen
+
+    # X-Tenant-Id is the platform impersonation path, not a host selection.
+    before = len(seen)
+    admin = TestClient(
+        _app_with_session("admin@shamrockbailbonds.biz", role="god_admin"),
+        base_url="http://leads.shamrockbailbonds.biz",
+    )
+    switched = admin.get("/who", headers={"X-Tenant-Id": "other_agency"})
+    assert switched.status_code == 200
+    assert switched.json()["tenant"] == "other_agency"
+    assert len(seen) == before
 
 
 def test_session_cookie_carries_shamrock_and_legacy_cookies_still_load(monkeypatch):
@@ -431,8 +620,14 @@ def test_indexes_are_defined_and_not_wired_into_startup():
     assert "tenant_poa_number" in names
     assert "tenant_bond_case_id" in names
     assert "tenant_gcal_dedup" in names
+    assert "tenant_id_unique" in names
+    assert "tenant_slug_unique" in names
     for spec in specs:
-        assert spec.keys[0] == ("tenant_id", 1)
+        if spec.collection == "tenants":
+            assert spec.unique is True
+            assert spec.partial is None
+        else:
+            assert spec.keys[0] == ("tenant_id", 1)
         assert "expireAfterSeconds" not in spec.as_create_kwargs()
     policy = audit_retention_policy()
     assert policy["current_ttl_seconds"] == AUDIT_TTL_CURRENT_SECONDS == 7776000
@@ -539,6 +734,104 @@ def test_backfill_cli_is_offline(capsys, monkeypatch):
     assert payload["connected"] is False
     assert payload["tenant_id"] == "shamrock"
     assert "active_bonds" in payload["would_touch_collections"]
+    assert "family_relationships" in payload["would_touch_collections"]
+    assert "docket_events" in payload["would_touch_collections"]
     assert "arrests" in payload["global_untouched"]
     assert payload["seed_tenant"]["tenant_id"] == "shamrock"
     assert payload["indexes_defined_not_applied"]
+
+
+def test_backfill_stamps_used_collections_and_unknown_present_ones():
+    """Present tenant-owned collections are stamped, including ones not inventoried.
+
+    Global arrests and the platform directory are left alone.
+    """
+    from scripts.backfill_tenant_id import run_against
+
+    family = _SyncBag([{"_id": "f"}])
+    mystery = _SyncBag([{"_id": "m"}])
+    arrests = _SyncBag([{"_id": "a"}])
+    db = _FakeDb(
+        family_relationships=family,
+        mystery_book=mystery,
+        arrests=arrests,
+        tenants=_SyncBag([]),
+        tenant_memberships=_SyncBag([]),
+    )
+    report = run_against(db, dry_run=False, down=False)
+    assert family.docs[0]["tenant_id"] == "shamrock"
+    assert family.docs[0]["tenant_backfill_rev"] == 1
+    assert mystery.docs[0]["tenant_id"] == "shamrock"
+    assert arrests.docs == [{"_id": "a"}]
+    assert "arrests" not in report["collections"]
+    assert "tenants" not in report["collections"]
+    assert "family_relationships" in report["collections"]
+    assert "mystery_book" in report["collections"]
+
+
+def test_startup_database_tasks_bind_shamrock_before_the_proxy(monkeypatch):
+    """Flag on: seed and index creation run inside a Shamrock tenant context.
+
+    Flag off: the same helper still seeds, and it does not stamp tenant_id.
+    """
+    from dashboard.main import run_startup_database_tasks
+
+    class _BootCollection(MemoryCollection):
+        def __init__(self):
+            super().__init__()
+            self.index_tenants = []
+
+        async def create_index(self, *args, **kwargs):
+            self.index_tenants.append(current_tenant_id())
+            return "ok"
+
+    class _BootDb(dict):
+        def __init__(self, collection):
+            super().__init__()
+            self._collection = collection
+
+        def __getitem__(self, name):
+            return self._collection
+
+    monkeypatch.setattr(
+        "dashboard.extensions.POA_RECEIPT_DATA",
+        [
+            {
+                "surety_id": "osi",
+                "prefix": "OSI3",
+                "max_bond": 3000,
+                "start": 1,
+                "end": 1,
+                "exp": "2026-12-31",
+            }
+        ],
+    )
+    monkeypatch.setattr("dashboard.extensions._mongo_client", object())
+
+    monkeypatch.setenv("SAAS_MULTI_TENANT", "1")
+    flagged = _BootCollection()
+    monkeypatch.setattr("dashboard.extensions._mongo_db", _BootDb(flagged))
+
+    async def unscoped():
+        from dashboard.extensions import _seed_poa_inventory_async
+
+        await _seed_poa_inventory_async()
+
+    _run(unscoped())
+    assert flagged.docs == []
+
+    _run(run_startup_database_tasks())
+    assert len(flagged.docs) == 1
+    assert flagged.docs[0]["tenant_id"] == SHAMROCK_TENANT_ID
+    assert flagged.docs[0]["poa_number"] == "1"
+    assert flagged.index_tenants
+    assert set(flagged.index_tenants) == {SHAMROCK_TENANT_ID}
+
+    monkeypatch.delenv("SAAS_MULTI_TENANT", raising=False)
+    plain = _BootCollection()
+    monkeypatch.setattr("dashboard.extensions._mongo_db", _BootDb(plain))
+    _run(run_startup_database_tasks())
+    assert len(plain.docs) == 1
+    assert "tenant_id" not in plain.docs[0]
+    assert plain.index_tenants
+    assert set(plain.index_tenants) == {SHAMROCK_TENANT_ID}

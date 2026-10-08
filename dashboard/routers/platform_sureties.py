@@ -30,6 +30,10 @@ def _admin(request: Request) -> bool:
     return role in {"god_admin", "admin"} and is_super_admin_email(email)
 
 
+def _actor(request: Request) -> str:
+    return getattr(request.state, "sl_email", "") or "platform"
+
+
 @router.get("/platform/sureties")
 async def sureties_page(request: Request):
     if not multi_tenant_enabled():
@@ -58,8 +62,9 @@ async def api_set(tenant_id: str, request: Request):
     if not _admin(request):
         return JSONResponse({"error": "platform_admin_required"}, status_code=403)
     payload = await request.json()
+    payload = payload if isinstance(payload, dict) else {}
     try:
-        return await set_access(tenant_id, payload if isinstance(payload, dict) else {})
+        return await set_access(tenant_id, payload, actor=_actor(request), reason=str(payload.get("reason") or ""))
     except SuretyEntitlementsDisabled:
         return _disabled()
     except SuretyEntitlementError as exc:
