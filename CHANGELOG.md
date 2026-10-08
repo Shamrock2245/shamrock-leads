@@ -8,6 +8,83 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 - `POST /api/intake/submit` keeps `telegram_miniapp` and `shannon_voice` as their own source tags. Older `telegram`, `telegram_mini_app`, `shannon`, and `elevenlabs_voice` values stay as they were. `shannon_voice` uses the same voice match skip as Shannon (the matcher runs from the desk, not inside the call) and the website pay-by-card link. `telegram_miniapp` still uses the Telegram pay link and still runs match-review on submit.
 
+## [Unreleased] — 2026-10-08 (start bond packet key)
+
+### Fixed
+- **Start bond packet (`SAAS_MULTI_TENANT` still default off).** The `paperwork_packets` upsert is keyed on `packet_id` (`idx_pkt_packet_id`), with `created_at` only in `$setOnInsert`. A signed or voided packet that shares the bond case is left in place.
+
+## [Unreleased] — 2026-10-08 (start bond packet upsert)
+
+### Fixed
+- **Start bond packet (`SAAS_MULTI_TENANT` still default off).** The `paperwork_packets` write is one `update_one` upsert, so a second submission for the same packet updates that row instead of inserting another.
+
+## [Unreleased] — 2026-10-08 (lead fan-out Motor retry)
+
+### Fixed
+- **Lead fan-out retry (`SAAS_MULTI_TENANT` still default off).** The cron sweep runs on the Motor database. Tenant lookup and the lead pointer write are awaited, so a due outbox row is written before it is marked delivered. The arrest writer still uses the sync helpers.
+
+## [Unreleased] — 2026-10-08 (lead fan-out retry job)
+
+### Fixed
+- **Lead fan-out outbox (`SAAS_MULTI_TENANT` still default off).** `lead_fanout_retry` on the dashboard cron retries due `lead_fanout_outbox` rows with backoff. After five attempts a row is `dead` and is not retried. Dead letters, and an open outbox that is too deep or too old, post to `SLACK_WEBHOOK_ALERTS`. The job does nothing when the flag is off.
+
+## [Unreleased] — 2026-10-07 (start bond packet review)
+
+### Fixed
+- **Start bond packet (`SAAS_MULTI_TENANT` still default off).** Send passes the bond's binding fields into `create_submission_for_packet`, uses the chosen surety's published template for the current agency, and refuses a power that does not match preflight. After submission it creates or updates `paperwork_packets` and reads signer URLs from `submitters[].sign_url`. The screen shows the sign and pay links. It still does not text, charge, or mark the power used.
+
+## [Unreleased] — 2026-10-07 (lead subscription review)
+
+### Fixed
+- **Lead subscriptions (`SAAS_MULTI_TENANT` still default off).** A tenant lead write that fails after the arrest upsert is queued on `lead_fanout_outbox` (booking pointer only, no defendant name) and retried; the arrest row stays. Exclusive county assignment uses a unique `(state, county)` claim, and a duplicate-key race returns `exclusive_taken`. Subscription saves write an `audit_events` row with the actor, reason, and old and new list. The console keeps a configured `price_cents` on save.
+
+## [Unreleased] — 2026-10-07 (Relay-only Manatee + Charlotte)
+
+### Changed
+- **Manatee + Charlotte (FL) are relay-only** (`config/relay_only.py`). The VPS/Hetzner scheduler keeps them registered but gives them no interval job. A dashboard run-now or custody-recheck trigger for either county is marked `relay_only` and is not run on the VPS. The new relay entry point `python main.py --relay-only` runs both once and exits non-zero on any failure; `python main.py <County>` still works. Ops: `docs/ops/REVIZE_RELAY_RUN.md`.
+- **Charlotte (FL):** got the same cleanup as Manatee #121. The APE/Warren + office SOCKS resolver (`CHARLOTTE_EGRESS_MODE=auto`, now a config error) and the Patchright stealth launcher / stealth context are removed. Charlotte now runs stock headless Playwright with `--no-proxy-server` and proxy env vars stripped. The exit check uses `trust_env=False`; an unknown exit is refused; egress blocks fail loud with nothing written. `tests/test_charlotte_no_proxy_path.py` proves no proxy or stealth path is reachable.
+
+### Removed
+- Dead code with no users left: `cf_browser.launch_cf_browser`, `new_stealth_context`, `wait_past_cloudflare`, `_launch_sync_playwright`, `require_residential_exit`, and `socks_proxy.to_playwright_proxy`, `to_httpx_proxy`, `require_socks_or_raise`. The shared resolver (`resolve_residential_proxy`, `validate_residential_proxy`, `curl_cffi_proxies`) stays for Marion and Hillsborough. `check_exit_ip` stays.
+- `docs/COUNTY_REGISTRY.md`: Manatee/Charlotte no longer list the APE/office SOCKS path.
+
+## [Unreleased] — 2026-10-07 (Staff edits survive rescrapes)
+
+### Fixed
+- **All counties:** a staff-set bond (update-bond-amount, update-charge-bonds, update-lead-details, admin patch) and staff-edited charge rows (per-charge amounts, case numbers, POAs, added or removed charges) now survive every rescrape. One module, `core/staff_edits.py`, protects each write path that puts source data on an existing arrest: the shared MongoWriter (every county, including the SSW and SmartWEB helpers), the First Appearance watcher, the custody recheck, the Lee jail refresh, refresh-from-source, the bookmarklet merge and the confirmed-booking refresh. Source values that disagree are kept in `scraped_bond_amount` / `scraped_bond_type` / `scraped_charges` / `scraped_charge_details`. A scraped charge that staff have not seen, removed or replaced is still added. A staff-entered $0 is stored in `staff_edits.bond` and hydrates as a known $0. Existing records are read under their `bond_override` / `MANUAL_CHARGE_BONDS` flags; there is no backfill. In the Write Bond modal a blank per-charge amount stays unknown (it used to be saved as $0), and a POA the modal does not send is kept. Two related fixes. First, the custody recheck read every live field as blank, because `ArrestRecord` has no `to_dict()`, so a recheck could wipe status, bond and charges. It now compares against `to_mongo_doc()` and never writes a value the source did not publish. Second, refresh-from-source no longer writes an unparsed bond as $0. Design note: `docs/STAFF_EDITS_SURVIVE_RESCRAPE.md`.
+
+## [Unreleased] — 2026-10-07 (surety entitlement review)
+
+### Fixed
+- **Surety checklist (`SAAS_MULTI_TENANT` still default off).** `POST /api/paperwork/generate/{intake_id}`, the paperwork preview, DocuSeal prefill and push, booking hydrate, and the appearance-bond print routes refuse a surety the agency is not enabled for before any carrier PDF is rendered. Changing the checklist writes an `audit_events` row with the actor, reason, and old and new enabled set.
+
+## [Unreleased] — 2026-10-07 (agency billing review)
+
+### Fixed
+- **Stripe test-mode billing (`SAAS_MULTI_TENANT` still default off).** Recurring Checkout puts `tenant_id` on `subscription_data[metadata]` so later invoice and subscription events resolve the agency. One Stripe Customer is reused. County, state, usage, and any later recurring plan are added as items on that subscription instead of a second Customer or subscription. An add-on is refused while the agency is past due, suspended, or canceled. A webhook for a different subscription does not change status or MRR, and deleting it does not cancel the agency. `livemode: true` events are rejected unless `STRIPE_ALLOW_LIVEMODE=1`, which stays unset. Comps and billing transitions write an `audit_events` row with the actor, reason, and old and new state. Suspension is enforced in the BlueBubbles client on every outbound send path, including a direct `send_human_like`.
+
+## [Unreleased] — 2026-10-07 (agency onboarding review)
+
+### Fixed
+- **Agency onboarding (`SAAS_MULTI_TENANT` still default off).** `tenants.tenant_id` and `tenants.slug` each have a unique index, and a duplicate-key error from a concurrent insert is `slug_taken`. Approve and reject are a single compare-and-set on `status: pending_approval`; a second decision returns `not_pending`. The declared owner stays `owner` when that email is also submitted as a coworker. The platform queue has Approve and Reject controls plus a rejection reason. Each decision writes an `audit_events` row with the actor, reason, and old and new state.
+
+## [Unreleased] — 2026-10-07 (tenant host membership and backfill)
+
+### Fixed
+- **Multi-tenant foundation (`SAAS_MULTI_TENANT` still default off).** A customer host `{slug}.app.shamrockbailbonds.biz` is routing only. The request binds that agency only when the signed-in email has an active `tenant_memberships` row for that slug. A signed-in caller on a Shamrock host must be a member of the tenant that host selects. Anonymous webhook and machine calls on Shamrock hosts still bind Shamrock. Flag off does not check membership and does not change filters.
+- **Backfill.** `scripts/backfill_tenant_id.py` stamps every tenant-owned collection the app opens, including `family_relationships`, `persons`, `osint_scans`, `docket_events`, and `intake_fanout_outbox`. A connected run also stamps any other present collection that is not on the global or platform allowlist. `tests/test_tenant_scope.py` fails if application code uses a collection that is neither tenant-owned nor allowlisted.
+- **Startup.** POA seeding and core index creation run inside a Shamrock tenant context, so a flag-on boot does not call the tenant proxy with no context. Flag off still writes the same unstamped seed.
+
+## [Unreleased] — 2026-10-07 (multi-tenant foundation through start bond packet)
+
+### Added
+- **`SAAS_MULTI_TENANT` flag, default off.** `get_collection()` is the tenant chokepoint: tenant-owned collections are scoped by `tenant_id`, and an explicit global allowlist (jail rosters and scraper health) stays shared. A request or job with no tenant fails closed only when the flag is on. Shamrock routes are unchanged while the flag is off. The offline backfill script and the tenant index specs are in the repo and are not applied to production. The 90-day audit TTL is unchanged.
+- **Agency onboarding** (`/platform`, `/signup`). A super-admin records the agency, Florida license numbers, branding, staff invites, and `env:` secret refs. Invites are stored and are not emailed. Self-serve signup stays pending until that super-admin approves it.
+- **Stripe test-mode billing** (`/platform/billing`). Checkout refuses a live key and refuses a price that is not configured. MRR is the sum of stored cents from signed `invoice.paid` events on active agencies. The second failed invoice suspends packet send and texting. Shamrock is not billed. No card number is stored.
+- **Surety checklist** (`/platform/sureties`). OSI and Palmetto stay on for Shamrock. Inactive carriers cannot be enabled. Private templates are labels only. When the flag is on, packet finalize refuses a surety the agency is not enabled for.
+- **Lead subscriptions** (`/platform/leads`). Fail-closed counties, including the Ohio pilot, are not sold. Shared is the default. An exclusive county rejects a second subscriber. New arrests fan out only when the flag is on, as booking pointers without the defendant name. Shamrock's unsaved list is the key Florida desk.
+- **Start bond packet** (`/bond-packet`), four steps. It hydrates the roster, suggests an available power, and runs the existing write-bond preflight and DocuSeal with email off. It does not text, charge a card, or mark the power used. `POST /api/write-bond` stays retired (HTTP 410).
+
 ## [Unreleased] — 2026-10-07 (Charlotte FL Revize hardening)
 
 ### Fixed
@@ -171,30 +248,3 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `intake_fanout`: after the Mongo save, a non-blocking, retried copy to the GAS "Intake Ledger" sheet and Slack (`intake_fanout_outbox`, cron `intake_fanout_retry`).
 - `surety_registry` (OSI + Palmetto active; Lexington/Roche/Universal/Bankers inactive) and `GET /api/paperwork/sureties`; greyed-out "coming soon" pills in Write Bond.
 - `payment_links` (one place for pay-by-card links) and `GET /api/paperwork/payment-links`.
-- Kiosk: `/kiosk`, `POST /api/portal/kiosk-id-confirm`, idle wipe, `/done?kiosk=1` reset.
-
-### Fixed
-- Co-indemnitor kiosk ID scan overwrote the primary indemnitor's CRM record.
-- Unknown sureties silently became OSI in PDF/DocuSeal/Drive paths (now fail closed).
-- Applicant data was kept in the browser's localStorage on the shared tablet.
-
-## [Unreleased] — 2026-09-25 (TnCIS fail closed)
-
-### Changed
-- **TnCIS (TN): Obscura fallback OFF, fail closed (owner decision).** The Cloudflare-protected statewide portal has no proven public contract. The curl_cffi + residential/mobile proxy, Patchright stealth, and Obscura fallback chain was removed from `tennessee_tncis_v2_ape.py`. The scope is now `SOURCE_CONTRACT_VALIDATED = False` and `fail_closed` in `SCRAPER_SOURCE_STATES`, is added to `OBSCURA_HARD_DENY_LABELS`, and has a `hold` row in the live emitter evidence. A Cloudflare or anti-bot answer raises `AntiBotBlocked` (`anti_bot`, never retried). Rows without a source identifier are never emitted. The matrix was regenerated (TN unverified → fail_closed for the TnCIS scope). Tests: `tests/test_tncis_fail_closed.py`.
-
-## [Unreleased] — 2026-09-25 (Scraper self-heal / fail-loud)
-
-### Added
-- **BaseScraper resilience** (`scrapers/scraper_resilience.py`): transient `network` retry with 2s/4s/8s backoff (never 429, anti-bot, or an active per-county cooldown; Lee opts out), fixed error classes (`network`, `anti_bot`, `url_changed`, `parse_drift`, `unknown`), and immediate `#scraper-errors` schema-drift alerts.
-- **Auto-disable** after 5 consecutive failures, stored on `scraper_status`. Health shows ⛔ Auto-disabled. Re-enable happens through a successful canary (≥1 record), the Health button / `POST /api/scraper/enable`, or `scripts/scraper_reenable.py`. KEY FL counties alert but are never skipped.
-- **Obscura routing policy:** `OBSCURA_ROUTE_COUNTIES` opt-in, verified_public only; hard deny list for holds and fail_closed scopes. No county is routed by default.
-- **Matrix drift gate:** `scripts/build_recon_matrix.py --check`, `docs/recon/live_emitter_evidence.json`, and `tests/test_source_state_drift.py`, which run in CI through a bridge test in `test_source_contract_run_guard.py` until `ci.yml` lists them directly.
-- Runbook `docs/ops/SCRAPER_SELF_HEALING.md`.
-
-### Fixed
-- The Slack webhook URL could leak into logs through `requests` exception strings (`SlackNotifier`, `ErrorTracker`). Only the exception class is logged now. ErrorTracker no longer double-posts failures.
-- **Health registry drift:** 30 code-guarded scrapers added as `fail_closed`, and Broward (FL) added as `verified_public`.
-- **Hampton / Marlboro (SC):** now actually fail closed (they were fetching through proxy paths into a 403 and synthesizing keys).
-- `COUNTY_SOURCE_CONTRACT_MATRIX.md` regenerated from versioned evidence (SC verified_public 1 → 5).
-- Self-healing docs (AGENTS, README, ARCHITECTURE, Watchdog) now describe what exists. The URL pre-flight check, failure history, and `force_enable()` never existed.
