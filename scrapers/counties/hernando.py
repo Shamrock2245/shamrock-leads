@@ -60,6 +60,10 @@ class HernandoDetailError(HernandoContractError):
 DAYS_BACK = 7
 DETAIL_URL = f"{SEARCH_URL}JailSearchDetails.aspx"
 REQUEST_PAUSE_S = 0.4
+# Detail GETs per run. Live 7-day windows hold ~82 bookings (2026-10-08), so
+# this is headroom, not a throttle; rows past the cap are skipped (not written,
+# so nothing stored is blanked) and picked up on a later run.
+MAX_DETAILS_PER_RUN = 200
 RELEASE_SPAN_ID = "ctl00_ContentPlaceHolder1_fvBook_lblReleaseDateTime"
 BOOK_TABLE_ID = "ctl00_ContentPlaceHolder1_fvBook"
 _MONEY_RE = re.compile(r"^\$\s*([0-9][0-9,]*\.\d{2})$")
@@ -227,6 +231,12 @@ class HernandoCountyScraper(BaseScraper):
         out: List[ArrestRecord] = []
         fetch_failures = drift = unreadable = no_charges = 0
         grids_seen = 0
+        if len(rows) > MAX_DETAILS_PER_RUN:
+            logger.warning(
+                "Hernando: %d keyed rows; detail cap %d, %d rows skipped this run",
+                len(rows), MAX_DETAILS_PER_RUN, len(rows) - MAX_DETAILS_PER_RUN,
+            )
+            rows = rows[:MAX_DETAILS_PER_RUN]
         for rec in rows:
             time.sleep(REQUEST_PAUSE_S)
             url = f"{DETAIL_URL}?BookNo={rec.Booking_Number}"
