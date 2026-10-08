@@ -19,6 +19,7 @@ from dashboard.services.docuseal_service import BOND_AGENTS, DocuSealService
 from dashboard.services.staff_test_case import (
     DEFAULT_SIGNER_EMAIL,
     packet_is_staff_test,
+    resolve_signer_email,
 )
 
 HOUSE_LICENSE = "P139768"
@@ -36,6 +37,7 @@ def _env(monkeypatch):
     monkeypatch.delenv("STAFF_TEST_CASE_MODE", raising=False)
     monkeypatch.delenv("STAFF_TEST_CASE_REAL_POWER", raising=False)
     monkeypatch.delenv("STAFF_TEST_CASE_SIGNER_EMAIL", raising=False)
+    monkeypatch.delenv("STAFF_TEST_CASE_EMAIL_ALLOWLIST", raising=False)
     monkeypatch.delenv("BOND_AGENT_NAME", raising=False)
     monkeypatch.delenv("BOND_AGENT_LICENSE", raising=False)
 
@@ -264,27 +266,132 @@ def test_test_mode_rejects_real_booking_and_real_arrest(monkeypatch):
     assert "poa_inventory" not in stores
 
 
-def test_test_mode_does_not_consume_a_real_power(monkeypatch):
+REAL_POA = "REALPOA-88421"
+OTHER_SIGNER = "other.desk@shamrockbailbonds.biz"
+
+
+def _docuseal_patches(captured, collections, delivery, payment, ensure, svc):
+    return (
+        patch("dashboard.services.packet_builder_service.resolve_client_esign_provider", new=AsyncMock(return_value="docuseal")),
+        patch("dashboard.services.staff_chain_service.ensure_match_bondcase", new=ensure),
+        patch("dashboard.routers.paperwork.get_collection", side_effect=collections),
+        patch("dashboard.extensions.get_collection", side_effect=collections),
+        patch("dashboard.services.docuseal_service.get_docuseal_service", return_value=svc),
+        patch("dashboard.services.docuseal_initial_delivery.deliver_initial_docuseal_links", new=delivery),
+        patch("dashboard.routers.paperwork._finalize_auto_payment_link", new=payment),
+    )
+
+
+def test_signer_env_cannot_redirect_submitters(monkeypatch):
     monkeypatch.setenv("STAFF_TEST_CASE_MODE", "1")
+    monkeypatch.setenv("STAFF_TEST_CASE_SIGNER_EMAIL", OTHER_SIGNER)
+    monkeypatch.setenv(
+        "STAFF_TEST_CASE_EMAIL_ALLOWLIST",
+        f"{OTHER_SIGNER},outside@example.invalid",
+    )
+    assert resolve_signer_email() == DEFAULT_SIGNER_EMAIL
+    captured = {}
+    svc = _service(captured)
+    delivery = AsyncMock()
+    payment = AsyncMock()
+    ensure = AsyncMock()
     stores, collections = _stores()
     client = _client()
-    client.cookies.update(_cookie("staff"))
-    with patch("dashboard.extensions.get_collection", side_effect=collections), \
-         patch("dashboard.routers.paperwork.get_collection", side_effect=collections):
-        refused = client.post(
+    client.cookies.update(_cookie("admin"))
+    patches = _docuseal_patches(captured, collections, delivery, payment, ensure, svc)
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+        response = client.post(
             "/api/paperwork/packet/finalize",
             json={
                 "test_case": True,
+                "surety_id": "osi",
                 "booking_number": "TEST-SMOKE1",
                 "case_number": "TEST-CASE-SMOKE1",
-                "poa_number": "OSI-100",
-                "allow_real_power": True,
-                "surety_id": "osi",
+                "packet_id": "PKT-TEST-SMOKE1",
+                "defendant_name": "Sample Party One",
+                "indemnitor_name": "Sample Party Two",
+                "indemnitor_email": OTHER_SIGNER,
+                "signer_email": OTHER_SIGNER,
+                "bond_amount": 5000,
+                "county": "Lee",
+                "state": "FL",
+                "send_email": True,
             },
         )
-    assert refused.status_code == 409, refused.text
-    assert refused.json()["error"] == "real_power_not_authorized"
-    assert "poa_inventory" not in stores or stores["poa_inventory"].finds == []
+    assert response.status_code == 200, response.text
+    assert response.json()["signer_email"] == DEFAULT_SIGNER_EMAIL
+    blob = json.dumps(captured["kwargs"])
+    assert OTHER_SIGNER not in blob
+    assert "outside@example.invalid" not in blob
+    for submitter in captured["kwargs"]["submitters"]:
+        assert submitter["email"] == DEFAULT_SIGNER_EMAIL
+        assert submitter["send_email"] is False
+    assert delivery.await_count == 0
+    assert "poa_inventory" not in stores
+
+
+def test_real_power_flags_still_use_fake_test_poa(monkeypatch):
+    monkeypatch.setenv("STAFF_TEST_CASE_MODE", "1")
+    monkeypatch.setenv("STAFF_TEST_CASE_REAL_POWER", "1")
+    captured = {}
+    svc = _service(captured)
+    delivery = AsyncMock()
+    payment = AsyncMock()
+    ensure = AsyncMock()
+    stores, collections = _stores({
+        "poa_inventory": [{
+            "poa_number": REAL_POA,
+            "surety_id": "osi",
+            "status": "assigned",
+            "max_bond_value": 50000,
+        }],
+    })
+    client = _client()
+    client.cookies.update(_cookie("staff"))
+    patches = _docuseal_patches(captured, collections, delivery, payment, ensure, svc)
+    with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+        response = client.post(
+            "/api/paperwork/packet/finalize",
+            json={
+                "test_case": True,
+                "surety_id": "osi",
+                "booking_number": "TEST-SMOKE1",
+                "case_number": "TEST-CASE-SMOKE1",
+                "packet_id": "PKT-TEST-SMOKE1",
+                "defendant_name": "Sample Party One",
+                "indemnitor_name": "Sample Party Two",
+                "bond_amount": 5000,
+                "county": "Lee",
+                "state": "FL",
+                "poa_number": REAL_POA,
+                "allow_real_power": True,
+                "use_real_power": True,
+                "real_power": True,
+                "consume_real_power": True,
+            },
+        )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert REAL_POA not in json.dumps(body)
+    kwargs = captured["kwargs"]
+    assert kwargs["send_email"] is False
+    payload = json.dumps(kwargs)
+    assert REAL_POA not in payload
+    for submitter in kwargs["submitters"]:
+        values = submitter.get("values") or {}
+        for key, value in values.items():
+            if "poa" in key.lower() or key in ("PowerNum", "BondNumbers", "bond_numbers"):
+                assert str(value).startswith("TEST-"), (key, value)
+                assert REAL_POA not in str(value)
+    inventory = stores["poa_inventory"]
+    assert inventory.finds == []
+    assert inventory.updates == []
+    assert inventory.inserts == []
+    packets = stores["paperwork_packets"].inserts
+    assert packets
+    for packet in packets:
+        assert str(packet.get("poa_number") or "").startswith("TEST-")
+        assert REAL_POA not in json.dumps(packet, default=str)
 
 
 def test_test_mode_packet_forces_staff_email_and_agent_pairs(monkeypatch):

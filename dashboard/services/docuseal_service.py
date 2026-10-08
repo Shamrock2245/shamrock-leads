@@ -1835,7 +1835,7 @@ class DocuSealService:
                 resolve_signer_email,
             )
 
-            signer_email = str(bond_data.get("staff_test_signer_email") or "").strip() or resolve_signer_email()
+            signer_email = resolve_signer_email()
             submitters = [force_test_submitter(item, signer_email) for item in submitters]
             send_email = False
 

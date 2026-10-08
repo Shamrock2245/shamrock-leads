@@ -1570,7 +1570,7 @@ async def packet_builder_finalize(request: Request):
 
             from dashboard.services.bond_packet_start import poa_assignment_block
 
-            if staff_test is not None and not staff_test.use_real_power:
+            if staff_test is not None:
                 poa_doc = staff_test.poa_record
             else:
                 poa_doc = await get_collection("poa_inventory").find_one(

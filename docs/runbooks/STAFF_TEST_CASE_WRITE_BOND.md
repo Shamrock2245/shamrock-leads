@@ -18,9 +18,9 @@ The booking number and case number must match `TEST-` plus letters, digits, and 
 
 ## What the smoke sends
 
-Every DocuSeal submitter email is `admin@shamrockbailbonds.biz`. `STAFF_TEST_CASE_SIGNER_EMAIL` may replace it only when that address is on `STAFF_TEST_CASE_EMAIL_ALLOWLIST` and ends with `@shamrockbailbonds.biz`. Phones are removed. `send_email` and `send_sms` are false. `deliver_initial_docuseal_links` is not called. No SwipeSimple link, payment, or charge is created.
+Every DocuSeal submitter email is `admin@shamrockbailbonds.biz`. Phones are removed. `send_email` and `send_sms` are false. `deliver_initial_docuseal_links` is not called. No SwipeSimple link, payment, or charge is created.
 
-The power defaults to `TEST-POA-0001` and is not loaded from `poa_inventory`. A non-`TEST-` power is rejected unless both `STAFF_TEST_CASE_REAL_POWER=1` and `allow_real_power: true` are set. Even then this mode does not assign or mark a power used. Chief of Staff and Brendan decide later whether a real power may be consumed.
+The power is `TEST-POA-0001` unless the request already sends a `TEST-` power. A real power number is ignored. `poa_inventory` is not read, reserved, or consumed.
 
 The writing agent is still the normal pair: the house row (Brendan O'Neal / P139768) when the case has no agent, or the license holder when the case has only a license (G356764 is Kayla Lukesic).
 

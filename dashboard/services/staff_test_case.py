@@ -4,10 +4,9 @@ Off unless ``STAFF_TEST_CASE_MODE=1`` and the request sets ``test_case`` true.
 A test case uses a ``TEST-`` booking and a ``PKT-TEST-`` packet. It never
 matches or updates a real arrest, bond, defendant, or POA inventory row.
 
-DocuSeal submitters are forced to one allowlisted staff address, with phones
-removed and ``send_email`` / ``send_sms`` false. Real inventory powers are
-not read unless ``STAFF_TEST_CASE_REAL_POWER=1`` and the request also sets
-``allow_real_power`` true.
+Every DocuSeal submitter is ``admin@shamrockbailbonds.biz``. Phones are
+removed and ``send_email`` / ``send_sms`` are false. The power is always a
+fake ``TEST-`` number. Inventory is not read, reserved, or consumed.
 """
 from __future__ import annotations
 
@@ -31,12 +30,9 @@ from dashboard.auth.recovery_scope import session_is_staff
 logger = logging.getLogger(__name__)
 
 ENV_MODE = "STAFF_TEST_CASE_MODE"
-ENV_REAL_POWER = "STAFF_TEST_CASE_REAL_POWER"
-ENV_SIGNER_EMAIL = "STAFF_TEST_CASE_SIGNER_EMAIL"
-ENV_EMAIL_ALLOWLIST = "STAFF_TEST_CASE_EMAIL_ALLOWLIST"
 
 DEFAULT_SIGNER_EMAIL = "admin@shamrockbailbonds.biz"
-_STAFF_EMAIL_DOMAIN = "@shamrockbailbonds.biz"
+DEFAULT_TEST_POA = "TEST-POA-0001"
 
 # Uppercase reserved namespace. Lowercase fixtures such as pkt-test-0002 are
 # not staff test cases.
@@ -49,6 +45,7 @@ _TRUTHY = frozenset({"1", "true", "yes", "on"})
 _PHONE_KEY = re.compile(r"phone", re.IGNORECASE)
 _EMAIL_KEY = re.compile(r"email", re.IGNORECASE)
 _PAY_KEY = re.compile(r"(payment|swipesimple|premium|invoice|pay_link)", re.IGNORECASE)
+_POA_KEY = re.compile(r"(poa|power.?num|bond_?numbers)", re.IGNORECASE)
 
 _IDENTITY_COLLECTIONS = (
     ("arrests", "real_arrest_refused", "Test mode cannot use or modify a real arrest record."),
@@ -74,7 +71,6 @@ class StaffTestCasePlan:
     context: dict
     signer_email: str
     packet_id: str
-    use_real_power: bool
     poa_record: dict
     actor: str
 
@@ -93,10 +89,6 @@ def _env_on(name: str) -> bool:
 
 def staff_test_case_mode_enabled() -> bool:
     return _env_on(ENV_MODE)
-
-
-def real_power_mode_enabled() -> bool:
-    return _env_on(ENV_REAL_POWER)
 
 
 def request_asks_for_test_case(body: Any) -> bool:
@@ -150,28 +142,47 @@ def docuseal_event_is_test(
 
 
 def resolve_signer_email() -> str:
-    """Staff inbox for every DocuSeal submitter. Default is the office admin.
+    """Every test-case DocuSeal submitter uses the office admin inbox."""
+    return DEFAULT_SIGNER_EMAIL
 
-    ``STAFF_TEST_CASE_SIGNER_EMAIL`` is accepted only when it is on
-    ``STAFF_TEST_CASE_EMAIL_ALLOWLIST`` and is a @shamrockbailbonds.biz address.
-    The office admin address is always allowlisted.
-    """
-    configured = (os.getenv(ENV_SIGNER_EMAIL) or "").strip().lower()
-    allow = {DEFAULT_SIGNER_EMAIL}
-    extra = os.getenv(ENV_EMAIL_ALLOWLIST) or ""
-    for part in extra.split(","):
-        item = part.strip().lower()
-        if item:
-            allow.add(item)
-    if not configured or configured == DEFAULT_SIGNER_EMAIL:
-        return DEFAULT_SIGNER_EMAIL
-    if configured not in allow or not configured.endswith(_STAFF_EMAIL_DOMAIN):
-        raise StaffTestCaseError(
-            "signer_email_not_allowlisted",
-            "Staff test cases can only email an allowlisted @shamrockbailbonds.biz address.",
-            403,
-        )
-    return configured
+
+def test_poa_number(value: Any) -> str:
+    """A caller-supplied TEST- power is kept. Anything else becomes the fake power."""
+    text = str(value or "").strip()
+    if is_test_booking(text):
+        return text
+    return DEFAULT_TEST_POA
+
+
+def _force_fake_poa(value: Any, poa_number: str) -> Any:
+    """Replace a non-TEST power on any POA field. Other fields stay as they are."""
+    if isinstance(value, dict):
+        out: dict = {}
+        for key, item in value.items():
+            if _POA_KEY.search(str(key)):
+                out[key] = _poa_field_value(item, poa_number)
+            elif isinstance(item, (dict, list)):
+                out[key] = _force_fake_poa(item, poa_number)
+            else:
+                out[key] = item
+        return out
+    if isinstance(value, list):
+        return [
+            _force_fake_poa(item, poa_number) if isinstance(item, (dict, list)) else item
+            for item in value
+        ]
+    return value
+
+
+def _poa_field_value(value: Any, poa_number: str) -> Any:
+    if isinstance(value, dict):
+        return _force_fake_poa(value, poa_number)
+    if isinstance(value, list):
+        return [_poa_field_value(item, poa_number) for item in value]
+    text = str(value or "").strip()
+    if not text:
+        return poa_number
+    return test_poa_number(text)
 
 
 def scrub_test_contacts(value: Any, signer_email: str) -> Any:
@@ -208,6 +219,11 @@ def apply_staff_test_contacts(bond_data: dict, signer_email: str) -> dict:
     bond_data["send_sms"] = False
     bond_data["staff_test_signer_email"] = signer_email
     bond_data["premium_amount"] = 0
+    poa_number = test_poa_number(bond_data.get("poa_number"))
+    bond_data["poa_number"] = poa_number
+    rewritten = _force_fake_poa(bond_data, poa_number)
+    bond_data.clear()
+    bond_data.update(rewritten)
     for party_key in ("defendant", "indemnitor"):
         party = bond_data.get(party_key)
         if isinstance(party, dict):
@@ -231,7 +247,8 @@ def force_test_submitter(submitter: Mapping[str, Any], signer_email: str) -> dic
     out["send_sms"] = False
     values = out.get("values")
     if isinstance(values, (dict, list)):
-        out["values"] = scrub_test_contacts(values, signer_email)
+        poa_number = test_poa_number(values.get("poa_number") if isinstance(values, dict) else "")
+        out["values"] = _force_fake_poa(scrub_test_contacts(values, signer_email), poa_number)
     fields = out.get("fields")
     if isinstance(fields, list):
         cleaned = []
@@ -242,12 +259,16 @@ def force_test_submitter(submitter: Mapping[str, Any], signer_email: str) -> dic
             name = str(field.get("name") or "")
             if _PHONE_KEY.search(name) or _PAY_KEY.search(name):
                 continue
+            field = dict(field)
             if _EMAIL_KEY.search(name):
-                field = dict(field)
                 if "default_value" in field:
                     field["default_value"] = signer_email
                 if "value" in field:
                     field["value"] = signer_email
+            elif _POA_KEY.search(name):
+                for slot in ("default_value", "value"):
+                    if slot in field:
+                        field[slot] = test_poa_number(field.get(slot))
             cleaned.append(field)
         out["fields"] = cleaned
     meta = out.get("metadata")
@@ -467,19 +488,7 @@ async def prepare_staff_test_case(request, body: Mapping[str, Any]) -> StaffTest
             409,
         )
 
-    poa_number = _text(body, "poa_number") or "TEST-POA-0001"
-    use_real_power = False
-    if is_test_booking(poa_number):
-        use_real_power = False
-    elif _truthy(body.get("allow_real_power")) and real_power_mode_enabled():
-        use_real_power = True
-    else:
-        raise StaffTestCaseError(
-            "real_power_not_authorized",
-            "Test mode does not use a real power unless STAFF_TEST_CASE_REAL_POWER=1 "
-            "and allow_real_power is true. Default is a TEST- power that is not in inventory.",
-            409,
-        )
+    poa_number = test_poa_number(_text(body, "poa_number", "poa", "POA_Number"))
 
     await _refuse_real_identity(booking)
     bond_amount = _amount(body)
@@ -507,7 +516,6 @@ async def prepare_staff_test_case(request, body: Mapping[str, Any]) -> StaffTest
         context=ctx,
         signer_email=signer_email,
         packet_id=_packet_id(body),
-        use_real_power=use_real_power,
         poa_record=poa_record,
         actor=actor,
     )

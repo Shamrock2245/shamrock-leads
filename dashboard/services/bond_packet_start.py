@@ -186,7 +186,10 @@ async def start_indemnitor_bond_packet(
         raise BondPacketStartError(str(exc), code="docuseal_packet_binding_invalid") from exc
 
     if not skip_bond_binding:
-        poa_doc = await _lookup_assigned_poa(hydrated) if poa_record is _POA_UNSET else poa_record
+        if staff_test_case:
+            poa_doc = poa_record if poa_record is not _POA_UNSET else None
+        else:
+            poa_doc = await _lookup_assigned_poa(hydrated) if poa_record is _POA_UNSET else poa_record
         blocked = poa_assignment_block(poa_doc, hydrated)
         if blocked:
             raise BondPacketStartError(blocked[1], code=blocked[0])
