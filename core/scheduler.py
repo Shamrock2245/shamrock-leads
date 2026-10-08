@@ -65,6 +65,7 @@ class ScraperScheduler:
             },
         )
         self._scrapers: Dict[str, BaseScraper] = {}
+        self._relay_only: set = set()
         self._writers: list = []
         self._job_history: List[Dict] = []
         self._registration_count: int = 0
@@ -90,6 +91,18 @@ class ScraperScheduler:
         job_id = scraper.scraper_id
 
         self._scrapers[job_id] = scraper
+
+        # Relay-only counties (config/relay_only.py) stay registered for
+        # ``main.py <County>`` / ``--relay-only`` but never get an interval job.
+        from config.relay_only import is_relay_only
+
+        if is_relay_only(scraper):
+            self._relay_only.add(job_id)
+            logger.info(
+                f"📋 Registered {scraper.county} scraper as RELAY-ONLY "
+                f"(no VPS schedule; Leads Ops relay runs `python main.py --relay-only`, job_id={job_id})"
+            )
+            return
 
         # Stagger first run: county 0 starts at +10s, county 1 at +25s, etc.
         stagger_offset = 10 + (self._registration_count * STAGGER_SECONDS)
@@ -179,6 +192,22 @@ class ScraperScheduler:
                 county = doc.get("county", "")
                 job_id = self._resolve_job_id(county) or f"scraper_{county.lower().replace(' ', '_')}"
                 scraper = self._scrapers.get(job_id)
+
+                # Relay-only counties never run on this host from a trigger.
+                if scraper is not None and job_id in self._relay_only:
+                    logger.warning(f"⛔ Trigger for relay-only county {county} not run here")
+                    col.update_one(
+                        {"_id": doc["_id"]},
+                        {"$set": {
+                            "status": "relay_only",
+                            "completed_at": datetime.now(timezone.utc),
+                            "message": (
+                                f"{county} runs only on the Leads Ops home relay "
+                                "(python main.py --relay-only). Not run on the VPS."
+                            ),
+                        }},
+                    )
+                    continue
 
                 # ── Custody Recheck Trigger ──
                 if trigger_type == "custody_recheck":
@@ -302,6 +331,8 @@ class ScraperScheduler:
             "booking_number": 1, "full_name": 1, "status": 1,
             "bond_amount": 1, "charges": 1, "bond_type": 1,
             "detail_url": 1, "county": 1,
+            # staff provenance, so the live-roster update can't replace staff edits
+            "staff_edits": 1, "bond_override": 1, "last_checked_mode": 1, "charge_details": 1,
         }))
 
         logger.info(f"🔍 Checking {len(defendants)} defendants in {county}")
@@ -351,11 +382,26 @@ class ScraperScheduler:
 
             # Compare old vs new
             diffs = []
-            new_dict = new_record.to_dict() if hasattr(new_record, "to_dict") else {}
+            # ArrestRecord has no to_dict(); without to_mongo_doc() every field
+            # read as "" and the recheck blanked status/bond/charges.
+            if hasattr(new_record, "to_dict"):
+                new_dict = new_record.to_dict()
+            elif hasattr(new_record, "to_mongo_doc"):
+                new_dict = new_record.to_mongo_doc()
+            else:
+                new_dict = {}
 
             for field in DIFF_FIELDS:
                 old_val = old_doc.get(field, "")
                 new_val = new_dict.get(field, "")
+                # A value the source did not publish is unknown, not a change
+                # (an unknown bond is never written as 0).
+                if field == "bond_amount" and "bond_amount_raw" in new_dict and not str(
+                    new_dict.get("bond_amount_raw") or ""
+                ).strip():
+                    continue
+                if new_val is None or (isinstance(new_val, str) and not new_val.strip()):
+                    continue
                 # Normalize for comparison
                 if isinstance(old_val, (int, float)) and isinstance(new_val, (int, float)):
                     if old_val != new_val:
@@ -387,6 +433,10 @@ class ScraperScheduler:
                     update_fields[d["field"]] = d["new"]
                 update_fields["last_custody_recheck"] = now.isoformat()
                 update_fields["custody_recheck_source"] = "live_roster"
+                # Staff bond / charge edits win; live values go to scraped_*.
+                from core.staff_edits import protect_scraped_update
+
+                update_fields, _ = protect_scraped_update(update_fields, old_doc, now=now)
 
                 arrests_col.update_one(
                     {"booking_number": bk, "county": county},
@@ -526,6 +576,26 @@ class ScraperScheduler:
             return None
         return None
 
+    def relay_only_job_ids(self) -> List[str]:
+        """Job ids registered as relay-only (no interval job on this host)."""
+        return sorted(self._relay_only)
+
+    def run_relay_only(self) -> Dict[str, Optional[dict]]:
+        """Run every relay-only county once (the Leads Ops relay entry point)."""
+        results: Dict[str, Optional[dict]] = {}
+        for job_id in self.relay_only_job_ids():
+            scraper = self._scrapers[job_id]
+            logger.info(f"🏠 Relay run: {scraper.county}")
+            try:
+                from dashboard.tenancy.context import bind_platform_job
+
+                with bind_platform_job(job_name=job_id):
+                    results[scraper.county] = scraper.run(writers=self._writers, force_canary=True)
+            except Exception as exc:  # noqa: BLE001 - one county must not stop the next
+                logger.error(f"❌ Relay run failed: {scraper.county}: {exc}")
+                results[scraper.county] = {"county": scraper.county, "error": str(exc)[:300]}
+        return results
+
     def run_now(self, county: str) -> Optional[dict]:
         """Trigger an immediate run for a specific county (optionally state-prefixed)."""
         job_id = self._resolve_job_id(county)
@@ -551,6 +621,9 @@ class ScraperScheduler:
 
         return {
             "running": self.scheduler.running,
+            "relay_only": sorted(
+                self._scrapers[j].county for j in self._relay_only if j in self._scrapers
+            ),
             "total_scrapers": len(self._scrapers),
             "max_workers": self.max_workers,
             "jobs": jobs,

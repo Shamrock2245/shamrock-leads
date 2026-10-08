@@ -88,6 +88,9 @@ jobs:
             tests/test_cf_browser.py \
             tests/test_residential_proxy.py \
             tests/test_manatee_no_proxy_path.py \
+            tests/test_charlotte_no_proxy_path.py \
+            tests/test_relay_only_scheduling.py \
+            tests/test_staff_edits_survive_rescrape.py \
             tests/test_putnam_parser.py \
             tests/test_davidson_nc_parser.py \
             tests/test_mecklenburg_nc_parser.py \

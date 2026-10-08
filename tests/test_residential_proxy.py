@@ -9,7 +9,6 @@ from scrapers.socks_proxy import (
     resolve_residential_proxy,
     validate_residential_proxy,
     _normalize_playwright_proxy,
-    to_playwright_proxy,
 )
 
 
@@ -17,17 +16,6 @@ def test_normalize_playwright_proxy():
     assert _normalize_playwright_proxy("socks5h://1.2.3.4:1080") == "socks5://1.2.3.4:1080"
     assert _normalize_playwright_proxy("1.2.3.4:1080") == "socks5://1.2.3.4:1080"
     assert _normalize_playwright_proxy("socks5://1.2.3.4:1080") == "socks5://1.2.3.4:1080"
-
-
-def test_to_playwright_proxy_splits_credentials():
-    d = to_playwright_proxy("http://warren:s3cret@178.156.179.237:8000")
-    assert d["server"] == "http://178.156.179.237:8000"
-    assert d["username"] == "warren"
-    assert d["password"] == "s3cret"
-
-    d2 = to_playwright_proxy("socks5://172.18.0.1:1080")
-    assert d2["server"] == "socks5://172.18.0.1:1080"
-    assert "username" not in d2
 
 
 def test_curl_cffi_proxies():

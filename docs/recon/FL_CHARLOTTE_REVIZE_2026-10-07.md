@@ -41,8 +41,10 @@ read smoke is the confirmation.
   and writes nothing.
 - `CHARLOTTE_EGRESS_MODE=direct` for Leads Ops residential runs: no proxy, and
   the host must look US residential (unknown exit = not residential, per #113).
-- Default `auto` keeps the existing APE/Warren + office SOCKS resolver so
-  current prod behaviour is not broken by this PR.
+- Update (later 2026-10-07): the `auto` APE/Warren + office SOCKS path and the
+  Patchright stealth launcher were removed. `direct` is the default and the
+  only accepted mode. Charlotte is relay-only, and the VPS scheduler no longer
+  runs it (`docs/ops/REVIZE_RELAY_RUN.md`).
 - Read smoke (no writes, aggregates only):
   `CHARLOTTE_EGRESS_MODE=direct python scripts/charlotte_residential_smoke.py`
 - Write smoke (needs `MONGODB_URI`):

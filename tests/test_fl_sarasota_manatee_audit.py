@@ -511,7 +511,7 @@ def _fake_httpx(responses):
 def test_exit_check_rate_limited_lookup_is_not_residential(monkeypatch):
     # Live 2026-10-07: ipinfo 429, ipify ok, ipapi 429 -> org/country empty.
     import httpx
-    from scrapers.cf_browser import check_exit_ip, require_residential_exit
+    from scrapers.cf_browser import check_exit_ip
 
     monkeypatch.setattr(httpx, "Client", _fake_httpx({
         "https://ipinfo.io": _Resp(429, {"status": 429}),
@@ -521,9 +521,11 @@ def test_exit_check_rate_limited_lookup_is_not_residential(monkeypatch):
     info = check_exit_ip(None, timeout=1, retries=1)
     assert info["ok"] and info["exit_unverified"] and not info["residential_likely"]
     import scrapers.cf_browser as cfb
+    from scrapers.counties import manatee
+    from scrapers.scraper_resilience import EgressBlocked
     monkeypatch.setattr(cfb, "check_exit_ip", lambda *a, **k: info)
-    with pytest.raises(RuntimeError, match="could not verify the exit IP's org/country"):
-        require_residential_exit(None, label="Manatee")
+    with pytest.raises(EgressBlocked, match="not verified US residential"):
+        manatee.resolve_egress()
 
 
 def test_exit_check_known_us_isp_is_residential(monkeypatch):
