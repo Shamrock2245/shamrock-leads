@@ -82,6 +82,8 @@ LEAD_SOURCES = [
     "bookmarklet",
     "elevenlabs_voice",
     "shannon",
+    "shannon_voice",
+    "telegram_miniapp",
     "shamrock-leads-dashboard",
 ]
 
@@ -113,7 +115,7 @@ def test_each_lead_source_saves_and_hands_off(intake_app, source):
     assert doc["indemnitor"]["state"] == ""
     assert doc["surety_id"] is None
     assert scheduled and scheduled[0]["intake_id"] == doc["intake_id"]
-    if source in ("elevenlabs_voice", "shannon"):
+    if source in ("elevenlabs_voice", "shannon", "shannon_voice"):
         engine.match_intake.assert_not_awaited()
     else:
         engine.match_intake.assert_awaited()
