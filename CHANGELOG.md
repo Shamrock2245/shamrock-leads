@@ -8,6 +8,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 - **Miami-Dade (FL):** the ArcGIS jail-bookings layer has no bond field, but the scraper wrote `Bond_Amount="0"` on every row, so Write Bond showed $0. It also wrote `UNKNOWN CHARGE` when no charge was listed. Now the bond is `""` (unknown, `bond_published: False`) and the charge is empty. `NO_BOND_ROSTER_COUNTIES` includes Miami-Dade, so legacy docs with a scraped `"0"` hydrate as unknown, and a staff amount still wins. The fetch uses plain `requests` (curl_cffi impersonation retired). It pages to the server's `returnCountOnly` total and raises `MiamiDadeContractError` on an HTTP or ArcGIS error, field drift, a repeated ObjectId or a short walk. Before, it logged and returned a truncated batch. Box read smoke on 2026-10-08: 360/360 rows (Oct 5–7), 353 with charges, 0 bonds, 3.7 s. The matrix stays `recon_only` and Health stays `unverified`: the `GlobalID` key is not a source booking number, and it is unproven whether it survives the layer's daily overwrite (`docs/recon/FL_MIAMI_DADE_ARCGIS_2026-10-08.md`).
 
+## [Unreleased] — 2026-10-08 (SwipeSimple locked amount from the BondCase)
+
+### Fixed
+- **Locked SwipeSimple invoice amount.** `create_locked_invoice` and `dispatch_invoice` take the premium from one resolver, `resolve_locked_premium`. Order: the staff-confirmed trio (`premium_confirmed_amount/_at/_by`), then `premium_cents` from Write Bond / Record Bond, then the older dollar fields. No invoice is created, and SwipeSimple is not called, when the premium is missing, `$0`, negative, not a number, has fractions of a cent (the stored value is no longer rounded), or when two premium fields disagree. Each case returns its own reason code. The 10%-of-bond figure that intake promote writes is now flagged `premium_is_estimate` and is never invoiced (`premium_estimate_unconfirmed`). Bonds promoted before this change, identified by `source: intake_promotion`, are blocked the same way until staff enter the premium in Write Bond.
+- **Indemnitor "generate payment link".** The endpoint no longer works out 10% of the bond, no longer builds a `shamrockbailbonds.biz/payment?amount=` URL, and no longer writes `payment_link` onto the bond. It returns the same link as every other source: the bond's own staged SwipeSimple invoice (locked premium) if there is one, otherwise the per-source SwipeSimple link with no amount. A `shamrockbailbonds.biz/payment` link already saved on a bond is not treated as the case's invoice link.
+- **Client portal pay link.** If the bond already has a staged SwipeSimple invoice, the portal shows that invoice.
+- **Staff "send SwipeSimple link".** When the bond has a staged invoice, the text and email quote the locked premium. If staff type a different amount, nothing is sent (`amount_mismatch_locked_invoice`). The static-link behavior for bonds without an invoice is unchanged.
+
+### Added
+- `tests/test_swipesimple_locked_amount_e2e.py` (added to CI). For every lead source (website/Wix indemnitor, Telegram bot and mini-app, walk-in or manual entry, scraper, ID scan, kiosk, Shannon, SMS, and the DocuSeal completed hook), it proves that the invoice amount in cents equals the BondCase premium, that the reference is the exact booking #, that only one create is made per bond, that the invoice is staged only, and that nothing is sent without `SWIPESIMPLE_DISPATCH_LIVE`. It also covers every way the path fails closed. All of it runs offline against a mocked SwipeSimple.
+
+## [Unreleased] — 2026-10-08 (FL matrix/Health parity + FL 67 status)
+
+### Fixed
+- **Nassau (FL) fail closed.** Nassau is an owner hold, but Health showed `unverified` and the matrix `recon_only`, while the module still ran every 120 min with `verify=False` and curl_cffi impersonation and keyed every row on the `Booking History` heading (`History`). Re-checked 2026-10-08: the portal still sends only its leaf certificate (GoDaddy G2 intermediate missing). `nassau.py` is now `SOURCE_CONTRACT_VALIDATED=False` with no source fetch, Health `fail_closed`, evidence + live-evidence hold row added, matrix regenerated and Nassau added to the drift-test `HOLD_LABELS`. Prod rows keyed `History` need a Leads Ops cleanup; nothing was deleted.
+
+### Docs
+- **`docs/recon/FL_67_STATUS_2026-10-08.md`:** one status for each of the 67 FL counties (4 `verified_public`, 40 unverified awaiting Leads Ops smoke with source PR, 17 `fail_closed`, 6 no source), ranked by Census 2024 population, with the matrix-vs-Health parity findings, today's live Sarasota/Manatee/Charlotte checks (the Sarasota listing root is now Cloudflare-challenged too), the relay cadence gap (Leads Ops must schedule `python main.py --relay-only`), rule conflicts in older modules, and the next-PR queue. `tests/test_fl_67_status.py` (in CI) keeps the table consistent with Health.
 ## [Unreleased] — 2026-10-08 (name without license falls back)
 
 ### Fixed

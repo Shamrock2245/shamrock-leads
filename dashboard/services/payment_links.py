@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 from typing import Any, Dict, Mapping, Optional
+from urllib.parse import urlparse
 
 WEBSITE_LINK = "https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd"
 TELEGRAM_LINK = "https://swipesimple.com/links/lnk_07a13eb404d7f3057a56d56d8bb488c8"
@@ -92,12 +93,33 @@ def normalize_source(source: Optional[str]) -> str:
     return "default"
 
 
+# Our own website /payment page with an ``amount=`` query is NOT a case's
+# SwipeSimple invoice: the legacy indemnitor "generate link" endpoint built it
+# from a 10%-of-bond estimate and stored it in ``payment_link``. Never treat
+# it as the case's own (locked) link.
+_NOT_CASE_INVOICE_HOSTS = ("shamrockbailbonds.biz", "www.shamrockbailbonds.biz")
+
+
+def is_case_invoice_link(link: Optional[str]) -> bool:
+    url = str(link or "").strip()
+    if not url.startswith("http"):
+        return False
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower()
+    if host in _NOT_CASE_INVOICE_HOSTS and parsed.path.rstrip("/").lower().startswith("/payment"):
+        return False
+    return True
+
+
 def case_invoice_link(case: Optional[Mapping[str, Any]]) -> Optional[str]:
     if not case:
         return None
     for key in CASE_LINK_FIELDS:
         link = str(case.get(key) or "").strip()
-        if link.startswith("https://"):
+        if link.startswith("https://") and is_case_invoice_link(link):
             return link
     return None
 
