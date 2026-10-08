@@ -77,7 +77,7 @@ def test_bond_is_published_sum_and_unknown_stays_empty():
         {"Charge": "VOP", "BondAmount": "", "ArrestingAgency": "OCSO", "CourtCaseNumber": "", "CaseStatus": "PRESENTENCED"},
     ]
     out = orange.parse_charges(charges)
-    assert out["bond"] == "2000.00"
+    assert out["bond"] == ""  # one blank charge (maybe a hold): total unknown, not 2000.00
     assert out["charges"] == ["BATTERY", "RESIST W/O VIOLENCE", "VOP"]
     assert [d["bond_amount"] for d in out["details"]] == [1500.0, 500.0, None]
     assert out["case_numbers"] == ["2026MM1"]
@@ -85,6 +85,23 @@ def test_bond_is_published_sum_and_unknown_stays_empty():
     assert orange.parse_charges([{"Charge": "VOP", "BondAmount": ""}])["bond"] == ""
     assert orange.parse_charges([])["bond"] == ""
     assert orange.parse_charges(None)["bond"] == ""
+
+
+def _c(*bonds):
+    return [{"Charge": f"C{i}", "BondAmount": b} for i, b in enumerate(bonds)]
+
+
+def test_total_bond_empty_when_any_charge_bond_is_blank():
+    mixed = orange.parse_charges(_c("1500.00", ""))
+    assert mixed["bond"] == ""
+    assert [d["bond_amount"] for d in mixed["details"]] == [1500.0, None]  # known per-charge amount kept
+    assert orange.parse_charges(_c("1500.00", "250.00"))["bond"] == "1750.00"
+    assert orange.parse_charges(_c("", " "))["bond"] == ""
+    assert orange.parse_charges(_c("0.00", "1500.00"))["bond"] == "1500.00"  # published $0 is known
+    assert orange.parse_charges(_c("1500.00", "SEE NOTE"))["bond"] == ""  # unparsed counts as unpublished
+    rec = orange.build_record("26000001", "X", _detail("26000001", datetime(2026, 10, 7, 9))[0],
+                              orange.parse_charges(_c("1500.00", "")))
+    assert rec.Bond_Amount == ""
 
 
 def test_record_fields_age_not_dob_and_no_invented_values():
@@ -173,3 +190,49 @@ def test_module_uses_plain_requests_only():
     src = open(orange.__file__).read()
     for banned in ("curl_cffi", "impersonate", "verify=False", "DrissionPage", "proxy", "captcha"):
         assert banned not in src.split('"""', 2)[2], banned
+
+
+def test_charges_shape_drift_raises_but_fetch_failure_is_unknown():
+    # a per-booking fetch failure (None) leaves charges/bond unknown
+    assert orange.parse_charges(None)["bond"] == ""
+    # a successful response with a changed shape is drift, never blank data
+    for bad in ({"charges": []}, "oops", [["BATTERY", "250.00"]], [{"ChargeDesc": "BATTERY", "BondAmount": "1"}],
+                [{"Charge": "BATTERY", "Bond": "250.00"}]):
+        with pytest.raises(OrangeContractError):
+            orange.parse_charges(bad)
+
+
+def test_scrape_raises_on_charges_drift_and_when_every_charges_fetch_fails(monkeypatch):
+    now = datetime.now()
+    pages = _pages({"d": [{"bookingNumber": "26000002", "inmateName": "DOE, J"}]})
+    details = {"26000002": _detail("26000002", now - timedelta(hours=1))}
+    _fake_session(monkeypatch, pages, details, {"26000002": {"renamed": []}}, [])
+    with pytest.raises(OrangeContractError):
+        OrangeCountyScraper().scrape(lookback_days=7)
+
+    def _get_json(self, session, url):
+        if "/getCharges/" in url:
+            raise requests.ConnectionError("down")
+        return _orig(self, session, url)
+
+    _fake_session(monkeypatch, pages, details, {}, [])
+    _orig = OrangeCountyScraper._get_json
+    monkeypatch.setattr(OrangeCountyScraper, "_get_json", _get_json)
+    with pytest.raises(OrangeContractError):
+        OrangeCountyScraper().scrape(lookback_days=7)
+
+
+def test_roster_and_detail_requests_are_paced(monkeypatch):
+    now = datetime.now()
+    pages = _pages({"d": [{"bookingNumber": b, "inmateName": "DOE, J"} for b in ("26000003", "26000002")]})
+    details = {b: _detail(b, now - timedelta(hours=1)) for b in ("26000003", "26000002")}
+    charges = {b: [{"Charge": "BATTERY", "BondAmount": "100.00"}] for b in details}
+    calls: list = []
+    _fake_session(monkeypatch, pages, details, charges, calls)
+    sleeps: list = []
+    monkeypatch.setattr(orange.time, "sleep", lambda s: sleeps.append(s))
+    OrangeCountyScraper().scrape(lookback_days=7)
+    assert orange.ROSTER_PAUSE_S >= 0.5 and orange.REQUEST_PAUSE_S >= 0.25
+    assert sleeps.count(orange.ROSTER_PAUSE_S) >= 25  # between every getInmates letter
+    later = [c for c in calls if "/getInmates/" not in c]
+    assert len([s for s in sleeps if s == orange.REQUEST_PAUSE_S]) >= len(later)  # one pause per detail/charges call

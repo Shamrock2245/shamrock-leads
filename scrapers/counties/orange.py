@@ -63,7 +63,8 @@ STOP_AFTER_OLDER = 15
 MAX_DETAILS = 800
 MAX_EMPTY_LETTERS = 3
 REQUEST_TIMEOUT = 30
-REQUEST_PAUSE_S = 0.05
+REQUEST_PAUSE_S = 0.25  # between per-booking detail/charges pairs
+ROSTER_PAUSE_S = 0.5  # between the 26 getInmates letter calls
 
 BOOKING_RE = re.compile(r"^\d{8}$")
 _AMOUNT_RE = re.compile(r"^\$?\s*([\d,]+(?:\.\d{1,2})?)$")
@@ -134,24 +135,41 @@ def parse_detail(data: Any, booking: str) -> Optional[Dict[str, Any]]:
     return row
 
 
+CHARGE_ROW_KEYS = ("Charge", "BondAmount")
+
+
 def parse_charges(data: Any) -> Dict[str, Any]:
-    """Charges + bond from getCharges. Bond '' when nothing is published."""
-    if not isinstance(data, list):
+    """Charges + bond from a successful getCharges response.
+
+    The total bond is the sum of ``BondAmount`` only when every charge row
+    publishes an amount (a published 0.00 counts). If any cell is blank or
+    unparsed, the total is '' (unknown), and per-charge amounts stay in
+    ``details``. ``None`` means the per-booking
+    fetch itself failed (bond and charges unknown for that booking). Any other
+    shape, or a row without ``Charge``/``BondAmount``, is contract drift and
+    raises, so a changed response can never blank known charges or bonds.
+    """
+    if data is None:
         return {"charges": [], "details": [], "bond": "", "agency": "", "case_numbers": []}
+    if not isinstance(data, list):
+        raise OrangeContractError("Orange: getCharges is not a JSON list")
     charges: List[str] = []
     details: List[Dict[str, Any]] = []
     amounts: List[float] = []
+    any_unpublished = False
     agency = ""
     cases: List[str] = []
     for row in data:
-        if not isinstance(row, dict):
-            continue
+        if not isinstance(row, dict) or any(k not in row for k in CHARGE_ROW_KEYS):
+            raise OrangeContractError("Orange: getCharges row drift")
         charge = _clean(row.get("Charge"))
         raw_bond = _clean(row.get("BondAmount"))
         m = _AMOUNT_RE.match(raw_bond)
         amount = float(m.group(1).replace(",", "")) if m else None
         if amount is not None:
             amounts.append(amount)
+        else:
+            any_unpublished = True  # blank/unparsed cell: may be a hold
         case = _clean(row.get("CourtCaseNumber"))
         if case and case not in cases:
             cases.append(case)
@@ -172,7 +190,9 @@ def parse_charges(data: Any) -> Dict[str, Any]:
     return {
         "charges": charges,
         "details": details,
-        "bond": f"{sum(amounts):.2f}" if amounts else "",
+        # Total only when every charge publishes an amount: a blank cell can be
+        # a hold, so a partial sum would understate the bond. Unknown = "".
+        "bond": f"{sum(amounts):.2f}" if amounts and not any_unpublished else "",
         "agency": agency,
         "case_numbers": cases,
     }
@@ -264,7 +284,9 @@ class OrangeCountyScraper(BaseScraper):
         session.headers.update(HEADERS)
 
         pages: Dict[str, Any] = {}
-        for letter in string.ascii_lowercase:
+        for i, letter in enumerate(string.ascii_lowercase):
+            if i:
+                time.sleep(ROSTER_PAUSE_S)
             try:
                 pages[letter] = self._get_json(session, f"{INMATES_URL}/{letter}")
             except (requests.RequestException, ValueError) as exc:
@@ -281,6 +303,7 @@ class OrangeCountyScraper(BaseScraper):
             if details >= MAX_DETAILS or older_in_a_row >= STOP_AFTER_OLDER:
                 break
             details += 1
+            time.sleep(REQUEST_PAUSE_S)
             try:
                 detail = parse_detail(self._get_json(session, f"{DETAILS_URL}/{booking}"), booking)
             except (requests.RequestException, ValueError) as exc:
@@ -297,6 +320,7 @@ class OrangeCountyScraper(BaseScraper):
                 older_in_a_row += 1
                 continue
             older_in_a_row = 0
+            time.sleep(REQUEST_PAUSE_S)
             try:
                 charge_data = self._get_json(session, f"{CHARGES_URL}/{booking}")
             except (requests.RequestException, ValueError) as exc:
@@ -306,10 +330,12 @@ class OrangeCountyScraper(BaseScraper):
             rec = build_record(booking, name, detail, parse_charges(charge_data))
             if rec is not None:
                 records.append(rec)
-            time.sleep(REQUEST_PAUSE_S)
 
         if details and detail_failures == details:
             raise OrangeContractError("Orange: every detail fetch failed or mismatched its booking")
+        in_window = len(records)
+        if in_window and charge_failures >= in_window:
+            raise OrangeContractError("Orange: every getCharges fetch failed")
         if detail_failures or charge_failures:
             logger.warning(
                 "Orange: %d detail and %d charge fetches failed (those bookings skipped / bond unknown)",
