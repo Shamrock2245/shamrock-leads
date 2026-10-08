@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import io
 import logging
-import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -226,80 +225,6 @@ def packet_composition(surety: Optional[str] = None) -> Dict[str, Any]:
     }
 
 
-_RAW_FIELD_TAG = re.compile(r"\{\{")
-# The printed agent/company header contains "Name" and "Address".
-# Those hits are the letterhead, not a fill-in label.
-_AGENT_OR_COMPANY_LINE = re.compile(
-    r"agent\s+name|phone\s*&\s*license|license\s*#|"
-    r"o['’]?shaughnahill|shamrock bail bonds|palmetto surety",
-    re.IGNORECASE,
-)
-
-
-def _label_tokens(value: str) -> List[str]:
-    return [
-        token
-        for token in (
-            re.sub(r"[^A-Za-z0-9]", "", part).lower() for part in str(value).split()
-        )
-        if token
-    ]
-
-
-def _line_words(page: fitz.Page) -> List[List[tuple]]:
-    grouped: Dict[Tuple[int, int], List[tuple]] = {}
-    for word in page.get_text("words") or []:
-        grouped.setdefault((int(word[5]), int(word[6])), []).append(word)
-    return [grouped[key] for key in sorted(grouped)]
-
-
-def _blocked_label_rects(lines: List[List[tuple]]) -> List[fitz.Rect]:
-    """Rectangles covering the agent header and the company letterhead."""
-    blocked: List[fitz.Rect] = []
-    for line in lines:
-        text = " ".join(str(word[4]) for word in line)
-        if not _AGENT_OR_COMPANY_LINE.search(text):
-            continue
-        rect = fitz.Rect(line[0][:4])
-        for word in line[1:]:
-            rect.include_rect(fitz.Rect(word[:4]))
-        rect.y0 -= 4
-        rect.y1 += 8
-        blocked.append(rect)
-    return blocked
-
-
-def _anchor_hits(page: fitz.Page, anchor: str) -> List[fitz.Rect]:
-    """Whole-word or exact-phrase hits, skipping the agent and company block.
-
-    ``page.search_for`` is case-insensitive and matches inside other words
-    (``Name`` hits ``username`` and the agent line ``Agent name``).
-    """
-    wanted = _label_tokens(anchor)
-    if not wanted:
-        return []
-    lines = _line_words(page)
-    blocked = _blocked_label_rects(lines)
-    hits: List[fitz.Rect] = []
-    for line in lines:
-        tokens: List[Tuple[str, tuple]] = []
-        for word in line:
-            token = re.sub(r"[^A-Za-z0-9]", "", str(word[4])).lower()
-            if token:
-                tokens.append((token, word))
-        for start in range(0, len(tokens) - len(wanted) + 1):
-            if [tokens[start + offset][0] for offset in range(len(wanted))] != wanted:
-                continue
-            first = tokens[start][1]
-            last = tokens[start + len(wanted) - 1][1]
-            rect = fitz.Rect(first[0], first[1], last[2], last[3])
-            rect.include_rect(fitz.Rect(first[:4]))
-            if any(rect.intersects(block) for block in blocked):
-                continue
-            hits.append(rect)
-    return hits
-
-
 def place_text_by_anchor(
     page: fitz.Page,
     anchor: str,
@@ -309,74 +234,15 @@ def place_text_by_anchor(
     font_size: float = 10,
     index: int = 0,
 ) -> None:
-    """Place `text` after a whole-word label, clipped to the page.
-
-    Raw ``{{...}}`` tags are not printed. A hit inside the agent header or
-    the company letterhead is skipped.
-    """
+    """Search for an anchor string on the page and place `text` at an offset."""
     if not text:
         return
-    value = str(text)
-    if _RAW_FIELD_TAG.search(value):
-        return
 
-    hits = _anchor_hits(page, anchor)
-    if len(hits) <= index:
-        return
-    anchor_rect = hits[index]
-    baseline = anchor_rect.y0 + dy
-    left = anchor_rect.x1 + dx
-    # insert_textbox needs about 1.37x the font size. A box of font_size+2
-    # (12pt at 10pt) returns a negative spare and writes nothing.
-    box = fitz.Rect(
-        left,
-        baseline - font_size * 1.2,
-        page.rect.x1 - 2,
-        baseline + font_size * 0.5,
-    )
-    box = box & page.rect
-    if box.is_empty or box.width < 8 or box.height < font_size * 1.2:
-        _insert_text_on_page(page, left, baseline, value, font_size)
-        return
-    spare = page.insert_textbox(
-        box,
-        value,
-        fontsize=font_size,
-        fontname="helv",
-        color=(0, 0, 0),
-        align=fitz.TEXT_ALIGN_LEFT,
-    )
-    if spare < 0:
-        smaller = max(6.0, font_size - 1)
-        spare = page.insert_textbox(
-            box,
-            value,
-            fontsize=smaller,
-            fontname="helv",
-            color=(0, 0, 0),
-            align=fitz.TEXT_ALIGN_LEFT,
-        )
-    if spare < 0:
-        _insert_text_on_page(page, box.x0, baseline, value, max(6.0, font_size - 1))
-
-
-def _insert_text_on_page(
-    page: fitz.Page,
-    x: float,
-    baseline: float,
-    value: str,
-    font_size: float,
-) -> None:
-    """Baseline fallback when a text box is too short for the font."""
-    y = min(max(baseline, page.rect.y0 + font_size), page.rect.y1 - 1)
-    x = min(max(x, page.rect.x0), page.rect.x1 - 4)
-    page.insert_text(
-        fitz.Point(x, y),
-        value,
-        fontsize=font_size,
-        fontname="helv",
-        color=(0, 0, 0),
-    )
+    rects = page.search_for(anchor)
+    if rects and len(rects) > index:
+        r = rects[index]
+        point = fitz.Point(r.x1 + dx, r.y0 + dy)
+        page.insert_text(point, str(text), fontsize=font_size, color=(0, 0, 0))
 
 
 def _open_blank(slug: str, surety: str) -> Optional[fitz.Document]:
@@ -460,31 +326,26 @@ def _hydrate_common_fields(
 
     place_text_by_anchor(page, "(Defendant/Principal)", def_name, dx=5, dy=-15)
     place_text_by_anchor(page, "Defendant", def_name, dx=10, dy=10, index=0)
-    indemnitor_name = (person.get("name") or "").strip()
-    # "Name" is skipped when it only appears in the agent header. A real
-    # Indemnitor label gets the indemnitor. A form with neither (the OSI
-    # application text layer) still prints the name under the defendant line,
-    # clear of that header.
-    if indemnitor_name:
-        if _anchor_hits(page, "Indemnitor"):
-            place_text_by_anchor(page, "Indemnitor", indemnitor_name, dx=8, dy=2)
-        elif not _anchor_hits(page, "Name"):
-            place_text_by_anchor(page, "Defendant", indemnitor_name, dx=10, dy=24, index=0)
-    place_text_by_anchor(page, "Name", indemnitor_name or def_name, dx=10, dy=10)
+    place_text_by_anchor(page, "Name", person.get("name") or def_name, dx=10, dy=10)
     place_text_by_anchor(page, "Address", person.get("address") or "", dx=10, dy=10)
     place_text_by_anchor(page, "Case", str(case_no), dx=10, dy=10)
     place_text_by_anchor(page, "County", str(county), dx=10, dy=10)
     place_text_by_anchor(page, "Bond Amount", str(bond_amt), dx=10, dy=10)
     place_text_by_anchor(page, "POA", str(poa), dx=10, dy=10)
-    # role is accepted so existing callers stay stable. DocuSeal owns
-    # signature and date fields; this stitch must not print {{...}} tags.
-    del role, role_index
+
+    if role:
+        # SignNow text tags for field extraction on secondary PDF path
+        sig_tag = f"{{{{s1_{role}}}}}"
+        date_tag = f"{{{{d1_{role}}}}}"
+        place_text_by_anchor(page, "INDEMNITOR:", sig_tag, dx=50, dy=10, font_size=8)
+        place_text_by_anchor(page, "Signature", sig_tag, dx=20, dy=10, font_size=8)
+        place_text_by_anchor(page, "this", date_tag, dx=20, dy=0, font_size=8, index=role_index)
 
 
 def hydrate_indemnity_agreement(
     data: Dict[str, Any], indemnitor_index: int = 0, surety: Optional[str] = None
 ) -> bytes:
-    """Fills the Indemnity Agreement. Signature widgets stay with DocuSeal."""
+    """Fills the Indemnity Agreement and places SignNow signature tags."""
     doc = _open_blank("indemnity-agreement", surety)
     if doc is None:
         raise FileNotFoundError(
