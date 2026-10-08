@@ -135,6 +135,7 @@ jobs:
             tests/test_surety_onboarding.py \
             tests/test_palmetto_packet_fields.py \
             tests/test_palmetto_docuseal_apply.py \
+            tests/test_paperwork_template_paths.py \
             tests/test_bond_packet_start.py \
             tests/test_surety_review_fixes.py \
             tests/test_wix_intake_webhook.py \

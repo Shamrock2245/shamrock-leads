@@ -2,10 +2,15 @@
 
 A DocuSeal field update replaces the template's whole field list. Documents
 this spec does not cover (paperwork header, FAQ pages, master waiver,
-SSA release) keep every existing area. A field whose areas sit on more than
-one document is split: areas on uncovered documents stay on the original
-field object (same uuid, name, and submitter). Areas on covered documents
-are replaced by the spec.
+SSA release) keep every existing area. A text, checkbox, or execution-date
+field whose areas sit on more than one document is split: areas on uncovered
+documents stay on the original field object (same uuid, name, and submitter).
+Areas on covered documents are replaced by the spec.
+
+Signature, initials, and date-signed fields keep the live area and role,
+including areas on a covered document. ``today_date`` is the prefilled
+execution date and still follows the spec. A name in
+``SIGNATURE_GEOMETRY_EXCEPTIONS`` is the only one allowed to move or drop.
 
 Covered text, date, and number boxes keep a live template 5 name when that
 name is one ``prefill_values_from_bond`` already sends. The placement spec's
@@ -121,6 +126,12 @@ _WIDGET_NAMES = {
     "cr_credit_card": "collateral_credit_card_checkbox",
 }
 
+# Live signature, initials, and date-signed boxes stay on the printed line.
+# Map a field name to the reason it was moved or dropped. Empty means every
+# live box of those types is copied through (same uuid, role, and area).
+# today_date is a prefill execution date, not a signature date.
+SIGNATURE_GEOMETRY_EXCEPTIONS: Dict[str, str] = {}
+
 # Text, number, and date boxes the prefill does not populate. Left blank.
 # Do not invent a value for these.
 BLANK_BY_DESIGN = frozenset({
@@ -136,6 +147,28 @@ BLANK_BY_DESIGN = frozenset({
     "reference_3_address",
     "reference_3_phone",
 })
+
+
+def keeps_live_geometry(field: Mapping[str, Any]) -> bool:
+    """Signature, initials, and date-signed boxes keep the live template 5 area.
+
+    ``today_date`` is the prefilled execution date and still follows the spec.
+    A name in ``SIGNATURE_GEOMETRY_EXCEPTIONS`` is allowed to move or drop.
+    """
+    name = str(field.get("name") or "")
+    if name in SIGNATURE_GEOMETRY_EXCEPTIONS:
+        reason = str(SIGNATURE_GEOMETRY_EXCEPTIONS.get(name) or "").strip()
+        if not reason:
+            raise PalmettoApplyError(
+                f"Signature geometry exception {name!r} needs a written reason."
+            )
+        return False
+    kind = str(field.get("type") or "")
+    if kind in ("signature", "initials"):
+        return True
+    if kind == "date" and name != "today_date":
+        return True
+    return False
 
 
 def resolved_docuseal_name(field: Mapping[str, Any]) -> str:
@@ -410,8 +443,9 @@ def plan_merge(
     """Return the PUT field list and a per-document added/moved/removed/kept plan.
 
     Areas on documents the spec does not cover are copied onto the original
-    field object. The caller's template is not mutated. Wholly uncovered
-    fields compare equal to the input field.
+    field object. Signature, initials, and date-signed fields are copied
+    whole, covered areas included. The caller's template is not mutated.
+    Wholly uncovered fields compare equal to the input field.
     """
     spec_fields = list(spec_fields if spec_fields is not None else docuseal_fields())
     matched = match_attachments(template)
@@ -494,6 +528,9 @@ def plan_merge(
                 field for field in live_by_name.get(name) or []
                 if str(field.get("submitter_uuid") or "") == submitter_uuid
             ]
+            if any(keeps_live_geometry(field) for field in priors):
+                kept.append(name)
+                continue
             donors = [field for field in priors if _wholly_here(field, uuid)]
             existing_uuid = str(donors[0].get("uuid") or "") if donors else ""
             emitted = _emitted_type(group, name)
@@ -517,7 +554,15 @@ def plan_merge(
                 continue
             seen_pairs.add(pair)
             if pair not in spec_pairs:
-                removed.append(pair[0])
+                locked = [
+                    field for field in live_by_name.get(pair[0]) or []
+                    if str(field.get("submitter_uuid") or "") == pair[1]
+                    and keeps_live_geometry(field)
+                ]
+                if locked:
+                    kept.append(pair[0])
+                else:
+                    removed.append(pair[0])
         replacements[uuid] = built
         documents.append({
             "document": row["name"] or row["filename"],
@@ -554,6 +599,12 @@ def plan_merge(
             emitted_docs.add(attachment_uuid)
 
     for field in original_fields:
+        if keeps_live_geometry(field):
+            payload.append(copy.deepcopy(field))
+            for attachment_uuid in dict.fromkeys(_area_uuids(field)):
+                if attachment_uuid in covered_uuids:
+                    _emit(attachment_uuid)
+            continue
         unique = list(dict.fromkeys(_area_uuids(field)))
         on_covered = [item for item in unique if item in covered_uuids]
         on_open = [item for item in unique if item not in covered_uuids]

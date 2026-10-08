@@ -12,7 +12,13 @@ from pathlib import Path
 
 import pytest
 
-from dashboard.palmetto_docuseal_apply import BLANK_BY_DESIGN, PalmettoApplyError, plan_merge
+from dashboard.palmetto_docuseal_apply import (
+    BLANK_BY_DESIGN,
+    SIGNATURE_GEOMETRY_EXCEPTIONS,
+    PalmettoApplyError,
+    keeps_live_geometry,
+    plan_merge,
+)
 from dashboard.services.docuseal_service import DocuSealService
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -279,12 +285,11 @@ def test_mixed_field_keeps_uncovered_areas_on_the_original_object():
     sig_uuid = "c6a72bbd-4bf1-40fe-afae-f46cc82079d3"
     sig = payload[sig_uuid]
     sig_src = originals[sig_uuid]
-    assert sig["name"] == "agent_signature_4"
-    assert sig["submitter_uuid"] == sig_src["submitter_uuid"]
-    assert sig["areas"] == [area for area in sig_src["areas"] if area["attachment_uuid"] == waiver]
-    assert len(sig["areas"]) == 1
+    assert sig == sig_src
+    assert any(area["attachment_uuid"] == waiver for area in sig["areas"])
+    assert len(sig["areas"]) == 4
 
-    # All-covered span is dropped. Each covered document gets its own field.
+    # All-covered text span is dropped. Each covered document gets its own field.
     assert "fdb47b90-ca53-4e6d-9180-fefc49763b7f" not in payload
     covered_agent = [
         field for field in plan["fields"]
@@ -295,6 +300,8 @@ def test_mixed_field_keeps_uncovered_areas_on_the_original_object():
     assert all(field.get("uuid") != "fdb47b90-ca53-4e6d-9180-fefc49763b7f" for field in covered_agent)
 
     for field in plan["fields"]:
+        if keeps_live_geometry(field):
+            continue
         attachments = {area.get("attachment_uuid") for area in field.get("areas") or []}
         assert not (attachments & COVERED and attachments & UNCOVERED)
 
@@ -310,7 +317,8 @@ def test_covered_documents_use_live_prefill_names():
     assert "defendant_name" in flat
     assert "app_defendant_name" not in flat
     indemnity = _doc(plan, "indemnity-agreement")
-    assert "agent_signature_4" in indemnity["removed"]
+    assert "agent_signature_4" in indemnity["kept"]
+    assert "agent_signature_4" not in indemnity["removed"]
     waiver = next(row for row in plan["documents"] if row["document"] == "master-waiver")
     assert "agent_signature_4" in waiver["kept"]
     written = []
@@ -348,6 +356,8 @@ def test_covered_fill_fields_match_prefill_or_the_blank_allowlist():
     for field in plan["fields"]:
         if field.get("type") not in FILLED_TYPES:
             continue
+        if keeps_live_geometry(field):
+            continue
         areas = field.get("areas") or []
         if not any(area.get("attachment_uuid") in COVERED for area in areas):
             continue
@@ -362,6 +372,57 @@ def test_covered_fill_fields_match_prefill_or_the_blank_allowlist():
     assert "defendant_name" in seen_filled
     assert "numeric_full_bond_amount" in seen_filled
     assert values["agent_name"] == "FAKE AGENT RIVERA"
+
+
+def _areas_within(left, right, tolerance=0.005):
+    if left.get("page") != right.get("page"):
+        return False
+    if left.get("attachment_uuid") != right.get("attachment_uuid"):
+        return False
+    return all(
+        abs(float(left[key]) - float(right[key])) <= tolerance
+        for key in ("x", "y", "w", "h")
+    )
+
+
+def test_signature_geometry_exceptions_are_justified():
+    for name, reason in SIGNATURE_GEOMETRY_EXCEPTIONS.items():
+        assert str(name).strip()
+        assert str(reason).strip()
+
+
+def test_signature_initials_and_date_signed_keep_live_areas():
+    """Live signature, initials, and date-signed boxes stay put.
+
+    A miss, or a move larger than half a percent of the page, fails unless
+    the field name is on SIGNATURE_GEOMETRY_EXCEPTIONS with a reason.
+    """
+    template = _load()
+    plan = plan_merge(template)
+    payload = {field["uuid"]: field for field in plan["fields"] if field.get("uuid")}
+    checked = 0
+    for field in template["fields"]:
+        if not keeps_live_geometry(field):
+            continue
+        covered = [
+            area for area in field.get("areas") or []
+            if area.get("attachment_uuid") in COVERED
+        ]
+        if not covered:
+            continue
+        name = str(field.get("name") or "")
+        if name in SIGNATURE_GEOMETRY_EXCEPTIONS:
+            continue
+        got = payload.get(field["uuid"])
+        assert got is not None, f"missing {field.get('type')} {name or field['uuid']}"
+        assert got["name"] == field["name"]
+        assert got["type"] == field["type"]
+        assert got["submitter_uuid"] == field["submitter_uuid"]
+        assert len(got.get("areas") or []) == len(field.get("areas") or [])
+        for live_area, put_area in zip(field["areas"], got["areas"]):
+            assert _areas_within(live_area, put_area), (name or field["uuid"], live_area, put_area)
+        checked += 1
+    assert checked >= 8
 
 
 def test_appearance_bond_is_not_written_onto_template_5():

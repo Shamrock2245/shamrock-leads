@@ -174,8 +174,10 @@ def _application() -> List[Dict[str, Any]]:
         _f(d, "app_signed_day", "text", df, 134, 723, 32, 12, "day", required=True),
         _f(d, "app_signed_month", "text", df, 198, 723, 298, 12, "month", required=True),
         _f(d, "app_signed_year", "text", df, 512, 723, 70, 12, "year", required=True),
-        _f(d, "app_agent_signature", "signature", bd, 40, 732, 200, 18, ""),
-        _f(d, "app_defendant_signature", "signature", df, 400, 732, 170, 20, ""),
+        # Live template 5 agent_signature_5 / defendant_signature_3. The measured
+        # guess sat left of the AGENT WITNESS line; these are the live areas.
+        _f(d, "app_agent_signature", "signature", bd, 130.97, 736.30, 155.45, 22.89, ""),
+        _f(d, "app_defendant_signature", "signature", df, 403.31, 736.30, 168.30, 20.52, ""),
     ]
     relatives = [
         (385, "app_parent", "def_parent_name", "def_parent_address", "def_parent_phone"),
@@ -234,9 +236,14 @@ def _indemnity() -> List[Dict[str, Any]]:
         _f(d, "ind_signed_day", "text", ind, 252, 628, 58, 12, "day", required=True),
         _f(d, "ind_signed_month", "text", ind, 340, 628, 155, 12, "month", required=True),
         _f(d, "ind_signed_year", "text", ind, 510, 628, 80, 12, "year", required=True),
-        _f(d, "ind_defendant_signature", "signature", df, 310, 632, 180, 16, ""),
-        _f(d, "ind_indemnitor_signature", "signature", ind, 310, 650, 180, 16, ""),
-        _f(d, "ind_coindemnitor_signature", "signature", co, 310, 668, 180, 16, ""),
+        # Live template 5 rows. The previous y values sat one line too high.
+        _f(d, "ind_defendant_signature", "signature", df, 322.93, 641.31, 250.15, 19.14, ""),
+        _f(d, "ind_indemnitor_signature", "signature", ind, 322.32, 659.66, 250.15, 19.14, ""),
+        _f(d, "ind_coindemnitor_signature", "signature", co, 321.71, 677.20, 250.15, 19.14, ""),
+        # Three WITNESSES lines. Live field agent_signature_4 (also on the waiver).
+        _f(d, "agent_signature_4", "signature", bd, 95.41, 639.72, 190.82, 19.94, ""),
+        _f(d, "agent_signature_4", "signature", bd, 96.02, 659.66, 190.82, 19.94, ""),
+        _f(d, "agent_signature_4", "signature", bd, 95.41, 679.60, 190.82, 19.94, ""),
         _f(d, "ind_notary_state", "text", ind, 76, 700, 200, 12, "state"),
         _f(d, "ind_notary_county", "text", ind, 84, 708, 200, 12, "county"),
         _f(d, "ind_notary_day", "text", ind, 74, 722, 42, 12, "day"),
@@ -288,8 +295,12 @@ def _collateral() -> List[Dict[str, Any]]:
         _f(d, "cr_card_fee_pct", "text", bd, 186, 541, 100, 12, "card_fee_percent"),
         _f(d, "cr_received_by", "text", bd, 438, 552, 160, 14, "agent_name", required=True),
         _f(d, "cr_in_trust_for", "text", bd, 432, 568, 50, 14, "indemnitor_name"),
-        _f(d, "cr_agent_signature", "signature", bd, 140, 744, 150, 16, ""),
-        _f(d, "cr_indemnitor_signature", "signature", ind, 380, 744, 190, 16, ""),
+        # Live template 5. Received By is agent_signature_4. The return block is
+        # agent_signature_5 (agent) and the bottom agent line is agent_signature_6.
+        _f(d, "agent_signature_4", "signature", bd, 433.36, 540.59, 155.25, 23.68, ""),
+        _f(d, "agent_signature_5", "signature", bd, 87.41, 731.57, 183.98, 28.41, ""),
+        _f(d, "cr_agent_signature", "signature", bd, 364.29, 764.72, 213.93, 20.52, ""),
+        _f(d, "cr_indemnitor_signature", "signature", ind, 400.97, 730.78, 190.70, 14.21, ""),
     ]
 
 
@@ -309,8 +320,9 @@ def _information_sheet() -> List[Dict[str, Any]]:
         _f(d, "bbis_poa_1", "text", ROLE_BONDSMAN, 350, 154, 226, 13, "poa_1", required=True),
         _f(d, "bbis_poa_2", "text", ROLE_BONDSMAN, 350, 168, 228, 13, "poa_2"),
         # SIGN lines at y=681. Left x=58–255, right x=366–580.
-        _f(d, "bbis_sign_left", "signature", ROLE_DEFENDANT, 64, 666, 188, 14, ""),
-        _f(d, "bbis_sign_right", "signature", ROLE_INDEMNITOR, 374, 666, 200, 14, ""),
+        # Live template 5 defendant_signature_3 and indemnitor_signature_3.
+        _f(d, "bbis_sign_left", "signature", ROLE_DEFENDANT, 56.92, 657.36, 216.65, 22.97, ""),
+        _f(d, "bbis_sign_right", "signature", ROLE_INDEMNITOR, 366.59, 655.78, 199.51, 22.18, ""),
         # Unlabeled rule under the right SIGN, y=705, x=366–580.
         _f(d, "bbis_sign_right_second", "signature", ROLE_COINDEMNITOR, 368, 690, 208, 14, ""),
     ]
