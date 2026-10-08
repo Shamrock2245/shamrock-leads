@@ -8,6 +8,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 - **Palmetto application and indemnity.** Each AGENT line keeps `agent_name` and adds `agent_license` on the same row, filled from that same `BOND_AGENTS` pair. The boxes are the template 6 placement verified at 08:27 ET (`AGENT_LINE_BOXES`). The application name and license set `valign: bottom` and `font_size: 11`. Both license boxes set `align: right`. An omitted `preferences` dict leaves the field unchanged. Templates 1 and 5 are not changed by this commit.
 
+## [Unreleased] — 2026-10-08 (Miami-Dade unknown bond, fail loud)
+
+### Fixed
+- **Miami-Dade (FL):** the ArcGIS jail-bookings layer has no bond field, but the scraper wrote `Bond_Amount="0"` on every row, so Write Bond showed $0. It also wrote `UNKNOWN CHARGE` when no charge was listed. Now the bond is `""` (unknown, `bond_published: False`) and the charge is empty. `NO_BOND_ROSTER_COUNTIES` includes Miami-Dade, so legacy docs with a scraped `"0"` hydrate as unknown, and a staff amount still wins. The fetch uses plain `requests` (curl_cffi impersonation retired). It pages to the server's `returnCountOnly` total and raises `MiamiDadeContractError` on an HTTP or ArcGIS error, field drift, a repeated ObjectId or a short walk. Before, it logged and returned a truncated batch. Box read smoke on 2026-10-08: 360/360 rows (Oct 5–7), 353 with charges, 0 bonds, 3.7 s. The matrix stays `recon_only` and Health stays `unverified`: the `GlobalID` key is not a source booking number, and it is unproven whether it survives the layer's daily overwrite (`docs/recon/FL_MIAMI_DADE_ARCGIS_2026-10-08.md`).
+
 ## [Unreleased] — 2026-10-08 (SwipeSimple locked amount from the BondCase)
 
 ### Fixed

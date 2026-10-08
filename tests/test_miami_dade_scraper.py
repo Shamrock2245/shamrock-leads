@@ -30,7 +30,8 @@ class TestMiamiDadeCountyScraper(unittest.TestCase):
         self.assertEqual(record.Booking_Date, "2026-08-14")
         self.assertEqual(record.Status, "Unknown")
         self.assertEqual(record.extra_data["booking_key_origin"], "official public ArcGIS GlobalID/ObjectId")
-        self.assertEqual(record.Bond_Amount, "0")
+        self.assertEqual(record.Bond_Amount, "")  # no bond field: unknown, never $0
+        self.assertIs(record.extra_data["bond_published"], False)
 
     def test_falls_back_to_source_object_id(self):
         record = self.scraper._parse_record(
