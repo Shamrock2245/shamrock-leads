@@ -9,7 +9,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **SmartWEB JAIL View (FL shared helper `scrapers/fl_smartweb.py`):** the card text walk read up to 15 following table rows, past the next inmate's photo row. A card with no charge grid (and no money on its own `Bond Amount:` label) fell back to the next card's `Bond Amount:`, so that booking was written with someone else's bond. The card is now the photo row plus following rows up to the next `bookno=` photo (`_card_rows`), and the header, card-level bond and charge grid all read only those rows. A card with no published bond stays `""`. Folds in the earlier unmerged branch `fix/smartweb-bound-card-bond` (88ab5e5). Affects every county on the helper: Bradford, Dixie, Escambia, Gilchrist, Hamilton, Madison, Putnam, Santa Rosa, Sumter, Taylor (and Glades once it moves onto the helper); stored rows already written with a bled bond need a Leads Ops correction (read-only key list prepared separately, no data changed here).
 
 ### Tests
-- `tests/test_fl_smartweb_unknown_bond.py` (already in the `ci.yml` list): empty card next to a rich card stays `""`; card-level `$0.00` stays unknown when the next card is positive; a `NO BOND` card with no charges does not take the next card's `$15,000`. All three fail on main without the fix.
+- `tests/test_fl_smartweb_unknown_bond.py` (already in the `ci.yml` list): empty card next to a rich card stays `""`; card-level `$0.00` stays unknown when the next card is positive; a `NO BOND` card with no charges does not take the next card's `$15,000`. The first and third fail on main; the `$0.00` one is a guard that already passes.
 
 ## [Unreleased] — 2026-10-08 (Hendry fail closed: person id only)
 
