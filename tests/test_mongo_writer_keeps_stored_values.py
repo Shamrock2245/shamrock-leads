@@ -135,5 +135,45 @@ def test_skip_log_names_fields_and_booking_key_only(caplog):
     with caplog.at_level("INFO", logger="writers.mongo_writer"):
         _writer(arrests).write_records([rec], "Orange")
     kept = [r.getMessage() for r in caplog.records if "kept stored charges/bond pair" in r.getMessage()]
-    assert kept and "FL/Orange/B1" in kept[0] and "charges" in kept[0] and "bond_amount_raw" in kept[0]
+    assert kept and "key=FL/Orange/B1" in kept[0] and "reason=empty_pair" in kept[0]
+    assert "charges" in kept[0] and "bond_amount_raw" in kept[0]
     assert not any("ZZTESTNAME" in r.getMessage() for r in caplog.records)
+
+
+def _kept_logs(caplog):
+    return [r.getMessage() for r in caplog.records if "kept stored charges/bond pair" in r.getMessage()]
+
+
+def test_partial_pair_reason_when_charges_empty_and_bond_published(caplog):
+    arrests = FakeArrests([_stored("B1", "Orange")])
+    with caplog.at_level("INFO", logger="writers.mongo_writer"):
+        _writer(arrests).write_records([_rec("B1", charges="", bond="2500")], "Orange")
+    doc = arrests.one("B1")
+    assert (doc["charges"], doc["bond_amount_raw"]) == ("BATTERY", "1500")
+    logs = _kept_logs(caplog)
+    assert len(logs) == 1 and "reason=partial_pair" in logs[0] and "key=FL/Orange/B1" in logs[0]
+    assert "protected=charges" in logs[0]
+
+
+def test_partial_pair_reason_when_bond_empty_and_charges_published(caplog):
+    arrests = FakeArrests([_stored("B1", "Orange")])
+    with caplog.at_level("INFO", logger="writers.mongo_writer"):
+        _writer(arrests).write_records([_rec("B1", charges="DUI", bond="")], "Orange")
+    doc = arrests.one("B1")
+    assert (doc["charges"], doc["bond_amount_raw"]) == ("BATTERY", "1500")
+    logs = _kept_logs(caplog)
+    assert len(logs) == 1 and "reason=partial_pair" in logs[0] and "protected=bond" in logs[0]
+
+
+def test_nothing_stored_on_the_empty_side_writes_the_incoming_values(caplog):
+    # Stored charges empty; incoming charges empty, bond published: nothing to protect.
+    arrests = FakeArrests([_stored("B1", "Orange", charges="", bond_raw="1500", bond=1500.0),
+                           _stored("B2", "Orange", charges="BATTERY", bond_raw="", bond=0.0)])
+    with caplog.at_level("INFO", logger="writers.mongo_writer"):
+        _writer(arrests).write_records(
+            [_rec("B1", charges="", bond="2500"), _rec("B2", charges="DUI", bond="")], "Orange"
+        )
+    assert (arrests.one("B1")["charges"], arrests.one("B1")["bond_amount_raw"]) == ("", "2500")
+    # Stored bond empty; incoming bond empty, charges published: write the new charges.
+    assert (arrests.one("B2")["charges"], arrests.one("B2")["bond_amount_raw"]) == ("DUI", "")
+    assert _kept_logs(caplog) == []

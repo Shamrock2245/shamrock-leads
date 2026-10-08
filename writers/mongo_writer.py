@@ -61,6 +61,11 @@ def keep_stored_source_values(collection, pending) -> int:
       (charges, charge_details, bond_amount, bond_amount_raw, bond_type) is
       dropped from ``$set``. The doc then never mixes old charges with a new
       blank bond, or the reverse.
+    - A stored side with nothing to protect (empty charges, or a missing or
+      zero bond) does not hold anything back; the incoming values are written.
+    - The skip is logged with ``reason=partial_pair`` when the other incoming
+      side was published (held back for the bond re-check worker), or
+      ``reason=empty_pair`` when both incoming sides were empty.
     - Otherwise every scraped value is written. A published value, including a
       real "0", replaces the stored one.
     - A stored zero bond is not protected: the 2026-10 sweep showed most
@@ -89,21 +94,27 @@ def keep_stored_source_values(collection, pending) -> int:
         existing = stored.get(key)
         if not existing:
             continue  # new booking: the empty value is the truth we have
-        empty_sides = []
-        if "charges" in doc and _blank(doc.get("charges")) and not _blank(existing.get("charges")):
-            empty_sides.append("charges")
-        if ("bond_amount_raw" in doc and _blank(doc.get("bond_amount_raw"))
-                and _stored_bond_is_positive(existing)):
-            empty_sides.append("bond")
-        if not empty_sides:
-            continue
+        incoming_charges_empty = "charges" in doc and _blank(doc.get("charges"))
+        incoming_bond_empty = "bond_amount_raw" in doc and _blank(doc.get("bond_amount_raw"))
+        # Protect only a stored side that has something to protect: non-empty
+        # charges, or a positive bond (a stored zero is not protected).
+        protected_sides = []
+        if incoming_charges_empty and not _blank(existing.get("charges")):
+            protected_sides.append("charges")
+        if incoming_bond_empty and _stored_bond_is_positive(existing):
+            protected_sides.append("bond")
+        if not protected_sides:
+            continue  # nothing stored on the empty side: write the incoming values
         dropped = [f for f in CHARGE_FIELDS + BOND_FIELDS if f in doc]
         for f in dropped:
             doc.pop(f, None)
         kept += 1
+        # partial_pair: one incoming side was published and is held back with
+        # the stored pair; the bond re-check worker can pick these up later.
+        reason = "partial_pair" if incoming_charges_empty != incoming_bond_empty else "empty_pair"
         logger.info(
-            "kept stored charges/bond pair for %s/%s/%s (empty scraped %s; skipped fields %s)",
-            key[0], key[1], key[2], "+".join(empty_sides), ",".join(dropped),
+            "kept stored charges/bond pair reason=%s key=%s/%s/%s protected=%s skipped_fields=%s",
+            reason, key[0], key[1], key[2], "+".join(protected_sides), ",".join(dropped),
         )
     return kept
 
