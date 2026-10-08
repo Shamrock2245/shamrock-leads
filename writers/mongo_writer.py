@@ -9,6 +9,7 @@ Handles:
 """
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 
@@ -21,6 +22,77 @@ from core.staff_edits import fetch_provenance_docs, protect_scraped_update
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+
+STORED_SOURCE_PROJECTION = {
+    "_id": 0, "state": 1, "county": 1, "booking_number": 1,
+    "charges": 1, "bond_amount": 1, "bond_amount_raw": 1,
+}
+
+
+def _blank(value) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip()) or value == []
+
+
+def _stored_bond_is_positive(existing: dict) -> bool:
+    raw = existing.get("bond_amount_raw")
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return float(re.sub(r"[^0-9.]", "", raw) or 0) > 0
+        except ValueError:
+            return False
+    try:
+        return float(existing.get("bond_amount") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def keep_stored_source_values(collection, pending) -> int:
+    """Drop empty ``charges`` / bond fields from ``$set`` when the stored doc has them.
+
+    ``pending`` is ``[(idx, record, (state, county, booking), doc)]``; each
+    ``doc`` is edited in place. Rules:
+
+    - ``charges``: an empty scraped value never replaces non-empty stored charges.
+    - Bond (``bond_amount`` + ``bond_amount_raw``): an empty scraped raw value
+      never replaces a stored **positive** amount. A stored zero is not
+      protected: the 2026-10 sweep showed most historic scraped "0" values were
+      invented for unpublished bonds, so unknown ("") may replace them.
+    - Any non-empty scraped value (including a published "0") replaces the
+      stored one.
+
+    One read per (state, county) for just the bookings with an empty field. A
+    failed read raises: writing blind could blank stored values.
+    """
+    need = [(key, doc) for _, _, key, doc in pending
+            if ("charges" in doc and _blank(doc.get("charges")))
+            or ("bond_amount_raw" in doc and _blank(doc.get("bond_amount_raw")))]
+    if not need:
+        return 0
+    by_scope: dict = {}
+    for (state, county, booking), _ in need:
+        by_scope.setdefault((state, county), []).append(booking)
+    stored: dict = {}
+    for (state, county), bookings in by_scope.items():
+        query = {"state": state, "county": county, "booking_number": {"$in": bookings}}
+        for d in collection.find(query, STORED_SOURCE_PROJECTION):
+            stored[(d.get("state"), d.get("county"), d.get("booking_number"))] = d
+    kept = 0
+    for key, doc in need:
+        existing = stored.get(key)
+        if not existing:
+            continue  # new booking: the empty value is the truth we have
+        touched = False
+        if "charges" in doc and _blank(doc.get("charges")) and not _blank(existing.get("charges")):
+            doc.pop("charges", None)
+            touched = True
+        if ("bond_amount_raw" in doc and _blank(doc.get("bond_amount_raw"))
+                and _stored_bond_is_positive(existing)):
+            doc.pop("bond_amount_raw", None)
+            doc.pop("bond_amount", None)
+            touched = True
+        kept += int(touched)
+    return kept
 
 
 class MongoWriter:
@@ -286,6 +358,12 @@ class MongoWriter:
         # charge edits; their $set is rewritten so scraped values land in
         # scraped_* fields instead of replacing staff values. A failed read
         # raises: writing blind could clobber staff edits.
+        # An empty scraped charges/bond never blanks a stored value (a missed
+        # detail fetch or a source that omits a field this run is not
+        # evidence the value went away). A published value still replaces it.
+        kept = keep_stored_source_values(self.arrests, pending) if pending else 0
+        if kept:
+            logger.info("%s: kept stored charges/bond (empty in this scrape) on %d record(s)", county, kept)
         staff_docs = fetch_provenance_docs(self.arrests, [key for _, _, key, _ in pending]) if pending else {}
         protected = 0
         for idx, record, key, doc in pending:

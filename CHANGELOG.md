@@ -3,6 +3,12 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (writer keeps stored charges/bond over empty scrapes)
+
+### Fixed
+- **`MongoWriter.write_records` never blanks stored charges or bond.** The upsert `$set`s the whole doc, so a run that emitted empty `charges` or bond (Orange or Okaloosa with a source `charges: []`, or any missed detail) overwrote the stored values. Now `keep_stored_source_values` makes one read per (state, county), for only the bookings with an empty field. An empty scraped `charges` never replaces non-empty stored charges, and an empty bond never replaces a stored positive `bond_amount`/`bond_amount_raw`. Any published value, including a real `"0"`, still replaces the stored one. A stored zero bond is not protected, because most historic scraped `"0"` values were invented for unpublished bonds. A failed read raises instead of writing blind. Staff-edit protection is unchanged and runs after this.
+- Tests: `tests/test_mongo_writer_keeps_stored_values.py`.
+
 ## [Unreleased] — 2026-10-08 (Okaloosa FL Inmate Locator API)
 
 ### Fixed
