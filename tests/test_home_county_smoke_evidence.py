@@ -76,7 +76,8 @@ def test_home_counties_matrix_state_after_source_checks():
         assert _matrix_status(text, county) == "candidate_productive", county
     for county in ("Charlotte", "Manatee", "Hendry", "DeSoto"):
         assert _matrix_status(text, county) == "recon_only", county
-    assert "| FL | 67 | 67 | 4 | 18 | 28 | 0 | 17 |" in text
+    # 2026-10-08: main also moved Orange (#134) and Indian River (#136) to candidate_productive.
+    assert "| FL | 67 | 67 | 4 | 20 | 26 | 0 | 17 |" in text
 
 
 def test_no_home_county_is_promoted_in_health():
