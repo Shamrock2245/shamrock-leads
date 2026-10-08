@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (Glades plain requests via the shared SmartWEB helper)
+
+### Changed
+- **Glades (FL) drops curl_cffi impersonation.** `scrapers/counties/glades.py` now reads the SmartWEB JAIL View through the shared plain-`requests` `scrapers/fl_smartweb.py` helper (booking-date window of 365 days + Current Inmates Only, then AddMoreResults). Live 2026-10-08: plain GET 200, no challenge, 28/28 current cards keyed on the source `GCSO<YY>JBN<NNNNNN>`, 28 with charges and booking date, 10 positive bonds, 18 unknown, none "0". The bond rules are unchanged from #139: a printed charge `$0.00` is a real 0, a card-level `$0.00` stays unknown, and any NO BOND charge makes the total unknown.
+
+### Tests
+- `tests/test_glades_no_impersonation_path.py` (added to the `ci.yml` list). The shared card-boundary fix this branch carried is dropped in favour of main's version from #150.
+
 ## [Unreleased] — 2026-10-08 (SmartWEB bond bleed: card text bound to its own card)
 
 ### Fixed
@@ -10,6 +18,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `tests/test_fl_smartweb_unknown_bond.py` (already in the `ci.yml` list): empty card next to a rich card stays `""`; card-level `$0.00` stays unknown when the next card is positive; a `NO BOND` card with no charges does not take the next card's `$15,000`. The first and third fail on main; the `$0.00` one is a guard that already passes.
+
 ## [Unreleased] — 2026-10-08 (Collier/Glades bond cleanup prep, NOT RUN)
 
 ### Added

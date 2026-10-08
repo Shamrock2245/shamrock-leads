@@ -23,3 +23,9 @@ So the card-level field is never the booking total: it is NO BOND when the charg
 - No charge cells → the card-level `Bond Amount` is used only if positive, else `""`.
 
 Re-parse of the same live page with the #139 parser: 14 empty, 6 positive.
+
+## Plain requests (2026-10-08 ~10:45 AM ET)
+`glades.py` now uses the shared `scrapers/fl_smartweb.py` helper. curl_cffi impersonation is retired, and there is no proxy, stealth or CAPTCHA.
+- Plain `requests` GET of `jail.aspx` returned HTTP 200 (about 25 KB) with no Cloudflare challenge, and the search form was present.
+- Scraper read over a 365-day window: 28 cards, 28 keyed `GCSO<YY>JBN<NNNNNN>`, 28 with charges, 28 with a booking date.
+- Bonds: 10 positive, 18 unknown, none `"0"`.
