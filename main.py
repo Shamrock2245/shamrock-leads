@@ -471,8 +471,11 @@ def register_scrapers(sched):
     sched.register_scraper(LeeCountyScraper(), interval_minutes=30)
     sched.register_scraper(SarasotaCountyScraper(), interval_minutes=60)
     sched.register_scraper(CollierCountyScraper(), interval_minutes=75)
-    sched.register_scraper(CharlotteCountyScraper(), interval_minutes=90)
-    sched.register_scraper(ManateeCountyScraper(), interval_minutes=75)
+    # Charlotte + Manatee are relay-only (config/relay_only.py): registered so
+    # `main.py --relay-only` / `main.py Manatee` resolve, never put on a VPS
+    # interval job. Leads Ops runs them from the home relay.
+    sched.register_scraper(CharlotteCountyScraper())
+    sched.register_scraper(ManateeCountyScraper())
     sched.register_scraper(DeSotoCountyScraper(), interval_minutes=180)
     sched.register_scraper(HendryCountyScraper(), interval_minutes=120)
 
@@ -992,6 +995,19 @@ def main():
         misfire_grace_time=300,
     )
     logger.info(f"📋 Total scrapers registered: {len(scheduler._scrapers)}")
+
+    if len(sys.argv) > 1 and sys.argv[1] == "--relay-only":
+        # Leads Ops home relay entry point: run each relay-only county
+        # (config/relay_only.py: Manatee, Charlotte) once from this host's own
+        # residential exit, then exit. Non-zero exit if any run failed.
+        results = scheduler.run_relay_only()
+        failed = [c for c, r in results.items() if not r or r.get("error")]
+        for c, r in results.items():
+            logger.info(f"Relay result {c}: {r}")
+        if failed:
+            logger.error(f"Relay runs failed: {', '.join(failed)}")
+            sys.exit(1)
+        return
 
     if len(sys.argv) > 1:
         county = sys.argv[1]

@@ -1,5 +1,11 @@
 """
-Shared residential / SOCKS proxy helpers for Cloudflare-protected scrapers.
+Shared residential / SOCKS proxy helpers for WAF-protected scrapers.
+
+Users (2026-10-07): Marion and Hillsborough only. Charlotte and Manatee run
+relay-only on the Leads Ops host's own residential exit with no proxy, and
+must never import this module (tests/test_*_no_proxy_path.py). The Playwright
+proxy helpers (``to_playwright_proxy`` / ``to_httpx_proxy``) and
+``require_socks_or_raise`` were removed with their last users.
 
 Resolution order (prefer APE/Warren, fall back to office tunnel):
   1. Explicit ``SCRAPER_SOCKS_PROXY`` / ``SOCKS_PROXY`` env if healthy
@@ -43,46 +49,6 @@ def _normalize_playwright_proxy(proxy_url: str) -> str:
     if "://" not in u and u:
         return f"socks5://{u}"
     return u
-
-
-def to_playwright_proxy(proxy_url: str) -> Dict[str, str]:
-    """Build a Playwright ``browser.launch(proxy=...)`` dict.
-
-    Playwright does not reliably parse ``user:pass@host`` inside ``server``.
-    Split credentials into username/password fields for HTTP and SOCKS proxies.
-    """
-    raw = _normalize_playwright_proxy(proxy_url)
-    if not raw:
-        raise ValueError("empty proxy_url")
-
-    # Ensure scheme for urlparse
-    if "://" not in raw:
-        raw = f"socks5://{raw}"
-
-    parsed = urlparse(raw)
-    scheme = (parsed.scheme or "socks5").lower()
-    host = parsed.hostname or ""
-    port = parsed.port
-    if not host:
-        # Fallback: treat whole string as server
-        return {"server": raw}
-
-    if port:
-        server = f"{scheme}://{host}:{port}"
-    else:
-        server = f"{scheme}://{host}"
-
-    out: Dict[str, str] = {"server": server}
-    if parsed.username:
-        out["username"] = unquote(parsed.username)
-    if parsed.password:
-        out["password"] = unquote(parsed.password)
-    return out
-
-
-def to_httpx_proxy(proxy_url: str) -> str:
-    """Return proxy URL suitable for httpx ``proxy=`` (credentials in URL OK)."""
-    return _normalize_playwright_proxy(proxy_url)
 
 
 def _parse_socks_host_port(proxy_url: str) -> tuple[str, int]:
@@ -175,24 +141,6 @@ def http_proxy_endpoint_ok(proxy_url: str, timeout: float = 3.0) -> bool:
     except Exception as e:
         logger.warning("[proxy] HTTP proxy endpoint check failed: %s", e)
         return False
-
-
-def require_socks_or_raise(proxy_url: Optional[str] = None) -> str:
-    """Return proxy URL if healthy, else raise RuntimeError with ops guidance.
-
-    Prefer :func:`resolve_residential_proxy` when an APE-aware scraper is
-    available — this entry point only checks the legacy SOCKS tunnel path.
-    """
-    url = proxy_url or get_socks_proxy_url()
-    if socks5_connect_ok(url):
-        return _normalize_playwright_proxy(url)
-    raise RuntimeError(
-        f"SOCKS proxy unhealthy ({url}). "
-        "Charlotte/Manatee/Sarasota require residential egress "
-        "(APE/Warren or office tunnel on VPS :1080). "
-        "On office iMac: ensure Warren node (com.warren.node) is running, or "
-        "restore reverse-SSH SOCKS to VPS :1080."
-    )
 
 
 def _office_socks_candidates() -> List[str]:

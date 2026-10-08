@@ -40,12 +40,19 @@ from urllib.parse import urljoin
 from core.models import ArrestRecord
 from scrapers.scraper_resilience import EgressBlocked, ParseDriftError
 
-# #113's Cloudflare challenge/block classifier, shared rather than copied.
-from scrapers.counties.manatee import is_egress_block  # noqa: F401  (re-exported)
+# #113/#121's Cloudflare classifier and plain (no proxy, no stealth) browser
+# helpers, shared rather than copied.
+from scrapers.counties.manatee import (  # noqa: F401  (re-exported)
+    browser_env,
+    is_egress_block,
+    launch_plain_browser,
+    wait_for_page,
+)
 
 logger = logging.getLogger(__name__)
 
-EGRESS_MODES = ("auto", "direct")
+# Revize counties run only from the Leads Ops relay's own residential exit.
+EGRESS_MODES = ("direct",)
 
 HEADER_ALIASES: Dict[str, Tuple[str, ...]] = {
     "booking": ("booking #", "booking#", "booking no", "booking no.", "booking number", "booking"),
@@ -346,48 +353,39 @@ def extract_published_total(text: str) -> Optional[int]:
 
 # ── Egress ───────────────────────────────────────────────────────────────────
 def egress_mode(env_var: str) -> str:
-    """``<COUNTY>_EGRESS_MODE`` (auto|direct). Unknown values fail loudly."""
-    mode = (os.getenv(env_var) or "auto").strip().lower()
+    """``<COUNTY>_EGRESS_MODE``: only ``direct``. Anything else fails loudly."""
+    mode = (os.getenv(env_var) or "direct").strip().lower()
     if mode not in EGRESS_MODES:
-        raise ValueError(f"{env_var}={mode!r} is not one of {EGRESS_MODES}")
+        raise ValueError(
+            f"{env_var}={mode!r} is not supported; only 'direct' (the host's own "
+            "residential exit). The APE/office SOCKS 'auto' path was removed."
+        )
     return mode
 
 
-def resolve_egress(
-    scraper: Any, *, county: str, env_var: str, sticky_session: str
-) -> Tuple[Optional[str], str]:
-    """``(proxy_url_or_None, source)`` for this run, or raise ``EgressBlocked``.
+def resolve_egress(scraper: Any = None, *, county: str, env_var: str) -> Tuple[None, str]:
+    """Verify this host's own exit is US residential, or raise ``EgressBlocked``.
 
-    ``direct`` never resolves a proxy: the host itself must be a verified US
-    residential exit (an exit whose org/country can't be looked up is
-    unverified and refused, per #113). ``auto`` keeps the existing resolver.
+    Always returns ``(None, "direct")``: there is no proxy to resolve. The exit
+    lookup ignores proxy env vars (``trust_env=False``), and an exit whose
+    org/country can't be looked up is unverified and refused (#113).
     """
-    mode = egress_mode(env_var)
-    if mode == "direct":
-        from scrapers.socks_proxy import validate_residential_proxy
-
-        ok, info = validate_residential_proxy(None, require_residential_exit=True)
-        if not ok:
-            raise EgressBlocked(
-                f"egress_block: {env_var}=direct but this host's exit is not verified US "
-                f"residential (ip={info.get('ip')} org={info.get('org')!r} "
-                f"country={info.get('country')} err={info.get('error')}). Run {county} from "
-                "Leads Ops residential egress with VPN off."
-            )
-        logger.info("[%s] direct residential egress ip=%s org=%s", county, info.get("ip"), info.get("org"))
-        return None, "direct"
-
-    from scrapers.socks_proxy import resolve_residential_proxy
+    egress_mode(env_var)
+    from scrapers.cf_browser import check_exit_ip
 
     try:
-        return resolve_residential_proxy(
-            scraper, sticky_session=sticky_session, require=True, max_ape_attempts=5
-        )
-    except RuntimeError as exc:
+        info = check_exit_ip(None, timeout=15.0, retries=2, trust_env=False)
+    except Exception as exc:  # noqa: BLE001 - any lookup failure is unverified
+        info = {"error": str(exc)}
+    if not info.get("residential_likely"):
         raise EgressBlocked(
-            f"egress_block: no residential exit for {county} Revize ({exc}). "
-            f"Run from Leads Ops residential egress with {env_var}=direct."
-        ) from exc
+            f"egress_block: {env_var}=direct but this host's exit is not verified US "
+            f"residential (ip={info.get('ip')} org={info.get('org')!r} "
+            f"country={info.get('country')} err={info.get('error')}). Run {county} on the "
+            "Leads Ops home relay with VPN off."
+        )
+    logger.info("[%s] direct residential egress ip=%s org=%s", county, info.get("ip"), info.get("org"))
+    return None, "direct"
 
 
 def check_page_egress(
@@ -401,8 +399,8 @@ def check_page_egress(
     ):
         raise EgressBlocked(
             f"egress_block: {county} page {pg} stuck on a Cloudflare challenge/block "
-            f"(HTTP {status}) via {egress_source} exit. Nothing written. Run from residential "
-            f"egress with {env_var}=direct."
+            f"(HTTP {status}) via {egress_source} exit. Nothing written. Run on the Leads "
+            f"Ops home relay with {env_var}=direct."
         )
 
 

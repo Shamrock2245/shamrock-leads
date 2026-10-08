@@ -33,6 +33,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 - **Lead subscriptions (`SAAS_MULTI_TENANT` still default off).** A tenant lead write that fails after the arrest upsert is queued on `lead_fanout_outbox` (booking pointer only, no defendant name) and retried; the arrest row stays. Exclusive county assignment uses a unique `(state, county)` claim, and a duplicate-key race returns `exclusive_taken`. Subscription saves write an `audit_events` row with the actor, reason, and old and new list. The console keeps a configured `price_cents` on save.
 
+## [Unreleased] — 2026-10-07 (Relay-only Manatee + Charlotte)
+
+### Changed
+- **Manatee + Charlotte (FL) are relay-only** (`config/relay_only.py`). The VPS/Hetzner scheduler keeps them registered but gives them no interval job. A dashboard run-now or custody-recheck trigger for either county is marked `relay_only` and is not run on the VPS. The new relay entry point `python main.py --relay-only` runs both once and exits non-zero on any failure; `python main.py <County>` still works. Ops: `docs/ops/REVIZE_RELAY_RUN.md`.
+- **Charlotte (FL):** got the same cleanup as Manatee #121. The APE/Warren + office SOCKS resolver (`CHARLOTTE_EGRESS_MODE=auto`, now a config error) and the Patchright stealth launcher / stealth context are removed. Charlotte now runs stock headless Playwright with `--no-proxy-server` and proxy env vars stripped. The exit check uses `trust_env=False`; an unknown exit is refused; egress blocks fail loud with nothing written. `tests/test_charlotte_no_proxy_path.py` proves no proxy or stealth path is reachable.
+
+### Removed
+- Dead code with no users left: `cf_browser.launch_cf_browser`, `new_stealth_context`, `wait_past_cloudflare`, `_launch_sync_playwright`, `require_residential_exit`, and `socks_proxy.to_playwright_proxy`, `to_httpx_proxy`, `require_socks_or_raise`. The shared resolver (`resolve_residential_proxy`, `validate_residential_proxy`, `curl_cffi_proxies`) stays for Marion and Hillsborough. `check_exit_ip` stays.
+- `docs/COUNTY_REGISTRY.md`: Manatee/Charlotte no longer list the APE/office SOCKS path.
+
+## [Unreleased] — 2026-10-07 (Staff edits survive rescrapes)
+
+### Fixed
+- **All counties:** a staff-set bond (update-bond-amount, update-charge-bonds, update-lead-details, admin patch) and staff-edited charge rows (per-charge amounts, case numbers, POAs, added or removed charges) now survive every rescrape. One module, `core/staff_edits.py`, protects each write path that puts source data on an existing arrest: the shared MongoWriter (every county, including the SSW and SmartWEB helpers), the First Appearance watcher, the custody recheck, the Lee jail refresh, refresh-from-source, the bookmarklet merge and the confirmed-booking refresh. Source values that disagree are kept in `scraped_bond_amount` / `scraped_bond_type` / `scraped_charges` / `scraped_charge_details`. A scraped charge that staff have not seen, removed or replaced is still added. A staff-entered $0 is stored in `staff_edits.bond` and hydrates as a known $0. Existing records are read under their `bond_override` / `MANUAL_CHARGE_BONDS` flags; there is no backfill. In the Write Bond modal a blank per-charge amount stays unknown (it used to be saved as $0), and a POA the modal does not send is kept. Two related fixes. First, the custody recheck read every live field as blank, because `ArrestRecord` has no `to_dict()`, so a recheck could wipe status, bond and charges. It now compares against `to_mongo_doc()` and never writes a value the source did not publish. Second, refresh-from-source no longer writes an unparsed bond as $0. Design note: `docs/STAFF_EDITS_SURVIVE_RESCRAPE.md`.
+
 ## [Unreleased] — 2026-10-07 (surety entitlement review)
 
 ### Fixed
