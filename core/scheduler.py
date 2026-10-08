@@ -15,12 +15,21 @@ try:
     from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
 except ImportError:  # pragma: no cover
     class BackgroundScheduler:  # type: ignore[no-redef]
-        def __init__(self, *args, **kwargs): pass
-        def add_job(self, *args, **kwargs): pass
+        def __init__(self, *args, **kwargs):
+            self._jobs = {}
+        def add_job(self, func, trigger=None, id=None, name=None, args=None, **kwargs):
+            class _Job:
+                def __init__(self, jid, jname):
+                    self.id = jid
+                    self.name = jname
+            job = _Job(id, name)
+            if id: self._jobs[id] = job
+            return job
         def add_listener(self, *args, **kwargs): pass
         def start(self): pass
         def shutdown(self, *args, **kwargs): pass
-        def get_jobs(self): return []
+        def get_jobs(self): return list(self._jobs.values())
+        def get_job(self, job_id): return self._jobs.get(job_id)
     class IntervalTrigger:  # type: ignore[no-redef]
         def __init__(self, *args, **kwargs): pass
     EVENT_JOB_ERROR = 1  # type: ignore[assignment]
