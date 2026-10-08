@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 - **Okaloosa (FL):** rows were saved with no booking date, because the legacy `Default.aspx` grid publishes none and was parsed by walking flattened cells. The scraper now uses the official Inmate Locator's public JSON API with plain `requests`. The roster comes from `/api/Inmates/search`, paged to the source `total` (it raises on a short walk or duplicate keys) and keyed on the source 10-digit `bookingNo`, with `custodyDate` as the booking timestamp. Bond is `totalBondAmt` when greater than 0, and unknown (`""`) otherwise (0 means nothing was published). Charges, statute, degree and per-charge bond come from `/api/Inmates/<bookingNo>` for the last 7 days. Only status `1` (in custody) is emitted. Box read smoke: 781 rows / 781 unique, booking date on all, 11 s. Health stays `unverified` until a Leads Ops write smoke (`docs/recon/FL_OKALOOSA_API_2026-10-08.md`).
+## [Unreleased] — 2026-10-08 (name without license falls back)
+
+### Fixed
+- **Palmetto appearance bonds.** A name that is not in `BOND_AGENTS` and has no license is not printed with a blank license. Resolution continues to the signed-in sub-agent, then the house pair (Brendan O'Neal / P139768). A short label such as Kayla L on Kayla Lukesic's session prints Kayla Lukesic / G356764, and the same label on a PIN-admin or machine path prints the house pair. A non-registry name is kept only when a non-registry license is also present. DocuSeal prefill, the bondsman submitter, the appearance bond, the print route, and the packet forms use that same pair. OSI appearance bonds are unchanged.
 
 ## [Unreleased] — 2026-10-08 (license-only agent pair)
 
