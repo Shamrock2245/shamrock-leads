@@ -31,6 +31,10 @@ def _admin(request: Request) -> bool:
     return role in {"god_admin", "admin"} and is_super_admin_email(email)
 
 
+def _actor(request: Request) -> str:
+    return getattr(request.state, "sl_email", "") or ""
+
+
 @router.get("/platform/leads")
 async def leads_page(request: Request):
     if not multi_tenant_enabled():
@@ -61,8 +65,14 @@ async def api_replace(tenant_id: str, request: Request):
     if not _admin(request):
         return JSONResponse({"error": "platform_admin_required"}, status_code=403)
     payload = await request.json()
+    body = payload if isinstance(payload, dict) else {}
     try:
-        return await replace_subscriptions(tenant_id, payload if isinstance(payload, dict) else {})
+        return await replace_subscriptions(
+            tenant_id,
+            body,
+            actor=_actor(request),
+            reason=str(body.get("reason") or ""),
+        )
     except LeadSubscriptionsDisabled:
         return _disabled()
     except LeadSubscriptionError as exc:

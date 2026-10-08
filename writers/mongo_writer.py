@@ -338,12 +338,9 @@ class MongoWriter:
         )
         if new_record_indexes:
             try:
-                from dashboard.tenancy.flag import multi_tenant_enabled
+                from dashboard.services.lead_subscriptions import record_lead_fanout
 
-                if multi_tenant_enabled():
-                    from dashboard.services.lead_subscriptions import fan_out_if_enabled
-
-                    fan_out_if_enabled(self.db, [records[i] for i in new_record_indexes])
+                record_lead_fanout(self.db, [records[i] for i in new_record_indexes])
             except Exception:
                 logger.exception("lead fan-out skipped")
         return stats

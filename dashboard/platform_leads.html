@@ -76,7 +76,10 @@
         box.querySelectorAll("input[type=checkbox]").forEach(function (input) {
           if (!input.checked) return;
           var mode = box.querySelector("select[data-county='" + input.dataset.county + "']");
-          kept.push({state: selectedState(), county: input.dataset.county, mode: mode.value});
+          var row = {state: selectedState(), county: input.dataset.county, mode: mode.value};
+          var existing = mine[input.dataset.county];
+          if (existing && existing.price_cents != null) row.price_cents = existing.price_cents;
+          kept.push(row);
         });
         fetch("/api/platform/tenants/" + encodeURIComponent(agency.tenant_id) + "/lead-subscriptions", {
           method: "PUT",

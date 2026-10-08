@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-07 (lead subscription review)
+
+### Fixed
+- **Lead subscriptions (`SAAS_MULTI_TENANT` still default off).** A tenant lead write that fails after the arrest upsert is queued on `lead_fanout_outbox` (booking pointer only, no defendant name) and retried; the arrest row stays. Exclusive county assignment uses a unique `(state, county)` claim, and a duplicate-key race returns `exclusive_taken`. Subscription saves write an `audit_events` row with the actor, reason, and old and new list. The console keeps a configured `price_cents` on save.
+
 ## [Unreleased] — 2026-10-07 (surety entitlement review)
 
 ### Fixed
