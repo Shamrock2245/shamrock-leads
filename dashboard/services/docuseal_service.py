@@ -602,6 +602,7 @@ class DocuSealService:
         completed_redirect_url: Optional[str] = None,
         variables: Optional[dict] = None,
         expire_at: Optional[str] = None,
+        send_sms: Optional[bool] = None,
     ) -> Any:
         """
         Create a multi-party submission from an existing template.
@@ -610,6 +611,7 @@ class DocuSealService:
         parties open sign links after PIN unlock.
         order defaults to ``random`` so indemnitor, co-indemnitor, and
         defendant can each open their /s/{slug} link immediately (OpenAPI).
+        send_sms is omitted unless the caller sets it. Staff test cases set it false.
         """
         body: Dict[str, Any] = {
             "template_id": int(template_id) if str(template_id).isdigit() else template_id,
@@ -617,6 +619,8 @@ class DocuSealService:
             "order": order,
             "submitters": submitters,
         }
+        if send_sms is not None:
+            body["send_sms"] = bool(send_sms)
         if message:
             body["message"] = message
         if completed_redirect_url:
@@ -1615,6 +1619,7 @@ class DocuSealService:
         include_defendant: bool = True,
         completed_redirect_url: Optional[str] = None,
         skip_bond_binding: bool = False,
+        staff_test_case: bool = False,
     ) -> Dict[str, Any]:
         """
         Build multi-party submitters from bond/packet context and create submission.
@@ -1824,6 +1829,16 @@ class DocuSealService:
         if not submitters:
             raise ValueError("No submitters to create DocuSeal submission")
 
+        if staff_test_case:
+            from dashboard.services.staff_test_case import (
+                force_test_submitter,
+                resolve_signer_email,
+            )
+
+            signer_email = str(bond_data.get("staff_test_signer_email") or "").strip() or resolve_signer_email()
+            submitters = [force_test_submitter(item, signer_email) for item in submitters]
+            send_email = False
+
         portal = (os.getenv("PAPERWORK_PUBLIC_URL") or "").rstrip("/")
         redirect = completed_redirect_url or (f"{portal}/done" if portal else None)
 
@@ -1833,6 +1848,7 @@ class DocuSealService:
             send_email=send_email,
             order=order,
             completed_redirect_url=redirect,
+            send_sms=False if staff_test_case else None,
         )
         result = self.normalize_create_response(raw)
         result["packet_id"] = packet_id

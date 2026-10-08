@@ -137,6 +137,7 @@ async def start_indemnitor_bond_packet(
     poa_record: Any = _POA_UNSET,
     docuseal: Any = None,
     session: Optional[Mapping[str, Any]] = None,
+    staff_test_case: bool = False,
 ) -> Dict[str, Any]:
     """
     Resolve, gate, and submit one indemnitor bond packet.
@@ -214,10 +215,11 @@ async def start_indemnitor_bond_packet(
         bond_data=hydrated,
         indemnitors=parties,
         defendant=defendant,
-        send_email=send_email,
+        send_email=False if staff_test_case else send_email,
         include_defendant=include_defendant,
         completed_redirect_url=completed_redirect_url,
         skip_bond_binding=skip_bond_binding,
+        staff_test_case=staff_test_case,
     )
     return {
         "template_id": template_id,
