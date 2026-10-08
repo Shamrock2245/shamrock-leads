@@ -79,6 +79,7 @@ jobs:
             tests/test_subdomains.py \
             tests/test_unhandled_exception_privacy.py \
             tests/test_dashboard_source_states.py \
+            tests/test_fail_closed_default_leads.py \
             tests/test_scraper_resilience.py \
             tests/test_base_scraper_self_heal.py \
             tests/test_source_state_drift.py \

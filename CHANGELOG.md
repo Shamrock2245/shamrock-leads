@@ -3,6 +3,12 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (fail-closed counties out of the default lead list)
+
+### Fixed
+- **Default lead views.** A county whose source contract is `fail_closed` in `SCRAPER_SOURCE_STATES` (Sarasota, Alachua, Hardee, St. Johns, Lee SC and the rest) no longer shows in the default `/api/leads` list, its CSV export, the bond-ready queue (`/api/ops/defendants`, Command Center), the per-state cards and strip, or the Write Book, SWFL and Florida presets. The rule is generic (`dashboard/services/source_state_filter.py`); there is no Sarasota special case. Rows are not deleted. Staff still see them by picking the county in the county filter or passing `include_fail_closed=true`. `WRITE_ELIGIBLE_COUNTIES`, which gates where the agency may write paper, is unchanged; only the preset list sent to the dashboard drops fail-closed counties. The lead-subscription seed already skipped fail-closed counties at runtime and now has a test.
+- **Presets load the fail_closed list first.** The SWFL, Florida and Write Book presets (Lead Explorer and Defendants) now load `/api/leads/fail-closed-counties` before seeding the county filter, so opening Defendants first no longer sends Sarasota or Hardee by name. Naming `Sarasota County (FL)` is now an opt-in like `Sarasota (FL)`.
+
 ## [Unreleased] — 2026-10-08 (home counties out of recon_only)
 
 ### Changed
