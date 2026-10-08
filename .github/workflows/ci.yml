@@ -127,6 +127,7 @@ jobs:
             tests/test_docuseal_initial_delivery.py \
             tests/test_defendant_delivery_authorization.py \
             tests/test_paperwork_hub.py \
+            tests/test_osi_stitch_placement.py \
             tests/test_staff_chain_ensure.py \
             tests/test_rearrest_detector.py \
             tests/test_book_watch_review.py \

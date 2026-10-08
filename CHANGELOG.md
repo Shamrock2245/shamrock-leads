@@ -8,6 +8,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 - **DocuSeal packets.** Write Bond finalize, push to DocuSeal, and Shannon voice no longer send a blank agent. The bondsman name and license are one pair: the explicit writing agent when that name or license is a `BOND_AGENTS` entry, otherwise the signed-in sub-agent's own entry, otherwise the house row (Brendan O'Neal / P139768). `BOND_AGENT_NAME` and `BOND_AGENT_LICENSE` override the house row only when both are set. A filtered label such as Master Admin is not printed. The template sample `Brendan ONeal` is not used. Palmetto appearance bonds no longer print P139768 under a different name; OSI appearance bonds are unchanged.
 
+## [Unreleased] — 2026-10-08 (OSI local stitch positions)
+
+### Fixed
+- **OSI local one-PDF stitch:** the application, promissory note, disclosure, surety terms, collateral receipt, and indemnity agreement place each value in a measured blank. The promissory note Defendant's Name cell receives the defendant. A form with no blank for a value is left empty. The stamp does not cover body text, the agent block, or print raw `{{ }}` tags.
+
 ## [Unreleased] — 2026-10-07 (Palmetto packet fields)
 
 ### Fixed
