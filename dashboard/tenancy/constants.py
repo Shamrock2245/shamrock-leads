@@ -172,6 +172,8 @@ KNOWN_APP_COLLECTIONS = frozenset(
         "social_queue",
         "source_performance",
         "sub_agents",
+        "surety_template_files",
+        "surety_template_versions",
         "swipesimple_invoice_claims",
         "swipesimple_session_health",
         "system_config",
