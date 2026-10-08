@@ -7,7 +7,9 @@ Receives indemnitor information from ALL sources that previously fed
 Dashboard.html in the GAS project:
   Sources:
     1. wix_portal      — Wix/Velo indemnitor portal (IntakeQueue CMS collection)
-    2. telegram        — Telegram Mini App intake form
+    2. telegram        — Telegram bot
+    2b. telegram_miniapp — Telegram mini-app intake form
+    2c. shannon_voice — Shannon voice agent (727-295-2245)
     3. manual_entry    — Staff manually enters data in the dashboard
     4. walk_in         — Walk-in client (staff enters on their behalf)
     5. phone_call      — Phone intake (staff enters while on call)
@@ -48,7 +50,8 @@ intake_bp = APIRouter(prefix="/api", tags=["intake"])
 VALID_SOURCES = {
     "wix_portal",
     "telegram",
-    "telegram_mini_app",   # alias used by Telegram Mini App
+    "telegram_mini_app",   # legacy alias used by older Telegram Mini App builds
+    "telegram_miniapp",    # canonical mini-app tag
     "manual_entry",
     "walk_in",
     "phone_call",
@@ -56,6 +59,7 @@ VALID_SOURCES = {
     "shamrock-leads-dashboard",
     "elevenlabs_voice",
     "shannon",
+    "shannon_voice",       # canonical Shannon voice tag
 }
 
 @intake_bp.get("/intake/by-booking/{booking_number}")
@@ -78,6 +82,7 @@ SOURCE_LABELS = {
     "wix_portal": "🌐 Wix Portal",
     "telegram": "📱 Telegram",
     "telegram_mini_app": "📱 Telegram Mini App",
+    "telegram_miniapp": "📱 Telegram Mini App",
     "manual_entry": "✏️ Manual Entry",
     "walk_in": "🚶 Walk-In",
     "phone_call": "📞 Phone Call",
@@ -85,6 +90,7 @@ SOURCE_LABELS = {
     "shamrock-leads-dashboard": "☘️ Dashboard",
     "elevenlabs_voice": "🎙 Shannon Voice",
     "shannon": "🎙 Shannon Voice",
+    "shannon_voice": "🎙 Shannon Voice",
 }
 def _normalize_source(raw: str) -> str:
     """Normalize source string to a canonical value."""
@@ -289,12 +295,14 @@ async def _normalize_intake(
     prefix_map = {
         "telegram": "TG",
         "telegram_mini_app": "TG",
+        "telegram_miniapp": "TG",
         "wix_portal": "WX",
         "wix_webhook": "WX",
         "walk_in": "WI",
         "phone_call": "PC",
         "elevenlabs_voice": "SH",
         "shannon": "SH",
+        "shannon_voice": "SH",
         "bookmarklet": "BK",
         "manual_entry": "ME",
         "shamrock-leads-dashboard": "SL",
@@ -457,11 +465,13 @@ async def intake_submit(request: Request):
     prefix_map = {
         "telegram": "TG",
         "telegram_mini_app": "TG",
+        "telegram_miniapp": "TG",
         "wix_portal": "WX",
         "walk_in": "WI",
         "phone_call": "PC",
         "elevenlabs_voice": "SH",
         "shannon": "SH",
+        "shannon_voice": "SH",
         "bookmarklet": "BK",
         "manual_entry": "ME",
         "shamrock-leads-dashboard": "SL",
@@ -541,7 +551,9 @@ async def intake_submit(request: Request):
         # Shannon's create_intake webhook has a short ElevenLabs deadline.
         # Matching can run later from the desk; do not block the voice turn.
         match_result = None
-        skip_match = bool(data.get("skip_match")) or source in ("elevenlabs_voice", "shannon")
+        # Voice tools have a short turn budget. Match-review still runs from the
+        # desk; these sources do not block the call on the matcher.
+        skip_match = bool(data.get("skip_match")) or source in ("elevenlabs_voice", "shannon", "shannon_voice")
         if not skip_match:
             try:
                 from dashboard.services.matching_engine import MatchingEngine

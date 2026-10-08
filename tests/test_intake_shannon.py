@@ -23,6 +23,9 @@ def test_extract_indemnitor_does_not_invent_oneill():
 def test_normalize_shannon_source():
     assert _normalize_source("elevenlabs_voice") == "elevenlabs_voice"
     assert _normalize_source("shannon") == "shannon"
+    assert _normalize_source("shannon_voice") == "shannon_voice"
+    assert _normalize_source("telegram_miniapp") == "telegram_miniapp"
+    assert _normalize_source("telegram") == "telegram"
 
 
 def test_shannon_intake_submit_skips_matching(monkeypatch):
