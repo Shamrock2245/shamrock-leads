@@ -154,7 +154,7 @@ def test_charlotte_walks_all_pages_and_matches_published_total():
         _page([_row(booking="26-004513", last="ROE", first="RICHARD")], text="Showing 2 to 2 of 2 entries"),
     ]
     recs, meta = _walk(pages)
-    assert len(recs) == 2 and meta == {"pages": 2, "rows": 2, "bookings": 2, "published_total": 2}
+    assert len(recs) == 2 and meta == {"pages": 2, "rows": 2, "bookings": 2, "published_total": 2, "columns": HEADERS}
 
 
 def test_charlotte_published_total_mismatch_fails_closed():

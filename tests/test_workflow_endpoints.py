@@ -172,11 +172,12 @@ def test_phone_only_walk_in_is_a_lead_without_invented_county(intake_app):
 def test_wix_portal_submit_fails_closed_and_strips_secret(intake_app):
     client, db, scheduled, _engine = intake_app
     body = _person("wix_portal", secret="should-not-store", apiKey="also-no")
-    missing = client.post("/api/intake/submit", json=body)
-    assert missing.status_code == 503
-    assert db["intake_queue"].docs == []
+    with patch.dict(os.environ, {"WIX_WEBHOOK_SECRET": "", "GAS_API_KEY": ""}):
+        missing = client.post("/api/intake/submit", json=body)
+        assert missing.status_code == 503
+        assert db["intake_queue"].docs == []
 
-    with patch.dict(os.environ, {"WIX_WEBHOOK_SECRET": WIX_SECRET}):
+    with patch.dict(os.environ, {"WIX_WEBHOOK_SECRET": WIX_SECRET, "GAS_API_KEY": ""}):
         denied = client.post(
             "/api/intake/submit",
             json=body,

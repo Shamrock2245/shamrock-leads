@@ -6,16 +6,123 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased] — 2026-10-08 (Indian River charge headers + Bond-row guard)
 
 ### Fixed
-- **Indian River charges.** `parse_detail` only collects `card-header` text inside the Charges section and stops at the next page heading (live: Visitation / Employee Services), so footer cards are never read as charges.
-- **Missing Bond row.** A booking-details page with no Bond label is skipped on scrape and on `_fetch_single_booking` recheck (returns `None`), so a stored bond is not overwritten with `""`. An unrecognised Bond value still yields unknown (`""`); `No Bond` still sets `Bond_Type="NO BOND"` with an empty amount.
+- **Indian River charges.** `parse_detail` collected every `card-header` after the Charges heading, including footer cards further down the page. It now reads only `card-header`s inside charge cards in the Charges section and stops at the next page heading (live: Visitation / Employee Services), so footer cards are never read as charges.
+- **Missing Bond row.** A booking-details page with no Bond label is now skipped on scrape, and `_fetch_single_booking` (custody recheck) returns `None` for it, so a stored bond is never overwritten with `""`. A recheck `None` is recorded as a `source_found: False` note only (status, bond and charges unchanged). The run raises `IndianRiverContractError` if no fetched page has a Bond row (label drift), and logs how many were skipped otherwise. An unrecognised Bond value still yields an unknown bond (`""`), and `No Bond` still sets `Bond_Type="NO BOND"` with an empty amount. No bond is ever invented.
 
 ### Tests
-- `tests/test_fl_indian_river_booking_search.py`: charge-header bound, scrape skip with no Bond row, recheck returns None, run-level mix updated. Fails on the #136 tip without the fix.
+- `tests/test_fl_indian_river_booking_search.py` (already in the `ci.yml` list): charge headers stop at the next section, a scrape skips a detail with no Bond row, the recheck returns `None` for one, and the run-level mix is updated. The new cases fail on main without the fix.
 
+## [Unreleased] — 2026-10-08 (Hernando detail cap)
+
+### Changed
+- **Hernando detail fetches are capped per run** (`MAX_DETAILS_PER_RUN = 200`), in addition to the existing 0.4 s pause before every `JailSearchDetails` GET. A live 7-day window holds about 82 bookings, so the cap is headroom. Rows past it are skipped (not written, so nothing stored is blanked) and are picked up on a later run.
+- Tests: `tests/test_fl_hernando_detail_pacing.py`.
+
+## [Unreleased] — 2026-10-08 (writer keeps stored charges/bond over empty scrapes)
+
+### Fixed
+- **`MongoWriter.write_records` never blanks stored charges or bond.** The upsert `$set`s the whole doc, so a run that emitted empty `charges` or bond (Orange or Okaloosa with a source `charges: []`, or any missed detail) overwrote the stored values. Now `keep_stored_source_values` makes one read per (state, county), for only the bookings with an empty side. Charges and bond are one pair: if either scraped side is empty while the stored side has a value (non-empty charges, or a positive bond), the whole stored pair (`charges`, `charge_details`, `bond_amount`, `bond_amount_raw`, `bond_type`) is kept, so a doc never mixes old charges with a new blank bond or the reverse. Any published value, including a real `"0"`, still replaces the stored pair. A stored zero bond is not protected, because most historic scraped `"0"` values were invented for unpublished bonds. A failed read raises instead of writing blind. A stored side with nothing to protect (empty charges, or a missing or zero bond) holds nothing back, and the incoming values are written. Each skip is logged with only the booking key and field names, never person names. The log gives `reason=partial_pair` when the other incoming side was published and is held back (for the bond re-check worker), or `reason=empty_pair` when both incoming sides were empty. Staff-edit protection is unchanged and runs after this.
+- Tests: `tests/test_mongo_writer_keeps_stored_values.py`.
+
+## [Unreleased] — 2026-10-08 (Glades plain requests via the shared SmartWEB helper)
+
+### Changed
+- **Glades (FL) drops curl_cffi impersonation.** `scrapers/counties/glades.py` now reads the SmartWEB JAIL View through the shared plain-`requests` `scrapers/fl_smartweb.py` helper (booking-date window of 365 days + Current Inmates Only, then AddMoreResults). Live 2026-10-08: plain GET 200, no challenge, 28/28 current cards keyed on the source `GCSO<YY>JBN<NNNNNN>`, 28 with charges and booking date, 10 positive bonds, 18 unknown, none "0". The bond rules are unchanged from #139: a printed charge `$0.00` is a real 0, a card-level `$0.00` stays unknown, and any NO BOND charge makes the total unknown.
+
+### Tests
+- `tests/test_glades_no_impersonation_path.py` (added to the `ci.yml` list). The shared card-boundary fix this branch carried is dropped in favour of main's version from #150.
+
+## [Unreleased] — 2026-10-08 (SmartWEB bond bleed: card text bound to its own card)
+
+### Fixed
+- **SmartWEB JAIL View (FL shared helper `scrapers/fl_smartweb.py`):** the card text walk read up to 15 following table rows, past the next inmate's photo row. A card with no charge grid (and no money on its own `Bond Amount:` label) fell back to the next card's `Bond Amount:`, so that booking was written with someone else's bond. The card is now the photo row plus following rows up to the next `bookno=` photo (`_card_rows`), and the header, card-level bond and charge grid all read only those rows. A card with no published bond stays `""`. Folds in the earlier unmerged branch `fix/smartweb-bound-card-bond` (88ab5e5). Affects every county on the helper: Bradford, Dixie, Escambia, Gilchrist, Hamilton, Madison, Putnam, Santa Rosa, Sumter, Taylor (and Glades once it moves onto the helper); stored rows already written with a bled bond need a Leads Ops correction (read-only key list prepared separately, no data changed here).
+
+### Tests
+- `tests/test_fl_smartweb_unknown_bond.py` (already in the `ci.yml` list): empty card next to a rich card stays `""`; card-level `$0.00` stays unknown when the next card is positive; a `NO BOND` card with no charges does not take the next card's `$15,000`. The first and third fail on main; the `$0.00` one is a guard that already passes.
+
+## [Unreleased] — 2026-10-08 (Collier/Glades bond cleanup prep, NOT RUN)
+
+### Added
+- **`scripts/collier_glades_bad_bond_count.py`.** A read-only count of Collier and Glades rows whose stored bond the source never published. Collier: every non-empty bond, split into `"0"` and positive values taken from charge text. Glades: `"0"` / `"0.00"`, with positive values counted as unattributable (stored rows keep no per-charge bonds, so a next-card figure cannot be traced). Staff-provenance rows and rows scraped after the #139 deploy are skipped. It prints counts only and needs `MONGODB_URI`. `--print-filter` prints the affected-rows filter used by the plan.
+- **`docs/ops/COLLIER_GLADES_BOND_CLEANUP_PLAN.md`** (NOT RUN, awaiting Brendan's OK). The plan: count, `mongoexport` backup, blank to `""` while keeping the old values in `bond_cleanup_2026_10`, skip `staff_edits` rows, verify the counts, and a rollback.
+
+## [Unreleased] — 2026-10-08 (Hendry fail closed: person id only)
+
+### Fixed
+- **Hendry (FL) fail closed.** The public MyOCV `inmates.json` identifies rows only by `inmateID` = `HCSO<YY>MNI<NNNNNN>`, a Master Name Index person id, not a booking number. Its year runs 00-26 whatever the booked year is, so a re-booking collides with the person's old row. CoS approved on 2026-10-08. `hendry.py` is now `SOURCE_CONTRACT_VALIDATED=False` with no fetch, Health is `fail_closed`, the evidence row and a `hold` row are recorded, and the matrix, `FL_67_STATUS` and `COUNTY_REGISTRY` are updated. Rows already stored under MNI keys are not touched; any cleanup waits on Brendan. Hendry also drops out of the sellable lead-subscription seed, and with #133 out of the default lead list (picking it by name still shows its rows).
+
+## [Unreleased] — 2026-10-08 (Collier and Glades publish-only bonds)
+
+### Fixed
+- **Collier bond.** The daily report publishes no bond amount, but `collier.py` added `$` figures from offense text into the bond (for example "GRAND THEFT PROPERTY VALUE $750-$5K" became a $750 bond; 2 of 7 live rows on 2026-10-08) and wrote `"0"` for the rest. A bond now counts only when this person's own `lblBondAmount` / `lblBondSummary` span prints a `$` figure. Unknown bond is `""`. Bond spans are read by the person's own `gvReport_ctlNN_ReportUC_` id, so a neighbour's span is never used. With no id prefix, no bond span is read and the bond is `""`.
+- **Glades bond.** `glades.py` read the first "Bond...: <number>" in a 15-row window that ran into the next inmates, so a "NO BOND" card took the next card's figure and a card with $245,000 in charge bonds was saved as `0.00`. The bond now comes only from this card's own charge grid. Any "NO BOND" charge (a hold) or an unreadable bond cell makes the total `""`. Otherwise the printed figures are summed, and a printed charge `$0.00` is a real `"0"`. With no charge grid, the card's own "Bond Amount:" counts only when positive: the card prints `$0.00` there even when its charges publish $15,000 to $245,000 (live check, 2026-10-08), so that `$0.00` stays `""`.
+- The Collier and Glades write smokes in `docs/recon/smoke_evidence.json` (#138) are on hold until this merges and deploys.
+
+### Docs
+- **Glades $0.00 evidence** (`docs/recon/FL_GLADES_BOND_ZERO_2026-10-08.md`, matrix + `county_source_contract_evidence.json`): live 2026-10-08, 20 cards, counts only. Card-level Bond Amount was NO BOND on 14 (all with NO BOND charges) and $0.00 on 6 (all with positive charge bonds, $15k–$245k); never a positive card figure; charge-level $0.00 once, beside a positive charge. CoS: card-level $0.00 → `""`; charge-level $0.00 stays `0`.
+
+## [Unreleased] — 2026-10-08 (fail-closed counties out of the default lead list)
+
+### Fixed
+- **Default lead views.** A county whose source contract is `fail_closed` in `SCRAPER_SOURCE_STATES` (Sarasota, Alachua, Hardee, St. Johns, Lee SC and the rest) no longer shows in the default `/api/leads` list, its CSV export, the bond-ready queue (`/api/ops/defendants`, Command Center), the per-state cards and strip, or the Write Book, SWFL and Florida presets. The rule is generic (`dashboard/services/source_state_filter.py`); there is no Sarasota special case. Rows are not deleted. Staff still see them by picking the county in the county filter or passing `include_fail_closed=true`. `WRITE_ELIGIBLE_COUNTIES`, which gates where the agency may write paper, is unchanged; only the preset list sent to the dashboard drops fail-closed counties. The lead-subscription seed already skipped fail-closed counties at runtime and now has a test.
+- **Presets load the fail_closed list first.** The SWFL, Florida and Write Book presets (Lead Explorer and Defendants) now load `/api/leads/fail-closed-counties` before seeding the county filter, so opening Defendants first no longer sends Sarasota or Hardee by name. Naming `Sarasota County (FL)` is now an opt-in like `Sarasota (FL)`.
+
+## [Unreleased] — 2026-10-08 (home counties out of recon_only)
+
+### Changed
+- **Home counties source checks.** Lee, Collier and Glades now show as `candidate_productive` in the recon matrix. Each was checked live from the box on 2026-10-08 with plain HTTPS: Lee has a 7-digit and Collier a 12-digit public booking number, and Glades has `GCSO<YY>JBN<6>` booking numbers. Health is unchanged, so none of them is `verified_public` before a Leads Ops write smoke. DeSoto stays `recon_only`: its DCN `bid` is the jail site's internal record id, not a booking number. Hendry stays `recon_only` because `inmateID` is a person ID (MNI). Charlotte and Manatee stay `recon_only`; the box still gets a Cloudflare 403 (8:07 AM ET). The Collier and Glades write smokes are on hold until the bond fix for those two scrapers (#139) merges.
+
+### Added
+- **Smoke and relay evidence slot.** `docs/recon/smoke_evidence.json` holds dated Leads Ops requests and results: Lee, Collier and Glades write smokes, Charlotte and Manatee relay read and relay write. The matrix builder refuses a result with no run date, commit, egress or method, a write with no Mongo writer result (a `prod_mongo_aggregate` write instead needs rows >= 1 in a window of 48 hours or less, with no blank or duplicate booking numbers), a relay row that did not run from the residential relay, a relay read with no live header set, a passed write on a `fail_closed` county, and a listed `verified_public` county with no passed write. The matrix shows the slot as a new table.
+- **`scripts/smoke_evidence_check.py`.** A read-only Mongo aggregate for one county: key shapes, duplicates, bond buckets (empty, zero, positive), charges, dates and status. It prints no names or other PII.
+- **Relay header set.** The Revize walk meta for Charlotte and Manatee now carries the page-1 column names so relay evidence can show the live table shape.
+- `docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md` with per-county results and the Leads Ops handoff.
+
+## [Unreleased] — 2026-10-08 (Hernando real custody status and per-case bonds)
+
+### Fixed
+- **Hernando released bookings were written "In Custody".** The search includes released bookings, so every keyed row is now enriched from its `JailSearchDetails.aspx?BookNo=` page.
+  - `Release Date/Time: -` → In Custody. A date → Released, with `Release_Date`. Anything else is unknown: the booking is skipped, never defaulted to In Custody.
+  - Charges, court case numbers and per-charge bonds now come from the detail page (`extra.charge_details`).
+  - The total is set only when every charge publishes a positive amount. `$0.00` is the jail's "no bond set" placeholder (live: 29 of 30 all-$0.00 bookings were still in custody, on VOP and hold charges), so it is unknown. A `$0.00` charge marked ROR is a real $0.
+  - A detail fetch failure or a drifted detail page skips that booking, so nothing blank is written over stored data. The run raises when every detail fetch fails, when no detail page is usable, or when no page in the run has a charge grid. Detail requests are paced (0.4 s) and use plain requests.
+  - A row whose roster Offenses cell is blank and whose detail page has no charge grid is skipped, instead of `$set`ting blank charges over stored ones.
+- Tests: `tests/test_fl_hernando_detail_status.py`.
+## [Unreleased] — 2026-10-08 (Pinellas unknown bond)
+
+### Fixed
+- **Pinellas (FL):** an unread charge-report modal, a modal with no `Bond Assessed`, or any blank or non-numeric charge bond (`NO BOND`, `HOLD`) was written as a $0 bond. Now the booking total is `""` (unknown) unless every charge publishes an amount. Real published `$0.00` values are kept: 33 of 82 cells in the 2026-10-06/07 live check were `$0.00`, so they stay `"0"`, and old Pinellas `"0"` rows still hydrate as a known $0. Live re-check (2026-10-07, 25 bookings): 13 positive, 10 published $0, 2 unknown. A booking whose charge-report modal did not render is now skipped for the run instead of being written roster-only, which would `$set` a blank bond and abbreviated charges over stored values. The run raises if every modal fails or every date search fails. Details in `docs/recon/FL_PINELLAS_BOND_2026-10-08.md`.
+## [Unreleased] — 2026-10-08 (SmartWEB unknown bond stays empty)
+
+### Fixed
+- **SmartWEB JAIL View bond** (`scrapers/fl_smartweb.py`). This covers Escambia, Santa Rosa, Putnam, Sumter, Bradford, Dixie, Taylor, Gilchrist, Hamilton and Madison.
+  - Each charge row's bond cell is now a published amount or unknown. NO BOND, HOLD, blank and non-money text were read as `0.0`; they are now unknown.
+  - The booking total is set only when every charge row publishes an amount. A real published `$0.00` is kept, both alone (`"0"`) and in a sum. Otherwise the total is `""`; before, it was a partial sum or an invented `"0"`.
+  - The card-level `Bond Amount:` is used only when the card has no charge rows, and only when it is positive. A card-level `$0.00` is the JAIL View default (live: bookings with no charges entered yet), so it stays unknown.
+  - A run in which no booking has charges raises instead of `$set`ting blank charges over stored rows.
+  - These counties publish real `$0.00`, so they are **not** added to `NO_BOND_ROSTER_COUNTIES`.
+- Tests: `tests/test_fl_smartweb_unknown_bond.py`.
+## [Unreleased] — 2026-10-08 (Palmetto application header placement)
+
+### Changed
+- **Palmetto application.** The header DEFENDANT line (`app_defendant_name`) is `468, 0, 138, 12.87` with no preferences, so it auto-sizes to 7pt and the baseline stays clear of the underline. POWER NO. (`app_power_number`) is `466, 27.2, 140, 14` with `valign: bottom` and no locked font size, so the 14pt box auto-sizes to 11pt. Bond No. (`app_bond_no`) keeps its box and sets the same `valign: bottom`, because both boxes are the `poa_number` field and DocuSeal stores preferences once per field. CASE NO. (`app_case_number`) is `458, 42, 148, 11.9` with `valign: bottom` and no locked font size, so the box stays under 13.98pt and auto-sizes to 7pt. An 11pt box would cross into POWER NO. `app_def_name`, the AGENT line, and the indemnity case number are unchanged. Templates 1 and 5 are not changed by this commit.
+
+## [Unreleased] — 2026-10-08 (Hernando unknown bond)
+
+### Fixed
+- **Hernando (FL):** the JailSearch results grid publishes no bond, yet every row was written with `Bond_Amount="0"`. Now it is `""` (unknown), and old Hernando `"0"` rows hydrate as unknown (`NO_BOND_ROSTER_COUNTIES`). Rows without a source `HCSO<YY>JBN<NNNNNN>` booking number are skipped instead of being keyed on the name. A response without the results table, or with no keyed rows, raises instead of returning an empty success. The scraper uses plain `requests` (curl_cffi impersonation retired). Live 7-day read: 82/82 rows with source keys, 81 with offenses, 0 bonds (`docs/recon/FL_HERNANDO_BOND_2026-10-08.md`).
 ## [Unreleased] — 2026-10-08 (Indian River FL booking search)
 
 ### Fixed
 - **Indian River (FL):** rows were keyed on the `/booking-details/<id>` **portal id**, not the booking number, had no booking date, and wrote bond `0` when none was shown. The scraper now uses the IRCSO site's own booking-date search (form POST with its `_token`, then `?page=N`) for the last 7 days. It reads each booking's detail `Booking Info`: the source `Booking Number` (`YYYY-NNNNNNNN`), a Booking Date that must equal the searched date, Arrest Date, Agency, Case Number, Bond (`$amount`; `No Bond` gives `Bond_Type=NO BOND` with the amount left empty; absent means unknown), Charges cards, and Release Date (→ Released). It uses plain `requests` with TLS verification on; curl_cffi, `verify=False` and the DrissionPage fallback are retired. `_fetch_single_booking` (custody recheck) now returns a record only when the page still shows the same source Booking Number. Legacy portal-id rows are reported as not found, and nothing is deleted. Box read smoke: 59 rows / 59 unique over 7 days, 0 dropped. Health stays `unverified` until a Leads Ops write smoke (`docs/recon/FL_INDIAN_RIVER_BOOKING_SEARCH_2026-10-08.md`). Legacy rows keyed on the portal id now get `None` from the custody recheck. That is recorded as a `source_found: False` note only, and the arrest's status, bond, charges and the record itself are unchanged (pinned by a test). Codex follow-up: a first results page with no result ids is accepted only when it carries the site's "No results found" text, and result links without `inmate-list` cards raise, so a changed or maintenance page is never read as "no bookings". A detail request failure now raises (BaseScraper retry and alert) instead of dropping the booking. Read smoke at 08:35 EDT: 60/60 rows, 15 with a bond, 15 No Bond, 23 released, 50 s. Shape guards (CoS): a booking-details page without the `Booking Info` table or the `Charges` heading raises `IndianRiverContractError`, and the run raises if no record in it has charges or a recognized `Bond` value (`$amount` / `No Bond`; `extra_data.bond_published`). A renamed heading, card class or Bond label can therefore never `$set` blank charges or bond over stored values. Live read at 08:50 EDT: 60 rows, 59 with charges, 30 with a recognized bond.
+## [Unreleased] — 2026-10-08 (Okaloosa FL Inmate Locator API)
+
+### Fixed
+- **Okaloosa (FL):** rows were saved with no booking date, because the legacy `Default.aspx` grid publishes none and was parsed by walking flattened cells. The scraper now uses the official Inmate Locator's public JSON API with plain `requests`. The roster comes from `/api/Inmates/search`, paged to the source `total` (it raises on a short walk or duplicate keys) and keyed on the source 10-digit `bookingNo`, with `custodyDate` as the booking timestamp. The bond is the sum of the detail `bailAmt` only when every charge publishes one (a published 0 counts). If any charge is blank, which can mean a hold, the total is unknown (`""`). The roster `totalBondAmt` is never used, because it is only the sum of the published charges (on 2026-10-08, 9 of 60 sampled bookings mixed a blank charge with a positive total), so bookings without a detail (outside the window) have an unknown bond. Charges, statute, degree and per-charge bond come from `/api/Inmates/<bookingNo>` for the last 7 days. Only status `1` (in custody) is emitted. Box read smoke: 781 rows / 781 unique, booking date on all, 11 s. Health stays `unverified` until a Leads Ops write smoke (`docs/recon/FL_OKALOOSA_API_2026-10-08.md`). Codex follow-up: only in-custody bookings from the last 7 days that have a fetched detail are emitted, so an older booking is never rewritten with blank charges, case or bond. A detail request failure raises (BaseScraper retry and alert), and a detail naming another booking skips that booking (if every detail does, the run raises). `Bond_Type` joins the distinct published `bailType` values (for example `CASH`). A `bailAmt` of 0 is read as unpublished (the source uses null, 82 of 82 sampled, and the roster's 0 means none). Paced read smoke at 08:33 EDT: 70/70 rows, all with charges, 15 complete bonds, 55 unknown, 24 `CASH`, 11 s. Shape drift in a detail now raises `OkaloosaContractError` instead of blanking every booking's charges: a missing or non-list `charges`, or a charge row that is not an object with `chargeDesc`/`charge`/`bailAmt`/`bailType` (all 71 live rows had those keys). An explicit empty `charges` list is still accepted.
+## [Unreleased] — 2026-10-08 (Orange FL BestJail contract)
+
+### Fixed
+- **Orange (FL):** the BestJail scraper timed out (it fetched details and charges for all ~2,400 current-year inmates). It also wrote `$0.00` when no bond was published and stored the age (`BIRTH`) as the DOB. It now uses plain `requests` (curl_cffi impersonation retired) on the county's public JSON endpoints: a 26-letter roster (any failed letter raises), deduped on the source 8-digit `bookingNumber` (the roster repeats a booking once per alias). It walks the newest bookings first and stops after the 7-day window. The booking's total bond is the sum of `BondAmount` only when every charge publishes an amount (a published `0.00` counts). If any charge cell is blank or unparsed, which can mean a hold, the total is empty, never a partial sum. Per-charge known amounts stay in `charge_details`. Charges come with per-charge `charge_details`, and the age goes to `Age_At_Arrest`. Box read smoke: 303 rows / 303 unique in 37 s. Codex follow-up: a successful `getCharges` response with a changed shape (not a list, or a row without `Charge`/`BondAmount`) now raises `OrangeContractError` instead of blanking known charges and bonds. A failed per-booking `getCharges` fetch skips that booking for the run, so its stored charges and bond are never overwritten with blanks (the writer `$set`s every field). The run raises only if every charges fetch fails. Roster calls are paced 0.5 s apart and detail/charges calls 0.25 s apart (paced read smoke: 302/302 rows in 189 s). Health stays `unverified` until a Leads Ops write smoke (`docs/recon/FL_ORANGE_BESTJAIL_2026-10-08.md`).
 ## [Unreleased] — 2026-10-08 (Palmetto agent license boxes)
 
 ### Added
@@ -51,6 +158,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Docs
 - **`docs/recon/FL_67_STATUS_2026-10-08.md`:** one status for each of the 67 FL counties (4 `verified_public`, 40 unverified awaiting Leads Ops smoke with source PR, 17 `fail_closed`, 6 no source), ranked by Census 2024 population, with the matrix-vs-Health parity findings, today's live Sarasota/Manatee/Charlotte checks (the Sarasota listing root is now Cloudflare-challenged too), the relay cadence gap (Leads Ops must schedule `python main.py --relay-only`), rule conflicts in older modules, and the next-PR queue. `tests/test_fl_67_status.py` (in CI) keeps the table consistent with Health.
+
 ## [Unreleased] — 2026-10-08 (name without license falls back)
 
 ### Fixed
