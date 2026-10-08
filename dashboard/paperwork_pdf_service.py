@@ -225,6 +225,130 @@ def packet_composition(surety: Optional[str] = None) -> Dict[str, Any]:
     }
 
 
+# Measured blanks for the OSI one-PDF stitch. Coordinates are PDF points,
+# origin top-left: (x, y, w, h). A value with no entry is not printed.
+# The promissory-note defendant_name rect is the empty cell under
+# "Defendant's Name", not the header label.
+OSI_STITCH_BOXES: Dict[str, Dict[str, Tuple[Tuple[float, float, float, float], ...]]] = {
+    "defendant-application": {
+        "defendant_name": ((104.0, 311.0, 190.0, 14.0),),
+        "defendant_address": ((90.0, 327.0, 155.0, 14.0),),
+        "case_number": ((468.0, 214.0, 112.0, 13.0),),
+        "poa_number": ((474.0, 199.0, 108.0, 13.0),),
+    },
+    "promissory-note": {
+        "defendant_name": ((30.0, 350.0, 200.0, 24.0),),
+        "county": ((400.0, 350.0, 165.0, 24.0),),
+        "bond_amount": ((68.0, 176.0, 98.0, 14.0),),
+    },
+    "disclosure-form": {
+        "defendant_name": ((112.0, 270.0, 430.0, 15.0),),
+        "bond_amount": ((132.0, 227.0, 110.0, 14.0),),
+        "poa_number": ((112.0, 203.0, 220.0, 14.0),),
+    },
+    "surety-terms": {
+        "defendant_name": ((124.0, 251.0, 440.0, 15.0),),
+        "case_number": ((242.0, 309.0, 86.0, 14.0),),
+        "poa_number": ((376.0, 309.0, 66.0, 14.0),),
+        "bond_amount": ((498.0, 309.0, 76.0, 14.0),),
+    },
+    "collateral-receipt": {
+        "indemnitor_name": ((122.0, 157.0, 220.0, 15.0),),
+        "indemnitor_address": ((90.0, 175.0, 165.0, 15.0),),
+        "defendant_name": ((100.0, 276.0, 120.0, 11.0),),
+        "case_number": ((344.0, 276.0, 140.0, 11.0),),
+        "bond_amount": ((118.0, 294.0, 120.0, 12.0),),
+        "poa_number": ((368.0, 294.0, 120.0, 12.0),),
+    },
+    "indemnity-agreement": {
+        "indemnitor_name": ((62.0, 130.0, 280.0, 13.0),),
+        "indemnitor_address": ((72.0, 144.0, 240.0, 14.0),),
+        "defendant_name": (
+            (36.0, 380.0, 210.0, 10.0),
+            (260.0, 459.0, 280.0, 9.0),
+        ),
+    },
+}
+
+# Printed agent header and company letterhead. Nothing is stamped here.
+OSI_AGENT_BLOCK = (360.0, 0.0, 612.0, 145.0)
+
+
+def _rect_hits_agent_block(rect: fitz.Rect) -> bool:
+    block = fitz.Rect(*OSI_AGENT_BLOCK)
+    return rect.intersects(block)
+
+
+def _stamp_in_box(page: fitz.Page, box: Tuple[float, float, float, float], text: str) -> None:
+    """Write text inside a measured blank. Shrink or fall back if it does not fit."""
+    value = str(text or "").strip()
+    if not value or "{{" in value:
+        return
+    rect = fitz.Rect(box[0], box[1], box[0] + box[2], box[1] + box[3]) & page.rect
+    if rect.is_empty or rect.width < 8 or _rect_hits_agent_block(rect):
+        return
+    for size in (9, 8, 7, 6):
+        spare = page.insert_textbox(
+            rect,
+            value,
+            fontsize=size,
+            fontname="helv",
+            color=(0, 0, 0),
+            align=fitz.TEXT_ALIGN_LEFT,
+        )
+        if spare >= 0:
+            return
+    page.insert_text(
+        fitz.Point(rect.x0 + 1, min(rect.y1 - 1, page.rect.y1 - 1)),
+        value,
+        fontsize=6,
+        fontname="helv",
+        color=(0, 0, 0),
+    )
+
+
+def _osi_stitch_values(
+    data: Dict[str, Any], person: Dict[str, Any]
+) -> Dict[str, str]:
+    """Values the OSI stitch is allowed to print. Missing sources stay empty."""
+    defendant = str(data.get("defendant_name") or data.get("Defendant_Name") or "").strip()
+    indemnitor = str(person.get("name") or "").strip()
+    if not indemnitor:
+        raw = data.get("indemnitors") or []
+        if raw and isinstance(raw[0], dict):
+            indemnitor = str(raw[0].get("name") or "").strip()
+        indemnitor = indemnitor or str(data.get("indemnitor_name") or "").strip()
+    indemnitor_address = str(person.get("address") or "").strip()
+    if not indemnitor_address:
+        raw = data.get("indemnitors") or []
+        if raw and isinstance(raw[0], dict):
+            indemnitor_address = str(raw[0].get("address") or "").strip()
+        indemnitor_address = indemnitor_address or str(data.get("indemnitor_address") or "").strip()
+    defendant_address = str(
+        data.get("defendant_address") or data.get("address") or ""
+    ).strip()
+    return {
+        "defendant_name": defendant,
+        "indemnitor_name": indemnitor,
+        "indemnitor_address": indemnitor_address,
+        "defendant_address": defendant_address,
+        "case_number": str(data.get("case_number") or data.get("Case_Number") or "").strip(),
+        "county": str(data.get("county") or data.get("County") or "").strip(),
+        "bond_amount": str(data.get("bond_amount") or data.get("Bond_Amount") or "").strip(),
+        "poa_number": str(data.get("poa_number") or data.get("POA_Number") or "").strip(),
+    }
+
+
+def _stamp_osi_form(page: fitz.Page, slug: str, values: Dict[str, str]) -> None:
+    """Place each present value in that form's measured blanks and nowhere else."""
+    for key, boxes in OSI_STITCH_BOXES.get(slug, {}).items():
+        text = values.get(key) or ""
+        if not text:
+            continue
+        for box in boxes:
+            _stamp_in_box(page, box, text)
+
+
 def place_text_by_anchor(
     page: fitz.Page,
     anchor: str,
@@ -312,17 +436,29 @@ def _hydrate_common_fields(
     person: Optional[Dict[str, Any]] = None,
     role: str = "",
     role_index: int = 0,
+    slug: str = "",
+    surety: str = "",
 ) -> None:
-    """Best-effort text placement on first page using common anchors."""
+    """Place common values on the first page.
+
+    OSI carrier forms use measured blanks. Other forms still follow labels.
+    """
     if not doc.page_count:
         return
     page = doc[0]
+    person = person or {}
+    osi_form = slug in OSI_STITCH_BOXES and (
+        surety == "osi" or slug in SHARED_LEGAL_SLUGS
+    )
+    if osi_form:
+        _stamp_osi_form(page, slug, _osi_stitch_values(data, person))
+        return
+
     def_name = data.get("defendant_name") or data.get("Defendant_Name") or ""
     case_no = data.get("case_number") or data.get("Case_Number") or ""
     county = data.get("county") or data.get("County") or ""
     bond_amt = data.get("bond_amount") or data.get("Bond_Amount") or ""
     poa = data.get("poa_number") or data.get("POA_Number") or ""
-    person = person or {}
 
     place_text_by_anchor(page, "(Defendant/Principal)", def_name, dx=5, dy=-15)
     place_text_by_anchor(page, "Defendant", def_name, dx=10, dy=10, index=0)
@@ -360,7 +496,15 @@ def hydrate_indemnity_agreement(
         ind = inds[indemnitor_index] if isinstance(inds[indemnitor_index], dict) else {}
 
     role = f"Indemnitor {indemnitor_index + 1}"
-    _hydrate_common_fields(doc, data, person=ind, role=role, role_index=0)
+    _hydrate_common_fields(
+        doc,
+        data,
+        person=ind,
+        role=role,
+        role_index=0,
+        slug="indemnity-agreement",
+        surety=_normalize_surety(surety) if surety else "",
+    )
 
     buf = io.BytesIO()
     doc.save(buf)
@@ -412,7 +556,15 @@ def _doc_bytes_for_slug(
     doc = _open_blank(slug, surety)
     if doc is None:
         return None
-    _hydrate_common_fields(doc, data, person=person, role=role, role_index=role_index)
+    _hydrate_common_fields(
+        doc,
+        data,
+        person=person,
+        role=role,
+        role_index=role_index,
+        slug=slug,
+        surety=surety,
+    )
     buf = io.BytesIO()
     doc.save(buf)
     doc.close()
