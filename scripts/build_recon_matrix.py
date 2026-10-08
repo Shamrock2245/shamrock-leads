@@ -20,6 +20,13 @@ EXTENSIONS = ROOT / "dashboard" / "extensions.py"
 DEFAULT_INVENTORY = ROOT / "docs" / "recon" / "county_recon_inventory.json"
 DEFAULT_EVIDENCE = ROOT / "docs" / "recon" / "county_source_contract_evidence.json"
 DEFAULT_LIVE_EVIDENCE = ROOT / "docs" / "recon" / "live_emitter_evidence.json"
+DEFAULT_SMOKE_EVIDENCE = ROOT / "docs" / "recon" / "smoke_evidence.json"
+RELAY_ONLY = ROOT / "config" / "relay_only.py"
+
+SMOKE_KINDS = {"write_smoke", "relay_read", "relay_write"}
+SMOKE_STATUSES = {"requested", "passed", "failed"}
+SMOKE_EGRESS = {"vps", "mac", "residential_relay"}
+SMOKE_METHODS = {"one_shot_run", "relay_only_run", "relay_read_smoke", "prod_mongo_aggregate"}
 DEFAULT_OUTPUT = ROOT / "docs" / "recon" / "COUNTY_SOURCE_CONTRACT_MATRIX.md"
 
 REQUIRED_COLUMNS = [
@@ -120,6 +127,144 @@ def _live_emitter_rows(path: Path | None, runtime_states: dict[str, str]) -> lis
     return rows
 
 
+def _relay_only_labels() -> set[str]:
+    tree = ast.parse(RELAY_ONLY.read_text())
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == "RELAY_ONLY_LABELS" for t in node.targets):
+            continue
+        value = node.value
+        if isinstance(value, ast.Call) and getattr(value.func, "id", "") in {"frozenset", "set"}:
+            value = value.args[0]
+        return {
+            element.value
+            for element in getattr(value, "elts", [])
+            if isinstance(element, ast.Constant) and isinstance(element.value, str)
+        }
+    raise RuntimeError("RELAY_ONLY_LABELS assignment not found")
+
+
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_SHA = re.compile(r"^[0-9a-f]{7,40}$")
+
+
+def _smoke_rows(path: Path | None, runtime_states: dict[str, str]) -> list[dict]:
+    """Validate requested / recorded write smokes and relay evidence.
+
+    A ``requested`` row is the handoff to Leads Ops: command and expectation,
+    no result. A ``passed`` or ``failed`` row carries the dated result. The
+    builder refuses rows that would let a county look smoked when it is not:
+
+    * ``relay_read`` / ``relay_write`` only for ``RELAY_ONLY_LABELS`` and only
+      from ``residential_relay`` egress;
+    * a passed write (``write_smoke`` / ``relay_write``) needs a Mongo writer
+      result with at least one new or updated row and ``status: ok``;
+    * a passed ``relay_read`` needs the live header set (``columns``);
+    * a ``fail_closed`` scope cannot have a passed write;
+    * a scope with any row here cannot be ``verified_public`` without a
+      passed write row.
+    """
+    if path is None or not path.exists():
+        return []
+    registered = _registered_labels()
+    relay_only = _relay_only_labels()
+    rows: list[dict] = []
+    seen: set[tuple] = set()
+    for raw in json.loads(path.read_text())["records"]:
+        label = str(raw.get("label") or "")
+        kind = str(raw.get("kind") or "")
+        status = str(raw.get("status") or "")
+        where = f"{label} {kind}"
+        if label not in registered:
+            raise RuntimeError(f"smoke evidence label is not registered: {label}")
+        if kind not in SMOKE_KINDS:
+            raise RuntimeError(f"unknown smoke kind for {label}: {kind}")
+        if status not in SMOKE_STATUSES:
+            raise RuntimeError(f"unknown smoke status for {where}: {status}")
+        if kind.startswith("relay_") and label not in relay_only:
+            raise RuntimeError(f"{where}: relay evidence is only for RELAY_ONLY_LABELS")
+        requested_on = str(raw.get("requested_on") or "")
+        if not _ISO_DATE.match(requested_on):
+            raise RuntimeError(f"{where}: requested_on must be YYYY-MM-DD")
+        for field in ("command", "expect", "source"):
+            if not str(raw.get(field) or "").strip():
+                raise RuntimeError(f"{where}: {field} is required")
+        run_on = raw.get("run_on")
+        result = raw.get("result")
+        state = runtime_states.get(label, "unverified")
+        if status == "requested":
+            if run_on or result or raw.get("commit"):
+                raise RuntimeError(f"{where}: a requested smoke carries no run_on, commit or result")
+        else:
+            if not isinstance(run_on, str) or not _ISO_DATE.match(run_on) or run_on < requested_on:
+                raise RuntimeError(f"{where}: run_on must be a YYYY-MM-DD date on or after requested_on")
+            if not _SHA.match(str(raw.get("commit") or "")):
+                raise RuntimeError(f"{where}: commit must be the git SHA the run used")
+            egress = str(raw.get("egress") or "")
+            if egress not in SMOKE_EGRESS:
+                raise RuntimeError(f"{where}: egress must be one of {sorted(SMOKE_EGRESS)}")
+            if kind.startswith("relay_") and egress != "residential_relay":
+                raise RuntimeError(f"{where}: relay evidence must come from residential_relay egress")
+            if str(raw.get("method") or "") not in SMOKE_METHODS:
+                raise RuntimeError(f"{where}: method must be one of {sorted(SMOKE_METHODS)}")
+            if not isinstance(result, dict) or not result.get("status"):
+                raise RuntimeError(f"{where}: result with a status is required")
+            if status == "passed":
+                if kind in {"write_smoke", "relay_write"}:
+                    if state == "fail_closed":
+                        raise RuntimeError(f"{where}: fail_closed scope cannot have a passed write")
+                    written = int(result.get("new_records") or 0) + int(result.get("updated_records") or 0)
+                    if result.get("status") != "ok" or int(result.get("mongo_writer_results") or 0) < 1 or written < 1:
+                        raise RuntimeError(
+                            f"{where}: a passed write needs status ok, a Mongo writer result "
+                            "and at least one new or updated row"
+                        )
+                if kind == "relay_read":
+                    if result.get("status") != "ok" or int(result.get("bookings") or 0) < 1:
+                        raise RuntimeError(f"{where}: a passed relay read needs status ok and bookings >= 1")
+                    if not isinstance(result.get("columns"), list) or not result["columns"]:
+                        raise RuntimeError(f"{where}: a passed relay read must record the live header set (columns)")
+        key = (label, kind, status, run_on or requested_on)
+        if key in seen:
+            raise RuntimeError(f"duplicate smoke evidence row: {key}")
+        seen.add(key)
+        rows.append({
+            "label": label,
+            "state": state,
+            "kind": kind,
+            "status": status,
+            "date": run_on or requested_on,
+            "commit": str(raw.get("commit") or ""),
+            "egress": str(raw.get("egress") or ""),
+            "summary": _smoke_summary(status, result, raw),
+            "source": str(raw["source"]),
+        })
+    for label in sorted({row["label"] for row in rows}):
+        if runtime_states.get(label) != "verified_public":
+            continue
+        if not any(
+            row["label"] == label and row["status"] == "passed" and row["kind"] in {"write_smoke", "relay_write"}
+            for row in rows
+        ):
+            raise RuntimeError(f"{label} is verified_public with no passed write smoke on record")
+    return rows
+
+
+def _smoke_summary(status: str, result: dict | None, raw: dict) -> str:
+    if status == "requested":
+        blocked = str(raw.get("blocked_on") or "").strip()
+        return f"Awaiting Leads Ops. {blocked}".strip() if blocked else "Awaiting Leads Ops."
+    parts = [f"status {result.get('status')}"]
+    for key in ("records_scraped", "bookings", "new_records", "updated_records"):
+        if key in result:
+            parts.append(f"{key.replace('_', ' ')} {result[key]}")
+    if result.get("columns"):
+        parts.append("columns " + " / ".join(str(c) for c in result["columns"]))
+    note = str(raw.get("note") or "").strip()
+    return "; ".join(parts) + (f". {note}" if note else "")
+
+
 def _matrix_status(passive_status: str, runtime_status: str) -> str:
     """Keep deployed source truth authoritative over passive reconnaissance."""
     if runtime_status in {"verified_public", "fail_closed"}:
@@ -140,6 +285,7 @@ def main() -> int:
     parser.add_argument("inventory", type=Path, nargs="?", default=DEFAULT_INVENTORY)
     parser.add_argument("evidence_file", type=Path, nargs="?", default=DEFAULT_EVIDENCE)
     parser.add_argument("--live-evidence", type=Path, default=DEFAULT_LIVE_EVIDENCE)
+    parser.add_argument("--smoke-evidence", type=Path, default=DEFAULT_SMOKE_EVIDENCE)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument(
         "--check",
@@ -147,7 +293,7 @@ def main() -> int:
         help="Do not write; exit 1 if the committed matrix differs from a fresh build (CI drift gate).",
     )
     args = parser.parse_args()
-    text, summary = build_matrix(args.inventory, args.evidence_file, args.live_evidence)
+    text, summary = build_matrix(args.inventory, args.evidence_file, args.live_evidence, args.smoke_evidence)
     if args.check:
         current = args.output.read_text() if args.output.exists() else ""
         if current != text:
@@ -165,7 +311,12 @@ def main() -> int:
     return 0
 
 
-def build_matrix(inventory_path: Path, evidence_path: Path, live_evidence_path: Path | None = DEFAULT_LIVE_EVIDENCE) -> tuple[str, dict]:
+def build_matrix(
+    inventory_path: Path,
+    evidence_path: Path,
+    live_evidence_path: Path | None = DEFAULT_LIVE_EVIDENCE,
+    smoke_evidence_path: Path | None = DEFAULT_SMOKE_EVIDENCE,
+) -> tuple[str, dict]:
     """Return ``(markdown, summary)`` for the canonical matrix (pure; no writes)."""
 
     class _Args:  # keep the original body's variable names
@@ -286,6 +437,22 @@ def build_matrix(inventory_path: Path, evidence_path: Path, live_evidence_path: 
             lines.append(
                 f"| {_escape(row['label'])} | {row['state']} | {row['emitter']} | {_escape(row['evidence'])} | `{_escape(row['source'])}` |"
             )
+    smoke_rows = _smoke_rows(smoke_evidence_path, runtime_states)
+    if smoke_rows:
+        lines.extend([
+            "",
+            "## Write smoke and relay evidence",
+            "",
+            "Requested and recorded Leads Ops smokes (`docs/recon/smoke_evidence.json`). A `requested` row is the handoff (command and expected fields are in the JSON and the cited doc). A `passed` row is dated and names the commit, egress and Mongo writer result. The builder refuses a passed write without a Mongo writer result, relay evidence from anything but the residential relay, a relay read without the live header set, a passed write on a `fail_closed` scope, and a `verified_public` scope listed here without a passed write.",
+            "",
+            "| County (ST) | Health source state | Kind | Status | Date | Commit | Egress | Result | Source |",
+            "|---|---|---|---|---|---|---|---|---|",
+        ])
+        for row in smoke_rows:
+            lines.append(
+                f"| {_escape(row['label'])} | {row['state']} | {row['kind']} | {row['status']} | {row['date']} | "
+                f"{row['commit'] or '—'} | {row['egress'] or '—'} | {_escape(row['summary'])} | `{_escape(row['source'])}` |"
+            )
     lines.extend([
         "",
         "## Operating rule",
@@ -306,6 +473,7 @@ def build_matrix(inventory_path: Path, evidence_path: Path, live_evidence_path: 
         "10. `docs/recon/SC_WRITE_SMOKE_2026-09-24.md` — Dorchester, Chesterfield, Aiken, Darlington write smokes and the Richland / Sumter / Hampton / Marlboro holds.",
         "11. `docs/recon/PALMETTO_READ_WRITE_HEALTH_2026-09-23.md` and `docs/recon/SWFL_SOURCE_CONTRACT_QUEUE.md` — FL live-write evidence and the Charlotte / Manatee / Sarasota queue.",
         "12. `docs/recon/live_emitter_evidence.json` — versioned live-write / hold evidence rendered in the Live emitter evidence table.",
+        "13. `docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md` and `docs/recon/smoke_evidence.json` — Lee, Collier, Charlotte, Manatee, Hendry, Glades and DeSoto source-contract checks and the Leads Ops write-smoke / relay evidence slots.",
         "",
     ])
     return "\n".join(lines), {"rows": len(records), "recommendations": dict(total_status)}

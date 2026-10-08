@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (home counties out of recon_only)
+
+### Changed
+- **Home counties source checks.** Lee, Collier, Glades and DeSoto now show as `candidate_productive` in the recon matrix. Each was checked live from the box on 2026-10-08 with plain HTTPS: Lee and Collier have a public roster with a 7-digit or 12-digit booking number, Glades has `GCSO<YY>JBN<6>` booking numbers, and DeSoto has the DCN `bid` (same rule as Darlington SC). Health is unchanged, so none of them is `verified_public` before a Leads Ops write smoke. Hendry stays `recon_only` because `inmateID` is a person ID (MNI), not a booking ID. Charlotte and Manatee stay `recon_only`; the box still gets a Cloudflare 403 (8:07 AM ET).
+
+### Added
+- **Smoke and relay evidence slot.** `docs/recon/smoke_evidence.json` holds dated Leads Ops requests and results: Lee and Collier write smokes, Charlotte and Manatee relay read and relay write. The matrix builder refuses a result with no run date, commit, egress or method, a write with no Mongo writer result, a relay row that did not run from the residential relay, a relay read with no live header set, a passed write on a `fail_closed` county, and a listed `verified_public` county with no passed write. The matrix shows the slot as a new table.
+- **`scripts/smoke_evidence_check.py`.** A read-only Mongo aggregate for one county: key shapes, duplicates, bond buckets (empty, zero, positive), charges, dates and status. It prints no names or other PII.
+- **Relay header set.** The Revize walk meta for Charlotte and Manatee now carries the page-1 column names so relay evidence can show the live table shape.
+- `docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md` with per-county results and the Leads Ops handoff.
+
 ## [Unreleased] — 2026-10-08 (license-only agent pair)
 
 ### Fixed
