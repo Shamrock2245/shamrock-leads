@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 - **Hernando (FL):** the JailSearch results grid publishes no bond, yet every row was written with `Bond_Amount="0"`. Now it is `""` (unknown), and old Hernando `"0"` rows hydrate as unknown (`NO_BOND_ROSTER_COUNTIES`). Rows without a source `HCSO<YY>JBN<NNNNNN>` booking number are skipped instead of being keyed on the name. A response without the results table, or with no keyed rows, raises instead of returning an empty success. The scraper uses plain `requests` (curl_cffi impersonation retired). Live 7-day read: 82/82 rows with source keys, 81 with offenses, 0 bonds (`docs/recon/FL_HERNANDO_BOND_2026-10-08.md`).
+## [Unreleased] — 2026-10-08 (Palmetto agent license boxes)
+
+### Added
+- **Palmetto application and indemnity.** Each AGENT line keeps `agent_name` and adds `agent_license` on the same row, filled from that same `BOND_AGENTS` pair. The boxes are the template 6 placement verified at 08:27 ET (`AGENT_LINE_BOXES`). The application name and license set `valign: bottom` and `font_size: 11`. Both license boxes set `align: right`. An omitted `preferences` dict leaves the field unchanged. Templates 1 and 5 are not changed by this commit.
 
 ## [Unreleased] — 2026-10-08 (staff test-case Write Bond smoke)
 

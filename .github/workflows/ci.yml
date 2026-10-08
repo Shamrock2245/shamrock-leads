@@ -54,6 +54,8 @@ jobs:
         env:
           ENV: test
           SECRET_KEY: ci-not-a-real-secret
+        # Palmetto agent-line placement is test_palmetto_packet_fields,
+        # test_agent_name_fallback, and test_palmetto_docuseal_apply.
         run: |
           pytest -q \
             tests/test_tenant_scope.py \
