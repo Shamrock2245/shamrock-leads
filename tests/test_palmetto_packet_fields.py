@@ -13,7 +13,12 @@ from dashboard.bond_pdf_service import (
     fill_palmetto_bond,
 )
 from dashboard.palmetto_field_placement import required_text_fields
-from dashboard.palmetto_packet_fill import build_palmetto_context, fill_palmetto_packet_forms
+from dashboard.palmetto_packet_fill import (
+    build_palmetto_context,
+    fill_palmetto_document,
+    fill_palmetto_packet_forms,
+)
+from dashboard.services.docuseal_service import BOND_AGENTS, house_default_agent
 
 FAKE = {
     "name": "SAMPLE, NOT A PERSON",
@@ -200,3 +205,84 @@ def test_osi_writer_keys_still_match_widgets():
         assert key in fields
     assert fields["DefCharge1"] == ["SAMPLE CHARGE ONLY"]
     assert "WrittenPremiumAmount" in fields
+
+
+_SAMPLE_AGENT = "Brendan ONeal"
+_AGENT_WIDGETS = (
+    ("defendant-application", "app_agent_name", "app_agent_license"),
+    ("indemnity-agreement", "ind_agent_name", "ind_agent_license"),
+)
+
+
+def _agent_line(data: dict) -> dict:
+    """Name and license widgets on the application, indemnity, and appearance bond."""
+    found = {}
+    for slug, name_key, license_key in _AGENT_WIDGETS:
+        fields = _annots(fill_palmetto_document(slug, data))
+        found[name_key] = fields[name_key]
+        found[license_key] = fields[license_key]
+    appearance = _annots(fill_palmetto_document("appearance-bond", data))
+    found["AgentField"] = appearance["AgentField"]
+    found["agentBailLicNumField"] = appearance["agentBailLicNumField"]
+    return found
+
+
+def _assert_pair(data: dict, name: str, license_no: str) -> None:
+    widgets = _agent_line(data)
+    assert widgets["app_agent_name"] == [name]
+    assert widgets["ind_agent_name"] == [name]
+    assert widgets["app_agent_license"] == [license_no]
+    assert widgets["ind_agent_license"] == [license_no]
+    assert widgets["AgentField"] == [name, name]
+    assert widgets["agentBailLicNumField"] == [license_no]
+    joined = " ".join(value for values in widgets.values() for value in values)
+    assert _SAMPLE_AGENT not in joined
+    for other_license, entry in BOND_AGENTS.items():
+        if other_license == license_no:
+            continue
+        assert entry["agent_name"] not in joined
+        assert other_license not in joined
+    own = BOND_AGENTS.get(license_no)
+    if own:
+        assert own["agent_name"] == name
+
+
+def test_agent_license_matches_the_writing_agent_pair(monkeypatch):
+    """The license widget is the same BOND_AGENTS pair as the name.
+
+    House default, a license-only sub-agent, and a crossed name/license
+    record each print one pair. The template sample spelling is not used.
+    An unregistered license with no name still falls through to the house
+    pair, and house_default_agent is unchanged.
+    """
+    monkeypatch.delenv("BOND_AGENT_NAME", raising=False)
+    monkeypatch.delenv("BOND_AGENT_LICENSE", raising=False)
+    assert house_default_agent() == ("Brendan O'Neal", "P139768")
+    assert house_default_agent(tenant="shamrock") == ("Brendan O'Neal", "P139768")
+
+    base = {
+        "name": "SAMPLE, NOT A PERSON",
+        "bond_amount": 1000,
+        "county": "Sample",
+        "charge": "SAMPLE CHARGE ONLY",
+    }
+    _assert_pair(base, "Brendan O'Neal", "P139768")
+    _assert_pair({**base, "agent_license": "G356764"}, "Kayla Lukesic", "G356764")
+    _assert_pair({**base, "agent_license": "W214323"}, "Jason Taylor", "W214323")
+    _assert_pair(
+        {**base, "agent_name": "Kayla Lukesic", "agent_license": "W214323"},
+        "Kayla Lukesic",
+        "G356764",
+    )
+    _assert_pair(
+        {**base, "agent_name": "Jason Taylor", "agent_license": "P139768"},
+        "Jason Taylor",
+        "W214323",
+    )
+    _assert_pair({**base, "agent_name": _SAMPLE_AGENT}, "Brendan O'Neal", "P139768")
+    _assert_pair({**base, "agent_license": "X100000"}, "Brendan O'Neal", "P139768")
+    _assert_pair(
+        {**base, "agent_name": "FAKE AGENT RIVERA", "agent_license": "X100000"},
+        "FAKE AGENT RIVERA",
+        "X100000",
+    )

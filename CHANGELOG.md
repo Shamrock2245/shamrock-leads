@@ -7,6 +7,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 - **Pinellas (FL):** an unread charge-report modal, a modal with no `Bond Assessed`, or any blank or non-numeric charge bond (`NO BOND`, `HOLD`) was written as a $0 bond. Now the booking total is `""` (unknown) unless every charge publishes an amount. Real published `$0.00` values are kept: 33 of 82 cells in the 2026-10-06/07 live check were `$0.00`, so they stay `"0"`, and old Pinellas `"0"` rows still hydrate as a known $0. Live re-check (2026-10-07, 25 bookings): 13 positive, 10 published $0, 2 unknown. A booking whose charge-report modal did not render is now skipped for the run instead of being written roster-only, which would `$set` a blank bond and abbreviated charges over stored values. The run raises if every modal fails or every date search fails. Details in `docs/recon/FL_PINELLAS_BOND_2026-10-08.md`.
+## [Unreleased] — 2026-10-08 (Palmetto agent license boxes)
+
+### Added
+- **Palmetto application and indemnity.** Each AGENT line keeps `agent_name` and adds `agent_license` on the same row, filled from that same `BOND_AGENTS` pair. The boxes are the template 6 placement verified at 08:27 ET (`AGENT_LINE_BOXES`). The application name and license set `valign: bottom` and `font_size: 11`. Both license boxes set `align: right`. An omitted `preferences` dict leaves the field unchanged. Templates 1 and 5 are not changed by this commit.
+
 ## [Unreleased] — 2026-10-08 (staff test-case Write Bond smoke)
 
 ### Added
