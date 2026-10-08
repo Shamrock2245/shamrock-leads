@@ -1,4 +1,7 @@
-"""Tiny in-memory async Mongo stand-in for unit tests (no network)."""
+"""Tiny in-memory async Mongo stand-in for unit tests (no network).
+
+Dotted update paths such as ``indemnitor.email`` are stored as nested fields.
+"""
 from __future__ import annotations
 
 import copy
