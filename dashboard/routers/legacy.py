@@ -654,8 +654,11 @@ async def refresh_from_source(request: Request):
 
             if res.get("success") and res.get("data"):
                 parsed_data = res["data"]
-                found_bond = float(parsed_data.get("bond_amount") or 0)
-                immediate["bond_found"] = found_bond
+                raw_bond = parsed_data.get("bond_amount")
+                bond_known = raw_bond is not None and str(raw_bond).strip() != ""
+                # An unparsed bond is unknown: keep the stored amount, never write 0.
+                found_bond = float(raw_bond) if bond_known else old_bond_f
+                immediate["bond_found"] = found_bond if bond_known else None
 
                 update_fields = {
                     "last_source_refresh_at": now_iso,
@@ -673,7 +676,7 @@ async def refresh_from_source(request: Request):
                     update_fields["last_name"] = parsed_data["last_name"]
                 if parsed_data.get("charges"):
                     update_fields["charges"] = parsed_data["charges"]
-                if found_bond >= 0:
+                if bond_known and found_bond >= 0:
                     update_fields["bond_amount"] = found_bond
                     update_fields["total_bond_amount"] = found_bond
                 if parsed_data.get("bond_type"):

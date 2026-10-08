@@ -25,9 +25,9 @@
 |---|---|
 | `writers/mongo_writer.MongoWriter.write_records` | Covers every county run through `BaseScraper.run`, including the Southern Software (SSW) and SmartWEB helpers, which return `ArrestRecord`s and never write to Mongo directly. It does one provenance read per state and county (`fetch_provenance_docs`), then protects each `UpdateOne`. If that read fails, the write fails too: it never writes blind. |
 | `core/first_appearance_watcher.py` | A staff bond (including a staff `$0`) is kept, and the source bond goes to `scraped_*`. No bond-set alert is sent for that record. |
-| `core/scheduler.py` custody recheck | The live-roster `update_fields` are protected. This is a write-path fix only; no scheduling change. |
+| `core/scheduler.py` custody recheck | The live-roster `update_fields` are protected. This is a write-path fix only; no scheduling change. Also fixed: `ArrestRecord` has no `to_dict()`, so the recheck used to read every live field as `""` and blank out status, bond and charges. It now uses `to_mongo_doc()`, and a value the source did not publish is never written. |
 | `dashboard/services/lee_clerk_watch._refresh_jail_source` | Protected. |
-| `POST /api/leads/refresh-from-source` | Protected. The response carries `staff_bond_kept` and `staff_charges_kept`. |
+| `POST /api/leads/refresh-from-source` | Protected. The response carries `staff_bond_kept` and `staff_charges_kept`. A bond the page did not publish is now left alone; it used to be written as $0. |
 | `dashboard/services/booking_extract_merge` (bookmarklet) | Protected, because the booking page is source data. |
 | `dashboard/services/confirmed_booking_intake` refresh | Protected. |
 
@@ -64,6 +64,6 @@ The first protected rescrape of such a record writes the matching `staff_edits.*
 - a record with no staff edits updating normally;
 - the state/county scope;
 - an SSW county (Henderson NC) and a SmartWEB county (Bradford FL) through MongoWriter;
-- the First Appearance watcher, the custody recheck, the Lee jail refresh, the bookmarklet merge, the three edit endpoints, and hydrate.
+- the First Appearance watcher, the custody recheck, the Lee jail refresh, refresh-from-source, the bookmarklet merge, the confirmed-booking refresh, the three edit endpoints, and hydrate.
 
 Health is unchanged. It stays `unverified` until a Leads Ops prod write smoke.

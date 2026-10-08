@@ -60,6 +60,8 @@ def _matches(doc, query):
                 return False
             if "$nin" in expected and actual in expected["$nin"]:
                 return False
+            if "$gt" in expected and (actual is None or not actual > expected["$gt"]):
+                return False
             continue
         if actual != expected:
             return False
@@ -129,6 +131,9 @@ class AsyncFake(FakeArrests):
     async def insert_one(self, doc):
         self.docs.append(deepcopy(doc))
         return SimpleNamespace(inserted_id="x")
+
+    async def create_index(self, *args, **kwargs):
+        return kwargs.get("name", "idx")
 
     def find(self, query, projection=None):
         items = super().find(query)
@@ -586,3 +591,67 @@ def test_custody_recheck_updates_normally_and_never_blanks_unknowns():
     assert doc["charges"] == "DUI | FLEEING"
     assert doc["bond_amount"] == 700.0 and doc["bond_type"] == "Surety"  # source blank -> unchanged
     assert doc["status"] == "In Custody"
+
+
+# ── POST /api/leads/refresh-from-source ──────────────────────────────────────
+def _refresh(cols, data):
+    from dashboard.routers import legacy
+
+    async def fake_ingest(url):
+        return {"success": True, "data": data}
+
+    with _legacy(cols), patch("dashboard.services.url_ingest_service.ingest_url", fake_ingest):
+        return asyncio.run(legacy.refresh_from_source(_request({"booking_number": "R1"})))
+
+
+def test_refresh_from_source_keeps_staff_bond_and_rows():
+    rows = [{"charge": "DUI", "bond_amount": 0.0, "case_number": "26MM1", "source": "staff"}]
+    cols = {"arrests": AsyncFake([_base("R1", bond_amount=0.0, charges="DUI", charge_details=rows,
+                                        detail_url="https://example.test/b/R1",
+                                        staff_edits={"bond": {"amount": 0.0},
+                                                     "charges": {"removed": [], "baseline": ["DUI"]}})])}
+    res = _refresh(cols, {"bond_amount": 9000, "charges": "DUI | NO DL"})
+    doc = cols["arrests"].one("R1")
+    assert res["immediate"]["staff_bond_kept"] is True
+    assert doc["bond_amount"] == 0.0 and doc["scraped_bond_amount"] == 9000.0
+    assert doc["charge_details"][0] == rows[0]
+    assert [r["charge"] for r in doc["charge_details"]] == ["DUI", "NO DL"]
+
+
+def test_refresh_from_source_unknown_bond_is_not_written_as_zero():
+    cols = {"arrests": AsyncFake([_base("R1", bond_amount=1200.0, charges="DUI",
+                                        detail_url="https://example.test/b/R1")])}
+    _refresh(cols, {"bond_amount": None, "charges": "DUI"})
+    assert cols["arrests"].one("R1")["bond_amount"] == 1200.0
+
+
+# ── Confirmed booking-URL intake refresh (Lee booking page) ──────────────────
+def test_confirmed_booking_refresh_keeps_staff_bond_and_rows():
+    from datetime import datetime, timedelta, timezone
+
+    from dashboard.services.confirmed_booking_intake import confirm_preview, project_public_booking_facts
+
+    facts = project_public_booking_facts(
+        {"booking_number": "1030773", "full_name": "Local Booking Fixture", "county": "Lee",
+         "status": "In Custody", "charges": "Fixture charge | Second charge", "bond_amount": "2500",
+         "charge_details": [{"charge": "Fixture charge", "bond_amount": 2500},
+                            {"charge": "Second charge", "bond_amount": 0}]},
+        booking_id="1030773", source_url="https://www.sheriffleefl.org/booking/?id=1030773",
+        parse_method="lee_county_api",
+    )
+    rows = [{"charge": "Fixture charge", "bond_amount": 1000.0, "poa_number": "P1", "source": "staff"}]
+    arrests = AsyncFake([_base("1030773", _id="a1", county="Lee", bond_amount=1000.0,
+                               charges="Fixture charge", charge_details=rows,
+                               staff_edits={"bond": {"amount": 1000.0},
+                                            "charges": {"removed": [], "baseline": ["Fixture charge"]}})])
+    previews = AsyncFake([{"_id": "p1", "preview_id": "pv1", "consumed_at": None, "facts": facts,
+                           "expires_at": datetime.now(timezone.utc) + timedelta(minutes=5)}])
+    res = asyncio.run(confirm_preview(
+        preview_id="pv1", confirmed_booking_number="1030773", exact_match_confirmed=True,
+        preview_collection=previews, arrests_collection=arrests, audit_collection=AsyncFake(),
+    ))
+    assert res["outcome"] == "refreshed"
+    doc = arrests.one("1030773")
+    assert doc["bond_amount"] == 1000.0 and doc["scraped_bond_amount"] is not None
+    assert doc["charge_details"][0] == rows[0]
+    assert [r["charge"] for r in doc["charge_details"]] == ["Fixture charge", "Second charge"]
