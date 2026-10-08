@@ -23,7 +23,7 @@
 |---|---:|---:|---:|---:|---:|---:|---:|
 | AL | 67 | 16 | 4 | 0 | 0 | 51 | 12 |
 | CT | 12 | 6 | 0 | 0 | 6 | 1 | 5 |
-| FL | 67 | 67 | 4 | 16 | 30 | 0 | 17 |
+| FL | 67 | 67 | 4 | 17 | 29 | 0 | 17 |
 | GA | 159 | 85 | 0 | 0 | 148 | 0 | 11 |
 | LA | 64 | 13 | 3 | 1 | 4 | 46 | 10 |
 | MS | 82 | 9 | 1 | 0 | 4 | 69 | 8 |
@@ -32,7 +32,7 @@
 | TN | 96 | 22 | 9 | 0 | 74 | 0 | 13 |
 | TX | 254 | 34 | 2 | 0 | 0 | 252 | 0 |
 
-**Aggregate matrix counts:** verified public 33; candidate productive 32; recon only 266; unverified 489; fail closed 127.
+**Aggregate matrix counts:** verified public 33; candidate productive 33; recon only 265; unverified 489; fail closed 127.
 
 ## County matrix
 
@@ -146,7 +146,7 @@
 | FL | 055 | Highlands County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 057 | Hillsborough County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 059 | Holmes County | OSI + Palmetto | registered | fail_closed | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
-| FL | 061 | Indian River County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
+| FL | 061 | Indian River County | OSI + Palmetto | registered | candidate_productive | https://www.ircsheriff.org/inmate-search | Ordinary public HTTPS IRCSO inmate search; the page form (POST /booking-search/search with its _token and booking_date) lists bookings for a date, 10 per page; /booking-details/<portal id> carries the Booking Info table; no login/CAPTCHA/WAF; TLS verifies | 2026-10-08 Indian River recon (docs/recon/FL_INDIAN_RIVER_BOOKING_SEARCH_2026-10-08.md): detail Booking Number YYYY-NNNNNNNN (the old module keyed rows on the /booking-details portal id and wrote bond 0), Booking Date matches the searched date (15/15 on 10/06), Bond as $amount / No Bond / absent, Charges cards, Release Date once released. Box read smoke 2026-10-08 ~08:06 EDT, 7 booking dates: 59 rows / 59 unique source Booking Numbers, booking date+time 59/59, charges 59/59, bond amount 15, No Bond 15, unknown 29, released 23; 0 dropped; ~51 s. Health stays unverified until a Leads Ops write smoke. |
 | FL | 063 | Jackson County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 065 | Jefferson County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 067 | Lafayette County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |

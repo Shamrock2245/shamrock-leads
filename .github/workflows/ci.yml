@@ -84,6 +84,7 @@ jobs:
             tests/test_fl_smartweb_five.py \
             tests/test_fl_smartweb_legacy_paging.py \
             tests/test_fl_brevard_newworld.py \
+            tests/test_fl_indian_river_booking_search.py \
             tests/test_fl_okaloosa_api.py \
             tests/test_fl_orange_bestjail.py \
             tests/test_fl_67_status.py \
