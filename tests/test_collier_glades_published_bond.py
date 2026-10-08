@@ -77,6 +77,19 @@ def test_collier_bond_never_comes_from_the_next_person():
     assert recs["202600000302"].Bond_Paid == "BONDED"
 
 
+def test_collier_without_an_id_prefix_reads_no_bond():
+    # Same report without the gvReport_ctlNN_ReportUC_ ids: there is no safe
+    # way to tell this person's bond span from the next person's.
+    html = _collier_person("ctl02", "202600000501", "DUI", "No information available.") + _collier_person(
+        "ctl03", "202600000502", "BATTERY", "10/07/2026  BONDED", bond_amount="$2,500.00")
+    html = html.replace(' id="gvReport_ctl02_ReportUC_Table1"', "").replace(' id="gvReport_ctl03_ReportUC_Table1"', "")
+    soup = BeautifulSoup(f"<table>{html}</table>", "html.parser")
+    recs = {r.Booking_Number: r for r in CollierCountyScraper()._parse_arrest_tables(soup.find_all("table"), soup)}
+    assert set(recs) == {"202600000501", "202600000502"}
+    assert recs["202600000501"].Bond_Amount == ""
+    assert recs["202600000502"].Bond_Amount == ""
+
+
 def test_collier_published_bond_span_still_counts():
     recs = _collier(_collier_person("ctl02", "202600000401", "GRAND THEFT $750-$5K",
                                     "No information available.", bond_amount="$5,000.00"))
@@ -126,16 +139,36 @@ def test_glades_bond_is_formatted_like_the_shared_smartweb_helper():
 def test_glades_sums_only_this_cards_published_charge_bonds():
     bonds = _glades(
         _glades_card("GCSO26JBN000101", "NO BOND", ["NO BOND", "NO BOND"]),
-        _glades_card("GCSO26JBN000102", "$0.00", ["$2500.00", "$1,000.00", "NO BOND"]),
+        _glades_card("GCSO26JBN000102", "NO BOND", ["$2500.00", "$1,000.00", "NO BOND"]),
         _glades_card("GCSO26JBN000103", "NO BOND", None),
         _glades_card("GCSO26JBN000104", "$0.00", ["$0.00"]),
+        _glades_card("GCSO26JBN000105", "$0.00", ["$2500.00", "$1,000.00", "$0.00"]),
     )
     assert bonds == {
         "GCSO26JBN000101": "",      # every charge NO BOND: no published bond
-        "GCSO26JBN000102": 3500.0,  # card prints $0.00, charges publish 2500 + 1000
+        "GCSO26JBN000102": "",      # a NO BOND hold makes the total unknown, not 3500
         "GCSO26JBN000103": "",      # no charge grid, card NO BOND: unknown, not "0"
-        "GCSO26JBN000104": "",      # $0.00 is not a bond
+        "GCSO26JBN000104": 0.0,     # a printed charge $0.00 is a real 0
+        "GCSO26JBN000105": 3500.0,  # card prints $0.00, charges publish 2500 + 1000 + 0
     }
+
+
+def test_glades_printed_zero_is_the_string_0_and_hold_is_empty():
+    raw = GladesCountyScraper()._parse_html(
+        _glades_card("GCSO26JBN000501", "$0.00", ["$0.00", "$0.00"])
+        + _glades_card("GCSO26JBN000502", "NO BOND", ["$0.00", "NO BOND"]), set())
+    assert {r.Booking_Number: r.Bond_Amount for r in raw} == {
+        "GCSO26JBN000501": "0", "GCSO26JBN000502": ""}
+
+
+def test_glades_card_level_zero_without_charges_is_not_a_bond():
+    # Live 2026-10-08: the card prints "Bond Amount: $0.00" even when its own
+    # charges publish $15,000-$245,000, so the card-level $0.00 is not a total.
+    assert _glades(_glades_card("GCSO26JBN000601", "$0.00", None)) == {"GCSO26JBN000601": ""}
+
+
+def test_glades_unreadable_bond_cell_makes_the_total_unknown():
+    assert _glades(_glades_card("GCSO26JBN000701", "$0.00", ["$2500.00", ""])) == {"GCSO26JBN000701": ""}
 
 
 def test_glades_card_level_bond_counts_when_it_is_the_only_figure():

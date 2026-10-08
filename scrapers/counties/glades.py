@@ -5,9 +5,9 @@ URL: https://smartweb.gladessheriff.org/smartwebclient/Jail.aspx
 Method: curl_cffi POST to Jail.aspx/AddMoreResults (ASP.NET PageMethods AJAX)
 Fix 2026-05-18: Replaced broken form POST with AJAX endpoint (same pattern as Suwannee/Putnam)
 Fix 2026-10-08: bond comes only from this card's own charge grid BOND column
-(or the card's own "Bond Amount:" cell when it prints a positive figure).
-"NO BOND", "$0.00" and a missing bond stay "" (unknown), never "0", and a
-card never takes the next card's bond.
+(or the card's own "Bond Amount:" cell when it prints a positive figure). Any
+"NO BOND" charge (a hold) or a missing bond makes the total "" (unknown); a
+printed charge "$0.00" is a real 0. A card never takes the next card's bond.
 """
 import logging
 import re
@@ -224,14 +224,21 @@ class GladesCountyScraper(BaseScraper):
 
     @classmethod
     def _card_bond(cls, img) -> str:
-        """Sum of positive BOND cells in this card's own charge grids.
+        """This card's bond from its own charge grid BOND column.
 
         Walks the document from this card's photo to the next card's photo, so
-        charge tables of later inmates are never read. Falls back to the
-        card's own "Bond Amount:" cell when it is a positive figure. Returns
-        "" when the source publishes no positive bond.
+        charge tables of later inmates are never read.
+
+        * Any charge printed "NO BOND" (a hold) makes the total unknown: "".
+        * Any BOND cell that is not a dollar figure makes the total unknown: "".
+        * Otherwise the sum of the printed figures; a printed "$0.00" is a
+          real 0, so all-$0.00 charges give "0".
+        * No charge grid: the card's own "Bond Amount:" only when positive.
+          The card prints "$0.00" there even when its charges publish
+          $15,000-$245,000 (live check 2026-10-08), so a card-level $0.00 is
+          not a bond and stays "".
         """
-        total = 0.0
+        cells: List[str] = []
         for el in img.next_elements:
             name = getattr(el, "name", None)
             if name == "img" and "bookno=" in (el.get("src") or ""):
@@ -240,24 +247,30 @@ class GladesCountyScraper(BaseScraper):
                 continue
             bond_idx = None
             for tr in el.find_all("tr"):
-                cells = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
+                row = [td.get_text(" ", strip=True) for td in tr.find_all("td")]
                 if bond_idx is None:
-                    if "BOND" in cells:
-                        bond_idx = cells.index("BOND")
+                    if "BOND" in row:
+                        bond_idx = row.index("BOND")
                     continue
-                if len(cells) > bond_idx:
-                    val = cls._money(cells[bond_idx])
-                    if val and val > 0:
-                        total += val
-        if total <= 0:
-            card = img.find_parent("tr")
-            for td in card.find_all("td") if card is not None else []:
-                if td.get_text(strip=True) == "Bond Amount:":
-                    nxt = td.find_next_sibling("td")
-                    val = cls._money(nxt.get_text(" ", strip=True)) if nxt is not None else None
-                    if val and val > 0:
-                        total = val
-                    break
-        if total <= 0:
-            return ""
-        return str(int(total)) if total.is_integer() else f"{total:.2f}"
+                if len(row) > bond_idx:
+                    cells.append(row[bond_idx])
+        if cells:
+            if any("NO BOND" in c.upper() for c in cells):
+                return ""
+            values = [cls._money(c) for c in cells]
+            if any(v is None for v in values):
+                return ""
+            return cls._fmt(sum(values))
+        card = img.find_parent("tr")
+        for td in card.find_all("td") if card is not None else []:
+            if td.get_text(strip=True) == "Bond Amount:":
+                nxt = td.find_next_sibling("td")
+                val = cls._money(nxt.get_text(" ", strip=True)) if nxt is not None else None
+                if val and val > 0:
+                    return cls._fmt(val)
+                break
+        return ""
+
+    @staticmethod
+    def _fmt(total: float) -> str:
+        return str(int(total)) if float(total).is_integer() else f"{total:.2f}"

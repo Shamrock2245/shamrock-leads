@@ -355,24 +355,18 @@ class CollierCountyScraper(BaseScraper):
         The report nests each person's tables inside wrapper tables that also
         hold the next person, so a look-ahead ``find`` can land on the wrong
         span. The span ids share the name-header prefix
-        (``gvReport_ctl04_ReportUC_``); without one, take only the first span
-        of each kind in look-ahead order (this person's comes first).
+        (``gvReport_ctl04_ReportUC_``). Without that prefix there is no safe
+        way to tell this person's span from the next person's, so no bond
+        span is read and the bond stays "" (unknown).
         """
         prefix = entry.get("prefix") or ""
         texts: List[str] = []
-        if prefix and soup is not None:
-            for name in cls._BOND_SPANS:
-                span = soup.find("span", id=prefix + name)
-                if span is not None:
-                    texts.append(span.get_text(" ", strip=True))
+        if not prefix or soup is None:
             return texts
-        start = entry["index"] + 1
         for name in cls._BOND_SPANS:
-            for table in tables[start:start + 15]:
-                span = table.find("span", id=lambda x, n=name: bool(x) and str(x).endswith(n))
-                if span is not None:
-                    texts.append(span.get_text(" ", strip=True))
-                    break
+            span = soup.find("span", id=prefix + name)
+            if span is not None:
+                texts.append(span.get_text(" ", strip=True))
         return texts
 
     @staticmethod
