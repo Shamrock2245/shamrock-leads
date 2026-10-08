@@ -125,7 +125,7 @@ def _full_bond():
     return {
         "surety_id": "palmetto",
         "writing_agent_name": "FAKE AGENT RIVERA",
-        "writing_agent_license": "G356764",
+        "writing_agent_license": "X100000",
         "defendant_name": "SAMPLE NOT A PERSON",
         "indemnitor_name": "INDEMNITOR SAMPLE",
         "coindemnitor_name": "COINDEMNITOR SAMPLE",

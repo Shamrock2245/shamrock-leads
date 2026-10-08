@@ -53,7 +53,7 @@ FAKE = {
     "indemnitor_dob": "02/02/1900",
     "indemnitor_ssn": "000-00-0000",
     "agent_name": "FAKE AGENT RIVERA",
-    "agent_license": "G356764",
+    "agent_license": "X100000",
     "collateral_description": "FAKE COLLATERAL NOTE",
     "relationship": "sample",
     "def_remarks": "FAKE REMARKS",
@@ -115,13 +115,14 @@ def test_palmetto_appearance_keys_and_real_agent():
     assert "Two Hundred Fifty" in fields["writtenPremiumAmountField"][0]
     assert fields["calculatedPremiumField"] == ["$250.00"]
     assert fields["AgentField"] == ["FAKE AGENT RIVERA", "FAKE AGENT RIVERA"]
-    assert fields["agentBailLicNumField"] == ["G356764"]
+    assert fields["agentBailLicNumField"] == ["X100000"]
     joined = " ".join(value for values in fields.values() for value in values)
     assert "Brendan" not in joined
     assert AGENT_NAME not in joined
     recipe = build_palmetto_field_values(FAKE)[0]
     assert recipe["chargestField1"] == "SAMPLE CHARGE ONLY"
     assert recipe["AgentField"] == "FAKE AGENT RIVERA"
+    assert recipe["agentBailLicNumField"] == "X100000"
     assert "chargesField1" not in recipe
     assert "AgentField#0" not in recipe
     assert "writtenPremiumAmount" not in recipe
@@ -130,6 +131,7 @@ def test_palmetto_appearance_keys_and_real_agent():
 def test_empty_agent_clears_sample_name():
     data = dict(FAKE)
     data.pop("agent_name")
+    data["agent_license"] = "G356764"
     pdf = fill_palmetto_bond(data)
     values = _xref_values(pdf, "AgentField")
     assert len(values) == 2

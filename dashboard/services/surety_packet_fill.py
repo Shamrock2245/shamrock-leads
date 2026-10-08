@@ -76,6 +76,16 @@ def _money(amount: float) -> str:
     return f"${amount:,.2f}"
 
 
+def _paired_writing_agent(data: Mapping[str, Any]) -> tuple:
+    """Name and license from one BOND_AGENTS lookup. Empty when the record has neither."""
+    from dashboard.services.docuseal_service import _pair_from_agent_source
+
+    pair = _pair_from_agent_source(data, blank_when_license_only=False)
+    if not pair:
+        return "", ""
+    return str(pair[0] or ""), str(pair[1] or "")
+
+
 def resolve_fail_closed_canonical(data: Mapping[str, Any]) -> Dict[str, str]:
     """Format only values that are actually present. Never invent them."""
     from dashboard.bond_pdf_service import (
@@ -87,8 +97,6 @@ def resolve_fail_closed_canonical(data: Mapping[str, Any]) -> Dict[str, str]:
         _safe_float,
         _split_charge,
         _split_court_datetime,
-        writing_agent_license,
-        writing_agent_name,
     )
 
     data = data or {}
@@ -148,6 +156,7 @@ def resolve_fail_closed_canonical(data: Mapping[str, Any]) -> Dict[str, str]:
     ind_def = f"{indemnitor} / {full_name}" if indemnitor and full_name else (indemnitor or full_name)
     poa = str(data.get("poa_number") or "").strip()
     collateral = str(data.get("collateral") or "").strip()
+    agent_name, agent_license = _paired_writing_agent(data)
 
     return {
         "defendant.full_name": full_name,
@@ -181,8 +190,8 @@ def resolve_fail_closed_canonical(data: Mapping[str, Any]) -> Dict[str, str]:
         "court.datetime": court_datetime,
         "court.type": str(data.get("court_type") or data.get("defendant_court_type") or "").strip(),
         "collateral.description": collateral,
-        "agent.name": writing_agent_name(data),
-        "agent.license": writing_agent_license(data),
+        "agent.name": agent_name,
+        "agent.license": agent_license,
         "agency.name": str(data.get("agency_name") or "").strip(),
         "agency.details": str(data.get("agency_details") or "").strip(),
     }

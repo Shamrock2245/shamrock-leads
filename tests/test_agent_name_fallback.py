@@ -410,15 +410,60 @@ def test_osi_appearance_output_is_unchanged():
 
 
 def test_explicit_non_registry_name_on_prefill_is_kept():
-    """Packet-field coverage still sends the name already stored on the bond."""
+    """An unregistered license keeps the name already stored on the bond."""
     values = _prefill({
         "writing_agent_name": "FAKE AGENT RIVERA",
-        "writing_agent_license": "G356764",
+        "writing_agent_license": "X100000",
         "defendant_name": "SAMPLE NOT A PERSON",
         "county": "Lee",
     })
     assert values["agent_name"] == "FAKE AGENT RIVERA"
-    assert values["agent_license"] == "G356764"
+    assert values["agent_license"] == "X100000"
+
+
+STRAY_NAMES = ("Kayla Lukesik", "FAKE AGENT RIVERA", "Shamrock Bail Bonds")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stray_name", STRAY_NAMES)
+@pytest.mark.parametrize("owner_name,owner_license", AGENTS)
+async def test_no_path_prints_a_name_with_another_agents_license_for_unregistered_names(
+    stray_name, owner_name, owner_license,
+):
+    """A name that misses BOND_AGENTS yields the registered license's own entry."""
+    payload = {
+        "agent_name": stray_name,
+        "writing_agent_name": stray_name,
+        "agent_license": owner_license,
+        "writing_agent_license": owner_license,
+        "bondsman_license": owner_license,
+    }
+    resolved = resolve_writing_agent(payload)
+    assert resolved == (owner_name, owner_license)
+    assert resolved != (stray_name, owner_license)
+    values = _prefill(payload)
+    assert values["agent_name"] == owner_name
+    assert values["bondsman_name"] == owner_name
+    assert values["agent_license"] == owner_license
+    assert values["bondsman_license"] == owner_license
+    assert values["agent_name"] != stray_name or stray_name == owner_name
+    built = build_bond_data_from_dashboard(ctx=_bound(), body=payload)
+    assert built["bondsman_name"] == owner_name
+    assert built["bondsman_license"] == owner_license
+    recipe = build_palmetto_field_values({"name": "SAMPLE", "bond_amount": 1000, **payload})[0]
+    assert recipe["AgentField"] == owner_name
+    assert recipe["agentBailLicNumField"] == owner_license
+    ctx = build_palmetto_context({"defendant_name": "SAMPLE", **payload})
+    assert ctx["agent_name"] == owner_name
+    assert ctx["agent_license"] == owner_license
+    bond = _bound(**payload, shannon_voice=True, defendant_name="Jordan Lee", indemnitor_name="Alex Rivera")
+    submitted = await _submit(bond)
+    bondsman = _bondsman(submitted["submitters"])
+    assert bondsman["name"] == owner_name
+    assert bondsman["values"]["agent_name"] == owner_name
+    assert bondsman["values"]["agent_license"] == owner_license
+    assert bondsman["name"] != stray_name or stray_name == owner_name
+    _no_sample({"resolved": resolved, "values": values, "recipe": recipe, "ctx": ctx})
 
 
 class _Col:

@@ -56,6 +56,7 @@ _NOT_WRITING_AGENT = frozenset({
     "unknown agent",
     "unassigned",
     "master admin",
+    "shamrock bail bonds",
 })
 _LICENSE_SHAPED = re.compile(r"^(?:[A-Za-z]{1,4}[\s\-]*)?\d{4,}$")
 

@@ -2118,9 +2118,12 @@ def house_default_agent(tenant=None) -> tuple:
 def _pair_from_agent_source(source: Any, *, blank_when_license_only: bool) -> Optional[tuple]:
     """One source's writing agent, or None when this source has no usable fact.
 
-    A registry name always returns that entry's own license. A filtered label
-    is not a name. An explicit non-registry name is kept with the license on
-    that same source.
+    A registry name always returns that entry's own license. When the name
+    misses the registry, a license that is a ``BOND_AGENTS`` key returns that
+    entry's name and license. ``(name, license)`` is kept only when the
+    license is not registered. A filtered label is not a name. Appearance
+    blanks still clear a missing name instead of inventing one from a license
+    left on the payload.
     """
     if not isinstance(source, Mapping):
         return None
@@ -2133,15 +2136,17 @@ def _pair_from_agent_source(source: Any, *, blank_when_license_only: bool) -> Op
     by_name = _registry_pair_for_name(clean_name)
     if by_name:
         return by_name
-    if clean_name:
-        return clean_name, raw_license
     by_license = _registry_pair_for_license(raw_license)
     if by_license:
+        if clean_name:
+            return by_license
         # Appearance blanks clear a missing name instead of inventing one
         # from a license that was left on the payload. DocuSeal sends do not.
         if blank_when_license_only and not ignored:
             return "", by_license[1]
         return by_license
+    if clean_name:
+        return clean_name, raw_license
     return None
 
 
@@ -2155,8 +2160,9 @@ def resolve_writing_agent(
 
     1. Explicit writing agent on body, case context, or intake when it is a
        ``BOND_AGENTS`` pair (license or exact case-insensitive name). A
-       filtered label falls through. A non-registry name already on that
-       source is kept with the license on the same source.
+       filtered label falls through. A name that misses the registry yields
+       the registered license's own entry. A non-registry name is kept only
+       with a license that is not in ``BOND_AGENTS``.
     2. Signed-in sub-agent, matched to ``BOND_AGENTS`` by license or name.
     3. Staff login with no agent on the session, and machine paths, use
        ``house_default_agent``.
