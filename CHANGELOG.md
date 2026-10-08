@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (start bond packet upsert)
+
+### Fixed
+- **Start bond packet (`SAAS_MULTI_TENANT` still default off).** The `paperwork_packets` write is one `update_one` upsert keyed on `bond_case_id`, so a second submission for the same bond case updates that row instead of inserting another.
+
 ## [Unreleased] — 2026-10-08 (lead fan-out retry job)
 
 ### Fixed

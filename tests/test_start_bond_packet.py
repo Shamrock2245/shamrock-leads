@@ -196,9 +196,17 @@ def test_prepare_and_send_does_not_burn_the_power(monkeypatch):
     assert len(poa.packets.docs) == 1
     stored = poa.packets.docs[0]
     assert stored["packet_id"] == "BC-1"
+    assert stored["bond_case_id"] == "BC-1"
     assert stored["docuseal_submission_id"] == "sub-1"
     assert stored["docuseal_template_id"] == "42"
     assert stored["tenant_id"] == "shamrock"
+    created_at = stored["created_at"]
+    again = client.post("/api/bond-packet/send", json=_body(template_id="999"))
+    assert again.status_code == 200
+    assert len(poa.packets.docs) == 1
+    assert poa.packets.docs[0]["created_at"] == created_at
+    assert "find_one" not in Path(packet.__file__).read_text(encoding="utf-8").split("async def _store_packet", 1)[1].split("async def send_packet", 1)[0]
+    assert "upsert=True" in Path(packet.__file__).read_text(encoding="utf-8")
     unconfirmed = client.post("/api/bond-packet/send", json=_body(confirmed=False))
     assert unconfirmed.status_code == 400
     assert unconfirmed.json()["error"] == "staff_confirmation_required"

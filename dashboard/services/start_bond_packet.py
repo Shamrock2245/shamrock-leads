@@ -302,34 +302,36 @@ async def _store_packet(binding: dict, template_id: str, submission: dict, links
 
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     packet_id = binding["bond_case_id"]
-    doc = {
-        "packet_id": packet_id,
-        "bond_case_id": binding["bond_case_id"],
-        "booking_number": binding["booking_number"],
-        "case_number": binding["case_number"],
-        "match_id": binding["match_id"],
-        "match_status": "validated",
-        "defendant_id": binding["defendant_id"],
-        "indemnitor_id": binding["indemnitor_id"],
-        "surety_id": binding["surety_id"],
-        "poa_number": binding["poa_number"],
-        "esign_provider": "docuseal",
-        "docuseal_template_id": str(template_id),
-        "docuseal_submission_id": str((submission or {}).get("submission_id") or ""),
-        "docuseal_submitters": (submission or {}).get("submitters") if isinstance(submission, dict) else [],
-        "docuseal_status": "sent",
-        "docuseal_sent_at": now,
-        "status": "sent",
-        "updated_at": now,
-        "sign_links": links,
-    }
+    submission_id = str((submission or {}).get("submission_id") or "")
     col = get_collection("paperwork_packets")
-    existing = await col.find_one({"packet_id": packet_id})
-    if existing:
-        await col.update_one({"packet_id": packet_id}, {"$set": doc})
-    else:
-        doc["created_at"] = now
-        await col.insert_one(doc)
+    await col.update_one(
+        {"bond_case_id": packet_id},
+        {
+            "$set": {
+                "packet_id": packet_id,
+                "bond_case_id": packet_id,
+                "booking_number": binding["booking_number"],
+                "case_number": binding["case_number"],
+                "match_id": binding["match_id"],
+                "match_status": "validated",
+                "defendant_id": binding["defendant_id"],
+                "indemnitor_id": binding["indemnitor_id"],
+                "surety_id": binding["surety_id"],
+                "poa_number": binding["poa_number"],
+                "esign_provider": "docuseal",
+                "docuseal_template_id": str(template_id),
+                "docuseal_submission_id": submission_id,
+                "docuseal_submitters": (submission or {}).get("submitters") if isinstance(submission, dict) else [],
+                "docuseal_status": "sent",
+                "docuseal_sent_at": now,
+                "status": "sent",
+                "updated_at": now,
+                "sign_links": links,
+            },
+            "$setOnInsert": {"created_at": now},
+        },
+        upsert=True,
+    )
     return packet_id
 
 
