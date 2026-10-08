@@ -165,7 +165,7 @@ def test_manatee_walks_all_pages_and_matches_published_total():
                            text1="Showing 1 to 2 of 3 bookings", text2="Showing 3 to 3 of 3 bookings")
     recs, meta = walk_roster(fetch, sleep=lambda s: None)
     assert [r.Booking_Number for r in recs] == ["2026010001", "2026010002", "2026010003"]
-    assert meta == {"pages": 2, "rows": 3, "bookings": 3, "published_total": 3}
+    assert meta == {"pages": 2, "rows": 3, "bookings": 3, "published_total": 3, "columns": HEADERS}
     assert fetch.calls[1] == "https://manatee-sheriff.revize.com/bookings?page=2"
 
 

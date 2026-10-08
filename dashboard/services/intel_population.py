@@ -189,14 +189,26 @@ def population_stages(
     county: str = "",
     q: str = "",
     now: datetime | None = None,
+    include_fail_closed: bool = False,
 ) -> list[dict]:
-    """Aggregation stages shared by the count and the page of defendants."""
+    """Aggregation stages shared by the count and the page of defendants.
+
+    Counties whose source contract is ``fail_closed`` are left out unless the
+    county is named or ``include_fail_closed`` is set.
+    """
+    from dashboard.services.source_state_filter import fail_closed_exclusion
+
     now = now or datetime.now(timezone.utc)
     clauses: list[dict] = []
     if state:
         clauses.append(state_clause(state))
     if county:
         clauses.append(county_clause(county))
+    hide = fail_closed_exclusion(
+        [county] if county else (), include_fail_closed=include_fail_closed,
+    )
+    if hide:
+        clauses.append(hide)
     if spec.get("hours"):
         clauses.append(time_clause(now - timedelta(hours=int(spec["hours"]))))
     elif spec.get("days"):
@@ -308,11 +320,15 @@ async def fetch_population(
     page: int = 1,
     limit: int = 40,
     now: datetime | None = None,
+    include_fail_closed: bool = False,
 ) -> dict:
     """Return one page of defendants and the full population total."""
     page = max(1, int(page))
     limit = max(1, min(100, int(limit)))
-    stages = population_stages(spec, state=state, county=county, q=q, now=now)
+    stages = population_stages(
+        spec, state=state, county=county, q=q, now=now,
+        include_fail_closed=include_fail_closed,
+    )
     pipeline = stages + [{
         "$facet": {
             "meta": [{"$count": "total"}],
@@ -380,7 +396,11 @@ async def arrest_state_breakdown(arrests, now: datetime | None = None) -> dict:
         code: {"total": 0, "last_24h": 0, "hot_leads": 0, "pipeline": 0.0}
         for code in ACTIVE_STATE_CODES
     }
-    async for doc in arrests.aggregate([
+    from dashboard.services.source_state_filter import fail_closed_exclusion
+
+    hide = fail_closed_exclusion()
+    head: list[dict] = [{"$match": hide}] if hide else []
+    async for doc in arrests.aggregate(head + [
         {"$addFields": {"_safe_bond": SAFE_BOND}},
         {"$group": {
             "_id": "$state",
@@ -404,7 +424,7 @@ async def arrest_state_breakdown(arrests, now: datetime | None = None) -> dict:
         out[code]["total"] += int(doc.get("total") or 0)
         out[code]["hot_leads"] += int(doc.get("hot") or 0)
         out[code]["pipeline"] = round(out[code]["pipeline"] + float(doc.get("pipeline") or 0), 2)
-    async for doc in arrests.aggregate([
+    async for doc in arrests.aggregate(head + [
         {"$match": time_clause(now - timedelta(hours=24))},
         {"$group": {"_id": "$state", "count": {"$sum": 1}}},
     ], allowDiskUse=True):
