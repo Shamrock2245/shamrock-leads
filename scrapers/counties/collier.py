@@ -141,11 +141,14 @@ class CollierCountyScraper(BaseScraper):
                 and cells[2] == "Residence"
                 and "," in cells[3]  # Name format: LAST, FIRST
             ):
+                table_id = table.get("id", "") or ""
                 name_entries.append({
                     "index": i,
                     "name": cells[3],
                     "dob": cells[4],
                     "address": cells[5],
+                    # "gvReport_ctl04_ReportUC_" scopes this person's spans.
+                    "prefix": table_id[: -len("Table1")] if table_id.endswith("Table1") else "",
                 })
 
         logger.info(f"🔍 Found {len(name_entries)} name headers")
@@ -157,7 +160,7 @@ class CollierCountyScraper(BaseScraper):
         for entry_idx, entry in enumerate(name_entries):
             try:
                 record_data = self._extract_record_from_tables(
-                    tables, entry, all_mugshots, entry_idx, len(records)
+                    tables, entry, all_mugshots, entry_idx, len(records), soup=soup
                 )
                 if record_data and record_data.Booking_Number:
                     records.append(record_data)
@@ -175,8 +178,16 @@ class CollierCountyScraper(BaseScraper):
         all_mugshots: list,
         entry_idx: int,
         records_count: int,
+        soup: Any = None,
     ) -> Optional[ArrestRecord]:
-        """Extract a single ArrestRecord from the table sequence following a name header."""
+        """Extract a single ArrestRecord from the table sequence following a name header.
+
+        Bond: the daily report publishes no bond amount, only ``lblBondSummary``
+        ("No information available." or "<date> BONDED"). A bond counts only
+        when this person's own bond span prints a ``$`` figure. Dollar figures
+        in charge text ("GRAND THEFT ... $750-$5K") are never a bond, and an
+        unknown bond stays ``""`` (never ``"0"``).
+        """
 
         # Parse the name
         raw_name = entry["name"]
@@ -270,59 +281,6 @@ class CollierCountyScraper(BaseScraper):
                         offense = row_cells[2]
                         if offense and offense != "\xa0":
                             charges_list.append(offense)
-                    # Extract bond amount from charge row cells
-                    for cell_text in row_cells:
-                        bond_match = re.search(
-                            r'\$\s*([\d,]+(?:\.\d{2})?)', cell_text
-                        )
-                        if bond_match:
-                            try:
-                                total_bond += float(
-                                    bond_match.group(1).replace(",", "")
-                                )
-                            except (ValueError, TypeError):
-                                pass
-
-            # Bond data from lblBondSummary or lblBondAmount spans
-            for span_keyword in ["lblBondSummary", "lblBondAmount", "lblBond"]:
-                bond_span = table.find(
-                    "span", id=lambda x: x and span_keyword in str(x)
-                )
-                if bond_span:
-                    bond_text = bond_span.get_text(strip=True)
-                    if "BONDED" in bond_text.upper():
-                        bond_paid = "BONDED"
-                    elif bond_text and bond_text != "No information available.":
-                        bond_paid = bond_text
-                    # Extract dollar amount from bond summary text
-                    bond_amt_match = re.search(
-                        r'\$\s*([\d,]+(?:\.\d{2})?)', bond_text
-                    )
-                    if bond_amt_match and total_bond == 0.0:
-                        try:
-                            total_bond = float(
-                                bond_amt_match.group(1).replace(",", "")
-                            )
-                        except (ValueError, TypeError):
-                            pass
-
-            # Fallback: scan all cells for dollar amounts if we still have 0
-            if total_bond == 0.0:
-                for td in table.find_all("td"):
-                    td_text = td.get_text(strip=True)
-                    if "$" in td_text:
-                        amt_match = re.search(
-                            r'\$\s*([\d,]+(?:\.\d{2})?)', td_text
-                        )
-                        if amt_match:
-                            try:
-                                amt = float(
-                                    amt_match.group(1).replace(",", "")
-                                )
-                                if amt > 0:
-                                    total_bond += amt
-                            except (ValueError, TypeError):
-                                pass
 
             # Stop looking if we have the booking number and checked enough tables
             if booking_number and j > start_idx + 5:
@@ -330,6 +288,15 @@ class CollierCountyScraper(BaseScraper):
 
         if not booking_number:
             return None
+
+        for bond_text in self._bond_span_texts(tables, entry, soup):
+            if "BONDED" in bond_text.upper():
+                bond_paid = "BONDED"
+            elif bond_text and bond_text != "No information available.":
+                bond_paid = bond_text
+            amount = self._published_bond_amount(bond_text)
+            if amount and total_bond == 0.0:
+                total_bond = amount
 
         # Mugshot
         if len(all_mugshots) > records_count:
@@ -370,12 +337,48 @@ class CollierCountyScraper(BaseScraper):
             ZIP=zip_code,
             Mugshot_URL=mugshot_url,
             Charges=charges_str,
-            Bond_Amount=str(total_bond) if total_bond > 0 else "0",
+            Bond_Amount=str(total_bond) if total_bond > 0 else "",
             Bond_Paid=bond_paid,
             Detail_URL=SEARCH_URL,
             LastCheckedMode="INITIAL",
             extra_data=extra,
         )
+
+    # ── Bond helpers ──
+
+    _BOND_SPANS = ("lblBondAmount", "lblBondSummary")
+
+    @classmethod
+    def _bond_span_texts(cls, tables: list, entry: dict, soup: Any) -> List[str]:
+        """This person's bond span texts, never a neighbour's.
+
+        The report nests each person's tables inside wrapper tables that also
+        hold the next person, so a look-ahead ``find`` can land on the wrong
+        span. The span ids share the name-header prefix
+        (``gvReport_ctl04_ReportUC_``). Without that prefix there is no safe
+        way to tell this person's span from the next person's, so no bond
+        span is read and the bond stays "" (unknown).
+        """
+        prefix = entry.get("prefix") or ""
+        texts: List[str] = []
+        if not prefix or soup is None:
+            return texts
+        for name in cls._BOND_SPANS:
+            span = soup.find("span", id=prefix + name)
+            if span is not None:
+                texts.append(span.get_text(" ", strip=True))
+        return texts
+
+    @staticmethod
+    def _published_bond_amount(text: str) -> float:
+        """A ``$`` figure printed in a bond span, else 0.0 (unknown)."""
+        match = re.search(r"\$\s*([\d,]+(?:\.\d{1,2})?)", text or "")
+        if not match:
+            return 0.0
+        try:
+            return float(match.group(1).replace(",", ""))
+        except ValueError:
+            return 0.0
 
     # ── HTTP Helpers ──
 
