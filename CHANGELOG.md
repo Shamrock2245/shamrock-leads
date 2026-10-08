@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-07 (agency onboarding review)
+
+### Fixed
+- **Agency onboarding (`SAAS_MULTI_TENANT` still default off).** `tenants.tenant_id` and `tenants.slug` each have a unique index, and a duplicate-key error from a concurrent insert is `slug_taken`. Approve and reject are a single compare-and-set on `status: pending_approval`; a second decision returns `not_pending`. The declared owner stays `owner` when that email is also submitted as a coworker. The platform queue has Approve and Reject controls plus a rejection reason. Each decision writes an `audit_events` row with the actor, reason, and old and new state.
+
 ## [Unreleased] — 2026-10-07 (tenant host membership and backfill)
 
 ### Fixed

@@ -42,6 +42,7 @@ class MemoryCollection:
         self.docs = [dict(doc) for doc in (docs or [])]
         self.filters = []
         self.pipelines = []
+        self.indexes = []
 
     def _match(self, doc, filt):
         if not filt:
@@ -87,11 +88,14 @@ class MemoryCollection:
         return SimpleNamespace(inserted_ids=["1"])
 
     async def update_one(self, filt, update, *args, **kwargs):
+        self.filters.append(filt)
         for doc in self.docs:
             if self._match(doc, filt or {}):
                 doc.update(update.get("$set", {}))
-                return SimpleNamespace(modified_count=1)
-        return SimpleNamespace(modified_count=0)
+                for key in update.get("$unset") or {}:
+                    doc.pop(key, None)
+                return SimpleNamespace(modified_count=1, matched_count=1)
+        return SimpleNamespace(modified_count=0, matched_count=0)
 
     async def update_many(self, filt, update, *args, **kwargs):
         count = 0
@@ -124,6 +128,7 @@ class MemoryCollection:
         raise AssertionError("estimated_document_count leaks across tenants")
 
     def create_index(self, *args, **kwargs):
+        self.indexes.append((args, kwargs))
         return "ok"
 
 
@@ -139,7 +144,7 @@ def test_known_collection_split_is_fail_closed():
     assert "notifications" in TENANT_OWNED_COLLECTIONS
     assert GLOBAL_COLLECTIONS.isdisjoint(TENANT_OWNED_COLLECTIONS)
     assert TENANT_OWNED_COLLECTIONS <= KNOWN_APP_COLLECTIONS
-    assert len(KNOWN_APP_COLLECTIONS) == 116
+    assert len(KNOWN_APP_COLLECTIONS) == 118
     assert len(GLOBAL_COLLECTIONS) == 11
     for name in (
         "docket_events",
@@ -615,8 +620,14 @@ def test_indexes_are_defined_and_not_wired_into_startup():
     assert "tenant_poa_number" in names
     assert "tenant_bond_case_id" in names
     assert "tenant_gcal_dedup" in names
+    assert "tenant_id_unique" in names
+    assert "tenant_slug_unique" in names
     for spec in specs:
-        assert spec.keys[0] == ("tenant_id", 1)
+        if spec.collection == "tenants":
+            assert spec.unique is True
+            assert spec.partial is None
+        else:
+            assert spec.keys[0] == ("tenant_id", 1)
         assert "expireAfterSeconds" not in spec.as_create_kwargs()
     policy = audit_retention_policy()
     assert policy["current_ttl_seconds"] == AUDIT_TTL_CURRENT_SECONDS == 7776000
