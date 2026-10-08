@@ -345,11 +345,26 @@ class ScraperScheduler:
 
             # Compare old vs new
             diffs = []
-            new_dict = new_record.to_dict() if hasattr(new_record, "to_dict") else {}
+            # ArrestRecord has no to_dict(); without to_mongo_doc() every field
+            # read as "" and the recheck blanked status/bond/charges.
+            if hasattr(new_record, "to_dict"):
+                new_dict = new_record.to_dict()
+            elif hasattr(new_record, "to_mongo_doc"):
+                new_dict = new_record.to_mongo_doc()
+            else:
+                new_dict = {}
 
             for field in DIFF_FIELDS:
                 old_val = old_doc.get(field, "")
                 new_val = new_dict.get(field, "")
+                # A value the source did not publish is unknown, not a change
+                # (an unknown bond is never written as 0).
+                if field == "bond_amount" and "bond_amount_raw" in new_dict and not str(
+                    new_dict.get("bond_amount_raw") or ""
+                ).strip():
+                    continue
+                if new_val is None or (isinstance(new_val, str) and not new_val.strip()):
+                    continue
                 # Normalize for comparison
                 if isinstance(old_val, (int, float)) and isinstance(new_val, (int, float)):
                     if old_val != new_val:

@@ -540,3 +540,49 @@ def test_hydrate_reads_staff_rows_after_rescrape():
     assert arrest_bond_value(doc) == 1000.0
     hydrated = charge_details_from_sources(arrest=doc)
     assert hydrated[0]["bond_amount"] == 1000.0
+
+
+# ── Scheduler custody recheck (live roster) ──────────────────────────────────
+class _SyncColl(FakeArrests):
+    def update_one(self, flt, update, upsert=False):
+        self._update(flt, update, upsert=upsert)
+
+    def insert_one(self, doc):
+        self.docs.append(deepcopy(doc))
+
+    def delete_many(self, flt):
+        return None
+
+
+def _recheck(arrests, record):
+    from core.scheduler import ScraperScheduler
+
+    sched = ScraperScheduler.__new__(ScraperScheduler)
+    sched._writers = []
+    db = {"arrests": arrests, "custody_rechecks": _SyncColl(), "scraper_triggers": _SyncColl()}
+    scraper = SimpleNamespace(_fetch_single_booking=lambda bk, url: record)
+    sched._handle_custody_recheck(db, {"_id": "t1", "county": "Lee", "mode": "single",
+                                       "booking_number": record.Booking_Number}, scraper)
+    return db
+
+
+def test_custody_recheck_keeps_staff_bond_and_rows():
+    rows = [{"charge": "DUI", "bond_amount": 1000.0, "poa_number": "P1", "source": "staff"}]
+    arrests = _SyncColl([_base("S1", bond_amount=1000.0, bond_type="Surety", charges="DUI", status="In Custody",
+                               charge_details=rows,
+                               staff_edits={"bond": {"amount": 1000.0, "type": "Surety"},
+                                            "charges": {"removed": [], "baseline": ["DUI"]}})])
+    _recheck(arrests, _rec("S1", bond="5000", bond_type="Cash", charges="DUI | NO DL"))
+    doc = arrests.one("S1")
+    assert doc["bond_amount"] == 1000.0 and doc["scraped_bond_amount"] == 5000.0
+    assert [r["charge"] for r in doc["charge_details"]] == ["DUI", "NO DL"]
+    assert doc["charge_details"][0]["poa_number"] == "P1"
+
+
+def test_custody_recheck_updates_normally_and_never_blanks_unknowns():
+    arrests = _SyncColl([_base("S2", bond_amount=700.0, bond_type="Surety", charges="DUI", status="In Custody")])
+    _recheck(arrests, _rec("S2", bond="", charges="DUI | FLEEING"))
+    doc = arrests.one("S2")
+    assert doc["charges"] == "DUI | FLEEING"
+    assert doc["bond_amount"] == 700.0 and doc["bond_type"] == "Surety"  # source blank -> unchanged
+    assert doc["status"] == "In Custody"
