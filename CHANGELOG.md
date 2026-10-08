@@ -38,6 +38,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Stripe test-mode billing** (`/platform/billing`). Checkout refuses a live key and refuses a price that is not configured. MRR is the sum of stored cents from signed `invoice.paid` events on active agencies. The second failed invoice suspends packet send and texting. Shamrock is not billed. No card number is stored.
 - **Surety checklist** (`/platform/sureties`). OSI and Palmetto stay on for Shamrock. Inactive carriers cannot be enabled. Private templates are labels only. When the flag is on, packet finalize refuses a surety the agency is not enabled for.
 - **Lead subscriptions** (`/platform/leads`). Fail-closed counties, including the Ohio pilot, are not sold. Shared is the default. An exclusive county rejects a second subscriber. New arrests fan out only when the flag is on, as booking pointers without the defendant name. Shamrock's unsaved list is the key Florida desk.
+
 ## [Unreleased] — 2026-10-07 (Charlotte FL Revize hardening)
 
 ### Fixed
