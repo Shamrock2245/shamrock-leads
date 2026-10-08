@@ -13,6 +13,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Dead code with no users left: `cf_browser.launch_cf_browser`, `new_stealth_context`, `wait_past_cloudflare`, `_launch_sync_playwright`, `require_residential_exit`, and `socks_proxy.to_playwright_proxy`, `to_httpx_proxy`, `require_socks_or_raise`. The shared resolver (`resolve_residential_proxy`, `validate_residential_proxy`, `curl_cffi_proxies`) stays for Marion and Hillsborough. `check_exit_ip` stays.
 - `docs/COUNTY_REGISTRY.md`: Manatee/Charlotte no longer list the APE/office SOCKS path.
 
+## [Unreleased] — 2026-10-07 (tenant host membership and backfill)
+
+### Fixed
+- **Multi-tenant foundation (`SAAS_MULTI_TENANT` still default off).** A customer host `{slug}.app.shamrockbailbonds.biz` is routing only. The request binds that agency only when the signed-in email has an active `tenant_memberships` row for that slug. A signed-in caller on a Shamrock host must be a member of the tenant that host selects. Anonymous webhook and machine calls on Shamrock hosts still bind Shamrock. Flag off does not check membership and does not change filters.
+- **Backfill.** `scripts/backfill_tenant_id.py` stamps every tenant-owned collection the app opens, including `family_relationships`, `persons`, `osint_scans`, `docket_events`, and `intake_fanout_outbox`. A connected run also stamps any other present collection that is not on the global or platform allowlist. `tests/test_tenant_scope.py` fails if application code uses a collection that is neither tenant-owned nor allowlisted.
+- **Startup.** POA seeding and core index creation run inside a Shamrock tenant context, so a flag-on boot does not call the tenant proxy with no context. Flag off still writes the same unstamped seed.
+
 ## [Unreleased] — 2026-10-07 (Charlotte FL Revize hardening)
 
 ### Fixed

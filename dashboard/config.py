@@ -44,6 +44,9 @@ class Config:
     # Dynamically loaded from env in extensions.py
 
     # ── Feature Flags ──
+    # SAAS_MULTI_TENANT is read live by dashboard.tenancy.flag.multi_tenant_enabled.
+    # Default off. Do not snapshot it on this class — a snapshot would freeze
+    # the value at import time and hide a later env change from tests.
     ENABLE_SHEETS_WRITER = os.getenv("ENABLE_SHEETS_WRITER", "true").lower() == "true"
     ENABLE_MONGO_WRITER = os.getenv("ENABLE_MONGO_WRITER", "true").lower() == "true"
     ENABLE_SLACK_ALERTS = os.getenv("ENABLE_SLACK_ALERTS", "true").lower() == "true"
