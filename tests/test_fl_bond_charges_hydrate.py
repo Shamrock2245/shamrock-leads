@@ -127,7 +127,7 @@ class TestPinellasChargeReportParse(unittest.TestCase):
         self.assertEqual(rec.Case_Number, "26-08535-CF")
         self.assertEqual(rec.Charges, "PETIT THEFT")
 
-    def test_missing_bond_defaults_to_zero_not_invented(self):
+    def test_missing_bond_stays_unknown_not_zero(self):
         scraper = PinellasCountyScraper()
         rec = scraper._row_to_record(
             {
@@ -137,7 +137,7 @@ class TestPinellasChargeReportParse(unittest.TestCase):
             }
         )
         self.assertIsNotNone(rec)
-        self.assertEqual(rec.Bond_Amount, "0")
+        self.assertEqual(rec.Bond_Amount, "")  # modal not read: unknown, never $0
 
 
 class TestMarionDetailChargeParse(unittest.TestCase):
