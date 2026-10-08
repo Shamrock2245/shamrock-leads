@@ -30,6 +30,21 @@ class TenantContext:
     job_name: str = ""
 
 
+@dataclass(frozen=True)
+class TenantDecision:
+    """Host routing result. ``membership_required`` is the authorization gate.
+
+    The host picks a candidate tenant. It does not grant access. When the
+    flag is on, a customer subdomain always requires an active membership,
+    and a Shamrock host requires one whenever the caller is authenticated.
+    Anonymous webhook and machine calls on Shamrock hosts stay tenant #1.
+    """
+
+    tenant_id: str | None
+    membership_required: bool
+    source: str
+
+
 _current: ContextVar[TenantContext | None] = ContextVar("shamrock_tenant", default=None)
 
 
@@ -61,44 +76,76 @@ def normalize_host(host: str | None) -> str:
     return raw
 
 
-def resolve_tenant_id(
+def _authenticated(session_email: str | None) -> bool:
+    return bool((session_email or "").strip())
+
+
+def classify_tenant_request(
     *,
     host: str | None,
     session_tenant: str | None,
     header_tenant: str | None,
     is_platform_admin: bool,
-) -> str | None:
-    """Return the tenant for this request, or None to fail closed.
+    session_email: str | None = None,
+) -> TenantDecision:
+    """Route a request to a candidate tenant.
 
-    Flag off: always Shamrock, including a hostile Host header.
-    Flag on: Shamrock's own hostnames stay tenant #1. Customer agencies use
-    ``{slug}.app.shamrockbailbonds.biz``. A platform super-admin may pass
-    ``X-Tenant-Id``. Everyone else cannot.
+    Flag off: always Shamrock, including a hostile Host header, and the
+    membership gate stays off so today's behavior does not change.
+
+    Flag on: the host is routing input. ``{slug}.app.shamrockbailbonds.biz``
+    is that slug only after an active membership check. Shamrock's own
+    hostnames stay tenant #1 for anonymous callers (webhooks, machine auth).
+    An authenticated caller on those hosts must be a member of the tenant
+    the host selected. A platform super-admin may pass ``X-Tenant-Id``;
+    that header is the impersonation path and is not a host selection.
     """
     if not multi_tenant_enabled():
-        return SHAMROCK_TENANT_ID
+        return TenantDecision(SHAMROCK_TENANT_ID, False, "flag_off")
 
     if is_platform_admin and (header_tenant or "").strip():
-        return normalize_slug(header_tenant)
+        return TenantDecision(normalize_slug(header_tenant), False, "platform_header")
 
     session_slug = normalize_slug(session_tenant)
     if session_slug and session_slug != SHAMROCK_TENANT_ID and not is_platform_admin:
         session_slug = None
 
     hostname = normalize_host(host)
+    signed_in = _authenticated(session_email)
     if hostname.endswith(SAAS_APP_SUFFIX):
         label = hostname[: -len(SAAS_APP_SUFFIX)]
         if "." in label:
-            return None
-        return normalize_slug(label)
+            return TenantDecision(None, True, "customer_host")
+        return TenantDecision(normalize_slug(label), True, "customer_host")
 
     if (
         hostname in SHAMROCK_HOSTS
         or hostname.endswith(".shamrockbailbonds.biz")
         or hostname in {"", "localhost"}
     ):
-        return session_slug or SHAMROCK_TENANT_ID
-    return None
+        tenant_id = session_slug or SHAMROCK_TENANT_ID
+        # Anonymous Shamrock-host traffic (webhooks, machine keys) keeps
+        # tenant #1. A signed-in user must actually belong to that tenant.
+        return TenantDecision(tenant_id, signed_in, "shamrock_host")
+    return TenantDecision(None, True, "rejected")
+
+
+def resolve_tenant_id(
+    *,
+    host: str | None,
+    session_tenant: str | None,
+    header_tenant: str | None,
+    is_platform_admin: bool,
+    session_email: str | None = None,
+) -> str | None:
+    """Candidate tenant id. Host selection still needs a membership check."""
+    return classify_tenant_request(
+        host=host,
+        session_tenant=session_tenant,
+        header_tenant=header_tenant,
+        is_platform_admin=is_platform_admin,
+        session_email=session_email,
+    ).tenant_id
 
 
 @contextmanager
@@ -166,12 +213,19 @@ class TenantContextMiddleware:
         role = _state_get(scope, "sl_role")
         is_admin = role in {"god_admin", "admin"} and is_super_admin_email(email)
         host = _header(scope, "x-forwarded-host") or _header(scope, "host")
-        tenant_id = resolve_tenant_id(
+        decision = classify_tenant_request(
             host=host,
             session_tenant=_state_get(scope, "sl_tenant_id"),
             header_tenant=_header(scope, "x-tenant-id"),
             is_platform_admin=is_admin,
+            session_email=email,
         )
+        tenant_id = decision.tenant_id
+        if tenant_id is not None and decision.membership_required:
+            from dashboard.tenancy.membership import has_active_membership
+
+            if not await has_active_membership(email, tenant_id):
+                tenant_id = None
         if tenant_id is None:
             from starlette.responses import JSONResponse
 

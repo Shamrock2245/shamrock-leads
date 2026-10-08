@@ -29,7 +29,7 @@ Checked in this tree, not taken from the memo.
 | Claim | What the code shows |
 |---|---|
 | No tenant scoping | Confirmed before this change. No module path contained `tenant`. `get_collection()` returned `get_db()[name]` with no filter. |
-| "0 of 122 collections" | **107** collection-name literals in application Python (`get_collection("…")`, `db["…"]`, cron `_idx("…")`), tests and `opencut/` excluded. Live Atlas may hold more. None of the 107 were filtered by tenant. The allowlist in this PR is **11 global** collections; the other **96** known names are tenant-owned. Names that are not on the global list, including names nobody has inventoried, are tenant-owned too. The memo's "15 global + 86 tenant" split was not a checked-in list. A shorter allowlist is the safer reading. |
+| "0 of 122 collections" | **116** known application collections (`dashboard/tenancy/inventory.py` scans `get_collection`, `db["…"]`, `db.name.find`, collection constants, and cron `_idx`). Tests and one-off scripts are excluded. **11** are the global allowlist; the other **105** known names are tenant-owned, including `family_relationships`, `persons`, `osint_scans`, and `docket_events`. `tenant_memberships` is platform, not part of that 116. Names that are not on the global or platform lists, including names nobody has inventoried, are tenant-owned too, and a connected backfill stamps those live collections as well. The memo's "15 global + 86 tenant" split was not a checked-in list. A shorter allowlist is the safer reading. |
 | 18 direct `MongoClient` files | **19** constructors outside `dashboard/extensions.py`: 16 `pymongo.MongoClient` call sites and 3 other `AsyncIOMotorClient`s (`social/main.py`, `scripts/create_indexes.py`, `scripts/verify_prod_checklist_pockets.py`). Listed in §12. They are not routed through the chokepoint in this PR. |
 | Unique `poa_number` and bond keys | Confirmed. `poa_inventory.poa_number` is unique in `dashboard/extensions.py` and `scripts/mongo_indexes.py`. `gcal_sync.dedup_key`, `paperwork_packets.packet_id`, `payment_plans.plan_id`, `defendants.identity_key`, `defendants.defendant_id` are unique in `dashboard/cron.py`, which runs on dashboard boot. Bond case id is indexed, not globally unique, in `dashboard/main.py`. Specs for `(tenant_id, …)` live in `dashboard/tenancy/indexes.py` and are **not** created on boot. |
 | Requests without a tenant fail closed | Implemented **when the flag is on**. Unknown hosts get HTTP 403 `tenant_required`. A tenant-owned query with no job/request context raises `TenantScopeError`, mapped to the same 403. Flag off never 403s for this reason. |
@@ -105,9 +105,9 @@ Implemented in `dashboard/tenancy/context.py`. The contextvar is the only tenant
 | Signal | Flag off | Flag on |
 |---|---|---|
 | Any host, any header | `shamrock` | — |
-| `*.shamrockbailbonds.biz` except the app suffix, plus `leads.`, `paperwork.`, localhost, the VPS IP, `testserver` | `shamrock` | `shamrock` (session slug ignored unless it is `shamrock` or the caller is a platform super-admin) |
-| `{slug}.app.shamrockbailbonds.biz` | `shamrock` | that slug |
-| `X-Tenant-Id` | ignored | honored only when the signed session is `god_admin` or `admin` **and** the email is `admin@shamrockbailbonds.biz` |
+| `*.shamrockbailbonds.biz` except the app suffix, plus `leads.`, `paperwork.`, localhost, the VPS IP, `testserver` | `shamrock` | `shamrock` for an anonymous caller (webhooks, machine auth). A signed-in caller must have an active `tenant_memberships` row for that tenant. Session slug is ignored unless it is `shamrock` or the caller is a platform super-admin. |
+| `{slug}.app.shamrockbailbonds.biz` | `shamrock` | that slug **only** when the signed-in email has an active membership in it. The host is routing input. No membership, or a membership in a different agency, is **403** `tenant_required`. |
+| `X-Tenant-Id` | ignored | honored only when the signed session is `god_admin` or `admin` **and** the email is `admin@shamrockbailbonds.biz`. This is impersonation, not host selection. |
 | Anything else | `shamrock` | **403** `tenant_required` |
 
 Login does not take a tenant from the browser. `_sign_token` stamps `tenant_id: shamrock`. Cookies signed before this change have no field; `_attach_session` treats that as Shamrock, so nobody is logged out.
@@ -115,6 +115,8 @@ Login does not take a tenant from the browser. `_sign_token` stamps `tenant_id: 
 Customer custom domains are a later lookup on `tenants.custom_domains`. Until that table is live, an unknown host fails closed instead of falling through to Shamrock. That is why Shamrock's real hostnames are listed explicitly.
 
 Middleware is pure ASGI and is registered **inside** PIN auth (`dashboard/main.py` adds it before `PinAuthMiddleware`, and Starlette runs the last `add_middleware` first). The signed session is already on `scope["state"]` when the tenant is chosen. Webhooks on `leads.shamrockbailbonds.biz` resolve to Shamrock by host, so DocuSeal, Twilio, and BlueBubbles keep a tenant when the flag is on. They still need the backfill first, or they will not see old rows.
+
+Dashboard boot (`run_startup_database_tasks`) seeds POA inventory and verifies core indexes inside `bind_job_tenant("shamrock")`. With the flag on, those calls would otherwise hit the tenant proxy before any request or job context exists, raise `tenant_required`, and the helpers would swallow that and skip the work. Flag off, the proxy is not installed, so the bind does not stamp `tenant_id` onto the seed.
 
 Background jobs:
 
