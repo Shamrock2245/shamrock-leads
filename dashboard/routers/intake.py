@@ -1227,7 +1227,12 @@ async def intake_promote(request: Request, intake_id: str):
         "county": matched_county,
         "facility": def_.get("facility", intake_doc.get("defendant_facility", "")),
         "bond_amount": bond_amount,
-        "premium": bond_amount * 0.10,  # Standard 10% premium
+        "premium": bond_amount * 0.10,  # Standard 10% premium (ESTIMATE)
+        # Marks the 10% figure as an estimate: swipesimple_invoice_service
+        # refuses to invoice it (premium_estimate_unconfirmed) until staff
+        # enter the real premium (Write Bond → premium_cents) or confirm it.
+        "premium_is_estimate": True,
+        "premium_source": "estimate_10pct_intake_promote",
         "insurance_company": surety.upper(),
         "poa_number": poa_number,
         "poa_full": poa_full,

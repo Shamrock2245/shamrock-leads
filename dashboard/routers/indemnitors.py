@@ -1264,51 +1264,44 @@ async def api_indemnitor_upload_delete(booking_number: str, file_id: str):
 
 @router.post("/indemnitors/{booking_number}/payment-link")
 async def api_indemnitor_payment_link(booking_number: str):
-    """Generate or return a SwipeSimple payment link for this bond."""
+    """Return the pay-by-card link for this bond (read-only).
+
+    Same resolver as every other source (dashboard/services/payment_links.py):
+    the bond's own staged SwipeSimple invoice link (locked premium, invoice #
+    = booking #) wins; otherwise the per-source static SwipeSimple link with
+    NO amount. Never computes a 10%-of-bond estimate, never builds an
+    ``?amount=`` URL, and never writes ``payment_link`` onto the bond.
+    """
     try:
         prospective_bonds = get_collection("prospective_bonds")
         active_bonds = get_collection("active_bonds")
 
-        doc = await prospective_bonds.find_one({"booking_number": booking_number})
-        collection = prospective_bonds
+        doc = await active_bonds.find_one({"booking_number": booking_number})
         if not doc:
-            doc = await active_bonds.find_one({"booking_number": booking_number})
-            collection = active_bonds
+            doc = await prospective_bonds.find_one({"booking_number": booking_number})
         if not doc:
             return JSONResponse({"error": "Bond not found"}, status_code=404)
 
-        ind = doc.get("indemnitor", {})
+        ind = doc.get("indemnitor", {}) or {}
         ind_name = ind.get("name") or " ".join(
             filter(None, [ind.get("firstName", ""), ind.get("lastName", "")])
-        ) or "Indemnitor"
-        bond_amount = doc.get("bond_amount", 0)
-        premium = round(float(bond_amount) * 0.10, 2) if bond_amount else 0
+        ) or doc.get("indemnitor_name") or "Indemnitor"
 
-        from urllib.parse import urlencode
-        base_url = os.environ.get("SWIPESIMPLE_URL", "https://shamrockbailbonds.biz/payment")
-        params = {
-            "amount": str(premium),
-            "name": ind_name,
-            "booking": booking_number,
-            "county": doc.get("county", ""),
-        }
-        payment_url = f"{base_url}?{urlencode(params)}"
+        from dashboard.services.payment_links import case_invoice_link, payment_link_for, source_of
+        from dashboard.services.swipesimple_invoice_service import _bond_premium
 
-        now = datetime.now(timezone.utc)
-        await collection.update_one(
-            {"booking_number": booking_number},
-            {"$set": {
-                "payment_link": payment_url,
-                "payment_premium": premium,
-                "updated_at": now,
-            }},
-        )
+        own = case_invoice_link(doc)
+        locked = _bond_premium(doc) if own else None
+        payment_url = payment_link_for(source_of(doc), doc)
 
         return {
             "success": True,
             "payment_link": payment_url,
-            "premium": premium,
-            "bond_amount": bond_amount,
+            "invoice_staged": bool(own),
+            "amount_locked": bool(own and locked is not None),
+            # Locked premium only when this bond's own invoice is staged.
+            "premium": float(locked) if (own and locked is not None) else None,
+            "bond_amount": doc.get("bond_amount", 0),
             "indemnitor_name": ind_name,
         }
     except Exception as e:
