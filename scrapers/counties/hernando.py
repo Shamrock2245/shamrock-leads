@@ -2,8 +2,15 @@
 Hernando County Arrest Scraper — ASP.NET JailSearch
 Source: Hernando County Sheriff's Office
 URL: https://www.hernandosheriff.org/jail/Applications/JailSearch/
-Method: curl_cffi POST — ASP.NET WebForms with ViewState
+Method: plain requests POST — ASP.NET WebForms with ViewState
 Fields: Name, Race, Sex, DOB, Booking Number, Booking Date, Offenses
+
+2026-10-08: the search results publish no bond, so Bond_Amount is "" (unknown,
+never $0); old Hernando "0" rows hydrate as unknown. Rows without a source
+booking number (HCSO<YY>JBN<NNNNNN>) are skipped, never keyed on the name. A
+response without the results table raises (a 7-day window always has
+bookings) instead of returning an empty success. TLS impersonation is
+retired; the site answers plain HTTPS.
 
 Fix 2026-05-18: Replaced DrissionPage with curl_cffi POST.
                 Results are in Table 5 (last large table, 100+ rows).
@@ -17,6 +24,8 @@ from datetime import datetime, timedelta
 from typing import List
 from urllib.parse import urljoin
 
+import requests
+
 from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
 
@@ -25,7 +34,12 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://www.hernandosheriff.org"
 SEARCH_URL = f"{BASE_URL}/jail/Applications/JailSearch/"
 FACILITY = "Hernando County Jail"
-IMPERSONATE = "chrome131"
+BOOKING_RE = re.compile(r"\b(HCSO\d{2}JBN\d{6})\b")
+
+
+class HernandoContractError(RuntimeError):
+    """The JailSearch results page no longer matches the verified contract."""
+
 DAYS_BACK = 7
 
 HEADERS = {
@@ -38,25 +52,20 @@ HEADERS = {
 
 
 class HernandoCountyScraper(BaseScraper):
-    """Hernando County (FL) — ASP.NET JailSearch (curl_cffi POST)"""
+    """Hernando County (FL) — ASP.NET JailSearch (plain requests POST)"""
 
     @property
     def county(self) -> str:
         return "Hernando"
 
     def scrape(self) -> List[ArrestRecord]:
-        try:
-            from curl_cffi import requests as cf
-            from bs4 import BeautifulSoup
-        except ImportError:
-            logger.error("curl_cffi/bs4 not installed")
-            raise
+        from bs4 import BeautifulSoup
 
-        session = cf.Session()
+        session = requests.Session()
 
         # Step 1: GET to retrieve ASP.NET ViewState tokens
         try:
-            r = session.get(SEARCH_URL, headers=HEADERS, timeout=20, impersonate=IMPERSONATE)
+            r = session.get(SEARCH_URL, headers=HEADERS, timeout=20)
             r.raise_for_status()
         except Exception as e:
             logger.error(f"Hernando GET failed: {e}")
@@ -89,7 +98,7 @@ class HernandoCountyScraper(BaseScraper):
         }
 
         try:
-            r2 = session.post(SEARCH_URL, data=payload, headers=HEADERS, timeout=30, impersonate=IMPERSONATE)
+            r2 = session.post(SEARCH_URL, data=payload, headers=HEADERS, timeout=30)
             r2.raise_for_status()
         except Exception as e:
             logger.error(f"Hernando POST failed: {e}")
@@ -119,8 +128,8 @@ class HernandoCountyScraper(BaseScraper):
                 # Keep going — we want the LAST matching table (the results, not the form)
         
         if not result_table:
-            logger.warning("Hernando: no results table found")
-            return []
+            raise HernandoContractError("Hernando: no results table in the search response")
+        skipped_no_key = 0
 
         rows = result_table.find_all("tr")
         for row in rows[1:]:  # Skip header
@@ -138,8 +147,11 @@ class HernandoCountyScraper(BaseScraper):
 
             # Parse cell1: "CURL, CODY DEAN W/M- 08/31/1990 HCSO26JBN002500"
             # Booking number pattern: letters+digits
-            bn_match = re.search(r'\b([A-Z]{2,6}\d{2}[A-Z]{2,3}\d{6,})\b', cell1)
-            booking_num = bn_match.group(1) if bn_match else ""
+            bn_match = BOOKING_RE.search(cell1)
+            if not bn_match:
+                skipped_no_key += 1  # never key a record on the name
+                continue
+            booking_num = bn_match.group(1)
 
             # DOB pattern
             dob_match = re.search(r'(\d{2}/\d{2}/\d{4})', cell1)
@@ -171,10 +183,9 @@ class HernandoCountyScraper(BaseScraper):
                 if bd_match:
                     booking_date = bd_match.group(1)
 
-            key = booking_num or full_name
-            if key in seen:
+            if booking_num in seen:
                 continue
-            seen.add(key)
+            seen.add(booking_num)
 
             f, m, l = self._parse_name(full_name)
 
@@ -191,11 +202,16 @@ class HernandoCountyScraper(BaseScraper):
                 Race=race,
                 Sex=sex,
                 Charges=cell3,
-                Bond_Amount="0",
+                Bond_Amount="",  # the results grid publishes no bond: unknown, never $0
                 Detail_URL=SEARCH_URL,
                 LastCheckedMode="INITIAL",
+                extra_data={"bond_published": False},
             ))
 
+        if skipped_no_key:
+            logger.warning("Hernando: skipped %d rows without a source booking number", skipped_no_key)
+        if not records:
+            raise HernandoContractError("Hernando: results table had no row with a source booking number")
         return records
 
     @staticmethod
