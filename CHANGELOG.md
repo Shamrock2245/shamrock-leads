@@ -6,7 +6,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased] — 2026-10-08 (Pinellas unknown bond)
 
 ### Fixed
-- **Pinellas (FL):** an unread charge-report modal, a modal with no `Bond Assessed`, or any blank or non-numeric charge bond (`NO BOND`, `HOLD`) was written as a $0 bond. Now the booking total is `""` (unknown) unless every charge publishes an amount. Real published `$0.00` values are kept: 33 of 82 cells in the 2026-10-06/07 live check were `$0.00`, so they stay `"0"`, and old Pinellas `"0"` rows still hydrate as a known $0. Live re-check (2026-10-07, 25 bookings): 13 positive, 10 published $0, 2 unknown. Details in `docs/recon/FL_PINELLAS_BOND_2026-10-08.md`.
+- **Pinellas (FL):** an unread charge-report modal, a modal with no `Bond Assessed`, or any blank or non-numeric charge bond (`NO BOND`, `HOLD`) was written as a $0 bond. Now the booking total is `""` (unknown) unless every charge publishes an amount. Real published `$0.00` values are kept: 33 of 82 cells in the 2026-10-06/07 live check were `$0.00`, so they stay `"0"`, and old Pinellas `"0"` rows still hydrate as a known $0. Live re-check (2026-10-07, 25 bookings): 13 positive, 10 published $0, 2 unknown. A booking whose charge-report modal did not render is now skipped for the run instead of being written roster-only, which would `$set` a blank bond and abbreviated charges over stored values. The run raises if every modal fails or every date search fails. Details in `docs/recon/FL_PINELLAS_BOND_2026-10-08.md`.
 
 ## [Unreleased] — 2026-10-08 (SwipeSimple locked amount from the BondCase)
 

@@ -53,3 +53,66 @@ def test_pinellas_zero_stays_a_known_zero_on_hydrate():
     # Pinellas publishes real $0.00, so a stored "0" is not reclassified as unknown.
     assert arrest_bond_value({"county": "Pinellas", "state": "FL", "bond_amount": 0.0, "bond_amount_raw": "0"}) == "0"
     assert arrest_bond_value({"county": "Pinellas", "state": "FL", "bond_amount": 0.0, "bond_amount_raw": ""}) == ""
+
+
+class _Btn:
+    def count(self):
+        return 1
+
+    def is_disabled(self):
+        return True
+
+    def click(self, *a, **k):
+        pass
+
+
+class _Page:
+    def get_by_role(self, *a, **k):
+        return _Btn()
+
+    def fill(self, *a, **k):
+        pass
+
+    def locator(self, *a, **k):
+        class _L:
+            first = None
+        return _L()
+
+    def wait_for_selector(self, *a, **k):
+        return True
+
+
+def _scrape_date_with(monkeypatch, rows, modals):
+    import scrapers.counties.pinellas as mod
+
+    s = P()
+    s._modal_attempts = s._modal_failures = 0
+    monkeypatch.setattr(mod.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(P, "_extract_rows", lambda self, page: [dict(r) for r in rows])
+    monkeypatch.setattr(P, "_read_detail_modal", lambda self, page, bn: modals.get(bn))
+    page = _Page()
+    page.get_by_role = lambda *a, **k: _Btn()
+    page.locator = lambda *a, **k: type("L", (), {"first": type("F", (), {"check": lambda self, **k: None})()})()
+    recs = s._scrape_date(page, "2026-10-07", set())
+    return s, recs
+
+
+def test_unread_modal_skips_the_booking_instead_of_writing_blanks(monkeypatch):
+    rows = [{"name": "DOE, JANE", "booking_num": "2600000001", "charge": "BATT"},
+            {"name": "DOE, JOHN", "booking_num": "2600000002", "charge": "DUI"}]
+    modals = {"2600000002": P.parse_charge_report_text(_modal(("DUI", "$500.00")))}
+    s, recs = _scrape_date_with(monkeypatch, rows, modals)
+    assert [r.Booking_Number for r in recs] == ["2600000002"]  # 0001 not emitted at all
+    assert recs[0].Bond_Amount == "500" and recs[0].Charges == "DUI"
+    assert (s._modal_attempts, s._modal_failures) == (2, 1)
+    s._check_modal_failures()  # one failure of two: warning only
+
+
+def test_every_modal_failing_fails_the_run(monkeypatch):
+    import pytest
+
+    rows = [{"name": "DOE, JANE", "booking_num": "2600000001", "charge": "BATT"}]
+    s, recs = _scrape_date_with(monkeypatch, rows, {})
+    assert recs == []
+    with pytest.raises(RuntimeError):
+        s._check_modal_failures()

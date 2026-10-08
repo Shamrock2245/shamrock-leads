@@ -56,6 +56,7 @@ class PinellasCountyScraper(BaseScraper):
 
         all_records: List[ArrestRecord] = []
         seen: Set[str] = set()
+        self._modal_attempts = self._modal_failures = 0
 
         with sync_playwright() as pw:
             # Prefer system Chrome when present (Mac / desktop smokes); fall back
@@ -80,6 +81,7 @@ class PinellasCountyScraper(BaseScraper):
                     page.wait_for_selector("#booking-date", timeout=60000)
                     time.sleep(1)
 
+                    date_errors = 0
                     for days_ago in range(DAYS_BACK):
                         target = datetime.now() - timedelta(days=days_ago)
                         date_iso = target.strftime("%Y-%m-%d")
@@ -90,8 +92,11 @@ class PinellasCountyScraper(BaseScraper):
                                 "[Pinellas] %s: %d records", date_iso, len(daily)
                             )
                         except Exception as e:
+                            date_errors += 1
                             logger.warning("[Pinellas] %s error: %s", date_iso, e)
                         time.sleep(1)
+                    if date_errors == DAYS_BACK:
+                        raise RuntimeError(f"Pinellas: all {DAYS_BACK} date searches failed")
                 finally:
                     try:
                         page.close()
@@ -103,6 +108,7 @@ class PinellasCountyScraper(BaseScraper):
                 except Exception:
                     pass
 
+        self._check_modal_failures()
         logger.info("[Pinellas] Scraped %d total records", len(all_records))
         return all_records
 
@@ -135,17 +141,18 @@ class PinellasCountyScraper(BaseScraper):
                 if booking_num in seen:
                     continue
                 seen.add(booking_num)
+                self._modal_attempts += 1
                 detail = self._read_detail_modal(page, booking_num)
-                if detail:
-                    if detail.get("charges"):
-                        raw["charge"] = detail["charges"]
-                    raw["bond_amount"] = detail.get("bond_amount", "")
-                    if detail.get("case_numbers"):
-                        raw["case_number"] = detail["case_numbers"]
-                else:
-                    # Roster-only path: charges may still be present; bond is
-                    # modal-only, so it stays unknown ("") — never $0.
-                    raw.setdefault("bond_amount", "")
+                if not detail:
+                    # Skip: a roster-only record would $set a blank bond and
+                    # abbreviated charges over the values stored for it.
+                    self._modal_failures += 1
+                    continue
+                if detail.get("charges"):
+                    raw["charge"] = detail["charges"]
+                raw["bond_amount"] = detail.get("bond_amount", "")
+                if detail.get("case_numbers"):
+                    raw["case_number"] = detail["case_numbers"]
                 rec = self._row_to_record(raw)
                 if rec:
                     records.append(rec)
@@ -260,6 +267,20 @@ class PinellasCountyScraper(BaseScraper):
             LastCheckedMode="INITIAL",
         )
 
+
+    _modal_attempts = 0
+    _modal_failures = 0
+
+    def _check_modal_failures(self) -> None:
+        """Bookings whose modal did not render are skipped (never written with
+        blanks). If every modal failed, the run fails loud."""
+        if self._modal_failures:
+            logger.warning(
+                "[Pinellas] %d/%d charge-report modals did not render; those bookings were skipped",
+                self._modal_failures, self._modal_attempts,
+            )
+        if self._modal_attempts and self._modal_failures == self._modal_attempts:
+            raise RuntimeError("Pinellas: every Subject Charge Report modal failed to render")
 
     def _read_detail_modal(self, page, booking_num: str) -> Optional[dict]:
         """Open Subject Charge Report for one roster row; parse bond + charges.
