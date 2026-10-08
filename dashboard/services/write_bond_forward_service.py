@@ -74,6 +74,16 @@ async def preflight_write_bond_forward(
     block_reasons: List[str] = []
     cid = (correlation_id or "").strip() or generate_correlation_id()
 
+    from dashboard.services.agency_billing import suspension_block
+
+    if await suspension_block():
+        return {
+            "state": "blocked",
+            "correlation_id": cid,
+            "block_reasons": ["tenant_suspended"],
+            "details": {},
+        }
+
     # 1. Authoritative BondCase Lookup (No synthetic stubs)
     bond_doc: Optional[Dict[str, Any]] = None
     if bond_case_id:

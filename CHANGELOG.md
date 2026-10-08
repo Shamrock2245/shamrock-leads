@@ -8,12 +8,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 - **All counties:** a staff-set bond (update-bond-amount, update-charge-bonds, update-lead-details, admin patch) and staff-edited charge rows (per-charge amounts, case numbers, POAs, added or removed charges) now survive every rescrape. One module, `core/staff_edits.py`, protects each write path that puts source data on an existing arrest: the shared MongoWriter (every county, including the SSW and SmartWEB helpers), the First Appearance watcher, the custody recheck, the Lee jail refresh, refresh-from-source, the bookmarklet merge and the confirmed-booking refresh. Source values that disagree are kept in `scraped_bond_amount` / `scraped_bond_type` / `scraped_charges` / `scraped_charge_details`. A scraped charge that staff have not seen, removed or replaced is still added. A staff-entered $0 is stored in `staff_edits.bond` and hydrates as a known $0. Existing records are read under their `bond_override` / `MANUAL_CHARGE_BONDS` flags; there is no backfill. In the Write Bond modal a blank per-charge amount stays unknown (it used to be saved as $0), and a POA the modal does not send is kept. Two related fixes. First, the custody recheck read every live field as blank, because `ArrestRecord` has no `to_dict()`, so a recheck could wipe status, bond and charges. It now compares against `to_mongo_doc()` and never writes a value the source did not publish. Second, refresh-from-source no longer writes an unparsed bond as $0. Design note: `docs/STAFF_EDITS_SURVIVE_RESCRAPE.md`.
 
+## [Unreleased] — 2026-10-07 (agency billing review)
+
+### Fixed
+- **Stripe test-mode billing (`SAAS_MULTI_TENANT` still default off).** Recurring Checkout puts `tenant_id` on `subscription_data[metadata]` so later invoice and subscription events resolve the agency. One Stripe Customer is reused. County, state, usage, and any later recurring plan are added as items on that subscription instead of a second Customer or subscription. An add-on is refused while the agency is past due, suspended, or canceled. A webhook for a different subscription does not change status or MRR, and deleting it does not cancel the agency. `livemode: true` events are rejected unless `STRIPE_ALLOW_LIVEMODE=1`, which stays unset. Comps and billing transitions write an `audit_events` row with the actor, reason, and old and new state. Suspension is enforced in the BlueBubbles client on every outbound send path, including a direct `send_human_like`.
+
+## [Unreleased] — 2026-10-07 (agency onboarding review)
+
+### Fixed
+- **Agency onboarding (`SAAS_MULTI_TENANT` still default off).** `tenants.tenant_id` and `tenants.slug` each have a unique index, and a duplicate-key error from a concurrent insert is `slug_taken`. Approve and reject are a single compare-and-set on `status: pending_approval`; a second decision returns `not_pending`. The declared owner stays `owner` when that email is also submitted as a coworker. The platform queue has Approve and Reject controls plus a rejection reason. Each decision writes an `audit_events` row with the actor, reason, and old and new state.
+
 ## [Unreleased] — 2026-10-07 (tenant host membership and backfill)
 
 ### Fixed
 - **Multi-tenant foundation (`SAAS_MULTI_TENANT` still default off).** A customer host `{slug}.app.shamrockbailbonds.biz` is routing only. The request binds that agency only when the signed-in email has an active `tenant_memberships` row for that slug. A signed-in caller on a Shamrock host must be a member of the tenant that host selects. Anonymous webhook and machine calls on Shamrock hosts still bind Shamrock. Flag off does not check membership and does not change filters.
 - **Backfill.** `scripts/backfill_tenant_id.py` stamps every tenant-owned collection the app opens, including `family_relationships`, `persons`, `osint_scans`, `docket_events`, and `intake_fanout_outbox`. A connected run also stamps any other present collection that is not on the global or platform allowlist. `tests/test_tenant_scope.py` fails if application code uses a collection that is neither tenant-owned nor allowlisted.
 - **Startup.** POA seeding and core index creation run inside a Shamrock tenant context, so a flag-on boot does not call the tenant proxy with no context. Flag off still writes the same unstamped seed.
+
+## [Unreleased] — 2026-10-07 (multi-tenant foundation, onboarding, and test-mode billing)
+
+### Added
+- **`SAAS_MULTI_TENANT` flag, default off.** `get_collection()` is the tenant chokepoint: tenant-owned collections are scoped by `tenant_id`, and an explicit global allowlist (jail rosters and scraper health) stays shared. A request or job with no tenant fails closed only when the flag is on. Shamrock routes are unchanged while the flag is off. The offline backfill script and the tenant index specs are in the repo and are not applied to production. The 90-day audit TTL is unchanged.
+- **Agency onboarding** (`/platform`, `/signup`). A super-admin records the agency, Florida license numbers, branding, staff invites, and `env:` secret refs. Invites are stored and are not emailed. Self-serve signup stays pending until that super-admin approves it.
+- **Stripe test-mode billing** (`/platform/billing`). Checkout refuses a live key and refuses a price that is not configured. MRR is the sum of stored cents from signed `invoice.paid` events on active agencies. The second failed invoice suspends packet send and texting. Shamrock is not billed. No card number is stored.
 
 ## [Unreleased] — 2026-10-07 (Charlotte FL Revize hardening)
 
