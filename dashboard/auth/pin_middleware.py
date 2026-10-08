@@ -36,6 +36,7 @@ from dashboard.auth.super_admin import (
     normalize_email,
     resolve_role_for_email,
 )
+from dashboard.tenancy.constants import SHAMROCK_TENANT_ID
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -137,10 +138,19 @@ def _sign_token(
     license_number: str | None = None,
     is_admin: bool = False,
     recovery_id: str | None = None,
+    tenant_id: str | None = None,
 ) -> str:
-    """Create a signed session token with identity claims."""
+    """Create a signed session token with identity claims.
+
+    ``tenant_id`` defaults to Shamrock. Login does not accept a tenant from
+    the client. Old cookies without the field still load and resolve as Shamrock.
+    """
     s = _get_serializer()
-    payload: dict[str, Any] = {"auth": True, "t": int(time.time())}
+    payload: dict[str, Any] = {
+        "auth": True,
+        "t": int(time.time()),
+        "tenant_id": tenant_id or SHAMROCK_TENANT_ID,
+    }
     if is_admin and role != "recovery":
         payload["is_admin"] = True
     if email:
@@ -168,6 +178,7 @@ def _attach_session(request: Request, sess: dict[str, Any]) -> None:
     request.state.sl_agent_name = sess.get("agent_name") or ""
     request.state.sl_license_number = sess.get("license_number") or ""
     request.state.sl_recovery_id = sess.get("recovery_id") or ""
+    request.state.sl_tenant_id = sess.get("tenant_id") or SHAMROCK_TENANT_ID
     request.state.sl_is_admin = (
         sess.get("role") in ("admin", "god_admin") or is_admin_email(sess.get("email"))
     )

@@ -116,13 +116,21 @@ class ScraperScheduler:
         self._writers = writers
 
     def _run_scraper(self, job_id: str):
-        """Execute a scraper job."""
+        """Execute a scraper job.
+
+        Scrapers are platform jobs. They write the shared arrest roster.
+        Tenant-owned collections fail closed if a scraper reaches the
+        scoped helper while SAAS_MULTI_TENANT is on. Flag off is a no-op.
+        """
         scraper = self._scrapers.get(job_id)
         if not scraper:
             logger.error(f"❌ Unknown scraper job: {job_id}")
             return
 
-        result = scraper.run(writers=self._writers)
+        from dashboard.tenancy.context import bind_platform_job
+
+        with bind_platform_job(job_name=job_id):
+            result = scraper.run(writers=self._writers)
         self._job_history.append({
             "job_id": job_id,
             "county": scraper.county,

@@ -39,23 +39,31 @@ async def _cron_runner(cron: CronDef):
     cycle = 0
     while True:
         cycle += 1
-        try:
-            from dashboard.services.automation_config import should_run
-            from dashboard.extensions import get_db
-            if not await should_run(get_db(), cron.name, default=cron.default_enabled):
-                logger.debug("[%s] Disabled — skipping", cron.label)
-                trigger.clear()
-                try:
-                    await asyncio.wait_for(trigger.wait(), timeout=cron.interval)
-                except asyncio.TimeoutError:
-                    pass
-                continue
-        except Exception as e:
-            logger.debug("[%s] automation_config check failed: %s", cron.label, e)
-        try:
-            await cron.run()
-        except Exception as e:
-            logger.warning("[%s] Error (cycle %s): %s", cron.label, cycle, e)
+        from dashboard.tenancy.constants import SHAMROCK_TENANT_ID
+        from dashboard.tenancy.context import bind_job_tenant
+
+        # Flag off: context is Shamrock and get_collection() stays raw.
+        # Flag on: this cron stays on tenant #1 until per-tenant fan-out.
+        # The bind wraps the enablement check too, because automation_config
+        # is tenant-owned and would otherwise fail closed once the flag is on.
+        with bind_job_tenant(SHAMROCK_TENANT_ID, job_name=cron.name):
+            try:
+                from dashboard.services.automation_config import should_run
+                from dashboard.extensions import get_db
+                if not await should_run(get_db(), cron.name, default=cron.default_enabled):
+                    logger.debug("[%s] Disabled — skipping", cron.label)
+                    trigger.clear()
+                    try:
+                        await asyncio.wait_for(trigger.wait(), timeout=cron.interval)
+                    except asyncio.TimeoutError:
+                        pass
+                    continue
+            except Exception as e:
+                logger.debug("[%s] automation_config check failed: %s", cron.label, e)
+            try:
+                await cron.run()
+            except Exception as e:
+                logger.warning("[%s] Error (cycle %s): %s", cron.label, cycle, e)
         trigger.clear()
         try:
             await asyncio.wait_for(trigger.wait(), timeout=cron.interval)
