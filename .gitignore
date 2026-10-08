@@ -1,3 +1,6 @@
+# Staff-uploaded surety PDFs and draft versions (not source)
+data/surety_onboarding/
+
 # .env
 .env
 *.env

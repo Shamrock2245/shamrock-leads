@@ -1457,12 +1457,12 @@ window.sendPaymentLink = async function (bookingNumber, defendantName, phone, em
       if (d.email_delivered) msgs.push('Email');
       toast(`💳 Payment link dispatched via ${msgs.join(' & ')}!`, 'success');
     } else {
-      const message = `Hi! This is Shamrock Bail Bonds. Here is your secure payment link for ${defendantName}'s bond: ${paymentLink} — Please complete payment at your earliest convenience. Questions? Call us at (239) 224-5454.`;
+      const message = `Hi! This is Shamrock Bail Bonds. Here is your secure payment link for ${defendantName}'s bond: ${paymentLink} — Please complete payment at your earliest convenience. Questions? Call us at (239) 332-2245.`;
       window.open(`sms:${phone}?body=${encodeURIComponent(message)}`);
       toast('Opened SMS fallback', 'warning');
     }
   } catch (e) {
-    const message = `Hi! This is Shamrock Bail Bonds. Here is your secure payment link for ${defendantName}'s bond: ${paymentLink} — Questions? Call us at (239) 224-5454.`;
+    const message = `Hi! This is Shamrock Bail Bonds. Here is your secure payment link for ${defendantName}'s bond: ${paymentLink} — Questions? Call us at (239) 332-2245.`;
     window.open(`sms:${phone}?body=${encodeURIComponent(message)}`);
     toast('Opened SMS fallback', 'warning');
   }

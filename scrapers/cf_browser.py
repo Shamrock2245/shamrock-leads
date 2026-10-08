@@ -63,8 +63,12 @@ def check_exit_ip(
     *,
     timeout: float = 20.0,
     retries: int = 3,
+    trust_env: bool = True,
 ) -> Dict[str, Any]:
     """Return public exit IP metadata via the proxy (or direct if proxy_url is None).
+
+    ``trust_env=False`` ignores HTTP(S)_PROXY / ALL_PROXY so a direct check
+    really measures this host's own exit (Manatee).
 
     Keys: ok, ip, org, country, city, residential_likely, raw
     """
@@ -90,6 +94,7 @@ def check_exit_ip(
             client_kwargs: Dict[str, Any] = {
                 "timeout": timeout,
                 "follow_redirects": True,
+                "trust_env": trust_env,
             }
             if proxy_url:
                 client_kwargs["proxy"] = proxy_url
@@ -131,8 +136,14 @@ def check_exit_ip(
             org_l = str(info["org"]).lower()
             dc_hit = any(m in org_l for m in _DATACENTER_MARKERS)
             country = str(info["country"] or "").upper()
-            us_ok = country in ("", "US", "USA")
-            info["residential_likely"] = info["ok"] and not dc_hit and us_ok
+            # Fail closed when the org/country lookup came back empty (e.g. the
+            # IP-info APIs rate-limited us): an unknown exit is not proof of a
+            # residential one. 2026-10-07: a datacenter box passed this check
+            # with org="" / country="" while ipinfo/ipapi answered 429.
+            known = bool(org_l.strip()) and bool(country)
+            us_ok = country in ("US", "USA")
+            info["exit_unverified"] = info["ok"] and not known
+            info["residential_likely"] = info["ok"] and known and not dc_hit and us_ok
             return info
         except Exception as e:
             last_err = str(e)
@@ -176,6 +187,12 @@ def require_residential_exit(
         )
         return info
 
+    if info.get("exit_unverified"):
+        raise RuntimeError(
+            f"[{label}] could not verify the exit IP's org/country (ip={info.get('ip')}; "
+            "IP-info lookups empty or rate-limited). Refusing to treat an unknown exit "
+            "as residential; retry later from the residential network."
+        )
     raise RuntimeError(
         f"[{label}] exit is NOT usable residential US for Cloudflare. "
         f"ip={info.get('ip')} country={info.get('country')} org={info.get('org')!r}. "
