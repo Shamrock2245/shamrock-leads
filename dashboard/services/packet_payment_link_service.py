@@ -353,6 +353,51 @@ async def send_swipesimple_payment_link(
         case=(bond_doc or {}),
     )
 
+    # Locked-amount guard: when the URL is this bond's OWN staged SwipeSimple
+    # invoice (amount locked at create from the BondCase premium), the amount
+    # quoted in the text/email must be that locked premium. A staff-typed
+    # amount that differs is refused (no send); a blank amount uses the lock.
+    from dashboard.services.payment_links import case_invoice_link as _own_link
+
+    if bond_doc and _own_link(bond_doc) and swipesimple_url == _own_link(bond_doc):
+        from dashboard.services.swipesimple_invoice_service import (
+            _bond_premium,
+            amounts_equal,
+        )
+
+        locked = _bond_premium(bond_doc)
+        typed = _money_or_zero(amount)
+        if locked is None:
+            return {
+                "success": False,
+                "skipped": True,
+                "error": "locked_invoice_premium_unresolved",
+                "packet_id": packet_id,
+                "booking_number": booking_number,
+                "amount": typed,
+                "payment_link": swipesimple_url,
+                "delivered": False,
+                "source": source,
+            }
+        if typed > 0 and not amounts_equal(typed, locked):
+            logger.warning(
+                "[payment_link] refused: typed amount differs from locked invoice premium "
+                "booking=%s source=%s", booking_number, source,
+            )
+            return {
+                "success": False,
+                "skipped": True,
+                "error": "amount_mismatch_locked_invoice",
+                "packet_id": packet_id,
+                "booking_number": booking_number,
+                "amount": typed,
+                "locked_premium": float(locked),
+                "payment_link": swipesimple_url,
+                "delivered": False,
+                "source": source,
+            }
+        amount_f = float(locked)
+
     text_delivered = False
     text_queued = False
     text_channel = None
