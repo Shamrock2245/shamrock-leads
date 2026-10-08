@@ -10,6 +10,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Docs
 - **`docs/recon/FL_67_STATUS_2026-10-08.md`:** one status for each of the 67 FL counties (4 `verified_public`, 40 unverified awaiting Leads Ops smoke with source PR, 17 `fail_closed`, 6 no source), ranked by Census 2024 population, with the matrix-vs-Health parity findings, today's live Sarasota/Manatee/Charlotte checks (the Sarasota listing root is now Cloudflare-challenged too), the relay cadence gap (Leads Ops must schedule `python main.py --relay-only`), rule conflicts in older modules, and the next-PR queue. `tests/test_fl_67_status.py` (in CI) keeps the table consistent with Health.
+## [Unreleased] — 2026-10-08 (name without license falls back)
+
+### Fixed
+- **Palmetto appearance bonds.** A name that is not in `BOND_AGENTS` and has no license is not printed with a blank license. Resolution continues to the signed-in sub-agent, then the house pair (Brendan O'Neal / P139768). A short label such as Kayla L on Kayla Lukesic's session prints Kayla Lukesic / G356764, and the same label on a PIN-admin or machine path prints the house pair. A non-registry name is kept only when a non-registry license is also present. DocuSeal prefill, the bondsman submitter, the appearance bond, the print route, and the packet forms use that same pair. OSI appearance bonds are unchanged.
 
 ## [Unreleased] — 2026-10-08 (license-only agent pair)
 

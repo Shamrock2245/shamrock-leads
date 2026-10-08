@@ -2139,10 +2139,11 @@ def _pair_from_agent_source(source: Any) -> Optional[tuple]:
 
     A registry name returns that entry's own license. A registered license
     with no usable name returns that holder's full ``BOND_AGENTS`` pair.
-    A name that misses the registry is kept only with a license that is not
-    registered. An unregistered license with no usable name returns None so
-    resolution can continue to the signed-in sub-agent or the house pair.
-    Filtered labels are skipped so the next name key can match.
+    A name that misses the registry is kept only when a non-registry license
+    is present. A usable name with no license at all returns None so
+    resolution continues to the signed-in sub-agent, then the house pair.
+    An unregistered license with no usable name returns None for the same
+    reason. Filtered labels are skipped so the next name key can match.
     """
     if not isinstance(source, Mapping):
         return None
@@ -2156,7 +2157,7 @@ def _pair_from_agent_source(source: Any) -> Optional[tuple]:
     by_license = _registry_pair_for_license(raw_license)
     if by_license:
         return by_license
-    if clean_name:
+    if clean_name and raw_license:
         return clean_name, raw_license
     return None
 
@@ -2172,9 +2173,9 @@ def resolve_writing_agent(
        ``BOND_AGENTS`` pair (license or exact case-insensitive name). Filtered
        labels are skipped and the next name key is used. A registered license
        alone returns that holder's name and license. A non-registry name is
-       kept only with a license that is not in ``BOND_AGENTS``. An
-       unregistered license with no usable name is dropped so the session
-       or the house pair can fill the agent.
+       kept only with a license that is not in ``BOND_AGENTS``. A usable
+       name with no license, and an unregistered license with no usable
+       name, are dropped so the session or the house pair can fill the agent.
     2. Signed-in sub-agent, matched to ``BOND_AGENTS`` by license or name.
     3. Staff login with no agent on the session, and machine paths, use
        ``house_default_agent``.

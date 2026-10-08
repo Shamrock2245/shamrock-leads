@@ -1363,17 +1363,13 @@ def _build_appearance_bond_data(d: dict):
         "poa_numbers": [c.get("poa_number") for c in charge_details],
         "poa_number": d.get("poa_number") or (charge_details[0].get("poa_number") if charge_details else ""),
     }
-    from dashboard.bond_pdf_service import writing_agent_license, writing_agent_name
+    from dashboard.services.docuseal_service import apply_writing_agent, resolve_writing_agent
 
-    agent = writing_agent_name(d)
-    license_no = writing_agent_license(d)
-    b_data["writing_agent_name"] = agent
-    b_data["agent_name"] = agent
-    b_data["bondsman_name"] = agent
-    b_data["writing_agent"] = agent
-    b_data["writing_agent_license"] = license_no
-    b_data["agent_license"] = license_no
-    b_data["bondsman_license"] = license_no
+    # Name and license are one pair. A short label with no license is not
+    # copied through as a blank license; resolution continues to the house
+    # pair here. The print routes attach the signed-in sub-agent first.
+    agent, license_no = resolve_writing_agent(d)
+    apply_writing_agent(b_data, agent, license_no)
     return b_data, None
 
 
@@ -1382,8 +1378,9 @@ def _attach_session_writing_agent(request: Request, payload: dict) -> dict:
 
     An explicit registry agent on the payload keeps that entry's own license.
     A signed-in sub-agent uses that entry. A registered license with no name
-    uses that holder's pair. An unregistered license with no usable name is
-    dropped. PIN admin and a payload with no agent then use the house pair.
+    uses that holder's pair. A usable name that misses ``BOND_AGENTS`` and
+    has no license is dropped, as is an unregistered license with no usable
+    name. PIN admin and a payload with no agent then use the house pair.
     A signed-in sub-agent is used before that house pair.
     """
     from dashboard.auth.agent_scope import agent_identity
