@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-07 (agency billing review)
+
+### Fixed
+- **Stripe test-mode billing (`SAAS_MULTI_TENANT` still default off).** Recurring Checkout puts `tenant_id` on `subscription_data[metadata]` so later invoice and subscription events resolve the agency. One Stripe Customer is reused. County, state, usage, and any later recurring plan are added as items on that subscription instead of a second Customer or subscription. An add-on is refused while the agency is past due, suspended, or canceled. A webhook for a different subscription does not change status or MRR, and deleting it does not cancel the agency. `livemode: true` events are rejected unless `STRIPE_ALLOW_LIVEMODE=1`, which stays unset. Comps and billing transitions write an `audit_events` row with the actor, reason, and old and new state. Suspension is enforced in the BlueBubbles client on every outbound send path, including a direct `send_human_like`.
+
 ## [Unreleased] — 2026-10-07 (agency onboarding review)
 
 ### Fixed
@@ -15,11 +20,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Backfill.** `scripts/backfill_tenant_id.py` stamps every tenant-owned collection the app opens, including `family_relationships`, `persons`, `osint_scans`, `docket_events`, and `intake_fanout_outbox`. A connected run also stamps any other present collection that is not on the global or platform allowlist. `tests/test_tenant_scope.py` fails if application code uses a collection that is neither tenant-owned nor allowlisted.
 - **Startup.** POA seeding and core index creation run inside a Shamrock tenant context, so a flag-on boot does not call the tenant proxy with no context. Flag off still writes the same unstamped seed.
 
-## [Unreleased] — 2026-10-07 (multi-tenant foundation and agency onboarding)
+## [Unreleased] — 2026-10-07 (multi-tenant foundation, onboarding, and test-mode billing)
 
 ### Added
 - **`SAAS_MULTI_TENANT` flag, default off.** `get_collection()` is the tenant chokepoint: tenant-owned collections are scoped by `tenant_id`, and an explicit global allowlist (jail rosters and scraper health) stays shared. A request or job with no tenant fails closed only when the flag is on. Shamrock routes are unchanged while the flag is off. The offline backfill script and the tenant index specs are in the repo and are not applied to production. The 90-day audit TTL is unchanged.
 - **Agency onboarding** (`/platform`, `/signup`). A super-admin records the agency, Florida license numbers, branding, staff invites, and `env:` secret refs. Invites are stored and are not emailed. Self-serve signup stays pending until that super-admin approves it.
+- **Stripe test-mode billing** (`/platform/billing`). Checkout refuses a live key and refuses a price that is not configured. MRR is the sum of stored cents from signed `invoice.paid` events on active agencies. The second failed invoice suspends packet send and texting. Shamrock is not billed. No card number is stored.
+
 ## [Unreleased] — 2026-10-07 (Charlotte FL Revize hardening)
 
 ### Fixed

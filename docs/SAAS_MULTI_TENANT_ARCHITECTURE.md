@@ -35,7 +35,7 @@ Checked in this tree, not taken from the memo.
 | Requests without a tenant fail closed | Implemented **when the flag is on**. Unknown hosts get HTTP 403 `tenant_required`. A tenant-owned query with no job/request context raises `TenantScopeError`, mapped to the same 403. Flag off never 403s for this reason. |
 | Audit TTL is 90 days | Confirmed. `dashboard/cron.py` creates `idx_audit_ttl_90d` with `expireAfterSeconds=7776000`. `scripts/mongo_indexes.py` creates `idx_ttl_90d` with `90 * 24 * 3600`. The trust pack wants **7 years** for money, signature, and POA actions (`AUDIT_RETENTION_TARGET_SECONDS`). This PR does not drop the TTL. Boot would recreate it. |
 | `leads` already mentions `tenant_id` | Confirmed, and it does **not** isolate anything. `writers/mongo_writer.py` builds a unique index `(arrest_id, tenant_id)` named `dedup_lead`. Writers do not set `tenant_id`, and readers do not filter on it. |
-| No Stripe / signup | Confirmed in this repo. Premiums go through SwipeSimple. There is no billing customer, plan, or signup route. |
+| No Stripe / signup | True at the start of this work. Premiums still go through SwipeSimple. Signup and Stripe Billing now exist behind `SAAS_MULTI_TENANT`, test mode only, and are absent from the request path while the flag is off. |
 | Portal `mongo-proxy` | **Not in this repo.** `shamrock-bail-portal-site/cloud-functions/mongo-proxy/index.js` was not modified and was not re-read here. The memo and the owner describe a shared-API-key function that runs caller-supplied find/update/delete against any database and collection. Replacement plan is §10. That repository stays untouched. |
 
 Roles today, from `dashboard/auth/pin_middleware.py`: `god_admin`, `admin` / `staff`, `sub_agent` (whitelist in `sub_agents`), `recovery` (allowlist in `dashboard/auth/recovery_scope.py`). The platform super-admin email is hardcoded in `dashboard/auth/super_admin.py` as `admin@shamrockbailbonds.biz`. There is no per-agency user directory.
@@ -220,9 +220,11 @@ Suggested plan shape, not a price list:
 | Trial | Time-boxed `tenants.status = trialing` |
 | Failure | Stripe `invoice.payment_failed` → `past_due` → after the grace rule, `suspended` |
 
-Suspended tenants can log in and export. They cannot send paperwork, texts, or new packets. Scrapers do not stop; they are platform jobs. Shamrock's plan is `internal` and is not invoiced.
+The grace rule in code is `STRIPE_SUSPEND_AFTER_FAILURES`, default 2: the first failed invoice is `past_due` and the desk still works; the next one is `suspended`. Prices are Stripe price ids (`STRIPE_PRICE_SETUP`, `STRIPE_PRICE_MONTHLY`, `STRIPE_PRICE_COUNTY`, `STRIPE_PRICE_STATE`, `STRIPE_PRICE_USAGE`). Until those are set, the console says "price not set" and Checkout refuses. A `sk_live_` key is rejected and no request is sent. Trial length is `STRIPE_TRIAL_DAYS`; unset means no trial. Recurring Checkout copies `tenant_id` onto `subscription_data[metadata]` so invoice and subscription events stay tied to the agency. One Stripe Customer is reused. The first recurring Checkout creates the subscription; later add-ons are subscription items on that same subscription, not a second Customer. An add-on is refused while the agency is `past_due`, `suspended`, or `canceled`. A webhook for a different subscription does not change status or MRR, and deleting a different subscription does not cancel the agency. Events with `livemode: true` are rejected unless `STRIPE_ALLOW_LIVEMODE=1` (left unset). Comps and billing transitions write `audit_events`. Suspension is enforced inside `BlueBubblesClient` on every outbound send, including a direct `send_human_like`.
 
-MRR on the super-admin home screen is the sum of active subscription amounts stored from Stripe webhooks. It is not computed by guessing. Webhook signatures are verified. Tests use fixtures, never a live charge.
+Suspended tenants can log in and export. They cannot send paperwork (`create_submission_for_packet` and write-bond preflight), texts (`send_message_universal`), or new packets. Scrapers do not stop; they are platform jobs. Shamrock's plan is `internal` and is not invoiced, and the suspension gate does not apply to tenant `shamrock`.
+
+MRR on the super-admin billing screen is the sum of `mrr_cents` stored from `invoice.paid` for subscriptions in `active` status. It is not computed by guessing. Webhook signatures are verified. Tests use fixtures, never a live charge. Usage meters are a price slot only; this slice does not report usage to Stripe.
 
 ---
 
@@ -332,6 +334,8 @@ Screen notes:
 Shamrock is not sent through this wizard. It is the seed document.
 
 ### 11.2 Charge agencies to join and stay
+
+**Shipped behind `SAAS_MULTI_TENANT`.** `GET /platform/billing` and `/api/platform/billing` show MRR, plan cards, and each agency's status. Checkout is `POST /api/platform/tenants/{id}/billing/checkout` and only builds a Stripe test-mode session, reusing the stored Customer. A later recurring plan is added as a subscription item. `POST /api/webhooks/stripe-billing` verifies `Stripe-Signature`, rejects `livemode: true` unless explicitly enabled, and then stores invoice amounts. Comp is a super-admin action that sets MRR to 0 and writes an audit row. Flag off returns 404. No card form is rendered.
 
 ```mermaid
 flowchart LR
@@ -466,7 +470,7 @@ Each phase is shippable on its own. Each is reversible by turning `SAAS_MULTI_TE
 | **1. Foundation (this change)** | Models, context, `get_collection` chokepoint, offline backfill, index specs, notification tests, session field. Flag off. | Do not set the flag. `--down` if a stamp was applied. | One package plus the chokepoint. No route rewrites beyond the tested slice. |
 | **1b. Human backfill** | Operator runs `--connect` then `--apply` with the ack env, in a window. | `--down --apply` with the same ack. | Operational. Not this PR. |
 | **2. Onboarding console** | Wizard, self-serve pending state, invites recorded not sent. Implemented behind the flag in the onboarding follow-up. | Flag off returns 404. Shamrock seed is untouched. | New routes and one HTML surface. |
-| **3. Stripe test mode** | Plans, Checkout, webhooks, MRR, suspend. No live key. | Flag off. Stripe test data can be discarded. | New billing module. Webhook signature required. |
+| **3. Stripe test mode** | Plans, Checkout, webhooks, MRR, suspend. Implemented behind the flag in the billing follow-up. No live key. | Flag off returns 404. Stripe test data can be discarded. | New billing module. Webhook signature required. |
 | **4. Surety entitlements** | Checklist over `SURETY_REGISTRY`. Finalize refuses a surety the tenant does not have. Private-template slot for Paperwork Desk. | Flag off uses today's registry. | A guard in the existing finalize path, not a new packet builder. |
 | **5. Lead subscriptions** | State/county picker. `route_lead` fan-out. Shared and exclusive both implemented; exclusive stays off until the owner decides. | Flag off. Writer keeps inserting Shamrock's leads as it does now. | Writer change is the risky part and stays behind the flag. |
 | **6. Start bond packet** | Four-click UI calling hydrate → preflight → DocuSeal → existing pay link. | Flag off hides the UI. Old paperwork routes stay. | Thin client over `paperwork.py`. |

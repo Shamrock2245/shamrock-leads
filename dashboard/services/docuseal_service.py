@@ -1608,6 +1608,10 @@ class DocuSealService:
         indemnitors: list of {name, email, phone, ...}; falls back to bond_data indemnitor.
         defendant: optional override; falls back to bond_data defendant fields.
         """
+        from dashboard.services.agency_billing import suspension_block
+
+        if await suspension_block():
+            raise DocuSealPacketValidationError("tenant_suspended")
         bond_data = dict(bond_data or {})
         if template_id is None or str(template_id).strip() in ("", "0", "null", "none"):
             raise DocuSealPacketValidationError("DocuSeal packet blocked: a valid template_id is required.")
