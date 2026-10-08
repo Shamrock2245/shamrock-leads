@@ -998,3 +998,203 @@ async def _promote_auto_payment_link(
     return await maybe_send_packet_payment_link(
         packet_id=str(bond_doc.get("paperwork_packet_id") or "").strip(),
         booking_number=matched_booking,
+        amount=None,
+        phone=bond_doc.get("indemnitor_phone") or "",
+        email=bond_doc.get("indemnitor_email") or "",
+        defendant_name=defendant_name,
+        bond_doc=bond_doc,
+        intake_doc=intake_doc,
+        source="intake_promote",
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  POST /api/intake/<intake_id>/promote
+#  Atomic intake-to-case transition: validates match, creates active_bonds,
+#  assigns POA from inventory, archives intake, and creates audit trail.
+#  Enforces The Chain: Match → BondCase → Packet → Signature → Payment
+# ═══════════════════════════════════════════════════════════════════════════════
+@intake_bp.post("/intake/{intake_id}/promote")
+async def intake_promote(request: Request, intake_id: str):
+    """
+    Atomically promote a matched intake to an active bond case.
+
+    Prerequisites (enforced):
+      1. Intake exists and has status 'pending' or 'in_progress'
+      2. Intake has a validated match (matched_booking_number exists)
+      3. Surety is specified ('osi' or 'palmetto')
+      4. POA is available from the correct surety's inventory
+
+    Creates:
+      1. active_bonds document (liability tracking anchor)
+      2. Updates poa_inventory (marks POA as assigned)
+      3. Archives the intake record (status → 'promoted')
+      4. Creates audit_events entry (immutable trail)
+      5. Publishes SSE event to dashboard
+
+    Body (optional overrides):
+        {
+            "surety": "osi",             // Required: "osi" or "palmetto"
+            "case_number": "25-CF-1234", // Optional: court case number
+            "court_date": "2025-06-15",  // Optional
+            "court_time": "8:30 AM",     // Optional
+            "court_location": "...",     // Optional
+            "agent_name": "Brendan",     // Optional, defaults to system
+            "notes": "Walk-in client"    // Optional
+        }
+    """
+    from dashboard.routers.events import publish_event
+
+    data = (await request.json()) or {}
+    now = datetime.now(timezone.utc)
+
+    # ── 1. Load and validate intake ──────────────────────────────────────────
+    intake_queue = get_collection("intake_queue")
+    intake_doc = await intake_queue.find_one({"intake_id": intake_id})
+    if not intake_doc:
+        return JSONResponse({"success": False, "error": f"Intake {intake_id} not found"}, status_code=404)
+
+    current_status = intake_doc.get("status", "")
+    if current_status not in ("pending", "in_progress"):
+        return JSONResponse(status_code=409, content={
+            "success": False,
+            "error": f"Intake {intake_id} cannot be promoted — current status is '{current_status}'. "
+                     f"Only 'pending' or 'in_progress' intakes can be promoted."
+        })
+
+    # ── 2. Validate match exists ─────────────────────────────────────────────
+    matched_booking = intake_doc.get("matched_booking_number")
+    matched_county = intake_doc.get("matched_county") or intake_doc.get("defendant_county", "")
+    match_confidence = intake_doc.get("match_confidence")
+
+    if not matched_booking:
+        return JSONResponse(status_code=422, content={
+            "success": False,
+            "error": "Cannot promote: intake has no validated match. "
+                     "Run /api/intake/<id>/match first to link a defendant."
+        })
+
+    # ── 3. Validate surety ───────────────────────────────────────────────────
+    surety = (data.get("surety") or "").lower().strip()
+    from dashboard.services.surety_registry import is_supported_surety  # active sureties only
+    if not is_supported_surety(surety):
+        return JSONResponse(status_code=400, content={
+            "success": False,
+            "error": "surety is required and must be 'osi' or 'palmetto'."
+        })
+
+    # ── 4. Check for duplicate bond (idempotent) ─────────────────────────────
+    active_bonds = get_collection("active_bonds")
+    existing_bond = await active_bonds.find_one({"booking_number": matched_booking})
+    if existing_bond:
+        return JSONResponse(status_code=409, content={
+            "success": False,
+            "error": f"Bond already exists for booking {matched_booking}. "
+                     f"Use /api/bonds/record to update existing bonds.",
+            "existing_bond_status": existing_bond.get("status"),
+        })
+
+    # ── 5. Extract defendant and indemnitor data ─────────────────────────────
+    ind = intake_doc.get("indemnitor", {})
+    def_ = intake_doc.get("defendant", {})
+
+    defendant_name = intake_doc.get("defendant_name", def_.get("name", "Unknown"))
+    indemnitor_name = intake_doc.get("indemnitor_name", "Unknown")
+
+    # Bond amount comes from the county source or an explicit staff override.
+    # A blank or $0 amount is not a bond. Do not invent one and do not take a power.
+    if "bond_amount" in data:
+        raw_bond = data.get("bond_amount")
+    elif "bondAmount" in data:
+        raw_bond = data.get("bondAmount")
+    else:
+        raw_bond = def_.get("bondAmount")
+        if raw_bond in (None, ""):
+            raw_bond = def_.get("bond_amount")
+    bond_amount = None
+    if raw_bond not in (None, ""):
+        try:
+            bond_amount = float(str(raw_bond).replace(",", "").replace("$", "").strip())
+        except (ValueError, TypeError):
+            bond_amount = None
+    if bond_amount is None or bond_amount <= 0:
+        return JSONResponse(status_code=422, content={
+            "success": False,
+            "error": "Cannot promote: bond amount is blank or $0. "
+                     "Enter the county bond amount before a power can be assigned.",
+        })
+
+    # ── 6. Auto-assign POA from inventory ────────────────────────────────────
+    poa_inventory = get_collection("poa_inventory")
+
+    # Find the right POA tier: smallest max_bond that covers this bond amount
+    poa_query = {
+        "surety_id": surety,
+        "status": "available",
+        "max_bond_value": {"$gte": bond_amount},
+    }
+    poa_doc = await poa_inventory.find_one(
+        poa_query,
+        sort=[("max_bond_value", 1), ("poa_number", 1)],  # Smallest sufficient, lowest number
+    )
+
+    if not poa_doc:
+        return JSONResponse(status_code=422, content={
+            "success": False,
+            "error": f"No available POA in {surety.upper()} inventory for bond amount ${bond_amount:,.2f}. "
+                     f"Assign a POA manually via /api/bonds/record."
+        })
+
+    poa_number = poa_doc["poa_number"]
+    poa_full = poa_doc.get("poa_full", poa_number)
+
+    # ── 7. Create active_bonds document (THE bond case) ──────────────────────
+    case_number = data.get("case_number", "").strip()
+    court_date = data.get("court_date", "").strip()
+    court_time = data.get("court_time", "").strip()
+    court_location = data.get("court_location", "").strip()
+    agent_name = (data.get("agent_name") or "").strip() or "Dashboard"
+    notes = data.get("notes", "").strip()
+
+    bond_doc = {
+        "booking_number": matched_booking,
+        "defendant_name": defendant_name,
+        "county": matched_county,
+        "facility": def_.get("facility", intake_doc.get("defendant_facility", "")),
+        "bond_amount": bond_amount,
+        "premium": bond_amount * 0.10,  # Standard 10% premium
+        "insurance_company": surety.upper(),
+        "poa_number": poa_number,
+        "poa_full": poa_full,
+        "case_number": case_number,
+        "charges": def_.get("charges", ""),
+        "court_date": court_date,
+        "court_time": court_time,
+        "court_location": court_location,
+        # Date-only for surety reports (matches POA execute; lexicographic Mongo windows)
+        "bond_date": now.strftime("%Y-%m-%d"),
+        "status": "active",
+        "source": "intake_promotion",
+        "intake_id": intake_id,
+        "agent_name": agent_name,
+        # Indemnitor
+        "indemnitor_name": indemnitor_name,
+        "indemnitor_phone": intake_doc.get("indemnitor_phone", ind.get("phone", "")),
+        "indemnitor_email": intake_doc.get("indemnitor_email", ind.get("email", "")),
+        "indemnitor_relationship": ind.get("relationship", ""),
+        # Defendant contact & secondary anchors
+        "defendant_phone": def_.get("phone") or "",
+        "defendant_email": def_.get("email") or "",
+        "employer_name": def_.get("employer") or "",
+        "employer_phone": def_.get("employerPhone") or "",
+        "employer_address": def_.get("employerAddress") or "",
+        "vehicle_make": def_.get("vehicleMake") or "",
+        "vehicle_model": def_.get("vehicleModel") or "",
+        "vehicle_year": def_.get("vehicleYear") or "",
+        "vehicle_color": def_.get("vehicleColor") or "",
+        "vehicle_plate": def_.get("vehiclePlate") or "",
+        "vehicle_vin": def_.get("vehicleVIN") or "",
+        "emergency_contact_name": def_.get("emergencyName") or "",
+        "emergency_contact_phone": def_.get("emergencyPhone") or "",
+        "emergency_contact_relation": def_.get("emergencyRelation") or "",
+        # Matching metadata
