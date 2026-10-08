@@ -12,6 +12,18 @@ response without the results table raises (a 7-day window always has
 bookings) instead of returning an empty success. TLS impersonation is
 retired; the site answers plain HTTPS.
 
+2026-10-08 (detail pages): every keyed row is enriched from
+JailSearchDetails.aspx?BookNo=<booking #>, the source of truth for custody and
+bond. ``Release Date/Time: -`` is In Custody; a date is Released with
+Release_Date. Anything else is unreadable, and the booking is skipped rather
+than defaulted to In Custody. Per-case charges carry their Bond Amount; the
+total is set only when every charge publishes a positive amount. A $0.00 cell
+is the jail's "no bond set" placeholder (live: 29 of 30 all-$0.00 bookings were
+still in custody, on VOP 948.06 and hold 00.00 charges), so it is unknown,
+except where the charge row says ROR, which is a real $0. A detail fetch failure
+or a drifted page skips that booking (nothing blank is written); the run
+raises when every detail fails or when no detail page has a charge grid.
+
 Fix 2026-05-18: Replaced DrissionPage with curl_cffi POST.
                 Results are in Table 5 (last large table, 100+ rows).
                 Cell 1 contains: "LAST, FIRST RACE/SEX- DOB BOOKING_NO"
@@ -20,8 +32,9 @@ Fix 2026-05-18: Replaced DrissionPage with curl_cffi POST.
 
 import logging
 import re
+import time
 from datetime import datetime, timedelta
-from typing import List
+from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
 
 import requests
@@ -40,7 +53,109 @@ BOOKING_RE = re.compile(r"\b(HCSO\d{2}JBN\d{6})\b")
 class HernandoContractError(RuntimeError):
     """The JailSearch results page no longer matches the verified contract."""
 
+class HernandoDetailError(HernandoContractError):
+    """A JailSearchDetails page no longer matches the verified contract."""
+
+
 DAYS_BACK = 7
+DETAIL_URL = f"{SEARCH_URL}JailSearchDetails.aspx"
+REQUEST_PAUSE_S = 0.4
+RELEASE_SPAN_ID = "ctl00_ContentPlaceHolder1_fvBook_lblReleaseDateTime"
+BOOK_TABLE_ID = "ctl00_ContentPlaceHolder1_fvBook"
+_MONEY_RE = re.compile(r"^\$\s*([0-9][0-9,]*\.\d{2})$")
+_RELEASE_RE = re.compile(r"^(\d{2}/\d{2}/\d{4})(?:\s+(\d{1,2}:\d{2}))?$")
+
+
+def _charge_bond(cell: str, other_info: str) -> Optional[float]:
+    """A charge's published bond, or None (unknown).
+
+    Positive "$N.NN" is published. "$0.00" is the "no bond set" placeholder
+    unless the row's Other Information says ROR (released on recognizance),
+    which is a real $0. Blank or any other text is unknown."""
+    m = _MONEY_RE.match((cell or "").strip())
+    if not m:
+        return None
+    value = float(m.group(1).replace(",", ""))
+    if value > 0:
+        return value
+    if re.search(r"\bROR\b", other_info or "", re.I):
+        return 0.0
+    return None
+
+
+def parse_detail(html: str, booking_number: str) -> Dict[str, Any]:
+    """Parse one JailSearchDetails page. Raises HernandoDetailError on drift."""
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    book = soup.find(id=BOOK_TABLE_ID)
+    if book is None:
+        raise HernandoDetailError(f"{booking_number}: booking table missing")
+    labels: Dict[str, str] = {}
+    for tr in book.find_all("tr"):
+        tds = tr.find_all("td", recursive=False)
+        if len(tds) >= 2:
+            label = tds[0].get_text(" ", strip=True)
+            if label.endswith(":"):
+                labels[label.rstrip(":").strip().lower()] = tds[1].get_text(" ", strip=True)
+    if labels.get("booking #") != booking_number:
+        raise HernandoDetailError(f"{booking_number}: detail page is for another booking")
+
+    span = soup.find(id=RELEASE_SPAN_ID)
+    release_raw = (span.get_text(" ", strip=True) if span else labels.get("release date/time", "")).strip()
+    release_date = release_time = ""
+    if release_raw == "-":
+        status: Optional[str] = "In Custody"
+    else:
+        rm = _RELEASE_RE.match(release_raw)
+        if rm:
+            status = "Released"
+            release_date, release_time = rm.group(1), rm.group(2) or ""
+        else:
+            status = None  # unreadable: never default to In Custody
+
+    charges: List[Dict[str, Any]] = []
+    grids = 0
+    for case_table in soup.find_all("table"):
+        first = case_table.find("tr")
+        if not first or not first.get_text(" | ", strip=True).startswith("Case Seq."):
+            continue
+        data_row = first.find_next_sibling("tr")
+        case_cells = [td.get_text(" ", strip=True) for td in data_row.find_all("td", recursive=False)] if data_row else []
+        court_case = case_cells[1] if len(case_cells) > 1 and case_cells[1].upper() not in ("N/A", "") else ""
+        for grid in case_table.find_all("table"):
+            head = grid.find("tr")
+            if not head or not head.get_text(" | ", strip=True).startswith("Statute |"):
+                continue
+            grids += 1
+            for row in grid.find_all("tr")[1:]:
+                tds = [td.get_text(" ", strip=True) for td in row.find_all("td")]
+                if len(tds) < 4:
+                    raise HernandoDetailError(f"{booking_number}: charge row has {len(tds)} cells")
+                other = tds[4] if len(tds) > 4 else ""
+                charges.append(
+                    {
+                        "case_number": court_case,
+                        "statute": tds[0],
+                        "description": tds[1],
+                        "bond_raw": tds[3],
+                        "bond": _charge_bond(tds[3], other),
+                    }
+                )
+
+    if charges and all(c["bond"] is not None for c in charges):
+        total = sum(c["bond"] for c in charges)
+        bond_amount = str(int(total)) if float(total).is_integer() else f"{total:.2f}"
+    else:
+        bond_amount = ""  # any unpublished charge bond makes the total unknown
+    return {
+        "status": status,
+        "release_date": release_date,
+        "release_time": release_time,
+        "charges": charges,
+        "charge_grids": grids,
+        "bond_amount": bond_amount,
+    }
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -104,9 +219,68 @@ class HernandoCountyScraper(BaseScraper):
             logger.error(f"Hernando POST failed: {e}")
             raise
 
-        records = self._parse(r2.text)
-        logger.info(f"Hernando: {len(records)} records")
-        return records
+        rows = self._parse(r2.text)
+        return self._enrich_from_details(session, rows)
+
+    def _enrich_from_details(self, session, rows: List[ArrestRecord]) -> List[ArrestRecord]:
+        """Detail page per booking; skip (never blank) on fetch or shape failure."""
+        out: List[ArrestRecord] = []
+        fetch_failures = drift = unreadable = 0
+        grids_seen = 0
+        for rec in rows:
+            time.sleep(REQUEST_PAUSE_S)
+            url = f"{DETAIL_URL}?BookNo={rec.Booking_Number}"
+            try:
+                resp = session.get(url, headers=HEADERS, timeout=20)
+                resp.raise_for_status()
+            except Exception as exc:
+                fetch_failures += 1
+                logger.warning("Hernando: detail fetch failed, booking skipped (%s)", type(exc).__name__)
+                continue
+            try:
+                detail = parse_detail(resp.text, rec.Booking_Number)
+            except HernandoDetailError as exc:
+                drift += 1
+                logger.warning("Hernando: detail page drift, booking skipped (%s)", exc)
+                continue
+            grids_seen += detail["charge_grids"]
+            if detail["status"] is None:
+                unreadable += 1  # unknown custody: skip, never write "In Custody"
+                continue
+            rec.Status = detail["status"]
+            rec.Release_Date = detail["release_date"]
+            rec.Detail_URL = url
+            if detail["charges"]:
+                rec.Charges = " | ".join(
+                    " - ".join(x for x in (c["statute"], c["description"]) if x) for c in detail["charges"]
+                )
+            case_numbers = list(dict.fromkeys(c["case_number"] for c in detail["charges"] if c["case_number"]))
+            if case_numbers:
+                rec.Case_Number = " | ".join(case_numbers)
+            rec.Bond_Amount = detail["bond_amount"]
+            rec.extra_data = {
+                "bond_published": detail["bond_amount"] != "",
+                "release_time": detail["release_time"],
+                "charge_details": [
+                    {k: c[k] for k in ("case_number", "statute", "description", "bond_raw")}
+                    for c in detail["charges"]
+                ],
+            }
+            out.append(rec)
+        attempts = len(rows)
+        if attempts and fetch_failures == attempts:
+            raise HernandoContractError(f"Hernando: all {attempts} detail fetches failed")
+        if attempts and not out:
+            raise HernandoDetailError(
+                f"Hernando: no usable detail page ({drift} drifted, {unreadable} unreadable custody)"
+            )
+        if out and grids_seen == 0:
+            raise HernandoDetailError("Hernando: no detail page in the run has a charge grid (markup drift)")
+        logger.info(
+            "Hernando: %d records (%d fetch failures, %d drifted, %d unreadable custody skipped)",
+            len(out), fetch_failures, drift, unreadable,
+        )
+        return out
 
     def _parse(self, html: str) -> List[ArrestRecord]:
         from bs4 import BeautifulSoup
