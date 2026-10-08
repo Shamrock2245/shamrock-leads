@@ -3,6 +3,12 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (Hernando detail cap)
+
+### Changed
+- **Hernando detail fetches are capped per run** (`MAX_DETAILS_PER_RUN = 200`), in addition to the existing 0.4 s pause before every `JailSearchDetails` GET. A live 7-day window holds about 82 bookings, so the cap is headroom. Rows past it are skipped (not written, so nothing stored is blanked) and are picked up on a later run.
+- Tests: `tests/test_fl_hernando_detail_pacing.py`.
+
 ## [Unreleased] — 2026-10-08 (writer keeps stored charges/bond over empty scrapes)
 
 ### Fixed
