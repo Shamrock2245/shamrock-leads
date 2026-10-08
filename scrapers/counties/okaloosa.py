@@ -111,8 +111,15 @@ def parse_search_page(data: Any) -> Tuple[int, List[Dict[str, Any]]]:
     return data["total"], data["data"]
 
 
+# Every charge row carried these keys on 2026-10-08 (71/71 rows, 40 details).
+CHARGE_ROW_KEYS = ("chargeDesc", "charge", "bailAmt", "bailType")
+
+
 def parse_detail(data: Any, booking: str) -> Optional[Dict[str, Any]]:
-    """Charges + bond for ``booking``; None when missing or naming another booking."""
+    """Charges + bond for ``booking``; None when missing or naming another booking.
+
+    Shape drift raises: no ``charges`` list, or a charge row that is not an
+    object with ``chargeDesc``/``charge``/``bailAmt``/``bailType``."""
     if not isinstance(data, dict) or _clean(data.get("bookingNo")) != booking:
         return None
     charges: List[str] = []
@@ -121,9 +128,13 @@ def parse_detail(data: Any, booking: str) -> Optional[Dict[str, Any]]:
     any_unpublished = False
     bond_types: List[str] = []
     cases: List[str] = []
-    for row in data.get("charges") or []:
-        if not isinstance(row, dict):
-            continue
+    rows = data.get("charges")
+    if not isinstance(rows, list):
+        # A renamed/dropped key would otherwise blank every booking's charges.
+        raise OkaloosaContractError(f"Okaloosa: detail {booking} has no 'charges' list")
+    for row in rows:
+        if not isinstance(row, dict) or any(k not in row for k in CHARGE_ROW_KEYS):
+            raise OkaloosaContractError(f"Okaloosa: detail {booking} charge row drift")
         desc = _clean(row.get("chargeDesc"))
         statute = _clean(row.get("charge"))
         amount = _money(row.get("bailAmt"))

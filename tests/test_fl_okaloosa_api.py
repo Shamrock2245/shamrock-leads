@@ -22,8 +22,13 @@ def _row(booking, when: datetime, bond=0.0, status="1", name="DOE, JANE Q"):
     }
 
 
+_ROW_DEFAULTS = {"chargeDesc": "", "charge": "", "bailAmt": None, "bailType": ""}
+
+
 def _detail(booking, charges):
-    return {"bookingNo": booking, "charges": charges, "releaseDate": None, "status": "1"}
+    # live rows always carry chargeDesc/charge/bailAmt/bailType (71/71, 2026-10-08)
+    return {"bookingNo": booking, "charges": [{**_ROW_DEFAULTS, **c} for c in charges],
+            "releaseDate": None, "status": "1"}
 
 
 def test_search_page_shape_is_enforced():
@@ -213,6 +218,27 @@ def test_detail_request_failure_raises_and_mismatch_skips(monkeypatch):
     _install(monkeypatch, pages, details, [])
     assert [r.Booking_Number for r in OkaloosaCountyScraper().scrape(lookback_days=7)] == ["2026000002"]
     _install(monkeypatch, pages, {"2026000002": _detail("2026009998", []), "2026000001": _detail("2026009999", [])}, [])
+    with pytest.raises(OkaloosaContractError):
+        OkaloosaCountyScraper().scrape(lookback_days=7)
+
+
+def test_detail_charges_shape_drift_raises():
+    base = {"bookingNo": "2026000001", "releaseDate": None, "status": "1"}
+    for bad in ({**base}, {**base, "charges": None}, {**base, "charges": {"x": 1}},
+                {**base, "charges": ["DUI"]},
+                {**base, "charges": [{"chargeDescription": "DUI", "charge": "", "bailAmt": None, "bailType": ""}]},
+                {**base, "charges": [{"chargeDesc": "DUI", "charge": "", "bailType": ""}]}):
+        with pytest.raises(OkaloosaContractError):
+            okaloosa.parse_detail(bad, "2026000001")
+    # an explicit empty list is the source saying "no charges yet" and is accepted
+    assert okaloosa.parse_detail({**base, "charges": []}, "2026000001")["charges"] == []
+
+
+def test_renamed_charges_key_fails_the_run_instead_of_blanking(monkeypatch):
+    now = datetime.now()
+    rows = [_row("2026000001", now - timedelta(hours=1))]
+    pages = [{"total": 1, "page": 1, "pageSize": 100, "data": rows}]
+    _install(monkeypatch, pages, {"2026000001": {"bookingNo": "2026000001", "chargeList": [], "status": "1"}}, [])
     with pytest.raises(OkaloosaContractError):
         OkaloosaCountyScraper().scrape(lookback_days=7)
 
