@@ -199,6 +199,12 @@
       "emitter": "live_write",
       "evidence": "2026-09-30 Mac write smoke 351 new, status ok (source deterministic ISOMS surrogate HAMBLEN-<hash>, 72 Hot / 49 Warm); live per 2026-09-30 brief",
       "source": "docs/recon/TENNESSEE_SCRAPERS_EXPANSION_2026-09-30.md"
+    },
+    {
+      "label": "Nassau (FL)",
+      "emitter": "hold",
+      "evidence": "Portal sends only its leaf certificate (GoDaddy G2 intermediate missing), so verified HTTPS fails; old verify=False parser keyed every row on 'History'. Owner hold 2026-10-08",
+      "source": "docs/recon/FL_67_STATUS_2026-10-08.md"
     }
   ]
 }
