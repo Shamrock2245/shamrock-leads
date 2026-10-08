@@ -91,6 +91,7 @@ jobs:
             tests/test_fl_67_status.py \
             tests/test_fl_idle_eight.py \
             tests/test_fl_bond_charges_hydrate.py \
+            tests/test_fl_pinellas_bond_unknown.py \
             tests/test_fl_hernando_unknown_bond.py \
             tests/test_miami_dade_scraper.py \
             tests/test_fl_miami_dade_arcgis_contract.py \
