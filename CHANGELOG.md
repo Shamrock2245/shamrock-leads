@@ -26,6 +26,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **`SAAS_MULTI_TENANT` flag, default off.** `get_collection()` is the tenant chokepoint: tenant-owned collections are scoped by `tenant_id`, and an explicit global allowlist (jail rosters and scraper health) stays shared. A request or job with no tenant fails closed only when the flag is on. Shamrock routes are unchanged while the flag is off. The offline backfill script and the tenant index specs are in the repo and are not applied to production. The 90-day audit TTL is unchanged.
 - **Agency onboarding** (`/platform`, `/signup`). A super-admin records the agency, Florida license numbers, branding, staff invites, and `env:` secret refs. Invites are stored and are not emailed. Self-serve signup stays pending until that super-admin approves it.
 - **Stripe test-mode billing** (`/platform/billing`). Checkout refuses a live key and refuses a price that is not configured. MRR is the sum of stored cents from signed `invoice.paid` events on active agencies. The second failed invoice suspends packet send and texting. Shamrock is not billed. No card number is stored.
+
 ## [Unreleased] — 2026-10-07 (Charlotte FL Revize hardening)
 
 ### Fixed
