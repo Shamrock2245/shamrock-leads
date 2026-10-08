@@ -270,6 +270,9 @@ def premium_dollars_to_cents(premium: Decimal) -> int:
     cents = int(as_cents)
     if cents < 0:
         raise SwipeSimpleInvoiceError("premium_negative")
+    if cents == 0:
+        # A $0 invoice is never a real premium — fail closed, never create.
+        raise SwipeSimpleInvoiceError("premium_zero")
     return cents
 
 
@@ -320,12 +323,103 @@ async def _load_bond_by_id(bond_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+# Legacy BondCase premium fields (dollars). All non-empty values must agree.
+_LEGACY_PREMIUM_FIELDS = ("premium_amount", "total_premium", "premium", "Premium_Amount")
+# Bond sources whose stored ``premium`` is the 10%-of-bond ESTIMATE written by
+# intake promote (dashboard/routers/intake.py) — never invoiceable on its own.
+_ESTIMATE_PREMIUM_SOURCES = frozenset({"intake_promotion"})
+
+
+def _blank(value: Any) -> bool:
+    return value is None or isinstance(value, bool) or str(value).strip() == ""
+
+
+def _exact_premium(value: Any, *, cents: bool = False) -> Decimal:
+    """
+    Parse one stored premium WITHOUT rounding. Sub-cent values fail closed
+    (``premium_not_exact_cents``) instead of being silently quantized.
+    """
+    raw = str(value).strip().replace(",", "").replace("$", "")
+    try:
+        d = Decimal(raw)
+    except (InvalidOperation, ValueError, TypeError):
+        raise SwipeSimpleInvoiceError("premium_not_numeric_on_bondcase") from None
+    if not d.is_finite():
+        raise SwipeSimpleInvoiceError("premium_not_numeric_on_bondcase")
+    if cents:
+        if d != d.to_integral_value():
+            raise SwipeSimpleInvoiceError("premium_not_exact_cents")
+        d = d / Decimal(100)
+    if d * 100 != (d * 100).to_integral_value():
+        raise SwipeSimpleInvoiceError("premium_not_exact_cents")
+    if d < 0:
+        raise SwipeSimpleInvoiceError("premium_negative")
+    if d == 0:
+        raise SwipeSimpleInvoiceError("premium_zero")
+    return d.quantize(Decimal("0.01"))
+
+
+def resolve_locked_premium(bond: Dict[str, Any]) -> Decimal:
+    """
+    The ONE premium resolver for a locked SwipeSimple invoice. Never invents,
+    defaults, rounds or estimates. Raises ``SwipeSimpleInvoiceError`` (fail
+    closed, no invoice) with a reason code when the bond has no single,
+    exact, positive, staff-entered premium.
+
+    Precedence:
+      1. Staff-confirmed trio ``premium_confirmed_amount/_at/_by`` (all set).
+      2. ``premium_cents`` (written only by staff money writes —
+         Write Bond / Record Bond via ar_service.money_fields).
+      3. Legacy dollar fields (premium_amount / total_premium / premium /
+         Premium_Amount) — only when the bond is NOT an intake-promote 10%
+         estimate.
+    Every other non-empty premium field on the bond must equal the chosen
+    amount (except under 1, where the confirmation is the authority);
+    disagreement → ``premium_ambiguous_on_bondcase``.
+    """
+    if not isinstance(bond, dict):
+        raise SwipeSimpleInvoiceError("premium_missing_on_bondcase")
+
+    # Staff-confirmed premium trio — same marker (and the only place the
+    # field names are defined) as packet_payment_link_service.
+    from dashboard.services.packet_payment_link_service import (
+        PREMIUM_CONFIRMED_AMOUNT_FIELD,
+        PREMIUM_CONFIRMED_AT_FIELD,
+        PREMIUM_CONFIRMED_BY_FIELD,
+    )
+
+    confirmed = (PREMIUM_CONFIRMED_AMOUNT_FIELD, PREMIUM_CONFIRMED_AT_FIELD, PREMIUM_CONFIRMED_BY_FIELD)
+    if all(not _blank(bond.get(k)) for k in confirmed):
+        return _exact_premium(bond.get(PREMIUM_CONFIRMED_AMOUNT_FIELD))
+
+    legacy: list[Decimal] = []
+    for key in _LEGACY_PREMIUM_FIELDS:
+        if not _blank(bond.get(key)):
+            legacy.append(_exact_premium(bond.get(key)))
+
+    if not _blank(bond.get("premium_cents")):
+        chosen = _exact_premium(bond.get("premium_cents"), cents=True)
+    else:
+        if not legacy:
+            raise SwipeSimpleInvoiceError("premium_missing_on_bondcase")
+        source = str(bond.get("source") or "").strip().lower()
+        if bond.get("premium_is_estimate") is True or source in _ESTIMATE_PREMIUM_SOURCES:
+            # 10%-of-bond estimate from intake promote — staff must enter /
+            # confirm the real premium (Write Bond) before an invoice exists.
+            raise SwipeSimpleInvoiceError("premium_estimate_unconfirmed")
+        chosen = legacy[0]
+
+    if any(v != chosen for v in legacy):
+        raise SwipeSimpleInvoiceError("premium_ambiguous_on_bondcase")
+    return chosen
+
+
 def _bond_premium(bond: Dict[str, Any]) -> Optional[Decimal]:
-    """Authoritative premium from BondCase fields — never invent."""
-    for key in ("premium_amount", "total_premium", "premium", "Premium_Amount"):
-        if bond.get(key) is not None and str(bond.get(key)).strip() != "":
-            return money_to_decimal(bond.get(key))
-    return None
+    """Authoritative premium or None (never invent). See resolve_locked_premium."""
+    try:
+        return resolve_locked_premium(bond)
+    except SwipeSimpleInvoiceError:
+        return None
 
 
 def _bond_booking(bond: Dict[str, Any]) -> str:
@@ -382,9 +476,11 @@ def _bond_customer_fields(bond: Dict[str, Any]) -> Dict[str, str]:
 
 
 def _existing_payment_link(bond: Dict[str, Any]) -> Optional[str]:
+    from dashboard.services.payment_links import is_case_invoice_link
+
     for key in ("swipesimple_payment_link", "invoice_payment_link", "payment_link"):
         link = str(bond.get(key) or "").strip()
-        if link.startswith("http"):
+        if link.startswith("http") and is_case_invoice_link(link):
             return link
     return None
 
@@ -1305,9 +1401,9 @@ async def create_locked_invoice(bond_id: str) -> Dict[str, Any]:
         raise SwipeSimpleInvoiceError("bond_not_found")
 
     booking_number = validate_booking_number(_bond_booking(bond))
-    premium = _bond_premium(bond)
-    if premium is None:
-        raise SwipeSimpleInvoiceError("premium_missing_on_bondcase")
+    # Fail closed with a reason code: missing / zero / sub-cent / ambiguous /
+    # intake-promote 10% estimate never reaches SwipeSimple.
+    premium = resolve_locked_premium(bond)
     _ = premium_dollars_to_cents(premium)
 
     existing = _existing_payment_link(bond)
@@ -1528,9 +1624,7 @@ async def dispatch_invoice(
         raise SwipeSimpleInvoiceError("payment_link_not_stored_create_first")
 
     booking_number = validate_booking_number(_bond_booking(bond))
-    premium = _bond_premium(bond)
-    if premium is None:
-        raise SwipeSimpleInvoiceError("premium_missing_on_bondcase")
+    premium = resolve_locked_premium(bond)
 
     payload = build_dispatch_payload(
         bond,
