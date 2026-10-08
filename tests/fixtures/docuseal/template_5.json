@@ -1,0 +1,327 @@
+{
+  "_about": "Merge fixture shaped like DocuSeal template 5 (shamrock-palmetto-paperwork-complete): the 10 document names from the live export, including two ssa-release copies, plus representative fields. The attached 203-field export was not on the agent filesystem, so these field objects are the ones the unit test keeps or classifies. This file is not a copy of production template 5.",
+  "id": 5,
+  "name": "shamrock-palmetto-paperwork-complete",
+  "submitters": [
+    {
+      "name": "bondsman",
+      "uuid": "sub-bondsman"
+    },
+    {
+      "name": "indemnitor",
+      "uuid": "sub-indemnitor"
+    },
+    {
+      "name": "defendant",
+      "uuid": "sub-defendant"
+    },
+    {
+      "name": "coindemnitor",
+      "uuid": "sub-coindemnitor"
+    }
+  ],
+  "schema": [
+    {
+      "attachment_uuid": "att-header",
+      "name": "shamrock-paperwork-header"
+    },
+    {
+      "attachment_uuid": "att-faq-co",
+      "name": "faq-cosigners"
+    },
+    {
+      "attachment_uuid": "att-faq-def",
+      "name": "faq-defendants"
+    },
+    {
+      "attachment_uuid": "att-waiver",
+      "name": "master-waiver"
+    },
+    {
+      "attachment_uuid": "att-indemnity",
+      "name": "indemnity-agreement-palmetto"
+    },
+    {
+      "attachment_uuid": "att-application",
+      "name": "defendant-application-palmetto"
+    },
+    {
+      "attachment_uuid": "att-704",
+      "name": "surety-terms-palmetto"
+    },
+    {
+      "attachment_uuid": "att-collateral",
+      "name": "collateral-receipt-palmetto"
+    },
+    {
+      "attachment_uuid": "att-ssa-1",
+      "name": "ssa-release"
+    },
+    {
+      "attachment_uuid": "att-ssa-2",
+      "name": "ssa-release"
+    }
+  ],
+  "documents": [
+    {
+      "uuid": "att-header",
+      "filename": "shamrock-paperwork-header.pdf"
+    },
+    {
+      "uuid": "att-faq-co",
+      "filename": "faq-cosigners.pdf"
+    },
+    {
+      "uuid": "att-faq-def",
+      "filename": "faq-defendants.pdf"
+    },
+    {
+      "uuid": "att-waiver",
+      "filename": "master-waiver.pdf"
+    },
+    {
+      "uuid": "att-indemnity",
+      "filename": "indemnity-agreement-palmetto.pdf"
+    },
+    {
+      "uuid": "att-application",
+      "filename": "defendant-application-palmetto.pdf"
+    },
+    {
+      "uuid": "att-704",
+      "filename": "surety-terms-palmetto.pdf"
+    },
+    {
+      "uuid": "att-collateral",
+      "filename": "collateral-receipt-palmetto.pdf"
+    },
+    {
+      "uuid": "att-ssa-1",
+      "filename": "ssa-release.pdf"
+    },
+    {
+      "uuid": "att-ssa-2",
+      "filename": "ssa-release.pdf"
+    }
+  ],
+  "fields": [
+    {
+      "uuid": "keep-header-1",
+      "submitter_uuid": "sub-bondsman",
+      "name": "HeaderAgency",
+      "type": "text",
+      "required": false,
+      "readonly": true,
+      "title": "Agency letterhead",
+      "description": "keep-byte-for-byte",
+      "default_value": "SHAMROCK HEADER KEEP",
+      "preferences": {
+        "font": "Helv",
+        "mask": null,
+        "font_size": 11
+      },
+      "areas": [
+        {
+          "page": 0,
+          "attachment_uuid": "att-header",
+          "x": 0.125,
+          "y": 0.04,
+          "w": 0.5,
+          "h": 0.02
+        }
+      ]
+    },
+    {
+      "uuid": "keep-faq-co-1",
+      "submitter_uuid": "sub-indemnitor",
+      "name": "FaqCosignerAck",
+      "type": "signature",
+      "required": false,
+      "preferences": {
+        "format": "drawn"
+      },
+      "areas": [
+        {
+          "page": 0,
+          "attachment_uuid": "att-faq-co",
+          "x": 0.2,
+          "y": 0.8,
+          "w": 0.3,
+          "h": 0.04
+        }
+      ]
+    },
+    {
+      "uuid": "keep-faq-def-1",
+      "submitter_uuid": "sub-defendant",
+      "name": "FaqDefendantAck",
+      "type": "signature",
+      "required": false,
+      "areas": [
+        {
+          "page": 1,
+          "attachment_uuid": "att-faq-def",
+          "x": 0.22,
+          "y": 0.76,
+          "w": 0.28,
+          "h": 0.04
+        }
+      ]
+    },
+    {
+      "uuid": "keep-waiver-1",
+      "submitter_uuid": "sub-defendant",
+      "name": "WaiverDefendant",
+      "type": "signature",
+      "required": false,
+      "title": "Defendant waiver",
+      "areas": [
+        {
+          "page": 3,
+          "attachment_uuid": "att-waiver",
+          "x": 0.15,
+          "y": 0.7,
+          "w": 0.35,
+          "h": 0.05
+        }
+      ]
+    },
+    {
+      "uuid": "live-ind-agent",
+      "submitter_uuid": "sub-bondsman",
+      "name": "ind_agent_name",
+      "type": "text",
+      "required": true,
+      "areas": [
+        {
+          "page": 0,
+          "attachment_uuid": "att-indemnity",
+          "x": 0.735763,
+          "y": 0.022566,
+          "w": 0.245254,
+          "h": 0.017552
+        }
+      ]
+    },
+    {
+      "uuid": "live-app-agent",
+      "submitter_uuid": "sub-bondsman",
+      "name": "app_agent_name",
+      "type": "text",
+      "required": true,
+      "areas": [
+        {
+          "page": 0,
+          "attachment_uuid": "att-application",
+          "x": 0.728758,
+          "y": 0.020274,
+          "w": 0.261438,
+          "h": 0.015206
+        }
+      ]
+    },
+    {
+      "uuid": "live-app-defendant",
+      "submitter_uuid": "sub-defendant",
+      "name": "app_defendant_name",
+      "type": "text",
+      "required": true,
+      "areas": [
+        {
+          "page": 0,
+          "attachment_uuid": "att-application",
+          "x": 0.814706,
+          "y": 0.002534,
+          "w": 0.22549,
+          "h": 0.015206
+        }
+      ]
+    },
+    {
+      "uuid": "live-app-removed",
+      "submitter_uuid": "sub-defendant",
+      "name": "app_removed_legacy",
+      "type": "text",
+      "required": false,
+      "areas": [
+        {
+          "page": 0,
+          "attachment_uuid": "att-application",
+          "x": 0.01,
+          "y": 0.01,
+          "w": 0.2,
+          "h": 0.02
+        }
+      ]
+    },
+    {
+      "uuid": "live-704-old",
+      "submitter_uuid": "sub-defendant",
+      "name": "bbis_old_defendant",
+      "type": "text",
+      "required": true,
+      "areas": [
+        {
+          "page": 0,
+          "attachment_uuid": "att-704",
+          "x": 0.04,
+          "y": 0.2,
+          "w": 0.3,
+          "h": 0.02
+        }
+      ]
+    },
+    {
+      "uuid": "live-note-amount",
+      "submitter_uuid": "sub-indemnitor",
+      "name": "note_amount_numeric",
+      "type": "text",
+      "required": true,
+      "areas": [
+        {
+          "page": 0,
+          "attachment_uuid": "att-collateral",
+          "x": 0.115442,
+          "y": 0.022808,
+          "w": 0.327209,
+          "h": 0.01774
+        }
+      ]
+    },
+    {
+      "uuid": "keep-ssa-def",
+      "submitter_uuid": "sub-defendant",
+      "name": "SsaReleaseDefendant",
+      "type": "signature",
+      "required": false,
+      "default_value": "",
+      "areas": [
+        {
+          "page": 0,
+          "attachment_uuid": "att-ssa-1",
+          "x": 0.18,
+          "y": 0.62,
+          "w": 0.32,
+          "h": 0.04
+        }
+      ]
+    },
+    {
+      "uuid": "keep-ssa-ind",
+      "submitter_uuid": "sub-indemnitor",
+      "name": "SsaReleaseIndemnitor",
+      "type": "signature",
+      "required": false,
+      "areas": [
+        {
+          "page": 0,
+          "attachment_uuid": "att-ssa-2",
+          "x": 0.55,
+          "y": 0.62,
+          "w": 0.32,
+          "h": 0.04
+        }
+      ]
+    }
+  ]
+}

@@ -9,7 +9,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Palmetto appearance bond:** the writer now uses the blank's real widget names. Charge line 1 goes to `chargestField1`, the written premium goes to `writtenPremiumAmountField`, and both `AgentField` lines get the writing agent already on the bond or session. An empty agent clears the baked-in sample `Brendan ONeal`. The published Palmetto v1 recipe (`build_palmetto_field_values` / `fill_published_appearance`) uses those same keys.
 - **Palmetto application, indemnity, collateral receipt, and bail bond information sheet:** AcroForm widgets were added on the measured blanks and filled from the same sources OSI prefill uses. Disclosure, a separate premium receipt, check-in, and a Palmetto mortgage blank are not in the carrier PDFs and were not invented.
 - **Form 704 (template 5 document `surety-terms-palmetto`):** the spec name is `bail-bond-information-sheet-palmetto`. Defendant name, two power-of-attorney lines (`poa_1`, `poa_2`), both SIGN lines, and the unlabeled line under the right SIGN sit on the measured rules. OSI is unchanged; the repo has no OSI Form 704.
-- **DocuSeal apply:** a field update keeps every live field on documents the spec does not cover, and replaces fields only on the covered carrier documents.
+- **DocuSeal apply:** a field update keeps every live field on documents the spec does not cover, byte for byte, and replaces fields only on the covered carrier documents. Dry-run (`--live`) lists fields added, moved, removed, and kept per document. `--clone` copies template 5 and writes the merge onto the copy.
 
 ## [Unreleased] — 2026-10-07 (Charlotte FL Revize hardening)
 

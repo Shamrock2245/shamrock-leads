@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Apply the Palmetto field-placement spec to a DocuSeal template.
+"""Plan or apply Palmetto DocuSeal fields without dropping uncovered documents.
 
-Dry-run unless ``--apply`` is passed. Reads the API URL from
-``DOCUSEAL_URL`` or ``DOCUSEAL_SERVER`` and the token from
-``DOCUSEAL_API_KEY``. Template id is ``DOCUSEAL_TEMPLATE_ID_PALMETTO``
-or 5. Never creates a submission and never sends anything to a signer.
+Dry-run is the default and sends no request. Pass ``--live PATH`` to diff a
+saved template export (the recommended check). ``--clone`` is the recommended
+write: POST /templates/{id}/clone, merge into the clone, PUT the clone, and
+print the new id. ``--apply`` updates the source template in place.
 
-``--create`` posts a new template instead of updating template 5. The
-script stops if a spec document cannot be matched to a template
-attachment.
+A field PUT replaces the template's whole field list. Fields on documents
+the spec does not cover are copied through unchanged. Appearance-bond fields
+are omitted when that PDF is not an attachment (it is print/wet-ink).
+
+Reads DOCUSEAL_URL or DOCUSEAL_SERVER, DOCUSEAL_API_KEY, and
+DOCUSEAL_TEMPLATE_ID_PALMETTO (default 5). Never creates a submission.
 """
 from __future__ import annotations
 
@@ -18,26 +21,10 @@ import os
 import sys
 import urllib.error
 import urllib.request
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
+from dashboard.palmetto_docuseal_apply import CLONE_NAME, PalmettoApplyError, plan_merge
 from dashboard.palmetto_field_placement import PACKET_INVENTORY, QUESTIONS, docuseal_fields
-
-# Filename hints for the carrier PDFs. First match wins. Unmatched spec
-# documents fail closed.
-_DOC_HINTS = {
-    "appearance-bond": ("appearance bond", "appearance-bond", "official appearance"),
-    "defendant-application": ("defendant application", "defendant-application", "application for appearance"),
-    "indemnity-agreement": ("indemnity",),
-    "collateral-receipt": ("collateral", "promissory note"),
-    "bail-bond-information-sheet-palmetto": (
-        "surety-terms-palmetto",
-        "surety term",
-        "bail bond information",
-        "information sheet",
-        "form 704",
-        "form#704",
-    ),
-}
 
 
 def _api_base() -> str:
@@ -69,99 +56,12 @@ def _request(method: str, url: str, token: str, body: Optional[dict] = None) -> 
     return json.loads(raw) if raw else {}
 
 
-def _documents(template: dict) -> List[dict]:
-    docs = template.get("documents") or template.get("schema") or []
-    if isinstance(docs, dict):
-        docs = list(docs.values())
-    return [doc for doc in docs if isinstance(doc, dict)]
-
-
-def _doc_name(doc: dict) -> str:
-    return str(doc.get("name") or doc.get("filename") or doc.get("title") or "").strip()
-
-
-def _doc_uuid(doc: dict) -> str:
-    return str(doc.get("uuid") or doc.get("attachment_uuid") or "").strip()
-
-
-def match_documents(template: dict) -> Dict[str, str]:
-    """Map spec slug → attachment uuid. Raises if a slug cannot be matched."""
-    docs = _documents(template)
-    used = set()
-    matched: Dict[str, str] = {}
-    unmatched = []
-    for slug, hints in _DOC_HINTS.items():
-        hit = None
-        for doc in docs:
-            uuid = _doc_uuid(doc)
-            name = _doc_name(doc).lower()
-            if not uuid or uuid in used:
-                continue
-            if any(hint in name for hint in hints):
-                hit = doc
-                break
-        if hit is None:
-            unmatched.append(slug)
-            continue
-        used.add(_doc_uuid(hit))
-        matched[slug] = _doc_uuid(hit)
-    if unmatched:
-        visible = [f"{_doc_name(doc) or '(unnamed)'} uuid={_doc_uuid(doc) or '(none)'}" for doc in docs]
-        raise SystemExit(
-            "Refusing to apply. Unmatched Palmetto documents: "
-            + ", ".join(unmatched)
-            + ". Template documents: "
-            + ("; ".join(visible) or "(none)")
-        )
-    return matched
-
-
-def build_payload_fields(attachment_by_slug: Dict[str, str]) -> List[dict]:
-    fields = []
-    seen = set()
-    for field in docuseal_fields():
-        slug = field["document"]
-        if slug not in attachment_by_slug:
-            continue
-        # Two appearance-bond widgets share AgentField. DocuSeal wants one
-        # field with one area per box.
-        key = (slug, field["name"])
-        area = {
-            "x": field["x_norm"],
-            "y": field["y_norm"],
-            "w": field["w_norm"],
-            "h": field["h_norm"],
-            "page": field["page"],
-            "attachment_uuid": attachment_by_slug[slug],
-        }
-        if key in seen:
-            for existing in fields:
-                if existing["name"] == field["name"] and existing.get("_slug") == slug:
-                    existing["areas"].append(area)
-                    break
-            continue
-        seen.add(key)
-        kind = {"text": "text", "checkbox": "checkbox", "signature": "signature"}.get(
-            field["type"], "text"
-        )
-        fields.append({
-            "name": field["name"],
-            "type": kind,
-            "role": field["role"],
-            "required": bool(field["required"]) if kind != "signature" else False,
-            "areas": [area],
-            "_slug": slug,
-            "preferences": {"data_source": field["data_source"]},
-        })
-    for field in fields:
-        field.pop("_slug", None)
-    return fields
-
-
 def spec_document() -> dict:
     return {
         "template_id_env": "DOCUSEAL_TEMPLATE_ID_PALMETTO",
         "default_template_id": "5",
+        "recommended": "clone",
+        "clone_name": CLONE_NAME,
         "inventory": PACKET_INVENTORY,
         "questions": QUESTIONS,
         "fields": [
@@ -183,89 +83,146 @@ def spec_document() -> dict:
     }
 
 
+def _plan_view(template_id: str, plan: dict) -> dict:
+    documents = []
+    for row in plan["documents"]:
+        documents.append({
+            "document": row["document"],
+            "filename": row["filename"],
+            "slug": row["slug"],
+            "coverage": row["coverage"],
+            "added": row["added"],
+            "moved": row["moved"],
+            "removed": row["removed"],
+            "kept": row["kept"],
+        })
+    return {
+        "mode": "dry-run",
+        "recommended": "clone",
+        "clone_name": CLONE_NAME,
+        "template_id": template_id,
+        "page_delta": plan["page_delta"],
+        "put_field_count": len(plan["fields"]),
+        "documents": documents,
+    }
+
+
+def _load_live(path: str) -> dict:
+    with open(path, encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, dict):
+        raise PalmettoApplyError(f"{path} is not a template object.")
+    return payload
+
+
+def _credentials() -> tuple:
+    base = _api_base()
+    token = _token()
+    if not base or not token:
+        print(
+            "DOCUSEAL_URL/DOCUSEAL_SERVER and DOCUSEAL_API_KEY are required.",
+            file=sys.stderr,
+        )
+        return "", ""
+    return base, token
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Apply Palmetto DocuSeal field placement")
-    parser.add_argument("--apply", action="store_true", help="PUT the template. Default is dry-run.")
-    parser.add_argument("--create", action="store_true", help="POST a new template instead of updating.")
+    parser.add_argument("--apply", action="store_true", help="PUT the source template. Prefer --clone.")
+    parser.add_argument(
+        "--clone",
+        action="store_true",
+        help="POST /templates/{id}/clone, apply to the clone, and print the new id.",
+    )
+    parser.add_argument("--live", default="", help="Dry-run against a saved template JSON. Sends nothing.")
     parser.add_argument("--write-spec", default="", help="Write the machine-readable spec JSON to this path.")
     args = parser.parse_args(argv)
+
+    if args.apply and args.clone:
+        print("Pass only one of --apply or --clone.", file=sys.stderr)
+        return 2
+    if args.live and (args.apply or args.clone):
+        print("--live is a dry-run. It does not write to DocuSeal.", file=sys.stderr)
+        return 2
 
     document = spec_document()
     if args.write_spec:
         with open(args.write_spec, "w", encoding="utf-8") as handle:
             json.dump(document, handle, indent=2)
             handle.write("\n")
-        print(f"wrote {args.write_spec} ({len(document['fields'])} fields)")
-
-    if not args.apply and not args.create:
-        print(
-            f"dry-run: {len(document['fields'])} DocuSeal fields ready. "
-            "Set DOCUSEAL_URL and DOCUSEAL_API_KEY and pass --apply to update "
-            f"template {_template_id()}. No request was sent."
-        )
-        return 0
-
-    base = _api_base()
-    token = _token()
-    if not base or not token:
-        print("DOCUSEAL_URL/DOCUSEAL_SERVER and DOCUSEAL_API_KEY are required for --apply/--create.", file=sys.stderr)
-        return 2
-
-    if args.create:
-        body = {
-            "name": "shamrock-palmetto-paperwork-complete",
-            "external_id": "shamrock-palmetto-paperwork",
-        }
-        created = _request("POST", f"{base}/api/templates", token, body)
-        template_id = str(created.get("id") or "")
-        if not template_id:
-            print("Create returned no template id. Stopping.", file=sys.stderr)
-            return 2
-        print(f"created template {template_id}. Upload the carrier PDFs, then rerun --apply.")
-        return 0
+        print(f"wrote {args.write_spec} ({len(document['fields'])} fields)", file=sys.stderr)
 
     template_id = _template_id()
-    try:
-        current = _request("GET", f"{base}/api/templates/{template_id}", token)
-    except urllib.error.HTTPError as exc:
-        print(f"GET template {template_id} failed: {exc.code}. Stopping.", file=sys.stderr)
-        return 2
-    attachment_by_slug = match_documents(current)
-    fields = build_payload_fields(attachment_by_slug)
-    existing = current.get("fields") or []
-    if _same_fields(existing, fields):
-        print(f"template {template_id} already matches the spec ({len(fields)} fields).")
+    if args.live:
+        try:
+            plan = plan_merge(_load_live(args.live))
+        except (OSError, json.JSONDecodeError, PalmettoApplyError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(json.dumps(_plan_view(template_id, plan), indent=2))
         return 0
+
+    if not args.apply and not args.clone:
+        print(
+            "Dry-run needs a template export. Pass --live PATH to list, per document, "
+            "the fields added, moved, removed, and kept. No request was sent. "
+            f"The recommended write is --clone (POST /templates/{template_id}/clone, "
+            f"then apply to the clone named {CLONE_NAME!r}).",
+            file=sys.stderr,
+        )
+        return 2
+
+    base, token = _credentials()
+    if not base:
+        return 2
+
+    source_id = template_id
+    try:
+        if args.clone:
+            created = _request(
+                "POST",
+                f"{base}/api/templates/{source_id}/clone",
+                token,
+                {"name": CLONE_NAME},
+            )
+            clone_id = str(created.get("id") or "").strip()
+            if not clone_id:
+                print("Clone returned no template id. Source template was not modified.", file=sys.stderr)
+                return 2
+            current = _request("GET", f"{base}/api/templates/{clone_id}", token)
+            target_id = clone_id
+        else:
+            current = _request("GET", f"{base}/api/templates/{source_id}", token)
+            target_id = source_id
+        plan = plan_merge(current)
+    except urllib.error.HTTPError as exc:
+        print(f"DocuSeal request failed: {exc.code}. Stopping.", file=sys.stderr)
+        return 2
+    except PalmettoApplyError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
     updated = _request(
         "PUT",
-        f"{base}/api/templates/{template_id}",
+        f"{base}/api/templates/{target_id}",
         token,
-        {"fields": fields},
+        {"fields": plan["fields"]},
     )
-    print(f"updated template {updated.get('id') or template_id} with {len(fields)} fields.")
-    return 0
-
-
-def _same_fields(existing: list, wanted: list) -> bool:
-    def key(field: dict) -> tuple:
-        areas = tuple(
-            (
-                round(float(area.get("x") or 0), 4),
-                round(float(area.get("y") or 0), 4),
-                round(float(area.get("w") or 0), 4),
-                round(float(area.get("h") or 0), 4),
-                int(area.get("page") or 0),
-                str(area.get("attachment_uuid") or ""),
-            )
-            for area in field.get("areas") or []
+    written_id = str(updated.get("id") or target_id)
+    if args.clone:
+        print(
+            f"clone_template_id={written_id} source_template_id={source_id} "
+            f"fields={len(plan['fields'])} name={CLONE_NAME}"
         )
-        return (field.get("name"), field.get("type"), field.get("role"), areas)
-
-    if len(existing) != len(wanted):
-        return False
-    return sorted(key(field) for field in existing if isinstance(field, dict)) == sorted(
-        key(field) for field in wanted
-    )
+    else:
+        print(
+            f"updated template {written_id} with {len(plan['fields'])} fields. "
+            "--clone is the recommended path and was not used.",
+            file=sys.stderr,
+        )
+        print(f"template_id={written_id}")
+    return 0
 
 
 if __name__ == "__main__":

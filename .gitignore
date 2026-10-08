@@ -33,6 +33,7 @@ config/google-services.json
 !deployment/tailscale/acl-policy.json
 !tests/fixtures/docuseal_template_snapshot.json
 !templates/palmetto/palmetto_docuseal_field_spec.json
+!tests/fixtures/docuseal/template_5.json
 
 
 # Python
