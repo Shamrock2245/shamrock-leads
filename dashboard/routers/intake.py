@@ -606,3 +606,15 @@ async def intake_submit(request: Request):
         logger.error(f"[intake] Failed to store intake {intake_id}: {e}")
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  GET /api/intake/queue
+#  Return pending intakes for the staff dashboard queue
+# ═══════════════════════════════════════════════════════════════════════════════
+@intake_bp.get("/intake/queue")
+async def intake_queue_list(
+    status: str = Query(default="pending"),
+    limit: int = Query(default=50),
+    source: str = Query(default=""),
+    counties: str = Query(default=""),
+):
