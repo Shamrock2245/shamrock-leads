@@ -795,10 +795,10 @@
     {
       "state": "FL",
       "county_fips": "051",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "fail_closed",
+      "official_source_url": "https://myocv.s3.amazonaws.com/ocvapps/a102933935/inmates.json",
+      "access_posture": "2026-10-08 ~8:00 AM ET from the agent box: plain HTTPS GET, HTTP 200 JSON, no challenge; not an access problem, an identifier problem",
+      "evidence_note": "2026-10-08 source-contract check (`docs/recon/FL_HENDRY_FAIL_CLOSED_2026-10-08.md`): the public MyOCV inmates.json (HTTP 200, 288 rows) identifies rows only by `inmateID` = `HCSO<YY>MNI<NNNNNN>`, a Master Name Index person id (its year runs 00-26 whatever the booked year is), not a source booking number. `chargeArray` is schema-only and no bond is published. Fail closed under the person-id rule (Alachua #107); CoS approved 2026-10-08. `hendry.py` is `SOURCE_CONTRACT_VALIDATED=False` and fetches nothing. Rows already stored under MNI keys are untouched; cleanup waits on Brendan."
     },
     {
       "state": "FL",

@@ -23,7 +23,7 @@
 |---|---:|---:|---:|---:|---:|---:|---:|
 | AL | 67 | 16 | 4 | 0 | 0 | 51 | 12 |
 | CT | 12 | 6 | 0 | 0 | 6 | 1 | 5 |
-| FL | 67 | 67 | 4 | 15 | 31 | 0 | 17 |
+| FL | 67 | 67 | 4 | 15 | 30 | 0 | 18 |
 | GA | 159 | 85 | 0 | 0 | 148 | 0 | 11 |
 | LA | 64 | 13 | 3 | 1 | 4 | 46 | 10 |
 | MS | 82 | 9 | 1 | 0 | 4 | 69 | 8 |
@@ -32,7 +32,7 @@
 | TN | 96 | 22 | 9 | 0 | 74 | 0 | 13 |
 | TX | 254 | 34 | 2 | 0 | 0 | 252 | 0 |
 
-**Aggregate matrix counts:** verified public 33; candidate productive 31; recon only 267; unverified 489; fail closed 127.
+**Aggregate matrix counts:** verified public 33; candidate productive 31; recon only 266; unverified 489; fail closed 128.
 
 ## County matrix
 
@@ -141,7 +141,7 @@
 | FL | 045 | Gulf County | OSI + Palmetto | registered | fail_closed | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 047 | Hamilton County | OSI + Palmetto | registered | candidate_productive | https://inmate.hamiltonsheriff.com/smartwebclient/jail.aspx | Ordinary public HTTPS SmartWEB JAIL View | 2026-10-07 idle-eight recon: Booking No HCSO<YY>JBN<NNNNNN>, booking date/time, charges, bond via booking-date window. Prior smartcop.hamiltoncountysheriff.com NXDOMAIN. |
 | FL | 049 | Hardee County | OSI + Palmetto | registered | fail_closed | https://www.hardeeso.com/ | Inmate search links only the OCV mobile app; OCV inmates.json buckets return 403 to ordinary access | 2026-10-07 SmartWEB legacy-paging check: no public web roster. Hold fail_closed in hardee.py (SOURCE_CONTRACT_VALIDATED=False) and SCRAPER_SOURCE_STATES. Do not invent booking keys. See docs/recon/FL_SMARTWEB_LEGACY_PAGING_2026-10-07.md. |
-| FL | 051 | Hendry County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
+| FL | 051 | Hendry County | OSI + Palmetto | registered | fail_closed | https://myocv.s3.amazonaws.com/ocvapps/a102933935/inmates.json | 2026-10-08 ~8:00 AM ET from the agent box: plain HTTPS GET, HTTP 200 JSON, no challenge; not an access problem, an identifier problem | 2026-10-08 source-contract check (`docs/recon/FL_HENDRY_FAIL_CLOSED_2026-10-08.md`): the public MyOCV inmates.json (HTTP 200, 288 rows) identifies rows only by `inmateID` = `HCSO<YY>MNI<NNNNNN>`, a Master Name Index person id (its year runs 00-26 whatever the booked year is), not a source booking number. `chargeArray` is schema-only and no bond is published. Fail closed under the person-id rule (Alachua #107); CoS approved 2026-10-08. `hendry.py` is `SOURCE_CONTRACT_VALIDATED=False` and fetches nothing. Rows already stored under MNI keys are untouched; cleanup waits on Brendan. |
 | FL | 053 | Hernando County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 055 | Highlands County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 057 | Hillsborough County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
@@ -1026,6 +1026,7 @@ Documented live writes and holds for scopes named in the latest executive brief.
 | Washington (TN) | verified_public | live_write | 2026-09-30 Mac write smoke 509 new, status ok (source numeric Booking Number 5-10 digits, WCSO 30-day rolling booking sheet PDF); live per 2026-09-30 brief | `docs/recon/TENNESSEE_SCRAPERS_EXPANSION_2026-09-30.md` |
 | Hamblen (TN) | verified_public | live_write | 2026-09-30 Mac write smoke 351 new, status ok (source deterministic ISOMS surrogate HAMBLEN-<hash>, 72 Hot / 49 Warm); live per 2026-09-30 brief | `docs/recon/TENNESSEE_SCRAPERS_EXPANSION_2026-09-30.md` |
 | Nassau (FL) | fail_closed | hold | Portal sends only its leaf certificate (GoDaddy G2 intermediate missing), so verified HTTPS fails; old verify=False parser keyed every row on 'History'. Owner hold 2026-10-08 | `docs/recon/FL_67_STATUS_2026-10-08.md` |
+| Hendry (FL) | fail_closed | hold | MyOCV inmates.json has only inmateID HCSO<YY>MNI<NNNNNN>, a person (Master Name Index) id, not a booking number; old v4 parser keyed rows on it. Fail closed 2026-10-08 (CoS approved) | `docs/recon/FL_HENDRY_FAIL_CLOSED_2026-10-08.md` |
 
 ## Operating rule
 
