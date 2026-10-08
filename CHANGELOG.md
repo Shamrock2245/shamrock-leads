@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (writing agent pair)
+
+### Fixed
+- **DocuSeal packets.** Write Bond finalize, push to DocuSeal, and Shannon voice no longer send a blank agent. The bondsman name and license are one pair: the explicit writing agent when that name or license is a `BOND_AGENTS` entry, otherwise the signed-in sub-agent's own entry, otherwise the house row (Brendan O'Neal / P139768). `BOND_AGENT_NAME` and `BOND_AGENT_LICENSE` override the house row only when both are set. A filtered label such as Master Admin or Shamrock Bail Bonds is not printed. The template sample `Brendan ONeal` is not used. A name that is not in `BOND_AGENTS` does not keep a registered license: that license's own row is printed (a typo of Kayla with Jason's license prints Jason Taylor / W214323). An unregistered license can still keep the name on the record. Palmetto appearance bonds no longer print P139768 under a different name; OSI appearance bonds are unchanged.
+
 ## [Unreleased] — 2026-10-08 (Intake upsert keeps lifecycle fields)
 
 ### Fixed
@@ -12,6 +17,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 - **OSI local one-PDF stitch:** the application, promissory note, disclosure, surety terms, collateral receipt, and indemnity agreement place each value in a measured blank. The promissory note Defendant's Name cell receives the defendant. A form with no blank for a value is left empty. The stamp does not cover body text, the agent block, or print raw `{{ }}` tags.
+
+## [Unreleased] — 2026-10-07 (Palmetto packet fields)
+
+### Fixed
+- **Palmetto appearance bond:** the writer now uses the blank's real widget names. Charge line 1 goes to `chargestField1`, the written premium goes to `writtenPremiumAmountField`, and both `AgentField` lines get the writing agent already on the bond or session. An empty agent clears the baked-in sample `Brendan ONeal`. The published Palmetto v1 recipe (`build_palmetto_field_values` / `fill_published_appearance`) uses those same keys.
+- **Palmetto application, indemnity, collateral receipt, and bail bond information sheet:** AcroForm widgets were added on the measured blanks and filled from the same sources OSI prefill uses. Disclosure, a separate premium receipt, check-in, and a Palmetto mortgage blank are not in the carrier PDFs and were not invented.
+- **Form 704 (template 5 document `surety-terms-palmetto`):** the spec name is `bail-bond-information-sheet-palmetto`. Defendant name, two power-of-attorney lines (`poa_1`, `poa_2`), both SIGN lines, and the unlabeled line under the right SIGN sit on the measured rules. OSI is unchanged; the repo has no OSI Form 704.
+- **DocuSeal apply:** a field update keeps every area on documents the spec does not cover. A text field that also has areas on a covered document is split: the uncovered areas stay on the original field (same uuid, name, and role) and the covered areas are replaced. Signature, initials, and date-signed boxes are copied from live template 5 (same uuid, role, and area), including when they also sit on a covered document. `today_date` is still the prefilled execution date. `SIGNATURE_GEOMETRY_EXCEPTIONS` is empty: no signature box is moved or dropped. Rebuilt text and date boxes stay on the live bondsman submitter (`ROLE_CHANGES` is empty). Covered text, date, and number boxes keep the live template 5 names `prefill_values_from_bond` already sends (`defendant_name`, `poa_number`, `numeric_full_bond_amount`, and the rest). A live synonym the prefill does not send is renamed to that prefill key. Boxes with no source (social password, contacted-by, and the other blank-by-design names) stay empty. The indemnity WHEREAS, notary, and application premium boxes are sized to the line. On the collateral receipt the Receipt Date prefill is not stacked on the live defendant date, and the Received By name and In Trust for name are not placed on the signature or the palm logo. Dry-run (`--live`) lists fields added, moved, removed, and kept per document. `--clone` copies template 5 and writes the merge onto the copy. `DOCUSEAL_URL` is the origin `https://sign.shamrockbailbonds.biz`; the script appends `/api`. The committed spec JSON is regenerated from this placement. A new field is stored with a fresh uuid; a field uuid that already exists is left as it is. Every area cites a document uuid on the template being written, including a clone whose documents have new uuids. The OSI one-PDF stitch is unchanged from main.
 
 ## [Unreleased] — 2026-10-07 (Telegram and Shannon intake tags)
 
@@ -106,7 +119,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 - **Charlotte (FL):** moved onto the shared Revize roster contract (`scrapers/revize_roster.py`, same as Manatee #113). Columns are mapped by header (Booking # / Last / First / Middle / Charge / Arrest Date / Released); the source `Booking #` is checked against the row's `/bookings/<id>` link; a row with a blank or unrecognised booking number (or too few cells) and a booking that names two people both fail closed. Every charge row for a booking is kept (`Charges` joined with ` | `, plus `extra_data.charge_details`). `Bond_Amount`/`Bond_Type` are `""` (the roster publishes no bond), no longer `"0"`. `Released` is required and an unrecognised value fails closed. Paging fails closed on a missing table or column, an empty first page, an empty or repeated page, hitting `MAX_PAGES` with a next page still offered, or a walked count that differs from a published total. A Cloudflare challenge/block, or no verified US residential exit, raises `EgressBlocked` and writes nothing (`CHARLOTTE_EGRESS_MODE=direct` for Leads Ops residential runs; default `auto` keeps the existing resolver). Live check from the box: `/`, `/bookings` and `?page=2` → 403 CF challenge (`docs/recon/FL_CHARLOTTE_REVIZE_2026-10-07.md`). Health stays `unverified`.
 - **Hydrate:** legacy Charlotte/Manatee docs that carry a scraped `"0"` for a bond the roster never published now hydrate as unknown (blank), not `$0`. A staff `bond_override` / `MANUAL_CHARGE_BONDS` flag left behind a rescrape that rewrote `bond_amount` to `0.0` also stays unknown; a staff-set positive amount still wins.
-
 ## [Unreleased] — 2026-10-07 (Sarasota / Manatee FL audit)
 
 ### Fixed

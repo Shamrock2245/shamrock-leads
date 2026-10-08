@@ -44,6 +44,59 @@ AGENT_LICENSE = "P139768"
 AGENCY_DETAILS = "Shamrock Bail Bonds\r1528 Broadway\rFort Myers, FL 33901\r239-332-2245\rshamrockbailbonds.biz"
 AGENCY_NAME = "Shamrock Bail Bonds"
 
+# Not a writing agent. Session and bond payloads use these as actor labels.
+_NOT_WRITING_AGENT = frozenset({
+    "dashboard",
+    "staff",
+    "staff_session",
+    "staff_direct",
+    "agent",
+    "house agent",
+    "unknown",
+    "unknown agent",
+    "unassigned",
+    "master admin",
+    "shamrock bail bonds",
+})
+_LICENSE_SHAPED = re.compile(r"^(?:[A-Za-z]{1,4}[\s\-]*)?\d{4,}$")
+
+
+def writing_agent_name(data: Optional[dict]) -> str:
+    """Writing agent already on the bond or session payload.
+
+    Empty when none is present. Never substitutes the template sample
+    ``Brendan ONeal`` or the constant ``AGENT_NAME``.
+    """
+    if not isinstance(data, dict):
+        return ""
+    for key in ("writing_agent_name", "agent_name", "bondsman_name", "writing_agent"):
+        name = str(data.get(key) or "").strip()
+        if not name:
+            continue
+        if name.casefold() in _NOT_WRITING_AGENT:
+            continue
+        compact = re.sub(r"\s+", "", name)
+        if _LICENSE_SHAPED.match(compact) or re.fullmatch(r"P\d{4,}", compact, flags=re.I):
+            continue
+        return name
+    return ""
+
+
+def writing_agent_license(data: Optional[dict]) -> str:
+    """License already on the bond or session payload. Empty when absent."""
+    if not isinstance(data, dict):
+        return ""
+    for key in (
+        "writing_agent_license",
+        "agent_license",
+        "bondsman_license",
+        "license_number",
+    ):
+        value = str(data.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
 
 def _safe_float(val) -> float:
     """Safely convert a value to float, handling currencies and None."""
@@ -626,6 +679,30 @@ def _widget_base_name(field_name: Optional[str]) -> str:
     return (m.group(1).strip() if m else name)
 
 
+def _pdf_literal(text: str) -> str:
+    """PDF literal string for an AcroForm /V."""
+    escaped = (
+        str(text)
+        .replace("\\", "\\\\")
+        .replace("(", "\\(")
+        .replace(")", "\\)")
+    )
+    return f"({escaped})"
+
+
+def _write_widget_v(widget, literal: str) -> None:
+    """Store /V on the widget xref.
+
+    ``widget.update()`` refreshes the appearance but leaves a baked-in /V
+    in place on the Palmetto agent lines (both named ``AgentField``).
+    """
+    page = getattr(widget, "parent", None)
+    doc = getattr(page, "parent", None) if page is not None else None
+    xref = getattr(widget, "xref", None)
+    if doc is not None and xref:
+        doc.xref_set_key(xref, "V", literal)
+
+
 def _clear_widget_value(widget) -> None:
     """Blank a form widget, including a template sample already stored in /V.
 
@@ -633,16 +710,13 @@ def _clear_widget_value(widget) -> None:
     rejected case number would keep the blank OSI template's sample CaseNum.
     """
     # field_value="" reports as cleared but save() restores the template /V.
-    page = getattr(widget, "parent", None)
-    doc = getattr(page, "parent", None) if page is not None else None
-    xref = getattr(widget, "xref", None)
-    if doc is not None and xref:
-        doc.xref_set_key(xref, "V", "()")
+    _write_widget_v(widget, "()")
     widget.field_value = ""
     try:
         widget.update()
     except Exception:
         pass
+    _write_widget_v(widget, "()")
 
 
 def _set_widget_value_with_scaling(widget, val, default_font_size=10):
@@ -661,6 +735,7 @@ def _set_widget_value_with_scaling(widget, val, default_font_size=10):
             widget.text_fontsize = default_font_size
             widget.field_value = val_str
             widget.update()
+            _write_widget_v(widget, _pdf_literal(val_str))
             return
 
         width = max(1.0, float(rect.x1 - rect.x0))
@@ -695,6 +770,7 @@ def _set_widget_value_with_scaling(widget, val, default_font_size=10):
         widget.text_fontsize = font_size
         widget.field_value = val_str
         widget.update()
+        _write_widget_v(widget, _pdf_literal(val_str))
     except Exception as exc:
         # Never abort a full bond package on a single widget failure
         logger.warning(
@@ -705,6 +781,7 @@ def _set_widget_value_with_scaling(widget, val, default_font_size=10):
         try:
             widget.field_value = val_str
             widget.update()
+            _write_widget_v(widget, _pdf_literal(val_str))
         except Exception:
             pass
 
@@ -843,10 +920,12 @@ def fill_osi_bond(data: dict) -> bytes:
 
 
 def build_palmetto_field_values(data: dict) -> tuple[dict, dict]:
-    """Historical Palmetto appearance-bond values and font sizes.
+    """Palmetto appearance-bond values keyed to the blank's real widgets.
 
-    Published Palmetto v1 calls this recipe. Field names are the historical
-    writer keys (some differ from the blank's widget names).
+    Published Palmetto v1 calls this recipe. ``chargestField1`` and
+    ``writtenPremiumAmountField`` are the printed AcroForm names (the charge
+    key includes the carrier typo). Both agent lines are named ``AgentField``.
+    There is no case-number widget on this blank.
     """
     bond_amount = _safe_float(data.get("bond_amount", 0))
     premium = max(100.0, bond_amount * 0.10)
@@ -864,12 +943,6 @@ def build_palmetto_field_values(data: dict) -> tuple[dict, dict]:
     county = data.get("county") or data.get("defendant_county") or ""
     address = data.get("address") or data.get("defendant_address") or ""
 
-    case_number = str(
-        data.get("case_number") or data.get("defendant_case_number") or ""
-    ).strip()
-    if _is_booking_as_case(case_number, booking_number):
-        case_number = ""
-
     court_date, court_time = _split_court_datetime(
         data.get("court_date") or data.get("defendant_court_date") or "",
         data.get("court_time") or data.get("defendant_court_time") or "",
@@ -880,43 +953,44 @@ def build_palmetto_field_values(data: dict) -> tuple[dict, dict]:
         court_datetime = f"{court_date} {court_time}".strip()
     else:
         court_datetime = court_date
-    
-    # ── Field Mapping ──
+
+    from dashboard.services.docuseal_service import resolve_writing_agent
+
+    agent_name, agent_license = resolve_writing_agent(
+        data, blank_when_license_only=True,
+    )
     field_values = {
         "defendantNameField": full_name,
         "countyField": county,
         "numericBondAmount": f"${bond_amount:,.2f}",
-        "chargesField1": charge_line1 or "No Charge Specified",
+        "chargestField1": charge_line1 or "No Charge Specified",
         "chargesField2": charge_line2,
         "CourtDateAndTimeField": court_datetime,
         "ArrestNumberField": booking_number,
-        # Some Palmetto revisions use a separate case field; safe no-op if absent
-        "CaseNumberField": case_number,
         "DefendantAddress": address,
         "powerNumField": data.get("poa_number", ""),
         "dayField": date_parts["day"],
         "monthWrittenField": date_parts["month"],
         "yearYYYYField": date_parts["year"],
         "cirCoField": data.get("court_type") or data.get("defendant_court_type") or "",
-        "agentBailLicNumField": AGENT_LICENSE,
-        "AgentField#0": AGENT_NAME,
-        "AgentField#1": AGENT_NAME,
-        "writtenPremiumAmount": _amount_to_words(premium),
+        "agentBailLicNumField": agent_license,
+        "AgentField": agent_name,
+        "writtenPremiumAmountField": _amount_to_words(premium),
         "calculatedPremiumField": f"${premium:,.2f}",
         "CollateralField": data.get("collateral") or "Indemnity Agreement, Promissory Note",
-        "collateralDescriptionField": "",
+        "collateralDescriptionField": data.get("collateral_description") or "",
         "AgencyField": AGENCY_NAME,
-        "whoSignedField": "defendant and family/friends",
-        "Transfer agent": "",
+        "whoSignedField": data.get("who_signed") or "defendant and family/friends",
+        "Transfer agent": data.get("transfer_agent") or "",
     }
-    
-    # Default font sizes per field for premium layout aesthetics
+
     font_sizes = {
         "defendantNameField": 11,
         "DefendantAddress": 8.5,
-        "writtenPremiumAmount": 8.0,
+        "writtenPremiumAmountField": 8.0,
         "whoSignedField": 8.5,
-        "chargesField1": 9.0,
+        "chargestField1": 9.0,
+        "AgentField": 9.0,
     }
 
     return field_values, font_sizes

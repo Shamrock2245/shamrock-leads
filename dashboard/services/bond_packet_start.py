@@ -17,8 +17,10 @@ from typing import Any, Dict, Mapping, Optional
 
 from dashboard.services.docuseal_service import (
     DocuSealPacketValidationError,
+    apply_writing_agent,
     build_bond_data_from_dashboard,
     resolve_template_id_for_surety,
+    resolve_writing_agent,
     validate_docuseal_packet_binding,
     validate_shannon_voice_packet,
 )
@@ -94,19 +96,26 @@ def _hydrate(
     intake_doc: Optional[Mapping[str, Any]],
     body: Optional[Mapping[str, Any]],
     field_overrides: Optional[Mapping[str, Any]],
+    session: Optional[Mapping[str, Any]] = None,
+    tenant_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     if bond_data is not None:
         hydrated = dict(bond_data)
         if surety_id:
             hydrated["surety_id"] = str(surety_id).strip().lower()
-        return hydrated
-    return build_bond_data_from_dashboard(
-        ctx=dict(ctx or {}),
-        intake_doc=dict(intake_doc or {}),
-        field_overrides=dict(field_overrides or {}),
-        body=dict(body or {}),
-        surety_id=surety_id or "osi",
+    else:
+        hydrated = build_bond_data_from_dashboard(
+            ctx=dict(ctx or {}),
+            intake_doc=dict(intake_doc or {}),
+            field_overrides=dict(field_overrides or {}),
+            body=dict(body or {}),
+            surety_id=surety_id or "osi",
+            session=session,
+        )
+    name, license_no = resolve_writing_agent(
+        hydrated, session=session, tenant=tenant_id,
     )
+    return apply_writing_agent(hydrated, name, license_no)
 
 
 async def start_indemnitor_bond_packet(
@@ -127,6 +136,7 @@ async def start_indemnitor_bond_packet(
     skip_bond_binding: bool = False,
     poa_record: Any = _POA_UNSET,
     docuseal: Any = None,
+    session: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Resolve, gate, and submit one indemnitor bond packet.
@@ -150,6 +160,8 @@ async def start_indemnitor_bond_packet(
         intake_doc=intake_doc,
         body=body,
         field_overrides=field_overrides,
+        session=session,
+        tenant_id=tenant,
     )
     parties = indemnitors if indemnitors is not None else hydrated.get("indemnitors")
 

@@ -274,6 +274,8 @@ def test_osi_and_palmetto_published_fill_matches_legacy_path():
 
     palm_data = dict(FIXTURE)
     palm_data["poa_number"] = "PSC15 2644778"
+    palm_data["agent_name"] = "Kayla Lukesic"
+    palm_data["agent_license"] = "G356764"
     palm_direct = fill_palmetto_bond(palm_data)
     palm_published = fill_published_appearance("palmetto", palm_data)
     assert _widgets(palm_direct) == _widgets(palm_published)
@@ -287,9 +289,26 @@ def test_osi_and_palmetto_published_fill_matches_legacy_path():
     assert palm_widgets["numericBondAmount"] == "$5,000.00"
     assert palm_widgets["yearYYYYField"] == "2026"
     assert "9/8/2026" in palm_widgets["CourtDateAndTimeField"]
-    # Historical writer keys that are not widget names stay off the page.
+    assert palm_widgets["chargestField1"].startswith("DRUGS")
+    assert "Five Hundred" in palm_widgets["writtenPremiumAmountField"]
+    assert palm_widgets["AgentField"] == "Kayla Lukesic"
+    assert palm_widgets["agentBailLicNumField"] == "G356764"
+    assert "Brendan" not in palm_widgets["AgentField"]
     assert "chargesField1" not in palm_widgets
-    assert build_palmetto_field_values(palm_data)[0]["chargesField1"].startswith("DRUGS")
+    recipe = build_palmetto_field_values(palm_data)[0]
+    assert recipe["chargestField1"].startswith("DRUGS")
+    assert recipe["AgentField"] == "Kayla Lukesic"
+    assert "writtenPremiumAmountField" in recipe
+    seed_names = {
+        field["name"]
+        for form in store.seed_version("palmetto")["forms"]
+        for field in form.get("fields") or []
+    }
+    assert "chargestField1" in seed_names
+    assert "writtenPremiumAmountField" in seed_names
+    assert "AgentField" in seed_names
+    assert "chargesField1" not in seed_names
+    assert "AgentField#0" not in seed_names
 
 
 def test_docuseal_env_wins_over_published_template_id():

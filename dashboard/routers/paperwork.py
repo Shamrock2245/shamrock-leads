@@ -57,6 +57,25 @@ DEFAULT_DOC_RULES_CATEGORIES = {
 }
 
 
+def _session_agent(request: Request) -> dict:
+    """Signed-in agent from the PIN cookie. Empty name and license for PIN admin."""
+    from dashboard.auth.agent_scope import agent_identity
+
+    ident = agent_identity(request)
+    return ident if isinstance(ident, dict) else {}
+
+
+def _copy_session_agent(target: dict, ident: dict) -> None:
+    if not isinstance(target, dict) or not isinstance(ident, dict):
+        return
+    name = str(ident.get("agent_name") or "").strip()
+    license_no = str(ident.get("license_number") or "").strip()
+    if name:
+        target["agent_name"] = name
+    if license_no:
+        target["license_number"] = license_no
+
+
 def rewrite_shannon_packet_id(packet_id: str) -> str:
     """Never use a Twilio CallSid as a Super CRM packet id."""
     pid = str(packet_id or "").strip()
@@ -253,6 +272,14 @@ async def paperwork_preview(bond_case_id: str):
                 ),
                 "court_date": case_doc.get("court_date") or "",
                 "address": case_doc.get("defendant_address") or case_doc.get("address") or "",
+                "writing_agent_name": case_doc.get("writing_agent_name") or "",
+                "agent_name": case_doc.get("agent_name") or "",
+                "bondsman_name": case_doc.get("bondsman_name") or "",
+                "writing_agent": case_doc.get("writing_agent") or "",
+                "writing_agent_license": case_doc.get("writing_agent_license") or "",
+                "agent_license": case_doc.get("agent_license") or "",
+                "bondsman_license": case_doc.get("bondsman_license") or "",
+                "license_number": case_doc.get("license_number") or "",
             }
 
         from dashboard.services.surety_entitlements import entitlement_denial
@@ -354,6 +381,14 @@ def _build_bond_data(intake: dict) -> dict:
         "intake_id": intake.get("intake_id", ""),
         "source": intake.get("source", ""),
         "created_at": datetime.now(timezone.utc).strftime("%m/%d/%Y"),
+        "writing_agent_name": intake.get("writing_agent_name") or "",
+        "agent_name": intake.get("agent_name") or "",
+        "bondsman_name": intake.get("bondsman_name") or "",
+        "writing_agent": intake.get("writing_agent") or "",
+        "writing_agent_license": intake.get("writing_agent_license") or "",
+        "agent_license": intake.get("agent_license") or "",
+        "bondsman_license": intake.get("bondsman_license") or "",
+        "license_number": intake.get("license_number") or "",
     }
 
 
@@ -1151,11 +1186,8 @@ async def packet_builder_finalize(request: Request):
             packet_id=body.get("packet_id"),
         )
         
-        user = getattr(request.state, "user", {})
-        if user.get("agent_name"):
-            ctx["agent_name"] = user.get("agent_name")
-        if user.get("license_number"):
-            ctx["license_number"] = user.get("license_number")
+        user = _session_agent(request)
+        _copy_session_agent(ctx, user)
 
         # Office finalize binds the packet. Shannon's create/email route is the
         # only skip_bond_binding + pending_staff_match path; this handler does
@@ -1263,10 +1295,7 @@ async def packet_builder_finalize(request: Request):
             ctx["indemnitor_id"] = ctx.get("indemnitor_id") or chain_res.get("indemnitor_id")
             if str(ctx.get("match_status") or "").lower() != "validated":
                 ctx["match_status"] = "validated"
-            if user.get("agent_name"):
-                ctx["agent_name"] = user.get("agent_name")
-            if user.get("license_number"):
-                ctx["license_number"] = user.get("license_number")
+            _copy_session_agent(ctx, user)
 
         from dashboard.routers.helpers import reject_unless_write_book
         blocked = await reject_unless_write_book(
@@ -1482,6 +1511,7 @@ async def packet_builder_finalize(request: Request):
                 field_overrides={},
                 body={},
                 surety_id=surety_id,
+                session=user,
             )
             try:
                 validate_docuseal_packet_binding(
@@ -1619,6 +1649,7 @@ async def packet_builder_finalize(request: Request):
                     send_email=bool(body.get("send_email", False)),
                     include_defendant=bool(body.get("include_defendant", True)),
                     poa_record=poa_doc,
+                    session=user,
                 )
             except BondPacketStartError as exc:
                 if exc.code == "docuseal_not_configured":
@@ -2179,10 +2210,13 @@ async def hydrate_from_booking(request: Request):
             return JSONResponse(denied, status_code=403)
     ctx["surety_id"] = surety_id
 
+    user = _session_agent(request)
+    _copy_session_agent(ctx, user)
     bond_data = build_bond_data_from_dashboard(
         ctx=ctx,
         body={"charge_details": ctx.get("charge_details") or []},
         surety_id=surety_id,
+        session=user,
     )
     values = DocuSealService.prefill_values_from_bond(bond_data)
     fields = build_adaptive_field_map(ctx)
@@ -2360,11 +2394,14 @@ async def docuseal_prefill_preview(request: Request):
                 else:
                     ctx[k] = v
 
+    user = _session_agent(request)
+    _copy_session_agent(ctx, user)
     bond_data = build_bond_data_from_dashboard(
         ctx=ctx,
         field_overrides=overrides if isinstance(overrides, dict) else {},
         body=body,
         surety_id=surety_id,
+        session=user,
     )
     values = DocuSealService.prefill_values_from_bond(bond_data)
     template_id = resolve_template_id_for_surety(surety_id)
@@ -3122,11 +3159,7 @@ async def paperwork_push_docuseal(packet_id: str, request: Request):
     # Hydration source: explicit bond_data > packet > intake, then the same
     # dashboard merger used by finalize / prefill-preview.
     bond_data = dict(body.get("bond_data") or {})
-    user = getattr(request.state, "user", {})
-    if user.get("agent_name"):
-        bond_data["agent_name"] = user.get("agent_name")
-    if user.get("license_number"):
-        bond_data["license_number"] = user.get("license_number")
+    user = _session_agent(request)
     for k in (
         "defendant_name",
         "indemnitor_name",
@@ -3195,6 +3228,7 @@ async def paperwork_push_docuseal(packet_id: str, request: Request):
         intake_doc=intake or {},
         body=bond_data,
         surety_id=surety_for_template,
+        session=user,
     )
 
     svc = get_docuseal_service()
