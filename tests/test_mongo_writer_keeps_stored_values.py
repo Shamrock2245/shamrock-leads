@@ -2,8 +2,10 @@
 
 The upsert ``$set``s the whole doc, so an empty ``charges`` or bond from one run
 (a source ``charges: []``, a missed detail) used to overwrite the stored values.
-Now an empty value never replaces a non-empty stored one, while any published
-value (including a real "0") still does. A stored zero bond is not protected,
+Now charges and bond are kept as one pair: if either scraped side is empty while
+the stored side has a value, the stored pair stays, so a doc never mixes old
+charges with a new blank bond or the reverse. Otherwise every published value,
+including a real "0", replaces the stored one. A stored zero bond is not protected,
 because the 2026-10 sweep showed most historic scraped "0" values were invented.
 Synthetic data only.
 """
@@ -68,11 +70,17 @@ def test_published_zero_replaces_stored_value():
     assert (doc["bond_amount_raw"], doc["bond_amount"]) == ("0", 0.0)
 
 
-def test_unknown_replaces_a_stored_zero_but_new_rows_keep_their_empty_values():
+def test_unknown_bond_replaces_a_stored_zero_when_charges_are_published():
     arrests = FakeArrests([_stored("B1", "Orange", bond_raw="0", bond=0.0)])
-    _writer(arrests).write_records([_rec("B1", charges="", bond=""), _rec("B2", charges="", bond="")], "Orange")
-    assert arrests.one("B1")["bond_amount_raw"] == ""  # stored zero is not protected (see module docstring)
-    assert arrests.one("B1")["charges"] == "BATTERY"
+    _writer(arrests).write_records([_rec("B1", charges="DUI", bond="")], "Orange")
+    doc = arrests.one("B1")
+    # A stored zero is not protected (see module docstring): unknown replaces it.
+    assert (doc["charges"], doc["bond_amount_raw"]) == ("DUI", "")
+
+
+def test_new_rows_keep_their_empty_values():
+    arrests = FakeArrests([])
+    _writer(arrests).write_records([_rec("B2", charges="", bond="")], "Orange")
     assert (arrests.one("B2")["charges"], arrests.one("B2")["bond_amount_raw"]) == ("", "")
 
 
@@ -85,3 +93,47 @@ def test_failed_stored_read_raises_instead_of_writing_blind():
     with pytest.raises(RuntimeError, match="mongo read failed"):
         _writer(arrests).write_records([_rec("B1", charges="", bond="")], "Orange")
     assert arrests.sets == []  # nothing was written
+
+
+def test_empty_charges_keep_the_stored_bond_too_even_with_a_new_bond():
+    arrests = FakeArrests([_stored("B1", "Orange")])
+    _writer(arrests).write_records([_rec("B1", charges="", bond="2500")], "Orange")
+    doc = arrests.one("B1")
+    assert (doc["charges"], doc["bond_amount_raw"], doc["bond_amount"]) == ("BATTERY", "1500", 1500.0)
+
+
+def test_empty_bond_keeps_the_stored_charges_too_even_with_new_charges():
+    arrests = FakeArrests([_stored("B1", "Orange")])
+    _writer(arrests).write_records([_rec("B1", charges="DUI", bond="")], "Orange")
+    doc = arrests.one("B1")
+    assert (doc["charges"], doc["bond_amount_raw"]) == ("BATTERY", "1500")
+
+
+def test_charge_details_and_bond_type_travel_with_the_kept_pair():
+    stored = _stored("B1", "Orange")
+    stored.update(charge_details=[{"charge": "BATTERY", "bond_amount": 1500.0}], bond_type="SURETY")
+    arrests = FakeArrests([stored])
+    rec = _rec("B1", charges="", bond="")
+    rec.extra_data = {"charge_details": [{"charge": "", "bond_amount": None}]}
+    _writer(arrests).write_records([rec], "Orange")
+    doc = arrests.one("B1")
+    assert doc["charge_details"] == [{"charge": "BATTERY", "bond_amount": 1500.0}]
+    assert doc["bond_type"] == "SURETY"
+
+
+def test_published_zero_with_charges_replaces_the_stored_pair():
+    arrests = FakeArrests([_stored("B1", "Orange")])
+    _writer(arrests).write_records([_rec("B1", charges="TRESPASS", bond="0")], "Orange")
+    doc = arrests.one("B1")
+    assert (doc["charges"], doc["bond_amount_raw"], doc["bond_amount"]) == ("TRESPASS", "0", 0.0)
+
+
+def test_skip_log_names_fields_and_booking_key_only(caplog):
+    arrests = FakeArrests([_stored("B1", "Orange")])
+    rec = _rec("B1", charges="", bond="")
+    rec.Full_Name = "ZZTESTNAME, PERSON"
+    with caplog.at_level("INFO", logger="writers.mongo_writer"):
+        _writer(arrests).write_records([rec], "Orange")
+    kept = [r.getMessage() for r in caplog.records if "kept stored charges/bond pair" in r.getMessage()]
+    assert kept and "FL/Orange/B1" in kept[0] and "charges" in kept[0] and "bond_amount_raw" in kept[0]
+    assert not any("ZZTESTNAME" in r.getMessage() for r in caplog.records)

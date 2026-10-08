@@ -28,6 +28,9 @@ STORED_SOURCE_PROJECTION = {
     "_id": 0, "state": 1, "county": 1, "booking_number": 1,
     "charges": 1, "bond_amount": 1, "bond_amount_raw": 1,
 }
+# Fields written together as one charges/bond pair.
+CHARGE_FIELDS = ("charges", "charge_details")
+BOND_FIELDS = ("bond_amount", "bond_amount_raw", "bond_type")
 
 
 def _blank(value) -> bool:
@@ -48,21 +51,25 @@ def _stored_bond_is_positive(existing: dict) -> bool:
 
 
 def keep_stored_source_values(collection, pending) -> int:
-    """Drop empty ``charges`` / bond fields from ``$set`` when the stored doc has them.
+    """Keep the stored charges/bond pair when this scrape has an empty side.
 
     ``pending`` is ``[(idx, record, (state, county, booking), doc)]``; each
-    ``doc`` is edited in place. Rules:
+    ``doc`` is edited in place. Charges and bond are one pair:
 
-    - ``charges``: an empty scraped value never replaces non-empty stored charges.
-    - Bond (``bond_amount`` + ``bond_amount_raw``): an empty scraped raw value
-      never replaces a stored **positive** amount. A stored zero is not
-      protected: the 2026-10 sweep showed most historic scraped "0" values were
-      invented for unpublished bonds, so unknown ("") may replace them.
-    - Any non-empty scraped value (including a published "0") replaces the
-      stored one.
+    - If the scraped ``charges`` are empty and the stored charges are not, or
+      the scraped bond is empty and the stored bond is positive, the whole pair
+      (charges, charge_details, bond_amount, bond_amount_raw, bond_type) is
+      dropped from ``$set``. The doc then never mixes old charges with a new
+      blank bond, or the reverse.
+    - Otherwise every scraped value is written. A published value, including a
+      real "0", replaces the stored one.
+    - A stored zero bond is not protected: the 2026-10 sweep showed most
+      historic scraped "0" values were invented for unpublished bonds, so
+      unknown ("") may replace them.
 
-    One read per (state, county) for just the bookings with an empty field. A
-    failed read raises: writing blind could blank stored values.
+    One read per (state, county) for just the bookings with an empty side. A
+    failed read raises: writing blind could blank stored values. Logs carry
+    only field names and the booking key, never person data.
     """
     need = [(key, doc) for _, _, key, doc in pending
             if ("charges" in doc and _blank(doc.get("charges")))
@@ -82,16 +89,22 @@ def keep_stored_source_values(collection, pending) -> int:
         existing = stored.get(key)
         if not existing:
             continue  # new booking: the empty value is the truth we have
-        touched = False
+        empty_sides = []
         if "charges" in doc and _blank(doc.get("charges")) and not _blank(existing.get("charges")):
-            doc.pop("charges", None)
-            touched = True
+            empty_sides.append("charges")
         if ("bond_amount_raw" in doc and _blank(doc.get("bond_amount_raw"))
                 and _stored_bond_is_positive(existing)):
-            doc.pop("bond_amount_raw", None)
-            doc.pop("bond_amount", None)
-            touched = True
-        kept += int(touched)
+            empty_sides.append("bond")
+        if not empty_sides:
+            continue
+        dropped = [f for f in CHARGE_FIELDS + BOND_FIELDS if f in doc]
+        for f in dropped:
+            doc.pop(f, None)
+        kept += 1
+        logger.info(
+            "kept stored charges/bond pair for %s/%s/%s (empty scraped %s; skipped fields %s)",
+            key[0], key[1], key[2], "+".join(empty_sides), ",".join(dropped),
+        )
     return kept
 
 
