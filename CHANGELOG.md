@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (Indian River FL booking search)
+
+### Fixed
+- **Indian River (FL):** rows were keyed on the `/booking-details/<id>` **portal id**, not the booking number, had no booking date, and wrote bond `0` when none was shown. The scraper now uses the IRCSO site's own booking-date search (form POST with its `_token`, then `?page=N`) for the last 7 days. It reads each booking's detail `Booking Info`: the source `Booking Number` (`YYYY-NNNNNNNN`), a Booking Date that must equal the searched date, Arrest Date, Agency, Case Number, Bond (`$amount`; `No Bond` gives `Bond_Type=NO BOND` with the amount left empty; absent means unknown), Charges cards, and Release Date (→ Released). It uses plain `requests` with TLS verification on; curl_cffi, `verify=False` and the DrissionPage fallback are retired. `_fetch_single_booking` (custody recheck) now returns a record only when the page still shows the same source Booking Number. Legacy portal-id rows are reported as not found, and nothing is deleted. Box read smoke: 59 rows / 59 unique over 7 days, 0 dropped. Health stays `unverified` until a Leads Ops write smoke (`docs/recon/FL_INDIAN_RIVER_BOOKING_SEARCH_2026-10-08.md`).
+
 ## [Unreleased] — 2026-10-08 (name without license falls back)
 
 ### Fixed

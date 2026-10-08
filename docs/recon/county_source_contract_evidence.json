@@ -835,10 +835,10 @@
     {
       "state": "FL",
       "county_fips": "061",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "productive",
+      "official_source_url": "https://www.ircsheriff.org/inmate-search",
+      "access_posture": "Ordinary public HTTPS IRCSO inmate search; the page form (POST /booking-search/search with its _token and booking_date) lists bookings for a date, 10 per page; /booking-details/<portal id> carries the Booking Info table; no login/CAPTCHA/WAF; TLS verifies",
+      "evidence_note": "2026-10-08 Indian River recon (docs/recon/FL_INDIAN_RIVER_BOOKING_SEARCH_2026-10-08.md): detail Booking Number YYYY-NNNNNNNN (the old module keyed rows on the /booking-details portal id and wrote bond 0), Booking Date matches the searched date (15/15 on 10/06), Bond as $amount / No Bond / absent, Charges cards, Release Date once released. Box read smoke 2026-10-08 ~08:06 EDT, 7 booking dates: 59 rows / 59 unique source Booking Numbers, booking date+time 59/59, charges 59/59, bond amount 15, No Bond 15, unknown 29, released 23; 0 dropped; ~51 s. Health stays unverified until a Leads Ops write smoke."
     },
     {
       "state": "FL",
