@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (Intake upsert keeps lifecycle fields)
+
+### Fixed
+- Repeat `POST /api/intake/submit` still updates identity fields. `status`, `created_at`, match fields, `paperwork_packet_id`, `paperwork_status`, `surety_id`, and `surety_unrecognized` are written with `$setOnInsert`, so a second save cannot revert a promoted or linked intake. Indemnitor and defendant sections are dotted paths (`indemnitor.email`, `defendant.charges`). Only a non-empty value is `$set`, so a thinner later submit cannot erase an email, address, date of birth, license, employer, reference, charge, or bond stored earlier. A new non-empty value still updates, and the first insert still stores the full document, including blanks. The same split is used by the Wix webhook normalizer.
+
 ## [Unreleased] — 2026-10-08 (OSI local stitch positions)
 
 ### Fixed
