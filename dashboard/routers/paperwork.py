@@ -1175,26 +1175,48 @@ async def packet_builder_finalize(request: Request):
             SMALL_BOND_MAX,
         )
         from dashboard.services.adobe_pdf_service import get_adobe_pdf_client
-
-        ctx = await resolve_case_context(
-            intake_id=body.get("intake_id"),
-            match_id=body.get("match_id"),
-            defendant_id=body.get("defendant_id"),
-            booking_number=body.get("booking_number"),
-            county=body.get("county"),
-            bond_case_id=body.get("bond_case_id"),
-            packet_id=body.get("packet_id"),
+        from dashboard.services.staff_test_case import (
+            StaffTestCaseError,
+            apply_staff_test_contacts,
+            audit_test_marker,
+            prepare_staff_test_case,
+            request_asks_for_test_case,
         )
-        
+
+        staff_test = None
+        if request_asks_for_test_case(body):
+            try:
+                staff_test = await prepare_staff_test_case(request, body)
+            except StaffTestCaseError as exc:
+                return JSONResponse(
+                    {"success": False, "error": exc.code, "message": str(exc)},
+                    status_code=exc.status_code,
+                )
+
         user = _session_agent(request)
-        _copy_session_agent(ctx, user)
+        if staff_test is not None:
+            # Synthetic TEST- case. Do not read or write a real arrest, match,
+            # bond, or inventory power.
+            ctx = staff_test.context
+            _copy_session_agent(ctx, user)
+        else:
+            ctx = await resolve_case_context(
+                intake_id=body.get("intake_id"),
+                match_id=body.get("match_id"),
+                defendant_id=body.get("defendant_id"),
+                booking_number=body.get("booking_number"),
+                county=body.get("county"),
+                bond_case_id=body.get("bond_case_id"),
+                packet_id=body.get("packet_id"),
+            )
+            _copy_session_agent(ctx, user)
 
         # Office finalize binds the packet. Shannon's create/email route is the
         # only skip_bond_binding + pending_staff_match path; this handler does
         # not honor a skip flag. If the chain is not already validated, ensure
         # must succeed or finalize stops before DocuSeal and before insert.
         booking_for_chain = str(ctx.get("booking_number") or body.get("booking_number") or "").strip()
-        chain_needs_ensure = bool(
+        chain_needs_ensure = staff_test is None and bool(
             booking_for_chain
             and (
                 str(ctx.get("match_status") or "").lower() != "validated"
@@ -1298,10 +1320,18 @@ async def packet_builder_finalize(request: Request):
             _copy_session_agent(ctx, user)
 
         from dashboard.routers.helpers import reject_unless_write_book
+        write_body = body
+        if staff_test is not None:
+            # A test smoke must not write a write-book override audit.
+            write_body = {
+                key: value
+                for key, value in body.items()
+                if key not in ("write_book_override", "write_book_override_reason")
+            }
         blocked = await reject_unless_write_book(
             county=ctx.get("county") or body.get("county") or "",
             state=ctx.get("state") or body.get("state"),
-            body=body,
+            body=write_body,
             action="paperwork_finalize",
             entity_id=str(
                 ctx.get("bond_case_id")
@@ -1335,8 +1365,9 @@ async def packet_builder_finalize(request: Request):
         from dashboard.services.packet_builder_service import _normalize_esign_provider
         provider = _normalize_esign_provider(provider)
 
-        # Persist preference when staff explicitly chose a provider in the UI
-        if body.get("provider") and body.get("save_esign_preference", True):
+        # Persist preference when staff explicitly chose a provider in the UI.
+        # Test cases do not write that preference onto a client record.
+        if staff_test is None and body.get("provider") and body.get("save_esign_preference", True):
             try:
                 await save_client_esign_provider(
                     provider=provider,
@@ -1421,7 +1452,9 @@ async def packet_builder_finalize(request: Request):
         manifest = assemble_manifest(
             categories,
             surety_id=finalize_surety,
-            include_payment_plan=bool(body.get("include_payment_plan", True)),
+            include_payment_plan=(
+                False if staff_test is not None else bool(body.get("include_payment_plan", True))
+            ),
             extra_catalog_keys=extra_keys,
             self_indemnitor=bool(ctx.get("self_indemnitor")),
         )
@@ -1429,7 +1462,10 @@ async def packet_builder_finalize(request: Request):
         extras = decode_extra_uploads(body.get("extra_uploads") or [])
 
         now = datetime.now(timezone.utc)
-        packet_id = body.get("packet_id") or f"PKT-{uuid.uuid4().hex[:10].upper()}"
+        if staff_test is not None:
+            packet_id = staff_test.packet_id
+        else:
+            packet_id = body.get("packet_id") or f"PKT-{uuid.uuid4().hex[:10].upper()}"
         surety_id = finalize_surety
 
         # Build normalized bond/intake data for DocuSeal template prefill
@@ -1513,6 +1549,8 @@ async def packet_builder_finalize(request: Request):
                 surety_id=surety_id,
                 session=user,
             )
+            if staff_test is not None:
+                apply_staff_test_contacts(bond_data, staff_test.signer_email)
             try:
                 validate_docuseal_packet_binding(
                     packet_id=packet_id,
@@ -1532,14 +1570,17 @@ async def packet_builder_finalize(request: Request):
 
             from dashboard.services.bond_packet_start import poa_assignment_block
 
-            poa_doc = await get_collection("poa_inventory").find_one(
-                {
-                    "poa_number": bond_data["poa_number"],
-                    "surety_id": bond_data["surety_id"],
-                    "status": {"$in": ["assigned", "used"]},
-                },
-                {"_id": 0, "max_bond_value": 1},
-            )
+            if staff_test is not None:
+                poa_doc = staff_test.poa_record
+            else:
+                poa_doc = await get_collection("poa_inventory").find_one(
+                    {
+                        "poa_number": bond_data["poa_number"],
+                        "surety_id": bond_data["surety_id"],
+                        "status": {"$in": ["assigned", "used"]},
+                    },
+                    {"_id": 0, "max_bond_value": 1},
+                )
             poa_block = poa_assignment_block(poa_doc, bond_data)
             if poa_block:
                 return JSONResponse(
@@ -1646,10 +1687,13 @@ async def packet_builder_finalize(request: Request):
                     surety_id=surety_id,
                     bond_data=bond_data,
                     indemnitors=bond_data.get("indemnitors"),
-                    send_email=bool(body.get("send_email", False)),
+                    send_email=(
+                        False if staff_test is not None else bool(body.get("send_email", False))
+                    ),
                     include_defendant=bool(body.get("include_defendant", True)),
                     poa_record=poa_doc,
                     session=user,
+                    staff_test_case=staff_test is not None,
                 )
             except BondPacketStartError as exc:
                 if exc.code == "docuseal_not_configured":
@@ -1789,6 +1833,11 @@ async def packet_builder_finalize(request: Request):
             "packet_version": 1,
             "voided": False,
         }
+        if staff_test is not None:
+            apply_staff_test_contacts(packet_doc, staff_test.signer_email)
+            packet_doc["is_test"] = True
+            packet_doc["test_case"] = True
+            packet_doc["real_power_consumed"] = False
 
         packets_col = get_collection("paperwork_packets")
         existing = await packets_col.find_one({"packet_id": packet_id})
@@ -1810,35 +1859,48 @@ async def packet_builder_finalize(request: Request):
         # automated only after the immutable packet exists.  The service is
         # disabled by default and refuses anything other than DocuSeal-bound,
         # pending signers with an approved recipient-specific template.
+        # Staff test cases never call it.
         auto_delivery: dict = {}
-        try:
-            from dashboard.services.automation_config import get_automation_config
-            from dashboard.services.docuseal_initial_delivery import (
-                AUTOMATION_KEY as DOCUSEAL_INITIAL_DELIVERY_KEY,
-                deliver_initial_docuseal_links,
-            )
-
-            auto_delivery_config = await get_automation_config(get_db())
-            auto_delivery = await deliver_initial_docuseal_links(
-                packet=packet_doc,
-                config=auto_delivery_config.get(DOCUSEAL_INITIAL_DELIVERY_KEY) or {},
-            )
-            await packets_col.update_one(
-                {"packet_id": packet_id},
-                {"$set": {"auto_delivery": auto_delivery, "updated_at": datetime.now(timezone.utc)}},
-            )
-        except Exception:
-            logger.exception("DocuSeal initial delivery evaluation failed for packet %s", packet_id)
+        if staff_test is not None:
             auto_delivery = {
                 "automation": "docuseal_initial_delivery",
-                "state": "blocked",
-                "reason": "delivery_evaluation_failed",
+                "state": "skipped",
+                "reason": "staff_test_case",
                 "recipients": [],
             }
             await packets_col.update_one(
                 {"packet_id": packet_id},
                 {"$set": {"auto_delivery": auto_delivery, "updated_at": datetime.now(timezone.utc)}},
             )
+        else:
+            try:
+                from dashboard.services.automation_config import get_automation_config
+                from dashboard.services.docuseal_initial_delivery import (
+                    AUTOMATION_KEY as DOCUSEAL_INITIAL_DELIVERY_KEY,
+                    deliver_initial_docuseal_links,
+                )
+
+                auto_delivery_config = await get_automation_config(get_db())
+                auto_delivery = await deliver_initial_docuseal_links(
+                    packet=packet_doc,
+                    config=auto_delivery_config.get(DOCUSEAL_INITIAL_DELIVERY_KEY) or {},
+                )
+                await packets_col.update_one(
+                    {"packet_id": packet_id},
+                    {"$set": {"auto_delivery": auto_delivery, "updated_at": datetime.now(timezone.utc)}},
+                )
+            except Exception:
+                logger.exception("DocuSeal initial delivery evaluation failed for packet %s", packet_id)
+                auto_delivery = {
+                    "automation": "docuseal_initial_delivery",
+                    "state": "blocked",
+                    "reason": "delivery_evaluation_failed",
+                    "recipients": [],
+                }
+                await packets_col.update_one(
+                    {"packet_id": packet_id},
+                    {"$set": {"auto_delivery": auto_delivery, "updated_at": datetime.now(timezone.utc)}},
+                )
 
         # Auto-send SwipeSimple payment link with premium in message copy.
         # Behind the SAME owner switch as DocuSeal completion
@@ -1847,33 +1909,55 @@ async def packet_builder_finalize(request: Request):
         # staff-confirmed premium (premium_confirmed_*) → else premium_unconfirmed.
         # Soft-fail: never blocks packet creation.
         payment_link_dispatch: dict = {}
-        try:
-            payment_link_dispatch = await _finalize_auto_payment_link(packet_id, packet_doc)
-            if payment_link_dispatch:
-                await packets_col.update_one(
-                    {"packet_id": packet_id},
-                    {
-                        "$set": {
-                            "payment_link_auto_dispatch": {
-                                "skipped": payment_link_dispatch.get("skipped"),
-                                "reason": payment_link_dispatch.get("reason"),
-                                "delivered": payment_link_dispatch.get("delivered"),
-                                "amount": payment_link_dispatch.get("amount"),
-                                "source": "packet_finalize",
-                            },
-                            "updated_at": datetime.now(timezone.utc),
-                        }
-                    },
-                )
-        except Exception:
-            logger.exception(
-                "Auto payment-link dispatch failed for packet %s (non-fatal)", packet_id
+        if staff_test is not None:
+            payment_link_dispatch = {
+                "skipped": True,
+                "reason": "staff_test_case",
+                "source": "packet_finalize",
+            }
+            await packets_col.update_one(
+                {"packet_id": packet_id},
+                {
+                    "$set": {
+                        "payment_link_auto_dispatch": {
+                            "skipped": True,
+                            "reason": "staff_test_case",
+                            "delivered": False,
+                            "amount": 0,
+                            "source": "packet_finalize",
+                        },
+                        "updated_at": datetime.now(timezone.utc),
+                    }
+                },
             )
-            payment_link_dispatch = {"success": False, "error": "dispatch_exception"}
+        else:
+            try:
+                payment_link_dispatch = await _finalize_auto_payment_link(packet_id, packet_doc)
+                if payment_link_dispatch:
+                    await packets_col.update_one(
+                        {"packet_id": packet_id},
+                        {
+                            "$set": {
+                                "payment_link_auto_dispatch": {
+                                    "skipped": payment_link_dispatch.get("skipped"),
+                                    "reason": payment_link_dispatch.get("reason"),
+                                    "delivered": payment_link_dispatch.get("delivered"),
+                                    "amount": payment_link_dispatch.get("amount"),
+                                    "source": "packet_finalize",
+                                },
+                                "updated_at": datetime.now(timezone.utc),
+                            }
+                        },
+                    )
+            except Exception:
+                logger.exception(
+                    "Auto payment-link dispatch failed for packet %s (non-fatal)", packet_id
+                )
+                payment_link_dispatch = {"success": False, "error": "dispatch_exception"}
 
         # Soft audit event
         try:
-            await get_collection("audit_events").insert_one({
+            audit_doc = {
                 "Event_ID": str(uuid.uuid4()),
                 "event_type": "packet_finalized",
                 "packet_id": packet_id,
@@ -1884,11 +1968,20 @@ async def packet_builder_finalize(request: Request):
                 "auto_delivery_sent_count": auto_delivery.get("sent_count", 0),
                 "actor": "packet_builder",
                 "timestamp": now,
-            })
+            }
+            if staff_test is not None:
+                audit_doc.update(
+                    audit_test_marker(
+                        packet_id,
+                        booking_number=str(ctx.get("booking_number") or ""),
+                    )
+                )
+                audit_doc["actor"] = staff_test.actor or "packet_builder"
+            await get_collection("audit_events").insert_one(audit_doc)
         except Exception:
             pass
 
-        return {
+        response = {
             "success": True,
             "packet_id": packet_id,
             "status": status,
@@ -1913,6 +2006,12 @@ async def packet_builder_finalize(request: Request):
                 "sources": ctx.get("sources"),
             },
         }
+        if staff_test is not None:
+            response["is_test"] = True
+            response["test_case"] = True
+            response["signer_email"] = staff_test.signer_email
+            response["real_power_consumed"] = False
+        return response
     except Exception as exc:
         logger.exception("packet_builder_finalize error")
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
