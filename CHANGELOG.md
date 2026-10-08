@@ -7,6 +7,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 - **Pinellas (FL):** an unread charge-report modal, a modal with no `Bond Assessed`, or any blank or non-numeric charge bond (`NO BOND`, `HOLD`) was written as a $0 bond. Now the booking total is `""` (unknown) unless every charge publishes an amount. Real published `$0.00` values are kept: 33 of 82 cells in the 2026-10-06/07 live check were `$0.00`, so they stay `"0"`, and old Pinellas `"0"` rows still hydrate as a known $0. Live re-check (2026-10-07, 25 bookings): 13 positive, 10 published $0, 2 unknown. A booking whose charge-report modal did not render is now skipped for the run instead of being written roster-only, which would `$set` a blank bond and abbreviated charges over stored values. The run raises if every modal fails or every date search fails. Details in `docs/recon/FL_PINELLAS_BOND_2026-10-08.md`.
+## [Unreleased] — 2026-10-08 (staff test-case Write Bond smoke)
+
+### Added
+- **Staff test-case mode for Write Bond finalize** (`POST /api/paperwork/packet/finalize`). Off unless `STAFF_TEST_CASE_MODE=1` and the request sets `test_case` true, and only for a PIN admin/staff session, a dashboard PIN header, or a machine token. A test booking and case must be prefixed `TEST-`, and the packet id `PKT-TEST-`. Those rows are stored with `is_test`. A real booking or a real arrest cannot be flagged as a test. Without the flag, finalize is unchanged.
+- **No customer contact and no inventory draw.** Every DocuSeal submitter email is `admin@shamrockbailbonds.biz`. Phones are removed. `send_email` and `send_sms` are false. Initial DocuSeal link delivery, SwipeSimple, and other customer notifications are skipped. The power is a fake `TEST-` number. Inventory is not read, reserved, or consumed.
+- **Test audit tags.** Finalize audit rows and DocuSeal webhook audit rows for a `PKT-TEST-` or `is_test` packet include `is_test`, `test_case`, and the `PKT-TEST-` packet id. Completion side effects (Drive, payment link, share invoice, court sync, Slack) are skipped for those packets. Bordereau, the daily ledger, and dashboard counts do not read these packet or audit rows today; filtering every reader is a follow-up. See `docs/runbooks/STAFF_TEST_CASE_WRITE_BOND.md`.
+
+## [Unreleased] — 2026-10-08 (Miami-Dade unknown bond, fail loud)
+
+### Fixed
+- **Miami-Dade (FL):** the ArcGIS jail-bookings layer has no bond field, but the scraper wrote `Bond_Amount="0"` on every row, so Write Bond showed $0. It also wrote `UNKNOWN CHARGE` when no charge was listed. Now the bond is `""` (unknown, `bond_published: False`) and the charge is empty. `NO_BOND_ROSTER_COUNTIES` includes Miami-Dade, so legacy docs with a scraped `"0"` hydrate as unknown, and a staff amount still wins. The fetch uses plain `requests` (curl_cffi impersonation retired). It pages to the server's `returnCountOnly` total and raises `MiamiDadeContractError` on an HTTP or ArcGIS error, field drift, a repeated ObjectId or a short walk. Before, it logged and returned a truncated batch. Box read smoke on 2026-10-08: 360/360 rows (Oct 5–7), 353 with charges, 0 bonds, 3.7 s. The matrix stays `recon_only` and Health stays `unverified`: the `GlobalID` key is not a source booking number, and it is unproven whether it survives the layer's daily overwrite (`docs/recon/FL_MIAMI_DADE_ARCGIS_2026-10-08.md`).
 
 ## [Unreleased] — 2026-10-08 (SwipeSimple locked amount from the BondCase)
 

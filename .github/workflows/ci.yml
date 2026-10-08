@@ -84,6 +84,8 @@ jobs:
             tests/test_fl_idle_eight.py \
             tests/test_fl_bond_charges_hydrate.py \
             tests/test_fl_pinellas_bond_unknown.py \
+            tests/test_miami_dade_scraper.py \
+            tests/test_fl_miami_dade_arcgis_contract.py \
             tests/test_fl_sarasota_manatee_audit.py \
             tests/test_fl_charlotte_revize.py \
             tests/test_sarasota_safety.py \
@@ -151,6 +153,7 @@ jobs:
             tests/test_palmetto_docuseal_apply.py \
             tests/test_paperwork_template_paths.py \
             tests/test_bond_packet_start.py \
+            tests/test_staff_test_case_write_bond.py \
             tests/test_surety_review_fixes.py \
             tests/test_wix_intake_webhook.py \
             tests/test_intake_fanout.py \
