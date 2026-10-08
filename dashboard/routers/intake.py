@@ -1198,3 +1198,257 @@ async def intake_promote(request: Request, intake_id: str):
         "emergency_contact_phone": def_.get("emergencyPhone") or "",
         "emergency_contact_relation": def_.get("emergencyRelation") or "",
         # Matching metadata
+        "match_confidence": match_confidence,
+        "match_strategy": intake_doc.get("match_strategy"),
+        # Payment tracking
+        "payment_status": "pending",
+        "payment_received": False,
+        "total_paid": 0.0,
+        # Paperwork tracking
+        "paperwork_packet_id": intake_doc.get("paperwork_packet_id"),
+        "paperwork_status": intake_doc.get("paperwork_status"),
+        # Check-in
+        "check_in_required": False,
+        "notes": notes,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    await active_bonds.insert_one(bond_doc)
+    logger.info(
+        "[intake] PROMOTED %s → active bond: %s (%s, %s, $%.2f, POA %s)",
+        intake_id, matched_booking, defendant_name, surety.upper(), bond_amount, poa_number,
+    )
+
+    # ── 7a. Auto payment link + court calendar seed (soft-fail) ───────────────
+    # Behind the SAME owner switch as DocuSeal completion
+    # (DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK, DEFAULT OFF — any enabled value
+    # enables this path). Even when on, the service sends ONLY with a
+    # staff-confirmed premium (premium_confirmed_*); the 10% "premium" written
+    # into bond_doc above is an estimate and never counts → premium_unconfirmed.
+    try:
+        pay_result = await _promote_auto_payment_link(
+            bond_doc=bond_doc,
+            intake_doc=intake_doc,
+            matched_booking=matched_booking,
+            defendant_name=defendant_name,
+        )
+        logger.info(
+            "[intake] payment_link auto-dispatch skipped=%s delivered=%s reason=%s",
+            pay_result.get("skipped"),
+            pay_result.get("delivered"),
+            pay_result.get("reason") or ("error" if pay_result.get("error") else None),
+        )
+    except Exception as pay_exc:
+        logger.warning("[intake] payment_link auto-dispatch failed (non-fatal) err_type=%s", type(pay_exc).__name__)
+
+    # ── 7a2. Opt-in Share Invoice (SwipeSimple draft + copy_link) — gated OFF ─
+    # Requires SWIPESIMPLE_SHARE_INVOICE_ON_PROMOTE=1. Live HTTP still needs
+    # SWIPESIMPLE_LIVE=1. STAGE ONLY: this automated hook always passes
+    # dispatch=False, so it never texts/emails the payment link — even if
+    # SWIPESIMPLE_DISPATCH_LIVE=1. Customer dispatch happens only via an
+    # explicit dispatch=True caller + SWIPESIMPLE_DISPATCH_LIVE.
+    # Soft-fail: never blocks promote. See SWIPESIMPLE_PRODUCTION_CHECKLIST.md.
+    try:
+        from dashboard.services.swipesimple_invoice_service import (
+            maybe_issue_share_invoice_for_bond,
+            share_invoice_on_promote_enabled,
+        )
+
+        if share_invoice_on_promote_enabled():
+            share_bond_id = str(
+                bond_doc.get("bond_case_id")
+                or bond_doc.get("bond_id")
+                or matched_booking
+                or ""
+            ).strip()
+            if share_bond_id:
+                share_result = await maybe_issue_share_invoice_for_bond(
+                    share_bond_id,
+                    channel="imessage",
+                    dispatch=False,  # stage only — automated hooks never dispatch
+                    source="intake_promote",
+                )
+                logger.info(
+                    "[intake] share_invoice booking=%s ok=%s idempotent=%s dispatch_sent=%s",
+                    matched_booking,
+                    share_result.get("ok"),
+                    (share_result.get("create") or {}).get("idempotent"),
+                    (share_result.get("dispatch") or {}).get("sent"),
+                )
+            else:
+                logger.info("[intake] share_invoice skipped — no bond id")
+        else:
+            logger.info(
+                "[intake] share_invoice skipped — SWIPESIMPLE_SHARE_INVOICE_ON_PROMOTE not set"
+            )
+    except Exception as share_exc:
+        logger.warning("[intake] share_invoice failed (non-fatal): %s", share_exc)
+
+    try:
+        from dashboard.services.bond_court_seed_service import (
+            seed_court_calendar_for_bond,
+        )
+
+        seed_result = await seed_court_calendar_for_bond(
+            bond=bond_doc,
+            booking_number=matched_booking,
+            source="intake_promote",
+        )
+        logger.info(
+            "[intake] court seed booking=%s success=%s reason=%s gcal=%s",
+            matched_booking,
+            seed_result.get("success"),
+            seed_result.get("reason"),
+            (seed_result.get("gcal") or {}).get("status"),
+        )
+    except Exception as seed_exc:
+        logger.warning("[intake] court seed failed (non-fatal): %s", seed_exc)
+
+    # ── 7b. Register Vehicle Watch if vehicle plate is provided ──────────────
+    if bond_doc.get("vehicle_plate"):
+        try:
+            from dashboard.services.geo_intelligence import GeoIntelligenceService
+            geo_svc = GeoIntelligenceService()
+            vehicle_info = {
+                "make": bond_doc.get("vehicle_make", ""),
+                "model": bond_doc.get("vehicle_model", ""),
+                "year": bond_doc.get("vehicle_year", ""),
+                "color": bond_doc.get("vehicle_color", ""),
+                "plate": bond_doc.get("vehicle_plate", ""),
+                "vin": bond_doc.get("vehicle_vin", ""),
+            }
+            await geo_svc.add_vehicle_watch(
+                booking_number=matched_booking,
+                vehicle_info=vehicle_info,
+                reason="Intake secondary anchor registration",
+            )
+            logger.info("[intake] Auto-registered vehicle watch for %s (%s)", matched_booking, bond_doc.get("vehicle_plate"))
+        except Exception as v_err:
+            logger.warning("[intake] Failed to auto-register vehicle watch: %s", v_err)
+
+    # ── 7c. Trigger Auto-OSINT Footprint Scan (Holehe, Ignorant, etc.) ────────
+    try:
+        from dashboard.services.auto_osint_trigger import trigger_auto_osint_profiling
+        await trigger_auto_osint_profiling(bond_doc, actor="intake_promotion")
+    except Exception as osint_err:
+        logger.warning("[intake] Failed to dispatch auto-OSINT scan: %s", osint_err)
+
+    # ── 8. Mark POA as assigned ──────────────────────────────────────────────
+    await poa_inventory.update_one(
+        {"poa_number": poa_number, "surety_id": surety},
+        {"$set": {
+            "status": "assigned",
+            "bond_case_id": matched_booking,
+            "defendant_name": defendant_name,
+            "used_at": now.isoformat(),
+        }},
+    )
+
+    # ── 9. Archive the intake (status → 'promoted') ──────────────────────────
+    await intake_queue.update_one(
+        {"intake_id": intake_id},
+        {"$set": {
+            "status": "promoted",
+            "promoted_at": now,
+            "promoted_to_booking": matched_booking,
+            "promoted_surety": surety.upper(),
+            "promoted_poa": poa_number,
+            "updated_at": now,
+        }},
+    )
+
+    # ── 10. Update arrest record with bond status ────────────────────────────
+    try:
+        arrests = get_collection("arrests")
+        await arrests.update_one(
+            {"booking_number": matched_booking},
+            {"$set": {
+                "bond_written": True,
+                "bond_written_at": now.isoformat(),
+                "bond_poa_number": poa_number,
+                "bond_surety": surety.upper(),
+                "bond_premium": bond_amount * 0.10,
+            }},
+        )
+    except Exception as exc:
+        logger.warning("[intake] arrest update during promote failed: %s", exc)
+
+    # ── 11. Audit event (immutable) ──────────────────────────────────────────
+    try:
+        audit_col = get_collection("audit_events")
+        await audit_col.insert_one({
+            "event_type": "intake_promoted_to_bond",
+            "entity_id": matched_booking,
+            "entity_type": "bond_case",
+            "intake_id": intake_id,
+            "defendant_name": defendant_name,
+            "indemnitor_name": indemnitor_name,
+            "county": matched_county,
+            "bond_amount": bond_amount,
+            "premium": bond_amount * 0.10,
+            "surety": surety.upper(),
+            "poa_number": poa_number,
+            "match_confidence": match_confidence,
+            "agent_name": agent_name,
+            "source": "intake_promotion",
+            "timestamp": now,
+        })
+    except Exception as exc:
+        logger.warning("[intake] audit log error during promote: %s", exc)
+
+    # ── 12. SSE event to dashboard ───────────────────────────────────────────
+    try:
+        await publish_event("intake_promoted", {
+            "intake_id": intake_id,
+            "booking_number": matched_booking,
+            "defendant_name": defendant_name,
+            "indemnitor_name": indemnitor_name,
+            "surety": surety.upper(),
+            "poa_number": poa_number,
+            "bond_amount": bond_amount,
+        })
+    except Exception:
+        pass
+
+    # ── 13. Slack alert ──────────────────────────────────────────────────────
+    # Bond case created from intake -> #new-cases
+    slack_url = os.getenv("SLACK_WEBHOOK_LEADS") or os.getenv("SLACK_WEBHOOK_URL", "")
+    if slack_url:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=5) as client:
+                await client.post(slack_url, json={
+                    "text": (
+                        f"☘️ *Bond Case Created from Intake*\n"
+                        f"Defendant: *{defendant_name}*\n"
+                        f"Booking: `{matched_booking}`\n"
+                        f"County: {matched_county}\n"
+                        f"Bond: *${bond_amount:,.2f}*\n"
+                        f"Surety: {surety.upper()} | POA: {poa_number}\n"
+                        f"Indemnitor: {indemnitor_name}\n"
+                        f"Source: Intake Promotion ({intake_id})"
+                    )
+                })
+        except Exception as exc:
+            logger.warning("[intake] Slack alert failed during promote: %s", exc)
+
+    logger.info(
+        "☘️ INTAKE PROMOTED — %s → Booking: %s | %s | $%.2f | %s | POA: %s",
+        intake_id, matched_booking, defendant_name, bond_amount, surety.upper(), poa_number,
+    )
+
+    return {
+        "success": True,
+        "message": f"Intake {intake_id} promoted to active bond",
+        "intake_id": intake_id,
+        "booking_number": matched_booking,
+        "defendant_name": defendant_name,
+        "indemnitor_name": indemnitor_name,
+        "bond_amount": bond_amount,
+        "premium": bond_amount * 0.10,
+        "surety": surety.upper(),
+        "poa_number": poa_number,
+        "poa_full": poa_full,
+        "status": "active",
+    }
