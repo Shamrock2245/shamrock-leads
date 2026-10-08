@@ -10,6 +10,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `tests/test_fl_smartweb_unknown_bond.py` (already in the `ci.yml` list): empty card next to a rich card stays `""`; card-level `$0.00` stays unknown when the next card is positive; a `NO BOND` card with no charges does not take the next card's `$15,000`. The first and third fail on main; the `$0.00` one is a guard that already passes.
+## [Unreleased] — 2026-10-08 (Collier/Glades bond cleanup prep, NOT RUN)
+
+### Added
+- **`scripts/collier_glades_bad_bond_count.py`.** A read-only count of Collier and Glades rows whose stored bond the source never published. Collier: every non-empty bond, split into `"0"` and positive values taken from charge text. Glades: `"0"` / `"0.00"`, with positive values counted as unattributable (stored rows keep no per-charge bonds, so a next-card figure cannot be traced). Staff-provenance rows and rows scraped after the #139 deploy are skipped. It prints counts only and needs `MONGODB_URI`. `--print-filter` prints the affected-rows filter used by the plan.
+- **`docs/ops/COLLIER_GLADES_BOND_CLEANUP_PLAN.md`** (NOT RUN, awaiting Brendan's OK). The plan: count, `mongoexport` backup, blank to `""` while keeping the old values in `bond_cleanup_2026_10`, skip `staff_edits` rows, verify the counts, and a rollback.
 
 ## [Unreleased] — 2026-10-08 (Hendry fail closed: person id only)
 
