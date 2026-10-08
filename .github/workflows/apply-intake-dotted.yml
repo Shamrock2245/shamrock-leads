@@ -22,6 +22,8 @@ jobs:
             echo "already applied"
             exit 0
           fi
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
           git fetch origin main
           git merge origin/main --no-edit || true
           python3 - << 'PY'
