@@ -22,7 +22,9 @@ Source contract (recon 2026-10-08, docs/recon/FL_INDIAN_RIVER_BOOKING_SEARCH_202
     malformed one) or without a parseable Booking Date is dropped. The booking
     date must be the searched date, or the row is dropped.
   * Bond: ``$amount`` → amount; ``No Bond`` → ``Bond_Type="NO BOND"`` with the
-    amount left empty; absent → empty (unknown). Never ``0`` unless published.
+    amount left empty. A detail page with no Bond *row* is skipped (the stored
+    bond is kept on recheck). An unrecognised Bond value still yields empty
+    amount (unknown). Never ``0`` unless published.
   * Health stays ``unverified`` until a Leads Ops write smoke.
 """
 from __future__ import annotations
@@ -140,12 +142,30 @@ def parse_detail(html: str) -> Dict[str, object]:
     heading = soup.find(lambda t: t.name in ("h3", "h4") and _clean(t.get_text()) == "Charges")
     if heading is None:
         raise IndianRiverContractError("Indian River: booking-details page has no 'Charges' heading")
+    return {"fields": fields, "charges": _charge_headers(heading)}
+
+
+_SECTION_TAGS = ("h1", "h2", "h3", "h4")
+
+
+def _charge_headers(heading) -> List[str]:
+    """Card headers of the Charges section only.
+
+    The section ends at the next page heading (live: ``Visitation`` /
+    ``Employee Services`` h4s in the footer), so a card header further down
+    the page is never read as a charge. A heading inside a charge card does
+    not end the section.
+    """
     charges: List[str] = []
-    for header in heading.find_all_next("div", class_="card-header"):
-        text = _clean(header.get_text(" ", strip=True))
-        if text:
-            charges.append(text)
-    return {"fields": fields, "charges": charges}
+    for tag in heading.find_all_next(True):
+        if tag.name in _SECTION_TAGS and tag.find_parent("div", class_="card") is None:
+            break
+        if tag.name == "div" and "card-header" in (tag.get("class") or []) \
+                and tag.find_parent("div", class_="card") is not None:
+            text = _clean(tag.get_text(" ", strip=True))
+            if text:
+                charges.append(text)
+    return charges
 
 
 def parse_bond(value: str) -> Dict[str, str]:
@@ -280,7 +300,7 @@ class IndianRiverCountyScraper(BaseScraper):
 
         records: List[ArrestRecord] = []
         seen: set = set()
-        fetched = dropped = 0
+        fetched = dropped = no_bond_label = 0
         for detail_id, day in wanted[:MAX_DETAILS]:
             url = f"{DETAIL_URL}/{detail_id}"
             fetched += 1
@@ -288,7 +308,14 @@ class IndianRiverCountyScraper(BaseScraper):
             # alerts) instead of silently dropping the booking.
             resp = session.get(url, timeout=REQUEST_TIMEOUT)
             resp.raise_for_status()
-            rec = build_record(parse_detail(resp.text), url)
+            detail = parse_detail(resp.text)
+            # Per-record guard: a page without a Bond row is not read as an
+            # unknown bond; the record is skipped so a stored bond is kept.
+            if "Bond" not in detail["fields"]:  # type: ignore[operator]
+                no_bond_label += 1
+                time.sleep(REQUEST_PAUSE_S)
+                continue
+            rec = build_record(detail, url)
             if rec is None or rec.Booking_Number in seen or datetime.strptime(rec.Booking_Date, "%m/%d/%Y").date() != day:
                 dropped += 1
             else:
@@ -296,8 +323,12 @@ class IndianRiverCountyScraper(BaseScraper):
                 records.append(rec)
             time.sleep(REQUEST_PAUSE_S)
 
+        if fetched and not records and no_bond_label == fetched:
+            raise IndianRiverContractError("Indian River: no booking-details page has a Bond row (label drift?)")
         if fetched and not records:
             raise IndianRiverContractError("Indian River: details fetched but none carry a source Booking Number")
+        if no_bond_label:
+            logger.warning("Indian River: skipped %d/%d details with no Bond row", no_bond_label, fetched)
         # Run-level drift guards: a renamed card class or Bond label would blank
         # every record's charges or bond without tripping a per-page check.
         if records and not any(r.Charges for r in records):
@@ -321,7 +352,10 @@ class IndianRiverCountyScraper(BaseScraper):
         except requests.RequestException as exc:
             logger.warning("Indian River re-fetch failed for %s: %s", detail_url, exc)
             return None
-        rec = build_record(parse_detail(resp.text), detail_url)
+        detail = parse_detail(resp.text)
+        if "Bond" not in detail["fields"]:  # type: ignore[operator]
+            return None
+        rec = build_record(detail, detail_url)
         if rec is None or rec.Booking_Number != booking_id:
             return None
         rec.LastCheckedMode = "RECHECK"

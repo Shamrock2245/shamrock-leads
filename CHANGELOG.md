@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (Indian River charge headers + Bond-row guard)
+
+### Fixed
+- **Indian River charges.** `parse_detail` only collects `card-header` text inside the Charges section and stops at the next page heading (live: Visitation / Employee Services), so footer cards are never read as charges.
+- **Missing Bond row.** A booking-details page with no Bond label is skipped on scrape and on `_fetch_single_booking` recheck (returns `None`), so a stored bond is not overwritten with `""`. An unrecognised Bond value still yields unknown (`""`); `No Bond` still sets `Bond_Type="NO BOND"` with an empty amount.
+
+### Tests
+- `tests/test_fl_indian_river_booking_search.py`: charge-header bound, scrape skip with no Bond row, recheck returns None, run-level mix updated. Fails on the #136 tip without the fix.
+
 ## [Unreleased] — 2026-10-08 (Indian River FL booking search)
 
 ### Fixed
