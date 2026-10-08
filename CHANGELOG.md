@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (Miami-Dade unknown bond, fail loud)
+
+### Fixed
+- **Miami-Dade (FL):** the ArcGIS jail-bookings layer has no bond field, but the scraper wrote `Bond_Amount="0"` on every row, so Write Bond showed $0. It also wrote `UNKNOWN CHARGE` when no charge was listed. Now the bond is `""` (unknown, `bond_published: False`) and the charge is empty. `NO_BOND_ROSTER_COUNTIES` includes Miami-Dade, so legacy docs with a scraped `"0"` hydrate as unknown, and a staff amount still wins. The fetch uses plain `requests` (curl_cffi impersonation retired). It pages to the server's `returnCountOnly` total and raises `MiamiDadeContractError` on an HTTP or ArcGIS error, field drift, a repeated ObjectId or a short walk. Before, it logged and returned a truncated batch. Box read smoke on 2026-10-08: 360/360 rows (Oct 5–7), 353 with charges, 0 bonds, 3.7 s. The matrix stays `recon_only` and Health stays `unverified`: the `GlobalID` key is not a source booking number, and it is unproven whether it survives the layer's daily overwrite (`docs/recon/FL_MIAMI_DADE_ARCGIS_2026-10-08.md`).
+
 ## [Unreleased] — 2026-10-08 (name without license falls back)
 
 ### Fixed

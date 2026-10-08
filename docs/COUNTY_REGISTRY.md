@@ -128,7 +128,7 @@
 ### Miami-Dade
 | County | Module | Runtime state | Source posture |
 |---|---|---|---|
-| **Miami-Dade** | `miami_dade.py` | Registered | ArcGIS FeatureServer parser deployed 2026-08-14. It requires the official source identifier and booking date; county-specific Mongo and alert telemetry remain unproven. |
+| **Miami-Dade** | `miami_dade.py` | Registered (Health `unverified`; matrix `recon_only`) | ArcGIS FeatureServer parser deployed 2026-08-14. 2026-10-08: plain `requests`, paged to the server `returnCountOnly` total. Errors, field drift or a short walk raise. The layer has no bond field, so the bond is `""` (never `$0`) and there is no placeholder charge. The key is the layer `GlobalID`, which is not a source booking number, and its stability across the daily overwrite is unproven (see `docs/recon/FL_MIAMI_DADE_ARCGIS_2026-10-08.md`). |
 
 ### Rural source-recon queue — scaffolded and registered
 
@@ -148,7 +148,7 @@ Dataset ID: c2275711ced240c6bc4e998ee1910e85
 Hub URL:    https://gis-mdc.opendata.arcgis.com/datasets/c2275711ced240c6bc4e998ee1910e85/about
 Note:       opendata.miamidade.gov now redirects to hub.arcgis.com (legacy Socrata gone)
 Update freq: Daily (not real-time)
-Approach:   Query the anonymous FeatureServer directly with `ObjectId,GlobalID,BookDate,Defendant,Charge1,Charge3`; exclude address, ZIP, and DOB fields. Fail closed without a complete name, source key, or booking date. The source is date-granular, so it must not fabricate a booking time or custody status.
+Approach:   Query the anonymous FeatureServer directly with `ObjectId,GlobalID,BookDate,Defendant,Charge1,Code2,Charge3`; exclude address, ZIP, and DOB fields. Fail closed without a complete name, source key, or booking date. The source is date-granular, so it must not fabricate a booking time or custody status.
 ```
 
 ---
