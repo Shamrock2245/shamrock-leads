@@ -34,7 +34,7 @@
 | 8 | **Hillsborough** | httpx direct-first + reCAPTCHA + SOLVECAPTCHA (HCSO login) | `hillsborough.py` | ✅ Active (needs HCSO_* + SOLVECAPTCHA_KEY) | 90 min | 2026-07-24 |
 | 9 | **Pinellas** | DrissionPage — date search | `pinellas.py` | ✅ Active | 90 min | 2026-04-27 |
 | 10 | **Seminole** | Custom | `seminole.py` | ✅ Active | 90 min | 2026-04-27 |
-| 11 | **Orange** | requests GET — getInmates API | `orange.py` | ✅ Active | 90 min | 2026-04-27 |
+| 11 | **Orange** | BestJail public JSON — getInmates/<letter> roster + getInmateDetails/getCharges per booking (plain requests, newest first, 7-day window) | `orange.py` | ✅ Active (unverified until write smoke; source `bookingNumber` 8 digits). See `docs/recon/FL_ORANGE_BESTJAIL_2026-10-08.md` | 90 min | 2026-10-08 |
 | 12 | **Pasco** | DrissionPage — Cloudflare bypass | `pasco.py` | ✅ Active | 90 min | 2026-04-27 |
 | 13 | **Lake** | requests POST `recent_data` + Turnstile token (SolveCaptcha, owner-approved; shared `scrapers/solvecaptcha.py`) | `lake.py` | ✅ `verified_public` (Mac write smoke 17 new; needs SOLVECAPTCHA_KEY) | 90 min | 2026-09-25 |
 | 14 | **Hernando** | Custom HTML | `hernando.py` | ✅ Active | 90 min | 2026-04-27 |

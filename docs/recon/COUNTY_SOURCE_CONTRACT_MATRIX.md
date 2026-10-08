@@ -23,7 +23,7 @@
 |---|---:|---:|---:|---:|---:|---:|---:|
 | AL | 67 | 16 | 4 | 0 | 0 | 51 | 12 |
 | CT | 12 | 6 | 0 | 0 | 6 | 1 | 5 |
-| FL | 67 | 67 | 4 | 15 | 31 | 0 | 17 |
+| FL | 67 | 67 | 4 | 16 | 30 | 0 | 17 |
 | GA | 159 | 85 | 0 | 0 | 148 | 0 | 11 |
 | LA | 64 | 13 | 3 | 1 | 4 | 46 | 10 |
 | MS | 82 | 9 | 1 | 0 | 4 | 69 | 8 |
@@ -32,7 +32,7 @@
 | TN | 96 | 22 | 9 | 0 | 74 | 0 | 13 |
 | TX | 254 | 34 | 2 | 0 | 0 | 252 | 0 |
 
-**Aggregate matrix counts:** verified public 33; candidate productive 31; recon only 267; unverified 489; fail closed 127.
+**Aggregate matrix counts:** verified public 33; candidate productive 32; recon only 266; unverified 489; fail closed 127.
 
 ## County matrix
 
@@ -164,7 +164,7 @@
 | FL | 089 | Nassau County | OSI + Palmetto | registered | fail_closed | https://dssinmate.nassauso.com/NewWorld.InmateInquiry/nassau | Fail closed: portal sends only its leaf certificate (GoDaddy G2 intermediate missing), so ordinary verified HTTPS fails | 2026-10-07 Brevard/New World recon: same New World contract as Walton/Flagler; old module used curl_cffi + verify=False and keyed every row on the Booking History heading ("History"). 2026-10-08 07:54 EDT re-check from box: curl verification fails (unable to get local issuer certificate); openssl shows only the *.nassauso.com leaf. Owner hold: nassau.py SOURCE_CONTRACT_VALIDATED=False and SCRAPER_SOURCE_STATES fail_closed until the chain is fixed or the GoDaddy G2 intermediate is approved. See docs/recon/FL_67_STATUS_2026-10-08.md. |
 | FL | 091 | Okaloosa County | OSI + Palmetto | registered | candidate_productive | https://okaloosacountyjail.myokaloosa.com/InmateLocator/Default.aspx | Ordinary public HTTPS ASP.NET Inmate Locator (linked from sheriff-okaloosa.org) | 2026-10-07 idle-eight recon: Default.aspx A–Z last-name search returns Booking# (10-digit YYYY+seq), name, demographics. SPA root /InmateLocator/ is not the roster. |
 | FL | 093 | Okeechobee County | OSI + Palmetto | registered | fail_closed | https://www.okeesheriff.org/inmate-search | Wix marketing shell; no public inmate roster feed | 2026-10-07 idle-eight recon: page 200 but no table/JSON roster or booking ID. Hold fail_closed. |
-| FL | 095 | Orange County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
+| FL | 095 | Orange County | OSI + Palmetto | registered | candidate_productive | https://netapps.ocfl.net/BestJail/Home/Inmates | Ordinary public HTTPS Orange County BestJail inmate search; the page script calls public JSON endpoints getInmates/<letter>, getInmateDetails/<booking>, getCharges/<booking>; no login/CAPTCHA/WAF | 2026-10-08 Orange BestJail recon (docs/recon/FL_ORANGE_BESTJAIL_2026-10-08.md): 26 letter roster calls all 200 (~1 s), 2,863 current bookings, source bookingNumber 8 digits YY+sequence (alias rows deduped on booking); detail BOOKING equals the requested booking; booking numbers sequential (dates non-increasing over 317 newest). Box read smoke 2026-10-08 ~08:00 EDT, 7-day window: 303 rows / 303 unique, booking date+time 303/303, charges 287, bond published >0 on 200, published 0.00 on 70, unknown (blank) 33; 37 s. Old module (curl_cffi impersonation, every current-year detail) timed out at 400 s and wrote $0.00 for unknown bond and age as DOB. Health stays unverified until a Leads Ops write smoke. |
 | FL | 097 | Osceola County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 099 | Palm Beach County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
 | FL | 101 | Pasco County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
