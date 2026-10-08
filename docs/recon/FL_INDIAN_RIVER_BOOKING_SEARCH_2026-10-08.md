@@ -47,3 +47,14 @@ The old module read the `/inmate-search` and `/todays-bookings` cards (about 11 
 1. Write smoke: `python main.py "Indian River"` with `MONGODB_URI`. Check for `YYYY-NNNNNNNN` keys, booking dates filled in, and a blank `bond_amount_raw` where nothing was published.
 2. If it is clean, CoS sets `SCRAPER_SOURCE_STATES["Indian River (FL)"] = "verified_public"` and adds a `live_emitter_evidence.json` row.
 3. Older prod rows keyed on the portal id stay as they are (nothing deleted). They will not be refreshed under the new key, so Leads Ops may want to archive them.
+
+## Legacy portal-id rows and the custody recheck (traced 2026-10-08)
+
+Rows written before this PR are keyed on the portal id (`/booking-details/<id>`). `_fetch_single_booking` returns `None` for them because the page's Booking Number differs. Every caller treats `None` as unknown. None of them mark the booking released or delete it:
+
+- `core/scheduler.py` `_handle_custody_recheck` counts the row as `not_found` and inserts a `custody_rechecks` note (`source_found: False`, proposed change "Not Found on Roster"). It then `continue`s with **no write to `arrests`**: status, bond, charges and the record are unchanged. A test now pins this: `test_custody_recheck_of_legacy_portal_id_row_changes_nothing`.
+- `dashboard/routers/scraper_control.py` (`/custody-recheck/results`) and `legacy.py` (`/leads/refresh-from-source/status`) only read the trigger and `custody_rechecks`. `sl-features.js` shows a "🚪 Not on Roster" badge on the card. The badge is display only, but staff could read it as released for these legacy rows. This behavior predates this PR and applies to every county whose single fetch returns `None`.
+- `core/first_appearance_watcher.py` `_refetch_record`: on `None` it falls back to the generic GET of the stored `detail_url`, which only raises a positive bond parsed from that same booking's page and keeps the stored key. If that also fails, it writes just `last_checked`/`last_checked_mode` (`_checked_update`) and skips.
+- `refresh-from-source` parses the stored page with the generic parser and queues the same scheduler recheck; it never calls `_fetch_single_booking`.
+- No release sweep or purge acts on an empty recheck. The retention and hygiene routers work on age and explicit admin actions only.
+

@@ -151,3 +151,53 @@ def test_module_uses_plain_requests_only():
     src = open(ir.__file__).read().split('"""', 2)[2]
     for banned in ("curl_cffi", "impersonate", "verify=False", "DrissionPage", "proxy", "captcha", "disable_warnings"):
         assert banned not in src, banned
+
+
+class _Coll:
+    """Minimal sync Mongo stand-in that records every write."""
+
+    def __init__(self, docs=None):
+        self.docs = [dict(d) for d in (docs or [])]
+        self.writes: list = []
+
+    def find(self, query, projection=None):
+        return [dict(d) for d in self.docs
+                if all(d.get(k) == v for k, v in query.items() if not isinstance(v, dict))]
+
+    def insert_one(self, doc):
+        self.writes.append(("insert_one", doc))
+        self.docs.append(dict(doc))
+
+    def update_one(self, flt, update, upsert=False):
+        self.writes.append(("update_one", flt, update))
+
+    def delete_many(self, flt):
+        self.writes.append(("delete_many", flt))
+
+    def delete_one(self, flt):
+        self.writes.append(("delete_one", flt))
+
+
+def test_custody_recheck_of_legacy_portal_id_row_changes_nothing(monkeypatch):
+    """A row written before this PR is keyed on the portal id. The recheck now
+    returns None for it; that must be unknown/skip, never released or deleted."""
+    from core.scheduler import ScraperScheduler
+
+    url = "https://www.ircsheriff.org/booking-details/730700001"
+    _install(monkeypatch, {}, {"730700001": _detail(booking="2026-00001234")})
+    legacy = {"booking_number": "730700001", "county": "Indian River", "status": "In Custody",
+              "bond_amount": 2500.0, "bond_type": "Surety", "charges": "BATTERY", "detail_url": url,
+              "full_name": "DOE, JANE"}
+    arrests, rechecks, triggers = _Coll([legacy]), _Coll(), _Coll()
+    sched = ScraperScheduler.__new__(ScraperScheduler)
+    sched._writers = []
+    sched._handle_custody_recheck(
+        {"arrests": arrests, "custody_rechecks": rechecks, "scraper_triggers": triggers},
+        {"_id": "t1", "county": "Indian River", "mode": "single", "booking_number": "730700001"},
+        IndianRiverCountyScraper(),
+    )
+    assert arrests.writes == []  # no status/bond/charges update, no delete
+    assert arrests.docs == [legacy]
+    found = [w[1] for w in rechecks.writes if w[0] == "insert_one"]
+    assert len(found) == 1 and found[0]["source_found"] is False  # a recheck note only
+    assert ("update_one", {"_id": "t1"}, {"$set": {"total_checked": 1, "changes_found": 0, "not_found_count": 1}}) in triggers.writes
