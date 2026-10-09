@@ -46,6 +46,7 @@ GLOBAL_COLLECTIONS = frozenset(
         "source_performance",
         "alpr_worker_status",
         "custody_rechecks",
+        "bond_rechecks",  # pending-bond re-check state (public booking keys only)
         "zip_lookups",
     }
 )
@@ -83,6 +84,7 @@ KNOWN_APP_COLLECTIONS = frozenset(
         "bond_alerts",
         "bond_cases",
         "bond_checkins",
+        "bond_rechecks",
         "bonds",
         "booking_intake_previews",
         "buf_escrow_balances",

@@ -98,6 +98,7 @@ jobs:
             tests/test_fl_hernando_unknown_bond.py \
             tests/test_fl_hernando_detail_status.py \
             tests/test_fl_hernando_detail_pacing.py \
+            tests/test_pending_bond_recheck.py \
             tests/test_miami_dade_scraper.py \
             tests/test_fl_miami_dade_arcgis_contract.py \
             tests/test_fl_sarasota_manatee_audit.py \

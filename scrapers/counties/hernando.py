@@ -297,6 +297,57 @@ class HernandoCountyScraper(BaseScraper):
         )
         return out
 
+    def fetch_bond_recheck(self, booking_id: str, detail_url: str = "") -> Optional[ArrestRecord]:
+        """Pending-bond re-check: re-read one booking's JailSearchDetails page.
+
+        Same detail path, headers and parser as the scrape (plain requests). The
+        record carries only what the detail page publishes (custody, release,
+        charges, case numbers, bond); core/pending_bond_recheck.py fills the
+        rest from the stored doc. None (nothing written) when the key is not a
+        source booking number, the fetch fails, the page drifted, custody is
+        unreadable, or no charge grid is published."""
+        booking = str(booking_id or "").strip()
+        if not BOOKING_RE.fullmatch(booking):
+            return None
+        url = f"{DETAIL_URL}?BookNo={booking}"
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=20)
+            resp.raise_for_status()
+            detail = parse_detail(resp.text, booking)
+        except HernandoDetailError as exc:
+            logger.warning("Hernando re-check: detail page drift, booking skipped (%s)", exc)
+            return None
+        except Exception as exc:
+            logger.warning("Hernando re-check: detail fetch failed for %s (%s)", booking, type(exc).__name__)
+            return None
+        if detail["status"] is None or not detail["charges"]:
+            return None
+        case_numbers = list(dict.fromkeys(c["case_number"] for c in detail["charges"] if c["case_number"]))
+        rec = ArrestRecord(
+            County=self.county,
+            State="FL",
+            Booking_Number=booking,
+            Status=detail["status"],
+            Release_Date=detail["release_date"],
+            Charges=" | ".join(
+                " - ".join(x for x in (c["statute"], c["description"]) if x) for c in detail["charges"]
+            ),
+            Case_Number=" | ".join(case_numbers),
+            Bond_Amount=detail["bond_amount"],
+            Detail_URL=url,
+            Facility=FACILITY,
+            LastCheckedMode="RECHECK",
+        )
+        rec.extra_data = {
+            "bond_published": detail["bond_amount"] != "",
+            "release_time": detail["release_time"],
+            "charge_details": [
+                {k: c[k] for k in ("case_number", "statute", "description", "bond_raw")}
+                for c in detail["charges"]
+            ],
+        }
+        return rec
+
     def _parse(self, html: str) -> List[ArrestRecord]:
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(html, "html.parser")
