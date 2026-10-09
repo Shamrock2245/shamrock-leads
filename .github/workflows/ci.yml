@@ -125,6 +125,7 @@ jobs:
             tests/test_newberry_pdf_scraper.py \
             tests/test_powers_pack.py \
             tests/test_lee_rate_limit.py \
+            tests/test_lee_no_proxy_path.py \
             tests/test_swipesimple_invoice_service.py \
             tests/test_swipesimple_locked_amount_e2e.py \
             tests/test_confirmed_booking_intake.py \
