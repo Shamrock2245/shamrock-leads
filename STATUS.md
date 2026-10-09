@@ -188,7 +188,7 @@ The required strict local secrets check remains unavailable in this clean checko
 
 ## August 14–16 source-safety wave review (2026-08-16)
 
-The 2026-08-14 through 2026-08-16 Shamrock2245 commit wave (fail-close campaign, recon matrix, and verified-public parsers) does **not** need a wholesale rollback. Keepers: Bossier, Tangipahoa, St. Mary, Lee/Marshall/Etowah/St. Clair AL, Rankin. York’s parser is kept but remains `fail_closed` until ordinary access is revalidated. Lincoln NC and Miami-Dade still emit and stay `unverified` until their source-state rows are promoted on purpose.
+The 2026-08-14 through 2026-08-16 Shamrock2245 commit wave (fail-close campaign, recon matrix, and verified-public parsers) does **not** need a wholesale rollback. Keepers: Bossier, Tangipahoa, St. Mary, Lee/Marshall/Etowah/St. Clair AL, Rankin. York’s parser is kept but remains `fail_closed` until ordinary access is revalidated. Lincoln NC still emits and stays `unverified` until its source-state row is promoted on purpose. Miami-Dade is `fail_closed` since 2026-10-09 (no source booking number; ArcGIS row ids are reissued on republish), so it no longer emits; see the FL/086 matrix row.
 
 Leftover Louisiana jobs from that window that were still scheduled without a contract gate are now fail-closed:
 
@@ -281,7 +281,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | State | Registered scrapers | Code path | Notes |
 |-------|--------------------:|-----------|-------|
 | **GA** | **85** | `scrapers/counties_ga/` | Gwinnett and Fulton fail-closed guards are deployed; six audited legacy P2C paths also fail closed under `0de5f79`. Five JailTracker wrappers are deployed fail closed under `0a75169`; see `docs/LEGACY_P2C_SOURCE_SAFETY.md` and `docs/JAILTRACKER_SOURCE_SAFETY.md`. |
-| **FL** | **67** | `scrapers/counties/` | Miami-Dade ArcGIS repair, Broward guard, and Sarasota’s third-party/proxy/CAPTCHA source-safety override are deployed 2026-08-14. Sarasota run `31843789326` succeeded; its public leads `/health`, sign, school, paperwork, and social `/auth` probes were healthy. Seven inherited JailTracker wrappers are deployed fail closed under `0a75169`; see `docs/JAILTRACKER_SOURCE_SAFETY.md`. Per-source persistence and alert telemetry remain pending. |
+| **FL** | **67** | `scrapers/counties/` | Miami-Dade ArcGIS repair, Broward guard, and Sarasota’s third-party/proxy/CAPTCHA source-safety override are deployed 2026-08-14. Sarasota run `31843789326` succeeded; its public leads `/health`, sign, school, paperwork, and social `/auth` probes were healthy. Seven inherited JailTracker wrappers are deployed fail closed under `0a75169`; see `docs/JAILTRACKER_SOURCE_SAFETY.md`. Per-source persistence and alert telemetry remain pending. Miami-Dade moved to `fail_closed` 2026-10-09 (no source booking number). |
 | **NC** | **60** | `scrapers/counties_nc/` | Durham fail-closed guard and Lincoln’s official OCV repair are deployed; seven audited legacy P2C paths also fail closed under `0de5f79`. Production persistence and alert telemetry remain pending. |
 | **SC** | **46** | `scrapers/counties_sc/` | York source-faithful parser repair is deployed; Lee and Lexington legacy P2C paths fail closed under `0de5f79`. Anderson, Cherokee, Colleton, Kershaw, and Laurens Zuercher guards are deployed in `7718bf8`; Chester and Greenwood JailTracker wrappers are deployed fail closed under `0a75169`. See `docs/SC_ZUERCHER_SOURCE_SAFETY.md` and `docs/JAILTRACKER_SOURCE_SAFETY.md`. Per-county persistence and alert telemetry remain pending. |
 | **TX** | **34** | `scrapers/counties_tx/` | Randall is source-validated; Bell, Ellis, Guadalupe, and Jefferson fail-closed guards deployed 2026-08-14 with public hosts healthy. |
@@ -407,7 +407,7 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 | `ENV=production` + strong `SECRET_KEY` + `DASHBOARD_PIN` on VPS | ✅ |
 | Atlas M0 512MB cap — oldest-first retention + hygiene tools | ✅ code 2026-08-04 · monitor growth |
 | Gmail discharge / GCal / Drive OAuth | Env-gated (tokens present; exercise live paths) |
-| FL error scrapers (upstream / WAF / captcha) | ⏳ Bay/Gadsden/Gilchrist/Okeechobee/Suwannee blocked; Marion WAF; Lake captcha-service. Miami-Dade ArcGIS repair is deployed but awaits Miami-specific production telemetry. |
+| FL error scrapers (upstream / WAF / captcha) | ⏳ Bay/Gadsden/Gilchrist/Okeechobee/Suwannee blocked; Marion WAF; Lake captcha-service. Miami-Dade is `fail_closed` (2026-10-09): the ArcGIS layer has no booking number and reissues row ids, so no write telemetry to request; reopening needs an owner decision on `md_dedupe` keying plus a backed-up cleanup (`scripts/miami_dade_dedupe_report.py` counts the duplicates, read only). |
 | Defendants collection backfill | ⏳ ongoing normalize/batch |
 | Local PDF stitcher full blank packet | ✅ folders: `surety-agnostic-shamrock/` + `osi/` + `palmetto/` · DocuSeal primary |
 | Auto-CRM “phone only → fully autopilot” with explicit human gates | Product next (Phase 21) |

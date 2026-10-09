@@ -12,9 +12,33 @@ Features:
 - Plain ``requests``; any HTTP/ArcGIS error, field drift or short page walk
   raises ``MiamiDadeContractError`` (BaseScraper alerts) instead of returning
   a silently truncated batch
+
+2026-10-09: FAIL CLOSED, no source booking number.
+The layer (a Table: miamidade_jail_data/FeatureServer/0) publishes BookDate,
+Defendant, Address, CityStateZip, DOB, ChargeCode1-3 (statute codes),
+Charge1/Code2/Charge3, Zip, Filler (always null), City, State, Zip1, plus the
+system ObjectId and GlobalID. There is no booking, jail or case number. The
+ObjectId/GlobalID are map row ids, not booking keys: after the 2026-10-09
+08:03 ET republish, 840 of the 841 rows in the 2026-10-08 snapshot had a new
+GlobalID and only 2 kept their ObjectId. So:
+
+* ``Booking_Number`` is left blank. It is never filled with a row id or a
+  derived value, so hydrate, PDF/DocuSeal and UI booking-number fields stay
+  empty instead of printing a hash.
+* ``extra_data["md_dedupe"]`` holds an internal dedupe key,
+  ``md_dedupe_key(Full_Name, Booking_Date, Charges)`` (sha256 over the
+  normalised defendant, booking date and full verbatim charge list), clearly
+  labelled as NOT a booking number.
+* The county is fail_closed (``SOURCE_CONTRACT_VALIDATED = False``): the
+  source-contract rule needs a real source booking id, and the writer keys on
+  booking_number, so no Miami-Dade row is fetched or written until an owner
+  decision on keying by ``md_dedupe`` (and a backed-up cleanup of the GlobalID
+  duplicates already stored).
 """
 
+import hashlib
 import logging
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
@@ -33,8 +57,10 @@ DAYS_BACK = 3  # Fetch bookings from the last 3 days
 PAGE_SIZE = 200
 MAX_PAGES = 10  # 2,000 rows; the layer adds ~160 bookings/day (476 for 3 days on 2026-10-08)
 REQUEST_TIMEOUT = 30
-# Retrieve only source fields needed for identity, booking deduplication, and charges.
-OUT_FIELDS = "ObjectId,GlobalID,BookDate,Defendant,Charge1,Code2,Charge3"
+# Retrieve only source fields needed for identity, deduplication, and charges.
+# ObjectId is only used to check paging within one run (it is reissued on
+# republish and is never stored as a key).
+OUT_FIELDS = "ObjectId,BookDate,Defendant,Charge1,Code2,Charge3"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -44,7 +70,43 @@ HEADERS = {
     "Origin": "https://gis-mdc.opendata.arcgis.com",
 }
 
-REQUIRED_FIELDS = ("ObjectId", "GlobalID", "BookDate", "Defendant", "Charge1", "Code2", "Charge3")
+REQUIRED_FIELDS = ("ObjectId", "BookDate", "Defendant", "Charge1", "Code2", "Charge3")
+
+MD_DEDUPE_VERSION = "md_dedupe_v1"
+MD_DEDUPE_LABEL = (
+    "internal dedupe key, NOT a booking number: sha256 of normalised "
+    "Defendant | BookDate | full verbatim charges"
+)
+_WS_RE = re.compile(r"\s+")
+
+
+def _norm(text: Any) -> str:
+    return _WS_RE.sub(" ", str(text or "")).strip().upper()
+
+
+def _norm_date(value: Any) -> str:
+    s = str(value or "").strip()
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(s[:10], fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return s
+
+
+def md_dedupe_key(full_name: Any, booking_date: Any, charges: Any) -> str:
+    """Internal Miami-Dade dedupe key. Never a booking number.
+
+    Inputs are the stored record fields (Full_Name, Booking_Date as YYYY-MM-DD,
+    Charges joined with " | "), so the same key can be recomputed from stored
+    arrests docs. Returns "" when the defendant or date is missing.
+    """
+    name, date = _norm(full_name), _norm_date(booking_date)
+    if not name or not date:
+        return ""
+    charges_norm = " | ".join(_norm(c) for c in str(charges or "").split("|") if _norm(c))
+    digest = hashlib.sha256(f"{MD_DEDUPE_VERSION}|{name}|{date}|{charges_norm}".encode("utf-8")).hexdigest()
+    return f"{MD_DEDUPE_VERSION}:{digest}"
 
 
 class MiamiDadeContractError(RuntimeError):
@@ -52,7 +114,18 @@ class MiamiDadeContractError(RuntimeError):
 
 
 class MiamiDadeCountyScraper(BaseScraper):
-    """Miami-Dade County (FL) arrest scraper — ArcGIS Open Data API."""
+    """Miami-Dade County (FL) arrest scraper — ArcGIS Open Data API.
+
+    Fail closed (2026-10-09): the layer publishes no source booking number and
+    its row ids are reissued on every republish."""
+
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "Miami-Dade ArcGIS jail layer publishes no booking, jail or case number; "
+        "ObjectId/GlobalID are map row ids reissued on republish (2026-10-09 08:03 ET: "
+        "840 of 841 snapshot rows got a new GlobalID). Writes stay off until an owner "
+        "decision on keying by the internal md_dedupe key."
+    )
 
     @property
     def county(self) -> str:
@@ -175,18 +248,19 @@ class MiamiDadeCountyScraper(BaseScraper):
 
             charges_str = " | ".join(charges_list)  # "" when the layer lists none; never a placeholder
             
-            # GlobalID is preferred; ObjectId is a source-issued fallback. Both are
-            # stored only as the booking deduplication token for this county source.
-            booking_number = str(attrs.get("GlobalID") or attrs.get("ObjectId") or "").strip()
-            # The ArcGIS source is date-granular, so do not guess a booking time.
-            # Fail closed if the public record has no complete name, booking key, or date.
-            if not booking_number or not booking_date_str or not full_name or len(full_name.replace(',', ' ').split()) < 2:
+            # The layer has no booking number and its row ids (ObjectId/GlobalID)
+            # are reissued on republish, so Booking_Number stays blank and the
+            # internal md_dedupe key carries identity. The source is
+            # date-granular, so no booking time is guessed. A row without a
+            # complete name or date is dropped.
+            if not booking_date_str or not full_name or len(full_name.replace(',', ' ').split()) < 2:
                 return None
+            dedupe = md_dedupe_key(full_name, booking_date_str, charges_str)
 
             return ArrestRecord(
                 County=self.county,
                 State="FL",
-                Booking_Number=booking_number,
+                Booking_Number="",  # no source booking number; never a row id or hash
                 Full_Name=full_name,
                 First_Name=first_name,
                 Middle_Name=middle_name,
@@ -199,7 +273,9 @@ class MiamiDadeCountyScraper(BaseScraper):
                 Facility="Miami-Dade Corrections",
                 LastCheckedMode="INITIAL",
                 extra_data={
-                    "booking_key_origin": "official public ArcGIS GlobalID/ObjectId",
+                    "booking_key_origin": "none: the source publishes no booking number",
+                    "md_dedupe": dedupe,
+                    "md_dedupe_label": MD_DEDUPE_LABEL,
                     "bond_published": False,
                 },
             )
