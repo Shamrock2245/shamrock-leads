@@ -148,6 +148,34 @@ def test_report_counts_duplicate_groups_and_merges():
     assert out["groups_with_staff_edits"] == 1
 
 
+def test_report_groups_staff_edited_charges_by_source_charges():
+    """A staff charge edit must not split a row from its untouched duplicates."""
+    sys.path.insert(0, "scripts")
+    import miami_dade_dedupe_report as rep
+
+    src = "BATTERY | RESIST OFFICER W/O VIOLENCE"
+    docs = [
+        _stored("{aaaaaaaa-0000-0000-0000-000000000011}"),
+        # staff edited charges; provenance keeps the scraped baseline list
+        _stored("{bbbbbbbb-0000-0000-0000-000000000012}", charges="BATTERY",
+                staff_edits={"charges": {"removed": ["RESIST OFFICER W/O VIOLENCE"],
+                                         "baseline": ["BATTERY", "RESIST OFFICER W/O VIOLENCE"]}}),
+        # staff charges won a later rescrape; scraped value kept aside
+        _stored("{cccccccc-0000-0000-0000-000000000013}", charges="BATTERY (STAFF NOTE)",
+                scraped_charges=src, staff_edits={"charges": {"removed": [], "baseline": []}}),
+        # legacy staff edit with no saved source list: unresolvable, not silently split
+        _stored("{dddddddd-0000-0000-0000-000000000014}", charges="SOMETHING ELSE",
+                last_checked_mode="MANUAL_CHARGE_BONDS"),
+    ]
+    out = rep.report(docs)
+    assert out["duplicate_groups"] == 1
+    assert out["rows_in_duplicate_groups"] == 3
+    assert out["rows_that_would_merge"] == 2
+    assert out["groups_with_staff_edits"] == 1
+    assert out["rows_staff_charges_unresolvable"] == 1
+    assert rep.source_charges({"charges": src}) == src
+
+
 def test_report_main_is_read_only_and_names_free(monkeypatch):
     sys.path.insert(0, "scripts")
     import miami_dade_dedupe_report as rep

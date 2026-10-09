@@ -5,7 +5,9 @@ Miami-Dade rows were keyed on the ArcGIS GlobalID/ObjectId, which the layer
 reissues on every republish, so each republish stored the same booking again
 under a new key. This script groups stored Miami-Dade arrests by the new
 internal ``md_dedupe`` key (scrapers.counties.miami_dade.md_dedupe_key:
-defendant | booking date | full charges) and prints COUNTS ONLY:
+defendant | booking date | full SOURCE charges; staff-edited charges are
+replaced by the saved scraped/baseline list, or counted as unresolvable)
+and prints COUNTS ONLY:
 total rows, key shapes, duplicate groups, and rows that would merge.
 
 It only calls find() with a projection. It never writes, merges or deletes.
@@ -22,7 +24,7 @@ import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, Dict, Iterable
+from typing import Any, Dict, Iterable, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -32,6 +34,7 @@ COUNTY_VALUES = ["Miami-Dade", "Miami-Dade (FL)", "Miami Dade", "MIAMI-DADE"]
 PROJECTION = {
     "_id": 0, "booking_number": 1, "full_name": 1, "booking_date": 1, "charges": 1,
     "status": 1, "bond_amount_raw": 1, "staff_edits": 1, "bond_override": 1, "last_checked_mode": 1,
+    "scraped_charges": 1,
 }
 _GUID_RE = re.compile(r"^\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?$", re.I)
 
@@ -51,16 +54,43 @@ def _staff(doc: Dict[str, Any]) -> bool:
     return bool(doc.get("staff_edits") or doc.get("bond_override") or doc.get("last_checked_mode") == "MANUAL_CHARGE_BONDS")
 
 
+def source_charges(doc: Dict[str, Any]) -> Optional[str]:
+    """The charges string as the SOURCE published it, or None if unknowable.
+
+    Staff may edit ``charges``; hashing the edited value would split a row
+    from its untouched duplicates. Use, in order: ``scraped_charges`` (the
+    latest scraped value kept when staff charges won), the
+    ``staff_edits.charges.baseline`` list (the scraped list staff first saw),
+    else ``charges`` when staff never edited them. A legacy staff charge edit
+    (``MANUAL_CHARGE_BONDS``) with neither saved returns None (unresolvable).
+    """
+    if str(doc.get("scraped_charges") or "").strip():
+        return str(doc["scraped_charges"])
+    edits = doc.get("staff_edits") if isinstance(doc.get("staff_edits"), dict) else {}
+    ch = edits.get("charges") if isinstance(edits.get("charges"), dict) else None
+    if ch is not None:
+        baseline = [str(b) for b in (ch.get("baseline") or []) if str(b).strip()]
+        return " | ".join(baseline) if baseline else None
+    if doc.get("last_checked_mode") == "MANUAL_CHARGE_BONDS":
+        return None
+    return str(doc.get("charges") or "")
+
+
 def report(docs: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
     """Counts only. ``docs`` are arrests docs (projection above)."""
     total = 0
     shapes: Counter = Counter()
     unkeyable = 0
+    unresolvable = 0
     groups: Dict[str, list] = defaultdict(list)
     for d in docs:
         total += 1
         shapes[key_shape(d.get("booking_number"))] += 1
-        k = md_dedupe_key(d.get("full_name"), d.get("booking_date"), d.get("charges"))
+        charges = source_charges(d)
+        if charges is None:
+            unresolvable += 1  # staff-edited charges with no saved source list: manual review
+            continue
+        k = md_dedupe_key(d.get("full_name"), d.get("booking_date"), charges)
         if not k:
             unkeyable += 1
             continue
@@ -71,6 +101,7 @@ def report(docs: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
         "total_rows": total,
         "booking_number_shapes": dict(shapes),
         "rows_without_name_or_date": unkeyable,
+        "rows_staff_charges_unresolvable": unresolvable,
         "distinct_md_dedupe_keys": len(groups),
         "duplicate_groups": len(dup),
         "rows_in_duplicate_groups": sum(len(g) for g in dup),
