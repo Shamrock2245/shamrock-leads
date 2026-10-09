@@ -305,6 +305,7 @@ class _FakePW:
 
 
 def test_manatee_scrape_raises_egress_block_instead_of_silent_empty(monkeypatch):
+    monkeypatch.setattr(ManateeCountyScraper, "SOURCE_CONTRACT_VALIDATED", True)  # reopen path (fail_closed 2026-10-09)
     monkeypatch.setattr(manatee, "resolve_egress", lambda scraper=None: (None, "direct"))
     monkeypatch.setattr(manatee, "launch_plain_browser", lambda: (_FakePW(), _FakeBrowser()))
     monkeypatch.setattr(manatee, "wait_for_page", lambda page, **kw: False)
@@ -471,7 +472,8 @@ def test_sarasota_still_fail_closed_with_documented_reason():
     assert SarasotaCountyScraper().scrape() == []
     from dashboard.extensions import SCRAPER_SOURCE_STATES
     assert SCRAPER_SOURCE_STATES["Sarasota (FL)"] == "fail_closed"
-    assert "Manatee (FL)" not in SCRAPER_SOURCE_STATES  # Health default: unverified
+    # 2026-10-09: Manatee is fail_closed too (Revize roster challenged from every exit).
+    assert SCRAPER_SOURCE_STATES["Manatee (FL)"] == "fail_closed"
 
 
 # ── Residential preflight: an unknown exit is not a residential exit ────────

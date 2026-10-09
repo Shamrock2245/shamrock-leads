@@ -594,6 +594,19 @@ class ScraperScheduler:
         results: Dict[str, Optional[dict]] = {}
         for job_id in self.relay_only_job_ids():
             scraper = self._scrapers[job_id]
+            if not getattr(scraper, "SOURCE_CONTRACT_VALIDATED", True):
+                # fail_closed county: the relay never attempts it (no browser,
+                # no source request, no scraper_status failure).
+                reason = getattr(scraper, "SOURCE_CONTRACT_REASON", "") or "fail_closed"
+                logger.warning(f"⛔ Relay skip (fail_closed): {scraper.county}")
+                results[scraper.county] = {
+                    "county": scraper.county,
+                    "status": "fail_closed",
+                    "skipped": True,
+                    "source_contract_state": "fail_closed",
+                    "reason": reason[:300],
+                }
+                continue
             logger.info(f"🏠 Relay run: {scraper.county}")
             try:
                 from dashboard.tenancy.context import bind_platform_job

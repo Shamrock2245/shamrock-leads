@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-09 (Charlotte + Manatee fail_closed; relay skips fail_closed counties)
+
+### Fixed
+- **Charlotte (FL) and Manatee (FL) are `fail_closed`.** The 2026-10-09 relay runs (stock Playwright Chromium, honest UA, code at ad35dc0) got a Cloudflare 403 (`cf-mitigated: challenge`) on roster page 1 from both T-Mobile AS21928 and Comcast AS7922. Nothing was written. From the agent box, every path on both Revize hosts was challenged as well: `/`, `/bookings`, `robots.txt`, `sitemap.xml` and JSON/RSS/CSV-style URLs. Both sheriff sites embed that same roster as an iframe (`ccso.org` Local Arrest Database, `manateesheriff.com` Arrest Inquiries); it is their only roster. Charlotte's Clerk Benchmark case search is behind reCAPTCHA. Manatee's Clerk court records are plain HTTPS with charges, a Bonds table and an OBTS number, but no booking number, and cases appear only after filing, so they do not meet the booking-roster contract. That route is ranked for a CoS/owner decision. Evidence: `docs/recon/FL_CHARLOTTE_SOURCE_RECON_2026-10-09.md` and `docs/recon/FL_MANATEE_SOURCE_RECON_2026-10-09.md`.
+- `SOURCE_CONTRACT_VALIDATED = False` with a documented reason on both scrapers. `scrape()` returns `[]` before the egress check, the browser and any source request. The Revize parser and contract are unchanged, so reopening is flipping the flag after a relay read and write smoke. Health `SCRAPER_SOURCE_STATES` and evidence FL/015 and FL/081 are now `fail_closed`. The matrix is regenerated (FL recon_only 24→22, fail_closed 19→21). COUNTY_REGISTRY, FL_67_STATUS, STATUS and REVIZE_RELAY_RUN are updated. Both counties stay in `config/relay_only.py`, so the VPS still never runs them.
+- **The Mac relay never attempts a fail_closed county.** `ScraperScheduler.run_relay_only()` (`python main.py --relay-only`) skips any relay-only scraper with `SOURCE_CONTRACT_VALIDATED = False`, with no `run()`, no browser, no request and no scraper_status failure. It reports `{"status": "fail_closed", "skipped": true}`, which is not an error, so the relay exit code stays 0 when Pinellas succeeds. `scripts/charlotte_residential_smoke.py` and `scripts/manatee_residential_smoke.py` exit `4` (`result: fail_closed`) without fetching. `python main.py Charlotte` already stopped at the `BaseScraper.run` source-contract guard.
+
+### Tests
+- `tests/test_fl_charlotte_manatee_fail_closed.py`: flag and reason; `scrape()` makes no egress check, browser or request; `run()` stops at the guard; Health, evidence and relay-only label; smoke scripts exit 4 without touching the source; `run_relay_only` skips Charlotte and Manatee (fakes and the real scrapers) and still runs Pinellas; skipped results are not counted as relay failures.
+- Existing parser and no-proxy tests for both counties now set `SOURCE_CONTRACT_VALIDATED = True` (the reopen path) and still pass unchanged. The home-county matrix and Health expectations are updated.
+
 ## [Unreleased] — 2026-10-09 (Palmetto A4 offense rows)
 
 ### Added
