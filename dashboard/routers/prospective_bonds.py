@@ -18,6 +18,7 @@ Endpoints:
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from datetime import datetime, timezone
+from core.record_key import arrest_ref_query
 from dashboard.extensions import get_collection
 import logging
 import re
@@ -83,7 +84,7 @@ async def api_prospective_create(request: Request):
             })
 
         # Snapshot defendant data from arrests collection
-        arrest_doc = await arrests.find_one({"booking_number": booking_number}, {"_id": 0})
+        arrest_doc = await arrests.find_one(arrest_ref_query(booking_number), {"_id": 0})
         if not arrest_doc:
             arrest_doc = {}
 

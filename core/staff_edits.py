@@ -43,7 +43,7 @@ BOND_FIELDS = ("bond_amount", "bond_amount_raw", "total_bond_amount", "bond_type
 CHARGE_FIELDS = ("charges", "charge_details")
 # Projection for the pre-write read of existing docs.
 PROVENANCE_PROJECTION = {
-    "_id": 0, "state": 1, "county": 1, "booking_number": 1,
+    "_id": 0, "state": 1, "county": 1, "booking_number": 1, "record_key": 1,
     "staff_edits": 1, "bond_override": 1, "last_checked_mode": 1,
     "bond_amount": 1, "bond_type": 1, "charges": 1, "charge_details": 1,
 }
@@ -337,14 +337,18 @@ def protect_scraped_update(
     return out, prov
 
 
-def fetch_provenance_docs(collection: Any, keys: Iterable[Tuple[str, str, str]]) -> Dict[Tuple[str, str, str], Dict[str, Any]]:
-    """``{(state, county, booking): doc}`` for docs that may carry staff edits."""
+def fetch_provenance_docs(collection: Any, keys: Iterable[Tuple[str, str, str]],
+                          key_field: str = "booking_number") -> Dict[Tuple[str, str, str], Dict[str, Any]]:
+    """``{(state, county, key): doc}`` for docs that may carry staff edits.
+
+    ``key_field`` is ``record_key`` once RECORD_KEY_MODE=on (core/record_key.py).
+    """
     by_scope: Dict[Tuple[str, str], List[str]] = {}
     for state, county, booking in keys:
         by_scope.setdefault((state, county), []).append(booking)
     found: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
     for (state, county), bookings in by_scope.items():
-        query = {"state": state, "county": county, "booking_number": {"$in": bookings}, **PROVENANCE_FILTER}
+        query = {"state": state, "county": county, key_field: {"$in": bookings}, **PROVENANCE_FILTER}
         for doc in collection.find(query, PROVENANCE_PROJECTION):
-            found[(doc.get("state"), doc.get("county"), doc.get("booking_number"))] = doc
+            found[(doc.get("state"), doc.get("county"), doc.get(key_field))] = doc
     return found

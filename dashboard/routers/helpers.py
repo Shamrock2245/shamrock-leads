@@ -55,7 +55,17 @@ def serialize_doc(doc: dict) -> dict:
         # (core/booking_identity.py, Miami-Dade) is flagged and displays blank.
         from core.booking_identity import is_internal_booking_key, public_booking_number
 
-        doc["booking_key_internal"] = is_internal_booking_key(doc["booking_number"])
+        from core.record_key import record_key_for
+
+        # record_key (core/record_key.py) is the route ref: the internal key
+        # for Miami-Dade, the booking number everywhere else. Post-migration
+        # a Miami-Dade booking_number is "" and record_key still routes.
+        rk = record_key_for(doc)
+        if rk:
+            doc["record_key"] = rk
+        doc["booking_key_internal"] = (bool(doc.get("booking_key_internal"))
+                                       or is_internal_booking_key(doc["booking_number"])
+                                       or is_internal_booking_key(rk))
         doc["booking_number_display"] = public_booking_number(doc["booking_number"])
     return attach_write_eligible(doc)
 

@@ -9,6 +9,7 @@ from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Query, Depends
 from fastapi.responses import StreamingResponse
 
+from core.record_key import arrest_ref_query
 from dashboard.deps import get_collection
 from dashboard.extensions import (
     ACTIVE_STATE_CODES,
@@ -592,7 +593,7 @@ async def api_leads_fail_closed_counties():
 async def api_lead_detail(booking_number: str):
     arrests = get_collection("arrests")
     try:
-        doc = await arrests.find_one({"booking_number": booking_number}, {"_id": 0})
+        doc = await arrests.find_one(arrest_ref_query(booking_number), {"_id": 0})
         if not doc:
             try:
                 doc = await arrests.find_one({"booking_number": int(booking_number)}, {"_id": 0})

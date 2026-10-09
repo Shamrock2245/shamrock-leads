@@ -1,6 +1,7 @@
 """ShamrockLeads — Arrests Router (FastAPI port of api/arrests.py)"""
 from datetime import datetime
 from fastapi import APIRouter, Query
+from core.record_key import arrest_ref_query
 from dashboard.deps import get_collection
 from dashboard.extensions import (
     REGISTERED_COUNTIES,
@@ -140,7 +141,7 @@ async def api_arrests_search(
 @router.get("/arrests/by-booking/{booking_number}")
 async def api_arrest_by_booking(booking_number: str):
     arrests = get_collection("arrests")
-    doc = await arrests.find_one({"booking_number": booking_number}, {"_id": 0})
+    doc = await arrests.find_one(arrest_ref_query(booking_number), {"_id": 0})
     if not doc:
         doc = await arrests.find_one(
             {"booking_number": {"$regex": f"^{booking_number}$", "$options": "i"}}, {"_id": 0})
