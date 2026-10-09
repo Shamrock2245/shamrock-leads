@@ -45,6 +45,11 @@ _TRUTHY = frozenset({"1", "true", "yes", "on"})
 _PHONE_KEY = re.compile(r"phone", re.IGNORECASE)
 _EMAIL_KEY = re.compile(r"email", re.IGNORECASE)
 _PAY_KEY = re.compile(r"(payment|swipesimple|premium|invoice|pay_link)", re.IGNORECASE)
+# How collateral was paid is a receipt checkbox, not a card number or amount.
+_COLLATERAL_METHOD_KEYS = frozenset({
+    "collateral_payment_method",
+    "collateral_other_description",
+})
 _POA_KEY = re.compile(r"(poa|power.?num|bond_?numbers)", re.IGNORECASE)
 
 _IDENTITY_COLLECTIONS = (
@@ -194,7 +199,11 @@ def scrub_test_contacts(value: Any, signer_email: str) -> Any:
                 out[key] = "" if not isinstance(item, (dict, list)) else scrub_test_contacts(item, signer_email)
             elif _EMAIL_KEY.search(str(key)) and not isinstance(item, (dict, list)):
                 out[key] = signer_email
-            elif _PAY_KEY.search(str(key)) and not isinstance(item, (dict, list)):
+            elif (
+                _PAY_KEY.search(str(key))
+                and str(key) not in _COLLATERAL_METHOD_KEYS
+                and not isinstance(item, (dict, list))
+            ):
                 out[key] = 0 if isinstance(item, (int, float)) and not isinstance(item, bool) else ""
             elif isinstance(item, (dict, list)):
                 out[key] = scrub_test_contacts(item, signer_email)
@@ -257,7 +266,9 @@ def force_test_submitter(submitter: Mapping[str, Any], signer_email: str) -> dic
                 cleaned.append(field)
                 continue
             name = str(field.get("name") or "")
-            if _PHONE_KEY.search(name) or _PAY_KEY.search(name):
+            if _PHONE_KEY.search(name) or (
+                _PAY_KEY.search(name) and name not in _COLLATERAL_METHOD_KEYS
+            ):
                 continue
             field = dict(field)
             if _EMAIL_KEY.search(name):
