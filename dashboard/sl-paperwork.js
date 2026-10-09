@@ -744,7 +744,7 @@ const SLPaperwork = {
   },
 
   _applyBondSeed(seed = {}) {
-    this._setAdaptiveField('pwApBooking', seed.booking_number);
+    this._setAdaptiveField('pwApBooking', window.slBookingLabel ? window.slBookingLabel(seed.booking_number) : seed.booking_number);
     this._setAdaptiveField('pwApCounty', seed.county);
     this._setAdaptiveField('pwApLookupId', seed.packet_id || seed.intake_id);
     this._setAdaptiveField('pwApPoa', seed.poa_number);

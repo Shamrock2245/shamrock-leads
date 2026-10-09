@@ -49,6 +49,13 @@ def serialize_doc(doc: dict) -> dict:
             doc[k] = str(v)
         elif k == "booking_number" and not isinstance(v, str):
             doc[k] = str(v) if v is not None else ""
+    if "booking_number" in doc:
+        # booking_number stays the record's routing id; an internal natural key
+        # (core/booking_identity.py, Miami-Dade) is flagged and displays blank.
+        from core.booking_identity import is_internal_booking_key, public_booking_number
+
+        doc["booking_key_internal"] = is_internal_booking_key(doc["booking_number"])
+        doc["booking_number_display"] = public_booking_number(doc["booking_number"])
     return attach_write_eligible(doc)
 
 

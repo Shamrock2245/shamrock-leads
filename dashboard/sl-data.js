@@ -32,7 +32,7 @@ function renderBondReadyRows(rows) {
       ? '<span class="write-eligible-pill" title="Shamrock Write-Eligible Book" style="display:inline-block;margin-left:4px;padding:1px 5px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.4);border-radius:4px;font-size:10px;font-weight:700">WRITE</span>'
       : '';
     return `<tr class="ld-clickable" title="Open lead detail" data-booking="${escHtml(bk)}">
-      <td><strong>${escHtml(l.full_name || '?')}</strong><br><span style="color:var(--muted);font-size:11px">${escHtml(l.dob || '')} · ${escHtml(bk)}</span></td>
+      <td><strong>${escHtml(l.full_name || '?')}</strong><br><span style="color:var(--muted);font-size:11px">${escHtml(l.dob || '')} · ${escHtml(window.slBookingLabel ? window.slBookingLabel(bk) : bk)}</span></td>
       <td>${l.county && l.county !== '—' ? `<span class="county-badge">${escHtml(l.county)}</span>${writeBadge}` : '—'}</td>
       <td class="${bc}">$${bond.toLocaleString()}</td>
       <td style="color:var(--success);font-weight:600">$${Math.round(prem).toLocaleString()}</td>

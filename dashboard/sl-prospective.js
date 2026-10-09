@@ -655,7 +655,7 @@ window.SLProspective = (function () {
         '<div class="ld-hero">' + heroPhoto +
           '<div class="ld-hero-text">' +
             '<div class="ld-name">' + esc(name) + '</div>' +
-            '<div class="ld-booking mono">' + esc(booking) + (county ? ' · ' + esc(county) : '') + (state ? ' (' + esc(String(state).toUpperCase()) + ')' : '') + '</div>' +
+            '<div class="ld-booking mono">' + esc(window.slBookingLabel ? window.slBookingLabel(booking) : booking) + (county ? ' · ' + esc(county) : '') + (state ? ' (' + esc(String(state).toUpperCase()) + ')' : '') + '</div>' +
             '<div class="ld-pill-row">' +
               writePill +
               '<span class="score-pill ' + scoreCls + '">' + esc(score) + (status ? ' · ' + esc(status) : '') + '</span>' +
@@ -1336,7 +1336,7 @@ window.SLProspective = (function () {
       var leads = d.leads || [];
       if (!leads.length) { el.innerHTML = '<div style="padding:16px;color:var(--muted);text-align:center">No results</div>'; return; }
       el.innerHTML = leads.map(function(l) {
-        return '<div class="al-result-row" onclick="SLProspective.addFromArrest(\'' + l.booking_number + '\',\'' + (l.full_name || '').replace(/'/g, "\\'") + '\',\'' + (l.county || '') + '\',' + (l.bond_amount || 0) + ')"><div style="font-weight:700">' + (l.full_name || '—') + '</div><div style="font-size:12px;color:var(--muted)">' + (l.county || '—') + ' · ' + (l.booking_number || '') + ' · ' + money(l.bond_amount) + '</div><div style="font-size:11px;color:var(--muted)">' + (l.charges || '—') + '</div></div>';
+        return '<div class="al-result-row" onclick="SLProspective.addFromArrest(\'' + l.booking_number + '\',\'' + (l.full_name || '').replace(/'/g, "\\'") + '\',\'' + (l.county || '') + '\',' + (l.bond_amount || 0) + ')"><div style="font-weight:700">' + (l.full_name || '—') + '</div><div style="font-size:12px;color:var(--muted)">' + (l.county || '—') + ' · ' + ((window.slBookingLabel ? window.slBookingLabel(l.booking_number) : l.booking_number) || '') + ' · ' + money(l.bond_amount) + '</div><div style="font-size:11px;color:var(--muted)">' + (l.charges || '—') + '</div></div>';
       }).join('');
     } catch (e) { el.innerHTML = '<div style="padding:16px;color:var(--red)">Error: ' + e.message + '</div>'; }
   }

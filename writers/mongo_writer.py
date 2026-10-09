@@ -18,6 +18,7 @@ from pymongo.collection import Collection
 from pymongo.errors import OperationFailure
 
 from core.models import ArrestRecord
+from core.booking_identity import internal_natural_key
 from core.staff_edits import fetch_provenance_docs, protect_scraped_update
 from config.settings import settings
 
@@ -333,19 +334,26 @@ class MongoWriter:
         op_to_record_idx: list[int] = []
         pending: list = []
 
+        internal_keyed = 0
         for idx, record in enumerate(records):
             booking = (record.Booking_Number or "").strip()
             county_name = (record.County or county or "").strip()
             state = (record.State or "FL").strip().upper() or "FL"
-            if not booking or not county_name:
+            # Narrow owner exception (core/booking_identity.py): an allow-listed
+            # scope with no source booking number (FL/Miami-Dade) is keyed on
+            # its exact-pattern internal natural key. Any other blank booking is
+            # still skipped below, unchanged.
+            internal_key = "" if booking or not county_name else internal_natural_key(record, county_name, state)
+            if (not booking and not internal_key) or not county_name:
                 skipped_invalid += 1
                 logger.debug(
-                    "Skip invalid record (missing booking/county): name=%r county=%r",
-                    getattr(record, "Full_Name", ""),
+                    "Skip invalid record (missing booking/county): county=%r",
                     county_name,
                 )
                 continue
-            # Normalize identity onto the record so writers/downstream agree
+            # Normalize identity onto the record so writers/downstream agree.
+            # An internal key is never copied onto Booking_Number.
+            identity = booking or internal_key
             record.Booking_Number = booking
             record.County = county_name
             record.State = state
@@ -353,7 +361,14 @@ class MongoWriter:
             doc = record.to_mongo_doc()
             doc["state"] = state
             doc["county"] = county_name
-            doc["booking_number"] = booking
+            doc["booking_number"] = identity
+            if internal_key:
+                # Stored identity only (unique index + dashboard addressing).
+                # Displays print it blank (public_booking_number / serialize_doc).
+                internal_keyed += 1
+                doc["booking_key_internal"] = True
+                doc["md_dedupe"] = internal_key
+                doc["md_key_fallback"] = bool((record.extra_data or {}).get("md_key_fallback"))
             doc["updated_at"] = now  # Track when record was last refreshed (retention signal)
             doc["last_seen_at"] = now
             # Refresh scraped_at on every write so live activity KPIs stay honest;
@@ -375,8 +390,10 @@ class MongoWriter:
             # Ensure created_at / first_seen_at are NEVER overwritten in $set
             doc.pop("created_at", None)
             doc.pop("first_seen_at", None)
-            pending.append((idx, record, (state, county_name, booking), doc))
+            pending.append((idx, record, (state, county_name, identity), doc))
 
+        if internal_keyed:
+            logger.info("%s: %d record(s) keyed on the internal natural key (no source booking number)", county, internal_keyed)
         # ── Staff edits survive rescrapes (core/staff_edits.py) ──
         # One read per (state, county) for docs that may carry staff bond or
         # charge edits; their $set is rewritten so scraped values land in

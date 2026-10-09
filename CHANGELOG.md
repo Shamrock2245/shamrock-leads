@@ -3,6 +3,50 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-09 (Miami-Dade reopen on an internal natural key; owner exception)
+
+### Changed
+- **Miami-Dade (FL) reopened as `unverified`.** It had been `fail_closed` since #166. Owner exception (Brendan, 2026-10-09 9:32 AM ET): the ArcGIS jail layer has no booking, jail or case number, and the owner approved an internal natural key. The county runs on the same 60-minute schedule. `SOURCE_CONTRACT_VALIDATED=True`. The exception is recorded in Health (no `SCRAPER_SOURCE_STATES` entry, with a comment like Pinellas), evidence FL/086 (`recon_only`), the regenerated matrix, `COUNTY_REGISTRY.md`, `STATUS.md` and the FL 67-status doc (now 39 unverified / 18 fail_closed). It is not `verified_public` until a Leads Ops write smoke after the cleanup.
+- **Key:** `md_dedupe_v2:` + sha256 of the normalised defendant, DOB and BookDate.
+  - Charges are not in the key, so an amended charge updates the same record.
+  - Without a DOB, the key falls back to defendant + BookDate + full verbatim charges, and the record is flagged `md_key_fallback`. Logs carry counts only, never names.
+  - Two rows with the same key in one snapshot (same person and DOB, same BookDate, e.g. a same-day re-booking) are merged into one record with the union of their charges, never written as two rows.
+  - `DOB` is now fetched (stored as `dob`, YYYY-MM-DD); address and ZIP are still excluded.
+- **`Booking_Number` stays blank.** The scraper never sets it to the key.
+- **`MongoWriter` narrow path** (`core/booking_identity.py`):
+  - A record with a blank `Booking_Number` is written only when (state, county) is in `INTERNAL_NATURAL_KEY_SCOPES` (only `("FL", "Miami-Dade")`) and `extra.md_dedupe` exactly matches `^md_dedupe_v2:[0-9a-f]{64}$`.
+  - The arrests collection is uniquely indexed on (state, county, booking_number) and the dashboard addresses records by `booking_number`, so the stored doc's `booking_number` carries the key as its record id. The doc also gets `booking_key_internal: true`, `md_dedupe` and `md_key_fallback`.
+  - Staff edits are preserved (`protect_scraped_update`), the charges/bond pair guard is unchanged, and unknown bond stays `""`.
+  - Every other county or state, and any malformed key, is skipped exactly as before.
+  - `BaseScraper.ALLOWS_INTERNAL_NATURAL_KEY` (default False; True only on `MiamiDadeCountyScraper`) applies the same check to the pre-write filter.
+  - The writer's skip log no longer prints a name.
+- **The key is never printed or hydrated as a booking number:**
+  - `build_adaptive_field_map` blanks it.
+  - DocuSeal `create_submission` scrubs submitter values and fields.
+  - The PDF fills (`_apply_field_values`, OSI/Palmetto builders, packet filename) blank it.
+  - `serialize_doc` adds `booking_key_internal` and `booking_number_display` (blank for the key) while `booking_number` stays the record id.
+  - The dashboard's `slBookingLabel` shows it blank in the lead table, defendant cards, lead detail, arrest search, Record Bond and the paperwork seed (Record Bond keeps it as a hidden link). Script `?v=` cache-bust versions are bumped.
+
+### Added
+- `scripts/miami_dade_dedupe_report.py` now groups stored rows by the runtime key function: the stored internal key, else DOB + BookDate, else the fallback on the saved source charges. Cleanup and runtime therefore agree.
+  - Legacy GlobalID rows carry no DOB, so in-window rows without a DOB are counted (`rows_in_runtime_window_without_dob`). The cleanup must set those survivors' key from the source DOB, or the next run stores them again.
+  - `--with-source-dob` reads the public layer for the runtime window (read-only) and counts how many resolve to exactly one runtime key.
+  - It stays read-only and counts-only: no names, DOBs, keys or hashes are printed.
+
+### Tests
+- New `tests/test_fl_miami_dade_natural_key.py` (added to the `ci.yml` list):
+  - two snapshots with regenerated ObjectId/GlobalID add 0 rows
+  - a charge change updates in place
+  - staff bond and charge edits survive
+  - the DOB-missing fallback is flagged and logged as counts only
+  - two people on the same BookDate don't collide
+  - a same-person same-day pair is merged
+  - the key never reaches booking fields (API doc, field map, OSI/Palmetto PDF values, DocuSeal submission)
+  - the blank-booking guard is unchanged for other counties/states and malformed keys, and in the BaseScraper filter
+  - unknown bond stays `""` and a stored positive bond is kept
+  - the report groups by the runtime key
+- Updated `tests/test_fl_miami_dade_no_row_id_key.py` (#166's hash-display test kept and extended to the stored doc), `tests/test_miami_dade_scraper.py`, `tests/test_fl_miami_dade_arcgis_contract.py` and the FL matrix summary in `tests/test_home_county_smoke_evidence.py`, and the Miami-Dade field-list check in `tests/test_fl_bond_charges_hydrate.py` (DOB now fetched; Address/Zip still excluded).
+
 ## [Unreleased] — 2026-10-09 (Miami-Dade: no row-id booking keys; fail_closed)
 
 ### Fixed

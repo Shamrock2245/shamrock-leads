@@ -26,6 +26,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from core.booking_identity import public_booking_number, scrub_internal_keys
+
 logger = logging.getLogger(__name__)
 
 # Catalog key (UI drag-drop) → DocuSeal/blank-PDF template slug
@@ -733,7 +735,8 @@ def build_adaptive_field_map(context: Dict[str, Any]) -> Dict[str, Any]:
     bond_str = f"${bond_amount:,.2f}" if bond_amount else ""
     prem_str = f"${premium:,.2f}" if premium else ""
     county = context.get("county") or ""
-    booking = context.get("booking_number") or ""
+    # Internal natural keys (core/booking_identity.py) are never printed as a booking number.
+    booking = public_booking_number(context.get("booking_number") or "")
     case_no = context.get("case_number") or ""
     poa = context.get("poa_number") or ""
     ind_csz = ", ".join(filter(None, [ind.get("city"), ind.get("state")]))
@@ -908,6 +911,7 @@ def build_adaptive_field_map(context: Dict[str, Any]) -> Dict[str, Any]:
         fields[f"charge_{i}"] = desc
 
     # Drop empty values for cleaner audit
+    fields = scrub_internal_keys(fields)
     return {k: v for k, v in fields.items() if v not in (None, "")}
 
 

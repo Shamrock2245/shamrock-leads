@@ -2,6 +2,14 @@
    Enhanced: Full SSE event routing, badge counters, desktop notifications,
    sound alerts, activity feed auto-update, keyboard shortcuts
 */
+// Booking number as printed. Internal natural keys (core/booking_identity.py,
+// Miami-Dade: no source booking number) stay the record's routing id but are
+// shown blank, never as a booking number.
+window.slBookingLabel = function (v) {
+  if (v === null || v === undefined) return '';
+  var s = String(v);
+  return /md_dedupe_v\d+:[0-9a-f]{16,}/.test(s) ? '' : s;
+};
 window.SL_STATE = {
   counties: [], writeCounties: [], failClosedCounties: [], selectedCounties: [], days: 0, custody: '', status: '',
   stateCode: '', minBond: 0, search: '', sort: 'scraped_at', order: 'desc',

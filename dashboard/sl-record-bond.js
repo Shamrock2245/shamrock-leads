@@ -68,7 +68,7 @@ window.SLRecordBond = (() => {
         </div>
         <div style="font-size:11px;color:var(--muted);margin-top:2px;display:flex;gap:8px;flex-wrap:wrap">
           <span>📍 ${a.county || '—'}</span>
-          <span>📋 ${a.booking_number || '—'}</span>
+          <span>📋 ${(window.slBookingLabel ? window.slBookingLabel(a.booking_number) : a.booking_number) || '—'}</span>
           <span>⚖️ ${(a.charges || '—').substring(0, 45)}${(a.charges || '').length > 45 ? '…' : ''}</span>
           ${a.custody_status ? `<span style="color:${a.custody_status.toLowerCase().includes('custody') ? 'var(--warning)' : 'var(--success)'}">● ${a.custody_status}</span>` : ''}
         </div>
@@ -102,7 +102,11 @@ window.SLRecordBond = (() => {
     $('rbDefendantAddress').value = arrest.address || arrest.defendant_address || '';
     $('rbDefendantDob').value = arrest.dob || arrest.date_of_birth || '';
     $('rbBookingUrl').value = arrest.source_url || arrest.detail_url || '';
-    $('rbBookingNumber').value = arrest.booking_number || '';
+    // An internal natural key (no source booking number) is kept as the link,
+    // not shown in the Booking # box.
+    const _rbBkShown = (window.slBookingLabel ? window.slBookingLabel(arrest.booking_number) : arrest.booking_number) || '';
+    $('rbBookingNumber').value = _rbBkShown;
+    $('rbBookingNumber').dataset.internalKey = _rbBkShown ? '' : (arrest.booking_number || '');
     $('rbCounty').value = arrest.county || '';
     $('rbFacility').value = arrest.facility || arrest.jail_facility || '';
     $('rbCharges').value = arrest.charges || '';
@@ -154,7 +158,9 @@ window.SLRecordBond = (() => {
 
     // Pre-fill from defendant/arrest data
     $('rbDefendantName').value = data.defendant_name || data.full_name || '';
-    $('rbBookingNumber').value = data.booking_number || '';
+    const _rbBkOpen = (window.slBookingLabel ? window.slBookingLabel(data.booking_number) : data.booking_number) || '';
+    $('rbBookingNumber').value = _rbBkOpen;
+    $('rbBookingNumber').dataset.internalKey = _rbBkOpen ? '' : (data.booking_number || '');
     $('rbCounty').value = data.county || '';
     $('rbFacility').value = data.facility || '';
     $('rbCharges').value = data.charges || '';
@@ -315,7 +321,7 @@ window.SLRecordBond = (() => {
       defendant_dob: $('rbDefendantDob')?.value || '',
       defendant_email: $('rbDefendantEmail')?.value || '',
       booking_page_url: $('rbBookingUrl')?.value || '',
-      booking_number: $('rbBookingNumber')?.value || '',
+      booking_number: $('rbBookingNumber')?.value || $('rbBookingNumber')?.dataset.internalKey || '',
       county: $('rbCounty')?.value || '',
       facility: $('rbFacility')?.value || '',
       charges: $('rbCharges')?.value || '',

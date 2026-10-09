@@ -142,7 +142,7 @@ async function loadDefendants() {
         : '';
 
       return `<div class="def-card" data-booking="${bkEscD}">
-        <div class="def-card-header"><div><div class="def-name ld-clickable" title="Open lead detail" onclick="event.stopPropagation();SLProspective&&SLProspective.openDetail('${bkSafe}')">${l.full_name||'Unknown'}</div><div class="def-booking">${l.booking_number||'\u2014'} ${readyChip}${leeBadgeDef}${pastBondBadge}</div></div>
+        <div class="def-card-header"><div><div class="def-name ld-clickable" title="Open lead detail" onclick="event.stopPropagation();SLProspective&&SLProspective.openDetail('${bkSafe}')">${l.full_name||'Unknown'}</div><div class="def-booking">${(window.slBookingLabel ? window.slBookingLabel(l.booking_number) : l.booking_number)||'\u2014'} ${readyChip}${leeBadgeDef}${pastBondBadge}</div></div>
           <div class="def-bond-edit-wrap" onclick="event.stopPropagation()">
             <div class="def-bond-pill ${bc} ${bond<=0?'bond-zero':''}" title="Click amount to edit — scrapers often leave $0 until first appearance">${bondPillLabel}</div>
             <div class="def-bond-edit-row">
