@@ -20,7 +20,6 @@ import traceback
 import requests as http_requests
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List
-from core.booking_identity import redact_internal_keys
 
 logger = logging.getLogger(__name__)
 
@@ -274,7 +273,7 @@ class ErrorTracker:
         try:
             http_requests.post(
                 self._slack_webhook,
-                json=redact_internal_keys(payload),
+                json=payload,
                 timeout=5,
             )
         except Exception as e:

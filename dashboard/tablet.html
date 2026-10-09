@@ -242,7 +242,6 @@
     </div>
   </div>
 
-<script src="/sl-booking-guard.js?v=1"></script>
 <script>
 'use strict';
 const API = window.location.origin;
@@ -378,13 +377,13 @@ function _ftaItem(f) {
   const amt = f.bond_amount ? `$${Number(f.bond_amount).toLocaleString()}` : '—';
   return `<div class="list-item ${cls}">
     <div style="display:flex;justify-content:space-between">
-      <div class="item-name">${_esc(f.defendant_name || (window.slBookingLabel ? window.slBookingLabel(f.booking_number) : f.booking_number) || '—')}</div>
+      <div class="item-name">${_esc(f.defendant_name || f.booking_number || '—')}</div>
       <span class="badge ${badge}">${label}</span>
     </div>
     <div class="item-meta">
       <span>${_esc(f.county || '—')}</span>
       <span style="color:var(--green);font-weight:700">${amt}</span>
-      <span>${_esc(window.slBookingLabel ? window.slBookingLabel(f.booking_number) : (f.booking_number || ''))}</span>
+      <span>${_esc(f.booking_number || '')}</span>
       ${f.hours_past_court ? `<span style="color:var(--red)">${Math.round(f.hours_past_court)}h past</span>` : ''}
     </div>
     ${f.surrender_initiated ? '<div style="font-size:0.6rem;color:var(--red);margin-top:3px;font-weight:700">🆘 Surrender initiated</div>' : ''}
@@ -403,14 +402,14 @@ function _bondItem(b) {
   const dateStr = b.court_date ? new Date(b.court_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—';
   return `<div class="list-item ${cls}">
     <div style="display:flex;justify-content:space-between">
-      <div class="item-name">${_esc(b.defendant_name || (window.slBookingLabel ? window.slBookingLabel(b.booking_number) : b.booking_number) || '—')}</div>
+      <div class="item-name">${_esc(b.defendant_name || b.booking_number || '—')}</div>
       ${courtBadge}
     </div>
     <div class="item-meta">
       <span>${_esc(b.county || '—')}</span>
       <span style="color:var(--green);font-weight:700">${amt}</span>
       <span>${dateStr}</span>
-      <span style="color:var(--muted)">${_esc(window.slBookingLabel ? window.slBookingLabel(b.booking_number) : (b.booking_number || ''))}</span>
+      <span style="color:var(--muted)">${_esc(b.booking_number || '')}</span>
     </div>
   </div>`;
 }

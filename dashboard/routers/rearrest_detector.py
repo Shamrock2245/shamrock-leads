@@ -22,7 +22,6 @@ import os
 
 from dashboard.extensions import get_collection
 from dashboard.services.book_watch import WATCH_STATUSES
-from core.booking_identity import redact_internal_keys
 
 logger = logging.getLogger(__name__)
 
@@ -385,7 +384,7 @@ async def _post_rearrest_slack(alert: dict) -> bool:
     )
     payload = {"text": text}
     async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.post(webhook, json=redact_internal_keys(payload))
+        resp = await client.post(webhook, json=payload)
         if resp.status_code >= 300:
             logger.warning("rearrest slack HTTP %s: %s", resp.status_code, resp.text[:200])
             return False

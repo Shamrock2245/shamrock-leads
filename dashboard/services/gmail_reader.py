@@ -20,7 +20,6 @@ import base64
 import email
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional
-from core.booking_identity import redact_internal_keys
 
 logger = logging.getLogger(__name__)
 
@@ -271,10 +270,6 @@ class GmailReaderService:
         Requires gmail.send scope on the OAuth refresh token.
         Returns {"success": bool, "id": str|None, "error": str|None}.
         """
-        # Internal natural keys (core/booking_identity.py) are never sent.
-        subject = redact_internal_keys(subject)
-        body_text = redact_internal_keys(body_text)
-        body_html = redact_internal_keys(body_html)
         service = self.authenticate()
         if not service:
             return {"success": False, "id": None, "error": "gmail_not_configured"}

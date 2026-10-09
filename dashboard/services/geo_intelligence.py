@@ -29,7 +29,6 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-from core.booking_identity import public_booking_number
 from dashboard.extensions import get_collection
 
 logger = logging.getLogger(__name__)
@@ -439,7 +438,7 @@ class GeoIntelligenceService:
             "notification_id": str(uuid.uuid4()),
             "type": "geofence_violation",
             "severity": "critical",
-            "title": f"⚠️ Zone Violation: {defendant_name or public_booking_number(booking_number)}",
+            "title": f"⚠️ Zone Violation: {defendant_name or booking_number}",
             "message": (
                 f"Defendant detected {direction} {zone.get('name', 'zone')} "
                 f"({zone_label}). Distance: {distance:.1f}mi from center. "

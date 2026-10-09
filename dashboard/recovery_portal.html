@@ -173,9 +173,6 @@
   </section>
 </main>
 <script>
-    // Miami-Dade internal natural keys (md_dedupe_vN:<hash>) are routing ids only; never print them.
-    function bkl(v) { v = String(v || ''); return /^md_dedupe_v\d+:[0-9a-f]{16,64}$/.test(v) ? '' : v.replace(/md_dedupe_v\d+:[0-9a-f]{16,64}/g, ''); }
-
 (function () {
   const $ = (id) => document.getElementById(id);
   let role = '';
@@ -221,7 +218,7 @@
       '<button type="button" class="file" data-share="' + esc(card.share_id) + '">' +
         '<div class="spine">FILE</div>' +
         '<div><strong>' + esc(card.defendant_name || 'Unnamed') + '</strong>' +
-        '<div>' + esc(bkl(card.booking_number)) + ' · ' + esc(card.court_case_number || '') + '</div>' +
+        '<div>' + esc(card.booking_number || '') + ' · ' + esc(card.court_case_number || '') + '</div>' +
         '<div>' + esc(card.county || '') + ' ' + esc(card.state || '') + '</div></div>' +
         '<div>' + (card.disposition ? '<span class="pill">' + esc(card.disposition) + '</span>' : '<span class="pill">open</span>') + '</div>' +
       '</button>'
@@ -249,7 +246,7 @@
       '<div class="grid">' +
         fact('Defendant', card.defendant_name) +
         fact('Date of birth', card.date_of_birth) +
-        fact('Booking', bkl(card.booking_number)) +
+        fact('Booking', card.booking_number) +
         fact('Case', card.case_number) +
         fact('Court case', card.court_case_number) +
         fact('Status', card.bond_status) +
@@ -365,7 +362,7 @@
     }
     host.innerHTML = '<table><thead><tr><th>Defendant</th><th>Booking</th><th>Court case</th><th></th></tr></thead><tbody>' +
       rows.map((row) => (
-        '<tr><td>' + esc(row.defendant_name) + '</td><td>' + esc(bkl(row.booking_number)) + '</td><td>' +
+        '<tr><td>' + esc(row.defendant_name) + '</td><td>' + esc(row.booking_number) + '</td><td>' +
         esc(row.court_case_number) + '</td><td>' +
         (row.already_shared ? '<span class="pill">shared</span>' :
           '<button type="button" data-book="' + esc(row.booking_number) + '">Use</button>') +
@@ -373,14 +370,8 @@
       )).join('') + '</tbody></table>';
     host.querySelectorAll('[data-book]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        const raw = btn.getAttribute('data-book') || '';
-        const input = $('shareBooking');
-        // An internal Miami-Dade key is the routing id only: keep it hidden, print blank.
-        input.dataset.internalKey = bkl(raw) === raw ? '' : raw;
-        input.required = !input.dataset.internalKey;
-        input.placeholder = input.dataset.internalKey ? 'Miami-Dade record selected (no public booking #)' : '';
-        input.value = bkl(raw);
-        input.focus();
+        $('shareBooking').value = btn.getAttribute('data-book') || '';
+        $('shareBooking').focus();
       });
     });
   }
@@ -420,15 +411,9 @@
     }
   });
 
-  $('shareBooking').addEventListener('input', (event) => {
-    event.target.dataset.internalKey = '';
-    event.target.required = true;
-  });
   $('shareForm').addEventListener('submit', async (event) => {
     event.preventDefault();
     const body = Object.fromEntries(new FormData(event.target).entries());
-    const bkInput = $('shareBooking');
-    if (!body.booking_number && bkInput.dataset.internalKey) body.booking_number = bkInput.dataset.internalKey;
     if (!body.expires_in_days) delete body.expires_in_days;
     try {
       const data = await api('/api/recovery/shares', {
@@ -462,12 +447,7 @@
       await loadAgents();
       await loadCandidates();
       const preset = new URLSearchParams(location.search).get('booking');
-      if (preset) {
-        const input = $('shareBooking');
-        input.dataset.internalKey = bkl(preset) === preset ? '' : preset;
-        input.required = !input.dataset.internalKey;
-        input.value = bkl(preset);
-      }
+      if (preset) $('shareBooking').value = preset;
     }
     await loadCases();
   }

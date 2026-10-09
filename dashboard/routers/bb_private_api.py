@@ -21,7 +21,6 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
-from core.booking_identity import redact_internal_keys
 
 logger = logging.getLogger(__name__)
 
@@ -132,8 +131,6 @@ class BlueBubblesClient:
                        params: dict | None = None,
                        json_body: dict | None = None) -> dict:
         """Execute an HTTP request against the BlueBubbles server."""
-        # Internal natural keys (core/booking_identity.py) are never sent.
-        json_body = redact_internal_keys(json_body)
         if _outbound_send_path(method, path):
             blocked = await _suspended_send_result()
             if blocked:

@@ -19,7 +19,6 @@ import os
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-from core.booking_identity import redact_internal_keys
 
 logger = logging.getLogger(__name__)
 
@@ -297,14 +296,14 @@ class SwipeSimpleReceiptPoller:
                 async with httpx.AsyncClient(timeout=8) as client:
                     await client.post(
                         slack,
-                        json=redact_internal_keys({
+                        json={
                             "text": (
                                 f":moneybag: *SwipeSimple receipt (Gmail poll)* — "
                                 f"${amount:.2f}"
                                 f"{f' | Booking: {booking_number}' if booking_number else ''}"
                                 f"{' | unmatched' if not bond else ''}"
                             )
-                        }),
+                        },
                     )
         except Exception as exc:
             logger.debug("[SwipeSimplePoll] slack failed: %s", exc)

@@ -71,8 +71,6 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
 
-from core.booking_identity import redact_internal_keys
-
 logger = logging.getLogger(__name__)
 
 # OWNER SWITCH — legacy static payment link. DEFAULT OFF. Single source of truth
@@ -834,13 +832,13 @@ class _Run:
             async with httpx.AsyncClient(timeout=8) as client:
                 await client.post(
                     slack,
-                    json=redact_internal_keys({
+                    json={
                         "text": (
                             f":white_check_mark: *DocuSeal packet signed* — "
                             f"`{self.packet_id}` | {self.defendant_name}"
                             f"{' | Drive filed' if self.drive_url() else ' | Drive pending'}"
                         )
-                    }),
+                    },
                 )
         except Exception as exc:
             await self.fail(STEP_SLACK, error_type=type(exc).__name__)

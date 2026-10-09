@@ -5,7 +5,7 @@
 // Booking number as printed. Internal natural keys (core/booking_identity.py,
 // Miami-Dade: no source booking number) stay the record's routing id but are
 // shown blank, never as a booking number.
-// Defined by sl-booking-guard.js (loaded first); fallback for safety.
+// Shared label/redact helpers (JS twin of core/booking_identity.py).
 window.slBookingLabel = window.slBookingLabel || function (v) {
   if (v === null || v === undefined) return '';
   var s = String(v);

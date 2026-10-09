@@ -9,7 +9,6 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
-from core.booking_identity import redact_internal_keys
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +176,7 @@ def send_alpr_slack_alert(hit: Dict[str, Any]) -> bool:
 
         r = requests.post(
             webhook,
-            json=redact_internal_keys({"text": text}),
+            json={"text": text},
             headers={"Content-Type": "application/json"},
             timeout=10,
         )

@@ -5,7 +5,6 @@ Endpoints: /api/poa/next, /api/poa/assign, /api/poa/inventory,
            /api/poa/release, /api/poa/reassign, /api/poa/restore
 """
 
-from core.booking_identity import redact_internal_keys
 import logging
 from datetime import datetime, timezone
 
@@ -1430,7 +1429,7 @@ async def api_poa_alert_check():
 
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(webhook, json=redact_internal_keys(payload), timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                async with session.post(webhook, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status == 200:
                         alerts_sent = 1
         except Exception as exc:

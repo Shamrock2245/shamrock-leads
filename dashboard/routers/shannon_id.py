@@ -17,7 +17,6 @@ from dashboard.routers.pin_portal import client_fields_from_id_ocr
 from dashboard.services.identity_media_service import save_upload_file, merge_id_photos_field
 from dashboard.services.id_ocr_service import last_name_token, normalize_person_name, resolve_legal_name
 from dashboard.services.id_scanner_service import IDScannerService
-from core.booking_identity import redact_internal_keys
 
 logger = logging.getLogger(__name__)
 
@@ -298,7 +297,7 @@ async def shannon_id_upload(
         if hook:
             httpx.post(
                 hook,
-                json=redact_internal_keys({"text": "Shannon ID photo received for packet " + packet_id + " (" + doc_type + "). Staff: attach to the case."}),
+                json={"text": "Shannon ID photo received for packet " + packet_id + " (" + doc_type + "). Staff: attach to the case."},
                 timeout=4.0,
             )
     except Exception:

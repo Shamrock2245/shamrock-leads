@@ -44,7 +44,6 @@ import logging
 from typing import Optional
 from datetime import datetime, timezone
 from dashboard.extensions import get_collection, get_db
-from core.booking_identity import redact_internal_keys
 logger = logging.getLogger(__name__)
 intake_bp = APIRouter(prefix="/api", tags=["intake"])
 # ── Valid intake sources ──────────────────────────────────────────────────────
@@ -1489,7 +1488,7 @@ async def intake_promote(request: Request, intake_id: str):
         try:
             import httpx
             async with httpx.AsyncClient(timeout=5) as client:
-                await client.post(slack_url, json=redact_internal_keys({
+                await client.post(slack_url, json={
                     "text": (
                         f"☘️ *Bond Case Created from Intake*\n"
                         f"Defendant: *{defendant_name}*\n"
@@ -1500,7 +1499,7 @@ async def intake_promote(request: Request, intake_id: str):
                         f"Indemnitor: {indemnitor_name}\n"
                         f"Source: Intake Promotion ({intake_id})"
                     )
-                }))
+                })
         except Exception as exc:
             logger.warning("[intake] Slack alert failed during promote: %s", exc)
 
