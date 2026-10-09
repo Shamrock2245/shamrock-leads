@@ -104,7 +104,8 @@ _SOURCE_NAMES = {
 
 # Signature widgets, and checkboxes whose live template 5 name is not the
 # data_source. Payment boxes keep these names so prefill hits template 5.
-# cr_other has no live checkbox; its data_source is the DocuSeal name.
+# Template 5 has no Other checkbox. Template 6 names that box cr_other.
+# The submission builder sends cr_other only when the target template has it.
 _WIDGET_NAMES = {
     "app_agent_signature": "agent_signature_5",
     "app_defendant_signature": "defendant_signature_3",

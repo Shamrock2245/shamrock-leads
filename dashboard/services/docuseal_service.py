@@ -147,26 +147,6 @@ def _nonempty_party(p: Any) -> bool:
     return False
 
 
-def _payment_fact(*vals: Any) -> Any:
-    """First stored payment fact. Blank is missing. Never a default method.
-
-    Case and surrounding whitespace stay on the string. The collateral
-    mapper folds those. A bool, number, or container is returned as stored
-    so an unknown type stays unknown instead of disappearing.
-    """
-    for val in vals:
-        if val is None:
-            continue
-        if isinstance(val, str):
-            if not val.strip():
-                continue
-            if val.strip().lower() in ("none", "null", "n/a", "tbd"):
-                continue
-            return val
-        return val
-    return ""
-
-
 def _text(*vals: Any) -> str:
     """First non-empty scalar as a stripped string."""
     for val in vals:
@@ -1662,6 +1642,7 @@ class DocuSealService:
         completed_redirect_url: Optional[str] = None,
         skip_bond_binding: bool = False,
         staff_test_case: bool = False,
+        template_field_names: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """
         Build multi-party submitters from bond/packet context and create submission.
@@ -1724,6 +1705,31 @@ class DocuSealService:
         in_person = bool(bond_data.get("in_person") or bond_data.get("in_person_scan"))
         payload_values: Dict[str, Any] = raw_values
 
+        from dashboard.collateral_payment_method import (
+            collateral_prefill_for_template,
+            payment_source as collateral_payment_source,
+        )
+        from dashboard.services.docuseal_signing_ux import (
+            field_names_for_template_id,
+            omit_unknown_template_fields,
+        )
+
+        # Collateral boxes follow the vault method. A built-in inventory
+        # (templates 5 and 6) drops a checkbox name that template lacks.
+        # Passing template_field_names also drops every other unknown name.
+        # Omitting it leaves the rest of the prefill in place.
+        explicit_names = template_field_names
+        inventory = explicit_names
+        if inventory is None:
+            inventory = field_names_for_template_id(template_id)
+        payload_values, collateral_warnings = collateral_prefill_for_template(
+            payload_values,
+            inventory,
+            collateral_payment_source(bond_data),
+        )
+        if explicit_names is not None:
+            payload_values = omit_unknown_template_fields(payload_values, explicit_names)
+
         # Collect indemnitors (primary + co-indemnitors)
         inds: List[Dict[str, Any]] = []
         if indemnitors:
@@ -1751,6 +1757,7 @@ class DocuSealService:
         signer_fields = submission_fields_from_values(
             payload_values,
             extra_readonly=extra_readonly,
+            template_field_names=explicit_names,
         )
         # Per-submitter redirect after that person finishes (not the whole packet).
         party_done = completed_redirect_url or paperwork_done_url()
@@ -1897,6 +1904,7 @@ class DocuSealService:
         result["template_id"] = template_id
         result["created_at"] = datetime.now(timezone.utc).isoformat()
         result["esign_provider"] = "docuseal"
+        result["warnings"] = collateral_warnings
         return result
 
     # ── Drive archive ───────────────────────────────────────────────────────
@@ -2416,20 +2424,10 @@ def build_bond_data_from_dashboard(
         "poa_numbers": poa_numbers,
         "bond_amount": bond_amount,
         "premium_amount": premium_amount,
-        # Collateral receipt method comes from the bond context, then intake.
-        # A packet-finalize body must not tick a box.
-        "down_payment_method": _payment_fact(
-            ctx.get("down_payment_method"), intake_doc.get("down_payment_method"),
-        ),
-        "payment_method": _payment_fact(
-            ctx.get("payment_method"), intake_doc.get("payment_method"),
-        ),
-        "down_payment_reference": _text(
-            ctx.get("down_payment_reference"), intake_doc.get("down_payment_reference"),
-        ),
-        "collateral_description": _text(
-            ctx.get("collateral_description"), intake_doc.get("collateral_description"),
-        ),
+        # Collateral receipt method is the vault record on the packet context.
+        # Premium down_payment_method and the finalize body do not tick a box.
+        "collateral_payment_method": _text(ctx.get("collateral_payment_method")),
+        "collateral_other_description": _text(ctx.get("collateral_other_description")),
         "court_date": ctx.get("court_date") or body.get("court_date") or "TBN",
         "charges": charges,
         "charge_details": charge_details,

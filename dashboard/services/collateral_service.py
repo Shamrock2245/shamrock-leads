@@ -11,12 +11,59 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 import fitz
 
+from dashboard.collateral_payment_method import require_staff_method
 from dashboard.extensions import get_collection
 
 logger = logging.getLogger("shamrock.collateral")
 
+
+def _optional_staff_method(data: Dict[str, Any]) -> Optional[str]:
+    """Blank stays unset. Any other value must be one of the staff select tokens."""
+    if "collateral_payment_method" not in data:
+        return None
+    raw = data.get("collateral_payment_method")
+    if raw is None:
+        return None
+    if isinstance(raw, str) and not raw.strip():
+        return None
+    return require_staff_method(raw)
+
+
+def _other_description(data: Dict[str, Any]) -> str:
+    raw = data.get("collateral_other_description")
+    if raw is None or isinstance(raw, (bool, dict, list, tuple, set, int, float)):
+        return ""
+    return str(raw).strip()
+
+
+async def _audit_payment_method(
+    *,
+    collateral_id: str,
+    booking_number: str,
+    tag_number: str,
+    old_method: str,
+    new_method: str,
+    actor: str,
+    when: str,
+) -> None:
+    audit_col = get_collection("audit_events")
+    await audit_col.insert_one({
+        "event_id": str(uuid.uuid4()),
+        "event_type": "collateral_payment_method_set",
+        "collateral_id": collateral_id,
+        "booking_number": booking_number,
+        "tag_number": tag_number,
+        "old_collateral_payment_method": old_method,
+        "new_collateral_payment_method": new_method,
+        "actor": actor or "Staff",
+        "created_at": when,
+    })
+
+
 async def add_collateral_item(data: Dict[str, Any]) -> Dict[str, Any]:
     """Record a new collateral item held in agency vault."""
+    method = _optional_staff_method(data)
+    other_description = _other_description(data)
     collateral_col = get_collection("collateral_items")
     now = datetime.now(timezone.utc)
 
@@ -38,6 +85,10 @@ async def add_collateral_item(data: Dict[str, Any]) -> Dict[str, Any]:
         "received_at": now.isoformat(),
         "notes": data.get("notes", ""),
     }
+    if method:
+        doc["collateral_payment_method"] = method
+    if other_description:
+        doc["collateral_other_description"] = other_description
 
     await collateral_col.insert_one(doc)
 
@@ -52,9 +103,66 @@ async def add_collateral_item(data: Dict[str, Any]) -> Dict[str, Any]:
         "estimated_value": doc["estimated_value"],
         "created_at": now.isoformat()
     })
+    if method:
+        await _audit_payment_method(
+            collateral_id=doc["collateral_id"],
+            booking_number=doc["booking_number"],
+            tag_number=tag_number,
+            old_method="",
+            new_method=method,
+            actor=str(doc.get("received_by") or "Staff"),
+            when=now.isoformat(),
+        )
 
     doc.pop("_id", None)
     return doc
+
+
+async def set_collateral_payment_method(
+    collateral_id: str,
+    data: Dict[str, Any],
+    actor: str = "Staff",
+) -> Dict[str, Any]:
+    """Set or change the vault payment method. Writes an audit row when it changes."""
+    if not collateral_id:
+        raise ValueError("Collateral item not found")
+    # This route always carries the method. Blank clears it. Unknown is rejected.
+    payload = dict(data or {})
+    payload.setdefault("collateral_payment_method", "")
+    new_method = _optional_staff_method(payload)
+    other_description = _other_description(payload)
+    collateral_col = get_collection("collateral_items")
+    item = await collateral_col.find_one({"collateral_id": collateral_id})
+    if not item:
+        raise ValueError("Collateral item not found")
+
+    old_method = str(item.get("collateral_payment_method") or "")
+    now = datetime.now(timezone.utc).isoformat()
+    updates: Dict[str, Any] = {}
+    if new_method:
+        updates["collateral_payment_method"] = new_method
+    else:
+        updates["collateral_payment_method"] = ""
+    if "collateral_other_description" in data:
+        updates["collateral_other_description"] = other_description
+    await collateral_col.update_one(
+        {"collateral_id": collateral_id},
+        {"$set": updates},
+    )
+    stored = new_method or ""
+    if stored != old_method:
+        await _audit_payment_method(
+            collateral_id=collateral_id,
+            booking_number=str(item.get("booking_number") or ""),
+            tag_number=str(item.get("tag_number") or ""),
+            old_method=old_method,
+            new_method=stored,
+            actor=actor or "Staff",
+            when=now,
+        )
+    item.update(updates)
+    item.pop("_id", None)
+    return item
 
 async def list_collateral_items(booking_number: Optional[str] = None, status: Optional[str] = None) -> List[Dict[str, Any]]:
     """List collateral items with optional filters."""

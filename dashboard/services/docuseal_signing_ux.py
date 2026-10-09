@@ -15,10 +15,16 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List, Optional
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Mapping, Optional
 from urllib.parse import urlparse
 
 from dashboard.collateral_payment_method import DOCUSEAL_CHECKBOX_NAMES
+
+_TEMPLATE_FIELDS_PATH = (
+    Path(__file__).resolve().parents[1] / "docuseal_live_template_fields.json"
+)
 
 DEFAULT_SIGN_HOST = "sign.shamrockbailbonds.biz"
 DEFAULT_SIGN_ORIGIN = f"https://{DEFAULT_SIGN_HOST}"
@@ -138,6 +144,48 @@ IDENTITY_READONLY_FIELD_NAMES = frozenset({
 })
 
 
+@lru_cache(maxsize=1)
+def _live_template_field_names() -> Dict[str, frozenset]:
+    """Names-only inventories for the attached live templates 5 and 6."""
+    try:
+        raw = json.loads(_TEMPLATE_FIELDS_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, frozenset] = {}
+    for key, names in raw.items():
+        if not isinstance(names, list):
+            continue
+        out[str(key)] = frozenset(str(name) for name in names if name)
+    return out
+
+
+def field_names_for_template_id(template_id: Any) -> Optional[frozenset]:
+    """Field names for a known live template, or None when this id is not one."""
+    key = str(template_id or "").strip()
+    names = _live_template_field_names().get(key)
+    if not names:
+        return None
+    return names
+
+
+def omit_unknown_template_fields(
+    values: Optional[Mapping[str, Any]],
+    template_field_names: Optional[Iterable[str]],
+) -> Dict[str, Any]:
+    """Drop every prefill name the target template does not have.
+
+    ``None`` means the caller has no inventory, so the dict is unchanged.
+    An inventory, including an empty one, keeps only listed names.
+    """
+    data = dict(values or {})
+    if template_field_names is None:
+        return data
+    allowed = {str(name) for name in template_field_names if name}
+    return {key: val for key, val in data.items() if key in allowed}
+
+
 def _is_act_field(name: str) -> bool:
     """Signatures, initials, and unnamed boxes are acts — never prefill them.
 
@@ -162,12 +210,17 @@ def submission_fields_from_values(
     *,
     extra_readonly: Optional[set] = None,
     force_editable: bool = False,
+    template_field_names: Optional[Iterable[str]] = None,
 ) -> List[Dict[str, Any]]:
     """OpenAPI submitters[].fields[] with default_value so Prefillable boxes fill.
 
     DocuSeal matches on field name. Sending both `values` and `fields.default_value`
     is the reliable way to hydrate every role's copy of the same named field.
+    When ``template_field_names`` is set, a name the template lacks is not sent.
     """
+    allowed = None
+    if template_field_names is not None:
+        allowed = {str(name) for name in template_field_names if name}
     items: List[tuple[str, Any, bool]] = []
     if isinstance(values, dict):
         for key, val in values.items():
@@ -188,6 +241,8 @@ def submission_fields_from_values(
     seen = set()
     for key, val, flagged_readonly in items:
         if key in seen or _is_act_field(key):
+            continue
+        if allowed is not None and key not in allowed:
             continue
         if val is None or str(val).strip() == "":
             continue

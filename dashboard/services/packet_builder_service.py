@@ -18,6 +18,7 @@ and requires Brendan's authorization PIN (default 224545).
 from __future__ import annotations
 
 import base64
+import inspect
 import io
 import logging
 import os
@@ -101,17 +102,31 @@ def _first(*vals: Any) -> str:
     return ""
 
 
-def _bond_stored(bond: Dict[str, Any], key: str) -> Any:
-    """Value stored on the bond document, or "" when that key is absent.
+async def _held_collateral_rows(booking_number: str) -> List[Dict[str, Any]]:
+    """Held vault rows for this booking. A missing collection yields none."""
+    booking = str(booking_number or "").strip()
+    if not booking:
+        return []
+    try:
+        from dashboard.extensions import get_collection
 
-    Case and surrounding whitespace are kept. Nothing here substitutes cash.
-    """
-    if not isinstance(bond, dict) or key not in bond:
-        return ""
-    value = bond.get(key)
-    if value is None:
-        return ""
-    return value
+        cursor = get_collection("collateral_items").find(
+            {"booking_number": booking, "status": "held"},
+            {"_id": 0},
+        )
+        to_list = getattr(cursor, "to_list", None)
+        if to_list is None:
+            return []
+        pending = to_list(length=50)
+        if not inspect.isawaitable(pending):
+            return []
+        rows = await pending
+    except Exception:
+        logger.debug("collateral payment method lookup skipped", exc_info=True)
+        return []
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
 
 
 def _digits_phone(p: str) -> str:
@@ -490,6 +505,15 @@ async def resolve_case_context(
     )
     match_confidence = match.get("Confidence") or match.get("confidence") or intake.get("match_confidence")
 
+    collateral_rows = await _held_collateral_rows(str(booking_number or ""))
+    if not collateral_rows and isinstance(bond.get("collateral_items"), list):
+        collateral_rows = [
+            row for row in bond.get("collateral_items") or [] if isinstance(row, dict)
+        ]
+    from dashboard.collateral_payment_method import context_from_collateral_rows
+
+    collateral_facts = context_from_collateral_rows(collateral_rows)
+
     context = {
         "resolved_at": _now_iso(),
         "sources": sources,
@@ -553,11 +577,9 @@ async def resolve_case_context(
         "bond_amount": bond_amount,
         "bond_amount_known": bond_amount_known,
         "premium_amount": premium,
-        # Collateral receipt payment type is a bond fact. Empty when unstored.
-        "down_payment_method": _bond_stored(bond, "down_payment_method"),
-        "payment_method": _bond_stored(bond, "payment_method"),
-        "down_payment_reference": _bond_stored(bond, "down_payment_reference"),
-        "collateral_description": _bond_stored(bond, "collateral_description"),
+        # Vault payment method only. The premium method is not copied here.
+        "collateral_payment_method": collateral_facts.get("collateral_payment_method") or "",
+        "collateral_other_description": collateral_facts.get("collateral_other_description") or "",
         "is_small_bond": bond_amount > 0 and bond_amount <= SMALL_BOND_MAX,
         "small_bond_max": SMALL_BOND_MAX,
         "defendant": {
@@ -671,8 +693,8 @@ async def resolve_case_context(
         lee_clerk_search_url(context.get("case_number") or "", context.get("booking_number") or "")
         if is_lee_county(context.get("county"), context.get("state")) else ""
     )
-    if isinstance(bond.get("collateral_items"), list):
-        context["collateral_items"] = bond["collateral_items"]
+    if collateral_facts.get("collateral_items"):
+        context["collateral_items"] = collateral_facts["collateral_items"]
 
     # Returning-client fast path: fill empty indemnitor / defendant PII from
     # the last Shamrock bond. Live booking, POA, case #, and amounts stay authoritative.

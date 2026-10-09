@@ -24,7 +24,11 @@ from dashboard.bond_pdf_service import (
     _split_court_datetime,
     fill_palmetto_bond,
 )
-from dashboard.collateral_payment_method import checkbox_context
+from dashboard.collateral_payment_method import (
+    SOURCE_OTHER,
+    checkbox_context,
+    payment_source,
+)
 from dashboard.palmetto_field_placement import PAGE_SIZE, fields_for
 from dashboard.paperwork_pdf_service import get_template_path
 
@@ -261,7 +265,11 @@ def build_palmetto_context(data: Optional[dict]) -> Dict[str, str]:
         "agent_license": license_no,
         "agency_name": AGENCY_NAME,
         "collateral": str(data.get("collateral") or "Indemnity Agreement, Promissory Note"),
-        "collateral_description": str(data.get("collateral_description") or "").strip(),
+        "collateral_description": (
+            str(data.get("collateral_other_description") or "").strip()
+            if payment_source(data) == SOURCE_OTHER
+            else ""
+        ),
         "collateral_receipt_number": str(data.get("collateral_receipt_number") or receipt_no),
         "who_signed": str(data.get("who_signed") or "defendant and family/friends"),
         "transfer_agent": str(data.get("transfer_agent") or ""),

@@ -8,10 +8,12 @@ from starlette.responses import Response
 from fastapi.responses import JSONResponse
 from typing import Optional, Dict, Any
 
+from dashboard.collateral_payment_method import InvalidCollateralPaymentMethod
 from dashboard.services.collateral_service import (
     add_collateral_item,
     list_collateral_items,
     return_collateral_item,
+    set_collateral_payment_method,
     generate_collateral_receipt_pdf
 )
 
@@ -36,6 +38,32 @@ async def create_collateral_item(request: Request):
         data = await request.json() or {}
         item = await add_collateral_item(data)
         return JSONResponse(status_code=200, content={"success": True, "item": item})
+    except InvalidCollateralPaymentMethod as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": "invalid_collateral_payment_method", "message": str(exc)},
+        )
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(exc)})
+
+@collateral_bp.post("/payment-method/{collateral_id}")
+async def update_collateral_payment_method(
+    collateral_id: str = Path(...),
+    request: Request = None,
+):
+    """Set or change how this collateral was paid. Premium method is not accepted here."""
+    try:
+        data = await request.json() or {}
+        actor = str(data.get("actor") or data.get("received_by") or "Staff")
+        item = await set_collateral_payment_method(collateral_id, data, actor=actor)
+        return JSONResponse(status_code=200, content={"success": True, "item": item})
+    except InvalidCollateralPaymentMethod as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": "invalid_collateral_payment_method", "message": str(exc)},
+        )
+    except ValueError as exc:
+        return JSONResponse(status_code=404, content={"success": False, "error": str(exc)})
     except Exception as exc:
         return JSONResponse(status_code=500, content={"success": False, "error": str(exc)})
 
