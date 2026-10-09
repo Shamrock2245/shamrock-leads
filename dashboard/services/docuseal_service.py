@@ -147,6 +147,26 @@ def _nonempty_party(p: Any) -> bool:
     return False
 
 
+def _payment_fact(*vals: Any) -> Any:
+    """First stored payment fact. Blank is missing. Never a default method.
+
+    Case and surrounding whitespace stay on the string. The collateral
+    mapper folds those. A bool, number, or container is returned as stored
+    so an unknown type stays unknown instead of disappearing.
+    """
+    for val in vals:
+        if val is None:
+            continue
+        if isinstance(val, str):
+            if not val.strip():
+                continue
+            if val.strip().lower() in ("none", "null", "n/a", "tbd"):
+                continue
+            return val
+        return val
+    return ""
+
+
 def _text(*vals: Any) -> str:
     """First non-empty scalar as a stripped string."""
     for val in vals:
@@ -1114,6 +1134,11 @@ class DocuSealService:
             else:
                 collateral_receipt_number = first_poa_digits[-8:]
 
+        from dashboard.collateral_payment_method import payment_source
+
+        # One stored method, or None. None leaves every payment box blank.
+        collateral_pay = payment_source(bond_data)
+
         # Keys intentionally duplicated for OSI/Palmetto template naming variance
         values: Dict[str, Any] = {
             **row_fields,
@@ -1142,6 +1167,23 @@ class DocuSealService:
             "bond_numbers": poa_all or poa,
             "BondNumbers": poa_all or poa,
             "collateral_receipt_number": collateral_receipt_number,
+            # Palmetto collateral-receipt payment boxes. Empty stays off.
+            # Literal keys so the hydration snapshot sees every name.
+            "collateral_cash_checkbox": (
+                True if collateral_pay == "collateral_cash" else ""
+            ),
+            "collateral_check_checkbox": (
+                True if collateral_pay == "collateral_check" else ""
+            ),
+            "collateral_money_order_checkbox": (
+                True if collateral_pay == "collateral_money_order" else ""
+            ),
+            "collateral_credit_card_checkbox": (
+                True if collateral_pay == "collateral_credit_card" else ""
+            ),
+            "collateral_other": (
+                True if collateral_pay == "collateral_other" else ""
+            ),
             "booking_number": booking,
             "court_date": court_date,
             "CourtDate": court_date,
@@ -2374,6 +2416,20 @@ def build_bond_data_from_dashboard(
         "poa_numbers": poa_numbers,
         "bond_amount": bond_amount,
         "premium_amount": premium_amount,
+        # Collateral receipt method comes from the bond context, then intake.
+        # A packet-finalize body must not tick a box.
+        "down_payment_method": _payment_fact(
+            ctx.get("down_payment_method"), intake_doc.get("down_payment_method"),
+        ),
+        "payment_method": _payment_fact(
+            ctx.get("payment_method"), intake_doc.get("payment_method"),
+        ),
+        "down_payment_reference": _text(
+            ctx.get("down_payment_reference"), intake_doc.get("down_payment_reference"),
+        ),
+        "collateral_description": _text(
+            ctx.get("collateral_description"), intake_doc.get("collateral_description"),
+        ),
         "court_date": ctx.get("court_date") or body.get("court_date") or "TBN",
         "charges": charges,
         "charge_details": charge_details,
@@ -2406,6 +2462,13 @@ def build_bond_data_from_dashboard(
                 "phone": bond_data.get("indemnitor_phone"),
             }
         ]
+
+    # Vault rows are not a second payment method. Only a list already on the
+    # bond context is kept. Intake cannot add rows that retick the receipt.
+    if isinstance(ctx.get("collateral_items"), list):
+        bond_data["collateral_items"] = ctx["collateral_items"]
+    else:
+        bond_data.pop("collateral_items", None)
 
     return bond_data
 

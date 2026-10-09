@@ -101,6 +101,19 @@ def _first(*vals: Any) -> str:
     return ""
 
 
+def _bond_stored(bond: Dict[str, Any], key: str) -> Any:
+    """Value stored on the bond document, or "" when that key is absent.
+
+    Case and surrounding whitespace are kept. Nothing here substitutes cash.
+    """
+    if not isinstance(bond, dict) or key not in bond:
+        return ""
+    value = bond.get(key)
+    if value is None:
+        return ""
+    return value
+
+
 def _digits_phone(p: str) -> str:
     d = re.sub(r"\D", "", p or "")
     if len(d) == 11 and d.startswith("1"):
@@ -540,6 +553,11 @@ async def resolve_case_context(
         "bond_amount": bond_amount,
         "bond_amount_known": bond_amount_known,
         "premium_amount": premium,
+        # Collateral receipt payment type is a bond fact. Empty when unstored.
+        "down_payment_method": _bond_stored(bond, "down_payment_method"),
+        "payment_method": _bond_stored(bond, "payment_method"),
+        "down_payment_reference": _bond_stored(bond, "down_payment_reference"),
+        "collateral_description": _bond_stored(bond, "collateral_description"),
         "is_small_bond": bond_amount > 0 and bond_amount <= SMALL_BOND_MAX,
         "small_bond_max": SMALL_BOND_MAX,
         "defendant": {
@@ -653,6 +671,8 @@ async def resolve_case_context(
         lee_clerk_search_url(context.get("case_number") or "", context.get("booking_number") or "")
         if is_lee_county(context.get("county"), context.get("state")) else ""
     )
+    if isinstance(bond.get("collateral_items"), list):
+        context["collateral_items"] = bond["collateral_items"]
 
     # Returning-client fast path: fill empty indemnitor / defendant PII from
     # the last Shamrock bond. Live booking, POA, case #, and amounts stay authoritative.

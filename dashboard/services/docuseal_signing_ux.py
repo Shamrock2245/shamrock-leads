@@ -18,6 +18,8 @@ import os
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
+from dashboard.collateral_payment_method import DOCUSEAL_CHECKBOX_NAMES
+
 DEFAULT_SIGN_HOST = "sign.shamrockbailbonds.biz"
 DEFAULT_SIGN_ORIGIN = f"https://{DEFAULT_SIGN_HOST}"
 DEFAULT_PAPERWORK_ORIGIN = "https://paperwork.shamrockbailbonds.biz"
@@ -115,7 +117,7 @@ STAFF_READONLY_FIELD_NAMES = frozenset({
     "payment_amount_1", "payment_amount_2", "payment_amount_3", "payment_amount_4",
     "payment_due_date_1", "payment_due_date_2", "payment_due_date_3", "payment_due_date_4",
     "state", "State",
-})
+}) | DOCUSEAL_CHECKBOX_NAMES
 
 # Verified ID-scan identity — lock after in-person / OCR confirmation.
 IDENTITY_READONLY_FIELD_NAMES = frozenset({
@@ -137,10 +139,16 @@ IDENTITY_READONLY_FIELD_NAMES = frozenset({
 
 
 def _is_act_field(name: str) -> bool:
-    """Signatures, initials, and unnamed boxes are acts — never prefill them."""
+    """Signatures, initials, and unnamed boxes are acts — never prefill them.
+
+    The Palmetto collateral payment boxes are staff facts. Their live names
+    end in ``_checkbox``, which would otherwise skip the prefill.
+    """
     key = (name or "").strip().lower()
     if not key:
         return True
+    if key in DOCUSEAL_CHECKBOX_NAMES:
+        return False
     return (
         "signature" in key
         or "initials" in key

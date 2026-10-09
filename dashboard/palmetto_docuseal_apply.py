@@ -102,9 +102,9 @@ _SOURCE_NAMES = {
     "defendant_social_password": "defendant_social_media_password",
 }
 
-# Signature and checkbox widgets. Empty data_source, so the placement name
-# is translated to the live template 5 name. A name with no live equivalent
-# stays as the placement name (a genuinely new box).
+# Signature widgets, and checkboxes whose live template 5 name is not the
+# data_source. Payment boxes keep these names so prefill hits template 5.
+# cr_other has no live checkbox; its data_source is the DocuSeal name.
 _WIDGET_NAMES = {
     "app_agent_signature": "agent_signature_5",
     "app_defendant_signature": "defendant_signature_3",

@@ -170,6 +170,7 @@ jobs:
             tests/test_palmetto_packet_fields.py \
             tests/test_agent_name_fallback.py \
             tests/test_palmetto_docuseal_apply.py \
+            tests/test_palmetto_collateral_payment.py \
             tests/test_palmetto_application_header_placement.py \
             tests/test_paperwork_template_paths.py \
             tests/test_bond_packet_start.py \

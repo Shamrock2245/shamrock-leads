@@ -3,6 +3,21 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-09 (Palmetto collateral receipt payment boxes)
+
+### Fixed
+- **Palmetto collateral receipt payment boxes fill from the stored method.** `cr_cash`, `cr_check`, `cr_money_order`, `cr_credit_card`, and `cr_other` had an empty `data_source`, so the receipt never checked a box. The method is `active_bonds.down_payment_method`. Record Bond also stores `payment_method` from the same select. When both are present they must classify to the same box.
+- Write Bond saves the method through `normalize_method` (lowercase, stripped): `cash`, `check`, `swipesimple`, `card`, plus `financing` and `other` when those tokens are sent. Record Bond stores the select value after strip and without lowercasing, so `Cash` can persist. The active-bond create path stores the raw string with no strip, so ` cash ` can persist. `normalize_method` aliases that Record Bond can keep raw: `cheque` → check, and `swipe` / `swipe simple` / `card_present` → SwipeSimple. `money order` is on the receipt and is mapped only when that token is what was stored. It is not a select option.
+- Mapping, after strip, lower, and folding `_` / `-` to spaces: `cash` → `cr_cash`; `check` and `cheque` → `cr_check`; `card` and `credit card` → `cr_credit_card`; `money order` → `cr_money_order`; `swipesimple`, `swipe`, `swipe simple`, `card present`, `financing`, and `other` → `cr_other`. Missing, whitespace-only, unrecognized (`wire`, and anything else outside that list), and disagreeing methods leave all five boxes blank. Nothing defaults to cash. The checkbox mapper does not call `normalize_method`, because that function turns an unknown token into cash.
+- **Other / See Item 1** uses the existing `cr_description` field (`collateral_description`). A stored description is kept. The method name and `down_payment_reference` (check number or Swipe id) are not copied into Item 1. DocuSeal still leaves `collateral_description` blank by design.
+- The bond stores one method. Vault rows store `item_type` (Cash Deposit, Jewelry, and the rest), which is not a payment method and does not check a box. Two embedded rows whose payment methods disagree also leave every box blank. More than one box is never checked.
+- Packet context copies the method from the bond document only. Write Bond hydration reads that context, then intake. The finalize request body cannot tick a box. Receipt numbering is unchanged (Palmetto: last 6 digits of the first POA).
+- Placement areas are unchanged. The bondsman role is unchanged. The five DocuSeal names are prefilled and read-only, same as the other staff `cr_*` facts. Live template 5 names stay `collateral_cash_checkbox`, `collateral_check_checkbox`, `collateral_money_order_checkbox`, and `collateral_credit_card_checkbox`. `cr_other` has no live checkbox, so its DocuSeal name is `collateral_other`.
+- **OSI collateral receipt is unchanged.** `templates/osi/collateral-receipt.pdf` has no placed payment checkboxes (only a zero-size Signature 1). The printed, unplaced boxes are not the same five-way mapping: a "paid by way of" row (Cash / Check / Other) near y≈229, and a bullet row (CASH / CHECK / CREDIT CARD / MONEY ORDER) near y≈832. No OSI field spec exists for them.
+
+### Tests
+- `tests/test_palmetto_collateral_payment.py` (added to the `ci.yml` list): each stored method checks exactly one box; case and whitespace variants from the writers that do not fold them; unknown, missing, and disagreeing methods leave all five blank; `other` keeps Item 1; vault `item_type` and disagreeing embedded rows do not multi-check; placement and spec areas stay put; prefill is read-only and a finalize body cannot override the bond. The #161 Write Bond golden field set is unchanged because an absent method omits the empty boxes.
+
 ## [Unreleased] — 2026-10-08 (Pinellas relay-only, non-stealth browser; patchright removed)
 
 ### Changed
