@@ -1,10 +1,12 @@
 """Write Bond goldens for the live templates and the two secondary maps.
 
 The shared prefill golden stays in ``test_write_bond_golden_smoke.py``.
-Live OSI template 1 and Palmetto template 5 keep every submission value whose
-field name is on the checked-in inventory. DocuSeal matches by name, so a
-payload key that is not on the template is dropped, and a template text box
-with no payload value stays blank.
+Live OSI template 1 keeps every submission value whose field name is on the
+checked-in inventory. Charge names the template does not have are omitted
+from the payload, so they are not listed as keys DocuSeal would drop.
+The Palmetto fixture join is 140 characters. Template 5's render-proven
+cap is 200, so finalize succeeds and the Palmetto success goldens are
+compared. Charge names the template does not have stay off the payload.
 
 Two secondary goldens stay beside those:
 
@@ -590,11 +592,15 @@ def test_write_bond_secondary_maps(monkeypatch, surety_id):
     assert values["agent_name"] == HOUSE_NAME
     assert values["agent_license"] == HOUSE_LICENSE
     assert BOND_AGENTS[HOUSE_LICENSE]["agent_name"] == HOUSE_NAME
-    assert values["offense_1"] == CHARGE_1
-    assert values["offense_2"] == CHARGE_2
-    assert values["charge_line_2"] == CHARGE_2
-    assert values["charges"] == JOINED
+    assert "charge_line_2" not in values
+    assert "charges" not in values
     assert values["charges_summary"] == JOINED
+    if surety_id == "palmetto":
+        assert "offense_1" not in values
+        assert "offense_2" not in values
+    else:
+        assert values["offense_1"] == CHARGE_1
+        assert values["offense_2"] == CHARGE_2
     assert values["court_datetime"] == values["court_date"]
     assert values["bond_amount_written"] == values["bond_amount_words"]
     assert values["full_bond_amount_words"] == values["bond_amount_words"]
@@ -631,9 +637,17 @@ def test_write_bond_secondary_maps(monkeypatch, surety_id):
         assert "§" in fields["DefCharge1"]["value"]
     else:
         assert fields["charges_summary"]["value"] == JOINED
-        assert fields["charge_line_2"]["value"] == CHARGE_2
-        assert fields["charge_line_2"]["value"] == values["offense_2"]
-        assert fields["charge_line_2"]["readonly"] is True
+        # Template 5's payload has no offense_2, so this projection does not
+        # fill charge_line_2. The rebuild spec still copies it when offense_2
+        # is present.
+        wired = project_template_fields("palmetto", {
+            "offense_2": CHARGE_2,
+            "charges_summary": JOINED,
+        })
+        assert wired["charge_line_2"]["value"] == CHARGE_2
+        assert wired["charge_line_2"]["source"] == "offense_2"
+        assert wired["charge_line_2"]["readonly"] is True
+        assert "charge_line_2" not in fields
         assert fields["court_datetime"]["value"] == values["court_date"]
         assert fields["bond_amount_words"]["value"] == values["bond_amount_written"]
         assert fields["numeric_full_bond_amount"]["value"] != values["bond_amount_words"]
@@ -667,7 +681,11 @@ def test_write_bond_live_template_fields(monkeypatch, surety_id):
 
     assert set(report["fields"]) == set(field_map) & names
     assert report["dropped_payload_keys"] == sorted(set(field_map) - names)
-    assert "charge_line_2" in report["dropped_payload_keys"]
+    # Charge names the live template lacks are omitted, not sent and dropped.
+    assert "charge_line_2" not in field_map
+    assert "charge_line_2" not in report["dropped_payload_keys"]
+    assert "charges" not in field_map
+    assert "charge_1" not in field_map
     assert "charges_summary" in report["fields"]
     assert report["fields"]["charges_summary"]["value"] == JOINED
     assert report["fields"]["agent_name"]["value"] == HOUSE_NAME
@@ -694,9 +712,10 @@ def test_write_bond_live_template_fields(monkeypatch, surety_id):
         assert report["fields"]["offense_1"]["readonly"] is True
         assert "offense_2" not in report["dropped_payload_keys"]
     else:
-        assert "offense_1" in report["dropped_payload_keys"]
-        assert "offense_2" in report["dropped_payload_keys"]
+        assert "offense_1" not in report["fields"]
         assert "offense_2" not in report["fields"]
+        assert "offense_1" not in report["dropped_payload_keys"]
+        assert "offense_2" not in report["dropped_payload_keys"]
         assert "charge_line_2" not in report["fields"]
 
     if os.environ.get(REGEN_ENV) == "1":
@@ -748,8 +767,15 @@ def test_write_bond_full_template_fields(monkeypatch, surety_id):
         assert "offense_3" not in report["fields"]
         assert "offense_4" not in report["fields"]
     else:
-        assert "offense_1" in report["dropped_payload_keys"]
+        # Template 5 has no offense grid. Those names are omitted, not sent
+        # and then dropped.
+        assert "offense_1" not in report["fields"]
+        assert "offense_2" not in report["fields"]
+        assert "offense_1" not in report["dropped_payload_keys"]
+        assert "offense_2" not in report["dropped_payload_keys"]
         assert "charge_line_2" not in report["fields"]
+        assert "charge_1" not in field_map
+        assert "charges" not in field_map
         assert report["fields"]["def_how_long_at_address_1"]["value"] == "TEST DURATION"
         assert report["fields"]["def_how_long_at_address_2"]["value"] == "TEST DURATION 2"
         assert report["fields"]["defendant_how_long_at_job"]["value"] == "TEST TENURE"

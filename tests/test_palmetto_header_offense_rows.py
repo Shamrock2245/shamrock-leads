@@ -13,8 +13,11 @@ import fitz
 
 from dashboard.palmetto_docuseal_apply import plan_merge
 from dashboard.palmetto_field_placement import PAGE_SIZE, PACKET_INVENTORY, fields_for
-from dashboard.palmetto_packet_fill import fill_palmetto_document, values_for_document
-from dashboard.services.docuseal_service import DocuSealService
+from dashboard.palmetto_packet_fill import (
+    build_palmetto_context,
+    fill_palmetto_document,
+    values_for_document,
+)
 from dashboard.services.write_bond_template_projection import (
     project_template_fields,
     spec_matches_placement,
@@ -145,25 +148,21 @@ def test_header_offense_rows_sit_between_logo_and_defendant():
 
 def test_header_offense_values_fill_by_name():
     """Packet offense_1..4 values land on the fields of the same name."""
-    bond = {
+    packet = {
         "defendant_name": "SAMPLE NOT A PERSON",
         "surety_id": "palmetto",
         "bond_amount": 2500,
-        "charges": " | ".join(_CHARGES),
     }
-    values = DocuSealService(
-        base_url="https://sign.example.invalid",
-        api_key="test",
-    ).prefill_values_from_bond(bond)
-    projected = project_template_fields("palmetto", values)
+    packet.update({name: text for name, text in zip(_ROWS, _CHARGES)})
+    context = build_palmetto_context(packet)
+    projected = project_template_fields("palmetto", context)
     for index, name in enumerate(_ROWS):
-        assert values[name] == _CHARGES[index]
-        assert projected[name]["value"] == values[name]
+        assert context[name] == _CHARGES[index]
+        assert projected[name]["value"] == context[name]
         assert projected[name]["source"] == name
         assert projected[name]["readonly"] is True
         assert projected[name]["submitter_role"] == ["bondsman"]
 
-    packet = {name: text for name, text in zip(_ROWS, _CHARGES)}
     filled = values_for_document("paperwork-header", packet)
     assert [filled[name] for name in _ROWS] == list(_CHARGES)
 

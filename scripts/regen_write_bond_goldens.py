@@ -6,7 +6,7 @@ writing when that variable is anything other than ``1``.
 
     WRITE_BOND_REGEN_GOLDEN=1 python scripts/regen_write_bond_goldens.py
 
-The files are ``tests/golden/write_bond_osi.json``,
+The files this can rewrite are ``tests/golden/write_bond_osi.json``,
 ``tests/golden/write_bond_palmetto.json``, the live template pair
 ``write_bond_osi_t1_live.json`` / ``write_bond_palmetto_t5_live.json``,
 the fully populated pair ``write_bond_osi_t1_full.json`` /
