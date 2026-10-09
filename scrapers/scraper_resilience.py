@@ -30,6 +30,11 @@ entry point. This module only holds the pure, unit-testable pieces that
    ``SCRAPER_AUTO_DISABLE_CANARY_MINUTES`` (default 360) and re-enables the
    scraper only when it returns records. Manual re-enable clears the flag
    (dashboard ``POST /api/scraper/enable`` or ``scripts/scraper_reenable.py``).
+   **Relay-only counties** (``config/relay_only.py``): a failure that only
+   says the source refused this exit (``EgressBlocked``, 403 / Cloudflare /
+   challenge, any non-cooldown ``anti_bot``) is not counted toward
+   auto-disable; it is counted separately in ``egress_blocked_failures``.
+   Parser drift and other failures on those counties still count and alert.
 
 5. **Obscura (CDP stealth browser) routing policy** — Obscura may only be used
    for labels that are already ``verified_public`` *and* explicitly opted in
@@ -460,6 +465,7 @@ class ResilienceState:
     auto_disabled_reason: Optional[str] = None
     last_canary_at: Optional[datetime] = None
     last_error_class: Optional[str] = None
+    egress_blocked_failures: int = 0
 
     @classmethod
     def from_doc(cls, doc: Optional[dict]) -> "ResilienceState":
@@ -468,6 +474,8 @@ class ResilienceState:
         raw_failures = doc.get("consecutive_failures")
         failures = raw_failures if isinstance(raw_failures, int) and not isinstance(raw_failures, bool) else 0
         failures = max(0, failures)
+        raw_egress = doc.get("egress_blocked_failures")
+        egress = raw_egress if isinstance(raw_egress, int) and not isinstance(raw_egress, bool) else 0
         return cls(
             consecutive_failures=failures,
             auto_disabled=doc.get("auto_disabled") is True,
@@ -475,6 +483,7 @@ class ResilienceState:
             auto_disabled_reason=_str_or_none(doc.get("auto_disabled_reason")),
             last_canary_at=_aware(doc.get("last_canary_at")),
             last_error_class=_str_or_none(doc.get("last_error_class")),
+            egress_blocked_failures=max(0, egress),
         )
 
     def to_fields(self) -> dict:
@@ -485,6 +494,7 @@ class ResilienceState:
             "auto_disabled_reason": self.auto_disabled_reason,
             "last_canary_at": self.last_canary_at,
             "last_error_class": self.last_error_class,
+            "egress_blocked_failures": self.egress_blocked_failures,
         }
 
 
@@ -507,6 +517,18 @@ def gate_decision(
     return GATE_SKIP
 
 
+ERROR_EGRESS_BLOCKED = "egress_blocked"
+
+
+def is_egress_blocked(verdict: ErrorClassification) -> bool:
+    """The source refused this host's exit (not a parser/data failure):
+    ``EgressBlocked`` (relay exit gate, Cloudflare challenge page) or any
+    non-cooldown ``anti_bot`` (401/403/429, WAF/challenge text)."""
+    if verdict.cooldown:
+        return False
+    return bool(verdict.egress_block) or verdict.error_class == ERROR_ANTI_BOT
+
+
 def state_after_failure(
     state: ResilienceState,
     verdict: ErrorClassification,
@@ -516,14 +538,25 @@ def state_after_failure(
     exempt: bool = False,
     was_canary: bool = False,
     reason: str = "",
+    relay_only: bool = False,
 ) -> Tuple[ResilienceState, bool]:
     """Return ``(new_state, tripped_now)``.
 
     Cooldown failures are not counted. ``exempt`` scopes (SWFL core) count and
-    alert but are never flagged ``auto_disabled``.
+    alert but are never flagged ``auto_disabled``. For ``relay_only`` scopes an
+    egress-blocked failure (:func:`is_egress_blocked`) leaves
+    ``consecutive_failures`` unchanged and bumps ``egress_blocked_failures``
+    instead, so a blocked relay exit can never auto-disable the county.
     """
     if not verdict.counts_toward_disable:
         return replace(state, last_error_class=verdict.error_class), False
+    if relay_only and is_egress_blocked(verdict):
+        return replace(
+            state,
+            egress_blocked_failures=state.egress_blocked_failures + 1,
+            last_error_class=ERROR_EGRESS_BLOCKED,
+            last_canary_at=_now_if(was_canary, state.last_canary_at, now),
+        ), False
     threshold = threshold if threshold is not None else auto_disable_threshold()
     failures = state.consecutive_failures + 1
     tripped = (not state.auto_disabled) and (not exempt) and failures >= threshold
@@ -537,6 +570,10 @@ def state_after_failure(
         last_canary_at=now if was_canary else state.last_canary_at,
     )
     return new_state, tripped
+
+
+def _now_if(flag: bool, current: Optional[datetime], now: datetime) -> Optional[datetime]:
+    return now if flag else current
 
 
 def state_after_success(
@@ -556,7 +593,7 @@ def state_after_success(
         if was_canary and records > 0:
             return ResilienceState(last_canary_at=now), True
         return replace(state, last_canary_at=now if was_canary else state.last_canary_at), False
-    return replace(state, consecutive_failures=0, last_error_class=None), False
+    return replace(state, consecutive_failures=0, egress_blocked_failures=0, last_error_class=None), False
 
 
 # ── Obscura (CDP stealth browser) routing policy ────────────────────────────

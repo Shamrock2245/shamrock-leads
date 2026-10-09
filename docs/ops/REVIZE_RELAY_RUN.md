@@ -36,6 +36,8 @@ CHARLOTTE_EGRESS_MODE=direct python scripts/charlotte_residential_smoke.py
 
 Exit codes: `0` ok, `2` egress_block (VPN on, a non-residential exit, or Cloudflare did not clear for a stock browser), `3` parse_drift. On a `2`, retry once later. Do not loop, and do not reach for a proxy or a stealth browser.
 
+Egress-blocked failures (exit gate, Cloudflare 403/challenge) are counted in `egress_blocked_failures`, not toward auto-disable. See the "Auto-disable and egress blocks" section of `docs/ops/PINELLAS_RELAY_RUN.md` for the counter reset.
+
 ## Health
 
 Health stays `unverified` for both counties until a Leads Ops prod write smoke from the relay (`MONGODB_URI` set) shows real `Booking #` keys, a blank `bond_amount_raw` and charges filled in. The agent box has no `MONGODB_URI` and no residential exit.
