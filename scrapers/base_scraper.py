@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 
 from core.models import ArrestRecord
 from scoring.lead_scorer import LeadScorer
+from config.relay_only import is_relay_only
 from scrapers.scraper_resilience import (
     AUTO_DISABLE_EXEMPT_LABELS,
     ERROR_PARSE_DRIFT,
@@ -40,6 +41,7 @@ from scrapers.scraper_resilience import (
     base_retry_enabled,
     classify_exception,
     gate_decision,
+    is_egress_blocked,
     obscura_hard_refusal,
     obscura_route_decision,
     retry_transient,
@@ -1180,6 +1182,14 @@ class BaseScraper(ABC):
             now = datetime.now(timezone.utc)
             threshold = auto_disable_threshold()
             exempt = label in AUTO_DISABLE_EXEMPT_LABELS
+            relay_only = is_relay_only(self)
+            egress_blocked = relay_only and is_egress_blocked(verdict)
+            if egress_blocked:
+                logger.warning(
+                    "🌐 %s: relay egress blocked [%s] — not counted toward auto-disable "
+                    "(egress_blocked_failures=%d)",
+                    label, verdict.error_class, res_state.egress_blocked_failures + 1,
+                )
             new_state, tripped = state_after_failure(
                 res_state,
                 verdict,
@@ -1188,6 +1198,7 @@ class BaseScraper(ABC):
                 exempt=exempt,
                 was_canary=was_canary,
                 reason=f"{verdict.error_class}: {str(e)[:250]}",
+                relay_only=relay_only,
             )
             self._resilience_state = new_state
             persisted_status = "auto_disabled" if new_state.auto_disabled else "error"
@@ -1232,7 +1243,10 @@ class BaseScraper(ABC):
                         error_class=verdict.error_class,
                         last_error=str(e),
                     )
-                elif exempt and verdict.counts_toward_disable and new_state.consecutive_failures == threshold:
+                elif (
+                    exempt and verdict.counts_toward_disable and not egress_blocked
+                    and new_state.consecutive_failures == threshold
+                ):
                     _slack.notify_scraper_auto_disabled(
                         label,
                         failures=new_state.consecutive_failures,
@@ -1274,6 +1288,7 @@ class BaseScraper(ABC):
                 "last_failure_at": now,
                 "error_class": verdict.error_class,
                 "cooldown_active": verdict.cooldown,
+                "egress_blocked": egress_blocked,
             })
             self._persist_status(
                 status_writer,
@@ -1290,6 +1305,8 @@ class BaseScraper(ABC):
                 "error": str(e),
                 "error_class": verdict.error_class,
                 "consecutive_failures": new_state.consecutive_failures,
+                "egress_blocked_failures": new_state.egress_blocked_failures,
+                "egress_blocked": egress_blocked,
                 "auto_disabled": new_state.auto_disabled,
             }
 

@@ -641,6 +641,7 @@ class MongoWriter:
         "auto_disabled_reason",
         "last_canary_at",
         "last_error_class",
+        "egress_blocked_failures",
     )
 
     def get_scraper_resilience(self, county: str, state: str = None) -> dict:
@@ -659,6 +660,7 @@ class MongoWriter:
             {"$set": {
                 "auto_disabled": False,
                 "consecutive_failures": 0,
+                "egress_blocked_failures": 0,
                 "auto_disabled_reason": None,
                 "reenabled_at": now,
                 "reenabled_by": by,
