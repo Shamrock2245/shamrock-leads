@@ -814,6 +814,13 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     # Hendry's MyOCV inmates.json has only inmateID = HCSO<YY>MNI<NNNNNN>, a
     # person (Master Name Index) id, not a booking number. CoS approved.
     "Hendry (FL)": "fail_closed",
+    # Pinellas (FL) is deliberately absent, so Health reads "unverified".
+    # Owner exception (Brendan 2026-10-08 1:38 PM ET, CoS agreed): Who's In Jail
+    # (Blazor Server, no plain-HTTP listing) runs relay-only through the Leads
+    # Ops home residential relay with a non-stealth stock Playwright Chromium and
+    # an honest User-Agent (config/relay_only.py,
+    # docs/recon/FL_PINELLAS_RELAY_ONLY_2026-10-08.md). Not verified_public until
+    # a Leads Ops write smoke goes through the relay.
     # Ohio pilot scopes are registered for truthful health visibility only.
     # They remain blocked before source fetch until county-specific approval.
     "Clermont (OH)": "fail_closed",
