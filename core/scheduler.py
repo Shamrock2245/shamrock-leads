@@ -202,6 +202,33 @@ class ScraperScheduler:
                 job_id = self._resolve_job_id(county) or f"scraper_{county.lower().replace(' ', '_')}"
                 scraper = self._scrapers.get(job_id)
 
+                # Fail-closed counties are never contacted from a trigger
+                # (run-now or custody recheck), on any host. A run-now with an
+                # unreadable Health map still reaches run(), which has its own
+                # SOURCE_CONTRACT_VALIDATED guard.
+                if scraper is not None:
+                    from config.source_guard import fail_closed_reason
+
+                    guard = fail_closed_reason(
+                        scraper=scraper,
+                        url=doc.get("detail_url") or "",
+                        unknown_closed=(trigger_type == "custody_recheck"),
+                    )
+                    if guard:
+                        logger.warning(f"⛔ Trigger for {county} not run: {guard}")
+                        col.update_one(
+                            {"_id": doc["_id"]},
+                            {"$set": {
+                                "status": "fail_closed",
+                                "completed_at": datetime.now(timezone.utc),
+                                "message": (
+                                    f"{county} source contract is fail_closed ({guard}); "
+                                    "no source request was made."
+                                ),
+                            }},
+                        )
+                        continue
+
                 # Relay-only counties never run on this host from a trigger.
                 if scraper is not None and job_id in self._relay_only:
                     logger.warning(f"⛔ Trigger for relay-only county {county} not run here")
@@ -306,6 +333,19 @@ class ScraperScheduler:
         rechecks_col = db["custody_rechecks"]
         triggers_col = db["scraper_triggers"]
 
+        # Backstop for callers other than _poll_triggers: no request for a
+        # fail_closed county.
+        from config.source_guard import fail_closed_reason
+
+        guard = fail_closed_reason(scraper=scraper, url=trigger_doc.get("detail_url") or "")
+        if guard:
+            logger.warning(f"⛔ Custody recheck for {county} skipped: {guard}")
+            triggers_col.update_one(
+                {"_id": trigger_doc.get("_id")},
+                {"$set": {"total_checked": 0, "fail_closed": True, "message": f"{county}: {guard}; no source request."}},
+            )
+            return
+
         # Check if scraper supports single-booking lookups
         has_single = hasattr(scraper, "_fetch_single_booking") and callable(
             getattr(scraper, "_fetch_single_booking", None)
@@ -362,6 +402,9 @@ class ScraperScheduler:
             full_name = old_doc.get("full_name", "Unknown")
 
             if not bk:
+                continue
+            if detail_url and fail_closed_reason(url=detail_url):
+                logger.info(f"  ⛔ Recheck {bk}: detail host is fail_closed; no request")
                 continue
 
             checked += 1

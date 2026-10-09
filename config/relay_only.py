@@ -13,7 +13,10 @@ of them is marked ``relay_only`` on the VPS and is not run there.
 
 A relay-only county that is ``fail_closed`` (``SOURCE_CONTRACT_VALIDATED =
 False``) is skipped by ``--relay-only`` with no source request: Manatee and
-Charlotte since 2026-10-09 (Cloudflare challenge from every exit tried).
+Charlotte since 2026-10-09 (Cloudflare challenge from every exit tried). A
+trigger for a fail_closed county is marked ``fail_closed`` (not ``relay_only``),
+and every other refetch / recheck / ingest path checks
+``config.source_guard.fail_closed_reason`` before any request.
 
 On the relay, Leads Ops runs them with ``python main.py --relay-only`` (each
 relay-only county once, then exit) or ``python main.py Manatee``. See
