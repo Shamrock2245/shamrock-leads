@@ -939,10 +939,10 @@
     {
       "state": "FL",
       "county_fips": "086",
-      "passive_recommendation": "recon_only",
+      "passive_recommendation": "fail_closed",
       "official_source_url": "[Miami-Dade Open Data: Jail Bookings, May 29, 2015 to current](https://gis-mdc.opendata.arcgis.com/datasets/c2275711ced240c6bc4e998ee1910e85/about)",
-      "access_posture": "Anonymous public ArcGIS FeatureServer query (plain HTTPS, no challenge), checked from the box 2026-10-08 08:10 EDT; the MDCR inmate search itself has reCAPTCHA v2 and is not used",
-      "evidence_note": "Layer miamidade_jail_data/FeatureServer/0 publishes BookDate (date only), Defendant and Charge1/Code2/Charge3 as daily bookings (516,951 rows; newest BookDate 2026-10-07). There is no bond field and no custody status, so bond stays unknown. There is no source booking number either: the scraper keys on the layer's GlobalID. schemaLastEditDate equals dataLastEditDate (the layer was overwritten 2026-10-08 08:05 EDT) and ObjectIds run 1..516951, so a daily overwrite may reissue GlobalIDs. Key stability is unproven, so this stays recon_only until two snapshots on different days show the same GlobalID for the same booking row."
+      "access_posture": "Fail closed: anonymous public ArcGIS FeatureServer query (plain HTTPS, no challenge) works, but the layer publishes no source booking number; the MDCR inmate search has reCAPTCHA v2 and is not used",
+      "evidence_note": "2026-10-09 fields check (layer ?f=json + outFields=* sample, field names and value shapes only): miamidade_jail_data/FeatureServer/0 is a Table with BookDate (date only, midnight ET), Defendant, Address, CityStateZip, DOB, ChargeCode1-3 (statute codes), Charge1/Code2/Charge3, Zip, Filler (null in all 1,000 sampled rows), City, State, Zip1, and the system ObjectId/GlobalID. No booking, jail or case number; no bond field; no custody status. The 2026-10-09 08:03 ET republish reissued row ids: of 841 rows in the 2026-10-08 snapshot, 840 changed GlobalID, 1 dropped out and only 2 kept their ObjectId (118 new rows). Row ids are not booking keys, so the scraper leaves Booking_Number blank, carries an internal md_dedupe key (sha256 of defendant + booking date + full charges; 0 collisions in a 1,000-row sample) and is fail_closed (SOURCE_CONTRACT_VALIDATED=False, Health fail_closed). Existing GlobalID-keyed rows are duplicated on each republish; scripts/miami_dade_dedupe_report.py counts them (read only). Reopen needs an owner decision on keying by md_dedupe plus a backed-up cleanup."
     },
     {
       "state": "FL",

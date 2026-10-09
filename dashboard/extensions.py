@@ -729,6 +729,9 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     "Lauderdale (MS)": "fail_closed",
     "Madison (MS)": "fail_closed",
     "Sarasota (FL)": "fail_closed",
+    # 2026-10-09: the ArcGIS jail layer has no booking/jail/case number and its
+    # ObjectId/GlobalID are reissued on republish (840/841 changed). Writes off.
+    "Miami-Dade (FL)": "fail_closed",
     # Runtime-gated FL scopes aligned to Health Source Guards (SCRAPER_SOURCE_STATES).
     # Broward: cleared 2026-09-23 after Turnstile+prefix write smoke (action=arrest_search).
     # Baker/Calhoun/Gulf/Holmes/Levy/Wakulla/Washington: FL JailTracker wrappers
