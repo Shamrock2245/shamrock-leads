@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-08 (Lee empty charges → unknown bond)
+
+### Fixed
+- **Lee bond when the charges API returns nothing.** `_to_arrest_record` and `_fetch_single_booking` now default `Bond_Amount` to `""` (unknown), not `"0"`. Empty `charges[]` already parsed as unknown; a missing key no longer invents a published zero. Stacked on #147 (plain direct fetch).
+
+### Tests
+- `tests/test_lee_empty_charges_bond.py` (in CI): normalize without enrichment, missing key, empty charges list, single-booking empty charges, and a published sum still works.
+
 ## [Unreleased] — 2026-10-08 (Lee direct fetch, no stealth)
 
 ### Changed

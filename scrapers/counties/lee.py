@@ -707,7 +707,7 @@ class LeeCountyScraper(BaseScraper):
             ZIP=n.get("zip", ""),
             Mugshot_URL=n.get("mugshot_url", ""),
             Charges=charges_str,
-            Bond_Amount=n.get("bond_amount", "0"),
+            Bond_Amount=n.get("bond_amount", ""),  # "" = unknown (no charges / nothing published)
             Bond_Paid=n.get("bond_paid", "NO"),
             Bond_Type=n.get("bond_type", ""),
             Court_Type=n.get("court_type", ""),
@@ -909,7 +909,7 @@ class LeeCountyScraper(BaseScraper):
                 "booking_number": booking_id,
                 "detail_url": detail_url or f"{BASE_URL}{DETAIL_PAGE}?id={booking_id}",
                 "charges": parsed.get("charges", []),
-                "bond_amount": parsed.get("bond_amount", "0"),
+                "bond_amount": parsed.get("bond_amount", ""),  # "" when charges API empty
                 "bond_paid": parsed.get("bond_paid", "NO"),
                 "bond_type": parsed.get("bond_type", ""),
                 "court_type": parsed.get("court_type", ""),
