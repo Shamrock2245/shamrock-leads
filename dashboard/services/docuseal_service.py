@@ -967,8 +967,17 @@ class DocuSealService:
             bond_data.get("court_time") or def_.get("court_time") or ""
         ).strip()
 
-        # Format Charges Summary (truncated cleanly if > 3 charges)
-        # Prefer structured charge_details (Write Bond / lead explorer) over free-text charges
+        # Charge text is verbatim. Precedence and the 4-row grid are documented
+        # in dashboard/services/charge_verbatim.py. Request body wins over stored
+        # arrest/BondCase rows because build_bond_data_from_dashboard already
+        # merged them onto this dict. Leading/trailing whitespace was stripped
+        # there; nothing else is rewritten.
+        from dashboard.services.charge_verbatim import (
+            filter_unknown_charge_fields,
+            fit_charges_for_template,
+            resolve_verbatim_charge_rows,
+        )
+
         charges_raw = (
             bond_data.get("charge_details")
             or bond_data.get("charge_list")
@@ -977,22 +986,17 @@ class DocuSealService:
             or def_.get("charges")
             or []
         )
-        charges_list = []
-        if isinstance(charges_raw, list):
-            for c in charges_raw:
-                if isinstance(c, dict):
-                    desc = c.get("charge") or c.get("description") or c.get("name") or ""
-                else:
-                    desc = str(c) if c is not None else ""
-                if desc.strip():
-                    charges_list.append(desc.strip())
-        elif isinstance(charges_raw, str) and charges_raw.strip():
-            # Jail/booking extracts use " | " (and sometimes ;/newlines); commas alone
-            # also appear inside charge descriptions, so prefer roster delimiters first.
-            if re.search(r"[|\n;]", charges_raw):
-                charges_list = [c.strip() for c in re.split(r"[|\n;]+", charges_raw) if c.strip()]
-            else:
-                charges_list = [c.strip() for c in charges_raw.split(",") if c.strip()]
+        charge_surety = str(bond_data.get("surety_id") or bond_data.get("surety") or "osi")
+        verbatim_rows = resolve_verbatim_charge_rows(bond_data)
+        charges_list = [row.charge for row in verbatim_rows]
+        # Raises ChargeCapacityError when the live template cannot print
+        # every charge. create_submission posts template_id + submitters only,
+        # so an extra PDF or an unknown field name never reaches the signer.
+        charge_placement = fit_charges_for_template(
+            verbatim_rows,
+            surety_id=charge_surety,
+            template="docuseal",
+        )
 
         # Primary case # from first structured charge if top-level missing
         if not case_number and isinstance(charges_raw, list):
@@ -1005,10 +1009,8 @@ class DocuSealService:
         if not case_number:
             case_number = "TBN"
 
-        if len(charges_list) > 3:
-            charges_summary = ", ".join(charges_list[:3]) + " (see case file)"
-        elif charges_list:
-            charges_summary = ", ".join(charges_list)
+        if charges_list:
+            charges_summary = charge_placement.summary
         else:
             charges_summary = bond_data.get("charges_summary") or "As charged"
 
@@ -1077,12 +1079,31 @@ class DocuSealService:
         prem_formatted_dollar = f"${prem_float:,.2f}" if prem_float > 0 else ""
         prem_words = _amount_to_words(prem_float) if prem_float > 0 else ""
 
-        # Build 4-row per-charge breakdown for legal schedule tables
+        # Offense text is only written for rows the live template prints.
+        # Palmetto has no offense grid, so on_form is empty and the join lives
+        # on charges_summary. Companion fields such as poa_number_N still come
+        # from each charge row, and the payload filter drops any name the
+        # target template does not have.
         row_fields = {}
         for i in range(1, 5):
             idx = i - 1
+            placed = charge_placement.on_form[idx] if idx < len(charge_placement.on_form) else None
+            companion = placed if placed is not None else (
+                verbatim_rows[idx] if idx < len(verbatim_rows) else None
+            )
+            if companion is None:
+                continue
             charge_obj = charges_raw[idx] if (isinstance(charges_raw, list) and idx < len(charges_raw)) else None
-            if isinstance(charge_obj, dict):
+            if isinstance(getattr(companion, "raw", None), dict):
+                charge_obj = companion.raw
+                c_desc = companion.charge
+                c_case = companion.case_number or case_number
+                c_poa = companion.poa_number or (poa_list[idx] if idx < len(poa_list) else poa)
+                c_amt_float = _safe_money(
+                    charge_obj.get("bond_amount") or charge_obj.get("amount") or charge_obj.get("bond") or 0
+                )
+                c_amt_str = f"{c_amt_float:,.2f}" if c_amt_float > 0 else ""
+            elif isinstance(charge_obj, dict):
                 c_desc = charge_obj.get("charge") or charge_obj.get("description") or charge_obj.get("name") or ""
                 c_case = charge_obj.get("case_number") or case_number
                 c_poa = charge_obj.get("poa_number") or (poa_list[idx] if idx < len(poa_list) else poa)
@@ -1090,6 +1111,11 @@ class DocuSealService:
                     charge_obj.get("bond_amount") or charge_obj.get("amount") or charge_obj.get("bond") or 0
                 )
                 c_amt_str = f"{c_amt_float:,.2f}" if c_amt_float > 0 else ""
+            elif companion is not None:
+                c_desc = companion.charge
+                c_case = companion.case_number or case_number
+                c_poa = companion.poa_number or (poa_list[idx] if idx < len(poa_list) else poa)
+                c_amt_str = bond_formatted if idx == 0 else ""
             elif isinstance(charge_obj, str) and charge_obj.strip():
                 c_desc = charge_obj.strip()
                 c_case = case_number
@@ -1101,7 +1127,7 @@ class DocuSealService:
                 c_case = case_number
                 c_poa = poa_list[idx] if idx < len(poa_list) else poa
                 c_amt_str = bond_formatted if idx == 0 else ""
-            elif idx == 0 and charges_summary:
+            elif idx == 0 and charges_summary and not verbatim_rows:
                 c_desc = charges_summary
                 c_case = case_number
                 c_poa = poa
@@ -1109,8 +1135,10 @@ class DocuSealService:
             else:
                 c_desc, c_case, c_poa, c_amt_str = "", "", "", ""
 
-            row_fields[f"offense_{i}"] = c_desc
-            row_fields[f"charge_{i}"] = c_desc
+            if placed is not None:
+                row_fields[f"offense_{i}"] = c_desc
+                row_fields[f"charge_{i}"] = c_desc
+            # statute_ and degree_ are not fields on template 1 or template 5.
             row_fields[f"case_number_{i}"] = c_case
             row_fields[f"case_{i}"] = c_case
             row_fields[f"poa_number_{i}"] = c_poa
@@ -1155,7 +1183,9 @@ class DocuSealService:
             # Palmetto appearance chargesField2 is named charge_line_2.
             # offense_2 is the second charge string. Copy it so that box fills.
             # Live template 5 has no widget by this name; the rebuild spec does.
-            "charge_line_2": row_fields.get("offense_2") or "",
+            "charge_line_2": row_fields.get("offense_2") or (
+                verbatim_rows[1].charge if len(verbatim_rows) > 1 else ""
+            ),
             "case_number": case_number,
             "CaseNum": case_number,
             "poa_number": poa,
@@ -1667,8 +1697,11 @@ class DocuSealService:
                 values[dest] = values[src]
         # A social password is typed by the signer. Never copy one from the case.
         values.pop("defendant_social_media_password", None)
-        # Drop empty strings so DocuSeal doesn't overwrite blank required fields with ""
-        return {k: v for k, v in values.items() if v is not None and str(v).strip() != ""}
+        # Drop empty strings so DocuSeal doesn't overwrite blank required fields with "".
+        # Then drop charge names the live template does not have. DocuSeal would
+        # ignore those and the charge would never appear on the signed packet.
+        kept = {k: v for k, v in values.items() if v is not None and str(v).strip() != ""}
+        return filter_unknown_charge_fields(kept, surety_id)
 
     def normalize_create_response(self, raw: Any) -> Dict[str, Any]:
         """
@@ -1793,6 +1826,13 @@ class DocuSealService:
                 raise
             except Exception:
                 logger.warning("[docuseal] published field aliases skipped for surety=%s", surety_for_alias)
+
+        from dashboard.services.charge_verbatim import filter_unknown_charge_fields
+
+        raw_values = filter_unknown_charge_fields(
+            raw_values,
+            surety_for_alias or str(bond_data.get("surety_id") or "osi"),
+        )
 
         in_person = bool(bond_data.get("in_person") or bond_data.get("in_person_scan"))
         payload_values: Dict[str, Any] = raw_values
@@ -2408,7 +2448,15 @@ def build_bond_data_from_dashboard(
     def_src = intake_doc.get("defendant") if isinstance(intake_doc.get("defendant"), dict) else {}
     ind_src = intake_doc.get("indemnitor") if isinstance(intake_doc.get("indemnitor"), dict) else {}
 
-    # Structured charges from lead / write-bond / body
+    # Structured charges. Precedence (first non-empty list):
+    #   1. request body charge_details, else body charge_list
+    #   2. case context charge_details, else charge_list
+    #      (context is arrest.charge_details, then arrest.extra.charge_details,
+    #      then BondCase charge_details / charge_list — see
+    #      charge_details_from_sources)
+    #   3. intake charge_details, else charge_list
+    # The plain charges string is context, then intake, then the body.
+    # See dashboard/services/charge_verbatim.py.
     charge_details = (
         body.get("charge_details")
         or body.get("charge_list")
