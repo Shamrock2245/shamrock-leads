@@ -65,6 +65,15 @@ is 200. The collateral-receipt box is wider (predicted limit 232) and
 is not the limit. A 0.45 character-width estimate at 5.5pt is only a
 cross-check and must stay at or below 218.
 
+Palmetto template 6 (the review clone) prints each charge on the
+paperwork-header rows ``offense_1``..``offense_4``. Those names are on
+the template 6 capacity record only. Template 5 and template 1
+inventories are unchanged, so a template 5 payload still omits
+``offense_*``. One header row longer than 209 characters fails closed
+(``capacity_unit`` ``characters``, capacity 209, and the row name).
+More charges than rows fails closed. The text is never shortened.
+Template 5's 200-character ``charges_summary`` cap is unchanged.
+
 There is no addendum delivery. ``DocuSealService.create_submission``
 posts ``template_id`` and ``submitters`` only. ``create_template_from_pdf``
 creates a different template. ``get_submission_documents`` downloads a
@@ -117,6 +126,7 @@ class ChargeCapacityError(ValueError):
         *,
         unit: str = "rows",
         summary_characters: Optional[int] = None,
+        row: Optional[str] = None,
     ):
         self.charge_count = int(charge_count)
         self.capacity = int(capacity)
@@ -126,7 +136,16 @@ class ChargeCapacityError(ValueError):
         self.summary_characters = (
             None if summary_characters is None else int(summary_characters)
         )
-        if self.unit == "characters":
+        self.row = str(row or "").strip() or None
+        if self.unit == "characters" and self.row:
+            shown = self.summary_characters if self.summary_characters is not None else 0
+            message = (
+                f"{self.row} is {shown} characters and exceeds the "
+                f"{self.capacity} character capacity of that row on the "
+                f"{self.surety_id} {self.template} template and no charge "
+                f"addendum is available"
+            )
+        elif self.unit == "characters":
             shown = self.summary_characters if self.summary_characters is not None else 0
             message = (
                 f"{self.charge_count} charges ({shown} characters) exceed the "
@@ -145,7 +164,7 @@ class ChargeCapacityError(ValueError):
 
 def capacity_error_body(exc: "ChargeCapacityError") -> Dict[str, Any]:
     """HTTP body for a 422 ``charge_capacity_exceeded`` response."""
-    return {
+    body = {
         "success": False,
         "error": "charge_capacity_exceeded",
         "message": str(exc),
@@ -153,6 +172,9 @@ def capacity_error_body(exc: "ChargeCapacityError") -> Dict[str, Any]:
         "capacity": exc.capacity,
         "capacity_unit": exc.unit,
     }
+    if exc.row:
+        body["row"] = exc.row
+    return body
 
 
 def edge_strip(value: Any) -> str:
@@ -362,6 +384,26 @@ def template_record(surety_id: str) -> Dict[str, Any]:
     return _inventory()["templates"][template_key(surety_id)]
 
 
+def capacity_record(surety_id: str = "", template_id: Any = None) -> Dict[str, Any]:
+    """Inventory for this submission.
+
+    An explicit template id wins. Otherwise the surety's configured
+    template id is used. Template 5 and template 1 stay on their own
+    records. Template 6 is the review clone with paperwork-header rows.
+    """
+    inventory = _inventory()["templates"]
+    tid = str(template_id).strip() if template_id not in (None, "") else ""
+    if not tid:
+        from dashboard.services.surety_registry import template_id_for
+
+        tid = str(template_id_for(surety_id) or "").strip()
+    if tid:
+        for record in inventory.values():
+            if str(record.get("template_id")) == tid:
+                return record
+    return inventory[template_key(surety_id)]
+
+
 def template_field_names(surety_id: str) -> set:
     return set(template_record(surety_id)["field_names"])
 
@@ -442,14 +484,20 @@ def is_charge_payload_key(name: str) -> bool:
     return bool(_CHARGE_ROW_KEY.match(name or ""))
 
 
-def filter_unknown_charge_fields(values: Mapping[str, Any], surety_id: str) -> Dict[str, Any]:
+def filter_unknown_charge_fields(
+    values: Mapping[str, Any],
+    surety_id: str,
+    template_id: Any = None,
+) -> Dict[str, Any]:
     """Drop charge prefill names the target template does not have.
 
     DocuSeal ignores a field name that is not on the template. Sending one
     looks like the charge was delivered and then vanishes from the signed
-    packet. Other prefill keys are left as they are.
+    packet. Other prefill keys are left as they are. Template 6 keeps
+    ``offense_1``..``offense_4``. Template 5 and template 1 use their
+    existing inventories.
     """
-    allowed = template_field_names(surety_id)
+    allowed = set(capacity_record(surety_id, template_id).get("field_names") or [])
     return {
         key: value
         for key, value in values.items()
@@ -502,22 +550,34 @@ def _layout_notes(
     return notes
 
 
+def _offense_row_character_cap(record: Mapping[str, Any]) -> Optional[int]:
+    raw = record.get("offense_row_character_capacity")
+    if isinstance(raw, dict) and raw.get("cap") is not None:
+        return int(raw["cap"])
+    return None
+
+
 def fit_charges_for_template(
     rows: Sequence[VerbatimCharge],
     *,
     surety_id: str = "",
     template: str = "docuseal",
+    template_id: Any = None,
 ) -> ChargePlacement:
     """Place every charge on a field the live template has, or fail closed.
 
-    OSI uses ``offense_1``..``offense_4``. Palmetto uses ``charges_summary``
-    only, and only while that text is within the render-proven character
-    cap. There is no DocuSeal addendum on the signed packet.
+    OSI template 1 uses ``offense_1``..``offense_4``. Palmetto template 5
+    uses ``charges_summary`` only, and only while that text is within the
+    render-proven character cap. Palmetto template 6 uses the four
+    paperwork-header rows, each capped at 209 characters. There is no
+    DocuSeal addendum on the signed packet.
     """
     rows = list(rows)
     summary = join_charge_summary(rows)
     surety = template_key(surety_id)
-    row_capacity = offense_row_capacity(surety)
+    record = capacity_record(surety_id, template_id)
+    row_names = list(record.get("offense_rows") or [])
+    row_capacity = len(row_names)
     if row_capacity < 1:
         char_capacity = summary_character_capacity(surety)
         if rows and (char_capacity < 1 or len(summary) > char_capacity):
@@ -541,6 +601,20 @@ def fit_charges_for_template(
         )
     if len(rows) > row_capacity:
         raise ChargeCapacityError(len(rows), row_capacity, surety, template, unit="rows")
+    row_cap = _offense_row_character_cap(record)
+    if row_cap is not None:
+        for index, row in enumerate(rows, start=1):
+            if len(row.charge) > row_cap:
+                name = row_names[index - 1] if index - 1 < len(row_names) else f"offense_{index}"
+                raise ChargeCapacityError(
+                    len(rows),
+                    row_cap,
+                    surety,
+                    template,
+                    unit="characters",
+                    summary_characters=len(row.charge),
+                    row=name,
+                )
     return ChargePlacement(
         on_form=list(rows),
         overflow=[],
@@ -560,6 +634,7 @@ def place_verbatim_charges(
     addendum: bool = False,
     surety_id: str = "",
     template: str = "docuseal",
+    template_id: Any = None,
 ) -> ChargePlacement:
     """Fit charges to the live template. ``capacity`` and ``addendum`` are ignored.
 
@@ -568,7 +643,12 @@ def place_verbatim_charges(
     1 or template 5 submission.
     """
     del capacity, addendum
-    return fit_charges_for_template(rows, surety_id=surety_id, template=template)
+    return fit_charges_for_template(
+        rows,
+        surety_id=surety_id,
+        template=template,
+        template_id=template_id,
+    )
 
 
 def addendum_allowed(bond_data: Optional[Mapping[str, Any]]) -> bool:
