@@ -33,6 +33,7 @@ config/google-services.json
 !docs/recon/smoke_evidence.json
 !deployment/tailscale/acl-policy.json
 !tests/fixtures/docuseal_template_snapshot.json
+!tests/fixtures/docuseal_charge_capacity.json
 !templates/palmetto/palmetto_docuseal_field_spec.json
 !tests/fixtures/docuseal/template_5.json
 !tests/golden/write_bond_osi.json

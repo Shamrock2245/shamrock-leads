@@ -414,6 +414,25 @@ def test_write_bond_golden_fields(monkeypatch, surety_id, template_id):
     monkeypatch.setenv("STAFF_TEST_CASE_MODE", "1")
     result = _post(monkeypatch, _body(surety_id))
     response = result["response"]
+
+    if surety_id == "palmetto":
+        # The fixture join is longer than template 5's charges_summary box
+        # (125 characters at 5.5pt). There is no addendum on the signed packet.
+        assert response.status_code == 422, response.text
+        body = response.json()
+        assert body["success"] is False
+        assert body["error"] == "charge_capacity_exceeded"
+        assert body["charge_count"] == 2
+        assert body["capacity_unit"] == "characters"
+        assert body["capacity"] == 125
+        assert "2" in body["message"] and "125" in body["message"]
+        assert result["captured"] == []
+        _assert_no_network(result)
+        assert result["stores"].get("paperwork_packets") is None or (
+            result["stores"]["paperwork_packets"].inserts == []
+        )
+        return
+
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["success"] is True
@@ -428,10 +447,13 @@ def test_write_bond_golden_fields(monkeypatch, surety_id, template_id):
 
     fields = _round_trip(_field_map(payload))
     assert fields["offense_1"]["value"] == CHARGE_1
-    assert fields["charge_1"]["value"] == CHARGE_1
     assert fields["offense_2"]["value"] == CHARGE_2
-    assert fields["charge_2"]["value"] == CHARGE_2
-    assert fields["charges"]["value"] == f"{CHARGE_1}, {CHARGE_2}"
+    # charge_N and charges are not fields on template 1. Sending them would
+    # be dropped by DocuSeal and would not print.
+    assert "charge_1" not in fields
+    assert "charge_2" not in fields
+    assert "charges" not in fields
+    assert "statute_1" not in fields
     assert fields["charges_summary"]["value"] == f"{CHARGE_1}, {CHARGE_2}"
     assert "§" in fields["offense_1"]["value"]
     assert "—" in fields["offense_1"]["value"]

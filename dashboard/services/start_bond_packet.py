@@ -289,6 +289,9 @@ async def _authoritative_binding(
     if staff_email.strip().lower() != indemnitor_email.lower():
         raise PacketStartError("indemnitor_required")
     data["match_status"] = "validated"
+    for key in ("charge_details", "charge_list", "charges", "Charges"):
+        if bond.get(key) not in (None, "", []):
+            data[key if key != "Charges" else "charges"] = bond.get(key)
     data["defendant_name"] = defendant_name
     data["indemnitor_name"] = indemnitor_name
     data["indemnitor_email"] = indemnitor_email

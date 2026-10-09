@@ -11,6 +11,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from dashboard.auth.agent_scope import poa_scope_query
+from dashboard.services.charge_verbatim import ChargeCapacityError, capacity_error_body
 from dashboard.services.start_bond_packet import (
     PacketStartConflict,
     PacketStartDisabled,
@@ -72,6 +73,8 @@ async def api_send(request: Request):
             {"error": exc.code, "message": exc.message, "packet_id": exc.packet_id},
             status_code=409,
         )
+    except ChargeCapacityError as exc:
+        return JSONResponse(capacity_error_body(exc), status_code=422)
     except PacketStartError as exc:
         return JSONResponse({"error": exc.code}, status_code=400)
     status = 200 if result.get("state") == "ready_for_staff_send" else 409

@@ -959,9 +959,8 @@ class DocuSealService:
         # merged them onto this dict. Leading/trailing whitespace was stripped
         # there; nothing else is rewritten.
         from dashboard.services.charge_verbatim import (
-            DOCUSEAL_CHARGE_ROW_CAPACITY,
-            addendum_allowed,
-            place_verbatim_charges,
+            filter_unknown_charge_fields,
+            fit_charges_for_template,
             resolve_verbatim_charge_rows,
         )
 
@@ -973,13 +972,15 @@ class DocuSealService:
             or def_.get("charges")
             or []
         )
+        charge_surety = str(bond_data.get("surety_id") or bond_data.get("surety") or "osi")
         verbatim_rows = resolve_verbatim_charge_rows(bond_data)
         charges_list = [row.charge for row in verbatim_rows]
-        charge_placement = place_verbatim_charges(
+        # Raises ChargeCapacityError when the live template cannot print
+        # every charge. create_submission posts template_id + submitters only,
+        # so an extra PDF or an unknown field name never reaches the signer.
+        charge_placement = fit_charges_for_template(
             verbatim_rows,
-            capacity=DOCUSEAL_CHARGE_ROW_CAPACITY,
-            addendum=addendum_allowed(bond_data),
-            surety_id=str(bond_data.get("surety_id") or bond_data.get("surety") or ""),
+            surety_id=charge_surety,
             template="docuseal",
         )
 
@@ -1064,11 +1065,14 @@ class DocuSealService:
         prem_formatted_dollar = f"${prem_float:,.2f}" if prem_float > 0 else ""
         prem_words = _amount_to_words(prem_float) if prem_float > 0 else ""
 
-        # Four printed charge rows. Overflow is on the addendum, not dropped.
+        # Only rows the live template can print. Palmetto has no offense grid,
+        # so on_form is empty and the join lives on charges_summary.
         row_fields = {}
         for i in range(1, 5):
             idx = i - 1
             placed = charge_placement.on_form[idx] if idx < len(charge_placement.on_form) else None
+            if placed is None:
+                continue
             charge_obj = charges_raw[idx] if (isinstance(charges_raw, list) and idx < len(charges_raw)) else None
             if placed is not None and isinstance(getattr(placed, "raw", None), dict):
                 charge_obj = placed.raw
@@ -1113,17 +1117,13 @@ class DocuSealService:
 
             row_fields[f"offense_{i}"] = c_desc
             row_fields[f"charge_{i}"] = c_desc
-            if placed is not None and placed.statute:
-                row_fields[f"statute_{i}"] = placed.statute
-            if placed is not None and placed.degree:
-                row_fields[f"degree_{i}"] = placed.degree
+            # statute_ and degree_ are not fields on template 1 or template 5.
             row_fields[f"case_number_{i}"] = c_case
             row_fields[f"case_{i}"] = c_case
             row_fields[f"poa_number_{i}"] = c_poa
             row_fields[f"poa_{i}"] = c_poa
             row_fields[f"bond_amount_{i}"] = c_amt_str
             row_fields[f"numeric_bond_amount_{i}"] = c_amt_str
-        row_fields.update(charge_placement.extra_fields)
 
         # Determine collateral receipt number from first POA suffix
         surety_id = str(bond_data.get("surety_id", "osi")).lower()
@@ -1574,8 +1574,11 @@ class DocuSealService:
             "agent_date_1": today_slash,
             "coindemnitor_date_1": today_slash,
         })
-        # Drop empty strings so DocuSeal doesn't overwrite blank required fields with ""
-        return {k: v for k, v in values.items() if v is not None and str(v).strip() != ""}
+        # Drop empty strings so DocuSeal doesn't overwrite blank required fields with "".
+        # Then drop charge names the live template does not have. DocuSeal would
+        # ignore those and the charge would never appear on the signed packet.
+        kept = {k: v for k, v in values.items() if v is not None and str(v).strip() != ""}
+        return filter_unknown_charge_fields(kept, surety_id)
 
     def normalize_create_response(self, raw: Any) -> Dict[str, Any]:
         """
@@ -1699,6 +1702,13 @@ class DocuSealService:
                 raise
             except Exception:
                 logger.warning("[docuseal] published field aliases skipped for surety=%s", surety_for_alias)
+
+        from dashboard.services.charge_verbatim import filter_unknown_charge_fields
+
+        raw_values = filter_unknown_charge_fields(
+            raw_values,
+            surety_for_alias or str(bond_data.get("surety_id") or "osi"),
+        )
 
         in_person = bool(bond_data.get("in_person") or bond_data.get("in_person_scan"))
         payload_values: Dict[str, Any] = raw_values
@@ -2406,7 +2416,6 @@ def build_bond_data_from_dashboard(
         "court_date": ctx.get("court_date") or body.get("court_date") or "TBN",
         "charges": charges,
         "charge_details": charge_details,
-        "allow_charge_addendum": body.get("allow_charge_addendum", True),
         # Payment plan (optional UI / body)
         "down_payment_amount": body.get("down_payment_amount") or body.get("down_payment"),
         "balance_financed_amount": body.get("balance_financed_amount") or body.get("balance_financed"),

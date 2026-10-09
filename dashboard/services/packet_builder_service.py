@@ -295,8 +295,8 @@ def charge_details_from_sources(
                 "case_number": default_case,
                 "poa_number": "",
             })
-    # Every stored row. Paperwork placement, not this loader, enforces the
-    # printed charge-row capacity and the addendum. See charge_verbatim.py.
+    # Every stored row. The signed DocuSeal packet fails closed when the
+    # live template cannot print them. See charge_verbatim.py.
     return rows
 
 
@@ -890,28 +890,32 @@ def build_adaptive_field_map(context: Dict[str, Any]) -> Dict[str, Any]:
         "agency_phone": "(239) 332-2245",
         "self_indemnitor": "yes" if context.get("self_indemnitor") else "no",
     }
-    # DocuSeal grid is four rows. Further charges stay on the addendum, in order.
+    # Signed DocuSeal packets fail closed when the live template cannot
+    # print every charge. This preview map still keeps the full join.
     from dashboard.services.charge_verbatim import (
-        DOCUSEAL_CHARGE_ROW_CAPACITY,
-        place_verbatim_charges,
+        ChargeCapacityError,
+        fit_charges_for_template,
+        join_charge_summary,
         resolve_verbatim_charge_rows,
     )
 
     verbatim_rows = resolve_verbatim_charge_rows(context)
     if verbatim_rows:
-        placement = place_verbatim_charges(
-            verbatim_rows,
-            capacity=DOCUSEAL_CHARGE_ROW_CAPACITY,
-            addendum=True,
-            surety_id=str(context.get("surety_id") or ""),
-            template="docuseal",
-        )
-        for i, row in enumerate(placement.on_form, start=1):
-            fields[f"offense_{i}"] = row.charge
-            fields[f"charge_{i}"] = row.charge
-        fields.update(placement.extra_fields)
-        fields["charges"] = placement.summary
-        fields["Charges"] = placement.summary
+        summary = join_charge_summary(verbatim_rows)
+        try:
+            placement = fit_charges_for_template(
+                verbatim_rows,
+                surety_id=str(context.get("surety_id") or "osi"),
+                template="docuseal",
+            )
+        except ChargeCapacityError:
+            fields["charges"] = summary
+            fields["Charges"] = summary
+        else:
+            for i, row in enumerate(placement.on_form, start=1):
+                fields[f"offense_{i}"] = row.charge
+            fields["charges"] = placement.summary or summary
+            fields["Charges"] = placement.summary or summary
 
     # Drop empty values for cleaner audit
     return {k: v for k, v in fields.items() if v not in (None, "")}

@@ -24,10 +24,9 @@ The first non-empty value wins:
    ``charges`` string.
 3. Intake document ``charge_details``, else ``charge_list``.
 4. The plain ``charges`` string: context, then intake, then the request
-   body. A string that contains ``|``, a newline, or ``;`` is split on
-   those roster delimiters. A comma splits charges only when none of
-   those delimiters is present, because a statute citation can contain
-   a comma.
+   body. ``|``, a newline, and ``;`` split charges. A comma never splits
+   a charge. ``BATTERY, DOMESTIC`` is one charge. A string with no
+   roster delimiter is one charge.
 
 ``prefill_values_from_bond`` then reads the merged bond dict in this
 order: ``charge_details``, ``charge_list``, ``charges``, then the same
@@ -42,30 +41,50 @@ whole.
 
 Row capacity
 ------------
-The live DocuSeal templates (OSI template 1 and Palmetto template 5)
-share one prefill grid: ``offense_1``..``offense_4`` and
-``charge_1``..``charge_4``. Capacity is 4 rows for both sureties.
+Capacity comes from the live DocuSeal field inventory in
+``tests/fixtures/docuseal_charge_capacity.json`` (template 1
+and template 5 exports, 2026-10-09). The repo snapshot's per-template
+field lists are still ``pending_live_capture``, so the live export wins.
+
+OSI template 1 (228 unique names, including unnamed boxes) prints each
+charge on ``offense_1``..``offense_4`` and the full join on
+``charges_summary``. There is no ``charge_N``, ``statute_N``,
+``degree_N``, or ``*_addendum_*`` field. More than 4 charges fail closed.
+``charges_summary`` still receives every charge that was placed. If that
+box cannot show the text at 5.5pt, a layout note says so and the text
+is not shortened. The offense rows are what carry each charge.
+
+Palmetto template 5 (157 unique names, including unnamed boxes) has no
+offense grid. The only charge text field is ``charges_summary``
+(``defendant_prior_offense`` is a prior-offense blank, not this case's
+charges). The full join is written there. The smallest printed box is
+the defendant application, 311.3pt wide. At the 5.5pt floor used by the
+appearance-bond filler (character width 0.45), that box holds 125
+characters. A longer summary fail-closes. The collateral receipt box
+holds 134 characters and is not the limit.
+
+There is no addendum delivery. ``DocuSealService.create_submission``
+posts ``template_id`` and ``submitters`` only. ``create_template_from_pdf``
+creates a different template. ``get_submission_documents`` downloads a
+finished submission. None of those puts an extra page on the template
+1 or template 5 packet the signer sees. Unknown field names are dropped
+by DocuSeal, so charge values are sent only for names on that template.
 
 An OSI appearance bond has one charge widget (``DefCharge1``). A
-Palmetto appearance bond has one charge widget (``chargestField1``;
-``chargesField2`` is a wrap line for that same charge, not a second
-charge). Further charges are additional appearance-bond forms, one per
-charge, in order (``generate_appearance_bonds``).
-
-When a 4-row grid has more charges than rows, the overflow is written
-in the same order onto a continuation addendum (``charge_addendum_N``
-and a one-page-per-charge PDF). A placement that has no addendum fails
-closed with the charge count and the capacity. It does not drop or
-shorten a charge.
+Palmetto appearance bond has one (``chargestField1``). Further charges
+are additional appearance-bond forms, one per charge. Those local PDFs
+are not the DocuSeal signing packet.
 """
 from __future__ import annotations
 
-import os
+import json
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-# Live DocuSeal OSI (template 1) and Palmetto (template 5) prefill grid.
+# OSI template 1 offense_1..offense_4. Palmetto template 5 has no offense rows.
 DOCUSEAL_CHARGE_ROW_CAPACITY = 4
 
 # One charge widget per appearance-bond form. The next charge is another form.
@@ -85,18 +104,53 @@ _ROSTER_SPLIT = re.compile(r"[|\n;]+")
 
 
 class ChargeCapacityError(ValueError):
-    """More charges than the template can print, and no addendum to carry them."""
+    """The live template cannot print every charge, and no addendum is delivered."""
 
-    def __init__(self, charge_count: int, capacity: int, surety_id: str, template: str):
+    def __init__(
+        self,
+        charge_count: int,
+        capacity: int,
+        surety_id: str,
+        template: str,
+        *,
+        unit: str = "rows",
+        summary_characters: Optional[int] = None,
+    ):
         self.charge_count = int(charge_count)
         self.capacity = int(capacity)
         self.surety_id = str(surety_id or "")
         self.template = str(template or "")
-        super().__init__(
-            f"{self.charge_count} charges exceed the {self.capacity} charge-row "
-            f"capacity of the {self.surety_id} {self.template} template and no "
-            f"charge addendum is available"
+        self.unit = str(unit or "rows")
+        self.summary_characters = (
+            None if summary_characters is None else int(summary_characters)
         )
+        if self.unit == "characters":
+            shown = self.summary_characters if self.summary_characters is not None else 0
+            message = (
+                f"{self.charge_count} charges ({shown} characters) exceed the "
+                f"{self.capacity} character capacity of the {self.surety_id} "
+                f"{self.template} charges_summary field and no charge addendum "
+                f"is available"
+            )
+        else:
+            message = (
+                f"{self.charge_count} charges exceed the {self.capacity} charge-row "
+                f"capacity of the {self.surety_id} {self.template} template and no "
+                f"charge addendum is available"
+            )
+        super().__init__(message)
+
+
+def capacity_error_body(exc: "ChargeCapacityError") -> Dict[str, Any]:
+    """HTTP body for a 422 ``charge_capacity_exceeded`` response."""
+    return {
+        "success": False,
+        "error": "charge_capacity_exceeded",
+        "message": str(exc),
+        "charge_count": exc.charge_count,
+        "capacity": exc.capacity,
+        "capacity_unit": exc.unit,
+    }
 
 
 def edge_strip(value: Any) -> str:
@@ -186,19 +240,20 @@ def charge_from_item(item: Any) -> Optional[VerbatimCharge]:
 
 
 def split_charges_text(text: str) -> List[str]:
-    """Split a roster charge string. Do not split on a comma inside a citation.
+    """Split a roster charge string on ``|``, newline, or ``;`` only.
 
-    ``|``, newline, and ``;`` are the roster delimiters. A comma splits only
-    when none of those is present. Each piece is edge-stripped and kept whole.
+    A comma is never a delimiter. ``BATTERY, DOMESTIC`` stays one charge.
+    A string with no roster delimiter is one charge. Each piece is
+    edge-stripped and kept whole.
     """
     raw = str(text or "")
     if not raw.strip():
         return []
     if re.search(r"[|\n;]", raw):
         parts = _ROSTER_SPLIT.split(raw)
-    else:
-        parts = raw.split(",")
-    return [edge_strip(part) for part in parts if edge_strip(part)]
+        return [edge_strip(part) for part in parts if edge_strip(part)]
+    one = edge_strip(raw)
+    return [one] if one else []
 
 
 def resolve_verbatim_charge_rows(bond_data: Optional[Mapping[str, Any]]) -> List[VerbatimCharge]:
@@ -277,171 +332,223 @@ def appearance_box_clips(surety_id: str, text: str) -> bool:
     return text_clips_box(text, box["width"], box["height"])
 
 
+_INVENTORY_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "tests"
+    / "fixtures"
+    / "docuseal_charge_capacity.json"
+)
+_CHARGE_ROW_KEY = re.compile(
+    r"^(?:offense|charge|statute|degree|case_number|case|bond_amount|"
+    r"numeric_bond_amount|poa|poa_number)_\d+$"
+)
+
+
+@lru_cache(maxsize=1)
+def _inventory() -> Dict[str, Any]:
+    return json.loads(_INVENTORY_PATH.read_text(encoding="utf-8"))
+
+
+def template_key(surety_id: str) -> str:
+    key = str(surety_id or "osi").strip().lower()
+    if key in {"palmetto", "psc"}:
+        return "palmetto"
+    return "osi"
+
+
+def template_record(surety_id: str) -> Dict[str, Any]:
+    return _inventory()["templates"][template_key(surety_id)]
+
+
+def template_field_names(surety_id: str) -> set:
+    return set(template_record(surety_id)["field_names"])
+
+
+def offense_row_capacity(surety_id: str) -> int:
+    """How many per-charge offense rows the live template actually has."""
+    return len(template_record(surety_id).get("offense_rows") or [])
+
+
+def charges_summary_boxes(surety_id: str) -> List[Dict[str, Any]]:
+    return [
+        box for box in template_record(surety_id).get("charge_boxes") or []
+        if box.get("field") == "charges_summary"
+    ]
+
+
+def summary_character_capacity(surety_id: str) -> int:
+    """Largest single-line length that still prints at or above 5.5pt.
+
+    The smallest ``charges_summary`` box on the template is the limit.
+    The same width math as ``text_clips_box`` decides it.
+    """
+    boxes = charges_summary_boxes(surety_id)
+    if not boxes:
+        return 0
+    limit = None
+    for box in boxes:
+        lo, hi = 0, 4000
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if text_clips_box("x" * mid, float(box["width_pt"]), float(box["height_pt"])):
+                hi = mid - 1
+            else:
+                lo = mid
+        limit = lo if limit is None else min(limit, lo)
+    return int(limit or 0)
+
+
+def summary_box_clips(surety_id: str, text: str) -> bool:
+    """True when any printed ``charges_summary`` box cannot show ``text``."""
+    if not text:
+        return False
+    for box in charges_summary_boxes(surety_id):
+        if text_clips_box(text, float(box["width_pt"]), float(box["height_pt"])):
+            return True
+    return False
+
+
+def is_charge_payload_key(name: str) -> bool:
+    """Charge text and the per-charge row companions sent next to it."""
+    if name in {"charges", "charges_summary"}:
+        return True
+    if "addendum" in name:
+        return True
+    return bool(_CHARGE_ROW_KEY.match(name or ""))
+
+
+def filter_unknown_charge_fields(values: Mapping[str, Any], surety_id: str) -> Dict[str, Any]:
+    """Drop charge prefill names the target template does not have.
+
+    DocuSeal ignores a field name that is not on the template. Sending one
+    looks like the charge was delivered and then vanishes from the signed
+    packet. Other prefill keys are left as they are.
+    """
+    allowed = template_field_names(surety_id)
+    return {
+        key: value
+        for key, value in values.items()
+        if not is_charge_payload_key(str(key)) or str(key) in allowed
+    }
+
+
+def _offense_box(surety_id: str, index: int) -> Optional[Dict[str, Any]]:
+    name = f"offense_{index}"
+    for box in template_record(surety_id).get("charge_boxes") or []:
+        if box.get("field") == name:
+            return box
+    return None
+
+
 def _layout_notes(
     rows: Sequence[VerbatimCharge],
     summary: str,
     *,
     surety_id: str,
     capacity: int,
-    overflow: Sequence[VerbatimCharge],
 ) -> List[str]:
     notes: List[str] = []
-    box = _APPEARANCE_CHARGE_BOX.get(str(surety_id or "").lower())
-    if summary and box and text_clips_box(summary, box["width"], box["height"]):
+    if summary and summary_box_clips(surety_id, summary):
+        boxes = charges_summary_boxes(surety_id)
+        narrow = min(boxes, key=lambda box: float(box["width_pt"])) if boxes else None
+        where = ""
+        if narrow:
+            where = (
+                f" The narrowest charges_summary box is {narrow['document']} "
+                f"({float(narrow['width_pt']):.0f}pt × {float(narrow['height_pt']):.0f}pt, "
+                f"{summary_character_capacity(surety_id)} characters at {_MIN_LEGIBLE_PT}pt)."
+            )
         notes.append(
-            f"charges and charges_summary contain all {len(rows)} charges "
-            f"({len(summary)} characters). The {surety_id} {box['field']} box "
-            f"({box['width']:.0f}pt × {box['height']:.0f}pt) clips below "
-            f"{_MIN_LEGIBLE_PT}pt. The text is not shortened."
+            f"charges_summary contains all {len(rows)} charges "
+            f"({len(summary)} characters).{where} The text is not shortened."
         )
     for index, row in enumerate(rows, start=1):
-        if box and text_clips_box(row.charge, box["width"], box["height"]):
+        box = _offense_box(surety_id, index)
+        if box and text_clips_box(row.charge, float(box["width_pt"]), float(box["height_pt"])):
             notes.append(
                 f"charge {index} is {len(row.charge)} characters. The {surety_id} "
-                f"{box['field']} box may clip it. The stored text is not shortened."
+                f"offense_{index} box may clip it. The stored text is not shortened."
             )
-    if overflow:
-        start = capacity + 1
-        end = capacity + len(overflow)
+    if capacity and len(rows) <= capacity:
         notes.append(
-            f"charges {start}-{end} are on the charge addendum in that order. "
-            f"offense_1..{capacity} hold the first {capacity}. "
-            f"charges and charges_summary still contain every charge."
+            f"offense_1..{len(rows)} hold these charges. "
+            f"charges_summary contains every charge."
         )
     return notes
 
 
-def _addendum_fields(overflow: Sequence[VerbatimCharge]) -> Dict[str, str]:
-    fields: Dict[str, str] = {}
-    for index, row in enumerate(overflow, start=1):
-        fields[f"charge_addendum_{index}"] = row.charge
-        fields[f"offense_addendum_{index}"] = row.charge
-        if row.statute:
-            fields[f"statute_addendum_{index}"] = row.statute
-        if row.degree:
-            fields[f"degree_addendum_{index}"] = row.degree
-        if row.case_number:
-            fields[f"case_addendum_{index}"] = row.case_number
-        if row.bond_amount not in (None, ""):
-            fields[f"bond_addendum_{index}"] = edge_strip(row.bond_amount)
-        if row.poa_number:
-            fields[f"poa_addendum_{index}"] = row.poa_number
-    return fields
-
-
-def _unicode_font() -> Optional[str]:
-    for path in (
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-    ):
-        if os.path.isfile(path):
-            return path
-    return None
-
-
-def render_charge_addendum_pdf(
+def fit_charges_for_template(
     rows: Sequence[VerbatimCharge],
     *,
     surety_id: str = "",
-) -> bytes:
-    """One page per overflow charge, in order. The widget value is the charge text.
+    template: str = "docuseal",
+) -> ChargePlacement:
+    """Place every charge on a field the live template has, or fail closed.
 
-    The page also prints statute, degree, case number, and the per-charge
-    bond when those values are present. They are not folded into the charge
-    text.
+    OSI uses ``offense_1``..``offense_4``. Palmetto uses ``charges_summary``
+    only, and only while that text still prints at or above 5.5pt. There is
+    no DocuSeal addendum on the signed packet.
     """
-    import fitz
-
-    doc = fitz.open()
-    fontfile = _unicode_font()
-    try:
-        for index, row in enumerate(rows, start=1):
-            page = doc.new_page(width=612, height=792)
-            header = f"Charge addendum {index}  {surety_id}".strip()
-            if fontfile:
-                page.insert_text((36, 48), header, fontfile=fontfile, fontsize=11)
-            else:
-                page.insert_text((36, 48), header, fontsize=11)
-            widget = fitz.Widget()
-            widget.field_type = fitz.PDF_WIDGET_TYPE_TEXT
-            widget.field_name = f"charge_addendum_{index}"
-            widget.field_value = row.charge
-            widget.rect = fitz.Rect(36, 72, 576, 160)
-            widget.text_fontsize = 10
-            page.add_widget(widget)
-            extras = []
-            if row.statute:
-                extras.append(("statute", row.statute))
-            if row.degree:
-                extras.append(("degree", row.degree))
-            if row.case_number:
-                extras.append(("case_number", row.case_number))
-            if row.bond_amount not in (None, ""):
-                extras.append(("bond_amount", edge_strip(row.bond_amount)))
-            top = 180
-            for name, value in extras:
-                extra = fitz.Widget()
-                extra.field_type = fitz.PDF_WIDGET_TYPE_TEXT
-                extra.field_name = f"{name}_addendum_{index}"
-                extra.field_value = value
-                extra.rect = fitz.Rect(36, top, 576, top + 22)
-                extra.text_fontsize = 10
-                page.add_widget(extra)
-                top += 28
-        if doc.page_count == 0:
-            return b""
-        return doc.tobytes()
-    finally:
-        doc.close()
+    rows = list(rows)
+    summary = join_charge_summary(rows)
+    surety = template_key(surety_id)
+    row_capacity = offense_row_capacity(surety)
+    if row_capacity < 1:
+        char_capacity = summary_character_capacity(surety)
+        if rows and (char_capacity < 1 or summary_box_clips(surety, summary)):
+            raise ChargeCapacityError(
+                len(rows),
+                char_capacity,
+                surety,
+                template,
+                unit="characters",
+                summary_characters=len(summary),
+            )
+        return ChargePlacement(
+            on_form=[],
+            overflow=[],
+            summary=summary,
+            extra_fields={},
+            layout_notes=_layout_notes(rows, summary, surety_id=surety, capacity=0),
+            addendum_pdf=b"",
+            capacity=char_capacity,
+            addendum=False,
+        )
+    if len(rows) > row_capacity:
+        raise ChargeCapacityError(len(rows), row_capacity, surety, template, unit="rows")
+    return ChargePlacement(
+        on_form=list(rows),
+        overflow=[],
+        summary=summary,
+        extra_fields={},
+        layout_notes=_layout_notes(rows, summary, surety_id=surety, capacity=row_capacity),
+        addendum_pdf=b"",
+        capacity=row_capacity,
+        addendum=False,
+    )
 
 
 def place_verbatim_charges(
     rows: Sequence[VerbatimCharge],
     *,
-    capacity: int,
-    addendum: bool,
+    capacity: int = 0,
+    addendum: bool = False,
     surety_id: str = "",
     template: str = "docuseal",
 ) -> ChargePlacement:
-    """Put charges on the form rows, then on the addendum. Never drop one.
+    """Fit charges to the live template. ``capacity`` and ``addendum`` are ignored.
 
-    ``addendum=False`` raises ``ChargeCapacityError`` when there are more
-    charges than ``capacity``. The message names both numbers.
+    An addendum flag cannot create fields the template does not have, and
+    this client has no API call that attaches an extra PDF to the template
+    1 or template 5 submission.
     """
-    capacity = int(capacity)
-    if capacity < 1:
-        raise ChargeCapacityError(len(rows), capacity, surety_id, template)
-    if len(rows) > capacity and not addendum:
-        raise ChargeCapacityError(len(rows), capacity, surety_id, template)
-    on_form = list(rows[:capacity])
-    overflow = list(rows[capacity:])
-    summary = join_charge_summary(rows)
-    pdf = render_charge_addendum_pdf(overflow, surety_id=surety_id) if overflow else b""
-    return ChargePlacement(
-        on_form=on_form,
-        overflow=overflow,
-        summary=summary,
-        extra_fields=_addendum_fields(overflow),
-        layout_notes=_layout_notes(
-            rows,
-            summary,
-            surety_id=surety_id,
-            capacity=capacity,
-            overflow=overflow,
-        ),
-        addendum_pdf=pdf,
-        capacity=capacity,
-        addendum=bool(addendum),
-    )
+    del capacity, addendum
+    return fit_charges_for_template(rows, surety_id=surety_id, template=template)
 
 
 def addendum_allowed(bond_data: Optional[Mapping[str, Any]]) -> bool:
-    """Default is an addendum. An explicit false refuses the continuation."""
-    if not isinstance(bond_data, Mapping) or "allow_charge_addendum" not in bond_data:
-        return True
-    flag = bond_data.get("allow_charge_addendum")
-    if flag is False or flag == 0:
-        return False
-    if isinstance(flag, str) and flag.strip().lower() in {"0", "false", "no"}:
-        return False
-    return True
+    """Always false. No DocuSeal addendum is attached to the signed packet."""
+    del bond_data
+    return False
+
+
