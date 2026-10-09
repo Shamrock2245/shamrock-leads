@@ -119,6 +119,10 @@ def _env_present(name: str) -> bool:
     return bool((os.getenv(name) or "").strip())
 
 
+def _env_on(name: str) -> bool:
+    return (os.getenv(name) or "").strip().lower() in _LIVE_TRUTHY
+
+
 def live_http_enabled() -> bool:
     """
     Gate for any outbound SwipeSimple HTTP from this module.
@@ -420,6 +424,55 @@ def _bond_premium(bond: Dict[str, Any]) -> Optional[Decimal]:
         return resolve_locked_premium(bond)
     except SwipeSimpleInvoiceError:
         return None
+
+
+async def resolve_premium_across_collections(bond: Dict[str, Any], booking_number: str) -> Decimal:
+    """
+    ``resolve_locked_premium`` on the loaded bond, cross-checked against the
+    ``active_bonds`` row for the same booking # when the bond came from
+    ``bond_cases``.
+
+    Write Bond (``/api/ar/write-capture``) stores the staff premium on
+    ``active_bonds`` (``premium_cents``); ``bond_cases`` holds a copy made by
+    the staff chain. A stale copy, or a copy of the intake-promote 10%
+    estimate, must never be invoiced: both rows must resolve and agree, else
+    fail closed (``premium_mismatch_across_collections`` or the active row's
+    own reason code).
+    """
+    premium = resolve_locked_premium(bond)
+    if bond.get("_collection") == "bond_cases" and booking_number:
+        try:
+            active = await get_collection("active_bonds").find_one({"booking_number": booking_number})
+        except Exception as exc:
+            logger.warning(
+                "[ss_invoice] active_bonds cross-check failed err_type=%s — fail closed",
+                type(exc).__name__,
+            )
+            raise SwipeSimpleInvoiceError("premium_cross_check_unavailable") from None
+        if isinstance(active, dict):
+            other = resolve_locked_premium(active)
+            if other != premium:
+                raise SwipeSimpleInvoiceError("premium_mismatch_across_collections")
+    return premium
+
+
+_TEST_CASE_INVOICES_ENV = "SWIPESIMPLE_TEST_CASE_INVOICES"
+
+
+def _is_staff_test_bond(bond: Dict[str, Any], booking_number: str) -> bool:
+    if bond.get("is_test") is True or bond.get("test_case") is True:
+        return True
+    return str(booking_number or "").strip().upper().startswith("TEST-")
+
+
+def _require_test_case_invoices_allowed(bond: Dict[str, Any], booking_number: str) -> None:
+    """
+    Staff test cases (``TEST-`` booking / ``is_test``, PR #137) never create a
+    SwipeSimple invoice unless SWIPESIMPLE_TEST_CASE_INVOICES=1 is set
+    deliberately (default off), so a TEST- smoke cannot leave a real invoice.
+    """
+    if _is_staff_test_bond(bond, booking_number) and not _env_on(_TEST_CASE_INVOICES_ENV):
+        raise SwipeSimpleInvoiceError("staff_test_case_invoice_disabled")
 
 
 def _bond_booking(bond: Dict[str, Any]) -> str:
@@ -1401,9 +1454,11 @@ async def create_locked_invoice(bond_id: str) -> Dict[str, Any]:
         raise SwipeSimpleInvoiceError("bond_not_found")
 
     booking_number = validate_booking_number(_bond_booking(bond))
+    _require_test_case_invoices_allowed(bond, booking_number)
     # Fail closed with a reason code: missing / zero / sub-cent / ambiguous /
-    # intake-promote 10% estimate never reaches SwipeSimple.
-    premium = resolve_locked_premium(bond)
+    # intake-promote 10% estimate / bond_cases vs active_bonds disagreement
+    # never reaches SwipeSimple.
+    premium = await resolve_premium_across_collections(bond, booking_number)
     _ = premium_dollars_to_cents(premium)
 
     existing = _existing_payment_link(bond)
@@ -1799,43 +1854,49 @@ async def _send_dispatch(channel: Channel, payload: Dict[str, Any]) -> bool:
     return bool(sent)
 
 
-async def _find_bond_for_reconcile(booking: str, receipt: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Match bond by booking # / invoice # / reference_id (fail-closed if none)."""
-    ref = str(
-        receipt.get("reference_id")
-        or receipt.get("invoice_number")
-        or receipt.get("swipesimple_invoice_number")
-        or booking
-        or ""
-    ).strip()
-    clauses = [
-        {"booking_number": booking},
-        {"swipesimple_invoice_number": booking},
-        {"bond_case_id": booking},
-    ]
-    if ref and ref != booking:
-        clauses.extend(
-            [
-                {"booking_number": ref},
-                {"swipesimple_invoice_number": ref},
-                {"bond_case_id": ref},
-            ]
-        )
-    vendor_inv = str(receipt.get("invoice_id") or receipt.get("swipesimple_invoice_id") or "").strip()
-    if vendor_inv:
-        clauses.append({"swipesimple_invoice_id": vendor_inv})
+_RECEIPT_OK_STATUSES = frozenset({"approved", "paid", "completed", "complete", "succeeded", "captured", "settled"})
 
-    query = {"$or": clauses}
+
+def _receipt_text(receipt: Dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        val = receipt.get(key)
+        if val is None or isinstance(val, (bool, dict, list)):
+            continue
+        text = str(val).strip()
+        if text:
+            return text
+    return ""
+
+
+def _receipt_amount(receipt: Dict[str, Any]) -> Decimal:
+    raw = receipt.get("amount")
+    if _blank(raw):
+        raise SwipeSimpleInvoiceError("receipt_amount_missing")
+    try:
+        return _exact_premium(raw)
+    except SwipeSimpleInvoiceError as exc:
+        raise SwipeSimpleInvoiceError(f"receipt_amount_invalid:{exc}") from None
+
+
+async def _find_bond_for_reconcile(invoice_number: str) -> Optional[Dict[str, Any]]:
+    """
+    Exact match only: the bond whose booking # is the receipt's invoice # and
+    whose stored ``swipesimple_invoice_number`` is that same value (i.e. we
+    staged this invoice). No name / email / bond-id / vendor-id fallback.
+    """
+    query = {"booking_number": invoice_number, "swipesimple_invoice_number": invoice_number}
     for coll_name in ("bond_cases", "active_bonds"):
         try:
             doc = await get_collection(coll_name).find_one(query)
-            if doc:
-                doc["_collection"] = coll_name
-                return doc
         except Exception as exc:
             logger.warning(
-                "[ss_invoice] reconcile lookup %s failed err_type=%s", coll_name, type(exc).__name__
+                "[ss_invoice] reconcile lookup %s failed err_type=%s — fail closed",
+                coll_name, type(exc).__name__,
             )
+            raise SwipeSimpleInvoiceError("reconcile_lookup_unavailable") from None
+        if doc:
+            doc["_collection"] = coll_name
+            return doc
     return None
 
 
@@ -1844,50 +1905,83 @@ async def reconcile_payment(
     receipt: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
-    Match a paid SwipeSimple receipt → bond PAID + LedgerService entry.
+    Flip a bond to PAID from a SwipeSimple receipt — fail closed.
 
-    Idempotent if bond already PAID / payment_status=paid.
-    Match on booking_number (= invoice # / reference_id), stored
-    swipesimple_invoice_number, or vendor invoice_id when present.
+    PAID only when ALL hold:
+      * the receipt carries an invoice # (``reference_id`` / ``invoice_number``)
+        and, when ``booking_number`` is passed, it equals that booking #;
+      * a bond exists whose booking # AND stored ``swipesimple_invoice_number``
+        equal that invoice # (we staged this invoice);
+      * if the receipt carries a vendor invoice id and the bond stores one,
+        they are equal;
+      * the receipt carries a status (``status`` / ``payment_status``) and it
+        is a paid/approved status — a missing or blank status is refused
+        (``receipt_status_missing``);
+      * a transaction id is present (idempotency key);
+      * the receipt amount is exact cents and equals the locked BondCase
+        premium (``resolve_premium_across_collections``). Less = partial
+        payment, more/other = mismatch — neither flips PAID.
 
-    Safe without live SwipeSimple polling — callers pass a receipt dict from
-    Gmail poller / webhook / CSV. Optional live poll remains out of scope
-    unless a separately gated helper is added later.
+    Idempotent: a bond already PAID by the same transaction id is a no-op; a
+    different transaction on an already-PAID bond is refused for manual review
+    (possible double charge). The flip is a conditional update
+    (``premium_paid != True``) so concurrent duplicates write one ledger entry.
     """
     receipt = receipt or {}
-    booking = validate_booking_number(
-        booking_number
-        or receipt.get("booking_number")
-        or receipt.get("reference_id")
-        or receipt.get("invoice_number")
-        or ""
+    invoice_number = _receipt_text(
+        receipt, "reference_id", "invoice_number", "swipesimple_invoice_number"
     )
+    if not invoice_number:
+        raise SwipeSimpleInvoiceError("receipt_invoice_number_missing")
+    if booking_number is not None and str(booking_number).strip() != invoice_number:
+        raise SwipeSimpleInvoiceError("receipt_invoice_number_mismatch")
+    booking = validate_booking_number(invoice_number)
 
-    bond = await _find_bond_for_reconcile(booking, receipt)
+    status = _receipt_text(receipt, "status", "payment_status").lower()
+    if not status:
+        raise SwipeSimpleInvoiceError("receipt_status_missing")
+    if status not in _RECEIPT_OK_STATUSES:
+        raise SwipeSimpleInvoiceError("receipt_status_not_paid")
+
+    txn = _receipt_text(receipt, "transaction_id", "txn_id")
+    if not txn:
+        raise SwipeSimpleInvoiceError("receipt_transaction_id_missing")
+
+    bond = await _find_bond_for_reconcile(booking)
     if not bond:
-        raise SwipeSimpleInvoiceError("bond_not_found_for_booking")
-
+        raise SwipeSimpleInvoiceError("invoice_not_staged_for_booking")
     log_bond_id = _claim_key(bond, "")
-    if _is_paid(bond):
-        logger.info("[ss_invoice] reconcile idempotent already PAID bond_id=%s", log_bond_id)
-        return {
-            "ok": True,
-            "idempotent": True,
-            "booking_number": booking,
-            "payment_status": "paid",
-        }
 
-    amount = money_to_decimal(receipt.get("amount"))
-    expected = _bond_premium(bond)
-    if amount is not None and expected is not None and not amounts_equal(amount, expected):
-        raise SwipeSimpleInvoiceError("premium_mismatch_vs_bondcase")
+    receipt_invoice_id = _receipt_text(receipt, "invoice_id", "swipesimple_invoice_id")
+    stored_invoice_id = str(bond.get("swipesimple_invoice_id") or "").strip()
+    if receipt_invoice_id and stored_invoice_id and receipt_invoice_id != stored_invoice_id:
+        raise SwipeSimpleInvoiceError("receipt_invoice_id_mismatch")
+
+    if _is_paid(bond):
+        if str(bond.get("last_transaction_id") or "").strip() == txn:
+            logger.info("[ss_invoice] reconcile idempotent already PAID bond_id=%s", log_bond_id)
+            return {
+                "ok": True,
+                "idempotent": True,
+                "booking_number": booking,
+                "payment_status": "paid",
+                "transaction_id": txn,
+            }
+        logger.warning(
+            "[ss_invoice] reconcile refused: bond already PAID by another transaction bond_id=%s",
+            log_bond_id,
+        )
+        raise SwipeSimpleInvoiceError("bond_already_paid_different_transaction")
+
+    expected = await resolve_premium_across_collections(bond, booking)
+    amount = _receipt_amount(receipt)
+    if amount < expected:
+        raise SwipeSimpleInvoiceError("receipt_partial_payment")
+    if amount != expected:
+        raise SwipeSimpleInvoiceError("receipt_amount_mismatch")
 
     now_iso = datetime.now(timezone.utc).isoformat()
-    txn = str(receipt.get("transaction_id") or "").strip() or f"SS-RECON-{booking}"
-    paid_amount = float(amount) if amount is not None else (
-        float(expected) if expected is not None else None
-    )
-
+    paid_amount = float(amount)
     payment_update = {
         "payment_status": "paid",
         "premium_paid": True,
@@ -1897,26 +1991,47 @@ async def reconcile_payment(
         "last_payment_status": "paid",
         "last_transaction_id": txn,
         "last_payment_source": "swipesimple_invoice_reconcile",
+        "swipesimple_paid_invoice_number": booking,
         "updated_at": now_iso,
     }
+    if receipt_invoice_id:
+        payment_update["swipesimple_paid_invoice_id"] = receipt_invoice_id
 
-    filt = {
-        "$or": [
-            {"booking_number": booking},
-            {"swipesimple_invoice_number": booking},
-            {"bond_case_id": booking},
-        ]
+    primary = bond.get("_collection") or "active_bonds"
+    cond = {
+        "booking_number": booking,
+        "swipesimple_invoice_number": booking,
+        "premium_paid": {"$ne": True},
     }
-    for coll_name in ("bond_cases", "active_bonds"):
-        try:
-            await get_collection(coll_name).update_one(filt, {"$set": payment_update})
-        except Exception as exc:
-            logger.warning(
-                "[ss_invoice] reconcile update %s failed bond_id=%s err_type=%s",
-                coll_name,
-                log_bond_id,
-                type(exc).__name__,
-            )
+    try:
+        res = await get_collection(primary).update_one(cond, {"$set": payment_update})
+    except Exception as exc:
+        logger.warning(
+            "[ss_invoice] reconcile update %s failed bond_id=%s err_type=%s",
+            primary, log_bond_id, type(exc).__name__,
+        )
+        raise SwipeSimpleInvoiceError("reconcile_update_failed") from None
+    if not getattr(res, "modified_count", 0):
+        # Lost a race with a concurrent duplicate: the winner wrote PAID + ledger.
+        logger.info("[ss_invoice] reconcile no-op (concurrent winner) bond_id=%s", log_bond_id)
+        return {
+            "ok": True,
+            "idempotent": True,
+            "booking_number": booking,
+            "payment_status": "paid",
+            "transaction_id": txn,
+        }
+    other = "active_bonds" if primary == "bond_cases" else "bond_cases"
+    try:
+        await get_collection(other).update_one(
+            {"booking_number": booking, "premium_paid": {"$ne": True}},
+            {"$set": payment_update},
+        )
+    except Exception as exc:
+        logger.warning(
+            "[ss_invoice] reconcile mirror %s failed bond_id=%s err_type=%s",
+            other, log_bond_id, type(exc).__name__,
+        )
 
     ledger_txn = None
     try:
@@ -1927,7 +2042,7 @@ async def reconcile_payment(
                 "booking_number": booking,
                 "type": "payment",
                 "category": "premium",
-                "amount": paid_amount or 0,
+                "amount": paid_amount,
                 "actor": "SwipeSimpleInvoiceService",
                 "notes": "swipesimple reconcile_payment (reference_id=booking #)",
                 "stripe_swipe_ref": txn,
@@ -1952,7 +2067,7 @@ async def reconcile_payment(
         "payment_status": "paid",
         "transaction_id": txn,
         "ledger_transaction_id": ledger_txn,
-        "matched_collection": bond.get("_collection"),
+        "matched_collection": primary,
     }
 
 

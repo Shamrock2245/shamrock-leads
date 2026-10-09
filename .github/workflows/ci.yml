@@ -128,6 +128,7 @@ jobs:
             tests/test_lee_rate_limit.py \
             tests/test_swipesimple_invoice_service.py \
             tests/test_swipesimple_locked_amount_e2e.py \
+            tests/test_writebond_to_paid_e2e.py \
             tests/test_confirmed_booking_intake.py \
             tests/test_deferred_client_intake.py \
             tests/test_intake_defendant_extract.py \
@@ -175,6 +176,7 @@ jobs:
             tests/test_verbatim_bond_charges.py \
             tests/test_bond_packet_start.py \
             tests/test_staff_test_case_write_bond.py \
+            tests/test_write_bond_golden_smoke.py \
             tests/test_surety_review_fixes.py \
             tests/test_wix_intake_webhook.py \
             tests/test_intake_fanout.py \

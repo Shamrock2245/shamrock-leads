@@ -110,11 +110,14 @@ class SwipeSimpleReconciliationService:
                 await self.bonds.update_one(
                     {"_id": matched_bond["_id"]},
                     {
+                        # Name-only match: record the payment for staff review
+                        # but NEVER flip PAID here. PAID requires invoice # +
+                        # exact locked amount (swipesimple_invoice_service.
+                        # reconcile_payment).
                         "$set": {
-                            "premium_paid": True,
-                            "premium_paid_amount": amount,
                             "last_payment_at": now_iso,
                             "last_payment_tx": tx_id,
+                            "last_payment_amount_unverified": amount,
                         },
                         "$push": {"payment_history": payment_record},
                     },
@@ -123,6 +126,7 @@ class SwipeSimpleReconciliationService:
 
         return {
             "reconciled": bool(matched_bond),
+            "premium_paid_flipped": False,
             "transaction_id": tx_id,
             "amount": amount,
             "matched_bond_id": str(matched_bond["_id"]) if matched_bond else None,
