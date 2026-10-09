@@ -350,6 +350,9 @@ BAD_RECEIPTS = [
     (dict(invoice_id="inv_someone_else"), "receipt_invoice_id_mismatch"),
     (dict(status="declined"), "receipt_status_not_paid"),
     (dict(status="refunded"), "receipt_status_not_paid"),
+    (dict(status=None), "receipt_status_missing"),
+    (dict(status=""), "receipt_status_missing"),
+    (dict(status="   "), "receipt_status_missing"),
     (dict(transaction_id=None), "receipt_transaction_id_missing"),
 ]
 
@@ -415,3 +418,10 @@ def test_legacy_name_match_service_never_flips_paid():
     bond = db["active_bonds"].docs[0]
     assert bond.get("premium_paid") is not True
     assert bond["last_payment_amount_unverified"] == 1.0
+
+
+def test_payment_status_key_alone_counts_as_status():
+    rig = _staged_rig()
+    out = rig.reconcile(_receipt(status=None, payment_status="paid"))
+    assert out["ok"] is True and out["idempotent"] is False
+    assert rig.active()["premium_paid"] is True

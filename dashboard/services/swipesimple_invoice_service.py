@@ -1914,7 +1914,9 @@ async def reconcile_payment(
         equal that invoice # (we staged this invoice);
       * if the receipt carries a vendor invoice id and the bond stores one,
         they are equal;
-      * the receipt status (when present) is a paid/approved status;
+      * the receipt carries a status (``status`` / ``payment_status``) and it
+        is a paid/approved status — a missing or blank status is refused
+        (``receipt_status_missing``);
       * a transaction id is present (idempotency key);
       * the receipt amount is exact cents and equals the locked BondCase
         premium (``resolve_premium_across_collections``). Less = partial
@@ -1936,7 +1938,9 @@ async def reconcile_payment(
     booking = validate_booking_number(invoice_number)
 
     status = _receipt_text(receipt, "status", "payment_status").lower()
-    if status and status not in _RECEIPT_OK_STATUSES:
+    if not status:
+        raise SwipeSimpleInvoiceError("receipt_status_missing")
+    if status not in _RECEIPT_OK_STATUSES:
         raise SwipeSimpleInvoiceError("receipt_status_not_paid")
 
     txn = _receipt_text(receipt, "transaction_id", "txn_id")
