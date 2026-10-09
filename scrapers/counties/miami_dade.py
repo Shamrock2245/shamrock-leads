@@ -330,7 +330,9 @@ class MiamiDadeCountyScraper(BaseScraper):
                 },
             )
         except Exception as e:
-            logger.warning(f"[{self.county}] Error parsing record {attrs.get('ObjectId')}: {e}")
+            # Row id and error type only: the row carries name and DOB, and an
+            # exception message may echo a field value.
+            logger.warning("[%s] Error parsing record ObjectId=%s: %s", self.county, attrs.get("ObjectId"), type(e).__name__)
             return None
 
     @staticmethod

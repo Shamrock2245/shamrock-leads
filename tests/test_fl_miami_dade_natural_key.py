@@ -248,3 +248,26 @@ def test_report_groups_by_the_runtime_key_so_cleanup_and_runtime_agree(monkeypat
     out = rep.report(docs, today=today, source_index=index)
     assert out["window_rows_source_dob_lookup"] == {"one_runtime_key": 2}
     assert "ZZSYNTH" not in str(out) and "md_dedupe_v2:" not in str(out)
+
+
+def test_parse_failure_log_has_no_person_data(caplog):
+    caplog.set_level(logging.WARNING)
+    bad = _row(4242, "g", name="ZZSYNTH, LOGCHECK", book="not-a-timestamp")
+    bad["BookDate"] = object()  # makes the parser raise
+    assert MiamiDadeCountyScraper()._parse_record(bad) is None
+    assert "ObjectId=4242" in caplog.text
+    assert "ZZSYNTH" not in caplog.text and "1990" not in caplog.text and str(DOB_A) not in caplog.text
+
+
+def test_report_keeps_the_stored_fallback_flag_for_internal_keys(monkeypatch):
+    import sys
+
+    sys.path.insert(0, "scripts")
+    import miami_dade_dedupe_report as rep
+
+    arrests = FakeArrests([])
+    _write(arrests, _snapshot(monkeypatch, [_row(1, "g1", dob=None, c1="TRESPASS"), _row(2, "g2")]))
+    out = rep.report(arrests.docs, today=datetime(2026, 10, 9, 14, tzinfo=timezone.utc))
+    assert out["booking_number_shapes"] == {"internal_natural_key": 2}
+    assert out["rows_keyed_fallback"] == 1 and out["rows_keyed_dob_or_internal"] == 1
+    assert out["rows_in_runtime_window_without_dob"] == 1

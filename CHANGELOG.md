@@ -20,6 +20,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Every other county or state, and any malformed key, is skipped exactly as before.
   - `BaseScraper.ALLOWS_INTERNAL_NATURAL_KEY` (default False; True only on `MiamiDadeCountyScraper`) applies the same check to the pre-write filter.
   - The writer's skip log no longer prints a name.
+  - The scraper's parse-failure warning logs only the ObjectId and the error type. The row now carries a DOB, and an exception message may echo a field value.
 - **The key is never printed or hydrated as a booking number:**
   - `build_adaptive_field_map` blanks it.
   - DocuSeal `create_submission` scrubs submitter values and fields.
@@ -44,7 +45,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - the key never reaches booking fields (API doc, field map, OSI/Palmetto PDF values, DocuSeal submission)
   - the blank-booking guard is unchanged for other counties/states and malformed keys, and in the BaseScraper filter
   - unknown bond stays `""` and a stored positive bond is kept
-  - the report groups by the runtime key
+  - the report groups by the runtime key and keeps the stored `md_key_fallback` flag for runtime-written rows
+  - parse-failure logs carry no person data
 - Updated `tests/test_fl_miami_dade_no_row_id_key.py` (#166's hash-display test kept and extended to the stored doc), `tests/test_miami_dade_scraper.py`, `tests/test_fl_miami_dade_arcgis_contract.py` and the FL matrix summary in `tests/test_home_county_smoke_evidence.py`, and the Miami-Dade field-list check in `tests/test_fl_bond_charges_hydrate.py` (DOB now fetched; Address/Zip still excluded).
 
 ## [Unreleased] — 2026-10-09 (Palmetto collateral receipt payment boxes)

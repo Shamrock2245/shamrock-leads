@@ -54,7 +54,7 @@ COUNTY_VALUES = ["Miami-Dade", "Miami-Dade (FL)", "Miami Dade", "MIAMI-DADE"]
 PROJECTION = {
     "_id": 0, "booking_number": 1, "full_name": 1, "dob": 1, "booking_date": 1, "charges": 1,
     "status": 1, "bond_amount_raw": 1, "staff_edits": 1, "bond_override": 1, "last_checked_mode": 1,
-    "scraped_charges": 1, "md_dedupe": 1, "booking_key_internal": 1,
+    "scraped_charges": 1, "md_dedupe": 1, "booking_key_internal": 1, "md_key_fallback": 1,
 }
 _GUID_RE = re.compile(r"^\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?$", re.I)
 
@@ -94,7 +94,7 @@ def runtime_key(doc: Dict[str, Any]) -> Tuple[str, bool, str]:
     """(key, is_fallback, problem) using the runtime key function."""
     stored = str(doc.get("md_dedupe") or doc.get("booking_number") or "")
     if MD_INTERNAL_KEY_RE.fullmatch(stored):
-        return stored, False, ""
+        return stored, bool(doc.get("md_key_fallback")), ""
     if str(doc.get("dob") or "").strip():
         key, fb = md_dedupe_key(doc.get("full_name"), doc.get("dob"), doc.get("booking_date"))
         return key, fb, "" if key else "no_name_or_date"
