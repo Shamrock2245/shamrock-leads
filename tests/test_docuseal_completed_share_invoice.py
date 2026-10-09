@@ -21,7 +21,7 @@ import logging
 import os
 import time
 from typing import Any, Dict, List, Optional
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -223,8 +223,16 @@ def invoice_store():
     # only lets the flow past the pre-claim live gate — HTTP stays mocked.
     prev_live = os.environ.get("SWIPESIMPLE_LIVE")
     os.environ["SWIPESIMPLE_LIVE"] = "1"
+    # BOOKING is "TEST-…": staff test-case bonds need the explicit opt-in.
+    prev_tc = os.environ.get("SWIPESIMPLE_TEST_CASE_INVOICES")
+    os.environ["SWIPESIMPLE_TEST_CASE_INVOICES"] = "1"
+    active_mirror = MagicMock()
+    # Write Bond mirror row (same premium) for the bond_cases/active_bonds cross-check.
+    active_mirror.find_one = AsyncMock(side_effect=lambda *_a, **_k: {
+        k: v for k, v in store.bond.items() if k != "_collection"})
     with patch.object(ss, "_claim_invoice_create", new=AsyncMock(return_value=(True, None, "test-claim"))), \
          patch.object(ss, "_finish_invoice_claim", new=AsyncMock()), \
+         patch.object(ss, "get_collection", side_effect=lambda name: active_mirror if name == "active_bonds" else MagicMock()), \
          patch.object(ss, "_load_bond_by_id", side_effect=store.load), \
          patch.object(ss, "_share_invoice_http", side_effect=store.share_http), \
          patch.object(ss, "_persist_invoice_fields", side_effect=store.persist), \
@@ -240,6 +248,10 @@ def invoice_store():
                 os.environ.pop("SWIPESIMPLE_LIVE", None)
             else:
                 os.environ["SWIPESIMPLE_LIVE"] = prev_live
+            if prev_tc is None:
+                os.environ.pop("SWIPESIMPLE_TEST_CASE_INVOICES", None)
+            else:
+                os.environ["SWIPESIMPLE_TEST_CASE_INVOICES"] = prev_tc
 
 
 def _post_completed(client: TestClient):

@@ -80,6 +80,14 @@ class Rig:
     async def _load(self, _bond_id):
         return dict(self.bond, _collection="bond_cases")
 
+    def _collection(self, name):
+        # Write Bond mirror row on active_bonds (same premium) for the
+        # bond_cases ↔ active_bonds premium cross-check.
+        assert name == "active_bonds", name
+        mirror = MagicMock()
+        mirror.find_one = AsyncMock(side_effect=lambda *_a, **_k: dict(self.bond))
+        return mirror
+
     async def _claims_coll(self):
         return self.claims
 
@@ -108,6 +116,7 @@ class Rig:
         cfg = {"has_session": True, "base_url": "https://swipesimple.com"}
         return [
             patch.object(ss, "_load_bond_by_id", self._load),
+            patch.object(ss, "get_collection", self._collection),
             patch.object(ss, "_claims_collection", self._claims_coll),
             patch.object(ss, "_fetch_csrf", self._csrf),
             patch.object(ss, "_http_create_invoice", self._create),
