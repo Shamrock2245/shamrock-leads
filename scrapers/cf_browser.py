@@ -40,11 +40,25 @@ _DATACENTER_MARKERS = (
     "quadranet",
     "serverius",
     "leaseweb",
-    "coloCrossing",
+    "colocrossing",
+    "hosting",
+    "colocation",
+    "datacenter",
+    "data center",
+    "cloudflare",  # WARP
     "vpn",
     "proxy",
     "tor-exit",
+    "mullvad",
+    "nordvpn",
+    "expressvpn",
+    "private internet access",
+    "proton ag",
 )
+# US mobile carriers (e.g. T-Mobile AS21928, Verizon Wireless, AT&T Mobility)
+# are accepted: owner-approved relay egress (Brendan 2026-10-09; Charlotte and
+# Manatee ran on T-Mobile AS21928 on 2026-09-22). They pass the same rule as a
+# home ISP: known org, US country, no datacenter/hosting/VPN/proxy marker.
 
 
 def check_exit_ip(
@@ -123,7 +137,7 @@ def check_exit_ip(
             info["ok"] = bool(info["ip"])
 
             org_l = str(info["org"]).lower()
-            dc_hit = any(m in org_l for m in _DATACENTER_MARKERS)
+            dc_hit = any(m.lower() in org_l for m in _DATACENTER_MARKERS)
             country = str(info["country"] or "").upper()
             # Fail closed when the org/country lookup came back empty (e.g. the
             # IP-info APIs rate-limited us): an unknown exit is not proof of a

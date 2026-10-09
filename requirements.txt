@@ -32,8 +32,8 @@ slack-sdk>=3.44.1
 curl-cffi>=0.16.3
 beautifulsoup4>=4.12.0
 DrissionPage>=4.0.0
-patchright>=1.50.0  # Pinellas, Charleston SC, stealth_utils (also run: patchright install chromium)
-playwright>=1.48.0  # Obscura CDP connection for CF-protected counties (Charlotte, Manatee)
+patchright>=1.50.0  # Charleston SC, stealth_utils (also run: patchright install chromium); not Pinellas (2026-10-08)
+playwright>=1.48.0  # stock Chromium on the Leads Ops relay (Charlotte, Manatee, Pinellas); run: python -m playwright install chromium
 # CAPTCHA OCR stack (see scrapers/captcha_ocr.py)
 # Core (light, always install):
 ddddocr>=1.4.0      # Captcha-specialized local OCR (JailTracker, etc.)

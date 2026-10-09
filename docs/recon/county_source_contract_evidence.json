@@ -1012,9 +1012,9 @@
       "state": "FL",
       "county_fips": "103",
       "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "official_source_url": "https://whosinjail.pinellassheriff.gov/",
+      "access_posture": "Who's In Jail is a Blazor Server app. 2026-10-08 ~11:42 AM ET plain-requests read from the agent box (honest User-Agent, no browser/proxy/impersonation): GET / HTTP 200 text/html 5,971-byte JS app shell (0 form/input/table elements, 0 booking numbers), /api same shell, /swagger and /robots.txt 404, legacy www.pinellassheriff.gov/InmateBooking/ 503; no challenge or 403, but rows render only over the SignalR circuit. Owner exception (Brendan 2026-10-08 1:38 PM ET, CoS agreed): non-stealth stock Playwright Chromium with an honest bot User-Agent, on the Leads Ops home relay's own residential exit only (`PINELLAS_EGRESS_MODE=direct`, the only mode; relay-only in config/relay_only.py, no VPS interval); patchright, stealth, proxy, impersonation and challenge solving are not used; a non-residential exit raises EgressBlocked before any browser start or source request",
+      "evidence_note": "2026-10-08 (`docs/recon/FL_PINELLAS_RELAY_ONLY_2026-10-08.md`): no plain-HTTP listing, so the roster is read in a stock browser on the residential relay only (owner exception above). Booking-date search keyed on the source booking number; Subject Charge Report modal gives Offense Description and per-charge Bond Assessed. Bond rules from #142 unchanged: total only when every charge publishes an amount, a published $0.00 is \"0\" (33 of 82 cells on 2026-10-06/07), unknown is \"\" never \"0\"; a booking whose modal does not render is skipped. The 2026-09-23 live writes came from the retired patchright path. Health stays `unverified` until a Leads Ops write smoke goes through the relay; not `verified_public`."
     },
     {
       "state": "FL",

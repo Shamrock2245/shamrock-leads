@@ -481,7 +481,9 @@ def register_scrapers(sched):
 
     # ── Tampa Bay / Central FL ────────────────────────────────────────────────
     sched.register_scraper(HillsboroughCountyScraper(), interval_minutes=90)
-    sched.register_scraper(PinellasCountyScraper(), interval_minutes=90)
+    # Pinellas is relay-only (config/relay_only.py; owner exception Brendan
+    # 2026-10-08): stock Playwright on the Leads Ops home relay, no VPS interval.
+    sched.register_scraper(PinellasCountyScraper())
     sched.register_scraper(SeminoleCountyScraper(), interval_minutes=90)
     sched.register_scraper(OrangeCountyScraper(), interval_minutes=90)
     sched.register_scraper(PascoCountyScraper(), interval_minutes=90)
@@ -1035,7 +1037,7 @@ def main():
 
     if len(sys.argv) > 1 and sys.argv[1] == "--relay-only":
         # Leads Ops home relay entry point: run each relay-only county
-        # (config/relay_only.py: Manatee, Charlotte) once from this host's own
+        # (config/relay_only.py: Manatee, Charlotte, Pinellas) once from this host's own
         # residential exit, then exit. Non-zero exit if any run failed.
         results = scheduler.run_relay_only()
         failed = [c for c, r in results.items() if not r or r.get("error")]

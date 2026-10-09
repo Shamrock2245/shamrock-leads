@@ -89,7 +89,7 @@
     {
       "label": "Pinellas (FL)",
       "emitter": "live_write",
-      "evidence": "48h Mongo write evidence 2026-09-23; Who's In Jail roster Mac smoke 149 ok; live per 2026-09-25 brief. Health stays unverified: no documented verified_public decision yet",
+      "evidence": "48h Mongo write evidence 2026-09-23; Who's In Jail roster Mac smoke 149 ok; live per 2026-09-25 brief (retired patchright path). 2026-10-08: relay-only with stock Playwright Chromium per owner exception (Brendan 1:38 PM ET); Health stays unverified until a Leads Ops write smoke through the relay",
       "source": "docs/recon/PALMETTO_READ_WRITE_HEALTH_2026-09-23.md"
     },
     {
