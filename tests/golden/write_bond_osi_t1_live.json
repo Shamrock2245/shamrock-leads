@@ -4,7 +4,7 @@
     "frozen_at": "2026-01-15T12:00:00+00:00",
     "inventory": "tests/fixtures/docuseal_t1_fields.json",
     "kind": "live_template",
-    "note": "Submission values whose names exist on the live template. dropped_payload_keys are payload names DocuSeal would ignore. unfilled_should_prefill are template fields that match case-data name patterns and received no value. unfilled_signer are signature, initial, checkbox, radio, and signing-date widgets. Rewrite only with WRITE_BOND_REGEN_GOLDEN=1. CI must not set that flag.",
+    "note": "Submission values whose names exist on the live template. dropped_payload_keys are payload names DocuSeal would ignore. unfilled_should_prefill are template fields that match case-data name patterns and received no value. Class payment is a premium payment-plan due date, not a signing date. unfilled_signer are signature, initial, checkbox, radio, and signing-date widgets. Rewrite only with WRITE_BOND_REGEN_GOLDEN=1. CI must not set that flag.",
     "surety_id": "osi",
     "template_id": 1
   },
@@ -1017,6 +1017,18 @@
       "type": "text"
     },
     {
+      "class": "payment",
+      "name": "final_payment_due_date",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "payment",
+      "name": "first_payment_due_date",
+      "readonly": true,
+      "type": "text"
+    },
+    {
       "class": "indemnitor",
       "name": "indemnitor_address",
       "readonly": true,
@@ -1173,6 +1185,30 @@
       "type": "text"
     },
     {
+      "class": "payment",
+      "name": "payment_due_date_1",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "payment",
+      "name": "payment_due_date_2",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "payment",
+      "name": "payment_due_date_3",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "payment",
+      "name": "payment_due_date_4",
+      "readonly": false,
+      "type": "text"
+    },
+    {
       "class": "poa",
       "name": "poa_number_3",
       "readonly": false,
@@ -1217,8 +1253,6 @@
     "defendant_signature_6",
     "defendant_signature_7",
     "defendant_signature_8",
-    "final_payment_due_date",
-    "first_payment_due_date",
     "indemnitor_initials_1",
     "indemnitor_initials_2",
     "indemnitor_signature_1",
@@ -1235,10 +1269,6 @@
     "mortgage_collateral_checkbox",
     "other_collateral_checkbox",
     "other_collateral_checkbox2",
-    "payment_due_date_1",
-    "payment_due_date_2",
-    "payment_due_date_3",
-    "payment_due_date_4",
     "premium_payment_form_check_checkbox",
     "premium_payment_form_creditcard_checkbox",
     "premium_payment_form_moneyorder_checkbox",

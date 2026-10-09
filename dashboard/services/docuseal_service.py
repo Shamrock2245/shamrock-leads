@@ -1251,11 +1251,11 @@ class DocuSealService:
             "defendant_city": bond_data.get("defendant_city") or def_.get("city") or "",
             "defendant_state": bond_data.get("defendant_state") or def_.get("state") or "FL",
             "defendant_zip": bond_data.get("defendant_zip") or def_.get("zip") or def_.get("zipcode") or "",
-            "defendant_children_names_ages": bond_data.get("children_names_ages") or def_.get("children_names_ages") or "",
-            "children_names_ages_1": bond_data.get("children_names_ages_1") or bond_data.get("children_names_ages") or def_.get("children_names_ages") or "",
-            "children_names_ages_2": bond_data.get("children_names_ages_2") or "",
-            "children_school_1": bond_data.get("children_school_1") or bond_data.get("children_school") or "",
-            "children_school_2": bond_data.get("children_school_2") or "",
+            "defendant_children_names_ages": bond_data.get("children_names_ages") or def_.get("children_names_ages") or def_.get("children_names_ages_1") or "",
+            "children_names_ages_1": bond_data.get("children_names_ages_1") or bond_data.get("children_names_ages") or def_.get("children_names_ages_1") or def_.get("children_names_ages") or "",
+            "children_names_ages_2": bond_data.get("children_names_ages_2") or def_.get("children_names_ages_2") or "",
+            "children_school_1": bond_data.get("children_school_1") or bond_data.get("children_school") or def_.get("children_school_1") or def_.get("children_school") or "",
+            "children_school_2": bond_data.get("children_school_2") or def_.get("children_school_2") or "",
             "ssa_release_reason": bond_data.get("ssa_release_reason") or "Bail bond underwriting and supervision",
             "ssa_other_records_text": bond_data.get("ssa_other_records_text") or "any and all for location purposes",
             "down_payment_amount": bond_data.get("down_payment_amount") or bond_data.get("down_payment") or "",
@@ -1495,16 +1495,19 @@ class DocuSealService:
             ),
             "def_spouse_parent_name": _text(
                 bond_data.get("def_spouse_parent_name"),
+                _person_text(def_, "spouse_parent_name"),
                 bond_data.get("defendant_spouse_name"),
                 _person_text(def_, "spouse_name"),
             ),
             "def_spouse_parent_phone": _text(
                 bond_data.get("def_spouse_parent_phone"),
+                _person_text(def_, "spouse_parent_phone"),
                 bond_data.get("defendant_spouse_phone"),
                 _person_text(def_, "spouse_phone"),
             ),
             "def_spouse_parent_address": _text(
                 bond_data.get("def_spouse_parent_address"),
+                _person_text(def_, "spouse_parent_address"),
                 bond_data.get("defendant_spouse_address"),
                 _person_text(def_, "spouse_address"),
             ),
@@ -1620,6 +1623,69 @@ class DocuSealService:
             "agent_date_1": today_slash,
             "coindemnitor_date_1": today_slash,
         })
+        # Template 5 names the same facts with a longer key. Copy only a
+        # present source. The FL default on defendant_dl_state is not a
+        # captured license state, so license state is copied from the party.
+        party_dl_state = _text(_person_text(def_, "dl_state", "dlState"))
+        if party_dl_state:
+            values["defendant_license_state"] = party_dl_state
+        for dest, src in {
+            "defendant_eye_color": "defendant_eyes",
+            "defendant_hair_color": "defendant_hair",
+            "defendant_boss_name": "defendant_boss",
+            "defendant_license_number": "defendant_dl",
+            "defendant_nickname": "defendant_alias",
+            "defendant_attorney_name": "def_attorney_name",
+            "defendant_attorney_address": "def_attorney_address",
+            "defendant_attorney_phone": "def_attorney_phone",
+            "defendant_prior_arrests": "def_prior_arrests",
+            "defendant_prior_offense": "def_prior_offense",
+            "defendant_remarks": "def_remarks",
+            "defendant_sibling_name_1": "def_sibling_1_name",
+            "defendant_sibling_name_2": "def_sibling_2_name",
+            "defendant_sibling_name_3": "def_sibling_3_name",
+            "defendant_sibling_address_1": "def_sibling_1_address",
+            "defendant_sibling_address_2": "def_sibling_2_address",
+            "defendant_sibling_address_3": "def_sibling_3_address",
+            "defendant_sibling_1_phone": "def_sibling_1_phone",
+            "defendant_sibling_2_phone": "def_sibling_2_phone",
+            "defendant_sibling_3_phone": "def_sibling_3_phone",
+            "defendant_children_name_age_1": "children_names_ages_1",
+            "defendant_children_name_age_2": "children_names_ages_2",
+            "defendant_child2_school": "children_school_2",
+            # Palmetto template 5 names for the same free-text facts.
+            "def_how_long_at_address_1": "defendant_address_how_long",
+            "def_how_long_at_address_2": "defendant_former_address_how_long",
+            "defendant_how_long_at_job": "defendant_employer_how_long",
+            "defendant_how_long_at_job_2": "defendant_previous_employment_how_long",
+            "defendant_bff_name": "def_best_friend_name",
+            "defendant_bff_address": "def_best_friend_address",
+            "defendant_bff_phone": "def_best_friend_phone",
+            "defendant_car_year": "def_vehicle_year",
+            "defendant_car_make": "def_vehicle_make",
+            "defendant_car_model": "def_vehicle_model",
+            "defendant_car_color": "def_vehicle_color",
+            "defendant_car_license_tag": "def_vehicle_plate",
+            "defendant_car_loan_vendor": "def_vehicle_lender",
+            "defendant_car_purchase_location": "def_vehicle_purchase_location",
+            "defendant_auto_loan": "def_vehicle_amount_owed",
+            "defendant_marks_tattoos": "defendant_tattoos",
+            "defendant_parents_name": "def_parent_name",
+            "defendant_parents_address": "def_parent_address",
+            "defendant_parents_phone": "def_parent_phone",
+            "defendant_spouse_employment": "defendant_spouse_employer",
+            "defendant_spouse_parents_name": "def_spouse_parent_name",
+            "defendant_spouse_parents_address": "def_spouse_parent_address",
+            "defendant_spouse_parents_phone": "def_spouse_parent_phone",
+            "defendant_work_phone_number": "defendant_employer_phone",
+            "indemnitor_alternate_phone": "indemnitor_phone2",
+            # Both widgets are free-text. The CRM stores one string, not a flag or a list.
+            "defendant_prior_convictions": "def_prior_convicted",
+        }.items():
+            if values.get(src) and not values.get(dest):
+                values[dest] = values[src]
+        # A social password is typed by the signer. Never copy one from the case.
+        values.pop("defendant_social_media_password", None)
         # Drop empty strings so DocuSeal doesn't overwrite blank required fields with "".
         # Then drop charge names the live template does not have. DocuSeal would
         # ignore those and the charge would never appear on the signed packet.
@@ -2492,23 +2558,25 @@ def build_bond_data_from_dashboard(
         "collateral_payment_method": _text(ctx.get("collateral_payment_method")),
         "collateral_other_description": _text(ctx.get("collateral_other_description")),
         "court_date": ctx.get("court_date") or body.get("court_date") or "TBN",
+        "court_time": ctx.get("court_time") or body.get("court_time") or "",
+        "court_type": ctx.get("court_type") or body.get("court_type") or "",
         "charges": charges,
         "charge_details": charge_details,
-        # Payment plan (optional UI / body)
-        "down_payment_amount": body.get("down_payment_amount") or body.get("down_payment"),
-        "balance_financed_amount": body.get("balance_financed_amount") or body.get("balance_financed"),
-        "number_of_payments": body.get("number_of_payments") or body.get("num_payments"),
-        "payment_amount": body.get("payment_amount"),
-        "first_payment_due_date": body.get("first_payment_due_date") or body.get("first_due_date"),
-        "final_payment_due_date": body.get("final_payment_due_date") or body.get("final_due_date"),
-        "payment_due_date_1": body.get("payment_due_date_1"),
-        "payment_amount_1": body.get("payment_amount_1"),
-        "payment_due_date_2": body.get("payment_due_date_2"),
-        "payment_amount_2": body.get("payment_amount_2"),
-        "payment_due_date_3": body.get("payment_due_date_3"),
-        "payment_amount_3": body.get("payment_amount_3"),
-        "payment_due_date_4": body.get("payment_due_date_4"),
-        "payment_amount_4": body.get("payment_amount_4"),
+        # Payment plan (optional UI / body). The case context uses the same names.
+        "down_payment_amount": body.get("down_payment_amount") or body.get("down_payment") or ctx.get("down_payment_amount") or ctx.get("down_payment"),
+        "balance_financed_amount": body.get("balance_financed_amount") or body.get("balance_financed") or ctx.get("balance_financed_amount") or ctx.get("balance_financed"),
+        "number_of_payments": body.get("number_of_payments") or body.get("num_payments") or ctx.get("number_of_payments") or ctx.get("num_payments"),
+        "payment_amount": body.get("payment_amount") or ctx.get("payment_amount"),
+        "first_payment_due_date": body.get("first_payment_due_date") or body.get("first_due_date") or ctx.get("first_payment_due_date") or ctx.get("first_due_date"),
+        "final_payment_due_date": body.get("final_payment_due_date") or body.get("final_due_date") or ctx.get("final_payment_due_date") or ctx.get("final_due_date"),
+        "payment_due_date_1": body.get("payment_due_date_1") or ctx.get("payment_due_date_1"),
+        "payment_amount_1": body.get("payment_amount_1") or ctx.get("payment_amount_1"),
+        "payment_due_date_2": body.get("payment_due_date_2") or ctx.get("payment_due_date_2"),
+        "payment_amount_2": body.get("payment_amount_2") or ctx.get("payment_amount_2"),
+        "payment_due_date_3": body.get("payment_due_date_3") or ctx.get("payment_due_date_3"),
+        "payment_amount_3": body.get("payment_amount_3") or ctx.get("payment_amount_3"),
+        "payment_due_date_4": body.get("payment_due_date_4") or ctx.get("payment_due_date_4"),
+        "payment_amount_4": body.get("payment_amount_4") or ctx.get("payment_amount_4"),
     }
 
     # Multi-indemnitor list for Co-Indemnitor role

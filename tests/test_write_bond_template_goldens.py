@@ -54,6 +54,16 @@ GOLDEN_DIR = Path(__file__).resolve().parents[1] / "tests" / "golden"
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "tests" / "fixtures"
 JOINED = f"{CHARGE_1}, {CHARGE_2}"
 
+# Premium payment-plan dates. Names end in _date, but they are case data.
+_PAYMENT_PLAN_DATES = (
+    "first_payment_due_date",
+    "final_payment_due_date",
+    "payment_due_date_1",
+    "payment_due_date_2",
+    "payment_due_date_3",
+    "payment_due_date_4",
+)
+
 # Case-data prefixes. ``def_`` is the defendant application family on template 1.
 # ``offense_`` and ``charge_`` are the charge lines. Signer widgets are separate.
 _SHOULD_PREFILL = (
@@ -136,7 +146,11 @@ def _classify_unfilled(field):
         lowered.endswith("_dob")
         or "birth" in lowered
         or lowered.startswith("court_")
+        # Premium payment-plan dates. The staff-test scrub still removes them.
+        or "payment_due_date" in lowered
     )
+    if "payment_due_date" in lowered:
+        return "payment"
     signing_date = (
         lowered.startswith("today_")
         or "signed" in lowered
@@ -154,6 +168,19 @@ def _classify_unfilled(field):
         if lowered.startswith(prefix):
             return label
     return "other"
+
+
+def _assert_payment_plan_dates(report, inventory):
+    """Due dates on the premium plan stay case data. The scrub still blanks them."""
+    names = {row["name"] for row in inventory["fields"]}
+    by_class = {row["name"]: row["class"] for row in report["unfilled_should_prefill"]}
+    for name in _PAYMENT_PLAN_DATES:
+        if name not in names:
+            continue
+        assert _classify_unfilled({"name": name, "type": "text"}) == "payment"
+        assert name not in report["unfilled_signer"]
+        assert name not in report["fields"]
+        assert by_class[name] == "payment"
 
 
 def _load_inventory(surety_id):
@@ -224,6 +251,11 @@ def _live_path(surety_id):
     return GOLDEN_DIR / f"write_bond_{surety_id}_t{template_id}_live.json"
 
 
+def _full_path(surety_id):
+    template_id = _LIVE[surety_id]["template_id"]
+    return GOLDEN_DIR / f"write_bond_{surety_id}_t{template_id}_full.json"
+
+
 def _load_secondary(surety_id):
     payload = json.loads(_secondary_path(surety_id).read_text(encoding="utf-8"))
     fields = {key: value for key, value in payload.items() if not key.startswith("_")}
@@ -268,8 +300,9 @@ def _write_live(surety_id, report):
                 "Submission values whose names exist on the live template. "
                 "dropped_payload_keys are payload names DocuSeal would ignore. "
                 "unfilled_should_prefill are template fields that match case-data "
-                "name patterns and received no value. unfilled_signer are signature, "
-                "initial, checkbox, radio, and signing-date widgets. "
+                "name patterns and received no value. Class payment is a premium "
+                "payment-plan due date, not a signing date. unfilled_signer are "
+                "signature, initial, checkbox, radio, and signing-date widgets. "
                 "Rewrite only with WRITE_BOND_REGEN_GOLDEN=1. CI must not set that flag."
             ),
         },
@@ -281,6 +314,232 @@ def _write_live(surety_id, report):
     }
     text = json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     _live_path(surety_id).write_text(text, encoding="utf-8")
+
+
+def _write_full(surety_id, report):
+    spec = _LIVE[surety_id]
+    document = {
+        "_meta": {
+            "surety_id": surety_id,
+            "template_id": spec["template_id"],
+            "kind": "live_template_full",
+            "inventory": f"tests/fixtures/{spec['fixture']}",
+            "filled_count": len(report["fields"]),
+            "frozen_at": FROZEN.isoformat(),
+            "note": (
+                "Fully populated synthetic staff test case. Same sections as the "
+                "sparse live golden: submission values whose names exist on the "
+                "live template, dropped payload keys, and template fields with no "
+                "value. Phone and payment or premium submission fields are removed "
+                "by the staff-test contact scrub before this payload is captured. "
+                "Class payment on an unfilled due date is the premium payment plan, "
+                "not a signing date. "
+                "Rewrite only with WRITE_BOND_REGEN_GOLDEN=1. CI must not set that flag."
+            ),
+        },
+        "fields": report["fields"],
+        "dropped_payload_keys": report["dropped_payload_keys"],
+        "unfilled_should_prefill": report["unfilled_should_prefill"],
+        "unfilled_signer": report["unfilled_signer"],
+        "unfilled_other": report["unfilled_other"],
+    }
+    text = json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    _full_path(surety_id).write_text(text, encoding="utf-8")
+
+
+_FULL_CHARGE_1 = "TEST CHARGE ONE"
+_FULL_CHARGE_2 = "TEST CHARGE TWO"
+
+
+def _person(**extra):
+    base = {
+        "first_name": "TEST",
+        "middle_name": "T",
+        "last_name": "PARTY",
+        "dob": "1900-01-01",
+        "dl": "TEST-DL-0000",
+        "dl_state": "XX",
+        "ssn": "000-00-0000",
+        "phone": "555-0100",
+        "address": "TEST ADDRESS 1",
+        "city": "TEST CITY",
+        "state": "XX",
+        "zip": "00000",
+        "employer": "TEST EMPLOYER",
+        "employer_phone": "555-0101",
+        "employer_address": "TEST ADDRESS 2",
+        "employer_how_long": "TEST TENURE",
+    }
+    base.update(extra)
+    return base
+
+
+def _full_body(surety_id):
+    tag = surety_id.upper()
+    defendant = _person(
+        last_name="DEFENDANT",
+        phone="555-0100",
+        hair="TEST HAIR",
+        eyes="TEST EYES",
+        race="TEST RACE",
+        sex="X",
+        height="0-00",
+        weight="0",
+        tattoos="TEST TATTOO",
+        alias="TEST ALIAS",
+        address_how_long="TEST DURATION",
+        former_address="TEST ADDRESS 3",
+        former_address_how_long="TEST DURATION 2",
+        boss="TEST BOSS",
+        previous_employment="TEST PRIOR EMPLOYER",
+        previous_employment_how_long="TEST TENURE 2",
+        parent_name="TEST PARENT",
+        parent_phone="555-0102",
+        parent_address="TEST ADDRESS 4",
+        spouse_name="TEST SPOUSE",
+        spouse_phone="555-0103",
+        spouse_address="TEST ADDRESS 5",
+        spouse_employer="TEST SPOUSE EMPLOYER",
+        spouse_parent_name="TEST SPOUSE PARENT",
+        spouse_parent_phone="555-0104",
+        spouse_parent_address="TEST ADDRESS 6",
+        best_friend_name="TEST FRIEND",
+        best_friend_phone="555-0105",
+        best_friend_address="TEST ADDRESS 7",
+        attorney_name="TEST ATTORNEY",
+        attorney_phone="555-0106",
+        attorney_address="TEST ADDRESS 8",
+        vehicle_year="1900",
+        vehicle_make="TEST MAKE",
+        vehicle_model="TEST MODEL",
+        vehicle_color="TEST COLOR",
+        vehicle_plate="TEST-PLATE",
+        vehicle_lender="TEST LENDER",
+        vehicle_amount_owed="1.00",
+        vehicle_purchase_location="TEST DEALER",
+        facebook="TEST FACEBOOK",
+        instagram="TEST INSTAGRAM",
+        prior_arrests="TEST PRIOR ARRESTS",
+        prior_convicted="TEST PRIOR CONVICTED",
+        prior_offense="TEST PRIOR OFFENSE",
+        remarks="TEST REMARKS",
+        sibling_1_name="TEST SIBLING ONE",
+        sibling_1_phone="555-0107",
+        sibling_1_address="TEST ADDRESS 9",
+        sibling_2_name="TEST SIBLING TWO",
+        sibling_2_phone="555-0108",
+        sibling_2_address="TEST ADDRESS 10",
+        sibling_3_name="TEST SIBLING THREE",
+        sibling_3_phone="555-0109",
+        sibling_3_address="TEST ADDRESS 11",
+        children_names_ages_1="TEST CHILD ONE 1900",
+        children_names_ages_2="TEST CHILD TWO 1900",
+        children_school_1="TEST SCHOOL ONE",
+        children_school_2="TEST SCHOOL TWO",
+    )
+    indemnitor = _person(
+        last_name="INDEMNITOR",
+        phone="555-0110",
+        phone2="555-0111",
+        work_phone="555-0112",
+        employer_phone="555-0113",
+        relationship="TEST RELATION",
+        vehicle_year="1900",
+        vehicle_make="TEST MAKE",
+        vehicle_model="TEST MODEL",
+        vehicle_color="TEST COLOR",
+        mortgage_co="TEST MORTGAGE",
+        mortgage_amount="1.00",
+        spouse_name="TEST IND SPOUSE",
+        spouse_dl="TEST-DL-0001",
+        spouse_ssn="000-00-0000",
+        spouse_employer="TEST IND SPOUSE EMPLOYER",
+        spouse_employer_address="TEST ADDRESS 12",
+        spouse_phone="555-0114",
+        spouse_work_phone="555-0115",
+        ref1Name="TEST REFERENCE ONE",
+        ref1Phone="555-0116",
+        ref1Address="TEST ADDRESS 13",
+        ref1Relation="TEST RELATION",
+        ref2Name="TEST REFERENCE TWO",
+        ref2Phone="555-0117",
+        ref2Address="TEST ADDRESS 14",
+        ref2Relation="TEST RELATION",
+    )
+    coindemnitor = _person(
+        last_name="COINDEMNITOR",
+        phone="555-0118",
+        relationship="TEST CO RELATION",
+    )
+    return {
+        "test_case": True,
+        "surety_id": surety_id,
+        "booking_number": f"TEST-FULL-{tag}",
+        "case_number": f"TEST-CASE-FULL-{tag}",
+        "packet_id": f"PKT-TEST-FULL-{tag}",
+        "defendant_name": "TEST DEFENDANT",
+        "indemnitor_name": "TEST INDEMNITOR",
+        "coindemnitor_name": "TEST COINDEMNITOR",
+        "bond_amount": 2000,
+        "premium_amount": "1.00",
+        # Staff-test mode strips write-book overrides, so the case county has
+        # to stay on the Florida write book. Party addresses stay TEST / XX.
+        "county": "Lee",
+        "state": "FL",
+        "court_date": "1900-01-01",
+        "court_time": "00:00",
+        "court_type": "TEST COURT",
+        "court_location": "TEST COURTHOUSE",
+        "facility": "TEST JAIL",
+        "charges": f"{_FULL_CHARGE_1} | {_FULL_CHARGE_2}",
+        "charge_details": [
+            {
+                "charge": _FULL_CHARGE_1,
+                "bond_amount": "1000",
+                "case_number": f"TEST-CASE-FULL-{tag}",
+                "poa_number": "TEST-POA-0001",
+            },
+            {
+                "charge": _FULL_CHARGE_2,
+                "bond_amount": "1000",
+                "case_number": f"TEST-CASE-FULL-{tag}",
+                "poa_number": "TEST-POA-0001",
+            },
+        ],
+        "down_payment_amount": "1.00",
+        "balance_financed_amount": "1.00",
+        "number_of_payments": "1",
+        "payment_amount": "1.00",
+        "first_payment_due_date": "1900-01-01",
+        "final_payment_due_date": "1900-01-01",
+        "payment_due_date_1": "1900-01-01",
+        "payment_amount_1": "1.00",
+        "payment_due_date_2": "1900-01-02",
+        "payment_amount_2": "1.00",
+        "payment_due_date_3": "1900-01-03",
+        "payment_amount_3": "1.00",
+        "payment_due_date_4": "1900-01-04",
+        "payment_amount_4": "1.00",
+        "collateral_description": "TEST COLLATERAL",
+        "defendant": defendant,
+        "indemnitor": indemnitor,
+        "coindemnitor": coindemnitor,
+        "send_email": True,
+        "send_sms": True,
+    }
+
+
+def _finalize_full(monkeypatch, surety_id):
+    monkeypatch.setenv("STAFF_TEST_CASE_MODE", "1")
+    result = _post(monkeypatch, _full_body(surety_id))
+    response = result["response"]
+    assert response.status_code == 200, response.text
+    _assert_no_network(result)
+    payload = _payload(result["captured"])
+    assert payload["template_id"] == _LIVE[surety_id]["template_id"]
+    _assert_send_flags(payload)
+    _assert_test_poa(payload)
+    return payload
 
 
 def _values(payload):
@@ -445,6 +704,7 @@ def test_write_bond_live_template_fields(monkeypatch, surety_id):
     assert should_names.isdisjoint(other_names)
     covered = set(report["fields"]) | signer_names | should_names | other_names
     assert covered == names
+    _assert_payment_plan_dates(report, inventory)
 
     if surety_id == "osi":
         assert report["fields"]["offense_1"]["value"] == CHARGE_1
@@ -464,6 +724,104 @@ def test_write_bond_live_template_fields(monkeypatch, surety_id):
     expected = _load_live(surety_id)
     meta = expected.get("_meta") or {}
     assert meta.get("kind") == "live_template"
+    assert meta.get("template_id") == _LIVE[surety_id]["template_id"]
+    assert meta.get("filled_count") == len(report["fields"])
+    diff = _diff(expected["fields"], report["fields"])
+    assert not diff, diff
+    assert expected["dropped_payload_keys"] == report["dropped_payload_keys"]
+    assert expected["unfilled_should_prefill"] == report["unfilled_should_prefill"]
+    assert expected["unfilled_signer"] == report["unfilled_signer"]
+    assert expected["unfilled_other"] == report["unfilled_other"]
+
+
+@pytest.mark.parametrize("surety_id", ["osi", "palmetto"])
+def test_write_bond_full_template_fields(monkeypatch, surety_id):
+    """Second case: every fact the prefill can read, still two charges."""
+    payload = _finalize_full(monkeypatch, surety_id)
+    field_map = _round_trip(_field_map(payload))
+    inventory = _load_inventory(surety_id)
+    report = _live_report(field_map, inventory)
+    names = {row["name"] for row in inventory["fields"]}
+    joined = f"{_FULL_CHARGE_1}, {_FULL_CHARGE_2}"
+
+    assert set(report["fields"]) == set(field_map) & names
+    assert report["dropped_payload_keys"] == sorted(set(field_map) - names)
+    assert report["fields"]["defendant_name"]["value"] == "TEST DEFENDANT"
+    assert report["fields"]["indemnitor_name"]["value"] == "TEST INDEMNITOR / TEST COINDEMNITOR"
+    assert report["fields"]["charges_summary"]["value"] == joined
+    assert report["fields"]["court_type"]["value"] == "TEST COURT"
+    assert "1900-01-01" in json.dumps(report["fields"])
+    assert "000-00-0000" in json.dumps(report["fields"])
+    assert "TEST-DL-0000" in json.dumps(report["fields"])
+    assert "defendant_social_media_password" not in field_map
+    assert "defendant_social_media_password" not in report["fields"]
+    assert "do-not-copy" not in json.dumps(report["fields"])
+    for name in report["fields"]:
+        assert "phone" not in name.lower()
+        lowered = name.lower()
+        assert "premium" not in lowered
+        assert "payment" not in lowered
+    if surety_id == "osi":
+        assert report["fields"]["offense_1"]["value"] == _FULL_CHARGE_1
+        assert report["fields"]["offense_2"]["value"] == _FULL_CHARGE_2
+        assert "offense_3" not in report["fields"]
+        assert "offense_4" not in report["fields"]
+    else:
+        # Template 5 has no offense grid. Those names are omitted, not sent
+        # and then dropped.
+        assert "offense_1" not in report["fields"]
+        assert "offense_2" not in report["fields"]
+        assert "offense_1" not in report["dropped_payload_keys"]
+        assert "offense_2" not in report["dropped_payload_keys"]
+        assert "charge_line_2" not in report["fields"]
+        assert "charge_1" not in field_map
+        assert "charges" not in field_map
+        assert report["fields"]["def_how_long_at_address_1"]["value"] == "TEST DURATION"
+        assert report["fields"]["def_how_long_at_address_2"]["value"] == "TEST DURATION 2"
+        assert report["fields"]["defendant_how_long_at_job"]["value"] == "TEST TENURE"
+        assert report["fields"]["defendant_how_long_at_job_2"]["value"] == "TEST TENURE 2"
+        assert report["fields"]["defendant_bff_name"]["value"] == "TEST FRIEND"
+        assert report["fields"]["defendant_bff_address"]["value"] == "TEST ADDRESS 7"
+        assert report["fields"]["defendant_car_year"]["value"] == "1900"
+        assert report["fields"]["defendant_car_make"]["value"] == "TEST MAKE"
+        assert report["fields"]["defendant_car_model"]["value"] == "TEST MODEL"
+        assert report["fields"]["defendant_car_color"]["value"] == "TEST COLOR"
+        assert report["fields"]["defendant_car_license_tag"]["value"] == "TEST-PLATE"
+        assert report["fields"]["defendant_car_loan_vendor"]["value"] == "TEST LENDER"
+        assert report["fields"]["defendant_car_purchase_location"]["value"] == "TEST DEALER"
+        assert report["fields"]["defendant_auto_loan"]["value"] == "1.00"
+        assert report["fields"]["defendant_marks_tattoos"]["value"] == "TEST TATTOO"
+        assert report["fields"]["defendant_parents_name"]["value"] == "TEST PARENT"
+        assert report["fields"]["defendant_parents_address"]["value"] == "TEST ADDRESS 4"
+        assert report["fields"]["defendant_spouse_employment"]["value"] == "TEST SPOUSE EMPLOYER"
+        assert report["fields"]["defendant_spouse_parents_name"]["value"] == "TEST SPOUSE PARENT"
+        assert report["fields"]["defendant_spouse_parents_address"]["value"] == "TEST ADDRESS 6"
+        assert report["fields"]["defendant_prior_convictions"]["value"] == "TEST PRIOR CONVICTED"
+        for scrubbed in (
+            "defendant_bff_phone",
+            "defendant_parents_phone",
+            "defendant_spouse_parents_phone",
+            "defendant_work_phone_number",
+            "indemnitor_alternate_phone",
+            "spouse_employment_phone_number",
+        ):
+            assert scrubbed not in report["fields"]
+
+    covered = (
+        set(report["fields"])
+        | set(report["unfilled_signer"])
+        | {row["name"] for row in report["unfilled_should_prefill"]}
+        | {row["name"] for row in report["unfilled_other"]}
+    )
+    assert covered == names
+    _assert_payment_plan_dates(report, inventory)
+
+    if os.environ.get(REGEN_ENV) == "1":
+        _write_full(surety_id, report)
+
+    expected = json.loads(_full_path(surety_id).read_text(encoding="utf-8"))
+    meta = expected.get("_meta") or {}
+    assert meta.get("kind") == "live_template_full"
     assert meta.get("template_id") == _LIVE[surety_id]["template_id"]
     assert meta.get("filled_count") == len(report["fields"])
     diff = _diff(expected["fields"], report["fields"])

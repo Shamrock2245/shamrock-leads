@@ -1,0 +1,1711 @@
+{
+  "_meta": {
+    "filled_count": 118,
+    "frozen_at": "2026-01-15T12:00:00+00:00",
+    "inventory": "tests/fixtures/docuseal_t1_fields.json",
+    "kind": "live_template_full",
+    "note": "Fully populated synthetic staff test case. Same sections as the sparse live golden: submission values whose names exist on the live template, dropped payload keys, and template fields with no value. Phone and payment or premium submission fields are removed by the staff-test contact scrub before this payload is captured. Class payment on an unfilled due date is the premium payment plan, not a signing date. Rewrite only with WRITE_BOND_REGEN_GOLDEN=1. CI must not set that flag.",
+    "surety_id": "osi",
+    "template_id": 1
+  },
+  "dropped_payload_keys": [
+    "AgencyName",
+    "AgentLicense",
+    "AgentName",
+    "BondNumbers",
+    "CaseNum",
+    "County",
+    "CourtDate",
+    "CourtType",
+    "Date",
+    "DefAddress",
+    "DefCity",
+    "DefDL",
+    "DefDLState",
+    "DefDOB",
+    "DefEmployer",
+    "DefEyes",
+    "DefFirstName",
+    "DefHair",
+    "DefHeight",
+    "DefLastName",
+    "DefMiddleName",
+    "DefName",
+    "DefRace",
+    "DefSex",
+    "DefState",
+    "DefWeight",
+    "DefZip",
+    "DefendantName",
+    "FullName",
+    "Ind2Name",
+    "IndAddress",
+    "IndCity",
+    "IndCityStateZip",
+    "IndDL",
+    "IndDOB",
+    "IndFirstName",
+    "IndLastName",
+    "IndMiddleName",
+    "IndName",
+    "IndState",
+    "IndZip",
+    "IndemnitorName",
+    "PowerNum",
+    "State",
+    "agency_address",
+    "agency_name",
+    "agent_license",
+    "bond_amount_numeric",
+    "bond_amount_words",
+    "bond_amount_written",
+    "bond_date_day",
+    "bond_date_month",
+    "bond_date_year_2digit",
+    "bond_numbers",
+    "bondsman_license",
+    "booking_number",
+    "coindemnitor_date_1",
+    "coindemnitor_name",
+    "county",
+    "court_date",
+    "court_datetime",
+    "date",
+    "date_written_out",
+    "def_how_long_at_address_1",
+    "def_how_long_at_address_2",
+    "defendant_attorney_address",
+    "defendant_attorney_name",
+    "defendant_auto_loan",
+    "defendant_bff_address",
+    "defendant_bff_name",
+    "defendant_boss_name",
+    "defendant_car_color",
+    "defendant_car_license_tag",
+    "defendant_car_loan_vendor",
+    "defendant_car_make",
+    "defendant_car_model",
+    "defendant_car_purchase_location",
+    "defendant_car_year",
+    "defendant_child2_school",
+    "defendant_children_name_age_1",
+    "defendant_children_name_age_2",
+    "defendant_children_names_ages",
+    "defendant_eye_color",
+    "defendant_hair_color",
+    "defendant_how_long_at_job",
+    "defendant_how_long_at_job_2",
+    "defendant_license_number",
+    "defendant_license_state",
+    "defendant_marks_tattoos",
+    "defendant_nickname",
+    "defendant_parents_address",
+    "defendant_parents_name",
+    "defendant_prior_arrests",
+    "defendant_prior_convictions",
+    "defendant_prior_offense",
+    "defendant_remarks",
+    "defendant_sibling_address_1",
+    "defendant_sibling_address_2",
+    "defendant_sibling_address_3",
+    "defendant_sibling_name_1",
+    "defendant_sibling_name_2",
+    "defendant_sibling_name_3",
+    "defendant_spouse_employment",
+    "defendant_spouse_name",
+    "defendant_spouse_parents_address",
+    "defendant_spouse_parents_name",
+    "formatted_date",
+    "indemnitor_city",
+    "indemnitor_email",
+    "indemnitor_first_name",
+    "indemnitor_last_name",
+    "indemnitor_middle_name",
+    "indemnitor_state",
+    "indemnitor_zip",
+    "numeric_full_bond_amount_dollar",
+    "poa_numbers",
+    "relationship",
+    "ssa_other_records_text",
+    "ssa_release_reason",
+    "state",
+    "today_date_long"
+  ],
+  "fields": {
+    "agent_date_1": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "01/15/2026"
+    },
+    "agent_name": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "Brendan O'Neal"
+    },
+    "all_poa_numbers": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST-POA-0001"
+    },
+    "balance_financed_amount": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "1.00"
+    },
+    "bond_amount": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "$2,000.00"
+    },
+    "bond_amount_1": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "1,000.00"
+    },
+    "bond_amount_2": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "1,000.00"
+    },
+    "bond_date_written": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "January 15, 2026"
+    },
+    "bondsman_name": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "Brendan O'Neal"
+    },
+    "case_number": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST-CASE-FULL-OSI"
+    },
+    "case_number_1": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST-CASE-FULL-OSI"
+    },
+    "case_number_2": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST-CASE-FULL-OSI"
+    },
+    "charges_summary": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST CHARGE ONE, TEST CHARGE TWO"
+    },
+    "children_names_ages_1": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST CHILD ONE 1900"
+    },
+    "children_names_ages_2": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST CHILD TWO 1900"
+    },
+    "children_school_1": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST SCHOOL ONE"
+    },
+    "children_school_2": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST SCHOOL TWO"
+    },
+    "collateral_receipt_number": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "0001"
+    },
+    "county_full": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "Lee County"
+    },
+    "court_type": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST COURT"
+    },
+    "def_attorney_address": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST ADDRESS 8"
+    },
+    "def_attorney_name": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST ATTORNEY"
+    },
+    "def_best_friend_address": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST ADDRESS 7"
+    },
+    "def_best_friend_name": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST FRIEND"
+    },
+    "def_facebook": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST FACEBOOK"
+    },
+    "def_instagram": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST INSTAGRAM"
+    },
+    "def_parent_address": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST ADDRESS 4"
+    },
+    "def_parent_name": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST PARENT"
+    },
+    "def_prior_arrests": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST PRIOR ARRESTS"
+    },
+    "def_prior_convicted": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST PRIOR CONVICTED"
+    },
+    "def_prior_offense": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST PRIOR OFFENSE"
+    },
+    "def_remarks": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST REMARKS"
+    },
+    "def_sibling_1_address": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST ADDRESS 9"
+    },
+    "def_sibling_1_name": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST SIBLING ONE"
+    },
+    "def_sibling_2_address": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST ADDRESS 10"
+    },
+    "def_sibling_2_name": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST SIBLING TWO"
+    },
+    "def_sibling_3_address": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST ADDRESS 11"
+    },
+    "def_sibling_3_name": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST SIBLING THREE"
+    },
+    "def_spouse_parent_address": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST ADDRESS 6"
+    },
+    "def_spouse_parent_name": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST SPOUSE PARENT"
+    },
+    "def_vehicle_amount_owed": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "1.00"
+    },
+    "def_vehicle_color": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST COLOR"
+    },
+    "def_vehicle_lender": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST LENDER"
+    },
+    "def_vehicle_make": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST MAKE"
+    },
+    "def_vehicle_model": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST MODEL"
+    },
+    "def_vehicle_plate": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST-PLATE"
+    },
+    "def_vehicle_purchase_location": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST DEALER"
+    },
+    "def_vehicle_year": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "1900"
+    },
+    "defendant_address": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST ADDRESS 1"
+    },
+    "defendant_address_how_long": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST DURATION"
+    },
+    "defendant_alias": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST ALIAS"
+    },
+    "defendant_boss": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST BOSS"
+    },
+    "defendant_city": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST CITY"
+    },
+    "defendant_date_1": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "01/15/2026"
+    },
+    "defendant_date_5": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "01/15/2026"
+    },
+    "defendant_dl": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST-DL-0000"
+    },
+    "defendant_dl_state": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "XX"
+    },
+    "defendant_dob": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "1900-01-01"
+    },
+    "defendant_email": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "admin@shamrockbailbonds.biz"
+    },
+    "defendant_employer": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST EMPLOYER"
+    },
+    "defendant_employer_address": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST ADDRESS 2"
+    },
+    "defendant_employer_how_long": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST TENURE"
+    },
+    "defendant_eyes": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST EYES"
+    },
+    "defendant_former_address": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST ADDRESS 3"
+    },
+    "defendant_former_address_how_long": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST DURATION 2"
+    },
+    "defendant_hair": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST HAIR"
+    },
+    "defendant_height": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "0-00"
+    },
+    "defendant_name": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST DEFENDANT"
+    },
+    "defendant_previous_employment": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST PRIOR EMPLOYER"
+    },
+    "defendant_previous_employment_how_long": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST TENURE 2"
+    },
+    "defendant_race": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST RACE"
+    },
+    "defendant_spouse_address": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST ADDRESS 5"
+    },
+    "defendant_spouse_employer": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST SPOUSE EMPLOYER"
+    },
+    "defendant_ssn": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "000-00-0000"
+    },
+    "defendant_state": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "XX"
+    },
+    "defendant_tattoos": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST TATTOO"
+    },
+    "defendant_weight": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "0"
+    },
+    "defendant_zip": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "00000"
+    },
+    "full_bond_amount_words": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "Two Thousand and 00/100"
+    },
+    "indemnitor_address": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST ADDRESS 1"
+    },
+    "indemnitor_city_state_zip": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST CITY, XX 00000"
+    },
+    "indemnitor_date_1": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "01/15/2026"
+    },
+    "indemnitor_date_5": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "01/15/2026"
+    },
+    "indemnitor_dl": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST-DL-0000"
+    },
+    "indemnitor_dob": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "1900-01-01"
+    },
+    "indemnitor_employer": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST EMPLOYER"
+    },
+    "indemnitor_employer_address": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST ADDRESS 2"
+    },
+    "indemnitor_mortgage_amount": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "1.00"
+    },
+    "indemnitor_mortgage_co": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST MORTGAGE"
+    },
+    "indemnitor_name": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST INDEMNITOR / TEST COINDEMNITOR"
+    },
+    "indemnitor_relationship": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST RELATION"
+    },
+    "indemnitor_spouse_dl": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST-DL-0001"
+    },
+    "indemnitor_spouse_employer": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST IND SPOUSE EMPLOYER"
+    },
+    "indemnitor_spouse_employer_address": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST ADDRESS 12"
+    },
+    "indemnitor_spouse_name": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST IND SPOUSE"
+    },
+    "indemnitor_spouse_ssn": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "000-00-0000"
+    },
+    "indemnitor_ssn": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "000-00-0000"
+    },
+    "indemnitor_vehicle_color": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST COLOR"
+    },
+    "indemnitor_vehicle_make": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST MAKE"
+    },
+    "indemnitor_vehicle_model": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST MODEL"
+    },
+    "indemnitor_vehicle_year": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "1900"
+    },
+    "numeric_balance_due": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "1.00"
+    },
+    "numeric_full_bond_amount": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "2,000.00"
+    },
+    "offense_1": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST CHARGE ONE"
+    },
+    "offense_2": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST CHARGE TWO"
+    },
+    "poa_number": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST-POA-0001"
+    },
+    "poa_number_1": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST-POA-0001"
+    },
+    "poa_number_2": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST-POA-0001"
+    },
+    "reference_1_address": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST ADDRESS 13"
+    },
+    "reference_1_name": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST REFERENCE ONE"
+    },
+    "reference_1_relation": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST RELATION"
+    },
+    "reference_2_address": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST ADDRESS 14"
+    },
+    "reference_2_name": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST REFERENCE TWO"
+    },
+    "reference_2_relation": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST RELATION"
+    },
+    "today_date": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "01/15/2026"
+    },
+    "today_day": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "15"
+    },
+    "today_month": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "January"
+    },
+    "today_year_2digit": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "26"
+    }
+  },
+  "unfilled_other": [
+    {
+      "class": "other",
+      "name": "collater_return_other_description",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "collateral_description",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "collateral_description_continued",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "collateral_fee",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "collateral_numerals",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "collateral_return_written",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "collateral_written",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "down_payment_amount",
+      "readonly": true,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "number_of_payments",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "numeric_downpayment",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "numeric_misc_charges",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "numeric_premium",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "numeric_total_charges",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "payment_amount",
+      "readonly": true,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "payment_amount_1",
+      "readonly": true,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "payment_amount_2",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "payment_amount_3",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "payment_amount_4",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "premium_down_payment_numeric",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "premium_down_payment_written",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "premium_receipt_number",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "reference_1_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "reference_2_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "written_premium",
+      "readonly": true,
+      "type": "text"
+    }
+  ],
+  "unfilled_should_prefill": [
+    {
+      "class": "bond",
+      "name": "bond_amount_3",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "bond",
+      "name": "bond_amount_4",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "case",
+      "name": "case_number_3",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "case",
+      "name": "case_number_4",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_attorney_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_best_friend_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_current_bail_surety",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_current_bail_yes_no",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_parent_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_sibling_1_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_sibling_2_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_sibling_3_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_spouse_parent_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_employer_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_spouse_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "payment",
+      "name": "final_payment_due_date",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "payment",
+      "name": "first_payment_due_date",
+      "readonly": true,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_employer_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_phone2",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_spouse_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_spouse_work_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_work_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "charges",
+      "name": "offense_3",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "charges",
+      "name": "offense_4",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "payment",
+      "name": "payment_due_date_1",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "payment",
+      "name": "payment_due_date_2",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "payment",
+      "name": "payment_due_date_3",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "payment",
+      "name": "payment_due_date_4",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "poa",
+      "name": "poa_number_3",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "poa",
+      "name": "poa_number_4",
+      "readonly": false,
+      "type": "text"
+    }
+  ],
+  "unfilled_signer": [
+    "bail_producer_checkbox",
+    "bondsman_signature4",
+    "bondsman_signature_000",
+    "bondsman_signature_1",
+    "bondsman_signature_2",
+    "bondsman_signature_3",
+    "bondsman_signature_after_bond_discharge",
+    "cash_collateral_checkbox",
+    "check_collateral_checkbox",
+    "coindemnitor_initials_1",
+    "coindemnitor_initials_2",
+    "coindemnitor_signature_1",
+    "coindemnitor_signature_2",
+    "coindemnitor_signature_3",
+    "coindemnitor_signature_4",
+    "date_of_collateral_return_signature",
+    "def_beard_mustache",
+    "def_dentures",
+    "def_glasses",
+    "def_left_handed",
+    "def_right_handed",
+    "defendant_initials_1",
+    "defendant_initials_2",
+    "defendant_signature_1",
+    "defendant_signature_2",
+    "defendant_signature_3",
+    "defendant_signature_4",
+    "defendant_signature_5",
+    "defendant_signature_6",
+    "defendant_signature_7",
+    "defendant_signature_8",
+    "indemnitor_initials_1",
+    "indemnitor_initials_2",
+    "indemnitor_signature_1",
+    "indemnitor_signature_10",
+    "indemnitor_signature_2",
+    "indemnitor_signature_3",
+    "indemnitor_signature_4",
+    "indemnitor_signature_5",
+    "indemnitor_signature_6",
+    "indemnitor_signature_7",
+    "indemnitor_signature_8",
+    "indemnitor_signature_9",
+    "managing_general_agent_checkbox",
+    "mortgage_collateral_checkbox",
+    "other_collateral_checkbox",
+    "other_collateral_checkbox2",
+    "premium_payment_form_check_checkbox",
+    "premium_payment_form_creditcard_checkbox",
+    "premium_payment_form_moneyorder_checkbox",
+    "ssa_other_records_check",
+    "surety_collateral_checkbox",
+    "vehicle_collateral_checkbox"
+  ]
+}
