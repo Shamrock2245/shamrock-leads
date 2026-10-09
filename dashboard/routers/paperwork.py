@@ -1867,6 +1867,18 @@ async def packet_builder_finalize(request: Request):
             "packet_version": 1,
             "voided": False,
         }
+        collateral_warnings = []
+        if isinstance(docuseal_result, dict):
+            for warning in docuseal_result.get("warnings") or []:
+                if not isinstance(warning, dict) or not warning.get("code"):
+                    continue
+                collateral_warnings.append({
+                    "code": str(warning.get("code") or ""),
+                    "message": str(warning.get("message") or ""),
+                })
+        packet_doc["warnings"] = collateral_warnings
+        if collateral_warnings:
+            packet_doc["layout_notes"] = list(collateral_warnings)
         if staff_test is not None:
             apply_staff_test_contacts(packet_doc, staff_test.signer_email)
             packet_doc["is_test"] = True
@@ -2031,6 +2043,7 @@ async def packet_builder_finalize(request: Request):
             "adobe_pdf_meta": adobe_pdf_meta,
             "esign_provider": provider,
             "flattened_preview_b64": flat_b64[:200] + "…" if flat_b64 and len(flat_b64) > 200 else flat_b64,
+            "warnings": collateral_warnings,
             "context_summary": {
                 "defendant_name": def_.get("name"),
                 "indemnitor_name": ind.get("name"),
@@ -3411,16 +3424,33 @@ async def paperwork_push_docuseal(packet_id: str, request: Request):
                 "docuseal_status": "sent",
                 "docuseal_sent_at": now_iso,
                 "status": packet.get("status") if packet.get("status") == "signed" else "sent",
+                "warnings": [
+                    {
+                        "code": str(warning.get("code") or ""),
+                        "message": str(warning.get("message") or ""),
+                    }
+                    for warning in (result.get("warnings") or [])
+                    if isinstance(warning, dict) and warning.get("code")
+                ],
             }
         },
     )
 
+    docuseal_warnings = [
+        {
+            "code": str(warning.get("code") or ""),
+            "message": str(warning.get("message") or ""),
+        }
+        for warning in (result.get("warnings") or [])
+        if isinstance(warning, dict) and warning.get("code")
+    ]
     return {
         "success": True,
         "packet_id": packet_id,
         "esign_provider": "docuseal",
         "submission_id": result.get("submission_id"),
         "submitters": result.get("submitters"),
+        "warnings": docuseal_warnings,
         "sign_links": [
             {"role": s.get("role"), "email": s.get("email"), "sign_url": s.get("sign_url")}
             for s in (result.get("submitters") or [])

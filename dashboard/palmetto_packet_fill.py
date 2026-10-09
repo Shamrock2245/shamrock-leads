@@ -23,6 +23,11 @@ from dashboard.bond_pdf_service import (
     _split_court_datetime,
     fill_palmetto_bond,
 )
+from dashboard.collateral_payment_method import (
+    SOURCE_OTHER,
+    checkbox_context,
+    payment_source,
+)
 from dashboard.palmetto_field_placement import PAGE_SIZE, fields_for
 from dashboard.paperwork_pdf_service import get_template_path
 
@@ -260,7 +265,11 @@ def build_palmetto_context(data: Optional[dict]) -> Dict[str, str]:
         "agent_license": license_no,
         "agency_name": AGENCY_NAME,
         "collateral": str(data.get("collateral") or "Indemnity Agreement, Promissory Note"),
-        "collateral_description": str(data.get("collateral_description") or ""),
+        "collateral_description": (
+            str(data.get("collateral_other_description") or "").strip()
+            if payment_source(data) == SOURCE_OTHER
+            else ""
+        ),
         "collateral_receipt_number": str(data.get("collateral_receipt_number") or receipt_no),
         "who_signed": str(data.get("who_signed") or "defendant and family/friends"),
         "transfer_agent": str(data.get("transfer_agent") or ""),
@@ -270,6 +279,7 @@ def build_palmetto_context(data: Optional[dict]) -> Dict[str, str]:
         "collateral_promissory_note": "",
         "collateral_indemnity": "",
         "collateral_mortgage": "",
+        **checkbox_context(data),
     }
     return ctx
 
@@ -356,6 +366,49 @@ def values_for_document(slug: str, data: Optional[dict]) -> Dict[str, str]:
     return values
 
 
+_PAYMENT_CHECKBOXES = frozenset({
+    "cr_cash",
+    "cr_check",
+    "cr_money_order",
+    "cr_credit_card",
+    "cr_other",
+})
+
+
+def checkbox_values_for_document(slug: str, data: Optional[dict]) -> Dict[str, str]:
+    """Payment boxes only. ``Yes`` checks one. Empty leaves the box blank."""
+    ctx = build_palmetto_context(data)
+    values: Dict[str, str] = {}
+    for field in fields_for(slug):
+        if field["name"] not in _PAYMENT_CHECKBOXES:
+            continue
+        source = field["data_source"]
+        values[field["name"]] = ctx.get(source, "") if source else ""
+    return values
+
+
+def _apply_checkbox_values(page, checks: Dict[str, str]) -> None:
+    for widget in page.widgets() or []:
+        name = widget.field_name or ""
+        if name not in checks or widget.field_type != fitz.PDF_WIDGET_TYPE_CHECKBOX:
+            continue
+        if checks[name] == "Yes":
+            on = "Yes"
+            try:
+                state = widget.on_state()
+                if state:
+                    on = state
+            except Exception:
+                pass
+            widget.field_value = on
+        else:
+            widget.field_value = "Off"
+        try:
+            widget.update()
+        except Exception:
+            pass
+
+
 # Placement slug → paperwork file slug. The information sheet keeps the
 # historical filename so the print stitch still resolves surety-terms.
 _FILE_SLUG = {
@@ -376,8 +429,10 @@ def fill_palmetto_document(slug: str, data: Optional[dict]) -> bytes:
     try:
         stamp_document_widgets(doc, slug)
         values = values_for_document(slug, data)
+        checks = checkbox_values_for_document(slug, data)
         for page in doc:
             _apply_field_values(page, values)
+            _apply_checkbox_values(page, checks)
         buf = io.BytesIO()
         doc.save(buf)
     finally:

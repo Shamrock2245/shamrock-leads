@@ -36,6 +36,7 @@ config/google-services.json
 !tests/fixtures/docuseal_charge_capacity.json
 !templates/palmetto/palmetto_docuseal_field_spec.json
 !tests/fixtures/docuseal/template_5.json
+!dashboard/docuseal_live_template_fields.json
 !tests/golden/write_bond_osi.json
 !tests/golden/write_bond_palmetto.json
 !tests/golden/write_bond_osi_t1_live.json
