@@ -1117,7 +1117,7 @@ const SLReports = (() => {
     });
     if (!rows.length) { toast('No visible data to export','warning'); return; }
     const csv = rows.join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
+    const blob = new Blob([(window.slRedactKeys ? window.slRedactKeys(csv) : csv)], { type: 'text/csv' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
     const meta = _currentReport || 'report';

@@ -72,3 +72,69 @@ def scrub_internal_keys(value: Any) -> Any:
     if isinstance(value, tuple):
         return tuple(scrub_internal_keys(v) for v in value)
     return public_booking_number(value)
+
+
+def redact_internal_keys(value: Any) -> Any:
+    """Copy of ``value`` with internal-key substrings removed from every string.
+
+    For free text and outbound payloads (Slack/Telegram/SMS/iMessage/email,
+    CSV/XLSX/Sheets rows, dashboard notifications): the rest of the text is
+    kept, the key itself prints blank. A value that is only a key becomes "".
+    """
+    if isinstance(value, str):
+        return _ANY_INTERNAL_KEY_RE.sub("", value) if "md_dedupe_v" in value else value
+    if isinstance(value, dict):
+        return {k: redact_internal_keys(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact_internal_keys(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(redact_internal_keys(v) for v in value)
+    return value
+
+
+class _RedactingWriter:
+    """csv.writer / csv.DictWriter wrapper whose rows pass redact_internal_keys."""
+
+    def __init__(self, inner: Any):
+        self._inner = inner
+
+    def writerow(self, row: Any) -> Any:
+        return self._inner.writerow(redact_internal_keys(row))
+
+    def writerows(self, rows: Any) -> None:
+        for row in rows:
+            self.writerow(row)
+
+    def __getattr__(self, name: str) -> Any:  # writeheader, dialect, fieldnames ...
+        return getattr(self._inner, name)
+
+
+def redacting_csv_writer(f: Any, *args: Any, **kwargs: Any) -> _RedactingWriter:
+    """Drop-in for ``csv.writer`` on every export path (CSV never prints a key)."""
+    import csv
+
+    return _RedactingWriter(csv.writer(f, *args, **kwargs))
+
+
+def redacting_dict_writer(f: Any, *args: Any, **kwargs: Any) -> _RedactingWriter:
+    """Drop-in for ``csv.DictWriter`` on every export path."""
+    import csv
+
+    return _RedactingWriter(csv.DictWriter(f, *args, **kwargs))
+
+
+def redact_workbook(wb: Any) -> Any:
+    """Blank internal-key substrings in every string cell of an openpyxl workbook.
+
+    Call right before ``wb.save(...)`` on every XLSX export.
+    """
+    for ws in getattr(wb, "worksheets", []):
+        for row in ws.iter_rows():
+            for cell in row:
+                v = cell.value
+                if isinstance(v, str) and "md_dedupe_v" in v:
+                    cell.value = redact_internal_keys(v)
+        title = getattr(ws, "title", "")
+        if isinstance(title, str) and "md_dedupe_v" in title:
+            ws.title = redact_internal_keys(title) or "Sheet"
+    return wb

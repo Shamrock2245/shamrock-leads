@@ -186,6 +186,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Rendered pages, text/CSV downloads and every response header never print a
+# Miami-Dade internal booking key (owner exception 2026-10-09).
+from dashboard.booking_key_middleware import BookingKeyRedactMiddleware  # noqa: E402
+
+app.add_middleware(BookingKeyRedactMiddleware)
+
 # Tenant context sits inside PIN auth. Starlette runs the last add_middleware
 # first, so PinAuthMiddleware below stays the outer gate and has already
 # attached the session before we resolve a tenant. Flag off: context is

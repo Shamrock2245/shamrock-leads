@@ -1454,7 +1454,7 @@ window.SLProspective = (function () {
       ];
     });
     var csv = [headers].concat(rows).map(function(r) { return r.map(function(v) { return '"' + String(v).replace(/"/g, '""') + '"'; }).join(','); }).join('\n');
-    var blob = new Blob([csv], { type: 'text/csv' });
+    var blob = new Blob([(window.slRedactKeys ? window.slRedactKeys(csv) : csv)], { type: 'text/csv' });
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;

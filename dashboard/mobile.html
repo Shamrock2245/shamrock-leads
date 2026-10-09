@@ -267,6 +267,7 @@
     </div>
   </div>
 
+<script src="/sl-booking-guard.js?v=1"></script>
 <script>
 'use strict';
 const API = window.location.origin;
@@ -359,12 +360,12 @@ function render() {
         const hrs = f.hours_past_court ? `${Math.round(f.hours_past_court)}h past` : '';
         return `<div class="item-card ${cls}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start">
-            <div class="item-name">${_esc(f.defendant_name || f.booking_number || '—')}</div>
+            <div class="item-name">${_esc(f.defendant_name || (window.slBookingLabel ? window.slBookingLabel(f.booking_number) : f.booking_number) || '—')}</div>
             <span class="item-badge ${badge}">${label}</span>
           </div>
           <div class="item-meta">
             <span>${_esc(f.county || '—')}</span>
-            <span>${_esc(f.booking_number || '')}</span>
+            <span>${_esc(window.slBookingLabel ? window.slBookingLabel(f.booking_number) : (f.booking_number || ''))}</span>
             ${hrs ? `<span style="color:var(--red)">${hrs}</span>` : ''}
           </div>
           ${f.surrender_initiated ? '<div style="font-size:0.6rem;color:var(--red);margin-top:4px;font-weight:700">🆘 Surrender initiated</div>' : ''}
@@ -385,13 +386,13 @@ function render() {
         const amt = b.bond_amount ? `$${Number(b.bond_amount).toLocaleString()}` : '—';
         return `<div class="item-card ${daysUntil !== null && daysUntil <= 0 ? 'red' : daysUntil !== null && daysUntil <= 3 ? 'orange' : 'green'}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start">
-            <div class="item-name">${_esc(b.defendant_name || b.booking_number || '—')}</div>
+            <div class="item-name">${_esc(b.defendant_name || (window.slBookingLabel ? window.slBookingLabel(b.booking_number) : b.booking_number) || '—')}</div>
             ${courtBadge}
           </div>
           <div class="item-meta">
             <span>${_esc(b.county || '—')}</span>
             <span style="color:var(--green);font-weight:700">${amt}</span>
-            <span>${_esc(b.booking_number || '')}</span>
+            <span>${_esc(window.slBookingLabel ? window.slBookingLabel(b.booking_number) : (b.booking_number || ''))}</span>
           </div>
         </div>`;
       }).join('');
@@ -410,7 +411,7 @@ function render() {
         const amt = b.bond_amount ? `$${Number(b.bond_amount).toLocaleString()}` : '';
         return `<div class="court-item">
           <div style="display:flex;justify-content:space-between;align-items:center">
-            <div class="item-name">${_esc(b.defendant_name || b.booking_number || '—')}</div>
+            <div class="item-name">${_esc(b.defendant_name || (window.slBookingLabel ? window.slBookingLabel(b.booking_number) : b.booking_number) || '—')}</div>
             <span class="court-date-badge ${badgeCls}">${label}</span>
           </div>
           <div class="item-meta" style="margin-top:4px">

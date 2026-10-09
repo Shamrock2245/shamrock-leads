@@ -23,6 +23,7 @@ import os
 from datetime import datetime, timezone
 
 from dashboard.extensions import get_collection
+from core.booking_identity import redact_internal_keys
 
 webhooks_bp = APIRouter(prefix="/api", tags=["webhooks"])
 logger = logging.getLogger(__name__)
@@ -352,12 +353,12 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
     if slack_webhook_url and status == "approved":
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                await client.post(slack_webhook_url, json={
+                await client.post(slack_webhook_url, json=redact_internal_keys({
                     "text": (
                         f":moneybag: *Payment Received* — ${amount:.2f} from {customer_name} "
                         f"({card_brand} ****{card_last4}) | Booking: {booking_number or 'N/A'}"
                     )
-                })
+                }))
         except Exception as exc:
             logger.warning("[payment_webhook] Slack alert failed: %s", exc)
 

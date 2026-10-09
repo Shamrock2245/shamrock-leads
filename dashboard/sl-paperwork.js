@@ -1586,7 +1586,7 @@ const SLPaperwork = {
     if (!this._adobeToolsLastResult) return;
     const ext = this._adobeToolsLastMode === 'md' ? 'md' : this._adobeToolsLastMode === 'json' ? 'json' : 'txt';
     const base = (this._adobeToolsFileName || 'output').replace(/\.pdf$/i, '');
-    const blob = new Blob([this._adobeToolsLastResult], { type: 'text/plain;charset=utf-8' });
+    const blob = new Blob([(window.slRedactKeys ? window.slRedactKeys(this._adobeToolsLastResult) : this._adobeToolsLastResult)], { type: 'text/plain;charset=utf-8' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `${base}.${ext}`;

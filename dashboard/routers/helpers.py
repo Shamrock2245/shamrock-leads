@@ -8,6 +8,7 @@ import math
 from datetime import datetime
 from bson import ObjectId
 from fastapi.responses import JSONResponse
+from core.booking_identity import redacting_csv_writer, redacting_dict_writer
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +156,7 @@ async def async_csv_streamer(cursor, fieldnames: list[str]):
     from MongoDB schema variations using extrasaction='ignore'.
     """
     buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=fieldnames, extrasaction="ignore")
+    writer = redacting_dict_writer(buffer, fieldnames=fieldnames, extrasaction="ignore")
 
     # Write and yield the header row
     writer.writeheader()
@@ -193,7 +194,7 @@ async def async_csv_list_streamer(cursor, row_extractor_fn, header: list[str]):
     and a header list, streaming formatted rows securely.
     """
     buffer = io.StringIO()
-    writer = csv.writer(buffer)
+    writer = redacting_csv_writer(buffer)
 
     # Write and yield the header row
     writer.writerow(header)
