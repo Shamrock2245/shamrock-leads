@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-09 (pre-existing test failures outside the CI list)
+
+### Fixed
+- **`GET /api/poa/next` validates the surety before opening the POA inventory.** An unknown or inactive surety still gets the same 400. The handler no longer opens the `poa_inventory` collection first, so the check needs no database. This order dates from the original import (8ee4491) and was kept by 6f108fe (single surety registry). No PDF, POA tier or OSI/Palmetto rule changes.
+
+### Tests
+- `tests/test_hendry_dedup.py` (stale since #143 / 06f58e5): #143 removed `HendryCountyScraper._parse_inmate` because the feed's only id is a person (MNI) id. The old tests called the removed parser and expected `inmateID` to become the booking key, which #143 forbids. They now check the stricter rule: no parser, `scrape()` returns `[]` with the network blocked, and the reason names MNI. The `County:Booking` dedup key format is unchanged. No key or dedupe rule was loosened.
+- `tests/test_new_osi_poa_format.py`: the unknown-surety test passed only with `MONGODB_URI` set. It now also asserts that the inventory is never opened for an unknown or empty surety.
+- `tests/test_prod_auth_allowlist.py` (environment-dependent, not a code change): the 401 / 302 / Traccar token tests passed only on a machine whose `.env` set `DASHBOARD_PIN` and `SECRET_KEY`. Without a PIN, the middleware's non-production dev path lets requests through. An autouse fixture now sets synthetic `DASHBOARD_PIN` / `SECRET_KEY` and clears machine keys. `/health` tests mock the DB ping. Every auth assertion is unchanged. New: `ENV=production` without a PIN returns 503 on `/api/stats`, `/openapi.json` and Traccar device status, while `/health` stays 200.
+- All three files are added to the `ci.yml` pytest list.
+
 ## [Unreleased] — 2026-10-09 (Charlotte + Manatee fail_closed; relay skips fail_closed counties)
 
 ### Fixed
