@@ -3,6 +3,28 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-09 (Pinellas modal fix + diagnostics; relay egress blocks never auto-disable)
+
+### Fixed
+- **Pinellas (FL) charge-report modals: root cause of the 0/10 relay smoke.** The relay smoke on Brendan's Mac (main 6c9303d, Comcast, gate passed) loaded the roster, then logged "10/10 charge-report modals did not render" and raised "every Subject Charge Report modal failed to render". The row-click script in `_read_detail_modal` held `split(/\n/)` in a non-raw Python string. Python turned `\n` into a real newline, so the browser got a regex literal with a line break, a JavaScript SyntaxError on every call. The exception was logged only at DEBUG and the booking was skipped, so no modal was ever opened. The script is gone. A test checks that no JS string in the module has a raw newline inside a regex literal (plus `node --check` when node is installed).
+- **Modal handling** (`scrapers/counties/pinellas.py`), stock Playwright only, no stealth:
+  - The exact row link is marked by booking number and opened with a trusted Playwright click, with a DOM `click()` as the fallback.
+  - The wait is on the modal's own content. The container (`.modal, [role=dialog], dialog[open], .modal-dialog, .blazored-modal, .mud-dialog`, not Blazor's reconnect overlay) must be visible and carry Offense Description / Bond Assessed, with the text unchanged across two polls.
+  - Per-attempt timeout is `PINELLAS_MODAL_TIMEOUT_MS`: default 20000 (was a fixed 8s), clamped to 2000–45000. Each booking gets one retry, then a 0.5s pause.
+  - Any open modal is closed (Escape plus its own Close button, up to 3s) before each click and after each read.
+  - After 5 bookings in a row fail twice, the rest of the run skips modals (`skipped_after_consecutive_failures`) instead of spending up to 90s per booking.
+  - When every modal fails, the run still raises `RuntimeError` ("every Subject Charge Report modal failed to render (reasons: …)"). The reason names avoid "timeout" so it is not retried as a network error.
+- **Names-free failure reasons in normal logs.** Each failed attempt logs a WARNING line with booking number, attempt, reason (`click_target_not_found`, `selector_not_found`, `empty_content`, `no_charge_fields_by_deadline`, `circuit_disconnected`, `exception`), wait condition, selector, timeout, elapsed ms, click mode, and exception type/text. The first 3 failures per run also log a DOM shape (tag/class counts and modal-candidate summaries). The run summary line lists reason counts. Exception text has roster names removed.
+- **Relay-only counties are never auto-disabled by egress-blocked failures.** The threshold is 5 consecutive counted failures (`auto_disable_threshold()` in `scrapers/scraper_resilience.py`, env `SCRAPER_AUTO_DISABLE_THRESHOLD`). Charlotte and Manatee were already in `AUTO_DISABLE_EXEMPT_LABELS` (count and alert, never skipped), but their streaks grew from Comcast-exit Cloudflare 403s. Pinellas is not exempt, so 5 relay exit-gate failures would have disabled it. For labels in `config/relay_only.py`, a failure where `is_egress_blocked(verdict)` is true (`EgressBlocked`, i.e. exit gate or challenge page, or any non-cooldown `anti_bot` such as 401/403/429/Cloudflare) now leaves `consecutive_failures` unchanged. It increments a separate `egress_blocked_failures` instead, with `last_error_class = "egress_blocked"`, and `scraper_status` gets `egress_blocked: true`. It never trips auto-disable or the exempt threshold alert. The per-run error notification is still sent. Parser drift and other failures on relay counties still count, alert and (for Pinellas) auto-disable. A successful run resets both counters. `MongoWriter.get_scraper_resilience` reads the new field and `reenable_scraper` zeroes it.
+
+### Added
+- `PINELLAS_MODAL_DEBUG=1` (or `scripts/pinellas_relay_smoke.py --debug`), off by default. It writes `logs/pinellas-modal-debug-<timestamp>.jsonl` on the relay and nothing else. Per modal attempt it records the selector, wait condition, timeout ms, elapsed ms, click mode, exception type/text, page console errors/warnings, page errors, failed requests, websocket (SignalR) open/close/error events (URLs without query strings), the DOM shape, and a names-free modal structure (tags/classes and field labels only; values become `#text(len)`). Everything goes through name redaction.
+- The smoke JSON now has `modal_failure_reasons`, `modal_timeout_ms`, `modal_debug` and `debug_log`. When every modal fails it exits 3 (`modals_not_rendered`) as documented, instead of 1.
+
+### Tests
+- `tests/test_pinellas_modal_wait.py` uses fake page objects and a fake clock, no Playwright. It covers late render, never render (`selector_not_found`, retried once), empty modal, text without charge fields, success after one retry, circuit disconnect, a missing row link (not retried), the trusted-click fallback, redacted exception text, the timeout clamp and budget, the 5-in-a-row stop, the all-failed RuntimeError (not retryable), and the debug JSONL (names, SignalR token absent; ws/console events present). It also checks the smoke `--debug` flag and the JS regex-newline guard.
+- `tests/test_relay_egress_auto_disable.py` covers the state machine and `BaseScraper.run()`: Pinellas exit-gate failures ×8 do not disable it, while real modal failures ×5 do. For Charlotte and Manatee, Cloudflare 403s ×6 leave the streak at 4 with no exempt alert, and the next parser failure counts and alerts at 5. A success clears both counters. Non-relay 403s still count. The threshold is 5.
+
 ## [Unreleased] — 2026-10-09 (Write Bond full-case goldens)
 
 ### Added
