@@ -1,11 +1,12 @@
 """Merge a Palmetto field spec into a live DocuSeal template.
 
 A DocuSeal field update replaces the template's whole field list. Documents
-this spec does not cover (paperwork header, FAQ pages, master waiver,
-SSA release) keep every existing area. A text, checkbox, or execution-date
-field whose areas sit on more than one document is split: areas on uncovered
-documents stay on the original field object (same uuid, name, and submitter).
-Areas on covered documents are replaced by the spec.
+this spec does not cover (FAQ pages, master waiver, SSA release) keep every
+existing area. The paperwork header keeps every existing area and gains the
+offense rows from this spec. A text, checkbox, or execution-date field whose
+areas sit on more than one document is split: areas on uncovered documents
+stay on the original field object (same uuid, name, and submitter). Areas on
+covered documents are replaced by the spec.
 
 Signature, initials, and date-signed fields keep the live area and role,
 including areas on a covered document. ``today_date`` is the prefilled
@@ -36,6 +37,9 @@ COVERED_SLUGS = (
 
 # Printed, not e-signed. Reported, never written onto template 5.
 PRINT_ONLY_SLUGS = ("appearance-bond",)
+
+# Live fields stay. Spec rows on these documents are added beside them.
+APPEND_SLUGS = ("paperwork-header",)
 
 CLONE_NAME = "shamrock-palmetto-paperwork-complete (field review)"
 
@@ -73,6 +77,11 @@ _DOC_HINTS = {
         "information sheet",
         "surety-terms",
         "surety term",
+    ),
+    "paperwork-header": (
+        "shamrock-paperwork-header",
+        "paperwork-header",
+        "paperwork header",
     ),
 }
 
@@ -143,14 +152,17 @@ ROLE_CHANGES: Dict[str, str] = {}
 
 # plan_merge fields that touch each covered form on the template 5 export.
 # Application and indemnity each include the agent_license box: one more
-# field than the plan before that box existed. The PUT total is +2.
+# field than the plan before that box existed.
+# The paperwork header is not replaced. It keeps 4 live fields and gains
+# the 4 offense rows. The PUT total is +4.
 TEMPLATE_5_FORM_FIELD_COUNTS = {
     "defendant-application": 85,
     "indemnity-agreement": 51,
     "collateral-receipt": 30,
     "bail-bond-information-sheet-palmetto": 6,
 }
-TEMPLATE_5_PUT_FIELD_COUNT = 195
+TEMPLATE_5_HEADER_FIELD_COUNT = 8
+TEMPLATE_5_PUT_FIELD_COUNT = 199
 
 _TEXT_ALIGNS = frozenset({"left", "center", "right"})
 _TEXT_VALIGNS = frozenset({"top", "center", "bottom"})
@@ -319,7 +331,7 @@ def match_attachments(template: Mapping[str, Any]) -> Dict[str, Dict[str, str]]:
     rows = template_attachments(template)
     claimed: Dict[str, Dict[str, str]] = {}
     used_uuids = set()
-    slugs = list(COVERED_SLUGS) + list(PRINT_ONLY_SLUGS)
+    slugs = list(COVERED_SLUGS) + list(PRINT_ONLY_SLUGS) + list(APPEND_SLUGS)
     ranking: List[Tuple[int, str, Dict[str, str]]] = []
     for slug in slugs:
         for row in rows:
@@ -448,7 +460,7 @@ def _groups_for(
     """
     grouped: Dict[Tuple[str, str], List[Mapping[str, Any]]] = {}
     order: List[Tuple[str, str]] = []
-    resolve = slug in COVERED_SLUGS
+    resolve = slug in COVERED_SLUGS or slug in APPEND_SLUGS
     for field in spec_fields:
         if str(field.get("document") or "") != slug:
             continue
@@ -636,13 +648,32 @@ def plan_merge(
         uuid = row["uuid"]
         slug = slug_by_uuid.get(uuid, "")
         if uuid not in covered_uuids:
+            added_names: List[str] = []
+            if slug in APPEND_SLUGS:
+                existing_names = set(_names_on(original_fields, uuid))
+                built_rows: List[dict] = []
+                for name, role, group in _groups_for(slug, spec_fields):
+                    if name in existing_names:
+                        continue
+                    submitter_uuid = submitters.get(role, "")
+                    if not submitter_uuid:
+                        known_roles = ", ".join(sorted(submitters)) or "(none)"
+                        raise PalmettoApplyError(
+                            f"Spec field {name} role {role or '(blank)'} is not a template submitter ({known_roles})."
+                        )
+                    added_names.append(name)
+                    built_rows.append(
+                        _build_field(name, group, uuid, submitter_uuid, page_delta, "")
+                    )
+                if built_rows:
+                    replacements[uuid] = built_rows
             documents.append({
                 "document": row["name"] or row["filename"],
                 "filename": row["filename"],
                 "attachment_uuid": uuid,
                 "slug": slug,
                 "coverage": "keep",
-                "added": [],
+                "added": added_names,
                 "moved": [],
                 "removed": [],
                 "kept": _names_on(original_fields, uuid),
@@ -774,6 +805,8 @@ def plan_merge(
     for row in attachments:
         if row["uuid"] in covered_uuids:
             _emit(row["uuid"])
+        elif row["uuid"] in replacements:
+            payload.extend(replacements[row["uuid"]])
 
     assert_put_identity(template, payload)
     return {

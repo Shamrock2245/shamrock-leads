@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-09 (Palmetto A4 offense rows)
+
+### Added
+- **Palmetto paperwork-header offense rows.** Four bondsman text fields, `offense_1` through `offense_4`, on the shared header page. Each box is x=90, w=432, h=20, at y=446 / 468 / 490 / 512, with `preferences.font_size` 7. The rows sit between the logo (ink bottom y=434.6) and the header defendant block, with a 2pt gap between rows. Recorded from the template 6 review clone and checked against TEST render submission #52 (0.000pt render-vs-model). Templates 1 and 5 are not edited here.
+- The apply plan keeps the live header fields and adds these four rows. Inventory slug `paperwork-header` now lists the fields. A 7pt worst-case glyph mix fits 104 characters on one line and 209 on two. A 20pt row does not hold a third line.
+
+### Tests
+- `tests/test_palmetto_header_offense_rows.py` (added to the `ci.yml` list). Areas, preferences, gaps, the logo-to-defendant band, fill by field name, and the 7pt fit limits. Synthetic charges only. No DocuSeal call.
+- `tests/golden/write_bond_palmetto_spec.json` regenerated with `WRITE_BOND_REGEN_GOLDEN=1 python scripts/regen_write_bond_goldens.py`.
+
 ## [Unreleased] — 2026-10-09 (Write Bond full-case goldens)
 
 ### Added

@@ -167,6 +167,20 @@
     ],
     "value": "5,000.00"
   },
+  "offense_1": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "Grand theft — occupant's dwelling (Fla. Stat. § 812.014(2)(c), 2nd degree)"
+  },
+  "offense_2": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "Burglary of a conveyance (Fla. Stat. § 810.02(3)(d), 3rd degree)"
+  },
   "poa_number": {
     "readonly": true,
     "submitter_role": [
