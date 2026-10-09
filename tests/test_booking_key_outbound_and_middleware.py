@@ -362,3 +362,26 @@ def test_booking_guard_js_parses():
         pytest.skip("node not installed")
     r = subprocess.run([node, "--check", str(DASH / "sl-booking-guard.js")], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr[:300]
+
+
+def test_booking_guard_keeps_routing_values_and_intercepts_assignments():
+    """Codex #171 P1/P2: non-text values untouched; programmatic text assignments hidden but readable."""
+    import json as _json
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    r = subprocess.run([node, str(ROOT / "tests/js/booking_guard_sim.js"), str(DASH / "sl-booking-guard.js")],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr[:300]
+    out = _json.loads(r.stdout.strip().splitlines()[-1])
+    assert out["textShown"] == ""                      # programmatic el.value = key prints blank
+    assert out["textRead"] == KEY == out["textKept"]   # consumers still read the routing id
+    assert out["chkRead"] == KEY == out["chkShown"]    # Bulk Exonerate checkbox value untouched
+    assert out["hiddenRead"] == KEY
+    assert out["mixed"] == "note  end"
+    assert out["plain"] == "2026-123456"               # non-MD values untouched
+    assert out["afterType"] == "24-0001" and out["keyCleared"] is True
+    assert out["label"] == "|2026-123456"

@@ -18,7 +18,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Only the `Content-Disposition` header (the download filename) is rewritten; `Location` and other headers are left alone, so redirects keep working.
   - A body without the `md_dedupe_v` marker is forwarded as the same bytes object.
 - **`sl-booking-guard.js`** loads first on every dashboard page except the recovery portal: index, mobile, tablet, portal, start_bond_packet and the four platform pages.
-  - It blanks a key in page text, attributes and input values (the key stays as a hidden link), and in desktop Notifications, alert/confirm/prompt and clipboard copies.
+  - It blanks a key in page text, attributes, desktop Notifications, alert/confirm/prompt and clipboard copies.
+  - Text-entry controls (text/search/tel/email/url, textarea) show a key blank, including on programmatic `.value =`. Reading `.value` while the field is blank still returns the routing id, and typing clears it. Checkbox, radio, hidden and button values are routing data and are never touched (Bulk Exonerate keeps working). Codex #171 P1/P2; a node simulation test is in `tests/js/booking_guard_sim.js`.
   - The mobile and tablet bond lists and the start-bond-packet header use the label directly.
 - **`recovery_portal.html`:** its recovery scope serves no scripts, so it carries an inline `bkl()` label. Selecting a Miami-Dade case keeps the key hidden for the share request.
 - **Tests:** `tests/test_booking_key_outbound_and_middleware.py`, added to the CI list.
