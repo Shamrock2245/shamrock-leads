@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-09 (POA reassign audit and release stamps)
+
+### Added
+- **`POST /api/poa/reassign` keeps every prior holder and writes an audit row.** The route appends `poa_inventory.reassigned_from` (prior holder, case, UTC timestamp, and actor). A second reassign appends; it does not replace the list. A legacy last-write string is kept as the first entry. The audit row is `action: poa_reassigned` with the power id and number, from-case / from-agent, to-case / to-agent, timestamp, and actor. The actor is the session email, else the session agent name. A body `actor`, `email`, `agent_name`, or `released_by` is ignored. No session returns 401 and writes nothing. Status, `bond_case_id`, `used_at`, and the success message are otherwise unchanged. The holder on the power is still the stored `assigned_to_agent`.
+
+### Fixed
+- **`POST /api/poa/release` stamps who released the power and when.** `released_at` is UTC and `released_by` is the session actor, never a body field. If the power was released before, that stamp is appended to `release_history` and the existing list is kept. Status returns to available, `bond_case_id` and `used_at` clear, and void fields still unset. No session returns 401.
+
+### Tests
+- `tests/test_poa_reassign_release_audit.py` (added to the `ci.yml` list). Mocked Mongo only, `TEST-` powers. Covers the audit row, `reassigned_from` across two reassigns, the session actor, 401 without a session, the release timestamp and actor (including prior release history), and the previous success / 400 / 404 / 409 behavior.
+
 ## [Unreleased] — 2026-10-09 (verbatim bond charge text)
 
 ### Fixed

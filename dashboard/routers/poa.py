@@ -1162,9 +1162,62 @@ async def api_poa_void(request: Request):
     return {"success": True, "poa_number": poa_number, "message": f"POA {poa_number} voided"}
 
 
+def _session_actor(request: Request) -> str | None:
+    """Session email, else the session agent name. Never the request body.
+
+    A missing session, or a session with neither email nor agent name, is
+    None so the route can return 401 before it writes inventory or audit.
+    """
+    from dashboard.auth.agent_scope import agent_identity
+    from dashboard.auth.pin_middleware import get_session_from_request
+
+    sess = get_session_from_request(request)
+    if not sess or not sess.get("auth"):
+        return None
+    ident = agent_identity(request)
+    actor = str(ident.get("email") or ident.get("agent_name") or "").strip()
+    return actor or None
+
+
+def _auth_required() -> JSONResponse:
+    return JSONResponse(
+        {"success": False, "error": "auth_required"},
+        status_code=401,
+    )
+
+
+def _power_id(doc: dict) -> str:
+    raw = doc.get("_id")
+    if raw not in (None, ""):
+        return str(raw)
+    for key in ("poa_id", "power_id"):
+        raw = doc.get(key)
+        if raw not in (None, ""):
+            return str(raw)
+    return str(doc.get("poa_number") or "")
+
+
+def _stored_holder(doc: dict) -> str:
+    return str(doc.get("assigned_to_agent") or doc.get("agent_name") or "").strip()
+
+
+def _legacy_reassign_case(existing) -> str | None:
+    """A last-write string is the previous case. 'none' / blank is not history."""
+    if not isinstance(existing, str):
+        return None
+    text = existing.strip()
+    if not text or text.lower() in ("none", "null"):
+        return None
+    return text
+
+
 @poa_bp.post("/poa/release")
 async def api_poa_release(request: Request):
     """Release an assigned POA back to available status."""
+    actor = _session_actor(request)
+    if not actor:
+        return _auth_required()
+
     poa_inventory = get_collection("poa_inventory")
     body = (await request.json()) or {}
     poa_number = str(body.get("poa_number", "")).strip()
@@ -1179,10 +1232,35 @@ async def api_poa_release(request: Request):
     if doc.get("status") != "assigned":
         return JSONResponse({"error": f"POA {poa_number} is {doc.get('status')}, not assigned"}, status_code=409)
 
+    when = datetime.now(timezone.utc)
+    update: dict = {
+        "$set": {
+            "status": "available",
+            "bond_case_id": None,
+            "used_at": None,
+            "released_at": when,
+            "released_by": actor,
+        },
+        "$unset": {"voided_at": "", "void_reason": ""},
+    }
+    # A prior stamp stays on release_history. $push appends; it does not
+    # replace a list that auto-release or an earlier manual release already wrote.
+    if doc.get("released_at") not in (None, ""):
+        prior = {
+            "released_at": doc.get("released_at"),
+            "released_by": doc.get("released_by"),
+        }
+        if doc.get("release_reason") not in (None, ""):
+            prior["release_reason"] = doc.get("release_reason")
+        if doc.get("released_reason") not in (None, ""):
+            prior["released_reason"] = doc.get("released_reason")
+        history = doc.get("release_history", None)
+        if history is None or isinstance(history, list):
+            update["$push"] = {"release_history": prior}
+
     await poa_inventory.update_one(
         {"poa_number": poa_number, "surety_id": surety_id},
-        {"$set": {"status": "available", "bond_case_id": None, "used_at": None},
-         "$unset": {"voided_at": "", "void_reason": ""}},
+        update,
     )
     return {"success": True, "poa_number": poa_number, "message": f"POA {poa_number} released back to available"}
 
@@ -1190,6 +1268,10 @@ async def api_poa_release(request: Request):
 @poa_bp.post("/poa/reassign")
 async def api_poa_reassign(request: Request):
     """Reassign a POA from one case to another."""
+    actor = _session_actor(request)
+    if not actor:
+        return _auth_required()
+
     poa_inventory = get_collection("poa_inventory")
     body = (await request.json()) or {}
     poa_number = str(body.get("poa_number", "")).strip()
@@ -1204,15 +1286,73 @@ async def api_poa_reassign(request: Request):
         return JSONResponse({"error": f"POA {poa_number} not found"}, status_code=404)
 
     old_case = doc.get("bond_case_id", "none")
+    holder = _stored_holder(doc)
+    when = datetime.now(timezone.utc)
+    entry = {
+        "holder": holder,
+        "case": old_case,
+        "timestamp": when,
+        "actor": actor,
+    }
+    sets = {
+        "status": "assigned",
+        "bond_case_id": new_booking,
+        "used_at": when.isoformat(),
+    }
+    update: dict = {"$set": sets}
+    existing = doc.get("reassigned_from", None)
+    if isinstance(existing, list) or existing is None:
+        # Append only. A second reassign must not replace the list.
+        update["$push"] = {"reassigned_from": entry}
+    else:
+        # A legacy last-write string cannot take $push. Keep that case, then append.
+        history: list = []
+        if isinstance(existing, dict):
+            history.append(existing)
+        else:
+            legacy_case = _legacy_reassign_case(existing)
+            if legacy_case:
+                history.append({
+                    "holder": "",
+                    "case": legacy_case,
+                    "timestamp": None,
+                    "actor": "",
+                })
+        history.append(entry)
+        sets["reassigned_from"] = history
+
     await poa_inventory.update_one(
         {"poa_number": poa_number, "surety_id": surety_id},
-        {"$set": {
-            "status": "assigned",
-            "bond_case_id": new_booking,
-            "used_at": datetime.now(timezone.utc).isoformat(),
-            "reassigned_from": old_case,
-        }},
+        update,
     )
+
+    power_id = _power_id(doc)
+    audit = get_collection("audit_events")
+    await audit.insert_one({
+        "action": "poa_reassigned",
+        "entity_type": "poa",
+        "entity_id": poa_number,
+        "poa_number": poa_number,
+        "power_id": power_id,
+        "from_case": old_case,
+        "from_agent": holder,
+        "to_case": new_booking,
+        "to_agent": holder,
+        "timestamp": when,
+        "actor": actor,
+        "actor_type": "user",
+        "details": {
+            "poa_number": poa_number,
+            "power_id": power_id,
+            "from_case": old_case,
+            "from_agent": holder,
+            "to_case": new_booking,
+            "to_agent": holder,
+            "reassigned_from": old_case,
+            "bond_case_id": new_booking,
+            "new_booking_number": new_booking,
+        },
+    })
     return {
         "success": True, "poa_number": poa_number,
         "message": f"POA {poa_number} reassigned from {old_case} → {new_booking}",
