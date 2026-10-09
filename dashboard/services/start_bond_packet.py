@@ -455,6 +455,15 @@ async def send_packet(
     email = str(indemnitor.get("email") or "").strip()
     if not name or "@" not in email:
         raise PacketStartError("indemnitor_required")
+    # Before POA suggestion and before the DocuSeal submit.
+    from dashboard.services.identity_verification_service import require_verified_indemnitors
+
+    await require_verified_indemnitors(
+        parties=[{"role": "indemnitor", "name": name}],
+        bond_case_id=str(payload.get("bond_case_id") or ""),
+        booking_number=str(payload.get("booking_number") or ""),
+        packet_id=str(payload.get("packet_id") or ""),
+    )
     poa_number = str(payload.get("poa_number") or "").strip()
     prepared = await prepare_packet(
         str(payload.get("booking_number") or ""),

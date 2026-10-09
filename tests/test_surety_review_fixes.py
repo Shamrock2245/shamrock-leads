@@ -191,6 +191,19 @@ def test_published_poa_prefixes_fail_closed_for_third_party():
     assert bare.value.code == "poa_tiers_unavailable"
 
 
+@pytest.fixture(autouse=True)
+def _assume_verified_indemnitor(monkeypatch):
+    """Surety field guards run after identity. This file assumes a passed scan."""
+
+    async def _ok(*_args, **_kwargs):
+        return {"ok": True, "exempt": "test_fixture", "issues": [], "methods": ["scan"]}
+
+    monkeypatch.setattr(
+        "dashboard.services.identity_verification_service.require_verified_indemnitors",
+        _ok,
+    )
+
+
 def _bound_packet(**extra):
     data = {
         "bond_case_id": "BC-1",

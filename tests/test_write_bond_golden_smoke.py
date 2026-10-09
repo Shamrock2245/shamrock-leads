@@ -10,11 +10,12 @@ is the value, readonly flag, and the submitter roles that receive that
 field. Rewrite them only with ``WRITE_BOND_REGEN_GOLDEN=1`` (see
 ``scripts/regen_write_bond_goldens.py``). CI does not set that flag.
 
-The identity refusal uses the gate Write Bond actually enforces:
-``validate_docuseal_packet_binding`` treats an empty name or a placeholder
-(``unknown``, ``test``, ``to be named``, and the rest of
-``_PLACEHOLDER_PARTY_NAMES``) as not an identity. This path does not read
-an ID-scan status, ``id_verified``, or a KYC flag.
+Placeholder names still fail ``validate_docuseal_packet_binding`` (``unknown``,
+``test``, ``to be named``, and the rest of ``_PLACEHOLDER_PARTY_NAMES``).
+This file's packet is a synthetic ``TEST-`` / ``PKT-TEST-`` staff test case,
+so the ID-scan and staff-attestation gate is not applied. That gate is for
+live indemnitors. A synthetic packet never reserves a live power and never
+contacts a real signer. The binding gate still runs.
 """
 from __future__ import annotations
 

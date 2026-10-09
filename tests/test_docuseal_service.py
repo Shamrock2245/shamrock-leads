@@ -22,6 +22,19 @@ from dashboard.services.docuseal_service import (
 from dashboard.services.swipesimple_receipt_poller import parse_swipesimple_receipt
 
 
+@pytest.fixture(autouse=True)
+def _assume_verified_indemnitor(monkeypatch):
+    """Submission shape tests. The identity gate has its own file."""
+
+    async def _ok(*_args, **_kwargs):
+        return {"ok": True, "exempt": "test_fixture", "issues": [], "methods": ["scan"]}
+
+    monkeypatch.setattr(
+        "dashboard.services.identity_verification_service.require_verified_indemnitors",
+        _ok,
+    )
+
+
 def test_prefill_values_from_bond():
     svc = DocuSealService(base_url="https://sign.example", api_key="test")
     vals = svc.prefill_values_from_bond(

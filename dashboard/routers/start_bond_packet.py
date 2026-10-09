@@ -74,5 +74,14 @@ async def api_send(request: Request):
         )
     except PacketStartError as exc:
         return JSONResponse({"error": exc.code}, status_code=400)
+    except Exception as exc:
+        from dashboard.services.identity_verification_service import IndemnitorIdentityError
+
+        if isinstance(exc, IndemnitorIdentityError):
+            return JSONResponse(
+                {"error": exc.code, "message": str(exc), "issues": exc.issues},
+                status_code=422,
+            )
+        raise
     status = 200 if result.get("state") == "ready_for_staff_send" else 409
     return JSONResponse(result, status_code=status)
