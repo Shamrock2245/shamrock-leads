@@ -6,11 +6,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased] — 2026-10-09 (Write Bond per-template goldens)
 
 ### Added
-- **Per-template Write Bond goldens** after the local name maps. `tests/test_write_bond_template_goldens.py` reuses the synthetic staff test case and the DocuSeal stub that raises. OSI template 1 is projected through the seeded appearance field map. Palmetto template 5 is projected through `PALMETTO_FIELDS` / `palmetto_docuseal_field_spec.json` (`resolved_docuseal_name`). Goldens: `tests/golden/write_bond_osi_template.json` and `tests/golden/write_bond_palmetto_template.json`. A mismatch prints missing, extra, and changed fields.
-- **Palmetto misses wired where a placement already exists.** `court_date` is copied to `court_datetime` (appearance `CourtDateAndTimeField`). `charges` may fill `charges_summary`. `bond_amount_written` and `full_bond_amount_words` may fill `bond_amount_words`. `ssa_release_reason` has no placement and is not given a box. The hydration-key snapshot lists `court_datetime`.
+- **Live template field inventories.** `tests/fixtures/docuseal_t1_fields.json` (OSI template 1, 227 named fields) and `tests/fixtures/docuseal_t5_fields.json` (Palmetto template 5, 156 named fields) keep field name, type, and readonly only. Blank-name widgets, geometry, and template default values are omitted.
+- **Live per-template Write Bond goldens.** `tests/test_write_bond_template_goldens.py` runs the same synthetic staff test case through `POST /api/paperwork/packet/finalize` with the DocuSeal client stubbed to raise. It goldens every submission value whose name exists on that live template (`tests/golden/write_bond_osi_t1_live.json`, `tests/golden/write_bond_palmetto_t5_live.json`), plus the payload keys the template would drop and the template fields that match case-data name patterns but received no value.
+- **Secondary maps, labelled as such.** The seeded OSI appearance-bond map stays in `tests/golden/write_bond_osi_appearance.json`. `PALMETTO_FIELDS` (the template 6 rebuild spec) stays in `tests/golden/write_bond_palmetto_spec.json`. Neither file is the live widget list.
+- **`offense_2` copied to `charge_line_2`.** Palmetto appearance `chargesField2` is named `charge_line_2`. The prefill now sends the second charge string under that name, and the field is staff-readonly like `offense_2`. Live template 5 has no `charge_line_2` or `offense_2` widget (its only charge text field is `charges_summary`), so production drops `charge_line_2`. The rebuild spec fills it.
 
 ### Tests
-- `tests/test_write_bond_template_goldens.py` (added to the `ci.yml` list). Regen stays opt-in: `WRITE_BOND_REGEN_GOLDEN=1 python scripts/regen_write_bond_goldens.py`.
+- `tests/test_write_bond_template_goldens.py` (already on the `ci.yml` list). Regen stays opt-in: `WRITE_BOND_REGEN_GOLDEN=1 python scripts/regen_write_bond_goldens.py`.
 
 ## [Unreleased] — 2026-10-09 (Write Bond golden smoke)
 

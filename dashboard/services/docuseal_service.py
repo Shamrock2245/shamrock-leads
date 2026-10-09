@@ -1136,6 +1136,10 @@ class DocuSealService:
             "CourtType": court_type,
             "charges_summary": charges_summary,
             "charges": charges_summary,
+            # Palmetto appearance chargesField2 is named charge_line_2.
+            # offense_2 is the second charge string. Copy it so that box fills.
+            # Live template 5 has no widget by this name; the rebuild spec does.
+            "charge_line_2": row_fields.get("offense_2") or "",
             "case_number": case_number,
             "CaseNum": case_number,
             "poa_number": poa,

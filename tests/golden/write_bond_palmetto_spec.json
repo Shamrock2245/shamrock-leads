@@ -1,9 +1,10 @@
 {
   "_meta": {
     "frozen_at": "2026-01-15T12:00:00+00:00",
-    "note": "Template fields after the local name map. Rewrite only with WRITE_BOND_REGEN_GOLDEN=1 via scripts/regen_write_bond_goldens.py. CI must not set that flag.",
-    "surety_id": "palmetto",
-    "template_id": 5
+    "kind": "palmetto_rebuild_spec",
+    "label": "PALMETTO_FIELDS rebuild spec (template 6). Not the live DocuSeal template 5 widget list.",
+    "note": "Secondary map, not the live template. Rewrite only with WRITE_BOND_REGEN_GOLDEN=1 via scripts/regen_write_bond_goldens.py. CI must not set that flag.",
+    "surety_id": "palmetto"
   },
   "agency_name": {
     "readonly": true,
@@ -46,6 +47,13 @@
       "bondsman"
     ],
     "value": "TEST-CASE-PALMETTO"
+  },
+  "charge_line_2": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "Burglary of a conveyance (Fla. Stat. § 810.02(3)(d), 3rd degree)"
   },
   "charges_summary": {
     "readonly": true,

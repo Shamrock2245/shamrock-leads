@@ -1,12 +1,11 @@
-"""Project Write Bond prefill onto checked-in template field inventories.
+"""Project Write Bond prefill onto the secondary field maps.
 
-OSI template 1 uses the seeded appearance field map in
-``surety_template_store`` (the same names as ``build_osi_field_values``).
-Palmetto template 5 uses ``PALMETTO_FIELDS``, which matches
-``templates/palmetto/palmetto_docuseal_field_spec.json``. Field names are
-``resolved_docuseal_name`` (the name DocuSeal matches). No DocuSeal call.
+The appearance-bond seed (OSI) and ``PALMETTO_FIELDS`` (Palmetto rebuild
+spec, template 6) are not the live DocuSeal widgets. Live template 1 and
+template 5 are matched by field name in the golden test, from the checked-in
+inventories. This module only projects the two secondary maps.
 
-A template field takes a value only from its allow-listed prefill keys.
+A spec field takes a value only from its allow-listed prefill keys.
 Empty values are omitted. Signature and checkbox widgets are not prefilled.
 """
 from __future__ import annotations
@@ -33,6 +32,8 @@ _SPEC_PATH = (
 _PALMETTO_WIRED_SOURCES: Dict[str, Tuple[str, ...]] = {
     # charge_line_1 resolves to charges_summary. ``charges`` is that same text.
     "charges_summary": ("charges",),
+    # chargesField2 is named charge_line_2. The prefill copies offense_2 there.
+    "charge_line_2": ("offense_2", "charge_2"),
     # CourtDateAndTimeField's data_source is court_datetime, not court_date.
     "court_datetime": ("court_date", "CourtDate"),
     # The words boxes read bond_amount_words. These two keys are the same words.

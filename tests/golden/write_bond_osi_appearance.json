@@ -127,8 +127,9 @@
   },
   "_meta": {
     "frozen_at": "2026-01-15T12:00:00+00:00",
-    "note": "Template fields after the local name map. Rewrite only with WRITE_BOND_REGEN_GOLDEN=1 via scripts/regen_write_bond_goldens.py. CI must not set that flag.",
-    "surety_id": "osi",
-    "template_id": 1
+    "kind": "appearance_bond_seed",
+    "label": "OSI appearance-bond field map from the seeded AcroForm. Not the live DocuSeal template 1 widget list.",
+    "note": "Secondary map, not the live template. Rewrite only with WRITE_BOND_REGEN_GOLDEN=1 via scripts/regen_write_bond_goldens.py. CI must not set that flag.",
+    "surety_id": "osi"
   }
 }
