@@ -128,7 +128,7 @@
 ### Miami-Dade
 | County | Module | Runtime state | Source posture |
 |---|---|---|---|
-| **Miami-Dade** | `miami_dade.py` | Registered (Health `unverified`; matrix `recon_only`) | ArcGIS FeatureServer parser deployed 2026-08-14. 2026-10-08: plain `requests`, paged to the server `returnCountOnly` total. Errors, field drift or a short walk raise. The layer has no bond field, so the bond is `""` (never `$0`) and there is no placeholder charge. The key is the layer `GlobalID`, which is not a source booking number, and its stability across the daily overwrite is unproven (see `docs/recon/FL_MIAMI_DADE_ARCGIS_2026-10-08.md`). |
+| **Miami-Dade** | `miami_dade.py` | Registered, **fail_closed** (Health `fail_closed`; matrix `fail_closed`; `SOURCE_CONTRACT_VALIDATED=False`, 2026-10-09) | ArcGIS FeatureServer table `miamidade_jail_data` (plain `requests`). It publishes no booking, jail or case number. Its ObjectId/GlobalID are map row ids that get reissued on republish: on 2026-10-09 08:03 ET, 840 of 841 snapshot rows got a new GlobalID. `Booking_Number` is therefore left blank, never a row id or hash. `extra.md_dedupe` holds an internal dedupe key (sha256 of defendant, booking date and full charges), labelled as not a booking number. No bond field, so bond is `""`, never `$0`. No rows are fetched or written until an owner decision on keying by `md_dedupe` plus a backed-up cleanup. Stored GlobalID duplicates are counted read-only by `scripts/miami_dade_dedupe_report.py`. |
 
 ### Rural source-recon queue — scaffolded and registered
 
