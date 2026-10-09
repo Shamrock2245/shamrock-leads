@@ -87,6 +87,8 @@ FIELD_TITLES: Dict[str, Dict[str, str]] = {
 STAFF_READONLY_FIELD_NAMES = frozenset({
     "offense_1", "offense_2", "offense_3", "offense_4",
     "charge_1", "charge_2", "charge_3", "charge_4",
+    # Appearance chargesField2 is named charge_line_2. Same text as offense_2.
+    "charge_line_2",
     "case_number", "case_number_1", "case_number_2", "case_number_3", "case_number_4",
     "case_1", "case_2", "case_3", "case_4", "CaseNum",
     "poa_number", "poa_number_1", "poa_number_2", "poa_number_3", "poa_number_4",
