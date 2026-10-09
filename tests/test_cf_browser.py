@@ -63,3 +63,68 @@ def test_us_isp_exit_is_residential_and_trust_env_is_passed(monkeypatch):
 def test_stealth_launcher_is_removed(name):
     # Last user (Charlotte) moved to stock Playwright, no proxy (2026-10-07).
     assert not hasattr(cfb, name)
+
+
+# 2026-10-09: the relay egress gate accepts US mobile carriers (Brendan's
+# T-Mobile hotspot, AS21928) and still rejects datacenter/hosting, VPN and proxy
+# exits. Synthetic documentation-range IPs.
+_MOBILE = [
+    "AS21928 T-Mobile USA, Inc.",
+    "AS6167 Cellco Partnership DBA Verizon Wireless",
+    "AS20057 AT&T Mobility LLC",
+]
+_REJECT = [
+    "AS36352 ColoCrossing",            # was never matched (mixed-case marker)
+    "AS20473 The Constant Company, LLC (Vultr hosting)",
+    "AS13335 Cloudflare, Inc.",        # WARP
+    "AS9009 M247 Europe SRL",
+    "AS39351 Mullvad VPN AB",
+    "AS212238 Datacamp Limited",
+    "AS14061 DigitalOcean, LLC",
+    "AS16509 Amazon.com, Inc.",
+    "AS64500 Example Residential Proxy Network",
+]
+
+
+@pytest.mark.parametrize("org", _MOBILE)
+def test_us_mobile_carrier_exit_is_accepted(monkeypatch, org):
+    import httpx
+
+    monkeypatch.setattr(httpx, "Client", _fake_client({"ip": "198.51.100.7", "org": org, "country": "US"}))
+    assert cfb.check_exit_ip(None, timeout=1, retries=1, trust_env=False)["residential_likely"]
+
+
+@pytest.mark.parametrize("org", _REJECT)
+def test_datacenter_vpn_proxy_exits_are_rejected_even_in_us(monkeypatch, org):
+    import httpx
+
+    monkeypatch.setattr(httpx, "Client", _fake_client({"ip": "203.0.113.9", "org": org, "country": "US"}))
+    assert not cfb.check_exit_ip(None, timeout=1, retries=1, trust_env=False)["residential_likely"]
+
+
+def test_foreign_mobile_carrier_is_rejected(monkeypatch):
+    import httpx
+
+    monkeypatch.setattr(httpx, "Client", _fake_client(
+        {"ip": "198.51.100.8", "org": "AS3320 Deutsche Telekom AG", "country": "DE"}))
+    assert not cfb.check_exit_ip(None, timeout=1, retries=1, trust_env=False)["residential_likely"]
+
+
+@pytest.mark.parametrize("module", ["pinellas", "manatee", "charlotte"])
+def test_relay_gates_pass_tmobile_and_block_vpn(monkeypatch, module):
+    import importlib
+
+    from scrapers.scraper_resilience import EgressBlocked
+
+    mod = importlib.import_module(f"scrapers.counties.{module}")
+    for var in ("PINELLAS_EGRESS_MODE", "MANATEE_EGRESS_MODE", "CHARLOTTE_EGRESS_MODE"):
+        monkeypatch.setenv(var, "direct")
+    import httpx
+
+    monkeypatch.setattr(httpx, "Client", _fake_client(
+        {"ip": "198.51.100.7", "org": "AS21928 T-Mobile USA, Inc.", "country": "US"}))
+    assert mod.resolve_egress() == (None, "direct")
+    monkeypatch.setattr(httpx, "Client", _fake_client(
+        {"ip": "203.0.113.9", "org": "AS39351 Mullvad VPN AB", "country": "US"}))
+    with pytest.raises(EgressBlocked):
+        mod.resolve_egress()
