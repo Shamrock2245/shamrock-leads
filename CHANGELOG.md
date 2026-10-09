@@ -16,6 +16,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_palmetto_collateral_payment.py`: each method checks one box; an unset method leaves every box blank even when `down_payment_method` is set; the aliases above map as ruled; other on the attached template 5 inventory warns and sends no Other value, and on template 6 checks `cr_other`; the server rejects a bad method; an audit row is written when the method is set and when it changes; the request body cannot override the stored value; a passed template inventory never sends a field name that template lacks. The #161 Write Bond golden field set stays green because an absent method adds no checkbox and the template-5 inventory is not applied to the rest of the prefill.
 
+## [Unreleased] — 2026-10-09 (Miami-Dade: no row-id booking keys; fail_closed)
+
+### Fixed
+- **Miami-Dade (FL) stops writing; Booking_Number is no longer a map row id.** Until now the hourly scheduled scraper keyed rows on the ArcGIS GlobalID (or ObjectId), and it was Health `unverified`, so it wrote to Mongo. The 2026-10-09 08:03 ET republish reissued those ids. Of the 841 rows in the 2026-10-08 snapshot, 840 got a new GlobalID, 1 dropped out and only 2 kept their ObjectId (118 new rows). So every republish stored the same bookings again under new keys. The layer metadata and an `outFields=*` sample (field names and value shapes only) show no booking, jail or case number. Its fields are BookDate (date only), Defendant, Address, CityStateZip, DOB, ChargeCode1-3 (statute codes), Charge1/Code2/Charge3, Zip, Filler (always null), City, State, Zip1, ObjectId and GlobalID.
+- `scrapers/counties/miami_dade.py`:
+  - `Booking_Number` is left blank. It is never filled with a row id or a derived value.
+  - A new `md_dedupe_key(Full_Name, Booking_Date, Charges)` (sha256 of the normalised defendant, booking date and full verbatim charge list) is stored as `extra.md_dedupe` and labelled "internal dedupe key, NOT a booking number". Hydrate, PDF/DocuSeal and UI booking-number fields stay empty.
+  - GlobalID is no longer fetched; ObjectId is only used to check paging within one run.
+  - Bond stays `""` (no bond field), never `"0"`.
+- **Fail closed:** `SOURCE_CONTRACT_VALIDATED = False` and Health `"Miami-Dade (FL)": "fail_closed"`. Under the source-contract rule there is no real source booking id, and the writer keys on `booking_number` (it skips blank keys). So the scheduled run makes no source request and writes nothing until an owner decision on keying by `md_dedupe` and a backed-up cleanup of the stored duplicates. Evidence JSON FL/086 is now `fail_closed`, the matrix is regenerated, and COUNTY_REGISTRY and FL_67_STATUS are updated.
+
+### Added
+- `scripts/miami_dade_dedupe_report.py`: read-only and counts only, for Leads Ops. It reports total Miami-Dade rows, stored key shapes (GlobalID / ObjectId / blank), duplicate groups under `md_dedupe`, rows that would merge, group sizes, and groups with staff edits or differing status/bond. Staff-edited charges are keyed by the saved source list (`scraped_charges`, else `staff_edits.charges.baseline`) so they are not split from their duplicates; a legacy staff charge edit with no saved list is counted as `rows_staff_charges_unresolvable`. It never merges, deletes or prints names, keys or hashes.
+- `STATUS.md`: the Miami-Dade entries now say `fail_closed` (no longer emitting; no write telemetry to request).
+
+### Tests
+- New `tests/test_fl_miami_dade_no_row_id_key.py` (added to the `ci.yml` list): fail_closed state and a run with no request or write; blank Booking_Number with the labelled key; the key survives a republish that reissues row ids; full charges, spacing and date handling; the key can be recomputed from the stored doc; the hash never reaches the hydrate field map; the writer refuses a blank-key row; report counts (including staff-edited charges grouped by source charges); and the report main is read-only and names-free.
+- Updated `tests/test_miami_dade_scraper.py` and `tests/test_fl_miami_dade_arcgis_contract.py` for the blank key, and the FL matrix summary row in `tests/test_home_county_smoke_evidence.py` (recon_only 24, fail_closed 19); FL 67-status counts now 38 unverified / 19 fail_closed.
+
 ## [Unreleased] — 2026-10-09 (Write Bond per-template goldens)
 
 ### Added
