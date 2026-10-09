@@ -14,6 +14,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_write_bond_golden_smoke.py` (added to the `ci.yml` list). Synthetic data only. No Mongo and no DocuSeal.
 
+## [Unreleased] — 2026-10-09 (Write Bond to PAID, SwipeSimple)
+
+### Fixed
+- **Receipt reconciliation (`swipesimple_invoice_service.reconcile_payment`).** A bond is marked PAID only when the receipt carries the invoice # (`reference_id` / `invoice_number`), a bond exists whose booking # and stored `swipesimple_invoice_number` both equal it, the vendor invoice id agrees when both sides have one, the receipt carries a paid status (a missing or blank `status` / `payment_status` is refused as `receipt_status_missing`), a transaction id is present, and the amount is exact cents equal to the locked BondCase premium. A lower amount is refused as `receipt_partial_payment`. Any other difference is refused as `receipt_amount_mismatch`. The same transaction again does nothing. A different transaction on a bond already PAID is refused for review (`bond_already_paid_different_transaction`). The PAID update is conditional (`premium_paid != True`), so two copies of one receipt arriving together write one ledger entry. The earlier lookup by bond id or vendor id is removed, and so is the fallback that accepted a receipt with no amount or no premium.
+- **Legacy `SwipeSimpleReconciliationService`.** It matches by defendant name only and is not called anywhere. It no longer sets `premium_paid`; it records the amount as `last_payment_amount_unverified`.
+- **Premium in two collections.** When the bond loads from `bond_cases`, the `active_bonds` row for the same booking # (where Write Bond saves `premium_cents`) must resolve to the same premium. If it does not, no invoice is created and no receipt is reconciled (`premium_mismatch_across_collections`). A 10%-of-bond estimate from intake promote that was copied into `bond_cases` is now blocked as well.
+- **Staff test cases (PR #137).** `POST /api/ar/write-capture` tags a new `TEST-` booking `is_test` / `test_case`, so test-mode finalize accepts it instead of refusing it as `real_bond_refused`. A `TEST-` or `is_test` bond never creates a SwipeSimple invoice unless `SWIPESIMPLE_TEST_CASE_INVOICES=1` is set (default off).
+
+### Added
+- `tests/test_writebond_to_paid_e2e.py` (added to CI) walks one test case through Write Bond money capture, test-mode finalize, the BondCase, exactly one locked invoice (reference = booking #, cents = premium; a second run creates nothing and reuses the claim), and reconciliation to PAID. It covers the failure cases too: partial or mismatched amount, wrong invoice # or invoice id, declined or refunded status, a missing transaction id, a bond with no staged invoice, a stale `bond_cases` premium, and duplicate or concurrent receipts. Everything runs offline: SwipeSimple HTTP, Mongo, DocuSeal, and the ledger are mocked, and nothing is sent.
+
 ## [Unreleased] — 2026-10-08 (Pinellas relay-only, non-stealth browser; patchright removed)
 
 ### Changed
