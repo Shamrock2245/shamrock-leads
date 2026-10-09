@@ -146,6 +146,26 @@ IDENTITY_READONLY_FIELD_NAMES = frozenset({
 })
 
 
+_CHARGE_FACT_PREFIXES = (
+    "charge_addendum_",
+    "offense_addendum_",
+    "statute_addendum_",
+    "degree_addendum_",
+    "case_addendum_",
+    "bond_addendum_",
+    "poa_addendum_",
+    "statute_",
+    "degree_",
+)
+
+
+def _is_staff_charge_fact(name: str) -> bool:
+    """Charge text, statute, and degree are staff facts, including addendum rows."""
+    if name in STAFF_READONLY_FIELD_NAMES:
+        return True
+    return name.startswith(_CHARGE_FACT_PREFIXES)
+
+
 @lru_cache(maxsize=1)
 def _live_template_field_names() -> Dict[str, frozenset]:
     """Names-only inventories for the attached live templates 5 and 6."""
@@ -250,7 +270,7 @@ def submission_fields_from_values(
             continue
         seen.add(key)
         readonly = False if force_editable else (
-            flagged_readonly or key in STAFF_READONLY_FIELD_NAMES or key in extra
+            flagged_readonly or _is_staff_charge_fact(key) or key in extra
         )
         row: Dict[str, Any] = {
             "name": key,

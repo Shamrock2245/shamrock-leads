@@ -292,6 +292,8 @@ def charge_details_from_sources(
                 rows.append({
                     "charge": desc,
                     "description": desc,
+                    "statute": _first(item.get("statute"), item.get("statute_citation"), item.get("statute_code")),
+                    "degree": _first(item.get("degree"), item.get("charge_degree")),
                     "bond_amount": _row_bond(item),
                     "bond_type": _first(item.get("bond_type"), "SURETY"),
                     "case_number": _first(item.get("case_number"), item.get("Case_Number"), default_case),
@@ -321,7 +323,9 @@ def charge_details_from_sources(
                 "case_number": default_case,
                 "poa_number": "",
             })
-    return rows[:8]
+    # Every stored row. The signed DocuSeal packet fails closed when the
+    # live template cannot print them. See charge_verbatim.py.
+    return rows
 
 
 def verify_self_indemnitor_pin(pin: str) -> bool:
@@ -928,26 +932,32 @@ def build_adaptive_field_map(context: Dict[str, Any]) -> Dict[str, Any]:
         "agency_phone": "(239) 332-2245",
         "self_indemnitor": "yes" if context.get("self_indemnitor") else "no",
     }
-    # Populate offense_1..4 from structured charges or pipe-delimited booking string
-    raw_charges = context.get("charge_details") or context.get("charge_list") or context.get("charges") or []
-    offense_list = []
-    if isinstance(raw_charges, list):
-        for c in raw_charges:
-            if isinstance(c, dict):
-                desc = (c.get("charge") or c.get("description") or c.get("name") or "").strip()
-            else:
-                desc = str(c or "").strip()
-            if desc:
-                offense_list.append(desc)
-    elif isinstance(raw_charges, str) and raw_charges.strip():
-        import re as _re
-        if _re.search(r"[|\n;]", raw_charges):
-            offense_list = [c.strip() for c in _re.split(r"[|\n;]+", raw_charges) if c.strip()]
+    # Signed DocuSeal packets fail closed when the live template cannot
+    # print every charge. This preview map still keeps the full join.
+    from dashboard.services.charge_verbatim import (
+        ChargeCapacityError,
+        fit_charges_for_template,
+        join_charge_summary,
+        resolve_verbatim_charge_rows,
+    )
+
+    verbatim_rows = resolve_verbatim_charge_rows(context)
+    if verbatim_rows:
+        summary = join_charge_summary(verbatim_rows)
+        try:
+            placement = fit_charges_for_template(
+                verbatim_rows,
+                surety_id=str(context.get("surety_id") or "osi"),
+                template="docuseal",
+            )
+        except ChargeCapacityError:
+            fields["charges"] = summary
+            fields["Charges"] = summary
         else:
-            offense_list = [c.strip() for c in raw_charges.split(",") if c.strip()]
-    for i, desc in enumerate(offense_list[:4], start=1):
-        fields[f"offense_{i}"] = desc
-        fields[f"charge_{i}"] = desc
+            for i, row in enumerate(placement.on_form, start=1):
+                fields[f"offense_{i}"] = row.charge
+            fields["charges"] = placement.summary or summary
+            fields["Charges"] = placement.summary or summary
 
     # Drop empty values for cleaner audit
     return {k: v for k, v in fields.items() if v not in (None, "")}

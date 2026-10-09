@@ -1534,6 +1534,7 @@ async def packet_builder_finalize(request: Request):
         }
 
         bond_data: dict = {}
+        charge_placement = None
         if provider == "docuseal":
             from dashboard.services.docuseal_service import (
                 DocuSealPacketValidationError,
@@ -1541,11 +1542,19 @@ async def packet_builder_finalize(request: Request):
                 validate_docuseal_packet_binding,
             )
 
+            # Charge rows travel with the request. Bond amount and POA stay on
+            # the resolved case context inside build_bond_data_from_dashboard.
+            # Precedence: body charge_details, then stored arrest/BondCase rows
+            # already on ctx, then the plain charges string. See charge_verbatim.py.
+            charge_body = {}
+            for charge_key in ("charge_details", "charge_list", "charges"):
+                if charge_key in body:
+                    charge_body[charge_key] = body.get(charge_key)
             bond_data = build_bond_data_from_dashboard(
                 ctx=ctx,
                 intake_doc=intake_doc,
                 field_overrides={},
-                body={},
+                body=charge_body,
                 surety_id=surety_id,
                 session=user,
             )
@@ -1591,6 +1600,25 @@ async def packet_builder_finalize(request: Request):
                     },
                     status_code=422,
                 )
+
+            from dashboard.services.charge_verbatim import (
+                ChargeCapacityError,
+                capacity_error_body,
+                fit_charges_for_template,
+                resolve_verbatim_charge_rows,
+            )
+
+            # Identity and POA are already decided. A template that cannot
+            # print every charge fails here, before a submission is created.
+            try:
+                charge_placement = fit_charges_for_template(
+                    resolve_verbatim_charge_rows(bond_data),
+                    surety_id=surety_id,
+                    template="docuseal",
+                )
+            except ChargeCapacityError as exc:
+                return JSONResponse(capacity_error_body(exc), status_code=422)
+            bond_data["_charge_layout_notes"] = list(charge_placement.layout_notes)
 
         # Fill + flatten via Adobe PDF Services (combine/compress) with local fallback.
         # DocuSeal uses its two live templates — skip heavy stitch/flatten unless staff
@@ -1679,6 +1707,7 @@ async def packet_builder_finalize(request: Request):
                     BondPacketStartError,
                     start_indemnitor_bond_packet,
                 )
+                from dashboard.services.charge_verbatim import ChargeCapacityError
 
                 # Tenant stays shamrock until request tenancy chooses it.
                 # The body is not a tenant source.
@@ -1695,6 +1724,10 @@ async def packet_builder_finalize(request: Request):
                     session=user,
                     staff_test_case=staff_test is not None,
                 )
+            except ChargeCapacityError as exc:
+                from dashboard.services.charge_verbatim import capacity_error_body
+
+                return JSONResponse(capacity_error_body(exc), status_code=422)
             except BondPacketStartError as exc:
                 if exc.code == "docuseal_not_configured":
                     send_results["docuseal"] = {
@@ -1815,6 +1848,7 @@ async def packet_builder_finalize(request: Request):
             "premium_amount": ctx.get("premium_amount") or 0,
             "poa_number": ctx.get("poa_number") or body.get("poa_number") or "",
             "self_indemnitor": bool(ctx.get("self_indemnitor")),
+            "charge_layout_notes": list(getattr(charge_placement, "layout_notes", []) or []),
             "hydration_score": audit.get("hydration_score"),
             "field_map_keys": list(fields.keys())[:80],
             "send_results": send_results,
@@ -3149,6 +3183,7 @@ async def shannon_email_indemnitor_paperwork(request: Request):
             bond_data["indemnitors"] = indemnitors
 
     ds = get_docuseal_service()
+    from dashboard.services.charge_verbatim import ChargeCapacityError
     try:
         submission = await ds.create_submission_for_packet(
             template_id=template_id,
@@ -3162,6 +3197,10 @@ async def shannon_email_indemnitor_paperwork(request: Request):
         )
     except DocuSealPacketValidationError as exc:
         return JSONResponse({"success": False, "error": str(exc)}, status_code=422)
+    except ChargeCapacityError as exc:
+        from dashboard.services.charge_verbatim import capacity_error_body
+
+        return JSONResponse(capacity_error_body(exc), status_code=422)
     except Exception as exc:
         logger.exception("shannon docuseal create failed")
         return JSONResponse({"success": False, "error": str(exc)}, status_code=502)
@@ -3350,6 +3389,7 @@ async def paperwork_push_docuseal(packet_id: str, request: Request):
             status_code=503,
         )
 
+    from dashboard.services.charge_verbatim import ChargeCapacityError
     try:
         result = await svc.create_submission_for_packet(
             template_id=template_id,
@@ -3361,6 +3401,10 @@ async def paperwork_push_docuseal(packet_id: str, request: Request):
             include_defendant=bool(body.get("include_defendant", True)),
             completed_redirect_url=body.get("completed_redirect_url"),
         )
+    except ChargeCapacityError as exc:
+        from dashboard.services.charge_verbatim import capacity_error_body
+
+        return JSONResponse(capacity_error_body(exc), status_code=422)
     except Exception as exc:
         logger.exception("docuseal create submission failed packet=%s", packet_id)
         return JSONResponse(
