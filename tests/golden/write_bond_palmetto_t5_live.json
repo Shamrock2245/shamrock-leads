@@ -4,7 +4,7 @@
     "frozen_at": "2026-01-15T12:00:00+00:00",
     "inventory": "tests/fixtures/docuseal_t5_fields.json",
     "kind": "live_template",
-    "note": "Submission values whose names exist on the live template. dropped_payload_keys are payload names DocuSeal would ignore. unfilled_should_prefill are template fields that match case-data name patterns and received no value. unfilled_signer are signature, initial, checkbox, radio, and signing-date widgets. Rewrite only with WRITE_BOND_REGEN_GOLDEN=1. CI must not set that flag.",
+    "note": "Submission values whose names exist on the live template. dropped_payload_keys are payload names DocuSeal would ignore. unfilled_should_prefill are template fields that match case-data name patterns and received no value. Class payment is a premium payment-plan due date, not a signing date. unfilled_signer are signature, initial, checkbox, radio, and signing-date widgets. Rewrite only with WRITE_BOND_REGEN_GOLDEN=1. CI must not set that flag.",
     "surety_id": "palmetto",
     "template_id": 5
   },
