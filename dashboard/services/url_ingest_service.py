@@ -188,17 +188,21 @@ async def ingest_url(url: str) -> dict:
 
 
 async def _ingest_lee_county_api(booking_id: str, source_url: str) -> Optional[dict]:
-    """Fetch booking info and charges directly from Lee County Sheriff's public API.
+    """Fetch booking + charges from Lee's public API over plain HTTPS.
 
-    Uses origin DNS pin (``scrapers.lee_origin``) because ``www.sheriffleefl.org``
-    A-record can point at a dead host while the apex origin still serves the API.
+    Same direct path as ``LeeCountyScraper`` (#147): one ``requests`` session,
+    honest User-Agent, normal DNS, ``trust_env=False``. No StealthSession, no
+    curl_cffi impersonation, no origin DNS pin. Honours the shared Lee cooldown.
     """
     import asyncio
+    import requests
 
-    headers = {"User-Agent": UA, "Accept": "application/json"}
+    headers = {
+        "User-Agent": "ShamrockLeads/1.0 (+https://www.shamrockbailbonds.biz)",
+        "Accept": "application/json",
+    }
 
     def _fetch_both():
-        from scrapers.lee_origin import lee_api_get
         try:
             from scrapers.lee_rate_limit import is_cooled_down, seconds_remaining
 
@@ -211,31 +215,31 @@ async def _ingest_lee_county_api(booking_id: str, source_url: str) -> Optional[d
         except Exception:
             pass
 
-        b = lee_api_get(
-            f"/public-api/bookings/{booking_id}",
-            headers=headers,
-            timeout=20,
-            max_retries=2,
-        )
-        c = lee_api_get(
-            f"/public-api/bookings/{booking_id}/charges",
-            headers=headers,
-            timeout=20,
-            max_retries=2,
-        )
-        return b, c
+        sess = requests.Session()
+        sess.trust_env = False
+        sess.proxies = {}
+        sess.headers.update(headers)
+        try:
+            b = sess.get(
+                f"https://www.sheriffleefl.org/public-api/bookings/{booking_id}",
+                timeout=20, proxies={},
+            )
+            c = sess.get(
+                f"https://www.sheriffleefl.org/public-api/bookings/{booking_id}/charges",
+                timeout=20, proxies={},
+            )
+            return b, c
+        finally:
+            sess.close()
 
     try:
-        b_resp, c_resp = await asyncio.to_thread(_fetch_both)
+        both = await asyncio.to_thread(_fetch_both)
     except Exception as e:
-        log.warning("Lee origin-pinned ingest failed, trying plain httpx: %s", e)
-        booking_url = f"https://www.sheriffleefl.org/public-api/bookings/{booking_id}"
-        charges_url = f"https://www.sheriffleefl.org/public-api/bookings/{booking_id}/charges"
-        async with httpx.AsyncClient(
-            timeout=20.0, follow_redirects=True, headers=headers, verify=False
-        ) as client:
-            b_resp = await client.get(booking_url)
-            c_resp = await client.get(charges_url)
+        log.warning("Lee direct ingest failed: %s", e)
+        return None
+    if both is None:
+        return None
+    b_resp, c_resp = both
 
     if b_resp is None or b_resp.status_code != 200:
         return None

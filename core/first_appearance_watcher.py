@@ -494,20 +494,13 @@ class FirstAppearanceWatcher:
             import requests
 
             headers = {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
-                "Accept": "application/json, text/html, */*;q=0.8",
-                "Referer": "https://www.sheriffleefl.org/",
+                "User-Agent": "ShamrockLeads/1.0 (+https://www.shamrockbailbonds.biz)",
+                "Accept": "application/json",
             }
 
-            # ── Lee County API direct charges fetch ──────────────────────────
-            # Use origin-pinned GET — www A-record can point at a dead host
-            # while the apex IP still serves the public API (see lee_origin).
-            # Skip entirely when the shared 429 cooldown is active so we do not
-            # dig the /32 rate-limit hole deeper (dashboard freezes on stale Lee).
+            # ── Lee County API direct charges fetch (plain HTTPS, #147 path) ──
+            # Skip when the shared 429 cooldown is active so we do not dig the
+            # /32 rate-limit hole deeper (dashboard freezes on stale Lee).
             if county == "lee" and booking_id:
                 try:
                     from scrapers.lee_rate_limit import is_cooled_down, seconds_remaining
@@ -522,26 +515,17 @@ class FirstAppearanceWatcher:
                         return None
                 except Exception:
                     pass
+                c_url = (
+                    f"https://www.sheriffleefl.org/public-api/bookings/"
+                    f"{booking_id}/charges"
+                )
+                sess = requests.Session()
+                sess.trust_env = False
+                sess.proxies = {}
                 try:
-                    from scrapers.lee_origin import lee_api_get
-
-                    resp = lee_api_get(
-                        f"/public-api/bookings/{booking_id}/charges",
-                        headers=headers,
-                        timeout=15,
-                        max_retries=1,
-                    )
-                except Exception as lee_exc:
-                    logger.debug(
-                        "FirstAppearanceWatcher: Lee origin pin failed, "
-                        "falling back to plain requests: %s",
-                        lee_exc,
-                    )
-                    c_url = (
-                        f"https://www.sheriffleefl.org/public-api/bookings/"
-                        f"{booking_id}/charges"
-                    )
-                    resp = requests.get(c_url, headers=headers, timeout=15)
+                    resp = sess.get(c_url, headers=headers, timeout=15, proxies={})
+                finally:
+                    sess.close()
                 if resp is not None and resp.status_code == 200:
                     try:
                         charges_json = resp.json()
