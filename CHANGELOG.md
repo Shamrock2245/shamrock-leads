@@ -18,6 +18,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `tests/test_relay_only_scheduling.py`: the relay-only set now includes Pinellas.
 - `tests/test_cf_browser.py` (already in the `ci.yml` list): US mobile carriers (T-Mobile AS21928, Verizon Wireless, AT&T Mobility) pass `check_exit_ip`, and the Pinellas, Manatee and Charlotte gates accept a T-Mobile exit. Datacenter/hosting, VPN and proxy orgs are rejected even with a US country, and so is a non-US carrier.
 
+## [Unreleased] — 2026-10-09 (bond re-check: unreadable source state fails closed)
+
+### Fixed
+- **Pending-bond re-check fails closed when the Health source state can't be read.** `core/pending_bond_recheck._source_state` returned `unverified` when `dashboard.extensions` failed to import or `scraper_source_state` raised, so a `fail_closed` county would have looked eligible. It now returns `fail_closed` and logs the label and error class only. No county is fetched and nothing is written.
+
+### Tests
+- `tests/test_pending_bond_recheck.py` (already in the `ci.yml` list): an import failure and a lookup error both exclude the county as `fail_closed`, and nothing is fetched or written. Both cases fail on main.
+
 ## [Unreleased] — 2026-10-08 (pending-bond re-check worker)
 
 ### Added

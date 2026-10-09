@@ -521,3 +521,33 @@ def test_state_collection_is_classified():
     from dashboard.tenancy.constants import GLOBAL_COLLECTIONS, KNOWN_APP_COLLECTIONS
 
     assert pbr.STATE_COLLECTION in GLOBAL_COLLECTIONS and pbr.STATE_COLLECTION in KNOWN_APP_COLLECTIONS
+
+
+# ── Source state unavailable fails closed (CoS follow-up, 2026-10-09) ─────
+def test_source_state_import_failure_fails_closed(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def broken(name, *a, **k):
+        if name == "dashboard.extensions":
+            raise ImportError("synthetic")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", broken)
+    assert pbr._source_state("Hernando (FL)") == "fail_closed"
+    assert county_exclusion(FakeScraper(), include_relay_only=False) == "fail_closed"
+
+
+def test_source_state_lookup_error_fails_closed_and_nothing_is_fetched(monkeypatch):
+    from dashboard import extensions
+
+    def boom(label):
+        raise RuntimeError("synthetic")
+
+    monkeypatch.setattr(extensions, "scraper_source_state", boom)
+    w, arrests, states = _mongo([_stored("B1")])
+    scraper = FakeScraper(results={"B1": _fetched("B1", bond="2500")})
+    stats = _worker([scraper], w).run()
+    assert scraper.calls == [] and stats["excluded"] == {"Hernando (FL)": "fail_closed"}
+    assert arrests.sets == [] and states.docs == []
