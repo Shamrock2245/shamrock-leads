@@ -9,6 +9,7 @@ Handles:
 """
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 
@@ -21,6 +22,101 @@ from core.staff_edits import fetch_provenance_docs, protect_scraped_update
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+
+STORED_SOURCE_PROJECTION = {
+    "_id": 0, "state": 1, "county": 1, "booking_number": 1,
+    "charges": 1, "bond_amount": 1, "bond_amount_raw": 1,
+}
+# Fields written together as one charges/bond pair.
+CHARGE_FIELDS = ("charges", "charge_details")
+BOND_FIELDS = ("bond_amount", "bond_amount_raw", "bond_type")
+
+
+def _blank(value) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip()) or value == []
+
+
+def _stored_bond_is_positive(existing: dict) -> bool:
+    raw = existing.get("bond_amount_raw")
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return float(re.sub(r"[^0-9.]", "", raw) or 0) > 0
+        except ValueError:
+            return False
+    try:
+        return float(existing.get("bond_amount") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def keep_stored_source_values(collection, pending) -> int:
+    """Keep the stored charges/bond pair when this scrape has an empty side.
+
+    ``pending`` is ``[(idx, record, (state, county, booking), doc)]``; each
+    ``doc`` is edited in place. Charges and bond are one pair:
+
+    - If the scraped ``charges`` are empty and the stored charges are not, or
+      the scraped bond is empty and the stored bond is positive, the whole pair
+      (charges, charge_details, bond_amount, bond_amount_raw, bond_type) is
+      dropped from ``$set``. The doc then never mixes old charges with a new
+      blank bond, or the reverse.
+    - A stored side with nothing to protect (empty charges, or a missing or
+      zero bond) does not hold anything back; the incoming values are written.
+    - The skip is logged with ``reason=partial_pair`` when the other incoming
+      side was published (held back for the bond re-check worker), or
+      ``reason=empty_pair`` when both incoming sides were empty.
+    - Otherwise every scraped value is written. A published value, including a
+      real "0", replaces the stored one.
+    - A stored zero bond is not protected: the 2026-10 sweep showed most
+      historic scraped "0" values were invented for unpublished bonds, so
+      unknown ("") may replace them.
+
+    One read per (state, county) for just the bookings with an empty side. A
+    failed read raises: writing blind could blank stored values. Logs carry
+    only field names and the booking key, never person data.
+    """
+    need = [(key, doc) for _, _, key, doc in pending
+            if ("charges" in doc and _blank(doc.get("charges")))
+            or ("bond_amount_raw" in doc and _blank(doc.get("bond_amount_raw")))]
+    if not need:
+        return 0
+    by_scope: dict = {}
+    for (state, county, booking), _ in need:
+        by_scope.setdefault((state, county), []).append(booking)
+    stored: dict = {}
+    for (state, county), bookings in by_scope.items():
+        query = {"state": state, "county": county, "booking_number": {"$in": bookings}}
+        for d in collection.find(query, STORED_SOURCE_PROJECTION):
+            stored[(d.get("state"), d.get("county"), d.get("booking_number"))] = d
+    kept = 0
+    for key, doc in need:
+        existing = stored.get(key)
+        if not existing:
+            continue  # new booking: the empty value is the truth we have
+        incoming_charges_empty = "charges" in doc and _blank(doc.get("charges"))
+        incoming_bond_empty = "bond_amount_raw" in doc and _blank(doc.get("bond_amount_raw"))
+        # Protect only a stored side that has something to protect: non-empty
+        # charges, or a positive bond (a stored zero is not protected).
+        protected_sides = []
+        if incoming_charges_empty and not _blank(existing.get("charges")):
+            protected_sides.append("charges")
+        if incoming_bond_empty and _stored_bond_is_positive(existing):
+            protected_sides.append("bond")
+        if not protected_sides:
+            continue  # nothing stored on the empty side: write the incoming values
+        dropped = [f for f in CHARGE_FIELDS + BOND_FIELDS if f in doc]
+        for f in dropped:
+            doc.pop(f, None)
+        kept += 1
+        # partial_pair: one incoming side was published and is held back with
+        # the stored pair; the bond re-check worker can pick these up later.
+        reason = "partial_pair" if incoming_charges_empty != incoming_bond_empty else "empty_pair"
+        logger.info(
+            "kept stored charges/bond pair reason=%s key=%s/%s/%s protected=%s skipped_fields=%s",
+            reason, key[0], key[1], key[2], "+".join(protected_sides), ",".join(dropped),
+        )
+    return kept
 
 
 class MongoWriter:
@@ -286,6 +382,12 @@ class MongoWriter:
         # charge edits; their $set is rewritten so scraped values land in
         # scraped_* fields instead of replacing staff values. A failed read
         # raises: writing blind could clobber staff edits.
+        # An empty scraped charges/bond never blanks a stored value (a missed
+        # detail fetch or a source that omits a field this run is not
+        # evidence the value went away). A published value still replaces it.
+        kept = keep_stored_source_values(self.arrests, pending) if pending else 0
+        if kept:
+            logger.info("%s: kept stored charges/bond (empty in this scrape) on %d record(s)", county, kept)
         staff_docs = fetch_provenance_docs(self.arrests, [key for _, _, key, _ in pending]) if pending else {}
         protected = 0
         for idx, record, key, doc in pending:

@@ -18,6 +18,13 @@ class LeadsQueryModel(BaseModel):
     order: Optional[str] = Field(default="desc", description="Sort direction: asc or desc")
     page: int = Field(default=1, ge=1, description="Page number for pagination")
     limit: int = Field(default=50, ge=1, le=200, description="Items per page")
+    include_fail_closed: bool = Field(
+        default=False,
+        description=(
+            "Show counties whose source contract is fail_closed. Off by default; "
+            "naming the county in `county` also shows it."
+        ),
+    )
 
     @field_validator("days", mode="before")
     @classmethod

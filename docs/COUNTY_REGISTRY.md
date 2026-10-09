@@ -24,7 +24,7 @@
 | 4 | **Manatee** | Revize roster, **relay-only**: Leads Ops home relay's own residential exit (`MANATEE_EGRESS_MODE=direct`, the only mode), stock Playwright, no proxy / SOCKS / APE / stealth; not on the VPS scheduler (`python main.py --relay-only`, `docs/ops/REVIZE_RELAY_RUN.md`); header-mapped Booking # / Last / First / Middle / Charge / Arrest Date / Released; CF challenge or non-residential exit raises `EgressBlocked` | `manatee.py` | ⚠️ Contract **unverified** (Health default) — 2026-10-07 audit hardened keys, Released, paging and bond-unknown; box egress gets HTTP 403 CF challenge; **not** `verified_public` until a Leads Ops residential read + prod write smoke — see `docs/recon/FL_SARASOTA_MANATEE_AUDIT_2026-10-07.md`, `docs/ops/MANATEE_RESIDENTIAL_RUN.md` | relay-only (Leads Ops; was 75 min on VPS) | 2026-10-07 audit: box egress CF-blocked; residential read smoke pending (Leads Ops) |
 | 5 | **Sarasota** | Official current-inmate listing (`cms.revize.com/revize/apps/sarasota/`) shows only an opaque per-person link id + name + date of birth: no booking number, no booking date/time; detail/search pages CF-challenged. Third-party mirror, CAPTCHA/JailTracker, proxy paths stay retired. | `sarasota.py` | ⏳ **Fail closed** (`SOURCE_CONTRACT_VALIDATED=False` + Health `fail_closed`) — reopen gate in `scrapers/counties/sarasota_contract.py` (source booking number + booking timestamp required); see `docs/recon/FL_SARASOTA_MANATEE_AUDIT_2026-10-07.md` | 90 min | 2026-10-07 live recon: listing 1,081 entries, no booking key; still closed |
 | 6 | **DeSoto** | DevExpress grid (DrissionPage) — **not** JailTracker | `desoto.py` | ✅ Active | 60 min | 2026-07-16 |
-| 7 | **Hendry** | Official OCV S3 `inmates.json` | `hendry.py` | ✅ Active (v4 OCV) | 120 min | 2026-07-10 |
+| 7 | **Hendry** | Official OCV S3 `inmates.json`; only id is `inmateID` = `HCSO<YY>MNI<NNNNNN>`, a person (MNI) id, not a booking number | `hendry.py` | 🔴 Fail closed (`SOURCE_CONTRACT_VALIDATED=False`; no person-id keys). See `docs/recon/FL_HENDRY_FAIL_CLOSED_2026-10-08.md` | 120 min | 2026-10-08 |
 
 ---
 
@@ -34,7 +34,7 @@
 | 8 | **Hillsborough** | httpx direct-first + reCAPTCHA + SOLVECAPTCHA (HCSO login) | `hillsborough.py` | ✅ Active (needs HCSO_* + SOLVECAPTCHA_KEY) | 90 min | 2026-07-24 |
 | 9 | **Pinellas** | DrissionPage — date search | `pinellas.py` | ✅ Active | 90 min | 2026-04-27 |
 | 10 | **Seminole** | Custom | `seminole.py` | ✅ Active | 90 min | 2026-04-27 |
-| 11 | **Orange** | requests GET — getInmates API | `orange.py` | ✅ Active | 90 min | 2026-04-27 |
+| 11 | **Orange** | BestJail public JSON — getInmates/<letter> roster + getInmateDetails/getCharges per booking (plain requests, newest first, 7-day window) | `orange.py` | ✅ Active (unverified until write smoke; source `bookingNumber` 8 digits). See `docs/recon/FL_ORANGE_BESTJAIL_2026-10-08.md` | 90 min | 2026-10-08 |
 | 12 | **Pasco** | DrissionPage — Cloudflare bypass | `pasco.py` | ✅ Active | 90 min | 2026-04-27 |
 | 13 | **Lake** | requests POST `recent_data` + Turnstile token (SolveCaptcha, owner-approved; shared `scrapers/solvecaptcha.py`) | `lake.py` | ✅ `verified_public` (Mac write smoke 17 new; needs SOLVECAPTCHA_KEY) | 90 min | 2026-09-25 |
 | 14 | **Hernando** | Custom HTML | `hernando.py` | ✅ Active | 90 min | 2026-04-27 |
@@ -61,7 +61,7 @@
 | 23 | **Broward** | Official BSO arrest search | `broward.py` | ✅ Live — Turnstile Arrest Search name-prefix + paged grid; Mac smoke 2026-09-23 (30 new / status=ok; action=arrest_search); needs `SOLVECAPTCHA_KEY` | 60 min | Writes enabled after contract validation |
 | 24 | **Martin** | Direct Tyler Technologies REST API | `martin.py` | ✅ Active | 120 min | 2026-05-24 |
 | 25 | **St. Lucie** | requests POST — PHP table | `st_lucie.py` | ✅ Active | 90 min | 2026-04-27 |
-| 26 | **Indian River** | requests GET — BS4 card list | `indian_river.py` | ✅ Active | 120 min | 2026-04-27 |
+| 26 | **Indian River** | IRCSO booking-date search (form POST + `?page=N`) → `/booking-details/<id>` Booking Info (source Booking Number `YYYY-NNNNNNNN`) — plain requests | `indian_river.py` | ✅ Active (unverified until write smoke). See `docs/recon/FL_INDIAN_RIVER_BOOKING_SEARCH_2026-10-08.md` | 180 min | 2026-10-08 |
 | 27 | **Okeechobee** | Wix shell page — no public data source | `okeechobee.py` | 🔴 No public roster URL | 120 min | 2026-07-24 |
 
 ---
@@ -102,7 +102,7 @@
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 40 | **Escambia** | SmartWEB JAIL View (`ECC<YY>JBN######`) — plain requests | `escambia.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
-| 41 | **Okaloosa** | Inmate Locator `Default.aspx` (source Booking# 10-digit) — plain requests A–Z | `okaloosa.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
+| 41 | **Okaloosa** | Inmate Locator public JSON API (`/InmateLocatorAPI/api/Inmates/search` + `/api/Inmates/<bookingNo>`; source bookingNo 10-digit, custodyDate) — plain requests | `okaloosa.py` | ✅ Active (unverified until write smoke). See `docs/recon/FL_OKALOOSA_API_2026-10-08.md` | 120 min | 2026-10-08 |
 | 42 | **Bay** | Custom HTML | `bay.py` | ✅ Active | 120 min | 2026-04-27 |
 | 43 | **Santa Rosa** | SmartWEB JAIL View (`SRSO<YY>JBN######`) — plain requests | `santa_rosa.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
 | 44 | **Walton** | New World InmateInquiry (`InCustody=True` + detail open `Booking` `YYYY-NNNNNNNN`; shared `fl_newworld`) — plain requests | `walton.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |

@@ -912,6 +912,42 @@ def _run_first_appearance_watcher():
         logger.error(f"FirstAppearanceWatcher run failed: {e}")
 
 
+def register_pending_bond_recheck(sched) -> bool:
+    """Add the pending-bond re-check interval job (kill switch:
+    PENDING_BOND_RECHECK_ENABLED=0). Returns True when the job was added."""
+    from apscheduler.triggers.interval import IntervalTrigger
+    from datetime import datetime, timezone, timedelta
+    from core.pending_bond_recheck import INTERVAL_HOURS, recheck_enabled
+
+    if not recheck_enabled():
+        logger.info("Pending-bond re-check disabled (PENDING_BOND_RECHECK_ENABLED=0)")
+        return False
+    sched.scheduler.add_job(
+        _run_pending_bond_recheck,
+        trigger=IntervalTrigger(hours=INTERVAL_HOURS),
+        id="pending_bond_recheck",
+        name="Pending Bond Re-check",
+        replace_existing=True,
+        next_run_time=datetime.now(timezone.utc) + timedelta(minutes=15),
+        misfire_grace_time=900,
+        max_instances=1,
+        coalesce=True,
+    )
+    return True
+
+
+def _run_pending_bond_recheck():
+    """Pending-bond re-check (core/pending_bond_recheck.py). Never raises."""
+    if scheduler is None:
+        return
+    try:
+        from core.pending_bond_recheck import run_pending_bond_recheck
+
+        run_pending_bond_recheck(scheduler)
+    except Exception as e:
+        logger.error(f"Pending-bond re-check failed: {type(e).__name__}")
+
+
 def _ensure_key_fl_counties_enabled():
     """Force-enable SWFL core scrapers so dashboard config never leaves Lee/Sarasota paused."""
     try:
@@ -994,6 +1030,7 @@ def main():
         next_run_time=datetime.now(timezone.utc) + timedelta(minutes=5),
         misfire_grace_time=300,
     )
+    register_pending_bond_recheck(scheduler)
     logger.info(f"📋 Total scrapers registered: {len(scheduler._scrapers)}")
 
     if len(sys.argv) > 1 and sys.argv[1] == "--relay-only":

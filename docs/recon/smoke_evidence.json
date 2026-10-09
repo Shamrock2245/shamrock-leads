@@ -1,0 +1,74 @@
+{
+  "as_of": "2026-10-08",
+  "description": "Leads Ops write-smoke and relay evidence. A requested row is the handoff (no run_on, commit or result). A passed or failed row adds run_on (YYYY-MM-DD, ET), commit (git SHA the run used), egress (vps / mac / residential_relay), method (one_shot_run / relay_only_run / relay_read_smoke / prod_mongo_aggregate) and result (the run's JSON plus mongo_writer_results = number of MongoWriter results in writer_results). Validated by scripts/build_recon_matrix.py. Evidence only: it never changes SCRAPER_SOURCE_STATES.",
+  "records": [
+    {
+      "label": "Lee (FL)",
+      "kind": "write_smoke",
+      "status": "requested",
+      "requested_on": "2026-10-08",
+      "command": "MONGODB_URI=<prod> python main.py Lee  (copy the final 'Result: {...}' log line), then MONGODB_URI=<prod> python scripts/smoke_evidence_check.py --county Lee --state FL --hours 24",
+      "expect": "Result status ok with a MongoWriter result (new_records + updated_records >= 1); smoke_evidence_check: booking_number_shapes only NNNNNNN, booking_number_duplicates 0, with_booking_date and with_booking_time == rows, with_charges > 0, bond only empty or positive (zero 0), status In Custody / Released, with_mugshot > 0",
+      "blocked_on": "Lee runs every 30 min on the VPS already; if Brendan has not cleared Lee's APE StealthSession / Scrapfly path, record the prod aggregate (method prod_mongo_aggregate) instead of a new one-shot run.",
+      "source": "docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md"
+    },
+    {
+      "label": "Collier (FL)",
+      "kind": "write_smoke",
+      "status": "requested",
+      "requested_on": "2026-10-08",
+      "command": "MONGODB_URI=<prod> python main.py Collier  (copy the final 'Result: {...}' log line), then MONGODB_URI=<prod> python scripts/smoke_evidence_check.py --county Collier --state FL --hours 24",
+      "expect": "Result status ok with a MongoWriter result (new_records + updated_records >= 1); booking_number_shapes only NNNNNNNNNNNN (12 digits), duplicates 0, rows equal the report's 'N matches found', with_charges == rows, bond only empty or positive (never a figure copied from offense text), with_mugshot > 0",
+      "blocked_on": "HOLD: run only after the Collier/Glades bond PR (#139) is merged and deployed. Today collier.py adds $ figures from offense text into the bond and writes 0 for unknown bond.",
+      "source": "docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md"
+    },
+    {
+      "label": "Glades (FL)",
+      "kind": "write_smoke",
+      "status": "requested",
+      "requested_on": "2026-10-08",
+      "command": "MONGODB_URI=<prod> python main.py Glades  (copy the final 'Result: {...}' log line), then MONGODB_URI=<prod> python scripts/smoke_evidence_check.py --county Glades --state FL --hours 24",
+      "expect": "Result status ok with a MongoWriter result (new_records + updated_records >= 1); booking numbers only GCSO<YY>JBN<NNNNNN>, duplicates 0, booking date and time and charges on every row, bond only empty or positive (bond.zero 0)",
+      "blocked_on": "HOLD: run only after the Collier/Glades bond PR (#139) is merged and deployed. Today glades.py writes 0 for an unknown bond.",
+      "source": "docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md"
+    },
+    {
+      "label": "Charlotte (FL)",
+      "kind": "relay_read",
+      "status": "requested",
+      "requested_on": "2026-10-08",
+      "command": "On the home relay, VPN off: CHARLOTTE_EGRESS_MODE=direct python scripts/charlotte_residential_smoke.py",
+      "expect": "exit 0 and result ok; bookings == unique_booking_numbers, duplicate_booking_numbers 0, bond_zero 0, walk.columns lists the live header set (Booking # / Last Name / First Name / Middle / Charge / Arrest Date / Released). Exit 3 with 'missing column(s) [released]' is the signal to send the header list to Scraper Watch; do not loosen the contract.",
+      "source": "docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md"
+    },
+    {
+      "label": "Charlotte (FL)",
+      "kind": "relay_write",
+      "status": "requested",
+      "requested_on": "2026-10-08",
+      "command": "On the home relay, VPN off, MONGODB_URI set: python main.py --relay-only  (copy the 'Relay result Charlotte: {...}' log line), then MONGODB_URI=<prod> python scripts/smoke_evidence_check.py --county Charlotte --state FL --hours 24",
+      "expect": "Relay result status ok with a MongoWriter result (new_records + updated_records >= 1), process exit 0; smoke_evidence_check: Revize Booking # shapes only, duplicates 0, bond empty (roster publishes no bond; zero 0), with_charges == rows",
+      "blocked_on": "After a passed Charlotte relay_read.",
+      "source": "docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md"
+    },
+    {
+      "label": "Manatee (FL)",
+      "kind": "relay_read",
+      "status": "requested",
+      "requested_on": "2026-10-08",
+      "command": "On the home relay, VPN off: MANATEE_EGRESS_MODE=direct python scripts/manatee_residential_smoke.py",
+      "expect": "exit 0 and result ok; bookings == unique_booking_numbers, duplicate_booking_numbers 0, bond_zero 0, walk.columns lists the live header set (Booking # / Last Name / First Name / Middle / Charge / Arrest Date / Released)",
+      "source": "docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md"
+    },
+    {
+      "label": "Manatee (FL)",
+      "kind": "relay_write",
+      "status": "requested",
+      "requested_on": "2026-10-08",
+      "command": "On the home relay, VPN off, MONGODB_URI set: python main.py --relay-only  (copy the 'Relay result Manatee: {...}' log line), then MONGODB_URI=<prod> python scripts/smoke_evidence_check.py --county Manatee --state FL --hours 24",
+      "expect": "Relay result status ok with a MongoWriter result (new_records + updated_records >= 1), process exit 0; smoke_evidence_check: Revize Booking # shapes only, duplicates 0, bond empty (zero 0), with_charges == rows",
+      "blocked_on": "After a passed Manatee relay_read.",
+      "source": "docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md"
+    }
+  ]
+}

@@ -15,8 +15,12 @@ Bond / charges for hydrate:
 - Roster rows include abbreviated charge text under the name when
   "Include Charge Information" is checked.
 - Per-charge **Bond Assessed** and full **Offense Description** live only in
-  the Subject Charge Report modal (name click). We sum Bond Assessed across
-  charges; if the jail publishes $0.00 we store "0" (no invention).
+  the Subject Charge Report modal (name click). The total is the sum of
+  Bond Assessed only when every charge publishes an amount; the jail does
+  publish real $0.00 values (33 of 82 cells on 2026-10-06/07), which are kept
+  as "0". A charge with a blank or non-numeric Bond Assessed (it can be a
+  hold), or a booking whose modal did not render, leaves the total "" —
+  unknown, never $0.
 """
 from __future__ import annotations
 
@@ -52,6 +56,7 @@ class PinellasCountyScraper(BaseScraper):
 
         all_records: List[ArrestRecord] = []
         seen: Set[str] = set()
+        self._modal_attempts = self._modal_failures = 0
 
         with sync_playwright() as pw:
             # Prefer system Chrome when present (Mac / desktop smokes); fall back
@@ -76,6 +81,7 @@ class PinellasCountyScraper(BaseScraper):
                     page.wait_for_selector("#booking-date", timeout=60000)
                     time.sleep(1)
 
+                    date_errors = 0
                     for days_ago in range(DAYS_BACK):
                         target = datetime.now() - timedelta(days=days_ago)
                         date_iso = target.strftime("%Y-%m-%d")
@@ -86,8 +92,11 @@ class PinellasCountyScraper(BaseScraper):
                                 "[Pinellas] %s: %d records", date_iso, len(daily)
                             )
                         except Exception as e:
+                            date_errors += 1
                             logger.warning("[Pinellas] %s error: %s", date_iso, e)
                         time.sleep(1)
+                    if date_errors == DAYS_BACK:
+                        raise RuntimeError(f"Pinellas: all {DAYS_BACK} date searches failed")
                 finally:
                     try:
                         page.close()
@@ -99,6 +108,7 @@ class PinellasCountyScraper(BaseScraper):
                 except Exception:
                     pass
 
+        self._check_modal_failures()
         logger.info("[Pinellas] Scraped %d total records", len(all_records))
         return all_records
 
@@ -131,17 +141,18 @@ class PinellasCountyScraper(BaseScraper):
                 if booking_num in seen:
                     continue
                 seen.add(booking_num)
+                self._modal_attempts += 1
                 detail = self._read_detail_modal(page, booking_num)
-                if detail:
-                    if detail.get("charges"):
-                        raw["charge"] = detail["charges"]
-                    raw["bond_amount"] = detail.get("bond_amount") or "0"
-                    if detail.get("case_numbers"):
-                        raw["case_number"] = detail["case_numbers"]
-                else:
-                    # Roster-only path: charges may still be present; bond is
-                    # modal-only — leave "0" rather than inventing an amount.
-                    raw.setdefault("bond_amount", "0")
+                if not detail:
+                    # Skip: a roster-only record would $set a blank bond and
+                    # abbreviated charges over the values stored for it.
+                    self._modal_failures += 1
+                    continue
+                if detail.get("charges"):
+                    raw["charge"] = detail["charges"]
+                raw["bond_amount"] = detail.get("bond_amount", "")
+                if detail.get("case_numbers"):
+                    raw["case_number"] = detail["case_numbers"]
                 rec = self._row_to_record(raw)
                 if rec:
                     records.append(rec)
@@ -250,12 +261,26 @@ class PinellasCountyScraper(BaseScraper):
             Race=self._clean(raw.get("race") or ""),
             Sex=sex,
             Charges=self._clean(raw.get("charge") or ""),
-            Bond_Amount=self._format_bond_amount(raw.get("bond_amount") or "0"),
+            Bond_Amount=self._format_bond_amount(raw.get("bond_amount")),
             Case_Number=self._clean(raw.get("case_number") or ""),
             Detail_URL=SEARCH_URL,
             LastCheckedMode="INITIAL",
         )
 
+
+    _modal_attempts = 0
+    _modal_failures = 0
+
+    def _check_modal_failures(self) -> None:
+        """Bookings whose modal did not render are skipped (never written with
+        blanks). If every modal failed, the run fails loud."""
+        if self._modal_failures:
+            logger.warning(
+                "[Pinellas] %d/%d charge-report modals did not render; those bookings were skipped",
+                self._modal_failures, self._modal_attempts,
+            )
+        if self._modal_attempts and self._modal_failures == self._modal_attempts:
+            raise RuntimeError("Pinellas: every Subject Charge Report modal failed to render")
 
     def _read_detail_modal(self, page, booking_num: str) -> Optional[dict]:
         """Open Subject Charge Report for one roster row; parse bond + charges.
@@ -323,27 +348,28 @@ class PinellasCountyScraper(BaseScraper):
     def parse_charge_report_text(text: str) -> dict:
         """Parse Subject Charge Report modal text (source-faithful, no invention).
 
-        Sums every published **Bond Assessed** value. Uses Offense Description
-        lines for Charges. Court Case Number values joined when present.
+        The total is the sum of every charge's **Bond Assessed** only when each
+        charge publishes an amount (a published $0.00 counts). A blank or
+        non-numeric Bond Assessed (it can be a hold) makes the total "".
+        Offense Description lines give Charges; Court Case Numbers are joined.
         """
         if not text:
-            return {"charges": "", "bond_amount": "0", "case_numbers": ""}
+            return {"charges": "", "bond_amount": "", "case_numbers": ""}
 
-        offenses = re.findall(
-            r"Offense Description:\s*([^\n]+)", text, flags=re.I
-        )
-        bonds = re.findall(
-            r"Bond Assessed:\s*([^\n]+)", text, flags=re.I
-        )
-        cases = re.findall(
-            r"Court Case Number:\s*([^\n]+)", text, flags=re.I
-        )
+        offenses = re.findall(r"Offense Description:\s*([^\n]+)", text, flags=re.I)
+        cases = re.findall(r"Court Case Number:\s*([^\n]+)", text, flags=re.I)
 
-        total = 0.0
-        saw_bond = False
-        for raw in bonds:
-            saw_bond = True
-            total += PinellasCountyScraper._parse_bond_number(raw)
+        # One block per charge (each starts at its Offense Description).
+        blocks = re.split(r"Offense Description:", text, flags=re.I)[1:] or [text]
+        amounts = []
+        any_unpublished = False
+        for block in blocks:
+            m = re.search(r"Bond Assessed:[ \t]*\n?[ \t]*([^\n]*)", block, flags=re.I)
+            amount = PinellasCountyScraper._parse_bond_number(m.group(1)) if m else None
+            if amount is None:
+                any_unpublished = True
+            else:
+                amounts.append(amount)
 
         charges = " | ".join(
             PinellasCountyScraper._clean(o) for o in offenses if o and o.strip()
@@ -351,11 +377,10 @@ class PinellasCountyScraper(BaseScraper):
         case_numbers = " | ".join(
             PinellasCountyScraper._clean(c) for c in cases if c and c.strip()
         )
-
-        if not saw_bond:
-            bond_amount = "0"
+        if amounts and not any_unpublished:
+            bond_amount = PinellasCountyScraper._format_bond_amount(sum(amounts))
         else:
-            bond_amount = PinellasCountyScraper._format_bond_amount(total)
+            bond_amount = ""
 
         return {
             "charges": charges,
@@ -364,26 +389,27 @@ class PinellasCountyScraper(BaseScraper):
         }
 
     @staticmethod
-    def _parse_bond_number(bond_str: str) -> float:
-        if not bond_str:
-            return 0.0
-        cleaned = re.sub(r"[$,\s]", "", str(bond_str).strip().upper())
-        if any(t in cleaned for t in ("NOBOND", "NONE", "N/A", "HOLD", "ROR")):
-            return 0.0
-        try:
-            return float(cleaned)
-        except (ValueError, TypeError):
-            return 0.0
+    def _parse_bond_number(bond_str) -> Optional[float]:
+        """A published dollar amount (``$0.00`` included), else None (unknown)."""
+        if bond_str is None:
+            return None
+        cleaned = re.sub(r"[$,\s]", "", str(bond_str).strip())
+        if not re.fullmatch(r"\d+(?:\.\d{1,2})?", cleaned):
+            return None
+        return float(cleaned)
 
     @staticmethod
     def _format_bond_amount(value) -> str:
-        """Canonical Bond_Amount string; never invent — empty/invalid → '0'."""
+        """Canonical Bond_Amount string. Unknown/blank/non-numeric → "" (never
+        $0); a published zero → "0"."""
         if value is None or value == "":
-            return "0"
+            return ""
         if isinstance(value, (int, float)):
             amount = float(value)
         else:
             amount = PinellasCountyScraper._parse_bond_number(str(value))
+            if amount is None:
+                return ""
         if amount <= 0:
             return "0"
         if amount.is_integer():
