@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-09 (Write Bond full-case goldens)
+
+### Added
+- **Fully populated synthetic Write Bond case.** A second staff-test case sets every defendant, indemnitor, co-indemnitor, spouse, reference, employer, vehicle, attorney, prior-history, premium, payment, collateral, and court fact the prefill already reads. Values are obvious placeholders (`TEST DEFENDANT`, `1900-01-01`, `000-00-0000`, `TEST-DL-0000`, `555-0100`, `test` addresses). The case keeps two charges. Phones and payment or premium fields are still removed by the staff-test contact scrub before DocuSeal sees the payload.
+- **Full-case live goldens.** `tests/golden/write_bond_osi_t1_full.json` and `tests/golden/write_bond_palmetto_t5_full.json` record the filled template fields, the dropped payload keys, and the template fields that stayed blank.
+- **Same-name template aliases.** Template 5 names that are the same fact as an existing prefill key are copied when that source is present: eye color, hair color, boss name, license number, license state (from the party record, not the FL default), nickname (alias), attorney name/address/phone, prior arrests, prior offense, prior convictions (both free-text), remarks, how long at the current and former address, how long at the current and previous job, best friend, car, auto loan, tattoos, parents, spouse employment, spouse's parents, sibling name/address/phone, work phone, indemnitor alternate phone, and the two children name/age lines plus child 2's school. `court_time` and `court_type` are copied from the case context. A spouse-parent name on the defendant is no longer overwritten by the spouse name. `defendant_social_media_password` is never copied. `spouse_employment_phone_number` stays unmapped because the widget does not name the party.
+- **Payment-plan due dates are case data.** `first_payment_due_date`, `final_payment_due_date`, and `payment_due_date_1` through `_4` are class `payment` in the golden report. The staff-test scrub still removes them.
+
+### Tests
+- `tests/test_write_bond_template_goldens.py` and `tests/test_docuseal_service.py`. Regen stays opt-in: `WRITE_BOND_REGEN_GOLDEN=1 python scripts/regen_write_bond_goldens.py`.
+
 ## [Unreleased] — 2026-10-09 (Palmetto collateral receipt payment boxes)
 
 ### Fixed
