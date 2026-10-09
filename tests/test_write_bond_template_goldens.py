@@ -4,9 +4,9 @@ The shared prefill golden stays in ``test_write_bond_golden_smoke.py``.
 Live OSI template 1 keeps every submission value whose field name is on the
 checked-in inventory. Charge names the template does not have are omitted
 from the payload, so they are not listed as keys DocuSeal would drop.
-Palmetto template 5 cannot show this fixture's charge join (140 characters,
-125-character box), so finalize returns 422 ``charge_capacity_exceeded``
-and does not rewrite the Palmetto success goldens.
+The Palmetto fixture join is 140 characters. Template 5's render-proven
+cap is 200, so finalize succeeds and the Palmetto success goldens are
+compared. Charge names the template does not have stay off the payload.
 
 Two secondary goldens stay beside those:
 
@@ -300,24 +300,6 @@ def _finalize(monkeypatch, surety_id):
     return payload
 
 
-def _assert_palmetto_capacity(monkeypatch):
-    """The golden join does not fit template 5. Finalize fails closed."""
-    monkeypatch.setenv("STAFF_TEST_CASE_MODE", "1")
-    result = _post(monkeypatch, _body("palmetto"))
-    response = result["response"]
-    assert response.status_code == 422, response.text
-    body = response.json()
-    assert body["success"] is False
-    assert body["error"] == "charge_capacity_exceeded"
-    assert body["charge_count"] == 2
-    assert body["capacity_unit"] == "characters"
-    assert body["capacity"] == 125
-    assert "2" in body["message"] and "125" in body["message"]
-    assert result["captured"] == []
-    _assert_no_network(result)
-    return result
-
-
 def test_palmetto_spec_matches_placement():
     assert spec_matches_placement()
 
@@ -346,34 +328,20 @@ def test_live_inventories_are_name_type_readonly_only():
 @pytest.mark.parametrize("surety_id", ["osi", "palmetto"])
 def test_write_bond_secondary_maps(monkeypatch, surety_id):
     """Appearance-bond seed and the Palmetto rebuild spec. Not the live widgets."""
-    if surety_id == "palmetto":
-        _assert_palmetto_capacity(monkeypatch)
-        # The rebuild spec is not the signed packet. It still copies offense_2
-        # onto charge_line_2 when that source is present.
-        projected = project_template_fields("palmetto", {
-            "offense_2": CHARGE_2,
-            "charges_summary": "BATTERY",
-            "agent_name": HOUSE_NAME,
-            "agent_license": HOUSE_LICENSE,
-        })
-        assert projected["charge_line_2"]["value"] == CHARGE_2
-        assert projected["charge_line_2"]["source"] == "offense_2"
-        assert projected["charge_line_2"]["readonly"] is True
-        assert projected["charges_summary"]["value"] == "BATTERY"
-        return
-
     payload = _finalize(monkeypatch, surety_id)
     values = _values(payload)
     assert values["agent_name"] == HOUSE_NAME
     assert values["agent_license"] == HOUSE_LICENSE
     assert BOND_AGENTS[HOUSE_LICENSE]["agent_name"] == HOUSE_NAME
-    assert values["offense_1"] == CHARGE_1
-    assert values["offense_2"] == CHARGE_2
-    # charge_line_2 and charges are not widgets on template 1. The payload
-    # omits them. The appearance map reads offense_2 for the second line.
     assert "charge_line_2" not in values
     assert "charges" not in values
     assert values["charges_summary"] == JOINED
+    if surety_id == "palmetto":
+        assert "offense_1" not in values
+        assert "offense_2" not in values
+    else:
+        assert values["offense_1"] == CHARGE_1
+        assert values["offense_2"] == CHARGE_2
     assert values["court_datetime"] == values["court_date"]
     assert values["bond_amount_written"] == values["bond_amount_words"]
     assert values["full_bond_amount_words"] == values["bond_amount_words"]
@@ -410,9 +378,17 @@ def test_write_bond_secondary_maps(monkeypatch, surety_id):
         assert "§" in fields["DefCharge1"]["value"]
     else:
         assert fields["charges_summary"]["value"] == JOINED
-        assert fields["charge_line_2"]["value"] == CHARGE_2
-        assert fields["charge_line_2"]["value"] == values["offense_2"]
-        assert fields["charge_line_2"]["readonly"] is True
+        # Template 5's payload has no offense_2, so this projection does not
+        # fill charge_line_2. The rebuild spec still copies it when offense_2
+        # is present.
+        wired = project_template_fields("palmetto", {
+            "offense_2": CHARGE_2,
+            "charges_summary": JOINED,
+        })
+        assert wired["charge_line_2"]["value"] == CHARGE_2
+        assert wired["charge_line_2"]["source"] == "offense_2"
+        assert wired["charge_line_2"]["readonly"] is True
+        assert "charge_line_2" not in fields
         assert fields["court_datetime"]["value"] == values["court_date"]
         assert fields["bond_amount_words"]["value"] == values["bond_amount_written"]
         assert fields["numeric_full_bond_amount"]["value"] != values["bond_amount_words"]
@@ -438,10 +414,6 @@ def test_write_bond_secondary_maps(monkeypatch, surety_id):
 @pytest.mark.parametrize("surety_id", ["osi", "palmetto"])
 def test_write_bond_live_template_fields(monkeypatch, surety_id):
     """Values DocuSeal would keep, plus the dropped keys and the blank case fields."""
-    if surety_id == "palmetto":
-        _assert_palmetto_capacity(monkeypatch)
-        return
-
     payload = _finalize(monkeypatch, surety_id)
     field_map = _round_trip(_field_map(payload))
     inventory = _load_inventory(surety_id)
@@ -480,9 +452,10 @@ def test_write_bond_live_template_fields(monkeypatch, surety_id):
         assert report["fields"]["offense_1"]["readonly"] is True
         assert "offense_2" not in report["dropped_payload_keys"]
     else:
-        assert "offense_1" in report["dropped_payload_keys"]
-        assert "offense_2" in report["dropped_payload_keys"]
+        assert "offense_1" not in report["fields"]
         assert "offense_2" not in report["fields"]
+        assert "offense_1" not in report["dropped_payload_keys"]
+        assert "offense_2" not in report["dropped_payload_keys"]
         assert "charge_line_2" not in report["fields"]
 
     if os.environ.get(REGEN_ENV) == "1":

@@ -57,11 +57,13 @@ is not shortened. The offense rows are what carry each charge.
 Palmetto template 5 (157 unique names, including unnamed boxes) has no
 offense grid. The only charge text field is ``charges_summary``
 (``defendant_prior_offense`` is a prior-offense blank, not this case's
-charges). The full join is written there. The smallest printed box is
-the defendant application, 311.3pt wide. At the 5.5pt floor used by the
-appearance-bond filler (character width 0.45), that box holds 125
-characters. A longer summary fail-closes. The collateral receipt box
-holds 134 characters and is not the limit.
+charges). The full join is written there. Render proof on template 6
+with template 5's application-box geometry (worst-case glyph mix,
+2026-10-09 submissions 46–51) shows 218 characters print at 5pt on two
+lines with no clipping, and 219 overflows the box. The fail-closed cap
+is 200. The collateral-receipt box is wider (predicted limit 232) and
+is not the limit. A 0.45 character-width estimate at 5.5pt is only a
+cross-check and must stay at or below 218.
 
 There is no addendum delivery. ``DocuSealService.create_submission``
 posts ``template_id`` and ``submitters`` only. ``create_template_from_pdf``
@@ -376,11 +378,20 @@ def charges_summary_boxes(surety_id: str) -> List[Dict[str, Any]]:
     ]
 
 
-def summary_character_capacity(surety_id: str) -> int:
+def charges_summary_capacity_record(surety_id: str) -> Optional[Dict[str, Any]]:
+    """Proven character cap, when a render has replaced the width estimate."""
+    record = template_record(surety_id).get("charges_summary_capacity")
+    if isinstance(record, dict) and record.get("cap") is not None:
+        return record
+    return None
+
+
+def model_summary_character_capacity(surety_id: str) -> int:
     """Largest single-line length that still prints at or above 5.5pt.
 
     The smallest ``charges_summary`` box on the template is the limit.
-    The same width math as ``text_clips_box`` decides it.
+    The same width math as ``text_clips_box`` decides it. For a template
+    with a render-proven cap this number is a cross-check only.
     """
     boxes = charges_summary_boxes(surety_id)
     if not boxes:
@@ -398,10 +409,24 @@ def summary_character_capacity(surety_id: str) -> int:
     return int(limit or 0)
 
 
+def summary_character_capacity(surety_id: str) -> int:
+    """Characters ``charges_summary`` may carry before finalize fails closed.
+
+    A render-proven ``cap`` wins. Otherwise the 5.5pt width estimate is used.
+    """
+    proven = charges_summary_capacity_record(surety_id)
+    if proven is not None:
+        return int(proven["cap"])
+    return model_summary_character_capacity(surety_id)
+
+
 def summary_box_clips(surety_id: str, text: str) -> bool:
-    """True when any printed ``charges_summary`` box cannot show ``text``."""
+    """True when ``charges_summary`` cannot show ``text`` on this template."""
     if not text:
         return False
+    proven = charges_summary_capacity_record(surety_id)
+    if proven is not None:
+        return len(text) > int(proven["cap"])
     for box in charges_summary_boxes(surety_id):
         if text_clips_box(text, float(box["width_pt"]), float(box["height_pt"])):
             return True
@@ -486,8 +511,8 @@ def fit_charges_for_template(
     """Place every charge on a field the live template has, or fail closed.
 
     OSI uses ``offense_1``..``offense_4``. Palmetto uses ``charges_summary``
-    only, and only while that text still prints at or above 5.5pt. There is
-    no DocuSeal addendum on the signed packet.
+    only, and only while that text is within the render-proven character
+    cap. There is no DocuSeal addendum on the signed packet.
     """
     rows = list(rows)
     summary = join_charge_summary(rows)
@@ -495,7 +520,7 @@ def fit_charges_for_template(
     row_capacity = offense_row_capacity(surety)
     if row_capacity < 1:
         char_capacity = summary_character_capacity(surety)
-        if rows and (char_capacity < 1 or summary_box_clips(surety, summary)):
+        if rows and (char_capacity < 1 or len(summary) > char_capacity):
             raise ChargeCapacityError(
                 len(rows),
                 char_capacity,

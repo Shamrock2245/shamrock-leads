@@ -27,8 +27,10 @@ from dashboard.bond_pdf_service import generate_appearance_bonds
 from dashboard.services.charge_verbatim import (
     ChargeCapacityError,
     addendum_allowed,
+    charges_summary_capacity_record,
     fit_charges_for_template,
     is_charge_payload_key,
+    model_summary_character_capacity,
     resolve_verbatim_charge_rows,
     split_charges_text,
     summary_box_clips,
@@ -58,7 +60,13 @@ SEE_CASE_FILE = "(see case file)"
 
 # Smallest charges_summary box on each live template, at the 5.5pt floor.
 OSI_SUMMARY_CHARS = 87
-PALMETTO_SUMMARY_CHARS = 125
+PALMETTO_SUMMARY_CHARS = 200
+PALMETTO_PROVEN_MAX = 218
+PALMETTO_RECEIPT_LIMIT = 232
+PALMETTO_CAP_BASIS = (
+    "DocuSeal render proof on T6 with T5 geometry, worst-case glyph mix, "
+    "2026-10-09 submissions 46–51"
+)
 OSI_OFFENSE_ROWS = 4
 
 _SUBMISSION_KEYS = {
@@ -139,6 +147,14 @@ def test_live_inventory_counts_and_charge_fields():
     assert palmetto["charge_text_fields"] == ["charges_summary"]
     assert summary_character_capacity("osi") == OSI_SUMMARY_CHARS
     assert summary_character_capacity("palmetto") == PALMETTO_SUMMARY_CHARS
+    proven = charges_summary_capacity_record("palmetto")
+    assert proven["proven_max"] == PALMETTO_PROVEN_MAX
+    assert proven["cap"] == PALMETTO_SUMMARY_CHARS
+    assert proven["second_box_limit"] == PALMETTO_RECEIPT_LIMIT
+    assert proven["basis"] == PALMETTO_CAP_BASIS
+    # The 0.45 width estimate is a cross-check. It must stay at or under the
+    # render-proven maximum. It is not the fail-closed cap.
+    assert model_summary_character_capacity("palmetto") <= PALMETTO_PROVEN_MAX
     for surety in ("osi", "palmetto"):
         names = template_field_names(surety)
         assert "charges_summary" in names
@@ -200,8 +216,8 @@ def test_osi_fails_closed_above_four_offense_rows(count):
 
 
 def test_palmetto_summary_is_byte_identical_when_it_fits():
-    # Four of the fixture charges join to 113 characters. The defendant
-    # application box holds 125, so the summary prints and nothing else does.
+    # Four of the fixture charges join to 113 characters. The render-proven
+    # cap is 200, so the summary prints and nothing else does.
     assert len(_join(4)) == 113
     assert len(_join(4)) <= PALMETTO_SUMMARY_CHARS
     bond, values = _prefill(4, surety_id="palmetto")
@@ -229,7 +245,7 @@ def test_palmetto_summary_is_byte_identical_when_it_fits():
     assert placement.summary == _join(4)
 
 
-@pytest.mark.parametrize("count", [5, 8])
+@pytest.mark.parametrize("count", [8])
 def test_palmetto_summary_fails_closed_when_the_box_cannot_show_it(count):
     summary = _join(count)
     assert len(summary) > PALMETTO_SUMMARY_CHARS
@@ -246,15 +262,23 @@ def test_palmetto_summary_fails_closed_when_the_box_cannot_show_it(count):
         DocuSealService.prefill_values_from_bond(_bond(count, surety_id="palmetto"))
 
 
-def test_palmetto_character_threshold_is_the_smallest_box():
+def test_palmetto_character_threshold_is_the_proven_cap():
     short = "x" * PALMETTO_SUMMARY_CHARS
     long = "x" * (PALMETTO_SUMMARY_CHARS + 1)
     assert summary_box_clips("palmetto", short) is False
     assert summary_box_clips("palmetto", long) is True
-    fit_charges_for_template(
+    placed = fit_charges_for_template(
         resolve_verbatim_charge_rows({"surety_id": "palmetto", "charges": short}),
         surety_id="palmetto",
     )
+    assert placed.summary == short
+    values = DocuSealService.prefill_values_from_bond({
+        "surety_id": "palmetto",
+        "defendant_name": "Sample Party One",
+        "county": "Lee",
+        "charges": short,
+    })
+    assert values["charges_summary"] == short
     with pytest.raises(ChargeCapacityError) as exc:
         fit_charges_for_template(
             resolve_verbatim_charge_rows({"surety_id": "palmetto", "charges": long}),
@@ -263,6 +287,14 @@ def test_palmetto_character_threshold_is_the_smallest_box():
     assert exc.value.capacity == PALMETTO_SUMMARY_CHARS
     assert exc.value.unit == "characters"
     assert exc.value.charge_count == 1
+    with pytest.raises(ChargeCapacityError) as pref:
+        DocuSealService.prefill_values_from_bond({
+            "surety_id": "palmetto",
+            "defendant_name": "Sample Party One",
+            "county": "Lee",
+            "charges": long,
+        })
+    assert pref.value.capacity == PALMETTO_SUMMARY_CHARS
 
 
 def test_osi_summary_clip_is_a_layout_note():
@@ -607,7 +639,6 @@ def test_finalize_palmetto_summary_carries_fitting_charges(monkeypatch):
     [
         ("osi", 5, "rows", 4),
         ("osi", 8, "rows", 4),
-        ("palmetto", 5, "characters", PALMETTO_SUMMARY_CHARS),
         ("palmetto", 8, "characters", PALMETTO_SUMMARY_CHARS),
     ],
 )

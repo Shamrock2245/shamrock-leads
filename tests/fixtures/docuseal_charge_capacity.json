@@ -500,6 +500,12 @@
         "written_premium"
       ],
       "offense_rows": [],
+      "charges_summary_capacity": {
+        "proven_max": 218,
+        "cap": 200,
+        "basis": "DocuSeal render proof on T6 with T5 geometry, worst-case glyph mix, 2026-10-09 submissions 46–51",
+        "second_box_limit": 232
+      },
       "charge_text_fields": [
         "charges_summary"
       ],
