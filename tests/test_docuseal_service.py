@@ -51,6 +51,7 @@ def test_prefill_values_from_bond():
     assert vals["today_year_2digit"]
     assert vals["offense_1"] == "BATTERY"
     assert vals["offense_2"] == "RESIST"
+    assert vals["charge_line_2"] == vals["offense_2"]
     assert vals["poa_number_1"] == "POA1"
     assert vals["poa_number_2"] == "POA2"
     # Premium: max(100, 100) + max(100, 100) = 200

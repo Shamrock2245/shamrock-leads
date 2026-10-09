@@ -1,0 +1,801 @@
+{
+  "_meta": {
+    "template_id": 5,
+    "template_name": "shamrock-palmetto-paperwork-complete",
+    "unique_named_fields": 156,
+    "blank_names_omitted": 2,
+    "note": "Live DocuSeal field inventory. Names, types, and readonly flags only. Geometry, default values, and sample people are omitted. Blank-name widgets are omitted."
+  },
+  "fields": [
+    {
+      "name": "agency_address",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "agency_name",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "agent_name",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "agent_signature_4",
+      "type": "signature",
+      "readonly": false
+    },
+    {
+      "name": "agent_signature_5",
+      "type": "signature",
+      "readonly": false
+    },
+    {
+      "name": "agent_signature_6",
+      "type": "signature",
+      "readonly": false
+    },
+    {
+      "name": "bond_amount_words",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "case_number",
+      "type": "text",
+      "readonly": true
+    },
+    {
+      "name": "charges_summary",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "coidemnitor_signature",
+      "type": "signature",
+      "readonly": false
+    },
+    {
+      "name": "coindemnitor_signature_1",
+      "type": "signature",
+      "readonly": false
+    },
+    {
+      "name": "coindemnitor_signature_2",
+      "type": "signature",
+      "readonly": false
+    },
+    {
+      "name": "collateral_cash_checkbox",
+      "type": "checkbox",
+      "readonly": false
+    },
+    {
+      "name": "collateral_check_checkbox",
+      "type": "checkbox",
+      "readonly": false
+    },
+    {
+      "name": "collateral_credit_card_checkbox",
+      "type": "checkbox",
+      "readonly": false
+    },
+    {
+      "name": "collateral_money_order_checkbox",
+      "type": "checkbox",
+      "readonly": false
+    },
+    {
+      "name": "county",
+      "type": "text",
+      "readonly": true
+    },
+    {
+      "name": "county_notary",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "court_type",
+      "type": "text",
+      "readonly": true
+    },
+    {
+      "name": "def_how_long_at_address_1",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "def_how_long_at_address_2",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_address",
+      "type": "text",
+      "readonly": true
+    },
+    {
+      "name": "defendant_attorney_address",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_attorney_name",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_attorney_phone",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_auto_loan",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_beard_checkbox",
+      "type": "checkbox",
+      "readonly": false
+    },
+    {
+      "name": "defendant_bff_address",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_bff_name",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_bff_phone",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_boss_name",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_car_color",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_car_license_tag",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_car_loan_vendor",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_car_make",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_car_model",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_car_purchase_location",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_car_year",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_child2_school",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_children_name_age_1",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_children_name_age_2",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_city",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_description",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_dob",
+      "type": [
+        "date",
+        "text"
+      ],
+      "readonly": false
+    },
+    {
+      "name": "defendant_email",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_employer",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_employer_address",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_eye_color",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_former_address",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_glasses_checkbox",
+      "type": "checkbox",
+      "readonly": false
+    },
+    {
+      "name": "defendant_hair_color",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_height",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_how_long_at_job",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_how_long_at_job_2",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_initials_1",
+      "type": "initials",
+      "readonly": false
+    },
+    {
+      "name": "defendant_initials_2",
+      "type": "initials",
+      "readonly": false
+    },
+    {
+      "name": "defendant_license_number",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_license_state",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_marks_tattoos",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_name",
+      "type": "text",
+      "readonly": false,
+      "readonly_mixed": true
+    },
+    {
+      "name": "defendant_nickname",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_other_surety",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_out_on_bail_now",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_parents_address",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_parents_name",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_parents_phone",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_phone",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_previous_employer_address",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_prior_arrests",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_prior_convictions",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_prior_offense",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_race",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_remarks",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_sibling_1_phone",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_sibling_2_phone",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_sibling_3_phone",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_sibling_address_1",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_sibling_address_2",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_sibling_address_3",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_sibling_name_1",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_sibling_name_2",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_sibling_name_3",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_signature",
+      "type": "signature",
+      "readonly": false
+    },
+    {
+      "name": "defendant_signature_1",
+      "type": "signature",
+      "readonly": false
+    },
+    {
+      "name": "defendant_signature_2",
+      "type": "signature",
+      "readonly": false
+    },
+    {
+      "name": "defendant_signature_3",
+      "type": "signature",
+      "readonly": false
+    },
+    {
+      "name": "defendant_signed_date_1",
+      "type": "date",
+      "readonly": false
+    },
+    {
+      "name": "defendant_social_media_login",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_social_media_password",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_spouse_employment",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_spouse_employment_address",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_spouse_parents_address",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_spouse_parents_name",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_spouse_parents_phone",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_ssn",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_state",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_weight",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_work_phone_number",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "defendant_zip",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "indemnitor_address",
+      "type": "text",
+      "readonly": false,
+      "readonly_mixed": true
+    },
+    {
+      "name": "indemnitor_alternate_phone",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "indemnitor_city",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "indemnitor_date_1",
+      "type": "date",
+      "readonly": true
+    },
+    {
+      "name": "indemnitor_dob",
+      "type": [
+        "date",
+        "text"
+      ],
+      "readonly": false
+    },
+    {
+      "name": "indemnitor_email",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "indemnitor_employer",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "indemnitor_employer_address",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "indemnitor_initials_1",
+      "type": "initials",
+      "readonly": false
+    },
+    {
+      "name": "indemnitor_initials_2",
+      "type": "initials",
+      "readonly": false
+    },
+    {
+      "name": "indemnitor_name",
+      "type": "text",
+      "readonly": false,
+      "readonly_mixed": true
+    },
+    {
+      "name": "indemnitor_parents_names",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "indemnitor_phone",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "indemnitor_signature",
+      "type": "signature",
+      "readonly": false
+    },
+    {
+      "name": "indemnitor_signature_1",
+      "type": "signature",
+      "readonly": false
+    },
+    {
+      "name": "indemnitor_signature_2",
+      "type": "signature",
+      "readonly": false
+    },
+    {
+      "name": "indemnitor_signature_3",
+      "type": "signature",
+      "readonly": false
+    },
+    {
+      "name": "indemnitor_spouse_dob",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "indemnitor_spouse_email",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "indemnitor_spouse_employer",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "indemnitor_spouse_employer_address",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "indemnitor_spouse_name",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "indemnitor_spouse_parents_address",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "indemnitor_ssn",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "indemnitor_state",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "indemnitor_zip",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "indemnity_agreement_checkbox",
+      "type": "checkbox",
+      "readonly": false
+    },
+    {
+      "name": "interest_on_note",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "left_hand_checkbox",
+      "type": "checkbox",
+      "readonly": false
+    },
+    {
+      "name": "mortgage_agreement_checkbox",
+      "type": "checkbox",
+      "readonly": false
+    },
+    {
+      "name": "numeric_full_bond_amount",
+      "type": "text",
+      "readonly": false,
+      "readonly_mixed": true
+    },
+    {
+      "name": "numeric_premium",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "poa_number",
+      "type": "text",
+      "readonly": true
+    },
+    {
+      "name": "poa_number_1",
+      "type": "text",
+      "readonly": true
+    },
+    {
+      "name": "poa_number_2",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "poa_number_3",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "poa_number_4",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "promissory_note_checkbox",
+      "type": "checkbox",
+      "readonly": false
+    },
+    {
+      "name": "radio_button_indem",
+      "type": "radio",
+      "readonly": false
+    },
+    {
+      "name": "radio_button_ssn_defendant",
+      "type": "radio",
+      "readonly": false
+    },
+    {
+      "name": "reference_1_address",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "reference_1_name",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "reference_1_phone",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "reference_2_address",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "reference_2_name",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "reference_2_phone",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "reference_3_address",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "reference_3_name",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "reference_3_phone",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "right_hand_checkbox",
+      "type": "checkbox",
+      "readonly": false
+    },
+    {
+      "name": "spouse_employment_phone_number",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "state_notary",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "today_date",
+      "type": "date",
+      "readonly": false
+    },
+    {
+      "name": "today_day",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "today_month",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "today_year_2digit",
+      "type": "text",
+      "readonly": false
+    },
+    {
+      "name": "written_premium",
+      "type": "text",
+      "readonly": true
+    }
+  ]
+}
