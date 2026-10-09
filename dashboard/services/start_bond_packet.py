@@ -460,6 +460,7 @@ async def send_packet(
 
     await require_verified_indemnitors(
         parties=[{"role": "indemnitor", "name": name}],
+        bond_data=payload,
         bond_case_id=str(payload.get("bond_case_id") or ""),
         booking_number=str(payload.get("booking_number") or ""),
         packet_id=str(payload.get("packet_id") or ""),

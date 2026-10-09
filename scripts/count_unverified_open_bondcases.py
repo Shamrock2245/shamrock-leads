@@ -10,6 +10,8 @@ Open BondCase: status is ``active``, ``monitoring``, ``alert``, or
 ``reinstated`` (the kanban statuses that are not terminal). The same
 bond case id in ``bond_cases`` and ``active_bonds`` counts once, and
 ``bond_cases`` wins. Synthetic ``TEST-`` / ``is_test`` rows are excluded.
+A passed defendant-role scan counts only when that case, or a linked
+packet, has ``self_indemnitor`` set. The name rule is unchanged.
 
 Usage:
     SHAMROCK_MONGO_RO_URI='mongodb+srv://readonly... ' \\
@@ -70,6 +72,8 @@ def _project() -> dict:
         "id_ocr_role": 1,
         "license_scan": 1,
         "dl_scan": 1,
+        "self_indemnitor": 1,
+        "defendant": 1,
     }
 
 

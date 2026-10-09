@@ -455,3 +455,133 @@ def test_finalize_returns_422_before_poa_or_docuseal():
     assert poa_calls["n"] == 0
     svc.create_submission.assert_not_called()
     assert "4821" not in response.text
+
+
+def _defendant_scan(name, *, success=True, state="FL"):
+    return {
+        "packet_id": "PKT-1",
+        "bond_case_id": "BC-1",
+        "booking_number": "BK-1",
+        "id_ocr_role": "defendant",
+        "id_ocr": _scan(name, success=success, state=state),
+    }
+
+
+@pytest.mark.parametrize("surety", ["osi", "palmetto"])
+@pytest.mark.asyncio
+async def test_self_indemnitor_passed_defendant_scan_passes_for_both_sureties(surety):
+    _stores, get = _collections({
+        "paperwork_packets": [_defendant_scan("Jamie Ann Sample", state="TX" if surety == "palmetto" else "FL")],
+    })
+    data = _bound(surety)
+    data["self_indemnitor"] = True
+    fake = _DocuSeal()
+
+    async def _create(self, **kwargs):
+        fake.calls.append(kwargs)
+        return {"submission_id": 1, "submitters": []}
+
+    fake.create_submission_for_packet = _create.__get__(fake, _DocuSeal)
+    with _patch_db(get):
+        result = await start_indemnitor_bond_packet(
+            packet_id="PKT-1",
+            surety_id=surety,
+            bond_data=data,
+            poa_record={"max_bond_value": 25000},
+            docuseal=fake,
+        )
+    assert result["surety_id"] == surety
+    assert len(fake.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_self_indemnitor_defendant_scan_different_name_is_name_mismatch():
+    _stores, get = _collections({
+        "paperwork_packets": [_defendant_scan(OTHER, state="SC")],
+    })
+    data = _bound("osi")
+    data["self_indemnitor"] = True
+    with _patch_db(get):
+        with pytest.raises(BondPacketStartError) as raised:
+            await start_indemnitor_bond_packet(
+                packet_id="PKT-1",
+                surety_id="osi",
+                bond_data=data,
+                poa_record={"max_bond_value": 25000},
+                docuseal=_DocuSeal(),
+            )
+    assert raised.value.code == "indemnitor_identity_unverified"
+    assert "name mismatch" in str(raised.value)
+    assert PRIMARY in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_self_indemnitor_failed_defendant_scan_refuses():
+    _stores, get = _collections({
+        "paperwork_packets": [_defendant_scan(PRIMARY, success=False, state="GA")],
+    })
+    data = _bound("palmetto")
+    data["self_indemnitor"] = True
+    fake = _DocuSeal()
+    poa = AsyncMock(side_effect=AssertionError("poa touched"))
+    with _patch_db(get), patch(
+        "dashboard.services.bond_packet_start._lookup_assigned_poa",
+        poa,
+    ):
+        with pytest.raises(BondPacketStartError) as raised:
+            await start_indemnitor_bond_packet(
+                packet_id="PKT-1",
+                surety_id="palmetto",
+                bond_data=data,
+                docuseal=fake,
+            )
+    assert raised.value.code == "indemnitor_identity_unverified"
+    assert "scan failed" in str(raised.value)
+    assert fake.calls == []
+    poa.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_unmarked_packet_ignores_matching_defendant_scan():
+    _stores, get = _collections({
+        "paperwork_packets": [_defendant_scan(PRIMARY, state="NC")],
+    })
+    data = _bound("osi")
+    data["self_indemnitor"] = False
+    data["indemnitor"]["relationship"] = "Self"
+    data["relationship"] = "Self"
+    with _patch_db(get):
+        with pytest.raises(BondPacketStartError) as raised:
+            await start_indemnitor_bond_packet(
+                packet_id="PKT-1",
+                surety_id="osi",
+                bond_data=data,
+                poa_record={"max_bond_value": 25000},
+                docuseal=_DocuSeal(),
+            )
+    assert raised.value.code == "indemnitor_identity_unverified"
+    assert "no scan and no attestation" in str(raised.value)
+    assert "name mismatch" not in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_self_indemnitor_defendant_scan_does_not_cover_coindemnitor():
+    _stores, get = _collections({
+        "paperwork_packets": [_defendant_scan(PRIMARY, state="AL")],
+    })
+    data = _bound("osi")
+    data["self_indemnitor"] = True
+    data["indemnitors"] = [
+        {"name": PRIMARY, "email": "signer@example.invalid", "indemnitor_id": "I-1"},
+        {"name": OTHER, "email": "co@example.invalid", "role": "co_indemnitor"},
+    ]
+    with _patch_db(get):
+        with pytest.raises(BondPacketStartError) as raised:
+            await start_indemnitor_bond_packet(
+                packet_id="PKT-1",
+                surety_id="osi",
+                bond_data=data,
+                poa_record={"max_bond_value": 25000},
+                docuseal=_DocuSeal(),
+            )
+    assert str(raised.value) == "Co-indemnitor Robin Sample: no scan and no attestation."

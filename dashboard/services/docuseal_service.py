@@ -2405,6 +2405,11 @@ def build_bond_data_from_dashboard(
         "payment_due_date_4": body.get("payment_due_date_4"),
         "payment_amount_4": body.get("payment_amount_4"),
     }
+    # The packet-context flag from apply_self_indemnitor. Not inferred.
+    from dashboard.services.identity_verification_service import explicit_self_indemnitor
+
+    if explicit_self_indemnitor(ctx) or explicit_self_indemnitor(intake_doc):
+        bond_data["self_indemnitor"] = True
 
     # Multi-indemnitor list for Co-Indemnitor role
     inds = ctx.get("indemnitors") or intake_doc.get("indemnitors")

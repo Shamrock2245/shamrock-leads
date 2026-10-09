@@ -105,6 +105,59 @@ def test_counts_only_open_cases_and_splits_reasons():
     assert "4821" not in blob
 
 
+def test_count_classifies_self_indemnitor_defendant_scan():
+    def defendant_scan(name, *, success=True):
+        return {"id_ocr_role": "defendant", "id_ocr": _scan(name, success=success)}
+
+    cases = [
+        _case(
+            "active",
+            bond_case_id="BC-SELF",
+            booking_number="BK-SELF",
+            self_indemnitor=True,
+            **defendant_scan("Jamie Ann Sample"),
+        ),
+        _case(
+            "active",
+            bond_case_id="BC-PLAIN",
+            booking_number="BK-PLAIN",
+            indemnitor={"name": "Jamie Sample", "relationship": "Self"},
+            **defendant_scan("Jamie Sample"),
+        ),
+        _case(
+            "monitoring",
+            "Jamie Sample",
+            bond_case_id="BC-MIS",
+            booking_number="BK-MIS",
+            self_indemnitor=True,
+            **defendant_scan("Robin Sample"),
+        ),
+        _case(
+            "alert",
+            bond_case_id="BC-FAIL",
+            booking_number="BK-FAIL",
+            self_indemnitor="yes",
+            **defendant_scan("Jamie Sample", success=False),
+        ),
+        _case("reinstated", bond_case_id="BC-PKT", booking_number="BK-PKT"),
+    ]
+    packet = {
+        "bond_case_id": "BC-PKT",
+        "packet_id": "PKT-SELF",
+        "self_indemnitor": True,
+        **defendant_scan("Jamie Sample"),
+    }
+    counts = summarize_open_bond_cases(cases, [packet], [])
+    assert counts["total_open"] == 5
+    assert counts["verified_by_scan"] == 2
+    assert counts["verified_by_attestation"] == 0
+    assert counts["blocked_no_scan"] == 1
+    assert counts["blocked_name_mismatch"] == 1
+    assert counts["blocked_scan_failed"] == 1
+    assert "Jamie" not in str(counts)
+    assert '"self_indemnitor": 1' in SCRIPT.read_text(encoding="utf-8")
+
+
 def test_script_refuses_without_the_read_only_uri(monkeypatch):
     monkeypatch.delenv("SHAMROCK_MONGO_RO_URI", raising=False)
     monkeypatch.setenv("MONGODB_URI", "mongodb://should-not-be-used")
