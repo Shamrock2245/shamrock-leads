@@ -14,6 +14,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 - `tests/test_writebond_to_paid_e2e.py` (added to CI) walks one test case through Write Bond money capture, test-mode finalize, the BondCase, exactly one locked invoice (reference = booking #, cents = premium; a second run creates nothing and reuses the claim), and reconciliation to PAID. It covers the failure cases too: partial or mismatched amount, wrong invoice # or invoice id, declined or refunded status, a missing transaction id, a bond with no staged invoice, a stale `bond_cases` premium, and duplicate or concurrent receipts. Everything runs offline: SwipeSimple HTTP, Mongo, DocuSeal, and the ledger are mocked, and nothing is sent.
 
+## [Unreleased] — 2026-10-09 (bond re-check: unreadable source state fails closed)
+
+### Fixed
+- **Pending-bond re-check fails closed when the Health source state can't be read.** `core/pending_bond_recheck._source_state` returned `unverified` when `dashboard.extensions` failed to import or `scraper_source_state` raised, so a `fail_closed` county would have looked eligible. It now returns `fail_closed` and logs the label and error class only. No county is fetched and nothing is written.
+
+### Tests
+- `tests/test_pending_bond_recheck.py` (already in the `ci.yml` list): an import failure and a lookup error both exclude the county as `fail_closed`, and nothing is fetched or written. Both cases fail on main.
+
 ## [Unreleased] — 2026-10-08 (pending-bond re-check worker)
 
 ### Added
