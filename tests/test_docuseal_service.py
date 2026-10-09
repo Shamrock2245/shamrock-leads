@@ -444,6 +444,89 @@ def test_resolve_template_id_for_surety():
         assert resolve_template_id_for_surety("palmetto") is None
 
 
+def test_prefill_copies_same_fact_template_names():
+    """Template 5 renames facts template 1 already stores. No reshaping."""
+    svc = DocuSealService(base_url="https://sign.example", api_key="test")
+    vals = svc.prefill_values_from_bond(
+        {
+            "defendant_name": "TEST DEFENDANT",
+            "indemnitor_name": "TEST INDEMNITOR",
+            "court_date": "1900-01-01",
+            "court_time": "00:00",
+            "defendant": {
+                "eyes": "TEST EYES",
+                "hair": "TEST HAIR",
+                "boss": "TEST BOSS",
+                "dl": "TEST-DL-0000",
+                "dl_state": "XX",
+                "alias": "TEST ALIAS",
+                "attorney_name": "TEST ATTORNEY",
+                "attorney_address": "TEST ADDRESS 1",
+                "attorney_phone": "555-0100",
+                "prior_arrests": "TEST PRIOR",
+                "prior_offense": "TEST OFFENSE",
+                "remarks": "TEST REMARKS",
+                "sibling_1_name": "TEST SIBLING",
+                "sibling_1_address": "TEST ADDRESS 2",
+                "sibling_1_phone": "555-0101",
+                "children_names_ages_1": "TEST CHILD 1900",
+                "children_names_ages_2": "TEST CHILD TWO 1900",
+                "children_school_2": "TEST SCHOOL",
+                "spouse_name": "TEST SPOUSE",
+                "spouse_parent_name": "TEST SPOUSE PARENT",
+            },
+        }
+    )
+    assert vals["defendant_eye_color"] == "TEST EYES"
+    assert vals["defendant_hair_color"] == "TEST HAIR"
+    assert vals["defendant_boss_name"] == "TEST BOSS"
+    assert vals["defendant_license_number"] == "TEST-DL-0000"
+    assert vals["defendant_license_state"] == "XX"
+    assert vals["defendant_nickname"] == "TEST ALIAS"
+    assert vals["defendant_attorney_name"] == "TEST ATTORNEY"
+    assert vals["defendant_attorney_address"] == "TEST ADDRESS 1"
+    assert vals["defendant_attorney_phone"] == "555-0100"
+    assert vals["defendant_prior_arrests"] == "TEST PRIOR"
+    assert vals["defendant_prior_offense"] == "TEST OFFENSE"
+    assert vals["defendant_remarks"] == "TEST REMARKS"
+    assert vals["defendant_sibling_name_1"] == "TEST SIBLING"
+    assert vals["defendant_sibling_address_1"] == "TEST ADDRESS 2"
+    assert vals["defendant_sibling_1_phone"] == "555-0101"
+    assert vals["defendant_children_name_age_1"] == "TEST CHILD 1900"
+    assert vals["defendant_children_name_age_2"] == "TEST CHILD TWO 1900"
+    assert vals["defendant_child2_school"] == "TEST SCHOOL"
+    assert vals["defendant_spouse_name"] == "TEST SPOUSE"
+    assert vals["def_spouse_parent_name"] == "TEST SPOUSE PARENT"
+    assert vals["court_datetime"] == "1900-01-01 00:00"
+    bare = svc.prefill_values_from_bond({"defendant_name": "TEST DEFENDANT"})
+    assert "defendant_license_state" not in bare
+    assert bare["defendant_dl_state"] == "FL"
+
+
+def test_build_bond_data_copies_court_time_and_case_payment():
+    from dashboard.services.docuseal_service import build_bond_data_from_dashboard
+
+    bond = build_bond_data_from_dashboard(
+        ctx={
+            "court_date": "1900-01-01",
+            "court_time": "00:00",
+            "court_type": "TEST COURT",
+            "balance_financed_amount": "1.00",
+            "defendant": {"name": "TEST DEFENDANT"},
+            "indemnitor": {"name": "TEST INDEMNITOR"},
+        },
+        body={},
+    )
+    assert bond["court_time"] == "00:00"
+    assert bond["court_type"] == "TEST COURT"
+    assert bond["court_date"] == "1900-01-01"
+    assert bond["balance_financed_amount"] == "1.00"
+    vals = DocuSealService.prefill_values_from_bond(bond)
+    assert vals["court_datetime"] == "1900-01-01 00:00"
+    assert vals["court_type"] == "TEST COURT"
+    assert vals["balance_financed_amount"] == "1.00"
+
+
 def test_build_bond_data_from_dashboard_merges_charges():
     from dashboard.services.docuseal_service import (
         build_bond_data_from_dashboard,

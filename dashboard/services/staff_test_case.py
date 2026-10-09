@@ -400,6 +400,117 @@ async def _refuse_real_identity(booking: str) -> None:
                 )
 
 
+# Party facts prefill_values_from_bond already reads. Name and email are
+# applied by the caller so a nested payload cannot replace the test identity.
+_HYDRATION_PARTY_KEYS = (
+    "first_name", "middle_name", "last_name",
+    "firstName", "middleName", "lastName",
+    "dob", "date_of_birth",
+    "dl", "dl_number", "dl_state", "dlState",
+    "ssn",
+    "address", "street", "city", "state", "zip", "zipcode",
+    "employer", "employer_phone", "employerPhone",
+    "employer_address", "employerAddress",
+    "employer_how_long", "employerHowLong",
+    "work_phone", "phone2", "other_phone",
+    "height", "weight", "hair", "hair_color", "eyes", "eye_color",
+    "race", "sex", "gender", "tattoos", "alias",
+    "address_how_long", "how_long",
+    "former_address", "former_address_how_long",
+    "boss", "supervisor",
+    "previous_employment", "previous_employment_how_long",
+    "parent_name", "parent_phone", "parent_address",
+    "spouse_name", "spouse_phone", "spouse_address", "spouse_employer",
+    "spouse_employer_address", "spouse_dl", "spouse_ssn", "spouse_work_phone",
+    "spouse_parent_name", "spouse_parent_phone", "spouse_parent_address",
+    "best_friend_name", "best_friend_phone", "best_friend_address",
+    "attorney_name", "attorney_phone", "attorney_address",
+    "vehicle_year", "vehicle_make", "vehicle_model", "vehicle_color",
+    "vehicle_plate", "vehicle_lender", "vehicle_amount_owed",
+    "vehicle_purchase_location",
+    "facebook", "instagram",
+    "prior_arrests", "prior_convicted", "prior_offense", "remarks",
+    "sibling_1_name", "sibling_1_phone", "sibling_1_address",
+    "sibling_2_name", "sibling_2_phone", "sibling_2_address",
+    "sibling_3_name", "sibling_3_phone", "sibling_3_address",
+    "children_names_ages", "children_names_ages_1", "children_names_ages_2",
+    "children_school", "children_school_1", "children_school_2",
+    "relationship",
+    "mortgage_co", "mortgage_amount",
+    "ref1Name", "ref1Phone", "ref1Address", "ref1Relation",
+    "ref2Name", "ref2Phone", "ref2Address", "ref2Relation",
+    "reference_1_name", "reference_1_phone", "reference_1_address", "reference_1_relation",
+    "reference_2_name", "reference_2_phone", "reference_2_address", "reference_2_relation",
+    "city_state_zip",
+)
+
+_HYDRATION_CONTEXT_TEXT = (
+    "court_date", "court_time", "court_type", "court_location", "facility",
+)
+
+_HYDRATION_CONTEXT_VALUES = (
+    "premium_amount",
+    "down_payment_amount", "down_payment",
+    "balance_financed_amount", "balance_financed",
+    "number_of_payments", "num_payments",
+    "payment_amount",
+    "first_payment_due_date", "first_due_date",
+    "final_payment_due_date", "final_due_date",
+    "payment_due_date_1", "payment_amount_1",
+    "payment_due_date_2", "payment_amount_2",
+    "payment_due_date_3", "payment_amount_3",
+    "payment_due_date_4", "payment_amount_4",
+    "collateral_description",
+)
+
+_CHARGE_ROW_KEYS = (
+    "charge", "description", "name",
+    "case_number", "Case_Number",
+    "poa_number", "bond_amount", "amount", "bond",
+)
+
+
+def _scalar(value: Any) -> str:
+    if value is None or isinstance(value, (dict, list, bool)):
+        return ""
+    return str(value).strip()
+
+
+def _party_hydration(raw: Any, *, name: str, email: str) -> dict:
+    """Copy facts the prefill already reads. Name and email stay the test parties."""
+    party: dict = {}
+    if isinstance(raw, Mapping):
+        for key in _HYDRATION_PARTY_KEYS:
+            text = _scalar(raw.get(key))
+            if text:
+                party[key] = text
+        phone = _scalar(raw.get("phone"))
+        if phone:
+            party["phone"] = phone
+    party["name"] = name
+    party["email"] = email
+    party.setdefault("phone", "")
+    return party
+
+
+def _charge_rows(body: Mapping[str, Any]) -> list:
+    raw = body.get("charge_details")
+    if not isinstance(raw, list):
+        return []
+    rows = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            continue
+        row = {}
+        for key in _CHARGE_ROW_KEYS:
+            text = _scalar(item.get(key))
+            if text:
+                row[key] = text
+        if row:
+            rows.append(row)
+    return rows
+
+
 def _synthetic_context(
     body: Mapping[str, Any],
     *,
@@ -432,20 +543,40 @@ def _synthetic_context(
         "defendant_id": f"TEST-DEF-{suffix}",
         "indemnitor_id": f"TEST-IND-{suffix}",
         "charges": _text(body, "charges") or "Sample charge",
-        "defendant": {
-            "name": defendant_name,
-            "email": signer_email,
-            "phone": "",
-        },
-        "indemnitor": {
-            "name": indemnitor_name,
-            "email": signer_email,
-            "phone": "",
-        },
+        "defendant": _party_hydration(
+            body.get("defendant"), name=defendant_name, email=signer_email,
+        ),
+        "indemnitor": _party_hydration(
+            body.get("indemnitor"), name=indemnitor_name, email=signer_email,
+        ),
         "indemnitors": [
-            {"name": indemnitor_name, "email": signer_email, "phone": ""},
+            _party_hydration(
+                body.get("indemnitor"), name=indemnitor_name, email=signer_email,
+            ),
         ],
     }
+    co_raw = body.get("coindemnitor") if isinstance(body.get("coindemnitor"), Mapping) else {}
+    co_name = _text(body, "coindemnitor_name") or _scalar(co_raw.get("name"))
+    if co_name:
+        ctx["indemnitors"].append(
+            _party_hydration(co_raw, name=co_name, email=signer_email)
+        )
+    for key in _HYDRATION_CONTEXT_TEXT:
+        text = _text(body, key)
+        if text:
+            ctx[key] = text
+    for key in _HYDRATION_CONTEXT_VALUES:
+        if key not in body:
+            continue
+        value = body.get(key)
+        if value is None or isinstance(value, (dict, list, bool)):
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        ctx[key] = value
+    charge_rows = _charge_rows(body)
+    if charge_rows:
+        ctx["charge_details"] = charge_rows
     # License-only records resolve through the existing agent pair. A name is
     # copied only when the request actually sent one.
     if license_no and not agent_name:
