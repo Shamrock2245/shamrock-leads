@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-09 (Write Bond golden smoke)
+
+### Added
+- **Offline Write Bond golden smoke** for OSI (template 1) and Palmetto (template 5). `tests/test_write_bond_golden_smoke.py` runs one synthetic staff test case through `POST /api/paperwork/packet/finalize` with `STAFF_TEST_CASE_MODE` set only inside the test. It compares the DocuSeal submission fields, including charge text, to `tests/golden/write_bond_osi.json` and `tests/golden/write_bond_palmetto.json`. A mismatch prints missing, extra, and changed fields.
+- **No DocuSeal network.** The HTTP client raises. The test asserts zero POST/PUT/DELETE calls, `send_email` and `send_sms` false, submitter email `admin@shamrockbailbonds.biz`, a `TEST-` power only, and `is_test` on the in-memory audit rows.
+- **Identity refusal.** The same synthetic case with an indemnitor name the binding gate treats as non-identity (`Unknown`, `test`) returns 422 `docuseal_packet_binding_invalid` for both sureties, with no payload and no packet.
+- **Regen is opt-in.** `WRITE_BOND_REGEN_GOLDEN=1 python scripts/regen_write_bond_goldens.py`. The script refuses to run without that flag. CI does not set it.
+
+### Tests
+- `tests/test_write_bond_golden_smoke.py` (added to the `ci.yml` list). Synthetic data only. No Mongo and no DocuSeal.
+
 ## [Unreleased] — 2026-10-09 (Write Bond to PAID, SwipeSimple)
 
 ### Fixed
