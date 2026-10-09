@@ -9,6 +9,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Optional
+from core.booking_identity import redact_internal_keys
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ async def post_slack(text: str, webhook_env: str = "SLACK_WEBHOOK_LEADS") -> boo
         import httpx
 
         async with httpx.AsyncClient() as client:
-            r = await client.post(url, json={"text": text}, timeout=8)
+            r = await client.post(url, json=redact_internal_keys({"text": text}), timeout=8)
             return r.status_code < 300
     except Exception as exc:
         logger.warning("[automation-digest] Slack post failed: %s", exc)

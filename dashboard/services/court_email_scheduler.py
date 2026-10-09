@@ -20,6 +20,7 @@ Usage:
 import logging
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
+from core.booking_identity import redact_internal_keys
 
 logger = logging.getLogger(__name__)
 
@@ -687,7 +688,7 @@ class CourtEmailScheduler:
         }
 
         try:
-            http_requests.post(webhook_url, json=payload, timeout=5)
+            http_requests.post(webhook_url, json=redact_internal_keys(payload), timeout=5)
         except Exception:
             pass
 

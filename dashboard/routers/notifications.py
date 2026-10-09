@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 from datetime import datetime, timezone, timedelta
 import uuid
 
+from core.booking_identity import redact_internal_keys
 from dashboard.extensions import get_collection
 
 notifications_bp = APIRouter(prefix="/api", tags=["notifications"])
@@ -65,8 +66,9 @@ async def create_notification(
         "icon": type_config["icon"],
         "priority": type_config["priority"],
         "color": type_config["color"],
-        "title": title,
-        "message": message,
+        # Notification text never prints a Miami-Dade internal key.
+        "title": redact_internal_keys(title),
+        "message": redact_internal_keys(message),
         "entity_id": entity_id,
         "entity_type": entity_type,
         "metadata": metadata or {},

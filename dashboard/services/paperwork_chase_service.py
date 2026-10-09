@@ -18,6 +18,7 @@ Respects:
 import logging
 import os
 from datetime import datetime, timezone, timedelta
+from core.booking_identity import redact_internal_keys
 
 logger = logging.getLogger(__name__)
 
@@ -319,7 +320,7 @@ class PaperworkChaseService:
                     f"━━━━━━━━━━━━━━━━━━"
                 )
                 async with httpx.AsyncClient() as client:
-                    await client.post(webhook_url, json={"text": text}, timeout=5)
+                    await client.post(webhook_url, json=redact_internal_keys({"text": text}), timeout=5)
             except Exception as exc:
                 logger.warning("[paperwork-chase] Slack alert failed: %s", exc)
 

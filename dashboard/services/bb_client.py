@@ -21,6 +21,7 @@ import logging
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone
 from bson import ObjectId
+from core.booking_identity import redact_internal_keys
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +180,8 @@ async def send_imessage(
     Returns:
         BlueBubbles API response dict
     """
+    # Internal natural keys (core/booking_identity.py) are never sent.
+    message = redact_internal_keys(message)
     return await _send_message_direct(phone, message)
 
 
@@ -326,6 +329,8 @@ async def send_message_universal(
           data?: any,
         }
     """
+    # Internal natural keys (core/booking_identity.py) are never sent.
+    message = redact_internal_keys(message)
     from dashboard.services.agency_billing import suspension_block
     from dashboard.services.outreach_queue import enqueue_message
     from dashboard.extensions import get_collection
@@ -449,6 +454,8 @@ async def send_imessage_with_attachment(
     Returns:
         BlueBubbles API response dict or queued status
     """
+    # Internal natural keys (core/booking_identity.py) are never sent.
+    message = redact_internal_keys(message)
     from dashboard.services.agency_billing import suspension_block
     from dashboard.services.outreach_queue import enqueue_message
     from dashboard.extensions import get_collection
