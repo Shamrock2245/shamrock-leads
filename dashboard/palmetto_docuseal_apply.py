@@ -102,9 +102,10 @@ _SOURCE_NAMES = {
     "defendant_social_password": "defendant_social_media_password",
 }
 
-# Signature and checkbox widgets. Empty data_source, so the placement name
-# is translated to the live template 5 name. A name with no live equivalent
-# stays as the placement name (a genuinely new box).
+# Signature widgets, and checkboxes whose live template 5 name is not the
+# data_source. Payment boxes keep these names so prefill hits template 5.
+# Template 5 has no Other checkbox. Template 6 names that box cr_other.
+# The submission builder sends cr_other only when the target template has it.
 _WIDGET_NAMES = {
     "app_agent_signature": "agent_signature_5",
     "app_defendant_signature": "defendant_signature_3",

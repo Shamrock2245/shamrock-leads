@@ -2578,7 +2578,7 @@
       "y": 0.534732,
       "w": 0.017996,
       "h": 0.013939,
-      "data_source": "",
+      "data_source": "collateral_cash",
       "required": false
     },
     {
@@ -2591,7 +2591,7 @@
       "y": 0.534732,
       "w": 0.017996,
       "h": 0.013939,
-      "data_source": "",
+      "data_source": "collateral_check",
       "required": false
     },
     {
@@ -2604,7 +2604,7 @@
       "y": 0.534732,
       "w": 0.017996,
       "h": 0.013939,
-      "data_source": "",
+      "data_source": "collateral_money_order",
       "required": false
     },
     {
@@ -2617,7 +2617,7 @@
       "y": 0.534732,
       "w": 0.017996,
       "h": 0.013939,
-      "data_source": "",
+      "data_source": "collateral_credit_card",
       "required": false
     },
     {
@@ -2630,7 +2630,7 @@
       "y": 0.534732,
       "w": 0.017996,
       "h": 0.013939,
-      "data_source": "",
+      "data_source": "collateral_other",
       "required": false
     },
     {
