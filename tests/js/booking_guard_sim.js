@@ -32,7 +32,7 @@ global.document = {
   getElementById(id) { return head.children.find((n) => n.id === id) || null; },
   addEventListener(t, f) { (listeners[t] = listeners[t] || []).push(f); },
 };
-global.navigator = {};
+if (typeof navigator === 'undefined') global.navigator = {};  // Node 21+ ships a read-only navigator
 global.window = global;
 eval(fs.readFileSync(process.argv[2], 'utf8'));
 
