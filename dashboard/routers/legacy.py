@@ -33,6 +33,7 @@ from dashboard.extensions import (
     update_bb_url, BB_CONFIG_API_KEY,
 )
 from dashboard.routers.helpers import serialize_doc
+from core.record_key import arrest_ref_query, doc_filter
 from core.staff_edits import (
     protect_scraped_update,
     staff_bond_marker,
@@ -444,7 +445,7 @@ async def update_charge_bonds(request: Request):
     now_iso = now.isoformat()
 
     arrests = get_collection("arrests")
-    existing = await arrests.find_one({"booking_number": booking_number})
+    existing = await arrests.find_one(arrest_ref_query(booking_number))
     if not existing:
         return JSONResponse({"error": f"No arrest record for {booking_number}"}, status_code=404)
 
@@ -541,7 +542,7 @@ async def update_charge_bonds(request: Request):
     if charge_descs:
         update_fields["charges"] = " | ".join(charge_descs)
 
-    await arrests.update_one({"booking_number": booking_number}, {"$set": update_fields})
+    await arrests.update_one(doc_filter(existing, booking_number), {"$set": update_fields})
 
     try:
         p_set = {"lead_score": rec.Lead_Score, "updated_at": now}
@@ -618,7 +619,7 @@ async def refresh_from_source(request: Request):
     now_iso = now.isoformat()
     arrests = get_collection("arrests")
 
-    doc = await arrests.find_one({"booking_number": booking_number})
+    doc = await arrests.find_one(arrest_ref_query(booking_number))
     if not doc:
         return JSONResponse(
             {"error": f"No arrest record for booking {booking_number}"},
@@ -704,8 +705,8 @@ async def refresh_from_source(request: Request):
                 if staff_prov.bond:
                     found_bond = float(staff_prov.bond_amount or 0)
 
-                await arrests.update_one({"booking_number": booking_number}, {"$set": update_fields})
-                updated_doc = await arrests.find_one({"booking_number": booking_number})
+                await arrests.update_one(doc_filter(doc, booking_number), {"$set": update_fields})
+                updated_doc = await arrests.find_one(arrest_ref_query(booking_number))
 
                 if abs(found_bond - old_bond_f) >= 0.01:
                     immediate["bond_updated"] = True
@@ -793,7 +794,7 @@ async def update_lead_details(request: Request):
     now_iso = now.isoformat()
 
     arrests = get_collection("arrests")
-    existing = await arrests.find_one({"booking_number": booking_number})
+    existing = await arrests.find_one(arrest_ref_query(booking_number))
     if not existing:
         return JSONResponse({"error": f"No arrest record found for booking {booking_number}"}, status_code=404)
 
@@ -848,8 +849,8 @@ async def update_lead_details(request: Request):
     if "dob" in body and body["dob"]:
         set_fields["dob"] = str(body["dob"]).strip()
 
-    await arrests.update_one({"booking_number": booking_number}, {"$set": set_fields})
-    updated = await arrests.find_one({"booking_number": booking_number})
+    await arrests.update_one(doc_filter(existing, booking_number), {"$set": set_fields})
+    updated = await arrests.find_one(arrest_ref_query(booking_number))
 
     # Mirror to prospective_bonds if present
     try:

@@ -15,6 +15,7 @@ Lifecycle-to-Pipeline Bridge:
 from datetime import datetime, timezone
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
+from core.record_key import arrest_ref_query
 from dashboard.extensions import get_collection
 import logging
 
@@ -319,7 +320,7 @@ async def finalize_bond_step1(request: Request, booking_number: str):
     arrests = get_collection("arrests")
     notes_col = get_collection("defendant_notes")
 
-    arrest = await arrests.find_one({"booking_number": booking_number}, {"_id": 0})
+    arrest = await arrests.find_one(arrest_ref_query(booking_number), {"_id": 0})
     if not arrest:
         return JSONResponse({"success": False, "error": "Defendant not found"}, status_code=404)
 
@@ -387,7 +388,7 @@ async def finalize_bond_step2(request: Request, booking_number: str):
     if provided_token and expected_token and provided_token != expected_token:
         return JSONResponse({"success": False, "error": "Review token mismatch. Please restart the finalization process."}, status_code=400)
 
-    arrest = await arrests.find_one({"booking_number": booking_number}, {"_id": 0})
+    arrest = await arrests.find_one(arrest_ref_query(booking_number), {"_id": 0})
     if not arrest:
         return JSONResponse({"success": False, "error": "Defendant not found"}, status_code=404)
 

@@ -19,6 +19,13 @@ from pymongo.errors import OperationFailure
 
 from core.models import ArrestRecord
 from core.booking_identity import internal_natural_key
+from core.record_key import (
+    BOOKING_PARTIAL_INDEX,
+    LEGACY_BOOKING_INDEX,
+    RECORD_KEY_INDEX,
+    record_key_mode,
+    stored_booking_number,
+)
 from core.staff_edits import fetch_provenance_docs, protect_scraped_update
 from config.settings import settings
 
@@ -26,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 STORED_SOURCE_PROJECTION = {
-    "_id": 0, "state": 1, "county": 1, "booking_number": 1,
+    "_id": 0, "state": 1, "county": 1, "booking_number": 1, "record_key": 1,
     "charges": 1, "bond_amount": 1, "bond_amount_raw": 1,
 }
 # Fields written together as one charges/bond pair.
@@ -51,7 +58,7 @@ def _stored_bond_is_positive(existing: dict) -> bool:
         return False
 
 
-def keep_stored_source_values(collection, pending) -> int:
+def keep_stored_source_values(collection, pending, key_field: str = "booking_number") -> int:
     """Keep the stored charges/bond pair when this scrape has an empty side.
 
     ``pending`` is ``[(idx, record, (state, county, booking), doc)]``; each
@@ -87,9 +94,9 @@ def keep_stored_source_values(collection, pending) -> int:
         by_scope.setdefault((state, county), []).append(booking)
     stored: dict = {}
     for (state, county), bookings in by_scope.items():
-        query = {"state": state, "county": county, "booking_number": {"$in": bookings}}
+        query = {"state": state, "county": county, key_field: {"$in": bookings}}
         for d in collection.find(query, STORED_SOURCE_PROJECTION):
-            stored[(d.get("state"), d.get("county"), d.get("booking_number"))] = d
+            stored[(d.get("state"), d.get("county"), d.get(key_field))] = d
     kept = 0
     for key, doc in need:
         existing = stored.get(key)
@@ -212,12 +219,31 @@ class MongoWriter:
             )
         except Exception as backfill_err:
             logger.warning(f"⚠️ arrests.state backfill skipped: {backfill_err}")
-        self._safe_create_index(
-            self.arrests,
-            [("state", ASCENDING), ("county", ASCENDING), ("booking_number", ASCENDING)],
-            unique=True,
-            name="dedup_state_county_booking",
-        )
+        if record_key_mode():
+            # Post-migration (scripts/migrations/record_key_migration.py):
+            # identity is record_key; booking_number stays unique only when
+            # non-empty, so Miami-Dade records can store it blank. Never
+            # recreate the legacy full unique index in this mode.
+            self._safe_create_index(
+                self.arrests,
+                [("state", ASCENDING), ("county", ASCENDING), ("record_key", ASCENDING)],
+                unique=True,
+                name=RECORD_KEY_INDEX,
+            )
+            self._safe_create_index(
+                self.arrests,
+                [("state", ASCENDING), ("county", ASCENDING), ("booking_number", ASCENDING)],
+                unique=True,
+                name=BOOKING_PARTIAL_INDEX,
+                partialFilterExpression={"booking_number": {"$gt": ""}},
+            )
+        else:
+            self._safe_create_index(
+                self.arrests,
+                [("state", ASCENDING), ("county", ASCENDING), ("booking_number", ASCENDING)],
+                unique=True,
+                name=LEGACY_BOOKING_INDEX,
+            )
         # Query indexes
         self._safe_create_index(self.arrests, [("county", ASCENDING)], name="idx_county")
         self._safe_create_index(self.arrests, [("state", ASCENDING)], name="idx_state")
@@ -335,6 +361,8 @@ class MongoWriter:
         pending: list = []
 
         internal_keyed = 0
+        mode_on = record_key_mode()
+        key_field = "record_key" if mode_on else "booking_number"
         for idx, record in enumerate(records):
             booking = (record.Booking_Number or "").strip()
             county_name = (record.County or county or "").strip()
@@ -361,7 +389,8 @@ class MongoWriter:
             doc = record.to_mongo_doc()
             doc["state"] = state
             doc["county"] = county_name
-            doc["booking_number"] = identity
+            doc["booking_number"] = stored_booking_number(identity, bool(internal_key), mode_on)
+            doc["record_key"] = identity  # core/record_key.py
             if internal_key:
                 # Stored identity only (unique index + dashboard addressing).
                 # Displays print it blank (public_booking_number / serialize_doc).
@@ -402,10 +431,10 @@ class MongoWriter:
         # An empty scraped charges/bond never blanks a stored value (a missed
         # detail fetch or a source that omits a field this run is not
         # evidence the value went away). A published value still replaces it.
-        kept = keep_stored_source_values(self.arrests, pending) if pending else 0
+        kept = keep_stored_source_values(self.arrests, pending, key_field) if pending else 0
         if kept:
             logger.info("%s: kept stored charges/bond (empty in this scrape) on %d record(s)", county, kept)
-        staff_docs = fetch_provenance_docs(self.arrests, [key for _, _, key, _ in pending]) if pending else {}
+        staff_docs = fetch_provenance_docs(self.arrests, [key for _, _, key, _ in pending], key_field) if pending else {}
         protected = 0
         for idx, record, key, doc in pending:
             existing = staff_docs.get(key)
@@ -416,10 +445,11 @@ class MongoWriter:
             operations.append(
                 UpdateOne(
                     {
-                        # State-aware natural key — Lee (FL) ≠ Lee (GA) ≠ Lee (SC)
+                        # State-aware natural key — Lee (FL) ≠ Lee (GA) ≠ Lee (SC).
+                        # RECORD_KEY_MODE=on (post-migration) keys on record_key.
                         "state": state,
                         "county": county_name,
-                        "booking_number": booking,
+                        key_field: booking,
                     },
                     {
                         "$set": doc,

@@ -11,6 +11,12 @@ window.slBookingLabel = window.slBookingLabel || function (v) {
   var s = String(v);
   return /md_dedupe_v\d+:[0-9a-f]{16,}/.test(s) ? '' : s;
 };
+// Route ref for a record (core/record_key.py): record_key when the API sent
+// one (Miami-Dade post-migration has booking_number ""), else booking_number.
+window.slRecordRef = function (rec) {
+  if (!rec) return '';
+  return String(rec.record_key || rec.booking_number || rec.Booking_Number || '');
+};
 window.slRedactKeys = window.slRedactKeys || function (t) {
   return t === null || t === undefined ? t : String(t).replace(/md_dedupe_v\d+:[0-9a-f]{16,64}/g, '');
 };

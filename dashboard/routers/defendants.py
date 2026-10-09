@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timezone
 from fastapi import APIRouter, File, Form, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
+from core.record_key import arrest_ref_query
 from dashboard.deps import get_collection, get_db
 from dashboard.services.defendant_normalizer import (
     DefendantNormalizationService, normalize_name_part, normalize_dob,
@@ -398,7 +399,7 @@ async def _defendant_media_target(booking_number: str):
         return None, None, None
 
     arrests = get_collection("arrests")
-    doc = await arrests.find_one({"booking_number": booking_number})
+    doc = await arrests.find_one(arrest_ref_query(booking_number))
     if doc:
         return arrests, {"booking_number": booking_number}, doc
 

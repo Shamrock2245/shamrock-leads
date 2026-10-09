@@ -3,6 +3,23 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-09 (DRAFT: record_key identity so Miami-Dade booking_number can be stored blank; stacked on #168)
+
+### Added
+- **`core/record_key.py`:** `record_key` is the record's identity: the source booking number, or the internal natural key where the source publishes none (Miami-Dade).
+  - `RECORD_KEY_MODE` defaults to `off`. Writes still key on `booking_number` exactly as before, but every doc also carries `record_key`.
+  - `on` is set by ops only after the migration.
+- **Writer:**
+  - With the mode on, `MongoWriter` upserts on (state, county, record_key) and stores `booking_number=""` for internal-key records. The staff-edit and stored-value guards look up by the same key.
+  - Indexes in on mode: unique (state, county, record_key), plus a partial unique index on non-empty booking_number. The legacy full unique index is never recreated in on mode.
+- **Routing:** arrests lookups in the legacy, stats, arrests, defendants, defendant-lifecycle and prospective-bonds routers resolve `record_key` first and fall back to legacy `booking_number` URLs (`arrest_ref_query`). A blank ref never matches. legacy.py updates now target the resolved `_id`.
+- **API and JS:** `serialize_doc` returns `record_key`, and `booking_key_internal` stays true after migration. `sl-core.js` adds `slRecordRef(rec)` for URLs.
+- **Migration:** `scripts/migrations/record_key_migration.py` is a dry run by default and reports counts and ObjectIds only.
+  - Steps: backfill `record_key`; duplicate check on (state, county, record_key) and on non-empty booking numbers; index swap; blank Miami-Dade `booking_number`; set `record_key` on linked collections. Blanking linked `booking_number` is a separate `--blank-linked` step.
+  - `--apply` requires `--i-have-a-verified-backup` plus a `--backup-dir` containing a mongodump of arrests (the mongodump and mongorestore commands are documented in the script). It aborts on any duplicate.
+  - Not run against prod.
+- **Tests:** `tests/test_record_key_routing.py`, added to the CI list.
+
 ## [Unreleased] — 2026-10-09 (Miami-Dade reopen on an internal natural key; owner exception)
 
 ### Changed
