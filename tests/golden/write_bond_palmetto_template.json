@@ -1,0 +1,218 @@
+{
+  "_meta": {
+    "frozen_at": "2026-01-15T12:00:00+00:00",
+    "note": "Template fields after the local name map. Rewrite only with WRITE_BOND_REGEN_GOLDEN=1 via scripts/regen_write_bond_goldens.py. CI must not set that flag.",
+    "surety_id": "palmetto",
+    "template_id": 5
+  },
+  "agency_name": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "Shamrock Bail Bonds"
+  },
+  "agent_license": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "P139768"
+  },
+  "agent_name": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "Brendan O'Neal"
+  },
+  "bond_amount_words": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "Five Thousand and 00/100"
+  },
+  "booking_number": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "TEST-GOLDEN-PALMETTO"
+  },
+  "case_number": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "TEST-CASE-PALMETTO"
+  },
+  "charges_summary": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "Grand theft — occupant's dwelling (Fla. Stat. § 812.014(2)(c), 2nd degree), Burglary of a conveyance (Fla. Stat. § 810.02(3)(d), 3rd degree)"
+  },
+  "collateral_receipt_number": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "0001"
+  },
+  "county": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "Lee"
+  },
+  "court_datetime": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "TBN"
+  },
+  "court_type": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "County/Circuit"
+  },
+  "defendant_dl_state": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "FL"
+  },
+  "defendant_email": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "admin@shamrockbailbonds.biz"
+  },
+  "defendant_name": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "Sample Party One"
+  },
+  "defendant_state": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "FL"
+  },
+  "indemnitor_email": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "admin@shamrockbailbonds.biz"
+  },
+  "indemnitor_first_name": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "Sample"
+  },
+  "indemnitor_last_name": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "Two"
+  },
+  "indemnitor_middle_name": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "Party"
+  },
+  "indemnitor_name": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "Sample Party Two"
+  },
+  "indemnitor_state": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "FL"
+  },
+  "numeric_full_bond_amount": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "5,000.00"
+  },
+  "poa_number": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "TEST-POA-0001"
+  },
+  "poa_number_1": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "TEST-POA-0001"
+  },
+  "poa_number_2": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "TEST-POA-0001"
+  },
+  "state": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "FL"
+  },
+  "today_date": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "01/15/2026"
+  },
+  "today_day": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "15"
+  },
+  "today_month": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "January"
+  },
+  "today_year_2digit": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "26"
+  }
+}

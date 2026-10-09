@@ -6,8 +6,10 @@ writing when that variable is anything other than ``1``.
 
     WRITE_BOND_REGEN_GOLDEN=1 python scripts/regen_write_bond_goldens.py
 
-The files are ``tests/golden/write_bond_osi.json`` and
-``tests/golden/write_bond_palmetto.json``. Review the diff before committing.
+The files are ``tests/golden/write_bond_osi.json``,
+``tests/golden/write_bond_palmetto.json``, and the per-template pair
+``write_bond_osi_template.json`` / ``write_bond_palmetto_template.json``.
+Review the diff before committing.
 """
 from __future__ import annotations
 
@@ -31,8 +33,9 @@ def main() -> int:
     return pytest.main([
         "-q",
         "tests/test_write_bond_golden_smoke.py",
+        "tests/test_write_bond_template_goldens.py",
         "-k",
-        "test_write_bond_golden_fields",
+        "test_write_bond_golden_fields or test_write_bond_template_fields",
     ])
 
 

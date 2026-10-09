@@ -37,6 +37,8 @@ config/google-services.json
 !tests/fixtures/docuseal/template_5.json
 !tests/golden/write_bond_osi.json
 !tests/golden/write_bond_palmetto.json
+!tests/golden/write_bond_osi_template.json
+!tests/golden/write_bond_palmetto_template.json
 
 
 # Python

@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-09 (Write Bond per-template goldens)
+
+### Added
+- **Per-template Write Bond goldens** after the local name maps. `tests/test_write_bond_template_goldens.py` reuses the synthetic staff test case and the DocuSeal stub that raises. OSI template 1 is projected through the seeded appearance field map. Palmetto template 5 is projected through `PALMETTO_FIELDS` / `palmetto_docuseal_field_spec.json` (`resolved_docuseal_name`). Goldens: `tests/golden/write_bond_osi_template.json` and `tests/golden/write_bond_palmetto_template.json`. A mismatch prints missing, extra, and changed fields.
+- **Palmetto misses wired where a placement already exists.** `court_date` is copied to `court_datetime` (appearance `CourtDateAndTimeField`). `charges` may fill `charges_summary`. `bond_amount_written` and `full_bond_amount_words` may fill `bond_amount_words`. `ssa_release_reason` has no placement and is not given a box.
+
+### Tests
+- `tests/test_write_bond_template_goldens.py` (added to the `ci.yml` list). Regen stays opt-in: `WRITE_BOND_REGEN_GOLDEN=1 python scripts/regen_write_bond_goldens.py`.
+
 ## [Unreleased] — 2026-10-09 (Write Bond golden smoke)
 
 ### Added
