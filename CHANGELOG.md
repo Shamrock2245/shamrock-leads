@@ -19,12 +19,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - A body without the `md_dedupe_v` marker is forwarded as the same bytes object.
 - **`sl-booking-guard.js`** loads first on every dashboard page except the recovery portal: index, mobile, tablet, portal, start_bond_packet and the four platform pages.
   - It blanks a key in page text, attributes, desktop Notifications, alert/confirm/prompt and clipboard copies.
-  - Text-entry controls (text/search/tel/email/url, textarea) show a key blank, including on programmatic `.value =`. Reading `.value` while the field is blank still returns the routing id, and typing clears it. Checkbox, radio, hidden and button values are routing data and are never touched (Bulk Exonerate keeps working). Codex #171 P1/P2; a node simulation test is in `tests/js/booking_guard_sim.js`.
+  - **Form-bound controls** (a form owner or a `name` attribute) never have `.value` changed. Only their presentation is masked (`[data-sl-masked]`, transparent text; native copy/cut redacted; focusing selects the hidden key so typing replaces it), so a native submit or `FormData` posts the real key. Belt-and-braces: capture-phase `submit` and `formdata` listeners put back a key an app kept in `data-internal-key` when the named field would post blank.
+  - Free-standing text controls (no form, no name) show a key blank, including on programmatic `.value =`. Reading `.value` while blank returns the routing id, and typing clears it. Checkbox, radio, hidden and button values are never touched (Bulk Exonerate keeps working). Codex #171 P1/P2; a node simulation is in `tests/js/booking_guard_sim.js`.
   - The mobile and tablet bond lists and the start-bond-packet header use the label directly.
+- **Server guard:** `protect_internal_booking_key` (in `core/booking_identity.py`) drops a blank/whitespace/None `booking_number` / `Booking_Number` from any update to a record whose stored booking number is an internal key. It's applied to update-lead-details, the admin-hygiene arrest patch and the paperwork packet bind. update-lead-details already rejects a blank `booking_number` with 400, so a form can never blank a stored Miami-Dade key.
 - **`recovery_portal.html`:** its recovery scope serves no scripts, so it carries an inline `bkl()` label. Selecting a Miami-Dade case keeps the key hidden for the share request.
 - **Tests:** `tests/test_booking_key_outbound_and_middleware.py`, added to the CI list.
   - Slack, Telegram and Twilio payloads; the middleware's rewrite scope, size cap, JSON/stream/Location pass-through and byte-identical output for non-Miami-Dade bodies and headers.
   - Byte-identical pass-through of every redact helper on non-Miami-Dade values.
+  - Native form submit on a Miami-Dade record posts the real key (node simulation); a blank booking from a form never overwrites a stored key (server tests); checkbox, radio and hidden behaviour from P1.
   - Guards on Slack/Telegram `json=`, message entry points, Sheets/notification text, middleware registration, guard-first page loading and recovery portal labels.
 
 ## [Unreleased] — 2026-10-09 (Miami-Dade reopen on an internal natural key; owner exception)

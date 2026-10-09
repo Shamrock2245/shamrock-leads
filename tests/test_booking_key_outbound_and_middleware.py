@@ -364,8 +364,7 @@ def test_booking_guard_js_parses():
     assert r.returncode == 0, r.stderr[:300]
 
 
-def test_booking_guard_keeps_routing_values_and_intercepts_assignments():
-    """Codex #171 P1/P2: non-text values untouched; programmatic text assignments hidden but readable."""
+def _guard_sim():
     import json as _json
     import shutil
     import subprocess
@@ -376,12 +375,99 @@ def test_booking_guard_keeps_routing_values_and_intercepts_assignments():
     r = subprocess.run([node, str(ROOT / "tests/js/booking_guard_sim.js"), str(DASH / "sl-booking-guard.js")],
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr[:300]
-    out = _json.loads(r.stdout.strip().splitlines()[-1])
-    assert out["textShown"] == ""                      # programmatic el.value = key prints blank
-    assert out["textRead"] == KEY == out["textKept"]   # consumers still read the routing id
-    assert out["chkRead"] == KEY == out["chkShown"]    # Bulk Exonerate checkbox value untouched
-    assert out["hiddenRead"] == KEY
+    return _json.loads(r.stdout.strip().splitlines()[-1])
+
+
+def test_booking_guard_native_form_submit_posts_real_key():
+    """CoS: a native submit on an MD record posts the real key, never blank (no data-loss path)."""
+    out = _guard_sim()
+    assert out["formBoundRaw"] == KEY == out["formBoundRead"]  # .value of form-bound input never changed
+    assert out["formBoundMasked"] is True                       # presentation masked instead
+    assert out["posted"]["booking_number"] == KEY               # native submission entry list
+    assert out["restoredPost"]["booking_number"] == KEY         # app-blanked named field restored
+    assert out["formdataOnly"] == KEY                           # formdata listener alone restores
+    assert out["namedRaw"] == KEY and out["namedMasked"] is True  # name attr alone = form-bound
+    assert out["selectedOnFocus"] is True                       # typing replaces, never appends blind
+    assert out["afterTypeMasked"] is False and out["afterTypePost"] == "24-0001"
+    assert out["plainFormMasked"] is False and out["css"] is True
+
+
+def test_booking_guard_keeps_routing_values_and_intercepts_assignments():
+    """Codex #171 P1/P2 still hold: non-text values untouched; free-standing text inputs hidden but readable."""
+    out = _guard_sim()
+    assert out["textShown"] == ""
+    assert out["textRead"] == KEY == out["textKept"]
+    assert out["chkRead"] == KEY == out["chkShown"] and out["chkMasked"] is False
+    assert out["radioRead"] == KEY and out["hiddenRead"] == KEY
+    assert out["posted"]["bulk"] == KEY and out["posted"]["pick"] == KEY and out["posted"]["rid"] == KEY
     assert out["mixed"] == "note  end"
-    assert out["plain"] == "2026-123456"               # non-MD values untouched
-    assert out["afterType"] == "24-0001" and out["keyCleared"] is True
+    assert out["plain"] == "2026-123456"
+    assert out["afterType"] == "24-0002" and out["keyCleared"] is True
     assert out["label"] == "|2026-123456"
+
+
+# ── server: a form can never blank a stored Miami-Dade key ─────────────────
+
+def test_protect_internal_booking_key_drops_blank_only_for_md_records():
+    from core.booking_identity import protect_internal_booking_key
+
+    md = {"booking_number": KEY, "county": "Miami-Dade", "state": "FL"}
+    for blank in ("", "   ", None):
+        upd = {"booking_number": blank, "Booking_Number": blank, "notes": "x"}
+        assert protect_internal_booking_key(upd, md) == {"notes": "x"}
+    assert protect_internal_booking_key({"booking_number": "26-0001"}, md) == {"booking_number": "26-0001"}
+    lee = {"booking_number": PUBLIC}
+    assert protect_internal_booking_key({"booking_number": ""}, lee) == {"booking_number": ""}  # unchanged rule
+
+
+def _md_cols():
+    from tests.test_staff_edits_survive_rescrape import AsyncFake
+
+    doc = {"booking_number": KEY, "booking_key_internal": True, "md_dedupe": KEY, "state": "FL",
+           "county": "Miami-Dade", "full_name": "SYNTHETIC PERSON", "charges": "A", "bond_amount": "",
+           "charge_details": [{"charge": "A"}], "_id": "oid-1"}
+    return {"arrests": AsyncFake([doc])}
+
+
+def _req(body):
+    from tests.test_staff_edits_survive_rescrape import _request
+
+    return _request(body)
+
+
+def test_form_post_on_md_record_keeps_stored_key():
+    from unittest.mock import patch
+
+    from dashboard.routers import legacy
+
+    cols = _md_cols()
+    with patch.object(legacy, "get_collection", side_effect=lambda n: cols.setdefault(n, type(cols["arrests"])())):
+        asyncio.run(legacy.update_lead_details(_req({
+            "booking_number": KEY, "case_number": "26CF000123", "court_date": "2026-11-02",
+            "Booking_Number": "", "booking_number_display": ""})))
+    doc = cols["arrests"].one(KEY)
+    assert doc["booking_number"] == KEY and doc["_id"] == "oid-1"
+    assert doc["case_number"] == "26CF000123"
+    assert all("booking_number" not in s and "Booking_Number" not in s for s in cols["arrests"].sets)
+
+
+def test_blank_booking_from_form_never_overwrites_md_key():
+    from unittest.mock import patch
+
+    from dashboard.routers import legacy
+
+    cols = _md_cols()
+    with patch.object(legacy, "get_collection", side_effect=lambda n: cols.setdefault(n, type(cols["arrests"])())):
+        r = asyncio.run(legacy.update_lead_details(_req({"booking_number": "", "case_number": "X"})))
+    assert getattr(r, "status_code", 200) == 400
+    doc = cols["arrests"].one(KEY)
+    assert doc["booking_number"] == KEY and "case_number" not in doc
+
+
+def test_admin_hygiene_blank_rename_never_overwrites_md_key():
+    src = (DASH / "routers/admin_hygiene.py").read_text(encoding="utf-8")
+    i = src.index('sets["booking_number"] = body.new_booking_number.strip()')
+    assert "protect_internal_booking_key(sets, existing)" in src[i:i + 300]
+    pw = (DASH / "routers/paperwork.py").read_text(encoding="utf-8")
+    i = pw.index('update_fields["booking_number"] = req.booking_number.strip()')
+    assert "protect_internal_booking_key(update_fields" in pw[i:i + 300]

@@ -2816,6 +2816,8 @@ async def bind_defendant_to_packet(request: Request, packet_id: str, req: BindDe
     }
     if req.booking_number:
         update_fields["booking_number"] = req.booking_number.strip()
+    from core.booking_identity import protect_internal_booking_key
+    protect_internal_booking_key(update_fields, packet or {})
     if req.county:
         update_fields["county"] = req.county.strip()
     if req.case_number:

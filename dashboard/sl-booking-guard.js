@@ -7,10 +7,15 @@
  *     — the JS twin of public_booking_number / booking_number_display.
  *   - slRedactKeys(text): text with any internal key removed (exports, toasts).
  *   - A MutationObserver blanks any key that still reaches page text and
- *     titles/placeholders; text-entry controls (text/search/tel/email/url,
- *     textarea) show it blank even on programmatic `.value =` while `.value`
- *     reads still return the routing id. Checkbox/radio/hidden values are
- *     routing data and never touched. Notifications/dialogs/clipboard too.
+ *     titles/placeholders. Notifications/dialogs/clipboard are redacted too.
+ *   - Form-bound controls (a form owner or a name attribute) NEVER have their
+ *     .value changed: only their presentation is masked (transparent text via
+ *     [data-sl-masked]), so a native submit / FormData posts the real key.
+ *     Belt-and-braces: capture-phase submit + formdata listeners put back a
+ *     key an app stored in data-internal-key when the field posts blank.
+ *   - Free-standing text controls (no form, no name) show it blank on
+ *     programmatic `.value =` while `.value` reads return the routing id.
+ *   - Checkbox/radio/hidden/button values are routing data and never touched.
  * Load this before every other dashboard script on every page.
  */
 (function () {
@@ -42,11 +47,36 @@
     if (el.tagName !== 'INPUT') return false;
     return TEXT_TYPES[(el.getAttribute('type') || '').toLowerCase()] === 1;
   }
+  // Submitted by the browser: its .value must stay the real value.
+  function isFormBound(el) {
+    return !!(el && (el.form || (el.hasAttribute && el.hasAttribute('name'))));
+  }
 
-  // Programmatic `el.value = key` (no mutation event) on a text control:
-  // the field shows blank, the key is kept in data-internal-key, and reading
-  // `.value` while the field is still blank returns the key, so every
-  // operational consumer keeps the routing id. Typing clears the hidden key.
+  // ── presentation-only mask for form-bound text controls ──
+  var MASK_ATTR = 'data-sl-masked';
+  var MASK_CSS = '[' + MASK_ATTR + ']{color:transparent!important;-webkit-text-fill-color:transparent!important;' +
+    'text-shadow:none!important;caret-color:currentColor}';
+  function injectMaskCss() {
+    if (typeof document === 'undefined' || !document.createElement || !document.head) return;
+    if (document.getElementById && document.getElementById('sl-booking-mask-css')) return;
+    var st = document.createElement('style');
+    st.id = 'sl-booking-mask-css';
+    st.textContent = MASK_CSS;
+    document.head.appendChild(st);
+  }
+  function setMask(el, raw) {
+    if (!el.setAttribute) return;
+    if (raw && raw.indexOf(MARK) !== -1) {
+      if (!el.hasAttribute || !el.hasAttribute(MASK_ATTR)) el.setAttribute(MASK_ATTR, '1');
+    } else if (el.hasAttribute && el.hasAttribute(MASK_ATTR)) {
+      el.removeAttribute(MASK_ATTR);
+    }
+  }
+
+  // Free-standing (not form-bound) text control: `el.value = key` shows blank,
+  // the key is kept in data-internal-key, and reading `.value` while the field
+  // is still blank returns the key. Form-bound controls keep the real value
+  // and are only masked. Typing clears a hidden key.
   var nativeValue = {};
   function patchValue(Ctor) {
     if (typeof Ctor !== 'function' || !Ctor.prototype) return;
@@ -58,11 +88,19 @@
       enumerable: d.enumerable,
       get: function () {
         var v = d.get.call(this);
-        if (v === '' && this.dataset && this.dataset.internalKey && isTextEntry(this)) return this.dataset.internalKey;
+        if (v === '' && this.dataset && this.dataset.internalKey && isTextEntry(this) && !isFormBound(this)) {
+          return this.dataset.internalKey;
+        }
         return v;
       },
       set: function (v) {
-        if (isTextEntry(this) && v !== null && v !== undefined && String(v).indexOf(MARK) !== -1) {
+        if (!isTextEntry(this)) { d.set.call(this, v); return; }
+        if (isFormBound(this)) {
+          d.set.call(this, v);  // real value, always
+          setMask(this, d.get.call(this));
+          return;
+        }
+        if (v !== null && v !== undefined && String(v).indexOf(MARK) !== -1) {
           var s = String(v);
           if (KEY_ONLY_RE.test(s)) {
             this.dataset.internalKey = s.trim();
@@ -82,6 +120,10 @@
     var d = nativeValue[el.tagName === 'TEXTAREA' ? 'HTMLTextAreaElement' : 'HTMLInputElement'];
     return d ? d.get.call(el) : el.value;
   }
+  function setRaw(el, v) {
+    var d = nativeValue[el.tagName === 'TEXTAREA' ? 'HTMLTextAreaElement' : 'HTMLInputElement'];
+    if (d) d.set.call(el, v); else el.value = v;
+  }
 
   function scrubElement(el) {
     if (!el || el.nodeType !== 1) return;
@@ -91,8 +133,8 @@
     }
     if (isTextEntry(el)) {
       var raw = rawValue(el);
-      // Markup-rendered value="key": route through the patched setter.
-      if (raw && raw.indexOf(MARK) !== -1) el.value = raw;
+      if (isFormBound(el)) setMask(el, raw);             // value untouched
+      else if (raw && raw.indexOf(MARK) !== -1) el.value = raw;  // patched setter hides it
     }
   }
   function scrubTree(root) {
@@ -117,13 +159,59 @@
   }
   window.slScrubBookingKeys = scrubTree;
 
+  // Belt-and-braces for native submission: a named control an app blanked on
+  // screen but whose key it kept in data-internal-key posts the key, never "".
+  function formControls(form) {
+    var els = (form && form.elements) || [];
+    var out = [];
+    for (var i = 0; i < els.length; i++) out.push(els[i]);
+    return out;
+  }
+  function onSubmitCapture(e) {
+    formControls(e.target).forEach(function (el) {
+      if (!isTextEntry(el) || !el.dataset || !el.dataset.internalKey) return;
+      if (rawValue(el) === '') { setRaw(el, el.dataset.internalKey); setMask(el, el.dataset.internalKey); }
+    });
+  }
+  function onFormDataCapture(e) {
+    var fd = e.formData;
+    if (!fd || typeof fd.get !== 'function') return;
+    formControls(e.target).forEach(function (el) {
+      var name = el.getAttribute && el.getAttribute('name');
+      if (!name || !el.dataset || !el.dataset.internalKey) return;
+      if (fd.get(name) === '') fd.set(name, el.dataset.internalKey);
+    });
+  }
+  // Native copy of a masked field's text would print the key.
+  function onCopyCapture(e) {
+    var t = e.target;
+    if (!t || !t.hasAttribute || !t.hasAttribute(MASK_ATTR) || !e.clipboardData) return;
+    var raw = rawValue(t);
+    var sel = (typeof t.selectionStart === 'number') ? raw.slice(t.selectionStart, t.selectionEnd) : raw;
+    e.clipboardData.setData('text/plain', redact(sel));
+    e.preventDefault();
+  }
+
   function start() {
+    injectMaskCss();
     scrubTree(document.body || document.documentElement);
-    document.addEventListener('focusin', function (e) { scrubElement(e.target); }, true);
+    document.addEventListener('focusin', function (e) {
+      var t = e.target;
+      scrubElement(t);
+      // Typing into a masked key-only field replaces it instead of appending blind.
+      if (t && t.hasAttribute && t.hasAttribute(MASK_ATTR) && KEY_ONLY_RE.test(rawValue(t)) && t.select) t.select();
+    }, true);
     document.addEventListener('input', function (e) {
       var t = e.target;
-      if (isTextEntry(t) && t.dataset && t.dataset.internalKey && rawValue(t) !== '') delete t.dataset.internalKey;
+      if (!isTextEntry(t)) return;
+      var raw = rawValue(t);
+      if (t.dataset && t.dataset.internalKey && raw !== '') delete t.dataset.internalKey;
+      if (isFormBound(t)) setMask(t, raw);
     }, true);
+    document.addEventListener('submit', onSubmitCapture, true);
+    document.addEventListener('formdata', onFormDataCapture, true);
+    document.addEventListener('copy', onCopyCapture, true);
+    document.addEventListener('cut', onCopyCapture, true);
     if (typeof MutationObserver === 'undefined') return;
     new MutationObserver(function (records) {
       for (var i = 0; i < records.length; i++) {
