@@ -178,6 +178,7 @@ jobs:
             tests/test_write_bond_golden_smoke.py \
             tests/test_write_bond_identity_gate.py \
             tests/test_count_unverified_open_bondcases.py \
+            tests/test_write_bond_template_goldens.py \
             tests/test_surety_review_fixes.py \
             tests/test_wix_intake_webhook.py \
             tests/test_intake_fanout.py \

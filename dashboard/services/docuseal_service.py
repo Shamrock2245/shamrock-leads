@@ -952,6 +952,9 @@ class DocuSealService:
         court_date = bond_data.get("court_date") or def_.get("court_date") or "TBN"
         if not str(court_date).strip():
             court_date = "TBN"
+        court_time = str(
+            bond_data.get("court_time") or def_.get("court_time") or ""
+        ).strip()
 
         # Format Charges Summary (truncated cleanly if > 3 charges)
         # Prefer structured charge_details (Write Bond / lead explorer) over free-text charges
@@ -1133,6 +1136,10 @@ class DocuSealService:
             "CourtType": court_type,
             "charges_summary": charges_summary,
             "charges": charges_summary,
+            # Palmetto appearance chargesField2 is named charge_line_2.
+            # offense_2 is the second charge string. Copy it so that box fills.
+            # Live template 5 has no widget by this name; the rebuild spec does.
+            "charge_line_2": row_fields.get("offense_2") or "",
             "case_number": case_number,
             "CaseNum": case_number,
             "poa_number": poa,
@@ -1145,6 +1152,14 @@ class DocuSealService:
             "booking_number": booking,
             "court_date": court_date,
             "CourtDate": court_date,
+            # Appearance-bond CourtDateAndTimeField is named court_datetime.
+            # court_date is the Write Bond key. Copy it so that box can fill.
+            # A separate time is joined only when the date is not TBN.
+            "court_datetime": (
+                f"{court_date} {court_time}".strip()
+                if court_time and str(court_date).strip().upper() != "TBN"
+                else str(court_date).strip()
+            ),
             "date": today_long,
             "Date": today_long,
             "today_date": today_slash,
