@@ -1068,20 +1068,26 @@ class DocuSealService:
         prem_formatted_dollar = f"${prem_float:,.2f}" if prem_float > 0 else ""
         prem_words = _amount_to_words(prem_float) if prem_float > 0 else ""
 
-        # Only rows the live template can print. Palmetto has no offense grid,
-        # so on_form is empty and the join lives on charges_summary.
+        # Offense text is only written for rows the live template prints.
+        # Palmetto has no offense grid, so on_form is empty and the join lives
+        # on charges_summary. Companion fields such as poa_number_N still come
+        # from each charge row, and the payload filter drops any name the
+        # target template does not have.
         row_fields = {}
         for i in range(1, 5):
             idx = i - 1
             placed = charge_placement.on_form[idx] if idx < len(charge_placement.on_form) else None
-            if placed is None:
+            companion = placed if placed is not None else (
+                verbatim_rows[idx] if idx < len(verbatim_rows) else None
+            )
+            if companion is None:
                 continue
             charge_obj = charges_raw[idx] if (isinstance(charges_raw, list) and idx < len(charges_raw)) else None
-            if placed is not None and isinstance(getattr(placed, "raw", None), dict):
-                charge_obj = placed.raw
-                c_desc = placed.charge
-                c_case = placed.case_number or case_number
-                c_poa = placed.poa_number or (poa_list[idx] if idx < len(poa_list) else poa)
+            if isinstance(getattr(companion, "raw", None), dict):
+                charge_obj = companion.raw
+                c_desc = companion.charge
+                c_case = companion.case_number or case_number
+                c_poa = companion.poa_number or (poa_list[idx] if idx < len(poa_list) else poa)
                 c_amt_float = _safe_money(
                     charge_obj.get("bond_amount") or charge_obj.get("amount") or charge_obj.get("bond") or 0
                 )
@@ -1094,10 +1100,10 @@ class DocuSealService:
                     charge_obj.get("bond_amount") or charge_obj.get("amount") or charge_obj.get("bond") or 0
                 )
                 c_amt_str = f"{c_amt_float:,.2f}" if c_amt_float > 0 else ""
-            elif placed is not None:
-                c_desc = placed.charge
-                c_case = placed.case_number or case_number
-                c_poa = placed.poa_number or (poa_list[idx] if idx < len(poa_list) else poa)
+            elif companion is not None:
+                c_desc = companion.charge
+                c_case = companion.case_number or case_number
+                c_poa = companion.poa_number or (poa_list[idx] if idx < len(poa_list) else poa)
                 c_amt_str = bond_formatted if idx == 0 else ""
             elif isinstance(charge_obj, str) and charge_obj.strip():
                 c_desc = charge_obj.strip()
@@ -1118,8 +1124,9 @@ class DocuSealService:
             else:
                 c_desc, c_case, c_poa, c_amt_str = "", "", "", ""
 
-            row_fields[f"offense_{i}"] = c_desc
-            row_fields[f"charge_{i}"] = c_desc
+            if placed is not None:
+                row_fields[f"offense_{i}"] = c_desc
+                row_fields[f"charge_{i}"] = c_desc
             # statute_ and degree_ are not fields on template 1 or template 5.
             row_fields[f"case_number_{i}"] = c_case
             row_fields[f"case_{i}"] = c_case
@@ -1160,7 +1167,9 @@ class DocuSealService:
             # Palmetto appearance chargesField2 is named charge_line_2.
             # offense_2 is the second charge string. Copy it so that box fills.
             # Live template 5 has no widget by this name; the rebuild spec does.
-            "charge_line_2": row_fields.get("offense_2") or "",
+            "charge_line_2": row_fields.get("offense_2") or (
+                verbatim_rows[1].charge if len(verbatim_rows) > 1 else ""
+            ),
             "case_number": case_number,
             "CaseNum": case_number,
             "poa_number": poa,
