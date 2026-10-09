@@ -104,6 +104,7 @@
       "county",
       "county_full",
       "court_date",
+      "court_datetime",
       "court_type",
       "date",
       "date_written_out",
