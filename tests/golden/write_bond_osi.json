@@ -491,6 +491,15 @@
     ],
     "value": "TBN"
   },
+  "court_datetime": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "TBN"
+  },
   "court_type": {
     "readonly": true,
     "submitter_role": [

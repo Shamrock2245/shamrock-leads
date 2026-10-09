@@ -6,8 +6,14 @@ writing when that variable is anything other than ``1``.
 
     WRITE_BOND_REGEN_GOLDEN=1 python scripts/regen_write_bond_goldens.py
 
-The files are ``tests/golden/write_bond_osi.json`` and
-``tests/golden/write_bond_palmetto.json``. Review the diff before committing.
+The files this can rewrite are ``tests/golden/write_bond_osi.json``,
+``tests/golden/write_bond_osi_t1_live.json``, and
+``tests/golden/write_bond_osi_appearance.json``.
+Palmetto finalize of this fixture returns 422 ``charge_capacity_exceeded``
+before any golden write, so ``write_bond_palmetto.json``,
+``write_bond_palmetto_t5_live.json``, and ``write_bond_palmetto_spec.json``
+are not rewritten.
+Review the diff before committing.
 """
 from __future__ import annotations
 
@@ -31,8 +37,9 @@ def main() -> int:
     return pytest.main([
         "-q",
         "tests/test_write_bond_golden_smoke.py",
+        "tests/test_write_bond_template_goldens.py",
         "-k",
-        "test_write_bond_golden_fields",
+        "test_write_bond_golden_fields or test_write_bond_secondary_maps or test_write_bond_live_template_fields",
     ])
 
 

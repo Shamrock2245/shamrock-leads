@@ -412,7 +412,7 @@ def is_charge_payload_key(name: str) -> bool:
     """Charge text and the per-charge row companions sent next to it."""
     if name in {"charges", "charges_summary"}:
         return True
-    if "addendum" in name:
+    if "addendum" in name or name.startswith("charge_line_"):
         return True
     return bool(_CHARGE_ROW_KEY.match(name or ""))
 

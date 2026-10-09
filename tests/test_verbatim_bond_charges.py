@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import fitz
@@ -125,6 +126,13 @@ def test_live_inventory_counts_and_charge_fields():
     assert palmetto["unique_field_names_including_blank"] == 157
     assert osi["blank_field_name_count"] == 3
     assert palmetto["blank_field_name_count"] == 2
+    fixture_dir = Path(__file__).resolve().parents[1] / "tests" / "fixtures"
+    t1 = json.loads((fixture_dir / "docuseal_t1_fields.json").read_text(encoding="utf-8"))
+    t5 = json.loads((fixture_dir / "docuseal_t5_fields.json").read_text(encoding="utf-8"))
+    assert template_field_names("osi") == {row["name"] for row in t1["fields"]}
+    assert template_field_names("palmetto") == {row["name"] for row in t5["fields"]}
+    assert t1["_meta"]["unique_named_fields"] == 227
+    assert t5["_meta"]["unique_named_fields"] == 156
     assert osi["offense_rows"] == [f"offense_{n}" for n in range(1, 5)]
     assert palmetto["offense_rows"] == []
     assert osi["charge_text_fields"] == ["charges_summary", "offense_1", "offense_2", "offense_3", "offense_4"]
