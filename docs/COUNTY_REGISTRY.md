@@ -32,7 +32,7 @@
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 8 | **Hillsborough** | httpx direct-first + reCAPTCHA + SOLVECAPTCHA (HCSO login) | `hillsborough.py` | ✅ Active (needs HCSO_* + SOLVECAPTCHA_KEY) | 90 min | 2026-07-24 |
-| 9 | **Pinellas** | DrissionPage — date search | `pinellas.py` | ✅ Active | 90 min | 2026-04-27 |
+| 9 | **Pinellas** | Who's In Jail (Blazor Server) booking-date search + Subject Charge Report modal, **relay-only**: stock Playwright Chromium on the Leads Ops home relay's own residential exit (`PINELLAS_EGRESS_MODE=direct`, the only mode), honest bot User-Agent, no patchright / stealth / proxy / impersonation / challenge solving; owner exception (Brendan 2026-10-08 1:38 PM ET); a non-residential exit raises `EgressBlocked` before any browser start | `pinellas.py` | ⚠️ Contract **unverified** (Health default) until a Leads Ops write smoke through the relay; plain HTTP gets only the JS shell (see `docs/recon/FL_PINELLAS_RELAY_ONLY_2026-10-08.md`, `docs/ops/PINELLAS_RELAY_RUN.md`) | relay-only (Leads Ops; was 90 min on VPS) | 2026-10-08 |
 | 10 | **Seminole** | Custom | `seminole.py` | ✅ Active | 90 min | 2026-04-27 |
 | 11 | **Orange** | BestJail public JSON — getInmates/<letter> roster + getInmateDetails/getCharges per booking (plain requests, newest first, 7-day window) | `orange.py` | ✅ Active (unverified until write smoke; source `bookingNumber` 8 digits). See `docs/recon/FL_ORANGE_BESTJAIL_2026-10-08.md` | 90 min | 2026-10-08 |
 | 12 | **Pasco** | DrissionPage — Cloudflare bypass | `pasco.py` | ✅ Active | 90 min | 2026-04-27 |
