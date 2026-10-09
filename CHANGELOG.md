@@ -57,6 +57,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - parse-failure logs carry no person data
 - Updated `tests/test_fl_miami_dade_no_row_id_key.py` (#166's hash-display test kept and extended to the stored doc), `tests/test_miami_dade_scraper.py`, `tests/test_fl_miami_dade_arcgis_contract.py` and the FL matrix summary in `tests/test_home_county_smoke_evidence.py`, and the Miami-Dade field-list check in `tests/test_fl_bond_charges_hydrate.py` (DOB now fetched; Address/Zip still excluded).
 
+## [Unreleased] — 2026-10-09 (Palmetto A4 offense rows)
+
+### Added
+- **Palmetto paperwork-header offense rows.** Four bondsman text fields, `offense_1` through `offense_4`, on the shared header page. Each box is x=90, w=432, h=20, at y=446 / 468 / 490 / 512, with `preferences.font_size` 7. The rows sit between the logo (ink bottom y=434.6) and the header defendant block, with a 2pt gap between rows. Recorded from the template 6 review clone and checked against TEST render submission #52 (0.000pt render-vs-model). Templates 1 and 5 are not edited here.
+- The apply plan keeps the live header fields and adds these four rows. Inventory slug `paperwork-header` now lists the fields. A 7pt worst-case glyph mix fits 104 characters on one line and 209 on two. A 20pt row does not hold a third line.
+- **Template 6 charge capacity.** `tests/fixtures/docuseal_charge_capacity.json` has a template 6 record. It lists `offense_1`..`offense_4` and `offense_rows` for the paperwork-header page. Template 5 and template 1 records are unchanged. A template 6 submission keeps those four values. A template 5 submission still omits `offense_*`. One row longer than 209 characters returns 422 `charge_capacity_exceeded` (`capacity_unit` `characters`, capacity 209, and the row name). A fifth charge on the four rows returns 422. The charge text is not shortened. Charges still split only on `|`, `;`, or a newline. Template 5's 200-character `charges_summary` cap is unchanged.
+
+### Tests
+- `tests/test_palmetto_header_offense_rows.py` (added to the `ci.yml` list). Areas, preferences, gaps, the logo-to-defendant band, fill by field name, and the 7pt fit limits. Synthetic charges only. No DocuSeal call.
+- `tests/test_palmetto_t6_offense_capacity.py` (added to the `ci.yml` list). A template 6 finalize sends four offense values to the stubbed DocuSeal client unchanged. The same payload to template 5 sends no `offense_*` key. 209 characters pass and 210 returns 422. Five charges return 422. Mongo is mocked. No live DocuSeal call.
+- `tests/golden/write_bond_palmetto_spec.json` regenerated with `WRITE_BOND_REGEN_GOLDEN=1 python scripts/regen_write_bond_goldens.py` on top of the verbatim-charge merge. The file matches main. Template 5's payload omits `offense_1`..`offense_4`, and this golden is a projection of that payload, so the new rows are not emitted. Empty values are dropped, so a two-charge case would also omit `offense_3` and `offense_4`.
+
 ## [Unreleased] — 2026-10-09 (POA reassign audit and release stamps)
 
 ### Added
