@@ -842,7 +842,10 @@ class DocuSealService:
         return s
 
     @staticmethod
-    def prefill_values_from_bond(bond_data: Dict[str, Any]) -> Dict[str, Any]:
+    def prefill_values_from_bond(
+        bond_data: Dict[str, Any],
+        template_id: Any = None,
+    ) -> Dict[str, Any]:
         """
         Map dashboard bond / intake fields → DocuSeal template field names.
 
@@ -985,6 +988,7 @@ class DocuSealService:
             verbatim_rows,
             surety_id=charge_surety,
             template="docuseal",
+            template_id=template_id,
         )
 
         # Primary case # from first structured charge if top-level missing
@@ -1068,11 +1072,12 @@ class DocuSealService:
         prem_formatted_dollar = f"${prem_float:,.2f}" if prem_float > 0 else ""
         prem_words = _amount_to_words(prem_float) if prem_float > 0 else ""
 
-        # Offense text is only written for rows the live template prints.
-        # Palmetto has no offense grid, so on_form is empty and the join lives
-        # on charges_summary. Companion fields such as poa_number_N still come
-        # from each charge row, and the payload filter drops any name the
-        # target template does not have.
+        # Offense text is only written for rows the target template prints.
+        # Template 5 has no offense grid, so on_form is empty and the join
+        # lives on charges_summary. Template 6 prints offense_1..offense_4.
+        # Companion fields such as poa_number_N still come from each charge
+        # row, and the payload filter drops any name the target template
+        # does not have.
         row_fields = {}
         for i in range(1, 5):
             idx = i - 1
@@ -1690,7 +1695,7 @@ class DocuSealService:
         # Then drop charge names the live template does not have. DocuSeal would
         # ignore those and the charge would never appear on the signed packet.
         kept = {k: v for k, v in values.items() if v is not None and str(v).strip() != ""}
-        return filter_unknown_charge_fields(kept, surety_id)
+        return filter_unknown_charge_fields(kept, surety_id, template_id=template_id)
 
     def normalize_create_response(self, raw: Any) -> Dict[str, Any]:
         """
@@ -1796,7 +1801,7 @@ class DocuSealService:
         bond_data = dict(bond_data or {})
         agent_name, agent_license = resolve_writing_agent(bond_data)
         apply_writing_agent(bond_data, agent_name, agent_license)
-        raw_values = self.prefill_values_from_bond(bond_data)
+        raw_values = self.prefill_values_from_bond(bond_data, template_id=template_id)
         # Published "mapped" sureties add their PDF field names. OSI/Palmetto
         # seeds stay on canonical_prefill, so this dict is unchanged for them.
         surety_for_alias = str(
@@ -1821,6 +1826,7 @@ class DocuSealService:
         raw_values = filter_unknown_charge_fields(
             raw_values,
             surety_for_alias or str(bond_data.get("surety_id") or "osi"),
+            template_id=template_id,
         )
 
         in_person = bool(bond_data.get("in_person") or bond_data.get("in_person_scan"))

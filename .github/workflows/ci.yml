@@ -58,6 +58,8 @@ jobs:
         # test_agent_name_fallback, and test_palmetto_docuseal_apply.
         # Application DEFENDANT, POWER NO., and CASE NO. placement is
         # test_palmetto_application_header_placement.
+        # Header offense rows (A4) are test_palmetto_header_offense_rows.
+        # Template 6 offense capacity is test_palmetto_t6_offense_capacity.
         run: |
           pytest -q \
             tests/test_tenant_scope.py \
@@ -177,6 +179,8 @@ jobs:
             tests/test_palmetto_docuseal_apply.py \
             tests/test_palmetto_collateral_payment.py \
             tests/test_palmetto_application_header_placement.py \
+            tests/test_palmetto_header_offense_rows.py \
+            tests/test_palmetto_t6_offense_capacity.py \
             tests/test_paperwork_template_paths.py \
             tests/test_verbatim_bond_charges.py \
             tests/test_bond_packet_start.py \

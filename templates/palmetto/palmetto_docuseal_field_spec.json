@@ -8,7 +8,7 @@
       "slug": "paperwork-header",
       "osi": "surety-agnostic-shamrock/paperwork-header.pdf (1 page)",
       "palmetto": "same Shamrock form (shared)",
-      "docuseal": "inside template 1 and template 5; field boxes not in repo"
+      "docuseal": "four offense rows (offense_1..offense_4) are in this spec; the PDF is inside template 1 and template 5"
     },
     {
       "slug": "faq-cosigners",
@@ -2879,6 +2879,70 @@
       "h": 0.017677,
       "data_source": "",
       "required": false
+    },
+    {
+      "document": "paperwork-header",
+      "name": "offense_1",
+      "type": "text",
+      "role": "bondsman",
+      "page": 1,
+      "x": 0.147059,
+      "y": 0.563131,
+      "w": 0.705882,
+      "h": 0.025253,
+      "data_source": "offense_1",
+      "required": false,
+      "preferences": {
+        "font_size": 7
+      }
+    },
+    {
+      "document": "paperwork-header",
+      "name": "offense_2",
+      "type": "text",
+      "role": "bondsman",
+      "page": 1,
+      "x": 0.147059,
+      "y": 0.590909,
+      "w": 0.705882,
+      "h": 0.025253,
+      "data_source": "offense_2",
+      "required": false,
+      "preferences": {
+        "font_size": 7
+      }
+    },
+    {
+      "document": "paperwork-header",
+      "name": "offense_3",
+      "type": "text",
+      "role": "bondsman",
+      "page": 1,
+      "x": 0.147059,
+      "y": 0.618687,
+      "w": 0.705882,
+      "h": 0.025253,
+      "data_source": "offense_3",
+      "required": false,
+      "preferences": {
+        "font_size": 7
+      }
+    },
+    {
+      "document": "paperwork-header",
+      "name": "offense_4",
+      "type": "text",
+      "role": "bondsman",
+      "page": 1,
+      "x": 0.147059,
+      "y": 0.646465,
+      "w": 0.705882,
+      "h": 0.025253,
+      "data_source": "offense_4",
+      "required": false,
+      "preferences": {
+        "font_size": 7
+      }
     }
   ]
 }
