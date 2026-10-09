@@ -97,6 +97,15 @@ bk._v = '24-0001'; fire('input', { target: bk });
 out.afterTypeMasked = bk.hasAttribute('data-sl-masked'); out.afterTypePost = nativeSubmit(form).booking_number;
 text._v = '24-0002'; fire('input', { target: text });
 out.afterType = text.value; out.keyCleared = !text.dataset.internalKey;
+// 7. Reset after a key (Bulk Assign): free-standing field cleared → no stale key.
+const ba = new HTMLInputElement('text'); ba.value = KEY; ba.value = '';
+out.resetRead = ba.value; out.resetCleared = !ba.dataset.internalKey;
+const ba2 = new HTMLInputElement('text'); ba2.value = KEY; ba2.value = '26-0009';
+out.replacedRead = ba2.value;
+// Form-bound field whose app-kept key is followed by a reset posts the reset, not the stale key.
+const rb2 = new HTMLInputElement('text', { name: 'booking_number' }); const rb2Form = makeForm([rb2]);
+rb2.value = ''; rb2.dataset.internalKey = KEY; rb2.value = '';
+out.resetFormPost = nativeSubmit(rb2Form).booking_number;
 out.label = window.slBookingLabel(KEY) + '|' + window.slBookingLabel('2026-123456');
 out.css = head.children.some((n) => n.id === 'sl-booking-mask-css');
 console.log(JSON.stringify(out));

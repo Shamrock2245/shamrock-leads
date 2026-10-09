@@ -95,6 +95,12 @@
       },
       set: function (v) {
         if (!isTextEntry(this)) { d.set.call(this, v); return; }
+        var keyOnly = v !== null && v !== undefined && KEY_ONLY_RE.test(String(v));
+        // Any non-key assignment (including a reset to '') drops a cached key,
+        // so a cleared field can never read or post a previous record's key
+        // (Codex #171: Bulk Assign reset). Apps that keep a key on purpose set
+        // data-internal-key after the value (Record Bond does).
+        if (!keyOnly && this.dataset && this.dataset.internalKey) delete this.dataset.internalKey;
         if (isFormBound(this)) {
           d.set.call(this, v);  // real value, always
           setMask(this, d.get.call(this));

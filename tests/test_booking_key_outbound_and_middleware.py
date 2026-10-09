@@ -406,6 +406,15 @@ def test_booking_guard_keeps_routing_values_and_intercepts_assignments():
     assert out["label"] == "|2026-123456"
 
 
+def test_booking_guard_reset_clears_cached_key():
+    """Codex #171 (7f6ba07): a reset field never reads or posts a previous record's key."""
+    out = _guard_sim()
+    assert out["resetRead"] == "" and out["resetCleared"] is True
+    assert out["replacedRead"] == "26-0009"
+    assert out["resetFormPost"] == ""
+    assert out["restoredPost"]["booking_number"] == KEY  # value-then-key (Record Bond) still restores
+
+
 # ── server: a form can never blank a stored Miami-Dade key ─────────────────
 
 def test_protect_internal_booking_key_drops_blank_only_for_md_records():
