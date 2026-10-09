@@ -18,6 +18,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_palmetto_collateral_payment.py` (added to the `ci.yml` list): each stored method checks exactly one box; case and whitespace variants from the writers that do not fold them; unknown, missing, and disagreeing methods leave all five blank; `other` keeps Item 1; vault `item_type` and disagreeing embedded rows do not multi-check; placement and spec areas stay put; prefill is read-only and a finalize body cannot override the bond. The #161 Write Bond golden field set is unchanged because an absent method omits the empty boxes.
 
+## [Unreleased] — 2026-10-09 (Write Bond golden smoke)
+
+### Added
+- **Offline Write Bond golden smoke** for OSI (template 1) and Palmetto (template 5). `tests/test_write_bond_golden_smoke.py` runs one synthetic staff test case through `POST /api/paperwork/packet/finalize` with `STAFF_TEST_CASE_MODE` set only inside the test. It compares the DocuSeal submission fields, including charge text, to `tests/golden/write_bond_osi.json` and `tests/golden/write_bond_palmetto.json`. A mismatch prints missing, extra, and changed fields.
+- **No DocuSeal network.** The HTTP client raises. The test asserts zero POST/PUT/DELETE calls, `send_email` and `send_sms` false, submitter email `admin@shamrockbailbonds.biz`, a `TEST-` power only, and `is_test` on the in-memory audit rows.
+- **Identity refusal.** The same synthetic case with an indemnitor name the binding gate treats as non-identity (`Unknown`, `test`) returns 422 `docuseal_packet_binding_invalid` for both sureties, with no payload and no packet.
+- **Regen is opt-in.** `WRITE_BOND_REGEN_GOLDEN=1 python scripts/regen_write_bond_goldens.py`. The script refuses to run without that flag. CI does not set it.
+
+### Tests
+- `tests/test_write_bond_golden_smoke.py` (added to the `ci.yml` list). Synthetic data only. No Mongo and no DocuSeal.
+
+## [Unreleased] — 2026-10-09 (Write Bond to PAID, SwipeSimple)
+
+### Fixed
+- **Receipt reconciliation (`swipesimple_invoice_service.reconcile_payment`).** A bond is marked PAID only when the receipt carries the invoice # (`reference_id` / `invoice_number`), a bond exists whose booking # and stored `swipesimple_invoice_number` both equal it, the vendor invoice id agrees when both sides have one, the receipt carries a paid status (a missing or blank `status` / `payment_status` is refused as `receipt_status_missing`), a transaction id is present, and the amount is exact cents equal to the locked BondCase premium. A lower amount is refused as `receipt_partial_payment`. Any other difference is refused as `receipt_amount_mismatch`. The same transaction again does nothing. A different transaction on a bond already PAID is refused for review (`bond_already_paid_different_transaction`). The PAID update is conditional (`premium_paid != True`), so two copies of one receipt arriving together write one ledger entry. The earlier lookup by bond id or vendor id is removed, and so is the fallback that accepted a receipt with no amount or no premium.
+- **Legacy `SwipeSimpleReconciliationService`.** It matches by defendant name only and is not called anywhere. It no longer sets `premium_paid`; it records the amount as `last_payment_amount_unverified`.
+- **Premium in two collections.** When the bond loads from `bond_cases`, the `active_bonds` row for the same booking # (where Write Bond saves `premium_cents`) must resolve to the same premium. If it does not, no invoice is created and no receipt is reconciled (`premium_mismatch_across_collections`). A 10%-of-bond estimate from intake promote that was copied into `bond_cases` is now blocked as well.
+- **Staff test cases (PR #137).** `POST /api/ar/write-capture` tags a new `TEST-` booking `is_test` / `test_case`, so test-mode finalize accepts it instead of refusing it as `real_bond_refused`. A `TEST-` or `is_test` bond never creates a SwipeSimple invoice unless `SWIPESIMPLE_TEST_CASE_INVOICES=1` is set (default off).
+
+### Added
+- `tests/test_writebond_to_paid_e2e.py` (added to CI) walks one test case through Write Bond money capture, test-mode finalize, the BondCase, exactly one locked invoice (reference = booking #, cents = premium; a second run creates nothing and reuses the claim), and reconciliation to PAID. It covers the failure cases too: partial or mismatched amount, wrong invoice # or invoice id, declined or refunded status, a missing transaction id, a bond with no staged invoice, a stale `bond_cases` premium, and duplicate or concurrent receipts. Everything runs offline: SwipeSimple HTTP, Mongo, DocuSeal, and the ledger are mocked, and nothing is sent.
+
 ## [Unreleased] — 2026-10-08 (Pinellas relay-only, non-stealth browser; patchright removed)
 
 ### Changed

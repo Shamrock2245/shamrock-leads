@@ -149,6 +149,20 @@ class FakeClaims:
             self._apply(d, update, inserting=False)
 
 
+class _ActiveMirror:
+    """active_bonds row for the bond (premium cross-check reads it)."""
+
+    def __init__(self, harness):
+        self.h = harness
+
+    async def find_one(self, filt, *_a, **_kw):
+        if filt.get("booking_number") == self.h.bond.get("booking_number"):
+            doc = copy.deepcopy(self.h.bond)
+            doc.pop("_collection", None)
+            return doc
+        return None
+
+
 class Harness:
     """Real create_locked_invoice / dispatch_invoice; Mongo + HTTP + BB mocked."""
 
@@ -171,6 +185,9 @@ class Harness:
         self.send_results: List[Any] = []
 
     def collection(self, name):
+        if name == "active_bonds":
+            # Write Bond mirror row for the premium cross-check (same premium).
+            return _ActiveMirror(self)
         assert name == INVOICE_CLAIMS_COLLECTION, f"unexpected collection {name}"
         return self.claims
 

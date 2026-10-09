@@ -245,6 +245,13 @@ async def apply_write_bond_money(payload: dict, actor: str) -> dict:
         "agent_name": actor,
         "ar_history": [],
     }
+    from dashboard.services.staff_test_case import is_test_booking
+
+    if is_test_booking(booking_raw):
+        # Staff test case (PR #137): tag the row so test-mode finalize accepts
+        # it as a test record and invoicing / reports can tell it apart.
+        insert["is_test"] = True
+        insert["test_case"] = True
     await bonds.update_one(
         {"booking_number": booking_raw},
         {"$set": set_fields, "$setOnInsert": insert},

@@ -1,0 +1,890 @@
+{
+  "AgencyName": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Shamrock Bail Bonds"
+  },
+  "AgentLicense": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "P139768"
+  },
+  "AgentName": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Brendan O'Neal"
+  },
+  "BondNumbers": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "TEST-POA-0001"
+  },
+  "CaseNum": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "TEST-CASE-OSI"
+  },
+  "County": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Lee"
+  },
+  "CourtDate": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "TBN"
+  },
+  "CourtType": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "County/Circuit"
+  },
+  "Date": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "January 15, 2026"
+  },
+  "DefDLState": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "FL"
+  },
+  "DefFirstName": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Sample"
+  },
+  "DefLastName": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "One"
+  },
+  "DefMiddleName": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Party"
+  },
+  "DefName": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Sample Party One"
+  },
+  "DefState": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "FL"
+  },
+  "DefendantName": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Sample Party One"
+  },
+  "FullName": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Sample Party Two"
+  },
+  "IndCityStateZip": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "FL"
+  },
+  "IndFirstName": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Sample"
+  },
+  "IndLastName": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Two"
+  },
+  "IndMiddleName": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Party"
+  },
+  "IndName": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Sample Party Two"
+  },
+  "IndState": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "FL"
+  },
+  "IndemnitorName": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Sample Party Two"
+  },
+  "PowerNum": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "TEST-POA-0001"
+  },
+  "State": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "FL"
+  },
+  "_meta": {
+    "frozen_at": "2026-01-15T12:00:00+00:00",
+    "note": "Opt-in golden. Rewrite only with WRITE_BOND_REGEN_GOLDEN=1 via scripts/regen_write_bond_goldens.py. CI must not set that flag.",
+    "surety_id": "osi",
+    "template_id": 1
+  },
+  "agency_address": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "1 Sample Street, Sample City, FL 00000"
+  },
+  "agency_name": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Shamrock Bail Bonds"
+  },
+  "agent_date_1": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "01/15/2026"
+  },
+  "agent_license": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "P139768"
+  },
+  "agent_name": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Brendan O'Neal"
+  },
+  "all_poa_numbers": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "TEST-POA-0001"
+  },
+  "bond_amount": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "$5,000.00"
+  },
+  "bond_amount_1": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "5,000.00"
+  },
+  "bond_amount_numeric": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "5,000.00"
+  },
+  "bond_amount_words": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Five Thousand and 00/100"
+  },
+  "bond_amount_written": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Five Thousand and 00/100"
+  },
+  "bond_date_day": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "15"
+  },
+  "bond_date_month": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "January"
+  },
+  "bond_date_written": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "January 15, 2026"
+  },
+  "bond_date_year_2digit": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "26"
+  },
+  "bond_numbers": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "TEST-POA-0001"
+  },
+  "bondsman_license": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "P139768"
+  },
+  "bondsman_name": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Brendan O'Neal"
+  },
+  "booking_number": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "TEST-GOLDEN-OSI"
+  },
+  "case_1": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "TEST-CASE-OSI"
+  },
+  "case_2": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "TEST-CASE-OSI"
+  },
+  "case_number": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "TEST-CASE-OSI"
+  },
+  "case_number_1": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "TEST-CASE-OSI"
+  },
+  "case_number_2": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "TEST-CASE-OSI"
+  },
+  "charge_1": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Grand theft — occupant's dwelling (Fla. Stat. § 812.014(2)(c), 2nd degree)"
+  },
+  "charge_2": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Burglary of a conveyance (Fla. Stat. § 810.02(3)(d), 3rd degree)"
+  },
+  "charges": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Grand theft — occupant's dwelling (Fla. Stat. § 812.014(2)(c), 2nd degree), Burglary of a conveyance (Fla. Stat. § 810.02(3)(d), 3rd degree)"
+  },
+  "charges_summary": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Grand theft — occupant's dwelling (Fla. Stat. § 812.014(2)(c), 2nd degree), Burglary of a conveyance (Fla. Stat. § 810.02(3)(d), 3rd degree)"
+  },
+  "coindemnitor_date_1": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "01/15/2026"
+  },
+  "collateral_receipt_number": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "0001"
+  },
+  "county": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Lee"
+  },
+  "county_full": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Lee County"
+  },
+  "court_date": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "TBN"
+  },
+  "court_type": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "County/Circuit"
+  },
+  "date": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "January 15, 2026"
+  },
+  "date_written_out": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "January 15, 2026"
+  },
+  "defendant_date_1": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "01/15/2026"
+  },
+  "defendant_date_5": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "01/15/2026"
+  },
+  "defendant_dl_state": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "FL"
+  },
+  "defendant_email": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "admin@shamrockbailbonds.biz"
+  },
+  "defendant_name": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Sample Party One"
+  },
+  "defendant_state": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "FL"
+  },
+  "formatted_date": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "January 15, 2026"
+  },
+  "full_bond_amount_words": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Five Thousand and 00/100"
+  },
+  "indemnitor_city_state_zip": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "FL"
+  },
+  "indemnitor_date_1": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "01/15/2026"
+  },
+  "indemnitor_date_5": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "01/15/2026"
+  },
+  "indemnitor_email": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "admin@shamrockbailbonds.biz"
+  },
+  "indemnitor_first_name": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Sample"
+  },
+  "indemnitor_last_name": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Two"
+  },
+  "indemnitor_middle_name": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Party"
+  },
+  "indemnitor_name": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Sample Party Two"
+  },
+  "indemnitor_state": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "FL"
+  },
+  "numeric_bond_amount_1": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "5,000.00"
+  },
+  "numeric_full_bond_amount": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "5,000.00"
+  },
+  "numeric_full_bond_amount_dollar": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "$5,000.00"
+  },
+  "offense_1": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Grand theft — occupant's dwelling (Fla. Stat. § 812.014(2)(c), 2nd degree)"
+  },
+  "offense_2": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Burglary of a conveyance (Fla. Stat. § 810.02(3)(d), 3rd degree)"
+  },
+  "poa_1": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "TEST-POA-0001"
+  },
+  "poa_2": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "TEST-POA-0001"
+  },
+  "poa_number": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "TEST-POA-0001"
+  },
+  "poa_number_1": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "TEST-POA-0001"
+  },
+  "poa_number_2": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "TEST-POA-0001"
+  },
+  "poa_numbers": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "TEST-POA-0001"
+  },
+  "ssa_other_records_text": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "any and all for location purposes"
+  },
+  "ssa_release_reason": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "Bail bond underwriting and supervision"
+  },
+  "state": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "FL"
+  },
+  "today_date": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "01/15/2026"
+  },
+  "today_date_long": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "January 15, 2026"
+  },
+  "today_day": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "15"
+  },
+  "today_month": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "January"
+  },
+  "today_year_2digit": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman",
+      "defendant",
+      "indemnitor"
+    ],
+    "value": "26"
+  }
+}
