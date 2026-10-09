@@ -52,6 +52,16 @@ GOLDEN_DIR = Path(__file__).resolve().parents[1] / "tests" / "golden"
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "tests" / "fixtures"
 JOINED = f"{CHARGE_1}, {CHARGE_2}"
 
+# Premium payment-plan dates. Names end in _date, but they are case data.
+_PAYMENT_PLAN_DATES = (
+    "first_payment_due_date",
+    "final_payment_due_date",
+    "payment_due_date_1",
+    "payment_due_date_2",
+    "payment_due_date_3",
+    "payment_due_date_4",
+)
+
 # Case-data prefixes. ``def_`` is the defendant application family on template 1.
 # ``offense_`` and ``charge_`` are the charge lines. Signer widgets are separate.
 _SHOULD_PREFILL = (
@@ -134,7 +144,11 @@ def _classify_unfilled(field):
         lowered.endswith("_dob")
         or "birth" in lowered
         or lowered.startswith("court_")
+        # Premium payment-plan dates. The staff-test scrub still removes them.
+        or "payment_due_date" in lowered
     )
+    if "payment_due_date" in lowered:
+        return "payment"
     signing_date = (
         lowered.startswith("today_")
         or "signed" in lowered
@@ -152,6 +166,19 @@ def _classify_unfilled(field):
         if lowered.startswith(prefix):
             return label
     return "other"
+
+
+def _assert_payment_plan_dates(report, inventory):
+    """Due dates on the premium plan stay case data. The scrub still blanks them."""
+    names = {row["name"] for row in inventory["fields"]}
+    by_class = {row["name"]: row["class"] for row in report["unfilled_should_prefill"]}
+    for name in _PAYMENT_PLAN_DATES:
+        if name not in names:
+            continue
+        assert _classify_unfilled({"name": name, "type": "text"}) == "payment"
+        assert name not in report["unfilled_signer"]
+        assert name not in report["fields"]
+        assert by_class[name] == "payment"
 
 
 def _load_inventory(surety_id):
@@ -271,8 +298,9 @@ def _write_live(surety_id, report):
                 "Submission values whose names exist on the live template. "
                 "dropped_payload_keys are payload names DocuSeal would ignore. "
                 "unfilled_should_prefill are template fields that match case-data "
-                "name patterns and received no value. unfilled_signer are signature, "
-                "initial, checkbox, radio, and signing-date widgets. "
+                "name patterns and received no value. Class payment is a premium "
+                "payment-plan due date, not a signing date. unfilled_signer are "
+                "signature, initial, checkbox, radio, and signing-date widgets. "
                 "Rewrite only with WRITE_BOND_REGEN_GOLDEN=1. CI must not set that flag."
             ),
         },
@@ -302,6 +330,8 @@ def _write_full(surety_id, report):
                 "live template, dropped payload keys, and template fields with no "
                 "value. Phone and payment or premium submission fields are removed "
                 "by the staff-test contact scrub before this payload is captured. "
+                "Class payment on an unfilled due date is the premium payment plan, "
+                "not a signing date. "
                 "Rewrite only with WRITE_BOND_REGEN_GOLDEN=1. CI must not set that flag."
             ),
         },
@@ -656,6 +686,7 @@ def test_write_bond_live_template_fields(monkeypatch, surety_id):
     assert should_names.isdisjoint(other_names)
     covered = set(report["fields"]) | signer_names | should_names | other_names
     assert covered == names
+    _assert_payment_plan_dates(report, inventory)
 
     if surety_id == "osi":
         assert report["fields"]["offense_1"]["value"] == CHARGE_1
@@ -703,6 +734,9 @@ def test_write_bond_full_template_fields(monkeypatch, surety_id):
     assert "1900-01-01" in json.dumps(report["fields"])
     assert "000-00-0000" in json.dumps(report["fields"])
     assert "TEST-DL-0000" in json.dumps(report["fields"])
+    assert "defendant_social_media_password" not in field_map
+    assert "defendant_social_media_password" not in report["fields"]
+    assert "do-not-copy" not in json.dumps(report["fields"])
     for name in report["fields"]:
         assert "phone" not in name.lower()
         lowered = name.lower()
@@ -716,6 +750,36 @@ def test_write_bond_full_template_fields(monkeypatch, surety_id):
     else:
         assert "offense_1" in report["dropped_payload_keys"]
         assert "charge_line_2" not in report["fields"]
+        assert report["fields"]["def_how_long_at_address_1"]["value"] == "TEST DURATION"
+        assert report["fields"]["def_how_long_at_address_2"]["value"] == "TEST DURATION 2"
+        assert report["fields"]["defendant_how_long_at_job"]["value"] == "TEST TENURE"
+        assert report["fields"]["defendant_how_long_at_job_2"]["value"] == "TEST TENURE 2"
+        assert report["fields"]["defendant_bff_name"]["value"] == "TEST FRIEND"
+        assert report["fields"]["defendant_bff_address"]["value"] == "TEST ADDRESS 7"
+        assert report["fields"]["defendant_car_year"]["value"] == "1900"
+        assert report["fields"]["defendant_car_make"]["value"] == "TEST MAKE"
+        assert report["fields"]["defendant_car_model"]["value"] == "TEST MODEL"
+        assert report["fields"]["defendant_car_color"]["value"] == "TEST COLOR"
+        assert report["fields"]["defendant_car_license_tag"]["value"] == "TEST-PLATE"
+        assert report["fields"]["defendant_car_loan_vendor"]["value"] == "TEST LENDER"
+        assert report["fields"]["defendant_car_purchase_location"]["value"] == "TEST DEALER"
+        assert report["fields"]["defendant_auto_loan"]["value"] == "1.00"
+        assert report["fields"]["defendant_marks_tattoos"]["value"] == "TEST TATTOO"
+        assert report["fields"]["defendant_parents_name"]["value"] == "TEST PARENT"
+        assert report["fields"]["defendant_parents_address"]["value"] == "TEST ADDRESS 4"
+        assert report["fields"]["defendant_spouse_employment"]["value"] == "TEST SPOUSE EMPLOYER"
+        assert report["fields"]["defendant_spouse_parents_name"]["value"] == "TEST SPOUSE PARENT"
+        assert report["fields"]["defendant_spouse_parents_address"]["value"] == "TEST ADDRESS 6"
+        assert report["fields"]["defendant_prior_convictions"]["value"] == "TEST PRIOR CONVICTED"
+        for scrubbed in (
+            "defendant_bff_phone",
+            "defendant_parents_phone",
+            "defendant_spouse_parents_phone",
+            "defendant_work_phone_number",
+            "indemnitor_alternate_phone",
+            "spouse_employment_phone_number",
+        ):
+            assert scrubbed not in report["fields"]
 
     covered = (
         set(report["fields"])
@@ -724,6 +788,7 @@ def test_write_bond_full_template_fields(monkeypatch, surety_id):
         | {row["name"] for row in report["unfilled_other"]}
     )
     assert covered == names
+    _assert_payment_plan_dates(report, inventory)
 
     if os.environ.get(REGEN_ENV) == "1":
         _write_full(surety_id, report)

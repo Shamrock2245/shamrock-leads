@@ -1601,9 +1601,39 @@ class DocuSealService:
             "defendant_children_name_age_1": "children_names_ages_1",
             "defendant_children_name_age_2": "children_names_ages_2",
             "defendant_child2_school": "children_school_2",
+            # Palmetto template 5 names for the same free-text facts.
+            "def_how_long_at_address_1": "defendant_address_how_long",
+            "def_how_long_at_address_2": "defendant_former_address_how_long",
+            "defendant_how_long_at_job": "defendant_employer_how_long",
+            "defendant_how_long_at_job_2": "defendant_previous_employment_how_long",
+            "defendant_bff_name": "def_best_friend_name",
+            "defendant_bff_address": "def_best_friend_address",
+            "defendant_bff_phone": "def_best_friend_phone",
+            "defendant_car_year": "def_vehicle_year",
+            "defendant_car_make": "def_vehicle_make",
+            "defendant_car_model": "def_vehicle_model",
+            "defendant_car_color": "def_vehicle_color",
+            "defendant_car_license_tag": "def_vehicle_plate",
+            "defendant_car_loan_vendor": "def_vehicle_lender",
+            "defendant_car_purchase_location": "def_vehicle_purchase_location",
+            "defendant_auto_loan": "def_vehicle_amount_owed",
+            "defendant_marks_tattoos": "defendant_tattoos",
+            "defendant_parents_name": "def_parent_name",
+            "defendant_parents_address": "def_parent_address",
+            "defendant_parents_phone": "def_parent_phone",
+            "defendant_spouse_employment": "defendant_spouse_employer",
+            "defendant_spouse_parents_name": "def_spouse_parent_name",
+            "defendant_spouse_parents_address": "def_spouse_parent_address",
+            "defendant_spouse_parents_phone": "def_spouse_parent_phone",
+            "defendant_work_phone_number": "defendant_employer_phone",
+            "indemnitor_alternate_phone": "indemnitor_phone2",
+            # Both widgets are free-text. The CRM stores one string, not a flag or a list.
+            "defendant_prior_convictions": "def_prior_convicted",
         }.items():
             if values.get(src) and not values.get(dest):
                 values[dest] = values[src]
+        # A social password is typed by the signer. Never copy one from the case.
+        values.pop("defendant_social_media_password", None)
         # Drop empty strings so DocuSeal doesn't overwrite blank required fields with ""
         return {k: v for k, v in values.items() if v is not None and str(v).strip() != ""}
 

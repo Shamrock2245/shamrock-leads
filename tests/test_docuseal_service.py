@@ -473,8 +473,36 @@ def test_prefill_copies_same_fact_template_names():
                 "children_names_ages_2": "TEST CHILD TWO 1900",
                 "children_school_2": "TEST SCHOOL",
                 "spouse_name": "TEST SPOUSE",
+                "spouse_employer": "TEST SPOUSE EMPLOYER",
                 "spouse_parent_name": "TEST SPOUSE PARENT",
+                "spouse_parent_address": "TEST ADDRESS 6",
+                "spouse_parent_phone": "555-0104",
+                "address_how_long": "TEST DURATION",
+                "former_address_how_long": "TEST DURATION 2",
+                "employer_how_long": "TEST TENURE",
+                "employer_phone": "555-0102",
+                "previous_employment_how_long": "TEST TENURE 2",
+                "best_friend_name": "TEST FRIEND",
+                "best_friend_address": "TEST ADDRESS 7",
+                "best_friend_phone": "555-0105",
+                "vehicle_year": "1900",
+                "vehicle_make": "TEST MAKE",
+                "vehicle_model": "TEST MODEL",
+                "vehicle_color": "TEST COLOR",
+                "vehicle_plate": "TEST-PLATE",
+                "vehicle_lender": "TEST LENDER",
+                "vehicle_purchase_location": "TEST DEALER",
+                "vehicle_amount_owed": "1.00",
+                "tattoos": "TEST TATTOO",
+                "parent_name": "TEST PARENT",
+                "parent_address": "TEST ADDRESS 4",
+                "parent_phone": "555-0103",
+                "prior_convicted": "TEST PRIOR CONVICTED",
+                "facebook": "TEST FACEBOOK",
+                "instagram": "TEST INSTAGRAM",
             },
+            "indemnitor": {"phone2": "555-0111"},
+            "defendant_social_media_password": "do-not-copy",
         }
     )
     assert vals["defendant_eye_color"] == "TEST EYES"
@@ -498,9 +526,62 @@ def test_prefill_copies_same_fact_template_names():
     assert vals["defendant_spouse_name"] == "TEST SPOUSE"
     assert vals["def_spouse_parent_name"] == "TEST SPOUSE PARENT"
     assert vals["court_datetime"] == "1900-01-01 00:00"
+    assert vals["def_how_long_at_address_1"] == "TEST DURATION"
+    assert vals["def_how_long_at_address_2"] == "TEST DURATION 2"
+    assert vals["defendant_how_long_at_job"] == "TEST TENURE"
+    assert vals["defendant_how_long_at_job_2"] == "TEST TENURE 2"
+    assert vals["defendant_bff_name"] == "TEST FRIEND"
+    assert vals["defendant_bff_address"] == "TEST ADDRESS 7"
+    assert vals["defendant_bff_phone"] == "555-0105"
+    assert vals["defendant_car_year"] == "1900"
+    assert vals["defendant_car_make"] == "TEST MAKE"
+    assert vals["defendant_car_model"] == "TEST MODEL"
+    assert vals["defendant_car_color"] == "TEST COLOR"
+    assert vals["defendant_car_license_tag"] == "TEST-PLATE"
+    assert vals["defendant_car_loan_vendor"] == "TEST LENDER"
+    assert vals["defendant_car_purchase_location"] == "TEST DEALER"
+    assert vals["defendant_auto_loan"] == "1.00"
+    assert vals["defendant_marks_tattoos"] == "TEST TATTOO"
+    assert vals["defendant_parents_name"] == "TEST PARENT"
+    assert vals["defendant_parents_address"] == "TEST ADDRESS 4"
+    assert vals["defendant_parents_phone"] == "555-0103"
+    assert vals["defendant_spouse_employment"] == "TEST SPOUSE EMPLOYER"
+    assert vals["defendant_spouse_parents_name"] == "TEST SPOUSE PARENT"
+    assert vals["defendant_spouse_parents_address"] == "TEST ADDRESS 6"
+    assert vals["defendant_spouse_parents_phone"] == "555-0104"
+    assert vals["defendant_work_phone_number"] == "555-0102"
+    assert vals["indemnitor_alternate_phone"] == "555-0111"
+    assert vals["defendant_prior_convictions"] == "TEST PRIOR CONVICTED"
+    assert vals["defendant_prior_convictions"] == vals["def_prior_convicted"]
+    assert "defendant_social_media_password" not in vals
+    assert "spouse_employment_phone_number" not in vals
     bare = svc.prefill_values_from_bond({"defendant_name": "TEST DEFENDANT"})
     assert "defendant_license_state" not in bare
+    assert "defendant_prior_convictions" not in bare
+    assert "def_how_long_at_address_1" not in bare
     assert bare["defendant_dl_state"] == "FL"
+
+
+def test_prefill_never_copies_a_social_media_password():
+    """Facebook and Instagram can fill. A password never does."""
+    svc = DocuSealService(base_url="https://sign.example", api_key="test")
+    vals = svc.prefill_values_from_bond(
+        {
+            "defendant_name": "TEST DEFENDANT",
+            "defendant_social_media_password": "do-not-copy",
+            "defendant": {
+                "facebook": "TEST FACEBOOK",
+                "instagram": "TEST INSTAGRAM",
+                "social_media_password": "do-not-copy",
+                "social_password": "do-not-copy",
+            },
+        }
+    )
+    assert vals["def_facebook"] == "TEST FACEBOOK"
+    assert vals["def_instagram"] == "TEST INSTAGRAM"
+    assert "defendant_social_media_password" not in vals
+    blob = " ".join(str(value) for value in vals.values())
+    assert "do-not-copy" not in blob
 
 
 def test_build_bond_data_copies_court_time_and_case_payment():

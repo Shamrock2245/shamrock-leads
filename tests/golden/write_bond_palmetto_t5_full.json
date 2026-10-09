@@ -1,10 +1,10 @@
 {
   "_meta": {
-    "filled_count": 68,
+    "filled_count": 89,
     "frozen_at": "2026-01-15T12:00:00+00:00",
     "inventory": "tests/fixtures/docuseal_t5_fields.json",
     "kind": "live_template_full",
-    "note": "Fully populated synthetic staff test case. Same sections as the sparse live golden: submission values whose names exist on the live template, dropped payload keys, and template fields with no value. Phone and payment or premium submission fields are removed by the staff-test contact scrub before this payload is captured. Rewrite only with WRITE_BOND_REGEN_GOLDEN=1. CI must not set that flag.",
+    "note": "Fully populated synthetic staff test case. Same sections as the sparse live golden: submission values whose names exist on the live template, dropped payload keys, and template fields with no value. Phone and payment or premium submission fields are removed by the staff-test contact scrub before this payload is captured. Class payment on an unfilled due date is the premium payment plan, not a signing date. Rewrite only with WRITE_BOND_REGEN_GOLDEN=1. CI must not set that flag.",
     "surety_id": "palmetto",
     "template_id": 5
   },
@@ -251,6 +251,26 @@
       ],
       "value": "TEST COURT"
     },
+    "def_how_long_at_address_1": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST DURATION"
+    },
+    "def_how_long_at_address_2": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST DURATION 2"
+    },
     "defendant_address": {
       "readonly": false,
       "submitter_role": [
@@ -281,6 +301,36 @@
       ],
       "value": "TEST ATTORNEY"
     },
+    "defendant_auto_loan": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "1.00"
+    },
+    "defendant_bff_address": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST ADDRESS 7"
+    },
+    "defendant_bff_name": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST FRIEND"
+    },
     "defendant_boss_name": {
       "readonly": false,
       "submitter_role": [
@@ -290,6 +340,76 @@
         "indemnitor"
       ],
       "value": "TEST BOSS"
+    },
+    "defendant_car_color": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST COLOR"
+    },
+    "defendant_car_license_tag": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST-PLATE"
+    },
+    "defendant_car_loan_vendor": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST LENDER"
+    },
+    "defendant_car_make": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST MAKE"
+    },
+    "defendant_car_model": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST MODEL"
+    },
+    "defendant_car_purchase_location": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST DEALER"
+    },
+    "defendant_car_year": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "1900"
     },
     "defendant_child2_school": {
       "readonly": false,
@@ -411,6 +531,26 @@
       ],
       "value": "0-00"
     },
+    "defendant_how_long_at_job": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST TENURE"
+    },
+    "defendant_how_long_at_job_2": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST TENURE 2"
+    },
     "defendant_license_number": {
       "readonly": false,
       "submitter_role": [
@@ -430,6 +570,16 @@
         "indemnitor"
       ],
       "value": "XX"
+    },
+    "defendant_marks_tattoos": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST TATTOO"
     },
     "defendant_name": {
       "readonly": false,
@@ -451,6 +601,26 @@
       ],
       "value": "TEST ALIAS"
     },
+    "defendant_parents_address": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST ADDRESS 4"
+    },
+    "defendant_parents_name": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST PARENT"
+    },
     "defendant_prior_arrests": {
       "readonly": false,
       "submitter_role": [
@@ -460,6 +630,16 @@
         "indemnitor"
       ],
       "value": "TEST PRIOR ARRESTS"
+    },
+    "defendant_prior_convictions": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST PRIOR CONVICTED"
     },
     "defendant_prior_offense": {
       "readonly": false,
@@ -550,6 +730,36 @@
         "indemnitor"
       ],
       "value": "TEST SIBLING THREE"
+    },
+    "defendant_spouse_employment": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST SPOUSE EMPLOYER"
+    },
+    "defendant_spouse_parents_address": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST ADDRESS 6"
+    },
+    "defendant_spouse_parents_name": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "coindemnitor",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST SPOUSE PARENT"
     },
     "defendant_ssn": {
       "readonly": false,
@@ -923,37 +1133,7 @@
   "unfilled_should_prefill": [
     {
       "class": "defendant",
-      "name": "def_how_long_at_address_1",
-      "readonly": false,
-      "type": "text"
-    },
-    {
-      "class": "defendant",
-      "name": "def_how_long_at_address_2",
-      "readonly": false,
-      "type": "text"
-    },
-    {
-      "class": "defendant",
       "name": "defendant_attorney_phone",
-      "readonly": false,
-      "type": "text"
-    },
-    {
-      "class": "defendant",
-      "name": "defendant_auto_loan",
-      "readonly": false,
-      "type": "text"
-    },
-    {
-      "class": "defendant",
-      "name": "defendant_bff_address",
-      "readonly": false,
-      "type": "text"
-    },
-    {
-      "class": "defendant",
-      "name": "defendant_bff_name",
       "readonly": false,
       "type": "text"
     },
@@ -965,67 +1145,7 @@
     },
     {
       "class": "defendant",
-      "name": "defendant_car_color",
-      "readonly": false,
-      "type": "text"
-    },
-    {
-      "class": "defendant",
-      "name": "defendant_car_license_tag",
-      "readonly": false,
-      "type": "text"
-    },
-    {
-      "class": "defendant",
-      "name": "defendant_car_loan_vendor",
-      "readonly": false,
-      "type": "text"
-    },
-    {
-      "class": "defendant",
-      "name": "defendant_car_make",
-      "readonly": false,
-      "type": "text"
-    },
-    {
-      "class": "defendant",
-      "name": "defendant_car_model",
-      "readonly": false,
-      "type": "text"
-    },
-    {
-      "class": "defendant",
-      "name": "defendant_car_purchase_location",
-      "readonly": false,
-      "type": "text"
-    },
-    {
-      "class": "defendant",
-      "name": "defendant_car_year",
-      "readonly": false,
-      "type": "text"
-    },
-    {
-      "class": "defendant",
       "name": "defendant_description",
-      "readonly": false,
-      "type": "text"
-    },
-    {
-      "class": "defendant",
-      "name": "defendant_how_long_at_job",
-      "readonly": false,
-      "type": "text"
-    },
-    {
-      "class": "defendant",
-      "name": "defendant_how_long_at_job_2",
-      "readonly": false,
-      "type": "text"
-    },
-    {
-      "class": "defendant",
-      "name": "defendant_marks_tattoos",
       "readonly": false,
       "type": "text"
     },
@@ -1038,18 +1158,6 @@
     {
       "class": "defendant",
       "name": "defendant_out_on_bail_now",
-      "readonly": false,
-      "type": "text"
-    },
-    {
-      "class": "defendant",
-      "name": "defendant_parents_address",
-      "readonly": false,
-      "type": "text"
-    },
-    {
-      "class": "defendant",
-      "name": "defendant_parents_name",
       "readonly": false,
       "type": "text"
     },
@@ -1068,12 +1176,6 @@
     {
       "class": "defendant",
       "name": "defendant_previous_employer_address",
-      "readonly": false,
-      "type": "text"
-    },
-    {
-      "class": "defendant",
-      "name": "defendant_prior_convictions",
       "readonly": false,
       "type": "text"
     },
@@ -1109,25 +1211,7 @@
     },
     {
       "class": "defendant",
-      "name": "defendant_spouse_employment",
-      "readonly": false,
-      "type": "text"
-    },
-    {
-      "class": "defendant",
       "name": "defendant_spouse_employment_address",
-      "readonly": false,
-      "type": "text"
-    },
-    {
-      "class": "defendant",
-      "name": "defendant_spouse_parents_address",
-      "readonly": false,
-      "type": "text"
-    },
-    {
-      "class": "defendant",
-      "name": "defendant_spouse_parents_name",
       "readonly": false,
       "type": "text"
     },
