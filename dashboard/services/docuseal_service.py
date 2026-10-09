@@ -953,8 +953,18 @@ class DocuSealService:
         if not str(court_date).strip():
             court_date = "TBN"
 
-        # Format Charges Summary (truncated cleanly if > 3 charges)
-        # Prefer structured charge_details (Write Bond / lead explorer) over free-text charges
+        # Charge text is verbatim. Precedence and the 4-row grid are documented
+        # in dashboard/services/charge_verbatim.py. Request body wins over stored
+        # arrest/BondCase rows because build_bond_data_from_dashboard already
+        # merged them onto this dict. Leading/trailing whitespace was stripped
+        # there; nothing else is rewritten.
+        from dashboard.services.charge_verbatim import (
+            DOCUSEAL_CHARGE_ROW_CAPACITY,
+            addendum_allowed,
+            place_verbatim_charges,
+            resolve_verbatim_charge_rows,
+        )
+
         charges_raw = (
             bond_data.get("charge_details")
             or bond_data.get("charge_list")
@@ -963,22 +973,15 @@ class DocuSealService:
             or def_.get("charges")
             or []
         )
-        charges_list = []
-        if isinstance(charges_raw, list):
-            for c in charges_raw:
-                if isinstance(c, dict):
-                    desc = c.get("charge") or c.get("description") or c.get("name") or ""
-                else:
-                    desc = str(c) if c is not None else ""
-                if desc.strip():
-                    charges_list.append(desc.strip())
-        elif isinstance(charges_raw, str) and charges_raw.strip():
-            # Jail/booking extracts use " | " (and sometimes ;/newlines); commas alone
-            # also appear inside charge descriptions, so prefer roster delimiters first.
-            if re.search(r"[|\n;]", charges_raw):
-                charges_list = [c.strip() for c in re.split(r"[|\n;]+", charges_raw) if c.strip()]
-            else:
-                charges_list = [c.strip() for c in charges_raw.split(",") if c.strip()]
+        verbatim_rows = resolve_verbatim_charge_rows(bond_data)
+        charges_list = [row.charge for row in verbatim_rows]
+        charge_placement = place_verbatim_charges(
+            verbatim_rows,
+            capacity=DOCUSEAL_CHARGE_ROW_CAPACITY,
+            addendum=addendum_allowed(bond_data),
+            surety_id=str(bond_data.get("surety_id") or bond_data.get("surety") or ""),
+            template="docuseal",
+        )
 
         # Primary case # from first structured charge if top-level missing
         if not case_number and isinstance(charges_raw, list):
@@ -991,10 +994,8 @@ class DocuSealService:
         if not case_number:
             case_number = "TBN"
 
-        if len(charges_list) > 3:
-            charges_summary = ", ".join(charges_list[:3]) + " (see case file)"
-        elif charges_list:
-            charges_summary = ", ".join(charges_list)
+        if charges_list:
+            charges_summary = charge_placement.summary
         else:
             charges_summary = bond_data.get("charges_summary") or "As charged"
 
@@ -1063,12 +1064,22 @@ class DocuSealService:
         prem_formatted_dollar = f"${prem_float:,.2f}" if prem_float > 0 else ""
         prem_words = _amount_to_words(prem_float) if prem_float > 0 else ""
 
-        # Build 4-row per-charge breakdown for legal schedule tables
+        # Four printed charge rows. Overflow is on the addendum, not dropped.
         row_fields = {}
         for i in range(1, 5):
             idx = i - 1
+            placed = charge_placement.on_form[idx] if idx < len(charge_placement.on_form) else None
             charge_obj = charges_raw[idx] if (isinstance(charges_raw, list) and idx < len(charges_raw)) else None
-            if isinstance(charge_obj, dict):
+            if placed is not None and isinstance(getattr(placed, "raw", None), dict):
+                charge_obj = placed.raw
+                c_desc = placed.charge
+                c_case = placed.case_number or case_number
+                c_poa = placed.poa_number or (poa_list[idx] if idx < len(poa_list) else poa)
+                c_amt_float = _safe_money(
+                    charge_obj.get("bond_amount") or charge_obj.get("amount") or charge_obj.get("bond") or 0
+                )
+                c_amt_str = f"{c_amt_float:,.2f}" if c_amt_float > 0 else ""
+            elif isinstance(charge_obj, dict):
                 c_desc = charge_obj.get("charge") or charge_obj.get("description") or charge_obj.get("name") or ""
                 c_case = charge_obj.get("case_number") or case_number
                 c_poa = charge_obj.get("poa_number") or (poa_list[idx] if idx < len(poa_list) else poa)
@@ -1076,6 +1087,11 @@ class DocuSealService:
                     charge_obj.get("bond_amount") or charge_obj.get("amount") or charge_obj.get("bond") or 0
                 )
                 c_amt_str = f"{c_amt_float:,.2f}" if c_amt_float > 0 else ""
+            elif placed is not None:
+                c_desc = placed.charge
+                c_case = placed.case_number or case_number
+                c_poa = placed.poa_number or (poa_list[idx] if idx < len(poa_list) else poa)
+                c_amt_str = bond_formatted if idx == 0 else ""
             elif isinstance(charge_obj, str) and charge_obj.strip():
                 c_desc = charge_obj.strip()
                 c_case = case_number
@@ -1087,7 +1103,7 @@ class DocuSealService:
                 c_case = case_number
                 c_poa = poa_list[idx] if idx < len(poa_list) else poa
                 c_amt_str = bond_formatted if idx == 0 else ""
-            elif idx == 0 and charges_summary:
+            elif idx == 0 and charges_summary and not verbatim_rows:
                 c_desc = charges_summary
                 c_case = case_number
                 c_poa = poa
@@ -1097,12 +1113,17 @@ class DocuSealService:
 
             row_fields[f"offense_{i}"] = c_desc
             row_fields[f"charge_{i}"] = c_desc
+            if placed is not None and placed.statute:
+                row_fields[f"statute_{i}"] = placed.statute
+            if placed is not None and placed.degree:
+                row_fields[f"degree_{i}"] = placed.degree
             row_fields[f"case_number_{i}"] = c_case
             row_fields[f"case_{i}"] = c_case
             row_fields[f"poa_number_{i}"] = c_poa
             row_fields[f"poa_{i}"] = c_poa
             row_fields[f"bond_amount_{i}"] = c_amt_str
             row_fields[f"numeric_bond_amount_{i}"] = c_amt_str
+        row_fields.update(charge_placement.extra_fields)
 
         # Determine collateral receipt number from first POA suffix
         surety_id = str(bond_data.get("surety_id", "osi")).lower()
@@ -2266,7 +2287,15 @@ def build_bond_data_from_dashboard(
     def_src = intake_doc.get("defendant") if isinstance(intake_doc.get("defendant"), dict) else {}
     ind_src = intake_doc.get("indemnitor") if isinstance(intake_doc.get("indemnitor"), dict) else {}
 
-    # Structured charges from lead / write-bond / body
+    # Structured charges. Precedence (first non-empty list):
+    #   1. request body charge_details, else body charge_list
+    #   2. case context charge_details, else charge_list
+    #      (context is arrest.charge_details, then arrest.extra.charge_details,
+    #      then BondCase charge_details / charge_list — see
+    #      charge_details_from_sources)
+    #   3. intake charge_details, else charge_list
+    # The plain charges string is context, then intake, then the body.
+    # See dashboard/services/charge_verbatim.py.
     charge_details = (
         body.get("charge_details")
         or body.get("charge_list")
@@ -2377,6 +2406,7 @@ def build_bond_data_from_dashboard(
         "court_date": ctx.get("court_date") or body.get("court_date") or "TBN",
         "charges": charges,
         "charge_details": charge_details,
+        "allow_charge_addendum": body.get("allow_charge_addendum", True),
         # Payment plan (optional UI / body)
         "down_payment_amount": body.get("down_payment_amount") or body.get("down_payment"),
         "balance_financed_amount": body.get("balance_financed_amount") or body.get("balance_financed"),

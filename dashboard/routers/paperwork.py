@@ -1534,6 +1534,7 @@ async def packet_builder_finalize(request: Request):
         }
 
         bond_data: dict = {}
+        charge_placement = None
         if provider == "docuseal":
             from dashboard.services.docuseal_service import (
                 DocuSealPacketValidationError,
@@ -1541,14 +1542,51 @@ async def packet_builder_finalize(request: Request):
                 validate_docuseal_packet_binding,
             )
 
+            # Charge rows travel with the request. Bond amount and POA stay on
+            # the resolved case context inside build_bond_data_from_dashboard.
+            # Precedence: body charge_details, then stored arrest/BondCase rows
+            # already on ctx, then the plain charges string. See charge_verbatim.py.
+            charge_body = {}
+            for charge_key in ("charge_details", "charge_list", "charges", "allow_charge_addendum"):
+                if charge_key in body:
+                    charge_body[charge_key] = body.get(charge_key)
             bond_data = build_bond_data_from_dashboard(
                 ctx=ctx,
                 intake_doc=intake_doc,
                 field_overrides={},
-                body={},
+                body=charge_body,
                 surety_id=surety_id,
                 session=user,
             )
+            from dashboard.services.charge_verbatim import (
+                DOCUSEAL_CHARGE_ROW_CAPACITY,
+                ChargeCapacityError,
+                addendum_allowed,
+                place_verbatim_charges,
+                resolve_verbatim_charge_rows,
+            )
+
+            try:
+                charge_placement = place_verbatim_charges(
+                    resolve_verbatim_charge_rows(bond_data),
+                    capacity=DOCUSEAL_CHARGE_ROW_CAPACITY,
+                    addendum=addendum_allowed(bond_data),
+                    surety_id=surety_id,
+                    template="docuseal",
+                )
+            except ChargeCapacityError as exc:
+                return JSONResponse(
+                    {
+                        "success": False,
+                        "error": "charge_capacity_exceeded",
+                        "message": str(exc),
+                        "charge_count": exc.charge_count,
+                        "capacity": exc.capacity,
+                    },
+                    status_code=422,
+                )
+            bond_data["_charge_layout_notes"] = list(charge_placement.layout_notes)
+            bond_data["_charge_addendum_pdf"] = charge_placement.addendum_pdf
             if staff_test is not None:
                 apply_staff_test_contacts(bond_data, staff_test.signer_email)
             try:
@@ -1679,6 +1717,7 @@ async def packet_builder_finalize(request: Request):
                     BondPacketStartError,
                     start_indemnitor_bond_packet,
                 )
+                from dashboard.services.charge_verbatim import ChargeCapacityError
 
                 # Tenant stays shamrock until request tenancy chooses it.
                 # The body is not a tenant source.
@@ -1694,6 +1733,17 @@ async def packet_builder_finalize(request: Request):
                     poa_record=poa_doc,
                     session=user,
                     staff_test_case=staff_test is not None,
+                )
+            except ChargeCapacityError as exc:
+                return JSONResponse(
+                    {
+                        "success": False,
+                        "error": "charge_capacity_exceeded",
+                        "message": str(exc),
+                        "charge_count": exc.charge_count,
+                        "capacity": exc.capacity,
+                    },
+                    status_code=422,
                 )
             except BondPacketStartError as exc:
                 if exc.code == "docuseal_not_configured":
@@ -1815,6 +1865,8 @@ async def packet_builder_finalize(request: Request):
             "premium_amount": ctx.get("premium_amount") or 0,
             "poa_number": ctx.get("poa_number") or body.get("poa_number") or "",
             "self_indemnitor": bool(ctx.get("self_indemnitor")),
+            "charge_layout_notes": list(getattr(charge_placement, "layout_notes", []) or []),
+            "charge_addendum_pdf": getattr(charge_placement, "addendum_pdf", b"") or b"",
             "hydration_score": audit.get("hydration_score"),
             "field_map_keys": list(fields.keys())[:80],
             "send_results": send_results,

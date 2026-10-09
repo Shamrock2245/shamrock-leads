@@ -20,7 +20,6 @@ from dashboard.bond_pdf_service import (
     _parse_date_parts,
     _parse_defendant_name,
     _safe_float,
-    _split_charge,
     _split_court_datetime,
     fill_palmetto_bond,
 )
@@ -90,7 +89,8 @@ def build_palmetto_context(data: Optional[dict]) -> Dict[str, str]:
         premium = max(100.0, bond_amount * 0.10)
 
     charge_raw = data.get("charge") or data.get("charges") or ""
-    charge_line1, charge_line2 = _split_charge(str(charge_raw or ""))
+    # Full charge text. The second line is not a shortened remainder.
+    charge_line1, charge_line2 = str(charge_raw or "").strip(), ""
     if not charge_line1:
         charge_line1 = "No Charge Specified"
 

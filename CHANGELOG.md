@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-09 (verbatim bond charge text)
+
+### Fixed
+- **Bond paperwork charge text is verbatim and complete.** Clerks reject a packet for a one-character difference. Finalize now passes request `charge_details` into `build_bond_data_from_dashboard` (it was called with `body={}`, so only the plain `charges` string was used). Precedence is documented in `dashboard/services/charge_verbatim.py`: request body `charge_details` / `charge_list`, then case-context rows (arrest `charge_details`, then `arrest.extra.charge_details`, then BondCase `charge_details`), then the intake rows, then the plain `charges` string. Each charge's text, statute, degree, per-charge bond, and case number are carried through. Leading and trailing whitespace is stripped, which is the same edge strip the fillers already used. Apostrophes, em dashes, and section signs are not rewritten.
+- **No "(see case file)" truncation.** `charges` and `charges_summary` join every charge with `", "`. The DocuSeal grid (OSI template 1 and Palmetto template 5) has 4 charge rows (`offense_1`..`offense_4`). Charges past those rows go on a continuation addendum, in order, for both sureties: `charge_addendum_N` on the submission and one PDF page per overflow charge. An OSI appearance bond has one charge widget (`DefCharge1`); a Palmetto appearance bond has one (`chargestField1`). Further charges are additional appearance-bond forms, one per charge. A template with no addendum fails closed with HTTP 422 `charge_capacity_exceeded`, naming the charge count and the row capacity. A printed box that cannot fit the text is reported in `charge_layout_notes`; the text is not shortened.
+- Stored arrest rows are no longer silently capped at 8, and statute and degree are kept on those rows.
+
+### Tests
+- `tests/test_verbatim_bond_charges.py` (added to the `ci.yml` pytest list). Synthetic TEST data only. Covers finalize charge_details, counts 2, 3, 4, and 8, addendum order, the 422 when there is no addendum, and non-ASCII text, for OSI and Palmetto.
+
 ## [Unreleased] — 2026-10-08 (Pinellas relay-only, non-stealth browser; patchright removed)
 
 ### Changed
