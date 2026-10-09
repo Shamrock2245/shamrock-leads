@@ -13,12 +13,17 @@ is ``cr_other``.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import fitz
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+from dashboard.auth.agent_scope import path_blocked_for_sub_agent
+from dashboard.auth.pin_middleware import COOKIE_NAME, PinAuthMiddleware, _get_serializer, _sign_token
+from dashboard.auth.recovery_scope import path_allowed_for_recovery
 
 from dashboard.collateral_payment_method import (
     DOCUSEAL_NAMES,
@@ -358,6 +363,34 @@ def test_finalize_body_cannot_override_stored_collateral_method():
     assert payment_source(body_only) is None
 
 
+_SESSION_EMAIL = "office@example.invalid"
+_SESSION_NAME = "Office Staff"
+
+
+def _session_cookie(email=_SESSION_EMAIL, agent_name=_SESSION_NAME, role="staff", **kwargs):
+    token = _sign_token(
+        email=email,
+        role=role,
+        agent_name=agent_name,
+        license_number=kwargs.get("license_number") or "",
+        recovery_id=kwargs.get("recovery_id"),
+        is_admin=role in ("god_admin", "admin"),
+    )
+    return {COOKIE_NAME: token}
+
+
+def _name_only_cookie(agent_name="Casey Agent"):
+    """A signed session with no email, so the actor falls through to the agent name."""
+    token = _get_serializer().dumps({
+        "auth": True,
+        "t": int(time.time()),
+        "role": "staff",
+        "email": "",
+        "agent_name": agent_name,
+    })
+    return {COOKIE_NAME: token}
+
+
 def test_server_rejects_unknown_collateral_payment_method(monkeypatch):
     with pytest.raises(Exception) as rejected:
         require_staff_method("wire")
@@ -369,6 +402,7 @@ def test_server_rejects_unknown_collateral_payment_method(monkeypatch):
     assert require_staff_method(" Credit_Card ") == "credit card"
     assert require_staff_method("money-order") == "money order"
 
+    monkeypatch.setenv("SECRET_KEY", "collateral-actor-test-secret")
     cols = {"collateral_items": _Mem(), "audit_events": _Mem()}
     monkeypatch.setattr(
         "dashboard.services.collateral_service.get_collection",
@@ -377,6 +411,7 @@ def test_server_rejects_unknown_collateral_payment_method(monkeypatch):
     app = FastAPI()
     app.include_router(collateral_bp)
     client = TestClient(app)
+    staff = _session_cookie()
 
     bad = client.post(
         "/api/collateral/add",
@@ -384,7 +419,10 @@ def test_server_rejects_unknown_collateral_payment_method(monkeypatch):
             "booking_number": "BK-SAMPLE",
             "defendant_name": "Sample Defendant",
             "collateral_payment_method": "wire",
+            "actor": "Desk",
+            "received_by": "Window Clerk",
         },
+        cookies=staff,
     )
     assert bad.status_code == 400
     assert bad.json()["error"] == "invalid_collateral_payment_method"
@@ -397,7 +435,9 @@ def test_server_rejects_unknown_collateral_payment_method(monkeypatch):
             "booking_number": "BK-SAMPLE",
             "defendant_name": "Sample Defendant",
             "collateral_payment_method": "swipesimple",
+            "actor": "Desk",
         },
+        cookies=staff,
     )
     assert alias.status_code == 400
 
@@ -408,11 +448,15 @@ def test_server_rejects_unknown_collateral_payment_method(monkeypatch):
             "defendant_name": "Sample Defendant",
             "collateral_payment_method": " Credit Card ",
             "collateral_other_description": "not used for a card",
+            "actor": "Desk",
+            "received_by": "Window Clerk",
         },
+        cookies=staff,
     )
     assert ok.status_code == 200, ok.text
     item = ok.json()["item"]
     assert item["collateral_payment_method"] == "credit card"
+    assert item["received_by"] == "Window Clerk"
     payment_audits = [
         row for row in cols["audit_events"].docs
         if row.get("event_type") == "collateral_payment_method_set"
@@ -421,14 +465,23 @@ def test_server_rejects_unknown_collateral_payment_method(monkeypatch):
     assert payment_audits[0]["old_collateral_payment_method"] == ""
     assert payment_audits[0]["new_collateral_payment_method"] == "credit card"
     assert payment_audits[0]["collateral_id"] == item["collateral_id"]
+    assert payment_audits[0]["actor"] == _SESSION_EMAIL
+    assert "Desk" not in str(payment_audits[0])
+    assert "Window Clerk" not in str(payment_audits[0])
     assert "depositor_phone" not in payment_audits[0]
 
     changed = client.post(
         f"/api/collateral/payment-method/{item['collateral_id']}",
-        json={"collateral_payment_method": "check", "actor": "Desk"},
+        json={
+            "collateral_payment_method": "check",
+            "actor": "Desk",
+            "received_by": "Someone Else",
+        },
+        cookies=staff,
     )
     assert changed.status_code == 200, changed.text
     assert changed.json()["item"]["collateral_payment_method"] == "check"
+    assert changed.json()["item"]["received_by"] == "Window Clerk"
     payment_audits = [
         row for row in cols["audit_events"].docs
         if row.get("event_type") == "collateral_payment_method_set"
@@ -436,19 +489,128 @@ def test_server_rejects_unknown_collateral_payment_method(monkeypatch):
     assert len(payment_audits) == 2
     assert payment_audits[1]["old_collateral_payment_method"] == "credit card"
     assert payment_audits[1]["new_collateral_payment_method"] == "check"
-    assert payment_audits[1]["actor"] == "Desk"
+    assert payment_audits[1]["actor"] == _SESSION_EMAIL
+    assert "Desk" not in str(payment_audits[1])
+    assert "Someone Else" not in str(payment_audits[1])
+
+    named = client.post(
+        f"/api/collateral/payment-method/{item['collateral_id']}",
+        json={"collateral_payment_method": "cash", "actor": "Desk"},
+        cookies=_name_only_cookie(),
+    )
+    assert named.status_code == 200, named.text
+    payment_audits = [
+        row for row in cols["audit_events"].docs
+        if row.get("event_type") == "collateral_payment_method_set"
+    ]
+    assert payment_audits[-1]["actor"] == "Casey Agent"
+    assert "Desk" not in str(payment_audits[-1])
 
     refused = client.post(
         f"/api/collateral/payment-method/{item['collateral_id']}",
-        json={"collateral_payment_method": "bitcoin"},
+        json={"collateral_payment_method": "bitcoin", "actor": "Desk"},
+        cookies=staff,
     )
     assert refused.status_code == 400
     payment_audits = [
         row for row in cols["audit_events"].docs
         if row.get("event_type") == "collateral_payment_method_set"
     ]
-    assert len(payment_audits) == 2
-    assert cols["collateral_items"].docs[0]["collateral_payment_method"] == "check"
+    assert len(payment_audits) == 3
+    assert cols["collateral_items"].docs[0]["collateral_payment_method"] == "cash"
+
+
+def test_collateral_payment_routes_require_a_session_and_keep_the_vault_role_matrix(monkeypatch):
+    """No session is 401. Recovery stays off the vault. A sub-agent may record collateral."""
+    monkeypatch.setenv("DASHBOARD_PIN", "test-pin-not-real")
+    monkeypatch.setenv("SECRET_KEY", "collateral-actor-test-secret")
+    monkeypatch.setattr(
+        "dashboard.auth.pin_middleware.VALID_PINS",
+        frozenset({"test-pin-not-real"}),
+    )
+    monkeypatch.setattr("dashboard.auth.pin_middleware.DASHBOARD_PIN", "test-pin-not-real")
+    cols = {"collateral_items": _Mem(), "audit_events": _Mem()}
+    monkeypatch.setattr(
+        "dashboard.services.collateral_service.get_collection",
+        lambda name: cols[name],
+    )
+    body = {
+        "booking_number": "BK-SAMPLE",
+        "defendant_name": "Sample Defendant",
+        "collateral_payment_method": "money order",
+        "actor": "Desk",
+        "received_by": "Window Clerk",
+    }
+    bare = FastAPI()
+    bare.include_router(collateral_bp)
+    bare_client = TestClient(bare)
+    bare_missing = bare_client.post("/api/collateral/add", json=body)
+    assert bare_missing.status_code == 401
+    assert bare_missing.json()["error"] == "auth_required"
+    assert cols["collateral_items"].docs == []
+    assert cols["audit_events"].docs == []
+
+    app = FastAPI()
+    app.add_middleware(PinAuthMiddleware)
+    app.include_router(collateral_bp)
+    client = TestClient(app)
+
+    assert path_allowed_for_recovery("/api/collateral/add", "POST") is False
+    assert path_allowed_for_recovery("/api/collateral/payment-method/col-1", "POST") is False
+    assert path_blocked_for_sub_agent("/api/collateral/add") is False
+    assert path_blocked_for_sub_agent("/api/collateral/payment-method/col-1") is False
+
+    missing = client.post("/api/collateral/add", json=body)
+    assert missing.status_code == 401
+    assert cols["collateral_items"].docs == []
+    assert cols["audit_events"].docs == []
+
+    recovery = client.post(
+        "/api/collateral/add",
+        json=body,
+        cookies=_session_cookie(
+            email="recovery@example.invalid",
+            role="recovery",
+            recovery_id="REC-1",
+        ),
+    )
+    assert recovery.status_code == 403
+    assert recovery.json()["code"] == "recovery_route_denied"
+    assert cols["collateral_items"].docs == []
+    assert cols["audit_events"].docs == []
+
+    recorded = client.post(
+        "/api/collateral/add",
+        json=body,
+        cookies=_session_cookie(
+            email="agent@example.invalid",
+            agent_name="Case Agent",
+            role="sub_agent",
+            license_number="A100001",
+        ),
+    )
+    assert recorded.status_code == 200, recorded.text
+    item = recorded.json()["item"]
+    assert item["received_by"] == "Window Clerk"
+    assert item["collateral_payment_method"] == "money order"
+    audits = [
+        row for row in cols["audit_events"].docs
+        if row.get("event_type") == "collateral_payment_method_set"
+    ]
+    assert len(audits) == 1
+    assert audits[0]["actor"] == "agent@example.invalid"
+    assert "Desk" not in str(audits[0])
+
+    forged = client.post(
+        f"/api/collateral/payment-method/{item['collateral_id']}",
+        json={"collateral_payment_method": "check", "actor": "Desk"},
+    )
+    assert forged.status_code == 401
+    assert cols["collateral_items"].docs[0]["collateral_payment_method"] == "money order"
+    assert len([
+        row for row in cols["audit_events"].docs
+        if row.get("event_type") == "collateral_payment_method_set"
+    ]) == 1
 
 
 def _bond(method: str) -> dict:

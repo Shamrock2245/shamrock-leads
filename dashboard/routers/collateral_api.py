@@ -19,6 +19,30 @@ from dashboard.services.collateral_service import (
 
 collateral_bp = APIRouter(prefix="/api/collateral", tags=["collateral"])
 
+
+def _session_audit_actor(request: Request) -> Optional[str]:
+    """Session email, else the session agent name. Never the request body.
+
+    Same identity #165 uses for attest-id. A missing session, or a session
+    with neither email nor agent name, returns None so the route can 401.
+    """
+    from dashboard.auth.agent_scope import agent_identity
+    from dashboard.auth.pin_middleware import get_session_from_request
+
+    sess = get_session_from_request(request)
+    if not sess or not sess.get("auth"):
+        return None
+    ident = agent_identity(request)
+    actor = str(ident.get("email") or ident.get("agent_name") or "").strip()
+    return actor or None
+
+
+def _auth_required() -> JSONResponse:
+    return JSONResponse(
+        status_code=401,
+        content={"success": False, "error": "auth_required"},
+    )
+
 @collateral_bp.get("")
 async def get_collateral_list(
     booking_number: Optional[str] = Query(None),
@@ -34,9 +58,12 @@ async def get_collateral_list(
 @collateral_bp.post("/add")
 async def create_collateral_item(request: Request):
     """Record a new collateral item in vault."""
+    actor = _session_audit_actor(request)
+    if not actor:
+        return _auth_required()
     try:
         data = await request.json() or {}
-        item = await add_collateral_item(data)
+        item = await add_collateral_item(data, actor=actor)
         return JSONResponse(status_code=200, content={"success": True, "item": item})
     except InvalidCollateralPaymentMethod as exc:
         return JSONResponse(
@@ -52,9 +79,11 @@ async def update_collateral_payment_method(
     request: Request = None,
 ):
     """Set or change how this collateral was paid. Premium method is not accepted here."""
+    actor = _session_audit_actor(request) if request is not None else None
+    if not actor:
+        return _auth_required()
     try:
         data = await request.json() or {}
-        actor = str(data.get("actor") or data.get("received_by") or "Staff")
         item = await set_collateral_payment_method(collateral_id, data, actor=actor)
         return JSONResponse(status_code=200, content={"success": True, "item": item})
     except InvalidCollateralPaymentMethod as exc:

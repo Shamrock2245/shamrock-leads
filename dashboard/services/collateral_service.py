@@ -55,13 +55,17 @@ async def _audit_payment_method(
         "tag_number": tag_number,
         "old_collateral_payment_method": old_method,
         "new_collateral_payment_method": new_method,
-        "actor": actor or "Staff",
+        "actor": str(actor or "").strip(),
         "created_at": when,
     })
 
 
-async def add_collateral_item(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Record a new collateral item held in agency vault."""
+async def add_collateral_item(data: Dict[str, Any], *, actor: str) -> Dict[str, Any]:
+    """Record a new collateral item held in agency vault.
+
+    ``actor`` is the signed-in session user. ``received_by`` stays a business
+    field on the item and is not copied onto the payment-method audit row.
+    """
     method = _optional_staff_method(data)
     other_description = _other_description(data)
     collateral_col = get_collection("collateral_items")
@@ -110,7 +114,7 @@ async def add_collateral_item(data: Dict[str, Any]) -> Dict[str, Any]:
             tag_number=tag_number,
             old_method="",
             new_method=method,
-            actor=str(doc.get("received_by") or "Staff"),
+            actor=actor,
             when=now.isoformat(),
         )
 
@@ -121,9 +125,14 @@ async def add_collateral_item(data: Dict[str, Any]) -> Dict[str, Any]:
 async def set_collateral_payment_method(
     collateral_id: str,
     data: Dict[str, Any],
-    actor: str = "Staff",
+    *,
+    actor: str,
 ) -> Dict[str, Any]:
-    """Set or change the vault payment method. Writes an audit row when it changes."""
+    """Set or change the vault payment method. Writes an audit row when it changes.
+
+    ``actor`` is the signed-in session user. A body ``actor`` or ``received_by``
+    is not read here.
+    """
     if not collateral_id:
         raise ValueError("Collateral item not found")
     # This route always carries the method. Blank clears it. Unknown is rejected.
@@ -157,7 +166,7 @@ async def set_collateral_payment_method(
             tag_number=str(item.get("tag_number") or ""),
             old_method=old_method,
             new_method=stored,
-            actor=actor or "Staff",
+            actor=actor,
             when=now,
         )
     item.update(updates)
