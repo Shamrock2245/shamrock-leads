@@ -474,12 +474,12 @@ class _Store:
         return type("R", (), {"matched_count": 1})()
 
 
-def _finalize_client(monkeypatch):
+def _finalize_client(monkeypatch, *, palmetto_template_id="5"):
     monkeypatch.setenv("SECRET_KEY", "ci-not-a-real-secret")
     monkeypatch.setenv("ENV", "test")
     monkeypatch.setenv("STAFF_TEST_CASE_MODE", "1")
     monkeypatch.setenv("DOCUSEAL_TEMPLATE_ID_OSI", "1")
-    monkeypatch.setenv("DOCUSEAL_TEMPLATE_ID_PALMETTO", "5")
+    monkeypatch.setenv("DOCUSEAL_TEMPLATE_ID_PALMETTO", str(palmetto_template_id))
     monkeypatch.setenv("DOCUSEAL_URL", "https://sign.example.invalid")
     monkeypatch.setenv("DOCUSEAL_API_KEY", "test-not-a-real-key")
     monkeypatch.setattr("dashboard.services.docuseal_service.datetime", _FrozenDateTime)
@@ -529,8 +529,11 @@ def _finalize_client(monkeypatch):
     return client, captured, stores, collections, svc
 
 
-def _post_finalize(monkeypatch, body):
-    client, captured, stores, collections, svc = _finalize_client(monkeypatch)
+def _post_finalize(monkeypatch, body, *, palmetto_template_id="5"):
+    client, captured, stores, collections, svc = _finalize_client(
+        monkeypatch,
+        palmetto_template_id=palmetto_template_id,
+    )
     with patch(
         "dashboard.services.packet_builder_service.resolve_client_esign_provider",
         new=AsyncMock(return_value="docuseal"),

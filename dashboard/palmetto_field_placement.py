@@ -26,6 +26,7 @@ PAGE_SIZE: Dict[str, tuple] = {
     "indemnity-agreement": (611.61, 797.65),
     "collateral-receipt": (611.23, 789.18),
     "bail-bond-information-sheet-palmetto": (612.0, 792.0),
+    "paperwork-header": (612.0, 792.0),
 }
 
 # Live template 5 submitters, lowercase, matching the DocuSeal export.
@@ -372,8 +373,22 @@ def _information_sheet() -> List[Dict[str, Any]]:
     ]
 
 
+def _header() -> List[Dict[str, Any]]:
+    """Shamrock paperwork header (shared doc 0). Four offense rows between the
+    logo (ink bottom y=434.6) and the header defendant box (y=541.3).
+    Live template 6, applied Oct 9; verified by TEST render #52."""
+    d = "paperwork-header"
+    p = {"font_size": 7}
+    return [
+        _f(d, "offense_1", "text", ROLE_BONDSMAN, 90, 446, 432, 20, "offense_1", preferences=p),
+        _f(d, "offense_2", "text", ROLE_BONDSMAN, 90, 468, 432, 20, "offense_2", preferences=p),
+        _f(d, "offense_3", "text", ROLE_BONDSMAN, 90, 490, 432, 20, "offense_3", preferences=p),
+        _f(d, "offense_4", "text", ROLE_BONDSMAN, 90, 512, 432, 20, "offense_4", preferences=p),
+    ]
+
+
 PALMETTO_FIELDS: List[Dict[str, Any]] = (
-    _appearance() + _application() + _indemnity() + _collateral() + _information_sheet()
+    _appearance() + _application() + _indemnity() + _collateral() + _information_sheet() + _header()
 )
 
 
@@ -400,7 +415,7 @@ PACKET_INVENTORY: List[Dict[str, Any]] = [
         "slug": "paperwork-header",
         "osi": "surety-agnostic-shamrock/paperwork-header.pdf (1 page)",
         "palmetto": "same Shamrock form (shared)",
-        "docuseal": "inside template 1 and template 5; field boxes not in repo",
+        "docuseal": "four offense rows (offense_1..offense_4) are in this spec; the PDF is inside template 1 and template 5",
     },
     {
         "slug": "faq-cosigners",
