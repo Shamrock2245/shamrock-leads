@@ -732,6 +732,11 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     # 2026-10-09: the ArcGIS jail layer has no booking/jail/case number and its
     # ObjectId/GlobalID are reissued on republish (840/841 changed). Writes off.
     "Miami-Dade (FL)": "fail_closed",
+    # 2026-10-09: Revize rosters answer a Cloudflare challenge from every tested
+    # exit (box, T-Mobile AS21928, Comcast AS7922); no other official source
+    # publishes a booking roster with a source booking number. Relay skips them.
+    "Charlotte (FL)": "fail_closed",
+    "Manatee (FL)": "fail_closed",
     # Runtime-gated FL scopes aligned to Health Source Guards (SCRAPER_SOURCE_STATES).
     # Broward: cleared 2026-09-23 after Turnstile+prefix write smoke (action=arrest_search).
     # Baker/Calhoun/Gulf/Holmes/Levy/Wakulla/Washington: FL JailTracker wrappers

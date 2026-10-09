@@ -475,7 +475,7 @@ def test_lee_jail_refresh_keeps_staff_bond_and_rows():
                 detail_url="https://example.test/booking/L1")
     arrests = AsyncFake([doc])
 
-    async def fake_ingest(url):
+    async def fake_ingest(url, **_kw):
         return {"success": True, "data": {"bond_amount": 0.0, "charges": "DUI | NO DL", "status": "In Custody"}}
 
     with patch.object(lee_clerk_watch, "get_collection", return_value=arrests), \
@@ -649,7 +649,7 @@ def test_custody_recheck_updates_normally_and_never_blanks_unknowns():
 def _refresh(cols, data):
     from dashboard.routers import legacy
 
-    async def fake_ingest(url):
+    async def fake_ingest(url, **_kw):
         return {"success": True, "data": data}
 
     with _legacy(cols), patch("dashboard.services.url_ingest_service.ingest_url", fake_ingest):

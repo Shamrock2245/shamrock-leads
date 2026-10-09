@@ -19,6 +19,8 @@ COUNTY_URL_PATTERNS = {
     r"sarasotasheriff\.org": "Sarasota", r"hillsboroughcounty\.org": "Hillsborough",
     r"pcsoweb\.com": "Pinellas", r"inmatelookup\.mcso\.org": "Marion",
     r"pbso\.org": "Palm Beach",
+    r"inmates\.charlottecountyfl\.revize\.com": "Charlotte",
+    r"manatee-sheriff\.revize\.com": "Manatee",
 }
 
 FL_COUNTIES_UPPER = {
@@ -111,13 +113,29 @@ def _title_case_name(name_str: str) -> str:
     return " ".join(res)
 
 
-async def ingest_url(url: str) -> dict:
-    """Fetch a URL and extract structured arrest data."""
+async def ingest_url(url: str, county: Optional[str] = None, state: Optional[str] = None) -> dict:
+    """Fetch a URL and extract structured arrest data.
+
+    ``county`` / ``state`` (optional) name the record the URL belongs to. No
+    request is made when that county, or the county the URL host maps to, is
+    fail_closed (config.source_guard)."""
     if not url or not url.strip():
         return {"success": False, "error": "No URL provided"}
     url = url.strip()
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
+
+    from config.source_guard import fail_closed_reason
+
+    guard = fail_closed_reason(county, state, url=url)
+    if guard:
+        log.info("url-ingest: source is fail_closed (%s); no request", guard)
+        return {
+            "success": False,
+            "fail_closed": True,
+            "error": f"Source contract is fail_closed ({guard}); no request was made.",
+            "url": url,
+        }
 
     # ── Fast path: Lee County API Ingestion ────────────────────────────────────
     if "sheriffleefl.org" in url.lower():

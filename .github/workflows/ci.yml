@@ -115,6 +115,8 @@ jobs:
             tests/test_manatee_no_proxy_path.py \
             tests/test_charlotte_no_proxy_path.py \
             tests/test_relay_only_scheduling.py \
+            tests/test_fl_charlotte_manatee_fail_closed.py \
+            tests/test_source_guard_fail_closed_paths.py \
             tests/test_pinellas_relay_only.py \
             tests/test_pinellas_modal_wait.py \
             tests/test_relay_egress_auto_disable.py \

@@ -77,12 +77,15 @@ class _Triggers:
 
 
 def test_dashboard_trigger_for_relay_only_county_is_not_run_on_vps(monkeypatch):
+    # Pinellas: relay-only and not fail_closed (Manatee/Charlotte are
+    # fail_closed since 2026-10-09 and get status "fail_closed" instead; see
+    # tests/test_source_guard_fail_closed_paths.py).
     sched = _sched()
-    man = _Fake("Manatee")
+    man = _Fake("Pinellas")
     sched.register_scraper(man)
     triggers = _Triggers([
-        {"_id": 1, "county": "Manatee", "status": "pending"},
-        {"_id": 2, "county": "Manatee", "status": "pending", "type": "custody_recheck"},
+        {"_id": 1, "county": "Pinellas", "status": "pending"},
+        {"_id": 2, "county": "Pinellas", "status": "pending", "type": "custody_recheck"},
     ])
     db = {"scraper_triggers": triggers}
     class _Client(dict):
