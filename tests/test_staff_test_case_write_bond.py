@@ -175,7 +175,24 @@ def test_flag_off_finalize_still_hits_override_poa_and_chain_gates(monkeypatch):
     resolve = AsyncMock(return_value=_ctx())
     ensure = AsyncMock(return_value={"success": False, "error": "chain_blocked", "status_code": 409})
     delivery = AsyncMock()
-    stores, collections = _stores()
+    # Real (non-test) finalize now requires a passed ID scan before the POA gate.
+    stores, collections = _stores({
+        "indemnitors": [{
+            "indemnitor_id": "I-1",
+            "booking_number": "B1",
+            "bond_case_id": "BC-1",
+            "name": "Sample Party Two",
+            "id_scan": {
+                "success": True,
+                "extracted": {
+                    "full_name": "Sample Party Two",
+                    "first_name": "Sample",
+                    "last_name": "Two",
+                    "dl_state": "FL",
+                },
+            },
+        }],
+    })
     client = _client()
     client.cookies.update(_cookie("god_admin"))
 

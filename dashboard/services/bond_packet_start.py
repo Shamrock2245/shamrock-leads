@@ -185,6 +185,24 @@ async def start_indemnitor_bond_packet(
     except DocuSealPacketValidationError as exc:
         raise BondPacketStartError(str(exc), code="docuseal_packet_binding_invalid") from exc
 
+    # After binding, before POA lookup or DocuSeal. Synthetic TEST- packets skip.
+    from dashboard.services.identity_verification_service import (
+        IndemnitorIdentityError,
+        require_verified_indemnitors,
+    )
+
+    try:
+        await require_verified_indemnitors(
+            bond_data=hydrated,
+            indemnitors=parties,
+            bond_case_id=str(hydrated.get("bond_case_id") or ""),
+            booking_number=str(hydrated.get("booking_number") or ""),
+            packet_id=str(packet_id or ""),
+            staff_test_case=bool(staff_test_case),
+        )
+    except IndemnitorIdentityError as exc:
+        raise BondPacketStartError(str(exc), code=exc.code) from exc
+
     if not skip_bond_binding:
         if staff_test_case:
             poa_doc = poa_record if poa_record is not _POA_UNSET else None

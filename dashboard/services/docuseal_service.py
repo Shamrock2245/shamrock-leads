@@ -1672,6 +1672,18 @@ class DocuSealService:
                 include_defendant=include_defendant,
             )
         bond_data = dict(bond_data or {})
+        # Identity before the DocuSeal field payload, the HTTP client, and any
+        # status change. Binding above is unchanged. Synthetic TEST- packets skip.
+        from dashboard.services.identity_verification_service import require_verified_indemnitors
+
+        await require_verified_indemnitors(
+            bond_data=bond_data,
+            indemnitors=indemnitors,
+            bond_case_id=str(bond_data.get("bond_case_id") or ""),
+            booking_number=str(bond_data.get("booking_number") or ""),
+            packet_id=str(packet_id or ""),
+            staff_test_case=bool(staff_test_case),
+        )
         agent_name, agent_license = resolve_writing_agent(bond_data)
         apply_writing_agent(bond_data, agent_name, agent_license)
         raw_values = self.prefill_values_from_bond(bond_data)
@@ -2408,6 +2420,11 @@ def build_bond_data_from_dashboard(
         "payment_due_date_4": body.get("payment_due_date_4"),
         "payment_amount_4": body.get("payment_amount_4"),
     }
+    # The packet-context flag from apply_self_indemnitor. Not inferred.
+    from dashboard.services.identity_verification_service import explicit_self_indemnitor
+
+    if explicit_self_indemnitor(ctx) or explicit_self_indemnitor(intake_doc):
+        bond_data["self_indemnitor"] = True
 
     # Multi-indemnitor list for Co-Indemnitor role
     inds = ctx.get("indemnitors") or intake_doc.get("indemnitors")
