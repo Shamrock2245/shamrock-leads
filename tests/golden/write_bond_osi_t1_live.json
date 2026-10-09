@@ -1,0 +1,1258 @@
+{
+  "_meta": {
+    "filled_count": 35,
+    "frozen_at": "2026-01-15T12:00:00+00:00",
+    "inventory": "tests/fixtures/docuseal_t1_fields.json",
+    "kind": "live_template",
+    "note": "Submission values whose names exist on the live template. dropped_payload_keys are payload names DocuSeal would ignore. unfilled_should_prefill are template fields that match case-data name patterns and received no value. unfilled_signer are signature, initial, checkbox, radio, and signing-date widgets. Rewrite only with WRITE_BOND_REGEN_GOLDEN=1. CI must not set that flag.",
+    "surety_id": "osi",
+    "template_id": 1
+  },
+  "dropped_payload_keys": [
+    "AgencyName",
+    "AgentLicense",
+    "AgentName",
+    "BondNumbers",
+    "CaseNum",
+    "County",
+    "CourtDate",
+    "CourtType",
+    "Date",
+    "DefDLState",
+    "DefFirstName",
+    "DefLastName",
+    "DefMiddleName",
+    "DefName",
+    "DefState",
+    "DefendantName",
+    "FullName",
+    "IndCityStateZip",
+    "IndFirstName",
+    "IndLastName",
+    "IndMiddleName",
+    "IndName",
+    "IndState",
+    "IndemnitorName",
+    "PowerNum",
+    "State",
+    "agency_address",
+    "agency_name",
+    "agent_license",
+    "bond_amount_numeric",
+    "bond_amount_words",
+    "bond_amount_written",
+    "bond_date_day",
+    "bond_date_month",
+    "bond_date_year_2digit",
+    "bond_numbers",
+    "bondsman_license",
+    "booking_number",
+    "case_1",
+    "case_2",
+    "charge_1",
+    "charge_2",
+    "charge_line_2",
+    "charges",
+    "coindemnitor_date_1",
+    "county",
+    "court_date",
+    "court_datetime",
+    "date",
+    "date_written_out",
+    "formatted_date",
+    "indemnitor_email",
+    "indemnitor_first_name",
+    "indemnitor_last_name",
+    "indemnitor_middle_name",
+    "indemnitor_state",
+    "numeric_bond_amount_1",
+    "numeric_full_bond_amount_dollar",
+    "poa_1",
+    "poa_2",
+    "poa_numbers",
+    "ssa_other_records_text",
+    "ssa_release_reason",
+    "state",
+    "today_date_long"
+  ],
+  "fields": {
+    "agent_date_1": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "01/15/2026"
+    },
+    "agent_name": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "Brendan O'Neal"
+    },
+    "all_poa_numbers": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST-POA-0001"
+    },
+    "bond_amount": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "$5,000.00"
+    },
+    "bond_amount_1": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "5,000.00"
+    },
+    "bond_date_written": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "January 15, 2026"
+    },
+    "bondsman_name": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "Brendan O'Neal"
+    },
+    "case_number": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST-CASE-OSI"
+    },
+    "case_number_1": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST-CASE-OSI"
+    },
+    "case_number_2": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST-CASE-OSI"
+    },
+    "charges_summary": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "Grand theft — occupant's dwelling (Fla. Stat. § 812.014(2)(c), 2nd degree), Burglary of a conveyance (Fla. Stat. § 810.02(3)(d), 3rd degree)"
+    },
+    "collateral_receipt_number": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "0001"
+    },
+    "county_full": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "Lee County"
+    },
+    "court_type": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "County/Circuit"
+    },
+    "defendant_date_1": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "01/15/2026"
+    },
+    "defendant_date_5": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "01/15/2026"
+    },
+    "defendant_dl_state": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "FL"
+    },
+    "defendant_email": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "admin@shamrockbailbonds.biz"
+    },
+    "defendant_name": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "Sample Party One"
+    },
+    "defendant_state": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "FL"
+    },
+    "full_bond_amount_words": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "Five Thousand and 00/100"
+    },
+    "indemnitor_city_state_zip": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "FL"
+    },
+    "indemnitor_date_1": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "01/15/2026"
+    },
+    "indemnitor_date_5": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "01/15/2026"
+    },
+    "indemnitor_name": {
+      "readonly": false,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "Sample Party Two"
+    },
+    "numeric_full_bond_amount": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "5,000.00"
+    },
+    "offense_1": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "Grand theft — occupant's dwelling (Fla. Stat. § 812.014(2)(c), 2nd degree)"
+    },
+    "offense_2": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "Burglary of a conveyance (Fla. Stat. § 810.02(3)(d), 3rd degree)"
+    },
+    "poa_number": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST-POA-0001"
+    },
+    "poa_number_1": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST-POA-0001"
+    },
+    "poa_number_2": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "TEST-POA-0001"
+    },
+    "today_date": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "01/15/2026"
+    },
+    "today_day": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "15"
+    },
+    "today_month": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "January"
+    },
+    "today_year_2digit": {
+      "readonly": true,
+      "submitter_role": [
+        "bondsman",
+        "defendant",
+        "indemnitor"
+      ],
+      "value": "26"
+    }
+  },
+  "unfilled_other": [
+    {
+      "class": "other",
+      "name": "balance_financed_amount",
+      "readonly": true,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "children_names_ages_1",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "children_names_ages_2",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "children_school_1",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "children_school_2",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "collater_return_other_description",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "collateral_description",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "collateral_description_continued",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "collateral_fee",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "collateral_numerals",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "collateral_return_written",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "collateral_written",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "down_payment_amount",
+      "readonly": true,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "number_of_payments",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "numeric_balance_due",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "numeric_downpayment",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "numeric_misc_charges",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "numeric_premium",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "numeric_total_charges",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "payment_amount",
+      "readonly": true,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "payment_amount_1",
+      "readonly": true,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "payment_amount_2",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "payment_amount_3",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "payment_amount_4",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "premium_down_payment_numeric",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "premium_down_payment_written",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "premium_receipt_number",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "reference_1_address",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "reference_1_name",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "reference_1_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "reference_1_relation",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "reference_2_address",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "reference_2_name",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "reference_2_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "reference_2_relation",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "other",
+      "name": "written_premium",
+      "readonly": true,
+      "type": "text"
+    }
+  ],
+  "unfilled_should_prefill": [
+    {
+      "class": "bond",
+      "name": "bond_amount_2",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "bond",
+      "name": "bond_amount_3",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "bond",
+      "name": "bond_amount_4",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "case",
+      "name": "case_number_3",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "case",
+      "name": "case_number_4",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_attorney_address",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_attorney_name",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_attorney_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_best_friend_address",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_best_friend_name",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_best_friend_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_current_bail_surety",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_current_bail_yes_no",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_facebook",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_instagram",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_parent_address",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_parent_name",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_parent_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_prior_arrests",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_prior_convicted",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_prior_offense",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_remarks",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_sibling_1_address",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_sibling_1_name",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_sibling_1_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_sibling_2_address",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_sibling_2_name",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_sibling_2_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_sibling_3_address",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_sibling_3_name",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_sibling_3_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_spouse_parent_address",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_spouse_parent_name",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_spouse_parent_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_vehicle_amount_owed",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_vehicle_color",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_vehicle_lender",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_vehicle_make",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_vehicle_model",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_vehicle_plate",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_vehicle_purchase_location",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "def_vehicle_year",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_address",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_address_how_long",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_alias",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_boss",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_city",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_dl",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_dob",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_employer",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_employer_address",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_employer_how_long",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_employer_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_eyes",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_former_address",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_former_address_how_long",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_hair",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_height",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_previous_employment",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_previous_employment_how_long",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_race",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_spouse_address",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_spouse_employer",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_spouse_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_ssn",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_tattoos",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_weight",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "defendant",
+      "name": "defendant_zip",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_address",
+      "readonly": true,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_dl",
+      "readonly": true,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_dob",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_employer",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_employer_address",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_employer_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_mortgage_amount",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_mortgage_co",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_phone2",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_relationship",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_spouse_dl",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_spouse_employer",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_spouse_employer_address",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_spouse_name",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_spouse_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_spouse_ssn",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_spouse_work_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_ssn",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_vehicle_color",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_vehicle_make",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_vehicle_model",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_vehicle_year",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "indemnitor",
+      "name": "indemnitor_work_phone",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "charges",
+      "name": "offense_3",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "charges",
+      "name": "offense_4",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "poa",
+      "name": "poa_number_3",
+      "readonly": false,
+      "type": "text"
+    },
+    {
+      "class": "poa",
+      "name": "poa_number_4",
+      "readonly": false,
+      "type": "text"
+    }
+  ],
+  "unfilled_signer": [
+    "bail_producer_checkbox",
+    "bondsman_signature4",
+    "bondsman_signature_000",
+    "bondsman_signature_1",
+    "bondsman_signature_2",
+    "bondsman_signature_3",
+    "bondsman_signature_after_bond_discharge",
+    "cash_collateral_checkbox",
+    "check_collateral_checkbox",
+    "coindemnitor_initials_1",
+    "coindemnitor_initials_2",
+    "coindemnitor_signature_1",
+    "coindemnitor_signature_2",
+    "coindemnitor_signature_3",
+    "coindemnitor_signature_4",
+    "date_of_collateral_return_signature",
+    "def_beard_mustache",
+    "def_dentures",
+    "def_glasses",
+    "def_left_handed",
+    "def_right_handed",
+    "defendant_initials_1",
+    "defendant_initials_2",
+    "defendant_signature_1",
+    "defendant_signature_2",
+    "defendant_signature_3",
+    "defendant_signature_4",
+    "defendant_signature_5",
+    "defendant_signature_6",
+    "defendant_signature_7",
+    "defendant_signature_8",
+    "final_payment_due_date",
+    "first_payment_due_date",
+    "indemnitor_initials_1",
+    "indemnitor_initials_2",
+    "indemnitor_signature_1",
+    "indemnitor_signature_10",
+    "indemnitor_signature_2",
+    "indemnitor_signature_3",
+    "indemnitor_signature_4",
+    "indemnitor_signature_5",
+    "indemnitor_signature_6",
+    "indemnitor_signature_7",
+    "indemnitor_signature_8",
+    "indemnitor_signature_9",
+    "managing_general_agent_checkbox",
+    "mortgage_collateral_checkbox",
+    "other_collateral_checkbox",
+    "other_collateral_checkbox2",
+    "payment_due_date_1",
+    "payment_due_date_2",
+    "payment_due_date_3",
+    "payment_due_date_4",
+    "premium_payment_form_check_checkbox",
+    "premium_payment_form_creditcard_checkbox",
+    "premium_payment_form_moneyorder_checkbox",
+    "ssa_other_records_check",
+    "surety_collateral_checkbox",
+    "vehicle_collateral_checkbox"
+  ]
+}

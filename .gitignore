@@ -38,6 +38,12 @@ config/google-services.json
 !dashboard/docuseal_live_template_fields.json
 !tests/golden/write_bond_osi.json
 !tests/golden/write_bond_palmetto.json
+!tests/golden/write_bond_osi_t1_live.json
+!tests/golden/write_bond_palmetto_t5_live.json
+!tests/golden/write_bond_osi_appearance.json
+!tests/golden/write_bond_palmetto_spec.json
+!tests/fixtures/docuseal_t1_fields.json
+!tests/fixtures/docuseal_t5_fields.json
 
 
 # Python

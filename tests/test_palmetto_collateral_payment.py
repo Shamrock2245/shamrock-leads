@@ -143,6 +143,10 @@ def test_live_template_inventories_match_the_attached_exports():
     assert "collateral_other" not in T6_NAMES
     assert field_names_for_template_id(5) == frozenset(T5_NAMES)
     assert field_names_for_template_id("6") == frozenset(T6_NAMES)
+    t5_fixture = json.loads(
+        (ROOT / "tests" / "fixtures" / "docuseal_t5_fields.json").read_text(encoding="utf-8")
+    )
+    assert {row["name"] for row in t5_fixture["fields"]} == set(T5_NAMES)
     assert "AgencyName" not in T5_NAMES
     assert "CaseNum" not in T5_NAMES
 

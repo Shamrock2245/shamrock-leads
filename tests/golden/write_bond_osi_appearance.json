@@ -1,0 +1,135 @@
+{
+  "AgencyDetails": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "1 Sample Street, Sample City, FL 00000"
+  },
+  "Arrest/case No": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "TEST-GOLDEN-OSI"
+  },
+  "BondAgentLicenseNum": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "P139768"
+  },
+  "BondAgentName": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "Brendan O'Neal"
+  },
+  "BondAmountCharge1": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "$5,000.00"
+  },
+  "CaseNum": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "TEST-CASE-OSI"
+  },
+  "CourtDate": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "TBN"
+  },
+  "DayDD": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "15"
+  },
+  "DefCharge1": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "Grand theft — occupant's dwelling (Fla. Stat. § 812.014(2)(c), 2nd degree)"
+  },
+  "DefCharge1Line2": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "Burglary of a conveyance (Fla. Stat. § 810.02(3)(d), 3rd degree)"
+  },
+  "DefCounty": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "Lee"
+  },
+  "DefCourtType": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "County/Circuit"
+  },
+  "DefFirstName": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "Sample"
+  },
+  "DefLastName": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "One"
+  },
+  "IndNameandDefName": {
+    "readonly": false,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "Sample Party Two / Sample Party One"
+  },
+  "Month": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "January"
+  },
+  "PowerNum": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "TEST-POA-0001"
+  },
+  "YearYY": {
+    "readonly": true,
+    "submitter_role": [
+      "bondsman"
+    ],
+    "value": "26"
+  },
+  "_meta": {
+    "frozen_at": "2026-01-15T12:00:00+00:00",
+    "kind": "appearance_bond_seed",
+    "label": "OSI appearance-bond field map from the seeded AcroForm. Not the live DocuSeal template 1 widget list.",
+    "note": "Secondary map, not the live template. Rewrite only with WRITE_BOND_REGEN_GOLDEN=1 via scripts/regen_write_bond_goldens.py. CI must not set that flag.",
+    "surety_id": "osi"
+  }
+}
