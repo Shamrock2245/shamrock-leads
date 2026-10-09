@@ -303,12 +303,19 @@ def _label(scraper: Any) -> str:
 
 
 def _source_state(label: str) -> str:
+    """Health source state; ``fail_closed`` when it can't be read.
+
+    If ``dashboard.extensions`` fails to import (or the lookup raises), the
+    worker can't tell a fail_closed county from a live one, so every county is
+    treated as fail_closed and nothing is fetched."""
     try:
         from dashboard.extensions import scraper_source_state
 
         return scraper_source_state(label)
-    except Exception:
-        return "unverified"
+    except Exception as exc:
+        logger.warning("bond-recheck: source state unavailable for %s (%s); treated as fail_closed",
+                       label, type(exc).__name__)
+        return "fail_closed"
 
 
 def county_exclusion(scraper: Any, *, include_relay_only: bool, writer: Any = None) -> Optional[str]:

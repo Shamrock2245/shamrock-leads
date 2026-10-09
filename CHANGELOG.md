@@ -14,6 +14,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_write_bond_golden_smoke.py` (added to the `ci.yml` list). Synthetic data only. No Mongo and no DocuSeal.
 
+## [Unreleased] — 2026-10-09 (bond re-check: unreadable source state fails closed)
+
+### Fixed
+- **Pending-bond re-check fails closed when the Health source state can't be read.** `core/pending_bond_recheck._source_state` returned `unverified` when `dashboard.extensions` failed to import or `scraper_source_state` raised, so a `fail_closed` county would have looked eligible. It now returns `fail_closed` and logs the label and error class only. No county is fetched and nothing is written.
+
+### Tests
+- `tests/test_pending_bond_recheck.py` (already in the `ci.yml` list): an import failure and a lookup error both exclude the county as `fail_closed`, and nothing is fetched or written. Both cases fail on main.
+
 ## [Unreleased] — 2026-10-08 (pending-bond re-check worker)
 
 ### Added
