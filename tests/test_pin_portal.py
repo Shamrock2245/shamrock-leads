@@ -134,14 +134,14 @@ def test_verify_admin_pin_bypass():
 
 
 def test_hardcoded_master_pin_disabled():
-    """Legacy hardcoded 224545 must not bypass portal auth when env pin unset."""
+    """No hardcoded master PIN may bypass portal auth when the env PIN is unset."""
     mock_pins = MagicMock()
     mock_pins.find_one = AsyncMock(return_value=None)
     with patch("dashboard.routers.pin_portal.get_collection", return_value=mock_pins), \
          patch("dashboard.routers.pin_portal._MASTER_PIN", ""):
         response = client.post(
             "/api/portal/verify-pin",
-            json={"phone": "2395550199", "pin": "224545"},
+            json={"phone": "2395550199", "pin": "000000"},
             follow_redirects=True,
         )
     assert response.status_code == 401

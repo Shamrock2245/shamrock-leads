@@ -267,8 +267,11 @@ async def send_portal_pin(req: SendPinRequest):
                 status_code=503,
             )
 
-        env = (os.getenv("ENV") or os.getenv("ENVIRONMENT") or "").lower()
-        debug_ok = env not in ("production", "prod")
+        # The OTP is echoed back only in explicit development (never when ENV
+        # is unset, staging, test or production).
+        from dashboard.auth.dev_mode import explicit_development
+
+        debug_ok = explicit_development()
         return {
             "success": True,
             "phone": clean_phone,
@@ -1039,7 +1042,12 @@ async def kiosk_id_ocr(request: Request):
         }, status_code=422)
 
     fields = client_fields_from_id_ocr(extracted, role)
-    token = _kiosk_serializer().dumps({"p": packet_id, "r": role, "f": fields})
+    from dashboard.auth.pin_middleware import SessionSecretMissing
+
+    try:
+        token = _kiosk_serializer().dumps({"p": packet_id, "r": role, "f": fields})
+    except SessionSecretMissing:
+        return JSONResponse({"success": False, "error": "Session signing not configured"}, status_code=503)
     return JSONResponse({
         "success": True,
         "confirm_required": True,
@@ -1067,9 +1075,12 @@ async def kiosk_id_confirm(req: KioskConfirmRequest):
                      Never the primary indemnitor's submitter, CRM record or fields.
     """
     from itsdangerous import BadSignature, SignatureExpired
+    from dashboard.auth.pin_middleware import SessionSecretMissing
 
     try:
         data = _kiosk_serializer().loads(req.scan_token, max_age=_KIOSK_SCAN_TTL_SECONDS)
+    except SessionSecretMissing:
+        return JSONResponse({"success": False, "error": "Session signing not configured"}, status_code=503)
     except SignatureExpired:
         return JSONResponse({"success": False, "error": "Scan expired. Please scan again."}, status_code=410)
     except BadSignature:

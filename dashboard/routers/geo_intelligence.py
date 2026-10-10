@@ -489,9 +489,10 @@ def _provided_traccar_webhook_secret(request: Request) -> str:
 def traccar_webhook_auth_failure(request: Request) -> tuple[int, str] | None:
     """Return (status, error) if the webhook request must be rejected."""
     expected = (os.getenv("TRACCAR_WEBHOOK_SECRET") or "").strip()
-    env = (os.getenv("ENV") or os.getenv("ENVIRONMENT") or "").lower()
-    require = os.getenv("REQUIRE_TRACCAR_WEBHOOK_SECRET", "").lower() in ("1", "true", "yes")
-    is_prod = env in ("production", "prod") or require
+    from dashboard.auth.dev_mode import unconfigured_secret_allowed
+
+    # Fail closed unless explicit ENV=development (and no REQUIRE_* flag).
+    is_prod = not unconfigured_secret_allowed("REQUIRE_TRACCAR_WEBHOOK_SECRET")
     if not expected:
         if is_prod:
             logger.warning("[traccar_webhook] TRACCAR_WEBHOOK_SECRET unset — rejecting")

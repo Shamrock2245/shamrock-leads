@@ -13,7 +13,7 @@ Defendant fields: arrest-lead scrape → defendant record.
 Indemnitor fields: intake / match / dashboard.
 
 Self-indemnitor (defendant also indemnitor) is allowed only for small bonds
-and requires Brendan's authorization PIN (default 224545).
+and requires Brendan's authorization PIN (`SELF_INDEMNITOR_PIN`; no default, fails closed when unset).
 """
 from __future__ import annotations
 
@@ -75,7 +75,8 @@ APPEARANCE_BOND_PROCEDURE = (
     "on paper → take signed original to the jail"
 )
 
-SELF_INDEMNITOR_PIN = os.getenv("SELF_INDEMNITOR_PIN", "224545")
+# No default: with SELF_INDEMNITOR_PIN unset, no self-indemnitor PIN verifies.
+SELF_INDEMNITOR_PIN = os.getenv("SELF_INDEMNITOR_PIN", "")
 SMALL_BOND_MAX = float(os.getenv("SMALL_BOND_MAX", "10000"))
 
 
@@ -329,8 +330,15 @@ def charge_details_from_sources(
 
 
 def verify_self_indemnitor_pin(pin: str) -> bool:
-    """Brendan discretion PIN for defendant-as-indemnitor on small bonds."""
-    return (pin or "").strip() == SELF_INDEMNITOR_PIN
+    """True only when SELF_INDEMNITOR_PIN is configured and matches. Fails closed
+    (False) when it is unset; there is no built-in default PIN."""
+    import secrets as _secrets
+
+    expected = (os.getenv("SELF_INDEMNITOR_PIN") or SELF_INDEMNITOR_PIN or "").strip()
+    given = (pin or "").strip()
+    if not expected or not given:
+        return False
+    return _secrets.compare_digest(given.encode(), expected.encode())
 
 
 def template_slug_for_catalog_key(key: str) -> str:

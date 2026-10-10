@@ -337,7 +337,7 @@ async def test_promote_hook_calls_helpers(switch_on, send_once_ok):
 
 @pytest.mark.asyncio
 async def test_payment_link_message_uses_official_shamrock_phone():
-    """Ensure payment link SMS and email use official phone (239) 332-2245, never PIN 224545."""
+    """Ensure payment link SMS and email use official phone (239) 332-2245, never the retired dashboard PIN."""
     from dashboard.services.packet_payment_link_service import send_swipesimple_payment_link
 
     sent_messages = []
@@ -365,8 +365,9 @@ async def test_payment_link_message_uses_official_shamrock_phone():
         assert len(sent_messages) == 1
         msg = sent_messages[0]["msg"]
         assert "(239) 332-2245" in msg
-        assert "224-5454" not in msg
-        assert "224545" not in msg
+        from scripts.check_brand_contacts import contains_retired_pin
+
+        assert not contains_retired_pin(msg)
 
 
 @pytest.mark.asyncio

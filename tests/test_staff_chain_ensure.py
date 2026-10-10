@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from dashboard.routers.staff_chain import staff_chain_bp
 
-TEST_PIN = "224545"
+TEST_PIN = "918273"  # synthetic
 
 
 @pytest.fixture
