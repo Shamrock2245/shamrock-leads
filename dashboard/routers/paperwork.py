@@ -1152,7 +1152,7 @@ async def packet_builder_finalize(request: Request):
     """
     Finalize a case packet:
       - adaptive hydration from match/defendant/indemnitor
-      - optional self-indemnitor (PIN 224545)
+      - optional self-indemnitor (env `SELF_INDEMNITOR_PIN`)
       - assemble docs from drag-drop rules + extra catalog keys
       - attach extra uploaded PDFs
       - flatten into a single PDF only for previews/extra uploads when needed

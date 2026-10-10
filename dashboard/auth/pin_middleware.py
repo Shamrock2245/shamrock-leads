@@ -37,6 +37,10 @@ from dashboard.auth.super_admin import (
     resolve_role_for_email,
 )
 from dashboard.tenancy.constants import SHAMROCK_TENANT_ID
+from dashboard.auth.dev_mode import (  # noqa: F401  (re-exported)
+    no_pin_passthrough_allowed,
+    session_secret_fallback_allowed,
+)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -117,17 +121,35 @@ OAUTH_PREFIXES = (
 VALID_PINS = frozenset(p for p in (DASHBOARD_PIN,) if p)
 
 
+class SessionSecretMissing(RuntimeError):
+    """SECRET_KEY is unset outside explicit development: no session can be
+    signed or verified. The middleware answers 503 on protected routes."""
+
+
+DEV_ONLY_SESSION_KEY = "shamrock-dev-only-session-key-v1-not-for-production"
+
+
+def session_secret_configured() -> bool:
+    """True when a session can be signed: SECRET_KEY set, or explicit development."""
+    return bool(os.getenv("SECRET_KEY", "").strip()) or session_secret_fallback_allowed()
+
+
 def _get_serializer() -> URLSafeTimedSerializer:
-    """Build the cookie signer from SECRET_KEY (required in production)."""
+    """Build the cookie signer from SECRET_KEY.
+
+    Fails closed: with no SECRET_KEY, only ENV/ENVIRONMENT exactly
+    ``development`` (and REQUIRE_SECRET_KEY unset) may use the fixed
+    development-only key. Everywhere else, including ENV unset, it raises
+    :class:`SessionSecretMissing`. The key is never derived from the PIN.
+    """
     secret = os.getenv("SECRET_KEY", "").strip()
     if not secret:
-        if os.getenv("ENV", os.getenv("ENVIRONMENT", "")).lower() in (
-            "production", "prod",
-        ) or os.getenv("REQUIRE_SECRET_KEY", "").lower() in ("1", "true", "yes"):
-            raise RuntimeError(
-                "SECRET_KEY must be set for dashboard session cookies in production"
+        if not session_secret_fallback_allowed():
+            raise SessionSecretMissing(
+                "SECRET_KEY must be set for dashboard session cookies "
+                "(only ENV=development may run without it)"
             )
-        secret = "shamrock-dev-only-session-key-v1-not-for-production"
+        secret = DEV_ONLY_SESSION_KEY
     return URLSafeTimedSerializer(secret)
 
 
@@ -207,6 +229,9 @@ def _load_session(token: str | None) -> dict[str, Any] | None:
         return None
     try:
         s = _get_serializer()
+    except SessionSecretMissing:
+        return None
+    try:
         data = s.loads(token, max_age=COOKIE_MAX_AGE)
         if not isinstance(data, dict) or not data.get("auth"):
             return None
@@ -357,6 +382,12 @@ class PinAuthMiddleware(BaseHTTPMiddleware):
                 return await call_next(request)
             return JSONResponse({"error": "Dashboard PIN not configured"}, status_code=503)
 
+        # No SECRET_KEY outside development: no session can be trusted or
+        # issued, so protected routes fail closed (open paths, /health,
+        # webhooks and machine keys were handled above).
+        if not session_secret_configured():
+            return JSONResponse({"error": "Session signing not configured"}, status_code=503)
+
         cookie = request.cookies.get(COOKIE_NAME)
         sess = _load_session(cookie) if cookie else None
         if sess:
@@ -383,19 +414,6 @@ class PinAuthMiddleware(BaseHTTPMiddleware):
         if path.startswith("/api/") or path == "/openapi.json":
             return JSONResponse({"error": "Authentication required"}, status_code=401)
         return RedirectResponse(login_redirect_location(path, request.url.query), status_code=302)
-
-
-def no_pin_passthrough_allowed() -> bool:
-    """True only when no PIN may be tolerated: ``ENV`` (or ``ENVIRONMENT``) is
-    exactly ``development`` and ``REQUIRE_DASHBOARD_PIN`` is not set.
-
-    Before 2026-10-10 any non-production ENV (including unset) let every
-    protected route through when ``DASHBOARD_PIN`` was missing.
-    """
-    if os.getenv("REQUIRE_DASHBOARD_PIN", "").strip().lower() in ("1", "true", "yes"):
-        return False
-    env = (os.getenv("ENV") or os.getenv("ENVIRONMENT") or "").strip().lower()
-    return env == "development"
 
 
 def login_redirect_location(path: str, query: str = "") -> str:
@@ -579,6 +597,9 @@ def mount_login_routes(app):
         agent_name = str(data.get("agent_name", "")).strip()
         license_number = str(data.get("license_number", "")).strip()
         recovery_id = str(data.get("recovery_id") or "").strip()
+
+        if not session_secret_configured():
+            return JSONResponse({"error": "Session signing not configured"}, status_code=503)
 
         if pin not in VALID_PINS:
             return JSONResponse({"error": "Invalid PIN"}, status_code=401)

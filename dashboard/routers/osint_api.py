@@ -67,7 +67,11 @@ def _require_admin(
     if DASHBOARD_PIN and x_admin_token and x_admin_token == DASHBOARD_PIN:
         return
     if not OSINT_ADMIN_KEY and not DASHBOARD_PIN:
-        return  # Dev mode
+        from dashboard.auth.dev_mode import no_pin_passthrough_allowed
+
+        if no_pin_passthrough_allowed():
+            return  # explicit ENV=development only
+        raise HTTPException(status_code=503, detail="OSINT admin authorization not configured.")
     raise HTTPException(
         status_code=403,
         detail="OSINT module requires admin authorization.",

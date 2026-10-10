@@ -3,6 +3,40 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-10 (auth hardening follow-ups: no hardcoded PIN, admin guards and SECRET_KEY fail closed)
+
+### Security
+- **Merge precondition:** prod must have `SECRET_KEY` set (Leads Ops to confirm). Without it, every protected route and the login POST return 503 after this change.
+- **No hardcoded PIN defaults.** `dashboard/config.py` `DASHBOARD_PIN` and `packet_builder_service.SELF_INDEMNITOR_PIN` have no default. An unset PIN fails closed: the middleware returns 503, and `verify_self_indemnitor_pin` returns False. The retired literal is removed from README, the staff-chain runbook, `.env.example`, a docstring and the tests. `scripts/check_brand_contacts.py` now keeps only a SHA-256 of it (`contains_retired_pin`, `is_pin_shaped_phone`), and a test checks that no tracked text file contains it. Rotate that PIN if any system still accepts it.
+- **One dev rule for every unconfigured credential** (`dashboard/auth/dev_mode.py`). A missing PIN, admin key, webhook secret or session key is tolerated only when `ENV` (or, if unset, `ENVIRONMENT`) is exactly `development` and the matching `REQUIRE_*` flag is not set. Unset, `production`, `prod`, `staging`, `test`, `dev` and typos are closed. `no_pin_passthrough_allowed()` moved here and is re-exported from `pin_middleware`.
+- **Admin / PIN guards fail closed when unconfigured.**
+  - AR `require_staff`: no PIN outside dev is now 401. Before, any non-prod ENV passed.
+  - OSINT `_require_admin`, ALPR `_require_staff` and booking-intake `_require_booking_intake_staff`: no key and no PIN is now 503. Before, they were open in every ENV.
+  - `POST /api/admin-pin-override`: no PIN is now 503. Before, any override was approved. The PIN comparison is now constant-time.
+  - Twilio / SwipeSimple webhooks without a secret: 503 unless dev. Before, they were open in any non-prod ENV.
+  - Traccar / DocuSeal webhooks: same rule.
+  - Adobe webhook: `DEBUG` alone no longer opens it.
+  - The portal OTP `debug_pin` echo now happens only in explicit dev. Before, an unset ENV echoed it.
+  - Session, admin-key and machine-key (`GAS_API_KEY` / `LEADS_INTERNAL_TOKEN`) paths are unchanged.
+- **No `SECRET_KEY` means session routes fail closed (503), not a startup failure.**
+  - `PinAuthMiddleware` answers 503 `Session signing not configured` on protected routes once the PIN check passes.
+  - The login POST and kiosk scan tokens return 503, and no cookie is issued or trusted.
+  - `/health`, public paths, webhooks and machine keys are unaffected.
+  - Refusing to start was rejected: it would also take down `/health`, the public paperwork portal and the inbound webhooks, and cause restart loops.
+  - `deps.Settings.secret_key` is no longer derived from the PIN or a fixed string. It is empty outside dev. The fixed dev-only key is used only under `ENV=development` (and `REQUIRE_SECRET_KEY` unset).
+
+### Tests
+- `tests/test_auth_harden_followups.py` (added to the `ci.yml` list) covers:
+  - dev vs unset / production / prod / staging / test / `dev` / typos, each with and without keys;
+  - `REQUIRE_*` flags, `ENVIRONMENT` fallback, machine keys, and admin keys and PIN tokens on OSINT / ALPR / booking intake;
+  - the bonds override (no DB writes on rejection);
+  - webhook secrets: Twilio, payment, Traccar, DocuSeal, Adobe;
+  - missing `SECRET_KEY`: 503 on protected routes, login and kiosk; `/health` 200; public paths unchanged; dev fallback;
+  - `deps` never PIN-derived, no `config.py` PIN default, self-indemnitor unset returns False, and the retired-PIN tree scan.
+- `tests/conftest.py` sets a synthetic `SECRET_KEY` via `setdefault`, as in prod. Tests of the missing-key path delete it.
+- `tests/test_prod_auth_allowlist.py` (payment payload validation) and `tests/test_workflow_endpoints.py` (Twilio SMS) now set `ENV=development` explicitly for their unsigned-webhook dev path. Their assertions are unchanged.
+- The retired literal was replaced with synthetic PINs in `test_pin_portal`, `test_packet_builder_service` (plus an unset-fails-closed test), `test_packet_pay_and_court_seed`, `test_checkin_evidence_pack`, `test_staff_chain_ensure`, `test_new_osi_poa_format` and `test_brand_contacts`.
+
 ## [Unreleased] — 2026-10-10 (dashboard auth fails closed without a PIN)
 
 ### Security

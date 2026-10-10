@@ -3,9 +3,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import hashlib
+
+import scripts.check_brand_contacts as brand
 from scripts.check_brand_contacts import (
     CANONICAL_PHONES,
-    PIN_AS_PHONE,
     WRONG_DOMAINS,
     scan_text,
     scan_tree,
@@ -39,14 +41,17 @@ def test_wrong_domains_are_flagged_without_matching_the_real_domain():
     assert scan_text("docs/note.md", "https://www.shamrockbailbonds.biz") == []
 
 
-def test_one_digit_typo_and_pin_phone_fail_placeholders_do_not():
+def test_one_digit_typo_and_pin_phone_fail_placeholders_do_not(monkeypatch):
+    # The retired PIN is kept only as a digest; exercise the check with a
+    # synthetic stand-in digest so the test holds no PIN digits either.
+    assert len(brand.PIN_AS_PHONE_SHA256) == 64
+    monkeypatch.setattr(brand, "PIN_AS_PHONE_SHA256", hashlib.sha256(b"2390000004").hexdigest())
     bad = scan_text("dashboard/sl-help.js", "Call (239) 334-2245 today")
     assert len(bad) == 1
     assert bad[0].kind == "shamrock_phone"
 
-    pin = scan_text("dashboard/sl-active-bonds.js", "Call us at (239) 224-5454.")
+    pin = scan_text("dashboard/sl-active-bonds.js", "Call us at (239) 000-0004.")
     assert len(pin) == 1
-    assert PIN_AS_PHONE == "2392245454"
 
     assert scan_text("dashboard/index.html", 'placeholder="(239) 555-0178"') == []
     assert scan_text("dashboard/extensions.py", "(239) 955-0314") == []

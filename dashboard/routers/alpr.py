@@ -55,7 +55,11 @@ def _require_staff(
     if DASHBOARD_PIN and x_admin_token and x_admin_token == DASHBOARD_PIN:
         return
     if not ALPR_ADMIN_KEY and not DASHBOARD_PIN:
-        return  # Dev open
+        from dashboard.auth.dev_mode import no_pin_passthrough_allowed
+
+        if no_pin_passthrough_allowed():
+            return  # explicit ENV=development only
+        raise HTTPException(status_code=503, detail="ALPR staff authorization not configured.")
     raise HTTPException(status_code=403, detail="ALPR requires authenticated staff session.")
 
 

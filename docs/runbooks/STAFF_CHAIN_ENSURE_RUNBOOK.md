@@ -83,7 +83,7 @@ X-Admin-Token: <DASHBOARD_PIN>
 ```bash
 curl -X POST "https://leads.shamrockbailbonds.biz/api/staff/chain/ensure-match-bondcase" \
   -H "Content-Type: application/json" \
-  -H "X-Admin-Token: 224545" \
+  -H "X-Admin-Token: $DASHBOARD_PIN" \
   -d '{
     "booking_number": "1033474",
     "surety_id": "osi",

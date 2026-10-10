@@ -9,6 +9,7 @@ Endpoints: /api/write-bond, /api/active-bonds (CRUD),
 
 import json as json_lib
 import os
+import secrets
 import re
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -2480,7 +2481,12 @@ async def api_admin_pin_override(request: Request):
     reason = str(data.get("reason", "Admin override for immediate bond posting")).strip()
     approved_by = str(data.get("approved_by", "Admin")).strip()
 
-    if _pin and pin_entered != _pin:
+    if not _pin:
+        from dashboard.auth.dev_mode import no_pin_passthrough_allowed
+
+        if not no_pin_passthrough_allowed():
+            return JSONResponse({"success": False, "error": "Admin PIN not configured"}, status_code=503)
+    elif not secrets.compare_digest(pin_entered.encode(), _pin.encode()):
         return JSONResponse({"success": False, "error": "Invalid Admin PIN"}, status_code=401)
 
     now = datetime.now(timezone.utc)
