@@ -23,6 +23,8 @@ import uuid
 from datetime import datetime, timezone
 import re
 from typing import Any, Dict, List, Mapping, Optional, Union
+
+from core.booking_identity import public_booking_number
 from urllib.parse import urljoin
 
 import httpx
@@ -613,6 +615,15 @@ class DocuSealService:
         defendant can each open their /s/{slug} link immediately (OpenAPI).
         send_sms is omitted unless the caller sets it. Staff test cases set it false.
         """
+        # Internal natural keys (core/booking_identity.py) never reach a document.
+        from core.booking_identity import scrub_internal_keys
+
+        submitters = [
+            {**s, **({"values": scrub_internal_keys(s["values"])} if "values" in s else {}),
+             **({"fields": scrub_internal_keys(s["fields"])} if "fields" in s else {})}
+            if isinstance(s, dict) else s
+            for s in submitters
+        ]
         body: Dict[str, Any] = {
             "template_id": int(template_id) if str(template_id).isdigit() else template_id,
             "send_email": send_email,
@@ -946,7 +957,7 @@ class DocuSealService:
             poa = poa_list[0] if poa_list else ""
             poa_all = ", ".join(poa_list)
 
-        booking = (
+        booking = public_booking_number(
             bond_data.get("booking_number")
             or bond_data.get("defendant_booking_number")
             or def_.get("booking_number")

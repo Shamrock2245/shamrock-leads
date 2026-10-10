@@ -135,6 +135,11 @@ class BaseScraper(ABC):
     # ``run`` then returns before any network, score, writer, broadcast, or alert
     # behavior can occur.
     SOURCE_CONTRACT_VALIDATED = True
+    # Narrow owner exception for sources with no booking number at all
+    # (Miami-Dade, 2026-10-09). Only a scraper that sets this AND whose records
+    # pass core.booking_identity.internal_natural_key (allow-listed state/county,
+    # exact key pattern) keeps rows with a blank Booking_Number. Default off.
+    ALLOWS_INTERNAL_NATURAL_KEY = False
     SOURCE_CONTRACT_REASON = ""
 
     # ── Self-healing (scrapers/scraper_resilience.py) ──
@@ -672,9 +677,17 @@ class BaseScraper(ABC):
     @classmethod
     def _filter_records_without_source_booking(cls, records: List[ArrestRecord]) -> List[ArrestRecord]:
         """Fail closed on missing or known synthetic booking identifiers."""
+        if not cls.ALLOWS_INTERNAL_NATURAL_KEY:
+            return [
+                record for record in records
+                if cls._has_source_booking_identifier(getattr(record, "Booking_Number", ""))
+            ]
+        from core.booking_identity import internal_natural_key
+
         return [
             record for record in records
             if cls._has_source_booking_identifier(getattr(record, "Booking_Number", ""))
+            or internal_natural_key(record)
         ]
 
     @property

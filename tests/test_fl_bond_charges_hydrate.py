@@ -190,7 +190,10 @@ class TestMiamiDadeNoBondLayer(unittest.TestCase):
         self.assertIn("Charge1", OUT_FIELDS)
         self.assertIn("Charge3", OUT_FIELDS)
         self.assertNotIn("Address", OUT_FIELDS)
-        self.assertNotIn("DOB", OUT_FIELDS)
+        self.assertNotIn("Zip", OUT_FIELDS)
+        # DOB is fetched since 2026-10-09: it is part of the owner-approved
+        # internal natural key (defendant + DOB + BookDate).
+        self.assertIn("DOB", OUT_FIELDS)
 
     def test_parse_leaves_bond_unknown_and_reads_code2(self):
         from datetime import datetime, timezone

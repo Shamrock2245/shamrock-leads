@@ -8,6 +8,7 @@ import math
 from datetime import datetime
 from bson import ObjectId
 from fastapi.responses import JSONResponse
+from core.booking_identity import redacting_csv_writer, redacting_dict_writer
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,13 @@ def serialize_doc(doc: dict) -> dict:
             doc[k] = str(v)
         elif k == "booking_number" and not isinstance(v, str):
             doc[k] = str(v) if v is not None else ""
+    if "booking_number" in doc:
+        # booking_number stays the record's routing id; an internal natural key
+        # (core/booking_identity.py, Miami-Dade) is flagged and displays blank.
+        from core.booking_identity import is_internal_booking_key, public_booking_number
+
+        doc["booking_key_internal"] = is_internal_booking_key(doc["booking_number"])
+        doc["booking_number_display"] = public_booking_number(doc["booking_number"])
     return attach_write_eligible(doc)
 
 
@@ -148,7 +156,7 @@ async def async_csv_streamer(cursor, fieldnames: list[str]):
     from MongoDB schema variations using extrasaction='ignore'.
     """
     buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=fieldnames, extrasaction="ignore")
+    writer = redacting_dict_writer(buffer, fieldnames=fieldnames, extrasaction="ignore")
 
     # Write and yield the header row
     writer.writeheader()
@@ -186,7 +194,7 @@ async def async_csv_list_streamer(cursor, row_extractor_fn, header: list[str]):
     and a header list, streaming formatted rows securely.
     """
     buffer = io.StringIO()
-    writer = csv.writer(buffer)
+    writer = redacting_csv_writer(buffer)
 
     # Write and yield the header row
     writer.writerow(header)

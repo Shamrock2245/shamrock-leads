@@ -80,9 +80,10 @@ def test_home_counties_matrix_state_after_source_checks():
     for county in ("Hendry", "Charlotte", "Manatee"):
         assert _matrix_status(text, county) == "fail_closed", county
     # 2026-10-08: main also moved Orange (#134) and Indian River (#136) to candidate_productive;
-    # #143 moved Hendry from recon_only to fail_closed; 2026-10-09 Miami-Dade too (no booking number).
-    # 2026-10-09 Charlotte and Manatee recon_only -> fail_closed.
-    assert "| FL | 67 | 67 | 4 | 20 | 22 | 0 | 21 |" in text
+    # #143 moved Hendry from recon_only to fail_closed; 2026-10-09 Charlotte and Manatee
+    # recon_only -> fail_closed; Miami-Dade was fail_closed 2026-10-09 (#166) and reopened
+    # recon_only the same day (owner exception).
+    assert "| FL | 67 | 67 | 4 | 20 | 23 | 0 | 20 |" in text
 
 
 def test_no_home_county_is_promoted_in_health():

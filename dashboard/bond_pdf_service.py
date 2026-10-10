@@ -24,6 +24,8 @@ from datetime import datetime, date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from core.booking_identity import public_booking_number, scrub_internal_keys
+
 import fitz  # PyMuPDF
 
 logger = logging.getLogger(__name__)
@@ -805,6 +807,8 @@ def _set_widget_value_with_scaling(widget, val, default_font_size=10):
 def _apply_field_values(page, field_values: dict, font_sizes: Optional[dict] = None) -> None:
     """Write values to form widgets; match base field names (handles [n] suffixes)."""
     font_sizes = font_sizes or {}
+    # Internal natural keys (core/booking_identity.py) are never printed.
+    field_values = scrub_internal_keys(dict(field_values))
     for widget in page.widgets() or []:
         raw_name = widget.field_name or ""
         base = _widget_base_name(raw_name)
@@ -844,9 +848,9 @@ def build_osi_field_values(data: dict) -> tuple[dict, dict]:
         last_name=data.get("last_name") or "",
     )
             
-    booking_number = str(
+    booking_number = str(public_booking_number(
         data.get("booking_number") or data.get("defendant_booking_number") or ""
-    ).strip()
+    )).strip()
     county = data.get("county") or data.get("defendant_county") or ""
     address = data.get("address") or data.get("defendant_address") or ""
 
@@ -957,9 +961,9 @@ def build_palmetto_field_values(data: dict) -> tuple[dict, dict]:
     charge_line1, charge_line2 = str(charge_raw or "").strip(), ""
 
     full_name = data.get("name") or data.get("defendant_name") or ""
-    booking_number = str(
+    booking_number = str(public_booking_number(
         data.get("booking_number") or data.get("defendant_booking_number") or ""
-    ).strip()
+    )).strip()
     county = data.get("county") or data.get("defendant_county") or ""
     address = data.get("address") or data.get("defendant_address") or ""
 
@@ -1232,12 +1236,12 @@ def store_appearance_bond_pdfs(
     """
     surety = (surety or "osi").lower().strip()
     rows = normalize_charge_rows(bond_data)
-    booking = (
+    booking = public_booking_number(
         booking_number
         or bond_data.get("booking_number")
         or bond_data.get("defendant_booking_number")
         or "unknown"
-    )
+    ) or "unknown"
     booking_safe = re.sub(r"[^A-Za-z0-9_-]+", "_", str(booking))[:40]
     pkt = packet_id or f"BOND-{datetime.now().strftime('%Y%m%d%H%M%S')}"
     pkt_safe = re.sub(r"[^A-Za-z0-9_-]+", "_", str(pkt))[:40]

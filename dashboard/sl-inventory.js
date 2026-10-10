@@ -840,7 +840,7 @@ const SLInventory = (() => {
       return;
     }
     // Build a tiny text "file" so the same backend path is used
-    const blob = new Blob([text], { type: 'text/plain' });
+    const blob = new Blob([(window.slRedactKeys ? window.slRedactKeys(text) : text)], { type: 'text/plain' });
     const file = new File([blob], 'pasted-receipt.txt', { type: 'text/plain' });
     return processUpload(file);
   }
