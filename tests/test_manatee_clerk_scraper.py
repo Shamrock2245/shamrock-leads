@@ -187,7 +187,7 @@ def test_detail_parse_fields_verbatim_and_minimised():
     assert [c["offense_date"] for c in d["charges"]] == ["2026-10-07", "2026-10-06"]
     assert d["charges"][0]["statute"] == "999.01.1a" and d["charges"][1]["degree"] == "First Degree"
     assert d["obts"] == {"obts": [OBTS_A], "agencies": ["ZZPD"], "served": ["2026-10-07", "2026-10-08"]}
-    assert d["defendant"] == {"name": "ALPHA ZED ZZSYNTH", "gender": "Female", "dob": "1990-01-02"}
+    assert d["defendants"] == [{"name": "ALPHA ZED ZZSYNTH", "gender": "Female", "dob": "1990-01-02"}]
     assert "SYNTH ST" not in repr(d) and "COUNSEL" not in repr(d)  # no address, no attorney
     assert d["next_event"] == {"date": "2026-10-20", "time": "08:30AM", "event": "ARRAIGNMENT (SYNTH)",
                                "location": "SYNTH JUDICIAL CENTER, COURTROOM 0-Z"}
@@ -333,7 +333,66 @@ def test_challenge_on_list_stops_the_run_egress_blocked(monkeypatch):
     v = classify_exception(exc.value)
     assert v.error_class == "anti_bot" and v.egress_block and not v.retryable
     assert sum(len(s.calls) for s in sessions) == 1  # stopped at the first challenge, no retry
-    assert ManateeClerkScraper.BASE_RETRY_ENABLED is False
+
+
+def test_base_retry_skips_challenges_but_retries_transient_5xx(monkeypatch):
+    assert ManateeClerkScraper.BASE_RETRY_ENABLED is True
+    # A challenge through the base retry wrapper: one request, no retry.
+    sc, sessions = _scraper(monkeypatch, LISTS, DETAILS, challenge_on=lambda m, u, d: True)
+    sc._retry_sleep = lambda s: None
+    monkeypatch.setattr("scrapers.base_scraper.base_retry_enabled", lambda: True)
+    with pytest.raises(EgressBlocked):
+        sc._scrape_with_retry()
+    assert sum(len(s.calls) for s in sessions) == 1
+    # A transient 503 is classified network/retryable and retried.
+    v = classify_exception(RuntimeError("Manatee Clerk: HTTP 503"))
+    assert v.error_class == "network" and v.retryable
+    flaky = {"n": 0}
+
+    def once_503(method, url, data):
+        flaky["n"] += 1
+        return flaky["n"] == 1
+
+    sc2, sessions2 = _scraper(monkeypatch, LISTS, DETAILS)
+    sc2._retry_sleep = lambda s: None
+    real_request = FakeSession.request
+
+    def request(self, method, url, **kw):
+        if once_503(method, url, kw.get("data")):
+            self.calls.append((method, url, {}))
+            return SimpleNamespace(status_code=503, headers={"server": "Microsoft-IIS/10.0"}, text="busy")
+        return real_request(self, method, url, **kw)
+
+    monkeypatch.setattr(FakeSession, "request", request)
+    assert len(sc2._scrape_with_retry()) == 2
+
+
+def _codef_detail(parties):
+    rows = "".join(f"<tr><td>Defendant</td><td>{n}<br/><strong>Attorney:</strong>X</td><td>{g}</td><td>{dob}</td></tr>"
+                   for n, g, dob in parties)
+    html = detail_page(CASE_A)
+    return re.sub(r"<tbody><tr><td>Defendant</td>.*?</tr></tbody>", f"<tbody>{rows}</tbody>", html, flags=re.S)
+
+
+def test_co_defendants_each_get_their_own_identity_fields(monkeypatch):
+    detail = _codef_detail([("ALPHA ZED ZZSYNTH", "Female", "01/02/1990"), ("BRAVO ZZSYNTH", "Male", "03/04/1985")])
+    rows = [_list_row(1, CASE_A, "ZZSYNTH, ALPHA ZED"), _list_row(2, CASE_A, "ZZSYNTH, BRAVO")]
+    sc, _ = _scraper(monkeypatch, {10: list_page(rows)}, {"9900001": detail, "9900002": detail})
+    a, b = sc.scrape()
+    assert (a.DOB, a.Sex, b.DOB, b.Sex) == ("1990-01-02", "F", "1985-03-04", "M")
+    assert a.extra_data["mc_case_key"] != b.extra_data["mc_case_key"]
+
+
+def test_unmatched_or_ambiguous_defendant_leaves_identity_blank(monkeypatch, caplog):
+    two_same = _codef_detail([("BRAVO ZZSYNTH", "Male", "03/04/1985"), ("BRAVO ZZSYNTH", "Male", "05/06/1999")])
+    other = _codef_detail([("CHARLIE ZZSYNTH", "Male", "03/04/1985")])
+    rows = [_list_row(1, CASE_A, "ZZSYNTH, BRAVO"), _list_row(2, CASE_A, "ZZSYNTH, DELTA")]
+    sc, _ = _scraper(monkeypatch, {10: list_page(rows)}, {"9900001": two_same, "9900002": other})
+    with caplog.at_level(logging.INFO):
+        recs = sc.scrape()
+    assert [(r.DOB, r.Sex) for r in recs] == [("", ""), ("", "")]
+    assert "defendant_unmatched=2" in caplog.text
+    assert mc.match_defendant([{"name": "ALPHA ZED ZZSYNTH"}], "ZZSYNTH, ALPHA ZED") == {"name": "ALPHA ZED ZZSYNTH"}
 
 
 def test_challenge_on_detail_stops_the_run(monkeypatch):

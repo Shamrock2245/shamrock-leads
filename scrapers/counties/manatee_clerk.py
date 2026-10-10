@@ -20,8 +20,9 @@ notes: ``docs/recon/FL_MANATEE_CLERK_SCRAPER_2026-10-10.md``):
 * Plain HTTPS (IIS, no Cloudflare, no CAPTCHA, terms allow automated access).
   Honest UA, ``REQUEST_DELAY_S`` between requests, ``MAX_DETAILS_PER_RUN`` cap.
   A challenge / CAPTCHA / 401 / 403 / 429 stops the run at once with
-  ``EgressBlocked`` (``egress_block:`` prefix; never retried, no stealth, no
-  proxy, no impersonation). Structural drift raises ``ParseDriftError``.
+  ``EgressBlocked`` (``egress_block:`` prefix; classified non-retryable, so
+  never retried; no stealth, no proxy, no impersonation). Transient 5xx /
+  timeouts keep the base retry. Structural drift raises ``ParseDriftError``.
 
 Keys and fields:
 
@@ -307,11 +308,12 @@ def parse_next_event(soup: BeautifulSoup, today: Optional[date] = None) -> Dict[
     return {"date": "", "time": "", "event": "", "location": ""}
 
 
-def parse_defendant(soup: BeautifulSoup) -> Dict[str, str]:
-    """Defendant name, gender and DOB from the Parties table (no address, no attorney)."""
+def parse_defendants(soup: BeautifulSoup) -> List[Dict[str, str]]:
+    """Every Defendant's name, gender and DOB from the Parties table (no address, no attorney)."""
     panel = _panel(soup, "Parties")
     if panel is None:
-        return {}
+        return []
+    out: List[Dict[str, str]] = []
     for tr in panel.select("tbody tr"):
         tds = tr.find_all("td")
         if len(tds) < 4 or _clean(tds[0].get_text(" ")) != "Defendant":
@@ -322,12 +324,31 @@ def parse_defendant(soup: BeautifulSoup) -> Dict[str, str]:
                 break
             if isinstance(node, NavigableString):
                 name_parts.append(str(node))
-        return {
+        out.append({
             "name": _clean(" ".join(name_parts)),
             "gender": _clean(tds[2].get_text(" ")),
             "dob": _iso(_clean(tds[3].get_text(" "))),
-        }
-    return {}
+        })
+    return out
+
+
+def _name_tokens(name: Any) -> frozenset:
+    return frozenset(t for t in re.split(r"[^A-Z0-9'-]+", _norm(name)) if t)
+
+
+def match_defendant(defendants: List[Dict[str, str]], list_name: str) -> Optional[Dict[str, str]]:
+    """The detail Defendant whose name is the list row's name, or None.
+
+    The list prints "LAST, FIRST MIDDLE" and the detail "FIRST MIDDLE LAST",
+    so names are compared as token sets. No match, or more than one match
+    (ambiguous), gives None and the record's DOB / sex stay blank: identity
+    fields are never copied from a different co-defendant.
+    """
+    want = _name_tokens(list_name)
+    if not want:
+        return None
+    hits = [d for d in defendants if _name_tokens(d.get("name")) == want]
+    return hits[0] if len(hits) == 1 else None
 
 
 def parse_detail(html: str, today: Optional[date] = None) -> Dict[str, Any]:
@@ -342,7 +363,7 @@ def parse_detail(html: str, today: Optional[date] = None) -> Dict[str, Any]:
         "status": _labelled(soup, "Status:"),
         "type": _labelled(soup, "Type:"),
         "judge": _labelled(soup, "Judge:"),
-        "defendant": parse_defendant(soup),
+        "defendants": parse_defendants(soup),
         "charges": parse_charges(soup),
         "bonds": parse_bonds(soup),
         "obts": parse_obts(soup),
@@ -404,14 +425,16 @@ class ManateeClerkScraper(BaseScraper):
     # core.booking_identity.internal_natural_key accepts them (FL / "Manatee
     # Clerk", exact mc_case_v1 pattern).
     ALLOWS_INTERNAL_NATURAL_KEY = True
-    # A challenge stops the run (EgressBlocked is never retried anyway).
-    BASE_RETRY_ENABLED = False
+    # Base transient-network retry stays on (5xx / timeouts). A challenge
+    # raises EgressBlocked, which is classified non-retryable, so it still
+    # stops the run at once.
 
     _sleep = staticmethod(time.sleep)
 
     def __init__(self, session_factory: Any = None):
         self._session_factory = session_factory or requests.Session
         self._requests_made = 0
+        self._unmatched_defendants = 0
         super().__init__()
 
     @property
@@ -435,10 +458,9 @@ class ManateeClerkScraper(BaseScraper):
         if self._requests_made:
             self._sleep(REQUEST_DELAY_S)
         self._requests_made += 1
-        try:
-            resp = session.request(method, url, timeout=REQUEST_TIMEOUT, allow_redirects=False, **kwargs)
-        except requests.RequestException as exc:
-            raise RuntimeError(f"Manatee Clerk: request failed ({type(exc).__name__})") from exc
+        # A requests timeout / connection error propagates as-is, so the base
+        # retry classifies it as a transient network failure.
+        resp = session.request(method, url, timeout=REQUEST_TIMEOUT, allow_redirects=False, **kwargs)
         body = resp.text or ""
         reason = detect_challenge(resp.status_code, dict(resp.headers or {}), body)
         if reason:
@@ -447,6 +469,7 @@ class ManateeClerkScraper(BaseScraper):
         if resp.status_code in (301, 302, 303, 307, 308):
             raise ManateeClerkContractError(f"Manatee Clerk: unexpected redirect (HTTP {resp.status_code})")
         if resp.status_code != 200:
+            # "HTTP 5xx" is classified network/retryable; 404/410 url_changed.
             raise RuntimeError(f"Manatee Clerk: HTTP {resp.status_code}")
         return body
 
@@ -461,6 +484,7 @@ class ManateeClerkScraper(BaseScraper):
 
         start = time.time()
         self._requests_made = 0
+        self._unmatched_defendants = 0
         end_d = date.today()
         start_d = end_d - timedelta(days=DAYS_BACK - 1)
         start_s, end_s = start_d.strftime("%m-%d-%Y"), end_d.strftime("%m-%d-%Y")
@@ -499,8 +523,10 @@ class ManateeClerkScraper(BaseScraper):
 
         no_bond = sum(1 for r in records if r.Bond_Amount == "")
         logger.info(
-            "[%s] %d records (listed=%d, details=%d, capped=%d, non_defendant=%d, bond_unknown=%d) in %.1fs",
-            self.county_label, len(records), listed, details, capped, skipped_non_defendant, no_bond, time.time() - start,
+            "[%s] %d records (listed=%d, details=%d, capped=%d, non_defendant=%d, bond_unknown=%d, "
+            "defendant_unmatched=%d) in %.1fs",
+            self.county_label, len(records), listed, details, capped, skipped_non_defendant, no_bond,
+            self._unmatched_defendants, time.time() - start,
         )
         return records
 
@@ -527,7 +553,9 @@ class ManateeClerkScraper(BaseScraper):
         if not key or len(name.replace(",", " ").split()) < 2:
             return None
         first, middle, last = self._parse_name(name)
-        defendant = detail.get("defendant") or {}
+        defendant = match_defendant(detail.get("defendants") or [], name) or {}
+        if not defendant:
+            self._unmatched_defendants += 1
         charges = detail.get("charges") or []
         obts = detail.get("obts") or {}
         served = [d for d in obts.get("served", []) if d]

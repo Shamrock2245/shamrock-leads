@@ -8,7 +8,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 - **Manatee Clerk (FL)**: a new, separate scraper (`scrapers/counties/manatee_clerk.py`) for court filings on records.manateeclerk.com (FELONY 10, MISDEMEANOR 35/37; list GET by filing date, detail anti-forgery POST). Owner exception (Brendan, 2026-10-10). Staff see the source as "Manatee Clerk (court filing)". The Manatee (FL) jail scraper is untouched and stays `fail_closed`.
   - Plain HTTPS, honest UA, 2.5 s pacing, 80 detail POSTs per run, one session per case type, every 120 min. `config/source_guard.py` is checked first; `manateeclerk.com` maps to `Manatee Clerk (FL)`.
-  - A challenge / CAPTCHA / 401 / 403 / 429 stops the run with `EgressBlocked` (never retried; base retry off). Structural drift raises `ParseDriftError`.
+  - A challenge / CAPTCHA / 401 / 403 / 429 stops the run with `EgressBlocked` (classified non-retryable, so never retried). Transient 5xx / timeouts keep the base retry. Structural drift raises `ParseDriftError`.
+  - Co-defendants: DOB and sex come only from the detail Defendant whose name matches the list row (token match); no match or an ambiguous match leaves them blank (counted, never names).
   - No booking number: `Booking_Number` stays blank and never holds the case number. Internal key `mc_case_v1:` + sha256(case number + defendant name). `case_number`, `obts_number`, `filing_date`, `case_status` and `source_label` are their own fields.
   - Charges verbatim; per-charge offense date, statute, degree, citation and Arrest Summons Served in `charge_details`; `Arrest_Date` from Arrest Summons Served; next court event; agency code.
   - Bond only from the Bonds table's bond rows; the `N Bond(s)` totals row is ignored, so no bond rows gives `""` (never `"0"`), and a published `$0.00` bond row counts.
