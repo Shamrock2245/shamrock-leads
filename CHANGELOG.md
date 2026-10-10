@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-10 (dashboard auth fails closed without a PIN)
+
+### Security
+- **No `DASHBOARD_PIN` now means 503 on protected routes, unless `ENV=development` is set explicitly** (CoS-approved hardening after #175). Before, any non-production `ENV`, including an unset one, let every protected route through when the PIN was missing. `PinAuthMiddleware` now calls `no_pin_passthrough_allowed()`. It is true only when `ENV` (or `ENVIRONMENT`) is exactly `development` and `REQUIRE_DASHBOARD_PIN` is not set. Production, staging, test, `dev` and an unset `ENV` are all closed. `/health`, the `OPEN_PATHS` / `OPEN_PREFIXES` allowlist, static assets, inbound webhooks, Traccar status tokens and machine keys are checked before the PIN gate, so they behave as before. With a PIN set, 401 (API / `openapi.json`) and 302 to `/login` (pages) are unchanged. `docker-compose.yml` is untouched.
+- Docs: `CONTRIBUTING.md` local-run note, `.env.example` auth block and `docs/SUPER_CRM.md` ops checklist now say a PIN-less local run needs `ENV=development`.
+
+### Tests
+- `tests/test_auth_no_pin_fail_closed.py` (added to the `ci.yml` list): missing PIN with `ENV` unset, `production`, `prod`, `staging`, `test` or `dev` returns 503 on `/api/stats`, `/openapi.json`, `/docs`, Traccar device status and `/`, and `/health` stays 200. `ENVIRONMENT=production` returns 503. `ENV=development` (or `ENVIRONMENT=development`) passes through. `ENV=development` with `REQUIRE_DASHBOARD_PIN=true` returns 503. A PIN set keeps 401 / 302 under every `ENV`. Public allowlist statuses are the same with and without a PIN. Synthetic values only.
+- `tests/test_bb_webhook_register_auth.py`: the two route-guard tests that rely on an open middleware now set `ENV=development` explicitly. Their 401 assertions are unchanged.
+
 ## [Unreleased] — 2026-10-09 (pre-existing test failures outside the CI list)
 
 ### Fixed
