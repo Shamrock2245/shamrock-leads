@@ -28,7 +28,7 @@ Keys and fields:
 
 * There is no booking number. ``Booking_Number`` stays blank and NEVER holds
   the case number. The record is keyed on an internal key
-  ``mc_case_v1:<sha256>`` (case number + OBTS number(s) where listed;
+  ``mc_case_v1:<sha256>`` (sha256 of the normalised case number only;
   ``mc_case_key``) through the narrow allow-listed writer path
   (``core.booking_identity``, scope ``("FL", "Manatee Clerk")`` only). Display
   helpers print it blank.
@@ -87,7 +87,7 @@ REQUEST_TIMEOUT = 30
 
 MC_KEY_VERSION = MC_KEY_PREFIX.rstrip(":")  # "mc_case_v1"
 MC_KEY_LABEL = (
-    "internal key, NOT a booking number: sha256 of normalised case number | OBTS number(s) where listed"
+    "internal key, NOT a booking number: sha256 of the normalised case number (upper-case, A-Z0-9 only)"
 )
 
 LIST_COLUMNS = ("", "View", "Case Number", "Party Name", "Party Type", "Case Type", "Case Status", "File Date", "DOB")
@@ -140,24 +140,28 @@ def _iso(mdy: str) -> str:
 
 
 def normalise_case_number(case_number: Any) -> str:
+    """Canonical form of a Clerk case number for the key.
+
+    Rule: upper-case, then drop every character that is not A-Z or 0-9
+    (spaces, tabs, dashes, dots, slashes). The Clerk prints the Florida
+    uniform case number as one token (e.g. ``2026CF009901AX``); this makes
+    ``2026-CF-009901-AX``, ``2026 cf 009901 ax`` and ``2026cf009901ax``
+    the same case. Leading zeros and the trailing party suffix are kept.
+    """
     return re.sub(r"[^0-9A-Z]", "", _norm(case_number))
 
 
-def mc_case_key(case_number: Any, obts: Any = ()) -> str:
-    """Internal Manatee Clerk key. Never a booking number; never printed.
+def mc_case_key(case_number: Any) -> str:
+    """Internal Manatee Clerk key: ``mc_case_v1:`` + sha256(normalised case number).
 
-    sha256 of the normalised case number plus the case's OBTS number(s) where
-    the Clerk lists any (sorted, de-duplicated). Returns "" without a case
-    number.
+    Never a booking number; never printed. OBTS is NOT in the key: it is a
+    plain ``obts_number`` field, so a case that gains an OBTS on a later
+    scrape upserts the same record. Returns "" without a case number.
     """
     case = normalise_case_number(case_number)
     if not case:
         return ""
-    if isinstance(obts, str):
-        obts = [obts]
-    nums = sorted({re.sub(r"[^0-9A-Z]", "", _norm(o)) for o in (obts or ()) if _norm(o)})
-    payload = f"{MC_KEY_VERSION}|{case}|{','.join(nums)}"
-    return MC_KEY_PREFIX + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return MC_KEY_PREFIX + hashlib.sha256(case.encode("utf-8")).hexdigest()
 
 
 def detect_challenge(status: int, headers: Dict[str, Any], body: str) -> str:
@@ -586,8 +590,7 @@ class ManateeClerkScraper(BaseScraper):
 
     def build_record(self, row: Dict[str, Any], detail: Dict[str, Any], court_type: str) -> Optional[ArrestRecord]:
         name = row["party_name"]
-        obts_info = detail.get("obts") or {}
-        key = mc_case_key(detail.get("case_number") or row["case_number"], obts_info.get("obts", []))
+        key = mc_case_key(detail.get("case_number") or row["case_number"])
         if not key or len(name.replace(",", " ").split()) < 2:
             return None
         first, middle, last = self._parse_name(name)
@@ -633,13 +636,15 @@ class ManateeClerkScraper(BaseScraper):
                 "mc_case_key": key,
                 "mc_case_key_label": MC_KEY_LABEL,
                 "source_label": SOURCE_LABEL,
-                "obts_number": ", ".join(obts.get("obts", [])),
                 "filing_date": filed,
                 "case_status": detail.get("status") or row.get("case_status", ""),
                 "judge": detail.get("judge", ""),
                 "next_event": event.get("event", ""),
                 "charge_details": charges,
                 "bond_published": bool(bonds.get("rows")),
+                # OBTS only when the Clerk lists one: MongoWriter promotes it to
+                # obts_number; a later blank scrape leaves the stored value alone.
+                **({"obts_number": ", ".join(obts["obts"])} if obts.get("obts") else {}),
             },
         )
 

@@ -385,6 +385,9 @@ class MongoWriter:
             if extra.get("charge_details"):
                 doc["charge_details"] = extra["charge_details"]
             # Court-filing sources (Manatee Clerk): their own labelled fields.
+            # Set only when present, so a later scrape that publishes a value
+            # (e.g. an OBTS number added after filing) updates it, and a later
+            # blank never wipes a stored one (the field is left out of $set).
             for fld in ("obts_number", "filing_date", "case_status", "source_label"):
                 if extra.get(fld):
                     doc[fld] = extra[fld]

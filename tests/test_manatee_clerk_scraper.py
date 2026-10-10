@@ -293,23 +293,64 @@ def test_case_number_is_never_copied_to_booking_number():
     assert not re.search(r"Booking_Number\s*=\s*(?!\"\")", src)
 
 
-def test_key_is_case_number_plus_obts_where_present():
-    k = mc.mc_case_key(CASE_A, [OBTS_A])
-    assert MC_INTERNAL_KEY_RE.fullmatch(k) and CASE_A not in k and OBTS_A not in k
-    assert k != mc.mc_case_key(CASE_A) != mc.mc_case_key(CASE_A, ["5800000002"])
-    assert mc.mc_case_key(CASE_A, [OBTS_A, OBTS_A]) == k == mc.mc_case_key(CASE_A.lower(), OBTS_A)
-    assert mc.mc_case_key(CASE_A, ["5800000002", OBTS_A]) == mc.mc_case_key(CASE_A, [OBTS_A, "5800000002"])
-    assert mc.mc_case_key("") == ""
+@pytest.mark.parametrize("variant", [
+    CASE_A, CASE_A.lower(), " 2026CF009901AX ", "2026-CF-009901-AX", "2026 cf 009901 ax",
+    "2026\tCF-009901 AX", "2026.CF.009901.AX", "2026/CF/009901/AX",
+])
+def test_case_number_normalisation_variants_share_one_key(variant):
+    assert mc.normalise_case_number(variant) == "2026CF009901AX"
+    assert mc.mc_case_key(variant) == mc.mc_case_key(CASE_A)
 
 
-def test_record_key_uses_detail_obts(monkeypatch):
+def test_key_is_sha256_of_the_normalised_case_number_only():
+    import hashlib
+
+    k = mc.mc_case_key(CASE_A)
+    assert k == "mc_case_v1:" + hashlib.sha256(b"2026CF009901AX").hexdigest()
+    assert MC_INTERNAL_KEY_RE.fullmatch(k) and CASE_A not in k
+    # Different cases (number, type code, party suffix) never share a key.
+    for other in ("2026CF009902AX", "2026MM009901AX", "2026CF009901BX", "2025CF009901AX", "2026CF0009901AX"):
+        assert mc.mc_case_key(other) != k, other
+    assert mc.mc_case_key("") == "" and mc.mc_case_key(" - ") == ""
+
+
+def test_obts_is_not_in_the_key(monkeypatch):
     sc, _ = _scraper(monkeypatch, LISTS, DETAILS)
-    a, b = sc.scrape()
-    assert a.extra_data["mc_case_key"] == mc.mc_case_key(CASE_A, [OBTS_A])
-    no_obts = detail_page(CASE_A, served=())
-    sc2, _ = _scraper(monkeypatch, {10: LISTS[10]}, {"9900001": no_obts})
+    a, _b = sc.scrape()
+    assert a.extra_data["mc_case_key"] == mc.mc_case_key(CASE_A) and a.extra_data["obts_number"] == OBTS_A
+    sc2, _ = _scraper(monkeypatch, {10: LISTS[10]}, {"9900001": detail_page(CASE_A, served=())})
     (r,) = sc2.scrape()
-    assert r.extra_data["mc_case_key"] == mc.mc_case_key(CASE_A) and r.extra_data["obts_number"] == ""
+    assert r.extra_data["mc_case_key"] == mc.mc_case_key(CASE_A) and "obts_number" not in r.extra_data
+
+
+def test_case_gains_obts_later_same_key_one_record_obts_filled_never_wiped(monkeypatch):
+    arrests = FakeArrests([])
+    lists = {10: LISTS[10]}
+
+    def run(detail):
+        sc, _ = _scraper(monkeypatch, lists, {"9900001": detail})
+        recs = sc.scrape()
+        return recs, _writer(arrests).write_records(recs, "Manatee Clerk")
+
+    # 1) Filed, no OBTS listed yet.
+    (r1,), s1 = run(detail_page(CASE_A, served=()))
+    assert s1["new_records"] == 1 and len(arrests.docs) == 1
+    assert "obts_number" not in arrests.docs[0]
+    # 2) Later scrape: the Clerk now lists an OBTS. Same key, same record, OBTS filled.
+    (r2,), s2 = run(DETAILS["9900001"])
+    assert r2.extra_data["mc_case_key"] == r1.extra_data["mc_case_key"]
+    assert s2["new_records"] == 0 and s2["skipped_invalid"] == 0 and len(arrests.docs) == 1
+    doc = arrests.docs[0]
+    assert doc["obts_number"] == OBTS_A and doc["booking_number"] == r1.extra_data["mc_case_key"]
+    assert doc["case_number"] == CASE_A and doc["case_number"] not in doc["booking_number"]
+    # 3) A later scrape with a blank OBTS keeps the stored one.
+    (_r3,), s3 = run(detail_page(CASE_A, served=()))
+    assert s3["new_records"] == 0 and len(arrests.docs) == 1
+    assert arrests.docs[0]["obts_number"] == OBTS_A
+    # A differently formatted case number on a later list still hits the same record.
+    lists[10] = list_page([_list_row(1, "2026-cf-009901-ax", "ZZSYNTH, ALPHA ZED")])
+    (_r4,), s4 = run(DETAILS["9900001"])
+    assert s4["new_records"] == 0 and len(arrests.docs) == 1
 
 
 def test_detail_case_mismatch_fails_loud(monkeypatch):
