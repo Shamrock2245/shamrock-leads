@@ -541,11 +541,26 @@ _EXTRACT_JS = r"""() => {
 
 class ManateeCountyScraper(BaseScraper):
 
+    # FAIL CLOSED 2026-10-09 (docs/recon/FL_MANATEE_SOURCE_RECON_2026-10-09.md). The Revize roster
+    # answers a Cloudflare challenge (HTTP 403 ``cf-mitigated: challenge``) on
+    # page 1 from the box, T-Mobile AS21928 and Comcast AS7922 alike, and no
+    # other official plain-HTTP source publishes a booking roster with a real
+    # source booking number. The parser below is kept unchanged: reopening is
+    # flipping this flag once a contract is proven (relay read + write smoke).
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "Revize roster (manatee-sheriff.revize.com, also the iframe on manateesheriff.com) returns a Cloudflare challenge on every path from every tested exit (2026-10-09). The Clerk's court-records case browse is plain HTTP but publishes case numbers and OBTS numbers, not booking numbers, so it does not meet the booking-roster contract."
+    )
+
     @property
     def county(self) -> str:
         return "Manatee"
 
     def scrape(self) -> List[ArrestRecord]:
+        if not getattr(self, "SOURCE_CONTRACT_VALIDATED", True):
+            # No egress check, no browser, no source request.
+            logger.warning("[Manatee] fail_closed: %s", self.SOURCE_CONTRACT_REASON)
+            return []
         _, egress_source = resolve_egress(self)
         logger.info("[Manatee] egress mode=%s source=%s", egress_mode(), egress_source)
 

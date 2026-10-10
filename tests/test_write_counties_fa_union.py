@@ -254,11 +254,12 @@ def test_watcher_query_uses_fa_watch_counties(monkeypatch):
     assert "Palm Beach" in values
     assert "Palm Beach (FL)" in values
     assert "Lee" in values
-    assert "Hendry" in values
+    # fail_closed watch counties are dropped before the query (config.source_guard).
+    for closed in ("Hendry", "Miami-Dade", "Charlotte", "Manatee", "Sarasota"):
+        assert closed not in values and f"{closed} (FL)" not in values
     assert "DeSoto" in values
     assert "Broward" in values
     assert "Broward (FL)" in values
-    assert "Miami-Dade" in values
     assert "St. Lucie" in values
     assert len(resolve_fa_watch_counties(env_watch_counties="", stored_targets=None)) == len(WRITE_ELIGIBLE_COUNTIES)
 

@@ -31,12 +31,12 @@ async def api_poa_next(
     Suggest the next available POA number(s) for a given surety + bond amount.
     Query params: surety, bond_amount, count, amounts (comma-separated per-charge)
     """
-    poa_inventory = get_collection("poa_inventory")
-
     surety = (surety or "").lower().strip()
     from dashboard.services.surety_registry import is_supported_surety  # active sureties only
     if not is_supported_surety(surety):
         return JSONResponse({"error": "surety must be 'osi' or 'palmetto'"}, status_code=400)
+    # Validate before touching inventory: an unknown/inactive surety never opens the collection.
+    poa_inventory = get_collection("poa_inventory")
     try:
         bond_amount = float(bond_amount or 0)
     except ValueError:

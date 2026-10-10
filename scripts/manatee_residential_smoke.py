@@ -5,7 +5,7 @@ Run on the Leads Ops home relay (Brendan's residential connection, VPN off):
 
     MANATEE_EGRESS_MODE=direct python scripts/manatee_residential_smoke.py
 
-Prints one JSON line of aggregates. Exit codes:
+Prints one JSON line of aggregates. Exit codes (4 = county is fail_closed; nothing is fetched):
     0 roster read and every drift guard passed
     2 egress block (Cloudflare challenge / host exit not residential)
     3 parse drift (columns, Released values, paging, totals, key collisions)
@@ -32,6 +32,11 @@ def main() -> int:
 
     out = {"county": "Manatee (FL)", "egress_mode": os.getenv("MANATEE_EGRESS_MODE", "direct")}
     scraper = ManateeCountyScraper()
+    if not getattr(scraper, "SOURCE_CONTRACT_VALIDATED", True):
+        # fail_closed: never touch the source from the relay.
+        out.update(result="fail_closed", error=scraper.SOURCE_CONTRACT_REASON[:400])
+        print(json.dumps(out))
+        return 4
     try:
         out["egress_mode"] = egress_mode()
         records = scraper.scrape()
