@@ -69,6 +69,16 @@
       "expect": "Relay result status ok with a MongoWriter result (new_records + updated_records >= 1), process exit 0; smoke_evidence_check: Revize Booking # shapes only, duplicates 0, bond empty (zero 0), with_charges == rows",
       "blocked_on": "After a passed Manatee relay_read.",
       "source": "docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md"
+    },
+    {
+      "label": "Manatee Clerk (FL)",
+      "kind": "write_smoke",
+      "status": "requested",
+      "requested_on": "2026-10-10",
+      "command": "MONGODB_URI=<prod> python main.py \"Manatee Clerk\"  (copy the final 'Result: {...}' log line), then MONGODB_URI=<prod> python scripts/smoke_evidence_check.py --county \"Manatee Clerk\" --state FL --hours 24",
+      "expect": "Result status ok with a MongoWriter result (new_records + updated_records >= 1); every row booking_key_internal true with booking_number matching ^mc_case_v1:[0-9a-f]{64}$ (displayed blank), case_number and obts_number set, booking_number never equal to case_number, bond only empty or from the Bonds table (zero only where the Clerk lists a $0.00 bond row), with_charges == rows",
+      "blocked_on": "Owner exception recorded 2026-10-10 (Brendan); needs the PR merged and deployed first.",
+      "source": "docs/recon/FL_MANATEE_CLERK_SCRAPER_2026-10-10.md"
     }
   ]
 }

@@ -18,7 +18,7 @@ from pymongo.collection import Collection
 from pymongo.errors import OperationFailure
 
 from core.models import ArrestRecord
-from core.booking_identity import internal_natural_key
+from core.booking_identity import MC_KEY_PREFIX, internal_natural_key
 from core.staff_edits import fetch_provenance_docs, protect_scraped_update
 from config.settings import settings
 
@@ -340,7 +340,7 @@ class MongoWriter:
             county_name = (record.County or county or "").strip()
             state = (record.State or "FL").strip().upper() or "FL"
             # Narrow owner exception (core/booking_identity.py): an allow-listed
-            # scope with no source booking number (FL/Miami-Dade) is keyed on
+            # scope with no source booking number (FL/Miami-Dade, FL/Manatee Clerk) is keyed on
             # its exact-pattern internal natural key. Any other blank booking is
             # still skipped below, unchanged.
             internal_key = "" if booking or not county_name else internal_natural_key(record, county_name, state)
@@ -367,8 +367,13 @@ class MongoWriter:
                 # Displays print it blank (public_booking_number / serialize_doc).
                 internal_keyed += 1
                 doc["booking_key_internal"] = True
-                doc["md_dedupe"] = internal_key
-                doc["md_key_fallback"] = bool((record.extra_data or {}).get("md_key_fallback"))
+                if internal_key.startswith(MC_KEY_PREFIX):
+                    # Manatee Clerk (court filing): the case number and OBTS
+                    # live in case_number / obts_number, never booking_number.
+                    doc["mc_case_key"] = internal_key
+                else:
+                    doc["md_dedupe"] = internal_key
+                    doc["md_key_fallback"] = bool((record.extra_data or {}).get("md_key_fallback"))
             doc["updated_at"] = now  # Track when record was last refreshed (retention signal)
             doc["last_seen_at"] = now
             # Refresh scraped_at on every write so live activity KPIs stay honest;
@@ -379,6 +384,10 @@ class MongoWriter:
             extra = record.extra_data or {}
             if extra.get("charge_details"):
                 doc["charge_details"] = extra["charge_details"]
+            # Court-filing sources (Manatee Clerk): their own labelled fields.
+            for fld in ("obts_number", "filing_date", "case_status", "source_label"):
+                if extra.get(fld):
+                    doc[fld] = extra[fld]
             if extra.get("fta_risk_score") is not None:
                 doc["fta_risk_score"] = extra["fta_risk_score"]
                 doc["fta_risk_level"] = extra.get("fta_risk_level")

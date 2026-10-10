@@ -167,7 +167,8 @@ def test_key_never_reaches_booking_number_fields(monkeypatch):
 
 
 def test_other_counties_blank_booking_guard_is_unchanged(monkeypatch):
-    assert set(INTERNAL_NATURAL_KEY_SCOPES) == {("FL", "Miami-Dade")}
+    # Manatee Clerk (owner exception 2026-10-10) is the only other scope.
+    assert set(INTERNAL_NATURAL_KEY_SCOPES) == {("FL", "Miami-Dade"), ("FL", "Manatee Clerk")}
     rec = _snapshot(monkeypatch, [_row(1, "g1")])[0]
     key = rec.extra_data["md_dedupe"]
 

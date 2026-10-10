@@ -3,6 +3,19 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-10 (Manatee Clerk court-filing scraper; owner exception)
+
+### Added
+- **Manatee Clerk (FL)**: a new, separate scraper (`scrapers/counties/manatee_clerk.py`) for court filings on records.manateeclerk.com (FELONY 10, MISDEMEANOR 35/37; list GET by filing date, detail anti-forgery POST). Owner exception (Brendan, 2026-10-10). Staff see the source as "Manatee Clerk (court filing)". The Manatee (FL) jail scraper is untouched and stays `fail_closed`.
+  - Plain HTTPS, honest UA, 2.5 s pacing, 80 detail POSTs per run, one session per case type, every 120 min. `config/source_guard.py` is checked first; `manateeclerk.com` maps to `Manatee Clerk (FL)`.
+  - A challenge / CAPTCHA / 401 / 403 / 429 stops the run with `EgressBlocked` (never retried; base retry off). Structural drift raises `ParseDriftError`.
+  - No booking number: `Booking_Number` stays blank and never holds the case number. Internal key `mc_case_v1:` + sha256(case number + defendant name). `case_number`, `obts_number`, `filing_date`, `case_status` and `source_label` are their own fields.
+  - Charges verbatim; per-charge offense date, statute, degree, citation and Arrest Summons Served in `charge_details`; `Arrest_Date` from Arrest Summons Served; next court event; agency code.
+  - Bond only from the Bonds table's bond rows; the `N Bond(s)` totals row is ignored, so no bond rows gives `""` (never `"0"`), and a published `$0.00` bond row counts.
+- `core/booking_identity.py`: `MC_KEY_PREFIX` / `MC_INTERNAL_KEY_RE`, scope `("FL", "Manatee Clerk")`, and `INTERNAL_NATURAL_KEY_FIELDS` (each scope reads its own extra field). Every internal-key regex (Python and `sl-core.js`) now also matches `mc_case_v\d+:`, so the key prints blank everywhere the Miami-Dade key does. `MongoWriter` stores `mc_case_key` (not `md_dedupe`) for this scope and promotes `obts_number` / `filing_date` / `case_status` / `source_label`. Every other county's blank-booking guard is unchanged.
+- Health `unverified` (no `SCRAPER_SOURCE_STATES` entry, with a comment); `REGISTERED_COUNTIES`, FL/081 evidence note, a requested write smoke in `smoke_evidence.json`, the regenerated matrix, `COUNTY_REGISTRY.md`, the FL 67-status doc, `STATUS.md` and `docs/recon/FL_MANATEE_CLERK_SCRAPER_2026-10-10.md` (with the 2026-10-10 live read: status, labels and counts only).
+- Tests: `tests/test_manatee_clerk_scraper.py` (synthetic fixtures).
+
 ## [Unreleased] — 2026-10-09 (Miami-Dade reopen on an internal natural key; owner exception)
 
 ### Changed

@@ -3,7 +3,7 @@
 > Palmetto Surety licensed states: **FL, SC, NC, TN, TX, CT, LA, MS**  
 > Plus **GA** (adjacent market / existing build) and **AL** (adjacent).  
 > Last updated: 2026-10-05
-> **Registry in code:** 67 FL · 85 GA · 60 NC · 46 SC · 34 TX · 22 TN · 16 AL · 13 LA · 9 MS · 6 CT · 3 OH guarded pilot scopes = **361**. The root `STATUS.md` remains the live-deployment truth and must not be updated until deployment proof exists. Registration is not proof of a successful production scrape. The complete ten-state source-contract inventory remains `docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md` (942 Census county-equivalents plus five registered non-county scopes; 947 rows total); separate Ohio guard requirements are in `docs/recon/OHIO_PILOT_SOURCE_CONTRACTS.md`.
+> **Registry in code:** 67 FL · 85 GA · 60 NC · 46 SC · 34 TX · 22 TN · 16 AL · 13 LA · 9 MS · 6 CT · 3 OH guarded pilot scopes = 361 county-level scopes, plus the Manatee Clerk (FL) court-filing scope (2026-10-10) = **362**. The root `STATUS.md` remains the live-deployment truth and must not be updated until deployment proof exists. Registration is not proof of a successful production scrape. The complete ten-state source-contract inventory remains `docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md` (942 Census county-equivalents plus five registered non-county scopes; 947 rows total); separate Ohio guard requirements are in `docs/recon/OHIO_PILOT_SOURCE_CONTRACTS.md`.
 
 ## Why this order
 
