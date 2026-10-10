@@ -103,7 +103,7 @@ Full field contract: `docs/specs/crm-ops-ia-revamp.md` §6.
 
 1. `python scripts/check_ecosystem_secrets.py --strict`
 2. Set VPS `.env`: `SECRET_KEY`, `DASHBOARD_PIN`, `GAS_API_KEY`, `WIX_WEBHOOK_SECRET`, Mongo, DocuSeal, Twilio, Slack, BB
-3. `ENV=production` (or `REQUIRE_DASHBOARD_PIN=true`) so empty PIN does not open the CRM
+3. `ENV=production` (and `REQUIRE_DASHBOARD_PIN=true`). Since 2026-10-10 an empty PIN never opens the CRM: protected routes return 503 unless `ENV=development` is set explicitly (local dev only)
 4. `python scripts/mongo_indexes.py` after deploy
 5. `curl -s https://leads.shamrockbailbonds.biz/api/crm/health` (authenticated session or via SSH localhost)
 6. Smoke: scrape → Slack; Wix intake → Bond Desk; create bond match; open omnibar search

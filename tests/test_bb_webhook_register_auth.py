@@ -50,11 +50,11 @@ def test_register_unauthenticated_is_rejected_by_middleware():
 
 
 def test_register_unauthenticated_rejected_by_route_even_without_pin():
-    """Defense in depth: route-level guard holds even if the middleware is open (dev, no PIN)."""
+    """Defense in depth: route-level guard holds even if the middleware is open (explicit ENV=development, no PIN)."""
     env = {k: v for k, v in _ENV.items() if k != "DASHBOARD_PIN"}
     cls, inst = _fake_bb_client_cls()
     with patch.dict(os.environ, env), \
-         patch.dict(os.environ, {"DASHBOARD_PIN": ""}), \
+         patch.dict(os.environ, {"DASHBOARD_PIN": "", "ENV": "development"}), \
          patch("dashboard.routers.bb_webhook_receiver.BlueBubblesClient", cls):
         resp = client.post("/api/webhooks/bluebubbles/register", json={"vps_url": "https://evil.invalid"})
     assert resp.status_code == 401
@@ -111,7 +111,8 @@ def test_delete_requires_auth():
 
 def test_delete_route_guard_without_pin():
     cls, inst = _fake_bb_client_cls()
-    with patch.dict(os.environ, {**_ENV, "DASHBOARD_PIN": ""}), \
+    # Middleware open only because ENV=development is explicit (no PIN).
+    with patch.dict(os.environ, {**_ENV, "DASHBOARD_PIN": "", "ENV": "development"}), \
          patch("dashboard.routers.bb_webhook_receiver.BlueBubblesClient", cls):
         resp = client.delete("/api/webhooks/bluebubbles/7")
     assert resp.status_code == 401

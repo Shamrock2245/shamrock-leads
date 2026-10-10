@@ -123,6 +123,7 @@ jobs:
             tests/test_hendry_dedup.py \
             tests/test_new_osi_poa_format.py \
             tests/test_prod_auth_allowlist.py \
+            tests/test_auth_no_pin_fail_closed.py \
             tests/test_pinellas_relay_only.py \
             tests/test_pinellas_modal_wait.py \
             tests/test_relay_egress_auto_disable.py \
