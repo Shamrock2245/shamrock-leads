@@ -17,6 +17,7 @@ from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from dashboard.extensions import get_collection
+from core.booking_identity import redacting_csv_writer
 
 logger = logging.getLogger(__name__)
 accounting_bp = APIRouter(prefix="/api", tags=["accounting"])
@@ -529,7 +530,7 @@ async def api_export_quickbooks(date_from: str = Query(default=""), date_to: str
 
     async def _quickbooks_streamer(cursor):
         buffer = io.StringIO()
-        writer = csv.writer(buffer)
+        writer = redacting_csv_writer(buffer)
         
         # QuickBooks General Journal Import format
         writer.writerow([
@@ -605,7 +606,7 @@ async def api_export_csv(date_from: str = Query(default=""), date_to: str = Quer
 
     async def _raw_csv_streamer(cursor):
         buffer = io.StringIO()
-        writer = csv.writer(buffer)
+        writer = redacting_csv_writer(buffer)
         writer.writerow([
             "Date", "Transaction ID", "Amount", "Method", "Type", "Status", 
             "Defendant", "Booking #", "POA #", "Case #", "Surety", "County", 

@@ -23,6 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from core.booking_identity import public_booking_number, redact_internal_keys
+
 from dashboard.extensions import get_collection
 from dashboard.services.identity_media_service import UPLOAD_DIR
 
@@ -74,7 +76,8 @@ def _pdf_text(value: Any, limit: int = 180) -> str:
 
 
 def safe_booking_filename(booking_number: str) -> str:
-    cleaned = _BOOKING_SAFE.sub("_", (booking_number or "").strip())[:80]
+    # A Miami-Dade internal key is never printed, not even in a filename.
+    cleaned = _BOOKING_SAFE.sub("_", public_booking_number(booking_number or "").strip())[:80]
     return cleaned or "booking"
 
 
@@ -254,7 +257,8 @@ def build_evidence_manifest(
     empty = len(public_rows) == 0
     bond = bond or {}
     return {
-        "booking_number": booking_number,
+        # Printed in the PDF/ZIP: an internal Miami-Dade key prints blank.
+        "booking_number": public_booking_number(booking_number),
         "defendant_name": bond.get("defendant_name") or bond.get("Defendant_Name") or "",
         "county": bond.get("county") or "",
         "case_number": bond.get("case_number") or bond.get("Case_Number") or "",
@@ -264,7 +268,7 @@ def build_evidence_manifest(
         "empty_reason": "no_check_in_logs" if empty else None,
         "randomized_windows": "deferred",
         "schedule": schedule_from_bond(bond),
-        "entries": public_rows,
+        "entries": redact_internal_keys(public_rows),
         "_files": [
             {"name": item["selfie_file"], "bytes": item["_selfie_bytes"]}
             for item in selected

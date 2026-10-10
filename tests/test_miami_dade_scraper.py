@@ -31,7 +31,8 @@ class TestMiamiDadeCountyScraper(unittest.TestCase):
         self.assertEqual(record.Booking_Date, "2026-08-14")
         self.assertEqual(record.Status, "Unknown")
         self.assertEqual(record.extra_data["booking_key_origin"], "none: the source publishes no booking number")
-        self.assertTrue(record.extra_data["md_dedupe"].startswith("md_dedupe_v1:"))
+        self.assertTrue(record.extra_data["md_dedupe"].startswith("md_dedupe_v2:"))
+        self.assertIs(record.extra_data["md_key_fallback"], True)  # no DOB in this row
         self.assertEqual(record.Bond_Amount, "")  # no bond field: unknown, never $0
         self.assertIs(record.extra_data["bond_published"], False)
 
@@ -53,10 +54,11 @@ class TestMiamiDadeCountyScraper(unittest.TestCase):
         self.assertIsNone(self.scraper._parse_record({**base, "Defendant": ""}))
         self.assertIsNone(self.scraper._parse_record({**base, "BookDate": None}))
 
-    def test_query_field_list_excludes_address_and_dob(self):
+    def test_query_field_list_excludes_address(self):
         self.assertNotIn("Address", OUT_FIELDS)
         self.assertNotIn("Zip", OUT_FIELDS)
-        self.assertNotIn("DOB", OUT_FIELDS)
+        # 2026-10-09 owner exception: DOB is part of the internal natural key.
+        self.assertIn("DOB", OUT_FIELDS)
         self.assertNotIn("GlobalID", OUT_FIELDS)  # reissued on republish; not fetched
         self.assertIn("BookDate", OUT_FIELDS)
         self.assertIn("Defendant", OUT_FIELDS)

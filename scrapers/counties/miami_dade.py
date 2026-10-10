@@ -13,27 +13,29 @@ Features:
   raises ``MiamiDadeContractError`` (BaseScraper alerts) instead of returning
   a silently truncated batch
 
-2026-10-09: FAIL CLOSED, no source booking number.
+2026-10-09: no source booking number; internal natural key (owner exception).
 The layer (a Table: miamidade_jail_data/FeatureServer/0) publishes BookDate,
 Defendant, Address, CityStateZip, DOB, ChargeCode1-3 (statute codes),
 Charge1/Code2/Charge3, Zip, Filler (always null), City, State, Zip1, plus the
-system ObjectId and GlobalID. There is no booking, jail or case number. The
-ObjectId/GlobalID are map row ids, not booking keys: after the 2026-10-09
-08:03 ET republish, 840 of the 841 rows in the 2026-10-08 snapshot had a new
-GlobalID and only 2 kept their ObjectId. So:
+system ObjectId and GlobalID. There is no booking, jail or case number, and the
+ObjectId/GlobalID are map row ids reissued on every republish (2026-10-09
+08:03 ET: 840 of 841 snapshot rows got a new GlobalID). #166 failed closed.
 
-* ``Booking_Number`` is left blank. It is never filled with a row id or a
-  derived value, so hydrate, PDF/DocuSeal and UI booking-number fields stay
-  empty instead of printing a hash.
-* ``extra_data["md_dedupe"]`` holds an internal dedupe key,
-  ``md_dedupe_key(Full_Name, Booking_Date, Charges)`` (sha256 over the
-  normalised defendant, booking date and full verbatim charge list), clearly
-  labelled as NOT a booking number.
-* The county is fail_closed (``SOURCE_CONTRACT_VALIDATED = False``): the
-  source-contract rule needs a real source booking id, and the writer keys on
-  booking_number, so no Miami-Dade row is fetched or written until an owner
-  decision on keying by ``md_dedupe`` (and a backed-up cleanup of the GlobalID
-  duplicates already stored).
+Owner exception (Brendan, 2026-10-09 9:32 AM ET): no source booking id, an
+internal natural key is approved, and the county reopens as ``unverified``.
+
+* ``Booking_Number`` stays blank. It is never a row id or a hash.
+* ``extra_data["md_dedupe"]`` is ``md_dedupe_key``: sha256 of the normalised
+  defendant, DOB and BookDate. Charges are NOT in the key, so an amended
+  charge updates the same record. When the row has no DOB the key falls back
+  to defendant + BookDate + full verbatim charges and the record is flagged
+  ``md_key_fallback`` (counts logged, never names).
+* Two rows in one run with the same key (same person, DOB and BookDate, e.g. a
+  re-booking the same day) are merged into one record with the union of their
+  charges, never written as two rows.
+* ``MongoWriter`` upserts on the key through a narrow, allow-listed path
+  (``core.booking_identity``); every other county keeps the blank-booking
+  guard. Hydrate, PDF/DocuSeal and API booking-number displays print it blank.
 """
 
 import hashlib
@@ -41,11 +43,12 @@ import logging
 import re
 import time
 from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 import requests
 
 from scrapers.base_scraper import BaseScraper
+from core.booking_identity import MD_KEY_PREFIX
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
@@ -58,9 +61,9 @@ PAGE_SIZE = 200
 MAX_PAGES = 10  # 2,000 rows; the layer adds ~160 bookings/day (476 for 3 days on 2026-10-08)
 REQUEST_TIMEOUT = 30
 # Retrieve only source fields needed for identity, deduplication, and charges.
-# ObjectId is only used to check paging within one run (it is reissued on
-# republish and is never stored as a key).
-OUT_FIELDS = "ObjectId,BookDate,Defendant,Charge1,Code2,Charge3"
+# DOB is part of the internal natural key. ObjectId is only used to check
+# paging within one run (it is reissued on republish and is never a key).
+OUT_FIELDS = "ObjectId,BookDate,Defendant,DOB,Charge1,Code2,Charge3"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -70,12 +73,12 @@ HEADERS = {
     "Origin": "https://gis-mdc.opendata.arcgis.com",
 }
 
-REQUIRED_FIELDS = ("ObjectId", "BookDate", "Defendant", "Charge1", "Code2", "Charge3")
+REQUIRED_FIELDS = ("ObjectId", "BookDate", "Defendant", "DOB", "Charge1", "Code2", "Charge3")
 
-MD_DEDUPE_VERSION = "md_dedupe_v1"
+MD_DEDUPE_VERSION = MD_KEY_PREFIX.rstrip(":")  # "md_dedupe_v2"
 MD_DEDUPE_LABEL = (
     "internal dedupe key, NOT a booking number: sha256 of normalised "
-    "Defendant | BookDate | full verbatim charges"
+    "Defendant | DOB | BookDate (fallback without DOB: Defendant | BookDate | full verbatim charges)"
 )
 _WS_RE = re.compile(r"\s+")
 
@@ -94,19 +97,47 @@ def _norm_date(value: Any) -> str:
     return s
 
 
-def md_dedupe_key(full_name: Any, booking_date: Any, charges: Any) -> str:
-    """Internal Miami-Dade dedupe key. Never a booking number.
+def _ms_to_date(value: Any) -> str:
+    """ArcGIS epoch-ms date (midnight ET, i.e. 04:00/05:00 UTC) -> YYYY-MM-DD."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return ""
+    try:
+        return datetime.fromtimestamp(value / 1000.0, tz=timezone.utc).strftime("%Y-%m-%d")
+    except (OverflowError, OSError, ValueError):
+        return ""
 
-    Inputs are the stored record fields (Full_Name, Booking_Date as YYYY-MM-DD,
-    Charges joined with " | "), so the same key can be recomputed from stored
-    arrests docs. Returns "" when the defendant or date is missing.
+
+def _norm_charges(charges: Any) -> str:
+    return " | ".join(_norm(c) for c in str(charges or "").split("|") if _norm(c))
+
+
+def md_dedupe_key(full_name: Any, dob: Any, booking_date: Any, charges: Any = "") -> Tuple[str, bool]:
+    """Internal Miami-Dade natural key ``(key, is_fallback)``. Never a booking number.
+
+    Inputs are the stored record fields (Full_Name, DOB and Booking_Date as
+    YYYY-MM-DD, Charges joined with " | "), so the same key can be recomputed
+    from stored arrests docs. With a DOB the key is defendant + DOB + BookDate
+    (charges excluded, so an amended charge updates the same record); without
+    one it falls back to defendant + BookDate + full verbatim charges.
+    Returns ("", False) when the defendant or booking date is missing.
     """
     name, date = _norm(full_name), _norm_date(booking_date)
     if not name or not date:
-        return ""
-    charges_norm = " | ".join(_norm(c) for c in str(charges or "").split("|") if _norm(c))
-    digest = hashlib.sha256(f"{MD_DEDUPE_VERSION}|{name}|{date}|{charges_norm}".encode("utf-8")).hexdigest()
-    return f"{MD_DEDUPE_VERSION}:{digest}"
+        return "", False
+    dob_norm = _norm_date(dob) if str(dob or "").strip() else ""
+    if dob_norm:
+        payload, fallback = f"{MD_DEDUPE_VERSION}|dob|{name}|{dob_norm}|{date}", False
+    else:
+        payload, fallback = f"{MD_DEDUPE_VERSION}|fallback|{name}|{date}|{_norm_charges(charges)}", True
+    return MD_KEY_PREFIX + hashlib.sha256(payload.encode("utf-8")).hexdigest(), fallback
+
+
+def _merge_charges(a: str, b: str) -> str:
+    out: List[str] = []
+    for c in [x.strip() for x in f"{a}|{b}".split("|")]:
+        if c and _norm(c) not in {_norm(x) for x in out}:
+            out.append(c)
+    return " | ".join(out)
 
 
 class MiamiDadeContractError(RuntimeError):
@@ -116,16 +147,14 @@ class MiamiDadeContractError(RuntimeError):
 class MiamiDadeCountyScraper(BaseScraper):
     """Miami-Dade County (FL) arrest scraper — ArcGIS Open Data API.
 
-    Fail closed (2026-10-09): the layer publishes no source booking number and
-    its row ids are reissued on every republish."""
+    No source booking number: rows are keyed on the internal natural key
+    (owner exception, Brendan 2026-10-09 9:32 AM ET); Booking_Number stays blank."""
 
-    SOURCE_CONTRACT_VALIDATED = False
-    SOURCE_CONTRACT_REASON = (
-        "Miami-Dade ArcGIS jail layer publishes no booking, jail or case number; "
-        "ObjectId/GlobalID are map row ids reissued on republish (2026-10-09 08:03 ET: "
-        "840 of 841 snapshot rows got a new GlobalID). Writes stay off until an owner "
-        "decision on keying by the internal md_dedupe key."
-    )
+    SOURCE_CONTRACT_VALIDATED = True
+    # Narrow opt-in: records with a blank Booking_Number are kept only when
+    # core.booking_identity.internal_natural_key accepts them (FL/Miami-Dade,
+    # exact md_dedupe_v2 pattern).
+    ALLOWS_INTERNAL_NATURAL_KEY = True
 
     @property
     def county(self) -> str:
@@ -161,6 +190,8 @@ class MiamiDadeCountyScraper(BaseScraper):
 
         seen = set()
         fetched = 0
+        by_key: Dict[str, ArrestRecord] = {}
+        merged_same_key = 0
         for page in range(MAX_PAGES):
             if fetched >= expected:
                 break
@@ -189,8 +220,18 @@ class MiamiDadeCountyScraper(BaseScraper):
                 seen.add(oid)
                 fetched += 1
                 record = self._parse_record(attrs)
-                if record:
+                if not record:
+                    continue
+                key = record.extra_data["md_dedupe"]
+                prior = by_key.get(key)
+                if prior is None:
+                    by_key[key] = record
                     all_records.append(record)
+                else:
+                    # Same person, DOB and BookDate twice in one snapshot (e.g. a
+                    # same-day re-booking): one record with both charge lists.
+                    prior.Charges = _merge_charges(prior.Charges, record.Charges)
+                    merged_same_key += 1
             if not data.get("exceededTransferLimit", False) and fetched < expected:
                 break
             offset += PAGE_SIZE
@@ -201,7 +242,11 @@ class MiamiDadeCountyScraper(BaseScraper):
                 f"Miami-Dade: walked {fetched} of {expected} bookings (layer changed mid-walk or paging drift)"
             )
 
-        logger.info(f"[{self.county}] Scrape complete. Found {len(all_records)} records in {time.time() - start_time:.1f}s.")
+        fallback = sum(1 for r in all_records if r.extra_data.get("md_key_fallback"))
+        logger.info(
+            "[%s] Scrape complete: %d records in %.1fs (md_key_fallback=%d, same_key_rows_merged=%d)",
+            self.county, len(all_records), time.time() - start_time, fallback, merged_same_key,
+        )
         return all_records
 
     def _get_json(self, session: requests.Session, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -255,13 +300,17 @@ class MiamiDadeCountyScraper(BaseScraper):
             # complete name or date is dropped.
             if not booking_date_str or not full_name or len(full_name.replace(',', ' ').split()) < 2:
                 return None
-            dedupe = md_dedupe_key(full_name, booking_date_str, charges_str)
+            dob_str = _ms_to_date(attrs.get("DOB"))
+            dedupe, fallback = md_dedupe_key(full_name, dob_str, booking_date_str, charges_str)
+            if not dedupe:
+                return None
 
             return ArrestRecord(
                 County=self.county,
                 State="FL",
                 Booking_Number="",  # no source booking number; never a row id or hash
                 Full_Name=full_name,
+                DOB=dob_str,
                 First_Name=first_name,
                 Middle_Name=middle_name,
                 Last_Name=last_name,
@@ -276,11 +325,14 @@ class MiamiDadeCountyScraper(BaseScraper):
                     "booking_key_origin": "none: the source publishes no booking number",
                     "md_dedupe": dedupe,
                     "md_dedupe_label": MD_DEDUPE_LABEL,
+                    "md_key_fallback": fallback,
                     "bond_published": False,
                 },
             )
         except Exception as e:
-            logger.warning(f"[{self.county}] Error parsing record {attrs.get('ObjectId')}: {e}")
+            # Row id and error type only: the row carries name and DOB, and an
+            # exception message may echo a field value.
+            logger.warning("[%s] Error parsing record ObjectId=%s: %s", self.county, attrs.get("ObjectId"), type(e).__name__)
             return None
 
     @staticmethod

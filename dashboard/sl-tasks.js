@@ -150,7 +150,7 @@ window.SLTasks = (() => {
         + '<div class="sl-task-header">'
         + '<span class="sl-task-title">' + _esc(t.title) + '</span>'
         + suretyBadge
-        + '<span class="sl-task-booking">#' + _esc(t.booking_number) + '</span>'
+        + '<span class="sl-task-booking">#' + _esc((window.slBookingLabel ? window.slBookingLabel(t.booking_number) : t.booking_number)) + '</span>'
         + '</div>'
         + '<div class="sl-task-desc">' + _esc(t.description) + '</div>'
         + '<div class="sl-task-meta">' + dueBadge

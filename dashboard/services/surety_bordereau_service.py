@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
 from dashboard.extensions import get_collection
+from core.booking_identity import redacting_csv_writer
 
 logger = logging.getLogger("shamrock.bordereau")
 
@@ -134,7 +135,7 @@ def export_bordereau_csv(bordereau_data: Dict[str, Any]) -> str:
     Format bordereau data dictionary as a clean CSV string for Excel / Surety download.
     """
     output = io.StringIO()
-    writer = csv.writer(output)
+    writer = redacting_csv_writer(output)
 
     writer.writerow(["SHAMROCK BAIL BONDS — MONTHLY SURETY BORDEREAU REPORT"])
     writer.writerow(["Surety Company", bordereau_data.get("surety_name")])

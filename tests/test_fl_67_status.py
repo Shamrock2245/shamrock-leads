@@ -47,7 +47,9 @@ def test_doc_lists_every_fl_county_once_with_one_status():
 
     rows = _rows()
     labels = [label for _rank, label, _status in rows]
-    fl = sorted(label for label in REGISTERED_COUNTIES if label.endswith("(FL)"))
+    from dashboard.extensions import NON_COUNTY_SOURCE_SCOPES
+
+    fl = sorted(label for label in REGISTERED_COUNTIES if label.endswith("(FL)") and label not in NON_COUNTY_SOURCE_SCOPES)
     assert len(fl) == 67
     assert sorted(labels) == fl
     assert [rank for rank, _l, _s in rows] == list(range(1, 68))
