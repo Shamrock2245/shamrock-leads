@@ -293,10 +293,23 @@ def test_case_number_is_never_copied_to_booking_number():
     assert not re.search(r"Booking_Number\s*=\s*(?!\"\")", src)
 
 
-def test_co_defendants_on_one_case_get_separate_keys():
-    assert mc.mc_case_key(CASE_A, "ZZSYNTH, ALPHA") != mc.mc_case_key(CASE_A, "ZZSYNTH, BRAVO")
-    assert mc.mc_case_key(CASE_A, "zzsynth,  alpha") == mc.mc_case_key(CASE_A.lower(), "ZZSYNTH, ALPHA")
-    assert mc.mc_case_key("", "X Y") == "" and mc.mc_case_key(CASE_A, "") == ""
+def test_key_is_case_number_plus_obts_where_present():
+    k = mc.mc_case_key(CASE_A, [OBTS_A])
+    assert MC_INTERNAL_KEY_RE.fullmatch(k) and CASE_A not in k and OBTS_A not in k
+    assert k != mc.mc_case_key(CASE_A) != mc.mc_case_key(CASE_A, ["5800000002"])
+    assert mc.mc_case_key(CASE_A, [OBTS_A, OBTS_A]) == k == mc.mc_case_key(CASE_A.lower(), OBTS_A)
+    assert mc.mc_case_key(CASE_A, ["5800000002", OBTS_A]) == mc.mc_case_key(CASE_A, [OBTS_A, "5800000002"])
+    assert mc.mc_case_key("") == ""
+
+
+def test_record_key_uses_detail_obts(monkeypatch):
+    sc, _ = _scraper(monkeypatch, LISTS, DETAILS)
+    a, b = sc.scrape()
+    assert a.extra_data["mc_case_key"] == mc.mc_case_key(CASE_A, [OBTS_A])
+    no_obts = detail_page(CASE_A, served=())
+    sc2, _ = _scraper(monkeypatch, {10: LISTS[10]}, {"9900001": no_obts})
+    (r,) = sc2.scrape()
+    assert r.extra_data["mc_case_key"] == mc.mc_case_key(CASE_A) and r.extra_data["obts_number"] == ""
 
 
 def test_detail_case_mismatch_fails_loud(monkeypatch):
@@ -374,25 +387,77 @@ def _codef_detail(parties):
     return re.sub(r"<tbody><tr><td>Defendant</td>.*?</tr></tbody>", f"<tbody>{rows}</tbody>", html, flags=re.S)
 
 
-def test_co_defendants_each_get_their_own_identity_fields(monkeypatch):
-    detail = _codef_detail([("ALPHA ZED ZZSYNTH", "Female", "01/02/1990"), ("BRAVO ZZSYNTH", "Male", "03/04/1985")])
+def test_multi_defendant_cases_fail_closed(monkeypatch, caplog):
+    # Two Defendant rows for one case on the list: skipped, no detail fetched.
     rows = [_list_row(1, CASE_A, "ZZSYNTH, ALPHA ZED"), _list_row(2, CASE_A, "ZZSYNTH, BRAVO")]
-    sc, _ = _scraper(monkeypatch, {10: list_page(rows)}, {"9900001": detail, "9900002": detail})
-    a, b = sc.scrape()
-    assert (a.DOB, a.Sex, b.DOB, b.Sex) == ("1990-01-02", "F", "1985-03-04", "M")
-    assert a.extra_data["mc_case_key"] != b.extra_data["mc_case_key"]
-
-
-def test_unmatched_or_ambiguous_defendant_leaves_identity_blank(monkeypatch, caplog):
-    two_same = _codef_detail([("BRAVO ZZSYNTH", "Male", "03/04/1985"), ("BRAVO ZZSYNTH", "Male", "05/06/1999")])
-    other = _codef_detail([("CHARLIE ZZSYNTH", "Male", "03/04/1985")])
-    rows = [_list_row(1, CASE_A, "ZZSYNTH, BRAVO"), _list_row(2, CASE_A, "ZZSYNTH, DELTA")]
-    sc, _ = _scraper(monkeypatch, {10: list_page(rows)}, {"9900001": two_same, "9900002": other})
+    sc, sessions = _scraper(monkeypatch, {10: list_page(rows)}, {})
     with caplog.at_level(logging.INFO):
-        recs = sc.scrape()
-    assert [(r.DOB, r.Sex) for r in recs] == [("", ""), ("", "")]
-    assert "defendant_unmatched=2" in caplog.text
+        assert sc.scrape() == []
+    assert not any(c[0] == "POST" for s in sessions for c in s.calls)
+    assert "multi_defendant_skipped=1" in caplog.text
+    # One list row, but the case-wide detail shows two Defendants: skipped too.
+    detail = _codef_detail([("ALPHA ZED ZZSYNTH", "Female", "01/02/1990"), ("BRAVO ZZSYNTH", "Male", "03/04/1985")])
+    sc2, _ = _scraper(monkeypatch, {10: list_page(rows[:1])}, {"9900001": detail})
+    assert sc2.scrape() == []
+
+
+def test_unmatched_defendant_leaves_identity_blank(monkeypatch, caplog):
+    other = _codef_detail([("CHARLIE ZZSYNTH", "Male", "03/04/1985")])
+    sc, _ = _scraper(monkeypatch, {10: list_page([_list_row(1, CASE_A, "ZZSYNTH, DELTA")])}, {"9900001": other})
+    with caplog.at_level(logging.INFO):
+        (r,) = sc.scrape()
+    assert (r.DOB, r.Sex) == ("", "")
+    assert "defendant_unmatched=1" in caplog.text
     assert mc.match_defendant([{"name": "ALPHA ZED ZZSYNTH"}], "ZZSYNTH, ALPHA ZED") == {"name": "ALPHA ZED ZZSYNTH"}
+
+
+def _paged(monkeypatch, pages, matching):
+    """Serve list pages by page number for caseTypeId=10."""
+    sc, sessions = _scraper(monkeypatch, {}, {f"99{i:05d}": detail_page(f"2026CF0{i:05d}AX") for i in range(1, 400)})
+    real = FakeSession.request
+
+    def request(self, method, url, **kw):
+        if method == "GET" and "caseTypeId=10" in url:
+            n = int(re.search(r"CaseType/(\d+)/", url).group(1))
+            self.calls.append((method, url, {}))
+            rows = pages[n - 1] if n <= len(pages) else []
+            return SimpleNamespace(status_code=200, headers={}, text=list_page(rows, matching=matching, empty=not rows and not matching))
+        return real(self, method, url, **kw)
+
+    monkeypatch.setattr(FakeSession, "request", request)
+    return sc
+
+
+def _rows(a, b):
+    return [_list_row(i, f"2026CF0{i:05d}AX", f"ZZSYNTH, P{i}") for i in range(a, b)]
+
+
+def test_list_walk_two_pages_ok(monkeypatch):
+    monkeypatch.setattr(mc, "PAGE_SIZE", 3)
+    sc = _paged(monkeypatch, [_rows(1, 4), _rows(4, 6)], 5)
+    assert len(sc.scrape()) == 5
+
+
+def test_list_walk_repeated_page_fails_loud(monkeypatch):
+    monkeypatch.setattr(mc, "PAGE_SIZE", 3)
+    sc = _paged(monkeypatch, [_rows(1, 4), _rows(1, 4)], 5)
+    with pytest.raises(ParseDriftError, match="repeats"):
+        sc.scrape()
+
+
+def test_list_walk_over_page_cap_fails_loud(monkeypatch):
+    monkeypatch.setattr(mc, "PAGE_SIZE", 3)
+    monkeypatch.setattr(mc, "MAX_LIST_PAGES", 2)
+    sc = _paged(monkeypatch, [_rows(1, 4), _rows(4, 7)], 7)
+    with pytest.raises(ParseDriftError, match="page cap"):
+        sc.scrape()
+
+
+def test_list_walk_short_of_count_fails_loud(monkeypatch):
+    monkeypatch.setattr(mc, "PAGE_SIZE", 3)
+    sc = _paged(monkeypatch, [_rows(1, 4)], 5)
+    with pytest.raises(ParseDriftError, match="walked 3 of 5"):
+        sc.scrape()
 
 
 def test_challenge_on_detail_stops_the_run(monkeypatch):

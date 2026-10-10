@@ -28,7 +28,7 @@ Keys and fields:
 
 * There is no booking number. ``Booking_Number`` stays blank and NEVER holds
   the case number. The record is keyed on an internal key
-  ``mc_case_v1:<sha256>`` (case number + normalised defendant name;
+  ``mc_case_v1:<sha256>`` (case number + OBTS number(s) where listed;
   ``mc_case_key``) through the narrow allow-listed writer path
   (``core.booking_identity``, scope ``("FL", "Manatee Clerk")`` only). Display
   helpers print it blank.
@@ -87,7 +87,7 @@ REQUEST_TIMEOUT = 30
 
 MC_KEY_VERSION = MC_KEY_PREFIX.rstrip(":")  # "mc_case_v1"
 MC_KEY_LABEL = (
-    "internal key, NOT a booking number: sha256 of normalised case number | defendant name"
+    "internal key, NOT a booking number: sha256 of normalised case number | OBTS number(s) where listed"
 )
 
 LIST_COLUMNS = ("", "View", "Case Number", "Party Name", "Party Type", "Case Type", "Case Status", "File Date", "DOB")
@@ -143,16 +143,20 @@ def normalise_case_number(case_number: Any) -> str:
     return re.sub(r"[^0-9A-Z]", "", _norm(case_number))
 
 
-def mc_case_key(case_number: Any, defendant_name: Any) -> str:
+def mc_case_key(case_number: Any, obts: Any = ()) -> str:
     """Internal Manatee Clerk key. Never a booking number; never printed.
 
-    sha256 of the normalised case number and defendant name (co-defendants on
-    one case stay separate records). Returns "" when either is missing.
+    sha256 of the normalised case number plus the case's OBTS number(s) where
+    the Clerk lists any (sorted, de-duplicated). Returns "" without a case
+    number.
     """
-    case, name = normalise_case_number(case_number), _norm(defendant_name)
-    if not case or not name:
+    case = normalise_case_number(case_number)
+    if not case:
         return ""
-    payload = f"{MC_KEY_VERSION}|{case}|{name}"
+    if isinstance(obts, str):
+        obts = [obts]
+    nums = sorted({re.sub(r"[^0-9A-Z]", "", _norm(o)) for o in (obts or ()) if _norm(o)})
+    payload = f"{MC_KEY_VERSION}|{case}|{','.join(nums)}"
     return MC_KEY_PREFIX + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -490,20 +494,31 @@ class ManateeClerkScraper(BaseScraper):
         start_s, end_s = start_d.strftime("%m-%d-%Y"), end_d.strftime("%m-%d-%Y")
 
         records: List[ArrestRecord] = []
-        seen_keys: set = set()
-        listed = details = capped = skipped_non_defendant = 0
+        seen_cases: set = set()
+        listed = details = capped = skipped_non_defendant = multi_defendant = 0
         for type_id, court_type in CASE_TYPES:
             # One session per case type: the site keeps search state per session.
             session = self._new_session()
             rows, list_url = self._walk_list(session, type_id, start_s, end_s)
             listed += len(rows)
             rows.sort(key=lambda r: r["file_date"], reverse=True)
+            defendants_per_case: Dict[str, int] = {}
+            for row in rows:
+                if row["party_type"].casefold() == "defendant":
+                    case = normalise_case_number(row["case_number"])
+                    defendants_per_case[case] = defendants_per_case.get(case, 0) + 1
             for row in rows:
                 if row["party_type"].casefold() != "defendant":
                     skipped_non_defendant += 1
                     continue
-                key = mc_case_key(row["case_number"], row["party_name"])
-                if not key or key in seen_keys:
+                case = normalise_case_number(row["case_number"])
+                if not case or case in seen_cases:
+                    continue
+                seen_cases.add(case)
+                if defendants_per_case.get(case, 0) > 1:
+                    # Case-wide charges, bond and OBTS can't be attributed to one
+                    # co-defendant: fail closed for this case (no detail fetch).
+                    multi_defendant += 1
                     continue
                 if details >= MAX_DETAILS_PER_RUN:
                     capped += 1
@@ -514,34 +529,56 @@ class ManateeClerkScraper(BaseScraper):
                 )
                 details += 1
                 detail = parse_detail(html)
-                if normalise_case_number(detail["case_number"]) != normalise_case_number(row["case_number"]):
+                if normalise_case_number(detail["case_number"]) != case:
                     raise ManateeClerkContractError("Manatee Clerk: detail case number does not match the list row")
+                if len(detail.get("defendants") or []) > 1:
+                    multi_defendant += 1
+                    continue
                 rec = self.build_record(row, detail, court_type)
                 if rec is not None:
-                    seen_keys.add(key)
                     records.append(rec)
 
         no_bond = sum(1 for r in records if r.Bond_Amount == "")
         logger.info(
             "[%s] %d records (listed=%d, details=%d, capped=%d, non_defendant=%d, bond_unknown=%d, "
-            "defendant_unmatched=%d) in %.1fs",
+            "defendant_unmatched=%d, multi_defendant_skipped=%d) in %.1fs",
             self.county_label, len(records), listed, details, capped, skipped_non_defendant, no_bond,
-            self._unmatched_defendants, time.time() - start,
+            self._unmatched_defendants, multi_defendant, time.time() - start,
         )
         return records
 
     def _walk_list(self, session: Any, type_id: int, start_s: str, end_s: str) -> Tuple[List[Dict[str, Any]], str]:
+        """Every list row for one case type, or ParseDriftError.
+
+        Fails loudly when the published count is over the page cap, when a page
+        repeats rows already seen (ignored page parameter / overlap), or when
+        the walk ends short of the published count.
+        """
         rows: List[Dict[str, Any]] = []
+        seen: set = set()
         url = ""
         expected: Optional[int] = None
         for page in range(1, MAX_LIST_PAGES + 1):
             url = BASE_URL + LIST_PATH.format(page=page, size=PAGE_SIZE, start=start_s, end=end_s) + f"?caseTypeId={type_id}"
             page_rows, count = parse_list(self._request(session, "GET", url))
-            expected = count if expected is None else expected
-            rows.extend(page_rows)
+            if expected is None:
+                expected = count
+                if expected > PAGE_SIZE * MAX_LIST_PAGES:
+                    raise ManateeClerkContractError(
+                        f"Manatee Clerk: caseTypeId={type_id} lists {expected} rows, over the "
+                        f"{PAGE_SIZE * MAX_LIST_PAGES}-row page cap"
+                    )
+            for r in page_rows:
+                sig = (normalise_case_number(r["case_number"]), _norm(r["party_name"]), _norm(r["party_type"]))
+                if sig in seen:
+                    raise ManateeClerkContractError(
+                        f"Manatee Clerk: caseTypeId={type_id} page {page} repeats a row already listed"
+                    )
+                seen.add(sig)
+                rows.append(r)
             if not page_rows or len(rows) >= expected:
                 break
-        if expected and len(rows) < expected and len(rows) < PAGE_SIZE * MAX_LIST_PAGES:
+        if len(rows) != (expected or 0):
             raise ManateeClerkContractError(
                 f"Manatee Clerk: caseTypeId={type_id} walked {len(rows)} of {expected} rows"
             )
@@ -549,7 +586,8 @@ class ManateeClerkScraper(BaseScraper):
 
     def build_record(self, row: Dict[str, Any], detail: Dict[str, Any], court_type: str) -> Optional[ArrestRecord]:
         name = row["party_name"]
-        key = mc_case_key(row["case_number"], name)
+        obts_info = detail.get("obts") or {}
+        key = mc_case_key(detail.get("case_number") or row["case_number"], obts_info.get("obts", []))
         if not key or len(name.replace(",", " ").split()) < 2:
             return None
         first, middle, last = self._parse_name(name)

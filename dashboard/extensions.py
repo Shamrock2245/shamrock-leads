@@ -751,7 +751,7 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     # Manatee Clerk (FL) is deliberately absent, so Health reads "unverified".
     # Owner exception (Brendan 2026-10-10): the Clerk's court-records site
     # (records.manateeclerk.com, plain HTTPS) is read as court filings, keyed on
-    # an internal key (mc_case_v1 = sha256 of case number + defendant name;
+    # an internal key (mc_case_v1 = sha256 of case number + OBTS where listed;
     # core/booking_identity.py). Booking_Number stays blank; case number and OBTS
     # have their own fields. Separate from the fail_closed Manatee (FL) jail
     # scraper. Not verified_public until a Leads Ops write smoke.

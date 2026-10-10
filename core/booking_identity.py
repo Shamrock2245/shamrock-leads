@@ -22,7 +22,7 @@ NOT a booking number:
 Owner exception (Brendan, 2026-10-10): the Manatee Clerk court-records scraper
 (``"Manatee Clerk"``, ``scrapers.counties.manatee_clerk``) reads court filings,
 which carry a case number and an OBTS number but no booking number. Its rows are
-keyed on ``mc_case_v1:<sha256>`` (case number + defendant name; see
+keyed on ``mc_case_v1:<sha256>`` (case number + OBTS number(s) where listed; see
 ``scrapers.counties.manatee_clerk.mc_case_key``). The case number and OBTS are
 stored in their own fields (``case_number``, ``obts_number``); ``booking_number``
 never holds or prints the case number. Same rules as above: only this exact
