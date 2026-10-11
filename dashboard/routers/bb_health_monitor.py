@@ -39,6 +39,7 @@ from dashboard.routers.bb_private_api import BlueBubblesClient
 from dashboard.extensions import BB_SERVERS, get_collection
 
 from datetime import timedelta
+from core.booking_identity import redact_internal_keys
 
 logger = logging.getLogger(__name__)
 
@@ -64,10 +65,10 @@ async def _send_slack_alert(message: str) -> None:
     try:
         import httpx
         async with httpx.AsyncClient() as client:
-            await client.post(_SLACK_WEBHOOK, json={
+            await client.post(_SLACK_WEBHOOK, json=redact_internal_keys({
                 "channel": _SLACK_CHANNEL,
                 "text": f"🚨 *BlueBubbles Alert* 🚨\n{message}",
-            }, timeout=10)
+            }), timeout=10)
     except Exception as e:
         logger.error("Slack alert failed: %s", e)
 

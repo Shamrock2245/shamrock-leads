@@ -865,6 +865,9 @@ async def update_lead_details(request: Request):
     if "dob" in body and body["dob"]:
         set_fields["dob"] = str(body["dob"]).strip()
 
+    # A form never blanks a stored Miami-Dade internal key (the dashboard shows it blank).
+    from core.booking_identity import protect_internal_booking_key
+    protect_internal_booking_key(set_fields, existing)
     await arrests.update_one({"booking_number": booking_number}, {"$set": set_fields})
     updated = await arrests.find_one({"booking_number": booking_number})
 

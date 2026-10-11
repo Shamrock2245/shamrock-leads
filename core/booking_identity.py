@@ -138,3 +138,27 @@ def redact_workbook(wb: Any) -> Any:
         if isinstance(title, str) and "md_dedupe_v" in title:
             ws.title = redact_internal_keys(title) or "Sheet"
     return wb
+
+
+_BOOKING_FIELDS = ("booking_number", "Booking_Number")
+
+
+def protect_internal_booking_key(update: dict, existing: Any) -> dict:
+    """Never let a blank booking number overwrite a stored internal key.
+
+    The dashboard shows a Miami-Dade internal key blank, so a form can post
+    ``booking_number=""`` back. When the stored record's booking number is an
+    internal key, blank/whitespace/None values for ``booking_number`` /
+    ``Booking_Number`` are dropped from ``update`` (the stored key is kept).
+    Returns ``update`` (mutated in place) for chaining. Other records and
+    non-blank values are untouched.
+    """
+    if not isinstance(update, dict) or not isinstance(existing, dict):
+        return update
+    stored = existing.get("booking_number") or existing.get("Booking_Number")
+    if not is_internal_booking_key(stored):
+        return update
+    for field in _BOOKING_FIELDS:
+        if field in update and (update[field] is None or not str(update[field]).strip()):
+            update.pop(field)
+    return update
