@@ -36,6 +36,22 @@ def _env_is_production() -> bool:
     return env in ("production", "prod")
 
 
+def payment_audit_event_id(txn_key: str, kind: str) -> str:
+    """Deterministic ``audit_events`` ``_id`` for one webhook delivery.
+
+    MongoDB's ``_id`` index is collection-wide. Tenant-scoped payment claims
+    can both succeed for the same provider transaction, so the audit id has
+    to include the tenant or the second agency's insert is a duplicate and
+    its claim is marked complete with no audit row. Flag off, and a request
+    with no tenant context, uses Shamrock (single-tenant webhook).
+    """
+    from dashboard.tenancy.constants import SHAMROCK_TENANT_ID
+    from dashboard.tenancy.context import current_tenant_id
+
+    tenant = current_tenant_id() or SHAMROCK_TENANT_ID
+    return f"wh:{tenant}:{txn_key}:{kind}:audit"
+
+
 def _payment_secret_unset_allowed() -> bool:
     """An unset SWIPESIMPLE_WEBHOOK_SECRET is tolerated only in explicit dev.
 
@@ -514,7 +530,7 @@ async def _payment_webhook_steps(data, booking_number, now, db, plc, txn_key, ki
         audit_events = get_collection("audit_events")
         try:
             await audit_events.insert_one({
-                "_id": f"wh:{txn_key}:{kind}:audit",
+                "_id": payment_audit_event_id(txn_key, kind),
                 "source": "swipesimple_webhook",
                 "event_type": f"payment.{status}",
                 "payload": data,

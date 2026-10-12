@@ -531,7 +531,50 @@ def test_audit_redelivery_after_insert_stays_one_row(rig):
     (again,) = _hooks(app, [_hook()])
     assert again.status_code == 200
     assert len(db["audit_events"].docs) == 1
-    assert db["audit_events"].docs[0]["_id"] == "wh:SS-1:charge:audit"
+    assert db["audit_events"].docs[0]["_id"] == "wh:shamrock:SS-1:charge:audit"
+
+
+def test_two_tenants_same_txn_each_keep_an_audit(rig, monkeypatch):
+    """Same provider transaction and kind, two agencies: each audit row is kept.
+
+    Claims are unique per tenant, but ``audit_events._id`` is collection-wide.
+    A shared id made the second insert a DuplicateKeyError that was swallowed,
+    and that tenant's claim was marked complete with no audit.
+    """
+    from dashboard.tenancy.context import bind_job_tenant
+    from dashboard.tenancy.scope import apply_scope
+
+    db, app, bb = rig
+    monkeypatch.setenv("SAAS_MULTI_TENANT", "1")
+    monkeypatch.setattr(wh, "get_collection", lambda name: apply_scope(db[name], name))
+    body = _hook()
+    with bind_job_tenant("agency_a"):
+        (ra,) = _hooks(app, [body])
+    with bind_job_tenant("agency_b"):
+        (rb,) = _hooks(app, [body])
+    assert ra.status_code == 200 and ra.json().get("duplicate") is not True
+    assert rb.status_code == 200 and rb.json().get("duplicate") is not True
+    assert sorted(d["_id"] for d in db["audit_events"].docs) == [
+        "wh:agency_a:SS-1:charge:audit",
+        "wh:agency_b:SS-1:charge:audit",
+    ]
+    assert {d.get("tenant_id") for d in db["audit_events"].docs} == {"agency_a", "agency_b"}
+    claims = db[plc.LOG_CLAIMS_COLLECTION].docs
+    assert {c.get("tenant_id") for c in claims} == {"agency_a", "agency_b"}
+    assert all(c.get("wh_audit") and c.get("wh_completed") for c in claims)
+    assert len(_rows(db)) == 2
+
+    agency_a = next(c for c in claims if c.get("tenant_id") == "agency_a")
+    for key in ("wh_audit", "wh_audit_hold", "wh_completed"):
+        agency_a.pop(key, None)
+    with bind_job_tenant("agency_a"):
+        (again,) = _hooks(app, [body])
+    assert again.status_code == 200
+    assert sorted(d["_id"] for d in db["audit_events"].docs) == [
+        "wh:agency_a:SS-1:charge:audit",
+        "wh:agency_b:SS-1:charge:audit",
+    ]
+    assert agency_a.get("wh_audit") and agency_a.get("wh_completed")
 
 
 @pytest.mark.parametrize("stored,redelivered,kind_event", [
