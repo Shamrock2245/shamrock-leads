@@ -70,6 +70,14 @@ class Coll:
                 return SimpleNamespace(matched_count=1, modified_count=1)
         return SimpleNamespace(matched_count=0, modified_count=0)
 
+    async def delete_one(self, flt):
+        await asyncio.sleep(0)
+        for i, d in enumerate(self.docs):
+            if matches(d, flt):
+                del self.docs[i]
+                return SimpleNamespace(deleted_count=1)
+        return SimpleNamespace(deleted_count=0)
+
     async def count_documents(self, flt=None):
         await asyncio.sleep(0)
         return sum(1 for d in self.docs if matches(d, flt or {}))
@@ -373,13 +381,13 @@ def test_payment_row_from_failed_attempt_is_not_legacy_success(rig, monkeypatch)
                         lambda name: failing if name == "payment_plans" else db[name])
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-HALF"}])
     assert r.status_code == 500
-    assert len(db["payments"].docs) == 1          # row left behind
+    assert db["payments"].docs == []              # row compensated (#181, Codex P1 @bd0f4a3)
     assert db["payment_plan_payment_claims"].docs[0]["status"] == "failed"
     monkeypatch.setattr(pp, "get_collection", lambda name: db[name])
     (r2,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-HALF"}])
     assert r2.status_code == 409 and r2.json()["error"] == "payment_needs_review"
     assert r2.json().get("success") is not True
-    assert len(db["payments"].docs) == 1 and _plan(db)["balance_remaining"] == 800.0
+    assert db["payments"].docs == [] and _plan(db)["balance_remaining"] == 800.0
 
 
 def test_payment_row_with_unfinished_claim_is_not_legacy_success(rig):

@@ -356,6 +356,10 @@ async def _audit_link(actor: str, plan: dict, plan_id: str, txn: str, row: dict,
             "status_before": row.get("status"),
             "status_after": "completed",
             "amount": amount,
+            "reason": "logged card payment linked to plan: exact transaction id, same amount, "
+                      "same or blank booking, settled status, only unlinked row for the id",
+            "confidence": 1.0,
+            "match_method": "exact_transaction_id",
         })
     except Exception as exc:
         logger.warning("[payment_plans] audit write failed plan_id=%s err=%s", plan_id, type(exc).__name__)
@@ -363,8 +367,9 @@ async def _audit_link(actor: str, plan: dict, plan_id: str, txn: str, row: dict,
     return True
 
 
-async def _revert_link(payments_col, row: dict, plan_id: str, link_set: dict) -> None:
-    """Undo a link this request made (only while it is still ours). Never raises."""
+async def _revert_link(payments_col, row: dict, plan_id: str, link_set: dict) -> bool:
+    """Undo a link this request made (only while it is still exactly as we wrote
+    it). Returns True when reverted. Never raises."""
     restore_set = {k: row[k] for k in link_set if k in row}
     restore_unset = {k: "" for k in link_set if k not in row}
     update: dict = {}
@@ -373,14 +378,47 @@ async def _revert_link(payments_col, row: dict, plan_id: str, link_set: dict) ->
     if restore_unset:
         update["$unset"] = restore_unset
     try:
-        res = await payments_col.update_one(
-            {"_id": row["_id"], "plan_id": plan_id, "plan_linked_at": link_set["plan_linked_at"]},
-            update,
-        )
+        # Pin every value this request wrote: if another writer (e.g. the
+        # reconciliation service setting status 'reconciled') changed any of
+        # them since, the revert matches nothing and newer state is kept.
+        res = await payments_col.update_one({"_id": row["_id"], **link_set}, update)
         if not getattr(res, "modified_count", 0):
             logger.error("[payment_plans] link revert matched nothing plan_id=%s", plan_id)
+            return False
     except Exception as exc:
         logger.error("[payment_plans] link revert failed plan_id=%s err=%s", plan_id, type(exc).__name__)
+        return False
+    return True
+
+
+async def _audit_unlink(actor: str, plan_id: str, txn: str, row: dict, reason: str) -> None:
+    """Best-effort audit of a compensating unlink. Never raises."""
+    now = datetime.now(timezone.utc)
+    try:
+        await get_collection("audit_events").insert_one({
+            "event_type": "payment_plan_logged_payment_unlinked",
+            "entity_type": "payment_plan",
+            "entity_id": plan_id,
+            "actor": actor,
+            "agent_name": actor,
+            "timestamp": now,
+            "created_at": now,
+            "transaction_id": txn,
+            "payment_id": str(row.get("_id")),
+            "plan_id_before": plan_id,
+            "plan_id_after": None,
+            "status_before": "completed",
+            "status_after": row.get("status"),
+            "reason": reason,
+            "confidence": 1.0,
+        })
+    except Exception as exc:
+        logger.error("[payment_plans] unlink audit failed plan_id=%s err=%s", plan_id, type(exc).__name__)
+
+
+async def _other_rows_for_txn(payments_col, txn: str, own_id) -> bool:
+    """Post-write recheck: does any OTHER payments row carry this txn? Raises on DB error."""
+    return await payments_col.find_one({"transaction_id": txn, "_id": {"$ne": own_id}}) is not None
 
 
 @payment_plans_bp.post("/payments/plans/{plan_id}/pay")
@@ -539,19 +577,7 @@ async def record_payment(request: Request, plan_id):
                  "message": "Linking the logged card payment failed. Check the plan before recording it again."},
                 status_code=500,
             )
-        if link_ok:
-            # The association is reported only with a durable audit record.
-            # If the audit insert fails, undo the link (conditional on it still
-            # being ours), fail the claim and return an error; balance untouched.
-            if not await _audit_link(_actor(request), plan, plan_id, txn, logged_row, amount):
-                await _revert_link(payments_col, logged_row, plan_id, link_set)
-                await _fail_claim(claims, plan_id, txn, "audit_write_failed")
-                return JSONResponse(
-                    {"error": "audit_write_failed", "transaction_id": txn,
-                     "message": "The payment was not applied because its audit record could not be saved. Try again shortly."},
-                    status_code=503,
-                )
-        else:
+        if not link_ok:
             await _fail_claim(claims, plan_id, txn, "logged_payment_link_lost")
             other = current.get("plan_id")
             if other and other != plan_id:
@@ -564,10 +590,14 @@ async def record_payment(request: Request, plan_id):
                  "message": "The logged card payment changed while it was being linked. Check the plan before recording it again."},
                 status_code=409,
             )
+        own_id = logged_row["_id"]
+    else:
+        from bson import ObjectId
 
-    try:
-        if logged_row is None:
+        own_id = ObjectId()
+        try:
             await payments_col.insert_one({
+                "_id": own_id,
                 "booking_number": plan["booking_number"],
                 "plan_id": plan_id,
                 "amount": amount,
@@ -578,6 +608,57 @@ async def record_payment(request: Request, plan_id):
                 "transaction_id": txn,
                 "notes": data.get("notes", ""),
             })
+        except Exception:
+            await _fail_claim(claims, plan_id, txn, "payment_write_error")
+            return JSONResponse({"error": "payment_record_failed", "transaction_id": txn}, status_code=500)
+
+    actor = _actor(request)
+
+    async def _undo(reason: str) -> bool:
+        """Compensate this request's payment write. True when fully undone."""
+        if logged_row is not None:
+            ok = await _revert_link(payments_col, logged_row, plan_id, link_set)
+            if ok:
+                await _audit_unlink(actor, plan_id, txn, logged_row, reason)
+            return ok
+        try:
+            res = await payments_col.delete_one({"_id": own_id, "plan_id": plan_id, "transaction_id": txn})
+            return bool(getattr(res, "deleted_count", 0))
+        except Exception as exc:
+            logger.error("[payment_plans] row undo failed plan_id=%s err=%s", plan_id, type(exc).__name__)
+            return False
+
+    # Post-write recheck (Codex P1): the poller/webhook insert into `payments`
+    # outside this claim. If any other row for this txn exists now (one that
+    # arrived after the pre-check), this application is ambiguous: undo our
+    # write before the balance moves and refuse.
+    try:
+        clash = await _other_rows_for_txn(payments_col, txn, own_id)
+    except Exception:
+        clash = True
+    if clash:
+        await _undo("another payments row for this transaction id appeared during the write")
+        await _fail_claim(claims, plan_id, txn, "logged_payment_ambiguous")
+        return JSONResponse(
+            {"error": "logged_payment_ambiguous", "transaction_id": txn,
+             "message": "Another logged payment with this transaction id appeared while this one was being recorded. Review before applying it to a plan."},
+            status_code=409,
+        )
+
+    if logged_row is not None:
+        # The association is reported only with a durable audit record.
+        # If the audit insert fails, undo the link (only if still exactly as
+        # written), fail the claim and return an error; balance untouched.
+        if not await _audit_link(actor, plan, plan_id, txn, logged_row, amount):
+            await _revert_link(payments_col, logged_row, plan_id, link_set)
+            await _fail_claim(claims, plan_id, txn, "audit_write_failed")
+            return JSONResponse(
+                {"error": "audit_write_failed", "transaction_id": txn,
+                 "message": "The payment was not applied because its audit record could not be saved. Try again shortly."},
+                status_code=503,
+            )
+
+    try:
         # Atomic increments so two different transactions never overwrite each other.
         await plans_col.update_one(
             {"plan_id": plan_id},
@@ -595,14 +676,28 @@ async def record_payment(request: Request, plan_id):
                 },
             },
         )
+    except Exception as exc:
+        # Balance write failed (Codex P1): compensate the link/row so it is not
+        # counted as revenue against an unchanged plan. The claim stays failed
+        # (payment_needs_review) because the $inc outcome is unknown.
+        logger.warning("[payment_plans] plan update failed plan_id=%s err=%s", plan_id, type(exc).__name__)
+        await _undo("plan balance update failed after the payment was linked")
+        await _fail_claim(claims, plan_id, txn, "plan_update_error")
+        return JSONResponse({"error": "payment_record_failed", "transaction_id": txn}, status_code=500)
+
+    # The payment is applied from here on. The paid-in-full clamp and the read
+    # back are not reasons to undo it.
+    try:
         await plans_col.update_one(
             {"plan_id": plan_id, "balance_remaining": {"$lte": 0}},
             {"$set": {"balance_remaining": 0, "status": "paid_in_full"}},
         )
+    except Exception as exc:
+        logger.warning("[payment_plans] paid-in-full clamp failed plan_id=%s err=%s", plan_id, type(exc).__name__)
+    try:
         updated = await plans_col.find_one({"plan_id": plan_id}) or {}
     except Exception:
-        await _fail_claim(claims, plan_id, txn, "payment_write_error")
-        return JSONResponse({"error": "payment_record_failed", "transaction_id": txn}, status_code=500)
+        updated = {}
 
     new_balance = updated.get("balance_remaining", 0)
     status = updated.get("status", "active")

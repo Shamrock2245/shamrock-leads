@@ -334,3 +334,112 @@ def test_event_added_between_check_and_link_fails_closed(rig):
     db["payments"].before_update = change
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
     assert r.status_code == 409 and "plan_id" not in row
+
+
+# ── Codex P1s on bd0f4a3 ────────────────────────────────────────────────────
+
+
+def _fail_plan_inc(db):
+    real = db["payment_plans"].update_one
+
+    async def boom(flt, update, upsert=False):
+        if "$inc" in update:
+            raise RuntimeError("plan write failed")
+        return await real(flt, update, upsert)
+    db["payment_plans"].update_one = boom
+
+
+def test_plan_update_failure_after_link_reverts_link(rig):
+    db, app = rig
+    row = _poller_row(db)
+    before = dict(row)
+    _fail_plan_inc(db)
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 500 and r.json()["error"] == "payment_record_failed"
+    assert row == before                                   # not counted as plan revenue
+    assert _plan(db)["balance_remaining"] == 800.0
+    claim = db["payment_plan_payment_claims"].docs[0]
+    assert claim["status"] == "failed" and claim["failed_reason"] == "plan_update_error"
+    kinds = [e["event_type"] for e in db["audit_events"].docs]
+    assert kinds == ["payment_plan_logged_payment_linked", "payment_plan_logged_payment_unlinked"]
+    assert all(e.get("reason") and e.get("confidence") == 1.0 for e in db["audit_events"].docs)
+
+
+def test_plan_update_failure_on_insert_path_removes_row(rig):
+    db, app = rig
+    _fail_plan_inc(db)
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CASH"}])
+    assert r.status_code == 500
+    assert db["payments"].docs == [] and _plan(db)["balance_remaining"] == 800.0
+
+
+def test_paid_in_full_clamp_failure_does_not_undo_applied_payment(rig):
+    db, app = rig
+    real = db["payment_plans"].update_one
+
+    async def clamp_boom(flt, update, upsert=False):
+        if "balance_remaining" in flt:
+            raise RuntimeError("clamp failed")
+        return await real(flt, update, upsert)
+    db["payment_plans"].update_one = clamp_boom
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CASH"}])
+    assert r.status_code == 200 and _plan(db)["balance_remaining"] == 700.0
+    assert db["payment_plan_payment_claims"].docs[0]["status"] == "applied"
+
+
+def test_revert_does_not_overwrite_concurrent_reconciliation_status(rig):
+    db, app = rig
+    row = _poller_row(db)
+    orig = db["audit_events"].insert_one
+
+    async def reconcile_then_fail(doc):
+        row["status"] = "reconciled"            # reconciliation service wrote meanwhile
+        raise RuntimeError("audit down")
+    db["audit_events"].insert_one = reconcile_then_fail
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 503
+    assert row["status"] == "reconciled"         # newer state kept, not restored to 'approved'
+    assert db["payment_plan_payment_claims"].docs[0]["status"] == "failed"
+    assert _plan(db)["balance_remaining"] == 800.0
+    del orig
+
+
+def test_poller_row_arriving_during_insert_is_detected_and_undone(rig):
+    db, app = rig
+    real = db["payments"].insert_one
+
+    async def insert_then_poller(doc):
+        await real(doc)
+        db["payments"].docs.append({"_id": "late-poll", "transaction_id": "TX-LATE",
+                                    "amount": 100.0, "status": "approved"})
+    db["payments"].insert_one = insert_then_poller
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-LATE"}])
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_ambiguous"
+    assert [d["_id"] for d in db["payments"].docs] == ["late-poll"]   # our row removed
+    assert _plan(db)["balance_remaining"] == 800.0
+    assert db["payment_plan_payment_claims"].docs[0]["failed_reason"] == "logged_payment_ambiguous"
+
+
+def test_second_logged_row_arriving_during_link_is_detected_and_undone(rig):
+    db, app = rig
+    row = _poller_row(db)
+    before = dict(row)
+
+    def add_webhook_row(coll, flt):
+        coll.docs.append({"_id": "late-hook", "transaction_id": "TX-CARD", "amount": 100.0,
+                          "status": "completed", "raw_payload": {"event_type": "payment.completed"}})
+    db["payments"].before_update = add_webhook_row
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_ambiguous"
+    assert row == before and _plan(db)["balance_remaining"] == 800.0
+    assert db["audit_events"].docs == [] or all(
+        e["event_type"] == "payment_plan_logged_payment_unlinked" for e in db["audit_events"].docs)
+
+
+def test_link_audit_has_reason_and_confidence(rig):
+    db, app = rig
+    _poller_row(db)
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 200
+    (ev,) = db["audit_events"].docs
+    assert ev["reason"] and ev["confidence"] == 1.0 and ev["match_method"] == "exact_transaction_id"
