@@ -128,11 +128,44 @@ def test_repeat_txn_is_idempotent_no_second_payment(rig):
 def test_concurrent_same_txn_applies_once(rig):
     db, app = rig
     rs = _post_many(app, [{"amount": 100, "transaction_id": "TX-RACE"}] * 5)
-    assert all(r.status_code == 200 for r in rs)
-    assert sorted(r.json()["idempotent"] for r in rs) == [False, True, True, True, True]
+    applied = [r for r in rs if r.status_code == 200 and r.json()["idempotent"] is False]
+    assert len(applied) == 1
+    for r in rs:
+        if r is applied[0]:
+            continue
+        # Losers never report a fresh application; mid-write they get 409 in progress.
+        assert (r.status_code == 409 and r.json()["error"] == "payment_in_progress") or (
+            r.status_code == 200 and r.json()["idempotent"] is True)
     assert len(db["payments"].docs) == 1
     assert _plan(db)["balance_remaining"] == 700.0
     assert _plan(db)["payments_made"] == 2
+    # Once the winner finished, a retry is an idempotent success.
+    (again,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-RACE"}])
+    assert again.status_code == 200 and again.json()["idempotent"] is True
+
+
+def test_stale_claimed_claim_is_not_reported_as_paid(rig):
+    """Worker died after inserting the claim: retries must not claim success (Codex P1)."""
+    db, app = rig
+    db["payment_plan_payment_claims"].docs.append(
+        {"plan_id": PLAN_ID, "transaction_id": "TX-STUCK", "status": "claimed"})
+    db["payment_plan_payment_claims"].unique.append(("plan_id", "transaction_id"))
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-STUCK"}])
+    assert r.status_code == 409 and r.json()["error"] == "payment_in_progress"
+    assert r.json().get("success") is not True
+    assert db["payments"].docs == [] and _plan(db)["balance_remaining"] == 800.0
+
+
+@pytest.mark.parametrize("claim_status", ["claimed", "weird", None])
+def test_only_applied_claims_count_as_success(rig, claim_status):
+    db, app = rig
+    doc = {"plan_id": PLAN_ID, "transaction_id": "TX-S"}
+    if claim_status is not None:
+        doc["status"] = claim_status
+    db["payment_plan_payment_claims"].docs.append(doc)
+    db["payment_plan_payment_claims"].unique.append(("plan_id", "transaction_id"))
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-S"}])
+    assert r.status_code == 409 and r.json()["error"] == "payment_in_progress"
 
 
 def test_concurrent_different_txns_all_apply_without_lost_updates(rig):

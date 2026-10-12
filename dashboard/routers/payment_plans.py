@@ -231,10 +231,21 @@ def _next_due(frequency: str, now: datetime) -> datetime:
 
 
 async def _idempotent_reply(plans_col, plan_id: str, txn: str, claim: dict | None):
-    if claim and claim.get("status") == "failed":
+    """Success only for a claim that finished (``applied``) or a legacy payment
+    row (``claim`` None). Anything else is never reported as paid."""
+    status = (claim or {}).get("status") if claim is not None else "applied"
+    if status == "failed":
         return JSONResponse(
             {"error": "payment_needs_review", "transaction_id": txn,
              "message": "An earlier attempt with this transaction id did not finish. Check the plan before recording it again."},
+            status_code=409,
+        )
+    if status != "applied":
+        # 'claimed' (another request is mid-write, or a worker died after the
+        # claim) or unknown/missing claim doc: not confirmed, so not success.
+        return JSONResponse(
+            {"error": "payment_in_progress", "transaction_id": txn,
+             "message": "This transaction id is being recorded or did not finish. Wait and retry; if it persists, check the plan before recording it again."},
             status_code=409,
         )
     plan = await plans_col.find_one({"plan_id": plan_id}) or {}
@@ -309,7 +320,7 @@ async def record_payment(request: Request, plan_id):
         })
     except DuplicateKeyError:
         existing = await claims.find_one({"plan_id": plan_id, "transaction_id": txn})
-        return await _idempotent_reply(plans_col, plan_id, txn, existing)
+        return await _idempotent_reply(plans_col, plan_id, txn, existing or {"status": "unknown"})
 
     try:
         await payments_col.insert_one({
