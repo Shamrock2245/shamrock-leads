@@ -326,6 +326,23 @@ def test_audit_failure_rolls_back_link_plan_and_claim(rig):
     assert db["payment_plans"].docs == [] and _claims(db) == []
 
 
+def _assert_plan_retained_for_changed_payment(db, response):
+    """Payment still points at a plan that exists, marked for review."""
+    assert response.status_code == 500
+    body = response.json()
+    assert body["error"] == "payment_needs_review"
+    assert "Nothing was recorded" not in body["message"]
+    row = db["payments"].docs[0]
+    assert row["status"] == "reconciled" and row.get("plan_id")
+    (plan,) = db["payment_plans"].docs
+    assert plan["plan_id"] == row["plan_id"] == body["plan_id"]
+    assert plan["status"] == "needs_review"
+    assert plan["review_reason"] == "plan_create_rollback_incomplete"
+    (claim,) = _claims(db)
+    assert claim["status"] == "failed" and claim["failed_reason"] == "plan_create_rollback_incomplete"
+    assert claim["plan_id"] == plan["plan_id"]
+
+
 def test_rollback_keeps_newer_reconciliation_status_and_blocks_txn(rig):
     db, app = rig
     db["payments"].docs.append(_poller())
@@ -335,11 +352,27 @@ def test_rollback_keeps_newer_reconciliation_status_and_blocks_txn(rig):
         raise RuntimeError("audit down")
     db["audit_events"].insert_one = reconcile_then_fail
     (r,) = _post(app, [_body()])
-    assert r.status_code == 500
-    assert db["payments"].docs[0]["status"] == "reconciled"     # newer state kept
-    assert db["payment_plans"].docs == []
-    (claim,) = _claims(db)                                       # txn stays blocked for review
-    assert claim["status"] == "failed" and claim["failed_reason"] == "plan_create_rollback_incomplete"
+    _assert_plan_retained_for_changed_payment(db, r)
+    # The booking already has a plan that needs review; a second one is refused.
+    (again,) = _post(app, [_body(txn="SS-OTHER")])
+    assert again.status_code == 409 and again.json()["error"] == "payment_needs_review"
+    assert len(db["payment_plans"].docs) == 1
+
+
+def test_claim_finalization_failure_retains_plan_when_payment_changed(rig):
+    db, app = rig
+    db["payments"].docs.append(_poller())
+    claims = db["payment_plan_payment_claims"]
+    real = Coll.update_one
+
+    async def reconcile_then_fail(self, flt, update, upsert=False):
+        if (update.get("$set") or {}).get("status") == "applied":
+            db["payments"].docs[0]["status"] = "reconciled"
+            raise RuntimeError("claim write failed")
+        return await real(self, flt, update, upsert)
+    claims.update_one = reconcile_then_fail.__get__(claims)
+    (r,) = _post(app, [_body()])
+    _assert_plan_retained_for_changed_payment(db, r)
 
 
 def test_poller_row_arriving_during_insert_rolls_back(rig):

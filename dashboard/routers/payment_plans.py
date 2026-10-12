@@ -149,9 +149,20 @@ async def create_plan(request: Request):
 
     plans_col = get_collection("payment_plans")
 
-    # Check for existing plan
-    existing = await plans_col.find_one({"booking_number": data["booking_number"], "status": "active"})
+    # Check for existing plan. needs_review is a plan whose linked payment
+    # could not be detached after a failed finalization; another plan would
+    # leave two records for one booking.
+    existing = await plans_col.find_one({
+        "booking_number": data["booking_number"],
+        "status": {"$in": ["active", "needs_review"]},
+    })
     if existing:
+        if existing.get("status") == "needs_review":
+            return JSONResponse(
+                {"error": "payment_needs_review", "plan_id": existing.get("plan_id"),
+                 "message": "A payment plan for this booking needs review before another can be created."},
+                status_code=409,
+            )
         return JSONResponse({"error": "Active payment plan already exists for this booking"}, status_code=409)
 
     total_premium = float(data["total_premium"])
@@ -289,7 +300,10 @@ async def _create_plan_with_down_payment_txn(plans_col, plan_doc, txn, amount, m
     a plan's payment row. An unlinked poller/webhook row for the txn is linked
     (settled + same amount + same booking) instead of writing a second row.
     Any failure after the claim undoes the plan, the link and the claim, so
-    nothing is left half-written. Returns a JSONResponse on refusal, else None.
+    nothing is left half-written — unless the linked payment was changed by a
+    newer write and can no longer be detached. That plan is kept as
+    ``needs_review`` so the payment's ``plan_id`` still points at a plan.
+    Returns a JSONResponse on refusal, else None.
     """
     from pymongo.errors import DuplicateKeyError
 
@@ -407,15 +421,21 @@ async def _create_plan_with_down_payment_txn(plans_col, plan_doc, txn, amount, m
             {"$set": {"status": "applied", "applied_at": now.isoformat()}},
         )
     except Exception as exc:
-        await _undo_plan_create(plans_col, payments_col, claims, plan_id, txn,
-                                row, link_set, own_id if link_set is None else None,
-                                plan_inserted)
+        outcome = await _undo_plan_create(plans_col, payments_col, claims, plan_id, txn,
+                                           row, link_set, own_id if link_set is None else None,
+                                           plan_inserted)
         if isinstance(exc, _LinkLost):
             return _conflict("logged_payment_changed", txn,
                              "The logged payment changed while the plan was being created. Try again.")
         if isinstance(exc, _Ambiguous):
             return _conflict("logged_payment_ambiguous", txn,
                              "Another logged payment with this transaction id appeared while the plan was being created. Review before trying again.")
+        if outcome == "retained":
+            return JSONResponse(
+                {"error": "payment_needs_review", "transaction_id": txn, "plan_id": plan_id,
+                 "message": "The payment stayed linked to the plan, but the plan could not be finished. Review it before recording this payment again."},
+                status_code=500,
+            )
         return _conflict("payment_record_failed", txn,
                          "The plan could not be created. Nothing was recorded.", 500)
     return None
@@ -441,12 +461,20 @@ async def _iter_find(coll, flt):
 
 async def _undo_plan_create(plans_col, payments_col, claims, plan_id, txn, row,
                             link_set, inserted_id, plan_inserted):
-    """Best-effort rollback in reverse order. The link revert matches only while
-    every field this request wrote is unchanged (a newer write, e.g. the
-    reconciliation service, is kept). The claim is deleted (txn free again)
-    only when everything was undone; otherwise it is marked failed so the txn
-    stays blocked for review."""
+    """Best-effort rollback in reverse order.
+
+    The link revert matches only while every field this request wrote is
+    unchanged (a newer write, e.g. the reconciliation service, is kept).
+    When that revert matches nothing, the payment still carries this
+    ``plan_id``, so the plan is kept as ``needs_review`` instead of being
+    deleted. The claim is deleted (txn free again) only when everything was
+    undone; otherwise it is marked failed so the txn stays blocked.
+
+    Returns ``"undone"``, ``"retained"`` (plan kept because the payment could
+    not be detached), or ``"incomplete"``.
+    """
     ok = True
+    detached = link_set is None
     try:
         if link_set is not None:
             restore = {k: row[k] for k in link_set if k in row}
@@ -455,18 +483,30 @@ async def _undo_plan_create(plans_col, payments_col, claims, plan_id, txn, row,
             if restore:
                 upd["$set"] = restore
             res = await payments_col.update_one({"_id": row["_id"], **link_set}, upd)
-            if not getattr(res, "matched_count", 0):
+            detached = bool(getattr(res, "matched_count", 0))
+            if not detached:
                 ok = False
                 logger.error("[payment_plans] down-payment link revert matched nothing plan_id=%s", plan_id)
-        if inserted_id is not None:
+        if detached and inserted_id is not None:
             await payments_col.delete_one({"_id": inserted_id, "plan_id": plan_id})
-        if plan_inserted:
+        if detached and plan_inserted:
             await plans_col.delete_one({"plan_id": plan_id})
     except Exception as exc:
         ok = False
         logger.error("[payment_plans] plan create rollback failed plan_id=%s err=%s", plan_id, type(exc).__name__)
+    if plan_inserted and not detached:
+        try:
+            await plans_col.update_one(
+                {"plan_id": plan_id},
+                {"$set": {"status": "needs_review",
+                          "review_reason": "plan_create_rollback_incomplete"}},
+            )
+        except Exception as exc:
+            ok = False
+            logger.error("[payment_plans] could not mark plan needs_review plan_id=%s err=%s",
+                         plan_id, type(exc).__name__)
     try:
-        if ok:
+        if ok and detached:
             await claims.delete_one({"plan_id": plan_id, "transaction_id": txn})
         else:
             await claims.update_one({"plan_id": plan_id, "transaction_id": txn},
@@ -475,6 +515,11 @@ async def _undo_plan_create(plans_col, payments_col, claims, plan_id, txn, row,
                                               "failed_at": datetime.now(timezone.utc).isoformat()}})
     except Exception:
         pass
+    if plan_inserted and not detached:
+        return "retained"
+    if ok and detached:
+        return "undone"
+    return "incomplete"
 
 
 def _next_due(frequency: str, now: datetime) -> datetime:
