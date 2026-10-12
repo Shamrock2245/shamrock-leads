@@ -153,6 +153,12 @@ async def create_plan(request: Request):
     plan_doc = {
         "plan_id": str(uuid.uuid4())[:12],
         "booking_number": data["booking_number"],
+        # Optional. A logged-receipt link refuses the plan until both are set,
+        # because booking number alone is not unique across counties and states.
+        **({"county": str(data.get("county") or data.get("County")).strip()}
+           if str(data.get("county") or data.get("County") or "").strip() else {}),
+        **({"state": str(data.get("state") or data.get("State")).strip()}
+           if str(data.get("state") or data.get("State") or "").strip() else {}),
         "defendant_name": data.get("defendant_name", ""),
         "indemnitor_name": data.get("indemnitor_name", ""),
         "indemnitor_phone": data.get("indemnitor_phone", ""),
@@ -355,6 +361,97 @@ def _logged_row_settled(row: dict) -> bool:
     return True
 
 
+def _booking_token(value) -> str:
+    return str(value or "").strip()
+
+
+def _place_token(value) -> str:
+    """County and state compare case-insensitively. No abbreviation guessing."""
+    return str(value or "").strip().casefold()
+
+
+def _identity_sources(doc: dict, *, nested: bool) -> list[dict]:
+    """Where a logged receipt may carry booking, county, and state.
+
+    The payment webhook keeps county (and any state the link sent) under
+    ``custom_fields``, and stores that same object on ``raw_payload``. A plan
+    carries identity only on its own document.
+    """
+    sources = [doc]
+    if not nested:
+        return sources
+    cf = doc.get("custom_fields")
+    if isinstance(cf, dict):
+        sources.append(cf)
+    raw = doc.get("raw_payload")
+    if isinstance(raw, dict) and isinstance(raw.get("custom_fields"), dict):
+        sources.append(raw["custom_fields"])
+    return sources
+
+
+def _agreed_token(sources: list[dict], keys: tuple[str, ...], normalize) -> str | None:
+    """The one non-blank value every source shares, or None if missing or split."""
+    found: list[str] = []
+    for src in sources:
+        for key in keys:
+            if key not in src:
+                continue
+            token = normalize(src.get(key))
+            if token:
+                found.append(token)
+    if not found or len(set(found)) != 1:
+        return None
+    return found[0]
+
+
+def _booking_identity(doc: dict, *, nested: bool) -> tuple[str, str, str] | None:
+    """``(booking_number, county, state)`` or None when it cannot be verified.
+
+    Booking numbers stay case-sensitive. County and state must both be present
+    and must not disagree across the receipt's stored copies. Missing or
+    conflicting jurisdiction is unverified — never treated as a match.
+    """
+    if not isinstance(doc, dict):
+        return None
+    sources = _identity_sources(doc, nested=nested)
+    booking = _agreed_token(sources, ("booking_number",), _booking_token)
+    county = _agreed_token(sources, ("county", "County"), _place_token)
+    state = _agreed_token(sources, ("state", "State"), _place_token)
+    if not booking or not county or not state:
+        return None
+    return booking, county, state
+
+
+def _identity_pins(row: dict) -> dict:
+    """Pin every jurisdiction field the link read, including fields that were absent.
+
+    A county or state added or changed after the check must make the conditional
+    update miss.
+    """
+    pins: dict = {}
+    for key in ("county", "County", "state", "State"):
+        if key in row:
+            pins[key] = row.get(key)
+        else:
+            pins[key] = {"$exists": False}
+    nested = (
+        ("custom_fields", row.get("custom_fields") if isinstance(row.get("custom_fields"), dict) else None),
+        (
+            "raw_payload.custom_fields",
+            (row.get("raw_payload") or {}).get("custom_fields")
+            if isinstance(row.get("raw_payload"), dict) else None,
+        ),
+    )
+    for prefix, cf in nested:
+        for key in ("county", "state", "booking_number"):
+            path = f"{prefix}.{key}"
+            if isinstance(cf, dict) and key in cf:
+                pins[path] = cf.get(key)
+            else:
+                pins[path] = {"$exists": False}
+    return pins
+
+
 def _actor(request: Request) -> str:
     """Same rule as the AR router: session agent/email, else X-Actor, else 'staff'."""
     try:
@@ -392,7 +489,9 @@ async def _audit_link(actor: str, plan: dict, plan_id: str, txn: str, row: dict,
             "status_after": "completed",
             "amount": amount,
             "reason": "logged card payment linked to plan: exact transaction id, same amount, "
-                      "same or blank booking, settled status, only unlinked row for the id",
+                      "same booking number, county, and state, settled status, only unlinked row for the id",
+            "county": plan.get("county") or plan.get("County"),
+            "state": plan.get("state") or plan.get("State"),
             "confidence": 1.0,
             "match_method": "exact_transaction_id",
         })
@@ -645,10 +744,21 @@ async def record_payment(request: Request, plan_id):
                  "message": "The logged card payment with this transaction id is not matched to a booking. Assign it to the booking before applying it to a plan."},
                 status_code=409,
             )
-        if row_booking != str(plan.get("booking_number") or "").strip():
+        # Booking number is not unique across counties or states (Lee FL can
+        # share a number with Lee GA). Both sides need booking + county + state,
+        # and those three must agree. Anything missing or in conflict fails closed.
+        row_identity = _booking_identity(logged_row, nested=True)
+        plan_identity = _booking_identity(plan, nested=False)
+        if row_identity is None or plan_identity is None:
+            return JSONResponse(
+                {"error": "logged_payment_jurisdiction_unverified", "transaction_id": txn,
+                 "message": "The logged card payment cannot be matched to this plan until both have the same booking number, county, and state. Assign the receipt's county and state before applying it."},
+                status_code=409,
+            )
+        if row_identity != plan_identity:
             return JSONResponse(
                 {"error": "logged_payment_booking_mismatch", "transaction_id": txn,
-                 "message": "The logged card payment with this transaction id belongs to another booking."},
+                 "message": "The logged card payment does not match this plan's booking, county, and state."},
                 status_code=409,
             )
 
@@ -682,6 +792,9 @@ async def record_payment(request: Request, plan_id):
             # not be overwritten.
             "booking_number": logged_row.get("booking_number"),
             "$or": [{"plan_id": {"$exists": False}}, {"plan_id": None}, {"plan_id": ""}],
+            # Pin county/state on the row and under custom_fields. A jurisdiction
+            # that appears or changes after this check must not still match.
+            **_identity_pins(logged_row),
         }
         _raw = logged_row.get("raw_payload")
         if isinstance(_raw, dict) and "event_type" in _raw:

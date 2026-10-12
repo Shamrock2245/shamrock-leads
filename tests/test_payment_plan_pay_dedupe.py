@@ -96,7 +96,8 @@ PLAN_ID = "plan-test-01"
 def rig(monkeypatch):
     db = DB()
     db["payment_plans"].docs.append({
-        "plan_id": PLAN_ID, "booking_number": "TEST-PP-1", "total_premium": 1000.0,
+        "plan_id": PLAN_ID, "booking_number": "TEST-PP-1", "county": "Lee", "state": "FL",
+        "total_premium": 1000.0,
         "down_payment": 200.0, "balance_remaining": 800.0, "installment_amount": 100.0,
         "frequency": "weekly", "payments_made": 1, "total_paid": 200.0, "status": "active",
     })
@@ -254,7 +255,7 @@ def test_poller_row_without_plan_does_not_block(rig):
     db, app = rig
     db["payments"].docs.append({"_id": "pay-poll-x", "transaction_id": "TX-CARD", "amount": 100,
                                 "status": "approved", "source": "swipesimple_gmail_poll",
-                                "booking_number": "TEST-PP-1"})
+                                "booking_number": "TEST-PP-1", "county": "Lee", "state": "FL"})
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
     assert r.status_code == 200 and r.json()["idempotent"] is False
     assert _plan(db)["balance_remaining"] == 700.0

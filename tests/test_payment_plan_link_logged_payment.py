@@ -11,10 +11,11 @@ import pytest
 from tests.test_payment_plan_pay_dedupe import PLAN_ID, _plan, _post_many, rig  # noqa: F401
 
 
-def _poller_row(db, txn="TX-CARD", amount=100.0, booking="TEST-PP-1", _id="pay-poll-1", **extra):
+def _poller_row(db, txn="TX-CARD", amount=100.0, booking="TEST-PP-1", _id="pay-poll-1",
+                county="Lee", state="FL", **extra):
     row = {"_id": _id, "transaction_id": txn, "gmail_message_id": "gm-1",
            "source": "swipesimple_gmail_poll", "amount": amount, "status": "approved",
-           "booking_number": booking, **extra}
+           "booking_number": booking, "county": county, "state": state, **extra}
     db["payments"].docs.append(row)
     return row
 
@@ -639,6 +640,116 @@ def test_plan_readback_retries_then_returns_real_balance(rig):
     body = r.json()
     assert r.status_code == 200 and body["balance_remaining"] == 700.0 and body["status"] == "active"
     assert db["payment_plan_payment_claims"].docs[0]["balance_after"] == 700.0
+
+
+# ── Codex P1 on cf5bd69: county + state, not booking number alone ────────────
+
+
+@pytest.mark.parametrize("override", [{"county": "Collier"}, {"state": "GA"}, {"county": "Lee", "state": "SC"}])
+def test_same_booking_other_county_or_state_is_not_linked(rig, override):
+    """Lee FL booking numbers can collide with Lee GA or Collier. Do not pay the URL plan."""
+    db, app = rig
+    row = _poller_row(db, **override)
+    before = dict(row)
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_booking_mismatch"
+    assert row == before and _plan(db)["balance_remaining"] == 800.0
+    assert db["payment_plan_payment_claims"].docs == []
+
+
+def test_county_and_state_match_is_case_insensitive(rig):
+    db, app = rig
+    row = _poller_row(db, county="lee", state="fl")
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 200 and row["plan_id"] == PLAN_ID
+    assert _plan(db)["balance_remaining"] == 700.0
+
+
+def test_state_name_is_not_guessed_from_abbreviation(rig):
+    db, app = rig
+    row = _poller_row(db, state="Florida")
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_booking_mismatch"
+    assert "plan_id" not in row and _plan(db)["balance_remaining"] == 800.0
+
+
+@pytest.mark.parametrize("drop", ["county", "state"])
+def test_receipt_missing_county_or_state_is_not_linked(rig, drop):
+    db, app = rig
+    row = _poller_row(db)
+    row.pop(drop)
+    before = dict(row)
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_jurisdiction_unverified"
+    assert row == before and _plan(db)["balance_remaining"] == 800.0
+    assert db["payment_plan_payment_claims"].docs == []
+
+
+@pytest.mark.parametrize("drop", ["county", "state"])
+def test_plan_missing_county_or_state_is_not_linked(rig, drop):
+    db, app = rig
+    _plan(db).pop(drop)
+    row = _poller_row(db)
+    before = dict(row)
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_jurisdiction_unverified"
+    assert row == before and _plan(db)["balance_remaining"] == 800.0
+
+
+def test_conflicting_county_copies_are_not_linked(rig):
+    db, app = rig
+    row = _poller_row(db, custom_fields={"county": "Collier", "state": "FL", "booking_number": "TEST-PP-1"})
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_jurisdiction_unverified"
+    assert "plan_id" not in row and _plan(db)["balance_remaining"] == 800.0
+
+
+def test_webhook_custom_fields_county_and_state_link(rig):
+    """The webhook keeps jurisdiction under custom_fields, not only top-level keys."""
+    db, app = rig
+    row = _poller_row(
+        db, source=None, status="approved",
+        custom_fields={"booking_number": "TEST-PP-1", "county": "Lee", "state": "FL"},
+        raw_payload={
+            "event_type": "payment.completed",
+            "custom_fields": {"booking_number": "TEST-PP-1", "county": "Lee", "state": "fl"},
+        },
+    )
+    row.pop("county")
+    row.pop("state")
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 200 and row["plan_id"] == PLAN_ID
+    assert _plan(db)["balance_remaining"] == 700.0
+
+
+def test_create_plan_keeps_county_and_state(rig):
+    db, app = rig
+
+    async def go():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            return await c.post("/api/payments/plans", json={
+                "booking_number": "B-NEW", "total_premium": 100, "down_payment": 0,
+                "county": " Lee ", "state": "GA",
+            })
+    r = asyncio.run(go())
+    assert r.status_code == 201
+    created = next(p for p in db["payment_plans"].docs if p.get("booking_number") == "B-NEW")
+    assert created["county"] == "Lee" and created["state"] == "GA"
+
+
+def test_county_changed_between_check_and_link_fails_closed(rig):
+    db, app = rig
+    row = _poller_row(db)
+
+    def change(coll, flt):
+        if flt.get("_id") == "pay-poll-1":
+            row["county"] = "Collier"
+    db["payments"].before_update = change
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 409 and r.json()["error"] == "payment_needs_review"
+    assert row["county"] == "Collier" and "plan_id" not in row
+    assert _plan(db)["balance_remaining"] == 800.0
 
 
 def test_clash_without_link_audit_does_not_emit_orphan_unlink(rig):
