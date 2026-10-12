@@ -149,7 +149,7 @@ def test_stale_claimed_claim_is_not_reported_as_paid(rig):
     db, app = rig
     db["payment_plan_payment_claims"].docs.append(
         {"plan_id": PLAN_ID, "transaction_id": "TX-STUCK", "status": "claimed"})
-    db["payment_plan_payment_claims"].unique.append(("plan_id", "transaction_id"))
+    db["payment_plan_payment_claims"].unique.append(("tenant_id", "transaction_id"))
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-STUCK"}])
     assert r.status_code == 409 and r.json()["error"] == "payment_in_progress"
     assert r.json().get("success") is not True
@@ -163,7 +163,7 @@ def test_only_applied_claims_count_as_success(rig, claim_status):
     if claim_status is not None:
         doc["status"] = claim_status
     db["payment_plan_payment_claims"].docs.append(doc)
-    db["payment_plan_payment_claims"].unique.append(("plan_id", "transaction_id"))
+    db["payment_plan_payment_claims"].unique.append(("tenant_id", "transaction_id"))
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-S"}])
     assert r.status_code == 409 and r.json()["error"] == "payment_in_progress"
 
@@ -177,19 +177,91 @@ def test_concurrent_different_txns_all_apply_without_lost_updates(rig):
     assert _plan(db)["total_paid"] == 500.0 and _plan(db)["payments_made"] == 4
 
 
-def test_same_txn_on_another_plan_is_separate(rig):
+def _post_plan(app, plan_id, body):
+    async def go():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            return await c.post(f"/api/payments/plans/{plan_id}/pay", json=body)
+    return asyncio.run(go())
+
+
+def _add_second_plan(db):
+    db["payment_plans"].docs.append({**_plan(db), "plan_id": "plan-test-02",
+                                     "balance_remaining": 800.0, "total_paid": 200.0,
+                                     "payments_made": 1})
+    return db["payment_plans"].docs[1]
+
+
+def test_same_txn_on_another_plan_is_refused(rig):
+    """One card txn / receipt # is one payment: never applied to two plans (Codex P1 #3)."""
     db, app = rig
     _post_many(app, [{"amount": 100, "transaction_id": "TX-1"}])
-    db["payment_plans"].docs.append({**_plan(db), "plan_id": "plan-test-02", "balance_remaining": 800.0})
+    other = _add_second_plan(db)
+    r = _post_plan(app, "plan-test-02", {"amount": 100, "transaction_id": "TX-1"})
+    assert r.status_code == 409 and r.json()["error"] == "transaction_id_used_on_other_plan"
+    assert len(db["payments"].docs) == 1
+    assert other["balance_remaining"] == 800.0 and _plan(db)["balance_remaining"] == 700.0
+
+
+def test_same_txn_two_plans_concurrently_applies_once(rig):
+    db, app = rig
+    other = _add_second_plan(db)
 
     async def go():
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
-            return await c.post("/api/payments/plans/plan-test-02/pay",
-                                json={"amount": 100, "transaction_id": "TX-1"})
-    r = asyncio.run(go())
-    assert r.json()["idempotent"] is False
-    assert len(db["payments"].docs) == 2
+            return await asyncio.gather(
+                c.post(f"/api/payments/plans/{PLAN_ID}/pay", json={"amount": 100, "transaction_id": "TX-X"}),
+                c.post("/api/payments/plans/plan-test-02/pay", json={"amount": 100, "transaction_id": "TX-X"}),
+            )
+    rs = asyncio.run(go())
+    assert sum(1 for r in rs if r.status_code == 200 and r.json().get("idempotent") is False) == 1
+    assert all(r.status_code in (200, 409) for r in rs)
+    assert len(db["payments"].docs) == 1
+    assert _plan(db)["balance_remaining"] + other["balance_remaining"] == 1500.0
+
+
+def test_legacy_row_on_other_plan_blocks_reuse(rig):
+    db, app = rig
+    _add_second_plan(db)
+    db["payments"].docs.append({"plan_id": "plan-test-02", "transaction_id": "TX-OLD2", "amount": 100})
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-OLD2"}])
+    assert r.status_code == 409 and r.json()["error"] == "transaction_id_used_on_other_plan"
+    assert _plan(db)["balance_remaining"] == 800.0
+
+
+def test_poller_row_without_plan_does_not_block(rig):
+    """The receipt poller logs card payments with no plan_id; that is not a plan application."""
+    db, app = rig
+    db["payments"].docs.append({"transaction_id": "TX-CARD", "amount": 100, "booking_number": "TEST-PP-1"})
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 200 and r.json()["idempotent"] is False
+    assert _plan(db)["balance_remaining"] == 700.0
+
+
+@pytest.mark.parametrize("amount", [900, 99.99, 100.01])
+def test_reused_txn_with_different_amount_refused(rig, amount):
+    """Applied $100, then same id with another amount: refuse, don't confirm (Codex P1 #4)."""
+    db, app = rig
+    _post_many(app, [{"amount": 100, "transaction_id": "TX-AMT"}])
+    (r,) = _post_many(app, [{"amount": amount, "transaction_id": "TX-AMT"}])
+    assert r.status_code == 409 and r.json()["error"] == "transaction_id_amount_mismatch"
+    assert r.json().get("success") is not True
+    assert len(db["payments"].docs) == 1 and _plan(db)["balance_remaining"] == 700.0
+
+
+def test_reused_txn_same_amount_as_string_is_idempotent(rig):
+    db, app = rig
+    _post_many(app, [{"amount": 100, "transaction_id": "TX-AMT2"}])
+    (r,) = _post_many(app, [{"amount": "100.00", "transaction_id": "TX-AMT2"}])
+    assert r.status_code == 200 and r.json()["idempotent"] is True
+
+
+def test_legacy_row_with_different_amount_refused(rig):
+    db, app = rig
+    db["payments"].docs.append({"plan_id": PLAN_ID, "transaction_id": "TX-L", "amount": 50})
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-L"}])
+    assert r.status_code == 409 and r.json()["error"] == "transaction_id_amount_mismatch"
 
 
 @pytest.mark.parametrize("txn", [None, "", "   "])
@@ -232,7 +304,7 @@ def test_index_is_created_lazily_once(rig):
     _post_many(app, [{"amount": 10, "transaction_id": "TX-1"}])
     _post_many(app, [{"amount": 10, "transaction_id": "TX-2"}])
     claims = db["payment_plan_payment_claims"]
-    assert claims.index_calls == 1 and claims.unique == [("plan_id", "transaction_id")]
+    assert claims.index_calls == 1 and claims.unique == [("tenant_id", "transaction_id")]
 
 
 def test_failed_write_marks_claim_and_retry_needs_review(rig):

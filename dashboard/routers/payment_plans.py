@@ -199,7 +199,11 @@ async def create_plan(request: Request):
 # ── Payment dedupe (one application per plan + transaction id) ───────────────
 #
 # Collection ``payment_plan_payment_claims`` with a unique index on
-# (plan_id, transaction_id), created lazily and idempotently on first use
+# (tenant_id, transaction_id) — one application of a transaction id per
+# tenant, across ALL plans (a card txn / receipt # is one real payment).
+# Tenant indexes are not applied yet, so today tenant_id is absent (null) and
+# the index is effectively one-per-transaction-id. Created lazily and
+# idempotently on first use
 # (``create_index`` is a no-op when the index already exists). No migration.
 # If the index cannot be ensured the request fails closed (503) and nothing
 # is recorded. The insert of the claim is the atomic gate: only the request
@@ -214,9 +218,9 @@ async def _payment_claims_collection():
     coll = get_collection(PAYMENT_CLAIMS_COLLECTION)
     if not _payment_claim_index_ready:
         await coll.create_index(
-            [("plan_id", 1), ("transaction_id", 1)],
+            [("tenant_id", 1), ("transaction_id", 1)],
             unique=True,
-            name="uniq_plan_txn",
+            name="uniq_tenant_txn",
         )
         _payment_claim_index_ready = True
     return coll
@@ -230,9 +234,28 @@ def _next_due(frequency: str, now: datetime) -> datetime:
     return now + timedelta(days=30)
 
 
-async def _idempotent_reply(plans_col, plan_id: str, txn: str, claim: dict | None):
-    """Success only for a claim that finished (``applied``) or a legacy payment
-    row (``claim`` None). Anything else is never reported as paid."""
+def _same_amount(a, b) -> bool:
+    try:
+        return round(float(a), 2) == round(float(b), 2)
+    except (TypeError, ValueError):
+        return False
+
+
+async def _idempotent_reply(
+    plans_col, plan_id: str, txn: str, claim: dict | None, amount: float,
+    legacy_row: dict | None = None,
+):
+    """Success only when the earlier application is the SAME payment: same
+    plan, same amount, and finished (``applied`` claim, or a legacy payment
+    row when no claim exists). Anything else is refused, never reported paid."""
+    prior = claim if claim is not None else (legacy_row or {})
+    prior_plan = prior.get("plan_id")
+    if prior_plan and prior_plan != plan_id:
+        return JSONResponse(
+            {"error": "transaction_id_used_on_other_plan", "transaction_id": txn,
+             "message": "This transaction id is already recorded on another payment plan."},
+            status_code=409,
+        )
     status = (claim or {}).get("status") if claim is not None else "applied"
     if status == "failed":
         return JSONResponse(
@@ -246,6 +269,12 @@ async def _idempotent_reply(plans_col, plan_id: str, txn: str, claim: dict | Non
         return JSONResponse(
             {"error": "payment_in_progress", "transaction_id": txn,
              "message": "This transaction id is being recorded or did not finish. Wait and retry; if it persists, check the plan before recording it again."},
+            status_code=409,
+        )
+    if not _same_amount(prior.get("amount"), amount):
+        return JSONResponse(
+            {"error": "transaction_id_amount_mismatch", "transaction_id": txn,
+             "message": "This transaction id was already recorded with a different amount."},
             status_code=409,
         )
     plan = await plans_col.find_one({"plan_id": plan_id}) or {}
@@ -305,14 +334,18 @@ async def record_payment(request: Request, plan_id):
 
     # A claim, when one exists, decides: a payment row left behind by a
     # 'failed' or unfinished 'claimed' attempt is NOT proof the plan was updated.
-    existing_claim = await claims.find_one({"plan_id": plan_id, "transaction_id": txn})
+    existing_claim = await claims.find_one({"transaction_id": txn})
     if existing_claim is not None:
-        return await _idempotent_reply(plans_col, plan_id, txn, existing_claim)
+        return await _idempotent_reply(plans_col, plan_id, txn, existing_claim, amount)
 
-    # Rows recorded before this dedupe existed have no claim: treat them as applied.
-    legacy = await payments_col.find_one({"plan_id": plan_id, "transaction_id": txn})
+    # Plan payments recorded before this dedupe existed have no claim: treat
+    # them as applied (on any plan). Rows without a plan_id (e.g. the receipt
+    # poller's log of a card payment) are not plan applications and don't block.
+    legacy = await payments_col.find_one(
+        {"transaction_id": txn, "plan_id": {"$exists": True, "$nin": [None, ""]}}
+    )
     if legacy:
-        return await _idempotent_reply(plans_col, plan_id, txn, None)
+        return await _idempotent_reply(plans_col, plan_id, txn, None, amount, legacy_row=legacy)
 
     now = datetime.now(timezone.utc)
     try:
@@ -325,8 +358,9 @@ async def record_payment(request: Request, plan_id):
             "claimed_at": now.isoformat(),
         })
     except DuplicateKeyError:
-        existing = await claims.find_one({"plan_id": plan_id, "transaction_id": txn})
-        return await _idempotent_reply(plans_col, plan_id, txn, existing or {"status": "unknown"})
+        existing = await claims.find_one({"transaction_id": txn})
+        return await _idempotent_reply(
+            plans_col, plan_id, txn, existing or {"status": "unknown"}, amount)
 
     try:
         await payments_col.insert_one({
