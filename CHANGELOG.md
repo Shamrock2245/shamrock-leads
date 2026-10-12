@@ -3,6 +3,19 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-12 (payment agent KPIs: settled and deduplicated)
+
+### Fixed
+- **`GET /api/analytics/agent-performance`, "the_payment_agent" `payments_recorded` and `total_collected`.** These used to count and sum every `payments` row with a recent `created_at`, whatever its status. That included declined and refunded webhook rows, and one card payment counted twice when both the poller and the webhook logged it. Plan `/pay` rows were missed entirely because they have `timestamp`, not `created_at`. Now:
+  - Rows in the window by `timestamp` or by `created_at` both count, so plan `/pay`, AR and poller/webhook rows are all included.
+  - Only settled statuses count: approved, paid, completed or success, case-insensitive (so `"Completed"` from `/api/payments` counts). This is the same rule as the plan-payment link in #181. A webhook row also needs `event_type` `payment.completed`.
+  - Each transaction id counts once. The preferred row is the one linked to a plan, then a `completed` row. Rows with no transaction id count on their own.
+
+  The logic is in `agent_analytics.summarize_settled_payments`.
+
+### Tests
+- New `tests/test_agent_analytics_payment_agent.py` (added to `ci.yml`): poller+webhook and poller+plan duplicates, which row is preferred, declined/refunded/voided/pending/blank statuses, webhook failed/refunded events, plan `/pay` rows, rows with no transaction id, and the KPIs from the endpoint itself.
+
 ## [Unreleased] — 2026-10-12 (payment webhook fails closed; plan payments deduped)
 
 ### Fixed

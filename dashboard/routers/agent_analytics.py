@@ -32,6 +32,72 @@ def _period_range(days: int = 30):
     return start, end
 
 
+# ── Payment agent: settled, deduped by transaction id ─────────────────────
+# Same settled rule as the plan-payment link (#181): approved / paid /
+# completed / success (case-insensitive); webhook rows only for event
+# ``payment.completed``. Plan /pay rows carry ``timestamp`` and poller /
+# webhook rows ``created_at``; both count. A transaction id counts once,
+# preferring the plan-linked row, then a ``completed`` row.
+
+_SETTLED_PAYMENT_STATUSES = frozenset({"approved", "paid", "completed", "success"})
+_PAYMENT_AGENT_FIELDS = {
+    "_id": 1, "transaction_id": 1, "amount": 1, "status": 1, "plan_id": 1,
+    "timestamp": 1, "created_at": 1, "raw_payload.event_type": 1,
+}
+
+
+def _settled_payment(row: dict) -> bool:
+    if str(row.get("status") or "").strip().lower() not in _SETTLED_PAYMENT_STATUSES:
+        return False
+    raw = row.get("raw_payload")
+    if isinstance(raw, dict) and raw.get("event_type") is not None:
+        return str(raw.get("event_type")).strip().lower() == "payment.completed"
+    return True
+
+
+def _payment_rank(row: dict) -> int:
+    if str(row.get("plan_id") or "").strip():
+        return 0
+    if str(row.get("status") or "").strip().lower() == "completed":
+        return 1
+    return 2
+
+
+def _amount(row: dict) -> float:
+    try:
+        value = float(row.get("amount") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return value if value == value and value not in (float("inf"), float("-inf")) else 0.0
+
+
+def summarize_settled_payments(rows) -> dict:
+    """{count, total, duplicates_skipped, unsettled_skipped} for settled rows,
+    one per transaction id (rows without an id count individually)."""
+    chosen: dict = {}
+    unsettled = dupes = 0
+    for idx, row in enumerate(rows or []):
+        if not _settled_payment(row):
+            unsettled += 1
+            continue
+        txn = str(row.get("transaction_id") or "").strip()
+        key = ("txn", txn) if txn else ("row", str(row.get("_id", idx)))
+        prev = chosen.get(key)
+        if prev is None:
+            chosen[key] = row
+            continue
+        dupes += 1
+        if _payment_rank(row) < _payment_rank(prev):
+            chosen[key] = row
+    total = sum(_amount(r) for r in chosen.values())
+    return {
+        "count": len(chosen),
+        "total": round(total, 2),
+        "duplicates_skipped": dupes,
+        "unsettled_skipped": unsettled,
+    }
+
+
 # ── Agent definitions with collection mappings ────────────────────────────
 AGENT_PROFILES = {
     "the_clerk": {
@@ -256,15 +322,13 @@ async def agent_performance(days: str = Query(default="30")):
 
         # ── Payments ─────────────────────────────────────────────────────
         pay_col = db["payments"]
-        payments = await pay_col.count_documents(
-            {"created_at": {"$gte": start_iso}}
-        )
-        pay_pipe = [
-            {"$match": {"created_at": {"$gte": start_iso}}},
-            {"$group": {"_id": None, "total": {"$sum": "$amount"}}},
-        ]
-        pay_agg = await pay_col.aggregate(pay_pipe).to_list(1)
-        total_collected = pay_agg[0]["total"] if pay_agg else 0
+        pay_rows = await pay_col.find(
+            {"$or": [{"timestamp": {"$gte": start_iso}}, {"created_at": {"$gte": start_iso}}]},
+            _PAYMENT_AGENT_FIELDS,
+        ).to_list(None)
+        pay_summary = summarize_settled_payments(pay_rows)
+        payments = pay_summary["count"]
+        total_collected = pay_summary["total"]
         results.append({
             **AGENT_PROFILES["the_payment_agent"],
             "agent_id": "the_payment_agent",
