@@ -282,6 +282,15 @@ def _conflict(error: str, txn: str, message: str, status_code: int = 409):
     )
 
 
+def _needs_review_response(txn: str, plan_id: str, message: str) -> JSONResponse:
+    """Same shape for a kept link and for an incomplete rollback."""
+    return JSONResponse(
+        {"error": "payment_needs_review", "transaction_id": txn, "plan_id": plan_id,
+         "message": message},
+        status_code=500,
+    )
+
+
 def _row_settled(row: dict) -> bool:
     if str(row.get("status") or "").strip().lower() not in _SETTLED_STATUSES:
         return False
@@ -431,10 +440,16 @@ async def _create_plan_with_down_payment_txn(plans_col, plan_doc, txn, amount, m
             return _conflict("logged_payment_ambiguous", txn,
                              "Another logged payment with this transaction id appeared while the plan was being created. Review before trying again.")
         if outcome == "retained":
-            return JSONResponse(
-                {"error": "payment_needs_review", "transaction_id": txn, "plan_id": plan_id,
-                 "message": "The payment stayed linked to the plan, but the plan could not be finished. Review it before recording this payment again."},
-                status_code=500,
+            return _needs_review_response(
+                txn, plan_id,
+                "The payment stayed linked to the plan, but the plan could not be finished. "
+                "Review it before recording this payment again.",
+            )
+        if outcome == "incomplete":
+            return _needs_review_response(
+                txn, plan_id,
+                "The plan could not be finished and the rollback did not complete. "
+                "Review it before recording this payment again.",
             )
         return _conflict("payment_record_failed", txn,
                          "The plan could not be created. Nothing was recorded.", 500)
@@ -459,6 +474,18 @@ async def _iter_find(coll, flt):
             yield d
 
 
+async def _delete_if_present(coll, flt, identity) -> bool:
+    """True when no document with ``identity`` remains.
+
+    ``delete_one`` matching nothing is success only when that document is
+    already gone. A row that is still there was not cleared.
+    """
+    res = await coll.delete_one(flt)
+    if getattr(res, "deleted_count", 0):
+        return True
+    return await coll.find_one(identity) is None
+
+
 async def _undo_plan_create(plans_col, payments_col, claims, plan_id, txn, row,
                             link_set, inserted_id, plan_inserted):
     """Best-effort rollback in reverse order.
@@ -467,14 +494,19 @@ async def _undo_plan_create(plans_col, payments_col, claims, plan_id, txn, row,
     unchanged (a newer write, e.g. the reconciliation service, is kept).
     When that revert matches nothing, the payment still carries this
     ``plan_id``, so the plan is kept as ``needs_review`` instead of being
-    deleted. The claim is deleted (txn free again) only when everything was
-    undone; otherwise it is marked failed so the txn stays blocked.
+    deleted. A delete that throws, or that matches nothing while the row is
+    still there, is the same kind of incomplete rollback: any surviving plan
+    is marked ``needs_review`` and the claim stays blocked.
+
+    The claim is deleted (txn free again) only when everything was undone.
 
     Returns ``"undone"``, ``"retained"`` (plan kept because the payment could
     not be detached), or ``"incomplete"``.
     """
     ok = True
     detached = link_set is None
+    payment_cleared = inserted_id is None
+    plan_cleared = not plan_inserted
     try:
         if link_set is not None:
             restore = {k: row[k] for k in link_set if k in row}
@@ -487,14 +519,22 @@ async def _undo_plan_create(plans_col, payments_col, claims, plan_id, txn, row,
             if not detached:
                 ok = False
                 logger.error("[payment_plans] down-payment link revert matched nothing plan_id=%s", plan_id)
-        if detached and inserted_id is not None:
-            await payments_col.delete_one({"_id": inserted_id, "plan_id": plan_id})
-        if detached and plan_inserted:
-            await plans_col.delete_one({"plan_id": plan_id})
+        if ok and detached and inserted_id is not None:
+            payment_cleared = await _delete_if_present(
+                payments_col, {"_id": inserted_id, "plan_id": plan_id}, {"_id": inserted_id})
+            if not payment_cleared:
+                ok = False
+                logger.error("[payment_plans] down-payment row delete did not clear plan_id=%s", plan_id)
+        if ok and detached and plan_inserted:
+            plan_cleared = await _delete_if_present(
+                plans_col, {"plan_id": plan_id}, {"plan_id": plan_id})
+            if not plan_cleared:
+                ok = False
+                logger.error("[payment_plans] plan delete did not clear plan_id=%s", plan_id)
     except Exception as exc:
         ok = False
         logger.error("[payment_plans] plan create rollback failed plan_id=%s err=%s", plan_id, type(exc).__name__)
-    if plan_inserted and not detached:
+    if plan_inserted and not plan_cleared:
         try:
             await plans_col.update_one(
                 {"plan_id": plan_id},
@@ -505,8 +545,9 @@ async def _undo_plan_create(plans_col, payments_col, claims, plan_id, txn, row,
             ok = False
             logger.error("[payment_plans] could not mark plan needs_review plan_id=%s err=%s",
                          plan_id, type(exc).__name__)
+    fully_undone = ok and detached and payment_cleared and plan_cleared
     try:
-        if ok and detached:
+        if fully_undone:
             await claims.delete_one({"plan_id": plan_id, "transaction_id": txn})
         else:
             await claims.update_one({"plan_id": plan_id, "transaction_id": txn},
@@ -514,10 +555,17 @@ async def _undo_plan_create(plans_col, payments_col, claims, plan_id, txn, row,
                                               "failed_reason": "plan_create_rollback_incomplete",
                                               "failed_at": datetime.now(timezone.utc).isoformat()}})
     except Exception:
-        pass
+        fully_undone = False
+        try:
+            await claims.update_one({"plan_id": plan_id, "transaction_id": txn},
+                                    {"$set": {"status": "failed",
+                                              "failed_reason": "plan_create_rollback_incomplete",
+                                              "failed_at": datetime.now(timezone.utc).isoformat()}})
+        except Exception:
+            pass
     if plan_inserted and not detached:
         return "retained"
-    if ok and detached:
+    if fully_undone:
         return "undone"
     return "incomplete"
 

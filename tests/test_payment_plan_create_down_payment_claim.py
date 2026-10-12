@@ -375,6 +375,80 @@ def test_claim_finalization_failure_retains_plan_when_payment_changed(rig):
     _assert_plan_retained_for_changed_payment(db, r)
 
 
+def _fail_applied_claim(db):
+    """The claim's applied write raises, so undo runs after the plan exists."""
+    claims = db["payment_plan_payment_claims"]
+    real = Coll.update_one
+
+    async def boom(self, flt, update, upsert=False):
+        if (update.get("$set") or {}).get("status") == "applied":
+            raise RuntimeError("claim write failed")
+        return await real(self, flt, update, upsert)
+    claims.update_one = boom.__get__(claims)
+
+
+def _assert_incomplete_undo(db, response):
+    assert response.status_code == 500
+    body = response.json()
+    assert body["error"] == "payment_needs_review"
+    assert body["transaction_id"] == "SS-77"
+    assert "Nothing was recorded" not in body["message"]
+    (plan,) = db["payment_plans"].docs
+    assert plan["status"] == "needs_review"
+    assert plan["review_reason"] == "plan_create_rollback_incomplete"
+    assert plan["plan_id"] == body["plan_id"]
+    assert plan["total_paid"] == 200
+    (claim,) = _claims(db)
+    assert claim["status"] == "failed"
+    assert claim["failed_reason"] == "plan_create_rollback_incomplete"
+    assert claim["plan_id"] == plan["plan_id"]
+    return plan
+
+
+def test_incomplete_undo_when_payment_delete_throws(rig):
+    db, app = rig
+    _fail_applied_claim(db)
+    payments = db["payments"]
+
+    async def boom(self, flt):
+        raise RuntimeError("delete failed")
+    payments.delete_one = boom.__get__(payments)
+    (r,) = _post(app, [_body()])
+    plan = _assert_incomplete_undo(db, r)
+    (pay,) = db["payments"].docs
+    assert pay["plan_id"] == plan["plan_id"]
+
+
+def test_incomplete_undo_when_plan_delete_throws(rig):
+    db, app = rig
+    _fail_applied_claim(db)
+    plans = db["payment_plans"]
+
+    async def boom(self, flt):
+        raise RuntimeError("delete failed")
+    plans.delete_one = boom.__get__(plans)
+    (r,) = _post(app, [_body()])
+    _assert_incomplete_undo(db, r)
+    assert db["payments"].docs == []
+
+
+def test_incomplete_undo_when_delete_matches_nothing(rig):
+    """delete_one reports nothing deleted and leaves the plan and payment."""
+    db, app = rig
+    _fail_applied_claim(db)
+    payments = db["payments"]
+    plans = db["payment_plans"]
+
+    async def miss(self, flt):
+        return SimpleNamespace(deleted_count=0)
+    payments.delete_one = miss.__get__(payments)
+    plans.delete_one = miss.__get__(plans)
+    (r,) = _post(app, [_body()])
+    plan = _assert_incomplete_undo(db, r)
+    (pay,) = db["payments"].docs
+    assert pay["plan_id"] == plan["plan_id"]
+
+
 def test_poller_row_arriving_during_insert_rolls_back(rig):
     db, app = rig
     real = db["payments"].insert_one
