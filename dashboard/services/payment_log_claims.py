@@ -81,11 +81,12 @@ async def begin(db, txn: str, kind: str, source: str) -> Dict[str, Any]:
     payments = db["payments"]
     row = await payments.find_one(_existing_filter(txn, kind))
     if row is not None:
-        return {"action": "existing", "row": row, "claim": None}
+        claim = await claims.find_one({"transaction_id": txn, "kind": kind})
+        return {"action": "existing", "row": row, "claim": claim}
     if kind == CHARGE:
         plan_claim = await db[PLAN_CLAIMS_COLLECTION].find_one({"transaction_id": txn})
         if plan_claim is not None:
-            return {"action": "existing", "row": None, "claim": plan_claim}
+            return {"action": "existing", "row": None, "claim": None, "plan_claim": plan_claim}
 
     now = datetime.now(timezone.utc).isoformat()
     try:
@@ -133,25 +134,50 @@ async def finish(db, txn: str, kind: str, row_id, *, ok: bool) -> bool:
         return ok
 
 
-async def mark_webhook_seen(db, txn: str, kind: str, event_type: str) -> bool:
-    """For a webhook whose charge was already logged by someone else: record
-    the confirmation once. True the first time (caller continues its side
-    effects once); False for a retry of the same webhook (caller stops)."""
+async def ensure_claim(db, txn: str, kind: str) -> Optional[Dict[str, Any]]:
+    """Return the claim doc for (txn, kind), creating a ``logged`` one for a
+    charge recorded by someone else (poller row, plan claim, legacy row) so
+    webhook step flags have somewhere to live. None if the store is down."""
     txn = str(txn or "").strip()
-    now = datetime.now(timezone.utc).isoformat()
     try:
         claims = await _claims(db)
-        # Make sure there is a claim doc to hang the flag on (legacy row / plan claim).
         try:
             await claims.insert_one({"transaction_id": txn, "kind": kind, "source": "existing_row",
-                                     "status": "logged", "claimed_at": now})
+                                     "status": "logged",
+                                     "claimed_at": datetime.now(timezone.utc).isoformat()})
         except Exception:
             pass
-        res = await claims.update_one(
-            {"transaction_id": txn, "kind": kind, "webhook_seen_at": {"$exists": False}},
-            {"$set": {"webhook_seen_at": now, "webhook_event_type": event_type}},
+        return await claims.find_one({"transaction_id": txn, "kind": kind})
+    except Exception as exc:
+        logger.warning("[payment_log_claims] ensure_claim failed err=%s", type(exc).__name__)
+        return None
+
+
+async def take_step(db, txn: str, kind: str, step: str) -> bool:
+    """Atomically take a once-only webhook step (``wh_<step>`` flag). True for
+    exactly one caller; False if already taken or on error (fail closed: a
+    customer text or alert is never sent twice)."""
+    try:
+        res = await db[LOG_CLAIMS_COLLECTION].update_one(
+            {"transaction_id": str(txn).strip(), "kind": kind, f"wh_{step}": {"$exists": False}},
+            {"$set": {f"wh_{step}": datetime.now(timezone.utc).isoformat()}},
         )
         return bool(getattr(res, "modified_count", 0))
     except Exception as exc:
-        logger.warning("[payment_log_claims] webhook mark failed err=%s", type(exc).__name__)
+        logger.warning("[payment_log_claims] take_step %s failed err=%s", step, type(exc).__name__)
         return False
+
+
+async def step_done(claim: Optional[Dict[str, Any]], step: str) -> bool:
+    return bool((claim or {}).get(f"wh_{step}"))
+
+
+async def mark_step(db, txn: str, kind: str, step: str) -> None:
+    """Record a retryable step (event / audit / completed) as done. Never raises."""
+    try:
+        await db[LOG_CLAIMS_COLLECTION].update_one(
+            {"transaction_id": str(txn).strip(), "kind": kind},
+            {"$set": {f"wh_{step}": datetime.now(timezone.utc).isoformat()}},
+        )
+    except Exception as exc:
+        logger.warning("[payment_log_claims] mark_step %s failed err=%s", step, type(exc).__name__)

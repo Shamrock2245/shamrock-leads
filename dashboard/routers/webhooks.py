@@ -321,24 +321,53 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
     log_row = gate["action"] == "insert"
     if not log_row:
         prior = gate.get("row") or {}
-        claim = gate.get("claim") or {}
-        if (claim.get("source") == "swipesimple_webhook"
-                or isinstance(prior.get("raw_payload"), dict)):
+        claim = gate.get("claim")
+        if claim is None and isinstance(prior.get("raw_payload"), dict):
+            # Webhook row logged before claims existed: already processed.
             return JSONResponse(status_code=200, content={
                 "success": True, "duplicate": True, "transaction_id": txn_key})
-        if not await plc.mark_webhook_seen(db, txn_key, kind, str(event_type)):
+        if claim is None:
+            claim = await plc.ensure_claim(db, txn_key, kind)
+            if claim is None:
+                return JSONResponse({"error": "payment_dedupe_unavailable"}, status_code=503)
+        if claim.get("wh_completed"):
             return JSONResponse(status_code=200, content={
                 "success": True, "duplicate": True, "transaction_id": txn_key})
-        if prior.get("_id") is not None and not str(prior.get("plan_id") or "").strip():
+        if claim.get("source") == "swipesimple_webhook" and claim.get("status") == "claimed":
+            # Another delivery is mid-write: let the provider retry later.
+            return JSONResponse({"error": "payment_in_progress", "transaction_id": txn_key},
+                                status_code=409)
+        # Otherwise resume: either our earlier delivery logged the row but did
+        # not finish its side effects, or the poller / plan logged the charge.
+        if (prior.get("_id") is not None and not str(prior.get("plan_id") or "").strip()
+                and not isinstance(prior.get("raw_payload"), dict)):
             try:
                 await get_collection("payments").update_one(
-                    {"_id": prior["_id"]},
+                    {"_id": prior["_id"], "webhook_confirmed_at": {"$exists": False}},
                     {"$set": {"webhook_confirmed_at": now.isoformat(),
                               "webhook_event_type": str(event_type)}},
                 )
             except Exception as exc:
                 logger.warning("[payment_webhook] attach failed: %s", type(exc).__name__)
+    else:
+        claim = {}
 
+    try:
+        return await _payment_webhook_steps(
+            data, booking_number, now, db, plc, txn_key, kind, log_row, claim,
+            publish_event, send_message_universal, httpx)
+    except Exception:
+        if log_row:
+            # Released only while still 'claimed' (row not inserted yet).
+            await plc.finish(db, txn_key, kind, None, ok=False)
+        raise
+
+
+async def _payment_webhook_steps(data, booking_number, now, db, plc, txn_key, kind, log_row,
+                                 claim, publish_event, send_message_universal, httpx):
+    """Steps 3-8 of the payment webhook. Customer text and Slack alert run at
+    most once per (txn, kind); the SSE event and audit record are retried
+    until done; ``wh_completed`` marks the delivery fully processed."""
     # -- 3. Parse booking number -----------------------------------------------
     custom_fields = data.get("custom_fields", {})
     booking_number = (
@@ -402,7 +431,7 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         await plc.finish(db, txn_key, kind, row_id, ok=True)
 
     # -- 5. Send BlueBubbles receipt ------------------------------------------
-    if indemnitor_phone and status == "approved":
+    if indemnitor_phone and status == "approved" and await plc.take_step(db, txn_key, kind, "receipt"):
         try:
             receipt_msg = (
                 f"✅ Payment received! Thank you, {customer_name}.\n"
@@ -417,7 +446,7 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
     # -- 6. Slack alert -------------------------------------------------------
     # Payment received → #intake (bond operations / intake channel)
     slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL") or os.getenv("SLACK_WEBHOOK_LEADS", "")
-    if slack_webhook_url and status == "approved":
+    if slack_webhook_url and status == "approved" and await plc.take_step(db, txn_key, kind, "slack"):
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 await client.post(slack_webhook_url, json={
@@ -429,24 +458,29 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         except Exception as exc:
             logger.warning("[payment_webhook] Slack alert failed: %s", exc)
 
-    # -- 7. Publish SSE event -------------------------------------------------
-    await publish_event('payment_received', {
-        "transaction_id": transaction_id,
-        "booking_number": booking_number,
-        "amount": amount,
-        "status": status,
-        "customer_name": customer_name,
-    })
+    # -- 7. Publish SSE event (retried on redelivery until done) --------------
+    if not await plc.step_done(claim, "event"):
+        await publish_event('payment_received', {
+            "transaction_id": transaction_id,
+            "booking_number": booking_number,
+            "amount": amount,
+            "status": status,
+            "customer_name": customer_name,
+        })
+        await plc.mark_step(db, txn_key, kind, "event")
 
-    # -- 8. Log audit event ---------------------------------------------------
-    audit_events = get_collection("audit_events")
-    await audit_events.insert_one({
-        "source": "swipesimple_webhook",
-        "event_type": f"payment.{status}",
-        "payload": data,
-        "timestamp": now.isoformat(),
-    })
+    # -- 8. Log audit event (retried on redelivery until done) ----------------
+    if not await plc.step_done(claim, "audit"):
+        audit_events = get_collection("audit_events")
+        await audit_events.insert_one({
+            "source": "swipesimple_webhook",
+            "event_type": f"payment.{status}",
+            "payload": data,
+            "timestamp": now.isoformat(),
+        })
+        await plc.mark_step(db, txn_key, kind, "audit")
 
+    await plc.mark_step(db, txn_key, kind, "completed")
     return JSONResponse(status_code=200, content={"success": True})
 
 

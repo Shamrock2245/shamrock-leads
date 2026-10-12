@@ -104,10 +104,15 @@ def test_webhook_logs_once_and_retry_is_duplicate(rig):
 
 def test_concurrent_webhooks_same_txn_one_row(rig):
     db, app, bb = rig
-    rs = _hooks(app, [_hook()] * 5)
-    assert all(r.status_code == 200 for r in rs)
-    assert sum(1 for r in rs if r.json().get("duplicate")) == 4
+    rs = _hooks(app, [_hook(custom_fields={"booking_number": "BK-1", "indemnitor_phone": "+10000000000"})] * 5)
+    fresh = [r for r in rs if r.status_code == 200 and not r.json().get("duplicate")]
+    assert len(fresh) == 1
+    for r in rs:
+        if r is not fresh[0]:
+            assert r.json().get("duplicate") is True or (
+                r.status_code == 409 and r.json()["error"] == "payment_in_progress")
     assert len(_rows(db)) == 1
+    assert bb.await_count == 1                      # customer texted once
 
 
 def test_refund_event_is_its_own_row_once(rig):
@@ -155,7 +160,9 @@ def test_concurrent_pollers_one_row(rig):
     async def go():
         return await asyncio.gather(*[_poll_one(db, mid=f"gm-{i}") for i in range(4)])
     outs = asyncio.run(go())
-    assert sum(1 for o in outs if not o.get("duplicate")) == 1
+    assert sum(1 for o in outs if o.get("success") and not o.get("duplicate")) == 1
+    for o in outs:   # losers: duplicate, or in progress (email stays unread for next run)
+        assert o.get("success") or o.get("duplicate") or o.get("error") == "payment_in_progress"
     assert len(_rows(db)) == 1
 
 
@@ -222,3 +229,71 @@ def test_legacy_duplicate_rows_still_skip(rig):
                                 "source": "swipesimple_gmail_poll"})
     assert asyncio.run(_poll_one(db, mid="gm-new"))["duplicate"] is True
     assert db["payments"].unique == []
+
+
+# ── Codex findings on 37ef4c0 ───────────────────────────────────────────────
+
+
+def test_poller_failure_before_insert_releases_claim(rig):
+    db, app, bb = rig
+
+    async def boom(*a, **k):
+        raise RuntimeError("bond lookup failed")
+    db["bond_cases"].find_one = boom
+    with pytest.raises(RuntimeError):
+        asyncio.run(_poll_one(db))
+    assert db[plc.LOG_CLAIMS_COLLECTION].docs == [] and _rows(db) == []
+    del db["bond_cases"]
+    out = asyncio.run(_poll_one(db))
+    assert out["success"] and not out.get("duplicate") and len(_rows(db)) == 1
+
+
+def test_webhook_failure_before_insert_releases_claim(rig):
+    db, app, bb = rig
+
+    async def boom(*a, **k):
+        raise RuntimeError("bond update failed")
+    db["bond_cases"].update_one = boom
+    with pytest.raises(RuntimeError):
+        _hooks(app, [_hook()])
+    assert db[plc.LOG_CLAIMS_COLLECTION].docs == [] and _rows(db) == []
+    del db["bond_cases"]
+    (r,) = _hooks(app, [_hook()])
+    assert r.status_code == 200 and not r.json().get("duplicate") and len(_rows(db)) == 1
+
+
+def test_webhook_retry_resumes_missing_event_and_audit(rig):
+    db, app, bb = rig
+    body = _hook(custom_fields={"booking_number": "BK-1", "indemnitor_phone": "+10000000000"})
+    calls = {"n": 0}
+
+    async def flaky(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("sse down")
+    with patch("dashboard.routers.events.publish_event", new=flaky):
+        with pytest.raises(RuntimeError):
+            _hooks(app, [body])
+        assert len(_rows(db)) == 1 and db["audit_events"].docs == []
+        (r2,) = _hooks(app, [body])                    # provider retry
+    assert r2.status_code == 200 and not r2.json().get("duplicate")
+    assert calls["n"] == 2 and len(db["audit_events"].docs) == 1
+    assert len(_rows(db)) == 1 and bb.await_count == 1   # no second row, no second text
+    (r3,) = _hooks(app, [body])
+    assert r3.json()["duplicate"] is True and len(db["audit_events"].docs) == 1
+
+
+def test_poller_then_webhook_texts_once_across_retries(rig):
+    db, app, bb = rig
+    asyncio.run(_poll_one(db))
+    body = _hook(custom_fields={"booking_number": "BK-1", "indemnitor_phone": "+10000000000"})
+    _hooks(app, [body, body, body])
+    assert bb.await_count == 1 and len(_rows(db)) == 1
+
+
+def test_poller_in_progress_claim_leaves_email_unread(rig):
+    db, app, bb = rig
+    db[plc.LOG_CLAIMS_COLLECTION].docs.append(
+        {"transaction_id": "SS-1", "kind": "charge", "source": "swipesimple_webhook", "status": "claimed"})
+    out = asyncio.run(_poll_one(db))
+    assert out["success"] is False and out["error"] == "payment_in_progress"

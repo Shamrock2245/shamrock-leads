@@ -217,56 +217,63 @@ class SwipeSimpleReceiptPoller:
         if gate["action"] == "unavailable":
             return {"success": False, "error": "payment_dedupe_unavailable", "transaction_id": txn}
         if gate["action"] == "existing":
+            claim = gate.get("claim") or {}
+            if gate.get("row") is None and claim.get("status") == "claimed" and not gate.get("plan_claim"):
+                # Another poll / webhook is mid-write: leave the email unread
+                # and try again next run (it may still fail and release).
+                return {"success": False, "error": "payment_in_progress", "transaction_id": txn}
             return {"success": True, "duplicate": True, "transaction_id": txn}
 
-        match_query: Dict[str, Any] = {}
-        if booking:
-            match_query = {"booking_number": booking}
-        elif customer_email:
-            match_query = {
-                "$or": [
-                    {"indemnitor_email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
-                    {"Indemnitor_Email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
-                ]
-            }
-
-        bond = None
-        if match_query:
-            bond = await db["bond_cases"].find_one(match_query)
-            if not bond:
-                bond = await db["active_bonds"].find_one(match_query)
-            if not bond and customer_email:
-                bond = await db["intake_queue"].find_one(
-                    {
-                        "$or": [
-                            {"indemnitor_email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
-                            {"indemnitor.email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
-                        ]
-                    }
-                )
-
-        booking_number = booking or (bond or {}).get("booking_number") or ""
-
-        doc = {
-            "transaction_id": txn,
-            "gmail_message_id": gmail_message_id,
-            "source": "swipesimple_gmail_poll",
-            "amount": amount,
-            "status": "approved",
-            "customer_email": customer_email,
-            "customer_name": "",
-            "booking_number": booking_number,
-            "subject": raw_subject[:200],
-            "matched_bond": bool(bond),
-            "created_at": now,
-        }
-        from bson import ObjectId
-
-        doc["_id"] = ObjectId()
+        # Everything between the claim and the insert is covered: any failure
+        # releases the claim so the next poll can log this receipt.
         try:
+            match_query: Dict[str, Any] = {}
+            if booking:
+                match_query = {"booking_number": booking}
+            elif customer_email:
+                match_query = {
+                    "$or": [
+                        {"indemnitor_email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
+                        {"Indemnitor_Email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
+                    ]
+                }
+
+            bond = None
+            if match_query:
+                bond = await db["bond_cases"].find_one(match_query)
+                if not bond:
+                    bond = await db["active_bonds"].find_one(match_query)
+                if not bond and customer_email:
+                    bond = await db["intake_queue"].find_one(
+                        {
+                            "$or": [
+                                {"indemnitor_email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
+                                {"indemnitor.email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
+                            ]
+                        }
+                    )
+
+            booking_number = booking or (bond or {}).get("booking_number") or ""
+
+            doc = {
+                "transaction_id": txn,
+                "gmail_message_id": gmail_message_id,
+                "source": "swipesimple_gmail_poll",
+                "amount": amount,
+                "status": "approved",
+                "customer_email": customer_email,
+                "customer_name": "",
+                "booking_number": booking_number,
+                "subject": raw_subject[:200],
+                "matched_bond": bool(bond),
+                "created_at": now,
+            }
+            from bson import ObjectId
+
+            doc["_id"] = ObjectId()
             await payments.insert_one(doc)
         except Exception:
-            await plc.finish(db, txn, plc.CHARGE, doc["_id"], ok=False)
+            await plc.finish(db, txn, plc.CHARGE, None, ok=False)
             raise
         if not await plc.finish(db, txn, plc.CHARGE, doc["_id"], ok=True):
             return {"success": True, "duplicate": True, "transaction_id": txn}
