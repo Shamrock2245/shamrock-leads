@@ -549,7 +549,16 @@ async def record_payment(request: Request, plan_id):
                 status_code=409,
             )
         row_booking = str(logged_row.get("booking_number") or "").strip()
-        if row_booking and row_booking != str(plan.get("booking_number") or "").strip():
+        if not row_booking:
+            # The poller stores "" when it could not match the receipt to a
+            # bond. Ownership is unverified: never attach it to whichever plan
+            # is in the URL (Codex P1). Staff must assign the booking first.
+            return JSONResponse(
+                {"error": "logged_payment_unowned", "transaction_id": txn,
+                 "message": "The logged card payment with this transaction id is not matched to a booking. Assign it to the booking before applying it to a plan."},
+                status_code=409,
+            )
+        if row_booking != str(plan.get("booking_number") or "").strip():
             return JSONResponse(
                 {"error": "logged_payment_booking_mismatch", "transaction_id": txn,
                  "message": "The logged card payment with this transaction id belongs to another booking."},
@@ -582,6 +591,9 @@ async def record_payment(request: Request, plan_id):
             # (e.g. the reconciliation service) changed the status or webhook
             # event meanwhile, the link must not match (fail closed).
             "status": logged_row.get("status"),
+            # Pin the validated booking too: a reassignment in between must
+            # not be overwritten.
+            "booking_number": logged_row.get("booking_number"),
             "$or": [{"plan_id": {"$exists": False}}, {"plan_id": None}, {"plan_id": ""}],
         }
         _raw = logged_row.get("raw_payload")
@@ -602,16 +614,31 @@ async def record_payment(request: Request, plan_id):
             "logged_status": logged_row.get("status"),
         }
         if not logged_row.get("timestamp"):
-            link_set["timestamp"] = now.isoformat()
+            # Keep the provider's payment time (Codex P2 on #182): revenue
+            # windows read ``timestamp``, so it must not become the link time.
+            link_set["timestamp"] = logged_row.get("created_at") or now.isoformat()
         try:
             linked = await payments_col.update_one(link_filter, {"$set": link_set})
             link_ok = bool(getattr(linked, "modified_count", 0))
             current = None if link_ok else (await payments_col.find_one({"_id": logged_row["_id"]}) or {})
         except Exception as exc:
-            # Write outcome unknown: fail the claim (retries -> payment_needs_review),
-            # balance untouched, clean error.
+            # Write outcome unknown (timeout / unknown write concern): the link
+            # may have persisted (Codex P1). Read back; if the row carries THIS
+            # link, revert it (guarded on every field we wrote). Then fail the
+            # claim (retries -> payment_needs_review); balance untouched.
             logger.warning("[payment_plans] link write failed plan_id=%s err=%s", plan_id, type(exc).__name__)
-            await _fail_claim(claims, plan_id, txn, "logged_payment_link_error")
+            reason = "logged_payment_link_error"
+            try:
+                persisted = await payments_col.find_one({"_id": logged_row["_id"]}) or {}
+            except Exception:
+                persisted = None
+            if persisted is None:
+                reason = "logged_payment_link_unknown"
+            elif (persisted.get("plan_id") == plan_id
+                    and persisted.get("plan_linked_at") == link_set["plan_linked_at"]):
+                if not await _revert_link(payments_col, logged_row, plan_id, link_set):
+                    reason = "logged_payment_link_unreverted"
+            await _fail_claim(claims, plan_id, txn, reason)
             return JSONResponse(
                 {"error": "payment_record_failed", "transaction_id": txn,
                  "message": "Linking the logged card payment failed. Check the plan before recording it again."},

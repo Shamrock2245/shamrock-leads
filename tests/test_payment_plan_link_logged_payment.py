@@ -82,11 +82,16 @@ def test_logged_row_for_other_booking_refused(rig):
     assert "plan_id" not in row and _plan(db)["balance_remaining"] == 800.0
 
 
-def test_logged_row_without_booking_can_link(rig):
+@pytest.mark.parametrize("booking", ["", None])
+def test_logged_row_without_booking_is_refused(rig, booking):
+    """Codex P1 @2ad7c3b: an unmatched receipt (booking "") has no verified owner."""
     db, app = rig
-    row = _poller_row(db, booking="")
+    row = _poller_row(db, booking=booking)
+    before = dict(row)
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
-    assert r.status_code == 200 and row["plan_id"] == PLAN_ID
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_unowned"
+    assert row == before and _plan(db)["balance_remaining"] == 800.0
+    assert db["payment_plan_payment_claims"].docs == []
 
 
 def test_two_unlinked_rows_same_txn_refused_as_ambiguous(rig):
@@ -443,3 +448,67 @@ def test_link_audit_has_reason_and_confidence(rig):
     assert r.status_code == 200
     (ev,) = db["audit_events"].docs
     assert ev["reason"] and ev["confidence"] == 1.0 and ev["match_method"] == "exact_transaction_id"
+
+
+# ── Codex findings on 2ad7c3b ───────────────────────────────────────────────
+
+
+def test_link_write_applied_but_driver_raised_is_reverted(rig):
+    """Unknown write outcome: the update persisted, then the driver raised."""
+    db, app = rig
+    row = _poller_row(db)
+    before = dict(row)
+    real = type(db["payments"]).update_one
+    state = {"first": True}
+
+    async def applied_then_raise(flt, update, upsert=False):
+        res = await real(db["payments"], flt, update, upsert)
+        if state["first"]:
+            state["first"] = False
+            raise RuntimeError("write concern timeout")
+        return res
+    db["payments"].update_one = applied_then_raise
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 500
+    assert row == before                                  # link undone
+    assert _plan(db)["balance_remaining"] == 800.0
+    claim = db["payment_plan_payment_claims"].docs[0]
+    assert claim["status"] == "failed" and claim["failed_reason"] == "logged_payment_link_error"
+
+
+def test_link_write_unknown_and_revert_fails_is_flagged(rig):
+    db, app = rig
+    row = _poller_row(db)
+    real = type(db["payments"]).update_one
+
+    async def applied_then_raise(flt, update, upsert=False):
+        if "$unset" in update:
+            raise RuntimeError("revert failed")
+        await real(db["payments"], flt, update, upsert)
+        raise RuntimeError("write concern timeout")
+    db["payments"].update_one = applied_then_raise
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 500 and _plan(db)["balance_remaining"] == 800.0
+    claim = db["payment_plan_payment_claims"].docs[0]
+    assert claim["failed_reason"] == "logged_payment_link_unreverted"
+    assert row["plan_id"] == PLAN_ID                      # left for staff review, flagged
+
+
+def test_booking_reassigned_between_check_and_link_fails_closed(rig):
+    db, app = rig
+    row = _poller_row(db)
+
+    def reassign(coll, flt):
+        row["booking_number"] = "TEST-OTHER"
+    db["payments"].before_update = reassign
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 409
+    assert row["booking_number"] == "TEST-OTHER" and "plan_id" not in row
+    assert _plan(db)["balance_remaining"] == 800.0
+
+
+def test_link_keeps_provider_created_at_as_timestamp(rig):
+    db, app = rig
+    row = _poller_row(db, created_at="2026-09-01T12:00:00+00:00")
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 200 and row["timestamp"] == "2026-09-01T12:00:00+00:00"
