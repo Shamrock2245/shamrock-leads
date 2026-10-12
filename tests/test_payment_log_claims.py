@@ -7,9 +7,12 @@ Slack / BlueBubbles calls.
 from __future__ import annotations
 
 import asyncio
+import copy
 import os
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
+
+from pymongo.errors import DuplicateKeyError
 
 import httpx
 import pytest
@@ -25,11 +28,25 @@ from tests.test_payment_plan_pay_dedupe import Coll as _BaseColl
 
 
 class Coll(_BaseColl):
+    async def insert_one(self, doc):
+        await asyncio.sleep(0)
+        if self.fail_insert:
+            raise RuntimeError("write failed")
+        if doc.get("_id") is not None and any(d.get("_id") == doc["_id"] for d in self.docs):
+            raise DuplicateKeyError("dup _id")
+        for fields in self.unique:
+            key = tuple(doc.get(f) for f in fields)
+            if any(tuple(d.get(f) for f in fields) == key for d in self.docs):
+                raise DuplicateKeyError("dup")
+        self.docs.append(copy.deepcopy(doc))
+
     async def update_one(self, flt, update, upsert=False):
         await asyncio.sleep(0)
         for d in self.docs:
             if matches(d, flt):
-                d.update(update.get("$set", {}))
+                for key in (update.get("$unset") or {}):
+                    d.pop(key, None)
+                d.update(update.get("$set") or {})
                 return SimpleNamespace(matched_count=1, modified_count=1)
         return SimpleNamespace(matched_count=0, modified_count=0)
 
@@ -463,3 +480,77 @@ def test_lost_claim_token_does_not_keep_a_second_row(rig):
     out = asyncio.run(_poll_one(db))
     assert out["duplicate"] is True
     assert [d["_id"] for d in _rows(db)] == ["winner"]
+
+
+def _seed_logged_charge(db, event_type="payment.completed"):
+    db["payments"].docs.append({
+        "_id": "legacy",
+        "transaction_id": "SS-1",
+        "status": "approved",
+        "raw_payload": {"event_type": event_type, "transaction_id": "SS-1", "status": "approved"},
+    })
+    db[plc.LOG_CLAIMS_COLLECTION].docs.append({
+        "transaction_id": "SS-1",
+        "kind": plc.claim_kind(event_type),
+        "source": "swipesimple_webhook",
+        "status": "logged",
+    })
+
+
+def test_concurrent_retries_publish_and_audit_once(rig):
+    """Two retries of a logged-but-incomplete webhook must not double the audit."""
+    db, app, bb = rig
+    _seed_logged_charge(db)
+    calls = {"n": 0}
+
+    async def count(*_a, **_k):
+        calls["n"] += 1
+        await asyncio.sleep(0)
+
+    body = _hook()
+    with patch("dashboard.routers.events.publish_event", new=count):
+        rs = _hooks(app, [body, body])
+    assert calls["n"] == 1
+    assert len(db["audit_events"].docs) == 1
+    assert len(_rows(db)) == 1
+    assert all(r.status_code in (200, 409) for r in rs)
+    assert any(r.status_code == 200 and not r.json().get("duplicate") for r in rs)
+    (again,) = _hooks(app, [body])
+    assert again.status_code == 200 and again.json()["duplicate"] is True
+    assert calls["n"] == 1 and len(db["audit_events"].docs) == 1
+
+
+def test_audit_redelivery_after_insert_stays_one_row(rig):
+    """The audit id is deterministic, so a retry that lost the done flag does not insert again."""
+    db, app, bb = rig
+    (r,) = _hooks(app, [_hook()])
+    assert r.status_code == 200 and len(db["audit_events"].docs) == 1
+    claim = db[plc.LOG_CLAIMS_COLLECTION].docs[0]
+    for key in ("wh_audit", "wh_audit_hold", "wh_completed"):
+        claim.pop(key, None)
+    (again,) = _hooks(app, [_hook()])
+    assert again.status_code == 200
+    assert len(db["audit_events"].docs) == 1
+    assert db["audit_events"].docs[0]["_id"] == "wh:SS-1:charge:audit"
+
+
+@pytest.mark.parametrize("stored,redelivered,kind_event", [
+    ("PAYMENT.REFUNDED", "Payment.Refunded", "payment.refunded"),
+    ("Payment.Failed", "PAYMENT.FAILED", "payment.failed"),
+    ("Payment.Completed", "PAYMENT.COMPLETED", "payment.completed"),
+])
+def test_legacy_event_type_case_does_not_insert_again(rig, stored, redelivered, kind_event):
+    db, app, bb = rig
+    db["payments"].docs.append({
+        "_id": "legacy",
+        "transaction_id": "SS-1",
+        "status": "approved",
+        "raw_payload": {"event_type": stored, "transaction_id": "SS-1"},
+    })
+    body = _hook(event=redelivered, status="refunded" if "refund" in kind_event else "approved")
+    (r,) = _hooks(app, [body])
+    assert r.status_code == 200
+    assert [d["_id"] for d in _rows(db)] == ["legacy"]
+    (again,) = _hooks(app, [body])
+    assert again.json().get("duplicate") is True
+    assert [d["_id"] for d in _rows(db)] == ["legacy"]

@@ -25,6 +25,7 @@ second worker cannot also insert.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
@@ -91,15 +92,22 @@ async def _claims(db) -> Any:
     return coll
 
 
+def _event_type_equals_ci(value: str) -> Dict[str, Any]:
+    """Case-insensitive equality. Legacy webhook rows kept the provider's
+    original casing (``PAYMENT.REFUNDED``, ``Payment.Failed``); ``claim_kind``
+    stores the lowercase kind."""
+    return {"$regex": f"^{re.escape(value)}$", "$options": "i"}
+
+
 def _existing_filter(txn: str, kind: str) -> Dict[str, Any]:
     if kind == CHARGE:
         # Any row for this txn that is not a separate non-charge webhook event
         # (a poller row, a webhook payment.completed row, a plan row).
         return {"transaction_id": txn, "$or": [
             {"raw_payload.event_type": {"$exists": False}},
-            {"raw_payload.event_type": {"$in": ["payment.completed", "PAYMENT.COMPLETED"]}},
+            {"raw_payload.event_type": _event_type_equals_ci("payment.completed")},
         ]}
-    return {"transaction_id": txn, "raw_payload.event_type": kind}
+    return {"transaction_id": txn, "raw_payload.event_type": _event_type_equals_ci(kind)}
 
 
 def _plan_claim_outcome(plan_claim: Dict[str, Any]) -> str:
@@ -332,6 +340,53 @@ async def take_step(db, txn: str, kind: str, step: str) -> bool:
 
 async def step_done(claim: Optional[Dict[str, Any]], step: str) -> bool:
     return bool((claim or {}).get(f"wh_{step}"))
+
+
+async def reserve_step(db, txn: str, kind: str, step: str) -> str:
+    """Atomically reserve a retryable webhook step (SSE event, audit).
+
+    ``run`` — this caller holds it and must do the work, then ``mark_step``,
+    or ``release_step`` if the work fails. ``done`` — already finished.
+    ``busy`` — another delivery holds it (or the store errored): do not do
+    the work and do not mark the webhook complete. A hold older than
+    ``STALE_AFTER`` can be taken, so a killed worker does not block the step.
+    """
+    txn = str(txn or "").strip()
+    hold = f"wh_{step}_hold"
+    try:
+        coll = db[LOG_CLAIMS_COLLECTION]
+        current = await coll.find_one({"transaction_id": txn, "kind": kind})
+        if await step_done(current, step):
+            return "done"
+        cutoff = (datetime.now(timezone.utc) - STALE_AFTER).isoformat()
+        res = await coll.update_one(
+            {"transaction_id": txn, "kind": kind, f"wh_{step}": {"$exists": False},
+             "$or": [
+                 {hold: {"$exists": False}},
+                 {hold: {"$lt": cutoff}},
+             ]},
+            {"$set": {hold: datetime.now(timezone.utc).isoformat()}},
+        )
+        if _modified(res) == 1:
+            return "run"
+        current = await coll.find_one({"transaction_id": txn, "kind": kind})
+        if await step_done(current, step):
+            return "done"
+        return "busy"
+    except Exception as exc:
+        logger.warning("[payment_log_claims] reserve_step %s failed err=%s", step, type(exc).__name__)
+        return "busy"
+
+
+async def release_step(db, txn: str, kind: str, step: str) -> None:
+    """Drop a retryable-step hold after the work failed. Never raises."""
+    try:
+        await db[LOG_CLAIMS_COLLECTION].update_one(
+            {"transaction_id": str(txn or "").strip(), "kind": kind},
+            {"$unset": {f"wh_{step}_hold": ""}},
+        )
+    except Exception as exc:
+        logger.warning("[payment_log_claims] release_step %s failed err=%s", step, type(exc).__name__)
 
 
 async def mark_step(db, txn: str, kind: str, step: str) -> None:

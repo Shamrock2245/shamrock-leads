@@ -474,8 +474,27 @@ async def _payment_webhook_steps(data, booking_number, now, db, plc, txn_key, ki
         except Exception as exc:
             logger.warning("[payment_webhook] Slack alert failed: %s", exc)
 
+    async def _retryable_step(step, work):
+        """One delivery runs the step. A concurrent retry gets 409 until it is
+        done, instead of inserting a second audit or publishing a second event."""
+        state = await plc.reserve_step(db, txn_key, kind, step)
+        if state == "done":
+            return None
+        if state != "run":
+            return JSONResponse(
+                {"error": "payment_in_progress", "transaction_id": txn_key},
+                status_code=409,
+            )
+        try:
+            await work()
+        except Exception:
+            await plc.release_step(db, txn_key, kind, step)
+            raise
+        await plc.mark_step(db, txn_key, kind, step)
+        return None
+
     # -- 7. Publish SSE event (retried on redelivery until done) --------------
-    if not await plc.step_done(claim, "event"):
+    async def _publish():
         await publish_event('payment_received', {
             "transaction_id": transaction_id,
             "booking_number": booking_number,
@@ -483,18 +502,30 @@ async def _payment_webhook_steps(data, booking_number, now, db, plc, txn_key, ki
             "status": status,
             "customer_name": customer_name,
         })
-        await plc.mark_step(db, txn_key, kind, "event")
+
+    stopped = await _retryable_step("event", _publish)
+    if stopped is not None:
+        return stopped
 
     # -- 8. Log audit event (retried on redelivery until done) ----------------
-    if not await plc.step_done(claim, "audit"):
+    async def _audit():
+        from pymongo.errors import DuplicateKeyError
+
         audit_events = get_collection("audit_events")
-        await audit_events.insert_one({
-            "source": "swipesimple_webhook",
-            "event_type": f"payment.{status}",
-            "payload": data,
-            "timestamp": now.isoformat(),
-        })
-        await plc.mark_step(db, txn_key, kind, "audit")
+        try:
+            await audit_events.insert_one({
+                "_id": f"wh:{txn_key}:{kind}:audit",
+                "source": "swipesimple_webhook",
+                "event_type": f"payment.{status}",
+                "payload": data,
+                "timestamp": now.isoformat(),
+            })
+        except DuplicateKeyError:
+            pass
+
+    stopped = await _retryable_step("audit", _audit)
+    if stopped is not None:
+        return stopped
 
     await plc.mark_step(db, txn_key, kind, "completed")
     return JSONResponse(status_code=200, content={"success": True})
