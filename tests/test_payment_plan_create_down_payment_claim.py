@@ -1,0 +1,303 @@
+"""POST /api/payments/plans with down_payment_transaction_id — the card txn of
+the down payment is claimed in payment_plan_payment_claims (uniq_tenant_txn)
+before the plan is created, same one-application rule as /pay.
+
+Offline in-memory Mongo double with a real unique index and an ``await``
+between every read and write so concurrent requests interleave.
+"""
+from __future__ import annotations
+
+import asyncio
+import copy
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+import httpx
+import pytest
+from fastapi import FastAPI
+from pymongo.errors import DuplicateKeyError
+
+from dashboard.routers import payment_plans as pp
+from tests._inmem_mongo import matches
+
+
+class Coll:
+    def __init__(self):
+        self.docs: list[dict] = []
+        self.unique: list[tuple[str, ...]] = []
+        self.fail_insert = False
+        self.fail_update = False
+        self.before_update = None
+
+    async def create_index(self, keys, unique=False, name=None, **_):
+        await asyncio.sleep(0)
+        fields = tuple(k for k, _ in keys)
+        if unique and fields not in self.unique:
+            self.unique.append(fields)
+        return name
+
+    async def insert_one(self, doc):
+        await asyncio.sleep(0)
+        if self.fail_insert:
+            raise RuntimeError("write failed")
+        for fields in self.unique:
+            key = tuple(doc.get(f) for f in fields)
+            if any(tuple(d.get(f) for f in fields) == key for d in self.docs):
+                raise DuplicateKeyError("dup")
+        self.docs.append(copy.deepcopy(doc))
+
+    async def find_one(self, flt=None, *a, **k):
+        await asyncio.sleep(0)
+        for d in self.docs:
+            if matches(d, flt or {}):
+                return copy.deepcopy(d)
+        return None
+
+    def find(self, flt=None, *a, **k):
+        docs = [copy.deepcopy(d) for d in self.docs if matches(d, flt or {})]
+
+        async def gen():
+            await asyncio.sleep(0)
+            for d in docs:
+                yield d
+        return gen()
+
+    async def update_one(self, flt, update, upsert=False):
+        await asyncio.sleep(0)
+        if self.before_update:
+            self.before_update(self, flt, update)
+        if self.fail_update:
+            raise RuntimeError("update failed")
+        for d in self.docs:
+            if matches(d, flt):
+                d.update(update.get("$set", {}))
+                for key in update.get("$unset", {}):
+                    d.pop(key, None)
+                return SimpleNamespace(matched_count=1, modified_count=1)
+        return SimpleNamespace(matched_count=0, modified_count=0)
+
+    async def delete_one(self, flt):
+        await asyncio.sleep(0)
+        for i, d in enumerate(self.docs):
+            if matches(d, flt):
+                del self.docs[i]
+                return SimpleNamespace(deleted_count=1)
+        return SimpleNamespace(deleted_count=0)
+
+    async def delete_many(self, flt):
+        await asyncio.sleep(0)
+        keep = [d for d in self.docs if not matches(d, flt)]
+        n = len(self.docs) - len(keep)
+        self.docs[:] = keep
+        return SimpleNamespace(deleted_count=n)
+
+
+class DB(dict):
+    def __missing__(self, name):
+        self[name] = Coll()
+        return self[name]
+
+
+@pytest.fixture
+def rig(monkeypatch):
+    db = DB()
+    monkeypatch.setattr(pp, "get_collection", lambda name: db[name])
+    monkeypatch.setattr(pp, "_payment_claim_index_ready", False)
+    app = FastAPI()
+    app.include_router(pp.payment_plans_bp)
+    with patch("dashboard.routers.events.publish_event", new=AsyncMock()):
+        yield db, app
+
+
+def _body(booking="BK-1", txn="SS-77", dp=200, **kw):
+    b = {"booking_number": booking, "total_premium": 1000, "down_payment": dp,
+         "payment_method": "Card", "down_payment_transaction_id": txn}
+    b.update(kw)
+    return b
+
+
+def _post(app, bodies):
+    async def go():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            return await asyncio.gather(*[c.post("/api/payments/plans", json=b) for b in bodies])
+    return asyncio.run(go())
+
+
+def _poller(txn="SS-77", amount=200.0, status="approved", **kw):
+    row = {"_id": f"row-{txn}-{status}", "transaction_id": txn, "amount": amount,
+           "status": status, "source": "swipesimple_gmail_poll",
+           "created_at": "2026-10-12T10:00:00+00:00"}
+    row.update(kw)
+    return row
+
+
+def _claims(db):
+    return db["payment_plan_payment_claims"].docs
+
+
+def test_new_txn_claims_and_writes_one_down_payment_row(rig):
+    db, app = rig
+    (r,) = _post(app, [_body(txn=" SS-77 ")])
+    assert r.status_code == 201
+    plan_id = r.json()["plan"]["plan_id"]
+    (row,) = db["payments"].docs
+    assert row["type"] == "down_payment" and row["transaction_id"] == "SS-77"
+    assert row["plan_id"] == plan_id
+    (claim,) = _claims(db)
+    assert claim["transaction_id"] == "SS-77" and claim["plan_id"] == plan_id
+    assert claim["status"] == "applied" and claim["kind"] == "down_payment"
+
+
+def test_no_txn_keeps_old_behaviour_without_claim(rig):
+    db, app = rig
+    b = _body(txn="")
+    (r,) = _post(app, [b])
+    assert r.status_code == 201
+    assert len(db["payments"].docs) == 1 and _claims(db) == []
+
+
+def test_concurrent_creates_same_txn_exactly_one_winner(rig):
+    db, app = rig
+    rs = _post(app, [_body(booking=f"BK-{i}") for i in range(5)])
+    codes = sorted(r.status_code for r in rs)
+    assert codes == [201, 409, 409, 409, 409]
+    for r in rs:
+        if r.status_code == 409:
+            assert r.json()["error"] == "transaction_id_used_on_other_plan"
+    assert len(db["payment_plans"].docs) == 1
+    assert len(db["payments"].docs) == 1 and len(_claims(db)) == 1
+    assert _claims(db)[0]["plan_id"] == db["payment_plans"].docs[0]["plan_id"]
+
+
+def test_concurrent_creates_linking_same_poller_row_one_winner(rig):
+    db, app = rig
+    db["payments"].docs.append(_poller())
+    rs = _post(app, [_body(booking="BK-1"), _body(booking="BK-1b")])
+    assert sorted(r.status_code for r in rs) == [201, 409]
+    assert len(db["payment_plans"].docs) == 1 and len(db["payments"].docs) == 1
+
+
+def test_txn_already_claimed_by_pay_is_409(rig):
+    db, app = rig
+    _claims(db).append({"plan_id": "other", "transaction_id": "SS-77", "status": "applied",
+                        "amount": 200.0})
+    (r,) = _post(app, [_body()])
+    assert r.status_code == 409 and r.json()["error"] == "transaction_id_used_on_other_plan"
+    assert db["payment_plans"].docs == [] and db["payments"].docs == []
+
+
+def test_legacy_plan_row_with_txn_is_409(rig):
+    db, app = rig
+    db["payments"].docs.append({"_id": "x", "transaction_id": "SS-77", "plan_id": "old",
+                                "amount": 200.0, "status": "completed"})
+    (r,) = _post(app, [_body()])
+    assert r.status_code == 409 and r.json()["error"] == "transaction_id_used_on_other_plan"
+    assert db["payment_plans"].docs == [] and _claims(db) == []
+
+
+def test_links_settled_poller_row_instead_of_duplicating(rig):
+    db, app = rig
+    db["payments"].docs.append(_poller())
+    (r,) = _post(app, [_body()])
+    assert r.status_code == 201
+    (row,) = db["payments"].docs
+    assert row["plan_id"] == r.json()["plan"]["plan_id"]
+    assert row["type"] == "down_payment" and row["status"] == "completed"
+    assert row["logged_status"] == "approved" and row["booking_number"] == "BK-1"
+    assert _claims(db)[0]["status"] == "applied"
+
+
+def test_links_settled_webhook_row(rig):
+    db, app = rig
+    db["payments"].docs.append(_poller(status="completed", source="swipesimple_webhook",
+                                       raw_payload={"event_type": "payment.completed"}))
+    (r,) = _post(app, [_body()])
+    assert r.status_code == 201 and len(db["payments"].docs) == 1
+
+
+@pytest.mark.parametrize("row,error", [
+    (_poller(status="declined"), "logged_payment_not_settled"),
+    (_poller(status="refunded"), "logged_payment_not_settled"),
+    (_poller(status="approved", raw_payload={"event_type": "payment.refunded"}),
+     "logged_payment_not_settled"),
+    (_poller(amount=150.0), "transaction_id_amount_mismatch"),
+    (_poller(booking_number="BK-OTHER"), "logged_payment_booking_mismatch"),
+])
+def test_unlinkable_logged_row_is_409_and_nothing_written(rig, row, error):
+    db, app = rig
+    db["payments"].docs.append(row)
+    before = copy.deepcopy(db["payments"].docs)
+    (r,) = _post(app, [_body()])
+    assert r.status_code == 409 and r.json()["error"] == error
+    assert db["payment_plans"].docs == [] and _claims(db) == []
+    assert db["payments"].docs == before
+
+
+def test_ambiguous_logged_rows_409(rig):
+    db, app = rig
+    db["payments"].docs += [_poller(), _poller(_id="row-2")]
+    (r,) = _post(app, [_body()])
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_ambiguous"
+    assert db["payment_plans"].docs == [] and _claims(db) == []
+
+
+def test_plan_insert_failure_leaves_no_half_state(rig):
+    db, app = rig
+    db["payment_plans"].fail_insert = True
+    (r,) = _post(app, [_body()])
+    assert r.status_code == 500 and r.json()["error"] == "payment_record_failed"
+    assert db["payment_plans"].docs == [] and db["payments"].docs == []
+    assert _claims(db) == []
+    db["payment_plans"].fail_insert = False
+    (r2,) = _post(app, [_body()])  # txn is free again
+    assert r2.status_code == 201
+
+
+def test_payment_row_failure_rolls_back_plan_and_claim(rig):
+    db, app = rig
+    db["payments"].fail_insert = True
+    (r,) = _post(app, [_body()])
+    assert r.status_code == 500
+    assert db["payment_plans"].docs == [] and db["payments"].docs == [] and _claims(db) == []
+
+
+def test_logged_row_changed_mid_link_rolls_back(rig):
+    db, app = rig
+    db["payments"].docs.append(_poller())
+
+    def flip(coll, flt, update):
+        coll.docs[0]["status"] = "refunded"
+    db["payments"].before_update = flip
+    (r,) = _post(app, [_body()])
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_changed"
+    assert db["payment_plans"].docs == [] and _claims(db) == []
+    assert "plan_id" not in db["payments"].docs[0]
+
+
+def test_claim_mark_applied_failure_unlinks_row(rig):
+    db, app = rig
+    db["payments"].docs.append(_poller())
+    claims = db["payment_plan_payment_claims"]
+    real = Coll.update_one
+
+    async def boom(self, flt, update, upsert=False):
+        if (update.get("$set") or {}).get("status") == "applied":
+            raise RuntimeError("claim write failed")
+        return await real(self, flt, update, upsert)
+    claims.update_one = boom.__get__(claims)
+    (r,) = _post(app, [_body()])
+    assert r.status_code == 500
+    assert db["payment_plans"].docs == [] and _claims(db) == []
+    row = db["payments"].docs[0]
+    assert "plan_id" not in row and row["status"] == "approved" and "type" not in row
+
+
+def test_dedupe_unavailable_is_503_and_no_plan(rig, monkeypatch):
+    db, app = rig
+
+    async def down():
+        raise RuntimeError("no index")
+    monkeypatch.setattr(pp, "_payment_claims_collection", down)
+    (r,) = _post(app, [_body()])
+    assert r.status_code == 503 and db["payment_plans"].docs == []

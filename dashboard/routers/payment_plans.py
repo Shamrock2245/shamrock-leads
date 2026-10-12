@@ -169,25 +169,32 @@ async def create_plan(request: Request):
         "created_by": data.get("created_by", "dashboard"),
     }
 
-    await plans_col.insert_one(plan_doc)
-    plan_doc["_id"] = str(plan_doc.get("_id", ""))
+    dp_txn = str(data.get("down_payment_transaction_id") or "").strip()
+    if dp_txn and down_payment > 0:
+        err = await _create_plan_with_down_payment_txn(
+            plans_col, plan_doc, dp_txn, down_payment,
+            data.get("payment_method", "Card"), now)
+        if err is not None:
+            return err
+        plan_doc["_id"] = ""
+    else:
+        await plans_col.insert_one(plan_doc)
+        plan_doc["_id"] = str(plan_doc.get("_id", ""))
 
-    # Record the down payment
-    if down_payment > 0:
-        payments_col = get_collection("payments")
-        await payments_col.insert_one({
-            "booking_number": data["booking_number"],
-            "plan_id": plan_doc["plan_id"],
-            "amount": down_payment,
-            "method": data.get("payment_method", "Cash"),
-            "type": "down_payment",
-            # Provider transaction id (card down payment) so it dedupes with the
-            # receipt-poller / webhook row for the same charge.
-            "transaction_id": str(data.get("down_payment_transaction_id") or "").strip(),
-            "status": "completed",
-            "timestamp": now.isoformat(),
-            "notes": "Initial down payment",
-        })
+        # Record the down payment (cash/check or card without a provider txn id)
+        if down_payment > 0:
+            payments_col = get_collection("payments")
+            await payments_col.insert_one({
+                "booking_number": data["booking_number"],
+                "plan_id": plan_doc["plan_id"],
+                "amount": down_payment,
+                "method": data.get("payment_method", "Cash"),
+                "type": "down_payment",
+                "transaction_id": "",
+                "status": "completed",
+                "timestamp": now.isoformat(),
+                "notes": "Initial down payment",
+            })
 
     await publish_event("payment_plan_created", {
         "plan_id": plan_doc["plan_id"],
@@ -227,6 +234,176 @@ async def _payment_claims_collection():
         )
         _payment_claim_index_ready = True
     return coll
+
+
+_SETTLED_STATUSES = {"approved", "paid", "completed", "success"}
+_UNLINKED = {"$or": [{"plan_id": {"$exists": False}}, {"plan_id": None}, {"plan_id": ""}]}
+
+
+def _conflict(error: str, txn: str, message: str, status_code: int = 409):
+    return JSONResponse(
+        {"error": error, "transaction_id": txn, "message": message},
+        status_code=status_code,
+    )
+
+
+def _row_settled(row: dict) -> bool:
+    if str(row.get("status") or "").strip().lower() not in _SETTLED_STATUSES:
+        return False
+    raw = row.get("raw_payload")
+    if isinstance(raw, dict) and raw.get("event_type") not in (None, "payment.completed"):
+        return False
+    return True
+
+
+async def _create_plan_with_down_payment_txn(plans_col, plan_doc, txn, amount, method, now):
+    """Create a plan whose down payment carries a provider transaction id.
+
+    Same rule as /pay (#179/#181): one application of a txn id per tenant,
+    gated by a claim in ``payment_plan_payment_claims`` (uniq_tenant_txn)
+    inserted BEFORE the plan. 409 if the txn is already claimed or already on
+    a plan's payment row. An unlinked poller/webhook row for the txn is linked
+    (settled + same amount + same booking) instead of writing a second row.
+    Any failure after the claim undoes the plan, the link and the claim, so
+    nothing is left half-written. Returns a JSONResponse on refusal, else None.
+    """
+    from pymongo.errors import DuplicateKeyError
+
+    payments_col = get_collection("payments")
+    plan_id = plan_doc["plan_id"]
+    booking = plan_doc["booking_number"]
+    try:
+        claims = await _payment_claims_collection()
+    except Exception:
+        return JSONResponse({"error": "payment_dedupe_unavailable"}, status_code=503)
+
+    if await claims.find_one({"transaction_id": txn}) is not None:
+        return _conflict("transaction_id_used_on_other_plan", txn,
+                         "This transaction id is already recorded on a payment plan.")
+    if await payments_col.find_one(
+            {"transaction_id": txn, "plan_id": {"$exists": True, "$nin": [None, ""]}}):
+        return _conflict("transaction_id_used_on_other_plan", txn,
+                         "This transaction id is already recorded on a payment plan.")
+
+    rows = [r async for r in _iter_find(payments_col, {"transaction_id": txn, **_UNLINKED})]
+    row = None
+    if len(rows) > 1:
+        return _conflict("logged_payment_ambiguous", txn,
+                         "More than one logged payment has this transaction id.")
+    if rows:
+        row = rows[0]
+        if not _row_settled(row):
+            return _conflict("logged_payment_not_settled", txn,
+                             "The logged payment for this transaction id is not settled.")
+        if not _same_amount(row.get("amount"), amount):
+            return _conflict("transaction_id_amount_mismatch", txn,
+                             "The logged payment for this transaction id has a different amount.")
+        rb = row.get("booking_number")
+        if rb not in (None, "") and str(rb) != str(booking):
+            return _conflict("logged_payment_booking_mismatch", txn,
+                             "The logged payment for this transaction id is for another booking.")
+
+    try:
+        await claims.insert_one({
+            "plan_id": plan_id, "transaction_id": txn, "booking_number": booking,
+            "amount": amount, "kind": "down_payment", "status": "claimed",
+            "claimed_at": now.isoformat(),
+        })
+    except DuplicateKeyError:
+        return _conflict("transaction_id_used_on_other_plan", txn,
+                         "This transaction id is already recorded on a payment plan.")
+    except Exception:
+        return JSONResponse({"error": "payment_dedupe_unavailable"}, status_code=503)
+
+    plan_inserted = False
+    linked = False
+    try:
+        await plans_col.insert_one(dict(plan_doc))
+        plan_inserted = True
+        if row is not None:
+            pin = {"_id": row["_id"], "transaction_id": txn, "amount": row.get("amount"),
+                   "status": row.get("status"), **_UNLINKED}
+            raw = row.get("raw_payload")
+            if isinstance(raw, dict) and "event_type" in raw:
+                pin["raw_payload.event_type"] = raw["event_type"]
+            else:
+                pin["raw_payload.event_type"] = {"$exists": False}
+            res = await payments_col.update_one(pin, {"$set": {
+                "plan_id": plan_id, "booking_number": booking, "type": "down_payment",
+                "logged_status": row.get("status"), "status": "completed",
+                "timestamp": row.get("timestamp") or now.isoformat(),
+                "plan_linked_at": now.isoformat(),
+            }})
+            if not getattr(res, "matched_count", 0):
+                raise _LinkLost()
+            linked = True
+        else:
+            await payments_col.insert_one({
+                "booking_number": booking, "plan_id": plan_id, "amount": amount,
+                "method": method, "type": "down_payment", "transaction_id": txn,
+                "status": "completed", "timestamp": now.isoformat(),
+                "notes": "Initial down payment",
+            })
+        await claims.update_one(
+            {"plan_id": plan_id, "transaction_id": txn},
+            {"$set": {"status": "applied", "applied_at": now.isoformat()}},
+        )
+    except Exception as exc:
+        await _undo_plan_create(plans_col, payments_col, claims, plan_id, txn,
+                                row if linked else None, plan_inserted)
+        if isinstance(exc, _LinkLost):
+            return _conflict("logged_payment_changed", txn,
+                             "The logged payment changed while the plan was being created. Try again.")
+        return _conflict("payment_record_failed", txn,
+                         "The plan could not be created. Nothing was recorded.", 500)
+    return None
+
+
+class _LinkLost(Exception):
+    pass
+
+
+async def _iter_find(coll, flt):
+    cursor = coll.find(flt)
+    if hasattr(cursor, "__aiter__"):
+        async for d in cursor:
+            yield d
+    else:
+        for d in await cursor.to_list(length=None):
+            yield d
+
+
+async def _undo_plan_create(plans_col, payments_col, claims, plan_id, txn, linked_row, plan_inserted):
+    """Best-effort rollback in reverse order; the claim goes last so the txn is
+    never released while a plan or payment row still references it."""
+    ok = True
+    try:
+        if linked_row is not None:
+            restore = {k: linked_row[k] for k in ("status", "timestamp", "booking_number", "type")
+                       if k in linked_row}
+            unset = {k: "" for k in ("plan_id", "logged_status", "plan_linked_at")}
+            for k in ("timestamp", "booking_number", "type"):
+                if k not in linked_row:
+                    unset[k] = ""
+            upd = {"$unset": unset}
+            if restore:
+                upd["$set"] = restore
+            await payments_col.update_one({"_id": linked_row["_id"], "plan_id": plan_id}, upd)
+        await payments_col.delete_many({"plan_id": plan_id, "transaction_id": txn,
+                                        "type": "down_payment", "plan_linked_at": {"$exists": False}})
+        if plan_inserted:
+            await plans_col.delete_one({"plan_id": plan_id})
+    except Exception:
+        ok = False
+    try:
+        if ok:
+            await claims.delete_one({"plan_id": plan_id, "transaction_id": txn})
+        else:
+            await claims.update_one({"plan_id": plan_id, "transaction_id": txn},
+                                    {"$set": {"status": "failed",
+                                              "failed_at": datetime.now(timezone.utc).isoformat()}})
+    except Exception:
+        pass
 
 
 def _next_due(frequency: str, now: datetime) -> datetime:

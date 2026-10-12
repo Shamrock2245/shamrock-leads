@@ -214,31 +214,3 @@ def test_down_payment_not_absorbed_by_refunded_card_row():
     out = S([_down(200.0), poller("SS-5", amount=200.0, booking_number="BK-1"),
              webhook("SS-5", event="payment.refunded", booking_number="BK-1")])
     assert out["count"] == 1 and out["total"] == 200.0  # card txn reversed; plan row stands
-
-
-def test_create_plan_persists_down_payment_transaction_id(monkeypatch):
-    from unittest.mock import AsyncMock, patch
-    from dashboard.routers import payment_plans as pp
-
-    class C:
-        def __init__(self):
-            self.docs = []
-
-        async def find_one(self, *a, **k):
-            return None
-
-        async def insert_one(self, doc):
-            self.docs.append(dict(doc))
-
-    cols = {"payment_plans": C(), "payments": C()}
-    monkeypatch.setattr(pp, "get_collection", lambda n: cols[n])
-
-    class Req:
-        async def json(self):
-            return {"booking_number": "BK-1", "total_premium": 1000, "down_payment": 200,
-                    "payment_method": "Card", "down_payment_transaction_id": " SS-77 "}
-    with patch("dashboard.routers.events.publish_event", new=AsyncMock()):
-        r = asyncio.run(pp.create_plan(Req()))
-    assert r.status_code == 201
-    (row,) = cols["payments"].docs
-    assert row["type"] == "down_payment" and row["transaction_id"] == "SS-77"
