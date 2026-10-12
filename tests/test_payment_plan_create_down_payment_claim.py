@@ -126,7 +126,7 @@ def _post(app, bodies):
 
 def _poller(txn="SS-77", amount=200.0, status="approved", **kw):
     row = {"_id": f"row-{txn}-{status}", "transaction_id": txn, "amount": amount,
-           "status": status, "source": "swipesimple_gmail_poll",
+           "status": status, "source": "swipesimple_gmail_poll", "booking_number": "BK-1",
            "created_at": "2026-10-12T10:00:00+00:00"}
     row.update(kw)
     return row
@@ -351,4 +351,38 @@ def test_poller_row_arriving_during_insert_rolls_back(rig):
     (r,) = _post(app, [_body()])
     assert r.status_code == 409 and r.json()["error"] == "logged_payment_ambiguous"
     assert [d["_id"] for d in db["payments"].docs] == ["late"]
+    assert db["payment_plans"].docs == [] and _claims(db) == []
+
+
+# ── Codex findings on bbee713 ───────────────────────────────────────────────
+
+
+def test_booking_reassigned_between_check_and_link_fails_closed(rig):
+    db, app = rig
+    db["payments"].docs.append(_poller())
+
+    def reassign(coll, flt, update):
+        coll.docs[0]["booking_number"] = "BK-OTHER"
+    db["payments"].before_update = reassign
+    (r,) = _post(app, [_body()])
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_changed"
+    row = db["payments"].docs[0]
+    assert row["booking_number"] == "BK-OTHER" and "plan_id" not in row
+    assert db["payment_plans"].docs == [] and _claims(db) == []
+
+
+def test_link_keeps_provider_created_at_as_timestamp(rig):
+    db, app = rig
+    db["payments"].docs.append(_poller(created_at="2026-09-01T12:00:00+00:00"))
+    (r,) = _post(app, [_body()])
+    assert r.status_code == 201
+    assert db["payments"].docs[0]["timestamp"] == "2026-09-01T12:00:00+00:00"
+
+
+@pytest.mark.parametrize("booking", ["", None])
+def test_unowned_logged_row_is_refused(rig, booking):
+    db, app = rig
+    db["payments"].docs.append(_poller(booking_number=booking))
+    (r,) = _post(app, [_body()])
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_unowned"
     assert db["payment_plans"].docs == [] and _claims(db) == []

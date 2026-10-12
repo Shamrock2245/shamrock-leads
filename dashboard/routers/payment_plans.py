@@ -303,8 +303,13 @@ async def _create_plan_with_down_payment_txn(plans_col, plan_doc, txn, amount, m
         if not _same_amount(row.get("amount"), amount):
             return _conflict("transaction_id_amount_mismatch", txn,
                              "The logged payment for this transaction id has a different amount.")
-        rb = row.get("booking_number")
-        if rb not in (None, "") and str(rb) != str(booking):
+        rb = str(row.get("booking_number") or "").strip()
+        if not rb:
+            # Unmatched receipt: ownership unverified, never attach it to this
+            # plan on its own (same rule as #181).
+            return _conflict("logged_payment_unowned", txn,
+                             "The logged payment for this transaction id is not matched to a booking. Assign it to the booking first.")
+        if rb != str(booking).strip():
             return _conflict("logged_payment_booking_mismatch", txn,
                              "The logged payment for this transaction id is for another booking.")
 
@@ -330,7 +335,8 @@ async def _create_plan_with_down_payment_txn(plans_col, plan_doc, txn, amount, m
         plan_inserted = True
         if row is not None:
             pin = {"_id": row["_id"], "transaction_id": txn, "amount": row.get("amount"),
-                   "status": row.get("status"), **_UNLINKED}
+                   "status": row.get("status"), "booking_number": row.get("booking_number"),
+                   **_UNLINKED}
             raw = row.get("raw_payload")
             if isinstance(raw, dict) and "event_type" in raw:
                 pin["raw_payload.event_type"] = raw["event_type"]
@@ -339,7 +345,8 @@ async def _create_plan_with_down_payment_txn(plans_col, plan_doc, txn, amount, m
             candidate = {
                 "plan_id": plan_id, "booking_number": booking, "type": "down_payment",
                 "logged_status": row.get("status"), "status": "completed",
-                "timestamp": row.get("timestamp") or now.isoformat(),
+                # Provider payment time, not the link time (revenue windows).
+                "timestamp": row.get("timestamp") or row.get("created_at") or now.isoformat(),
                 "plan_linked_at": now.isoformat(),
             }
             res = await payments_col.update_one(pin, {"$set": candidate})
@@ -373,7 +380,7 @@ async def _create_plan_with_down_payment_txn(plans_col, plan_doc, txn, amount, m
                 "status_before": row.get("status"), "status_after": "completed",
                 "amount": amount,
                 "reason": "plan down payment linked to logged card payment: exact transaction id, "
-                          "same amount, same or blank booking, settled status, only row for the id",
+                          "same amount, same booking, settled status, only row for the id",
                 "confidence": 1.0, "match_method": "exact_transaction_id",
             })
         await claims.update_one(
