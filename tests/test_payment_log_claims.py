@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -166,15 +167,71 @@ def test_concurrent_pollers_one_row(rig):
     assert len(_rows(db)) == 1
 
 
-def test_plan_claim_blocks_both_writers(rig):
+def test_applied_plan_claim_blocks_both_writers(rig):
+    """An applied plan claim (or a plan payment row) is the recorded charge."""
     db, app, bb = rig
     db[plc.PLAN_CLAIMS_COLLECTION].docs.append(
-        {"transaction_id": "SS-1", "plan_id": "plan-1", "status": "claimed"})
+        {"transaction_id": "SS-1", "plan_id": "plan-1", "status": "applied"})
     out = asyncio.run(_poll_one(db))
     assert out["duplicate"] is True
     (r,) = _hooks(app, [_hook()])
     assert r.status_code == 200
     assert _rows(db) == []
+
+
+@pytest.mark.parametrize("claim_status", ["claimed", "weird", None])
+def test_in_progress_plan_claim_is_not_a_recorded_charge(rig, claim_status):
+    """Plan /pay still claimed, or an unknown status: do not insert, and do not
+    mark the receipt done. Only ``applied`` (or a payment row) suppresses it."""
+    db, app, bb = rig
+    doc = {"transaction_id": "SS-1", "plan_id": "plan-1"}
+    if claim_status is not None:
+        doc["status"] = claim_status
+    db[plc.PLAN_CLAIMS_COLLECTION].docs.append(doc)
+    out = asyncio.run(_poll_one(db))
+    assert out["success"] is False and out["error"] == "payment_in_progress"
+    (r,) = _hooks(app, [_hook()])
+    assert r.status_code == 409 and r.json()["error"] == "payment_in_progress"
+    assert _rows(db) == []
+
+
+def test_failed_plan_claim_lets_logger_record_the_charge_once(rig):
+    """Plan /pay failed before its payment row: the provider charge is logged once."""
+    db, app, bb = rig
+    db[plc.PLAN_CLAIMS_COLLECTION].docs.append(
+        {"transaction_id": "SS-1", "plan_id": "plan-1", "status": "failed"})
+    out = asyncio.run(_poll_one(db))
+    assert out["success"] is True and out.get("duplicate") is not True
+    (r,) = _hooks(app, [_hook()])
+    assert r.status_code == 200
+    assert len(_rows(db)) == 1
+    assert db[plc.PLAN_CLAIMS_COLLECTION].docs[0]["status"] == "failed"
+    # Poller audit plus one webhook audit. The charge itself is a single row.
+    sources = sorted(d["source"] for d in db["audit_events"].docs)
+    assert sources == ["swipesimple_gmail_poll", "swipesimple_webhook"]
+
+
+def test_failed_plan_claim_webhook_then_poller_one_row(rig):
+    db, app, bb = rig
+    db[plc.PLAN_CLAIMS_COLLECTION].docs.append(
+        {"transaction_id": "SS-1", "plan_id": "plan-1", "status": "failed"})
+    (r,) = _hooks(app, [_hook()])
+    assert r.status_code == 200 and r.json().get("duplicate") is not True
+    out = asyncio.run(_poll_one(db))
+    assert out["duplicate"] is True
+    assert len(_rows(db)) == 1
+    assert len(db["audit_events"].docs) == 1
+
+
+def test_failed_plan_claim_concurrent_writers_one_row(rig):
+    db, app, bb = rig
+    db[plc.PLAN_CLAIMS_COLLECTION].docs.append(
+        {"transaction_id": "SS-1", "plan_id": "plan-1", "status": "failed"})
+
+    async def go():
+        return await asyncio.gather(_poll_one(db), _post_hooks(app, [_hook()]))
+    asyncio.run(go())
+    assert len(_rows(db)) == 1
 
 
 def test_existing_plan_row_blocks_both_writers(rig):
@@ -297,3 +354,112 @@ def test_poller_in_progress_claim_leaves_email_unread(rig):
         {"transaction_id": "SS-1", "kind": "charge", "source": "swipesimple_webhook", "status": "claimed"})
     out = asyncio.run(_poll_one(db))
     assert out["success"] is False and out["error"] == "payment_in_progress"
+
+
+def _stale_claimed_at():
+    return (datetime.now(timezone.utc) - plc.STALE_AFTER - timedelta(seconds=5)).isoformat()
+
+
+def _seed_stale_logger_claim(db, claimed_at=None):
+    db[plc.LOG_CLAIMS_COLLECTION].docs.append({
+        "transaction_id": "SS-1", "kind": "charge", "source": "swipesimple_webhook",
+        "status": "claimed", "claimed_at": _stale_claimed_at() if claimed_at is None else claimed_at,
+    })
+
+
+def test_fresh_logger_claim_is_not_taken_over(rig):
+    db, app, bb = rig
+    _seed_stale_logger_claim(db, claimed_at=datetime.now(timezone.utc).isoformat())
+    out = asyncio.run(_poll_one(db))
+    assert out["success"] is False and out["error"] == "payment_in_progress"
+    (r,) = _hooks(app, [_hook()])
+    assert r.status_code == 409 and r.json()["error"] == "payment_in_progress"
+    assert _rows(db) == []
+
+
+def test_unparseable_claimed_at_is_not_taken_over(rig):
+    db, app, bb = rig
+    _seed_stale_logger_claim(db, claimed_at="not-a-timestamp")
+    out = asyncio.run(_poll_one(db))
+    assert out["error"] == "payment_in_progress" and _rows(db) == []
+
+
+def test_stale_logger_claim_poller_records_once(rig):
+    db, app, bb = rig
+    _seed_stale_logger_claim(db)
+    out = asyncio.run(_poll_one(db))
+    assert out["success"] is True and out.get("duplicate") is not True
+    assert len(_rows(db)) == 1
+    assert db[plc.LOG_CLAIMS_COLLECTION].docs[0]["status"] == "logged"
+    again = asyncio.run(_poll_one(db, mid="gm-2"))
+    assert again["duplicate"] is True and len(_rows(db)) == 1
+
+
+def test_stale_logger_claim_webhook_records_once_with_audit(rig):
+    db, app, bb = rig
+    _seed_stale_logger_claim(db)
+    (r,) = _hooks(app, [_hook()])
+    assert r.status_code == 200 and r.json().get("duplicate") is not True
+    assert len(_rows(db)) == 1 and len(db["audit_events"].docs) == 1
+    assert db[plc.LOG_CLAIMS_COLLECTION].docs[0]["status"] == "logged"
+    (r2,) = _hooks(app, [_hook()])
+    assert r2.json()["duplicate"] is True
+    assert len(_rows(db)) == 1 and len(db["audit_events"].docs) == 1
+
+
+def test_stale_claim_with_row_resumes_audit_without_second_row(rig):
+    db, app, bb = rig
+    db["payments"].docs.append({
+        "_id": "p1", "transaction_id": "SS-1", "status": "approved",
+        "source": "swipesimple_gmail_poll",
+    })
+    _seed_stale_logger_claim(db)
+    (r,) = _hooks(app, [_hook()])
+    assert r.status_code == 200 and r.json().get("duplicate") is not True
+    assert [d["_id"] for d in _rows(db)] == ["p1"]
+    assert len(db["audit_events"].docs) == 1
+    assert db[plc.LOG_CLAIMS_COLLECTION].docs[0]["status"] == "logged"
+
+
+def test_concurrent_stale_reclaim_one_insert_token(rig):
+    db, app, bb = rig
+    _seed_stale_logger_claim(db)
+
+    async def go():
+        return await asyncio.gather(*[
+            plc.begin(db, "SS-1", plc.CHARGE, "swipesimple_gmail_poll") for _ in range(5)
+        ])
+    gates = asyncio.run(go())
+    inserts = [g for g in gates if g["action"] == "insert"]
+    assert len(inserts) == 1 and inserts[0].get("claim_token")
+    assert all(g["action"] == "in_progress" for g in gates if g is not inserts[0])
+    assert sum(1 for d in db[plc.LOG_CLAIMS_COLLECTION].docs if d.get("kind") == "charge") == 1
+
+
+def test_concurrent_stale_reclaim_one_payment_row(rig):
+    db, app, bb = rig
+    _seed_stale_logger_claim(db)
+
+    async def go():
+        return await asyncio.gather(*[_poll_one(db, mid=f"gm-{i}") for i in range(4)])
+    outs = asyncio.run(go())
+    assert sum(1 for o in outs if o.get("success") and not o.get("duplicate")) == 1
+    for o in outs:
+        assert o.get("success") or o.get("duplicate") or o.get("error") == "payment_in_progress"
+    assert len(_rows(db)) == 1
+
+
+def test_lost_claim_token_does_not_keep_a_second_row(rig):
+    """Takeover lands during insert: only the winner's row remains."""
+    db, app, bb = rig
+    real = db["payments"].insert_one
+
+    async def steal(doc):
+        await real(doc)
+        db[plc.LOG_CLAIMS_COLLECTION].docs[0]["claimed_at"] = "winner-token"
+        db["payments"].docs.append(
+            {"_id": "winner", "transaction_id": "SS-1", "status": "approved"})
+    db["payments"].insert_one = steal
+    out = asyncio.run(_poll_one(db))
+    assert out["duplicate"] is True
+    assert [d["_id"] for d in _rows(db)] == ["winner"]

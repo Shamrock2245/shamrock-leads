@@ -308,9 +308,10 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
     # -- 2b. Transaction-id claim (payment_log_claims) --------------------------
     # One payments row per (transaction id, event kind). A retry of a webhook
     # we already logged stops here (no second row, receipt or alert). A charge
-    # already logged by the receipt poller or claimed by plan /pay is not
+    # already logged by the receipt poller or an applied plan /pay is not
     # inserted again; the existing row is marked as webhook-confirmed and the
-    # remaining steps run once.
+    # remaining steps run once. A failed plan claim and a stale logger claim
+    # are not treated as already recorded.
     from dashboard.services import payment_log_claims as plc
     txn_key = str(transaction_id).strip()
     kind = plc.claim_kind(event_type)
@@ -318,7 +319,11 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
     gate = await plc.begin(db, txn_key, kind, "swipesimple_webhook")
     if gate["action"] == "unavailable":
         return JSONResponse({"error": "payment_dedupe_unavailable"}, status_code=503)
+    if gate["action"] == "in_progress":
+        return JSONResponse({"error": "payment_in_progress", "transaction_id": txn_key},
+                            status_code=409)
     log_row = gate["action"] == "insert"
+    claim_token = gate.get("claim_token")
     if not log_row:
         prior = gate.get("row") or {}
         claim = gate.get("claim")
@@ -333,8 +338,13 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         if claim.get("wh_completed"):
             return JSONResponse(status_code=200, content={
                 "success": True, "duplicate": True, "transaction_id": txn_key})
+        if prior.get("_id") is None and claim.get("status") == "claimed":
+            # No payment row yet. Do not return 200 or mark the charge done.
+            return JSONResponse({"error": "payment_in_progress", "transaction_id": txn_key},
+                                status_code=409)
         if claim.get("source") == "swipesimple_webhook" and claim.get("status") == "claimed":
-            # Another delivery is mid-write: let the provider retry later.
+            # Row exists but this delivery has not finished the claim: the
+            # writer is still between insert and finish. Let the provider retry.
             return JSONResponse({"error": "payment_in_progress", "transaction_id": txn_key},
                                 status_code=409)
         # Otherwise resume: either our earlier delivery logged the row but did
@@ -354,17 +364,17 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
 
     try:
         return await _payment_webhook_steps(
-            data, booking_number, now, db, plc, txn_key, kind, log_row, claim,
+            data, booking_number, now, db, plc, txn_key, kind, log_row, claim, claim_token,
             publish_event, send_message_universal, httpx)
     except Exception:
         if log_row:
-            # Released only while still 'claimed' (row not inserted yet).
-            await plc.finish(db, txn_key, kind, None, ok=False)
+            # Released only while this caller still holds the claim (row not inserted yet).
+            await plc.finish(db, txn_key, kind, None, ok=False, claim_token=claim_token)
         raise
 
 
 async def _payment_webhook_steps(data, booking_number, now, db, plc, txn_key, kind, log_row,
-                                 claim, publish_event, send_message_universal, httpx):
+                                 claim, claim_token, publish_event, send_message_universal, httpx):
     """Steps 3-8 of the payment webhook. Customer text and Slack alert run at
     most once per (txn, kind); the SSE event and audit record are retried
     until done; ``wh_completed`` marks the delivery fully processed."""
@@ -409,6 +419,10 @@ async def _payment_webhook_steps(data, booking_number, now, db, plc, txn_key, ki
     if log_row:
         from bson import ObjectId
 
+        if claim_token and not await plc.still_held(db, txn_key, kind, claim_token):
+            await plc.finish(db, txn_key, kind, None, ok=False, claim_token=claim_token)
+            return JSONResponse({"error": "payment_in_progress", "transaction_id": txn_key},
+                                status_code=409)
         row_id = ObjectId()
         try:
             await payments.insert_one({
@@ -426,9 +440,11 @@ async def _payment_webhook_steps(data, booking_number, now, db, plc, txn_key, ki
                 "created_at": now.isoformat(),
             })
         except Exception:
-            await plc.finish(db, txn_key, kind, row_id, ok=False)
+            await plc.finish(db, txn_key, kind, row_id, ok=False, claim_token=claim_token)
             raise
-        await plc.finish(db, txn_key, kind, row_id, ok=True)
+        if not await plc.finish(db, txn_key, kind, row_id, ok=True, claim_token=claim_token):
+            return JSONResponse({"error": "payment_in_progress", "transaction_id": txn_key},
+                                status_code=409)
 
     # -- 5. Send BlueBubbles receipt ------------------------------------------
     if indemnitor_phone and status == "approved" and await plc.take_step(db, txn_key, kind, "receipt"):

@@ -208,14 +208,17 @@ class SwipeSimpleReceiptPoller:
         if existing:
             return {"success": True, "duplicate": True, "transaction_id": txn}
 
-        # Transaction-id claim (payment_log_claims): a plan /pay claim, a
-        # webhook row, or a concurrent poll for the same charge means this
-        # receipt is already recorded: skip, never insert a second row.
+        # Transaction-id claim (payment_log_claims). An applied plan claim or
+        # an existing payments row means this receipt is already recorded.
+        # A failed plan claim is not. A fresh in-progress claim leaves the
+        # email unread so a later poll can log it.
         from dashboard.services import payment_log_claims as plc
 
         gate = await plc.begin(db, txn, plc.CHARGE, "swipesimple_gmail_poll")
         if gate["action"] == "unavailable":
             return {"success": False, "error": "payment_dedupe_unavailable", "transaction_id": txn}
+        if gate["action"] == "in_progress":
+            return {"success": False, "error": "payment_in_progress", "transaction_id": txn}
         if gate["action"] == "existing":
             claim = gate.get("claim") or {}
             if gate.get("row") is None and claim.get("status") == "claimed" and not gate.get("plan_claim"):
@@ -225,7 +228,9 @@ class SwipeSimpleReceiptPoller:
             return {"success": True, "duplicate": True, "transaction_id": txn}
 
         # Everything between the claim and the insert is covered: any failure
-        # releases the claim so the next poll can log this receipt.
+        # releases the claim so the next poll can log this receipt. The insert
+        # itself runs only while this caller still holds claim_token.
+        token = gate.get("claim_token")
         try:
             match_query: Dict[str, Any] = {}
             if booking:
@@ -271,11 +276,16 @@ class SwipeSimpleReceiptPoller:
             from bson import ObjectId
 
             doc["_id"] = ObjectId()
+            if token and not await plc.still_held(db, txn, plc.CHARGE, token):
+                await plc.finish(db, txn, plc.CHARGE, None, ok=False, claim_token=token)
+                return {"success": False, "error": "payment_in_progress", "transaction_id": txn}
             await payments.insert_one(doc)
         except Exception:
-            await plc.finish(db, txn, plc.CHARGE, None, ok=False)
+            await plc.finish(db, txn, plc.CHARGE, None, ok=False, claim_token=token)
             raise
-        if not await plc.finish(db, txn, plc.CHARGE, doc["_id"], ok=True):
+        if not await plc.finish(db, txn, plc.CHARGE, doc["_id"], ok=True, claim_token=token):
+            if await payments.find_one({"transaction_id": txn}) is None:
+                return {"success": False, "error": "payment_in_progress", "transaction_id": txn}
             return {"success": True, "duplicate": True, "transaction_id": txn}
 
         if booking_number:
