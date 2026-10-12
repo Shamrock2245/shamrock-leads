@@ -219,6 +219,13 @@ async def twilio_webhook(request: Request):
 # POST /webhooks/payment
 # ─────────────────────────────────────────────────────────────────────────────
 
+class _Collections:
+    """``db[name]`` view over get_collection (for payment_log_claims)."""
+
+    def __getitem__(self, name):
+        return get_collection(name)
+
+
 @webhooks_bp.post("/webhooks/payment")
 async def payment_webhook(request: Request, booking_number: str = Query(default="")):
     """
@@ -298,6 +305,40 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
             status_code=400,
         )
 
+    # -- 2b. Transaction-id claim (payment_log_claims) --------------------------
+    # One payments row per (transaction id, event kind). A retry of a webhook
+    # we already logged stops here (no second row, receipt or alert). A charge
+    # already logged by the receipt poller or claimed by plan /pay is not
+    # inserted again; the existing row is marked as webhook-confirmed and the
+    # remaining steps run once.
+    from dashboard.services import payment_log_claims as plc
+    txn_key = str(transaction_id).strip()
+    kind = plc.claim_kind(event_type)
+    db = _Collections()
+    gate = await plc.begin(db, txn_key, kind, "swipesimple_webhook")
+    if gate["action"] == "unavailable":
+        return JSONResponse({"error": "payment_dedupe_unavailable"}, status_code=503)
+    log_row = gate["action"] == "insert"
+    if not log_row:
+        prior = gate.get("row") or {}
+        claim = gate.get("claim") or {}
+        if (claim.get("source") == "swipesimple_webhook"
+                or isinstance(prior.get("raw_payload"), dict)):
+            return JSONResponse(status_code=200, content={
+                "success": True, "duplicate": True, "transaction_id": txn_key})
+        if not await plc.mark_webhook_seen(db, txn_key, kind, str(event_type)):
+            return JSONResponse(status_code=200, content={
+                "success": True, "duplicate": True, "transaction_id": txn_key})
+        if prior.get("_id") is not None and not str(prior.get("plan_id") or "").strip():
+            try:
+                await get_collection("payments").update_one(
+                    {"_id": prior["_id"]},
+                    {"$set": {"webhook_confirmed_at": now.isoformat(),
+                              "webhook_event_type": str(event_type)}},
+                )
+            except Exception as exc:
+                logger.warning("[payment_webhook] attach failed: %s", type(exc).__name__)
+
     # -- 3. Parse booking number -----------------------------------------------
     custom_fields = data.get("custom_fields", {})
     booking_number = (
@@ -336,19 +377,29 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
 
     # -- 4. Log to payments collection ----------------------------------------
     payments = get_collection("payments")
-    await payments.insert_one({
-        "transaction_id": transaction_id,
-        "booking_number": booking_number,
-        "amount": amount,
-        "status": status,
-        "card_last4": card_last4,
-        "card_brand": card_brand,
-        "customer_name": customer_name,
-        "indemnitor_phone": indemnitor_phone,
-        "custom_fields": custom_fields,
-        "raw_payload": data,
-        "created_at": now.isoformat(),
-    })
+    if log_row:
+        from bson import ObjectId
+
+        row_id = ObjectId()
+        try:
+            await payments.insert_one({
+                "_id": row_id,
+                "transaction_id": transaction_id,
+                "booking_number": booking_number,
+                "amount": amount,
+                "status": status,
+                "card_last4": card_last4,
+                "card_brand": card_brand,
+                "customer_name": customer_name,
+                "indemnitor_phone": indemnitor_phone,
+                "custom_fields": custom_fields,
+                "raw_payload": data,
+                "created_at": now.isoformat(),
+            })
+        except Exception:
+            await plc.finish(db, txn_key, kind, row_id, ok=False)
+            raise
+        await plc.finish(db, txn_key, kind, row_id, ok=True)
 
     # -- 5. Send BlueBubbles receipt ------------------------------------------
     if indemnitor_phone and status == "approved":

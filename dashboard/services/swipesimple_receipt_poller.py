@@ -208,6 +208,17 @@ class SwipeSimpleReceiptPoller:
         if existing:
             return {"success": True, "duplicate": True, "transaction_id": txn}
 
+        # Transaction-id claim (payment_log_claims): a plan /pay claim, a
+        # webhook row, or a concurrent poll for the same charge means this
+        # receipt is already recorded: skip, never insert a second row.
+        from dashboard.services import payment_log_claims as plc
+
+        gate = await plc.begin(db, txn, plc.CHARGE, "swipesimple_gmail_poll")
+        if gate["action"] == "unavailable":
+            return {"success": False, "error": "payment_dedupe_unavailable", "transaction_id": txn}
+        if gate["action"] == "existing":
+            return {"success": True, "duplicate": True, "transaction_id": txn}
+
         match_query: Dict[str, Any] = {}
         if booking:
             match_query = {"booking_number": booking}
@@ -249,7 +260,16 @@ class SwipeSimpleReceiptPoller:
             "matched_bond": bool(bond),
             "created_at": now,
         }
-        await payments.insert_one(doc)
+        from bson import ObjectId
+
+        doc["_id"] = ObjectId()
+        try:
+            await payments.insert_one(doc)
+        except Exception:
+            await plc.finish(db, txn, plc.CHARGE, doc["_id"], ok=False)
+            raise
+        if not await plc.finish(db, txn, plc.CHARGE, doc["_id"], ok=True):
+            return {"success": True, "duplicate": True, "transaction_id": txn}
 
         if booking_number:
             payment_update = {

@@ -3,6 +3,20 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-12 (payment loggers: one payments row per transaction id)
+
+### Fixed
+- **The Gmail receipt poller and `POST /api/webhooks/payment` no longer insert a second `payments` row for a charge that is already recorded or claimed.** Before inserting, each writer checks for an existing `payments` row with the transaction id and for a plan claim in `payment_plan_payment_claims`, then takes a claim in the new `payment_log_claims` collection (unique index `uniq_tenant_txn_kind` on tenant, transaction id and kind). The kind is `charge` for a poller receipt or webhook `payment.completed`, and the webhook event otherwise, so refund and failure events are still logged once each. Logic is in `dashboard/services/payment_log_claims.py`.
+  - Poller: if the charge is already recorded (any row for the id, a plan claim, or another concurrent poll), the receipt is skipped as a duplicate.
+  - Webhook: a retry of an event the webhook already logged returns 200 `duplicate: true` and does nothing else (no second row, receipt text or alert). A charge already logged by the poller is not inserted again; the poller row gets `webhook_confirmed_at` and `webhook_event_type` (its `raw_payload` shape is not touched), and the rest of the webhook steps run once. A plan-linked row is never modified.
+  - If the claim store is unavailable, nothing is inserted: the webhook returns 503 `payment_dedupe_unavailable` and the poller reports an error and leaves the email unread for the next run.
+  - If the row insert fails, the claim is released so a retry can log it. After the insert, if a plan `/pay` row for the same charge appeared meanwhile, the poller or webhook row is removed (the plan row is canonical).
+  - There is no unique index on `payments` itself; historical duplicates in prod are only read, never changed. Adding one needs a prod cleanup and Brendan's OK.
+  - Plan `/pay` (#181) and `create_plan` (#182) still use their own claims; after those merge, this branch needs a merge from main.
+
+### Tests
+- New `tests/test_payment_log_claims.py` (added to `ci.yml`): webhook retry, five concurrent webhooks, refund event logged once separately, poller then webhook (attach), webhook then poller (skip), concurrent poller and webhook, concurrent pollers, plan claim and plan row block both writers, a plan row landing during the poller insert, insert failure releasing the claim, claim store down failing closed, and legacy duplicates left untouched.
+
 ## [Unreleased] — 2026-10-12 (plan payments: exact cents)
 
 ### Fixed
