@@ -263,3 +263,50 @@ def test_unknown_plan_404_no_claim(rig):
             return await c.post("/api/payments/plans/nope/pay", json={"amount": 1, "transaction_id": "T"})
     assert asyncio.run(go()).status_code == 404
     assert db["payment_plan_payment_claims"].docs == []
+
+
+class _FailingPlanUpdate:
+    """Wrap the plans collection so update_one raises (payment row already written)."""
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+    async def update_one(self, *a, **k):
+        raise RuntimeError("plan write failed")
+
+
+def test_payment_row_from_failed_attempt_is_not_legacy_success(rig, monkeypatch):
+    """Payment row written, plan update failed: retry must not report success (Codex P1 #2)."""
+    db, app = rig
+    failing = _FailingPlanUpdate(db["payment_plans"])
+    monkeypatch.setattr(pp, "get_collection",
+                        lambda name: failing if name == "payment_plans" else db[name])
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-HALF"}])
+    assert r.status_code == 500
+    assert len(db["payments"].docs) == 1          # row left behind
+    assert db["payment_plan_payment_claims"].docs[0]["status"] == "failed"
+    monkeypatch.setattr(pp, "get_collection", lambda name: db[name])
+    (r2,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-HALF"}])
+    assert r2.status_code == 409 and r2.json()["error"] == "payment_needs_review"
+    assert r2.json().get("success") is not True
+    assert len(db["payments"].docs) == 1 and _plan(db)["balance_remaining"] == 800.0
+
+
+def test_payment_row_with_unfinished_claim_is_not_legacy_success(rig):
+    db, app = rig
+    db["payments"].docs.append({"plan_id": PLAN_ID, "transaction_id": "TX-MID", "amount": 100})
+    db["payment_plan_payment_claims"].docs.append(
+        {"plan_id": PLAN_ID, "transaction_id": "TX-MID", "status": "claimed"})
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-MID"}])
+    assert r.status_code == 409 and r.json()["error"] == "payment_in_progress"
+
+
+def test_payment_row_with_applied_claim_is_idempotent(rig):
+    db, app = rig
+    _post_many(app, [{"amount": 100, "transaction_id": "TX-OK"}])
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-OK"}])
+    assert r.status_code == 200 and r.json()["idempotent"] is True
+    assert len(db["payments"].docs) == 1 and _plan(db)["balance_remaining"] == 700.0

@@ -298,15 +298,21 @@ async def record_payment(request: Request, plan_id):
     if not plan:
         return JSONResponse({"error": "Plan not found"}, status_code=404)
 
-    # Rows recorded before this dedupe existed have no claim: treat them as applied.
-    legacy = await payments_col.find_one({"plan_id": plan_id, "transaction_id": txn})
-    if legacy:
-        return await _idempotent_reply(plans_col, plan_id, txn, None)
-
     try:
         claims = await _payment_claims_collection()
     except Exception:
         return JSONResponse({"error": "payment_dedupe_unavailable"}, status_code=503)
+
+    # A claim, when one exists, decides: a payment row left behind by a
+    # 'failed' or unfinished 'claimed' attempt is NOT proof the plan was updated.
+    existing_claim = await claims.find_one({"plan_id": plan_id, "transaction_id": txn})
+    if existing_claim is not None:
+        return await _idempotent_reply(plans_col, plan_id, txn, existing_claim)
+
+    # Rows recorded before this dedupe existed have no claim: treat them as applied.
+    legacy = await payments_col.find_one({"plan_id": plan_id, "transaction_id": txn})
+    if legacy:
+        return await _idempotent_reply(plans_col, plan_id, txn, None)
 
     now = datetime.now(timezone.utc)
     try:
