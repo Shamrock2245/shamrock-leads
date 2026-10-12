@@ -252,6 +252,7 @@ class _Closable:
 
 
 def test_charlotte_scrape_raises_egress_block_and_returns_nothing(monkeypatch):
+    monkeypatch.setattr(CharlotteCountyScraper, "SOURCE_CONTRACT_VALIDATED", True)  # reopen path (fail_closed 2026-10-09)
     monkeypatch.setattr(charlotte, "resolve_egress", lambda scraper=None: (None, "direct"))
     monkeypatch.setenv("CHARLOTTE_EGRESS_MODE", "direct")
     browser = type("B", (_Closable,), {

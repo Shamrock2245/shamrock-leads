@@ -5,17 +5,23 @@ they do not invent transfer history.
 
 Transfer evidence that actually exists
 --------------------------------------
-* ``POST /api/poa/reassign`` writes ``poa_inventory.reassigned_from`` (previous
-  ``bond_case_id`` only) and overwrites ``used_at``. It does not write
-  ``audit_events``, ``reassigned_at``, or from/to agent or office. The field
-  is last-write: an earlier reassignment is gone.
+* ``POST /api/poa/reassign`` appends ``poa_inventory.reassigned_from`` (prior
+  holder, case, timestamp, and the session actor) and writes ``audit_events``
+  action ``poa_reassigned`` (power id and number, from-case / from-agent,
+  to-case / to-agent, timestamp, session actor). It still overwrites
+  ``used_at``. A legacy ``reassigned_from`` string is only the previous
+  ``bond_case_id``; the next reassign keeps that case as the first list entry.
+  The actor is the session email, else the session agent name. Office-to-office
+  history is still not stored.
 * ``auto_release_poa`` writes ``released_at`` (datetime), ``release_reason``,
   and ``audit_events`` action ``auto_released`` (no surety on the audit row;
   surety comes from the inventory document).
 * Bond renewal writes ``released_at`` / ``released_reason`` on the old power
   and ``previous_poa_number`` plus ``last_renewed_at`` on the bond.
-* ``POST /api/poa/release`` sets the power back to available and does not
-  store a timestamp, so those releases cannot appear.
+* ``POST /api/poa/release`` sets the power back to available and stamps
+  ``released_at`` (UTC) and ``released_by`` (the session actor). A previous
+  ``released_at`` is appended to ``release_history`` and is not dropped.
+  A manual release stored before that stamp still has no timestamp.
 
 Void rows use the same filter as ``GET /api/reports/voided-powers``:
 ``poa_inventory.status == voided``, exact ``surety_id``, ``voided_at`` in range.
@@ -52,16 +58,17 @@ _ASSIGNED_STATUSES = frozenset({"assigned", "used", "executed"})
 TRANSFER_HISTORY_BANNER = (
     "Transfer log is best-effort and incomplete. "
     "Each row is backed by stored evidence only. "
-    "Case reassignment: poa_inventory.reassigned_from holds the previous bond_case_id "
-    "and is overwritten on the next reassign, so only the latest case move survives. "
-    "POST /api/poa/reassign does not write audit_events or reassigned_at. "
-    "used_at is overwritten at reassign time and is the event time when reassigned_from is set. "
+    "Case reassignment: POST /api/poa/reassign appends poa_inventory.reassigned_from "
+    "(prior holder, case, timestamp, and session actor) and writes audit_events action poa_reassigned. "
+    "A legacy reassigned_from string is still only the previous bond_case_id. "
+    "used_at is overwritten at reassign time and is the event time when reassigned_from is a string. "
     "Releases: poa_inventory.released_at plus release_reason or released_reason "
-    "(auto-release and bond-renewal power swap). "
-    "audit_events with entity_type poa and action auto_released are included when the power's surety_id matches this carrier. "
+    "(auto-release, bond-renewal power swap, and manual POST /api/poa/release, which stamps released_at and released_by). "
+    "An earlier release stamp is kept on release_history. "
+    "A manual release stored before that stamp still has no timestamp and does not appear. "
+    "audit_events with entity_type poa and action auto_released or poa_reassigned are included when the power's surety_id matches this carrier. "
     "active_bonds.previous_poa_number records a renewal that replaced a power. "
-    "Manual POST /api/poa/release returns a power to available and does not store a timestamp, so those releases do not appear. "
-    "No agent-to-agent or office-to-office history is stored. "
+    "Office-to-office history is not stored. "
     "An empty sheet means no dated evidence fell in this range."
 )
 
@@ -249,7 +256,11 @@ def _execution_stamp(inv: dict) -> tuple[Any, str] | None:
         raw = inv.get("date_executed") if inv.get("date_executed") not in (None, "") else inv.get("executed_at")
         return raw, "poa_inventory.date_executed"
     # Reassign overwrites used_at. That stamp is a transfer time, not an execution.
-    if _clean_text(inv.get("reassigned_from")):
+    mark = inv.get("reassigned_from")
+    if isinstance(mark, list):
+        if any(_reassign_entry_marked(item) for item in mark):
+            return None
+    elif _clean_text(mark):
         return None
     status = str(inv.get("status") or "").strip().lower()
     if status in _ASSIGNED_STATUSES and inv.get("used_at") not in (None, ""):
@@ -402,6 +413,17 @@ def _meaningful_reassign(val: Any) -> bool:
     return bool(text) and text.lower() not in ("none", "null")
 
 
+def _reassign_entry_marked(item: Any) -> bool:
+    if isinstance(item, dict):
+        return bool(
+            _clean_text(item.get("case"))
+            or _clean_text(item.get("holder"))
+            or _clean_text(item.get("from_case"))
+            or _clean_text(item.get("from_agent"))
+        )
+    return _meaningful_reassign(item)
+
+
 def _release_reason(doc: dict) -> Optional[str]:
     return _clean_text(doc.get("release_reason") or doc.get("released_reason"))
 
@@ -461,33 +483,81 @@ def _select_transfers(
     window = _window_active(start_dt, end_dt)
     rows: list[dict] = []
     release_index: dict[tuple[str, Optional[str]], dict] = {}
+    reassign_index: dict[tuple[str, Optional[str]], dict] = {}
+
+    def _note_reassign(raw: Any, from_ref: Optional[str], to_ref: Optional[str]) -> None:
+        nonlocal omitted_undated
+        day = _iso_day(raw)
+        if window and not _in_window(raw, start_dt, end_dt):
+            if day is None:
+                omitted_undated += 1
+            return
+        if day is None and window:
+            omitted_undated += 1
+            return
+        row = _transfer_row(
+            event_date=day,
+            event_type="reassign",
+            poa_number=poa,
+            from_ref=from_ref,
+            to_ref=to_ref,
+            reason=None,
+            defendant=_stored_defendant(doc),
+            sources=["poa_inventory.reassigned_from"],
+        )
+        rows.append(row)
+        reassign_index[(poa, day)] = row
 
     for doc in inv_rows:
         poa = _norm_poa(doc.get("poa_number") or doc.get("poa_full"))
         if not poa:
             continue
-        if _meaningful_reassign(doc.get("reassigned_from")):
-            raw = doc.get("used_at")
-            day = _iso_day(raw)
-            if window and not _in_window(raw, start_dt, end_dt):
-                if day is None:
-                    omitted_undated += 1
-            else:
-                if day is None and window:
-                    omitted_undated += 1
+        history = doc.get("reassigned_from")
+        if isinstance(history, list):
+            entries = [item for item in history if _reassign_entry_marked(item)]
+            for index, entry in enumerate(entries):
+                if isinstance(entry, dict):
+                    raw = entry.get("timestamp")
+                    if raw in (None, ""):
+                        raw = entry.get("reassigned_at")
+                    from_ref = _clean_text(
+                        entry.get("case") or entry.get("from_case") or entry.get("bond_case_id")
+                    )
+                    if index + 1 < len(entries) and isinstance(entries[index + 1], dict):
+                        nxt = entries[index + 1]
+                        to_ref = _clean_text(
+                            nxt.get("case") or nxt.get("from_case") or nxt.get("bond_case_id")
+                        )
+                    else:
+                        to_ref = _clean_text(doc.get("bond_case_id"))
                 else:
-                    rows.append(_transfer_row(
-                        event_date=day,
-                        event_type="reassign",
-                        poa_number=poa,
-                        from_ref=_clean_text(doc.get("reassigned_from")),
-                        to_ref=_clean_text(doc.get("bond_case_id")),
-                        reason=None,
-                        defendant=_stored_defendant(doc),
-                        sources=["poa_inventory.reassigned_from"],
+                    raw = doc.get("used_at")
+                    from_ref = _clean_text(entry)
+                    to_ref = _clean_text(doc.get("bond_case_id"))
+                _note_reassign(raw, from_ref, to_ref)
+        elif _meaningful_reassign(history):
+            _note_reassign(
+                doc.get("used_at"),
+                _clean_text(history),
+                _clean_text(doc.get("bond_case_id")),
+            )
+        release_sources: list[tuple[Any, Optional[str], str]] = []
+        prior_releases = doc.get("release_history")
+        if isinstance(prior_releases, list):
+            for item in prior_releases:
+                if isinstance(item, dict) and item.get("released_at") not in (None, ""):
+                    release_sources.append((
+                        item.get("released_at"),
+                        _clean_text(item.get("release_reason") or item.get("released_reason")),
+                        "poa_inventory.release_history",
                     ))
         if doc.get("released_at") not in (None, ""):
-            raw = doc.get("released_at")
+            release_sources.append((
+                doc.get("released_at"),
+                _release_reason(doc),
+                "poa_inventory.released_at",
+            ))
+        for raw, reason, source in release_sources:
             day = _iso_day(raw)
             if window and not _in_window(raw, start_dt, end_dt):
                 if day is None:
@@ -496,15 +566,22 @@ def _select_transfers(
             if day is None and window:
                 omitted_undated += 1
                 continue
+            existing_release = release_index.get((poa, day))
+            if existing_release:
+                if source not in existing_release["sources"]:
+                    existing_release["sources"].append(source)
+                if not existing_release.get("reason") and reason:
+                    existing_release["reason"] = reason
+                continue
             row = _transfer_row(
                 event_date=day,
                 event_type="release",
                 poa_number=poa,
                 from_ref=_clean_text(doc.get("bond_case_id")),
                 to_ref=None,
-                reason=_release_reason(doc),
+                reason=reason,
                 defendant=_stored_defendant(doc),
-                sources=["poa_inventory.released_at"],
+                sources=[source],
             )
             rows.append(row)
             release_index[(poa, day)] = row
@@ -573,19 +650,28 @@ def _select_transfers(
             omitted_undated += 1
             continue
         details = event.get("details") if isinstance(event.get("details"), dict) else {}
-        existing = release_index.get((poa, day))
         source = f"audit_events.{action}"
-        if existing:
-            if source not in existing["sources"]:
-                existing["sources"].append(source)
-            if not existing.get("reason"):
-                existing["reason"] = _clean_text(details.get("reason"))
-            continue
+        if action == "poa_reassigned":
+            existing_reassign = reassign_index.get((poa, day))
+            if existing_reassign:
+                if source not in existing_reassign["sources"]:
+                    existing_reassign["sources"].append(source)
+                continue
+        else:
+            existing = release_index.get((poa, day))
+            if existing:
+                if source not in existing["sources"]:
+                    existing["sources"].append(source)
+                if not existing.get("reason"):
+                    existing["reason"] = _clean_text(details.get("reason"))
+                continue
         from_ref = _clean_text(
             details.get("reassigned_from") or details.get("from") or details.get("old_case")
+            or details.get("from_case")
         )
         to_ref = _clean_text(
             details.get("bond_case_id") or details.get("to") or details.get("new_booking_number")
+            or details.get("to_case")
         )
         row = _transfer_row(
             event_date=day,

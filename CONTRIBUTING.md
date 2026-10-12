@@ -33,6 +33,9 @@ python main.py lee          # Single county
 python main.py --dry-run    # Parse without writing
 
 # Run dashboard locally
+# Set DASHBOARD_PIN in .env (recommended). With no PIN, every protected route
+# answers 503 "Dashboard PIN not configured" unless ENV=development is set
+# explicitly (local dev only; never on the VPS). /health stays 200.
 python3 dashboard/run.py
 # OR
 uvicorn dashboard.main:app --host 0.0.0.0 --port 5050 --access-log --workers 1

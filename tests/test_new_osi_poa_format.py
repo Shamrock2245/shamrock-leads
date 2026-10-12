@@ -262,6 +262,11 @@ def test_api_poa_next_marks_missing_tier(mock_get_col, client):
 
 
 def test_api_poa_next_rejects_unknown_surety(client):
-    res = client.get("/api/poa/next?surety=unknown&bond_amount=1000")
-    assert res.status_code == 400
-    assert "surety" in res.json()["error"]
+    # Surety is validated before the POA inventory is opened (no Mongo needed;
+    # previously this test only passed with MONGODB_URI set).
+    with patch("dashboard.routers.poa.get_collection") as get_col:
+        for surety in ("unknown", ""):
+            res = client.get(f"/api/poa/next?surety={surety}&bond_amount=1000")
+            assert res.status_code == 400
+            assert "surety" in res.json()["error"]
+        get_col.assert_not_called()

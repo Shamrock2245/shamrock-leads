@@ -95,7 +95,6 @@ def resolve_fail_closed_canonical(data: Mapping[str, Any]) -> Dict[str, str]:
         _parse_date_parts,
         _parse_defendant_name,
         _safe_float,
-        _split_charge,
         _split_court_datetime,
     )
 
@@ -116,7 +115,8 @@ def resolve_fail_closed_canonical(data: Mapping[str, Any]) -> Dict[str, str]:
     charge_raw = str(data.get("charge") or data.get("charges") or "").strip()
     if _is_placeholder_charge(charge_raw):
         charge_raw = ""
-    charge_line1, charge_line2 = _split_charge(charge_raw)
+    # Full charge text on the primary line. Do not shorten it onto line 2.
+    charge_line1, charge_line2 = charge_raw, ""
 
     court_date, court_time = _split_court_datetime(
         data.get("court_date") or data.get("defendant_court_date") or "",

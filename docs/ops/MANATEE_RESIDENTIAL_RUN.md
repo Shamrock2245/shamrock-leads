@@ -1,5 +1,7 @@
 # Manatee FL: residential run (Leads Ops)
 
+> **2026-10-09: Manatee is `fail_closed`** (`SOURCE_CONTRACT_VALIDATED=False`, Health `fail_closed`; `docs/recon/FL_MANATEE_SOURCE_RECON_2026-10-09.md`). The Revize roster answers a Cloudflare challenge from the relay too. No path contacts the source: `--relay-only` skips it, the smoke script exits `4`, dashboard run-now / custody-recheck / health-check are refused (HTTP 409), queued triggers are marked `fail_closed`, and the FirstAppearanceWatcher, pending-bond recheck and URL ingest make no request (`config/source_guard.py`). The run steps below are historical until a contract is proven.
+
 Manatee's public roster (`https://manatee-sheriff.revize.com/bookings`) sits behind Cloudflare. Datacenter exits get an HTTP 403 `cf-mitigated: challenge` page; the agent box got this on 2026-10-07. The VPS and the office Comcast line have also been blocked in the past.
 
 **Manatee runs only on Brendan's home relay, which Leads Ops operates.** The scraper runs *on* that host and uses the host's own home-ISP exit. "Residential" means that connection. It is **not** a proxy service.
@@ -25,7 +27,7 @@ An egress block is never reported as `empty` or `ok`.
 
 ## Relay-only scheduling
 
-Manatee is **relay-only** (`config/relay_only.py`, together with Charlotte). The VPS/Hetzner scheduler keeps Manatee registered but never gives it an interval job. A dashboard run-now or custody-recheck trigger for Manatee is marked `relay_only` on the VPS and is not run there. Leads Ops runs it from the relay with `python main.py --relay-only`, which runs Manatee and Charlotte once each and exits non-zero if either fails. `python main.py Manatee` runs Manatee alone. See `docs/ops/REVIZE_RELAY_RUN.md` for the shared runner.
+Manatee is **relay-only** (`config/relay_only.py`, together with Charlotte). The VPS/Hetzner scheduler keeps Manatee registered but never gives it an interval job. A dashboard run-now or custody-recheck trigger for Manatee was marked `relay_only` on the VPS; since 2026-10-09 it is refused or marked `fail_closed` instead. Leads Ops runs it from the relay with `python main.py --relay-only`, which runs Manatee and Charlotte once each and exits non-zero if either fails. `python main.py Manatee` runs Manatee alone. See `docs/ops/REVIZE_RELAY_RUN.md` for the shared runner.
 
 ## Egress setting
 

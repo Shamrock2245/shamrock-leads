@@ -18,6 +18,7 @@ and requires Brendan's authorization PIN (default 224545).
 from __future__ import annotations
 
 import base64
+import inspect
 import io
 import logging
 import os
@@ -99,6 +100,33 @@ def _first(*vals: Any) -> str:
         if s and s.lower() not in ("none", "null", "n/a", "-"):
             return s
     return ""
+
+
+async def _held_collateral_rows(booking_number: str) -> List[Dict[str, Any]]:
+    """Held vault rows for this booking. A missing collection yields none."""
+    booking = str(booking_number or "").strip()
+    if not booking:
+        return []
+    try:
+        from dashboard.extensions import get_collection
+
+        cursor = get_collection("collateral_items").find(
+            {"booking_number": booking, "status": "held"},
+            {"_id": 0},
+        )
+        to_list = getattr(cursor, "to_list", None)
+        if to_list is None:
+            return []
+        pending = to_list(length=50)
+        if not inspect.isawaitable(pending):
+            return []
+        rows = await pending
+    except Exception:
+        logger.debug("collateral payment method lookup skipped", exc_info=True)
+        return []
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
 
 
 def _digits_phone(p: str) -> str:
@@ -264,6 +292,8 @@ def charge_details_from_sources(
                 rows.append({
                     "charge": desc,
                     "description": desc,
+                    "statute": _first(item.get("statute"), item.get("statute_citation"), item.get("statute_code")),
+                    "degree": _first(item.get("degree"), item.get("charge_degree")),
                     "bond_amount": _row_bond(item),
                     "bond_type": _first(item.get("bond_type"), "SURETY"),
                     "case_number": _first(item.get("case_number"), item.get("Case_Number"), default_case),
@@ -293,7 +323,9 @@ def charge_details_from_sources(
                 "case_number": default_case,
                 "poa_number": "",
             })
-    return rows[:8]
+    # Every stored row. The signed DocuSeal packet fails closed when the
+    # live template cannot print them. See charge_verbatim.py.
+    return rows
 
 
 def verify_self_indemnitor_pin(pin: str) -> bool:
@@ -477,6 +509,15 @@ async def resolve_case_context(
     )
     match_confidence = match.get("Confidence") or match.get("confidence") or intake.get("match_confidence")
 
+    collateral_rows = await _held_collateral_rows(str(booking_number or ""))
+    if not collateral_rows and isinstance(bond.get("collateral_items"), list):
+        collateral_rows = [
+            row for row in bond.get("collateral_items") or [] if isinstance(row, dict)
+        ]
+    from dashboard.collateral_payment_method import context_from_collateral_rows
+
+    collateral_facts = context_from_collateral_rows(collateral_rows)
+
     context = {
         "resolved_at": _now_iso(),
         "sources": sources,
@@ -540,6 +581,9 @@ async def resolve_case_context(
         "bond_amount": bond_amount,
         "bond_amount_known": bond_amount_known,
         "premium_amount": premium,
+        # Vault payment method only. The premium method is not copied here.
+        "collateral_payment_method": collateral_facts.get("collateral_payment_method") or "",
+        "collateral_other_description": collateral_facts.get("collateral_other_description") or "",
         "is_small_bond": bond_amount > 0 and bond_amount <= SMALL_BOND_MAX,
         "small_bond_max": SMALL_BOND_MAX,
         "defendant": {
@@ -653,6 +697,8 @@ async def resolve_case_context(
         lee_clerk_search_url(context.get("case_number") or "", context.get("booking_number") or "")
         if is_lee_county(context.get("county"), context.get("state")) else ""
     )
+    if collateral_facts.get("collateral_items"):
+        context["collateral_items"] = collateral_facts["collateral_items"]
 
     # Returning-client fast path: fill empty indemnitor / defendant PII from
     # the last Shamrock bond. Live booking, POA, case #, and amounts stay authoritative.
@@ -886,26 +932,32 @@ def build_adaptive_field_map(context: Dict[str, Any]) -> Dict[str, Any]:
         "agency_phone": "(239) 332-2245",
         "self_indemnitor": "yes" if context.get("self_indemnitor") else "no",
     }
-    # Populate offense_1..4 from structured charges or pipe-delimited booking string
-    raw_charges = context.get("charge_details") or context.get("charge_list") or context.get("charges") or []
-    offense_list = []
-    if isinstance(raw_charges, list):
-        for c in raw_charges:
-            if isinstance(c, dict):
-                desc = (c.get("charge") or c.get("description") or c.get("name") or "").strip()
-            else:
-                desc = str(c or "").strip()
-            if desc:
-                offense_list.append(desc)
-    elif isinstance(raw_charges, str) and raw_charges.strip():
-        import re as _re
-        if _re.search(r"[|\n;]", raw_charges):
-            offense_list = [c.strip() for c in _re.split(r"[|\n;]+", raw_charges) if c.strip()]
+    # Signed DocuSeal packets fail closed when the live template cannot
+    # print every charge. This preview map still keeps the full join.
+    from dashboard.services.charge_verbatim import (
+        ChargeCapacityError,
+        fit_charges_for_template,
+        join_charge_summary,
+        resolve_verbatim_charge_rows,
+    )
+
+    verbatim_rows = resolve_verbatim_charge_rows(context)
+    if verbatim_rows:
+        summary = join_charge_summary(verbatim_rows)
+        try:
+            placement = fit_charges_for_template(
+                verbatim_rows,
+                surety_id=str(context.get("surety_id") or "osi"),
+                template="docuseal",
+            )
+        except ChargeCapacityError:
+            fields["charges"] = summary
+            fields["Charges"] = summary
         else:
-            offense_list = [c.strip() for c in raw_charges.split(",") if c.strip()]
-    for i, desc in enumerate(offense_list[:4], start=1):
-        fields[f"offense_{i}"] = desc
-        fields[f"charge_{i}"] = desc
+            for i, row in enumerate(placement.on_form, start=1):
+                fields[f"offense_{i}"] = row.charge
+            fields["charges"] = placement.summary or summary
+            fields["Charges"] = placement.summary or summary
 
     # Drop empty values for cleaner audit
     return {k: v for k, v in fields.items() if v not in (None, "")}

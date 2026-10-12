@@ -8,14 +8,40 @@ from starlette.responses import Response
 from fastapi.responses import JSONResponse
 from typing import Optional, Dict, Any
 
+from dashboard.collateral_payment_method import InvalidCollateralPaymentMethod
 from dashboard.services.collateral_service import (
     add_collateral_item,
     list_collateral_items,
     return_collateral_item,
+    set_collateral_payment_method,
     generate_collateral_receipt_pdf
 )
 
 collateral_bp = APIRouter(prefix="/api/collateral", tags=["collateral"])
+
+
+def _session_audit_actor(request: Request) -> Optional[str]:
+    """Session email, else the session agent name. Never the request body.
+
+    Same identity #165 uses for attest-id. A missing session, or a session
+    with neither email nor agent name, returns None so the route can 401.
+    """
+    from dashboard.auth.agent_scope import agent_identity
+    from dashboard.auth.pin_middleware import get_session_from_request
+
+    sess = get_session_from_request(request)
+    if not sess or not sess.get("auth"):
+        return None
+    ident = agent_identity(request)
+    actor = str(ident.get("email") or ident.get("agent_name") or "").strip()
+    return actor or None
+
+
+def _auth_required() -> JSONResponse:
+    return JSONResponse(
+        status_code=401,
+        content={"success": False, "error": "auth_required"},
+    )
 
 @collateral_bp.get("")
 async def get_collateral_list(
@@ -32,10 +58,41 @@ async def get_collateral_list(
 @collateral_bp.post("/add")
 async def create_collateral_item(request: Request):
     """Record a new collateral item in vault."""
+    actor = _session_audit_actor(request)
+    if not actor:
+        return _auth_required()
     try:
         data = await request.json() or {}
-        item = await add_collateral_item(data)
+        item = await add_collateral_item(data, actor=actor)
         return JSONResponse(status_code=200, content={"success": True, "item": item})
+    except InvalidCollateralPaymentMethod as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": "invalid_collateral_payment_method", "message": str(exc)},
+        )
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(exc)})
+
+@collateral_bp.post("/payment-method/{collateral_id}")
+async def update_collateral_payment_method(
+    collateral_id: str = Path(...),
+    request: Request = None,
+):
+    """Set or change how this collateral was paid. Premium method is not accepted here."""
+    actor = _session_audit_actor(request) if request is not None else None
+    if not actor:
+        return _auth_required()
+    try:
+        data = await request.json() or {}
+        item = await set_collateral_payment_method(collateral_id, data, actor=actor)
+        return JSONResponse(status_code=200, content={"success": True, "item": item})
+    except InvalidCollateralPaymentMethod as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": "invalid_collateral_payment_method", "message": str(exc)},
+        )
+    except ValueError as exc:
+        return JSONResponse(status_code=404, content={"success": False, "error": str(exc)})
     except Exception as exc:
         return JSONResponse(status_code=500, content={"success": False, "error": str(exc)})
 

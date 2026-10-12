@@ -171,7 +171,7 @@ async def _refresh_jail_source(arrest: Dict[str, Any]) -> Dict[str, Any]:
         return {"attempted": False, "updated": False}
     try:
         from dashboard.services.url_ingest_service import ingest_url
-        res = await ingest_url(detail_url)
+        res = await ingest_url(detail_url, county=arrest.get("county"), state=arrest.get("state"))
     except Exception as exc:
         logger.debug("lee jail refresh skipped: %s", type(exc).__name__)
         return {"attempted": True, "updated": False, "error": type(exc).__name__}

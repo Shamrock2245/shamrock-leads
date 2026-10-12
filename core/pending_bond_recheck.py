@@ -326,8 +326,15 @@ def county_exclusion(scraper: Any, *, include_relay_only: bool, writer: Any = No
         return "no_recheck_path"
     if _source_state(_label(scraper)) == "fail_closed":
         return "fail_closed"
-    if not bool(getattr(scraper, "SOURCE_CONTRACT_VALIDATED", True)):
-        return "source_contract_unvalidated"
+    # Shared guard (config.source_guard): same check every refetch / ingest /
+    # trigger path uses before it contacts a source.
+    from config.source_guard import HEALTH_UNREADABLE, fail_closed_reason
+
+    reason = fail_closed_reason(scraper=scraper)
+    if reason == HEALTH_UNREADABLE:
+        return "fail_closed"
+    if reason:
+        return reason
     if is_relay_only(scraper) and not include_relay_only:
         return "relay_only"
     loader = getattr(scraper, "_load_resilience_state", None)
@@ -590,6 +597,15 @@ class PendingBondRecheck:
 
     def _recheck_one(self, scraper, label, doc, now, stats, c_stats) -> None:
         state, county, bk = doc["state"], doc["county"], str(doc["booking_number"])
+        from config.source_guard import fail_closed_reason
+
+        guard = fail_closed_reason(county, state, scraper=scraper, url=doc.get("detail_url") or "")
+        if guard:
+            # Per-booking backstop to county_exclusion: no source request.
+            stats.setdefault("skipped_fail_closed", 0)
+            stats["skipped_fail_closed"] += 1
+            logger.info("bond-recheck: %s %s skipped (%s); no request", label, bk, guard)
+            return
         stats["checked"] += 1
         c_stats["checked"] += 1
         outcome = "no_result"

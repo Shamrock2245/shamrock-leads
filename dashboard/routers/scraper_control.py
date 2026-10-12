@@ -88,6 +88,17 @@ async def api_run_now(request: Request):
                 trigger_key = f"{state.lower()}_{bare.lower().replace(' ', '_')}"
             matched = county if not state else f"{county} ({state})"
 
+        from config.source_guard import fail_closed_reason
+
+        source_guard = fail_closed_reason(matched)
+        if source_guard:
+            return JSONResponse({
+                "ok": False,
+                "fail_closed": True,
+                "county": matched,
+                "error": f"{matched} source contract is fail_closed ({source_guard}); no run was queued.",
+            }, status_code=409)
+
         triggers = get_collection("scraper_triggers")
         now = datetime.now(timezone.utc)
         await triggers.update_one(
@@ -126,9 +137,17 @@ async def api_run_all():
     Always returns JSON on failure.
     """
     try:
+        from config.source_guard import fail_closed_reason
+
         triggers = get_collection("scraper_triggers")
         now = datetime.now(timezone.utc)
+        queued = 0
+        skipped_fail_closed = []
         for county in REGISTERED_COUNTIES:
+            if fail_closed_reason(county):
+                skipped_fail_closed.append(county)
+                continue
+            queued += 1
             trigger_key = registered_county_to_trigger_key(county)
             await triggers.update_one(
                 {"county": trigger_key},
@@ -143,10 +162,12 @@ async def api_run_all():
             )
         return {
             "ok": True,
-            "triggered": len(REGISTERED_COUNTIES),
+            "triggered": queued,
+            "skipped_fail_closed": skipped_fail_closed,
             "message": (
-                f"Run triggers queued for all {len(REGISTERED_COUNTIES)} scrapers "
-                f"(FL/GA/SC/NC/TN/TX/LA/CT/AL/MS)."
+                f"Run triggers queued for {queued} scrapers "
+                f"(FL/GA/SC/NC/TN/TX/LA/CT/AL/MS); "
+                f"{len(skipped_fail_closed)} fail_closed counties skipped."
             ),
             "requested_at": now.isoformat(),
         }
@@ -407,6 +428,17 @@ async def api_scraper_health_check(request: Request):
     if not matched:
         return JSONResponse({"error": f"County '{county}' not found"}, status_code=404)
 
+    from config.source_guard import fail_closed_reason
+
+    source_guard = fail_closed_reason(matched)
+    if source_guard:
+        return JSONResponse({
+            "ok": False,
+            "fail_closed": True,
+            "county": matched,
+            "error": f"{matched} source contract is fail_closed ({source_guard}); no health check was queued.",
+        }, status_code=409)
+
     triggers = get_collection("scraper_triggers")
     now = datetime.now(timezone.utc)
     await triggers.update_one(
@@ -506,6 +538,17 @@ async def api_custody_recheck(request: Request):
             county = doc.get("county", "")
         if not county:
             return JSONResponse({"error": f"No record found for booking {booking_number}"}, status_code=404)
+
+    from config.source_guard import fail_closed_reason
+
+    source_guard = fail_closed_reason(county)
+    if source_guard:
+        return JSONResponse({
+            "ok": False,
+            "fail_closed": True,
+            "county": county,
+            "error": f"{county} source contract is fail_closed ({source_guard}); no recheck was queued.",
+        }, status_code=409)
 
     triggers = get_collection("scraper_triggers")
     now = datetime.now(timezone.utc)

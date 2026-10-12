@@ -1,5 +1,7 @@
 # Revize relay runs: Manatee + Charlotte (Leads Ops)
 
+> **2026-10-09: Manatee and Charlotte are `fail_closed`.** Both Revize rosters answer a Cloudflare challenge on page 1 from T-Mobile AS21928 and Comcast AS7922 (and the box). `python main.py --relay-only` now **skips** them (result `status: fail_closed, skipped: true`, not an error), and the smoke scripts exit `4` without fetching. Only Pinellas runs on the relay. Evidence and ranked alternatives: `docs/recon/FL_CHARLOTTE_SOURCE_RECON_2026-10-09.md`, `docs/recon/FL_MANATEE_SOURCE_RECON_2026-10-09.md`. Reopen = relay read + write smoke with no challenge, then flip `SOURCE_CONTRACT_VALIDATED`.
+
 Manatee and Charlotte (FL) are both Revize CMS rosters behind Cloudflare. They run **only on Brendan's home relay, which Leads Ops operates**. Each run uses the relay's own home-ISP exit, or the iPhone hotspot. "Residential" means that connection. It is **not** a proxy service.
 
 ## What is enforced in code
@@ -35,6 +37,8 @@ CHARLOTTE_EGRESS_MODE=direct python scripts/charlotte_residential_smoke.py
 ```
 
 Exit codes: `0` ok, `2` egress_block (VPN on, a non-residential exit, or Cloudflare did not clear for a stock browser), `3` parse_drift. On a `2`, retry once later. Do not loop, and do not reach for a proxy or a stealth browser.
+
+Egress-blocked failures (exit gate, Cloudflare 403/challenge) are counted in `egress_blocked_failures`, not toward auto-disable. See the "Auto-disable and egress blocks" section of `docs/ops/PINELLAS_RELAY_RUN.md` for the counter reset.
 
 ## Health
 

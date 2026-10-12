@@ -20,7 +20,7 @@ BOOK_MS = int(datetime(2026, 10, 7, 4, tzinfo=timezone.utc).timestamp() * 1000)
 
 
 def _attrs(oid, **over):
-    a = {"ObjectId": oid, "GlobalID": f"gid-{oid}", "BookDate": BOOK_MS, "Defendant": "DOE, JANE",
+    a = {"ObjectId": oid, "GlobalID": f"gid-{oid}", "BookDate": BOOK_MS, "Defendant": f"DOE, JANE{oid}",
          "Charge1": "BATTERY", "Code2": None, "Charge3": None}
     a.update(over)
     return a
@@ -88,7 +88,8 @@ def test_scrape_pages_to_the_server_count(monkeypatch):
     _install(monkeypatch, 3, [([_attrs(3), _attrs(2)], True), ([_attrs(1)], False)], calls)
     monkeypatch.setattr(miami_dade, "PAGE_SIZE", 2)
     recs = MiamiDadeCountyScraper().scrape()
-    assert [r.Booking_Number for r in recs] == ["gid-3", "gid-2", "gid-1"]
+    assert [r.Booking_Number for r in recs] == ["", "", ""]  # no source booking number
+    assert len(recs) == 3 and all(r.extra_data["md_dedupe"].startswith("md_dedupe_v1:") for r in recs)
     assert calls[0]["returnCountOnly"] == "true"
     assert all("outFields" in c and "Address" not in c["outFields"] and "DOB" not in c["outFields"] for c in calls[1:])
 

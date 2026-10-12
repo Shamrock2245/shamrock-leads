@@ -687,9 +687,18 @@ def _widget_base_name(field_name: Optional[str]) -> str:
 
 
 def _pdf_literal(text: str) -> str:
-    """PDF literal string for an AcroForm /V."""
+    """PDF string for an AcroForm /V. Non-ASCII is stored as UTF-16BE.
+
+    A parenthesized literal is PDFDocEncoding and would drop an em dash or
+    a section sign. The UTF-16 form keeps those characters. The text itself
+    is not rewritten.
+    """
+    raw = str(text)
+    if any(ord(ch) > 127 for ch in raw):
+        encoded = raw.encode("utf-16-be")
+        return "<FEFF" + encoded.hex().upper() + ">"
     escaped = (
-        str(text)
+        raw
         .replace("\\", "\\\\")
         .replace("(", "\\(")
         .replace(")", "\\)")
@@ -822,8 +831,11 @@ def build_osi_field_values(data: dict) -> tuple[dict, dict]:
     charge_raw = data.get("charge") or data.get("charges") or ""
     if _is_placeholder_charge(charge_raw):
         charge_raw = ""
-    charge_line1, charge_line2 = _split_charge(charge_raw)
-    
+    # The whole charge goes in DefCharge1. Line 2 is not a second charge and
+    # is not a shortened tail. A box that cannot fit the text is a layout
+    # note (charge_verbatim.appearance_box_clips), not a reason to cut it.
+    charge_line1, charge_line2 = str(charge_raw or "").strip(), ""
+
     # Full name parsing (LAST, FIRST MIDDLE for FL jail rosters)
     full_name = data.get("name") or data.get("defendant_name") or ""
     first_name, last_name = _parse_defendant_name(
@@ -941,7 +953,8 @@ def build_palmetto_field_values(data: dict) -> tuple[dict, dict]:
     charge_raw = data.get("charge") or data.get("charges") or ""
     if _is_placeholder_charge(charge_raw):
         charge_raw = ""
-    charge_line1, charge_line2 = _split_charge(charge_raw)
+    # Full charge in chargestField1. chargesField2 is not a second charge.
+    charge_line1, charge_line2 = str(charge_raw or "").strip(), ""
 
     full_name = data.get("name") or data.get("defendant_name") or ""
     booking_number = str(

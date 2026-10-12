@@ -3,6 +3,8 @@ Tests for production auth allowlist hardening, webhook PIN gating, and today_new
 Tracks fix for Issue #19 / Grok audit review.
 """
 import os
+
+import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from fastapi.testclient import TestClient
 from dashboard.main import app
@@ -12,6 +14,28 @@ from core.models import ArrestRecord
 from datetime import datetime, timezone
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _prod_like_auth_env(monkeypatch):
+    """Run every test with a dashboard PIN and SECRET_KEY configured, as in prod.
+
+    Without DASHBOARD_PIN the middleware's non-production dev path lets requests
+    through, so these tests used to pass only on a machine whose .env set a PIN
+    (and SECRET_KEY for Traccar status tokens). Synthetic values only.
+    """
+    monkeypatch.setenv("DASHBOARD_PIN", "synthetic-test-pin-0000")
+    monkeypatch.setenv("SECRET_KEY", "synthetic-test-secret-key-not-real")
+    for var in ("GAS_API_KEY", "LEADS_INTERNAL_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def _mock_health_db():
+    mock_col = MagicMock()
+    mock_db = MagicMock()
+    mock_db.command = AsyncMock(return_value={"ok": 1})
+    mock_col.database = mock_db
+    return patch("dashboard.main.get_collection", return_value=mock_col)
 
 
 def test_open_paths_exact_whitelist():
@@ -70,10 +94,23 @@ def test_docs_redirect_to_login():
 
 
 def test_health_routes_remain_open():
-    """Liveness probes must stay open for load balancers."""
-    resp = client.get("/health")
+    """Liveness probes must stay open for load balancers (no session, no key)."""
+    with _mock_health_db():
+        resp = client.get("/health")
     assert resp.status_code == 200
     assert resp.json().get("status") in ("healthy", "ok")
+
+
+def test_production_without_pin_fails_closed(monkeypatch):
+    """ENV=production with no DASHBOARD_PIN must 503, never serve the API."""
+    monkeypatch.delenv("DASHBOARD_PIN", raising=False)
+    monkeypatch.setattr("dashboard.auth.pin_middleware.DASHBOARD_PIN", "")
+    monkeypatch.setenv("ENV", "production")
+    for path in ("/api/stats", "/openapi.json", "/api/traccar/device-status/12345"):
+        resp = client.get(path)
+        assert resp.status_code == 503, path
+    with _mock_health_db():
+        assert client.get("/health").status_code == 200
 
 
 def test_machine_auth_allows_sweeps_and_api():

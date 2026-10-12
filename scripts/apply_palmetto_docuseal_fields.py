@@ -7,8 +7,10 @@ write: POST /templates/{id}/clone, merge into the clone, PUT the clone, and
 print the new id. ``--apply`` updates the source template in place.
 
 A field PUT replaces the template's whole field list. Fields on documents
-the spec does not cover are copied through unchanged. Appearance-bond fields
-are omitted when that PDF is not an attachment (it is print/wet-ink).
+the spec does not cover are copied through unchanged. The paperwork header
+keeps its live fields and gains the offense rows from this spec.
+Appearance-bond fields are omitted when that PDF is not an attachment
+(it is print/wet-ink).
 
 Reads DOCUSEAL_URL or DOCUSEAL_SERVER, DOCUSEAL_API_KEY, and
 DOCUSEAL_TEMPLATE_ID_PALMETTO (default 5). Never creates a submission.

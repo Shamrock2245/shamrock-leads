@@ -3456,7 +3456,9 @@ SLFeatures.saveCollateralItem = async function() {
     item_type: document.getElementById('colType').value,
     estimated_value: parseFloat(document.getElementById('colVal').value || 0),
     storage_location: document.getElementById('colLoc').value.trim(),
-    description: document.getElementById('colDesc').value.trim()
+    description: document.getElementById('colDesc').value.trim(),
+    collateral_payment_method: document.getElementById('colPayMethod').value,
+    collateral_other_description: document.getElementById('colPayOther').value.trim()
   };
 
   if (!data.booking_number || !data.defendant_name) {
@@ -3477,6 +3479,8 @@ SLFeatures.saveCollateralItem = async function() {
     }
     toast(`✅ Collateral Tag #${d.item.tag_number} recorded in vault!`, 'success');
     document.getElementById('colDesc').value = '';
+    document.getElementById('colPayOther').value = '';
+    document.getElementById('colPayMethod').value = '';
     SLFeatures.loadCollateralList(data.booking_number);
   } catch (err) {
     toast('Error recording collateral: ' + err.message, 'error');
@@ -3495,22 +3499,63 @@ SLFeatures.loadCollateralList = async function(bookingNumber) {
       container.innerHTML = '<span style="color:var(--text-muted)">No collateral items currently recorded.</span>';
       return;
     }
-    container.innerHTML = d.items.map(i => `
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.1)">
+    const payOptions = [
+      ['', 'Payment method'],
+      ['cash', 'Cash'],
+      ['check', 'Check'],
+      ['money order', 'Money Order'],
+      ['credit card', 'Credit Card'],
+      ['other', 'Other'],
+    ];
+    container.innerHTML = d.items.map(i => {
+      const current = i.collateral_payment_method || '';
+      const options = payOptions.map(([value, label]) =>
+        `<option value="${value}"${value === current ? ' selected' : ''}>${label}</option>`
+      ).join('');
+      const otherNote = i.collateral_other_description
+        ? ` | Other: ${i.collateral_other_description}`
+        : '';
+      return `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.1)">
         <div>
           <strong>${i.tag_number}</strong> — ${i.item_type} ($${(i.estimated_value || 0).toLocaleString()})
-          <div style="color:var(--text-muted);font-size:11px">${i.defendant_name} | Depositor: ${i.depositor_name || 'N/A'} | ${i.storage_location}</div>
+          <div style="color:var(--text-muted);font-size:11px">${i.defendant_name} | Depositor: ${i.depositor_name || 'N/A'} | ${i.storage_location}${current ? ` | Paid by: ${current}` : ''}${otherNote}</div>
         </div>
-        <div>
+        <div style="display:flex;align-items:center;gap:6px">
           ${i.status === 'returned'
             ? `<span style="color:#22c55e;font-size:11px;font-weight:600">✅ Returned</span>`
-            : `<button class="btn-secondary" style="font-size:11px;padding:4px 8px" onclick="SLFeatures.returnCollateralItem('${i.collateral_id}')">Return & Print PDF Receipt</button>`
+            : `<select aria-label="Collateral payment method" style="font-size:11px;padding:4px;background:var(--bg-main);color:#fff;border:1px solid var(--border);border-radius:6px" onchange="SLFeatures.updateCollateralPaymentMethod('${i.collateral_id}', this.value)">${options}</select>
+               <button class="btn-secondary" style="font-size:11px;padding:4px 8px" onclick="SLFeatures.returnCollateralItem('${i.collateral_id}')">Return & Print PDF Receipt</button>`
           }
         </div>
-      </div>
-    `).join('');
+      </div>`;
+    }).join('');
   } catch (err) {
     container.innerHTML = '<span style="color:#ef4444">Error loading collateral items</span>';
+  }
+};
+
+SLFeatures.updateCollateralPaymentMethod = async function(id, method) {
+  const other = document.getElementById('colPayOther')?.value.trim() || '';
+  try {
+    const res = await fetch(`${API}/api/collateral/payment-method/${id}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        collateral_payment_method: method,
+        collateral_other_description: other,
+      }),
+    });
+    const d = await res.json();
+    if (!res.ok || !d.success) {
+      toast(d.message || d.error || 'Payment method was not saved', 'error');
+      SLFeatures.loadCollateralList(document.getElementById('colBookingNum')?.value.trim());
+      return;
+    }
+    toast('Collateral payment method saved', 'success');
+    SLFeatures.loadCollateralList(document.getElementById('colBookingNum')?.value.trim());
+  } catch (err) {
+    toast('Error saving payment method: ' + err.message, 'error');
   }
 };
 

@@ -350,12 +350,12 @@ class PinAuthMiddleware(BaseHTTPMiddleware):
 
         pin = (os.getenv("DASHBOARD_PIN") or DASHBOARD_PIN or "").strip()
         if not pin:
-            env = (os.getenv("ENV") or os.getenv("ENVIRONMENT") or "").lower()
-            if env in ("production", "prod") or os.getenv("REQUIRE_DASHBOARD_PIN", "").lower() in (
-                "1", "true", "yes",
-            ):
-                return JSONResponse({"error": "Dashboard PIN not configured"}, status_code=503)
-            return await call_next(request)
+            # Fail closed: with no PIN, protected routes answer 503 unless the
+            # process is explicitly ENV=development (local dev only). ENV unset,
+            # production, staging or anything else is closed.
+            if no_pin_passthrough_allowed():
+                return await call_next(request)
+            return JSONResponse({"error": "Dashboard PIN not configured"}, status_code=503)
 
         cookie = request.cookies.get(COOKIE_NAME)
         sess = _load_session(cookie) if cookie else None
@@ -383,6 +383,19 @@ class PinAuthMiddleware(BaseHTTPMiddleware):
         if path.startswith("/api/") or path == "/openapi.json":
             return JSONResponse({"error": "Authentication required"}, status_code=401)
         return RedirectResponse(login_redirect_location(path, request.url.query), status_code=302)
+
+
+def no_pin_passthrough_allowed() -> bool:
+    """True only when no PIN may be tolerated: ``ENV`` (or ``ENVIRONMENT``) is
+    exactly ``development`` and ``REQUIRE_DASHBOARD_PIN`` is not set.
+
+    Before 2026-10-10 any non-production ENV (including unset) let every
+    protected route through when ``DASHBOARD_PIN`` was missing.
+    """
+    if os.getenv("REQUIRE_DASHBOARD_PIN", "").strip().lower() in ("1", "true", "yes"):
+        return False
+    env = (os.getenv("ENV") or os.getenv("ENVIRONMENT") or "").strip().lower()
+    return env == "development"
 
 
 def login_redirect_location(path: str, query: str = "") -> str:

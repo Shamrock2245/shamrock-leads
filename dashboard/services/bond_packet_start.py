@@ -166,6 +166,31 @@ async def start_indemnitor_bond_packet(
     )
     parties = indemnitors if indemnitors is not None else hydrated.get("indemnitors")
 
+    # Identity gate first, then validate_docuseal_packet_binding, then POA.
+    # Synthetic TEST- packets skip the identity gate. IndemnitorIdentityError
+    # is a binding-error subclass, so it has its own handler and is not recoded
+    # as a binding failure. Shannon voice keeps its validator ahead of the gate.
+    from dashboard.services.identity_verification_service import (
+        IndemnitorIdentityError,
+        require_verified_indemnitors,
+    )
+
+    async def _require_identity() -> None:
+        try:
+            await require_verified_indemnitors(
+                bond_data=hydrated,
+                indemnitors=parties,
+                bond_case_id=str(hydrated.get("bond_case_id") or ""),
+                booking_number=str(hydrated.get("booking_number") or ""),
+                packet_id=str(packet_id or ""),
+                staff_test_case=bool(staff_test_case),
+            )
+        except IndemnitorIdentityError as exc:
+            raise BondPacketStartError(str(exc), code=exc.code) from exc
+
+    if not skip_bond_binding:
+        await _require_identity()
+
     try:
         if skip_bond_binding:
             validate_shannon_voice_packet(
@@ -185,23 +210,8 @@ async def start_indemnitor_bond_packet(
     except DocuSealPacketValidationError as exc:
         raise BondPacketStartError(str(exc), code="docuseal_packet_binding_invalid") from exc
 
-    # After binding, before POA lookup or DocuSeal. Synthetic TEST- packets skip.
-    from dashboard.services.identity_verification_service import (
-        IndemnitorIdentityError,
-        require_verified_indemnitors,
-    )
-
-    try:
-        await require_verified_indemnitors(
-            bond_data=hydrated,
-            indemnitors=parties,
-            bond_case_id=str(hydrated.get("bond_case_id") or ""),
-            booking_number=str(hydrated.get("booking_number") or ""),
-            packet_id=str(packet_id or ""),
-            staff_test_case=bool(staff_test_case),
-        )
-    except IndemnitorIdentityError as exc:
-        raise BondPacketStartError(str(exc), code=exc.code) from exc
+    if skip_bond_binding:
+        await _require_identity()
 
     if not skip_bond_binding:
         if staff_test_case:

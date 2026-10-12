@@ -842,7 +842,10 @@ class DocuSealService:
         return s
 
     @staticmethod
-    def prefill_values_from_bond(bond_data: Dict[str, Any]) -> Dict[str, Any]:
+    def prefill_values_from_bond(
+        bond_data: Dict[str, Any],
+        template_id: Any = None,
+    ) -> Dict[str, Any]:
         """
         Map dashboard bond / intake fields → DocuSeal template field names.
 
@@ -956,8 +959,17 @@ class DocuSealService:
             bond_data.get("court_time") or def_.get("court_time") or ""
         ).strip()
 
-        # Format Charges Summary (truncated cleanly if > 3 charges)
-        # Prefer structured charge_details (Write Bond / lead explorer) over free-text charges
+        # Charge text is verbatim. Precedence and the 4-row grid are documented
+        # in dashboard/services/charge_verbatim.py. Request body wins over stored
+        # arrest/BondCase rows because build_bond_data_from_dashboard already
+        # merged them onto this dict. Leading/trailing whitespace was stripped
+        # there; nothing else is rewritten.
+        from dashboard.services.charge_verbatim import (
+            filter_unknown_charge_fields,
+            fit_charges_for_template,
+            resolve_verbatim_charge_rows,
+        )
+
         charges_raw = (
             bond_data.get("charge_details")
             or bond_data.get("charge_list")
@@ -966,22 +978,18 @@ class DocuSealService:
             or def_.get("charges")
             or []
         )
-        charges_list = []
-        if isinstance(charges_raw, list):
-            for c in charges_raw:
-                if isinstance(c, dict):
-                    desc = c.get("charge") or c.get("description") or c.get("name") or ""
-                else:
-                    desc = str(c) if c is not None else ""
-                if desc.strip():
-                    charges_list.append(desc.strip())
-        elif isinstance(charges_raw, str) and charges_raw.strip():
-            # Jail/booking extracts use " | " (and sometimes ;/newlines); commas alone
-            # also appear inside charge descriptions, so prefer roster delimiters first.
-            if re.search(r"[|\n;]", charges_raw):
-                charges_list = [c.strip() for c in re.split(r"[|\n;]+", charges_raw) if c.strip()]
-            else:
-                charges_list = [c.strip() for c in charges_raw.split(",") if c.strip()]
+        charge_surety = str(bond_data.get("surety_id") or bond_data.get("surety") or "osi")
+        verbatim_rows = resolve_verbatim_charge_rows(bond_data)
+        charges_list = [row.charge for row in verbatim_rows]
+        # Raises ChargeCapacityError when the live template cannot print
+        # every charge. create_submission posts template_id + submitters only,
+        # so an extra PDF or an unknown field name never reaches the signer.
+        charge_placement = fit_charges_for_template(
+            verbatim_rows,
+            surety_id=charge_surety,
+            template="docuseal",
+            template_id=template_id,
+        )
 
         # Primary case # from first structured charge if top-level missing
         if not case_number and isinstance(charges_raw, list):
@@ -994,10 +1002,8 @@ class DocuSealService:
         if not case_number:
             case_number = "TBN"
 
-        if len(charges_list) > 3:
-            charges_summary = ", ".join(charges_list[:3]) + " (see case file)"
-        elif charges_list:
-            charges_summary = ", ".join(charges_list)
+        if charges_list:
+            charges_summary = charge_placement.summary
         else:
             charges_summary = bond_data.get("charges_summary") or "As charged"
 
@@ -1066,12 +1072,32 @@ class DocuSealService:
         prem_formatted_dollar = f"${prem_float:,.2f}" if prem_float > 0 else ""
         prem_words = _amount_to_words(prem_float) if prem_float > 0 else ""
 
-        # Build 4-row per-charge breakdown for legal schedule tables
+        # Offense text is only written for rows the target template prints.
+        # Template 5 has no offense grid, so on_form is empty and the join
+        # lives on charges_summary. Template 6 prints offense_1..offense_4.
+        # Companion fields such as poa_number_N still come from each charge
+        # row, and the payload filter drops any name the target template
+        # does not have.
         row_fields = {}
         for i in range(1, 5):
             idx = i - 1
+            placed = charge_placement.on_form[idx] if idx < len(charge_placement.on_form) else None
+            companion = placed if placed is not None else (
+                verbatim_rows[idx] if idx < len(verbatim_rows) else None
+            )
+            if companion is None:
+                continue
             charge_obj = charges_raw[idx] if (isinstance(charges_raw, list) and idx < len(charges_raw)) else None
-            if isinstance(charge_obj, dict):
+            if isinstance(getattr(companion, "raw", None), dict):
+                charge_obj = companion.raw
+                c_desc = companion.charge
+                c_case = companion.case_number or case_number
+                c_poa = companion.poa_number or (poa_list[idx] if idx < len(poa_list) else poa)
+                c_amt_float = _safe_money(
+                    charge_obj.get("bond_amount") or charge_obj.get("amount") or charge_obj.get("bond") or 0
+                )
+                c_amt_str = f"{c_amt_float:,.2f}" if c_amt_float > 0 else ""
+            elif isinstance(charge_obj, dict):
                 c_desc = charge_obj.get("charge") or charge_obj.get("description") or charge_obj.get("name") or ""
                 c_case = charge_obj.get("case_number") or case_number
                 c_poa = charge_obj.get("poa_number") or (poa_list[idx] if idx < len(poa_list) else poa)
@@ -1079,6 +1105,11 @@ class DocuSealService:
                     charge_obj.get("bond_amount") or charge_obj.get("amount") or charge_obj.get("bond") or 0
                 )
                 c_amt_str = f"{c_amt_float:,.2f}" if c_amt_float > 0 else ""
+            elif companion is not None:
+                c_desc = companion.charge
+                c_case = companion.case_number or case_number
+                c_poa = companion.poa_number or (poa_list[idx] if idx < len(poa_list) else poa)
+                c_amt_str = bond_formatted if idx == 0 else ""
             elif isinstance(charge_obj, str) and charge_obj.strip():
                 c_desc = charge_obj.strip()
                 c_case = case_number
@@ -1090,7 +1121,7 @@ class DocuSealService:
                 c_case = case_number
                 c_poa = poa_list[idx] if idx < len(poa_list) else poa
                 c_amt_str = bond_formatted if idx == 0 else ""
-            elif idx == 0 and charges_summary:
+            elif idx == 0 and charges_summary and not verbatim_rows:
                 c_desc = charges_summary
                 c_case = case_number
                 c_poa = poa
@@ -1098,8 +1129,10 @@ class DocuSealService:
             else:
                 c_desc, c_case, c_poa, c_amt_str = "", "", "", ""
 
-            row_fields[f"offense_{i}"] = c_desc
-            row_fields[f"charge_{i}"] = c_desc
+            if placed is not None:
+                row_fields[f"offense_{i}"] = c_desc
+                row_fields[f"charge_{i}"] = c_desc
+            # statute_ and degree_ are not fields on template 1 or template 5.
             row_fields[f"case_number_{i}"] = c_case
             row_fields[f"case_{i}"] = c_case
             row_fields[f"poa_number_{i}"] = c_poa
@@ -1116,6 +1149,11 @@ class DocuSealService:
                 collateral_receipt_number = first_poa_digits[-6:]
             else:
                 collateral_receipt_number = first_poa_digits[-8:]
+
+        from dashboard.collateral_payment_method import payment_source
+
+        # One stored method, or None. None leaves every payment box blank.
+        collateral_pay = payment_source(bond_data)
 
         # Keys intentionally duplicated for OSI/Palmetto template naming variance
         values: Dict[str, Any] = {
@@ -1139,7 +1177,9 @@ class DocuSealService:
             # Palmetto appearance chargesField2 is named charge_line_2.
             # offense_2 is the second charge string. Copy it so that box fills.
             # Live template 5 has no widget by this name; the rebuild spec does.
-            "charge_line_2": row_fields.get("offense_2") or "",
+            "charge_line_2": row_fields.get("offense_2") or (
+                verbatim_rows[1].charge if len(verbatim_rows) > 1 else ""
+            ),
             "case_number": case_number,
             "CaseNum": case_number,
             "poa_number": poa,
@@ -1149,6 +1189,23 @@ class DocuSealService:
             "bond_numbers": poa_all or poa,
             "BondNumbers": poa_all or poa,
             "collateral_receipt_number": collateral_receipt_number,
+            # Palmetto collateral-receipt payment boxes. Empty stays off.
+            # Literal keys so the hydration snapshot sees every name.
+            "collateral_cash_checkbox": (
+                True if collateral_pay == "collateral_cash" else ""
+            ),
+            "collateral_check_checkbox": (
+                True if collateral_pay == "collateral_check" else ""
+            ),
+            "collateral_money_order_checkbox": (
+                True if collateral_pay == "collateral_money_order" else ""
+            ),
+            "collateral_credit_card_checkbox": (
+                True if collateral_pay == "collateral_credit_card" else ""
+            ),
+            "collateral_other": (
+                True if collateral_pay == "collateral_other" else ""
+            ),
             "booking_number": booking,
             "court_date": court_date,
             "CourtDate": court_date,
@@ -1199,11 +1256,11 @@ class DocuSealService:
             "defendant_city": bond_data.get("defendant_city") or def_.get("city") or "",
             "defendant_state": bond_data.get("defendant_state") or def_.get("state") or "FL",
             "defendant_zip": bond_data.get("defendant_zip") or def_.get("zip") or def_.get("zipcode") or "",
-            "defendant_children_names_ages": bond_data.get("children_names_ages") or def_.get("children_names_ages") or "",
-            "children_names_ages_1": bond_data.get("children_names_ages_1") or bond_data.get("children_names_ages") or def_.get("children_names_ages") or "",
-            "children_names_ages_2": bond_data.get("children_names_ages_2") or "",
-            "children_school_1": bond_data.get("children_school_1") or bond_data.get("children_school") or "",
-            "children_school_2": bond_data.get("children_school_2") or "",
+            "defendant_children_names_ages": bond_data.get("children_names_ages") or def_.get("children_names_ages") or def_.get("children_names_ages_1") or "",
+            "children_names_ages_1": bond_data.get("children_names_ages_1") or bond_data.get("children_names_ages") or def_.get("children_names_ages_1") or def_.get("children_names_ages") or "",
+            "children_names_ages_2": bond_data.get("children_names_ages_2") or def_.get("children_names_ages_2") or "",
+            "children_school_1": bond_data.get("children_school_1") or bond_data.get("children_school") or def_.get("children_school_1") or def_.get("children_school") or "",
+            "children_school_2": bond_data.get("children_school_2") or def_.get("children_school_2") or "",
             "ssa_release_reason": bond_data.get("ssa_release_reason") or "Bail bond underwriting and supervision",
             "ssa_other_records_text": bond_data.get("ssa_other_records_text") or "any and all for location purposes",
             "down_payment_amount": bond_data.get("down_payment_amount") or bond_data.get("down_payment") or "",
@@ -1443,16 +1500,19 @@ class DocuSealService:
             ),
             "def_spouse_parent_name": _text(
                 bond_data.get("def_spouse_parent_name"),
+                _person_text(def_, "spouse_parent_name"),
                 bond_data.get("defendant_spouse_name"),
                 _person_text(def_, "spouse_name"),
             ),
             "def_spouse_parent_phone": _text(
                 bond_data.get("def_spouse_parent_phone"),
+                _person_text(def_, "spouse_parent_phone"),
                 bond_data.get("defendant_spouse_phone"),
                 _person_text(def_, "spouse_phone"),
             ),
             "def_spouse_parent_address": _text(
                 bond_data.get("def_spouse_parent_address"),
+                _person_text(def_, "spouse_parent_address"),
                 bond_data.get("defendant_spouse_address"),
                 _person_text(def_, "spouse_address"),
             ),
@@ -1568,8 +1628,74 @@ class DocuSealService:
             "agent_date_1": today_slash,
             "coindemnitor_date_1": today_slash,
         })
-        # Drop empty strings so DocuSeal doesn't overwrite blank required fields with ""
-        return {k: v for k, v in values.items() if v is not None and str(v).strip() != ""}
+        # Template 5 names the same facts with a longer key. Copy only a
+        # present source. The FL default on defendant_dl_state is not a
+        # captured license state, so license state is copied from the party.
+        party_dl_state = _text(_person_text(def_, "dl_state", "dlState"))
+        if party_dl_state:
+            values["defendant_license_state"] = party_dl_state
+        for dest, src in {
+            "defendant_eye_color": "defendant_eyes",
+            "defendant_hair_color": "defendant_hair",
+            "defendant_boss_name": "defendant_boss",
+            "defendant_license_number": "defendant_dl",
+            "defendant_nickname": "defendant_alias",
+            "defendant_attorney_name": "def_attorney_name",
+            "defendant_attorney_address": "def_attorney_address",
+            "defendant_attorney_phone": "def_attorney_phone",
+            "defendant_prior_arrests": "def_prior_arrests",
+            "defendant_prior_offense": "def_prior_offense",
+            "defendant_remarks": "def_remarks",
+            "defendant_sibling_name_1": "def_sibling_1_name",
+            "defendant_sibling_name_2": "def_sibling_2_name",
+            "defendant_sibling_name_3": "def_sibling_3_name",
+            "defendant_sibling_address_1": "def_sibling_1_address",
+            "defendant_sibling_address_2": "def_sibling_2_address",
+            "defendant_sibling_address_3": "def_sibling_3_address",
+            "defendant_sibling_1_phone": "def_sibling_1_phone",
+            "defendant_sibling_2_phone": "def_sibling_2_phone",
+            "defendant_sibling_3_phone": "def_sibling_3_phone",
+            "defendant_children_name_age_1": "children_names_ages_1",
+            "defendant_children_name_age_2": "children_names_ages_2",
+            "defendant_child2_school": "children_school_2",
+            # Palmetto template 5 names for the same free-text facts.
+            "def_how_long_at_address_1": "defendant_address_how_long",
+            "def_how_long_at_address_2": "defendant_former_address_how_long",
+            "defendant_how_long_at_job": "defendant_employer_how_long",
+            "defendant_how_long_at_job_2": "defendant_previous_employment_how_long",
+            "defendant_bff_name": "def_best_friend_name",
+            "defendant_bff_address": "def_best_friend_address",
+            "defendant_bff_phone": "def_best_friend_phone",
+            "defendant_car_year": "def_vehicle_year",
+            "defendant_car_make": "def_vehicle_make",
+            "defendant_car_model": "def_vehicle_model",
+            "defendant_car_color": "def_vehicle_color",
+            "defendant_car_license_tag": "def_vehicle_plate",
+            "defendant_car_loan_vendor": "def_vehicle_lender",
+            "defendant_car_purchase_location": "def_vehicle_purchase_location",
+            "defendant_auto_loan": "def_vehicle_amount_owed",
+            "defendant_marks_tattoos": "defendant_tattoos",
+            "defendant_parents_name": "def_parent_name",
+            "defendant_parents_address": "def_parent_address",
+            "defendant_parents_phone": "def_parent_phone",
+            "defendant_spouse_employment": "defendant_spouse_employer",
+            "defendant_spouse_parents_name": "def_spouse_parent_name",
+            "defendant_spouse_parents_address": "def_spouse_parent_address",
+            "defendant_spouse_parents_phone": "def_spouse_parent_phone",
+            "defendant_work_phone_number": "defendant_employer_phone",
+            "indemnitor_alternate_phone": "indemnitor_phone2",
+            # Both widgets are free-text. The CRM stores one string, not a flag or a list.
+            "defendant_prior_convictions": "def_prior_convicted",
+        }.items():
+            if values.get(src) and not values.get(dest):
+                values[dest] = values[src]
+        # A social password is typed by the signer. Never copy one from the case.
+        values.pop("defendant_social_media_password", None)
+        # Drop empty strings so DocuSeal doesn't overwrite blank required fields with "".
+        # Then drop charge names the live template does not have. DocuSeal would
+        # ignore those and the charge would never appear on the signed packet.
+        kept = {k: v for k, v in values.items() if v is not None and str(v).strip() != ""}
+        return filter_unknown_charge_fields(kept, surety_id, template_id=template_id)
 
     def normalize_create_response(self, raw: Any) -> Dict[str, Any]:
         """
@@ -1635,6 +1761,7 @@ class DocuSealService:
         completed_redirect_url: Optional[str] = None,
         skip_bond_binding: bool = False,
         staff_test_case: bool = False,
+        template_field_names: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """
         Build multi-party submitters from bond/packet context and create submission.
@@ -1656,6 +1783,20 @@ class DocuSealService:
         bond_data = dict(bond_data or {})
         if template_id is None or str(template_id).strip() in ("", "0", "null", "none"):
             raise DocuSealPacketValidationError("DocuSeal packet blocked: a valid template_id is required.")
+        # Identity gate first, before binding, the field payload, the HTTP
+        # client, and any status change. Synthetic TEST- packets skip it.
+        # validate_docuseal_packet_binding is unchanged and runs next.
+        from dashboard.services.identity_verification_service import require_verified_indemnitors
+
+        if not skip_bond_binding:
+            await require_verified_indemnitors(
+                bond_data=bond_data,
+                indemnitors=indemnitors,
+                bond_case_id=str(bond_data.get("bond_case_id") or ""),
+                booking_number=str(bond_data.get("booking_number") or ""),
+                packet_id=str(packet_id or ""),
+                staff_test_case=bool(staff_test_case),
+            )
         if skip_bond_binding:
             validate_shannon_voice_packet(
                 packet_id=packet_id,
@@ -1671,22 +1812,19 @@ class DocuSealService:
                 defendant=defendant,
                 include_defendant=include_defendant,
             )
+        if skip_bond_binding:
+            await require_verified_indemnitors(
+                bond_data=bond_data,
+                indemnitors=indemnitors,
+                bond_case_id=str(bond_data.get("bond_case_id") or ""),
+                booking_number=str(bond_data.get("booking_number") or ""),
+                packet_id=str(packet_id or ""),
+                staff_test_case=bool(staff_test_case),
+            )
         bond_data = dict(bond_data or {})
-        # Identity before the DocuSeal field payload, the HTTP client, and any
-        # status change. Binding above is unchanged. Synthetic TEST- packets skip.
-        from dashboard.services.identity_verification_service import require_verified_indemnitors
-
-        await require_verified_indemnitors(
-            bond_data=bond_data,
-            indemnitors=indemnitors,
-            bond_case_id=str(bond_data.get("bond_case_id") or ""),
-            booking_number=str(bond_data.get("booking_number") or ""),
-            packet_id=str(packet_id or ""),
-            staff_test_case=bool(staff_test_case),
-        )
         agent_name, agent_license = resolve_writing_agent(bond_data)
         apply_writing_agent(bond_data, agent_name, agent_license)
-        raw_values = self.prefill_values_from_bond(bond_data)
+        raw_values = self.prefill_values_from_bond(bond_data, template_id=template_id)
         # Published "mapped" sureties add their PDF field names. OSI/Palmetto
         # seeds stay on canonical_prefill, so this dict is unchanged for them.
         surety_for_alias = str(
@@ -1706,8 +1844,41 @@ class DocuSealService:
             except Exception:
                 logger.warning("[docuseal] published field aliases skipped for surety=%s", surety_for_alias)
 
+        from dashboard.services.charge_verbatim import filter_unknown_charge_fields
+
+        raw_values = filter_unknown_charge_fields(
+            raw_values,
+            surety_for_alias or str(bond_data.get("surety_id") or "osi"),
+            template_id=template_id,
+        )
+
         in_person = bool(bond_data.get("in_person") or bond_data.get("in_person_scan"))
         payload_values: Dict[str, Any] = raw_values
+
+        from dashboard.collateral_payment_method import (
+            collateral_prefill_for_template,
+            payment_source as collateral_payment_source,
+        )
+        from dashboard.services.docuseal_signing_ux import (
+            field_names_for_template_id,
+            omit_unknown_template_fields,
+        )
+
+        # Collateral boxes follow the vault method. A built-in inventory
+        # (templates 5 and 6) drops a checkbox name that template lacks.
+        # Passing template_field_names also drops every other unknown name.
+        # Omitting it leaves the rest of the prefill in place.
+        explicit_names = template_field_names
+        inventory = explicit_names
+        if inventory is None:
+            inventory = field_names_for_template_id(template_id)
+        payload_values, collateral_warnings = collateral_prefill_for_template(
+            payload_values,
+            inventory,
+            collateral_payment_source(bond_data),
+        )
+        if explicit_names is not None:
+            payload_values = omit_unknown_template_fields(payload_values, explicit_names)
 
         # Collect indemnitors (primary + co-indemnitors)
         inds: List[Dict[str, Any]] = []
@@ -1736,6 +1907,7 @@ class DocuSealService:
         signer_fields = submission_fields_from_values(
             payload_values,
             extra_readonly=extra_readonly,
+            template_field_names=explicit_names,
         )
         # Per-submitter redirect after that person finishes (not the whole packet).
         party_done = completed_redirect_url or paperwork_done_url()
@@ -1882,6 +2054,7 @@ class DocuSealService:
         result["template_id"] = template_id
         result["created_at"] = datetime.now(timezone.utc).isoformat()
         result["esign_provider"] = "docuseal"
+        result["warnings"] = collateral_warnings
         return result
 
     # ── Drive archive ───────────────────────────────────────────────────────
@@ -2293,7 +2466,15 @@ def build_bond_data_from_dashboard(
     def_src = intake_doc.get("defendant") if isinstance(intake_doc.get("defendant"), dict) else {}
     ind_src = intake_doc.get("indemnitor") if isinstance(intake_doc.get("indemnitor"), dict) else {}
 
-    # Structured charges from lead / write-bond / body
+    # Structured charges. Precedence (first non-empty list):
+    #   1. request body charge_details, else body charge_list
+    #   2. case context charge_details, else charge_list
+    #      (context is arrest.charge_details, then arrest.extra.charge_details,
+    #      then BondCase charge_details / charge_list — see
+    #      charge_details_from_sources)
+    #   3. intake charge_details, else charge_list
+    # The plain charges string is context, then intake, then the body.
+    # See dashboard/services/charge_verbatim.py.
     charge_details = (
         body.get("charge_details")
         or body.get("charge_list")
@@ -2401,24 +2582,30 @@ def build_bond_data_from_dashboard(
         "poa_numbers": poa_numbers,
         "bond_amount": bond_amount,
         "premium_amount": premium_amount,
+        # Collateral receipt method is the vault record on the packet context.
+        # Premium down_payment_method and the finalize body do not tick a box.
+        "collateral_payment_method": _text(ctx.get("collateral_payment_method")),
+        "collateral_other_description": _text(ctx.get("collateral_other_description")),
         "court_date": ctx.get("court_date") or body.get("court_date") or "TBN",
+        "court_time": ctx.get("court_time") or body.get("court_time") or "",
+        "court_type": ctx.get("court_type") or body.get("court_type") or "",
         "charges": charges,
         "charge_details": charge_details,
-        # Payment plan (optional UI / body)
-        "down_payment_amount": body.get("down_payment_amount") or body.get("down_payment"),
-        "balance_financed_amount": body.get("balance_financed_amount") or body.get("balance_financed"),
-        "number_of_payments": body.get("number_of_payments") or body.get("num_payments"),
-        "payment_amount": body.get("payment_amount"),
-        "first_payment_due_date": body.get("first_payment_due_date") or body.get("first_due_date"),
-        "final_payment_due_date": body.get("final_payment_due_date") or body.get("final_due_date"),
-        "payment_due_date_1": body.get("payment_due_date_1"),
-        "payment_amount_1": body.get("payment_amount_1"),
-        "payment_due_date_2": body.get("payment_due_date_2"),
-        "payment_amount_2": body.get("payment_amount_2"),
-        "payment_due_date_3": body.get("payment_due_date_3"),
-        "payment_amount_3": body.get("payment_amount_3"),
-        "payment_due_date_4": body.get("payment_due_date_4"),
-        "payment_amount_4": body.get("payment_amount_4"),
+        # Payment plan (optional UI / body). The case context uses the same names.
+        "down_payment_amount": body.get("down_payment_amount") or body.get("down_payment") or ctx.get("down_payment_amount") or ctx.get("down_payment"),
+        "balance_financed_amount": body.get("balance_financed_amount") or body.get("balance_financed") or ctx.get("balance_financed_amount") or ctx.get("balance_financed"),
+        "number_of_payments": body.get("number_of_payments") or body.get("num_payments") or ctx.get("number_of_payments") or ctx.get("num_payments"),
+        "payment_amount": body.get("payment_amount") or ctx.get("payment_amount"),
+        "first_payment_due_date": body.get("first_payment_due_date") or body.get("first_due_date") or ctx.get("first_payment_due_date") or ctx.get("first_due_date"),
+        "final_payment_due_date": body.get("final_payment_due_date") or body.get("final_due_date") or ctx.get("final_payment_due_date") or ctx.get("final_due_date"),
+        "payment_due_date_1": body.get("payment_due_date_1") or ctx.get("payment_due_date_1"),
+        "payment_amount_1": body.get("payment_amount_1") or ctx.get("payment_amount_1"),
+        "payment_due_date_2": body.get("payment_due_date_2") or ctx.get("payment_due_date_2"),
+        "payment_amount_2": body.get("payment_amount_2") or ctx.get("payment_amount_2"),
+        "payment_due_date_3": body.get("payment_due_date_3") or ctx.get("payment_due_date_3"),
+        "payment_amount_3": body.get("payment_amount_3") or ctx.get("payment_amount_3"),
+        "payment_due_date_4": body.get("payment_due_date_4") or ctx.get("payment_due_date_4"),
+        "payment_amount_4": body.get("payment_amount_4") or ctx.get("payment_amount_4"),
     }
     # The packet-context flag from apply_self_indemnitor. Not inferred.
     from dashboard.services.identity_verification_service import explicit_self_indemnitor
@@ -2438,6 +2625,13 @@ def build_bond_data_from_dashboard(
                 "phone": bond_data.get("indemnitor_phone"),
             }
         ]
+
+    # Vault rows are not a second payment method. Only a list already on the
+    # bond context is kept. Intake cannot add rows that retick the receipt.
+    if isinstance(ctx.get("collateral_items"), list):
+        bond_data["collateral_items"] = ctx["collateral_items"]
+    else:
+        bond_data.pop("collateral_items", None)
 
     return bond_data
 

@@ -1,8 +1,9 @@
 """DocuSeal apply splits multi-document fields and keeps live prefill names.
 
 The fixture is the real template 5 export (203 fields) with signed document
-URLs removed. Areas on the header, both FAQ pages, the master waiver, and
-both SSA releases must survive unchanged.
+URLs removed. Existing areas on the header, both FAQ pages, the master waiver,
+and both SSA releases must survive unchanged. The header also gains the four
+offense rows.
 """
 from __future__ import annotations
 
@@ -255,13 +256,24 @@ def test_uncovered_areas_survive_exactly():
     raw = json.dumps(template)
     plan = plan_merge(template)
     assert json.dumps(template) == raw
-    assert _areas_on(plan["fields"], UNCOVERED) == _areas_on(template["fields"], UNCOVERED)
+    header_uuid = "94f0a909-bc1b-41fb-b247-a0639d9ff244"
+    others = UNCOVERED - {header_uuid}
+    assert _areas_on(plan["fields"], others) == _areas_on(template["fields"], others)
+    original_header = _areas_on(template["fields"], {header_uuid})
+    planned_header = _areas_on(plan["fields"], {header_uuid})
+    assert original_header == [row for row in planned_header if row in original_header]
+    added_header = [row for row in planned_header if row not in original_header]
+    assert [row[1] for row in added_header] == ["offense_1", "offense_2", "offense_3", "offense_4"]
     for row in plan["documents"]:
-        if row["coverage"] == "keep":
+        if row["coverage"] != "keep":
+            continue
+        if row.get("slug") == "paperwork-header":
+            assert row["added"] == ["offense_1", "offense_2", "offense_3", "offense_4"]
+        else:
             assert row["added"] == []
-            assert row["moved"] == []
-            assert row["removed"] == []
-            assert row["kept"]
+        assert row["moved"] == []
+        assert row["removed"] == []
+        assert row["kept"]
     originals = {field["uuid"]: field for field in template["fields"]}
     payload = {field["uuid"]: field for field in plan["fields"] if field.get("uuid")}
     # Header + waiver date never touches a covered document.
@@ -477,6 +489,10 @@ def test_live_dry_run_lists_every_document_and_sends_nothing(monkeypatch, capsys
             assert isinstance(row[key], list)
         by_coverage.setdefault(row["coverage"], []).append(row["document"])
     assert "shamrock-paperwork-header" in by_coverage["keep"]
+    header_plan = next(row for row in payload["documents"] if row["document"] == "shamrock-paperwork-header")
+    assert header_plan["added"] == ["offense_1", "offense_2", "offense_3", "offense_4"]
+    assert header_plan["removed"] == []
+    assert header_plan["moved"] == []
     assert by_coverage["keep"].count("ssa-release") == 2
     assert "defendant-application-palmetto" in by_coverage["replace"]
     assert "appearance-bond" in by_coverage["not_on_template"]
@@ -736,19 +752,25 @@ def test_agent_license_is_one_right_aligned_bondsman_field_per_form():
 
     counts = getattr(apply_mod, "TEMPLATE_5_FORM_FIELD_COUNTS", None)
     put_count = getattr(apply_mod, "TEMPLATE_5_PUT_FIELD_COUNT", None)
+    header_count = getattr(apply_mod, "TEMPLATE_5_HEADER_FIELD_COUNT", None)
     assert counts == {
         "defendant-application": 85,
         "indemnity-agreement": 51,
         "collateral-receipt": 30,
         "bail-bond-information-sheet-palmetto": 6,
     }
-    assert put_count == 195
+    assert put_count == 199
+    assert header_count == 8
 
     template = _load()
     plan = plan_merge(template)
     assert len(plan["fields"]) == put_count
     for slug, expected in counts.items():
         assert len(_fields_touching(plan, slug)) == expected, slug
+    assert len(_fields_touching(plan, "paperwork-header")) == header_count
+    header = _doc(plan, "paperwork-header")
+    assert header["added"] == ["offense_1", "offense_2", "offense_3", "offense_4"]
+    assert header["kept"] == ["defendant_name", "case_number", "today_date", "indemnitor_name"]
 
     submitters = {row["uuid"]: row["name"] for row in template["submitters"]}
     licenses = [field for field in plan["fields"] if field.get("name") == "agent_license"]

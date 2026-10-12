@@ -410,24 +410,6 @@
     ],
     "value": "TEST-GOLDEN-OSI"
   },
-  "case_1": {
-    "readonly": true,
-    "submitter_role": [
-      "bondsman",
-      "defendant",
-      "indemnitor"
-    ],
-    "value": "TEST-CASE-OSI"
-  },
-  "case_2": {
-    "readonly": true,
-    "submitter_role": [
-      "bondsman",
-      "defendant",
-      "indemnitor"
-    ],
-    "value": "TEST-CASE-OSI"
-  },
   "case_number": {
     "readonly": true,
     "submitter_role": [
@@ -454,42 +436,6 @@
       "indemnitor"
     ],
     "value": "TEST-CASE-OSI"
-  },
-  "charge_1": {
-    "readonly": true,
-    "submitter_role": [
-      "bondsman",
-      "defendant",
-      "indemnitor"
-    ],
-    "value": "Grand theft — occupant's dwelling (Fla. Stat. § 812.014(2)(c), 2nd degree)"
-  },
-  "charge_2": {
-    "readonly": true,
-    "submitter_role": [
-      "bondsman",
-      "defendant",
-      "indemnitor"
-    ],
-    "value": "Burglary of a conveyance (Fla. Stat. § 810.02(3)(d), 3rd degree)"
-  },
-  "charge_line_2": {
-    "readonly": true,
-    "submitter_role": [
-      "bondsman",
-      "defendant",
-      "indemnitor"
-    ],
-    "value": "Burglary of a conveyance (Fla. Stat. § 810.02(3)(d), 3rd degree)"
-  },
-  "charges": {
-    "readonly": true,
-    "submitter_role": [
-      "bondsman",
-      "defendant",
-      "indemnitor"
-    ],
-    "value": "Grand theft — occupant's dwelling (Fla. Stat. § 812.014(2)(c), 2nd degree), Burglary of a conveyance (Fla. Stat. § 810.02(3)(d), 3rd degree)"
   },
   "charges_summary": {
     "readonly": true,
@@ -734,15 +680,6 @@
     ],
     "value": "FL"
   },
-  "numeric_bond_amount_1": {
-    "readonly": true,
-    "submitter_role": [
-      "bondsman",
-      "defendant",
-      "indemnitor"
-    ],
-    "value": "5,000.00"
-  },
   "numeric_full_bond_amount": {
     "readonly": true,
     "submitter_role": [
@@ -778,24 +715,6 @@
       "indemnitor"
     ],
     "value": "Burglary of a conveyance (Fla. Stat. § 810.02(3)(d), 3rd degree)"
-  },
-  "poa_1": {
-    "readonly": true,
-    "submitter_role": [
-      "bondsman",
-      "defendant",
-      "indemnitor"
-    ],
-    "value": "TEST-POA-0001"
-  },
-  "poa_2": {
-    "readonly": true,
-    "submitter_role": [
-      "bondsman",
-      "defendant",
-      "indemnitor"
-    ],
-    "value": "TEST-POA-0001"
   },
   "poa_number": {
     "readonly": true,
