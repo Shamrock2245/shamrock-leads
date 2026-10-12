@@ -7,7 +7,7 @@ Endpoints:
   GET  /payments/plans                 — List all active payment plans
   GET  /payments/plans/<booking>       — Get plan for a specific bond
   POST /payments/plans                 — Create a new payment plan
-  POST /payments/plans/<plan_id>/pay   — Record a payment against a plan
+  POST /payments/plans/<plan_id>/pay   — Record a payment against a plan (transaction_id required; deduped)
   GET  /payments/delinquent            — Get all delinquent plans (>30 days)
   GET  /payments/summary               — Revenue summary (daily/weekly/monthly)
   GET  /payments/premium-calc          — Quick premium calculator
@@ -196,13 +196,89 @@ async def create_plan(request: Request):
     return JSONResponse(status_code=201, content={"success": True, "plan": plan_doc})
 
 
+# ── Payment dedupe (one application per plan + transaction id) ───────────────
+#
+# Collection ``payment_plan_payment_claims`` with a unique index on
+# (plan_id, transaction_id), created lazily and idempotently on first use
+# (``create_index`` is a no-op when the index already exists). No migration.
+# If the index cannot be ensured the request fails closed (503) and nothing
+# is recorded. The insert of the claim is the atomic gate: only the request
+# that inserts it may write the payment and move the balance.
+
+PAYMENT_CLAIMS_COLLECTION = "payment_plan_payment_claims"
+_payment_claim_index_ready = False
+
+
+async def _payment_claims_collection():
+    global _payment_claim_index_ready
+    coll = get_collection(PAYMENT_CLAIMS_COLLECTION)
+    if not _payment_claim_index_ready:
+        await coll.create_index(
+            [("plan_id", 1), ("transaction_id", 1)],
+            unique=True,
+            name="uniq_plan_txn",
+        )
+        _payment_claim_index_ready = True
+    return coll
+
+
+def _next_due(frequency: str, now: datetime) -> datetime:
+    if frequency == "weekly":
+        return now + timedelta(days=7)
+    if frequency == "biweekly":
+        return now + timedelta(days=14)
+    return now + timedelta(days=30)
+
+
+async def _idempotent_reply(plans_col, plan_id: str, txn: str, claim: dict | None):
+    if claim and claim.get("status") == "failed":
+        return JSONResponse(
+            {"error": "payment_needs_review", "transaction_id": txn,
+             "message": "An earlier attempt with this transaction id did not finish. Check the plan before recording it again."},
+            status_code=409,
+        )
+    plan = await plans_col.find_one({"plan_id": plan_id}) or {}
+    return {
+        "success": True,
+        "idempotent": True,
+        "transaction_id": txn,
+        "balance_remaining": plan.get("balance_remaining"),
+        "total_paid": plan.get("total_paid"),
+        "status": plan.get("status"),
+    }
+
+
 @payment_plans_bp.post("/payments/plans/{plan_id}/pay")
 async def record_payment(request: Request, plan_id):
-    """Record a payment against an existing plan."""
+    """Record a payment against an existing plan — at most once per transaction id.
+
+    ``transaction_id`` is required (400 ``transaction_id_required``). The same
+    transaction id on the same plan returns ``idempotent: true`` with no second
+    payment row and no balance change, including under concurrent requests.
+    """
+    from pymongo.errors import DuplicateKeyError
+
     from dashboard.routers.events import publish_event
-    data = await request.json()
-    if not data or 'amount' not in data:
+    try:
+        data = await request.json()
+    except Exception:
+        data = None
+    if not data or not isinstance(data, dict) or 'amount' not in data:
         return JSONResponse({"error": "Missing amount"}, status_code=400)
+
+    txn = str(data.get("transaction_id") or "").strip()
+    if not txn:
+        return JSONResponse(
+            {"error": "transaction_id_required",
+             "message": "Send the card transaction id, or the receipt number for cash or check."},
+            status_code=400,
+        )
+    try:
+        amount = float(data["amount"])
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "invalid_amount"}, status_code=400)
+    if not amount > 0 or amount == float("inf"):
+        return JSONResponse({"error": "invalid_amount"}, status_code=400)
 
     plans_col = get_collection("payment_plans")
     payments_col = get_collection("payments")
@@ -211,51 +287,76 @@ async def record_payment(request: Request, plan_id):
     if not plan:
         return JSONResponse({"error": "Plan not found"}, status_code=404)
 
-    amount = float(data["amount"])
+    # Rows recorded before this dedupe existed have no claim: treat them as applied.
+    legacy = await payments_col.find_one({"plan_id": plan_id, "transaction_id": txn})
+    if legacy:
+        return await _idempotent_reply(plans_col, plan_id, txn, None)
+
+    try:
+        claims = await _payment_claims_collection()
+    except Exception:
+        return JSONResponse({"error": "payment_dedupe_unavailable"}, status_code=503)
+
     now = datetime.now(timezone.utc)
+    try:
+        await claims.insert_one({
+            "plan_id": plan_id,
+            "transaction_id": txn,
+            "booking_number": plan.get("booking_number"),
+            "amount": amount,
+            "status": "claimed",
+            "claimed_at": now.isoformat(),
+        })
+    except DuplicateKeyError:
+        existing = await claims.find_one({"plan_id": plan_id, "transaction_id": txn})
+        return await _idempotent_reply(plans_col, plan_id, txn, existing)
 
-    # Record payment
-    payment_doc = {
-        "booking_number": plan["booking_number"],
-        "plan_id": plan_id,
-        "amount": amount,
-        "method": data.get("method", "Cash"),
-        "type": "installment",
-        "status": "completed",
-        "timestamp": now.isoformat(),
-        "transaction_id": data.get("transaction_id", ""),
-        "notes": data.get("notes", ""),
-    }
-    await payments_col.insert_one(payment_doc)
+    try:
+        await payments_col.insert_one({
+            "booking_number": plan["booking_number"],
+            "plan_id": plan_id,
+            "amount": amount,
+            "method": data.get("method", "Cash"),
+            "type": "installment",
+            "status": "completed",
+            "timestamp": now.isoformat(),
+            "transaction_id": txn,
+            "notes": data.get("notes", ""),
+        })
+        # Atomic increments so two different transactions never overwrite each other.
+        await plans_col.update_one(
+            {"plan_id": plan_id},
+            {
+                "$inc": {
+                    "balance_remaining": -amount,
+                    "total_paid": amount,
+                    "payments_made": 1,
+                },
+                "$set": {
+                    "next_due_date": _next_due(plan.get("frequency", "weekly"), now).isoformat(),
+                    "delinquent": False,
+                    "delinquent_days": 0,
+                    "updated_at": now.isoformat(),
+                },
+            },
+        )
+        await plans_col.update_one(
+            {"plan_id": plan_id, "balance_remaining": {"$lte": 0}},
+            {"$set": {"balance_remaining": 0, "status": "paid_in_full"}},
+        )
+        updated = await plans_col.find_one({"plan_id": plan_id}) or {}
+    except Exception:
+        await claims.update_one(
+            {"plan_id": plan_id, "transaction_id": txn},
+            {"$set": {"status": "failed", "failed_at": datetime.now(timezone.utc).isoformat()}},
+        )
+        return JSONResponse({"error": "payment_record_failed", "transaction_id": txn}, status_code=500)
 
-    # Update plan
-    new_balance = max(0, plan["balance_remaining"] - amount)
-    new_total_paid = plan["total_paid"] + amount
-    new_payments_made = plan["payments_made"] + 1
-
-    # Calculate next due date
-    frequency = plan.get("frequency", "weekly")
-    if frequency == "weekly":
-        next_due = now + timedelta(days=7)
-    elif frequency == "biweekly":
-        next_due = now + timedelta(days=14)
-    else:
-        next_due = now + timedelta(days=30)
-
-    status = "paid_in_full" if new_balance <= 0 else "active"
-
-    await plans_col.update_one(
-        {"plan_id": plan_id},
-        {"$set": {
-            "balance_remaining": new_balance,
-            "total_paid": new_total_paid,
-            "payments_made": new_payments_made,
-            "next_due_date": next_due.isoformat(),
-            "status": status,
-            "delinquent": False,
-            "delinquent_days": 0,
-            "updated_at": now.isoformat(),
-        }}
+    new_balance = updated.get("balance_remaining", 0)
+    status = updated.get("status", "active")
+    await claims.update_one(
+        {"plan_id": plan_id, "transaction_id": txn},
+        {"$set": {"status": "applied", "applied_at": now.isoformat(), "balance_after": new_balance}},
     )
 
     await publish_event("payment_received", {
@@ -267,8 +368,10 @@ async def record_payment(request: Request, plan_id):
 
     return {
         "success": True,
+        "idempotent": False,
+        "transaction_id": txn,
         "balance_remaining": new_balance,
-        "total_paid": new_total_paid,
+        "total_paid": updated.get("total_paid"),
         "status": status,
     }
 

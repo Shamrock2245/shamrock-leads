@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-12 (payment webhook fails closed; plan payments deduped)
+
+### Fixed
+- **`POST /api/webhooks/payment` with no `SWIPESIMPLE_WEBHOOK_SECRET`.** It now returns 503 (`Webhook secret not configured`) before the body is read, in every environment except `ENV` exactly `development`. Precedence is the same as the no-PIN gate (#176): `ENV`, then `ENVIRONMENT` when `ENV` is unset or blank, and `REQUIRE_DASHBOARD_PIN` closes development too. The value match is exact and case-sensitive, so `staging`, `test`, `dev`, `Development`, blank and unset all fail closed. Before this, only `production`/`prod` failed closed and every other value processed unsigned requests. When the secret is set, the HMAC check is unchanged.
+- **`POST /api/payments/plans/{plan_id}/pay` applies each transaction once.** `transaction_id` is now required (400 `transaction_id_required`; for cash or check, send the receipt number). A claim row in the new `payment_plan_payment_claims` collection is inserted before anything is written. Its unique index on `(plan_id, transaction_id)` (`uniq_plan_txn`) is created lazily and idempotently on first use; there is no migration. If the index can't be ensured, the request returns 503 and records nothing. A repeat or concurrent duplicate returns `idempotent: true` with no second `payments` row and no balance change. A `payments` row recorded before this change with the same plan and transaction id also counts as applied. If an attempt fails after its claim, a retry returns 409 `payment_needs_review`. The balance, total paid and payment count now use `$inc`, so two different payments at once can't overwrite each other. An amount of zero, a negative amount or a non-number is refused.
+
+### Tests
+- `tests/test_payment_webhook.py` (now in the `ci.yml` list): unset-secret cases for each `ENV`/`ENVIRONMENT` value, precedence, rejection before the body is read, `REQUIRE_DASHBOARD_PIN`, and the HMAC check in every environment. `tests/test_prod_auth_allowlist.py` now uses `ENV=development` for its no-secret payload test.
+- `tests/test_payment_plan_pay_dedupe.py` (added to `ci.yml`): repeat and concurrent same-transaction requests, concurrent different transactions, missing transaction id, bad amounts, legacy rows, index unavailable, failed write, and overpayment.
+- `tests/test_tenant_scope.py`: the known-collection count is now 121 (`payment_plan_payment_claims` is tenant-owned).
+
 ## [Unreleased] — 2026-10-10 (dashboard auth fails closed without a PIN)
 
 ### Security
