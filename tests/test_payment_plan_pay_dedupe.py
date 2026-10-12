@@ -65,6 +65,8 @@ class Coll:
                 for k, v in update.get("$inc", {}).items():
                     d[k] = d.get(k, 0) + v
                 d.update(update.get("$set", {}))
+                for k in update.get("$unset", {}):
+                    d.pop(k, None)
                 return SimpleNamespace(matched_count=1, modified_count=1)
         return SimpleNamespace(matched_count=0, modified_count=0)
 

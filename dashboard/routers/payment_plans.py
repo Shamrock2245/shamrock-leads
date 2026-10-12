@@ -334,8 +334,9 @@ def _actor(request: Request) -> str:
     return str(request.headers.get("x-actor") or "").strip() or "staff"
 
 
-async def _audit_link(actor: str, plan: dict, plan_id: str, txn: str, row: dict, amount: float) -> None:
-    """Immutable audit_events record for the plan_id association (ar_service._audit pattern)."""
+async def _audit_link(actor: str, plan: dict, plan_id: str, txn: str, row: dict, amount: float) -> bool:
+    """Immutable audit_events record for the plan_id association (ar_service._audit
+    shape). Returns False when it could not be written; the caller then undoes the link."""
     now = datetime.now(timezone.utc)
     try:
         await get_collection("audit_events").insert_one({
@@ -358,6 +359,28 @@ async def _audit_link(actor: str, plan: dict, plan_id: str, txn: str, row: dict,
         })
     except Exception as exc:
         logger.warning("[payment_plans] audit write failed plan_id=%s err=%s", plan_id, type(exc).__name__)
+        return False
+    return True
+
+
+async def _revert_link(payments_col, row: dict, plan_id: str, link_set: dict) -> None:
+    """Undo a link this request made (only while it is still ours). Never raises."""
+    restore_set = {k: row[k] for k in link_set if k in row}
+    restore_unset = {k: "" for k in link_set if k not in row}
+    update: dict = {}
+    if restore_set:
+        update["$set"] = restore_set
+    if restore_unset:
+        update["$unset"] = restore_unset
+    try:
+        res = await payments_col.update_one(
+            {"_id": row["_id"], "plan_id": plan_id, "plan_linked_at": link_set["plan_linked_at"]},
+            update,
+        )
+        if not getattr(res, "modified_count", 0):
+            logger.error("[payment_plans] link revert matched nothing plan_id=%s", plan_id)
+    except Exception as exc:
+        logger.error("[payment_plans] link revert failed plan_id=%s err=%s", plan_id, type(exc).__name__)
 
 
 @payment_plans_bp.post("/payments/plans/{plan_id}/pay")
@@ -477,8 +500,17 @@ async def record_payment(request: Request, plan_id):
             "_id": logged_row["_id"],
             "transaction_id": txn,
             "amount": logged_row.get("amount"),
+            # Pin the settlement facts that were validated: if another writer
+            # (e.g. the reconciliation service) changed the status or webhook
+            # event meanwhile, the link must not match (fail closed).
+            "status": logged_row.get("status"),
             "$or": [{"plan_id": {"$exists": False}}, {"plan_id": None}, {"plan_id": ""}],
         }
+        _raw = logged_row.get("raw_payload")
+        if isinstance(_raw, dict) and "event_type" in _raw:
+            link_filter["raw_payload.event_type"] = _raw.get("event_type")
+        else:
+            link_filter["raw_payload.event_type"] = {"$exists": False}
         # Revenue reports count rows with status completed/paid/success by
         # ``timestamp`` (the shape a plan installment row had). Give the linked
         # row that shape so the installment is still counted exactly once;
@@ -508,7 +540,17 @@ async def record_payment(request: Request, plan_id):
                 status_code=500,
             )
         if link_ok:
-            await _audit_link(_actor(request), plan, plan_id, txn, logged_row, amount)
+            # The association is reported only with a durable audit record.
+            # If the audit insert fails, undo the link (conditional on it still
+            # being ours), fail the claim and return an error; balance untouched.
+            if not await _audit_link(_actor(request), plan, plan_id, txn, logged_row, amount):
+                await _revert_link(payments_col, logged_row, plan_id, link_set)
+                await _fail_claim(claims, plan_id, txn, "audit_write_failed")
+                return JSONResponse(
+                    {"error": "audit_write_failed", "transaction_id": txn,
+                     "message": "The payment was not applied because its audit record could not be saved. Try again shortly."},
+                    status_code=503,
+                )
         else:
             await _fail_claim(claims, plan_id, txn, "logged_payment_link_lost")
             other = current.get("plan_id")

@@ -259,9 +259,78 @@ def test_no_audit_for_cash_insert_or_lost_link(rig):
     assert db["audit_events"].docs == []
 
 
-def test_audit_write_failure_does_not_undo_payment(rig):
+def test_audit_write_failure_reverts_link_and_reports_error(rig):
+    """Codex P1 (0a6581b): never report success without a durable audit record."""
     db, app = rig
-    _poller_row(db)
+    row = _poller_row(db)
+    before = dict(row)
     db["audit_events"].fail_insert = True
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
-    assert r.status_code == 200 and _plan(db)["balance_remaining"] == 700.0
+    assert r.status_code == 503 and r.json()["error"] == "audit_write_failed"
+    assert r.json().get("success") is not True
+    assert row == before                                   # link undone exactly
+    assert _plan(db)["balance_remaining"] == 800.0 and _plan(db)["payments_made"] == 1
+    claim = db["payment_plan_payment_claims"].docs[0]
+    assert claim["status"] == "failed" and claim["failed_reason"] == "audit_write_failed"
+    db["audit_events"].fail_insert = False
+    (r2,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r2.status_code == 409 and r2.json()["error"] == "payment_needs_review"
+
+
+def test_audit_failure_revert_does_not_touch_row_relinked_by_someone_else(rig):
+    db, app = rig
+    _second_plan(db)
+    row = _poller_row(db)
+    db["audit_events"].fail_insert = True
+    orig = db["audit_events"].insert_one
+
+    async def steal_then_fail(doc):
+        row["plan_id"] = "plan-test-02"
+        row["plan_linked_at"] = "someone-else"
+        return await orig(doc)
+    db["audit_events"].insert_one = steal_then_fail
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 503
+    assert row["plan_id"] == "plan-test-02"                # revert was conditional on our link
+    assert _plan(db)["balance_remaining"] == 800.0
+
+
+@pytest.mark.parametrize("new_status", ["reconciled", "refunded", "declined", "pending"])
+def test_status_changed_between_check_and_link_fails_closed(rig, new_status):
+    """Codex P1 (0a6581b): the conditional link pins the validated status."""
+    db, app = rig
+    row = _poller_row(db)
+
+    def change(coll, flt):
+        if flt.get("_id") == "pay-poll-1":
+            row["status"] = new_status
+    db["payments"].before_update = change
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 409 and r.json()["error"] == "payment_needs_review"
+    assert row["status"] == new_status and "plan_id" not in row
+    assert _plan(db)["balance_remaining"] == 800.0 and db["audit_events"].docs == []
+
+
+def test_webhook_event_changed_between_check_and_link_fails_closed(rig):
+    db, app = rig
+    row = _poller_row(db, source=None, status="approved", raw_payload={"event_type": "payment.completed"})
+
+    def change(coll, flt):
+        if flt.get("_id") == "pay-poll-1":
+            row["raw_payload"]["event_type"] = "payment.refunded"
+    db["payments"].before_update = change
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 409 and "plan_id" not in row
+    assert _plan(db)["balance_remaining"] == 800.0
+
+
+def test_event_added_between_check_and_link_fails_closed(rig):
+    db, app = rig
+    row = _poller_row(db)
+
+    def change(coll, flt):
+        if flt.get("_id") == "pay-poll-1":
+            row["raw_payload"] = {"event_type": "payment.refunded"}
+    db["payments"].before_update = change
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 409 and "plan_id" not in row
