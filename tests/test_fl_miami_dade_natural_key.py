@@ -136,7 +136,9 @@ def test_key_never_reaches_booking_number_fields(monkeypatch):
     arrests = FakeArrests([])
     _write(arrests, recs)
     key = arrests.docs[0]["booking_number"]
-    assert recs[0].Booking_Number == ""  # the record never carries the key
+    # After the write the record carries the key as its routing identity
+    # (downstream consumers); display paths below still blank it.
+    assert recs[0].Booking_Number == key
 
     api = serialize_doc(dict(arrests.docs[0]))
     assert api["booking_number_display"] == "" and api["booking_key_internal"] is True

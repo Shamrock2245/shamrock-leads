@@ -18,7 +18,7 @@ from pymongo.collection import Collection
 from pymongo.errors import OperationFailure
 
 from core.models import ArrestRecord
-from core.booking_identity import MC_KEY_PREFIX, internal_natural_key
+from core.booking_identity import MC_KEY_PREFIX, internal_natural_key, is_internal_booking_key
 from core.staff_edits import fetch_provenance_docs, protect_scraped_update
 from config.settings import settings
 
@@ -337,6 +337,10 @@ class MongoWriter:
         internal_keyed = 0
         for idx, record in enumerate(records):
             booking = (record.Booking_Number or "").strip()
+            if is_internal_booking_key(booking):
+                # Re-entry: a record this writer already keyed carries its
+                # internal key; recompute it so the scope fields stay set.
+                booking = ""
             county_name = (record.County or county or "").strip()
             state = (record.State or "FL").strip().upper() or "FL"
             # Narrow owner exception (core/booking_identity.py): an allow-listed
@@ -352,9 +356,13 @@ class MongoWriter:
                 )
                 continue
             # Normalize identity onto the record so writers/downstream agree.
-            # An internal key is never copied onto Booking_Number.
+            # With no source booking number the internal key is kept on the
+            # record as its routing identity (RearrestChecker, lead fan-out
+            # pointers, SheetsWriter dedupe all read Booking_Number). It is
+            # never a display value: every display/export path goes through
+            # public_booking_number / redact_internal_keys, which blank it.
             identity = booking or internal_key
-            record.Booking_Number = booking
+            record.Booking_Number = identity
             record.County = county_name
             record.State = state
 

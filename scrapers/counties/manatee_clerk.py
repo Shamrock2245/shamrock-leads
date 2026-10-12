@@ -499,7 +499,12 @@ class ManateeClerkScraper(BaseScraper):
 
         records: List[ArrestRecord] = []
         seen_cases: set = set()
-        listed = details = capped = skipped_non_defendant = multi_defendant = 0
+        listed = details = skipped_non_defendant = multi_defendant = 0
+        # Phase 1: walk every case type's list and pick the eligible cases.
+        # Phase 2 (detail POSTs) only starts once the whole run is known to
+        # fit under MAX_DETAILS_PER_RUN, so the cap can never drop cases
+        # silently: an over-cap window fails the run loudly instead.
+        planned: List[Tuple[Any, str, str, Dict[str, Any], str]] = []
         for type_id, court_type in CASE_TYPES:
             # One session per case type: the site keeps search state per session.
             session = self._new_session()
@@ -524,29 +529,35 @@ class ManateeClerkScraper(BaseScraper):
                     # co-defendant: fail closed for this case (no detail fetch).
                     multi_defendant += 1
                     continue
-                if details >= MAX_DETAILS_PER_RUN:
-                    capped += 1
-                    continue
-                html = self._request(
-                    session, "POST", BASE_URL + (row["form_action"] or DETAIL_PATH),
-                    data=row["form"], headers={"Referer": list_url},
-                )
-                details += 1
-                detail = parse_detail(html)
-                if normalise_case_number(detail["case_number"]) != case:
-                    raise ManateeClerkContractError("Manatee Clerk: detail case number does not match the list row")
-                if len(detail.get("defendants") or []) > 1:
-                    multi_defendant += 1
-                    continue
-                rec = self.build_record(row, detail, court_type)
-                if rec is not None:
-                    records.append(rec)
+                planned.append((session, list_url, court_type, row, case))
+
+        if len(planned) > MAX_DETAILS_PER_RUN:
+            raise ManateeClerkContractError(
+                f"Manatee Clerk: {len(planned)} eligible cases exceed MAX_DETAILS_PER_RUN="
+                f"{MAX_DETAILS_PER_RUN}; refusing to truncate the run (no detail pages fetched)"
+            )
+
+        for session, list_url, court_type, row, case in planned:
+            html = self._request(
+                session, "POST", BASE_URL + (row["form_action"] or DETAIL_PATH),
+                data=row["form"], headers={"Referer": list_url},
+            )
+            details += 1
+            detail = parse_detail(html)
+            if normalise_case_number(detail["case_number"]) != case:
+                raise ManateeClerkContractError("Manatee Clerk: detail case number does not match the list row")
+            if len(detail.get("defendants") or []) > 1:
+                multi_defendant += 1
+                continue
+            rec = self.build_record(row, detail, court_type)
+            if rec is not None:
+                records.append(rec)
 
         no_bond = sum(1 for r in records if r.Bond_Amount == "")
         logger.info(
-            "[%s] %d records (listed=%d, details=%d, capped=%d, non_defendant=%d, bond_unknown=%d, "
+            "[%s] %d records (listed=%d, details=%d, non_defendant=%d, bond_unknown=%d, "
             "defendant_unmatched=%d, multi_defendant_skipped=%d) in %.1fs",
-            self.county_label, len(records), listed, details, capped, skipped_non_defendant, no_bond,
+            self.county_label, len(records), listed, details, skipped_non_defendant, no_bond,
             self._unmatched_defendants, multi_defendant, time.time() - start,
         )
         return records

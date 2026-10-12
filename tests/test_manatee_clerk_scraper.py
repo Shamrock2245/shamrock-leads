@@ -287,6 +287,56 @@ def test_key_and_case_number_never_in_display_fields(monkeypatch):
     assert "mc_case_v\\d+" in js and js.count("mc_case_v") >= 2  # slBookingLabel + slRedactKeys
 
 
+def test_writer_keeps_internal_key_on_record_for_downstream_but_displays_blank(monkeypatch):
+    from writers.sheets_writer import SheetsWriter
+    from dashboard.services.lead_subscriptions import _record_pointer
+
+    recs = _scraper(monkeypatch, LISTS, DETAILS)[0].scrape()
+    assert all(r.Booking_Number == "" for r in recs)  # scraper output stays blank
+    arrests = FakeArrests([])
+    _writer(arrests).write_records(recs, "Manatee Clerk")
+    keys = {d["case_number"]: d["booking_number"] for d in arrests.docs}
+    for r in recs:
+        # Downstream consumers (RearrestChecker, lead pointers, Sheets dedupe)
+        # read Booking_Number: they get the stored internal key, unique per case.
+        assert is_internal_booking_key(r.Booking_Number) and r.Booking_Number in keys.values()
+        ptr = _record_pointer(r)
+        assert ptr is not None and ptr["booking_number"] == r.Booking_Number
+        # Display / export paths blank it.
+        assert r.to_sheet_row()[2] == ""
+        assert r.Booking_Number not in repr(r.to_sheet_row())
+    assert len({r.get_dedup_key() for r in recs}) == len(recs) == 2
+    # Writing again is idempotent: re-keyed, scope fields kept, no new rows.
+    again = _writer(arrests).write_records(recs, "Manatee Clerk")
+    assert again["new_records"] == 0 and len(arrests.docs) == 2
+    assert all(d["mc_case_key"] == d["booking_number"] for d in arrests.docs)
+    # Sheets cannot dedupe a blank booking column across runs: Mongo-only.
+    sw = SheetsWriter.__new__(SheetsWriter)
+    inserted = []
+
+    class _Sheet:
+        def insert_rows(self, rows, **kw):
+            inserted.extend(rows)
+
+    sw._get_or_create_sheet = lambda *a, **k: _Sheet()
+    sw._ensure_header_row = lambda *a, **k: None
+    sw._get_existing_dedup_keys = lambda *a, **k: set()
+    sw._write_qualified_records = lambda *a, **k: None
+    sw.write_records(recs, "Manatee Clerk", auto_score=False)
+    assert inserted == []
+
+
+def test_slack_and_dashboard_events_blank_the_internal_key():
+    import inspect
+    from scrapers import base_scraper
+    from writers import slack_notifier
+
+    src = inspect.getsource(slack_notifier)
+    assert "{record.Booking_Number}" not in src and "public_booking_number(record.Booking_Number)" in src
+    bsrc = inspect.getsource(base_scraper.BaseScraper._broadcast_scraper_events)
+    assert '"booking_number": record.Booking_Number' not in bsrc
+
+
 def test_case_number_is_never_copied_to_booking_number():
     src = (ROOT / "scrapers" / "counties" / "manatee_clerk.py").read_text()
     assert re.search(r"Booking_Number\s*=\s*\"\"", src)
@@ -360,13 +410,25 @@ def test_detail_case_mismatch_fails_loud(monkeypatch):
         sc.scrape()
 
 
-def test_run_cap_limits_detail_posts(monkeypatch):
-    rows = [_list_row(i, f"2026CF0{i:05d}AX", f"ZZSYNTH, P{i}") for i in range(1, 6)]
-    details = {f"99{i:05d}": detail_page(f"2026CF0{i:05d}AX") for i in range(1, 6)}
+def test_run_under_cap_fetches_every_case(monkeypatch):
+    rows = [_list_row(i, f"2026CF0{i:05d}AX", f"ZZSYNTH, P{i}") for i in range(1, 4)]
+    details = {f"99{i:05d}": detail_page(f"2026CF0{i:05d}AX") for i in range(1, 4)}
     monkeypatch.setattr(mc, "MAX_DETAILS_PER_RUN", 3)
     sc, sessions = _scraper(monkeypatch, {10: list_page(rows)}, details)
     assert len(sc.scrape()) == 3
     assert sum(1 for s in sessions for c in s.calls if c[0] == "POST") == 3
+
+
+def test_run_over_cap_fails_loudly_before_any_detail_post(monkeypatch):
+    rows = [_list_row(i, f"2026CF0{i:05d}AX", f"ZZSYNTH, P{i}") for i in range(1, 6)]
+    details = {f"99{i:05d}": detail_page(f"2026CF0{i:05d}AX") for i in range(1, 6)}
+    monkeypatch.setattr(mc, "MAX_DETAILS_PER_RUN", 3)
+    sc, sessions = _scraper(monkeypatch, {10: list_page(rows)}, details)
+    with pytest.raises(mc.ManateeClerkContractError) as exc:
+        sc.scrape()
+    assert "5 eligible cases exceed MAX_DETAILS_PER_RUN=3" in str(exc.value)
+    assert isinstance(exc.value, ParseDriftError)
+    assert sum(1 for s in sessions for c in s.calls if c[0] == "POST") == 0  # nothing silently dropped
 
 
 def test_requests_are_paced(monkeypatch):

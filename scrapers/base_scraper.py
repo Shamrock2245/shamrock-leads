@@ -22,6 +22,7 @@ from abc import ABC, abstractmethod
 from typing import List, Optional
 from datetime import datetime, timezone
 
+from core.booking_identity import public_booking_number
 from core.models import ArrestRecord
 from scoring.lead_scorer import LeadScorer
 from config.relay_only import is_relay_only
@@ -1350,7 +1351,7 @@ class BaseScraper(ABC):
                 "state": st,
                 "county_label": f"{self.county} ({st})",
                 "full_name": record.Full_Name,
-                "booking_number": record.Booking_Number,
+                "booking_number": public_booking_number(record.Booking_Number),
                 "charges": record.Charges,
                 "bond_amount": record.Bond_Amount,
                 "mugshot_url": record.Mugshot_URL,
@@ -1365,7 +1366,7 @@ class BaseScraper(ABC):
                 "state": st,
                 "county_label": f"{self.county} ({st})",
                 "full_name": record.Full_Name,
-                "booking_number": record.Booking_Number,
+                "booking_number": public_booking_number(record.Booking_Number),
                 "charges": record.Charges,
                 "bond_amount": record.Bond_Amount,
                 "lead_score": record.Lead_Score,

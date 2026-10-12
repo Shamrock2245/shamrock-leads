@@ -19,6 +19,7 @@ The site keeps search state per session (a second case-type search in the same s
 ## Behaviour
 
 - Honest UA `ShamrockLeadsBot/1.0 (+https://shamrockbailbonds.biz; Manatee Clerk court filing reader; plain HTTPS)`, 2.5 s between requests, at most 80 detail POSTs per run, 4 list pages of 50 per case type, cases filed yesterday and today, every 120 min.
+- The run plans every eligible case across all case types before any detail POST. If the plan exceeds `MAX_DETAILS_PER_RUN` (80), it raises `ManateeClerkContractError` and fetches nothing, so no case is ever dropped silently by the cap.
 - The list walk fails loudly when the published count is over the 200-row page cap, when a page repeats rows already listed, or when the walk ends short of the count.
 - A challenge or CAPTCHA (`cf-mitigated`, Turnstile / reCAPTCHA / hCaptcha / "Just a moment..." markers, or HTTP 401 / 403 / 429) stops the run at once with `EgressBlocked` (`egress_block:` prefix: classified `anti_bot` / egress-blocked and non-retryable, so the base retry never repeats it). Transient 5xx and timeouts keep the base transient-network retry. No stealth, proxy, impersonation or CAPTCHA solving. A short-of-count page walk, a missing results table, a list page with neither rows nor `NO RECORDS FOUND`, a Bonds header change, or a detail whose case number does not match the list row raises `ParseDriftError`.
 - `config/source_guard.py` is honoured: `scrape()` checks `fail_closed_reason(scraper=self, url=…)` first, and `manateeclerk.com` maps to `Manatee Clerk (FL)` (not to the jail scope).
