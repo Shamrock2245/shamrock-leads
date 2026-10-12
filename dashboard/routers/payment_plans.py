@@ -234,11 +234,28 @@ def _next_due(frequency: str, now: datetime) -> datetime:
     return now + timedelta(days=30)
 
 
-def _same_amount(a, b) -> bool:
+def _amount_cents(value) -> int | None:
+    """Exact integer cents, or None when not a positive amount with at most
+    two decimal places (fractional cents are refused, never rounded)."""
+    from decimal import Decimal, InvalidOperation
+
+    if value is None or isinstance(value, bool):
+        return None
     try:
-        return round(float(a), 2) == round(float(b), 2)
-    except (TypeError, ValueError):
-        return False
+        dec = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError):
+        return None
+    if not dec.is_finite() or dec <= 0:
+        return None
+    cents = dec * 100
+    if cents != cents.to_integral_value():
+        return None
+    return int(cents)
+
+
+def _same_amount(a, b) -> bool:
+    ca, cb = _amount_cents(a), _amount_cents(b)
+    return ca is not None and ca == cb
 
 
 async def _idempotent_reply(
@@ -313,12 +330,14 @@ async def record_payment(request: Request, plan_id):
              "message": "Send the card transaction id, or the receipt number for cash or check."},
             status_code=400,
         )
-    try:
-        amount = float(data["amount"])
-    except (TypeError, ValueError):
-        return JSONResponse({"error": "invalid_amount"}, status_code=400)
-    if not amount > 0 or amount == float("inf"):
-        return JSONResponse({"error": "invalid_amount"}, status_code=400)
+    amount_cents = _amount_cents(data.get("amount"))
+    if amount_cents is None:
+        return JSONResponse(
+            {"error": "invalid_amount",
+             "message": "Amount must be a positive number with at most two decimal places."},
+            status_code=400,
+        )
+    amount = amount_cents / 100
 
     plans_col = get_collection("payment_plans")
     payments_col = get_collection("payments")

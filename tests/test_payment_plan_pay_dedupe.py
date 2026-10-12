@@ -382,3 +382,30 @@ def test_payment_row_with_applied_claim_is_idempotent(rig):
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-OK"}])
     assert r.status_code == 200 and r.json()["idempotent"] is True
     assert len(db["payments"].docs) == 1 and _plan(db)["balance_remaining"] == 700.0
+
+
+@pytest.mark.parametrize("amount", ["100.001", 100.004, "1e-3", "NaN", "Infinity", True, "", "  "])
+def test_fractional_cent_or_non_numeric_amount_refused(rig, amount):
+    """Codex P2: no fractional cents, so idempotency compares the exact applied amount."""
+    db, app = rig
+    (r,) = _post_many(app, [{"amount": amount, "transaction_id": "TX-FC"}])
+    assert r.status_code == 400 and r.json()["error"] == "invalid_amount"
+    assert db["payments"].docs == [] and db["payment_plan_payment_claims"].docs == []
+    assert _plan(db)["balance_remaining"] == 800.0
+
+
+def test_retry_matches_exact_cents(rig):
+    db, app = rig
+    _post_many(app, [{"amount": "100.10", "transaction_id": "TX-C"}])
+    (same,) = _post_many(app, [{"amount": 100.1, "transaction_id": "TX-C"}])
+    assert same.status_code == 200 and same.json()["idempotent"] is True
+    (diff,) = _post_many(app, [{"amount": "100.11", "transaction_id": "TX-C"}])
+    assert diff.status_code == 409 and diff.json()["error"] == "transaction_id_amount_mismatch"
+    assert len(db["payments"].docs) == 1
+
+
+def test_legacy_row_with_fractional_cents_is_not_confirmed(rig):
+    db, app = rig
+    db["payments"].docs.append({"plan_id": PLAN_ID, "transaction_id": "TX-LF", "amount": 100.004})
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-LF"}])
+    assert r.status_code == 409 and r.json()["error"] == "transaction_id_amount_mismatch"
