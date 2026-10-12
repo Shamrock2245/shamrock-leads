@@ -859,3 +859,68 @@ def test_mongo_writer_cursor_round_trips_on_the_scraper_status_doc():
     assert MongoWriter.get_scraper_cursor(w, "Manatee Clerk", "FL") == {"backlog": 3, "done": {}}
     assert w.scraper_status.doc["county_label"] == "Manatee Clerk (FL)"
     assert all(f == w.scraper_status.filters[0] for f in w.scraper_status.filters)  # same status doc identity
+
+
+def _start_dates(sessions):
+    from datetime import datetime as _dt
+
+    out = set()
+    for s in sessions:
+        for c in s.calls:
+            if c[0] == "GET":
+                m = re.search(r"/CourtRecords/Search/CaseType/\d+/\d+/(\d\d-\d\d-\d{4})/", c[1])
+                out.add(_dt.strptime(m.group(1), "%m-%d-%Y").date())
+    return out
+
+
+def test_list_window_boundary_is_14_days(monkeypatch):
+    from datetime import timedelta
+
+    today = date.today()
+    assert mc.MAX_LOOKBACK_DAYS == 14
+    assert mc.PAGE_SIZE * mc.MAX_LIST_PAGES == 400  # 14 days at ~11 rows / 2 days is ~77 per case type
+    rows, details, _ = _cases(3)
+    for oldest, expect in (
+        ("", today - timedelta(days=mc.DAYS_BACK - 1)),          # nothing queued: default 2-day window
+        ((today - timedelta(days=10)).isoformat(), today - timedelta(days=10)),  # widened to the queue
+        ((today - timedelta(days=13)).isoformat(), today - timedelta(days=13)),  # last day inside
+        ((today - timedelta(days=14)).isoformat(), today - timedelta(days=13)),  # first day outside: capped
+    ):
+        store = QueueStore()
+        store.cursor = {"oldest_pending": oldest, "pending": {}, "done": {}}
+        sc, sessions = _queue_scraper(monkeypatch, rows, details)
+        sc.run(writers=[store])
+        assert _start_dates(sessions) == {expect}, oldest
+
+
+def test_aged_out_queued_cases_alert_with_count_only(monkeypatch, caplog):
+    from datetime import timedelta
+
+    alerts = []
+    monkeypatch.setattr("scrapers.base_scraper._slack.notify_scraper_error",
+                        lambda county, msg, **kw: alerts.append((county, msg, kw)))
+    today = date.today()
+    old1, old2, inside = mc.mc_case_key("2026CF900001AX"), mc.mc_case_key("2026CF900002AX"), mc.mc_case_key("2026CF900003AX")
+    store = QueueStore()
+    store.cursor = {"done": {}, "backlog": 3, "growth_streak": 0,
+                    "oldest_pending": (today - timedelta(days=20)).isoformat(),
+                    "pending": {old1: (today - timedelta(days=20)).isoformat(),
+                                old2: (today - timedelta(days=14)).isoformat(),
+                                inside: (today - timedelta(days=13)).isoformat()}}
+    rows, details, _ = _cases(2)
+    sc, _ = _queue_scraper(monkeypatch, rows, details)
+    with caplog.at_level(logging.WARNING):
+        sc.run(writers=[store])
+    assert len(alerts) == 1
+    county, msg, kw = alerts[0]
+    assert county == "Manatee Clerk (FL)" and kw["error_class"] == "queue_aged_out"
+    assert "2 queued cases aged out of the 14-day" in msg
+    for text in [msg] + [r.getMessage() for r in caplog.records]:
+        assert "2026CF" not in text and "ZZSYNTH" not in text and "mc_case_v1:" not in text
+    assert any("2 queued cases aged out" in r.getMessage() for r in caplog.records)
+    assert any("1 queued cases inside the window are no longer listed" in r.getMessage() for r in caplog.records)
+    assert old1 not in store.cursor["pending"] and old2 not in store.cursor["pending"]
+    # Already reported: the next run does not alert again.
+    sc, _ = _queue_scraper(monkeypatch, rows, details)
+    sc.run(writers=[store])
+    assert len(alerts) == 1

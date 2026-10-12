@@ -84,7 +84,10 @@ MAX_LIST_PAGES = 8      # per case type (room for a widened backlog window)
 MAX_DETAILS_PER_RUN = 80
 # Durable detail queue (scraper_status.cursors.detail_queue, see writers/mongo_writer.py).
 QUEUE_CURSOR_NAME = "detail_queue"
-MAX_LOOKBACK_DAYS = 7   # the list window widens back to the oldest queued case, at most this far
+# The list window widens back to the oldest queued case, at most this far. 14 days
+# is ~77 rows per case type at the observed ~11 rows / 2 days, far under the
+# PAGE_SIZE * MAX_LIST_PAGES (400) cap; the walk still fails loudly above it.
+MAX_LOOKBACK_DAYS = 14
 BACKLOG_ALERT_RUNS = 3  # alert when the backlog grows on this many consecutive runs
 REQUEST_DELAY_S = 2.5
 REQUEST_TIMEOUT = 30
@@ -513,10 +516,12 @@ class ManateeClerkScraper(BaseScraper):
         if oldest_pending and oldest_pending < start_d:
             # Queued cases from earlier runs: widen the window back to them.
             start_d = max(oldest_pending, floor_d)
-            if oldest_pending < floor_d:
-                logger.warning("[%s] queued cases older than %d days fall outside the list window",
-                               self.county_label, MAX_LOOKBACK_DAYS)
         start_s, end_s = start_d.strftime("%m-%d-%Y"), end_d.strftime("%m-%d-%Y")
+        floor_s = floor_d.isoformat()
+        aged_out = {k: v for k, v in (queue.get("pending") or {}).items() if k not in done and (not v or v < floor_s)}
+        if aged_out:
+            logger.warning("[%s] detail queue: %d queued cases aged out of the %d-day window (not fetched)",
+                           self.county_label, len(aged_out), MAX_LOOKBACK_DAYS)
 
         records: List[ArrestRecord] = []
         seen_cases: set = set()
@@ -559,7 +564,7 @@ class ManateeClerkScraper(BaseScraper):
         batch, rest = eligible[:MAX_DETAILS_PER_RUN], eligible[MAX_DETAILS_PER_RUN:]
         written_plan: Dict[str, str] = {}
         resolved: Dict[str, str] = {}
-        still_queued: List[str] = [e[0] for e in rest]
+        still_queued: Dict[str, str] = {e[1]: e[0] for e in rest}
         for file_date, key, session, list_url, court_type, row, case in batch:
             html = self._request(
                 session, "POST", BASE_URL + (row["form_action"] or DETAIL_PATH),
@@ -578,11 +583,17 @@ class ManateeClerkScraper(BaseScraper):
                 # Half-parsed case (no charges / no usable defendant): never
                 # written; it stays queued for the next run.
                 partial += 1
-                still_queued.append(file_date)
+                still_queued[key] = file_date
                 continue
             records.append(rec)
             written_plan[key] = file_date
 
+        listed_keys = {e[1] for e in eligible}
+        unlisted = sum(1 for k, v in (queue.get("pending") or {}).items()
+                       if k not in aged_out and k not in listed_keys and k not in done)
+        if unlisted:
+            logger.warning("[%s] detail queue: %d queued cases inside the window are no longer listed",
+                           self.county_label, unlisted)
         backlog = len(still_queued)
         self._queue_plan = {
             "prior": queue,
@@ -590,7 +601,8 @@ class ManateeClerkScraper(BaseScraper):
             "written_plan": written_plan,
             "resolved": resolved,
             "still_queued": still_queued,
-            "floor": floor_d.isoformat(),
+            "floor": floor_s,
+            "aged_out": aged_out,
         }
         no_bond = sum(1 for r in records if r.Bond_Amount == "")
         logger.info(
@@ -634,16 +646,15 @@ class ManateeClerkScraper(BaseScraper):
             r.Booking_Number for r in records if is_internal_booking_key(getattr(r, "Booking_Number", ""))
         }
         done = dict(plan["done"])
-        unconfirmed: List[str] = []
+        pending: Dict[str, str] = dict(plan["still_queued"])
         for key, file_date in plan["written_plan"].items():
             if key in written:
                 done[key] = file_date
             else:
-                unconfirmed.append(file_date)
+                pending[key] = file_date
         done.update(plan["resolved"])
         floor = plan["floor"]
         done = {k: v for k, v in done.items() if v and v >= floor}
-        pending = list(plan["still_queued"]) + unconfirmed
         backlog = len(pending)
         prior = plan["prior"] or {}
         prev = prior.get("backlog")
@@ -652,7 +663,8 @@ class ManateeClerkScraper(BaseScraper):
         state = {
             "v": 1,
             "done": done,
-            "oldest_pending": min((d for d in pending if d), default=""),
+            "pending": pending,
+            "oldest_pending": min((d for d in pending.values() if d), default=""),
             "backlog": backlog,
             "growth_streak": streak,
             "updated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
@@ -663,8 +675,23 @@ class ManateeClerkScraper(BaseScraper):
         else:
             self._mem_queue = state
         logger.info("[%s] detail queue: backlog=%d growth_streak=%d", self.county_label, backlog, streak)
+        aged = len(plan.get("aged_out") or {})
+        if aged:
+            self._alert_aged_out(aged)
         if streak == BACKLOG_ALERT_RUNS:
             self._alert_backlog_growth(backlog, streak)
+
+    def _alert_aged_out(self, aged: int) -> None:
+        """No silent drops: queued cases that left the list window. Count only."""
+        from scrapers.base_scraper import _slack  # existing #scraper-errors path
+
+        msg = (f"Manatee Clerk detail queue: {aged} queued cases aged out of the "
+               f"{MAX_LOOKBACK_DAYS}-day list window before their details were fetched. Counts only.")
+        logger.warning("[%s] %s", self.county_label, msg)
+        try:
+            _slack.notify_scraper_error(self.county_label, msg, error_class="queue_aged_out")
+        except Exception:
+            pass
 
     def _alert_backlog_growth(self, backlog: int, streak: int) -> None:
         from scrapers.base_scraper import _slack  # existing #scraper-errors path
