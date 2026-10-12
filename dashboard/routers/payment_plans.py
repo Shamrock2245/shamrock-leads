@@ -241,16 +241,32 @@ def _amount_cents(value) -> int | None:
 
     if value is None or isinstance(value, bool):
         return None
+    text = str(value).strip()
+    if not text or len(text) > 64:
+        return None
     try:
-        dec = Decimal(str(value).strip())
+        dec = Decimal(text)  # construction is exact (no context rounding)
     except (InvalidOperation, ValueError):
         return None
     if not dec.is_finite() or dec <= 0:
         return None
-    cents = dec * 100
-    if cents != cents.to_integral_value():
+    # Exact integer arithmetic on the digits; no Decimal multiplication, so the
+    # 28-digit context can never round fractional cents away.
+    _sign, digits, exponent = dec.as_tuple()
+    if exponent > 12:  # > 10^12 dollars: refuse before building a huge int
         return None
-    return int(cents)
+    shift = exponent + 2  # power of ten to apply to the digit string for cents
+    if shift >= 0:
+        cents = int("".join(map(str, digits)) or "0") * (10 ** shift)
+    else:
+        drop = digits[len(digits) + shift:] if -shift <= len(digits) else digits
+        if any(d != 0 for d in drop):
+            return None  # fractional cents
+        kept = digits[: len(digits) + shift] if -shift < len(digits) else ()
+        cents = int("".join(map(str, kept)) or "0")
+    if cents <= 0 or cents > 10 ** 14:  # cap $1 trillion
+        return None
+    return cents
 
 
 def _same_amount(a, b) -> bool:

@@ -409,3 +409,31 @@ def test_legacy_row_with_fractional_cents_is_not_confirmed(rig):
     db["payments"].docs.append({"plan_id": PLAN_ID, "transaction_id": "TX-LF", "amount": 100.004})
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-LF"}])
     assert r.status_code == 409 and r.json()["error"] == "transaction_id_amount_mismatch"
+
+
+@pytest.mark.parametrize("amount", [
+    "1.00000000000000000000000000001",       # Codex P2: 28-digit context used to round this to 1.00
+    "100.000000000000000000000000000001",
+    "0.001", "1e-3", "1e400", "12345678901234567890.12", "1" * 70,
+])
+def test_high_precision_or_huge_amounts_refused_without_rounding(rig, amount):
+    db, app = rig
+    (r,) = _post_many(app, [{"amount": amount, "transaction_id": "TX-HP"}])
+    assert r.status_code == 400 and r.json()["error"] == "invalid_amount"
+    assert db["payments"].docs == [] and db["payment_plan_payment_claims"].docs == []
+
+
+@pytest.mark.parametrize("amount,cents", [
+    ("1.00", 100), ("1.000000000000000000000000000000000", 100), ("1E+2", 10000),
+    ("1e-2", 1), (99.99, 9999), ("5e1", 5000),
+])
+def test_exact_cents_parsing(amount, cents):
+    assert pp._amount_cents(amount) == cents
+
+
+def test_high_precision_replay_is_not_treated_as_same_payment(rig):
+    db, app = rig
+    _post_many(app, [{"amount": "1.00", "transaction_id": "TX-HP2"}])
+    (r,) = _post_many(app, [{"amount": "1.00000000000000000000000000001", "transaction_id": "TX-HP2"}])
+    assert r.status_code == 400
+    assert len(db["payments"].docs) == 1
