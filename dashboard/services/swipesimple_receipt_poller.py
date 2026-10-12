@@ -22,6 +22,10 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Same shape as dashboard.extensions.parse_registered_county: ``Lee (FL)`` carries
+# the state in the label. A bare county name does not imply a state.
+_COUNTY_LABEL_RE = re.compile(r"^(.+?)\s*\(([A-Za-z]{2})\)$")
+
 # Bail School prices — leave for GAS poller (do not double-unlock courses)
 SCHOOL_AMOUNTS = {199.0, 649.0}
 
@@ -43,6 +47,84 @@ _SYSTEM_EMAILS = {
     "admin@shamrockbailbonds.biz",
     "support@swipesimple.com",
 }
+
+
+def _first_text(doc: Dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        token = str(doc.get(key) or "").strip()
+        if token:
+            return token
+    return ""
+
+
+def jurisdiction_from_bond(bond: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """Booking identity ``_booking_identity`` can compare, copied off a bond.
+
+    Returns county, state, and booking number when the bond actually has them.
+    A ``County (ST)`` label supplies the state. A bare county with no state
+    field is unverified and returns None. Never invents a state.
+    """
+    if not isinstance(bond, dict):
+        return None
+    raw_county = _first_text(bond, "county", "County")
+    raw_state = _first_text(bond, "state", "State")
+    bare, label_state = raw_county, ""
+    labeled = _COUNTY_LABEL_RE.match(raw_county)
+    if labeled:
+        bare = labeled.group(1).strip()
+        label_state = labeled.group(2).upper()
+    if raw_state and label_state and raw_state.casefold() != label_state.casefold():
+        return None
+    state = raw_state or label_state
+    booking = _first_text(bond, "booking_number")
+    if not bare or not state:
+        return None
+    out = {"county": bare, "state": state}
+    if booking:
+        out["booking_number"] = booking
+    return out
+
+
+def agreed_jurisdiction(bonds: List[Dict[str, Any]]) -> Optional[Dict[str, str]]:
+    """The one jurisdiction every bond shares, or None when missing or split.
+
+    Two cases with the same booking number in different counties or states do
+    not yield a jurisdiction. Callers then leave county and state unset.
+    """
+    found: List[Dict[str, str]] = []
+    for bond in bonds:
+        item = jurisdiction_from_bond(bond)
+        if item:
+            found.append(item)
+    if not found:
+        return None
+    places = {(item["county"].casefold(), item["state"].casefold()) for item in found}
+    bookings = {item["booking_number"] for item in found if item.get("booking_number")}
+    if len(places) != 1 or len(bookings) > 1:
+        return None
+    return found[0]
+
+
+async def _docs_for_query(coll, query: Dict[str, Any], limit: int = 20) -> Optional[List[Dict[str, Any]]]:
+    """Matching documents, or None when the read failed or the set is too large."""
+    try:
+        count = await coll.count_documents(query)
+    except Exception:
+        return None
+    if not count:
+        return []
+    if count > limit:
+        return None
+    try:
+        cursor = coll.find(query)
+        if hasattr(cursor, "to_list"):
+            return await cursor.to_list(length=limit)
+        docs: List[Dict[str, Any]] = []
+        async for doc in cursor:
+            docs.append(doc)
+        return docs
+    except Exception:
+        return None
 
 
 def parse_swipesimple_receipt(subject: str, body: str) -> Dict[str, Any]:
@@ -208,23 +290,26 @@ class SwipeSimpleReceiptPoller:
         if existing:
             return {"success": True, "duplicate": True, "transaction_id": txn}
 
-        match_query: Dict[str, Any] = {}
+        bonds: List[Dict[str, Any]] = []
+        jurisdiction_known = True
         if booking:
-            match_query = {"booking_number": booking}
-        elif customer_email:
-            match_query = {
+            for collection in ("bond_cases", "active_bonds", "intake_queue"):
+                found = await _docs_for_query(db[collection], {"booking_number": booking})
+                if found is None:
+                    jurisdiction_known = False
+                    break
+                bonds.extend(found)
+        if not bonds and jurisdiction_known and customer_email:
+            email_query = {
                 "$or": [
                     {"indemnitor_email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
                     {"Indemnitor_Email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
                 ]
             }
-
-        bond = None
-        if match_query:
-            bond = await db["bond_cases"].find_one(match_query)
+            bond = await db["bond_cases"].find_one(email_query)
             if not bond:
-                bond = await db["active_bonds"].find_one(match_query)
-            if not bond and customer_email:
+                bond = await db["active_bonds"].find_one(email_query)
+            if not bond:
                 bond = await db["intake_queue"].find_one(
                     {
                         "$or": [
@@ -233,8 +318,15 @@ class SwipeSimpleReceiptPoller:
                         ]
                     }
                 )
+            if bond:
+                bonds = [bond]
 
-        booking_number = booking or (bond or {}).get("booking_number") or ""
+        jurisdiction = agreed_jurisdiction(bonds) if jurisdiction_known else None
+        bond = bonds[0] if bonds else None
+        booking_number = booking or (jurisdiction or {}).get("booking_number") or (bond or {}).get("booking_number") or ""
+        # A receipt booking that disagrees with the bond's booking is not that bond.
+        if jurisdiction and jurisdiction.get("booking_number") and booking and jurisdiction["booking_number"] != booking:
+            jurisdiction = None
 
         doc = {
             "transaction_id": txn,
@@ -249,6 +341,14 @@ class SwipeSimpleReceiptPoller:
             "matched_bond": bool(bond),
             "created_at": now,
         }
+        if jurisdiction:
+            # Same keys _booking_identity reads. Omitted when the match is
+            # missing or split across counties/states, so /pay fails closed.
+            doc["county"] = jurisdiction["county"]
+            doc["state"] = jurisdiction["state"]
+        if "_id" not in doc:
+            from bson import ObjectId
+            doc["_id"] = ObjectId()
         await payments.insert_one(doc)
 
         if booking_number:

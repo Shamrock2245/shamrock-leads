@@ -752,6 +752,90 @@ def test_county_changed_between_check_and_link_fails_closed(rig):
     assert _plan(db)["balance_remaining"] == 800.0
 
 
+def _apply_poller(db, booking="TEST-PP-1", txn="TX-CARD", amount=100.0):
+    from dashboard.services.swipesimple_receipt_poller import SwipeSimpleReceiptPoller
+
+    async def go():
+        return await SwipeSimpleReceiptPoller()._apply_bond_payment(
+            db,
+            {"amount": amount, "booking_number": booking, "transaction_id": txn},
+            gmail_message_id="gm-poll",
+            raw_subject="SwipeSimple receipt",
+        )
+    return asyncio.run(go())
+
+
+def test_poller_matched_receipt_links_and_fills_plan_jurisdiction(rig, monkeypatch):
+    """A matched Gmail receipt carries the bond's county and state, and so does the plan."""
+    monkeypatch.delenv("SLACK_WEBHOOK_LEADS", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    db, app = rig
+    plan = _plan(db)
+    plan.pop("county")
+    plan.pop("state")
+    db["bond_cases"].docs.append({"booking_number": "TEST-PP-1", "county": "Lee (FL)"})
+    applied = _apply_poller(db)
+    assert applied["matched"] is True
+    row = db["payments"].docs[0]
+    assert row["county"] == "Lee" and row["state"] == "FL" and row["booking_number"] == "TEST-PP-1"
+    assert "plan_id" not in row
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 200 and row["plan_id"] == PLAN_ID
+    assert plan["county"] == "Lee" and plan["state"] == "FL"
+    assert plan["balance_remaining"] == 700.0
+
+
+def test_poller_unmatched_receipt_stays_unverified(rig, monkeypatch):
+    monkeypatch.delenv("SLACK_WEBHOOK_LEADS", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    db, app = rig
+    plan = _plan(db)
+    plan.pop("county")
+    plan.pop("state")
+    _apply_poller(db)
+    row = db["payments"].docs[0]
+    assert row["booking_number"] == "TEST-PP-1"
+    assert "county" not in row and "state" not in row and row.get("matched_bond") is False
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_jurisdiction_unverified"
+    assert "plan_id" not in row and "county" not in plan
+    assert plan["balance_remaining"] == 800.0
+
+
+def test_poller_does_not_pick_a_county_when_booking_numbers_collide(rig, monkeypatch):
+    monkeypatch.delenv("SLACK_WEBHOOK_LEADS", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    db, app = rig
+    plan = _plan(db)
+    plan.pop("county")
+    plan.pop("state")
+    db["bond_cases"].docs.append({"booking_number": "TEST-PP-1", "county": "Lee", "state": "FL"})
+    db["active_bonds"].docs.append({"booking_number": "TEST-PP-1", "county": "Lee", "state": "GA"})
+    _apply_poller(db)
+    row = db["payments"].docs[0]
+    assert "county" not in row and "state" not in row
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_jurisdiction_unverified"
+    assert "plan_id" not in row and "county" not in plan and "state" not in plan
+    assert plan["balance_remaining"] == 800.0
+
+
+def test_bond_without_state_does_not_invent_one(rig, monkeypatch):
+    monkeypatch.delenv("SLACK_WEBHOOK_LEADS", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    db, app = rig
+    _plan(db).pop("county")
+    _plan(db).pop("state")
+    db["active_bonds"].docs.append({"booking_number": "TEST-PP-1", "county": "Lee"})
+    _apply_poller(db)
+    row = db["payments"].docs[0]
+    assert row["matched_bond"] is True
+    assert "county" not in row and "state" not in row
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_jurisdiction_unverified"
+    assert _plan(db)["balance_remaining"] == 800.0
+
+
 def test_clash_without_link_audit_does_not_emit_orphan_unlink(rig):
     """If the link audit cannot be saved, the compensation revert writes no unlink event."""
     db, app = rig

@@ -55,6 +55,16 @@ class Coll:
                 return copy.deepcopy(d)
         return None
 
+    def find(self, flt=None, *a, **k):
+        docs = [copy.deepcopy(d) for d in self.docs if matches(d, flt or {})]
+
+        class _FindCursor:
+            async def to_list(self, length=None):
+                await asyncio.sleep(0)
+                return docs[:length] if length else list(docs)
+
+        return _FindCursor()
+
     async def update_one(self, flt, update, upsert=False):
         await asyncio.sleep(0)
         if self.before_update is not None:

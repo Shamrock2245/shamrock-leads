@@ -422,6 +422,71 @@ def _booking_identity(doc: dict, *, nested: bool) -> tuple[str, str, str] | None
     return booking, county, state
 
 
+async def _plan_with_bond_jurisdiction(plans_col, plan: dict) -> dict:
+    """Fill a plan's missing county and state from the one bond for its booking.
+
+    The receipt poller copies the same fields onto a matched payments row.
+    A plan that already has both is left alone. Zero bonds, a bond with no
+    state, or bonds that disagree leave the plan unchanged so the link fails
+    closed. A failed write does not invent an in-memory identity.
+    """
+    if _booking_identity(plan, nested=False):
+        return plan
+    booking = _booking_token(plan.get("booking_number"))
+    if not booking:
+        return plan
+    from dashboard.services.swipesimple_receipt_poller import (
+        _docs_for_query,
+        agreed_jurisdiction,
+    )
+
+    bonds = []
+    for name in ("bond_cases", "active_bonds", "intake_queue"):
+        found = await _docs_for_query(get_collection(name), {"booking_number": booking})
+        if found is None:
+            return plan
+        bonds.extend(found)
+    jurisdiction = agreed_jurisdiction(bonds)
+    if not jurisdiction:
+        return plan
+    if jurisdiction.get("booking_number") and jurisdiction["booking_number"] != booking:
+        return plan
+    plan_county = _place_token(plan.get("county") or plan.get("County"))
+    plan_state = _place_token(plan.get("state") or plan.get("State"))
+    if plan_county and plan_county != _place_token(jurisdiction["county"]):
+        return plan
+    if plan_state and plan_state != _place_token(jurisdiction["state"]):
+        return plan
+    to_set = {}
+    if not plan_county:
+        to_set["county"] = jurisdiction["county"]
+    if not plan_state:
+        to_set["state"] = jurisdiction["state"]
+    if not to_set:
+        return plan
+    missing = []
+    for key in to_set:
+        missing.append({"$or": [{key: {"$exists": False}}, {key: None}, {key: ""}]})
+    try:
+        updated = await plans_col.update_one(
+            {"plan_id": plan.get("plan_id"), "$and": missing},
+            {"$set": to_set},
+        )
+    except Exception as exc:
+        logger.warning(
+            "[payment_plans] plan jurisdiction write failed plan_id=%s err=%s",
+            plan.get("plan_id"), type(exc).__name__,
+        )
+        return plan
+    if not getattr(updated, "modified_count", 0):
+        try:
+            fresh = await plans_col.find_one({"plan_id": plan.get("plan_id")})
+        except Exception:
+            return plan
+        return fresh or plan
+    return {**plan, **to_set}
+
+
 def _identity_pins(row: dict) -> dict:
     """Pin every jurisdiction field the link read, including fields that were absent.
 
@@ -747,6 +812,10 @@ async def record_payment(request: Request, plan_id):
         # Booking number is not unique across counties or states (Lee FL can
         # share a number with Lee GA). Both sides need booking + county + state,
         # and those three must agree. Anything missing or in conflict fails closed.
+        # A plan created before county/state were stored picks them up from the
+        # one bond for this booking — the same source the receipt poller copies
+        # onto a matched payments row.
+        plan = await _plan_with_bond_jurisdiction(plans_col, plan)
         row_identity = _booking_identity(logged_row, nested=True)
         plan_identity = _booking_identity(plan, nested=False)
         if row_identity is None or plan_identity is None:
