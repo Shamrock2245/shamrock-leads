@@ -379,6 +379,7 @@ def test_plan_update_failure_on_insert_path_removes_row(rig):
 
 
 def test_paid_in_full_clamp_failure_does_not_undo_applied_payment(rig):
+    """A clamp write that raises is ignored when the read-back balance is still positive."""
     db, app = rig
     real = db["payment_plans"].update_one
 
@@ -388,8 +389,11 @@ def test_paid_in_full_clamp_failure_does_not_undo_applied_payment(rig):
         return await real(flt, update, upsert)
     db["payment_plans"].update_one = clamp_boom
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CASH"}])
-    assert r.status_code == 200 and _plan(db)["balance_remaining"] == 700.0
-    assert db["payment_plan_payment_claims"].docs[0]["status"] == "applied"
+    body = r.json()
+    assert r.status_code == 200 and body["balance_remaining"] == 700.0 and body["status"] == "active"
+    assert _plan(db)["balance_remaining"] == 700.0 and _plan(db)["status"] == "active"
+    claim = db["payment_plan_payment_claims"].docs[0]
+    assert claim["status"] == "applied" and claim["balance_after"] == 700.0
 
 
 def test_revert_does_not_overwrite_concurrent_reconciliation_status(rig):
@@ -437,8 +441,11 @@ def test_second_logged_row_arriving_during_link_is_detected_and_undone(rig):
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
     assert r.status_code == 409 and r.json()["error"] == "logged_payment_ambiguous"
     assert row == before and _plan(db)["balance_remaining"] == 800.0
-    assert db["audit_events"].docs == [] or all(
-        e["event_type"] == "payment_plan_logged_payment_unlinked" for e in db["audit_events"].docs)
+    kinds = [e["event_type"] for e in db["audit_events"].docs]
+    assert kinds == ["payment_plan_logged_payment_linked", "payment_plan_logged_payment_unlinked"]
+    link, unlink = db["audit_events"].docs
+    assert link["plan_id_after"] == PLAN_ID and unlink["plan_id_before"] == PLAN_ID
+    assert unlink["plan_id_after"] is None and unlink["reason"] and link["reason"]
 
 
 def test_link_audit_has_reason_and_confidence(rig):
@@ -512,3 +519,141 @@ def test_link_keeps_provider_created_at_as_timestamp(rig):
     row = _poller_row(db, created_at="2026-09-01T12:00:00+00:00")
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
     assert r.status_code == 200 and row["timestamp"] == "2026-09-01T12:00:00+00:00"
+
+
+# ── Codex findings on dbb24d0 ───────────────────────────────────────────────
+
+
+def _fail_plan_reads_after_inc(db, fails_left):
+    """Raise on plan find_one after the balance $inc, ``fails_left`` times."""
+    real_find = db["payment_plans"].find_one
+    real_update = db["payment_plans"].update_one
+    state = {"armed": False, "fails_left": fails_left}
+
+    async def arm_after_inc(flt, update, upsert=False):
+        res = await real_update(flt, update, upsert)
+        if "$inc" in update:
+            state["armed"] = True
+        return res
+
+    async def fail_readback(flt=None, *a, **k):
+        if state["armed"] and state["fails_left"]:
+            state["fails_left"] -= 1
+            raise RuntimeError("readback failed")
+        return await real_find(flt, *a, **k)
+
+    db["payment_plans"].update_one = arm_after_inc
+    db["payment_plans"].find_one = fail_readback
+
+
+def test_settling_clamp_failure_fails_closed_without_undo(rig):
+    """Codex P1: a payment that clears the balance must not report success while the plan stays active and negative."""
+    db, app = rig
+    real = db["payment_plans"].update_one
+
+    async def clamp_boom(flt, update, upsert=False):
+        if "balance_remaining" in flt:
+            raise RuntimeError("clamp failed")
+        return await real(flt, update, upsert)
+    db["payment_plans"].update_one = clamp_boom
+    (r,) = _post_many(app, [{"amount": 900, "transaction_id": "TX-SETTLE"}])
+    body = r.json()
+    assert r.status_code == 500 and body["error"] == "paid_in_full_clamp_failed"
+    assert body.get("success") is not True
+    assert "balance_remaining" not in body and "status" not in body
+    plan = _plan(db)
+    assert plan["balance_remaining"] == -100.0 and plan["status"] == "active"
+    assert len(db["payments"].docs) == 1
+    claim = db["payment_plan_payment_claims"].docs[0]
+    assert claim["status"] == "failed" and claim["failed_reason"] == "paid_in_full_clamp_failed"
+    assert "balance_after" not in claim
+    (r2,) = _post_many(app, [{"amount": 900, "transaction_id": "TX-SETTLE"}])
+    assert r2.status_code == 409 and r2.json()["error"] == "payment_needs_review"
+    assert _plan(db)["balance_remaining"] == -100.0 and len(db["payments"].docs) == 1
+
+
+def test_settling_clamp_retries_then_confirms(rig):
+    """The clamp is tried again after a failed write; a later success is what the response reports."""
+    db, app = rig
+    real = db["payment_plans"].update_one
+    state = {"n": 0}
+
+    async def flaky_clamp(flt, update, upsert=False):
+        if "balance_remaining" in flt:
+            state["n"] += 1
+            if state["n"] == 1:
+                raise RuntimeError("clamp failed")
+        return await real(flt, update, upsert)
+    db["payment_plans"].update_one = flaky_clamp
+    (r,) = _post_many(app, [{"amount": 900, "transaction_id": "TX-SETTLE"}])
+    body = r.json()
+    assert r.status_code == 200 and body["status"] == "paid_in_full" and body["balance_remaining"] == 0
+    assert state["n"] == 2
+    assert _plan(db)["status"] == "paid_in_full" and _plan(db)["balance_remaining"] == 0
+    claim = db["payment_plan_payment_claims"].docs[0]
+    assert claim["status"] == "applied" and claim["balance_after"] == 0
+
+
+def test_clamp_timeout_after_apply_is_reconciled_by_readback(rig):
+    """A clamp that persisted and then raised is confirmed from the plan, not treated as a failure."""
+    db, app = rig
+    real = db["payment_plans"].update_one
+    state = {"raised": False}
+
+    async def apply_then_raise(flt, update, upsert=False):
+        res = await real(flt, update, upsert)
+        if "balance_remaining" in flt and not state["raised"]:
+            state["raised"] = True
+            raise RuntimeError("clamp timeout")
+        return res
+    db["payment_plans"].update_one = apply_then_raise
+    (r,) = _post_many(app, [{"amount": 900, "transaction_id": "TX-SETTLE"}])
+    body = r.json()
+    assert r.status_code == 200 and body["status"] == "paid_in_full" and body["balance_remaining"] == 0
+    assert _plan(db)["status"] == "paid_in_full" and _plan(db)["balance_remaining"] == 0
+    assert db["payment_plan_payment_claims"].docs[0]["balance_after"] == 0
+
+
+def test_plan_readback_failure_does_not_fabricate_state(rig):
+    """Codex P1: a failed post-update read must not claim balance 0 or status active."""
+    db, app = rig
+    _fail_plan_reads_after_inc(db, fails_left=2)
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CASH"}])
+    body = r.json()
+    assert r.status_code == 500 and body["error"] == "plan_readback_failed"
+    assert body.get("success") is not True
+    assert "balance_remaining" not in body and "status" not in body
+    assert _plan(db)["balance_remaining"] == 700.0
+    assert len(db["payments"].docs) == 1
+    claim = db["payment_plan_payment_claims"].docs[0]
+    assert claim["status"] == "failed" and claim["failed_reason"] == "plan_readback_failed"
+    assert "balance_after" not in claim
+    (r2,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CASH"}])
+    assert r2.status_code == 409 and r2.json()["error"] == "payment_needs_review"
+
+
+def test_plan_readback_retries_then_returns_real_balance(rig):
+    db, app = rig
+    _fail_plan_reads_after_inc(db, fails_left=1)
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CASH"}])
+    body = r.json()
+    assert r.status_code == 200 and body["balance_remaining"] == 700.0 and body["status"] == "active"
+    assert db["payment_plan_payment_claims"].docs[0]["balance_after"] == 700.0
+
+
+def test_clash_without_link_audit_does_not_emit_orphan_unlink(rig):
+    """If the link audit cannot be saved, the compensation revert writes no unlink event."""
+    db, app = rig
+    row = _poller_row(db)
+    before = dict(row)
+
+    def add_webhook_row(coll, flt):
+        coll.docs.append({"_id": "late-hook", "transaction_id": "TX-CARD", "amount": 100.0,
+                          "status": "completed", "raw_payload": {"event_type": "payment.completed"}})
+    db["payments"].before_update = add_webhook_row
+    db["audit_events"].fail_insert = True
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 503 and r.json()["error"] == "audit_write_failed"
+    assert row == before and _plan(db)["balance_remaining"] == 800.0
+    assert db["audit_events"].docs == []
+    assert db["payment_plan_payment_claims"].docs[0]["failed_reason"] == "audit_write_failed"

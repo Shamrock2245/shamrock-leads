@@ -456,6 +456,93 @@ async def _other_rows_for_txn(payments_col, txn: str, own_id) -> bool:
     return await payments_col.find_one({"transaction_id": txn, "_id": {"$ne": own_id}}) is not None
 
 
+def _plan_payment_confirmed(plan) -> bool:
+    """True only when balance and status were read and agree.
+
+    A positive balance is still open. A non-positive balance counts only after
+    the paid-in-full clamp: exactly 0 and status ``paid_in_full``. Missing
+    fields are not confirmed — never substitute 0 or ``active``.
+    """
+    if not isinstance(plan, dict):
+        return False
+    if "balance_remaining" not in plan or "status" not in plan:
+        return False
+    try:
+        bal = float(plan["balance_remaining"])
+    except (TypeError, ValueError):
+        return False
+    if bal > 0:
+        return True
+    return bal == 0.0 and plan["status"] == "paid_in_full"
+
+
+def _plan_needs_paid_in_full_clamp(plan) -> bool:
+    """True when a read plan is at or below zero and not yet clamped."""
+    if not isinstance(plan, dict) or "balance_remaining" not in plan:
+        return False
+    try:
+        bal = float(plan["balance_remaining"])
+    except (TypeError, ValueError):
+        return False
+    if bal > 0:
+        return False
+    return not (bal == 0.0 and plan.get("status") == "paid_in_full")
+
+
+async def _clamp_paid_in_full(plans_col, plan_id: str) -> None:
+    """Set balance to 0 and status paid_in_full when the balance is already <= 0.
+
+    A raised write is logged and left for the caller to reconcile by reading
+    the plan. Never raises.
+    """
+    try:
+        await plans_col.update_one(
+            {"plan_id": plan_id, "balance_remaining": {"$lte": 0}},
+            {"$set": {"balance_remaining": 0, "status": "paid_in_full"}},
+        )
+    except Exception as exc:
+        logger.warning(
+            "[payment_plans] paid-in-full clamp failed plan_id=%s err=%s",
+            plan_id, type(exc).__name__,
+        )
+
+
+async def _read_plan(plans_col, plan_id: str):
+    """Return the plan document, or None when the read failed or matched nothing.
+
+    None is unknown. Callers must not replace it with ``{}``.
+    """
+    try:
+        return await plans_col.find_one({"plan_id": plan_id})
+    except Exception as exc:
+        logger.warning(
+            "[payment_plans] plan readback failed plan_id=%s err=%s",
+            plan_id, type(exc).__name__,
+        )
+        return None
+
+
+async def _confirm_applied_plan(plans_col, plan_id: str):
+    """Clamp a settled plan and read it back after the balance ``$inc``.
+
+    Returns ``(plan, None)`` when balance and status were read and are
+    consistent. Returns ``(None, reason)`` when they could not be confirmed
+    after one retry. Does not undo the payment: the ``$inc`` already landed,
+    and removing the payment row would leave a reduced balance with no evidence.
+    """
+    saw_unclamped = False
+    for _ in range(2):
+        await _clamp_paid_in_full(plans_col, plan_id)
+        updated = await _read_plan(plans_col, plan_id)
+        if _plan_payment_confirmed(updated):
+            return updated, None
+        # Last observation wins: a later read that fails is a readback failure,
+        # even if an earlier read showed an unclamped balance.
+        saw_unclamped = _plan_needs_paid_in_full_clamp(updated)
+    reason = "paid_in_full_clamp_failed" if saw_unclamped else "plan_readback_failed"
+    return None, reason
+
+
 @payment_plans_bp.post("/payments/plans/{plan_id}/pay")
 async def record_payment(request: Request, plan_id):
     """Record a payment against an existing plan — at most once per transaction id.
@@ -695,10 +782,26 @@ async def record_payment(request: Request, plan_id):
             logger.error("[payment_plans] row undo failed plan_id=%s err=%s", plan_id, type(exc).__name__)
             return False
 
+    if logged_row is not None:
+        # Audit the link before any later compensation. A clash undo emits
+        # payment_plan_logged_payment_unlinked; that event must follow this
+        # link record (Codex P2). If the audit insert fails, revert with no
+        # unlink event — there is no link record to pair it with — fail the
+        # claim and return an error. Balance untouched.
+        if not await _audit_link(actor, plan, plan_id, txn, logged_row, amount):
+            await _revert_link(payments_col, logged_row, plan_id, link_set)
+            await _fail_claim(claims, plan_id, txn, "audit_write_failed")
+            return JSONResponse(
+                {"error": "audit_write_failed", "transaction_id": txn,
+                 "message": "The payment was not applied because its audit record could not be saved. Try again shortly."},
+                status_code=503,
+            )
+
     # Post-write recheck (Codex P1): the poller/webhook insert into `payments`
     # outside this claim. If any other row for this txn exists now (one that
     # arrived after the pre-check), this application is ambiguous: undo our
-    # write before the balance moves and refuse.
+    # write before the balance moves and refuse. The link audit above already
+    # ran, so the unlink audit is the matching transition.
     try:
         clash = await _other_rows_for_txn(payments_col, txn, own_id)
     except Exception:
@@ -711,19 +814,6 @@ async def record_payment(request: Request, plan_id):
              "message": "Another logged payment with this transaction id appeared while this one was being recorded. Review before applying it to a plan."},
             status_code=409,
         )
-
-    if logged_row is not None:
-        # The association is reported only with a durable audit record.
-        # If the audit insert fails, undo the link (only if still exactly as
-        # written), fail the claim and return an error; balance untouched.
-        if not await _audit_link(actor, plan, plan_id, txn, logged_row, amount):
-            await _revert_link(payments_col, logged_row, plan_id, link_set)
-            await _fail_claim(claims, plan_id, txn, "audit_write_failed")
-            return JSONResponse(
-                {"error": "audit_write_failed", "transaction_id": txn,
-                 "message": "The payment was not applied because its audit record could not be saved. Try again shortly."},
-                status_code=503,
-            )
 
     try:
         # Atomic increments so two different transactions never overwrite each other.
@@ -752,22 +842,27 @@ async def record_payment(request: Request, plan_id):
         await _fail_claim(claims, plan_id, txn, "plan_update_error")
         return JSONResponse({"error": "payment_record_failed", "transaction_id": txn}, status_code=500)
 
-    # The payment is applied from here on. The paid-in-full clamp and the read
-    # back are not reasons to undo it.
-    try:
-        await plans_col.update_one(
-            {"plan_id": plan_id, "balance_remaining": {"$lte": 0}},
-            {"$set": {"balance_remaining": 0, "status": "paid_in_full"}},
+    # The $inc landed, so the payment stays (undoing the row would drop the
+    # evidence of a balance that already moved). The paid-in-full clamp is
+    # retried once and then checked against a real read. If the plan is still
+    # active with a non-positive balance, or the plan cannot be read, fail
+    # closed: no success, and no guessed balance_after / status (Codex P1).
+    updated, unconfirmed = await _confirm_applied_plan(plans_col, plan_id)
+    if updated is None:
+        await _fail_claim(claims, plan_id, txn, unconfirmed)
+        if unconfirmed == "paid_in_full_clamp_failed":
+            message = ("The installment was recorded, but the plan could not be marked paid in full. "
+                       "Check the plan before recording it again.")
+        else:
+            message = ("The installment was recorded, but the plan could not be read back. "
+                       "Check the plan before recording it again.")
+        return JSONResponse(
+            {"error": unconfirmed, "transaction_id": txn, "message": message},
+            status_code=500,
         )
-    except Exception as exc:
-        logger.warning("[payment_plans] paid-in-full clamp failed plan_id=%s err=%s", plan_id, type(exc).__name__)
-    try:
-        updated = await plans_col.find_one({"plan_id": plan_id}) or {}
-    except Exception:
-        updated = {}
 
-    new_balance = updated.get("balance_remaining", 0)
-    status = updated.get("status", "active")
+    new_balance = updated["balance_remaining"]
+    status = updated["status"]
     await claims.update_one(
         {"plan_id": plan_id, "transaction_id": txn},
         {"$set": {"status": "applied", "applied_at": now.isoformat(), "balance_after": new_balance}},
