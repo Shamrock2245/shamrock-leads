@@ -181,6 +181,9 @@ async def create_plan(request: Request):
             "amount": down_payment,
             "method": data.get("payment_method", "Cash"),
             "type": "down_payment",
+            # Provider transaction id (card down payment) so it dedupes with the
+            # receipt-poller / webhook row for the same charge.
+            "transaction_id": str(data.get("down_payment_transaction_id") or "").strip(),
             "status": "completed",
             "timestamp": now.isoformat(),
             "notes": "Initial down payment",

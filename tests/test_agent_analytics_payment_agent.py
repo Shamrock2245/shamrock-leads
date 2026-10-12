@@ -57,7 +57,8 @@ def test_unsettled_statuses_excluded(status):
     if status is None:
         row.pop("status")
     out = S([row])
-    assert out["count"] == 0 and out["total"] == 0 and out["unsettled_skipped"] == 1
+    assert out["count"] == 0 and out["total"] == 0
+    assert out["unsettled_skipped"] + out["reversed_skipped"] == 1
 
 
 @pytest.mark.parametrize("event", ["payment.failed", "payment.refunded"])
@@ -140,3 +141,104 @@ def test_agent_performance_payment_agent_kpis(monkeypatch):
     agent = next(a for a in agents if a.get("agent_id") == "the_payment_agent")
     assert agent["kpis"]["payments_recorded"] == 3
     assert agent["kpis"]["total_collected"] == 200.0
+
+
+# ── Codex P2s on 8f765fb ─────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("reversal", [
+    {"status": "refunded"}, {"status": "voided"}, {"status": "chargeback"},
+    {"status": "approved", "raw_payload": {"event_type": "payment.refunded"}},
+    {"status": "approved", "raw_payload": {"event_type": "payment.voided"}},
+    {"status": "approved", "raw_payload": {"event_type": "payment.chargeback"}},
+])
+def test_later_refund_or_chargeback_cancels_settled_transaction(reversal):
+    """P2: group by transaction first; a reversal row cancels the earlier settled row(s)."""
+    rows = [webhook("T1"), poller("T1"),
+            {"_id": "rev", "transaction_id": "T1", "amount": 100.0, "created_at": RECENT, **reversal},
+            poller("T2", amount=30.0)]
+    out = S(rows)
+    assert out["count"] == 1 and out["total"] == 30.0 and out["reversed_skipped"] == 1
+
+
+def test_refund_cancels_even_plan_linked_row():
+    out = S([plan_pay("T1", 100.0), webhook("T1", event="payment.refunded")])
+    assert out["count"] == 0 and out["total"] == 0
+
+
+def test_declined_row_alone_does_not_cancel_settled_row():
+    out = S([poller("T1", status="declined"), poller("T1", amount=100.0, _id="ok")])
+    assert out["count"] == 1 and out["total"] == 100.0
+
+
+def _down(amount=200.0, booking="BK-1", when=RECENT, txn=None, **kw):
+    row = {"_id": f"dp-{booking}-{amount}", "booking_number": booking, "plan_id": "plan-1",
+           "amount": amount, "type": "down_payment", "status": "completed", "timestamp": when, **kw}
+    if txn:
+        row["transaction_id"] = txn
+    return row
+
+
+def test_untracked_down_payment_matched_to_poller_row_counts_once():
+    """P2: card down payment logged by /payments/plans (no txn) and by the poller."""
+    out = S([_down(200.0), poller("SS-9", amount=200.0, booking_number="BK-1")])
+    assert out["count"] == 1 and out["total"] == 200.0 and out["down_payments_matched"] == 1
+
+
+def test_untracked_down_payment_matched_to_webhook_row():
+    out = S([_down(150.0), webhook("SS-8", amount=150.0, booking_number="BK-1")])
+    assert out["count"] == 1 and out["total"] == 150.0
+
+
+@pytest.mark.parametrize("card", [
+    lambda: poller("SS-1", amount=199.99, booking_number="BK-1"),            # amount differs
+    lambda: poller("SS-1", amount=200.0, booking_number="BK-OTHER"),         # booking differs
+    lambda: {**poller("SS-1", amount=200.0, booking_number="BK-1"),
+             "created_at": (NOW - timedelta(days=10)).isoformat()},           # outside window
+])
+def test_down_payment_not_matched_counts_both(card):
+    out = S([_down(200.0), card()])
+    assert out["count"] == 2 and out["down_payments_matched"] == 0
+
+
+def test_one_card_row_absorbs_only_one_down_payment():
+    out = S([_down(200.0), {**_down(200.0), "_id": "dp-2"}, poller("SS-1", amount=200.0, booking_number="BK-1")])
+    assert out["count"] == 2 and out["total"] == 400.0 and out["down_payments_matched"] == 1
+
+
+def test_down_payment_with_txn_dedupes_by_txn_preferring_plan_row():
+    out = S([_down(200.0, txn="SS-7"), poller("SS-7", amount=200.0, booking_number="BK-1")])
+    assert out["count"] == 1 and out["total"] == 200.0 and out["duplicates_skipped"] == 1
+
+
+def test_down_payment_not_absorbed_by_refunded_card_row():
+    out = S([_down(200.0), poller("SS-5", amount=200.0, booking_number="BK-1"),
+             webhook("SS-5", event="payment.refunded", booking_number="BK-1")])
+    assert out["count"] == 1 and out["total"] == 200.0  # card txn reversed; plan row stands
+
+
+def test_create_plan_persists_down_payment_transaction_id(monkeypatch):
+    from unittest.mock import AsyncMock, patch
+    from dashboard.routers import payment_plans as pp
+
+    class C:
+        def __init__(self):
+            self.docs = []
+
+        async def find_one(self, *a, **k):
+            return None
+
+        async def insert_one(self, doc):
+            self.docs.append(dict(doc))
+
+    cols = {"payment_plans": C(), "payments": C()}
+    monkeypatch.setattr(pp, "get_collection", lambda n: cols[n])
+
+    class Req:
+        async def json(self):
+            return {"booking_number": "BK-1", "total_premium": 1000, "down_payment": 200,
+                    "payment_method": "Card", "down_payment_transaction_id": " SS-77 "}
+    with patch("dashboard.routers.events.publish_event", new=AsyncMock()):
+        r = asyncio.run(pp.create_plan(Req()))
+    assert r.status_code == 201
+    (row,) = cols["payments"].docs
+    assert row["type"] == "down_payment" and row["transaction_id"] == "SS-77"

@@ -11,10 +11,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Only settled statuses count: approved, paid, completed or success, case-insensitive (so `"Completed"` from `/api/payments` counts). This is the same rule as the plan-payment link in #181. A webhook row also needs `event_type` `payment.completed`.
   - Each transaction id counts once. The preferred row is the one linked to a plan, then a `completed` row. Rows with no transaction id count on their own.
 
+  - **Refunds and chargebacks (Codex P2):** rows are grouped by transaction id first. If any row for a transaction is a refund, void, chargeback, reversal or dispute (by status or webhook `event_type`), the whole transaction is left out, including a plan-linked row. A partial refund also drops the transaction from these KPIs (conservative).
+  - **Card down payments (Codex P2):** `POST /api/payments/plans` now saves `down_payment_transaction_id` as the down-payment row's `transaction_id`, so it dedupes against the poller or webhook row for the same charge. Older down-payment rows have no transaction id. Such a row is suppressed when a settled poller or webhook row has the same booking, the exact same amount and a time within 3 days; each card row can absorb only one down payment.
+
   The logic is in `agent_analytics.summarize_settled_payments`.
 
 ### Tests
-- New `tests/test_agent_analytics_payment_agent.py` (added to `ci.yml`): poller+webhook and poller+plan duplicates, which row is preferred, declined/refunded/voided/pending/blank statuses, webhook failed/refunded events, plan `/pay` rows, rows with no transaction id, and the KPIs from the endpoint itself.
+- New `tests/test_agent_analytics_payment_agent.py` (added to `ci.yml`): poller+webhook and poller+plan duplicates, which row is preferred, declined/refunded/voided/pending/blank statuses, webhook failed/refunded events, plan `/pay` rows, rows with no transaction id, and the KPIs from the endpoint itself, refund/void/chargeback cancellation, down-payment matching (matched, not matched, one-to-one, transaction id, refunded card row), and `create_plan` saving the down-payment transaction id.
 
 ## [Unreleased] — 2026-10-12 (payment webhook fails closed; plan payments deduped)
 

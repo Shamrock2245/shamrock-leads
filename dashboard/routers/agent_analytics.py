@@ -12,6 +12,7 @@ Endpoints:
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
@@ -36,29 +37,57 @@ def _period_range(days: int = 30):
 # Same settled rule as the plan-payment link (#181): approved / paid /
 # completed / success (case-insensitive); webhook rows only for event
 # ``payment.completed``. Plan /pay rows carry ``timestamp`` and poller /
-# webhook rows ``created_at``; both count. A transaction id counts once,
-# preferring the plan-linked row, then a ``completed`` row.
+# webhook rows ``created_at``; both count.
+#  * Rows are grouped by transaction id FIRST. If any row for a transaction
+#    is a refund / void / chargeback / reversal (status or webhook event),
+#    the whole transaction is excluded (conservative: a partial refund also
+#    drops it from these KPIs).
+#  * A transaction id counts once, preferring the plan-linked row, then a
+#    ``completed`` row.
+#  * A plan down-payment row with no transaction id (``POST /payments/plans``
+#    before it stored one) is suppressed when a settled card row (poller /
+#    webhook) for the same booking and exact amount exists within
+#    ``_DOWN_PAYMENT_MATCH_WINDOW``; each card row absorbs at most one.
 
 _SETTLED_PAYMENT_STATUSES = frozenset({"approved", "paid", "completed", "success"})
+_REVERSAL_MARKERS = ("refund", "void", "chargeback", "charge_back", "reversal", "reversed", "dispute")
+_DOWN_PAYMENT_MATCH_WINDOW = timedelta(days=3)
 _PAYMENT_AGENT_FIELDS = {
-    "_id": 1, "transaction_id": 1, "amount": 1, "status": 1, "plan_id": 1,
-    "timestamp": 1, "created_at": 1, "raw_payload.event_type": 1,
+    "_id": 1, "transaction_id": 1, "amount": 1, "status": 1, "plan_id": 1, "type": 1,
+    "source": 1, "booking_number": 1, "timestamp": 1, "created_at": 1,
+    "raw_payload.event_type": 1,
 }
 
 
+def _event(row: dict) -> str:
+    raw = row.get("raw_payload")
+    if isinstance(raw, dict) and raw.get("event_type") is not None:
+        return str(raw.get("event_type")).strip().lower()
+    return ""
+
+
+def _status(row: dict) -> str:
+    return str(row.get("status") or "").strip().lower()
+
+
+def _is_reversal(row: dict) -> bool:
+    text = f"{_status(row)} {_event(row)}"
+    return any(marker in text for marker in _REVERSAL_MARKERS)
+
+
 def _settled_payment(row: dict) -> bool:
-    if str(row.get("status") or "").strip().lower() not in _SETTLED_PAYMENT_STATUSES:
+    if _status(row) not in _SETTLED_PAYMENT_STATUSES:
         return False
     raw = row.get("raw_payload")
     if isinstance(raw, dict) and raw.get("event_type") is not None:
-        return str(raw.get("event_type")).strip().lower() == "payment.completed"
+        return _event(row) == "payment.completed"
     return True
 
 
 def _payment_rank(row: dict) -> int:
     if str(row.get("plan_id") or "").strip():
         return 0
-    if str(row.get("status") or "").strip().lower() == "completed":
+    if _status(row) == "completed":
         return 1
     return 2
 
@@ -71,30 +100,99 @@ def _amount(row: dict) -> float:
     return value if value == value and value not in (float("inf"), float("-inf")) else 0.0
 
 
+def _cents(row: dict) -> int:
+    return int(round(_amount(row) * 100))
+
+
+def _when(row: dict) -> Optional[datetime]:
+    for key in ("timestamp", "created_at"):
+        val = row.get(key)
+        if isinstance(val, datetime):
+            return val if val.tzinfo else val.replace(tzinfo=timezone.utc)
+        if isinstance(val, str) and val.strip():
+            try:
+                dt = datetime.fromisoformat(val.strip().replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return None
+
+
+def _is_card_log_row(row: dict) -> bool:
+    """Poller / webhook row (provider-logged card payment), not plan-linked."""
+    if str(row.get("plan_id") or "").strip():
+        return False
+    return row.get("source") == "swipesimple_gmail_poll" or isinstance(row.get("raw_payload"), dict)
+
+
+def _is_untracked_down_payment(row: dict) -> bool:
+    return (str(row.get("type") or "").strip().lower() == "down_payment"
+            and not str(row.get("transaction_id") or "").strip())
+
+
 def summarize_settled_payments(rows) -> dict:
-    """{count, total, duplicates_skipped, unsettled_skipped} for settled rows,
-    one per transaction id (rows without an id count individually)."""
-    chosen: dict = {}
-    unsettled = dupes = 0
-    for idx, row in enumerate(rows or []):
-        if not _settled_payment(row):
+    """{count, total, duplicates_skipped, unsettled_skipped, reversed_skipped,
+    down_payments_matched} — settled money, one per transaction id."""
+    rows = list(rows or [])
+    by_txn: dict = {}
+    loose: list = []
+    for idx, row in enumerate(rows):
+        txn = str(row.get("transaction_id") or "").strip()
+        if txn:
+            by_txn.setdefault(txn, []).append(row)
+        else:
+            loose.append((idx, row))
+
+    unsettled = dupes = reversed_txns = 0
+    chosen: list = []
+    for txn, group in by_txn.items():
+        if any(_is_reversal(r) for r in group):
+            reversed_txns += 1
+            continue
+        settled = [r for r in group if _settled_payment(r)]
+        unsettled += len(group) - len(settled)
+        if not settled:
+            continue
+        dupes += len(settled) - 1
+        chosen.append(min(settled, key=_payment_rank))  # min keeps first on ties
+
+    card_rows = [r for r in chosen if _is_card_log_row(r)]
+    absorbed: set = set()
+    matched = 0
+    for idx, row in loose:
+        if _is_reversal(row) or not _settled_payment(row):
             unsettled += 1
             continue
-        txn = str(row.get("transaction_id") or "").strip()
-        key = ("txn", txn) if txn else ("row", str(row.get("_id", idx)))
-        prev = chosen.get(key)
-        if prev is None:
-            chosen[key] = row
-            continue
-        dupes += 1
-        if _payment_rank(row) < _payment_rank(prev):
-            chosen[key] = row
-    total = sum(_amount(r) for r in chosen.values())
+        if _is_untracked_down_payment(row):
+            booking = str(row.get("booking_number") or "").strip()
+            when = _when(row)
+            hit = None
+            for c_idx, card in enumerate(card_rows):
+                if c_idx in absorbed or not booking:
+                    continue
+                if str(card.get("booking_number") or "").strip() != booking:
+                    continue
+                if _cents(card) != _cents(row):
+                    continue
+                c_when = _when(card)
+                if when is not None and c_when is not None and abs(c_when - when) > _DOWN_PAYMENT_MATCH_WINDOW:
+                    continue
+                hit = c_idx
+                break
+            if hit is not None:
+                absorbed.add(hit)
+                matched += 1
+                continue
+        chosen.append(row)
+
+    total = sum(_amount(r) for r in chosen)
     return {
         "count": len(chosen),
         "total": round(total, 2),
         "duplicates_skipped": dupes,
         "unsettled_skipped": unsettled,
+        "reversed_skipped": reversed_txns,
+        "down_payments_matched": matched,
     }
 
 
