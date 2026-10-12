@@ -347,6 +347,36 @@ async def record_payment(request: Request, plan_id):
     if legacy:
         return await _idempotent_reply(plans_col, plan_id, txn, None, amount, legacy_row=legacy)
 
+    # Link, don't duplicate: a card payment the receipt poller (or payment
+    # webhook) already logged is a payments row with this transaction_id and
+    # no plan_id. Attach plan_id to THAT row instead of inserting a second one.
+    unlinked_filter = {
+        "transaction_id": txn,
+        "$or": [{"plan_id": {"$exists": False}}, {"plan_id": None}, {"plan_id": ""}],
+    }
+    unlinked_count = await payments_col.count_documents(unlinked_filter)
+    if unlinked_count > 1:
+        return JSONResponse(
+            {"error": "logged_payment_ambiguous", "transaction_id": txn,
+             "message": "More than one logged payment has this transaction id. Review before applying it to a plan."},
+            status_code=409,
+        )
+    logged_row = await payments_col.find_one(unlinked_filter) if unlinked_count == 1 else None
+    if logged_row is not None:
+        if not _same_amount(logged_row.get("amount"), amount):
+            return JSONResponse(
+                {"error": "logged_payment_amount_mismatch", "transaction_id": txn,
+                 "message": "The logged card payment with this transaction id has a different amount."},
+                status_code=409,
+            )
+        row_booking = str(logged_row.get("booking_number") or "").strip()
+        if row_booking and row_booking != str(plan.get("booking_number") or "").strip():
+            return JSONResponse(
+                {"error": "logged_payment_booking_mismatch", "transaction_id": txn,
+                 "message": "The logged card payment with this transaction id belongs to another booking."},
+                status_code=409,
+            )
+
     now = datetime.now(timezone.utc)
     try:
         await claims.insert_one({
@@ -362,18 +392,52 @@ async def record_payment(request: Request, plan_id):
         return await _idempotent_reply(
             plans_col, plan_id, txn, existing or {"status": "unknown"}, amount)
 
-    try:
-        await payments_col.insert_one({
-            "booking_number": plan["booking_number"],
-            "plan_id": plan_id,
-            "amount": amount,
-            "method": data.get("method", "Cash"),
-            "type": "installment",
-            "status": "completed",
-            "timestamp": now.isoformat(),
+    if logged_row is not None:
+        # Conditional link: matches only while the row is still unlinked and
+        # unchanged. Losing it means someone linked it meanwhile; never insert.
+        link_filter = {
+            "_id": logged_row["_id"],
             "transaction_id": txn,
-            "notes": data.get("notes", ""),
-        })
+            "amount": logged_row.get("amount"),
+            "$or": [{"plan_id": {"$exists": False}}, {"plan_id": None}, {"plan_id": ""}],
+        }
+        linked = await payments_col.update_one(link_filter, {"$set": {
+            "plan_id": plan_id,
+            "plan_linked_at": now.isoformat(),
+            "plan_linked_type": "installment",
+        }})
+        if not getattr(linked, "modified_count", 0):
+            current = await payments_col.find_one({"_id": logged_row["_id"]}) or {}
+            await claims.update_one(
+                {"plan_id": plan_id, "transaction_id": txn},
+                {"$set": {"status": "failed", "failed_at": datetime.now(timezone.utc).isoformat(),
+                          "failed_reason": "logged_payment_link_lost"}},
+            )
+            other = current.get("plan_id")
+            if other and other != plan_id:
+                return JSONResponse(
+                    {"error": "transaction_id_used_on_other_plan", "transaction_id": txn},
+                    status_code=409,
+                )
+            return JSONResponse(
+                {"error": "payment_needs_review", "transaction_id": txn,
+                 "message": "The logged card payment changed while it was being linked. Check the plan before recording it again."},
+                status_code=409,
+            )
+
+    try:
+        if logged_row is None:
+            await payments_col.insert_one({
+                "booking_number": plan["booking_number"],
+                "plan_id": plan_id,
+                "amount": amount,
+                "method": data.get("method", "Cash"),
+                "type": "installment",
+                "status": "completed",
+                "timestamp": now.isoformat(),
+                "transaction_id": txn,
+                "notes": data.get("notes", ""),
+            })
         # Atomic increments so two different transactions never overwrite each other.
         await plans_col.update_one(
             {"plan_id": plan_id},
@@ -420,6 +484,7 @@ async def record_payment(request: Request, plan_id):
     return {
         "success": True,
         "idempotent": False,
+        "linked_logged_payment": logged_row is not None,
         "transaction_id": txn,
         "balance_remaining": new_balance,
         "total_paid": updated.get("total_paid"),

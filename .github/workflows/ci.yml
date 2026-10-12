@@ -122,6 +122,7 @@ jobs:
             tests/test_prod_auth_allowlist.py \
             tests/test_payment_webhook.py \
             tests/test_payment_plan_pay_dedupe.py \
+            tests/test_payment_plan_link_logged_payment.py \
             tests/test_auth_no_pin_fail_closed.py \
             tests/test_pinellas_relay_only.py \
             tests/test_pinellas_modal_wait.py \

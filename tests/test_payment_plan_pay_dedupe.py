@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -25,6 +26,7 @@ class Coll:
         self.index_calls = 0
         self.fail_index = False
         self.fail_insert = False
+        self.before_update = None
 
     async def create_index(self, keys, unique=False, name=None, **_):
         await asyncio.sleep(0)
@@ -55,13 +57,20 @@ class Coll:
 
     async def update_one(self, flt, update, upsert=False):
         await asyncio.sleep(0)
+        if self.before_update is not None:
+            hook, self.before_update = self.before_update, None
+            hook(self, flt)
         for d in self.docs:
             if matches(d, flt):
                 for k, v in update.get("$inc", {}).items():
                     d[k] = d.get(k, 0) + v
                 d.update(update.get("$set", {}))
-                return
-        return
+                return SimpleNamespace(matched_count=1, modified_count=1)
+        return SimpleNamespace(matched_count=0, modified_count=0)
+
+    async def count_documents(self, flt=None):
+        await asyncio.sleep(0)
+        return sum(1 for d in self.docs if matches(d, flt or {}))
 
 
 class DB(dict):
@@ -233,10 +242,13 @@ def test_legacy_row_on_other_plan_blocks_reuse(rig):
 def test_poller_row_without_plan_does_not_block(rig):
     """The receipt poller logs card payments with no plan_id; that is not a plan application."""
     db, app = rig
-    db["payments"].docs.append({"transaction_id": "TX-CARD", "amount": 100, "booking_number": "TEST-PP-1"})
+    db["payments"].docs.append({"_id": "pay-poll-x", "transaction_id": "TX-CARD", "amount": 100,
+                                "booking_number": "TEST-PP-1"})
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
     assert r.status_code == 200 and r.json()["idempotent"] is False
     assert _plan(db)["balance_remaining"] == 700.0
+    # Linked, not duplicated (see test_payment_plan_link_logged_payment.py).
+    assert len(db["payments"].docs) == 1 and db["payments"].docs[0]["plan_id"] == PLAN_ID
 
 
 @pytest.mark.parametrize("amount", [900, 99.99, 100.01])

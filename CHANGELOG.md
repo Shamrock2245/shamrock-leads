@@ -3,6 +3,21 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-12 (plan payments: link the logged card payment, don't duplicate it)
+
+### Fixed
+- **`POST /api/payments/plans/{plan_id}/pay` no longer writes a second `payments` row for a card payment that is already logged.** When the receipt poller (or payment webhook) has already logged the transaction (a `payments` row with that `transaction_id` and no `plan_id`), the route sets `plan_id`, `plan_linked_at` and `plan_linked_type` on that row instead of inserting another. The link is a conditional update that matches only while the row is still unlinked and its amount hasn't changed. If the link is lost, the claim is marked `failed`, nothing is inserted and the balance doesn't move: a row now on another plan returns 409 `transaction_id_used_on_other_plan`; any other change returns 409 `payment_needs_review`. #179's rules still hold (claim first, amount match, one plan per transaction id). Before any claim, the route refuses with 409 when:
+  - the logged row's amount differs from the request (`logged_payment_amount_mismatch`)
+  - the row names a different booking (`logged_payment_booking_mismatch`)
+  - more than one unlinked row has the id (`logged_payment_ambiguous`)
+  - the row is already linked to another plan (`transaction_id_used_on_other_plan`)
+
+  The response adds `linked_logged_payment`. This stops revenue totals that sum `payments` from counting new card installments twice. Rows already duplicated in prod are not changed.
+
+### Tests
+- New `tests/test_payment_plan_link_logged_payment.py` (added to `ci.yml`): linking, replay, cash insert, amount mismatch, other plan, other booking, ambiguous rows, concurrent requests on one plan and on two plans, and a link lost to a change between the check and the update.
+- `tests/test_payment_plan_pay_dedupe.py`: the poller-row case now asserts the row is linked, not duplicated.
+
 ## [Unreleased] — 2026-10-12 (payment webhook fails closed; plan payments deduped)
 
 ### Fixed
