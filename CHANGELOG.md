@@ -13,6 +13,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
   - **Refunds and chargebacks (Codex P2):** rows are grouped by transaction id first. If any row for a transaction is a refund, void, chargeback, reversal or dispute (by status or webhook `event_type`), the whole transaction is left out, including a plan-linked row. A partial refund also drops the transaction from these KPIs (conservative).
   - **Card down payments (Codex P2):** `POST /api/payments/plans` now saves `down_payment_transaction_id` as the down-payment row's `transaction_id`, so it dedupes against the poller or webhook row for the same charge. Older down-payment rows have no transaction id. Such a row is suppressed when a settled poller or webhook row has the same booking, the exact same amount and a time within 3 days; each card row can absorb only one down payment.
+  - **Only card down payments are matched (Codex P2 @e975130):** a down payment with no transaction id is matched only when its `method` is a card (card, credit, debit or swipe, case-insensitive). Cash, check, other or missing methods are always counted, so a separate cash payment is never dropped. `method` is now loaded by the KPI query.
+  - **Refunded card down payments (Codex P2 @e975130):** if such a card down payment matches a provider charge that was refunded, voided or charged back, the down payment is left out too (`down_payments_reversed`), instead of still counting.
 
   The logic is in `agent_analytics.summarize_settled_payments`.
 

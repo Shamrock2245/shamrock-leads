@@ -172,7 +172,8 @@ def test_declined_row_alone_does_not_cancel_settled_row():
 
 def _down(amount=200.0, booking="BK-1", when=RECENT, txn=None, **kw):
     row = {"_id": f"dp-{booking}-{amount}", "booking_number": booking, "plan_id": "plan-1",
-           "amount": amount, "type": "down_payment", "status": "completed", "timestamp": when, **kw}
+           "amount": amount, "type": "down_payment", "status": "completed", "timestamp": when,
+           "method": "Card", **kw}
     if txn:
         row["transaction_id"] = txn
     return row
@@ -210,7 +211,46 @@ def test_down_payment_with_txn_dedupes_by_txn_preferring_plan_row():
     assert out["count"] == 1 and out["total"] == 200.0 and out["duplicates_skipped"] == 1
 
 
-def test_down_payment_not_absorbed_by_refunded_card_row():
+def test_legacy_card_down_payment_excluded_when_its_charge_is_refunded():
+    """Codex P2 @e975130: the matching card charge was refunded -> fail closed."""
     out = S([_down(200.0), poller("SS-5", amount=200.0, booking_number="BK-1"),
              webhook("SS-5", event="payment.refunded", booking_number="BK-1")])
-    assert out["count"] == 1 and out["total"] == 200.0  # card txn reversed; plan row stands
+    assert out["count"] == 0 and out["total"] == 0.0
+    assert out["reversed_skipped"] == 1 and out["down_payments_reversed"] == 1
+
+
+@pytest.mark.parametrize("event", ["payment.chargeback", "payment.voided"])
+def test_legacy_card_down_payment_excluded_on_chargeback_or_void(event):
+    out = S([_down(200.0), webhook("SS-6", amount=200.0, booking_number="BK-1"),
+             webhook("SS-6", amount=200.0, event=event, booking_number="BK-1", _id="rev")])
+    assert out["count"] == 0 and out["down_payments_reversed"] == 1
+
+
+def test_refund_of_other_booking_does_not_drop_down_payment():
+    out = S([_down(200.0), poller("SS-5", amount=200.0, booking_number="BK-2"),
+             webhook("SS-5", event="payment.refunded", booking_number="BK-2")])
+    assert out["count"] == 1 and out["total"] == 200.0 and out["down_payments_reversed"] == 0
+
+
+@pytest.mark.parametrize("method", ["Cash", "Check", "", None, "Zelle"])
+def test_non_card_down_payment_never_absorbed_by_card_row(method):
+    """Codex P2 @e975130: a distinct cash down payment is real money, keep it."""
+    out = S([_down(200.0, method=method), poller("SS-9", amount=200.0, booking_number="BK-1")])
+    assert out["count"] == 2 and out["total"] == 400.0 and out["down_payments_matched"] == 0
+
+
+@pytest.mark.parametrize("method", ["Cash", None])
+def test_non_card_down_payment_kept_when_card_charge_refunded(method):
+    out = S([_down(200.0, method=method), poller("SS-5", amount=200.0, booking_number="BK-1"),
+             webhook("SS-5", event="payment.refunded", booking_number="BK-1")])
+    assert out["count"] == 1 and out["total"] == 200.0
+
+
+@pytest.mark.parametrize("method", ["Card", "credit card", "Debit", "SwipeSimple"])
+def test_card_methods_are_matched(method):
+    out = S([_down(200.0, method=method), poller("SS-9", amount=200.0, booking_number="BK-1")])
+    assert out["count"] == 1 and out["down_payments_matched"] == 1
+
+
+def test_endpoint_projection_loads_method():
+    assert aa._PAYMENT_AGENT_FIELDS.get("method") == 1

@@ -55,7 +55,7 @@ _DOWN_PAYMENT_MATCH_WINDOW = timedelta(days=3)
 _PAYMENT_AGENT_FIELDS = {
     "_id": 1, "transaction_id": 1, "amount": 1, "status": 1, "plan_id": 1, "type": 1,
     "source": 1, "booking_number": 1, "timestamp": 1, "created_at": 1,
-    "raw_payload.event_type": 1,
+    "raw_payload.event_type": 1, "method": 1,
 }
 
 
@@ -125,14 +125,36 @@ def _is_card_log_row(row: dict) -> bool:
     return row.get("source") == "swipesimple_gmail_poll" or isinstance(row.get("raw_payload"), dict)
 
 
-def _is_untracked_down_payment(row: dict) -> bool:
-    return (str(row.get("type") or "").strip().lower() == "down_payment"
-            and not str(row.get("transaction_id") or "").strip())
+_CARD_METHOD_MARKERS = ("card", "credit", "debit", "swipe")
+
+
+def _is_untracked_card_down_payment(row: dict) -> bool:
+    """A down payment with no transaction id whose recorded method is a card.
+    Cash, check, other or missing methods are never matched to a card row
+    (Codex P2: a distinct cash payment must not be dropped)."""
+    if str(row.get("type") or "").strip().lower() != "down_payment":
+        return False
+    if str(row.get("transaction_id") or "").strip():
+        return False
+    method = str(row.get("method") or "").strip().lower()
+    return any(m in method for m in _CARD_METHOD_MARKERS)
+
+
+def _card_matches(row: dict, card: dict) -> bool:
+    booking = str(row.get("booking_number") or "").strip()
+    if not booking or str(card.get("booking_number") or "").strip() != booking:
+        return False
+    if _cents(card) != _cents(row):
+        return False
+    when, c_when = _when(row), _when(card)
+    if when is not None and c_when is not None and abs(c_when - when) > _DOWN_PAYMENT_MATCH_WINDOW:
+        return False
+    return True
 
 
 def summarize_settled_payments(rows) -> dict:
     """{count, total, duplicates_skipped, unsettled_skipped, reversed_skipped,
-    down_payments_matched} — settled money, one per transaction id."""
+    down_payments_matched, down_payments_reversed} — settled money, one per transaction id."""
     rows = list(rows or [])
     by_txn: dict = {}
     loose: list = []
@@ -145,9 +167,16 @@ def summarize_settled_payments(rows) -> dict:
 
     unsettled = dupes = reversed_txns = 0
     chosen: list = []
+    reversed_cards: list = []
     for txn, group in by_txn.items():
         if any(_is_reversal(r) for r in group):
             reversed_txns += 1
+            # Keep the provider's original charge (not the refund row) so a
+            # legacy card down payment for it can be excluded too (Codex P2).
+            logs = [r for r in group if _is_card_log_row(r)]
+            original = [r for r in logs if not _is_reversal(r)] or logs
+            if original:
+                reversed_cards.append(original[0])
             continue
         settled = [r for r in group if _settled_payment(r)]
         unsettled += len(group) - len(settled)
@@ -158,30 +187,25 @@ def summarize_settled_payments(rows) -> dict:
 
     card_rows = [r for r in chosen if _is_card_log_row(r)]
     absorbed: set = set()
-    matched = 0
+    reversed_used: set = set()
+    matched = dp_reversed = 0
     for idx, row in loose:
         if _is_reversal(row) or not _settled_payment(row):
             unsettled += 1
             continue
-        if _is_untracked_down_payment(row):
-            booking = str(row.get("booking_number") or "").strip()
-            when = _when(row)
-            hit = None
-            for c_idx, card in enumerate(card_rows):
-                if c_idx in absorbed or not booking:
-                    continue
-                if str(card.get("booking_number") or "").strip() != booking:
-                    continue
-                if _cents(card) != _cents(row):
-                    continue
-                c_when = _when(card)
-                if when is not None and c_when is not None and abs(c_when - when) > _DOWN_PAYMENT_MATCH_WINDOW:
-                    continue
-                hit = c_idx
-                break
+        if _is_untracked_card_down_payment(row):
+            hit = next((i for i, card in enumerate(card_rows)
+                        if i not in absorbed and _card_matches(row, card)), None)
             if hit is not None:
                 absorbed.add(hit)
                 matched += 1
+                continue
+            # Its card charge was refunded / charged back: fail closed.
+            rhit = next((i for i, card in enumerate(reversed_cards)
+                         if i not in reversed_used and _card_matches(row, card)), None)
+            if rhit is not None:
+                reversed_used.add(rhit)
+                dp_reversed += 1
                 continue
         chosen.append(row)
 
@@ -193,6 +217,7 @@ def summarize_settled_payments(rows) -> dict:
         "unsettled_skipped": unsettled,
         "reversed_skipped": reversed_txns,
         "down_payments_matched": matched,
+        "down_payments_reversed": dp_reversed,
     }
 
 
