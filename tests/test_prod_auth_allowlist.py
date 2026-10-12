@@ -289,8 +289,9 @@ def test_health_endpoint_drops_total_arrests():
 
 def test_payment_webhook_rejects_empty_and_invalid_payload():
     """POST /api/webhooks/payment must fail closed on empty/invalid payload (non-prod)."""
-    # Non-production + no secret: payload validation still applies (dev path).
-    with patch.dict(os.environ, {"ENV": "test", "ENVIRONMENT": "", "SWIPESIMPLE_WEBHOOK_SECRET": ""}, clear=False):
+    # Explicit ENV=development + no secret: payload validation still applies (dev path).
+    with patch.dict(os.environ, {"ENV": "development", "ENVIRONMENT": "", "SWIPESIMPLE_WEBHOOK_SECRET": ""}, clear=False):
+        os.environ.pop("REQUIRE_DASHBOARD_PIN", None)
         resp = client.post("/api/webhooks/payment", json={})
         assert resp.status_code == 400
         assert "payload" in resp.json().get("error", "").lower()
