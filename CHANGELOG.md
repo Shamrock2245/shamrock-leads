@@ -12,11 +12,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - more than one unlinked row has the id (`logged_payment_ambiguous`)
   - the row is already linked to another plan (`transaction_id_used_on_other_plan`)
 
+- Only a **settled** logged row is linked: its status must be approved, paid, completed or success, and a webhook row's `event_type` must be `payment.completed`. Declined, refunded, voided, pending or blank-status rows, and webhook `payment.failed` / `payment.refunded` events, return 409 `logged_payment_not_settled` before any claim (Codex P1).
+- If the link write itself raises, the claim is marked `failed` (`failed_reason: logged_payment_link_error`), the balance doesn't move, and the route returns a clean 500 `payment_record_failed`. Retries then get 409 `payment_needs_review` instead of a claim stuck in `claimed` (Codex P1).
+- A successful link writes an `audit_events` record following the `ar_service._audit` shape: `event_type: payment_plan_logged_payment_linked`, `entity_type: payment_plan`, actor, transaction id, payment id, plan id before and after, status before and after, and amount (Codex P1). As in the AR pattern, a failed audit write is logged and does not undo the payment.
+
   The response adds `linked_logged_payment`. This stops revenue totals that sum `payments` from counting new card installments twice. Rows already duplicated in prod are not changed.
 
 ### Tests
 - New `tests/test_payment_plan_link_logged_payment.py` (added to `ci.yml`): linking, replay, cash insert, amount mismatch, other plan, other booking, ambiguous rows, concurrent requests on one plan and on two plans, and a link lost to a change between the check and the update.
-- `tests/test_payment_plan_pay_dedupe.py`: the poller-row case now asserts the row is linked, not duplicated.
+- `tests/test_payment_plan_link_logged_payment.py` also covers: unsettled statuses and webhook events refused, settled statuses linked, a link-write exception (claim failed, balance unchanged, retry needs review), the audit event's fields, and an audit failure not undoing the payment.
+- `tests/test_payment_plan_pay_dedupe.py`: the poller-row case uses the poller's real `approved` status and asserts the row is linked, not duplicated.
 
 ## [Unreleased] — 2026-10-12 (payment webhook fails closed; plan payments deduped)
 

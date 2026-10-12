@@ -19,6 +19,9 @@ from datetime import datetime, timezone, timedelta
 import uuid
 
 from dashboard.extensions import get_collection
+import logging
+
+logger = logging.getLogger(__name__)
 
 payment_plans_bp = APIRouter(prefix="/api", tags=["payment_plans"])
 # ── Premium Calculator ──────────────────────────────────────────────────────────
@@ -241,6 +244,18 @@ def _same_amount(a, b) -> bool:
         return False
 
 
+async def _fail_claim(claims, plan_id: str, txn: str, reason: str) -> None:
+    """Mark the claim failed (#179: retries then get payment_needs_review). Never raises."""
+    try:
+        await claims.update_one(
+            {"plan_id": plan_id, "transaction_id": txn},
+            {"$set": {"status": "failed", "failed_at": datetime.now(timezone.utc).isoformat(),
+                      "failed_reason": reason}},
+        )
+    except Exception as exc:
+        logger.error("[payment_plans] could not mark claim failed plan_id=%s err=%s", plan_id, type(exc).__name__)
+
+
 async def _idempotent_reply(
     plans_col, plan_id: str, txn: str, claim: dict | None, amount: float,
     legacy_row: dict | None = None,
@@ -286,6 +301,63 @@ async def _idempotent_reply(
         "total_paid": plan.get("total_paid"),
         "status": plan.get("status"),
     }
+
+
+_SETTLED_STATUSES = frozenset({"approved", "paid", "completed", "success"})
+
+
+def _logged_row_settled(row: dict) -> bool:
+    """Only a settled card payment may be linked: status approved / paid /
+    completed / success. Declined, refunded, voided, pending, blank, or a
+    webhook row whose event is not ``payment.completed`` fail closed."""
+    status = str(row.get("status") or "").strip().lower()
+    if status not in _SETTLED_STATUSES:
+        return False
+    raw = row.get("raw_payload")
+    if isinstance(raw, dict) and raw.get("event_type") is not None:
+        if str(raw.get("event_type")).strip().lower() != "payment.completed":
+            return False
+    return True
+
+
+def _actor(request: Request) -> str:
+    """Same rule as the AR router: session agent/email, else X-Actor, else 'staff'."""
+    try:
+        from dashboard.auth.pin_middleware import get_session_from_request
+
+        sess = get_session_from_request(request) or {}
+    except Exception:
+        sess = {}
+    name = str(sess.get("agent_name") or sess.get("email") or "").strip()
+    if name:
+        return name
+    return str(request.headers.get("x-actor") or "").strip() or "staff"
+
+
+async def _audit_link(actor: str, plan: dict, plan_id: str, txn: str, row: dict, amount: float) -> None:
+    """Immutable audit_events record for the plan_id association (ar_service._audit pattern)."""
+    now = datetime.now(timezone.utc)
+    try:
+        await get_collection("audit_events").insert_one({
+            "event_type": "payment_plan_logged_payment_linked",
+            "entity_type": "payment_plan",
+            "entity_id": plan_id,
+            "actor": actor,
+            "agent_name": actor,
+            "timestamp": now,
+            "created_at": now,
+            "booking_number": plan.get("booking_number"),
+            "transaction_id": txn,
+            "payment_id": str(row.get("_id")),
+            "payment_source": row.get("source") or ("webhook" if isinstance(row.get("raw_payload"), dict) else ""),
+            "plan_id_before": row.get("plan_id") or None,
+            "plan_id_after": plan_id,
+            "status_before": row.get("status"),
+            "status_after": "completed",
+            "amount": amount,
+        })
+    except Exception as exc:
+        logger.warning("[payment_plans] audit write failed plan_id=%s err=%s", plan_id, type(exc).__name__)
 
 
 @payment_plans_bp.post("/payments/plans/{plan_id}/pay")
@@ -369,6 +441,12 @@ async def record_payment(request: Request, plan_id):
                  "message": "The logged card payment with this transaction id has a different amount."},
                 status_code=409,
             )
+        if not _logged_row_settled(logged_row):
+            return JSONResponse(
+                {"error": "logged_payment_not_settled", "transaction_id": txn,
+                 "message": "The logged card payment with this transaction id is not a settled payment (declined, refunded, voided, pending or no status)."},
+                status_code=409,
+            )
         row_booking = str(logged_row.get("booking_number") or "").strip()
         if row_booking and row_booking != str(plan.get("booking_number") or "").strip():
             return JSONResponse(
@@ -415,14 +493,24 @@ async def record_payment(request: Request, plan_id):
         }
         if not logged_row.get("timestamp"):
             link_set["timestamp"] = now.isoformat()
-        linked = await payments_col.update_one(link_filter, {"$set": link_set})
-        if not getattr(linked, "modified_count", 0):
-            current = await payments_col.find_one({"_id": logged_row["_id"]}) or {}
-            await claims.update_one(
-                {"plan_id": plan_id, "transaction_id": txn},
-                {"$set": {"status": "failed", "failed_at": datetime.now(timezone.utc).isoformat(),
-                          "failed_reason": "logged_payment_link_lost"}},
+        try:
+            linked = await payments_col.update_one(link_filter, {"$set": link_set})
+            link_ok = bool(getattr(linked, "modified_count", 0))
+            current = None if link_ok else (await payments_col.find_one({"_id": logged_row["_id"]}) or {})
+        except Exception as exc:
+            # Write outcome unknown: fail the claim (retries -> payment_needs_review),
+            # balance untouched, clean error.
+            logger.warning("[payment_plans] link write failed plan_id=%s err=%s", plan_id, type(exc).__name__)
+            await _fail_claim(claims, plan_id, txn, "logged_payment_link_error")
+            return JSONResponse(
+                {"error": "payment_record_failed", "transaction_id": txn,
+                 "message": "Linking the logged card payment failed. Check the plan before recording it again."},
+                status_code=500,
             )
+        if link_ok:
+            await _audit_link(_actor(request), plan, plan_id, txn, logged_row, amount)
+        else:
+            await _fail_claim(claims, plan_id, txn, "logged_payment_link_lost")
             other = current.get("plan_id")
             if other and other != plan_id:
                 return JSONResponse(
@@ -471,10 +559,7 @@ async def record_payment(request: Request, plan_id):
         )
         updated = await plans_col.find_one({"plan_id": plan_id}) or {}
     except Exception:
-        await claims.update_one(
-            {"plan_id": plan_id, "transaction_id": txn},
-            {"$set": {"status": "failed", "failed_at": datetime.now(timezone.utc).isoformat()}},
-        )
+        await _fail_claim(claims, plan_id, txn, "payment_write_error")
         return JSONResponse({"error": "payment_record_failed", "transaction_id": txn}, status_code=500)
 
     new_balance = updated.get("balance_remaining", 0)

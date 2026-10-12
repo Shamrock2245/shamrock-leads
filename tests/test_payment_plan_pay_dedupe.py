@@ -243,6 +243,7 @@ def test_poller_row_without_plan_does_not_block(rig):
     """The receipt poller logs card payments with no plan_id; that is not a plan application."""
     db, app = rig
     db["payments"].docs.append({"_id": "pay-poll-x", "transaction_id": "TX-CARD", "amount": 100,
+                                "status": "approved", "source": "swipesimple_gmail_poll",
                                 "booking_number": "TEST-PP-1"})
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
     assert r.status_code == 200 and r.json()["idempotent"] is False

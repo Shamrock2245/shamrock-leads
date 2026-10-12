@@ -169,3 +169,99 @@ def test_linked_row_counts_once_in_status_filtered_revenue(rig):
     assert len(counted) == 1 and counted[0]["amount"] == 100.0
     assert row["logged_status"] == "approved" and row["type"] == "installment"
     assert row["gmail_message_id"] == "gm-1" and row["source"] == "swipesimple_gmail_poll"
+
+
+# ── Codex P1s on b69809f ─────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("status", ["declined", "refunded", "voided", "void", "pending", "failed", "", None, "DECLINED"])
+def test_unsettled_logged_row_is_never_linked(rig, status):
+    """(a) Only settled card payments may be linked; everything else 409, before any claim."""
+    db, app = rig
+    row = _poller_row(db, status=status)
+    if status is None:
+        row.pop("status")
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_not_settled"
+    assert "plan_id" not in row and len(db["payments"].docs) == 1
+    assert db["payment_plan_payment_claims"].docs == []
+    assert _plan(db)["balance_remaining"] == 800.0
+    assert db["audit_events"].docs == []
+
+
+@pytest.mark.parametrize("status", ["approved", "paid", "completed", "success", " Approved "])
+def test_settled_statuses_link(rig, status):
+    db, app = rig
+    row = _poller_row(db, status=status)
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 200 and row["plan_id"] == PLAN_ID
+
+
+@pytest.mark.parametrize("event", ["payment.failed", "payment.refunded", "payment.voided", ""])
+def test_webhook_row_with_non_completed_event_refused(rig, event):
+    db, app = rig
+    row = _poller_row(db, source=None, status="approved", raw_payload={"event_type": event})
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_not_settled"
+    assert "plan_id" not in row
+
+
+def test_webhook_completed_event_links(rig):
+    db, app = rig
+    row = _poller_row(db, source=None, status="approved", raw_payload={"event_type": "payment.completed"})
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 200 and row["plan_id"] == PLAN_ID
+
+
+def test_link_write_exception_fails_claim_and_leaves_balance(rig):
+    """(c) Link write raises: clean 500, claim 'failed', no balance change; retry -> needs_review."""
+    db, app = rig
+    row = _poller_row(db)
+
+    def boom(coll, flt):
+        raise RuntimeError("transient write failure")
+    db["payments"].before_update = boom
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 500 and r.json()["error"] == "payment_record_failed"
+    claim = db["payment_plan_payment_claims"].docs[0]
+    assert claim["status"] == "failed" and claim["failed_reason"] == "logged_payment_link_error"
+    assert _plan(db)["balance_remaining"] == 800.0 and _plan(db)["payments_made"] == 1
+    assert "plan_id" not in row and db["audit_events"].docs == []
+    (r2,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r2.status_code == 409 and r2.json()["error"] == "payment_needs_review"
+
+
+def test_successful_link_writes_audit_event(rig):
+    """(d) Immutable audit_events record for the association, ar_service._audit shape."""
+    db, app = rig
+    _poller_row(db)
+
+    async def go():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            return await c.post(f"/api/payments/plans/{PLAN_ID}/pay",
+                                json={"amount": 100, "transaction_id": "TX-CARD"},
+                                headers={"X-Actor": "desk-test"})
+    r = asyncio.run(go())
+    assert r.status_code == 200
+    (ev,) = db["audit_events"].docs
+    assert ev["event_type"] == "payment_plan_logged_payment_linked"
+    assert ev["entity_type"] == "payment_plan" and ev["entity_id"] == PLAN_ID
+    assert ev["actor"] == "desk-test" and ev["agent_name"] == "desk-test"
+    assert ev["transaction_id"] == "TX-CARD" and ev["payment_id"] == "pay-poll-1"
+    assert ev["plan_id_before"] is None and ev["plan_id_after"] == PLAN_ID
+    assert ev["status_before"] == "approved" and ev["status_after"] == "completed"
+    assert ev["amount"] == 100.0 and ev["timestamp"] and ev["created_at"]
+
+
+def test_no_audit_for_cash_insert_or_lost_link(rig):
+    db, app = rig
+    _post_many(app, [{"amount": 100, "transaction_id": "TX-CASH-1"}])
+    assert db["audit_events"].docs == []
+
+
+def test_audit_write_failure_does_not_undo_payment(rig):
+    db, app = rig
+    _poller_row(db)
+    db["audit_events"].fail_insert = True
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 200 and _plan(db)["balance_remaining"] == 700.0
