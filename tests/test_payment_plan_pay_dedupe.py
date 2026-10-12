@@ -437,3 +437,38 @@ def test_high_precision_replay_is_not_treated_as_same_payment(rig):
     (r,) = _post_many(app, [{"amount": "1.00000000000000000000000000001", "transaction_id": "TX-HP2"}])
     assert r.status_code == 400
     assert len(db["payments"].docs) == 1
+
+
+def _post_raw(app, raw: bytes):
+    async def go():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            return await c.post(f"/api/payments/plans/{PLAN_ID}/pay", content=raw,
+                                headers={"Content-Type": "application/json"})
+    return asyncio.run(go())
+
+
+@pytest.mark.parametrize("token", [
+    "1.00000000000000000000000000001",      # Codex P2: unquoted JSON number used to become float 1.0
+    "100.000000000000000000000001", "0.001", "1e-3", "1e400", "NaN", "Infinity", "-Infinity",
+])
+def test_unquoted_json_number_with_fractional_cents_refused(rig, token):
+    db, app = rig
+    raw = ('{"amount": %s, "transaction_id": "TX-RAW"}' % token).encode()
+    r = _post_raw(app, raw)
+    assert r.status_code == 400
+    assert db["payments"].docs == [] and db["payment_plan_payment_claims"].docs == []
+
+
+@pytest.mark.parametrize("token,balance", [("100", 700.0), ("100.10", 699.9), ("1E+2", 700.0), ("99.99", 700.01)])
+def test_unquoted_json_number_exact_cents_accepted(rig, token, balance):
+    db, app = rig
+    r = _post_raw(app, ('{"amount": %s, "transaction_id": "TX-RAW2"}' % token).encode())
+    assert r.status_code == 200
+    assert round(_plan(db)["balance_remaining"], 2) == balance
+
+
+def test_malformed_json_body_refused(rig):
+    db, app = rig
+    assert _post_raw(app, b'{"amount": 1,,}').status_code == 400
+    assert _post_raw(app, b"").status_code == 400

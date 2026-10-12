@@ -17,6 +17,8 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from datetime import datetime, timezone, timedelta
 import uuid
+import json as _json
+from decimal import Decimal
 
 from dashboard.extensions import get_collection
 
@@ -333,7 +335,10 @@ async def record_payment(request: Request, plan_id):
 
     from dashboard.routers.events import publish_event
     try:
-        data = await request.json()
+        # Parse JSON numbers as Decimal straight from the raw body: request.json()
+        # would turn {"amount": 1.00000000000000000000000000001} into the float
+        # 1.0 before validation, hiding the fractional cents.
+        data = _json.loads(await request.body(), parse_float=Decimal)
     except Exception:
         data = None
     if not data or not isinstance(data, dict) or 'amount' not in data:
