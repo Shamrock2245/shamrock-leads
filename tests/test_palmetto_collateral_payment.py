@@ -623,6 +623,7 @@ def _bond(method: str) -> dict:
 
 
 async def _submission(method: str, template_id, template_field_names=None):
+    """Collateral payload only. The identity gate has its own tests."""
     svc = DocuSealService(base_url="https://sign.example", api_key="k")
     captured = {}
 
@@ -630,14 +631,22 @@ async def _submission(method: str, template_id, template_field_names=None):
         captured.update(kwargs)
         return [{"id": 1, "submission_id": 9, "role": "indemnitor", "slug": "a", "email": "ind@example.com"}]
 
+    async def _verified(*_args, **_kwargs):
+        return {"ok": True, "exempt": "test_fixture", "issues": [], "methods": ["scan"]}
+
     svc.create_submission = _create
-    result = await svc.create_submission_for_packet(
-        template_id=template_id,
-        packet_id="pkt-collateral",
-        bond_data=_bond(method),
-        send_email=False,
-        template_field_names=template_field_names,
-    )
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(
+            "dashboard.services.identity_verification_service.require_verified_indemnitors",
+            _verified,
+        )
+        result = await svc.create_submission_for_packet(
+            template_id=template_id,
+            packet_id="pkt-collateral",
+            bond_data=_bond(method),
+            send_email=False,
+            template_field_names=template_field_names,
+        )
     submitter = captured["submitters"][0]
     field_names = {row["name"] for row in submitter.get("fields") or []}
     value_names = set((submitter.get("values") or {}))
