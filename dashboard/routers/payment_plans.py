@@ -401,11 +401,21 @@ async def record_payment(request: Request, plan_id):
             "amount": logged_row.get("amount"),
             "$or": [{"plan_id": {"$exists": False}}, {"plan_id": None}, {"plan_id": ""}],
         }
-        linked = await payments_col.update_one(link_filter, {"$set": {
+        # Revenue reports count rows with status completed/paid/success by
+        # ``timestamp`` (the shape a plan installment row had). Give the linked
+        # row that shape so the installment is still counted exactly once;
+        # the poller's original status is kept in ``logged_status``.
+        link_set = {
             "plan_id": plan_id,
             "plan_linked_at": now.isoformat(),
             "plan_linked_type": "installment",
-        }})
+            "type": "installment",
+            "status": "completed",
+            "logged_status": logged_row.get("status"),
+        }
+        if not logged_row.get("timestamp"):
+            link_set["timestamp"] = now.isoformat()
+        linked = await payments_col.update_one(link_filter, {"$set": link_set})
         if not getattr(linked, "modified_count", 0):
             current = await payments_col.find_one({"_id": logged_row["_id"]}) or {}
             await claims.update_one(

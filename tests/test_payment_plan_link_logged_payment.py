@@ -156,3 +156,16 @@ def test_row_amount_changed_between_check_and_update_needs_review(rig):
     assert r.status_code == 409 and r.json()["error"] == "payment_needs_review"
     assert "plan_id" not in row and len(db["payments"].docs) == 1
     assert _plan(db)["balance_remaining"] == 800.0
+
+
+def test_linked_row_counts_once_in_status_filtered_revenue(rig):
+    """Reports sum status in (completed, paid, success) by timestamp: the linked
+    card payment must still be counted, exactly once."""
+    db, app = rig
+    row = _poller_row(db)
+    _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    counted = [d for d in db["payments"].docs
+               if d.get("status") in ("completed", "paid", "success") and d.get("timestamp")]
+    assert len(counted) == 1 and counted[0]["amount"] == 100.0
+    assert row["logged_status"] == "approved" and row["type"] == "installment"
+    assert row["gmail_message_id"] == "gm-1" and row["source"] == "swipesimple_gmail_poll"
