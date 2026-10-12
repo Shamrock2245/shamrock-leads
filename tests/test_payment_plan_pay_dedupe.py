@@ -382,3 +382,93 @@ def test_payment_row_with_applied_claim_is_idempotent(rig):
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-OK"}])
     assert r.status_code == 200 and r.json()["idempotent"] is True
     assert len(db["payments"].docs) == 1 and _plan(db)["balance_remaining"] == 700.0
+
+
+@pytest.mark.parametrize("amount", ["100.001", 100.004, "1e-3", "NaN", "Infinity", True, "", "  "])
+def test_fractional_cent_or_non_numeric_amount_refused(rig, amount):
+    """Codex P2: no fractional cents, so idempotency compares the exact applied amount."""
+    db, app = rig
+    (r,) = _post_many(app, [{"amount": amount, "transaction_id": "TX-FC"}])
+    assert r.status_code == 400 and r.json()["error"] == "invalid_amount"
+    assert db["payments"].docs == [] and db["payment_plan_payment_claims"].docs == []
+    assert _plan(db)["balance_remaining"] == 800.0
+
+
+def test_retry_matches_exact_cents(rig):
+    db, app = rig
+    _post_many(app, [{"amount": "100.10", "transaction_id": "TX-C"}])
+    (same,) = _post_many(app, [{"amount": 100.1, "transaction_id": "TX-C"}])
+    assert same.status_code == 200 and same.json()["idempotent"] is True
+    (diff,) = _post_many(app, [{"amount": "100.11", "transaction_id": "TX-C"}])
+    assert diff.status_code == 409 and diff.json()["error"] == "transaction_id_amount_mismatch"
+    assert len(db["payments"].docs) == 1
+
+
+def test_legacy_row_with_fractional_cents_is_not_confirmed(rig):
+    db, app = rig
+    db["payments"].docs.append({"plan_id": PLAN_ID, "transaction_id": "TX-LF", "amount": 100.004})
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-LF"}])
+    assert r.status_code == 409 and r.json()["error"] == "transaction_id_amount_mismatch"
+
+
+@pytest.mark.parametrize("amount", [
+    "1.00000000000000000000000000001",       # Codex P2: 28-digit context used to round this to 1.00
+    "100.000000000000000000000000000001",
+    "0.001", "1e-3", "1e400", "12345678901234567890.12", "1" * 70,
+])
+def test_high_precision_or_huge_amounts_refused_without_rounding(rig, amount):
+    db, app = rig
+    (r,) = _post_many(app, [{"amount": amount, "transaction_id": "TX-HP"}])
+    assert r.status_code == 400 and r.json()["error"] == "invalid_amount"
+    assert db["payments"].docs == [] and db["payment_plan_payment_claims"].docs == []
+
+
+@pytest.mark.parametrize("amount,cents", [
+    ("1.00", 100), ("1.000000000000000000000000000000000", 100), ("1E+2", 10000),
+    ("1e-2", 1), (99.99, 9999), ("5e1", 5000),
+])
+def test_exact_cents_parsing(amount, cents):
+    assert pp._amount_cents(amount) == cents
+
+
+def test_high_precision_replay_is_not_treated_as_same_payment(rig):
+    db, app = rig
+    _post_many(app, [{"amount": "1.00", "transaction_id": "TX-HP2"}])
+    (r,) = _post_many(app, [{"amount": "1.00000000000000000000000000001", "transaction_id": "TX-HP2"}])
+    assert r.status_code == 400
+    assert len(db["payments"].docs) == 1
+
+
+def _post_raw(app, raw: bytes):
+    async def go():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            return await c.post(f"/api/payments/plans/{PLAN_ID}/pay", content=raw,
+                                headers={"Content-Type": "application/json"})
+    return asyncio.run(go())
+
+
+@pytest.mark.parametrize("token", [
+    "1.00000000000000000000000000001",      # Codex P2: unquoted JSON number used to become float 1.0
+    "100.000000000000000000000001", "0.001", "1e-3", "1e400", "NaN", "Infinity", "-Infinity",
+])
+def test_unquoted_json_number_with_fractional_cents_refused(rig, token):
+    db, app = rig
+    raw = ('{"amount": %s, "transaction_id": "TX-RAW"}' % token).encode()
+    r = _post_raw(app, raw)
+    assert r.status_code == 400
+    assert db["payments"].docs == [] and db["payment_plan_payment_claims"].docs == []
+
+
+@pytest.mark.parametrize("token,balance", [("100", 700.0), ("100.10", 699.9), ("1E+2", 700.0), ("99.99", 700.01)])
+def test_unquoted_json_number_exact_cents_accepted(rig, token, balance):
+    db, app = rig
+    r = _post_raw(app, ('{"amount": %s, "transaction_id": "TX-RAW2"}' % token).encode())
+    assert r.status_code == 200
+    assert round(_plan(db)["balance_remaining"], 2) == balance
+
+
+def test_malformed_json_body_refused(rig):
+    db, app = rig
+    assert _post_raw(app, b'{"amount": 1,,}').status_code == 400
+    assert _post_raw(app, b"").status_code == 400

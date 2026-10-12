@@ -26,6 +26,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - New `tests/test_agent_analytics_payment_agent.py` (added to `ci.yml`): poller+webhook and poller+plan duplicates, which row is preferred, declined/refunded/voided/pending/blank statuses, webhook failed/refunded events, plan `/pay` rows, rows with no transaction id, and the KPIs from the endpoint itself, refund/void/chargeback cancellation, down-payment matching (matched, not matched, one-to-one, transaction id, refunded card row), and the analytics side of down payments. New `tests/test_payment_plan_create_down_payment_claim.py` (added to `ci.yml`): claim and row on a new id, concurrent creates with the same id (one winner, also when linking the same poller row), 409 when claimed or on a plan row, linking settled poller and webhook rows, refusing unsettled/refunded/wrong-amount/wrong-booking/ambiguous rows, rollback when the plan insert, payment write, link or claim update fails, and 503 when dedupe is unavailable.
 
+## [Unreleased] — 2026-10-12 (plan payments: exact cents)
+
+### Fixed
+- **`POST /api/payments/plans/{plan_id}/pay` amounts are exact cents.** This is the follow-up to Codex P2 on #179, whose fix missed the #179 merge. Before this, the route accepted fractional cents such as `100.001` and changed the balance by that amount. A retry with `100.004` then rounded to the same cents and came back as an idempotent success for a different amount. Now the amount is parsed as a decimal and must be positive, finite and have at most two decimal places; otherwise it returns 400 `invalid_amount`. Cents are worked out with exact integer arithmetic on the decimal's digits and exponent, never Decimal multiplication, because the default 28-digit context would round away fractional cents (Codex P2: `"1.00000000000000000000000000001"` was accepted as $1.00). Amounts over 64 characters or over $1 trillion are refused. The request body is parsed with JSON numbers read as `Decimal` from the raw text, so an unquoted number such as `1.00000000000000000000000000001` is checked exactly instead of first becoming the float `1.0` (Codex P2). Idempotent replays compare exact integer cents with no rounding.
+
+### Tests
+- `tests/test_payment_plan_pay_dedupe.py`: refuses `100.001`, `100.004`, `1e-3`, `NaN`, `Infinity`, booleans and blanks; accepts a retry with the exact same cents (`"100.10"` vs `100.1`) and refuses `"100.11"`; refuses an older payment row with fractional cents.
+
 ## [Unreleased] — 2026-10-12 (payment webhook fails closed; plan payments deduped)
 
 ### Fixed
