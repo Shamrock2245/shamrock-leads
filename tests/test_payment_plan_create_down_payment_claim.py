@@ -116,10 +116,12 @@ def _body(booking="BK-1", txn="SS-77", dp=200, **kw):
     return b
 
 
-def _post(app, bodies):
+def _post(app, bodies, *, cookies=None, headers=None):
     async def go():
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://t", cookies=cookies, headers=headers,
+        ) as c:
             return await asyncio.gather(*[c.post("/api/payments/plans", json=b) for b in bodies])
     return asyncio.run(go())
 
@@ -386,3 +388,76 @@ def test_unowned_logged_row_is_refused(rig, booking):
     (r,) = _post(app, [_body()])
     assert r.status_code == 409 and r.json()["error"] == "logged_payment_unowned"
     assert db["payment_plans"].docs == [] and _claims(db) == []
+
+
+# ── Codex P1 on c0cbce7: audit actor is the session, not created_by ────────
+
+
+def _session_cookie(monkeypatch, *, email, agent_name=None, role="staff"):
+    monkeypatch.setenv("SECRET_KEY", "test-session-secret-not-production")
+    from dashboard.auth.pin_middleware import COOKIE_NAME, _sign_token
+    token = _sign_token(email=email, role=role, agent_name=agent_name)
+    return {COOKIE_NAME: token}
+
+
+def test_link_audit_ignores_body_created_by(rig):
+    db, app = rig
+    db["payments"].docs.append(_poller())
+    (r,) = _post(app, [_body(created_by="Someone Else")])
+    assert r.status_code == 201
+    (ev,) = db["audit_events"].docs
+    assert ev["actor"] == "dashboard" and ev["agent_name"] == "dashboard"
+
+
+def test_link_audit_actor_is_session_agent_not_created_by(rig, monkeypatch):
+    db, app = rig
+    db["payments"].docs.append(_poller())
+    cookies = _session_cookie(
+        monkeypatch, email="kayla@shamrockbailbonds.biz", agent_name="Kayla Lukesic",
+    )
+    (r,) = _post(app, [_body(created_by="Someone Else")], cookies=cookies)
+    assert r.status_code == 201
+    (ev,) = db["audit_events"].docs
+    assert ev["actor"] == "Kayla Lukesic" and ev["agent_name"] == "Kayla Lukesic"
+
+
+def test_link_audit_actor_falls_back_to_session_email(rig, monkeypatch):
+    db, app = rig
+    db["payments"].docs.append(_poller())
+    cookies = _session_cookie(monkeypatch, email="Office@ShamrockBailBonds.biz")
+    (r,) = _post(app, [_body(created_by="Someone Else")], cookies=cookies)
+    assert r.status_code == 201
+    (ev,) = db["audit_events"].docs
+    assert ev["actor"] == "office@shamrockbailbonds.biz"
+    assert ev["agent_name"] == "office@shamrockbailbonds.biz"
+
+
+def test_link_audit_actor_is_machine_key_for_trusted_machine_call(rig, monkeypatch):
+    monkeypatch.setenv("GAS_API_KEY", "machine-secret-not-real")
+    monkeypatch.delenv("LEADS_INTERNAL_TOKEN", raising=False)
+    monkeypatch.delenv("INTERNAL_API_TOKEN", raising=False)
+    db, app = rig
+    db["payments"].docs.append(_poller())
+    (r,) = _post(
+        app, [_body(created_by="Someone Else")],
+        headers={"X-API-Key": "machine-secret-not-real"},
+    )
+    assert r.status_code == 201
+    (ev,) = db["audit_events"].docs
+    assert ev["actor"] == "machine_key" and ev["agent_name"] == "machine_key"
+
+
+def test_session_actor_wins_over_machine_key(rig, monkeypatch):
+    monkeypatch.setenv("GAS_API_KEY", "machine-secret-not-real")
+    db, app = rig
+    db["payments"].docs.append(_poller())
+    cookies = _session_cookie(
+        monkeypatch, email="kayla@shamrockbailbonds.biz", agent_name="Kayla Lukesic",
+    )
+    (r,) = _post(
+        app, [_body(created_by="Someone Else")],
+        cookies=cookies, headers={"X-API-Key": "machine-secret-not-real"},
+    )
+    assert r.status_code == 201
+    (ev,) = db["audit_events"].docs
+    assert ev["actor"] == "Kayla Lukesic" and ev["agent_name"] == "Kayla Lukesic"

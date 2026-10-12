@@ -143,6 +143,40 @@ def test_agent_performance_payment_agent_kpis(monkeypatch):
     assert agent["kpis"]["total_collected"] == 200.0
 
 
+def _payment_agent(monkeypatch, rows):
+    db = _DB()
+    db["payments"] = _Coll(rows)
+    monkeypatch.setattr(aa, "get_db", lambda: db)
+    out = asyncio.run(aa.agent_performance(days="30"))
+    body = out if isinstance(out, dict) else __import__("json").loads(out.body)
+    agents = body.get("agents") or body.get("results") or body
+    return next(a for a in agents if a.get("agent_id") == "the_payment_agent")
+
+
+def test_future_paid_at_is_outside_the_report_window(monkeypatch):
+    """P2: AR stores paid_at on payments.timestamp. A future date is not this period."""
+    future = (NOW + timedelta(days=10)).isoformat()
+    agent = _payment_agent(monkeypatch, [
+        plan_pay("T1", 40.0),
+        {"_id": "future-ar", "transaction_id": "AR-FUTURE", "amount": 500.0,
+         "status": "completed", "source": "ar_manual", "type": "payment",
+         "timestamp": future},
+        {"_id": "future-created", "transaction_id": "AR-CREATED", "amount": 80.0,
+         "status": "completed", "created_at": future},
+    ])
+    assert agent["kpis"]["payments_recorded"] == 1
+    assert agent["kpis"]["total_collected"] == 40.0
+
+
+def test_timestamp_and_created_at_inside_the_window_still_count(monkeypatch):
+    agent = _payment_agent(monkeypatch, [
+        plan_pay("T1", 25.0),
+        poller("T2", amount=15.0),
+    ])
+    assert agent["kpis"]["payments_recorded"] == 2
+    assert agent["kpis"]["total_collected"] == 40.0
+
+
 # ── Codex P2s on 8f765fb ─────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("reversal", [

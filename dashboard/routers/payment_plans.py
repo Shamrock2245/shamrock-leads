@@ -80,6 +80,25 @@ async def premium_calculator(bond_amount: int = Query(default=0), surety_id: str
 
 # ── Payment Plans CRUD ──────────────────────────────────────────────────────────
 
+def _audit_actor(request: Request) -> str:
+    """Who an immutable financial audit row names.
+
+    The signed session wins: ``agent_name``, then ``email``, then ``role``
+    (same order as the AR and family-tree routers). A trusted machine key
+    (``GAS_API_KEY`` / ``LEADS_INTERNAL_TOKEN``) with no session is recorded
+    as ``machine_key``. The request body is never an identity.
+    """
+    from dashboard.auth.pin_middleware import get_session_from_request, is_machine_auth_valid
+
+    sess = get_session_from_request(request) or {}
+    if sess.get("auth"):
+        name = str(sess.get("agent_name") or sess.get("email") or sess.get("role") or "").strip()
+        return name or "dashboard"
+    if is_machine_auth_valid(request):
+        return "machine_key"
+    return "dashboard"
+
+
 @payment_plans_bp.get("/payments/plans")
 async def list_plans(status: str = Query(default='')):
     """List all payment plans with optional status filter."""
@@ -178,7 +197,7 @@ async def create_plan(request: Request):
     if dp_txn and down_payment > 0:
         err = await _create_plan_with_down_payment_txn(
             plans_col, plan_doc, dp_txn, down_payment,
-            data.get("payment_method", "Card"), now)
+            data.get("payment_method", "Card"), now, _audit_actor(request))
         if err is not None:
             return err
         plan_doc["_id"] = ""
@@ -261,7 +280,7 @@ def _row_settled(row: dict) -> bool:
     return True
 
 
-async def _create_plan_with_down_payment_txn(plans_col, plan_doc, txn, amount, method, now):
+async def _create_plan_with_down_payment_txn(plans_col, plan_doc, txn, amount, method, now, actor):
     """Create a plan whose down payment carries a provider transaction id.
 
     Same rule as /pay (#179/#181): one application of a txn id per tenant,
@@ -371,8 +390,8 @@ async def _create_plan_with_down_payment_txn(plans_col, plan_doc, txn, amount, m
             await get_collection("audit_events").insert_one({
                 "event_type": "payment_plan_logged_payment_linked",
                 "entity_type": "payment_plan", "entity_id": plan_id,
-                "actor": plan_doc.get("created_by") or "dashboard",
-                "agent_name": plan_doc.get("created_by") or "dashboard",
+                "actor": actor,
+                "agent_name": actor,
                 "timestamp": now, "created_at": now,
                 "booking_number": booking, "transaction_id": txn,
                 "payment_id": str(row.get("_id")), "payment_type": "down_payment",

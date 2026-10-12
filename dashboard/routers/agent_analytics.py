@@ -37,7 +37,10 @@ def _period_range(days: int = 30):
 # Same settled rule as the plan-payment link (#181): approved / paid /
 # completed / success (case-insensitive); webhook rows only for event
 # ``payment.completed``. Plan /pay rows carry ``timestamp`` and poller /
-# webhook rows ``created_at``; both count.
+# webhook rows ``created_at``; both count. The KPI query keeps a row only when
+# ``timestamp`` or ``created_at`` is inside the report window (``start``
+# through ``end``, inclusive), so a future ``paid_at`` on ``timestamp`` is
+# outside the current period.
 #  * Rows are grouped by transaction id FIRST. If any row for a transaction
 #    is a refund / void / chargeback / reversal (status or webhook event),
 #    the whole transaction is excluded (conservative: a partial refund also
@@ -306,6 +309,7 @@ async def agent_performance(days: str = Query(default="30")):
         days = int(days)
         start, end = _period_range(days)
         start_iso = start.isoformat()
+        end_iso = end.isoformat()
 
         results = []
 
@@ -445,8 +449,11 @@ async def agent_performance(days: str = Query(default="30")):
 
         # ── Payments ─────────────────────────────────────────────────────
         pay_col = db["payments"]
+        # Closed window. A future paid_at (AR stores it on payments.timestamp)
+        # must not land in the current period, and neither must a future created_at.
+        in_window = {"$gte": start_iso, "$lte": end_iso}
         pay_rows = await pay_col.find(
-            {"$or": [{"timestamp": {"$gte": start_iso}}, {"created_at": {"$gte": start_iso}}]},
+            {"$or": [{"timestamp": dict(in_window)}, {"created_at": dict(in_window)}]},
             _PAYMENT_AGENT_FIELDS,
         ).to_list(None)
         pay_summary = summarize_settled_payments(pay_rows)
