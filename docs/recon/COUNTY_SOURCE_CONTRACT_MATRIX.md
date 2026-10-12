@@ -1039,8 +1039,6 @@ Requested and recorded Leads Ops smokes (`docs/recon/smoke_evidence.json`). A `r
 | Glades (FL) | unverified | write_smoke | requested | 2026-10-08 | — | — | Awaiting Leads Ops. HOLD: run only after the Collier/Glades bond PR (#139) is merged and deployed. Today glades.py writes 0 for an unknown bond. | `docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md` |
 | Charlotte (FL) | fail_closed | relay_read | requested | 2026-10-08 | — | — | Awaiting Leads Ops. | `docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md` |
 | Charlotte (FL) | fail_closed | relay_write | requested | 2026-10-08 | — | — | Awaiting Leads Ops. After a passed Charlotte relay_read. | `docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md` |
-| Manatee (FL) | fail_closed | relay_read | requested | 2026-10-08 | — | — | Awaiting Leads Ops. | `docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md` |
-| Manatee (FL) | fail_closed | relay_write | requested | 2026-10-08 | — | — | Awaiting Leads Ops. After a passed Manatee relay_read. | `docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md` |
 | Manatee Clerk (FL) | unverified | write_smoke | requested | 2026-10-10 | — | — | Awaiting Leads Ops. Owner exception recorded 2026-10-10 (Brendan); needs the PR merged and deployed first. | `docs/recon/FL_MANATEE_CLERK_SCRAPER_2026-10-10.md` |
 
 ## Operating rule

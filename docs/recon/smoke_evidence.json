@@ -52,25 +52,6 @@
       "source": "docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md"
     },
     {
-      "label": "Manatee (FL)",
-      "kind": "relay_read",
-      "status": "requested",
-      "requested_on": "2026-10-08",
-      "command": "On the home relay, VPN off: MANATEE_EGRESS_MODE=direct python scripts/manatee_residential_smoke.py",
-      "expect": "exit 0 and result ok; bookings == unique_booking_numbers, duplicate_booking_numbers 0, bond_zero 0, walk.columns lists the live header set (Booking # / Last Name / First Name / Middle / Charge / Arrest Date / Released)",
-      "source": "docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md"
-    },
-    {
-      "label": "Manatee (FL)",
-      "kind": "relay_write",
-      "status": "requested",
-      "requested_on": "2026-10-08",
-      "command": "On the home relay, VPN off, MONGODB_URI set: python main.py --relay-only  (copy the 'Relay result Manatee: {...}' log line), then MONGODB_URI=<prod> python scripts/smoke_evidence_check.py --county Manatee --state FL --hours 24",
-      "expect": "Relay result status ok with a MongoWriter result (new_records + updated_records >= 1), process exit 0; smoke_evidence_check: Revize Booking # shapes only, duplicates 0, bond empty (zero 0), with_charges == rows",
-      "blocked_on": "After a passed Manatee relay_read.",
-      "source": "docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md"
-    },
-    {
       "label": "Manatee Clerk (FL)",
       "kind": "write_smoke",
       "status": "requested",

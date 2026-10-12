@@ -31,7 +31,7 @@ from core.booking_identity import (
 from scrapers.base_scraper import BaseScraper
 from scrapers.counties import manatee_clerk as mc
 from scrapers.counties.manatee import ManateeCountyScraper
-from scrapers.counties.manatee_clerk import ManateeClerkScraper
+from scrapers.counties.manatee_clerk import ManateeClerkScraper, normalise_case_number
 from scrapers.scraper_resilience import EgressBlocked, ParseDriftError, classify_exception
 from tests.test_staff_edits_survive_rescrape import FakeArrests, _writer
 
@@ -227,7 +227,8 @@ def test_scrape_builds_records_with_keys_out_of_booking_fields(monkeypatch):
     recs = sc.scrape()
     assert len(recs) == 2  # the Plaintiff row is skipped
     assert len(sessions) == len(mc.CASE_TYPES)  # one session per case type
-    a, b = recs
+    by_case = {r.Case_Number: r for r in recs}
+    a, b = by_case[CASE_A], by_case[CASE_B]
     assert a.County == "Manatee Clerk" and a.State == "FL" and a.Facility == "Manatee Clerk (court filing)"
     assert a.Booking_Number == "" and b.Booking_Number == ""
     assert a.Case_Number == CASE_A and a.extra_data["obts_number"] == OBTS_A
@@ -366,7 +367,7 @@ def test_key_is_sha256_of_the_normalised_case_number_only():
 
 def test_obts_is_not_in_the_key(monkeypatch):
     sc, _ = _scraper(monkeypatch, LISTS, DETAILS)
-    a, _b = sc.scrape()
+    a = {r.Case_Number: r for r in sc.scrape()}[CASE_A]
     assert a.extra_data["mc_case_key"] == mc.mc_case_key(CASE_A) and a.extra_data["obts_number"] == OBTS_A
     sc2, _ = _scraper(monkeypatch, {10: LISTS[10]}, {"9900001": detail_page(CASE_A, served=())})
     (r,) = sc2.scrape()
@@ -419,16 +420,195 @@ def test_run_under_cap_fetches_every_case(monkeypatch):
     assert sum(1 for s in sessions for c in s.calls if c[0] == "POST") == 3
 
 
-def test_run_over_cap_fails_loudly_before_any_detail_post(monkeypatch):
-    rows = [_list_row(i, f"2026CF0{i:05d}AX", f"ZZSYNTH, P{i}") for i in range(1, 6)]
-    details = {f"99{i:05d}": detail_page(f"2026CF0{i:05d}AX") for i in range(1, 6)}
-    monkeypatch.setattr(mc, "MAX_DETAILS_PER_RUN", 3)
-    sc, sessions = _scraper(monkeypatch, {10: list_page(rows)}, details)
-    with pytest.raises(mc.ManateeClerkContractError) as exc:
-        sc.scrape()
-    assert "5 eligible cases exceed MAX_DETAILS_PER_RUN=3" in str(exc.value)
-    assert isinstance(exc.value, ParseDriftError)
-    assert sum(1 for s in sessions for c in s.calls if c[0] == "POST") == 0  # nothing silently dropped
+# ── durable detail queue (cap 80/run, oldest first, cursor after write) ──
+
+class QueueStore:
+    """Fake system-of-record writer: real MongoWriter upsert logic over FakeArrests,
+    plus the scraper_status cursor/resilience methods (in-memory, synthetic)."""
+
+    def __init__(self, fail_write=False):
+        self.arrests = FakeArrests([])
+        self.cursor = {}
+        self.fail_write = fail_write
+        self.writes = []
+
+    def write_records(self, records, county):
+        if self.fail_write:
+            raise RuntimeError("synthetic write failure")
+        self.writes.append([r.Case_Number for r in records])
+        return _writer(self.arrests).write_records(records, county)
+
+    def upsert_scraper_status(self, **kw):
+        pass
+
+    def get_scraper_resilience(self, **kw):
+        return {}
+
+    def get_scraper_cursor(self, county, state=None, name="detail_queue"):
+        assert county == "Manatee Clerk" and name == "detail_queue"
+        return dict(self.cursor)
+
+    def set_scraper_cursor(self, county, state=None, name="detail_queue", value=None):
+        self.cursor = dict(value)
+
+
+def _cases(n):
+    """n synthetic single-defendant cases over the last 5 filing dates."""
+    from datetime import timedelta
+
+    rows, details, filed = [], {}, {}
+    for i in range(1, n + 1):
+        case = f"2026CF{i:06d}AX"
+        d = date.today() - timedelta(days=(i * 7) % 5)
+        rows.append(_list_row(i, case, f"ZZSYNTH, P{i}", filed=d.strftime("%m/%d/%Y")))
+        details[f"99{i:05d}"] = detail_page(case)
+        filed[normalise_case_number(case)] = d.isoformat()
+    return rows, details, filed
+
+
+def _queue_scraper(monkeypatch, rows, details, challenge_on=None):
+    monkeypatch.setattr(mc, "PAGE_SIZE", 250)
+    monkeypatch.setattr(mc, "MAX_LIST_PAGES", 1)
+    sc, sessions = _scraper(monkeypatch, {10: list_page(rows)}, details, challenge_on)
+    sc._retry_sleep = lambda s: None
+    sc.TRANSIENT_RETRY_DELAYS = ()
+    monkeypatch.setattr("scrapers.base_scraper._slack.notify_new_arrests", lambda *a, **k: None)
+    return sc, sessions
+
+
+def _posted(sessions):
+    return [c[2]["caseId"] for s in sessions for c in s.calls if c[0] == "POST"]
+
+
+def test_200_cases_drain_over_3_runs_oldest_first_no_dupes_no_skips(monkeypatch):
+    rows, details, filed = _cases(200)
+    store = QueueStore()
+    written, backlogs = [], []
+    for run in range(3):
+        sc, _ = _queue_scraper(monkeypatch, rows, details)
+        sc.run(writers=[store])
+        batch = store.writes[-1]
+        assert len(batch) == min(80, 200 - 80 * run)
+        written.extend(batch)
+        backlogs.append(store.cursor["backlog"])
+    assert backlogs == [120, 40, 0]
+    assert len(written) == len(set(written)) == 200  # no duplicates, no skips
+    order = [(filed[normalise_case_number(c)], mc.mc_case_key(c)) for c in written]
+    assert order == sorted(order)  # oldest first across runs
+    assert len(store.arrests.docs) == 200 and store.cursor["oldest_pending"] == ""
+    # A 4th run lists the same 200: nothing left to fetch.
+    sc, sessions = _queue_scraper(monkeypatch, rows, details)
+    sc.run(writers=[store])
+    assert _posted(sessions) == [] and len(store.arrests.docs) == 200
+
+
+def test_cursor_lives_in_scraper_status_and_holds_no_case_numbers(monkeypatch):
+    rows, details, _ = _cases(90)
+    store = QueueStore()
+    sc, _ = _queue_scraper(monkeypatch, rows, details)
+    sc.run(writers=[store])
+    blob = repr(store.cursor)
+    assert set(store.cursor) >= {"done", "oldest_pending", "backlog", "growth_streak"}
+    assert all(MC_INTERNAL_KEY_RE.fullmatch(k) for k in store.cursor["done"])
+    assert "2026CF" not in blob and "ZZSYNTH" not in blob
+
+
+def test_partial_parse_case_is_not_written_and_stays_queued(monkeypatch):
+    rows, details, _ = _cases(3)
+    broken = dict(details, **{"9900002": detail_page("2026CF000002AX", charges=[])})
+    store = QueueStore()
+    sc, _ = _queue_scraper(monkeypatch, rows, broken)
+    sc.run(writers=[store])
+    assert sorted(store.writes[-1]) == ["2026CF000001AX", "2026CF000003AX"]
+    assert len(store.arrests.docs) == 2 and store.cursor["backlog"] == 1
+    assert mc.mc_case_key("2026CF000002AX") not in store.cursor["done"]
+    # Next run (detail now complete): only the queued case is fetched and written.
+    sc, sessions = _queue_scraper(monkeypatch, rows, details)
+    sc.run(writers=[store])
+    assert _posted(sessions) == ["9900002"] and store.writes[-1] == ["2026CF000002AX"]
+    assert store.cursor["backlog"] == 0 and len(store.arrests.docs) == 3
+
+
+def test_crash_mid_batch_resumes_without_skips(monkeypatch):
+    rows, details, _ = _cases(100)
+    store = QueueStore()
+    crashing = dict(details)
+    sc, sessions = _queue_scraper(monkeypatch, rows, crashing)
+    seen = []
+    real_request = sc._request
+
+    def flaky(session, method, url, **kw):
+        if method == "POST":
+            seen.append(kw["data"]["caseId"])
+            if len(seen) == 40:
+                raise RuntimeError("Manatee Clerk: HTTP 503")
+        return real_request(session, method, url, **kw)
+
+    sc._request = flaky
+    out = sc.run(writers=[store])
+    assert out.get("error") and store.writes == [] and store.cursor == {}
+    assert store.arrests.docs == []
+    # A failed write also leaves everything queued.
+    bad = QueueStore(fail_write=True)
+    sc, _ = _queue_scraper(monkeypatch, rows, details)
+    sc.run(writers=[bad])
+    assert bad.cursor == {}
+    # Resume: the same oldest 80, then the last 20, nothing skipped.
+    sc, _ = _queue_scraper(monkeypatch, rows, details)
+    sc.run(writers=[store])
+    sc, _ = _queue_scraper(monkeypatch, rows, details)
+    sc.run(writers=[store])
+    assert [len(w) for w in store.writes] == [80, 20]
+    assert len({c for w in store.writes for c in w}) == 100 and store.cursor["backlog"] == 0
+
+
+def test_backlog_growth_alert_fires_on_third_growing_run_not_before(monkeypatch):
+    monkeypatch.setattr(mc, "MAX_DETAILS_PER_RUN", 1)
+    alerts = []
+    monkeypatch.setattr("scrapers.base_scraper._slack.notify_scraper_error",
+                        lambda county, msg, **kw: alerts.append((county, msg, kw)))
+    rows, details, _ = _cases(20)
+    store = QueueStore()
+    backlogs = []
+    for n in (2, 4, 7, 11):  # growing intake, 1 detail per run
+        sc, _ = _queue_scraper(monkeypatch, rows[:n], details)
+        sc.run(writers=[store])
+        backlogs.append(store.cursor["backlog"])
+        if len(backlogs) < 4:
+            assert alerts == []  # first run + 2 growing runs: no alert yet
+    assert backlogs == [1, 2, 4, 7] and store.cursor["growth_streak"] == 3
+    assert len(alerts) == 1
+    county, msg, kw = alerts[0]
+    assert county == "Manatee Clerk (FL)" and kw["error_class"] == "backlog_growth"
+    assert "backlog=7" in msg and "ZZSYNTH" not in msg and "2026CF" not in msg
+    # Backlog shrinks: streak resets, no new alert.
+    sc, _ = _queue_scraper(monkeypatch, rows[:11], details)
+    sc.run(writers=[store])
+    assert store.cursor["growth_streak"] == 0 and len(alerts) == 1
+
+
+def test_blocked_run_does_not_advance_the_cursor(monkeypatch):
+    rows, details, _ = _cases(90)
+    store = QueueStore()
+    sc, _ = _queue_scraper(monkeypatch, rows, details)
+    sc.run(writers=[store])
+    before = dict(store.cursor)
+    n_posts = []
+
+    def block_third_post(m, u, d):
+        if m == "POST":
+            n_posts.append(1)
+            return len(n_posts) == 3
+        return False
+
+    sc, sessions = _queue_scraper(monkeypatch, rows, details, challenge_on=block_third_post)
+    out = sc.run(writers=[store])
+    assert out.get("error", "").startswith("egress_block:") or "egress" in str(out).lower()
+    assert len(_posted(sessions)) == 3  # stopped at the challenge, no retry
+    assert store.cursor == before and len(store.writes) == 1  # queue intact
+    sc, _ = _queue_scraper(monkeypatch, rows, details)
+    sc.run(writers=[store])
+    assert len(store.writes[-1]) == 10 and store.cursor["backlog"] == 0
 
 
 def test_requests_are_paced(monkeypatch):
@@ -651,3 +831,31 @@ def test_other_counties_blank_booking_guard_unchanged(monkeypatch):
 
     assert _Other._filter_records_without_source_booking([rec]) == []
     assert ManateeClerkScraper._filter_records_without_source_booking([rec]) == [rec]
+
+
+def test_mongo_writer_cursor_round_trips_on_the_scraper_status_doc():
+    from writers.mongo_writer import MongoWriter
+
+    class Coll:
+        def __init__(self):
+            self.doc, self.filters = {}, []
+
+        def update_one(self, flt, update, upsert=False):
+            assert upsert is True
+            self.filters.append(flt)
+            for k, v in update["$set"].items():
+                if k.startswith("cursors."):
+                    self.doc.setdefault("cursors", {})[k.split(".", 1)[1]] = v
+                else:
+                    self.doc[k] = v
+
+        def find_one(self, flt, projection):
+            self.filters.append(flt)
+            return dict(self.doc)
+
+    w = SimpleNamespace(scraper_status=Coll(), _scraper_status_identity=MongoWriter._scraper_status_identity)
+    assert MongoWriter.get_scraper_cursor(w, "Manatee Clerk", "FL") == {}
+    MongoWriter.set_scraper_cursor(w, "Manatee Clerk", "FL", value={"backlog": 3, "done": {}})
+    assert MongoWriter.get_scraper_cursor(w, "Manatee Clerk", "FL") == {"backlog": 3, "done": {}}
+    assert w.scraper_status.doc["county_label"] == "Manatee Clerk (FL)"
+    assert all(f == w.scraper_status.filters[0] for f in w.scraper_status.filters)  # same status doc identity

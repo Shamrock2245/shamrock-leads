@@ -53,7 +53,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 from bs4 import BeautifulSoup, NavigableString, Tag
 
-from core.booking_identity import MC_KEY_PREFIX, MC_SCOPE_COUNTY
+from core.booking_identity import MC_KEY_PREFIX, MC_SCOPE_COUNTY, is_internal_booking_key
 from core.models import ArrestRecord
 from scrapers.base_scraper import BaseScraper
 from scrapers.scraper_resilience import EgressBlocked, ParseDriftError
@@ -80,8 +80,12 @@ HEADERS = {
 CASE_TYPES: Tuple[Tuple[int, str], ...] = ((10, "Felony"), (35, "Misdemeanor"), (37, "Misdemeanor"))
 DAYS_BACK = 2           # filed yesterday and today (filing lags arrest)
 PAGE_SIZE = 50
-MAX_LIST_PAGES = 4      # per case type
+MAX_LIST_PAGES = 8      # per case type (room for a widened backlog window)
 MAX_DETAILS_PER_RUN = 80
+# Durable detail queue (scraper_status.cursors.detail_queue, see writers/mongo_writer.py).
+QUEUE_CURSOR_NAME = "detail_queue"
+MAX_LOOKBACK_DAYS = 7   # the list window widens back to the oldest queued case, at most this far
+BACKLOG_ALERT_RUNS = 3  # alert when the backlog grows on this many consecutive runs
 REQUEST_DELAY_S = 2.5
 REQUEST_TIMEOUT = 30
 
@@ -130,6 +134,13 @@ def _clean(text: Any) -> str:
 
 def _norm(text: Any) -> str:
     return _clean(text).upper()
+
+
+def _parse_iso(value: str) -> Optional[date]:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date() if value else None
+    except ValueError:
+        return None
 
 
 def _iso(mdy: str) -> str:
@@ -494,23 +505,29 @@ class ManateeClerkScraper(BaseScraper):
         self._requests_made = 0
         self._unmatched_defendants = 0
         end_d = date.today()
+        floor_d = end_d - timedelta(days=MAX_LOOKBACK_DAYS - 1)
+        queue = self._load_queue()
+        done: Dict[str, str] = dict(queue.get("done") or {})
         start_d = end_d - timedelta(days=DAYS_BACK - 1)
+        oldest_pending = _parse_iso(queue.get("oldest_pending") or "")
+        if oldest_pending and oldest_pending < start_d:
+            # Queued cases from earlier runs: widen the window back to them.
+            start_d = max(oldest_pending, floor_d)
+            if oldest_pending < floor_d:
+                logger.warning("[%s] queued cases older than %d days fall outside the list window",
+                               self.county_label, MAX_LOOKBACK_DAYS)
         start_s, end_s = start_d.strftime("%m-%d-%Y"), end_d.strftime("%m-%d-%Y")
 
         records: List[ArrestRecord] = []
         seen_cases: set = set()
-        listed = details = skipped_non_defendant = multi_defendant = 0
-        # Phase 1: walk every case type's list and pick the eligible cases.
-        # Phase 2 (detail POSTs) only starts once the whole run is known to
-        # fit under MAX_DETAILS_PER_RUN, so the cap can never drop cases
-        # silently: an over-cap window fails the run loudly instead.
-        planned: List[Tuple[Any, str, str, Dict[str, Any], str]] = []
+        listed = details = skipped_non_defendant = multi_defendant = already_done = partial = 0
+        # Phase 1: walk every case type's list and queue the eligible cases.
+        eligible: List[Tuple[str, str, Any, str, str, Dict[str, Any], str]] = []
         for type_id, court_type in CASE_TYPES:
             # One session per case type: the site keeps search state per session.
             session = self._new_session()
             rows, list_url = self._walk_list(session, type_id, start_s, end_s)
             listed += len(rows)
-            rows.sort(key=lambda r: r["file_date"], reverse=True)
             defendants_per_case: Dict[str, int] = {}
             for row in rows:
                 if row["party_type"].casefold() == "defendant":
@@ -529,15 +546,21 @@ class ManateeClerkScraper(BaseScraper):
                     # co-defendant: fail closed for this case (no detail fetch).
                     multi_defendant += 1
                     continue
-                planned.append((session, list_url, court_type, row, case))
+                key = mc_case_key(case)
+                if key in done:
+                    already_done += 1
+                    continue
+                eligible.append((row.get("file_date") or "", key, session, list_url, court_type, row, case))
 
-        if len(planned) > MAX_DETAILS_PER_RUN:
-            raise ManateeClerkContractError(
-                f"Manatee Clerk: {len(planned)} eligible cases exceed MAX_DETAILS_PER_RUN="
-                f"{MAX_DETAILS_PER_RUN}; refusing to truncate the run (no detail pages fetched)"
-            )
-
-        for session, list_url, court_type, row, case in planned:
+        # Phase 2: oldest first, at most MAX_DETAILS_PER_RUN detail POSTs. The
+        # rest stay queued for the next run (durable cursor, committed only in
+        # after_records_written once the write succeeded).
+        eligible.sort(key=lambda e: (e[0], e[1]))
+        batch, rest = eligible[:MAX_DETAILS_PER_RUN], eligible[MAX_DETAILS_PER_RUN:]
+        written_plan: Dict[str, str] = {}
+        resolved: Dict[str, str] = {}
+        still_queued: List[str] = [e[0] for e in rest]
+        for file_date, key, session, list_url, court_type, row, case in batch:
             html = self._request(
                 session, "POST", BASE_URL + (row["form_action"] or DETAIL_PATH),
                 data=row["form"], headers={"Referer": list_url},
@@ -548,19 +571,111 @@ class ManateeClerkScraper(BaseScraper):
                 raise ManateeClerkContractError("Manatee Clerk: detail case number does not match the list row")
             if len(detail.get("defendants") or []) > 1:
                 multi_defendant += 1
+                resolved[key] = file_date  # fail-closed skip; settled once the run's write succeeds
                 continue
-            rec = self.build_record(row, detail, court_type)
-            if rec is not None:
-                records.append(rec)
+            rec = self.build_record(row, detail, court_type) if detail.get("charges") else None
+            if rec is None:
+                # Half-parsed case (no charges / no usable defendant): never
+                # written; it stays queued for the next run.
+                partial += 1
+                still_queued.append(file_date)
+                continue
+            records.append(rec)
+            written_plan[key] = file_date
 
+        backlog = len(still_queued)
+        self._queue_plan = {
+            "prior": queue,
+            "done": done,
+            "written_plan": written_plan,
+            "resolved": resolved,
+            "still_queued": still_queued,
+            "floor": floor_d.isoformat(),
+        }
         no_bond = sum(1 for r in records if r.Bond_Amount == "")
         logger.info(
-            "[%s] %d records (listed=%d, details=%d, non_defendant=%d, bond_unknown=%d, "
-            "defendant_unmatched=%d, multi_defendant_skipped=%d) in %.1fs",
-            self.county_label, len(records), listed, details, skipped_non_defendant, no_bond,
-            self._unmatched_defendants, multi_defendant, time.time() - start,
+            "[%s] %d records (listed=%d, eligible=%d, details=%d, backlog=%d, partial_requeued=%d, "
+            "already_done=%d, non_defendant=%d, bond_unknown=%d, defendant_unmatched=%d, "
+            "multi_defendant_skipped=%d) in %.1fs",
+            self.county_label, len(records), listed, len(eligible), details, backlog, partial,
+            already_done, skipped_non_defendant, no_bond, self._unmatched_defendants,
+            multi_defendant, time.time() - start,
         )
         return records
+
+    # ── durable detail queue ──
+    def _queue_store(self) -> Any:
+        w = getattr(self, "_run_status_writer", None)
+        if w is not None and callable(getattr(w, "get_scraper_cursor", None)):
+            return w
+        return None
+
+    def _load_queue(self) -> Dict[str, Any]:
+        store = self._queue_store()
+        if store is None:
+            # No system-of-record writer (direct scrape() / dry run): in-memory only.
+            return dict(getattr(self, "_mem_queue", {}) or {})
+        return store.get_scraper_cursor(county=self.county, state="FL", name=QUEUE_CURSOR_NAME) or {}
+
+    def after_records_written(self, status_writer: Any, records: List[ArrestRecord], ok: bool) -> None:
+        """Advance the durable cursor, only after the system-of-record write succeeded.
+
+        A crash, block or failed write never reaches here (or arrives with
+        ``ok=False``), so the batch stays queued and is retried, never skipped.
+        """
+        plan = getattr(self, "_queue_plan", None)
+        self._queue_plan = None
+        if not plan or not ok:
+            if plan:
+                logger.warning("[%s] write not confirmed; %d cases stay queued",
+                               self.county_label, len(plan["written_plan"]) + len(plan["still_queued"]))
+            return
+        written = {
+            r.Booking_Number for r in records if is_internal_booking_key(getattr(r, "Booking_Number", ""))
+        }
+        done = dict(plan["done"])
+        unconfirmed: List[str] = []
+        for key, file_date in plan["written_plan"].items():
+            if key in written:
+                done[key] = file_date
+            else:
+                unconfirmed.append(file_date)
+        done.update(plan["resolved"])
+        floor = plan["floor"]
+        done = {k: v for k, v in done.items() if v and v >= floor}
+        pending = list(plan["still_queued"]) + unconfirmed
+        backlog = len(pending)
+        prior = plan["prior"] or {}
+        prev = prior.get("backlog")
+        streak = int(prior.get("growth_streak") or 0)
+        streak = streak + 1 if (prev is not None and backlog > int(prev)) else 0
+        state = {
+            "v": 1,
+            "done": done,
+            "oldest_pending": min((d for d in pending if d), default=""),
+            "backlog": backlog,
+            "growth_streak": streak,
+            "updated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        }
+        store = status_writer if callable(getattr(status_writer, "set_scraper_cursor", None)) else None
+        if store is not None:
+            store.set_scraper_cursor(county=self.county, state="FL", name=QUEUE_CURSOR_NAME, value=state)
+        else:
+            self._mem_queue = state
+        logger.info("[%s] detail queue: backlog=%d growth_streak=%d", self.county_label, backlog, streak)
+        if streak == BACKLOG_ALERT_RUNS:
+            self._alert_backlog_growth(backlog, streak)
+
+    def _alert_backlog_growth(self, backlog: int, streak: int) -> None:
+        from scrapers.base_scraper import _slack  # existing #scraper-errors path
+
+        msg = (f"Manatee Clerk detail backlog grew on {streak} consecutive runs: backlog={backlog} "
+               f"(cap {MAX_DETAILS_PER_RUN} details/run). Counts only.")
+        logger.warning("[%s] %s", self.county_label, msg)
+        try:
+            _slack.notify_scraper_error(self.county_label, msg, error_class="backlog_growth")
+        except Exception:
+            pass
 
     def _walk_list(self, session: Any, type_id: int, start_s: str, end_s: str) -> Tuple[List[Dict[str, Any]], str]:
         """Every list row for one case type, or ParseDriftError.

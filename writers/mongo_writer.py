@@ -664,6 +664,35 @@ class MongoWriter:
         "egress_blocked_failures",
     )
 
+    def get_scraper_cursor(self, county: str, state: str = None, name: str = "detail_queue") -> dict:
+        """Durable per-scraper cursor/backlog state (``scraper_status.cursors.<name>``), or ``{}``.
+
+        Same doc and identity as the resilience state, so it survives restarts
+        and redeploys. Holds counts and internal case keys only (no person data).
+        """
+        filter_q, _bare, _st, _label = self._scraper_status_identity(county, state)
+        doc = self.scraper_status.find_one(filter_q, {f"cursors.{name}": 1, "_id": 0}) or {}
+        return dict((doc.get("cursors") or {}).get(name) or {})
+
+    def set_scraper_cursor(self, county: str, state: str = None, name: str = "detail_queue", value: dict = None) -> None:
+        """Persist the cursor/backlog state written by :meth:`get_scraper_cursor`."""
+        filter_q, bare, st, label = self._scraper_status_identity(county, state)
+        now = datetime.now(timezone.utc)
+        self.scraper_status.update_one(
+            filter_q,
+            {
+                "$set": {
+                    f"cursors.{name}": dict(value or {}),
+                    "county": bare or county,
+                    "county_label": label,
+                    "state": st,
+                    "updated_at": now,
+                },
+                "$setOnInsert": {"created_at": now},
+            },
+            upsert=True,
+        )
+
     def get_scraper_resilience(self, county: str, state: str = None) -> dict:
         """Read persisted consecutive-failure / auto-disable state (or ``{}``)."""
         filter_q, _bare, _st, _label = self._scraper_status_identity(county, state)
