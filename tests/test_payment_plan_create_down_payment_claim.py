@@ -301,3 +301,54 @@ def test_dedupe_unavailable_is_503_and_no_plan(rig, monkeypatch):
     monkeypatch.setattr(pp, "_payment_claims_collection", down)
     (r,) = _post(app, [_body()])
     assert r.status_code == 503 and db["payment_plans"].docs == []
+
+
+def test_link_writes_audit_with_reason_and_confidence(rig):
+    db, app = rig
+    db["payments"].docs.append(_poller())
+    (r,) = _post(app, [_body()])
+    assert r.status_code == 201
+    (ev,) = db["audit_events"].docs
+    assert ev["event_type"] == "payment_plan_logged_payment_linked"
+    assert ev["reason"] and ev["confidence"] == 1.0 and ev["transaction_id"] == "SS-77"
+
+
+def test_audit_failure_rolls_back_link_plan_and_claim(rig):
+    db, app = rig
+    db["payments"].docs.append(_poller())
+    before = copy.deepcopy(db["payments"].docs)
+    db["audit_events"].fail_insert = True
+    (r,) = _post(app, [_body()])
+    assert r.status_code == 500
+    assert db["payments"].docs == before
+    assert db["payment_plans"].docs == [] and _claims(db) == []
+
+
+def test_rollback_keeps_newer_reconciliation_status_and_blocks_txn(rig):
+    db, app = rig
+    db["payments"].docs.append(_poller())
+
+    async def reconcile_then_fail(doc):
+        db["payments"].docs[0]["status"] = "reconciled"
+        raise RuntimeError("audit down")
+    db["audit_events"].insert_one = reconcile_then_fail
+    (r,) = _post(app, [_body()])
+    assert r.status_code == 500
+    assert db["payments"].docs[0]["status"] == "reconciled"     # newer state kept
+    assert db["payment_plans"].docs == []
+    (claim,) = _claims(db)                                       # txn stays blocked for review
+    assert claim["status"] == "failed" and claim["failed_reason"] == "plan_create_rollback_incomplete"
+
+
+def test_poller_row_arriving_during_insert_rolls_back(rig):
+    db, app = rig
+    real = db["payments"].insert_one
+
+    async def insert_then_poller(doc):
+        await real(doc)
+        db["payments"].docs.append(_poller(_id="late"))
+    db["payments"].insert_one = insert_then_poller
+    (r,) = _post(app, [_body()])
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_ambiguous"
+    assert [d["_id"] for d in db["payments"].docs] == ["late"]
+    assert db["payment_plans"].docs == [] and _claims(db) == []

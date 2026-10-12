@@ -16,9 +16,12 @@ Endpoints:
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from datetime import datetime, timezone, timedelta
+import logging
 import uuid
 
 from dashboard.extensions import get_collection
+
+logger = logging.getLogger(__name__)
 
 payment_plans_bp = APIRouter(prefix="/api", tags=["payment_plans"])
 # ── Premium Calculator ──────────────────────────────────────────────────────────
@@ -315,8 +318,11 @@ async def _create_plan_with_down_payment_txn(plans_col, plan_doc, txn, amount, m
     except Exception:
         return JSONResponse({"error": "payment_dedupe_unavailable"}, status_code=503)
 
+    from bson import ObjectId
+
     plan_inserted = False
-    linked = False
+    link_set = None
+    own_id = None
     try:
         await plans_col.insert_one(dict(plan_doc))
         plan_inserted = True
@@ -328,21 +334,45 @@ async def _create_plan_with_down_payment_txn(plans_col, plan_doc, txn, amount, m
                 pin["raw_payload.event_type"] = raw["event_type"]
             else:
                 pin["raw_payload.event_type"] = {"$exists": False}
-            res = await payments_col.update_one(pin, {"$set": {
+            candidate = {
                 "plan_id": plan_id, "booking_number": booking, "type": "down_payment",
                 "logged_status": row.get("status"), "status": "completed",
                 "timestamp": row.get("timestamp") or now.isoformat(),
                 "plan_linked_at": now.isoformat(),
-            }})
+            }
+            res = await payments_col.update_one(pin, {"$set": candidate})
             if not getattr(res, "matched_count", 0):
                 raise _LinkLost()
-            linked = True
+            link_set = candidate
+            own_id = row["_id"]
         else:
+            own_id = ObjectId()
             await payments_col.insert_one({
+                "_id": own_id,
                 "booking_number": booking, "plan_id": plan_id, "amount": amount,
                 "method": method, "type": "down_payment", "transaction_id": txn,
                 "status": "completed", "timestamp": now.isoformat(),
                 "notes": "Initial down payment",
+            })
+        # Post-write recheck: the poller/webhook write outside this claim. Any
+        # other row for this txn now means the down payment is ambiguous.
+        if await payments_col.find_one({"transaction_id": txn, "_id": {"$ne": own_id}}):
+            raise _Ambiguous()
+        if link_set is not None:
+            await get_collection("audit_events").insert_one({
+                "event_type": "payment_plan_logged_payment_linked",
+                "entity_type": "payment_plan", "entity_id": plan_id,
+                "actor": plan_doc.get("created_by") or "dashboard",
+                "agent_name": plan_doc.get("created_by") or "dashboard",
+                "timestamp": now, "created_at": now,
+                "booking_number": booking, "transaction_id": txn,
+                "payment_id": str(row.get("_id")), "payment_type": "down_payment",
+                "plan_id_before": None, "plan_id_after": plan_id,
+                "status_before": row.get("status"), "status_after": "completed",
+                "amount": amount,
+                "reason": "plan down payment linked to logged card payment: exact transaction id, "
+                          "same amount, same or blank booking, settled status, only row for the id",
+                "confidence": 1.0, "match_method": "exact_transaction_id",
             })
         await claims.update_one(
             {"plan_id": plan_id, "transaction_id": txn},
@@ -350,13 +380,21 @@ async def _create_plan_with_down_payment_txn(plans_col, plan_doc, txn, amount, m
         )
     except Exception as exc:
         await _undo_plan_create(plans_col, payments_col, claims, plan_id, txn,
-                                row if linked else None, plan_inserted)
+                                row, link_set, own_id if link_set is None else None,
+                                plan_inserted)
         if isinstance(exc, _LinkLost):
             return _conflict("logged_payment_changed", txn,
                              "The logged payment changed while the plan was being created. Try again.")
+        if isinstance(exc, _Ambiguous):
+            return _conflict("logged_payment_ambiguous", txn,
+                             "Another logged payment with this transaction id appeared while the plan was being created. Review before trying again.")
         return _conflict("payment_record_failed", txn,
                          "The plan could not be created. Nothing was recorded.", 500)
     return None
+
+
+class _Ambiguous(Exception):
+    pass
 
 
 class _LinkLost(Exception):
@@ -373,34 +411,39 @@ async def _iter_find(coll, flt):
             yield d
 
 
-async def _undo_plan_create(plans_col, payments_col, claims, plan_id, txn, linked_row, plan_inserted):
-    """Best-effort rollback in reverse order; the claim goes last so the txn is
-    never released while a plan or payment row still references it."""
+async def _undo_plan_create(plans_col, payments_col, claims, plan_id, txn, row,
+                            link_set, inserted_id, plan_inserted):
+    """Best-effort rollback in reverse order. The link revert matches only while
+    every field this request wrote is unchanged (a newer write, e.g. the
+    reconciliation service, is kept). The claim is deleted (txn free again)
+    only when everything was undone; otherwise it is marked failed so the txn
+    stays blocked for review."""
     ok = True
     try:
-        if linked_row is not None:
-            restore = {k: linked_row[k] for k in ("status", "timestamp", "booking_number", "type")
-                       if k in linked_row}
-            unset = {k: "" for k in ("plan_id", "logged_status", "plan_linked_at")}
-            for k in ("timestamp", "booking_number", "type"):
-                if k not in linked_row:
-                    unset[k] = ""
-            upd = {"$unset": unset}
+        if link_set is not None:
+            restore = {k: row[k] for k in link_set if k in row}
+            unset = {k: "" for k in link_set if k not in row}
+            upd = {"$unset": unset} if unset else {}
             if restore:
                 upd["$set"] = restore
-            await payments_col.update_one({"_id": linked_row["_id"], "plan_id": plan_id}, upd)
-        await payments_col.delete_many({"plan_id": plan_id, "transaction_id": txn,
-                                        "type": "down_payment", "plan_linked_at": {"$exists": False}})
+            res = await payments_col.update_one({"_id": row["_id"], **link_set}, upd)
+            if not getattr(res, "matched_count", 0):
+                ok = False
+                logger.error("[payment_plans] down-payment link revert matched nothing plan_id=%s", plan_id)
+        if inserted_id is not None:
+            await payments_col.delete_one({"_id": inserted_id, "plan_id": plan_id})
         if plan_inserted:
             await plans_col.delete_one({"plan_id": plan_id})
-    except Exception:
+    except Exception as exc:
         ok = False
+        logger.error("[payment_plans] plan create rollback failed plan_id=%s err=%s", plan_id, type(exc).__name__)
     try:
         if ok:
             await claims.delete_one({"plan_id": plan_id, "transaction_id": txn})
         else:
             await claims.update_one({"plan_id": plan_id, "transaction_id": txn},
                                     {"$set": {"status": "failed",
+                                              "failed_reason": "plan_create_rollback_incomplete",
                                               "failed_at": datetime.now(timezone.utc).isoformat()}})
     except Exception:
         pass
