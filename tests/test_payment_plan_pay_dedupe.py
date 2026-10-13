@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -15,6 +16,7 @@ from fastapi import FastAPI
 from pymongo.errors import DuplicateKeyError
 
 from dashboard.routers import payment_plans as pp
+from dashboard.services import payment_log_claims as plc
 from tests._inmem_mongo import matches
 
 
@@ -60,8 +62,16 @@ class Coll:
                 for k, v in update.get("$inc", {}).items():
                     d[k] = d.get(k, 0) + v
                 d.update(update.get("$set", {}))
-                return
-        return
+                return SimpleNamespace(matched_count=1, modified_count=1)
+        return SimpleNamespace(matched_count=0, modified_count=0)
+
+    async def delete_one(self, flt):
+        await asyncio.sleep(0)
+        for i, d in enumerate(self.docs):
+            if matches(d, flt):
+                del self.docs[i]
+                return SimpleNamespace(deleted_count=1)
+        return SimpleNamespace(deleted_count=0)
 
 
 class DB(dict):
@@ -83,6 +93,7 @@ def rig(monkeypatch):
     })
     monkeypatch.setattr(pp, "get_collection", lambda name: db[name])
     monkeypatch.setattr(pp, "_payment_claim_index_ready", False)
+    monkeypatch.setattr(plc, "_index_ready", False)
     app = FastAPI()
     app.include_router(pp.payment_plans_bp)
     with patch("dashboard.routers.events.publish_event", new=AsyncMock()):
@@ -231,12 +242,18 @@ def test_legacy_row_on_other_plan_blocks_reuse(rig):
 
 
 def test_poller_row_without_plan_does_not_block(rig):
-    """The receipt poller logs card payments with no plan_id; that is not a plan application."""
+    """A poller row is not a finished plan application, so /pay still applies it.
+
+    It is the charge, though: the plan balance moves once and no second
+    payments row is inserted for that transaction id.
+    """
     db, app = rig
     db["payments"].docs.append({"transaction_id": "TX-CARD", "amount": 100, "booking_number": "TEST-PP-1"})
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
     assert r.status_code == 200 and r.json()["idempotent"] is False
     assert _plan(db)["balance_remaining"] == 700.0
+    assert len(db["payments"].docs) == 1
+    assert db["payments"].docs[0]["plan_id"] == PLAN_ID
 
 
 @pytest.mark.parametrize("amount", [900, 99.99, 100.01])

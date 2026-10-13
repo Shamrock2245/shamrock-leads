@@ -365,6 +365,21 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
                                 status_code=409)
         # Otherwise resume: either our earlier delivery logged the row but did
         # not finish its side effects, or the poller / plan logged the charge.
+        # Do not apply this payload to the bond, the receipt, or the audit
+        # when it disagrees with the payment already recorded.
+        if prior.get("_id") is not None:
+            custom = data.get("custom_fields") if isinstance(data.get("custom_fields"), dict) else {}
+            incoming_booking = str(custom.get("booking_number") or booking_number or "").strip()
+            if plc.recorded_charge_conflicts(
+                prior,
+                amount=data.get("amount"),
+                status=data.get("status"),
+                booking_number=incoming_booking,
+            ):
+                return JSONResponse(
+                    {"error": "payment_needs_review", "transaction_id": txn_key},
+                    status_code=409,
+                )
         if (prior.get("_id") is not None and not str(prior.get("plan_id") or "").strip()
                 and not isinstance(prior.get("raw_payload"), dict)):
             try:

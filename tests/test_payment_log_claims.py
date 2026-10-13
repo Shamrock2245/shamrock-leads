@@ -46,6 +46,8 @@ class Coll(_BaseColl):
             if matches(d, flt):
                 for key in (update.get("$unset") or {}):
                     d.pop(key, None)
+                for key, value in (update.get("$inc") or {}).items():
+                    d[key] = d.get(key, 0) + value
                 d.update(update.get("$set") or {})
                 return SimpleNamespace(matched_count=1, modified_count=1)
         return SimpleNamespace(matched_count=0, modified_count=0)
@@ -597,3 +599,200 @@ def test_legacy_event_type_case_does_not_insert_again(rig, stored, redelivered, 
     (again,) = _hooks(app, [body])
     assert again.json().get("duplicate") is True
     assert [d["_id"] for d in _rows(db)] == ["legacy"]
+
+
+def _mount_plan(app, db, monkeypatch):
+    from dashboard.routers import payment_plans as pp
+
+    monkeypatch.setattr(pp, "get_collection", lambda name: db[name])
+    monkeypatch.setattr(pp, "_payment_claim_index_ready", False)
+    monkeypatch.setattr(plc, "_index_ready", False)
+    db["payment_plans"].docs.append({
+        "plan_id": "plan-1",
+        "booking_number": "BK-1",
+        "total_premium": 1000.0,
+        "balance_remaining": 800.0,
+        "installment_amount": 100.0,
+        "frequency": "weekly",
+        "payments_made": 0,
+        "total_paid": 0.0,
+        "status": "active",
+    })
+    app.include_router(pp.payment_plans_bp)
+
+
+def _plan_pay(app, amount=100, txn="SS-1"):
+    async def go():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            return await c.post(
+                "/api/payments/plans/plan-1/pay",
+                json={"amount": amount, "transaction_id": txn, "method": "Card"},
+            )
+    return asyncio.run(go())
+
+
+def _assert_one_charge_applied_once(db):
+    assert len(_rows(db)) == 1
+    plan = db["payment_plans"].docs[0]
+    assert plan["balance_remaining"] == 700.0
+    assert plan["total_paid"] == 100.0
+    assert plan["payments_made"] == 1
+
+
+def test_logger_finished_before_plan_does_not_insert_again(rig, monkeypatch):
+    """Poller logs the charge first. Plan /pay applies it once and does not add a row."""
+    db, app, bb = rig
+    _mount_plan(app, db, monkeypatch)
+    out = asyncio.run(_poll_one(db, amount=100.0))
+    assert out["success"] is True and out.get("duplicate") is not True
+    r = _plan_pay(app, amount=100)
+    assert r.status_code == 200 and r.json()["idempotent"] is False
+    _assert_one_charge_applied_once(db)
+    assert _rows(db)[0].get("plan_id") == "plan-1"
+    again = _plan_pay(app, amount=100)
+    assert again.status_code == 200 and again.json()["idempotent"] is True
+    _assert_one_charge_applied_once(db)
+
+
+def test_plan_finished_before_logger_one_row(rig, monkeypatch):
+    db, app, bb = rig
+    _mount_plan(app, db, monkeypatch)
+    r = _plan_pay(app, amount=100)
+    assert r.status_code == 200 and r.json()["idempotent"] is False
+    out = asyncio.run(_poll_one(db, amount=100.0))
+    assert out["duplicate"] is True
+    _assert_one_charge_applied_once(db)
+
+
+def test_concurrent_plan_and_poller_one_payment(rig, monkeypatch):
+    db, app, bb = rig
+    _mount_plan(app, db, monkeypatch)
+
+    async def go():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            poll = _poll_one(db, amount=100.0)
+            pay = c.post("/api/payments/plans/plan-1/pay",
+                         json={"amount": 100, "transaction_id": "SS-1", "method": "Card"})
+            return await asyncio.gather(poll, pay)
+
+    _poll_out, pay = asyncio.run(go())
+    assert len(_rows(db)) == 1
+    if pay.status_code == 409:
+        pay = _plan_pay(app, amount=100)
+    assert pay.status_code == 200
+    _assert_one_charge_applied_once(db)
+    again = asyncio.run(_poll_one(db, amount=100.0, mid="gm-later"))
+    assert again.get("duplicate") is True or again.get("error") == "payment_in_progress"
+    _assert_one_charge_applied_once(db)
+
+
+def test_concurrent_plan_and_webhook_one_payment(rig, monkeypatch):
+    db, app, bb = rig
+    _mount_plan(app, db, monkeypatch)
+
+    async def go():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            hook = c.post("/api/webhooks/payment", json=_hook(amount=100.0))
+            pay = c.post("/api/payments/plans/plan-1/pay",
+                         json={"amount": 100, "transaction_id": "SS-1", "method": "Card"})
+            return await asyncio.gather(hook, pay)
+
+    hook, pay = asyncio.run(go())
+    assert len(_rows(db)) == 1
+    if pay.status_code == 409:
+        pay = _plan_pay(app, amount=100)
+    assert pay.status_code == 200
+    _assert_one_charge_applied_once(db)
+    assert hook.status_code in (200, 409)
+
+
+def test_fresh_logger_claim_blocks_plan_insert(rig, monkeypatch):
+    db, app, bb = rig
+    _mount_plan(app, db, monkeypatch)
+    db[plc.LOG_CLAIMS_COLLECTION].docs.append({
+        "transaction_id": "SS-1",
+        "kind": plc.CHARGE,
+        "status": "claimed",
+        "claimed_at": datetime.now(timezone.utc).isoformat(),
+        "source": "swipesimple_gmail_poll",
+    })
+    r = _plan_pay(app, amount=100)
+    assert r.status_code == 409 and r.json()["error"] == "payment_in_progress"
+    assert _rows(db) == []
+    assert db[plc.PLAN_CLAIMS_COLLECTION].docs == []
+    assert db["payment_plans"].docs[0]["balance_remaining"] == 800.0
+
+
+def test_plan_amount_disagrees_with_logged_charge(rig, monkeypatch):
+    db, app, bb = rig
+    _mount_plan(app, db, monkeypatch)
+    assert asyncio.run(_poll_one(db, amount=200.0))["success"] is True
+    r = _plan_pay(app, amount=100)
+    assert r.status_code == 409 and r.json()["error"] == "transaction_id_amount_mismatch"
+    assert len(_rows(db)) == 1
+    assert not str(_rows(db)[0].get("plan_id") or "").strip()
+    assert db[plc.PLAN_CLAIMS_COLLECTION].docs == []
+    assert db["payment_plans"].docs[0]["balance_remaining"] == 800.0
+    assert db["payment_plans"].docs[0]["total_paid"] == 0.0
+
+
+def test_webhook_rejects_conflicting_amount_before_effects(rig):
+    db, app, bb = rig
+    db["payments"].docs.append({
+        "_id": "p1", "transaction_id": "SS-1", "amount": 50.0, "status": "approved",
+        "booking_number": "BK-1", "source": "swipesimple_gmail_poll",
+    })
+    db["bond_cases"].docs.append({"booking_number": "BK-1", "last_payment_amount": 50.0})
+    body = _hook(amount=200.0, indemnitor_phone="+10000000000")
+    (r,) = _hooks(app, [body])
+    assert r.status_code == 409 and r.json()["error"] == "payment_needs_review"
+    assert db["audit_events"].docs == []
+    assert bb.await_count == 0
+    assert db["bond_cases"].docs[0]["last_payment_amount"] == 50.0
+    assert "webhook_event_type" not in db["payments"].docs[0]
+    assert all(not c.get("wh_completed") for c in db[plc.LOG_CLAIMS_COLLECTION].docs)
+    (again,) = _hooks(app, [body])
+    assert again.status_code == 409 and again.json()["error"] == "payment_needs_review"
+    assert db["audit_events"].docs == []
+    assert len(_rows(db)) == 1
+
+
+@pytest.mark.parametrize("row_status,row_booking,hook_status", [
+    ("approved", "BK-OTHER", "approved"),
+    ("declined", "BK-1", "approved"),
+    ("completed", "BK-1", "refunded"),
+])
+def test_webhook_rejects_conflicting_booking_or_status(rig, row_status, row_booking, hook_status):
+    db, app, bb = rig
+    db["payments"].docs.append({
+        "_id": "p1", "transaction_id": "SS-1", "amount": 200.0, "status": row_status,
+        "booking_number": row_booking, "source": "swipesimple_gmail_poll",
+    })
+    db["bond_cases"].docs.append({"booking_number": "BK-1"})
+    db["active_bonds"].docs.append({"booking_number": row_booking})
+    (r,) = _hooks(app, [_hook(amount=200.0, status=hook_status)])
+    assert r.status_code == 409 and r.json()["error"] == "payment_needs_review"
+    assert "last_payment_amount" not in db["bond_cases"].docs[0]
+    assert "last_payment_amount" not in db["active_bonds"].docs[0]
+    assert db["audit_events"].docs == []
+    assert db["payments"].docs[0]["status"] == row_status
+    assert db["payments"].docs[0]["booking_number"] == row_booking
+
+
+def test_failed_plan_insert_releases_charge_claim_for_the_logger(rig, monkeypatch):
+    """Plan /pay failed before its payment row: the poller can still log the charge once."""
+    db, app, bb = rig
+    _mount_plan(app, db, monkeypatch)
+    db["payments"].fail_insert = True
+    r = _plan_pay(app, amount=100)
+    assert r.status_code == 500
+    assert db[plc.PLAN_CLAIMS_COLLECTION].docs[0]["status"] == "failed"
+    assert db[plc.LOG_CLAIMS_COLLECTION].docs == []
+    db["payments"].fail_insert = False
+    out = asyncio.run(_poll_one(db, amount=100.0))
+    assert out["success"] is True and out.get("duplicate") is not True
+    assert len(_rows(db)) == 1
+    assert db[plc.PLAN_CLAIMS_COLLECTION].docs[0]["status"] == "failed"

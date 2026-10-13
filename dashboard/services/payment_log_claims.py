@@ -21,12 +21,19 @@ A logger claim left ``claimed`` with no payment row (worker killed after the
 claim insert) is reclaimable once ``claimed_at`` is at least ``STALE_AFTER``
 old. Takeover is one conditional update matching that ``claimed_at``, so a
 second worker cannot also insert.
+
+Plan ``/pay`` inserts through the same charge claim (``coordinate_plan_insert``).
+The plan claim collection alone is not that gate: a plan writer and a logger
+can each see no opposite claim and each insert a payments row. Only the holder
+of the charge claim may insert. If the logger already logged the charge, plan
+``/pay`` applies onto that row and does not insert another.
 """
 from __future__ import annotations
 
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -108,6 +115,77 @@ def _existing_filter(txn: str, kind: str) -> Dict[str, Any]:
             {"raw_payload.event_type": _event_type_equals_ci("payment.completed")},
         ]}
     return {"transaction_id": txn, "raw_payload.event_type": _event_type_equals_ci(kind)}
+
+
+def _money_cents(value: Any) -> Optional[int]:
+    """Integer cents, or None when the value is missing or not a whole-cent amount."""
+    if value is None or isinstance(value, bool):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        dec = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return None
+    if not dec.is_finite():
+        return None
+    cents = dec * 100
+    if cents != cents.to_integral_value():
+        return None
+    return int(cents)
+
+
+# Plan /pay stores a settled installment as ``completed``. The poller and the
+# webhook store the same settled card charge as ``approved``. Those are one
+# payment fact. Declined and refunded are different facts.
+_SETTLED_STATUSES = frozenset({"approved", "completed", "paid", "success"})
+_DECLINED_STATUSES = frozenset({"declined", "failed", "denied"})
+_REFUNDED_STATUSES = frozenset({"refunded", "refund"})
+
+
+def _status_fact(value: Any) -> Optional[str]:
+    status = str(value or "").strip().lower()
+    if not status:
+        return None
+    if status in _SETTLED_STATUSES:
+        return "settled"
+    if status in _DECLINED_STATUSES:
+        return "declined"
+    if status in _REFUNDED_STATUSES:
+        return "refunded"
+    return status
+
+
+def recorded_charge_conflicts(
+    recorded: Optional[Dict[str, Any]],
+    *,
+    amount: Any,
+    status: Any,
+    booking_number: Any,
+) -> bool:
+    """True when an existing payment row disagrees with a payload about to
+    drive bond updates, a receipt, or an audit.
+
+    A fact that the row does not carry is not a conflict. A fact both sides
+    carry must match: amount in whole cents, status (``completed`` and
+    ``approved`` are the same settled charge), and booking number.
+    """
+    row = recorded or {}
+    if row.get("amount") is not None:
+        recorded_cents = _money_cents(row.get("amount"))
+        incoming_cents = _money_cents(amount)
+        if recorded_cents is None or incoming_cents is None or recorded_cents != incoming_cents:
+            return True
+    recorded_status = _status_fact(row.get("status"))
+    incoming_status = _status_fact(status)
+    if recorded_status and recorded_status != incoming_status:
+        return True
+    recorded_booking = str(row.get("booking_number") or "").strip()
+    incoming_booking = str(booking_number or "").strip()
+    if recorded_booking and incoming_booking and recorded_booking.casefold() != incoming_booking.casefold():
+        return True
+    return False
 
 
 def _plan_claim_outcome(plan_claim: Dict[str, Any]) -> str:
@@ -234,6 +312,100 @@ async def begin(db, txn: str, kind: str, source: str) -> Dict[str, Any]:
     except Exception as exc:
         logger.warning("[payment_log_claims] claim insert failed err=%s", type(exc).__name__)
         return {"action": "unavailable"}
+    return {"action": "insert", "claim_token": now}
+
+
+async def coordinate_plan_insert(db, txn: str) -> Dict[str, Any]:
+    """Whether plan ``/pay`` may insert a payments row for this charge.
+
+    Returns ``insert`` (this caller holds the logger charge claim and must
+    insert, then ``finish`` with the token), ``use_existing`` (a charge row
+    is already recorded: apply the plan onto that row, do not insert),
+    ``in_progress`` (a logger holds a fresh claim: do not insert a plan claim
+    or a payment), ``needs_review`` (the claim says logged but no row exists),
+    or ``unavailable``.
+    """
+    from pymongo.errors import DuplicateKeyError
+
+    txn = str(txn or "").strip()
+    if not txn:
+        return {"action": "unavailable"}
+    try:
+        claims = await _claims(db)
+    except Exception as exc:
+        logger.warning("[payment_log_claims] plan coordinate index err=%s", type(exc).__name__)
+        return {"action": "unavailable"}
+
+    async def _from_existing(claim: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        row = await db["payments"].find_one(_existing_filter(txn, CHARGE))
+        if row is not None:
+            if (
+                claim
+                and str(claim.get("status") or "") == "claimed"
+                and claim_is_stale(claim.get("claimed_at"))
+            ):
+                await _reconcile_stale_logged(claims, txn, CHARGE, claim, row)
+            return {"action": "use_existing", "row": row}
+        if claim is None:
+            return None
+        status = str(claim.get("status") or "")
+        if status == "claimed" and claim_is_stale(claim.get("claimed_at")):
+            token = await _reclaim_stale(claims, txn, CHARGE, "plan_pay", claim.get("claimed_at"))
+            if not token:
+                return {"action": "in_progress"}
+            row = await db["payments"].find_one(_existing_filter(txn, CHARGE))
+            if row is not None:
+                current = await claims.find_one({"transaction_id": txn, "kind": CHARGE})
+                await _reconcile_stale_logged(claims, txn, CHARGE, current, row)
+                return {"action": "use_existing", "row": row}
+            return {"action": "insert", "claim_token": token}
+        if status == "logged":
+            return {"action": "needs_review"}
+        return {"action": "in_progress"}
+
+    try:
+        decided = await _from_existing(await claims.find_one({"transaction_id": txn, "kind": CHARGE}))
+    except Exception as exc:
+        logger.warning("[payment_log_claims] plan coordinate read err=%s", type(exc).__name__)
+        return {"action": "unavailable"}
+    if decided is not None:
+        return decided
+
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        await claims.insert_one({
+            "transaction_id": txn, "kind": CHARGE, "source": "plan_pay",
+            "status": "claimed", "claimed_at": now,
+        })
+    except DuplicateKeyError:
+        try:
+            decided = await _from_existing(
+                await claims.find_one({"transaction_id": txn, "kind": CHARGE}))
+        except Exception as exc:
+            logger.warning("[payment_log_claims] plan coordinate reread err=%s", type(exc).__name__)
+            return {"action": "unavailable"}
+        return decided or {"action": "in_progress"}
+    except Exception as exc:
+        logger.warning("[payment_log_claims] plan coordinate insert err=%s", type(exc).__name__)
+        return {"action": "unavailable"}
+
+    try:
+        row = await db["payments"].find_one(_existing_filter(txn, CHARGE))
+    except Exception as exc:
+        logger.warning("[payment_log_claims] plan coordinate row err=%s", type(exc).__name__)
+        await finish(db, txn, CHARGE, None, ok=False, claim_token=now)
+        return {"action": "unavailable"}
+    if row is not None:
+        try:
+            await claims.update_one(
+                {"transaction_id": txn, "kind": CHARGE, "status": "claimed", "claimed_at": now},
+                {"$set": {"status": "logged", "payment_id": str(row.get("_id")),
+                          "logged_at": now}},
+            )
+        except Exception as exc:
+            logger.warning("[payment_log_claims] plan coordinate link err=%s", type(exc).__name__)
+            return {"action": "in_progress"}
+        return {"action": "use_existing", "row": row}
     return {"action": "insert", "claim_token": now}
 
 

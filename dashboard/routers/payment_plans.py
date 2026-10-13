@@ -380,12 +380,54 @@ async def record_payment(request: Request, plan_id):
 
     # Plan payments recorded before this dedupe existed have no claim: treat
     # them as applied (on any plan). Rows without a plan_id (e.g. the receipt
-    # poller's log of a card payment) are not plan applications and don't block.
+    # poller's log of a card payment) are not plan applications and don't block
+    # the balance update, but they are the charge: plan /pay must not insert
+    # a second payments row for that transaction id.
     legacy = await payments_col.find_one(
         {"transaction_id": txn, "plan_id": {"$exists": True, "$nin": [None, ""]}}
     )
     if legacy:
         return await _idempotent_reply(plans_col, plan_id, txn, None, amount, legacy_row=legacy)
+
+    # One charge row per transaction. Share the logger's charge claim so a
+    # poller or webhook that is writing this id cannot also insert.
+    from dashboard.services import payment_log_claims as plc
+
+    class _PayDB:
+        def __getitem__(self, name):
+            return get_collection(name)
+
+    coord = await plc.coordinate_plan_insert(_PayDB(), txn)
+    if coord["action"] == "unavailable":
+        return JSONResponse({"error": "payment_dedupe_unavailable"}, status_code=503)
+    if coord["action"] == "in_progress":
+        return JSONResponse(
+            {"error": "payment_in_progress", "transaction_id": txn,
+             "message": "This transaction id is being recorded. Wait and retry."},
+            status_code=409,
+        )
+    if coord["action"] == "needs_review":
+        return JSONResponse(
+            {"error": "payment_needs_review", "transaction_id": txn,
+             "message": "This transaction id is marked recorded but has no payment row."},
+            status_code=409,
+        )
+    charge_token = coord.get("claim_token") if coord["action"] == "insert" else None
+    existing_charge = coord.get("row") if coord["action"] == "use_existing" else None
+    if existing_charge is not None:
+        other_plan = str(existing_charge.get("plan_id") or "").strip()
+        if other_plan and other_plan != plan_id:
+            return JSONResponse(
+                {"error": "transaction_id_used_on_other_plan", "transaction_id": txn,
+                 "message": "This transaction id is already recorded on another payment plan."},
+                status_code=409,
+            )
+        if not _same_amount(existing_charge.get("amount"), amount):
+            return JSONResponse(
+                {"error": "transaction_id_amount_mismatch", "transaction_id": txn,
+                 "message": "This transaction id was already recorded with a different amount."},
+                status_code=409,
+            )
 
     now = datetime.now(timezone.utc)
     try:
@@ -398,22 +440,46 @@ async def record_payment(request: Request, plan_id):
             "claimed_at": now.isoformat(),
         })
     except DuplicateKeyError:
+        if charge_token:
+            await plc.finish(_PayDB(), txn, plc.CHARGE, None, ok=False, claim_token=charge_token)
         existing = await claims.find_one({"transaction_id": txn})
         return await _idempotent_reply(
             plans_col, plan_id, txn, existing or {"status": "unknown"}, amount)
 
     try:
-        await payments_col.insert_one({
-            "booking_number": plan["booking_number"],
-            "plan_id": plan_id,
-            "amount": amount,
-            "method": data.get("method", "Cash"),
-            "type": "installment",
-            "status": "completed",
-            "timestamp": now.isoformat(),
-            "transaction_id": txn,
-            "notes": data.get("notes", ""),
-        })
+        if existing_charge is not None:
+            # The logger (or a legacy poller row) already recorded this charge.
+            # Stamp this plan on that row. Do not insert a second one.
+            stamp_filter: dict = {"transaction_id": txn}
+            if existing_charge.get("_id") is not None:
+                stamp_filter = {"_id": existing_charge["_id"]}
+            await payments_col.update_one(stamp_filter, {"$set": {"plan_id": plan_id}})
+        else:
+            from bson import ObjectId
+
+            row_id = ObjectId()
+            await payments_col.insert_one({
+                "_id": row_id,
+                "booking_number": plan["booking_number"],
+                "plan_id": plan_id,
+                "amount": amount,
+                "method": data.get("method", "Cash"),
+                "type": "installment",
+                "status": "completed",
+                "timestamp": now.isoformat(),
+                "transaction_id": txn,
+                "notes": data.get("notes", ""),
+            })
+            if charge_token and not await plc.finish(
+                _PayDB(), txn, plc.CHARGE, row_id, ok=True, claim_token=charge_token,
+            ):
+                await claims.delete_one(
+                    {"plan_id": plan_id, "transaction_id": txn, "status": "claimed"})
+                return JSONResponse(
+                    {"error": "payment_in_progress", "transaction_id": txn},
+                    status_code=409,
+                )
+            charge_token = None
         # Atomic increments so two different transactions never overwrite each other.
         await plans_col.update_one(
             {"plan_id": plan_id},
@@ -441,6 +507,12 @@ async def record_payment(request: Request, plan_id):
             {"plan_id": plan_id, "transaction_id": txn},
             {"$set": {"status": "failed", "failed_at": datetime.now(timezone.utc).isoformat()}},
         )
+        # Release only a charge claim this attempt still holds, so a failed
+        # insert does not block the poller from recording the provider charge.
+        # A payment row that was inserted stays; finish(ok=False) drops the
+        # claim, and the row itself keeps a later logger from inserting again.
+        if charge_token:
+            await plc.finish(_PayDB(), txn, plc.CHARGE, None, ok=False, claim_token=charge_token)
         return JSONResponse({"error": "payment_record_failed", "transaction_id": txn}, status_code=500)
 
     new_balance = updated.get("balance_remaining", 0)
