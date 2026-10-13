@@ -310,6 +310,8 @@ def test_missing_transaction_id_refused(rig, txn):
     (r,) = _post_many(app, [body])
     assert r.status_code == 400 and r.json()["error"] == "transaction_id_required"
     assert db["payments"].docs == [] and _plan(db)["balance_remaining"] == 800.0
+    assert db["payment_plan_payment_claims"].docs == []
+    assert db["payment_log_claims"].docs == []
 
 
 @pytest.mark.parametrize("amount", [0, -5, "abc", None])

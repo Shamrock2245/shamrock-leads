@@ -253,13 +253,17 @@ async def begin(db, txn: str, kind: str, source: str) -> Dict[str, Any]:
     ``{"action": "existing", ...}`` (already recorded: do not insert),
     ``{"action": "in_progress", ...}`` (someone else holds a fresh claim, or
     a plan ``/pay`` is still ``claimed``: do not insert and do not mark the
-    charge done), or ``{"action": "unavailable"}`` (claim store down).
+    charge done), ``{"action": "rejected"}`` (the id is empty after strip:
+    do not insert and do not open a claim), or ``{"action": "unavailable"}``
+    (claim store down).
     """
     from pymongo.errors import DuplicateKeyError
 
     txn = str(txn or "").strip()
     if not txn:
-        return {"action": "insert", "unclaimed": True}
+        # A blank id cannot be claimed. An unclaimed insert would let every
+        # retry write another payments row.
+        return {"action": "rejected"}
     try:
         claims = await _claims(db)
     except Exception as exc:
@@ -323,13 +327,14 @@ async def coordinate_plan_insert(db, txn: str) -> Dict[str, Any]:
     is already recorded: apply the plan onto that row, do not insert),
     ``in_progress`` (a logger holds a fresh claim: do not insert a plan claim
     or a payment), ``needs_review`` (the claim says logged but no row exists),
-    or ``unavailable``.
+    ``rejected`` (the id is empty after strip: do not insert), or
+    ``unavailable``.
     """
     from pymongo.errors import DuplicateKeyError
 
     txn = str(txn or "").strip()
     if not txn:
-        return {"action": "unavailable"}
+        return {"action": "rejected"}
     try:
         claims = await _claims(db)
     except Exception as exc:

@@ -315,7 +315,9 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
 
     event_type = data.get("event_type")
     transaction_id = data.get("transaction_id")
-    if not event_type or not transaction_id:
+    # Whitespace is present but normalizes to an empty claim key. Reject it
+    # here, before begin(), so it cannot take the unclaimed-insert path.
+    if not event_type or not str(transaction_id or "").strip():
         return JSONResponse(
             {"error": "Missing required fields: event_type and transaction_id"},
             status_code=400,
@@ -333,6 +335,11 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
     kind = plc.claim_kind(event_type)
     db = _Collections()
     gate = await plc.begin(db, txn_key, kind, "swipesimple_webhook")
+    if gate["action"] == "rejected":
+        return JSONResponse(
+            {"error": "Missing required fields: event_type and transaction_id"},
+            status_code=400,
+        )
     if gate["action"] == "unavailable":
         return JSONResponse({"error": "payment_dedupe_unavailable"}, status_code=503)
     if gate["action"] == "in_progress":

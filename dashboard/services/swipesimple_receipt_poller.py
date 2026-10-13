@@ -192,8 +192,12 @@ class SwipeSimpleReceiptPoller:
         amount = parsed.get("amount")
         customer_email = parsed.get("customer_email")
         booking = parsed.get("booking_number") or ""
-        txn = parsed.get("transaction_id") or gmail_message_id
+        txn = str(parsed.get("transaction_id") or "").strip() or str(gmail_message_id or "").strip()
         now = datetime.now(timezone.utc).isoformat()
+        if not txn:
+            # Neither the receipt nor the Gmail id is a claim key. Do not
+            # insert, and leave the message unread for a later poll.
+            return {"success": False, "error": "transaction_id_required", "transaction_id": ""}
 
         # Idempotency
         payments = db["payments"]
@@ -215,6 +219,8 @@ class SwipeSimpleReceiptPoller:
         from dashboard.services import payment_log_claims as plc
 
         gate = await plc.begin(db, txn, plc.CHARGE, "swipesimple_gmail_poll")
+        if gate["action"] == "rejected":
+            return {"success": False, "error": "transaction_id_required", "transaction_id": txn}
         if gate["action"] == "unavailable":
             return {"success": False, "error": "payment_dedupe_unavailable", "transaction_id": txn}
         if gate["action"] == "in_progress":

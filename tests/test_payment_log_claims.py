@@ -830,6 +830,67 @@ def test_stale_worker_loses_claim_before_bond_update(rig):
     assert claims.docs[0]["claimed_at"] == "winner-token"
 
 
+def test_whitespace_transaction_id_webhook_inserts_nothing(rig):
+    """A blank id is not an unclaimed insert. Retries add no payment rows."""
+    db, app, bb = rig
+    db["bond_cases"].docs.append({"booking_number": "BK-1", "last_payment_amount": 50.0})
+    db["active_bonds"].docs.append({"booking_number": "BK-1", "last_payment_amount": 50.0})
+    for txn in ("   ", "\n\t", "  "):
+        (r,) = _hooks(app, [_hook(txn=txn, indemnitor_phone="+10000000000")])
+        assert r.status_code == 400
+        assert "transaction_id" in r.json()["error"]
+    assert db["payments"].docs == []
+    assert db[plc.LOG_CLAIMS_COLLECTION].docs == []
+    assert db["audit_events"].docs == []
+    assert bb.await_count == 0
+    assert db["bond_cases"].docs[0]["last_payment_amount"] == 50.0
+    assert db["active_bonds"].docs[0]["last_payment_amount"] == 50.0
+
+
+def test_begin_rejects_blank_transaction_id(rig):
+    db, app, bb = rig
+    gate = asyncio.run(plc.begin(db, "   ", plc.CHARGE, "swipesimple_webhook"))
+    assert gate["action"] == "rejected"
+    assert "unclaimed" not in gate
+    assert gate.get("claim_token") is None
+    assert db["payments"].docs == []
+    assert db[plc.LOG_CLAIMS_COLLECTION].docs == []
+    plan = asyncio.run(plc.coordinate_plan_insert(db, " \t"))
+    assert plan["action"] == "rejected"
+    assert db["payments"].docs == []
+
+
+def test_blank_transaction_id_poller_does_not_insert(rig):
+    db, app, bb = rig
+    poller = SwipeSimpleReceiptPoller(db)
+    out = asyncio.run(poller._apply_bond_payment(
+        db,
+        {"amount": 200.0, "transaction_id": "   ", "booking_number": "BK-1"},
+        gmail_message_id="  ",
+        raw_subject="Receipt",
+    ))
+    assert out["success"] is False and out["error"] == "transaction_id_required"
+    assert db["payments"].docs == []
+    assert db[plc.LOG_CLAIMS_COLLECTION].docs == []
+    # A blank receipt id falls back to the Gmail message id, once.
+    logged = asyncio.run(poller._apply_bond_payment(
+        db,
+        {"amount": 200.0, "transaction_id": "  ", "booking_number": "BK-1"},
+        gmail_message_id="gm-real",
+        raw_subject="Receipt",
+    ))
+    assert logged["success"] is True and logged.get("duplicate") is not True
+    assert [d["transaction_id"] for d in db["payments"].docs] == ["gm-real"]
+    again = asyncio.run(poller._apply_bond_payment(
+        db,
+        {"amount": 200.0, "transaction_id": "  ", "booking_number": "BK-1"},
+        gmail_message_id="gm-real",
+        raw_subject="Receipt",
+    ))
+    assert again.get("duplicate") is True
+    assert len(db["payments"].docs) == 1
+
+
 def test_failed_plan_insert_releases_charge_claim_for_the_logger(rig, monkeypatch):
     """Plan /pay failed before its payment row: the poller can still log the charge once."""
     db, app, bb = rig

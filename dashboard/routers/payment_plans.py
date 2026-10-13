@@ -398,6 +398,12 @@ async def record_payment(request: Request, plan_id):
             return get_collection(name)
 
     coord = await plc.coordinate_plan_insert(_PayDB(), txn)
+    if coord["action"] == "rejected":
+        return JSONResponse(
+            {"error": "transaction_id_required",
+             "message": "Send the card transaction id, or the receipt number for cash or check."},
+            status_code=400,
+        )
     if coord["action"] == "unavailable":
         return JSONResponse({"error": "payment_dedupe_unavailable"}, status_code=503)
     if coord["action"] == "in_progress":
