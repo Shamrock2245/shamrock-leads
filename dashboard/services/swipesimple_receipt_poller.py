@@ -110,6 +110,38 @@ def agreed_jurisdiction(bonds: List[Dict[str, Any]]) -> Optional[Dict[str, str]]
     return found[0]
 
 
+async def _bonds_matching_email(db, customer_email: str) -> tuple[List[Dict[str, Any]], bool]:
+    """Every bond that carries this indemnitor email, across the bond collections.
+
+    Returns ``(docs, True)`` when every collection was read. ``([], False)``
+    when a read failed or a collection has too many matches to be a single
+    identity. Callers then fail closed instead of using ``find_one``.
+    """
+    email_query = {
+        "$or": [
+            {"indemnitor_email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
+            {"Indemnitor_Email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
+        ]
+    }
+    intake_query = {
+        "$or": [
+            {"indemnitor_email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
+            {"indemnitor.email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
+        ]
+    }
+    found: List[Dict[str, Any]] = []
+    for collection, query in (
+        ("bond_cases", email_query),
+        ("active_bonds", email_query),
+        ("intake_queue", intake_query),
+    ):
+        docs = await _docs_for_query(db[collection], query)
+        if docs is None:
+            return [], False
+        found.extend(docs)
+    return found, True
+
+
 async def _docs_for_query(coll, query: Dict[str, Any], limit: int = 20) -> Optional[List[Dict[str, Any]]]:
     """Matching documents, or None when the read failed or the set is too large."""
     try:
@@ -305,33 +337,31 @@ class SwipeSimpleReceiptPoller:
                     break
                 bonds.extend(found)
         if not bonds and jurisdiction_known and customer_email:
-            email_query = {
-                "$or": [
-                    {"indemnitor_email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
-                    {"Indemnitor_Email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
-                ]
-            }
-            bond = await db["bond_cases"].find_one(email_query)
-            if not bond:
-                bond = await db["active_bonds"].find_one(email_query)
-            if not bond:
-                bond = await db["intake_queue"].find_one(
-                    {
-                        "$or": [
-                            {"indemnitor_email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
-                            {"indemnitor.email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
-                        ]
-                    }
-                )
-            if bond:
-                bonds = [bond]
+            # Same email on two bonds must not pick an arbitrary first row.
+            # find_one would stamp that bond's county and state, and /pay
+            # would treat the receipt as verified.
+            email_bonds, email_ok = await _bonds_matching_email(db, customer_email)
+            if not email_ok:
+                jurisdiction_known = False
+            else:
+                bonds = email_bonds
 
         jurisdiction = agreed_jurisdiction(bonds) if jurisdiction_known else None
-        bond = bonds[0] if bonds else None
-        booking_number = booking or (jurisdiction or {}).get("booking_number") or (bond or {}).get("booking_number") or ""
         # A receipt booking that disagrees with the bond's booking is not that bond.
         if jurisdiction and jurisdiction.get("booking_number") and booking and jurisdiction["booking_number"] != booking:
             jurisdiction = None
+        # The receipt's own booking number stays. An email-only match may
+        # supply a booking number only when every match is one complete
+        # identity. Anything else leaves the booking blank so /pay fails closed.
+        if booking:
+            booking_number = booking
+            matched = bool(bonds)
+        elif jurisdiction and jurisdiction.get("booking_number"):
+            booking_number = jurisdiction["booking_number"]
+            matched = True
+        else:
+            booking_number = ""
+            matched = False
 
         doc = {
             "transaction_id": txn,
@@ -343,7 +373,7 @@ class SwipeSimpleReceiptPoller:
             "customer_name": "",
             "booking_number": booking_number,
             "subject": raw_subject[:200],
-            "matched_bond": bool(bond),
+            "matched_bond": matched,
             "created_at": now,
         }
         if jurisdiction:
@@ -398,7 +428,7 @@ class SwipeSimpleReceiptPoller:
                         "amount": amount,
                         "booking_number": booking_number,
                         "transaction_id": txn,
-                        "matched": bool(bond),
+                        "matched": matched,
                         "has_customer_email": bool(customer_email),
                     },
                 }
@@ -420,7 +450,7 @@ class SwipeSimpleReceiptPoller:
                                 f":moneybag: *SwipeSimple receipt (Gmail poll)* — "
                                 f"${amount:.2f}"
                                 f"{f' | Booking: {booking_number}' if booking_number else ''}"
-                                f"{' | unmatched' if not bond else ''}"
+                                f"{' | unmatched' if not matched else ''}"
                             )
                         },
                     )
@@ -432,7 +462,7 @@ class SwipeSimpleReceiptPoller:
             "amount": amount,
             "booking_number": booking_number,
             "transaction_id": txn,
-            "matched": bool(bond),
+            "matched": matched,
         }
 
 

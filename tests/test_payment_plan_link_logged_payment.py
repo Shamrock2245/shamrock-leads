@@ -1187,3 +1187,143 @@ def test_clash_without_link_audit_does_not_emit_orphan_unlink(rig):
     assert row == before and _plan(db)["balance_remaining"] == 800.0
     assert db["audit_events"].docs == []
     assert db["payment_plan_payment_claims"].docs[0]["failed_reason"] == "audit_write_failed"
+
+
+def _fail_unlink_audit(db):
+    orig = db["audit_events"].insert_one
+
+    async def fail_unlink(doc):
+        if doc.get("event_type") == "payment_plan_logged_payment_unlinked":
+            raise RuntimeError("audit down")
+        return await orig(doc)
+
+    db["audit_events"].insert_one = fail_unlink
+
+
+def test_undo_is_not_complete_when_unlink_audit_fails(rig):
+    """A reverted link is not compensation until the unlink audit is saved."""
+    db, app = rig
+    row = _poller_row(db)
+    before = dict(row)
+
+    def add_webhook_row(coll, flt):
+        coll.docs.append({"_id": "late-hook", "transaction_id": "TX-CARD", "amount": 100.0,
+                          "status": "completed", "raw_payload": {"event_type": "payment.completed"}})
+    db["payments"].before_update = add_webhook_row
+    _fail_unlink_audit(db)
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    body = r.json()
+    assert r.status_code == 503 and body["error"] == "unlink_audit_failed"
+    assert body.get("success") is not True
+    assert row == before and _plan(db)["balance_remaining"] == 800.0
+    kinds = [e["event_type"] for e in db["audit_events"].docs]
+    assert kinds == ["payment_plan_logged_payment_linked"]
+    claim = db["payment_plan_payment_claims"].docs[0]
+    assert claim["status"] == "failed" and claim["failed_reason"] == "unlink_audit_failed"
+
+
+def test_plan_update_undo_requires_unlink_audit(rig):
+    db, app = rig
+    row = _poller_row(db)
+    before = dict(row)
+    _fail_plan_inc(db)
+    _fail_unlink_audit(db)
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 503 and r.json()["error"] == "unlink_audit_failed"
+    assert row == before and _plan(db)["balance_remaining"] == 800.0
+    kinds = [e["event_type"] for e in db["audit_events"].docs]
+    assert kinds == ["payment_plan_logged_payment_linked"]
+    assert db["payment_plan_payment_claims"].docs[0]["failed_reason"] == "unlink_audit_failed"
+
+
+def _apply_email_receipt(db, email="payer@example.com", txn="TX-EMAIL"):
+    from dashboard.services.swipesimple_receipt_poller import SwipeSimpleReceiptPoller
+
+    async def go():
+        return await SwipeSimpleReceiptPoller()._apply_bond_payment(
+            db,
+            {"amount": 100.0, "booking_number": "", "transaction_id": txn,
+             "customer_email": email},
+            gmail_message_id="gm-email",
+            raw_subject="SwipeSimple receipt",
+        )
+    return asyncio.run(go())
+
+
+def test_poller_email_only_ambiguous_match_is_not_verified(rig, monkeypatch):
+    """The same indemnitor email on two bonds must not stamp an arbitrary one."""
+    monkeypatch.delenv("SLACK_WEBHOOK_LEADS", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    db, app = rig
+    db["bond_cases"].docs.append({
+        "booking_number": "BOOK-A", "county": "Lee", "state": "FL",
+        "indemnitor_email": "payer@example.com",
+    })
+    db["active_bonds"].docs.append({
+        "booking_number": "BOOK-B", "county": "Collier", "state": "FL",
+        "indemnitor_email": "payer@example.com",
+    })
+    applied = _apply_email_receipt(db)
+    assert applied["matched"] is False and applied["booking_number"] == ""
+    row = db["payments"].docs[0]
+    assert row["booking_number"] == "" and row["matched_bond"] is False
+    assert "county" not in row and "state" not in row
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-EMAIL"}])
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_unowned"
+    assert "plan_id" not in row and _plan(db)["balance_remaining"] == 800.0
+
+
+def test_poller_email_only_incomplete_sibling_is_not_verified(rig, monkeypatch):
+    monkeypatch.delenv("SLACK_WEBHOOK_LEADS", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    db, app = rig
+    db["bond_cases"].docs.append({
+        "booking_number": "TEST-PP-1", "county": "Lee", "state": "FL",
+        "indemnitor_email": "payer@example.com",
+    })
+    db["active_bonds"].docs.append({
+        "booking_number": "TEST-PP-1", "county": "Lee",
+        "indemnitor_email": "payer@example.com",
+    })
+    applied = _apply_email_receipt(db)
+    assert applied["matched"] is False and applied["booking_number"] == ""
+    row = db["payments"].docs[0]
+    assert "county" not in row and "state" not in row and row["booking_number"] == ""
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-EMAIL"}])
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_unowned"
+    assert _plan(db)["balance_remaining"] == 800.0
+
+
+def test_poller_email_only_one_complete_identity_links(rig, monkeypatch):
+    monkeypatch.delenv("SLACK_WEBHOOK_LEADS", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    db, app = rig
+    db["intake_queue"].docs.append({
+        "booking_number": "TEST-PP-1", "county": "Lee", "state": "FL",
+        "indemnitor": {"email": "Payer@Example.com"},
+    })
+    applied = _apply_email_receipt(db)
+    assert applied["matched"] is True and applied["booking_number"] == "TEST-PP-1"
+    row = db["payments"].docs[0]
+    assert row["county"] == "Lee" and row["state"] == "FL"
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-EMAIL"}])
+    assert r.status_code == 200 and row["plan_id"] == PLAN_ID
+    assert _plan(db)["balance_remaining"] == 700.0
+
+
+def test_poller_email_only_duplicate_copies_of_one_identity_still_stamp(rig, monkeypatch):
+    monkeypatch.delenv("SLACK_WEBHOOK_LEADS", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    db, app = rig
+    bond = {
+        "booking_number": "TEST-PP-1", "county": "Lee", "state": "FL",
+        "indemnitor_email": "payer@example.com",
+    }
+    db["bond_cases"].docs.append(dict(bond))
+    db["active_bonds"].docs.append(dict(bond))
+    applied = _apply_email_receipt(db)
+    assert applied["matched"] is True
+    row = db["payments"].docs[0]
+    assert row["county"] == "Lee" and row["state"] == "FL" and row["booking_number"] == "TEST-PP-1"
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-EMAIL"}])
+    assert r.status_code == 200 and row["plan_id"] == PLAN_ID

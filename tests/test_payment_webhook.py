@@ -176,3 +176,149 @@ def test_secret_set_hmac_unchanged_in_every_env(payment_app, monkeypatch, env):
     ok = client.post("/api/webhooks/payment", content=body,
                      headers={"Content-Type": "application/json", "X-SwipeSimple-Signature": sig})
     assert ok.status_code == 400  # valid HMAC passes auth
+
+
+# ── Later lifecycle events update the existing row (Codex P1 @72932a8) ────────
+
+
+def _lifecycle_client(payment_app, monkeypatch):
+    from dashboard.services import payment_txn_dedupe as dedupe
+    from tests.test_payment_plan_pay_dedupe import DB
+
+    db = DB()
+    monkeypatch.setattr(dedupe, "_index_ready", False)
+    monkeypatch.setattr("dashboard.routers.webhooks.get_collection", lambda name: db[name])
+    monkeypatch.setenv("ENV", "development")
+    monkeypatch.delenv("SWIPESIMPLE_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("REQUIRE_DASHBOARD_PIN", raising=False)
+    return db, TestClient(payment_app)
+
+
+def _seed_linked_payment(db, *, balance=700.0, plan_status="active", plan_id="plan-test-01"):
+    db["payment_log_claims"].docs.append({
+        "transaction_id": "TX-LIFE", "status": "logged", "source": "payment_webhook",
+    })
+    db["payments"].docs.append({
+        "_id": "pay-life",
+        "transaction_id": "TX-LIFE",
+        "amount": 100.0,
+        "status": "completed",
+        "plan_id": plan_id,
+        "booking_number": "TEST-PP-1",
+        "raw_payload": {"event_type": "payment.completed", "status": "approved", "amount": 100},
+        "timestamp": "2026-10-01T00:00:00+00:00",
+    })
+    db["payment_plans"].docs.append({
+        "plan_id": plan_id,
+        "balance_remaining": balance,
+        "total_paid": 300.0,
+        "payments_made": 2,
+        "status": plan_status,
+        "applied_transaction_ids": ["TX-LIFE"],
+    })
+
+
+def _post_lifecycle(client, event_type, status, amount=100):
+    return client.post(
+        "/api/webhooks/payment",
+        json={
+            "event_type": event_type,
+            "transaction_id": "TX-LIFE",
+            "amount": amount,
+            "status": status,
+        },
+    )
+
+
+@pytest.mark.parametrize("event,status,stored", [
+    ("payment.refunded", "refunded", "refunded"),
+    ("payment.failed", "declined", "declined"),
+    ("payment.failed", "", "failed"),
+])
+def test_later_lifecycle_updates_linked_row_and_restores_plan(payment_app, monkeypatch, event, status, stored):
+    db, client = _lifecycle_client(payment_app, monkeypatch)
+    _seed_linked_payment(db)
+    with patch("dashboard.services.bb_client.send_message_universal") as bb:
+        resp = _post_lifecycle(client, event, status)
+        bb.assert_not_called()
+    body = resp.json()
+    assert resp.status_code == 200 and body["lifecycle_updated"] is True and body["status"] == stored
+    row = db["payments"].docs[0]
+    assert row["status"] == stored and row["plan_id"] == "plan-test-01"
+    assert len(db["payments"].docs) == 1
+    plan = db["payment_plans"].docs[0]
+    assert plan["balance_remaining"] == 800.0
+    assert plan["total_paid"] == 200.0 and plan["payments_made"] == 1
+    assert "TX-LIFE" not in plan["applied_transaction_ids"]
+    (ev,) = db["audit_events"].docs
+    assert ev["event_type"] == event and ev["status_before"] == "completed"
+    assert ev["status_after"] == stored and ev["balance_reversed"] is True
+    assert ev["confidence"] == 1.0 and ev["transaction_id"] == "TX-LIFE"
+    again = _post_lifecycle(client, event, status)
+    assert again.status_code == 200 and again.json()["duplicate"] is True
+    assert db["payment_plans"].docs[0]["balance_remaining"] == 800.0
+    assert len(db["audit_events"].docs) == 1
+
+
+def test_completed_replay_stays_duplicate(payment_app, monkeypatch):
+    db, client = _lifecycle_client(payment_app, monkeypatch)
+    _seed_linked_payment(db)
+    resp = _post_lifecycle(client, "payment.completed", "approved")
+    assert resp.status_code == 200 and resp.json() == {"success": True, "duplicate": True}
+    assert db["payments"].docs[0]["status"] == "completed"
+    assert db["payment_plans"].docs[0]["balance_remaining"] == 700.0
+    assert db["audit_events"].docs == []
+
+
+def test_lifecycle_amount_mismatch_does_not_move_the_plan(payment_app, monkeypatch):
+    db, client = _lifecycle_client(payment_app, monkeypatch)
+    _seed_linked_payment(db)
+    resp = _post_lifecycle(client, "payment.refunded", "refunded", amount=90)
+    assert resp.status_code == 409 and resp.json()["error"] == "payment_lifecycle_amount_mismatch"
+    assert db["payments"].docs[0]["status"] == "completed"
+    assert db["payment_plans"].docs[0]["balance_remaining"] == 700.0
+    assert db["audit_events"].docs == []
+
+
+def test_refund_of_paid_in_full_reopens_the_plan(payment_app, monkeypatch):
+    db, client = _lifecycle_client(payment_app, monkeypatch)
+    _seed_linked_payment(db, balance=0.0, plan_status="paid_in_full")
+    resp = _post_lifecycle(client, "payment.refunded", "refunded")
+    assert resp.status_code == 200 and resp.json()["lifecycle_updated"] is True
+    plan = db["payment_plans"].docs[0]
+    assert plan["balance_remaining"] == 100.0 and plan["status"] == "active"
+    assert db["payments"].docs[0]["status"] == "refunded"
+
+
+def test_lifecycle_audit_failure_is_not_success(payment_app, monkeypatch):
+    db, client = _lifecycle_client(payment_app, monkeypatch)
+    _seed_linked_payment(db)
+    db["audit_events"].fail_insert = True
+    resp = _post_lifecycle(client, "payment.refunded", "refunded")
+    assert resp.status_code == 503 and resp.json()["error"] == "payment_lifecycle_update_failed"
+    assert resp.json().get("success") is not True
+    db["audit_events"].fail_insert = False
+    again = _post_lifecycle(client, "payment.refunded", "refunded")
+    assert again.status_code == 200 and again.json()["lifecycle_updated"] is True
+    assert db["payments"].docs[0]["status"] == "refunded"
+    assert db["payment_plans"].docs[0]["balance_remaining"] == 800.0
+    assert len(db["audit_events"].docs) == 1
+
+
+def test_unlinked_refund_updates_status_without_a_plan_reversal(payment_app, monkeypatch):
+    db, client = _lifecycle_client(payment_app, monkeypatch)
+    db["payment_log_claims"].docs.append({
+        "transaction_id": "TX-LIFE", "status": "logged", "source": "swipesimple_gmail_poll",
+    })
+    db["payments"].docs.append({
+        "_id": "pay-life",
+        "transaction_id": "TX-LIFE",
+        "amount": 100.0,
+        "status": "approved",
+        "raw_payload": {"event_type": "payment.completed", "amount": 100},
+    })
+    resp = _post_lifecycle(client, "payment.refunded", "refunded")
+    assert resp.status_code == 200 and resp.json()["status"] == "refunded"
+    assert db["payments"].docs[0]["status"] == "refunded"
+    assert db["payment_plans"].docs == []
+    assert db["audit_events"].docs[0]["balance_reversed"] is False

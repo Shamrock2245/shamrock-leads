@@ -36,6 +36,230 @@ def _env_is_production() -> bool:
     return env in ("production", "prod")
 
 
+_TERMINAL_PAYMENT_EVENTS = {
+    "payment.refunded": "refunded",
+    "payment.failed": "failed",
+}
+_TERMINAL_PAYMENT_STATUSES = {"refunded", "failed", "declined", "voided", "void"}
+
+
+def _terminal_payment_status(event_type: str, status: str) -> str | None:
+    """Status a later SwipeSimple lifecycle event must store, or None.
+
+    ``payment.completed`` / ``approved`` is not a later lifecycle. A refund,
+    failure, decline, or void is. ``void`` is stored as ``voided``.
+    """
+    event = str(event_type or "").strip().lower()
+    raw = str(status or "").strip().lower()
+    if raw in _TERMINAL_PAYMENT_STATUSES:
+        return "voided" if raw == "void" else raw
+    return _TERMINAL_PAYMENT_EVENTS.get(event)
+
+
+async def _payment_rows_for_txn(payments, transaction_id: str):
+    """Rows for this transaction id, or None when the read failed.
+
+    More than 20 rows is too many to update safely; the caller fails closed.
+    """
+    try:
+        count = await payments.count_documents({"transaction_id": transaction_id})
+    except Exception:
+        return None
+    if count == 0 or count > 20:
+        return [] if count == 0 else None
+    try:
+        cursor = payments.find({"transaction_id": transaction_id})
+        if hasattr(cursor, "to_list"):
+            rows = await cursor.to_list(length=20)
+        else:
+            rows = []
+            async for doc in cursor:
+                rows.append(doc)
+    except Exception:
+        return None
+    if len(rows) != count:
+        return None
+    return rows
+
+
+def _row_reflects_lifecycle(row: dict, event_type: str, new_status: str) -> bool:
+    raw = row.get("raw_payload") if isinstance(row.get("raw_payload"), dict) else {}
+    stored_event = str(raw.get("event_type") or row.get("lifecycle_event") or "").strip().lower()
+    stored_status = str(row.get("status") or "").strip().lower()
+    return stored_event == str(event_type or "").strip().lower() and stored_status == new_status
+
+
+async def _apply_later_payment_lifecycle(
+    payments,
+    *,
+    transaction_id: str,
+    event_type: str,
+    new_status: str,
+    amount,
+    payload: dict,
+    now: datetime,
+):
+    """Apply a refund or failure to the payment row that already exists.
+
+    The log claim blocks a second insert. That must not drop the later event.
+    A linked ``completed`` row is updated so revenue stops counting it, and a
+    plan that still lists this transaction has its balance restored. Success
+    is returned only after that update and its audit are saved. A replay of
+    the same event is ``duplicate`` and does not send another receipt.
+    """
+    from dashboard.routers.payment_plans import _same_amount
+
+    rows = await _payment_rows_for_txn(payments, transaction_id)
+    if not rows:
+        logger.warning(
+            "[payment_webhook] later lifecycle has no payment row txn_set=%s",
+            bool(transaction_id),
+        )
+        return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+    if not all(_same_amount(row.get("amount"), amount) for row in rows):
+        return JSONResponse(
+            {"error": "payment_lifecycle_amount_mismatch", "transaction_id": transaction_id},
+            status_code=409,
+        )
+
+    plan_ids: list[str] = []
+    for row in rows:
+        plan_id = str(row.get("plan_id") or "").strip()
+        if plan_id and plan_id not in plan_ids:
+            plan_ids.append(plan_id)
+    if len(plan_ids) > 1:
+        logger.warning("[payment_webhook] later lifecycle spans multiple plans txn_set=%s", bool(transaction_id))
+        return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+
+    plans = get_collection("payment_plans")
+    plan = None
+    needs_reversal = False
+    if plan_ids:
+        try:
+            plan = await plans.find_one({"plan_id": plan_ids[0]})
+        except Exception as exc:
+            logger.warning(
+                "[payment_webhook] plan read failed for lifecycle err=%s", type(exc).__name__,
+            )
+            return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+        if not isinstance(plan, dict):
+            return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+        applied = list(plan.get("applied_transaction_ids") or [])
+        needs_reversal = transaction_id in applied
+        if needs_reversal and any(
+            key not in plan for key in ("balance_remaining", "total_paid", "payments_made")
+        ):
+            return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+
+    audit_events = get_collection("audit_events")
+    try:
+        existing_audit = await audit_events.find_one({
+            "source": "swipesimple_webhook",
+            "transaction_id": transaction_id,
+            "event_type": event_type,
+        })
+    except Exception as exc:
+        logger.warning("[payment_webhook] lifecycle audit read failed err=%s", type(exc).__name__)
+        return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+
+    already = all(_row_reflects_lifecycle(row, event_type, new_status) for row in rows)
+    if already and not needs_reversal and existing_audit is not None:
+        return JSONResponse(status_code=200, content={"success": True, "duplicate": True})
+
+    status_before = []
+    if not already:
+        for row in rows:
+            current = str(row.get("status") or "").strip().lower()
+            before = row.get("lifecycle_status_before") if current == new_status else row.get("status")
+            status_before.append(before)
+            fields = {
+                "status": new_status,
+                "raw_payload": payload,
+                "lifecycle_event": event_type,
+                "lifecycle_updated_at": now.isoformat(),
+            }
+            if current != new_status:
+                fields["lifecycle_status_before"] = row.get("status")
+            try:
+                await payments.update_one({"_id": row["_id"]}, {"$set": fields})
+            except Exception as exc:
+                logger.warning(
+                    "[payment_webhook] lifecycle row update failed err=%s", type(exc).__name__,
+                )
+                return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+    else:
+        status_before = [row.get("lifecycle_status_before") for row in rows]
+
+    balance_reversed = False
+    if needs_reversal and isinstance(plan, dict):
+        try:
+            restored = float(rows[0].get("amount"))
+            balance_now = float(plan["balance_remaining"])
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+        reversal: dict = {
+            "$inc": {
+                "balance_remaining": restored,
+                "total_paid": -restored,
+                "payments_made": -1,
+            },
+            "$pull": {"applied_transaction_ids": transaction_id},
+        }
+        if plan.get("status") == "paid_in_full" and balance_now + restored > 0:
+            reversal["$set"] = {"status": "active", "updated_at": now.isoformat()}
+        try:
+            res = await plans.update_one(
+                {"plan_id": plan_ids[0], "applied_transaction_ids": transaction_id},
+                reversal,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[payment_webhook] plan reversal failed err=%s", type(exc).__name__,
+            )
+            return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+        moved = bool(getattr(res, "modified_count", 0) or getattr(res, "matched_count", 0))
+        if not moved:
+            try:
+                fresh = await plans.find_one({"plan_id": plan_ids[0]})
+            except Exception:
+                fresh = None
+            still_applied = (
+                not isinstance(fresh, dict)
+                or transaction_id in list(fresh.get("applied_transaction_ids") or [])
+            )
+            if still_applied:
+                return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+        balance_reversed = True
+
+    if existing_audit is None:
+        # No phone, name, or address. The payment row keeps the provider payload.
+        try:
+            await audit_events.insert_one({
+                "source": "swipesimple_webhook",
+                "event_type": event_type,
+                "actor": "swipesimple_webhook",
+                "agent_name": "payment_webhook",
+                "timestamp": now.isoformat(),
+                "transaction_id": transaction_id,
+                "payment_ids": [str(row.get("_id")) for row in rows],
+                "status_before": status_before[0] if len(status_before) == 1 else status_before,
+                "status_after": new_status,
+                "plan_id": plan_ids[0] if plan_ids else None,
+                "amount": rows[0].get("amount"),
+                "balance_reversed": balance_reversed,
+                "reason": "later SwipeSimple lifecycle event for an existing transaction",
+                "confidence": 1.0,
+            })
+        except Exception as exc:
+            logger.warning("[payment_webhook] lifecycle audit failed err=%s", type(exc).__name__)
+            return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+
+    return JSONResponse(
+        status_code=200,
+        content={"success": True, "lifecycle_updated": True, "status": new_status},
+    )
+
+
 def _payment_secret_unset_allowed() -> bool:
     """An unset SWIPESIMPLE_WEBHOOK_SECRET is tolerated only in explicit dev.
 
@@ -336,8 +560,10 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
 
     # -- 4. Log to payments collection ----------------------------------------
     # payment_log_claims (unique on that collection only) is the atomic gate.
-    # A second writer for this transaction id does not insert another row, and
-    # does not send another receipt or Slack message. payments is not indexed.
+    # A second writer for this transaction id does not insert another row.
+    # A later refund or failure still updates that row and writes an audit.
+    # A replay of the same event does not send another receipt or Slack
+    # message. payments is not indexed.
     payments = get_collection("payments")
     log_claims = get_collection("payment_log_claims")
     try:
@@ -362,7 +588,18 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         )
         return JSONResponse({"error": "payment_dedupe_unavailable"}, status_code=503)
     if not inserted:
-        return JSONResponse(status_code=200, content={"success": True, "duplicate": True})
+        later_status = _terminal_payment_status(event_type, status)
+        if later_status is None:
+            return JSONResponse(status_code=200, content={"success": True, "duplicate": True})
+        return await _apply_later_payment_lifecycle(
+            payments,
+            transaction_id=transaction_id,
+            event_type=str(event_type),
+            new_status=later_status,
+            amount=amount,
+            payload=data,
+            now=now,
+        )
 
     # -- 5. Send BlueBubbles receipt ------------------------------------------
     if indemnitor_phone and status == "approved":

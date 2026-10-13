@@ -60,6 +60,9 @@ def _match_value(val, cond) -> bool:
             if op == "$exists" and (val is not None) != bool(arg):
                 return False
         return True
+    # Mongo matches an array field when it equals the query value or contains it.
+    if isinstance(val, list):
+        return val == cond or any(item == cond for item in val)
     return val == cond
 
 

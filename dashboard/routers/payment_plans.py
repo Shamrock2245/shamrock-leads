@@ -778,29 +778,41 @@ async def _revert_link(payments_col, row: dict, plan_id: str, link_set: dict) ->
     return True
 
 
-async def _audit_unlink(actor: str, plan_id: str, txn: str, row: dict, reason: str) -> None:
-    """Best-effort audit of a compensating unlink. Never raises."""
+async def _audit_unlink(actor: str, plan_id: str, txn: str, row: dict, reason: str) -> bool:
+    """Record the compensating unlink. False when it was not saved.
+
+    Tried twice. Never raises. A reverted payment row is not a finished
+    compensation until this event exists: the link audit would otherwise be
+    the only history of an association that was removed.
+    """
     now = datetime.now(timezone.utc)
-    try:
-        await get_collection("audit_events").insert_one({
-            "event_type": "payment_plan_logged_payment_unlinked",
-            "entity_type": "payment_plan",
-            "entity_id": plan_id,
-            "actor": actor,
-            "agent_name": actor,
-            "timestamp": now,
-            "created_at": now,
-            "transaction_id": txn,
-            "payment_id": str(row.get("_id")),
-            "plan_id_before": plan_id,
-            "plan_id_after": None,
-            "status_before": "completed",
-            "status_after": row.get("status"),
-            "reason": reason,
-            "confidence": 1.0,
-        })
-    except Exception as exc:
-        logger.error("[payment_plans] unlink audit failed plan_id=%s err=%s", plan_id, type(exc).__name__)
+    doc = {
+        "event_type": "payment_plan_logged_payment_unlinked",
+        "entity_type": "payment_plan",
+        "entity_id": plan_id,
+        "actor": actor,
+        "agent_name": actor,
+        "timestamp": now,
+        "created_at": now,
+        "transaction_id": txn,
+        "payment_id": str(row.get("_id")),
+        "plan_id_before": plan_id,
+        "plan_id_after": None,
+        "status_before": "completed",
+        "status_after": row.get("status"),
+        "reason": reason,
+        "confidence": 1.0,
+    }
+    for _attempt in range(2):
+        try:
+            await get_collection("audit_events").insert_one(dict(doc))
+            return True
+        except Exception as exc:
+            logger.error(
+                "[payment_plans] unlink audit failed plan_id=%s err=%s",
+                plan_id, type(exc).__name__,
+            )
+    return False
 
 
 async def _other_rows_for_txn(payments_col, txn: str, own_id) -> bool:
@@ -1282,19 +1294,42 @@ async def record_payment(request: Request, plan_id):
 
     # actor was taken before the claim so the jurisdiction backfill could name it.
 
-    async def _undo(reason: str) -> bool:
-        """Compensate this request's payment write. True when fully undone."""
+    async def _undo(reason: str) -> str:
+        """Compensate this request's payment write.
+
+        ``complete`` when the row is back and, for a link, the unlink audit
+        was saved. ``reverted_unaudited`` when the row was reverted but that
+        audit was not saved. ``unchanged`` when the row itself could not be
+        reverted. Compensation is not complete without the unlink audit.
+        """
         if logged_row is not None:
-            ok = await _revert_link(payments_col, logged_row, plan_id, link_set)
-            if ok:
-                await _audit_unlink(actor, plan_id, txn, logged_row, reason)
-            return ok
+            if not await _revert_link(payments_col, logged_row, plan_id, link_set):
+                return "unchanged"
+            if not await _audit_unlink(actor, plan_id, txn, logged_row, reason):
+                return "reverted_unaudited"
+            return "complete"
         try:
             res = await payments_col.delete_one({"_id": own_id, "plan_id": plan_id, "transaction_id": txn})
-            return bool(getattr(res, "deleted_count", 0))
+            return "complete" if getattr(res, "deleted_count", 0) else "unchanged"
         except Exception as exc:
             logger.error("[payment_plans] row undo failed plan_id=%s err=%s", plan_id, type(exc).__name__)
-            return False
+            return "unchanged"
+
+    def _undo_incomplete(state: str, unchanged_reason: str, unchanged_body: dict, unchanged_status: int):
+        """Response when compensation did not finish. None when it did.
+
+        The caller still has to return this response. A missing unlink audit
+        is 503 ``unlink_audit_failed`` even though the payment row was reverted.
+        """
+        if state == "complete":
+            return None
+        if state == "reverted_unaudited":
+            return "unlink_audit_failed", JSONResponse(
+                {"error": "unlink_audit_failed", "transaction_id": txn,
+                 "message": "The payment link was removed, but the unlink audit could not be saved. Check this payment before recording it again."},
+                status_code=503,
+            )
+        return unchanged_reason, JSONResponse(unchanged_body, status_code=unchanged_status)
 
     if logged_row is not None:
         # Audit the link before any later compensation. A clash undo emits
@@ -1328,13 +1363,17 @@ async def record_payment(request: Request, plan_id):
     except Exception:
         clash = True
     if clash:
-        if not await _undo("another payments row for this transaction id appeared during the write"):
-            await _fail_claim(claims, plan_id, txn, "logged_payment_ambiguous_unreverted")
-            return JSONResponse(
-                {"error": "logged_payment_ambiguous_unreverted", "transaction_id": txn,
-                 "message": "Another payment with this transaction id appeared, and this one could not be undone. Check the payment before recording it again."},
-                status_code=500,
-            )
+        incomplete = _undo_incomplete(
+            await _undo("another payments row for this transaction id appeared during the write"),
+            "logged_payment_ambiguous_unreverted",
+            {"error": "logged_payment_ambiguous_unreverted", "transaction_id": txn,
+             "message": "Another payment with this transaction id appeared, and this one could not be undone. Check the payment before recording it again."},
+            500,
+        )
+        if incomplete is not None:
+            reason_code, response = incomplete
+            await _fail_claim(claims, plan_id, txn, reason_code)
+            return response
         await _fail_claim(claims, plan_id, txn, "logged_payment_ambiguous")
         return JSONResponse(
             {"error": "logged_payment_ambiguous", "transaction_id": txn,
@@ -1385,13 +1424,17 @@ async def record_payment(request: Request, plan_id):
         if not applied:
             plan_write_landed = False
     if not plan_write_landed:
-        if not await _undo("plan balance update failed after the payment was linked"):
-            await _fail_claim(claims, plan_id, txn, "plan_update_error_unreverted")
-            return JSONResponse(
-                {"error": "payment_record_failed", "transaction_id": txn,
-                 "message": "The plan balance did not update and the payment could not be undone. Check the plan before recording it again."},
-                status_code=500,
-            )
+        incomplete = _undo_incomplete(
+            await _undo("plan balance update failed after the payment was linked"),
+            "plan_update_error_unreverted",
+            {"error": "payment_record_failed", "transaction_id": txn,
+             "message": "The plan balance did not update and the payment could not be undone. Check the plan before recording it again."},
+            500,
+        )
+        if incomplete is not None:
+            reason_code, response = incomplete
+            await _fail_claim(claims, plan_id, txn, reason_code)
+            return response
         await _fail_claim(claims, plan_id, txn, "plan_update_error")
         return JSONResponse({"error": "payment_record_failed", "transaction_id": txn}, status_code=500)
 

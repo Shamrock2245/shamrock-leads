@@ -105,6 +105,10 @@ class Coll:
             if v not in cur:
                 cur = [*cur, v]
             doc[k] = cur
+        for k, v in update.get("$pull", {}).items():
+            cur = doc.get(k)
+            if isinstance(cur, list):
+                doc[k] = [item for item in cur if item != v]
 
     async def update_one(self, flt, update, upsert=False):
         await asyncio.sleep(0)
