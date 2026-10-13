@@ -128,6 +128,7 @@ _ID_TYPE = re.compile(r"^[a-z][a-z0-9 _-]{0,39}$")
 _REASON_PRIORITY = (
     "lookup_failed",
     "bond_case_conflict",
+    "unresolved_intake",
     "no_issuing_state",
     "scan_failed",
     "name_mismatch",
@@ -388,9 +389,22 @@ def _county_name(doc: Mapping[str, Any] | None) -> str:
 
 
 def _link_ids(doc: Mapping[str, Any]) -> dict[str, str]:
+    primary = _text(doc, "booking_number", "Booking_Number", "defendant_booking_number")
+    matched = _text(doc, "matched_booking_number")
+    # Two different booking numbers do not identify one case. Leave the
+    # link blank and mark the row so the gate can refuse instead of picking.
+    if primary and matched and primary != matched:
+        booking = ""
+        unresolved = "1"
+    else:
+        booking = primary or matched
+        unresolved = ""
     return {
         "bond_case_id": _text(doc, "bond_case_id", "Bond_Case_ID"),
-        "booking_number": _text(doc, "booking_number", "Booking_Number", "defendant_booking_number"),
+        "booking_number": booking,
+        "booking_a": primary,
+        "booking_b": matched,
+        "unresolved_intake": unresolved,
         "packet_id": _text(doc, "packet_id", "Packet_ID"),
         "indemnitor_id": _text(doc, "indemnitor_id", "Indemnitor_ID"),
         "county": _county_name(doc),
@@ -505,6 +519,14 @@ def scans_from_document(doc: Mapping[str, Any]) -> list[dict[str, str]]:
         if not _text(nested, "id_ocr_role", "role", "party_role"):
             nested["role"] = "defendant"
         found.extend(scans_from_document(nested))
+    raw = doc.get("_raw")
+    if isinstance(raw, Mapping):
+        extracted = raw.get("id_extracted")
+        if isinstance(extracted, Mapping):
+            raw_role = _text(raw, "role") or role
+            row = _normalize_scan(extracted, doc, raw_role)
+            if row:
+                found.append(row)
     return found
 
 
@@ -517,6 +539,8 @@ def _case_linked(
     indemnitor_id: str,
     county: str = "",
 ) -> bool:
+    if str(row.get("unresolved_intake") or "") == "1":
+        return False
     if _identifier_conflict(row, bond_case_id=bond_case_id, county=county):
         return False
     return _shares_case_key(
@@ -526,6 +550,22 @@ def _case_linked(
         packet_id=packet_id,
         indemnitor_id=indemnitor_id,
     )
+
+
+def _unresolved_for_booking(row: Mapping[str, str], booking_number: str) -> bool:
+    """True when this scan's booking numbers disagree and touch this case.
+
+    The row is not a positive link. It explains a 422 when nothing else
+    verifies the party.
+    """
+    if str(row.get("unresolved_intake") or "") != "1":
+        return False
+    if not booking_number:
+        return True
+    return booking_number in {
+        str(row.get("booking_a") or ""),
+        str(row.get("booking_b") or ""),
+    }
 
 
 def _is_defendant_scan(row: Mapping[str, str]) -> bool:
@@ -712,6 +752,8 @@ def evaluate_parties(
             reason = "scan_failed"
         elif any(str(row.get("gap") or "") == "no_issuing_state" for row in tied):
             reason = "no_issuing_state"
+        elif any(_unresolved_for_booking(row, booking_number) for row in scans):
+            reason = "unresolved_intake"
         else:
             reason = "no_scan"
         issues.append({"role": role, "name": name, "reason": reason})
@@ -735,6 +777,8 @@ def _reason_text(reason: str) -> str:
         return "bond case conflict"
     if reason == "no_issuing_state":
         return "no US issuing state"
+    if reason == "unresolved_intake":
+        return "deferred intake is not tied to this booking"
     return "no scan and no attestation"
 
 
@@ -773,6 +817,7 @@ def _link_clauses(
         add("Booking_Number", booking_number)
         if not prefix:
             add("defendant_booking_number", booking_number)
+            add("matched_booking_number", booking_number)
     if packet_id:
         add("packet_id", packet_id)
     for indemnitor_id in indemnitor_ids:
@@ -1111,6 +1156,7 @@ def summarize_open_bond_cases(
         "blocked_lookup_failed": 0,
         "blocked_bond_case_conflict": 0,
         "blocked_no_issuing_state": 0,
+        "blocked_unresolved_intake": 0,
     }
     related = list(related_docs or [])
     audits = list(attestations or [])

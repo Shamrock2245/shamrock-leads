@@ -57,6 +57,14 @@ def _project() -> dict:
         "Bond_Case_ID": 1,
         "booking_number": 1,
         "Booking_Number": 1,
+        "defendant_booking_number": 1,
+        "matched_booking_number": 1,
+        "role": 1,
+        "county": 1,
+        "County": 1,
+        "defendant_county": 1,
+        "matched_county": 1,
+        "_raw.id_extracted": 1,
         "packet_id": 1,
         "indemnitor_id": 1,
         "Indemnitor_ID": 1,
@@ -88,6 +96,7 @@ def _print_counts(counts: dict[str, int]) -> None:
         "blocked_lookup_failed",
         "blocked_bond_case_conflict",
         "blocked_no_issuing_state",
+        "blocked_unresolved_intake",
     ):
         print(f"{key}={int(counts.get(key) or 0)}")
 
@@ -127,6 +136,8 @@ def _count(uri: str) -> int:
                 {"Bond_Case_ID": {"$in": keys}},
                 {"booking_number": {"$in": keys}},
                 {"Booking_Number": {"$in": keys}},
+                {"defendant_booking_number": {"$in": keys}},
+                {"matched_booking_number": {"$in": keys}},
                 {"indemnitor_id": {"$in": keys}},
                 {"Indemnitor_ID": {"$in": keys}},
             ]}

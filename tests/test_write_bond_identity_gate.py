@@ -806,3 +806,101 @@ async def test_country_only_scan_is_unverified():
         )
     assert decision["ok"] is True
     assert decision["methods"] == ["scan"]
+
+
+def _deferred(booking, extracted, *, role="indemnitor", also_booking=""):
+    doc = {
+        "role": role,
+        "matched_booking_number": booking,
+        "indemnitor": {"name": PRIMARY, "state": "FL"},
+        "defendant": {"name": "Casey Sample"},
+        "_raw": {"role": role, "id_extracted": extracted},
+    }
+    if also_booking:
+        doc["booking_number"] = also_booking
+    return doc
+
+
+@pytest.mark.asyncio
+async def test_deferred_intake_uses_matched_booking_or_refuses():
+    """A scan that lives only under _raw.id_extracted verifies after match.
+
+    Unmatched, malformed, defendant-role, and disagreeing booking numbers
+    do not verify and do not crash. No DocuSeal call.
+    """
+    good = _deferred("BK-1", {"full_name": PRIMARY, "dl_state": "FL"})
+    stores, get = _filtering_collections({"intake_queue": [good]})
+    with _patch_db(get):
+        decision = await require_verified_indemnitors(
+            bond_data=_bound("osi"),
+            bond_case_id="BC-1",
+            booking_number="BK-1",
+            packet_id="PKT-1",
+        )
+    assert decision["ok"] is True
+    assert decision["methods"] == ["scan"]
+    assert any(
+        {"matched_booking_number": "BK-1"} in (query or {}).get("$or", [])
+        for query in stores["intake_queue"].queries
+    )
+
+    unmatched = _deferred(None, {"full_name": PRIMARY, "dl_state": "FL"})
+    _stores, get = _filtering_collections({"intake_queue": [unmatched]})
+    with _patch_db(get):
+        with pytest.raises(IndemnitorIdentityError) as missing:
+            await require_verified_indemnitors(
+                bond_data=_bound("osi"),
+                bond_case_id="BC-1",
+                booking_number="BK-1",
+                packet_id="PKT-1",
+            )
+    assert missing.value.issues[0]["reason"] == "no_scan"
+
+    malformed = {
+        "role": "indemnitor",
+        "matched_booking_number": "BK-1",
+        "_raw": "not-a-document",
+    }
+    _stores, get = _filtering_collections({"intake_queue": [malformed]})
+    with _patch_db(get):
+        with pytest.raises(IndemnitorIdentityError) as broken:
+            await require_verified_indemnitors(
+                bond_data=_bound("osi"),
+                bond_case_id="BC-1",
+                booking_number="BK-1",
+                packet_id="PKT-1",
+            )
+    assert broken.value.issues[0]["reason"] == "no_scan"
+
+    defendant = _deferred(
+        "BK-1",
+        {"full_name": PRIMARY, "dl_state": "FL"},
+        role="defendant",
+    )
+    _stores, get = _filtering_collections({"intake_queue": [defendant]})
+    with _patch_db(get):
+        with pytest.raises(IndemnitorIdentityError) as defended:
+            await require_verified_indemnitors(
+                bond_data=_bound("osi"),
+                bond_case_id="BC-1",
+                booking_number="BK-1",
+                packet_id="PKT-1",
+            )
+    assert defended.value.issues[0]["reason"] == "no_scan"
+
+    disagree = _deferred(
+        "BK-1",
+        {"full_name": PRIMARY, "dl_state": "FL"},
+        also_booking="BK-OTHER",
+    )
+    _stores, get = _filtering_collections({"intake_queue": [disagree]})
+    with _patch_db(get):
+        with pytest.raises(IndemnitorIdentityError) as conflict:
+            await require_verified_indemnitors(
+                bond_data=_bound("osi"),
+                bond_case_id="BC-1",
+                booking_number="BK-1",
+                packet_id="PKT-1",
+            )
+    assert conflict.value.issues[0]["reason"] == "unresolved_intake"
+    assert "deferred intake is not tied to this booking" in str(conflict.value)
