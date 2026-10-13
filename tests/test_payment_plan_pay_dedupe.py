@@ -23,29 +23,56 @@ class Coll:
     def __init__(self):
         self.docs: list[dict] = []
         self.unique: list[tuple[str, ...]] = []
+        self.partial_unique: list[tuple] = []
         self.index_calls = 0
         self.fail_index = False
         self.fail_insert = False
         self.before_update = None
 
-    async def create_index(self, keys, unique=False, name=None, **_):
+    async def create_index(self, keys, unique=False, name=None, partialFilterExpression=None, **_):
         await asyncio.sleep(0)
         self.index_calls += 1
         if self.fail_index:
             raise RuntimeError("index unavailable")
         fields = tuple(k for k, _ in keys) if isinstance(keys, list) else (keys,)
-        if unique and fields not in self.unique:
+        if unique and partialFilterExpression is not None:
+            spec = (fields, partialFilterExpression)
+            if spec not in self.partial_unique:
+                self.partial_unique.append(spec)
+        elif unique and fields not in self.unique:
             self.unique.append(fields)
         return name
+
+    def _unique_key(self, doc, fields):
+        return tuple(doc.get(f) for f in fields)
+
+    def _violates_unique(self, doc, ignore_index=None) -> bool:
+        for fields in self.unique:
+            key = self._unique_key(doc, fields)
+            for index, other in enumerate(self.docs):
+                if index == ignore_index:
+                    continue
+                if self._unique_key(other, fields) == key:
+                    return True
+        for fields, partial in self.partial_unique:
+            if not matches(doc, partial):
+                continue
+            key = self._unique_key(doc, fields)
+            for index, other in enumerate(self.docs):
+                if index == ignore_index:
+                    continue
+                if not matches(other, partial):
+                    continue
+                if self._unique_key(other, fields) == key:
+                    return True
+        return False
 
     async def insert_one(self, doc):
         await asyncio.sleep(0)
         if self.fail_insert:
             raise RuntimeError("write failed")
-        for fields in self.unique:
-            key = tuple(doc.get(f) for f in fields)
-            if any(tuple(d.get(f) for f in fields) == key for d in self.docs):
-                raise DuplicateKeyError("dup")
+        if self._violates_unique(doc):
+            raise DuplicateKeyError("dup")
         self.docs.append(copy.deepcopy(doc))
 
     async def find_one(self, flt=None, *a, **k):
@@ -65,18 +92,33 @@ class Coll:
 
         return _FindCursor()
 
+    def _apply_update(self, doc, update):
+        for k, v in update.get("$inc", {}).items():
+            doc[k] = doc.get(k, 0) + v
+        doc.update(update.get("$set", {}))
+        for k in update.get("$unset", {}):
+            doc.pop(k, None)
+        for k, v in update.get("$addToSet", {}).items():
+            cur = doc.get(k)
+            if not isinstance(cur, list):
+                cur = [] if cur is None else [cur]
+            if v not in cur:
+                cur = [*cur, v]
+            doc[k] = cur
+
     async def update_one(self, flt, update, upsert=False):
         await asyncio.sleep(0)
         if self.before_update is not None:
             hook, self.before_update = self.before_update, None
             hook(self, flt)
-        for d in self.docs:
+        for index, d in enumerate(self.docs):
             if matches(d, flt):
-                for k, v in update.get("$inc", {}).items():
-                    d[k] = d.get(k, 0) + v
-                d.update(update.get("$set", {}))
-                for k in update.get("$unset", {}):
-                    d.pop(k, None)
+                trial = copy.deepcopy(d)
+                self._apply_update(trial, update)
+                if self._violates_unique(trial, ignore_index=index):
+                    raise DuplicateKeyError("dup")
+                d.clear()
+                d.update(trial)
                 return SimpleNamespace(matched_count=1, modified_count=1)
         return SimpleNamespace(matched_count=0, modified_count=0)
 
@@ -113,6 +155,8 @@ def rig(monkeypatch):
     })
     monkeypatch.setattr(pp, "get_collection", lambda name: db[name])
     monkeypatch.setattr(pp, "_payment_claim_index_ready", False)
+    from dashboard.services import payment_txn_dedupe as _txn_dedupe
+    monkeypatch.setattr(_txn_dedupe, "_index_ready", False)
     app = FastAPI()
     app.include_router(pp.payment_plans_bp)
     with patch("dashboard.routers.events.publish_event", new=AsyncMock()):

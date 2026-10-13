@@ -335,20 +335,33 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         )
 
     # -- 4. Log to payments collection ----------------------------------------
+    # Same partial unique key as the receipt poller and plan /pay. A second
+    # writer for this transaction id does not insert another row, and does not
+    # send another receipt or Slack message.
     payments = get_collection("payments")
-    await payments.insert_one({
-        "transaction_id": transaction_id,
-        "booking_number": booking_number,
-        "amount": amount,
-        "status": status,
-        "card_last4": card_last4,
-        "card_brand": card_brand,
-        "customer_name": customer_name,
-        "indemnitor_phone": indemnitor_phone,
-        "custom_fields": custom_fields,
-        "raw_payload": data,
-        "created_at": now.isoformat(),
-    })
+    try:
+        from dashboard.services.payment_txn_dedupe import insert_payment_once
+
+        inserted = await insert_payment_once(payments, {
+            "transaction_id": transaction_id,
+            "booking_number": booking_number,
+            "amount": amount,
+            "status": status,
+            "card_last4": card_last4,
+            "card_brand": card_brand,
+            "customer_name": customer_name,
+            "indemnitor_phone": indemnitor_phone,
+            "custom_fields": custom_fields,
+            "raw_payload": data,
+            "created_at": now.isoformat(),
+        })
+    except Exception as exc:
+        logger.warning(
+            "[payment_webhook] payment dedupe unavailable err=%s", type(exc).__name__,
+        )
+        return JSONResponse({"error": "payment_dedupe_unavailable"}, status_code=503)
+    if not inserted:
+        return JSONResponse(status_code=200, content={"success": True, "duplicate": True})
 
     # -- 5. Send BlueBubbles receipt ------------------------------------------
     if indemnitor_phone and status == "approved":

@@ -407,9 +407,15 @@ def test_revert_does_not_overwrite_concurrent_reconciliation_status(rig):
         raise RuntimeError("audit down")
     db["audit_events"].insert_one = reconcile_then_fail
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    body = r.json()
     assert r.status_code == 503
+    assert body["error"] == "audit_write_failed_link_unreverted"
+    assert "not applied" not in body["message"]
     assert row["status"] == "reconciled"         # newer state kept, not restored to 'approved'
-    assert db["payment_plan_payment_claims"].docs[0]["status"] == "failed"
+    assert row["plan_id"] == PLAN_ID             # link stayed; the failure is escalated
+    claim = db["payment_plan_payment_claims"].docs[0]
+    assert claim["status"] == "failed"
+    assert claim["failed_reason"] == "audit_write_failed_link_unreverted"
     assert _plan(db)["balance_remaining"] == 800.0
     del orig
 
@@ -833,6 +839,317 @@ def test_bond_without_state_does_not_invent_one(rig, monkeypatch):
     assert "county" not in row and "state" not in row
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
     assert r.status_code == 409 and r.json()["error"] == "logged_payment_jurisdiction_unverified"
+    assert _plan(db)["balance_remaining"] == 800.0
+
+
+def test_incomplete_bond_is_not_ignored_when_another_bond_is_complete(rig, monkeypatch):
+    """A booking that matches one complete bond and one bond with no county or state is ambiguous."""
+    monkeypatch.delenv("SLACK_WEBHOOK_LEADS", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    db, app = rig
+    plan = _plan(db)
+    plan.pop("county")
+    plan.pop("state")
+    db["bond_cases"].docs.append({
+        "booking_number": "TEST-PP-1", "county": "Lee", "state": "FL",
+    })
+    db["active_bonds"].docs.append({"booking_number": "TEST-PP-1"})
+    _apply_poller(db)
+    row = db["payments"].docs[0]
+    assert "county" not in row and "state" not in row
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_jurisdiction_unverified"
+    assert "plan_id" not in row and "county" not in plan and "state" not in plan
+    assert plan["balance_remaining"] == 800.0
+    assert db["payment_plan_payment_claims"].docs == []
+    assert not any(e.get("event_type") == "payment_plan_jurisdiction_backfilled"
+                   for e in db["audit_events"].docs)
+
+
+def test_agreeing_complete_bonds_backfill_and_audit(rig, monkeypatch):
+    monkeypatch.delenv("SLACK_WEBHOOK_LEADS", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    db, app = rig
+    plan = _plan(db)
+    plan.pop("county")
+    plan.pop("state")
+    db["bond_cases"].docs.append({
+        "booking_number": "TEST-PP-1", "county": "Lee", "state": "FL",
+    })
+    db["active_bonds"].docs.append({
+        "booking_number": "TEST-PP-1", "County": "lee", "State": "fl",
+    })
+    _apply_poller(db)
+    row = db["payments"].docs[0]
+    assert row["county"] == "Lee" and row["state"] == "FL"
+
+    async def go():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            return await c.post(
+                f"/api/payments/plans/{PLAN_ID}/pay",
+                json={"amount": 100, "transaction_id": "TX-CARD"},
+                headers={"X-Actor": "desk-test"},
+            )
+    r = asyncio.run(go())
+    assert r.status_code == 200 and row["plan_id"] == PLAN_ID
+    assert plan["county"] == "Lee" and plan["state"] == "FL"
+    assert plan["balance_remaining"] == 700.0
+    backfill = next(
+        e for e in db["audit_events"].docs
+        if e.get("event_type") == "payment_plan_jurisdiction_backfilled"
+    )
+    assert backfill["actor"] == "desk-test" and backfill["agent_name"] == "desk-test"
+    assert backfill["entity_id"] == PLAN_ID
+    assert backfill["county_before"] is None and backfill["state_before"] is None
+    assert backfill["county_after"] == "Lee" and backfill["state_after"] == "FL"
+    assert backfill["reason"] and backfill["confidence"] == 1.0
+    assert backfill["booking_number"] == "TEST-PP-1"
+    kinds = [e["event_type"] for e in db["audit_events"].docs]
+    assert kinds.index("payment_plan_jurisdiction_backfilled") < kinds.index(
+        "payment_plan_logged_payment_linked"
+    )
+
+
+def test_jurisdiction_backfill_audit_failure_reverts_and_does_not_link(rig, monkeypatch):
+    monkeypatch.delenv("SLACK_WEBHOOK_LEADS", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    db, app = rig
+    plan = _plan(db)
+    plan.pop("county")
+    plan.pop("state")
+    db["bond_cases"].docs.append({
+        "booking_number": "TEST-PP-1", "county": "Lee", "state": "FL",
+    })
+    _apply_poller(db)
+    row = db["payments"].docs[0]
+    db["audit_events"].fail_insert = True
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 503 and r.json()["error"] == "jurisdiction_backfill_audit_failed"
+    assert "plan_id" not in row
+    assert "county" not in plan and "state" not in plan
+    assert plan["balance_remaining"] == 800.0
+    assert db["payment_plan_payment_claims"].docs == []
+    assert not any(e.get("event_type") == "payment_plan_jurisdiction_backfilled"
+                   for e in db["audit_events"].docs)
+
+
+def test_jurisdiction_backfill_unreverted_is_not_linked_until_audited(rig, monkeypatch):
+    monkeypatch.delenv("SLACK_WEBHOOK_LEADS", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    db, app = rig
+    plan = _plan(db)
+    plan.pop("county")
+    plan.pop("state")
+    db["bond_cases"].docs.append({
+        "booking_number": "TEST-PP-1", "county": "Lee", "state": "FL",
+    })
+    _apply_poller(db)
+    row = db["payments"].docs[0]
+    real_update = db["payment_plans"].update_one
+    state = {"block_unset": True}
+
+    async def block_revert(flt, update, upsert=False):
+        if state["block_unset"] and "county" in update.get("$unset", {}):
+            raise RuntimeError("revert failed")
+        return await real_update(flt, update, upsert)
+
+    db["payment_plans"].update_one = block_revert
+    db["audit_events"].fail_insert = True
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 503 and r.json()["error"] == "jurisdiction_backfill_unaudited"
+    assert plan.get("jurisdiction_backfill_unaudited") is True
+    assert "plan_id" not in row and plan["balance_remaining"] == 800.0
+    assert db["payment_plan_payment_claims"].docs == []
+    (r2,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r2.status_code == 503 and r2.json()["error"] == "jurisdiction_backfill_unaudited"
+    assert "plan_id" not in row and plan["balance_remaining"] == 800.0
+    db["audit_events"].fail_insert = False
+    state["block_unset"] = False
+    (r3,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r3.status_code == 200 and row["plan_id"] == PLAN_ID
+    assert plan["balance_remaining"] == 700.0
+    assert "jurisdiction_backfill_unaudited" not in plan
+    assert any(
+        e.get("event_type") == "payment_plan_jurisdiction_backfilled"
+        and e.get("county_before") is None and e.get("county_after") == "Lee"
+        and e.get("confidence") == 1.0 and e.get("reason")
+        for e in db["audit_events"].docs
+    )
+
+
+def test_create_plan_normalizes_county_label(rig):
+    db, app = rig
+
+    async def go():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            ok = await c.post("/api/payments/plans", json={
+                "booking_number": "B-LABEL", "total_premium": 100, "down_payment": 0,
+                "county": "Lee (FL)", "state": "FL",
+            })
+            bad = await c.post("/api/payments/plans", json={
+                "booking_number": "B-CONFLICT", "total_premium": 100, "down_payment": 0,
+                "county": "Lee (FL)", "state": "GA",
+            })
+            return ok, bad
+    ok, bad = asyncio.run(go())
+    assert ok.status_code == 201
+    created = next(p for p in db["payment_plans"].docs if p.get("booking_number") == "B-LABEL")
+    assert created["county"] == "Lee" and created["state"] == "FL"
+    assert bad.status_code == 400 and bad.json()["error"] == "invalid_jurisdiction"
+    assert not any(p.get("booking_number") == "B-CONFLICT" for p in db["payment_plans"].docs)
+
+
+def test_labeled_plan_county_matches_bare_receipt(rig):
+    db, app = rig
+    plan = _plan(db)
+    plan["county"] = "Lee (FL)"
+    plan["state"] = "FL"
+    row = _poller_row(db, county="Lee", state="FL")
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 200 and row["plan_id"] == PLAN_ID
+    assert plan["balance_remaining"] == 700.0
+
+
+def test_plan_update_that_landed_is_not_undone_when_the_driver_raises(rig):
+    """The $inc applied, then the driver raised. Keep the payment and confirm from the read."""
+    db, app = rig
+    row = _poller_row(db)
+    real = db["payment_plans"].update_one
+    state = {"raised": False}
+
+    async def apply_then_raise(flt, update, upsert=False):
+        res = await real(flt, update, upsert)
+        if "$inc" in update and not state["raised"]:
+            state["raised"] = True
+            raise RuntimeError("write concern timeout")
+        return res
+    db["payment_plans"].update_one = apply_then_raise
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    body = r.json()
+    assert r.status_code == 200 and body["balance_remaining"] == 700.0
+    assert row["plan_id"] == PLAN_ID
+    assert "TX-CARD" in _plan(db)["applied_transaction_ids"]
+    assert db["payment_plan_payment_claims"].docs[0]["status"] == "applied"
+
+
+def test_unknown_plan_update_keeps_the_payment_row(rig):
+    db, app = rig
+    row = _poller_row(db)
+    real_update = db["payment_plans"].update_one
+    real_find = db["payment_plans"].find_one
+    state = {"blind": False}
+
+    async def apply_then_raise(flt, update, upsert=False):
+        res = await real_update(flt, update, upsert)
+        if "$inc" in update:
+            state["blind"] = True
+            raise RuntimeError("write concern timeout")
+        return res
+
+    async def blind_read(flt=None, *a, **k):
+        if state["blind"]:
+            raise RuntimeError("read failed")
+        return await real_find(flt, *a, **k)
+
+    db["payment_plans"].update_one = apply_then_raise
+    db["payment_plans"].find_one = blind_read
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    body = r.json()
+    assert r.status_code == 500 and body["error"] == "plan_update_unknown"
+    assert "balance_remaining" not in body and body.get("success") is not True
+    assert row["plan_id"] == PLAN_ID
+    assert _plan(db)["balance_remaining"] == 700.0
+    claim = db["payment_plan_payment_claims"].docs[0]
+    assert claim["status"] == "failed" and claim["failed_reason"] == "plan_update_unknown"
+    assert "balance_after" not in claim
+
+
+def test_second_insert_of_same_transaction_id_is_rejected(rig, monkeypatch):
+    monkeypatch.delenv("SLACK_WEBHOOK_LEADS", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    db, app = rig
+    _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert db["payments"].docs[0]["txn_dedupe_key"] == "TX-CARD"
+    real_find = db["payments"].find_one
+    state = {"hide": True}
+
+    async def hide_first(flt=None, *a, **k):
+        if state["hide"]:
+            state["hide"] = False
+            return None
+        return await real_find(flt, *a, **k)
+
+    db["payments"].find_one = hide_first
+    again = _apply_poller(db)
+    assert again.get("duplicate") is True
+    assert len(db["payments"].docs) == 1
+    assert _plan(db)["balance_remaining"] == 700.0
+
+
+def test_insert_race_links_the_poller_row_instead_of_duplicating(rig):
+    from pymongo.errors import DuplicateKeyError
+
+    db, app = rig
+    real = db["payments"].insert_one
+    state = {"raced": False}
+
+    async def lose_the_race(doc):
+        if doc.get("plan_id") == PLAN_ID and not state["raced"]:
+            state["raced"] = True
+            db["payments"].docs.append({
+                "_id": "late-poll",
+                "transaction_id": doc["transaction_id"],
+                "txn_dedupe_key": doc["transaction_id"],
+                "amount": doc["amount"],
+                "status": "approved",
+                "booking_number": "TEST-PP-1",
+                "county": "Lee",
+                "state": "FL",
+            })
+            raise DuplicateKeyError("dup")
+        return await real(doc)
+
+    db["payments"].insert_one = lose_the_race
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 200 and r.json()["linked_logged_payment"] is True
+    assert len(db["payments"].docs) == 1
+    assert db["payments"].docs[0]["_id"] == "late-poll"
+    assert db["payments"].docs[0]["plan_id"] == PLAN_ID
+    assert _plan(db)["balance_remaining"] == 700.0
+
+
+def test_link_loses_when_another_row_owns_the_transaction_key(rig):
+    db, app = rig
+    row = _poller_row(db)
+
+    def plant(coll, flt):
+        coll.docs.append({
+            "_id": "other-key",
+            "transaction_id": "TX-CARD",
+            "txn_dedupe_key": "TX-CARD",
+            "amount": 100.0,
+            "status": "approved",
+            "booking_number": "TEST-PP-1",
+            "county": "Lee",
+            "state": "FL",
+        })
+    db["payments"].before_update = plant
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_ambiguous"
+    assert "plan_id" not in row
+    assert _plan(db)["balance_remaining"] == 800.0
+    assert db["payment_plan_payment_claims"].docs[0]["failed_reason"] == "logged_payment_ambiguous"
+
+
+def test_txn_index_unavailable_fails_closed(rig):
+    db, app = rig
+    db["payments"].fail_index = True
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert r.status_code == 503 and r.json()["error"] == "payment_dedupe_unavailable"
+    assert db["payments"].docs == []
+    assert db["payment_plan_payment_claims"].docs == []
     assert _plan(db)["balance_remaining"] == 800.0
 
 

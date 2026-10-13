@@ -150,15 +150,40 @@ async def create_plan(request: Request):
     else:
         next_due = now + timedelta(days=30)
 
+    raw_county = str(data.get("county") or data.get("County") or "").strip()
+    raw_state = str(data.get("state") or data.get("State") or "").strip()
+    # Optional. A logged-receipt link refuses the plan until both are set,
+    # because booking number alone is not unique across counties and states.
+    # ``Lee (FL)`` is stored as county Lee and state FL, the same shape the
+    # receipt poller copies off a bond. A label whose state disagrees with the
+    # state field is rejected.
+    stored_place: dict = {}
+    if raw_county or raw_state:
+        from dashboard.services.swipesimple_receipt_poller import jurisdiction_from_bond
+
+        parsed_place = jurisdiction_from_bond({
+            "county": raw_county,
+            "state": raw_state,
+            "booking_number": data["booking_number"],
+        })
+        if parsed_place:
+            stored_place = {"county": parsed_place["county"], "state": parsed_place["state"]}
+        elif raw_county and raw_state:
+            return JSONResponse(
+                {"error": "invalid_jurisdiction",
+                 "message": "County and state disagree. Send a county and a state, or a County (ST) label whose state matches."},
+                status_code=400,
+            )
+        else:
+            if raw_county:
+                stored_place["county"] = raw_county
+            if raw_state:
+                stored_place["state"] = raw_state
+
     plan_doc = {
         "plan_id": str(uuid.uuid4())[:12],
         "booking_number": data["booking_number"],
-        # Optional. A logged-receipt link refuses the plan until both are set,
-        # because booking number alone is not unique across counties and states.
-        **({"county": str(data.get("county") or data.get("County")).strip()}
-           if str(data.get("county") or data.get("County") or "").strip() else {}),
-        **({"state": str(data.get("state") or data.get("State")).strip()}
-           if str(data.get("state") or data.get("State") or "").strip() else {}),
+        **stored_place,
         "defendant_name": data.get("defendant_name", ""),
         "indemnitor_name": data.get("indemnitor_name", ""),
         "indemnitor_phone": data.get("indemnitor_phone", ""),
@@ -404,37 +429,175 @@ def _agreed_token(sources: list[dict], keys: tuple[str, ...], normalize) -> str 
     return found[0]
 
 
+def _place_pair(src: dict) -> tuple[str, str] | None:
+    """Casefolded ``(county, state)`` from one document, peeling ``Name (ST)``.
+
+    Returns None when this source names a place that is incomplete or whose
+    label state disagrees with its state field. Returns an empty tuple when
+    the source does not carry a place at all.
+    """
+    raw_county = ""
+    raw_state = ""
+    for key in ("county", "County"):
+        if key in src and str(src.get(key) or "").strip():
+            raw_county = str(src.get(key)).strip()
+            break
+    for key in ("state", "State"):
+        if key in src and str(src.get(key) or "").strip():
+            raw_state = str(src.get(key)).strip()
+            break
+    if not raw_county and not raw_state:
+        return ("", "")
+    from dashboard.services.swipesimple_receipt_poller import jurisdiction_from_bond
+
+    parsed = jurisdiction_from_bond({"county": raw_county, "state": raw_state})
+    if not parsed:
+        return None
+    return parsed["county"].casefold(), parsed["state"].casefold()
+
+
 def _booking_identity(doc: dict, *, nested: bool) -> tuple[str, str, str] | None:
     """``(booking_number, county, state)`` or None when it cannot be verified.
 
     Booking numbers stay case-sensitive. County and state must both be present
-    and must not disagree across the receipt's stored copies. Missing or
+    and must not disagree across the receipt's stored copies. A ``Lee (FL)``
+    label is the same county as ``Lee`` when the state is FL. Missing or
     conflicting jurisdiction is unverified — never treated as a match.
     """
     if not isinstance(doc, dict):
         return None
     sources = _identity_sources(doc, nested=nested)
     booking = _agreed_token(sources, ("booking_number",), _booking_token)
-    county = _agreed_token(sources, ("county", "County"), _place_token)
-    state = _agreed_token(sources, ("state", "State"), _place_token)
-    if not booking or not county or not state:
+    places: list[tuple[str, str]] = []
+    for src in sources:
+        pair = _place_pair(src)
+        if pair is None:
+            return None
+        if pair != ("", ""):
+            places.append(pair)
+    if not booking or not places or len(set(places)) != 1:
         return None
+    county, state = places[0]
     return booking, county, state
 
 
-async def _plan_with_bond_jurisdiction(plans_col, plan: dict) -> dict:
-    """Fill a plan's missing county and state from the one bond for its booking.
+def _text_or_none(value) -> str | None:
+    text = str(value or "").strip()
+    return text or None
 
-    The receipt poller copies the same fields onto a matched payments row.
-    A plan that already has both is left alone. Zero bonds, a bond with no
-    state, or bonds that disagree leave the plan unchanged so the link fails
-    closed. A failed write does not invent an in-memory identity.
+
+async def _audit_jurisdiction_backfill(
+    actor: str, plan_id: str, booking: str,
+    before: dict, after: dict,
+) -> bool:
+    """Immutable record of a plan's county/state backfill. False when it was not saved."""
+    now = datetime.now(timezone.utc)
+    try:
+        await get_collection("audit_events").insert_one({
+            "event_type": "payment_plan_jurisdiction_backfilled",
+            "entity_type": "payment_plan",
+            "entity_id": plan_id,
+            "actor": actor,
+            "agent_name": actor,
+            "timestamp": now,
+            "created_at": now,
+            "booking_number": booking,
+            "county_before": before.get("county"),
+            "state_before": before.get("state"),
+            "county_after": after.get("county"),
+            "state_after": after.get("state"),
+            "reason": "legacy plan missing county or state; copied from the one bond "
+                      "whose booking number, county, and state all agree",
+            "confidence": 1.0,
+            "match_method": "unique_bond_booking_identity",
+        })
+    except Exception as exc:
+        logger.warning(
+            "[payment_plans] jurisdiction audit failed plan_id=%s err=%s",
+            plan_id, type(exc).__name__,
+        )
+        return False
+    return True
+
+
+async def _revert_jurisdiction(plans_col, plan_id: str, to_set: dict) -> bool:
+    """Undo a backfill this request wrote, only while those values are unchanged."""
+    try:
+        res = await plans_col.update_one(
+            {"plan_id": plan_id, **to_set},
+            {"$unset": {key: "" for key in to_set}},
+        )
+        return bool(getattr(res, "modified_count", 0))
+    except Exception as exc:
+        logger.error(
+            "[payment_plans] jurisdiction revert failed plan_id=%s err=%s",
+            plan_id, type(exc).__name__,
+        )
+        return False
+
+
+def _backfill_error(txn: str, error: str) -> JSONResponse:
+    if error == "jurisdiction_backfill_unaudited":
+        message = ("The plan's county and state were filled from the bond but the audit "
+                   "record could not be saved and the change could not be undone. "
+                   "Check the plan before applying this payment.")
+    else:
+        message = ("The plan's county and state were not kept because the audit record "
+                   "could not be saved. Try again shortly.")
+    return JSONResponse(
+        {"error": error, "transaction_id": txn, "message": message},
+        status_code=503,
+    )
+
+
+async def _plan_with_bond_jurisdiction(plans_col, plan: dict, actor: str, txn: str):
+    """Fill a plan's missing county and state from the one complete bond identity.
+
+    Returns ``(plan, None)`` or ``(plan, error_response)``. Every bond with this
+    booking number must supply the same booking number, county, and state. An
+    incomplete bond is ambiguous: nothing is written and nothing is linked.
+    A backfill that does land is audited (old and new values, actor, reason,
+    confidence) before the caller may link. If that audit cannot be saved, the
+    backfill is reverted. If the revert also fails, the plan is marked so a
+    later request still will not link until the audit is saved.
     """
+    plan_id = plan.get("plan_id")
+    if plan.get("jurisdiction_backfill_unaudited"):
+        previous = plan.get("jurisdiction_backfill_previous")
+        if not isinstance(previous, dict):
+            previous = {}
+        after = {
+            "county": _text_or_none(plan.get("county") or plan.get("County")),
+            "state": _text_or_none(plan.get("state") or plan.get("State")),
+        }
+        if not await _audit_jurisdiction_backfill(
+            actor, plan_id, _booking_token(plan.get("booking_number")), previous, after,
+        ):
+            return plan, _backfill_error(txn, "jurisdiction_backfill_unaudited")
+        try:
+            await plans_col.update_one(
+                {"plan_id": plan_id, "jurisdiction_backfill_unaudited": True},
+                {"$unset": {
+                    "jurisdiction_backfill_unaudited": "",
+                    "jurisdiction_backfill_previous": "",
+                }},
+            )
+        except Exception as exc:
+            logger.error(
+                "[payment_plans] could not clear unaudited jurisdiction flag plan_id=%s err=%s",
+                plan_id, type(exc).__name__,
+            )
+            return plan, _backfill_error(txn, "jurisdiction_backfill_unaudited")
+        plan = {
+            k: v for k, v in plan.items()
+            if k not in ("jurisdiction_backfill_unaudited", "jurisdiction_backfill_previous")
+        }
+
     if _booking_identity(plan, nested=False):
-        return plan
+        return plan, None
     booking = _booking_token(plan.get("booking_number"))
     if not booking:
-        return plan
+        return plan, None
     from dashboard.services.swipesimple_receipt_poller import (
         _docs_for_query,
         agreed_jurisdiction,
@@ -444,47 +607,72 @@ async def _plan_with_bond_jurisdiction(plans_col, plan: dict) -> dict:
     for name in ("bond_cases", "active_bonds", "intake_queue"):
         found = await _docs_for_query(get_collection(name), {"booking_number": booking})
         if found is None:
-            return plan
+            return plan, None
         bonds.extend(found)
     jurisdiction = agreed_jurisdiction(bonds)
     if not jurisdiction:
-        return plan
+        return plan, None
     if jurisdiction.get("booking_number") and jurisdiction["booking_number"] != booking:
-        return plan
-    plan_county = _place_token(plan.get("county") or plan.get("County"))
-    plan_state = _place_token(plan.get("state") or plan.get("State"))
+        return plan, None
+    before = {
+        "county": _text_or_none(plan.get("county") or plan.get("County")),
+        "state": _text_or_none(plan.get("state") or plan.get("State")),
+    }
+    plan_county = _place_token(before["county"])
+    plan_state = _place_token(before["state"])
     if plan_county and plan_county != _place_token(jurisdiction["county"]):
-        return plan
+        return plan, None
     if plan_state and plan_state != _place_token(jurisdiction["state"]):
-        return plan
+        return plan, None
     to_set = {}
     if not plan_county:
         to_set["county"] = jurisdiction["county"]
     if not plan_state:
         to_set["state"] = jurisdiction["state"]
     if not to_set:
-        return plan
+        return plan, None
+    after = {
+        "county": to_set.get("county", before["county"]),
+        "state": to_set.get("state", before["state"]),
+    }
     missing = []
     for key in to_set:
         missing.append({"$or": [{key: {"$exists": False}}, {key: None}, {key: ""}]})
     try:
         updated = await plans_col.update_one(
-            {"plan_id": plan.get("plan_id"), "$and": missing},
+            {"plan_id": plan_id, "$and": missing},
             {"$set": to_set},
         )
     except Exception as exc:
         logger.warning(
             "[payment_plans] plan jurisdiction write failed plan_id=%s err=%s",
-            plan.get("plan_id"), type(exc).__name__,
+            plan_id, type(exc).__name__,
         )
-        return plan
+        return plan, None
     if not getattr(updated, "modified_count", 0):
         try:
-            fresh = await plans_col.find_one({"plan_id": plan.get("plan_id")})
+            fresh = await plans_col.find_one({"plan_id": plan_id})
         except Exception:
-            return plan
-        return fresh or plan
-    return {**plan, **to_set}
+            return plan, None
+        return fresh or plan, None
+    if await _audit_jurisdiction_backfill(actor, plan_id, booking, before, after):
+        return {**plan, **to_set}, None
+    if await _revert_jurisdiction(plans_col, plan_id, to_set):
+        return plan, _backfill_error(txn, "jurisdiction_backfill_audit_failed")
+    try:
+        await plans_col.update_one(
+            {"plan_id": plan_id, **to_set},
+            {"$set": {
+                "jurisdiction_backfill_unaudited": True,
+                "jurisdiction_backfill_previous": before,
+            }},
+        )
+    except Exception as exc:
+        logger.error(
+            "[payment_plans] could not flag unaudited jurisdiction plan_id=%s err=%s",
+            plan_id, type(exc).__name__,
+        )
+    return {**plan, **to_set}, _backfill_error(txn, "jurisdiction_backfill_unaudited")
 
 
 def _identity_pins(row: dict) -> dict:
@@ -707,6 +895,67 @@ async def _confirm_applied_plan(plans_col, plan_id: str):
     return None, reason
 
 
+async def _classify_logged_payment(plans_col, payments_col, plan, txn, amount, actor):
+    """Decide whether ``/pay`` links a logged row or inserts one.
+
+    Returns ``(plan, row, error)``. ``error`` is a refusal (no claim yet when
+    the caller has not claimed). ``row`` is the single unlinked logged payment
+    to link, or None when the caller should insert. A plan jurisdiction
+    backfill, when it happens, is audited before this returns a row.
+    """
+    unlinked_filter = {
+        "transaction_id": txn,
+        "$or": [{"plan_id": {"$exists": False}}, {"plan_id": None}, {"plan_id": ""}],
+    }
+    unlinked_count = await payments_col.count_documents(unlinked_filter)
+    if unlinked_count > 1:
+        return plan, None, JSONResponse(
+            {"error": "logged_payment_ambiguous", "transaction_id": txn,
+             "message": "More than one logged payment has this transaction id. Review before applying it to a plan."},
+            status_code=409,
+        )
+    logged_row = await payments_col.find_one(unlinked_filter) if unlinked_count == 1 else None
+    if logged_row is None:
+        return plan, None, None
+    if not _same_amount(logged_row.get("amount"), amount):
+        return plan, None, JSONResponse(
+            {"error": "logged_payment_amount_mismatch", "transaction_id": txn,
+             "message": "The logged card payment with this transaction id has a different amount."},
+            status_code=409,
+        )
+    if not _logged_row_settled(logged_row):
+        return plan, None, JSONResponse(
+            {"error": "logged_payment_not_settled", "transaction_id": txn,
+             "message": "The logged card payment with this transaction id is not a settled payment (declined, refunded, voided, pending or no status)."},
+            status_code=409,
+        )
+    if not str(logged_row.get("booking_number") or "").strip():
+        # The poller stores "" when it could not match the receipt to a bond.
+        return plan, None, JSONResponse(
+            {"error": "logged_payment_unowned", "transaction_id": txn,
+             "message": "The logged card payment with this transaction id is not matched to a booking. Assign it to the booking before applying it to a plan."},
+            status_code=409,
+        )
+    plan, backfill_error = await _plan_with_bond_jurisdiction(plans_col, plan, actor, txn)
+    if backfill_error is not None:
+        return plan, None, backfill_error
+    row_identity = _booking_identity(logged_row, nested=True)
+    plan_identity = _booking_identity(plan, nested=False)
+    if row_identity is None or plan_identity is None:
+        return plan, None, JSONResponse(
+            {"error": "logged_payment_jurisdiction_unverified", "transaction_id": txn,
+             "message": "The logged card payment cannot be matched to this plan until both have the same booking number, county, and state. Assign the receipt's county and state before applying it."},
+            status_code=409,
+        )
+    if row_identity != plan_identity:
+        return plan, None, JSONResponse(
+            {"error": "logged_payment_booking_mismatch", "transaction_id": txn,
+             "message": "The logged card payment does not match this plan's booking, county, and state."},
+            status_code=409,
+        )
+    return plan, logged_row, None
+
+
 @payment_plans_bp.post("/payments/plans/{plan_id}/pay")
 async def record_payment(request: Request, plan_id):
     """Record a payment against an existing plan — at most once per transaction id.
@@ -771,65 +1020,28 @@ async def record_payment(request: Request, plan_id):
     if legacy:
         return await _idempotent_reply(plans_col, plan_id, txn, None, amount, legacy_row=legacy)
 
+    # One payments row per transaction id. The poller and the webhook take the
+    # same partial unique index before they insert. If it cannot be created,
+    # nothing is claimed.
+    try:
+        from dashboard.services.payment_txn_dedupe import ensure_payment_txn_dedupe
+
+        await ensure_payment_txn_dedupe(payments_col)
+    except Exception:
+        return JSONResponse({"error": "payment_dedupe_unavailable"}, status_code=503)
+
     # Link, don't duplicate: a card payment the receipt poller (or payment
     # webhook) already logged is a payments row with this transaction_id and
     # no plan_id. Attach plan_id to THAT row instead of inserting a second one.
-    unlinked_filter = {
-        "transaction_id": txn,
-        "$or": [{"plan_id": {"$exists": False}}, {"plan_id": None}, {"plan_id": ""}],
-    }
-    unlinked_count = await payments_col.count_documents(unlinked_filter)
-    if unlinked_count > 1:
-        return JSONResponse(
-            {"error": "logged_payment_ambiguous", "transaction_id": txn,
-             "message": "More than one logged payment has this transaction id. Review before applying it to a plan."},
-            status_code=409,
-        )
-    logged_row = await payments_col.find_one(unlinked_filter) if unlinked_count == 1 else None
-    if logged_row is not None:
-        if not _same_amount(logged_row.get("amount"), amount):
-            return JSONResponse(
-                {"error": "logged_payment_amount_mismatch", "transaction_id": txn,
-                 "message": "The logged card payment with this transaction id has a different amount."},
-                status_code=409,
-            )
-        if not _logged_row_settled(logged_row):
-            return JSONResponse(
-                {"error": "logged_payment_not_settled", "transaction_id": txn,
-                 "message": "The logged card payment with this transaction id is not a settled payment (declined, refunded, voided, pending or no status)."},
-                status_code=409,
-            )
-        row_booking = str(logged_row.get("booking_number") or "").strip()
-        if not row_booking:
-            # The poller stores "" when it could not match the receipt to a
-            # bond. Ownership is unverified: never attach it to whichever plan
-            # is in the URL (Codex P1). Staff must assign the booking first.
-            return JSONResponse(
-                {"error": "logged_payment_unowned", "transaction_id": txn,
-                 "message": "The logged card payment with this transaction id is not matched to a booking. Assign it to the booking before applying it to a plan."},
-                status_code=409,
-            )
-        # Booking number is not unique across counties or states (Lee FL can
-        # share a number with Lee GA). Both sides need booking + county + state,
-        # and those three must agree. Anything missing or in conflict fails closed.
-        # A plan created before county/state were stored picks them up from the
-        # one bond for this booking — the same source the receipt poller copies
-        # onto a matched payments row.
-        plan = await _plan_with_bond_jurisdiction(plans_col, plan)
-        row_identity = _booking_identity(logged_row, nested=True)
-        plan_identity = _booking_identity(plan, nested=False)
-        if row_identity is None or plan_identity is None:
-            return JSONResponse(
-                {"error": "logged_payment_jurisdiction_unverified", "transaction_id": txn,
-                 "message": "The logged card payment cannot be matched to this plan until both have the same booking number, county, and state. Assign the receipt's county and state before applying it."},
-                status_code=409,
-            )
-        if row_identity != plan_identity:
-            return JSONResponse(
-                {"error": "logged_payment_booking_mismatch", "transaction_id": txn,
-                 "message": "The logged card payment does not match this plan's booking, county, and state."},
-                status_code=409,
-            )
+    # Booking number is not unique across counties or states. Both sides need
+    # booking + county + state. A legacy plan copies those from the one bond
+    # whose booking identity is complete and unanimous, and that copy is audited.
+    actor = _actor(request)
+    plan, logged_row, pre_error = await _classify_logged_payment(
+        plans_col, payments_col, plan, txn, amount, actor,
+    )
+    if pre_error is not None:
+        return pre_error
 
     now = datetime.now(timezone.utc)
     try:
@@ -846,6 +1058,29 @@ async def record_payment(request: Request, plan_id):
         return await _idempotent_reply(
             plans_col, plan_id, txn, existing or {"status": "unknown"}, amount)
 
+    # Re-read after the claim. A row that arrived, vanished, or became
+    # ambiguous since the pre-check fails closed. A row that appeared where
+    # there was none is linked instead of inserted.
+    plan, logged_after, post_error = await _classify_logged_payment(
+        plans_col, payments_col, plan, txn, amount, actor,
+    )
+    if post_error is not None:
+        await _fail_claim(claims, plan_id, txn, "logged_payment_recheck_failed")
+        return post_error
+    if logged_row is None and logged_after is not None:
+        logged_row = logged_after
+    elif logged_row is not None and (
+        logged_after is None or logged_after.get("_id") != logged_row.get("_id")
+    ):
+        await _fail_claim(claims, plan_id, txn, "logged_payment_ambiguous")
+        return JSONResponse(
+            {"error": "logged_payment_ambiguous", "transaction_id": txn,
+             "message": "The logged card payment changed while it was being claimed. Review before applying it to a plan."},
+            status_code=409,
+        )
+    else:
+        logged_row = logged_after
+
     if logged_row is not None:
         # Conditional link: matches only while the row is still unlinked and
         # unchanged. Losing it means someone linked it meanwhile; never insert.
@@ -860,7 +1095,18 @@ async def record_payment(request: Request, plan_id):
             # Pin the validated booking too: a reassignment in between must
             # not be overwritten.
             "booking_number": logged_row.get("booking_number"),
-            "$or": [{"plan_id": {"$exists": False}}, {"plan_id": None}, {"plan_id": ""}],
+            # Still unlinked, and the transaction-id key is free or already ours.
+            # A second payments row that owns txn_dedupe_key makes the $set raise
+            # DuplicateKeyError instead of linking.
+            "$and": [
+                {"$or": [{"plan_id": {"$exists": False}}, {"plan_id": None}, {"plan_id": ""}]},
+                {"$or": [
+                    {"txn_dedupe_key": {"$exists": False}},
+                    {"txn_dedupe_key": None},
+                    {"txn_dedupe_key": ""},
+                    {"txn_dedupe_key": txn},
+                ]},
+            ],
             # Pin county/state on the row and under custom_fields. A jurisdiction
             # that appears or changes after this check must not still match.
             **_identity_pins(logged_row),
@@ -881,6 +1127,9 @@ async def record_payment(request: Request, plan_id):
             "type": "installment",
             "status": "completed",
             "logged_status": logged_row.get("status"),
+            # Holds the partial unique key so a later poller or webhook insert
+            # of this transaction id cannot add a second row.
+            "txn_dedupe_key": txn,
         }
         if not logged_row.get("timestamp"):
             # Keep the provider's payment time (Codex P2 on #182): revenue
@@ -890,6 +1139,15 @@ async def record_payment(request: Request, plan_id):
             linked = await payments_col.update_one(link_filter, {"$set": link_set})
             link_ok = bool(getattr(linked, "modified_count", 0))
             current = None if link_ok else (await payments_col.find_one({"_id": logged_row["_id"]}) or {})
+        except DuplicateKeyError:
+            # Another payments row already holds this transaction id. The update
+            # did not apply. Do not guess, and do not decrement the balance.
+            await _fail_claim(claims, plan_id, txn, "logged_payment_ambiguous")
+            return JSONResponse(
+                {"error": "logged_payment_ambiguous", "transaction_id": txn,
+                 "message": "Another logged payment with this transaction id is already stored. Review before applying it to a plan."},
+                status_code=409,
+            )
         except Exception as exc:
             # Write outcome unknown (timeout / unknown write concern): the link
             # may have persisted (Codex P1). Read back; if the row carries THIS
@@ -930,9 +1188,11 @@ async def record_payment(request: Request, plan_id):
     else:
         from bson import ObjectId
 
+        from dashboard.services.payment_txn_dedupe import insert_payment_once
+
         own_id = ObjectId()
         try:
-            await payments_col.insert_one({
+            inserted = await insert_payment_once(payments_col, {
                 "_id": own_id,
                 "booking_number": plan["booking_number"],
                 "plan_id": plan_id,
@@ -947,8 +1207,98 @@ async def record_payment(request: Request, plan_id):
         except Exception:
             await _fail_claim(claims, plan_id, txn, "payment_write_error")
             return JSONResponse({"error": "payment_record_failed", "transaction_id": txn}, status_code=500)
+        if not inserted:
+            # The poller or webhook inserted this transaction id after the
+            # recheck. Link that row when it is the one settled unlinked match.
+            # Otherwise fail closed: do not insert a second row.
+            plan, logged_row, adopt_error = await _classify_logged_payment(
+                plans_col, payments_col, plan, txn, amount, actor,
+            )
+            if adopt_error is not None or logged_row is None:
+                await _fail_claim(claims, plan_id, txn, "logged_payment_ambiguous")
+                if adopt_error is not None:
+                    return adopt_error
+                return JSONResponse(
+                    {"error": "logged_payment_ambiguous", "transaction_id": txn,
+                     "message": "Another logged payment with this transaction id appeared while this one was being recorded. Review before applying it to a plan."},
+                    status_code=409,
+                )
+            link_filter = {
+                "_id": logged_row["_id"],
+                "transaction_id": txn,
+                "amount": logged_row.get("amount"),
+                "status": logged_row.get("status"),
+                "booking_number": logged_row.get("booking_number"),
+                "$and": [
+                    {"$or": [{"plan_id": {"$exists": False}}, {"plan_id": None}, {"plan_id": ""}]},
+                    {"$or": [
+                        {"txn_dedupe_key": {"$exists": False}},
+                        {"txn_dedupe_key": None},
+                        {"txn_dedupe_key": ""},
+                        {"txn_dedupe_key": txn},
+                    ]},
+                ],
+                **_identity_pins(logged_row),
+            }
+            _raw = logged_row.get("raw_payload")
+            if isinstance(_raw, dict) and "event_type" in _raw:
+                link_filter["raw_payload.event_type"] = _raw.get("event_type")
+            else:
+                link_filter["raw_payload.event_type"] = {"$exists": False}
+            link_set = {
+                "plan_id": plan_id,
+                "plan_linked_at": now.isoformat(),
+                "plan_linked_type": "installment",
+                "type": "installment",
+                "status": "completed",
+                "logged_status": logged_row.get("status"),
+                "txn_dedupe_key": txn,
+            }
+            if not logged_row.get("timestamp"):
+                link_set["timestamp"] = logged_row.get("created_at") or now.isoformat()
+            try:
+                linked = await payments_col.update_one(link_filter, {"$set": link_set})
+                if not getattr(linked, "modified_count", 0):
+                    await _fail_claim(claims, plan_id, txn, "logged_payment_link_lost")
+                    return JSONResponse(
+                        {"error": "payment_needs_review", "transaction_id": txn,
+                         "message": "The logged card payment changed while it was being linked. Check the plan before recording it again."},
+                        status_code=409,
+                    )
+            except DuplicateKeyError:
+                await _fail_claim(claims, plan_id, txn, "logged_payment_ambiguous")
+                return JSONResponse(
+                    {"error": "logged_payment_ambiguous", "transaction_id": txn,
+                     "message": "Another logged payment with this transaction id is already stored. Review before applying it to a plan."},
+                    status_code=409,
+                )
+            except Exception as exc:
+                # Same unknown-outcome rule as the direct link: read the row
+                # back before deciding the link did not persist.
+                logger.warning(
+                    "[payment_plans] adopted link write failed plan_id=%s err=%s",
+                    plan_id, type(exc).__name__,
+                )
+                reason = "logged_payment_link_error"
+                try:
+                    persisted = await payments_col.find_one({"_id": logged_row["_id"]}) or {}
+                except Exception:
+                    persisted = None
+                if persisted is None:
+                    reason = "logged_payment_link_unknown"
+                elif (persisted.get("plan_id") == plan_id
+                        and persisted.get("plan_linked_at") == link_set["plan_linked_at"]):
+                    if not await _revert_link(payments_col, logged_row, plan_id, link_set):
+                        reason = "logged_payment_link_unreverted"
+                await _fail_claim(claims, plan_id, txn, reason)
+                return JSONResponse(
+                    {"error": "payment_record_failed", "transaction_id": txn,
+                     "message": "Linking the logged card payment failed. Check the plan before recording it again."},
+                    status_code=500,
+                )
+            own_id = logged_row["_id"]
 
-    actor = _actor(request)
+    # actor was taken before the claim so the jurisdiction backfill could name it.
 
     async def _undo(reason: str) -> bool:
         """Compensate this request's payment write. True when fully undone."""
@@ -971,7 +1321,14 @@ async def record_payment(request: Request, plan_id):
         # unlink event — there is no link record to pair it with — fail the
         # claim and return an error. Balance untouched.
         if not await _audit_link(actor, plan, plan_id, txn, logged_row, amount):
-            await _revert_link(payments_col, logged_row, plan_id, link_set)
+            if not await _revert_link(payments_col, logged_row, plan_id, link_set):
+                # The link is still on the row. Do not say the payment was not applied.
+                await _fail_claim(claims, plan_id, txn, "audit_write_failed_link_unreverted")
+                return JSONResponse(
+                    {"error": "audit_write_failed_link_unreverted", "transaction_id": txn,
+                     "message": "The audit record could not be saved and the link could not be undone. Check this payment before recording it again."},
+                    status_code=503,
+                )
             await _fail_claim(claims, plan_id, txn, "audit_write_failed")
             return JSONResponse(
                 {"error": "audit_write_failed", "transaction_id": txn,
@@ -989,7 +1346,13 @@ async def record_payment(request: Request, plan_id):
     except Exception:
         clash = True
     if clash:
-        await _undo("another payments row for this transaction id appeared during the write")
+        if not await _undo("another payments row for this transaction id appeared during the write"):
+            await _fail_claim(claims, plan_id, txn, "logged_payment_ambiguous_unreverted")
+            return JSONResponse(
+                {"error": "logged_payment_ambiguous_unreverted", "transaction_id": txn,
+                 "message": "Another payment with this transaction id appeared, and this one could not be undone. Check the payment before recording it again."},
+                status_code=500,
+            )
         await _fail_claim(claims, plan_id, txn, "logged_payment_ambiguous")
         return JSONResponse(
             {"error": "logged_payment_ambiguous", "transaction_id": txn,
@@ -997,8 +1360,11 @@ async def record_payment(request: Request, plan_id):
             status_code=409,
         )
 
+    plan_write_landed = True
     try:
         # Atomic increments so two different transactions never overwrite each other.
+        # applied_transaction_ids is set in the same update, so a driver error
+        # after the write can be told apart from one where the write did not land.
         await plans_col.update_one(
             {"plan_id": plan_id},
             {
@@ -1013,14 +1379,37 @@ async def record_payment(request: Request, plan_id):
                     "delinquent_days": 0,
                     "updated_at": now.isoformat(),
                 },
+                "$addToSet": {"applied_transaction_ids": txn},
             },
         )
     except Exception as exc:
-        # Balance write failed (Codex P1): compensate the link/row so it is not
-        # counted as revenue against an unchanged plan. The claim stays failed
-        # (payment_needs_review) because the $inc outcome is unknown.
+        # The client may not know whether the $inc landed. Read the marker
+        # before undoing the payment. If the plan cannot be read, keep the
+        # payment: deleting it would drop the only evidence of a balance that
+        # may already have moved.
         logger.warning("[payment_plans] plan update failed plan_id=%s err=%s", plan_id, type(exc).__name__)
-        await _undo("plan balance update failed after the payment was linked")
+        fresh = await _read_plan(plans_col, plan_id)
+        applied = (
+            isinstance(fresh, dict)
+            and txn in list(fresh.get("applied_transaction_ids") or [])
+        )
+        if not isinstance(fresh, dict):
+            await _fail_claim(claims, plan_id, txn, "plan_update_unknown")
+            return JSONResponse(
+                {"error": "plan_update_unknown", "transaction_id": txn,
+                 "message": "The plan balance update did not confirm. The payment row was kept. Check the plan before recording it again."},
+                status_code=500,
+            )
+        if not applied:
+            plan_write_landed = False
+    if not plan_write_landed:
+        if not await _undo("plan balance update failed after the payment was linked"):
+            await _fail_claim(claims, plan_id, txn, "plan_update_error_unreverted")
+            return JSONResponse(
+                {"error": "payment_record_failed", "transaction_id": txn,
+                 "message": "The plan balance did not update and the payment could not be undone. Check the plan before recording it again."},
+                status_code=500,
+            )
         await _fail_claim(claims, plan_id, txn, "plan_update_error")
         return JSONResponse({"error": "payment_record_failed", "transaction_id": txn}, status_code=500)
 

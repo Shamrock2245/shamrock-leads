@@ -86,21 +86,26 @@ def jurisdiction_from_bond(bond: Dict[str, Any]) -> Optional[Dict[str, str]]:
 
 
 def agreed_jurisdiction(bonds: List[Dict[str, Any]]) -> Optional[Dict[str, str]]:
-    """The one jurisdiction every bond shares, or None when missing or split.
+    """The one complete booking identity every bond shares, or None.
 
-    Two cases with the same booking number in different counties or states do
-    not yield a jurisdiction. Callers then leave county and state unset.
+    Every candidate must supply booking number, county, and state, and those
+    three must all agree. A bond missing any of them is not skipped: the match
+    is ambiguous and this returns None. Callers then do not stamp a receipt
+    or backfill a plan.
     """
+    if not bonds:
+        return None
     found: List[Dict[str, str]] = []
     for bond in bonds:
         item = jurisdiction_from_bond(bond)
-        if item:
-            found.append(item)
-    if not found:
-        return None
-    places = {(item["county"].casefold(), item["state"].casefold()) for item in found}
-    bookings = {item["booking_number"] for item in found if item.get("booking_number")}
-    if len(places) != 1 or len(bookings) > 1:
+        if not item or not item.get("booking_number"):
+            return None
+        found.append(item)
+    identities = {
+        (item["booking_number"], item["county"].casefold(), item["state"].casefold())
+        for item in found
+    }
+    if len(identities) != 1:
         return None
     return found[0]
 
@@ -349,7 +354,20 @@ class SwipeSimpleReceiptPoller:
         if "_id" not in doc:
             from bson import ObjectId
             doc["_id"] = ObjectId()
-        await payments.insert_one(doc)
+        # Unique txn_dedupe_key: a plan /pay or webhook insert of this id wins
+        # the race instead of leaving two payments rows.
+        try:
+            from dashboard.services.payment_txn_dedupe import insert_payment_once
+
+            inserted = await insert_payment_once(payments, doc)
+        except Exception as exc:
+            logger.warning(
+                "[SwipeSimplePoll] payment dedupe unavailable txn=%s err=%s",
+                txn, type(exc).__name__,
+            )
+            return {"success": False, "error": "payment_dedupe_unavailable", "transaction_id": txn}
+        if not inserted:
+            return {"success": True, "duplicate": True, "transaction_id": txn}
 
         if booking_number:
             payment_update = {
