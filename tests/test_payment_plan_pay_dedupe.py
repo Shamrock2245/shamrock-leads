@@ -36,7 +36,7 @@ class Coll:
             self.unique.append(fields)
         return name
 
-    async def insert_one(self, doc):
+    async def insert_one(self, doc, session=None, **kwargs):
         await asyncio.sleep(0)
         if self.fail_insert:
             raise RuntimeError("write failed")
@@ -53,7 +53,23 @@ class Coll:
                 return copy.deepcopy(d)
         return None
 
-    async def update_one(self, flt, update, upsert=False):
+    def find(self, flt=None, *a, **k):
+        docs = [copy.deepcopy(d) for d in self.docs if matches(d, flt or {})]
+
+        class _Cur:
+            def __aiter__(self):
+                self._it = iter(docs)
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self._it)
+                except StopIteration:
+                    raise StopAsyncIteration
+
+        return _Cur()
+
+    async def update_one(self, flt, update, upsert=False, session=None, **kwargs):
         await asyncio.sleep(0)
         for d in self.docs:
             if matches(d, flt):
@@ -81,8 +97,15 @@ def rig(monkeypatch):
         "down_payment": 200.0, "balance_remaining": 800.0, "installment_amount": 100.0,
         "frequency": "weekly", "payments_made": 1, "total_paid": 200.0, "status": "active",
     })
+    pp._inflight_txns.clear()
+    pp._txn_support_cache.clear()
+
+    async def _no_txn():
+        return None
+
     monkeypatch.setattr(pp, "get_collection", lambda name: db[name])
     monkeypatch.setattr(pp, "_payment_claim_index_ready", False)
+    monkeypatch.setattr(pp, "_txn_client", _no_txn)
     app = FastAPI()
     app.include_router(pp.payment_plans_bp)
     with patch("dashboard.routers.events.publish_event", new=AsyncMock()):
@@ -144,19 +167,27 @@ def test_concurrent_same_txn_applies_once(rig):
     assert again.status_code == 200 and again.json()["idempotent"] is True
 
 
-def test_stale_claimed_claim_is_not_reported_as_paid(rig):
-    """Worker died after inserting the claim: retries must not claim success (Codex P1)."""
+def test_stale_claimed_claim_resumes_and_applies_once(rig):
+    """Worker died after the claim and before any write. A retry applies that payment once.
+
+    It must not report success without moving the balance, and it must not apply twice.
+    """
     db, app = rig
     db["payment_plan_payment_claims"].docs.append(
-        {"plan_id": PLAN_ID, "transaction_id": "TX-STUCK", "status": "claimed"})
+        {"plan_id": PLAN_ID, "transaction_id": "TX-STUCK", "status": "claimed", "amount": 100})
     db["payment_plan_payment_claims"].unique.append(("tenant_id", "transaction_id"))
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-STUCK"}])
-    assert r.status_code == 409 and r.json()["error"] == "payment_in_progress"
-    assert r.json().get("success") is not True
-    assert db["payments"].docs == [] and _plan(db)["balance_remaining"] == 800.0
+    assert r.status_code == 200 and r.json()["idempotent"] is False
+    assert r.json()["success"] is True
+    assert len(db["payments"].docs) == 1
+    assert _plan(db)["balance_remaining"] == 700.0
+    assert db["payment_plan_payment_claims"].docs[0]["status"] == "applied"
+    (again,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-STUCK"}])
+    assert again.status_code == 200 and again.json()["idempotent"] is True
+    assert _plan(db)["balance_remaining"] == 700.0 and len(db["payments"].docs) == 1
 
 
-@pytest.mark.parametrize("claim_status", ["claimed", "weird", None])
+@pytest.mark.parametrize("claim_status", ["weird", None])
 def test_only_applied_claims_count_as_success(rig, claim_status):
     db, app = rig
     doc = {"plan_id": PLAN_ID, "transaction_id": "TX-S"}
@@ -230,13 +261,15 @@ def test_legacy_row_on_other_plan_blocks_reuse(rig):
     assert _plan(db)["balance_remaining"] == 800.0
 
 
-def test_poller_row_without_plan_does_not_block(rig):
-    """The receipt poller logs card payments with no plan_id; that is not a plan application."""
+def test_unsettled_poller_row_is_refused(rig):
+    """A logged row with no settled status is not a second insert and does not move the balance."""
     db, app = rig
     db["payments"].docs.append({"transaction_id": "TX-CARD", "amount": 100, "booking_number": "TEST-PP-1"})
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
-    assert r.status_code == 200 and r.json()["idempotent"] is False
-    assert _plan(db)["balance_remaining"] == 700.0
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_not_settled"
+    assert _plan(db)["balance_remaining"] == 800.0
+    assert len(db["payments"].docs) == 1 and not db["payments"].docs[0].get("plan_id")
+    assert db["payment_plan_payment_claims"].docs == []
 
 
 @pytest.mark.parametrize("amount", [900, 99.99, 100.01])
@@ -351,29 +384,42 @@ class _FailingPlanUpdate:
 
 
 def test_payment_row_from_failed_attempt_is_not_legacy_success(rig, monkeypatch):
-    """Payment row written, plan update failed: retry must not report success (Codex P1 #2)."""
+    """Balance write failed after the row was linked: that attempt is not success.
+
+    The claim stays on the row_linked step. A later retry resumes and moves the
+    balance once. It is not treated as an already-paid legacy row.
+    """
     db, app = rig
     failing = _FailingPlanUpdate(db["payment_plans"])
     monkeypatch.setattr(pp, "get_collection",
                         lambda name: failing if name == "payment_plans" else db[name])
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-HALF"}])
     assert r.status_code == 500
-    assert len(db["payments"].docs) == 1          # row left behind
-    assert db["payment_plan_payment_claims"].docs[0]["status"] == "failed"
+    assert r.json().get("success") is not True
+    assert len(db["payments"].docs) == 1
+    assert db["payment_plan_payment_claims"].docs[0]["status"] == "claimed"
+    assert db["payment_plan_payment_claims"].docs[0]["step"] == "row_linked"
+    assert _plan(db)["balance_remaining"] == 800.0
     monkeypatch.setattr(pp, "get_collection", lambda name: db[name])
     (r2,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-HALF"}])
-    assert r2.status_code == 409 and r2.json()["error"] == "payment_needs_review"
-    assert r2.json().get("success") is not True
-    assert len(db["payments"].docs) == 1 and _plan(db)["balance_remaining"] == 800.0
+    assert r2.status_code == 200 and r2.json()["idempotent"] is False
+    assert len(db["payments"].docs) == 1 and _plan(db)["balance_remaining"] == 700.0
 
 
-def test_payment_row_with_unfinished_claim_is_not_legacy_success(rig):
+def test_payment_row_with_unfinished_claim_resumes_balance(rig):
+    """A row written under a still-claimed id is not legacy success. The retry finishes it."""
     db, app = rig
-    db["payments"].docs.append({"plan_id": PLAN_ID, "transaction_id": "TX-MID", "amount": 100})
+    db["payments"].docs.append({
+        "plan_id": PLAN_ID, "transaction_id": "TX-MID", "amount": 100,
+        "booking_number": "TEST-PP-1", "status": "completed", "type": "installment",
+    })
     db["payment_plan_payment_claims"].docs.append(
-        {"plan_id": PLAN_ID, "transaction_id": "TX-MID", "status": "claimed"})
+        {"plan_id": PLAN_ID, "transaction_id": "TX-MID", "status": "claimed", "amount": 100,
+         "step": "row_linked"})
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-MID"}])
-    assert r.status_code == 409 and r.json()["error"] == "payment_in_progress"
+    assert r.status_code == 200 and r.json()["idempotent"] is False
+    assert len(db["payments"].docs) == 1 and _plan(db)["balance_remaining"] == 700.0
+    assert db["payment_plan_payment_claims"].docs[0]["status"] == "applied"
 
 
 def test_payment_row_with_applied_claim_is_idempotent(rig):
