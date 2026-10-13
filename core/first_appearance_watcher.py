@@ -368,7 +368,17 @@ class FirstAppearanceWatcher:
             stored_targets=self._stored_fa_target_counties(),
         )
         if target_counties is not None:
-            query["county"] = {"$in": fa_query_county_values(target_counties)}
+            # fail_closed counties are never selected (config.source_guard);
+            # _refetch_record re-checks every record before any request.
+            from config.source_guard import fail_closed_reason
+
+            open_counties = [
+                c for c in target_counties if not fail_closed_reason(c, unknown_closed=False)
+            ]
+            dropped = len(target_counties) - len(open_counties)
+            if dropped:
+                logger.info("FirstAppearanceWatcher: %d fail_closed watch county(ies) excluded", dropped)
+            query["county"] = {"$in": fa_query_county_values(open_counties)}
 
         query["created_at"] = {"$gte": cutoff}
 
@@ -419,6 +429,23 @@ class FirstAppearanceWatcher:
 
     # ── Detail Re-fetch ───────────────────────────────────────────────────────
 
+    @staticmethod
+    def _source_blocked(doc: Dict[str, Any], detail_url: str, scraper: Any = None) -> bool:
+        """True (and no request) when the record's county, scraper or detail
+        URL host is fail_closed / SOURCE_CONTRACT_VALIDATED=False."""
+        from config.source_guard import fail_closed_reason
+
+        reason = fail_closed_reason(
+            doc.get("county", ""), doc.get("state"), scraper=scraper, url=detail_url,
+        )
+        if reason:
+            logger.info(
+                "FirstAppearanceWatcher: skip refetch %s/%s (%s); no source request",
+                doc.get("county", ""), doc.get("booking_number", ""), reason,
+            )
+            return True
+        return False
+
     def _refetch_record(self, doc: Dict[str, Any]) -> Optional[ArrestRecord]:
         """
         Re-fetch a single record from the live jail roster.
@@ -436,6 +463,10 @@ class FirstAppearanceWatcher:
         booking_id = doc.get("booking_number", "")
 
         if not detail_url:
+            return None
+
+        # Fail-closed sources are never contacted (config.source_guard).
+        if self._source_blocked(doc, detail_url, self._scrapers.get(county)):
             return None
 
         # PBSO blotter index is not a per-inmate page. Never generic-GET the search form.
@@ -489,6 +520,9 @@ class FirstAppearanceWatcher:
         """
         county = doc.get("county", "").lower()
         booking_id = doc.get("booking_number", "")
+
+        if self._source_blocked(doc, detail_url, self._scrapers.get(doc.get("county", ""))):
+            return None
 
         try:
             import requests

@@ -736,6 +736,11 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     # internal natural key (md_dedupe_v2 = sha256 of defendant + DOB + BookDate;
     # core/booking_identity.py). Booking_Number stays blank. Not verified_public
     # until a Leads Ops write smoke after the backed-up cleanup.
+    # 2026-10-09: Revize rosters answer a Cloudflare challenge from every tested
+    # exit (box, T-Mobile AS21928, Comcast AS7922); no other official source
+    # publishes a booking roster with a source booking number. Relay skips them.
+    "Charlotte (FL)": "fail_closed",
+    "Manatee (FL)": "fail_closed",
     # Runtime-gated FL scopes aligned to Health Source Guards (SCRAPER_SOURCE_STATES).
     # Broward: cleared 2026-09-23 after Turnstile+prefix write smoke (action=arrest_search).
     # Baker/Calhoun/Gulf/Holmes/Levy/Wakulla/Washington: FL JailTracker wrappers

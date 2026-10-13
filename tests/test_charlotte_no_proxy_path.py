@@ -124,6 +124,7 @@ def _explode(name):
 
 
 def test_full_scrape_with_proxy_env_set_reaches_no_proxy_or_stealth_path(monkeypatch):
+    monkeypatch.setattr(CharlotteCountyScraper, "SOURCE_CONTRACT_VALIDATED", True)  # reopen path (fail_closed 2026-10-09)
     for k, v in PROXY_ENV.items():
         monkeypatch.setenv(k, v)
     monkeypatch.delenv("CHARLOTTE_EGRESS_MODE", raising=False)
@@ -175,6 +176,7 @@ def test_full_scrape_with_proxy_env_set_reaches_no_proxy_or_stealth_path(monkeyp
 
 
 def test_unverified_exit_stops_before_any_browser(monkeypatch):
+    monkeypatch.setattr(CharlotteCountyScraper, "SOURCE_CONTRACT_VALIDATED", True)  # reopen path (fail_closed 2026-10-09)
     import scrapers.cf_browser as cfb
     monkeypatch.setattr(cfb, "check_exit_ip", lambda *a, **k: {
         "ok": True, "ip": "203.0.113.9", "org": "", "country": "", "exit_unverified": True,

@@ -1,5 +1,7 @@
 # Revize relay runs: Manatee + Charlotte (Leads Ops)
 
+> **2026-10-09: Manatee and Charlotte are `fail_closed`.** Both Revize rosters answer a Cloudflare challenge on page 1 from T-Mobile AS21928 and Comcast AS7922 (and the box). `python main.py --relay-only` now **skips** them (result `status: fail_closed, skipped: true`, not an error), and the smoke scripts exit `4` without fetching. Only Pinellas runs on the relay. Evidence and ranked alternatives: `docs/recon/FL_CHARLOTTE_SOURCE_RECON_2026-10-09.md`, `docs/recon/FL_MANATEE_SOURCE_RECON_2026-10-09.md`. Reopen = relay read + write smoke with no challenge, then flip `SOURCE_CONTRACT_VALIDATED`.
+
 Manatee and Charlotte (FL) are both Revize CMS rosters behind Cloudflare. They run **only on Brendan's home relay, which Leads Ops operates**. Each run uses the relay's own home-ISP exit, or the iPhone hotspot. "Residential" means that connection. It is **not** a proxy service.
 
 ## What is enforced in code

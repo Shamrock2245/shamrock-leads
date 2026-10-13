@@ -37,6 +37,22 @@ def _env_is_production() -> bool:
     return env in ("production", "prod")
 
 
+def _payment_secret_unset_allowed() -> bool:
+    """An unset SWIPESIMPLE_WEBHOOK_SECRET is tolerated only in explicit dev.
+
+    Same precedence as the no-PIN gate (#176, ``no_pin_passthrough_allowed``):
+    ``ENV``, or ``ENVIRONMENT`` when ``ENV`` is unset/blank, and
+    ``REQUIRE_DASHBOARD_PIN`` closes it. Stricter on the value: it must be
+    exactly ``development`` (case-sensitive, no trimming). Production, prod,
+    staging, test, ``dev``, ``Development``, blank/unset ENV and typos all
+    fail closed (503, before the body is read).
+    """
+    if os.getenv("REQUIRE_DASHBOARD_PIN", "").strip().lower() in ("1", "true", "yes"):
+        return False
+    env = os.getenv("ENV") or os.getenv("ENVIRONMENT") or ""
+    return env == "development"
+
+
 def verify_gmail_pubsub_token(token: str, audience: str) -> dict:
     """Verify a Google-signed Pub/Sub push OIDC token."""
     from google.auth.transport.requests import Request as GoogleAuthRequest
@@ -222,7 +238,8 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         created_at:       ISO timestamp
 
     On success:
-      1. Validate HMAC signature (if SWIPESIMPLE_WEBHOOK_SECRET is set)
+      1. Validate HMAC signature (SWIPESIMPLE_WEBHOOK_SECRET set); unset → 503
+         unless ENV is exactly ``development``
       2. Parse booking_number from custom_fields or query params
       3. Update bond case payment status in active_bonds / prospective_bonds
       4. Log to payments collection
@@ -254,7 +271,7 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         if not hmac.compare_digest(expected_sig, sig_header):
             logger.warning("[payment_webhook] Invalid SwipeSimple signature — rejecting")
             return JSONResponse({"error": "Invalid signature"}, status_code=401)
-    elif _env_is_production():
+    elif not _payment_secret_unset_allowed():
         logger.warning(
             "[payment_webhook] Rejected — SWIPESIMPLE_WEBHOOK_SECRET not configured "
             "(receipt poller remains source of truth if SwipeSimple never sends webhooks)"
@@ -262,7 +279,7 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         return JSONResponse({"error": "Webhook secret not configured"}, status_code=503)
     else:
         logger.warning(
-            "[payment_webhook] SWIPESIMPLE_WEBHOOK_SECRET unset — allowing in non-production only"
+            "[payment_webhook] SWIPESIMPLE_WEBHOOK_SECRET unset — allowing in ENV=development only"
         )
 
     # -- 2. Payload validation (fail closed on empty or invalid payload) -------

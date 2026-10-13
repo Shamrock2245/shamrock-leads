@@ -226,7 +226,8 @@ def test_fail_closed_relay_only_and_no_path_are_excluded(monkeypatch):
     monkeypatch.setitem(extensions.SCRAPER_SOURCE_STATES, "Hernando (FL)", "unverified")
     assert county_exclusion(FakeScraper(), include_relay_only=False) is None
 
-    relay = FakeScraper(county="Manatee")
+    # Pinellas: relay-only and unverified (Manatee/Charlotte are fail_closed since 2026-10-09).
+    relay = FakeScraper(county="Pinellas")
     assert county_exclusion(relay, include_relay_only=False) == "relay_only"
     assert county_exclusion(relay, include_relay_only=True) is None  # only when run on the relay
 
@@ -244,12 +245,12 @@ def test_excluded_counties_are_never_fetched(monkeypatch):
     from dashboard import extensions
 
     monkeypatch.setitem(extensions.SCRAPER_SOURCE_STATES, "Hernando (FL)", "fail_closed")
-    w, arrests, states = _mongo([_stored("B1"), _stored("M1", county="Manatee")])
+    w, arrests, states = _mongo([_stored("B1"), _stored("M1", county="Pinellas")])
     closed = FakeScraper(results={"B1": _fetched("B1", bond="2500")})
-    relay = FakeScraper(county="Manatee", results={"M1": _fetched("M1", county="Manatee", bond="2500")})
+    relay = FakeScraper(county="Pinellas", results={"M1": _fetched("M1", county="Pinellas", bond="2500")})
     stats = _worker([closed, relay], w).run()
     assert closed.calls == [] and relay.calls == []
-    assert stats["excluded"] == {"Hernando (FL)": "fail_closed", "Manatee (FL)": "relay_only"}
+    assert stats["excluded"] == {"Hernando (FL)": "fail_closed", "Pinellas (FL)": "relay_only"}
     assert arrests.one("B1")["bond_amount_raw"] == "" and states.docs == []
 
 

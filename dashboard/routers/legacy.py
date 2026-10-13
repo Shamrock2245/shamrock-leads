@@ -630,6 +630,23 @@ async def refresh_from_source(request: Request):
     if not detail_url and county.lower() == "lee":
         detail_url = f"https://www.sheriffleefl.org/booking/?id={booking_number}"
 
+    # Fail-closed county or source host: no immediate fetch, no queued recheck.
+    from config.source_guard import fail_closed_reason
+
+    source_guard = fail_closed_reason(county, doc.get("state"), url=detail_url)
+    if source_guard:
+        return {
+            "success": False,
+            "fail_closed": True,
+            "booking_number": booking_number,
+            "county": county,
+            "trigger_id": None,
+            "message": (
+                f"{county or 'This county'} source contract is fail_closed ({source_guard}); "
+                "no source request was made and no recheck was queued."
+            ),
+        }
+
     old_bond = doc.get("bond_amount")
     try:
         old_bond_f = float(old_bond or 0)
@@ -650,7 +667,7 @@ async def refresh_from_source(request: Request):
     if detail_url:
         try:
             from dashboard.services.url_ingest_service import ingest_url
-            res = await ingest_url(detail_url)
+            res = await ingest_url(detail_url, county=county, state=doc.get("state"))
 
             if res.get("success") and res.get("data"):
                 parsed_data = res["data"]
