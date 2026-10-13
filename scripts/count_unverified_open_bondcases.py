@@ -87,6 +87,7 @@ def _print_counts(counts: dict[str, int]) -> None:
         "blocked_name_mismatch",
         "blocked_lookup_failed",
         "blocked_bond_case_conflict",
+        "blocked_no_issuing_state",
     ):
         print(f"{key}={int(counts.get(key) or 0)}")
 

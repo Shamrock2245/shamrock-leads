@@ -128,6 +128,7 @@ _ID_TYPE = re.compile(r"^[a-z][a-z0-9 _-]{0,39}$")
 _REASON_PRIORITY = (
     "lookup_failed",
     "bond_case_conflict",
+    "no_issuing_state",
     "scan_failed",
     "name_mismatch",
     "no_scan",
@@ -273,27 +274,50 @@ def packet_parties(
     return rows
 
 
+_ISSUER_KEYS = (
+    "dl_state",
+    "dlState",
+    "issuing_state",
+    "issuing_jurisdiction",
+    "id_state",
+)
+_COUNTRY_KEYS = ("issuing_country", "country")
+
+
+def _jurisdiction_token(raw: str) -> str:
+    """A US state, DC, or territory. A country token is not an issuer."""
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    token = text.upper()
+    if token in _US_JURISDICTIONS:
+        return token
+    named = _JURISDICTION_NAMES.get(text.lower())
+    if named in _US_JURISDICTIONS:
+        return named
+    return ""
+
+
 def _jurisdiction(blob: Mapping[str, Any] | None) -> str:
+    """Issuing jurisdiction for a scan.
+
+    An explicit issuer key is used as-is and does not fall through to the
+    address. ``country`` / ``issuing_country`` (US, USA) is not a state.
+    When a country field is set and no explicit issuer is a US jurisdiction,
+    address ``state`` does not count. A lone ``state`` with no country and
+    no explicit issuer still counts when it is a US jurisdiction, because
+    portal extracts store the issuer there.
+    """
     if not isinstance(blob, Mapping):
         return ""
-    raw = _text(
-        blob,
-        "dl_state",
-        "dlState",
-        "issuing_state",
-        "issuing_jurisdiction",
-        "id_state",
-        "state",
-        "issuing_country",
-        "country",
-    )
-    if not raw:
+    for key in _ISSUER_KEYS:
+        raw = _text(blob, key)
+        if not raw:
+            continue
+        return _jurisdiction_token(raw)
+    if _text(blob, *_COUNTRY_KEYS):
         return ""
-    token = raw.strip().upper()
-    if token in _US_JURISDICTIONS or token == "US":
-        return token
-    named = _JURISDICTION_NAMES.get(raw.strip().lower())
-    return named or ""
+    return _jurisdiction_token(_text(blob, "state"))
 
 
 def _scan_name(blob: Mapping[str, Any], role: str = "") -> str:
@@ -345,8 +369,10 @@ def _outcome(blob: Mapping[str, Any]) -> str:
     )
     if not explicit and not bare:
         return "absent"
-    if len(_tokens(name)) < 2 or not jurisdiction:
+    if len(_tokens(name)) < 2:
         return "failed"
+    if not jurisdiction:
+        return "no_issuing_state"
     return "passed"
 
 
@@ -446,6 +472,7 @@ def _normalize_scan(blob: Mapping[str, Any], parent: Mapping[str, Any], role: st
     return {
         "name": name,
         "passed": "1" if outcome == "passed" else "0",
+        "gap": outcome if outcome == "no_issuing_state" else "",
         "role": scan_role.lower(),
         **links,
     }
@@ -678,8 +705,13 @@ def evaluate_parties(
         tied.extend(defendant_rows)
         if any(str(row.get("passed")) == "1" for row in tied):
             reason = "name_mismatch"
-        elif any(str(row.get("passed")) == "0" for row in tied):
+        elif any(
+            str(row.get("passed")) == "0" and str(row.get("gap") or "") != "no_issuing_state"
+            for row in tied
+        ):
             reason = "scan_failed"
+        elif any(str(row.get("gap") or "") == "no_issuing_state" for row in tied):
+            reason = "no_issuing_state"
         else:
             reason = "no_scan"
         issues.append({"role": role, "name": name, "reason": reason})
@@ -701,6 +733,8 @@ def _reason_text(reason: str) -> str:
         return "identity lookup failed"
     if reason == "bond_case_conflict":
         return "bond case conflict"
+    if reason == "no_issuing_state":
+        return "no US issuing state"
     return "no scan and no attestation"
 
 
@@ -1076,6 +1110,7 @@ def summarize_open_bond_cases(
         "blocked_name_mismatch": 0,
         "blocked_lookup_failed": 0,
         "blocked_bond_case_conflict": 0,
+        "blocked_no_issuing_state": 0,
     }
     related = list(related_docs or [])
     audits = list(attestations or [])

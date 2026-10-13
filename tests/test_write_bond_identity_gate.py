@@ -754,3 +754,55 @@ async def test_conflicting_bond_case_ids_are_422_and_neither_row_is_chosen():
         )
     assert decision["ok"] is True
     assert decision["methods"] == ["scan"]
+
+
+@pytest.mark.asyncio
+async def test_country_only_scan_is_unverified():
+    """US/USA is not an issuing state. Address state loses when a country is set.
+
+    A lone address state with no country still verifies. Portal extracts
+    store the issuer on ``state`` and the rules allow a US jurisdiction there.
+    """
+    refused = [
+        {"full_name": PRIMARY, "country": "US"},
+        {"full_name": PRIMARY, "issuing_country": "USA"},
+        {"full_name": PRIMARY, "state": "FL", "issuing_country": "USA"},
+        {"full_name": PRIMARY, "dl_state": "US", "state": "FL"},
+    ]
+    for extracted in refused:
+        _stores, get = _collections({
+            "indemnitors": [{
+                "indemnitor_id": "I-1",
+                "booking_number": "BK-1",
+                "bond_case_id": "BC-1",
+                "id_scan": extracted,
+            }],
+        })
+        with _patch_db(get):
+            with pytest.raises(IndemnitorIdentityError) as raised:
+                await require_verified_indemnitors(
+                    bond_data=_bound("osi"),
+                    bond_case_id="BC-1",
+                    booking_number="BK-1",
+                    packet_id="PKT-1",
+                )
+        assert raised.value.issues[0]["reason"] == "no_issuing_state"
+        assert "no US issuing state" in str(raised.value)
+
+    _stores, get = _collections({
+        "indemnitors": [{
+            "indemnitor_id": "I-1",
+            "booking_number": "BK-1",
+            "bond_case_id": "BC-1",
+            "id_extracted": {"full_name": PRIMARY, "state": "FL"},
+        }],
+    })
+    with _patch_db(get):
+        decision = await require_verified_indemnitors(
+            bond_data=_bound("osi"),
+            bond_case_id="BC-1",
+            booking_number="BK-1",
+            packet_id="PKT-1",
+        )
+    assert decision["ok"] is True
+    assert decision["methods"] == ["scan"]
