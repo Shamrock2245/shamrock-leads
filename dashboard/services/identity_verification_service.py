@@ -606,6 +606,43 @@ def message_for_issues(issues: Sequence[Mapping[str, str]]) -> str:
     return " ".join(parts) or "Indemnitor (name missing): no scan and no attestation."
 
 
+def _link_clauses(
+    *,
+    bond_case_id: str,
+    booking_number: str,
+    packet_id: str,
+    indemnitor_ids: Iterable[str],
+    prefix: str = "",
+) -> list[dict[str, str]]:
+    """Equality clauses for one document level.
+
+    ``prefix`` is ``details.`` for staff attestations. Those rows keep the
+    case and person ids under ``details``, not on the audit document itself.
+    """
+    ors: list[dict[str, str]] = []
+
+    def add(field: str, value: str) -> None:
+        if value:
+            ors.append({f"{prefix}{field}": value})
+
+    if bond_case_id:
+        add("bond_case_id", bond_case_id)
+        add("Bond_Case_ID", bond_case_id)
+    if booking_number:
+        add("booking_number", booking_number)
+        add("Booking_Number", booking_number)
+        if not prefix:
+            add("defendant_booking_number", booking_number)
+    if packet_id:
+        add("packet_id", packet_id)
+    for indemnitor_id in indemnitor_ids:
+        if not indemnitor_id:
+            continue
+        add("indemnitor_id", indemnitor_id)
+        add("Indemnitor_ID", indemnitor_id)
+    return ors
+
+
 def _link_filter(
     *,
     bond_case_id: str,
@@ -613,24 +650,50 @@ def _link_filter(
     packet_id: str,
     indemnitor_ids: Iterable[str],
 ) -> dict[str, Any] | None:
-    ors: list[dict[str, str]] = []
-    if bond_case_id:
-        ors.append({"bond_case_id": bond_case_id})
-        ors.append({"Bond_Case_ID": bond_case_id})
-    if booking_number:
-        ors.append({"booking_number": booking_number})
-        ors.append({"Booking_Number": booking_number})
-        ors.append({"defendant_booking_number": booking_number})
-    if packet_id:
-        ors.append({"packet_id": packet_id})
-    for indemnitor_id in indemnitor_ids:
-        if not indemnitor_id:
-            continue
-        ors.append({"indemnitor_id": indemnitor_id})
-        ors.append({"Indemnitor_ID": indemnitor_id})
+    ors = _link_clauses(
+        bond_case_id=bond_case_id,
+        booking_number=booking_number,
+        packet_id=packet_id,
+        indemnitor_ids=indemnitor_ids,
+    )
     if not ors:
         return None
     return {"$or": ors}
+
+
+def _audit_filter(
+    *,
+    bond_case_id: str,
+    booking_number: str,
+    packet_id: str,
+    indemnitor_ids: Iterable[str],
+) -> dict[str, Any] | None:
+    """Find ``staff_id_attestation`` rows by top-level or ``details.*`` ids.
+
+    ``record_staff_id_attestation`` writes the links under ``details``. A
+    top-level-only query never sees that row, so a successful attestation
+    would still fail closed as unverified.
+    """
+    ids = [bond_case_id, booking_number, packet_id, *list(indemnitor_ids)]
+    ors = _link_clauses(
+        bond_case_id=bond_case_id,
+        booking_number=booking_number,
+        packet_id=packet_id,
+        indemnitor_ids=indemnitor_ids,
+    )
+    ors.extend(_link_clauses(
+        bond_case_id=bond_case_id,
+        booking_number=booking_number,
+        packet_id=packet_id,
+        indemnitor_ids=indemnitor_ids,
+        prefix="details.",
+    ))
+    for value in ids:
+        if value:
+            ors.append({"entity_id": value})
+    if not ors:
+        return None
+    return {"$and": [{"action": ATTESTATION_ACTION}, {"$or": ors}]}
 
 
 async def _collect(cursor: Any) -> list[dict]:
@@ -686,11 +749,16 @@ async def gather_identity_evidence(
             if explicit_self_indemnitor(doc):
                 self_indemnitor = True
             scans.extend(scans_from_document(doc))
-    audit_filt = {"$and": [{"action": ATTESTATION_ACTION}, filt]}
-    try:
+    audit_filt = _audit_filter(
+        bond_case_id=bond_case_id,
+        booking_number=booking_number,
+        packet_id=packet_id,
+        indemnitor_ids=indemnitor_ids,
+    )
+    if audit_filt is None:
+        attestations = []
+    else:
         attestations = await _find_docs("audit_events", audit_filt)
-    except IdentityLookupError:
-        raise
     return {"scans": scans, "attestations": attestations, "self_indemnitor": self_indemnitor}
 
 

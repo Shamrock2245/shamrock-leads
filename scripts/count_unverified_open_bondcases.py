@@ -131,7 +131,26 @@ def _count(uri: str) -> int:
             for name in _SCAN_COLLECTIONS:
                 for doc in db[name].find(link, projection):
                     related.append(dict(doc))
-            audit_filt = {"$and": [{"action": "staff_id_attestation"}, link]}
+            # Staff attestations store the case and person ids under details,
+            # plus entity_id. A top-level-only filter never sees that row.
+            audit_link = {"$or": [
+                {"bond_case_id": {"$in": keys}},
+                {"Bond_Case_ID": {"$in": keys}},
+                {"booking_number": {"$in": keys}},
+                {"Booking_Number": {"$in": keys}},
+                {"packet_id": {"$in": keys}},
+                {"indemnitor_id": {"$in": keys}},
+                {"Indemnitor_ID": {"$in": keys}},
+                {"entity_id": {"$in": keys}},
+                {"details.bond_case_id": {"$in": keys}},
+                {"details.Bond_Case_ID": {"$in": keys}},
+                {"details.booking_number": {"$in": keys}},
+                {"details.Booking_Number": {"$in": keys}},
+                {"details.packet_id": {"$in": keys}},
+                {"details.indemnitor_id": {"$in": keys}},
+                {"details.Indemnitor_ID": {"$in": keys}},
+            ]}
+            audit_filt = {"$and": [{"action": "staff_id_attestation"}, audit_link]}
             for doc in db["audit_events"].find(audit_filt, {
                 "_id": 0,
                 "action": 1,

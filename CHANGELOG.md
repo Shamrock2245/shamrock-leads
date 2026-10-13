@@ -27,6 +27,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_write_bond_identity_gate.py` and `tests/test_count_unverified_open_bondcases.py` (added to the `ci.yml` list). No Mongo, DocuSeal, or network.
 
+### Fixed
+- **Staff attestation lookup reads the nested link.** `staff_id_attestation` rows keep `bond_case_id`, `booking_number`, `packet_id`, and `indemnitor_id` under `details`, with `entity_id` at the top. The Write Bond gate and the read-only open-BondCase tally query those paths. A top-level-only filter never saw the row, so a saved attestation still failed closed as unverified.
+
 ## [Unreleased] — 2026-10-09 (pre-existing test failures outside the CI list)
 
 ### Fixed

@@ -5,6 +5,7 @@ No Mongo, DocuSeal, or network. Names are samples. ID numbers are last-4 only.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -15,7 +16,9 @@ from dashboard.auth.pin_middleware import COOKIE_NAME, _sign_token
 from dashboard.services.bond_packet_start import BondPacketStartError, start_indemnitor_bond_packet
 from dashboard.services.docuseal_service import DocuSealService
 from dashboard.services.identity_verification_service import (
+    IndemnitorIdentityError,
     names_match,
+    record_staff_id_attestation,
     require_verified_indemnitors,
 )
 
@@ -585,3 +588,99 @@ async def test_self_indemnitor_defendant_scan_does_not_cover_coindemnitor():
                 docuseal=_DocuSeal(),
             )
     assert str(raised.value) == "Co-indemnitor Robin Sample: no scan and no attestation."
+
+
+def _get_path(doc, path):
+    cur = doc
+    for part in str(path).split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return None
+        cur = cur[part]
+    return cur
+
+
+def _query_matches(doc, query) -> bool:
+    """Enough of Mongo's query language for these fakes. Unknown operators miss."""
+    if not query:
+        return True
+    if not isinstance(query, dict):
+        return False
+    if "$and" in query:
+        return all(_query_matches(doc, part) for part in query["$and"])
+    if "$or" in query:
+        return any(_query_matches(doc, part) for part in query["$or"])
+    for key, expected in query.items():
+        if str(key).startswith("$"):
+            return False
+        actual = _get_path(doc, key)
+        if isinstance(expected, dict) and set(expected) == {"$in"}:
+            if actual not in expected["$in"]:
+                return False
+            continue
+        if actual != expected:
+            return False
+    return True
+
+
+class _FilteringStore(_Store):
+    """Applies find() filters. The older double ignores the query on purpose."""
+
+    def __init__(self, docs=None):
+        super().__init__(docs)
+        self.queries = []
+
+    def find(self, query=None, projection=None):
+        self.queries.append(query)
+        matched = [doc for doc in self.docs if _query_matches(doc, query or {})]
+        return _Cursor(matched)
+
+
+def _filtering_collections(seed=None):
+    stores = {name: _FilteringStore(docs) for name, docs in (seed or {}).items()}
+
+    def get(name):
+        if name not in stores:
+            stores[name] = _FilteringStore()
+        return stores[name]
+
+    return stores, get
+
+
+@pytest.mark.asyncio
+async def test_nested_attestation_is_found_only_under_details():
+    """A real attestation has no top-level bond_case_id. The query must nest."""
+    stores, get = _filtering_collections()
+    with _patch_db(get):
+        saved = await record_staff_id_attestation("office@example.invalid", {
+            "indemnitor_name": PRIMARY,
+            "id_type": "drivers_license",
+            "issuing_state": "FL",
+            "id_last4": "4821",
+            "bond_case_id": "BC-1",
+            "booking_number": "BK-1",
+            "indemnitor_id": "I-1",
+        })
+        assert saved["ok"] is True
+        row = stores["audit_events"].docs[0]
+        assert "bond_case_id" not in row
+        assert row["details"]["bond_case_id"] == "BC-1"
+        assert row["entity_id"] == "I-1"
+        decision = await require_verified_indemnitors(
+            bond_data=_bound("osi"),
+            bond_case_id="BC-1",
+            booking_number="BK-1",
+            packet_id="PKT-1",
+        )
+    assert decision["ok"] is True
+    assert decision["methods"] == ["attestation"]
+    assert any(
+        {"details.bond_case_id": "BC-1"} in (query or {}).get("$or", [])
+        or any(
+            {"details.bond_case_id": "BC-1"} in (part or {}).get("$or", [])
+            for part in (query or {}).get("$and", [])
+            if isinstance(part, dict)
+        )
+        for query in stores["audit_events"].queries
+    )
+    tally = (Path(__file__).resolve().parents[1] / "scripts" / "count_unverified_open_bondcases.py").read_text(encoding="utf-8")
+    assert '"details.bond_case_id"' in tally
