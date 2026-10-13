@@ -29,6 +29,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 - **Staff attestation lookup reads the nested link.** `staff_id_attestation` rows keep `bond_case_id`, `booking_number`, `packet_id`, and `indemnitor_id` under `details`, with `entity_id` at the top. The Write Bond gate and the read-only open-BondCase tally query those paths. A top-level-only filter never saw the row, so a saved attestation still failed closed as unverified.
+- **Conflicting bond-case ids are a 422.** A shared booking number, packet id, or indemnitor id does not verify the case when another row carries a different `bond_case_id`. The gate does not pick the matching row. A different county on that weaker key is the same refusal (`bond case conflict`), unless both rows name the same bond-case id.
 
 ## [Unreleased] — 2026-10-09 (pre-existing test failures outside the CI list)
 

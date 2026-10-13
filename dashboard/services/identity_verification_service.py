@@ -125,7 +125,13 @@ _LAST4 = re.compile(r"^\d{4}$")
 _ID_TYPE = re.compile(r"^[a-z][a-z0-9 _-]{0,39}$")
 
 # A blocked case lands in exactly one bucket, most specific first.
-_REASON_PRIORITY = ("lookup_failed", "scan_failed", "name_mismatch", "no_scan")
+_REASON_PRIORITY = (
+    "lookup_failed",
+    "bond_case_conflict",
+    "scan_failed",
+    "name_mismatch",
+    "no_scan",
+)
 
 
 class IndemnitorIdentityError(DocuSealPacketValidationError):
@@ -344,13 +350,86 @@ def _outcome(blob: Mapping[str, Any]) -> str:
     return "passed"
 
 
+def _norm_county(value: Any) -> str:
+    cleaned = re.sub(r"\s+county$", "", str(value or "").strip(), flags=re.IGNORECASE)
+    return cleaned.casefold()
+
+
+def _county_name(doc: Mapping[str, Any] | None) -> str:
+    if not isinstance(doc, Mapping):
+        return ""
+    return _norm_county(_text(doc, "county", "County", "defendant_county", "matched_county"))
+
+
 def _link_ids(doc: Mapping[str, Any]) -> dict[str, str]:
     return {
         "bond_case_id": _text(doc, "bond_case_id", "Bond_Case_ID"),
         "booking_number": _text(doc, "booking_number", "Booking_Number", "defendant_booking_number"),
         "packet_id": _text(doc, "packet_id", "Packet_ID"),
         "indemnitor_id": _text(doc, "indemnitor_id", "Indemnitor_ID"),
+        "county": _county_name(doc),
     }
+
+
+def _shares_case_key(
+    row: Mapping[str, str],
+    *,
+    bond_case_id: str,
+    booking_number: str,
+    packet_id: str,
+    indemnitor_id: str,
+) -> bool:
+    if bond_case_id and str(row.get("bond_case_id") or "") == bond_case_id:
+        return True
+    if booking_number and str(row.get("booking_number") or "") == booking_number:
+        return True
+    if packet_id and str(row.get("packet_id") or "") == packet_id:
+        return True
+    if indemnitor_id and str(row.get("indemnitor_id") or "") == indemnitor_id:
+        return True
+    return False
+
+
+def _identifier_conflict(row: Mapping[str, str], *, bond_case_id: str, county: str) -> bool:
+    """True when this row names another bond case or another county.
+
+    The same bond_case_id still links. County does not override that id.
+    A different non-empty bond_case_id disqualifies the row even when the
+    booking number matches.
+    """
+    row_case = str(row.get("bond_case_id") or "")
+    if bond_case_id and row_case and row_case != bond_case_id:
+        return True
+    row_county = _norm_county(row.get("county"))
+    req_county = _norm_county(county)
+    if req_county and row_county and req_county != row_county:
+        if bond_case_id and row_case == bond_case_id:
+            return False
+        return True
+    return False
+
+
+def _evidence_conflict(
+    rows: Sequence[Mapping[str, str]],
+    *,
+    bond_case_id: str,
+    county: str,
+) -> bool:
+    """Refuse rather than choose among disagreeing bond-case ids.
+
+    One matching row does not win when another row that shares a weaker
+    key carries a different bond_case_id or county.
+    """
+    if any(_identifier_conflict(row, bond_case_id=bond_case_id, county=county) for row in rows):
+        return True
+    case_ids = {
+        str(row.get("bond_case_id") or "")
+        for row in rows
+        if str(row.get("bond_case_id") or "")
+    }
+    if not bond_case_id and len(case_ids) > 1:
+        return True
+    return False
 
 
 def _normalize_scan(blob: Mapping[str, Any], parent: Mapping[str, Any], role: str = "") -> dict[str, str] | None:
@@ -402,16 +481,24 @@ def scans_from_document(doc: Mapping[str, Any]) -> list[dict[str, str]]:
     return found
 
 
-def _case_linked(row: Mapping[str, str], *, bond_case_id: str, booking_number: str, packet_id: str, indemnitor_id: str) -> bool:
-    if bond_case_id and row.get("bond_case_id") == bond_case_id:
-        return True
-    if booking_number and row.get("booking_number") == booking_number:
-        return True
-    if packet_id and row.get("packet_id") == packet_id:
-        return True
-    if indemnitor_id and row.get("indemnitor_id") == indemnitor_id:
-        return True
-    return False
+def _case_linked(
+    row: Mapping[str, str],
+    *,
+    bond_case_id: str,
+    booking_number: str,
+    packet_id: str,
+    indemnitor_id: str,
+    county: str = "",
+) -> bool:
+    if _identifier_conflict(row, bond_case_id=bond_case_id, county=county):
+        return False
+    return _shares_case_key(
+        row,
+        bond_case_id=bond_case_id,
+        booking_number=booking_number,
+        packet_id=packet_id,
+        indemnitor_id=indemnitor_id,
+    )
 
 
 def _is_defendant_scan(row: Mapping[str, str]) -> bool:
@@ -436,6 +523,19 @@ def explicit_self_indemnitor(doc: Mapping[str, Any] | None) -> bool:
     return False
 
 
+def _attestation_links(row: Mapping[str, Any]) -> dict[str, str]:
+    details = row.get("details") if isinstance(row.get("details"), Mapping) else row
+    if not isinstance(details, Mapping):
+        details = {}
+    return {
+        "bond_case_id": _text(details, "bond_case_id", "Bond_Case_ID") or _text(row, "bond_case_id"),
+        "booking_number": _text(details, "booking_number", "Booking_Number") or _text(row, "booking_number"),
+        "packet_id": _text(details, "packet_id") or _text(row, "packet_id"),
+        "indemnitor_id": _text(details, "indemnitor_id", "Indemnitor_ID") or _text(row, "entity_id"),
+        "county": _county_name(details) or _county_name(row),
+    }
+
+
 def attestation_matches_party(
     row: Mapping[str, Any],
     party: Mapping[str, str],
@@ -443,6 +543,7 @@ def attestation_matches_party(
     bond_case_id: str,
     booking_number: str,
     packet_id: str,
+    county: str = "",
 ) -> bool:
     if not isinstance(row, Mapping):
         return False
@@ -462,18 +563,13 @@ def attestation_matches_party(
         return False
     if not names_match(_text(details, "indemnitor_name", "name"), party.get("name")):
         return False
-    linked = {
-        "bond_case_id": _text(details, "bond_case_id", "Bond_Case_ID") or _text(row, "bond_case_id"),
-        "booking_number": _text(details, "booking_number", "Booking_Number") or _text(row, "booking_number"),
-        "packet_id": _text(details, "packet_id") or _text(row, "packet_id"),
-        "indemnitor_id": _text(details, "indemnitor_id", "Indemnitor_ID") or _text(row, "entity_id"),
-    }
     return _case_linked(
-        linked,
+        _attestation_links(row),
         bond_case_id=bond_case_id,
         booking_number=booking_number,
         packet_id=packet_id,
         indemnitor_id=str(party.get("indemnitor_id") or ""),
+        county=county,
     )
 
 
@@ -514,6 +610,7 @@ def evaluate_parties(
     booking_number: str = "",
     packet_id: str = "",
     self_indemnitor: bool = False,
+    county: str = "",
 ) -> dict[str, Any]:
     """Pure decision. ``ok`` is true only when every party is verified.
 
@@ -529,29 +626,35 @@ def evaluate_parties(
         role = str(party.get("role") or "indemnitor")
         name = str(party.get("name") or "")
         indemnitor_id = str(party.get("indemnitor_id") or "")
+        share = dict(
+            bond_case_id=bond_case_id,
+            booking_number=booking_number,
+            packet_id=packet_id,
+            indemnitor_id=indemnitor_id,
+        )
+        # Every scan that shares a key, including a defendant-role scan and
+        # a row whose bond_case_id disagrees. A conflict refuses the party
+        # even when another row matches exactly.
+        conflict_rows = [row for row in scans if _shares_case_key(row, **share)]
+        conflict_rows.extend(
+            _attestation_links(row)
+            for row in attestations
+            if isinstance(row, Mapping) and _shares_case_key(_attestation_links(row), **share)
+        )
+        if _evidence_conflict(conflict_rows, bond_case_id=bond_case_id, county=county):
+            issues.append({"role": role, "name": name, "reason": "bond_case_conflict"})
+            continue
         linked = [
             row for row in scans
             if not _is_defendant_scan(row)
-            and _case_linked(
-                row,
-                bond_case_id=bond_case_id,
-                booking_number=booking_number,
-                packet_id=packet_id,
-                indemnitor_id=indemnitor_id,
-            )
+            and _case_linked(row, **share, county=county)
         ]
         defendant_rows: list[Mapping[str, str]] = []
         if self_indemnitor and role == "indemnitor":
             defendant_rows = [
                 row for row in scans
                 if _is_defendant_scan(row)
-                and _case_linked(
-                    row,
-                    bond_case_id=bond_case_id,
-                    booking_number=booking_number,
-                    packet_id=packet_id,
-                    indemnitor_id=indemnitor_id,
-                )
+                and _case_linked(row, **share, county=county)
             ]
         considered = [*linked, *defendant_rows]
         if any(str(row.get("passed")) == "1" and names_match(name, row.get("name")) for row in considered):
@@ -564,6 +667,7 @@ def evaluate_parties(
                 bond_case_id=bond_case_id,
                 booking_number=booking_number,
                 packet_id=packet_id,
+                county=county,
             )
             for row in attestations
         )
@@ -595,6 +699,8 @@ def _reason_text(reason: str) -> str:
         return "name mismatch"
     if reason == "lookup_failed":
         return "identity lookup failed"
+    if reason == "bond_case_conflict":
+        return "bond case conflict"
     return "no scan and no attestation"
 
 
@@ -803,6 +909,7 @@ async def require_verified_indemnitors(
         booking_number=booking_number,
         packet_id=packet_id,
         self_indemnitor=explicit_self_indemnitor(bond_data) or bool(evidence.get("self_indemnitor")),
+        county=_text(bond_data, "county", "County", "defendant_county"),
     )
     if not decision["ok"]:
         raise IndemnitorIdentityError(message_for_issues(decision["issues"]), decision["issues"])
@@ -968,6 +1075,7 @@ def summarize_open_bond_cases(
         "blocked_scan_failed": 0,
         "blocked_name_mismatch": 0,
         "blocked_lookup_failed": 0,
+        "blocked_bond_case_conflict": 0,
     }
     related = list(related_docs or [])
     audits = list(attestations or [])
@@ -983,15 +1091,18 @@ def summarize_open_bond_cases(
         scans = scans_from_document(doc)
         self_indemnitor = explicit_self_indemnitor(doc)
         for extra in related:
-            linked_extra = _case_linked(
-                {**_link_ids(extra), "passed": "0"},
+            extra_links = {**_link_ids(extra), "passed": "0"}
+            # Share on the weaker key even when the bond-case id conflicts,
+            # so evaluate_parties can refuse instead of dropping the row.
+            linked_extra = _shares_case_key(
+                extra_links,
                 bond_case_id=bond_case_id,
                 booking_number=booking_number,
                 packet_id=packet_id,
                 indemnitor_id=_text(doc, "indemnitor_id", "Indemnitor_ID"),
             ) or any(
-                _case_linked(
-                    {**_link_ids(extra), "passed": "0"},
+                _shares_case_key(
+                    extra_links,
                     bond_case_id=bond_case_id,
                     booking_number=booking_number,
                     packet_id=packet_id,
@@ -1012,6 +1123,7 @@ def summarize_open_bond_cases(
             booking_number=booking_number,
             packet_id=packet_id,
             self_indemnitor=self_indemnitor,
+            county=_text(doc, "county", "County", "defendant_county"),
         )
         if decision["ok"]:
             if decision["methods"] and all(method == "scan" for method in decision["methods"]):

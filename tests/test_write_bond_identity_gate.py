@@ -684,3 +684,73 @@ async def test_nested_attestation_is_found_only_under_details():
     )
     tally = (Path(__file__).resolve().parents[1] / "scripts" / "count_unverified_open_bondcases.py").read_text(encoding="utf-8")
     assert '"details.bond_case_id"' in tally
+
+
+@pytest.mark.asyncio
+async def test_conflicting_bond_case_ids_are_422_and_neither_row_is_chosen():
+    """A matching scan does not win when another row names a different case.
+
+    Fail-closed reading: any shared weaker key plus a different bond_case_id,
+    or a different county when the bond-case ids are not the same, refuses
+    the party. The same bond_case_id still verifies.
+    """
+    matching = {
+        "indemnitor_id": "I-1",
+        "booking_number": "BK-1",
+        "bond_case_id": "BC-1",
+        "county": "Lee",
+        "id_scan": _scan(PRIMARY, state="FL"),
+    }
+    other_case = {
+        "indemnitor_id": "I-9",
+        "booking_number": "BK-1",
+        "bond_case_id": "BC-OTHER",
+        "county": "Collier",
+        "id_scan": _scan(PRIMARY, state="FL"),
+    }
+    _stores, get = _collections({"indemnitors": [matching, other_case]})
+    data = {**_bound("osi"), "county": "Lee"}
+    with _patch_db(get):
+        with pytest.raises(IndemnitorIdentityError) as raised:
+            await require_verified_indemnitors(
+                bond_data=data,
+                bond_case_id="BC-1",
+                booking_number="BK-1",
+                packet_id="PKT-1",
+            )
+    assert raised.value.code == "indemnitor_identity_unverified"
+    assert raised.value.issues[0]["reason"] == "bond_case_conflict"
+    assert "bond case conflict" in str(raised.value)
+
+    other_county = {
+        "booking_number": "BK-1",
+        "county": "Collier County",
+        "id_scan": _scan(PRIMARY, state="FL"),
+    }
+    _stores, get = _collections({"intake_queue": [other_county]})
+    with _patch_db(get):
+        with pytest.raises(IndemnitorIdentityError) as county_raised:
+            await require_verified_indemnitors(
+                bond_data=data,
+                bond_case_id="BC-1",
+                booking_number="BK-1",
+                packet_id="PKT-1",
+            )
+    assert county_raised.value.issues[0]["reason"] == "bond_case_conflict"
+
+    same_case = {
+        "booking_number": "BK-1",
+        "bond_case_id": "BC-1",
+        "county": "Collier",
+        "id_scan": _scan(PRIMARY, state="FL"),
+    }
+    _stores, get = _collections({"indemnitors": [same_case]})
+    with _patch_db(get):
+        decision = await require_verified_indemnitors(
+            bond_data=data,
+            bond_case_id="BC-1",
+            booking_number="BK-1",
+            packet_id="PKT-1",
+        )
+    assert decision["ok"] is True
+    assert decision["methods"] == ["scan"]
