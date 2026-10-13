@@ -485,7 +485,11 @@ async def _payment_webhook_steps(data, booking_number, now, db, plc, txn_key, ki
         try:
             await payments.insert_one({
                 "_id": row_id,
-                "transaction_id": transaction_id,
+                # Same key the claim uses. A crash before finish() is recovered
+                # by looking up this string; the provider's raw value stays on
+                # raw_payload. Whitespace or a non-string id must not be stored
+                # here or that lookup inserts the charge again.
+                "transaction_id": txn_key,
                 "booking_number": booking_number,
                 "amount": amount,
                 "status": status,

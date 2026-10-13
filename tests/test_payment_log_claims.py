@@ -830,6 +830,42 @@ def test_stale_worker_loses_claim_before_bond_update(rig):
     assert claims.docs[0]["claimed_at"] == "winner-token"
 
 
+@pytest.mark.parametrize("raw,normalized", [
+    ("  SS-1  ", "SS-1"),
+    (4242, "4242"),
+])
+def test_stale_claim_recovery_finds_normalized_txn_key(rig, raw, normalized):
+    """The payments row stores the claim key, so a crash before finish() is recoverable.
+
+    Surrounding whitespace and a non-string provider id both normalize to one
+    string. Recovery looks that string up. A retry must not insert again.
+    """
+    db, app, bb = rig
+    real_finish = plc.finish
+    state = {"died": False}
+
+    async def die_once(db_, txn, kind, row_id, *, ok, claim_token=None):
+        if ok and row_id is not None and not state["died"]:
+            state["died"] = True
+            return False
+        return await real_finish(db_, txn, kind, row_id, ok=ok, claim_token=claim_token)
+
+    with patch.object(plc, "finish", die_once):
+        (r,) = _hooks(app, [_hook(txn=raw)])
+    assert state["died"] is True
+    assert r.status_code == 409 and r.json()["error"] == "payment_in_progress"
+    assert [d.get("transaction_id") for d in db["payments"].docs] == [normalized]
+    assert db["payments"].docs[0]["raw_payload"]["transaction_id"] == raw
+    claim = db[plc.LOG_CLAIMS_COLLECTION].docs[0]
+    assert claim["status"] == "claimed" and claim["transaction_id"] == normalized
+    claim["claimed_at"] = _stale_claimed_at()
+
+    (again,) = _hooks(app, [_hook(txn=f"  {normalized}\t")])
+    assert again.status_code == 200
+    assert [d.get("transaction_id") for d in db["payments"].docs] == [normalized]
+    assert db[plc.LOG_CLAIMS_COLLECTION].docs[0]["status"] == "logged"
+
+
 def test_whitespace_transaction_id_webhook_inserts_nothing(rig):
     """A blank id is not an unclaimed insert. Retries add no payment rows."""
     db, app, bb = rig
