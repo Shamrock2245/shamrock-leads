@@ -216,6 +216,13 @@ def _seed_linked_payment(db, *, balance=700.0, plan_status="active", plan_id="pl
         "status": plan_status,
         "applied_transaction_ids": ["TX-LIFE"],
     })
+    db["payment_plan_payment_claims"].docs.append({
+        "plan_id": plan_id,
+        "transaction_id": "TX-LIFE",
+        "amount": 100.0,
+        "status": "applied",
+        "balance_after": balance,
+    })
 
 
 def _post_lifecycle(client, event_type, status, amount=100):
@@ -254,6 +261,12 @@ def test_later_lifecycle_updates_linked_row_and_restores_plan(payment_app, monke
     assert ev["event_type"] == event and ev["status_before"] == "completed"
     assert ev["status_after"] == stored and ev["balance_reversed"] is True
     assert ev["confidence"] == 1.0 and ev["transaction_id"] == "TX-LIFE"
+    assert ev["balance_remaining_before"] == 700.0 and ev["balance_remaining_after"] == 800.0
+    assert ev["total_paid_before"] == 300.0 and ev["total_paid_after"] == 200.0
+    assert ev["payments_made_before"] == 2 and ev["payments_made_after"] == 1
+    assert ev["plan_status_before"] == "active" and ev["plan_status_after"] == "active"
+    assert db["payment_plan_payment_claims"].docs[0]["status"] == "reversed"
+    assert db["payment_plan_payment_claims"].docs[0]["reversed_event"] == event
     again = _post_lifecycle(client, event, status)
     assert again.status_code == 200 and again.json()["duplicate"] is True
     assert db["payment_plans"].docs[0]["balance_remaining"] == 800.0
@@ -283,6 +296,7 @@ def test_lifecycle_amount_mismatch_does_not_move_the_plan(payment_app, monkeypat
     assert db["payments"].docs[0]["status"] == "completed"
     assert db["payment_plans"].docs[0]["balance_remaining"] == 700.0
     assert db["audit_events"].docs == []
+    assert db["payment_plan_payment_claims"].docs[0]["status"] == "applied"
 
 
 def test_refund_of_paid_in_full_reopens_the_plan(payment_app, monkeypatch):
@@ -293,6 +307,13 @@ def test_refund_of_paid_in_full_reopens_the_plan(payment_app, monkeypatch):
     plan = db["payment_plans"].docs[0]
     assert plan["balance_remaining"] == 100.0 and plan["status"] == "active"
     assert db["payments"].docs[0]["status"] == "refunded"
+    ev = db["audit_events"].docs[0]
+    assert ev["balance_reversed"] is True
+    assert ev["balance_remaining_before"] == 0.0 and ev["balance_remaining_after"] == 100.0
+    assert ev["total_paid_before"] == 300.0 and ev["total_paid_after"] == 200.0
+    assert ev["payments_made_before"] == 2 and ev["payments_made_after"] == 1
+    assert ev["plan_status_before"] == "paid_in_full" and ev["plan_status_after"] == "active"
+    assert db["payment_plan_payment_claims"].docs[0]["status"] == "reversed"
 
 
 def test_lifecycle_audit_failure_is_not_success(payment_app, monkeypatch):
@@ -308,6 +329,13 @@ def test_lifecycle_audit_failure_is_not_success(payment_app, monkeypatch):
     assert db["payments"].docs[0]["status"] == "refunded"
     assert db["payment_plans"].docs[0]["balance_remaining"] == 800.0
     assert len(db["audit_events"].docs) == 1
+    ev = db["audit_events"].docs[0]
+    assert ev["balance_reversed"] is True
+    assert ev["balance_remaining_before"] == 700.0 and ev["balance_remaining_after"] == 800.0
+    assert ev["total_paid_before"] == 300.0 and ev["total_paid_after"] == 200.0
+    assert ev["payments_made_before"] == 2 and ev["payments_made_after"] == 1
+    assert ev["plan_status_before"] == "active" and ev["plan_status_after"] == "active"
+    assert db["payment_plan_payment_claims"].docs[0]["status"] == "reversed"
 
 
 def test_unlinked_refund_updates_status_without_a_plan_reversal(payment_app, monkeypatch):
@@ -327,6 +355,7 @@ def test_unlinked_refund_updates_status_without_a_plan_reversal(payment_app, mon
     assert db["payments"].docs[0]["status"] == "refunded"
     assert db["payment_plans"].docs == []
     assert db["audit_events"].docs[0]["balance_reversed"] is False
+    assert "balance_remaining_before" not in db["audit_events"].docs[0]
 
 
 def test_refund_of_preexisting_row_does_not_insert_a_second_payment(payment_app, monkeypatch):
@@ -528,4 +557,59 @@ def test_completed_webhook_amount_mismatch_does_not_enrich(payment_app, monkeypa
     assert resp.json()["error"] == "payment_lifecycle_amount_mismatch"
     row = db["payments"].docs[0]
     assert row["booking_number"] == "" and "county" not in row
+    assert len(db["payments"].docs) == 1
+
+
+def test_refund_keeps_retrying_until_the_applied_claim_is_reversed(payment_app, monkeypatch):
+    """A restored balance with the plan claim still applied is not success, and /pay is not idempotent."""
+    from dashboard.routers import payment_plans as pp
+
+    db, client = _lifecycle_client(payment_app, monkeypatch)
+    monkeypatch.setattr(pp, "get_collection", lambda name: db[name])
+    monkeypatch.setattr(pp, "_payment_claim_index_ready", False)
+    _seed_linked_payment(db)
+    real = db["payment_plan_payment_claims"].update_one
+    state = {"fail": True}
+
+    async def fail_claim_reversal(flt, update, upsert=False):
+        if state["fail"] and (update.get("$set") or {}).get("status") == "reversed":
+            raise RuntimeError("claim reversal down")
+        return await real(flt, update, upsert)
+
+    db["payment_plan_payment_claims"].update_one = fail_claim_reversal
+    first = _post_lifecycle(client, "payment.refunded", "refunded")
+    assert first.status_code == 503 and first.json().get("success") is not True
+    assert db["payment_plan_payment_claims"].docs[0]["status"] == "applied"
+    plan = db["payment_plans"].docs[0]
+    assert plan["balance_remaining"] == 800.0
+    assert "TX-LIFE" not in plan["applied_transaction_ids"]
+    snap = plan["reversal_snapshot"]
+    assert snap["balance_remaining_before"] == 700.0 and snap["balance_remaining_after"] == 800.0
+    assert snap["total_paid_before"] == 300.0 and snap["total_paid_after"] == 200.0
+    assert snap["payments_made_before"] == 2 and snap["payments_made_after"] == 1
+    assert snap["plan_status_before"] == "active" and snap["plan_status_after"] == "active"
+    assert db["audit_events"].docs == []
+
+    state["fail"] = False
+    second = _post_lifecycle(client, "payment.refunded", "refunded")
+    assert second.status_code == 200 and second.json()["lifecycle_updated"] is True
+    assert db["payment_plan_payment_claims"].docs[0]["status"] == "reversed"
+    (ev,) = db["audit_events"].docs
+    assert ev["balance_reversed"] is True
+    assert ev["balance_remaining_before"] == 700.0 and ev["balance_remaining_after"] == 800.0
+    assert ev["total_paid_before"] == 300.0 and ev["total_paid_after"] == 200.0
+    assert ev["payments_made_before"] == 2 and ev["payments_made_after"] == 1
+    assert ev["plan_status_before"] == "active" and ev["plan_status_after"] == "active"
+    assert plan["balance_remaining"] == 800.0
+
+    payment_app.include_router(pp.payment_plans_bp)
+    with patch("dashboard.routers.events.publish_event", new=AsyncMock()):
+        pay = client.post(
+            "/api/payments/plans/plan-test-01/pay",
+            json={"amount": 100, "transaction_id": "TX-LIFE"},
+        )
+    body = pay.json()
+    assert pay.status_code == 409 and body["error"] == "payment_reversed"
+    assert body.get("success") is not True and body.get("idempotent") is not True
+    assert db["payment_plans"].docs[0]["balance_remaining"] == 800.0
     assert len(db["payments"].docs) == 1

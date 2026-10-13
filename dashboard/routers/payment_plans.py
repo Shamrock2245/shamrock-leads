@@ -322,6 +322,51 @@ async def _fail_claim(claims, plan_id: str, txn: str, reason: str) -> None:
         logger.error("[payment_plans] could not mark claim failed plan_id=%s err=%s", plan_id, type(exc).__name__)
 
 
+async def _finish_applied_claim(claims, plan_id: str, txn: str, balance_after, now: datetime) -> bool:
+    """Set the plan claim to ``applied`` and confirm it by readback.
+
+    The payment row and the plan balance are already durable when this runs.
+    A transient failure here must not escape as an unhandled 500, and must not
+    leave a later retry stuck on ``payment_in_progress``. True when the claim
+    is applied. False when two attempts and a readback still show it is not.
+    """
+    payload = {
+        "status": "applied",
+        "applied_at": now.isoformat(),
+        "balance_after": balance_after,
+    }
+    flt = {"plan_id": plan_id, "transaction_id": txn, "status": "claimed"}
+    for _ in range(2):
+        try:
+            res = await claims.update_one(flt, {"$set": payload})
+            if getattr(res, "matched_count", 0) or getattr(res, "modified_count", 0):
+                return True
+        except Exception as exc:
+            logger.warning(
+                "[payment_plans] claim applied write failed plan_id=%s err=%s",
+                plan_id, type(exc).__name__,
+            )
+        try:
+            current = await claims.find_one({"plan_id": plan_id, "transaction_id": txn})
+        except Exception as exc:
+            logger.warning(
+                "[payment_plans] claim applied readback failed plan_id=%s err=%s",
+                plan_id, type(exc).__name__,
+            )
+            current = None
+        if isinstance(current, dict) and current.get("status") == "applied":
+            return True
+    return False
+
+
+def _claim_status_unconfirmed(txn: str):
+    return JSONResponse(
+        {"error": "claim_status_unconfirmed", "transaction_id": txn,
+         "message": "The installment was recorded, but its claim did not confirm. Retry this transaction id."},
+        status_code=503,
+    )
+
+
 async def _idempotent_reply(
     plans_col, plan_id: str, txn: str, claim: dict | None, amount: float,
     legacy_row: dict | None = None,
@@ -344,9 +389,47 @@ async def _idempotent_reply(
              "message": "An earlier attempt with this transaction id did not finish. Check the plan before recording it again."},
             status_code=409,
         )
+    if status == "reversed":
+        # A refund or failure restored the balance. The claim must not look
+        # like a finished installment.
+        return JSONResponse(
+            {"error": "payment_reversed", "transaction_id": txn,
+             "message": "This transaction was refunded or failed after it was applied. It is not an open installment."},
+            status_code=409,
+        )
+    if status == "claimed":
+        # The balance write can land and the claim-status write can miss.
+        # applied_transaction_ids is the marker that the installment is on
+        # the plan. Finish the claim from that marker instead of returning
+        # payment_in_progress forever.
+        try:
+            plan_doc = await plans_col.find_one({"plan_id": plan_id})
+        except Exception as exc:
+            logger.warning(
+                "[payment_plans] claim reconcile plan read failed plan_id=%s err=%s",
+                plan_id, type(exc).__name__,
+            )
+            return _claim_status_unconfirmed(txn)
+        applied_ids = list((plan_doc or {}).get("applied_transaction_ids") or []) if isinstance(plan_doc, dict) else []
+        if isinstance(plan_doc, dict) and txn in applied_ids:
+            try:
+                claims = await _payment_claims_collection()
+            except Exception as exc:
+                logger.warning(
+                    "[payment_plans] claim reconcile collection failed plan_id=%s err=%s",
+                    plan_id, type(exc).__name__,
+                )
+                return _claim_status_unconfirmed(txn)
+            if not await _finish_applied_claim(
+                claims, plan_id, txn, plan_doc.get("balance_remaining"), datetime.now(timezone.utc),
+            ):
+                return _claim_status_unconfirmed(txn)
+            status = "applied"
+            if claim is not None:
+                claim["status"] = "applied"
     if status != "applied":
-        # 'claimed' (another request is mid-write, or a worker died after the
-        # claim) or unknown/missing claim doc: not confirmed, so not success.
+        # 'claimed' (another request is mid-write, or a worker died before the
+        # plan update) or unknown/missing claim doc: not confirmed, so not success.
         return JSONResponse(
             {"error": "payment_in_progress", "transaction_id": txn,
              "message": "This transaction id is being recorded or did not finish. Wait and retry; if it persists, check the plan before recording it again."},
@@ -1459,10 +1542,13 @@ async def record_payment(request: Request, plan_id):
 
     new_balance = updated["balance_remaining"]
     status = updated["status"]
-    await claims.update_one(
-        {"plan_id": plan_id, "transaction_id": txn},
-        {"$set": {"status": "applied", "applied_at": now.isoformat(), "balance_after": new_balance}},
-    )
+    # The plan marker is already durable. Retry this write and read it back.
+    # If it still is not applied, 503 — the next /pay finishes it from
+    # applied_transaction_ids instead of staying on payment_in_progress.
+    if txn not in list(updated.get("applied_transaction_ids") or []):
+        return _claim_status_unconfirmed(txn)
+    if not await _finish_applied_claim(claims, plan_id, txn, new_balance, now):
+        return _claim_status_unconfirmed(txn)
 
     await publish_event("payment_received", {
         "plan_id": plan_id,

@@ -554,3 +554,80 @@ def test_malformed_json_body_refused(rig):
     db, app = rig
     assert _post_raw(app, b'{"amount": 1,,}').status_code == 400
     assert _post_raw(app, b"").status_code == 400
+
+
+def _wrap_applied_claim_update(db, wrapper):
+    real = db["payment_plan_payment_claims"].update_one
+
+    async def update_one(flt, update, upsert=False):
+        return await wrapper(real, flt, update, upsert)
+
+    db["payment_plan_payment_claims"].update_one = update_one
+
+
+def test_applied_claim_write_retries_after_one_failure(rig):
+    db, app = rig
+    state = {"left": 1}
+
+    async def wrapper(real, flt, update, upsert=False):
+        if (update.get("$set") or {}).get("status") == "applied" and state["left"]:
+            state["left"] -= 1
+            raise RuntimeError("claim status down")
+        return await real(flt, update, upsert)
+
+    _wrap_applied_claim_update(db, wrapper)
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CLAIM"}])
+    assert r.status_code == 200 and r.json()["success"] is True and r.json()["idempotent"] is False
+    assert _plan(db)["balance_remaining"] == 700.0
+    claim = db["payment_plan_payment_claims"].docs[0]
+    assert claim["status"] == "applied" and claim["balance_after"] == 700.0
+    assert len(db["payments"].docs) == 1
+
+
+def test_applied_claim_write_that_lands_is_confirmed_by_readback(rig):
+    db, app = rig
+    state = {"raised": False}
+
+    async def wrapper(real, flt, update, upsert=False):
+        if (update.get("$set") or {}).get("status") == "applied" and not state["raised"]:
+            state["raised"] = True
+            await real(flt, update, upsert)
+            raise RuntimeError("ack lost")
+        return await real(flt, update, upsert)
+
+    _wrap_applied_claim_update(db, wrapper)
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CLAIM"}])
+    assert r.status_code == 200 and r.json()["idempotent"] is False
+    assert db["payment_plan_payment_claims"].docs[0]["status"] == "applied"
+    assert len(db["payments"].docs) == 1
+    assert _plan(db)["balance_remaining"] == 700.0
+
+
+def test_stuck_claimed_status_is_reconciled_from_the_plan_marker(rig):
+    db, app = rig
+    state = {"fail": True}
+
+    async def wrapper(real, flt, update, upsert=False):
+        if state["fail"] and (update.get("$set") or {}).get("status") == "applied":
+            raise RuntimeError("claim status down")
+        return await real(flt, update, upsert)
+
+    _wrap_applied_claim_update(db, wrapper)
+    (first,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CLAIM"}])
+    body = first.json()
+    assert first.status_code == 503 and body["error"] == "claim_status_unconfirmed"
+    assert body.get("success") is not True
+    assert _plan(db)["balance_remaining"] == 700.0
+    assert "TX-CLAIM" in _plan(db)["applied_transaction_ids"]
+    assert len(db["payments"].docs) == 1
+    assert db["payment_plan_payment_claims"].docs[0]["status"] == "claimed"
+
+    state["fail"] = False
+    (second,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CLAIM"}])
+    again = second.json()
+    assert second.status_code == 200 and again["idempotent"] is True and again["success"] is True
+    assert again["balance_remaining"] == 700.0
+    assert db["payment_plan_payment_claims"].docs[0]["status"] == "applied"
+    assert len(db["payments"].docs) == 1
+    assert _plan(db)["balance_remaining"] == 700.0
+    assert _plan(db)["payments_made"] == 2

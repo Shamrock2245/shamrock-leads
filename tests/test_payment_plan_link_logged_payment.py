@@ -1327,3 +1327,89 @@ def test_poller_email_only_duplicate_copies_of_one_identity_still_stamp(rig, mon
     assert row["county"] == "Lee" and row["state"] == "FL" and row["booking_number"] == "TEST-PP-1"
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-EMAIL"}])
     assert r.status_code == 200 and row["plan_id"] == PLAN_ID
+
+
+def _old_stamp():
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+
+
+def _seed_log_claim(db, status, *, fresh=False):
+    from datetime import datetime, timezone
+    stamp = datetime.now(timezone.utc).isoformat() if fresh else _old_stamp()
+    db["payment_log_claims"].docs.append({
+        "transaction_id": "TX-CARD",
+        "status": status,
+        "source": "swipesimple_gmail_poll",
+        "claimed_at": stamp if status != "logged" else _old_stamp(),
+        "logged_at": stamp if status == "logged" else _old_stamp(),
+        "reclaim_token": "dead" if not fresh else "live",
+    })
+
+
+@pytest.mark.parametrize("status", ["claimed", "inserting", "logged"])
+def test_orphan_log_claim_without_a_payment_row_is_reclaimed(rig, monkeypatch, status):
+    monkeypatch.delenv("SLACK_WEBHOOK_LEADS", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    db, _app = rig
+    _seed_log_claim(db, status)
+    applied = _apply_poller(db)
+    assert applied.get("success") is True and applied.get("duplicate") is not True
+    assert len(db["payments"].docs) == 1
+    assert db["payments"].docs[0]["transaction_id"] == "TX-CARD"
+    assert len(db["payment_log_claims"].docs) == 1
+    assert db["payment_log_claims"].docs[0]["status"] == "logged"
+    again = _apply_poller(db)
+    assert again.get("duplicate") is True
+    assert len(db["payments"].docs) == 1
+
+
+@pytest.mark.parametrize("status", ["claimed", "inserting"])
+def test_live_log_claim_without_a_row_is_not_a_duplicate(rig, monkeypatch, status):
+    monkeypatch.delenv("SLACK_WEBHOOK_LEADS", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    db, _app = rig
+    _seed_log_claim(db, status, fresh=True)
+    applied = _apply_poller(db)
+    assert applied.get("success") is False
+    assert applied.get("duplicate") is not True
+    assert applied.get("error") == "payment_dedupe_unavailable"
+    assert db["payments"].docs == []
+    assert db["payment_log_claims"].docs[0]["status"] == status
+    assert db["payment_log_claims"].docs[0]["reclaim_token"] == "live"
+
+
+def test_fresh_logged_claim_without_a_visible_row_is_not_reclaimed(rig, monkeypatch):
+    """logged_at is the live stamp. An old claimed_at must not steal a claim that was just marked."""
+    monkeypatch.delenv("SLACK_WEBHOOK_LEADS", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    db, _app = rig
+    _seed_log_claim(db, "logged", fresh=True)
+    applied = _apply_poller(db)
+    assert applied.get("success") is False
+    assert applied.get("duplicate") is not True
+    assert db["payments"].docs == []
+    assert db["payment_log_claims"].docs[0]["status"] == "logged"
+
+
+def test_orphan_reclaim_fails_closed_when_the_payment_read_fails(rig, monkeypatch):
+    monkeypatch.delenv("SLACK_WEBHOOK_LEADS", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    db, _app = rig
+    _seed_log_claim(db, "claimed")
+    state = {"n": 0}
+
+    async def fail_after_the_poller_check(flt=None, *a, **k):
+        state["n"] += 1
+        if state["n"] == 1:
+            return None
+        raise RuntimeError("mongo down")
+
+    db["payments"].find_one = fail_after_the_poller_check
+    applied = _apply_poller(db)
+    assert applied.get("success") is False
+    assert applied.get("duplicate") is not True
+    assert applied.get("error") == "payment_dedupe_unavailable"
+    assert db["payments"].docs == []
+    assert db["payment_log_claims"].docs[0]["status"] == "claimed"
+    assert db["payment_log_claims"].docs[0]["reclaim_token"] == "dead"
