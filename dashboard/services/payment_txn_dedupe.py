@@ -93,6 +93,23 @@ async def _release_if_no_row(payments, claims, txn: str) -> None:
         return
 
 
+async def _existing_payment(payments, txn: str):
+    """The payments row for this transaction, or None when there is none.
+
+    Raises when the read fails. ``payment_log_claims`` starts empty on deploy
+    while production already has payments rows, so a missing claim is not
+    proof that this transaction has no row.
+    """
+    try:
+        return await payments.find_one({"transaction_id": txn})
+    except Exception as exc:
+        logger.warning(
+            "[payment_log] existing payment read failed txn_set=%s err=%s",
+            bool(txn), type(exc).__name__,
+        )
+        raise
+
+
 async def hold_payment_log(claims, txn: str, *, source: str, payment_id) -> None:
     """Hold the log claim for a payments row that already exists.
 
@@ -107,17 +124,28 @@ async def hold_payment_log(claims, txn: str, *, source: str, payment_id) -> None
 
 
 async def insert_payment_once(payments, doc: dict, *, claims, source: str) -> bool:
-    """Insert ``doc`` when this caller wins the log claim.
+    """Insert ``doc`` when this caller wins the log claim and no row exists yet.
 
-    Return False when the transaction id is already claimed. The payments
-    collection is not indexed. Any other error propagates; the claim is
-    released only when a follow-up read shows no payments row for the id.
+    Return False when the transaction id is already claimed or a payments row
+    for it already exists. The existing row keeps its claim so a later refund
+    or completed webhook updates that row instead of inserting another. The
+    payments collection is not indexed. Any other error propagates; the claim
+    is released only when a follow-up read shows no payments row for the id.
     """
     txn = str(doc.get("transaction_id") or "").strip()
     stored = {k: v for k, v in doc.items() if k != "txn_dedupe_key"}
     if txn:
         await ensure_payment_log_claims(claims)
+        existing = await _existing_payment(payments, txn)
+        if existing is not None:
+            await hold_payment_log(claims, txn, source=source, payment_id=existing.get("_id"))
+            return False
         if not await _insert_claim(claims, txn, source):
+            return False
+        # The row may have been stored before the claim was acquired.
+        existing = await _existing_payment(payments, txn)
+        if existing is not None:
+            await _mark_logged(claims, txn, existing.get("_id"), source)
             return False
     try:
         await payments.insert_one(stored)

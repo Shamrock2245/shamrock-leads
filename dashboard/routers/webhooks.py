@@ -89,6 +89,331 @@ def _row_reflects_lifecycle(row: dict, event_type: str, new_status: str) -> bool
     return stored_event == str(event_type or "").strip().lower() and stored_status == new_status
 
 
+def _association_pin(row: dict) -> dict:
+    """Match the plan association observed on this read, including an absent one."""
+    plan_id = str(row.get("plan_id") or "").strip()
+    if plan_id:
+        return {"plan_id": plan_id}
+    return {"$or": [
+        {"plan_id": {"$exists": False}},
+        {"plan_id": None},
+        {"plan_id": ""},
+    ]}
+
+
+def _exact_field_pin(row: dict, key: str) -> dict:
+    if key not in row:
+        return {key: {"$exists": False}}
+    return {key: row.get(key)}
+
+
+async def _store_lifecycle_status(payments, row: dict, event_type: str, new_status: str, payload: dict, now: datetime):
+    """Write the lifecycle status while the observed plan association still holds.
+
+    Returns the row whose association was pinned. A concurrent ``/pay`` that
+    links the row makes the first update miss; the second attempt pins the
+    plan id from a fresh read so the caller can reverse that plan. None when
+    the write cannot be confirmed.
+    """
+    current = row
+    for _attempt in range(2):
+        status_now = str(current.get("status") or "").strip().lower()
+        fields = {
+            "status": new_status,
+            "raw_payload": payload,
+            "lifecycle_event": event_type,
+            "lifecycle_updated_at": now.isoformat(),
+        }
+        if status_now != new_status:
+            fields["lifecycle_status_before"] = current.get("status")
+        try:
+            res = await payments.update_one(
+                {"_id": current["_id"], **_association_pin(current)},
+                {"$set": fields},
+            )
+        except Exception as exc:
+            logger.warning(
+                "[payment_webhook] lifecycle row update failed err=%s", type(exc).__name__,
+            )
+            return None
+        if getattr(res, "modified_count", 0) or getattr(res, "matched_count", 0):
+            return current
+        try:
+            fresh = await payments.find_one({"_id": current["_id"]})
+        except Exception as exc:
+            logger.warning(
+                "[payment_webhook] lifecycle reread failed err=%s", type(exc).__name__,
+            )
+            return None
+        if not isinstance(fresh, dict):
+            return None
+        current = fresh
+    return None
+
+
+async def _ensure_initial_payment_audit(transaction_id: str, status: str, payload: dict, now: datetime) -> bool:
+    """Write the first-insert audit when the row exists and the audit does not.
+
+    A provider retry must not be acknowledged while this record is missing.
+    False when the read or the insert failed.
+    """
+    event_type = f"payment.{status}"
+    audit_events = get_collection("audit_events")
+    try:
+        existing = await audit_events.find_one({
+            "source": "swipesimple_webhook",
+            "event_type": event_type,
+            "$or": [
+                {"transaction_id": transaction_id},
+                {"payload.transaction_id": transaction_id},
+            ],
+        })
+    except Exception as exc:
+        logger.warning("[payment_webhook] initial audit read failed err=%s", type(exc).__name__)
+        return False
+    if existing is not None:
+        return True
+    try:
+        await audit_events.insert_one({
+            "source": "swipesimple_webhook",
+            "event_type": event_type,
+            "payload": payload,
+            "timestamp": now.isoformat(),
+            "transaction_id": transaction_id,
+            "actor": "swipesimple_webhook",
+            "agent_name": "payment_webhook",
+            "reason": "SwipeSimple payment webhook",
+            "confidence": 1.0,
+        })
+    except Exception as exc:
+        logger.warning("[payment_webhook] initial audit failed err=%s", type(exc).__name__)
+        return False
+    return True
+
+
+def _webhook_ownership(booking_number: str, custom_fields) -> dict | None:
+    """Complete booking identity from a completed webhook, when it sends one.
+
+    None when the webhook carries no booking, county, or state. ``conflict``
+    when those fields disagree with each other. A partial identity is returned
+    so the caller can refuse a conflicting booking without inventing a place.
+    """
+    from dashboard.routers.payment_plans import _booking_token
+    from dashboard.services.swipesimple_receipt_poller import jurisdiction_from_bond
+
+    cf = custom_fields if isinstance(custom_fields, dict) else {}
+    booking = _booking_token(booking_number or cf.get("booking_number"))
+    county = cf.get("county") if str(cf.get("county") or "").strip() else cf.get("County")
+    state = cf.get("state") if str(cf.get("state") or "").strip() else cf.get("State")
+    has_place = bool(str(county or "").strip() or str(state or "").strip())
+    parsed = jurisdiction_from_bond({"county": county, "state": state}) if has_place else None
+    if has_place and not parsed:
+        return {"conflict": True}
+    if parsed and booking:
+        return {
+            "booking_number": booking,
+            "county": parsed["county"],
+            "state": parsed["state"],
+        }
+    if booking or parsed:
+        return {
+            "partial": True,
+            "booking_number": booking,
+            "county": (parsed or {}).get("county") or "",
+            "state": (parsed or {}).get("state") or "",
+        }
+    return None
+
+
+def _row_ownership_conflict(row: dict, incoming: dict) -> bool:
+    """True when the row already names a different booking, county, or state."""
+    from dashboard.routers.payment_plans import _booking_token, _identity_sources, _place_pair
+
+    target_place = (incoming.get("county") or "").casefold(), (incoming.get("state") or "").casefold()
+    for src in _identity_sources(row, nested=True):
+        if "booking_number" in src:
+            booking = _booking_token(src.get("booking_number"))
+            if booking and incoming.get("booking_number") and booking != incoming["booking_number"]:
+                return True
+            if booking and incoming.get("partial") and incoming.get("booking_number") and booking != incoming["booking_number"]:
+                return True
+        pair = _place_pair(src)
+        if pair is None:
+            return True
+        if pair != ("", "") and incoming.get("county") and pair != target_place:
+            return True
+    return False
+
+
+def _row_has_ownership(row: dict, incoming: dict) -> bool:
+    booking = str(row.get("booking_number") or "").strip()
+    county = str(row.get("county") or "").strip()
+    state = str(row.get("state") or "").strip()
+    return (
+        booking == incoming["booking_number"]
+        and county.casefold() == incoming["county"].casefold()
+        and state.casefold() == incoming["state"].casefold()
+    )
+
+
+async def _finish_ownership_audit(row: dict, transaction_id: str, now: datetime) -> bool:
+    """Save the enrichment audit stashed on the row, then clear that stash.
+
+    False when the audit was not saved. The stash keeps the before-image when
+    the previous attempt updated the row and lost the audit insert.
+    """
+    pending = row.get("ownership_enrichment")
+    if not isinstance(pending, dict):
+        return True
+    audit_events = get_collection("audit_events")
+    payment_id = str(row.get("_id"))
+    try:
+        existing = await audit_events.find_one({
+            "source": "swipesimple_webhook",
+            "event_type": "payment.ownership_enriched",
+            "transaction_id": transaction_id,
+            "payment_id": payment_id,
+        })
+    except Exception as exc:
+        logger.warning("[payment_webhook] enrichment audit read failed err=%s", type(exc).__name__)
+        return False
+    if existing is None:
+        try:
+            await audit_events.insert_one({
+                "source": "swipesimple_webhook",
+                "event_type": "payment.ownership_enriched",
+                "actor": "swipesimple_webhook",
+                "agent_name": "payment_webhook",
+                "timestamp": now.isoformat(),
+                "transaction_id": transaction_id,
+                "payment_id": payment_id,
+                "booking_before": pending.get("booking_before") or "",
+                "booking_after": pending.get("booking_after") or "",
+                "county_before": pending.get("county_before") or "",
+                "county_after": pending.get("county_after") or "",
+                "state_before": pending.get("state_before") or "",
+                "state_after": pending.get("state_after") or "",
+                "reason": "completed webhook supplied booking, county, and state for an existing transaction",
+                "confidence": 1.0,
+            })
+        except Exception as exc:
+            logger.warning("[payment_webhook] enrichment audit failed err=%s", type(exc).__name__)
+            return False
+    payments = get_collection("payments")
+    try:
+        await payments.update_one({"_id": row["_id"]}, {"$unset": {"ownership_enrichment": ""}})
+    except Exception as exc:
+        logger.warning("[payment_webhook] enrichment stash clear failed err=%s", type(exc).__name__)
+        return False
+    return True
+
+
+async def _enrich_completed_payment(
+    payments,
+    rows: list,
+    *,
+    transaction_id: str,
+    booking_number: str,
+    custom_fields,
+    amount,
+    now: datetime,
+):
+    """Copy a completed webhook's booking identity onto the claimed row.
+
+    Returns a JSONResponse when the amount or the ownership conflicts, or when
+    the write or its audit fails. Returns None when the row needed nothing.
+    Returns ``enriched`` when the identity was written and audited.
+    """
+    from dashboard.routers.payment_plans import _same_amount
+
+    for row in rows:
+        if not await _finish_ownership_audit(row, transaction_id, now):
+            return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+    incoming = _webhook_ownership(booking_number, custom_fields)
+    if incoming is None:
+        return None
+    if not all(_same_amount(row.get("amount"), amount) for row in rows):
+        return JSONResponse(
+            {"error": "payment_lifecycle_amount_mismatch", "transaction_id": transaction_id},
+            status_code=409,
+        )
+    if incoming.get("conflict") or any(_row_ownership_conflict(row, incoming) for row in rows):
+        return JSONResponse(
+            {"error": "logged_payment_jurisdiction_unverified", "transaction_id": transaction_id},
+            status_code=409,
+        )
+    if incoming.get("partial"):
+        return None
+    enriched = False
+    for row in rows:
+        if _row_has_ownership(row, incoming):
+            continue
+        cf = dict(row.get("custom_fields")) if isinstance(row.get("custom_fields"), dict) else {}
+        cf["booking_number"] = incoming["booking_number"]
+        cf["county"] = incoming["county"]
+        cf["state"] = incoming["state"]
+        raw = dict(row.get("raw_payload")) if isinstance(row.get("raw_payload"), dict) else {}
+        raw_cf = dict(raw.get("custom_fields")) if isinstance(raw.get("custom_fields"), dict) else {}
+        raw_cf["booking_number"] = incoming["booking_number"]
+        raw_cf["county"] = incoming["county"]
+        raw_cf["state"] = incoming["state"]
+        raw["custom_fields"] = raw_cf
+        if not raw.get("event_type"):
+            raw["event_type"] = "payment.completed"
+        fields = {
+            "booking_number": incoming["booking_number"],
+            "county": incoming["county"],
+            "state": incoming["state"],
+            "custom_fields": cf,
+            "raw_payload": raw,
+            "ownership_enrichment": {
+                "booking_before": row.get("booking_number") or "",
+                "county_before": row.get("county") or "",
+                "state_before": row.get("state") or "",
+                "booking_after": incoming["booking_number"],
+                "county_after": incoming["county"],
+                "state_after": incoming["state"],
+            },
+        }
+        pin = {
+            "_id": row["_id"],
+            **_exact_field_pin(row, "booking_number"),
+            **_exact_field_pin(row, "county"),
+            **_exact_field_pin(row, "state"),
+        }
+        try:
+            res = await payments.update_one(pin, {"$set": fields})
+        except Exception as exc:
+            logger.warning("[payment_webhook] ownership enrich failed err=%s", type(exc).__name__)
+            return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+        if not (getattr(res, "modified_count", 0) or getattr(res, "matched_count", 0)):
+            try:
+                fresh = await payments.find_one({"_id": row["_id"]})
+            except Exception:
+                fresh = None
+            if not isinstance(fresh, dict):
+                return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+            if _row_ownership_conflict(fresh, incoming):
+                return JSONResponse(
+                    {"error": "logged_payment_jurisdiction_unverified", "transaction_id": transaction_id},
+                    status_code=409,
+                )
+            if not _row_has_ownership(fresh, incoming):
+                return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+            row = fresh
+        else:
+            row = {**row, **fields}
+        if not await _finish_ownership_audit(row, transaction_id, now):
+            return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+        enriched = True
+    if not enriched:
+        return None
+    return JSONResponse(
+        status_code=200,
+        content={"success": True, "duplicate": True, "enriched": True},
+    )
+
+
 async def _apply_later_payment_lifecycle(
     payments,
     *,
@@ -122,8 +447,24 @@ async def _apply_later_payment_lifecycle(
             status_code=409,
         )
 
+    already = all(_row_reflects_lifecycle(row, event_type, new_status) for row in rows)
+    status_before = []
+    pinned_rows = []
+    if already:
+        pinned_rows = list(rows)
+        status_before = [row.get("lifecycle_status_before") for row in rows]
+    else:
+        for row in rows:
+            stored = await _store_lifecycle_status(
+                payments, row, event_type, new_status, payload, now,
+            )
+            if stored is None:
+                return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+            pinned_rows.append(stored)
+            status_before.append(stored.get("status"))
+
     plan_ids: list[str] = []
-    for row in rows:
+    for row in pinned_rows:
         plan_id = str(row.get("plan_id") or "").strip()
         if plan_id and plan_id not in plan_ids:
             plan_ids.append(plan_id)
@@ -162,33 +503,8 @@ async def _apply_later_payment_lifecycle(
         logger.warning("[payment_webhook] lifecycle audit read failed err=%s", type(exc).__name__)
         return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
 
-    already = all(_row_reflects_lifecycle(row, event_type, new_status) for row in rows)
     if already and not needs_reversal and existing_audit is not None:
         return JSONResponse(status_code=200, content={"success": True, "duplicate": True})
-
-    status_before = []
-    if not already:
-        for row in rows:
-            current = str(row.get("status") or "").strip().lower()
-            before = row.get("lifecycle_status_before") if current == new_status else row.get("status")
-            status_before.append(before)
-            fields = {
-                "status": new_status,
-                "raw_payload": payload,
-                "lifecycle_event": event_type,
-                "lifecycle_updated_at": now.isoformat(),
-            }
-            if current != new_status:
-                fields["lifecycle_status_before"] = row.get("status")
-            try:
-                await payments.update_one({"_id": row["_id"]}, {"$set": fields})
-            except Exception as exc:
-                logger.warning(
-                    "[payment_webhook] lifecycle row update failed err=%s", type(exc).__name__,
-                )
-                return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
-    else:
-        status_before = [row.get("lifecycle_status_before") for row in rows]
 
     balance_reversed = False
     if needs_reversal and isinstance(plan, dict):
@@ -590,6 +906,26 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
     if not inserted:
         later_status = _terminal_payment_status(event_type, status)
         if later_status is None:
+            rows = await _payment_rows_for_txn(payments, transaction_id)
+            if not rows:
+                logger.warning(
+                    "[payment_webhook] duplicate completed event has no payment row txn_set=%s",
+                    bool(transaction_id),
+                )
+                return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+            if not await _ensure_initial_payment_audit(transaction_id, status, data, now):
+                return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+            enriched = await _enrich_completed_payment(
+                payments,
+                rows,
+                transaction_id=transaction_id,
+                booking_number=booking_number or "",
+                custom_fields=custom_fields,
+                amount=amount,
+                now=now,
+            )
+            if enriched is not None:
+                return enriched
             return JSONResponse(status_code=200, content={"success": True, "duplicate": True})
         return await _apply_later_payment_lifecycle(
             payments,
@@ -639,13 +975,9 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
     })
 
     # -- 8. Log audit event ---------------------------------------------------
-    audit_events = get_collection("audit_events")
-    await audit_events.insert_one({
-        "source": "swipesimple_webhook",
-        "event_type": f"payment.{status}",
-        "payload": data,
-        "timestamp": now.isoformat(),
-    })
+    # A retry must be able to recreate this record. Success waits on the insert.
+    if not await _ensure_initial_payment_audit(transaction_id, status, data, now):
+        return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
 
     return JSONResponse(status_code=200, content={"success": True})
 

@@ -6,7 +6,7 @@ import hashlib
 import hmac
 import json
 import os
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -267,7 +267,12 @@ def test_completed_replay_stays_duplicate(payment_app, monkeypatch):
     assert resp.status_code == 200 and resp.json() == {"success": True, "duplicate": True}
     assert db["payments"].docs[0]["status"] == "completed"
     assert db["payment_plans"].docs[0]["balance_remaining"] == 700.0
-    assert db["audit_events"].docs == []
+    (ev,) = db["audit_events"].docs
+    assert ev["event_type"] == "payment.approved" and ev["transaction_id"] == "TX-LIFE"
+    again = _post_lifecycle(client, "payment.completed", "approved")
+    assert again.status_code == 200 and again.json()["duplicate"] is True
+    assert len(db["audit_events"].docs) == 1
+    assert len(db["payments"].docs) == 1
 
 
 def test_lifecycle_amount_mismatch_does_not_move_the_plan(payment_app, monkeypatch):
@@ -322,3 +327,205 @@ def test_unlinked_refund_updates_status_without_a_plan_reversal(payment_app, mon
     assert db["payments"].docs[0]["status"] == "refunded"
     assert db["payment_plans"].docs == []
     assert db["audit_events"].docs[0]["balance_reversed"] is False
+
+
+def test_refund_of_preexisting_row_does_not_insert_a_second_payment(payment_app, monkeypatch):
+    """A payments row that predates payment_log_claims is updated, not copied."""
+    db, client = _lifecycle_client(payment_app, monkeypatch)
+    db["payments"].docs.append({
+        "_id": "pay-old",
+        "transaction_id": "TX-LIFE",
+        "amount": 100.0,
+        "status": "completed",
+        "plan_id": "plan-test-01",
+        "booking_number": "TEST-PP-1",
+        "raw_payload": {"event_type": "payment.completed", "status": "approved", "amount": 100},
+    })
+    db["payment_plans"].docs.append({
+        "plan_id": "plan-test-01",
+        "balance_remaining": 700.0,
+        "total_paid": 300.0,
+        "payments_made": 2,
+        "status": "active",
+        "applied_transaction_ids": ["TX-LIFE"],
+    })
+    resp = _post_lifecycle(client, "payment.refunded", "refunded")
+    assert resp.status_code == 200 and resp.json()["lifecycle_updated"] is True
+    assert len(db["payments"].docs) == 1
+    assert db["payments"].docs[0]["_id"] == "pay-old"
+    assert db["payments"].docs[0]["status"] == "refunded"
+    assert db["payment_plans"].docs[0]["balance_remaining"] == 800.0
+    assert "TX-LIFE" not in db["payment_plans"].docs[0]["applied_transaction_ids"]
+    assert db["payment_log_claims"].docs[0]["transaction_id"] == "TX-LIFE"
+
+
+def test_refund_reverses_a_plan_linked_during_the_update(payment_app, monkeypatch):
+    db, client = _lifecycle_client(payment_app, monkeypatch)
+    db["payment_log_claims"].docs.append({
+        "transaction_id": "TX-LIFE", "status": "logged", "source": "payment_webhook",
+    })
+    db["payments"].docs.append({
+        "_id": "pay-life",
+        "transaction_id": "TX-LIFE",
+        "amount": 100.0,
+        "status": "approved",
+        "booking_number": "TEST-PP-1",
+        "raw_payload": {"event_type": "payment.completed", "status": "approved", "amount": 100},
+    })
+    db["payment_plans"].docs.append({
+        "plan_id": "plan-test-01",
+        "balance_remaining": 800.0,
+        "total_paid": 200.0,
+        "payments_made": 1,
+        "status": "active",
+        "applied_transaction_ids": [],
+    })
+
+    def link_before_status_write(coll, flt):
+        for row in coll.docs:
+            if row.get("_id") == "pay-life":
+                row["plan_id"] = "plan-test-01"
+                row["status"] = "completed"
+        plan = db["payment_plans"].docs[0]
+        plan["balance_remaining"] = 700.0
+        plan["total_paid"] = 300.0
+        plan["payments_made"] = 2
+        plan["applied_transaction_ids"] = ["TX-LIFE"]
+
+    db["payments"].before_update = link_before_status_write
+    resp = _post_lifecycle(client, "payment.refunded", "refunded")
+    assert resp.status_code == 200 and resp.json()["lifecycle_updated"] is True
+    assert len(db["payments"].docs) == 1
+    assert db["payments"].docs[0]["status"] == "refunded"
+    assert db["payments"].docs[0]["plan_id"] == "plan-test-01"
+    plan = db["payment_plans"].docs[0]
+    assert plan["balance_remaining"] == 800.0
+    assert plan["total_paid"] == 200.0 and plan["payments_made"] == 1
+    assert "TX-LIFE" not in plan["applied_transaction_ids"]
+
+
+def test_completed_retry_writes_the_missing_initial_audit(payment_app, monkeypatch):
+    db, client = _lifecycle_client(payment_app, monkeypatch)
+    db["audit_events"].fail_insert = True
+    first = _post_lifecycle(client, "payment.completed", "approved")
+    assert first.status_code == 503
+    assert first.json().get("success") is not True
+    assert len(db["payments"].docs) == 1
+    assert db["audit_events"].docs == []
+    db["audit_events"].fail_insert = False
+    second = _post_lifecycle(client, "payment.completed", "approved")
+    assert second.status_code == 200 and second.json()["duplicate"] is True
+    assert len(db["payments"].docs) == 1
+    (ev,) = db["audit_events"].docs
+    assert ev["event_type"] == "payment.approved" and ev["transaction_id"] == "TX-LIFE"
+
+
+def _post_completed(client, custom_fields, amount=100, txn="TX-LIFE"):
+    return client.post(
+        "/api/webhooks/payment",
+        json={
+            "event_type": "payment.completed",
+            "transaction_id": txn,
+            "amount": amount,
+            "status": "approved",
+            "custom_fields": custom_fields,
+        },
+    )
+
+
+def test_completed_webhook_enriches_an_unowned_poller_row(payment_app, monkeypatch):
+    from dashboard.routers import payment_plans as pp
+    from dashboard.routers.payment_plans import _booking_identity
+
+    db, client = _lifecycle_client(payment_app, monkeypatch)
+    monkeypatch.setattr(pp, "get_collection", lambda name: db[name])
+    monkeypatch.setattr(pp, "_payment_claim_index_ready", False)
+    db["payments"].docs.append({
+        "_id": "pay-poll",
+        "transaction_id": "TX-LIFE",
+        "amount": 100.0,
+        "status": "approved",
+        "booking_number": "",
+        "source": "swipesimple_gmail_poll",
+    })
+    db["payment_plans"].docs.append({
+        "plan_id": "plan-test-01",
+        "booking_number": "TEST-PP-1",
+        "county": "Lee",
+        "state": "FL",
+        "total_premium": 1000.0,
+        "down_payment": 200.0,
+        "balance_remaining": 800.0,
+        "installment_amount": 100.0,
+        "frequency": "weekly",
+        "payments_made": 1,
+        "total_paid": 200.0,
+        "status": "active",
+    })
+    payment_app.include_router(pp.payment_plans_bp)
+    resp = _post_completed(client, {
+        "booking_number": "TEST-PP-1", "county": "Lee (FL)", "state": "FL",
+    })
+    body = resp.json()
+    assert resp.status_code == 200 and body["enriched"] is True and body["duplicate"] is True
+    row = db["payments"].docs[0]
+    assert row["booking_number"] == "TEST-PP-1"
+    assert row["county"] == "Lee" and row["state"] == "FL"
+    assert row["custom_fields"]["county"] == "Lee"
+    assert "ownership_enrichment" not in row
+    assert len(db["payments"].docs) == 1
+    assert _booking_identity(row, nested=True) == ("TEST-PP-1", "lee", "fl")
+    kinds = [e["event_type"] for e in db["audit_events"].docs]
+    assert "payment.ownership_enriched" in kinds and "payment.approved" in kinds
+    enriched = next(e for e in db["audit_events"].docs if e["event_type"] == "payment.ownership_enriched")
+    assert enriched["booking_before"] == "" and enriched["booking_after"] == "TEST-PP-1"
+    assert enriched["county_after"] == "Lee" and enriched["confidence"] == 1.0
+    with patch("dashboard.routers.events.publish_event", new=AsyncMock()):
+        pay = client.post(
+            "/api/payments/plans/plan-test-01/pay",
+            json={"amount": 100, "transaction_id": "TX-LIFE"},
+        )
+    assert pay.status_code == 200 and pay.json()["linked_logged_payment"] is True
+    assert row["plan_id"] == "plan-test-01"
+    assert db["payment_plans"].docs[0]["balance_remaining"] == 700.0
+
+
+def test_completed_webhook_does_not_overwrite_a_different_booking(payment_app, monkeypatch):
+    db, client = _lifecycle_client(payment_app, monkeypatch)
+    db["payments"].docs.append({
+        "_id": "pay-poll",
+        "transaction_id": "TX-LIFE",
+        "amount": 100.0,
+        "status": "approved",
+        "booking_number": "OTHER-1",
+        "county": "Collier",
+        "state": "FL",
+    })
+    resp = _post_completed(client, {
+        "booking_number": "TEST-PP-1", "county": "Lee", "state": "FL",
+    })
+    assert resp.status_code == 409
+    assert resp.json()["error"] == "logged_payment_jurisdiction_unverified"
+    row = db["payments"].docs[0]
+    assert row["booking_number"] == "OTHER-1" and row["county"] == "Collier"
+    assert len(db["payments"].docs) == 1
+    assert not any(e["event_type"] == "payment.ownership_enriched" for e in db["audit_events"].docs)
+
+
+def test_completed_webhook_amount_mismatch_does_not_enrich(payment_app, monkeypatch):
+    db, client = _lifecycle_client(payment_app, monkeypatch)
+    db["payments"].docs.append({
+        "_id": "pay-poll",
+        "transaction_id": "TX-LIFE",
+        "amount": 100.0,
+        "status": "approved",
+        "booking_number": "",
+    })
+    resp = _post_completed(client, {
+        "booking_number": "TEST-PP-1", "county": "Lee", "state": "FL",
+    }, amount=90)
+    assert resp.status_code == 409
+    assert resp.json()["error"] == "payment_lifecycle_amount_mismatch"
+    row = db["payments"].docs[0]
+    assert row["booking_number"] == "" and "county" not in row
+    assert len(db["payments"].docs) == 1
