@@ -1020,13 +1020,14 @@ async def record_payment(request: Request, plan_id):
     if legacy:
         return await _idempotent_reply(plans_col, plan_id, txn, None, amount, legacy_row=legacy)
 
-    # One payments row per transaction id. The poller and the webhook take the
-    # same partial unique index before they insert. If it cannot be created,
-    # nothing is claimed.
+    # One payments row per transaction id. The gate is payment_log_claims
+    # (unique on that collection only). No index is created on payments.
+    # If the claims index cannot be created, nothing is claimed.
+    log_claims = get_collection("payment_log_claims")
     try:
-        from dashboard.services.payment_txn_dedupe import ensure_payment_txn_dedupe
+        from dashboard.services.payment_txn_dedupe import ensure_payment_log_claims
 
-        await ensure_payment_txn_dedupe(payments_col)
+        await ensure_payment_log_claims(log_claims)
     except Exception:
         return JSONResponse({"error": "payment_dedupe_unavailable"}, status_code=503)
 
@@ -1095,18 +1096,9 @@ async def record_payment(request: Request, plan_id):
             # Pin the validated booking too: a reassignment in between must
             # not be overwritten.
             "booking_number": logged_row.get("booking_number"),
-            # Still unlinked, and the transaction-id key is free or already ours.
-            # A second payments row that owns txn_dedupe_key makes the $set raise
-            # DuplicateKeyError instead of linking.
-            "$and": [
-                {"$or": [{"plan_id": {"$exists": False}}, {"plan_id": None}, {"plan_id": ""}]},
-                {"$or": [
-                    {"txn_dedupe_key": {"$exists": False}},
-                    {"txn_dedupe_key": None},
-                    {"txn_dedupe_key": ""},
-                    {"txn_dedupe_key": txn},
-                ]},
-            ],
+            # Still unlinked. A second payments row is blocked by payment_log_claims,
+            # not by an index on this collection.
+            "$or": [{"plan_id": {"$exists": False}}, {"plan_id": None}, {"plan_id": ""}],
             # Pin county/state on the row and under custom_fields. A jurisdiction
             # that appears or changes after this check must not still match.
             **_identity_pins(logged_row),
@@ -1127,27 +1119,24 @@ async def record_payment(request: Request, plan_id):
             "type": "installment",
             "status": "completed",
             "logged_status": logged_row.get("status"),
-            # Holds the partial unique key so a later poller or webhook insert
-            # of this transaction id cannot add a second row.
-            "txn_dedupe_key": txn,
         }
         if not logged_row.get("timestamp"):
             # Keep the provider's payment time (Codex P2 on #182): revenue
             # windows read ``timestamp``, so it must not become the link time.
             link_set["timestamp"] = logged_row.get("created_at") or now.isoformat()
         try:
+            from dashboard.services.payment_txn_dedupe import hold_payment_log
+
+            await hold_payment_log(
+                log_claims, txn, source="plan_pay", payment_id=logged_row["_id"],
+            )
+        except Exception:
+            await _fail_claim(claims, plan_id, txn, "payment_dedupe_unavailable")
+            return JSONResponse({"error": "payment_dedupe_unavailable", "transaction_id": txn}, status_code=503)
+        try:
             linked = await payments_col.update_one(link_filter, {"$set": link_set})
             link_ok = bool(getattr(linked, "modified_count", 0))
             current = None if link_ok else (await payments_col.find_one({"_id": logged_row["_id"]}) or {})
-        except DuplicateKeyError:
-            # Another payments row already holds this transaction id. The update
-            # did not apply. Do not guess, and do not decrement the balance.
-            await _fail_claim(claims, plan_id, txn, "logged_payment_ambiguous")
-            return JSONResponse(
-                {"error": "logged_payment_ambiguous", "transaction_id": txn,
-                 "message": "Another logged payment with this transaction id is already stored. Review before applying it to a plan."},
-                status_code=409,
-            )
         except Exception as exc:
             # Write outcome unknown (timeout / unknown write concern): the link
             # may have persisted (Codex P1). Read back; if the row carries THIS
@@ -1203,7 +1192,7 @@ async def record_payment(request: Request, plan_id):
                 "timestamp": now.isoformat(),
                 "transaction_id": txn,
                 "notes": data.get("notes", ""),
-            })
+            }, claims=log_claims, source="plan_pay")
         except Exception:
             await _fail_claim(claims, plan_id, txn, "payment_write_error")
             return JSONResponse({"error": "payment_record_failed", "transaction_id": txn}, status_code=500)
@@ -1229,15 +1218,7 @@ async def record_payment(request: Request, plan_id):
                 "amount": logged_row.get("amount"),
                 "status": logged_row.get("status"),
                 "booking_number": logged_row.get("booking_number"),
-                "$and": [
-                    {"$or": [{"plan_id": {"$exists": False}}, {"plan_id": None}, {"plan_id": ""}]},
-                    {"$or": [
-                        {"txn_dedupe_key": {"$exists": False}},
-                        {"txn_dedupe_key": None},
-                        {"txn_dedupe_key": ""},
-                        {"txn_dedupe_key": txn},
-                    ]},
-                ],
+                "$or": [{"plan_id": {"$exists": False}}, {"plan_id": None}, {"plan_id": ""}],
                 **_identity_pins(logged_row),
             }
             _raw = logged_row.get("raw_payload")
@@ -1252,10 +1233,18 @@ async def record_payment(request: Request, plan_id):
                 "type": "installment",
                 "status": "completed",
                 "logged_status": logged_row.get("status"),
-                "txn_dedupe_key": txn,
             }
             if not logged_row.get("timestamp"):
                 link_set["timestamp"] = logged_row.get("created_at") or now.isoformat()
+            try:
+                from dashboard.services.payment_txn_dedupe import hold_payment_log
+
+                await hold_payment_log(
+                    log_claims, txn, source="plan_pay", payment_id=logged_row["_id"],
+                )
+            except Exception:
+                await _fail_claim(claims, plan_id, txn, "payment_dedupe_unavailable")
+                return JSONResponse({"error": "payment_dedupe_unavailable", "transaction_id": txn}, status_code=503)
             try:
                 linked = await payments_col.update_one(link_filter, {"$set": link_set})
                 if not getattr(linked, "modified_count", 0):
@@ -1265,13 +1254,6 @@ async def record_payment(request: Request, plan_id):
                          "message": "The logged card payment changed while it was being linked. Check the plan before recording it again."},
                         status_code=409,
                     )
-            except DuplicateKeyError:
-                await _fail_claim(claims, plan_id, txn, "logged_payment_ambiguous")
-                return JSONResponse(
-                    {"error": "logged_payment_ambiguous", "transaction_id": txn,
-                     "message": "Another logged payment with this transaction id is already stored. Review before applying it to a plan."},
-                    status_code=409,
-                )
             except Exception as exc:
                 # Same unknown-outcome rule as the direct link: read the row
                 # back before deciding the link did not persist.

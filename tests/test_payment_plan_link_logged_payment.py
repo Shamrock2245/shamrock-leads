@@ -1066,12 +1066,25 @@ def test_unknown_plan_update_keeps_the_payment_row(rig):
     assert "balance_after" not in claim
 
 
+def _assert_payments_not_indexed(db):
+    """Standing order: no unique or partial index on payments."""
+    assert db["payments"].index_calls == 0
+    assert db["payments"].unique == []
+    assert db["payments"].partial_unique == []
+    for row in db["payments"].docs:
+        assert "txn_dedupe_key" not in row
+
+
 def test_second_insert_of_same_transaction_id_is_rejected(rig, monkeypatch):
     monkeypatch.delenv("SLACK_WEBHOOK_LEADS", raising=False)
     monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
     db, app = rig
     _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
-    assert db["payments"].docs[0]["txn_dedupe_key"] == "TX-CARD"
+    claim = db["payment_log_claims"].docs[0]
+    assert claim["transaction_id"] == "TX-CARD" and claim["status"] == "logged"
+    assert ("tenant_id", "transaction_id") in db["payment_log_claims"].unique
+    assert db["payment_log_claims"].partial_unique == []
+    _assert_payments_not_indexed(db)
     real_find = db["payments"].find_one
     state = {"hide": True}
 
@@ -1085,24 +1098,25 @@ def test_second_insert_of_same_transaction_id_is_rejected(rig, monkeypatch):
     again = _apply_poller(db)
     assert again.get("duplicate") is True
     assert len(db["payments"].docs) == 1
+    assert len(db["payment_log_claims"].docs) == 1
     assert _plan(db)["balance_remaining"] == 700.0
+    _assert_payments_not_indexed(db)
 
 
 def test_insert_race_links_the_poller_row_instead_of_duplicating(rig):
     from pymongo.errors import DuplicateKeyError
 
     db, app = rig
-    real = db["payments"].insert_one
+    real = db["payment_log_claims"].insert_one
     state = {"raced": False}
 
     async def lose_the_race(doc):
-        if doc.get("plan_id") == PLAN_ID and not state["raced"]:
+        if not state["raced"]:
             state["raced"] = True
             db["payments"].docs.append({
                 "_id": "late-poll",
                 "transaction_id": doc["transaction_id"],
-                "txn_dedupe_key": doc["transaction_id"],
-                "amount": doc["amount"],
+                "amount": 100.0,
                 "status": "approved",
                 "booking_number": "TEST-PP-1",
                 "county": "Lee",
@@ -1111,16 +1125,18 @@ def test_insert_race_links_the_poller_row_instead_of_duplicating(rig):
             raise DuplicateKeyError("dup")
         return await real(doc)
 
-    db["payments"].insert_one = lose_the_race
+    db["payment_log_claims"].insert_one = lose_the_race
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
     assert r.status_code == 200 and r.json()["linked_logged_payment"] is True
     assert len(db["payments"].docs) == 1
     assert db["payments"].docs[0]["_id"] == "late-poll"
     assert db["payments"].docs[0]["plan_id"] == PLAN_ID
+    assert "txn_dedupe_key" not in db["payments"].docs[0]
     assert _plan(db)["balance_remaining"] == 700.0
+    _assert_payments_not_indexed(db)
 
 
-def test_link_loses_when_another_row_owns_the_transaction_key(rig):
+def test_link_loses_when_another_row_appears_for_the_transaction(rig):
     db, app = rig
     row = _poller_row(db)
 
@@ -1128,7 +1144,6 @@ def test_link_loses_when_another_row_owns_the_transaction_key(rig):
         coll.docs.append({
             "_id": "other-key",
             "transaction_id": "TX-CARD",
-            "txn_dedupe_key": "TX-CARD",
             "amount": 100.0,
             "status": "approved",
             "booking_number": "TEST-PP-1",
@@ -1141,16 +1156,19 @@ def test_link_loses_when_another_row_owns_the_transaction_key(rig):
     assert "plan_id" not in row
     assert _plan(db)["balance_remaining"] == 800.0
     assert db["payment_plan_payment_claims"].docs[0]["failed_reason"] == "logged_payment_ambiguous"
+    _assert_payments_not_indexed(db)
 
 
-def test_txn_index_unavailable_fails_closed(rig):
+def test_log_claim_index_unavailable_fails_closed(rig):
     db, app = rig
-    db["payments"].fail_index = True
+    db["payment_log_claims"].fail_index = True
     (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
     assert r.status_code == 503 and r.json()["error"] == "payment_dedupe_unavailable"
     assert db["payments"].docs == []
+    assert db["payment_log_claims"].docs == []
     assert db["payment_plan_payment_claims"].docs == []
     assert _plan(db)["balance_remaining"] == 800.0
+    _assert_payments_not_indexed(db)
 
 
 def test_clash_without_link_audit_does_not_emit_orphan_unlink(rig):

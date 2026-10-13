@@ -335,10 +335,11 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         )
 
     # -- 4. Log to payments collection ----------------------------------------
-    # Same partial unique key as the receipt poller and plan /pay. A second
-    # writer for this transaction id does not insert another row, and does not
-    # send another receipt or Slack message.
+    # payment_log_claims (unique on that collection only) is the atomic gate.
+    # A second writer for this transaction id does not insert another row, and
+    # does not send another receipt or Slack message. payments is not indexed.
     payments = get_collection("payments")
+    log_claims = get_collection("payment_log_claims")
     try:
         from dashboard.services.payment_txn_dedupe import insert_payment_once
 
@@ -354,7 +355,7 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
             "custom_fields": custom_fields,
             "raw_payload": data,
             "created_at": now.isoformat(),
-        })
+        }, claims=log_claims, source="payment_webhook")
     except Exception as exc:
         logger.warning(
             "[payment_webhook] payment dedupe unavailable err=%s", type(exc).__name__,

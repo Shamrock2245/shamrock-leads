@@ -354,12 +354,13 @@ class SwipeSimpleReceiptPoller:
         if "_id" not in doc:
             from bson import ObjectId
             doc["_id"] = ObjectId()
-        # Unique txn_dedupe_key: a plan /pay or webhook insert of this id wins
-        # the race instead of leaving two payments rows.
+        # payment_log_claims is the atomic gate. payments itself is not indexed.
         try:
             from dashboard.services.payment_txn_dedupe import insert_payment_once
 
-            inserted = await insert_payment_once(payments, doc)
+            inserted = await insert_payment_once(
+                payments, doc, claims=db["payment_log_claims"], source="swipesimple_gmail_poll",
+            )
         except Exception as exc:
             logger.warning(
                 "[SwipeSimplePoll] payment dedupe unavailable txn=%s err=%s",
