@@ -72,8 +72,11 @@ Thumbs.db
 
 # Virtual envs
 venv/
+venv*/
 .venv/
+.venv*/
 env/
+env*/
 
 # Secrets and tokens
 scripts/gmail_token.json

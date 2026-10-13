@@ -152,6 +152,7 @@ KNOWN_APP_COLLECTIONS = frozenset(
         "paperwork_packets",
         "paperwork_rules",
         "payment_dispatches",
+        "payment_plan_payment_claims",
         "payment_plans",
         "payments",
         "persons",
