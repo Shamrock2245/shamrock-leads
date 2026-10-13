@@ -256,6 +256,26 @@ def test_poller_row_without_plan_does_not_block(rig):
     assert db["payments"].docs[0]["plan_id"] == PLAN_ID
 
 
+def test_same_amount_different_booking_is_not_reassigned(rig):
+    """A charge logged for another booking is not stamped onto this plan."""
+    db, app = rig
+    db["payments"].docs.append({
+        "_id": "other-booking",
+        "transaction_id": "TX-OTHER",
+        "amount": 100,
+        "booking_number": "OTHER-BK",
+    })
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-OTHER"}])
+    assert r.status_code == 409 and r.json()["error"] == "payment_needs_review"
+    assert r.json().get("success") is not True
+    assert _plan(db)["balance_remaining"] == 800.0
+    assert _plan(db)["total_paid"] == 200.0
+    assert len(db["payments"].docs) == 1
+    assert "plan_id" not in db["payments"].docs[0]
+    assert db["payments"].docs[0]["booking_number"] == "OTHER-BK"
+    assert db["payment_plan_payment_claims"].docs == []
+
+
 @pytest.mark.parametrize("amount", [900, 99.99, 100.01])
 def test_reused_txn_with_different_amount_refused(rig, amount):
     """Applied $100, then same id with another amount: refuse, don't confirm (Codex P1 #4)."""

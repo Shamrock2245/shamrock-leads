@@ -428,6 +428,16 @@ async def record_payment(request: Request, plan_id):
                  "message": "This transaction id was already recorded with a different amount."},
                 status_code=409,
             )
+        # Same cents is not the same defendant. A charge already logged for
+        # another booking must not be stamped onto this plan.
+        charge_booking = str(existing_charge.get("booking_number") or "").strip().casefold()
+        plan_booking = str(plan.get("booking_number") or "").strip().casefold()
+        if charge_booking and plan_booking and charge_booking != plan_booking:
+            return JSONResponse(
+                {"error": "payment_needs_review", "transaction_id": txn,
+                 "message": "This transaction id is already recorded for a different booking."},
+                status_code=409,
+            )
 
     now = datetime.now(timezone.utc)
     try:
