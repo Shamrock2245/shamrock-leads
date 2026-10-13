@@ -782,6 +782,54 @@ def test_webhook_rejects_conflicting_booking_or_status(rig, row_status, row_book
     assert db["payments"].docs[0]["booking_number"] == row_booking
 
 
+def test_stale_worker_loses_claim_before_bond_update(rig):
+    """A delayed webhook that loses its claim must not overwrite last_payment_*."""
+    db, app, bb = rig
+    winner = {
+        "last_payment_amount": 250.0,
+        "last_payment_status": "approved",
+        "last_transaction_id": "SS-1",
+    }
+    db["bond_cases"].docs.append({"booking_number": "BK-1", **winner})
+    db["active_bonds"].docs.append({"booking_number": "BK-1", **winner})
+    claims = db[plc.LOG_CLAIMS_COLLECTION]
+    real_find = claims.find_one
+    stolen = {"n": 0}
+
+    async def steal_on_ownership_read(flt=None, *a, **k):
+        # still_held looks up this delivery's claimed_at. A takeover has
+        # already replaced that token and logged the corrected charge.
+        if (
+            isinstance(flt, dict)
+            and flt.get("status") == "claimed"
+            and flt.get("claimed_at")
+            and stolen["n"] == 0
+        ):
+            stolen["n"] += 1
+            for doc in claims.docs:
+                if doc.get("claimed_at") == flt.get("claimed_at") and doc.get("status") == "claimed":
+                    doc["claimed_at"] = "winner-token"
+            db["payments"].docs.append({
+                "_id": "winner",
+                "transaction_id": "SS-1",
+                "amount": 250.0,
+                "status": "approved",
+                "booking_number": "BK-1",
+            })
+        return await real_find(flt, *a, **k)
+
+    claims.find_one = steal_on_ownership_read
+    (r,) = _hooks(app, [_hook(amount=200.0)])
+    assert stolen["n"] == 1
+    assert r.status_code == 409 and r.json()["error"] == "payment_in_progress"
+    assert db["bond_cases"].docs[0]["last_payment_amount"] == 250.0
+    assert db["active_bonds"].docs[0]["last_payment_amount"] == 250.0
+    assert [d["_id"] for d in _rows(db)] == ["winner"]
+    assert db["audit_events"].docs == []
+    assert bb.await_count == 0
+    assert claims.docs[0]["claimed_at"] == "winner-token"
+
+
 def test_failed_plan_insert_releases_charge_claim_for_the_logger(rig, monkeypatch):
     """Plan /pay failed before its payment row: the poller can still log the charge once."""
     db, app, bb = rig

@@ -432,13 +432,34 @@ async def _payment_webhook_steps(data, booking_number, now, db, plc, txn_key, ki
         "last_transaction_id": transaction_id,
     }
 
+    async def _stop_if_claim_lost():
+        """A 15-minute takeover replaces ``claimed_at``. This delivery must not
+        write ``last_payment_*`` or insert a payment with the payload it
+        started with after that token is gone."""
+        if not claim_token:
+            return None
+        if await plc.still_held(db, txn_key, kind, claim_token):
+            return None
+        await plc.finish(db, txn_key, kind, None, ok=False, claim_token=claim_token)
+        return JSONResponse(
+            {"error": "payment_in_progress", "transaction_id": txn_key},
+            status_code=409,
+        )
+
     if booking_number:
+        lost = await _stop_if_claim_lost()
+        if lost is not None:
+            return lost
         bond_cases = get_collection("bond_cases")
         await bond_cases.update_one(
             {"booking_number": booking_number},
             {"$set": payment_update},
         )
-        # Also try active_bonds for legacy records
+        # Also try active_bonds for legacy records. Re-check: the claim can
+        # be taken between the two writes.
+        lost = await _stop_if_claim_lost()
+        if lost is not None:
+            return lost
         active_bonds = get_collection("active_bonds")
         await active_bonds.update_one(
             {"booking_number": booking_number},
@@ -450,10 +471,9 @@ async def _payment_webhook_steps(data, booking_number, now, db, plc, txn_key, ki
     if log_row:
         from bson import ObjectId
 
-        if claim_token and not await plc.still_held(db, txn_key, kind, claim_token):
-            await plc.finish(db, txn_key, kind, None, ok=False, claim_token=claim_token)
-            return JSONResponse({"error": "payment_in_progress", "transaction_id": txn_key},
-                                status_code=409)
+        lost = await _stop_if_claim_lost()
+        if lost is not None:
+            return lost
         row_id = ObjectId()
         try:
             await payments.insert_one({
