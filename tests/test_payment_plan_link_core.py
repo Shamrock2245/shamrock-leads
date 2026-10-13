@@ -162,7 +162,10 @@ def test_link_happy_path_counts_once_and_creates_no_payments_index(rig):
         assert field not in row
     assert db["payment_plan_payment_claims"].docs[0]["status"] == "applied"
     assert len(db["audit_events"].docs) == 1
-    assert db["audit_events"].docs[0]["event_type"] == pp._AUDIT_EVENT
+    audit = db["audit_events"].docs[0]
+    assert audit["event_type"] == pp._AUDIT_EVENT
+    assert audit["old_state"] == {"balance_remaining": 800.0, "status": "active"}
+    assert audit["new_state"] == {"balance_remaining": 700.0, "status": "active"}
     assert db["payments"].index_calls == 0 and db["payments"].unique == []
     assert pp._last_apply_path == "fallback"
     again = _post(app, {"amount": 100, "transaction_id": "TX-LOG"})
@@ -178,6 +181,9 @@ def test_link_paid_in_full(rig):
     assert r.json()["status"] == "paid_in_full" and r.json()["balance_remaining"] == 0
     assert _plan(db)["status"] == "paid_in_full" and _plan(db)["balance_remaining"] == 0
     assert len(db["payments"].docs) == 1
+    audit = db["audit_events"].docs[0]
+    assert audit["old_state"] == {"balance_remaining": 800.0, "status": "active"}
+    assert audit["new_state"] == {"balance_remaining": 0, "status": "paid_in_full"}
 
 
 def test_insert_when_no_logged_row_has_no_token_fields(rig):
@@ -304,6 +310,11 @@ def _seed_claim(db, step, **extra):
         "plan_id": PLAN_ID, "transaction_id": "TX-STEP", "status": "claimed",
         "amount": 100, "step": step, "booking_number": "TEST-PP-1",
     }
+    if step in ("balance_applied", "audited"):
+        doc.update({
+            "balance_before": 800.0, "status_before": "active",
+            "balance_after": 700.0, "status_after": "active",
+        })
     doc.update(extra)
     db["payment_plan_payment_claims"].docs.append(doc)
 
@@ -339,9 +350,33 @@ def test_fallback_resumes_after_each_checkpoint(rig, step):
     assert db["payment_plan_payment_claims"].docs[0]["status"] == "applied"
     audits = [d for d in db["audit_events"].docs if d.get("event_type") == pp._AUDIT_EVENT]
     assert len(audits) == 1
+    if step == "balance_applied":
+        assert audits[0]["old_state"] == {"balance_remaining": 800.0, "status": "active"}
+        assert audits[0]["new_state"] == {"balance_remaining": 700.0, "status": "active"}
     again = _post(app, {"amount": 100, "transaction_id": "TX-STEP"})
     assert again.status_code == 200 and again.json()["idempotent"] is True
     assert _plan(db)["balance_remaining"] == 700.0
+
+
+def test_resume_refuses_a_blank_row_booking(rig):
+    db, app = rig
+    db["payments"].docs.append({
+        "transaction_id": "TX-BLANK", "plan_id": PLAN_ID, "amount": 100,
+        "status": "completed", "logged_status": "approved", "booking_number": "",
+        "type": "installment",
+    })
+    db["payment_plan_payment_claims"].docs.append({
+        "plan_id": PLAN_ID, "transaction_id": "TX-BLANK", "status": "claimed",
+        "step": "row_linked", "amount": 100,
+    })
+    r = _post(app, {"amount": 100, "transaction_id": "TX-BLANK"})
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_booking_mismatch"
+    assert _plan(db)["balance_remaining"] == 800.0
+    assert "collected_transaction_ids" not in _plan(db)
+    row = db["payments"].docs[0]
+    assert row.get("plan_id") in (None, "")
+    assert row["status"] == "approved"
+    assert db["audit_events"].docs == []
 
 
 def test_fallback_reverses_a_link_that_no_longer_matches(rig):

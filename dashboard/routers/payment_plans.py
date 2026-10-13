@@ -473,16 +473,14 @@ def _qualify(plan: dict, row: dict, amount, txn: str):
 
 
 def _our_row_ok(row: dict, plan: dict, amount) -> bool:
-    """A row this claim already attached still matches the plan and the cents."""
+    """A row this claim already attached still matches the plan and the cents.
+
+    Both booking numbers must be non-blank and equal. A blank row booking
+    does not match a plan that still has one.
+    """
     if not _same_amount(row.get("amount"), amount):
         return False
-    row_booking = _booking(row.get("booking_number"))
-    plan_booking = _booking(plan.get("booking_number"))
-    if row_booking and row_booking != plan_booking:
-        return False
-    if not row_booking and not plan_booking:
-        return False
-    return True
+    return _same_booking(plan, row)
 
 
 async def _docs(coll, flt: dict, session=None) -> list:
@@ -603,6 +601,22 @@ async def _set_step(claims, plan_id: str, txn: str, step: str, session=None) -> 
         {"$set": {"step": step}},
         **_sess(session),
     )
+
+
+async def _remember_balance(claims, plan_id: str, txn: str, prefix: str, plan: dict, session=None) -> None:
+    """Keep the plan balance and status on the claim for the audit event.
+
+    ``before`` is written once, ahead of the ``$inc``. ``after`` is the plan
+    read once that increment and the paid-in-full clamp have finished.
+    """
+    fields = {
+        f"balance_{prefix}": plan.get("balance_remaining"),
+        f"status_{prefix}": plan.get("status"),
+    }
+    flt = {"transaction_id": txn, "plan_id": plan_id, "status": "claimed"}
+    if prefix == "before":
+        flt["balance_before"] = {"$exists": False}
+    await claims.update_one(flt, {"$set": fields}, **_sess(session))
 
 
 def _collected(plan: dict, txn: str) -> bool:
@@ -841,7 +855,7 @@ async def _guard_before_balance(payments_col, plan, plan_id, txn, amount, sessio
         )
 
 
-async def _audit(audit_col, actor: str, plan, plan_id: str, txn: str, amount, linked: bool, session=None) -> None:
+async def _audit(audit_col, claims, actor: str, plan, plan_id: str, txn: str, amount, linked: bool, session=None) -> None:
     from pymongo.errors import DuplicateKeyError
 
     existing = await audit_col.find_one(
@@ -850,6 +864,11 @@ async def _audit(audit_col, actor: str, plan, plan_id: str, txn: str, amount, li
     )
     if existing:
         return
+    claim = await claims.find_one({"transaction_id": txn, "plan_id": plan_id}, **_sess(session)) or {}
+    if "balance_before" not in claim or "status_before" not in claim:
+        raise RuntimeError("audit snapshot missing")
+    if "balance_after" not in claim or "status_after" not in claim:
+        raise RuntimeError("audit snapshot missing")
     now = datetime.now(timezone.utc)
     try:
         await audit_col.insert_one({
@@ -869,6 +888,14 @@ async def _audit(audit_col, actor: str, plan, plan_id: str, txn: str, amount, li
             "linked_existing_row": linked,
             "reason": "plan payment applied",
             "confidence": 1.0,
+            "old_state": {
+                "balance_remaining": claim.get("balance_before"),
+                "status": claim.get("status_before"),
+            },
+            "new_state": {
+                "balance_remaining": claim.get("balance_after"),
+                "status": claim.get("status_after"),
+            },
         }, **_sess(session))
     except DuplicateKeyError:
         return
@@ -898,13 +925,17 @@ async def _apply_steps(claims, payments_col, plans_col, audit_col, plan, plan_id
         step = "row_linked"
     if step == "row_linked":
         await _guard_before_balance(payments_col, plan, plan_id, txn, amount, session)
+        before = await plans_col.find_one({"plan_id": plan_id}, **_sess(session)) or {}
+        await _remember_balance(claims, plan_id, txn, "before", before, session)
         await _apply_balance(plans_col, plan_id, txn, amount, now, session)
+        after = await plans_col.find_one({"plan_id": plan_id}, **_sess(session)) or {}
+        await _remember_balance(claims, plan_id, txn, "after", after, session)
         await _set_step(claims, plan_id, txn, "balance_applied", session)
         step = "balance_applied"
     if step == "balance_applied":
         linked_rows = await _docs(payments_col, {"transaction_id": txn, "plan_id": plan_id}, session)
         linked = bool(linked_rows) and linked_rows[0].get("logged_status") is not None
-        await _audit(audit_col, actor, plan, plan_id, txn, amount, linked, session)
+        await _audit(audit_col, claims, actor, plan, plan_id, txn, amount, linked, session)
         await _set_step(claims, plan_id, txn, "audited", session)
         step = "audited"
     if step == "audited":
