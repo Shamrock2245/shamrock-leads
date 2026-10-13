@@ -538,7 +538,7 @@ def test_completed_webhook_does_not_overwrite_a_different_booking(payment_app, m
     row = db["payments"].docs[0]
     assert row["booking_number"] == "OTHER-1" and row["county"] == "Collier"
     assert len(db["payments"].docs) == 1
-    assert not any(e["event_type"] == "payment.ownership_enriched" for e in db["audit_events"].docs)
+    assert db["audit_events"].docs == []
 
 
 def test_completed_webhook_amount_mismatch_does_not_enrich(payment_app, monkeypatch):
@@ -558,6 +558,13 @@ def test_completed_webhook_amount_mismatch_does_not_enrich(payment_app, monkeypa
     row = db["payments"].docs[0]
     assert row["booking_number"] == "" and "county" not in row
     assert len(db["payments"].docs) == 1
+    assert db["audit_events"].docs == []
+    again = _post_completed(client, {
+        "booking_number": "TEST-PP-1", "county": "Lee", "state": "FL",
+    }, amount=100)
+    assert again.status_code == 200
+    approved = [e for e in db["audit_events"].docs if e["event_type"] == "payment.approved"]
+    assert len(approved) == 1 and approved[0]["payload"]["amount"] == 100
 
 
 def test_refund_keeps_retrying_until_the_applied_claim_is_reversed(payment_app, monkeypatch):
@@ -583,7 +590,12 @@ def test_refund_keeps_retrying_until_the_applied_claim_is_reversed(payment_app, 
     plan = db["payment_plans"].docs[0]
     assert plan["balance_remaining"] == 800.0
     assert "TX-LIFE" not in plan["applied_transaction_ids"]
-    snap = plan["reversal_snapshot"]
+    snaps = [
+        item for item in (plan.get("reversal_snapshots") or {}).values()
+        if item.get("transaction_id") == "TX-LIFE"
+    ]
+    assert len(snaps) == 1 and "reversal_snapshot" not in plan
+    snap = snaps[0]
     assert snap["balance_remaining_before"] == 700.0 and snap["balance_remaining_after"] == 800.0
     assert snap["total_paid_before"] == 300.0 and snap["total_paid_after"] == 200.0
     assert snap["payments_made_before"] == 2 and snap["payments_made_after"] == 1
@@ -613,3 +625,222 @@ def test_refund_keeps_retrying_until_the_applied_claim_is_reversed(payment_app, 
     assert body.get("success") is not True and body.get("idempotent") is not True
     assert db["payment_plans"].docs[0]["balance_remaining"] == 800.0
     assert len(db["payments"].docs) == 1
+
+
+def _post_txn(client, txn, event_type="payment.refunded", status="refunded", amount=100):
+    return client.post(
+        "/api/webhooks/payment",
+        json={
+            "event_type": event_type,
+            "transaction_id": txn,
+            "amount": amount,
+            "status": status,
+        },
+    )
+
+
+def _snap(plan, txn, event="payment.refunded"):
+    found = [
+        item for item in (plan.get("reversal_snapshots") or {}).values()
+        if item.get("transaction_id") == txn and item.get("event_type") == event
+    ]
+    assert len(found) == 1
+    return found[0]
+
+
+def test_refund_blocks_an_in_flight_claim_before_the_balance_moves(payment_app, monkeypatch):
+    """A refund after the row is linked, while the claim is still claimed, must not leave /pay free to decrement."""
+    from dashboard.routers import payment_plans as pp
+
+    db, client = _lifecycle_client(payment_app, monkeypatch)
+    monkeypatch.setattr(pp, "get_collection", lambda name: db[name])
+    monkeypatch.setattr(pp, "_payment_claim_index_ready", False)
+    db["payment_log_claims"].docs.append({
+        "transaction_id": "TX-LIFE", "status": "logged", "source": "payment_webhook",
+    })
+    db["payments"].docs.append({
+        "_id": "pay-life",
+        "transaction_id": "TX-LIFE",
+        "amount": 100.0,
+        "status": "completed",
+        "plan_id": "plan-test-01",
+        "booking_number": "TEST-PP-1",
+        "county": "Lee",
+        "state": "FL",
+        "raw_payload": {"event_type": "payment.completed", "amount": 100},
+    })
+    db["payment_plans"].docs.append({
+        "plan_id": "plan-test-01",
+        "booking_number": "TEST-PP-1",
+        "county": "Lee",
+        "state": "FL",
+        "balance_remaining": 800.0,
+        "total_paid": 200.0,
+        "payments_made": 1,
+        "status": "active",
+        "applied_transaction_ids": [],
+    })
+    db["payment_plan_payment_claims"].docs.append({
+        "plan_id": "plan-test-01",
+        "transaction_id": "TX-LIFE",
+        "amount": 100.0,
+        "status": "claimed",
+    })
+    resp = _post_lifecycle(client, "payment.refunded", "refunded")
+    assert resp.status_code == 200 and resp.json()["lifecycle_updated"] is True
+    assert db["payments"].docs[0]["status"] == "refunded"
+    assert db["payment_plan_payment_claims"].docs[0]["status"] == "reversed"
+    plan = db["payment_plans"].docs[0]
+    assert plan["balance_remaining"] == 800.0
+    assert plan["applied_transaction_ids"] == []
+    assert db["audit_events"].docs[0]["balance_reversed"] is False
+
+    payment_app.include_router(pp.payment_plans_bp)
+    with patch("dashboard.routers.events.publish_event", new=AsyncMock()):
+        pay = client.post(
+            "/api/payments/plans/plan-test-01/pay",
+            json={"amount": 100, "transaction_id": "TX-LIFE"},
+        )
+    body = pay.json()
+    assert pay.status_code == 409 and body["error"] == "payment_reversed"
+    assert body.get("success") is not True
+    assert db["payment_plans"].docs[0]["balance_remaining"] == 800.0
+    assert db["payment_plans"].docs[0]["payments_made"] == 1
+    assert db["payment_plan_payment_claims"].docs[0]["status"] == "reversed"
+
+
+def test_refund_reverses_a_balance_while_the_claim_is_still_claimed(payment_app, monkeypatch):
+    """The installment can land on the plan before the claim leaves claimed. The refund still gives the balance back."""
+    db, client = _lifecycle_client(payment_app, monkeypatch)
+    _seed_linked_payment(db)
+    db["payment_plan_payment_claims"].docs[0]["status"] = "claimed"
+    resp = _post_lifecycle(client, "payment.refunded", "refunded")
+    assert resp.status_code == 200 and resp.json()["lifecycle_updated"] is True
+    plan = db["payment_plans"].docs[0]
+    assert plan["balance_remaining"] == 800.0
+    assert "TX-LIFE" not in plan["applied_transaction_ids"]
+    assert db["payment_plan_payment_claims"].docs[0]["status"] == "reversed"
+    ev = db["audit_events"].docs[0]
+    assert ev["balance_reversed"] is True
+    assert ev["balance_remaining_before"] == 700.0 and ev["balance_remaining_after"] == 800.0
+
+
+def test_reversal_snapshots_stay_per_transaction(payment_app, monkeypatch):
+    """A later refund on the same plan must not erase the snapshot the failed audit still needs."""
+    db, client = _lifecycle_client(payment_app, monkeypatch)
+    db["payment_plans"].docs.append({
+        "plan_id": "plan-test-01",
+        "balance_remaining": 600.0,
+        "total_paid": 400.0,
+        "payments_made": 3,
+        "status": "active",
+        "applied_transaction_ids": ["TX-A", "TX-B"],
+    })
+    for txn in ("TX-A", "TX-B"):
+        db["payment_log_claims"].docs.append({
+            "transaction_id": txn, "status": "logged", "source": "payment_webhook",
+        })
+        db["payments"].docs.append({
+            "_id": f"pay-{txn}",
+            "transaction_id": txn,
+            "amount": 100.0,
+            "status": "completed",
+            "plan_id": "plan-test-01",
+            "raw_payload": {"event_type": "payment.completed", "amount": 100},
+        })
+        db["payment_plan_payment_claims"].docs.append({
+            "plan_id": "plan-test-01",
+            "transaction_id": txn,
+            "amount": 100.0,
+            "status": "applied",
+        })
+    real = db["audit_events"].insert_one
+
+    async def fail_a(doc):
+        if doc.get("transaction_id") == "TX-A":
+            raise RuntimeError("audit down")
+        return await real(doc)
+
+    db["audit_events"].insert_one = fail_a
+    first = _post_txn(client, "TX-A")
+    assert first.status_code == 503
+    plan = db["payment_plans"].docs[0]
+    assert plan["balance_remaining"] == 700.0
+    assert plan["total_paid"] == 300.0 and plan["payments_made"] == 2
+    assert plan["applied_transaction_ids"] == ["TX-B"]
+    snap_a = _snap(plan, "TX-A")
+    assert snap_a["balance_remaining_before"] == 600.0 and snap_a["balance_remaining_after"] == 700.0
+    assert snap_a["total_paid_before"] == 400.0 and snap_a["total_paid_after"] == 300.0
+    assert snap_a["payments_made_before"] == 3 and snap_a["payments_made_after"] == 2
+    assert db["audit_events"].docs == []
+
+    second = _post_txn(client, "TX-B")
+    assert second.status_code == 200 and second.json()["lifecycle_updated"] is True
+    assert plan["balance_remaining"] == 800.0
+    assert plan["total_paid"] == 200.0 and plan["payments_made"] == 1
+    assert plan["applied_transaction_ids"] == []
+    assert _snap(plan, "TX-A")["balance_remaining_before"] == 600.0
+    snap_b = _snap(plan, "TX-B")
+    assert snap_b["balance_remaining_before"] == 700.0 and snap_b["balance_remaining_after"] == 800.0
+    assert "reversal_snapshot" not in plan
+
+    db["audit_events"].insert_one = real
+    retry = _post_txn(client, "TX-A")
+    assert retry.status_code == 200 and retry.json()["lifecycle_updated"] is True
+    audits_a = [e for e in db["audit_events"].docs if e["transaction_id"] == "TX-A"]
+    assert len(audits_a) == 1
+    assert audits_a[0]["balance_reversed"] is True
+    assert audits_a[0]["balance_remaining_before"] == 600.0
+    assert audits_a[0]["balance_remaining_after"] == 700.0
+    assert audits_a[0]["total_paid_before"] == 400.0 and audits_a[0]["total_paid_after"] == 300.0
+    assert plan["balance_remaining"] == 800.0
+
+
+def test_legacy_reversal_snapshot_still_audits_on_retry(payment_app, monkeypatch):
+    """A snapshot stored before per-transaction keys still supplies the retry audit."""
+    db, client = _lifecycle_client(payment_app, monkeypatch)
+    db["payment_log_claims"].docs.append({
+        "transaction_id": "TX-LIFE", "status": "logged", "source": "payment_webhook",
+    })
+    db["payments"].docs.append({
+        "_id": "pay-life",
+        "transaction_id": "TX-LIFE",
+        "amount": 100.0,
+        "status": "refunded",
+        "plan_id": "plan-test-01",
+        "lifecycle_event": "payment.refunded",
+        "lifecycle_status_before": "completed",
+        "raw_payload": {"event_type": "payment.refunded", "amount": 100},
+    })
+    db["payment_plans"].docs.append({
+        "plan_id": "plan-test-01",
+        "balance_remaining": 800.0,
+        "total_paid": 200.0,
+        "payments_made": 1,
+        "status": "active",
+        "applied_transaction_ids": [],
+        "reversal_snapshot": {
+            "transaction_id": "TX-LIFE",
+            "event_type": "payment.refunded",
+            "balance_remaining_before": 700.0,
+            "balance_remaining_after": 800.0,
+            "total_paid_before": 300.0,
+            "total_paid_after": 200.0,
+            "payments_made_before": 2,
+            "payments_made_after": 1,
+            "plan_status_before": "active",
+            "plan_status_after": "active",
+        },
+    })
+    db["payment_plan_payment_claims"].docs.append({
+        "plan_id": "plan-test-01",
+        "transaction_id": "TX-LIFE",
+        "amount": 100.0,
+        "status": "reversed",
+    })
+    resp = _post_lifecycle(client, "payment.refunded", "refunded")
+    assert resp.status_code == 200 and resp.json()["lifecycle_updated"] is True
+    (ev,) = db["audit_events"].docs
+    assert ev["balance_reversed"] is True
+    assert ev["balance_remaining_before"] == 700.0 and ev["balance_remaining_after"] == 800.0
+    assert db["payment_plans"].docs[0]["balance_remaining"] == 800.0

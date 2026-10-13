@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from pymongo.errors import DuplicateKeyError
 
 from dashboard.routers import payment_plans as pp
-from tests._inmem_mongo import matches
+from tests._inmem_mongo import _set_path, matches
 
 
 class Coll:
@@ -94,10 +94,30 @@ class Coll:
 
     def _apply_update(self, doc, update):
         for k, v in update.get("$inc", {}).items():
-            doc[k] = doc.get(k, 0) + v
-        doc.update(update.get("$set", {}))
+            if "." in k:
+                current = doc
+                for part in k.split(".")[:-1]:
+                    current = current.get(part, {}) if isinstance(current, dict) else {}
+                leaf = k.split(".")[-1]
+                base = current.get(leaf, 0) if isinstance(current, dict) else 0
+                _set_path(doc, k, base + v)
+            else:
+                doc[k] = doc.get(k, 0) + v
+        for k, v in update.get("$set", {}).items():
+            _set_path(doc, k, copy.deepcopy(v))
         for k in update.get("$unset", {}):
-            doc.pop(k, None)
+            if "." not in k:
+                doc.pop(k, None)
+                continue
+            parent = doc
+            parts = k.split(".")
+            for part in parts[:-1]:
+                if not isinstance(parent, dict):
+                    parent = None
+                    break
+                parent = parent.get(part)
+            if isinstance(parent, dict):
+                parent.pop(parts[-1], None)
         for k, v in update.get("$addToSet", {}).items():
             cur = doc.get(k)
             if not isinstance(cur, list):

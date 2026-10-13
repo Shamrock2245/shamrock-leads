@@ -308,6 +308,30 @@ async def _finish_ownership_audit(row: dict, transaction_id: str, now: datetime)
     return True
 
 
+def _completed_replay_refusal(rows, amount, booking_number: str, custom_fields, transaction_id: str):
+    """409 when a duplicate completed event must not be audited.
+
+    None when the amount matches and the ownership does not conflict. A
+    partial identity is not a refusal; enrichment decides whether to fill it.
+    """
+    from dashboard.routers.payment_plans import _same_amount
+
+    if not all(_same_amount(row.get("amount"), amount) for row in rows):
+        return JSONResponse(
+            {"error": "payment_lifecycle_amount_mismatch", "transaction_id": transaction_id},
+            status_code=409,
+        )
+    incoming = _webhook_ownership(booking_number, custom_fields)
+    if incoming and (
+        incoming.get("conflict") or any(_row_ownership_conflict(row, incoming) for row in rows)
+    ):
+        return JSONResponse(
+            {"error": "logged_payment_jurisdiction_unverified", "transaction_id": transaction_id},
+            status_code=409,
+        )
+    return None
+
+
 async def _enrich_completed_payment(
     payments,
     rows: list,
@@ -426,21 +450,47 @@ _REVERSAL_FIELDS = (
 )
 
 
+def _snapshot_path(transaction_id: str, event_type: str) -> str:
+    """One stored field per transaction and event, not one field for the plan.
+
+    The digest is the Mongo key so a transaction id that contains ``.`` or
+    ``$`` cannot land in another transaction's snapshot. The snapshot body
+    still carries the transaction id and event type.
+    """
+    digest = hashlib.sha256(f"{transaction_id}\n{event_type}".encode()).hexdigest()[:20]
+    return f"reversal_snapshots.{digest}"
+
+
+def _snapshot_complete(snap) -> bool:
+    return isinstance(snap, dict) and all(key in snap for key in _REVERSAL_FIELDS)
+
+
 def _reversal_snapshot_for(plan, transaction_id: str, event_type: str):
-    """The before/after values stored with the reversal, or None when absent.
+    """The before/after values stored for this transaction, or None when absent.
 
     A retry that no longer sees the transaction in ``applied_transaction_ids``
-    still has to audit the reversal that already happened. The snapshot is
-    that record. A different event does not reuse it.
+    still has to audit the reversal that already happened. Snapshots are keyed
+    by transaction so a later reversal on the same plan does not replace this
+    one. A single ``reversal_snapshot`` from an older write is still read.
     """
     if not isinstance(plan, dict):
         return None
+    snaps = plan.get("reversal_snapshots")
+    if isinstance(snaps, dict):
+        for snap in snaps.values():
+            if (
+                isinstance(snap, dict)
+                and snap.get("transaction_id") == transaction_id
+                and snap.get("event_type") == event_type
+                and _snapshot_complete(snap)
+            ):
+                return snap
     snap = plan.get("reversal_snapshot")
     if not isinstance(snap, dict):
         return None
     if snap.get("transaction_id") != transaction_id or snap.get("event_type") != event_type:
         return None
-    if any(key not in snap for key in _REVERSAL_FIELDS):
+    if not _snapshot_complete(snap):
         return None
     return snap
 
@@ -467,12 +517,14 @@ def _build_reversal_snapshot(plan: dict, transaction_id: str, event_type: str, r
 
 
 async def _invalidate_applied_plan_claim(transaction_id: str, plan_id: str | None, event_type: str, now: datetime) -> bool:
-    """Move an applied plan claim to ``reversed``.
+    """Move an applied or in-flight plan claim to ``reversed``.
 
-    True when no applied claim remains. False when the write did not confirm,
-    so the caller does not report success. ``/pay`` treats ``applied`` as an
-    idempotent success; a refunded or failed transaction must not stay there.
-    A retry still flips the claim after the balance was already restored.
+    True when no ``applied`` or ``claimed`` claim remains. False when the
+    write did not confirm, so the caller does not report success. ``/pay``
+    treats ``applied`` as an idempotent success and ``claimed`` as a claim it
+    may still finish. A refund that arrives after the payment row is linked
+    and before the plan balance moves must block that claim. A retry still
+    flips the claim after the balance was already restored.
     """
     claims = get_collection("payment_plan_payment_claims")
     try:
@@ -480,8 +532,14 @@ async def _invalidate_applied_plan_claim(transaction_id: str, plan_id: str | Non
     except Exception as exc:
         logger.warning("[payment_webhook] plan claim read failed err=%s", type(exc).__name__)
         return False
-    if not isinstance(claim, dict) or claim.get("status") != "applied":
+    if not isinstance(claim, dict):
         return True
+    claim_status = claim.get("status")
+    if claim_status in ("reversed", "failed"):
+        return True
+    if claim_status not in ("applied", "claimed"):
+        logger.warning("[payment_webhook] plan claim status is not reversible")
+        return False
     claim_plan = str(claim.get("plan_id") or "").strip()
     if plan_id and claim_plan and claim_plan != plan_id:
         logger.warning("[payment_webhook] plan claim belongs to a different plan")
@@ -489,7 +547,7 @@ async def _invalidate_applied_plan_claim(transaction_id: str, plan_id: str | Non
     for _ in range(2):
         try:
             await claims.update_one(
-                {"transaction_id": transaction_id, "status": "applied"},
+                {"transaction_id": transaction_id, "status": {"$in": ["applied", "claimed"]}},
                 {"$set": {
                     "status": "reversed",
                     "reversed_at": now.isoformat(),
@@ -504,8 +562,8 @@ async def _invalidate_applied_plan_claim(transaction_id: str, plan_id: str | Non
             logger.warning("[payment_webhook] plan claim readback failed err=%s", type(exc).__name__)
             fresh = None
         # A failed read is not proof the claim moved. Only a confirmed
-        # non-applied claim (or no claim) lets the lifecycle succeed.
-        if isinstance(fresh, dict) and fresh.get("status") != "applied":
+        # claim that /pay can no longer finish lets the lifecycle succeed.
+        if isinstance(fresh, dict) and fresh.get("status") not in ("applied", "claimed"):
             return True
         if fresh is None:
             try:
@@ -515,6 +573,67 @@ async def _invalidate_applied_plan_claim(transaction_id: str, plan_id: str | Non
             if still == 0:
                 return True
     return False
+
+
+async def _reverse_plan_balance(plans, plan, plan_id, transaction_id, event_type, amount, now):
+    """Restore the plan when this transaction is still applied.
+
+    Returns ``(reversed, snapshot, error)``. ``error`` is a response the
+    caller returns. The snapshot is stored under this transaction's own key.
+    """
+    applied = list(plan.get("applied_transaction_ids") or [])
+    if transaction_id not in applied:
+        return False, None, None
+    if any(key not in plan for key in ("balance_remaining", "total_paid", "payments_made")):
+        return False, None, JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+    try:
+        restored = float(amount)
+        balance_now = float(plan["balance_remaining"])
+        snapshot = _build_reversal_snapshot(
+            plan, transaction_id, event_type, restored, balance_now,
+        )
+    except (TypeError, ValueError):
+        return False, None, JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+    set_fields = {
+        _snapshot_path(transaction_id, event_type): snapshot,
+        "updated_at": now.isoformat(),
+    }
+    if snapshot["plan_status_after"] != snapshot["plan_status_before"]:
+        set_fields["status"] = snapshot["plan_status_after"]
+    reversal = {
+        "$inc": {
+            "balance_remaining": restored,
+            "total_paid": -restored,
+            "payments_made": -1,
+        },
+        "$pull": {"applied_transaction_ids": transaction_id},
+        "$set": set_fields,
+    }
+    try:
+        res = await plans.update_one(
+            {"plan_id": plan_id, "applied_transaction_ids": transaction_id},
+            reversal,
+        )
+    except Exception as exc:
+        logger.warning("[payment_webhook] plan reversal failed err=%s", type(exc).__name__)
+        return False, None, JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+    moved = bool(getattr(res, "modified_count", 0) or getattr(res, "matched_count", 0))
+    if moved:
+        return True, snapshot, None
+    try:
+        fresh = await plans.find_one({"plan_id": plan_id})
+    except Exception:
+        fresh = None
+    still_applied = (
+        not isinstance(fresh, dict)
+        or transaction_id in list(fresh.get("applied_transaction_ids") or [])
+    )
+    if still_applied:
+        return False, None, JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+    stored = _reversal_snapshot_for(fresh, transaction_id, event_type)
+    if stored is None:
+        return False, None, JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+    return True, stored, None
 
 
 async def _apply_later_payment_lifecycle(
@@ -608,72 +727,52 @@ async def _apply_later_payment_lifecycle(
 
     balance_reversed = False
     reversal_snapshot = None
-    if needs_reversal and isinstance(plan, dict):
-        try:
-            restored = float(rows[0].get("amount"))
-            balance_now = float(plan["balance_remaining"])
-            snapshot = _build_reversal_snapshot(
-                plan, transaction_id, event_type, restored, balance_now,
-            )
-        except (TypeError, ValueError):
-            return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
-        set_fields = {"reversal_snapshot": snapshot, "updated_at": now.isoformat()}
-        if snapshot["plan_status_after"] != snapshot["plan_status_before"]:
-            set_fields["status"] = snapshot["plan_status_after"]
-        reversal: dict = {
-            "$inc": {
-                "balance_remaining": restored,
-                "total_paid": -restored,
-                "payments_made": -1,
-            },
-            "$pull": {"applied_transaction_ids": transaction_id},
-            "$set": set_fields,
-        }
-        try:
-            res = await plans.update_one(
-                {"plan_id": plan_ids[0], "applied_transaction_ids": transaction_id},
-                reversal,
-            )
-        except Exception as exc:
-            logger.warning(
-                "[payment_webhook] plan reversal failed err=%s", type(exc).__name__,
-            )
-            return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
-        moved = bool(getattr(res, "modified_count", 0) or getattr(res, "matched_count", 0))
-        if moved:
+    if isinstance(plan, dict) and plan_ids:
+        did_reverse, snap, reverse_error = await _reverse_plan_balance(
+            plans, plan, plan_ids[0], transaction_id, event_type, rows[0].get("amount"), now,
+        )
+        if reverse_error is not None:
+            return reverse_error
+        if did_reverse:
             balance_reversed = True
-            reversal_snapshot = snapshot
+            reversal_snapshot = snap
         else:
-            try:
-                fresh = await plans.find_one({"plan_id": plan_ids[0]})
-            except Exception:
-                fresh = None
-            still_applied = (
-                not isinstance(fresh, dict)
-                or transaction_id in list(fresh.get("applied_transaction_ids") or [])
-            )
-            if still_applied:
-                return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
-            stored = _reversal_snapshot_for(fresh, transaction_id, event_type)
-            if stored is None:
-                return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
-            balance_reversed = True
-            reversal_snapshot = stored
-    elif isinstance(plan, dict):
-        stored = _reversal_snapshot_for(plan, transaction_id, event_type)
-        if stored is not None:
-            balance_reversed = True
-            reversal_snapshot = stored
+            stored = _reversal_snapshot_for(plan, transaction_id, event_type)
+            if stored is not None:
+                balance_reversed = True
+                reversal_snapshot = stored
 
     if balance_reversed and reversal_snapshot is None:
         return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
 
     # The balance restore and the claim are separate writes. A retry whose
-    # transaction is already pulled still has to leave the claim reversed,
-    # or /pay reports the refunded installment as an idempotent success.
+    # transaction is already pulled still has to leave the claim reversed.
+    # An in-flight ``claimed`` claim is blocked here too: /pay must not apply
+    # a payment this event has already marked terminal.
     linked_plan = plan_ids[0] if plan_ids else None
     if not await _invalidate_applied_plan_claim(transaction_id, linked_plan, event_type, now):
         return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+
+    # /pay can add the transaction after the first plan read and before this
+    # claim block. Re-read once and reverse that late balance move.
+    if plan_ids and not balance_reversed:
+        try:
+            fresh_plan = await plans.find_one({"plan_id": plan_ids[0]})
+        except Exception as exc:
+            logger.warning(
+                "[payment_webhook] plan reread failed for lifecycle err=%s", type(exc).__name__,
+            )
+            return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+        if isinstance(fresh_plan, dict):
+            did_reverse, snap, reverse_error = await _reverse_plan_balance(
+                plans, fresh_plan, plan_ids[0], transaction_id, event_type, rows[0].get("amount"), now,
+            )
+            if reverse_error is not None:
+                return reverse_error
+            if did_reverse:
+                balance_reversed = True
+                reversal_snapshot = snap
+                needs_reversal = True
 
     if already and not needs_reversal and existing_audit is not None:
         return JSONResponse(status_code=200, content={"success": True, "duplicate": True})
@@ -1048,6 +1147,14 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
                     bool(transaction_id),
                 )
                 return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+            # Amount and ownership are checked before the initial audit.
+            # A rejected replay must not leave payment.{status} holding the
+            # mismatched payload: a later correct retry would keep that audit.
+            refused = _completed_replay_refusal(
+                rows, amount, booking_number or "", custom_fields, transaction_id,
+            )
+            if refused is not None:
+                return refused
             if not await _ensure_initial_payment_audit(transaction_id, status, data, now):
                 return JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
             enriched = await _enrich_completed_payment(

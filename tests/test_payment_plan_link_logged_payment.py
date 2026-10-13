@@ -1379,6 +1379,84 @@ def test_live_log_claim_without_a_row_is_not_a_duplicate(rig, monkeypatch, statu
     assert db["payment_log_claims"].docs[0]["reclaim_token"] == "live"
 
 
+def test_refund_between_link_and_balance_does_not_reduce_the_plan(rig):
+    """The row can be refunded after it is linked and before the plan balance moves."""
+    db, app = rig
+    row = _poller_row(db)
+    orig = db["audit_events"].insert_one
+
+    async def refund_after_link(doc):
+        if doc.get("event_type") == "payment_plan_logged_payment_linked":
+            row["status"] = "refunded"
+            row["raw_payload"] = {"event_type": "payment.refunded", "amount": 100}
+        return await orig(doc)
+
+    db["audit_events"].insert_one = refund_after_link
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    body = r.json()
+    assert r.status_code == 409 and body["error"] == "payment_reversed"
+    assert body.get("success") is not True
+    assert _plan(db)["balance_remaining"] == 800.0 and _plan(db)["payments_made"] == 1
+    assert "TX-CARD" not in (_plan(db).get("applied_transaction_ids") or [])
+    assert db["payment_plan_payment_claims"].docs[0]["status"] == "reversed"
+    assert row["status"] == "refunded" and len(db["payments"].docs) == 1
+    (again,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert again.status_code == 409 and again.json()["error"] == "payment_reversed"
+    assert _plan(db)["balance_remaining"] == 800.0
+
+
+def test_refund_during_the_balance_write_is_given_back(rig):
+    db, app = rig
+
+    def refund(_coll, _flt):
+        db["payments"].docs[0]["status"] = "refunded"
+        db["payments"].docs[0]["raw_payload"] = {"event_type": "payment.refunded"}
+
+    db["payment_plans"].before_update = refund
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CASH"}])
+    assert r.status_code == 409 and r.json()["error"] == "payment_reversed"
+    assert r.json().get("success") is not True
+    plan = _plan(db)
+    assert plan["balance_remaining"] == 800.0
+    assert plan["total_paid"] == 200.0 and plan["payments_made"] == 1
+    assert "TX-CASH" not in (plan.get("applied_transaction_ids") or [])
+    assert db["payment_plan_payment_claims"].docs[0]["status"] == "reversed"
+
+
+def test_pay_retry_removes_a_refunded_installment_left_on_the_plan(rig):
+    """A reversed claim can still be sitting on a balance the refund did not see."""
+    db, app = rig
+    db["payments"].docs.append({
+        "_id": "pay-1",
+        "transaction_id": "TX-CARD",
+        "amount": 100.0,
+        "status": "refunded",
+        "plan_id": PLAN_ID,
+        "booking_number": "TEST-PP-1",
+        "county": "Lee",
+        "state": "FL",
+        "raw_payload": {"event_type": "payment.refunded"},
+    })
+    plan = _plan(db)
+    plan["balance_remaining"] = 700.0
+    plan["total_paid"] = 300.0
+    plan["payments_made"] = 2
+    plan["applied_transaction_ids"] = ["TX-CARD"]
+    db["payment_plan_payment_claims"].docs.append({
+        "plan_id": PLAN_ID,
+        "transaction_id": "TX-CARD",
+        "amount": 100.0,
+        "status": "reversed",
+    })
+    (r,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    body = r.json()
+    assert r.status_code == 409 and body["error"] == "payment_reversed"
+    assert body.get("success") is not True and body.get("idempotent") is not True
+    assert plan["balance_remaining"] == 800.0
+    assert plan["total_paid"] == 200.0 and plan["payments_made"] == 1
+    assert "TX-CARD" not in plan["applied_transaction_ids"]
+
+
 def test_fresh_logged_claim_without_a_visible_row_is_not_reclaimed(rig, monkeypatch):
     """logged_at is the live stamp. An old claimed_at must not steal a claim that was just marked."""
     monkeypatch.delenv("SLACK_WEBHOOK_LEADS", raising=False)

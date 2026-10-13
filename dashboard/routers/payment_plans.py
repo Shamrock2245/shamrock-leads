@@ -367,6 +367,171 @@ def _claim_status_unconfirmed(txn: str):
     )
 
 
+def _payment_reversed_response(txn: str):
+    return JSONResponse(
+        {"error": "payment_reversed", "transaction_id": txn,
+         "message": "This transaction was refunded or failed. It is not an open installment."},
+        status_code=409,
+    )
+
+
+_TERMINAL_PAYMENT_STATUSES = frozenset({"refunded", "failed", "declined", "voided", "void"})
+
+
+def _row_is_terminal(row: dict) -> bool:
+    """True when SwipeSimple has already closed this payment."""
+    status = str((row or {}).get("status") or "").strip().lower()
+    if status in _TERMINAL_PAYMENT_STATUSES:
+        return True
+    raw = row.get("raw_payload") if isinstance(row, dict) else None
+    if isinstance(raw, dict):
+        event = str(raw.get("event_type") or "").strip().lower()
+        if event in {"payment.refunded", "payment.failed"}:
+            return True
+    return False
+
+
+async def _terminal_payment_rows(txn: str):
+    """True when every payments row for this transaction is terminal.
+
+    False when there is no row or a row that can still be collected. None
+    when the read failed.
+    """
+    payments = get_collection("payments")
+    try:
+        cursor = payments.find({"transaction_id": txn})
+        if hasattr(cursor, "to_list"):
+            rows = await cursor.to_list(length=20)
+        else:
+            rows = []
+            async for doc in cursor:
+                rows.append(doc)
+    except Exception as exc:
+        logger.warning("[payment_plans] terminal payment read failed err=%s", type(exc).__name__)
+        return None
+    if not rows:
+        return False
+    return all(_row_is_terminal(row) for row in rows)
+
+
+async def _reverse_plan_claim(claims, plan_id: str, txn: str, event: str) -> bool:
+    """Set a claimed or applied plan claim to reversed. True when that is confirmed."""
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        await claims.update_one(
+            {"plan_id": plan_id, "transaction_id": txn, "status": {"$in": ["claimed", "applied"]}},
+            {"$set": {"status": "reversed", "reversed_at": now, "reversed_event": event}},
+        )
+    except Exception as exc:
+        logger.warning("[payment_plans] claim reverse failed plan_id=%s err=%s", plan_id, type(exc).__name__)
+    try:
+        fresh = await claims.find_one({"plan_id": plan_id, "transaction_id": txn})
+    except Exception as exc:
+        logger.warning("[payment_plans] claim reverse readback failed plan_id=%s err=%s", plan_id, type(exc).__name__)
+        return False
+    if fresh is None:
+        return True
+    return isinstance(fresh, dict) and fresh.get("status") == "reversed"
+
+
+async def _restore_uncollected_balance(plans_col, plan_id: str, txn: str, amount) -> bool:
+    """Pull a terminal transaction back out of the plan when it is still applied.
+
+    True when the transaction is not left in ``applied_transaction_ids``.
+    False when the plan cannot be read or the marker is still there.
+    """
+    try:
+        plan = await plans_col.find_one({"plan_id": plan_id})
+    except Exception as exc:
+        logger.warning("[payment_plans] terminal balance read failed plan_id=%s err=%s", plan_id, type(exc).__name__)
+        return False
+    if not isinstance(plan, dict):
+        return False
+    if txn not in list(plan.get("applied_transaction_ids") or []):
+        return True
+    try:
+        restored = float(amount)
+        balance_now = float(plan["balance_remaining"])
+    except (TypeError, ValueError, KeyError):
+        return False
+    update: dict = {
+        "$inc": {
+            "balance_remaining": restored,
+            "total_paid": -restored,
+            "payments_made": -1,
+        },
+        "$pull": {"applied_transaction_ids": txn},
+    }
+    if plan.get("status") == "paid_in_full" and balance_now + restored > 0:
+        update["$set"] = {"status": "active", "updated_at": datetime.now(timezone.utc).isoformat()}
+    try:
+        await plans_col.update_one(
+            {"plan_id": plan_id, "applied_transaction_ids": txn},
+            update,
+        )
+    except Exception as exc:
+        logger.warning("[payment_plans] terminal balance restore failed plan_id=%s err=%s", plan_id, type(exc).__name__)
+        return False
+    try:
+        fresh = await plans_col.find_one({"plan_id": plan_id})
+    except Exception:
+        return False
+    if not isinstance(fresh, dict):
+        return False
+    return txn not in list(fresh.get("applied_transaction_ids") or [])
+
+
+async def _stop_terminal_installment(plans_col, claims, plan_id: str, txn: str, amount):
+    """Refuse a balance move when this transaction is already terminal.
+
+    None when the payment can still be collected. A response when it must not
+    reduce the plan. Restores the balance when a previous attempt already
+    applied the transaction.
+    """
+    try:
+        claim = await claims.find_one({"plan_id": plan_id, "transaction_id": txn})
+    except Exception as exc:
+        logger.warning("[payment_plans] terminal claim read failed plan_id=%s err=%s", plan_id, type(exc).__name__)
+        return JSONResponse(
+            {"error": "payment_record_failed", "transaction_id": txn,
+             "message": "The payment could not be confirmed. Check the plan before recording it again."},
+            status_code=503,
+        )
+    claim_status = claim.get("status") if isinstance(claim, dict) else None
+    terminal = await _terminal_payment_rows(txn)
+    if terminal is None:
+        return JSONResponse(
+            {"error": "payment_record_failed", "transaction_id": txn,
+             "message": "The payment could not be confirmed. Check the plan before recording it again."},
+            status_code=503,
+        )
+    if claim_status == "reversed" or terminal:
+        restore_amount = amount
+        if isinstance(claim, dict) and claim.get("amount") is not None:
+            restore_amount = claim.get("amount")
+        if not await _restore_uncollected_balance(plans_col, plan_id, txn, restore_amount):
+            return JSONResponse(
+                {"error": "payment_record_failed", "transaction_id": txn,
+                 "message": "The refunded payment could not be removed from the plan. Check the plan before recording it again."},
+                status_code=503,
+            )
+        if claim_status != "reversed":
+            if not await _reverse_plan_claim(claims, plan_id, txn, "payment.refunded"):
+                return JSONResponse(
+                    {"error": "payment_record_failed", "transaction_id": txn,
+                     "message": "The refunded payment's claim could not be updated. Check the plan before recording it again."},
+                    status_code=503,
+                )
+        return _payment_reversed_response(txn)
+    if claim_status != "claimed":
+        return JSONResponse(
+            {"error": "payment_needs_review", "transaction_id": txn,
+             "message": "This transaction id changed while it was being recorded. Check the plan before recording it again."},
+            status_code=409,
+        )
+    return None
+
+
 async def _idempotent_reply(
     plans_col, plan_id: str, txn: str, claim: dict | None, amount: float,
     legacy_row: dict | None = None,
@@ -390,14 +555,39 @@ async def _idempotent_reply(
             status_code=409,
         )
     if status == "reversed":
-        # A refund or failure restored the balance. The claim must not look
-        # like a finished installment.
-        return JSONResponse(
-            {"error": "payment_reversed", "transaction_id": txn,
-             "message": "This transaction was refunded or failed after it was applied. It is not an open installment."},
-            status_code=409,
+        # A refund can reverse the claim and still lose the race to the
+        # balance write. Pull the transaction back out before refusing, so
+        # a later retry does not leave the refunded payment on the plan.
+        try:
+            claims = await _payment_claims_collection()
+        except Exception as exc:
+            logger.warning(
+                "[payment_plans] reversed claim collection failed plan_id=%s err=%s",
+                plan_id, type(exc).__name__,
+            )
+            return _claim_status_unconfirmed(txn)
+        stopped = await _stop_terminal_installment(
+            plans_col, claims, plan_id, txn, (claim or {}).get("amount", amount),
         )
+        if stopped is not None:
+            return stopped
+        return _payment_reversed_response(txn)
     if status == "claimed":
+        # A refund can close the payment while this claim is still claimed.
+        # Do not finish it as applied, and do not leave the balance reduced.
+        try:
+            claims = await _payment_claims_collection()
+        except Exception as exc:
+            logger.warning(
+                "[payment_plans] terminal claim collection failed plan_id=%s err=%s",
+                plan_id, type(exc).__name__,
+            )
+            return _claim_status_unconfirmed(txn)
+        stopped = await _stop_terminal_installment(
+            plans_col, claims, plan_id, txn, (claim or {}).get("amount", amount),
+        )
+        if stopped is not None:
+            return stopped
         # The balance write can land and the claim-status write can miss.
         # applied_transaction_ids is the marker that the installment is on
         # the plan. Finish the claim from that marker instead of returning
@@ -1464,6 +1654,13 @@ async def record_payment(request: Request, plan_id):
             status_code=409,
         )
 
+    # A refund can land after this request linked the row and before the
+    # balance moves. Do not decrement a terminal payment. The claim is
+    # reversed so a retry cannot apply it either.
+    stopped = await _stop_terminal_installment(plans_col, claims, plan_id, txn, amount)
+    if stopped is not None:
+        return stopped
+
     plan_write_landed = True
     try:
         # Atomic increments so two different transactions never overwrite each other.
@@ -1539,6 +1736,12 @@ async def record_payment(request: Request, plan_id):
             {"error": unconfirmed, "transaction_id": txn, "message": message},
             status_code=500,
         )
+
+    # The row can become terminal between the pre-check and this read.
+    # Give the balance back when this transaction was the one that moved it.
+    stopped = await _stop_terminal_installment(plans_col, claims, plan_id, txn, amount)
+    if stopped is not None:
+        return stopped
 
     new_balance = updated["balance_remaining"]
     status = updated["status"]
