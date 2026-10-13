@@ -844,3 +844,60 @@ def test_legacy_reversal_snapshot_still_audits_on_retry(payment_app, monkeypatch
     assert ev["balance_reversed"] is True
     assert ev["balance_remaining_before"] == 700.0 and ev["balance_remaining_after"] == 800.0
     assert db["payment_plans"].docs[0]["balance_remaining"] == 800.0
+
+
+def test_refund_restores_a_legacy_plan_with_an_applied_claim_and_no_marker(payment_app, monkeypatch):
+    """A plan collected before applied_transaction_ids existed still gets the refund back."""
+    db, client = _lifecycle_client(payment_app, monkeypatch)
+    _seed_linked_payment(db)
+    plan = db["payment_plans"].docs[0]
+    del plan["applied_transaction_ids"]
+    resp = _post_lifecycle(client, "payment.refunded", "refunded")
+    assert resp.status_code == 200 and resp.json()["lifecycle_updated"] is True
+    assert plan["balance_remaining"] == 800.0
+    assert plan["total_paid"] == 200.0 and plan["payments_made"] == 1
+    assert "TX-LIFE" not in (plan.get("applied_transaction_ids") or [])
+    (ev,) = db["audit_events"].docs
+    assert ev["balance_reversed"] is True and ev["legacy_marker_reconstructed"] is True
+    assert ev["balance_remaining_before"] == 700.0 and ev["balance_remaining_after"] == 800.0
+    assert ev["total_paid_before"] == 300.0 and ev["total_paid_after"] == 200.0
+    assert ev["payments_made_before"] == 2 and ev["payments_made_after"] == 1
+    assert ev["confidence"] == 1.0
+    again = _post_lifecycle(client, "payment.refunded", "refunded")
+    assert again.status_code == 200 and again.json()["duplicate"] is True
+    assert plan["balance_remaining"] == 800.0
+    assert len(db["audit_events"].docs) == 1
+
+
+def test_refund_restores_a_preclaim_linked_payment(payment_app, monkeypatch):
+    """No plan claim and no marker: the settled linked row is the collection evidence."""
+    db, client = _lifecycle_client(payment_app, monkeypatch)
+    _seed_linked_payment(db)
+    plan = db["payment_plans"].docs[0]
+    del plan["applied_transaction_ids"]
+    db["payment_plan_payment_claims"].docs.clear()
+    resp = _post_lifecycle(client, "payment.refunded", "refunded")
+    assert resp.status_code == 200 and resp.json()["lifecycle_updated"] is True
+    assert plan["balance_remaining"] == 800.0
+    assert plan["payments_made"] == 1
+    assert db["audit_events"].docs[0]["legacy_marker_reconstructed"] is True
+    assert db["audit_events"].docs[0]["balance_reversed"] is True
+
+
+def test_legacy_applied_claim_without_collected_totals_fails_closed(payment_app, monkeypatch):
+    """A missing marker is not 'never applied' when the claim says the installment was collected."""
+    db, client = _lifecycle_client(payment_app, monkeypatch)
+    _seed_linked_payment(db)
+    plan = db["payment_plans"].docs[0]
+    del plan["applied_transaction_ids"]
+    plan["payments_made"] = 0
+    resp = _post_lifecycle(client, "payment.refunded", "refunded")
+    assert resp.status_code == 503
+    assert resp.json()["error"] == "payment_lifecycle_update_failed"
+    assert resp.json().get("success") is not True
+    assert plan["balance_remaining"] == 700.0
+    assert plan["total_paid"] == 300.0
+    assert plan["payments_made"] == 0
+    assert "applied_transaction_ids" not in plan
+    assert db["audit_events"].docs == []
+    assert db["payment_plan_payment_claims"].docs[0]["status"] == "applied"

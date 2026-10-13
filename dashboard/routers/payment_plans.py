@@ -434,12 +434,76 @@ async def _reverse_plan_claim(claims, plan_id: str, txn: str, event: str) -> boo
     return isinstance(fresh, dict) and fresh.get("status") == "reversed"
 
 
+async def _ensure_terminal_restore_audit(plan_id: str, txn: str, snapshot: dict) -> bool:
+    """Write the before/after record for a balance this route restored.
+
+    True when that audit is stored. A retry does not write a second copy.
+    The webhook's earlier ``balance_reversed: false`` audit is a different
+    event and is left as the record of what the webhook itself did.
+    """
+    from dashboard.routers.webhooks import _REVERSAL_FIELDS
+
+    audit_events = get_collection("audit_events")
+    flt = {
+        "event_type": "payment_plan_terminal_balance_restored",
+        "transaction_id": txn,
+        "entity_id": plan_id,
+    }
+    try:
+        existing = await audit_events.find_one(flt)
+    except Exception as exc:
+        logger.warning(
+            "[payment_plans] terminal restore audit read failed plan_id=%s err=%s",
+            plan_id, type(exc).__name__,
+        )
+        return False
+    if existing is not None:
+        return True
+    now = datetime.now(timezone.utc)
+    doc = {
+        "event_type": "payment_plan_terminal_balance_restored",
+        "entity_type": "payment_plan",
+        "entity_id": plan_id,
+        "actor": "payment_plan_pay",
+        "agent_name": "payment_plan_pay",
+        "timestamp": now,
+        "created_at": now,
+        "transaction_id": txn,
+        "plan_id": plan_id,
+        "reason": "refunded or failed transaction was already applied; the pay route restored the balance",
+        "confidence": 1.0,
+    }
+    for key in _REVERSAL_FIELDS:
+        if key not in snapshot:
+            return False
+        doc[key] = snapshot[key]
+    for _attempt in range(2):
+        try:
+            await audit_events.insert_one(dict(doc))
+            return True
+        except Exception as exc:
+            logger.warning(
+                "[payment_plans] terminal restore audit failed plan_id=%s err=%s",
+                plan_id, type(exc).__name__,
+            )
+    return False
+
+
 async def _restore_uncollected_balance(plans_col, plan_id: str, txn: str, amount) -> bool:
     """Pull a terminal transaction back out of the plan when it is still applied.
 
-    True when the transaction is not left in ``applied_transaction_ids``.
-    False when the plan cannot be read or the marker is still there.
+    True when the transaction is not left in ``applied_transaction_ids`` and,
+    when this route moved the balance, the before/after audit is saved.
+    False when the plan cannot be read, the marker is still there, or the
+    audit of a restore this route performed is missing.
     """
+    from dashboard.routers.webhooks import (
+        _build_reversal_snapshot,
+        _reversal_snapshot_for,
+        _snapshot_path,
+    )
+
+    event_type = "payment.refunded"
     try:
         plan = await plans_col.find_one({"plan_id": plan_id})
     except Exception as exc:
@@ -447,13 +511,27 @@ async def _restore_uncollected_balance(plans_col, plan_id: str, txn: str, amount
         return False
     if not isinstance(plan, dict):
         return False
-    if txn not in list(plan.get("applied_transaction_ids") or []):
-        return True
+    applied = txn in list(plan.get("applied_transaction_ids") or [])
+    existing_snap = _reversal_snapshot_for(plan, txn, event_type)
+    if not applied:
+        # Nothing to undo, unless this route already restored and still owes
+        # the audit. A webhook snapshot is that webhook's record.
+        if not (isinstance(existing_snap, dict) and existing_snap.get("restored_by") == "payment_plan_pay"):
+            return True
+        return await _ensure_terminal_restore_audit(plan_id, txn, existing_snap)
     try:
         restored = float(amount)
         balance_now = float(plan["balance_remaining"])
+        snapshot = _build_reversal_snapshot(plan, txn, event_type, restored, balance_now)
     except (TypeError, ValueError, KeyError):
         return False
+    snapshot["restored_by"] = "payment_plan_pay"
+    set_fields = {
+        _snapshot_path(txn, event_type): snapshot,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if snapshot["plan_status_after"] != snapshot["plan_status_before"]:
+        set_fields["status"] = snapshot["plan_status_after"]
     update: dict = {
         "$inc": {
             "balance_remaining": restored,
@@ -461,9 +539,8 @@ async def _restore_uncollected_balance(plans_col, plan_id: str, txn: str, amount
             "payments_made": -1,
         },
         "$pull": {"applied_transaction_ids": txn},
+        "$set": set_fields,
     }
-    if plan.get("status") == "paid_in_full" and balance_now + restored > 0:
-        update["$set"] = {"status": "active", "updated_at": datetime.now(timezone.utc).isoformat()}
     try:
         await plans_col.update_one(
             {"plan_id": plan_id, "applied_transaction_ids": txn},
@@ -478,7 +555,14 @@ async def _restore_uncollected_balance(plans_col, plan_id: str, txn: str, amount
         return False
     if not isinstance(fresh, dict):
         return False
-    return txn not in list(fresh.get("applied_transaction_ids") or [])
+    if txn in list(fresh.get("applied_transaction_ids") or []):
+        return False
+    fresh_snap = _reversal_snapshot_for(fresh, txn, event_type)
+    if not isinstance(fresh_snap, dict):
+        return False
+    if fresh_snap.get("restored_by") != "payment_plan_pay":
+        return True
+    return await _ensure_terminal_restore_audit(plan_id, txn, fresh_snap)
 
 
 async def _stop_terminal_installment(plans_col, claims, plan_id: str, txn: str, amount):
@@ -1089,8 +1173,17 @@ async def _audit_unlink(actor: str, plan_id: str, txn: str, row: dict, reason: s
 
 
 async def _other_rows_for_txn(payments_col, txn: str, own_id) -> bool:
-    """Post-write recheck: does any OTHER payments row carry this txn? Raises on DB error."""
-    return await payments_col.find_one({"transaction_id": txn, "_id": {"$ne": own_id}}) is not None
+    """Post-write recheck: does any OTHER committed payments row carry this txn?
+
+    A row that still has ``log_claim_token`` is an uncommitted insert. It is
+    not a second payment. Raises on DB error. This filter does not create an
+    index on ``payments``.
+    """
+    return await payments_col.find_one({
+        "transaction_id": txn,
+        "_id": {"$ne": own_id},
+        "log_claim_token": {"$exists": False},
+    }) is not None
 
 
 def _plan_payment_confirmed(plan) -> bool:

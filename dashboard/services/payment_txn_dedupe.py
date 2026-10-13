@@ -15,6 +15,12 @@ A claim with no payments row is not a duplicate. A live claim (still inside
 ``ORPHAN_CLAIM_AFTER``) raises ``PaymentLogNotReady`` so the caller retries
 without marking the receipt read. An older claim is reclaimed and the row
 is inserted once.
+
+An ``inserting`` claim can be reclaimed after that window only because the
+insert is fenced. The payments row carries ``log_claim_token`` until the
+owner confirms it still holds the claim. If the token has moved, that owner
+deletes its own row and does not leave it committed. The new owner is the
+only one that may commit. This does not create an index on ``payments``.
 """
 from __future__ import annotations
 
@@ -173,21 +179,86 @@ async def _release_if_no_row(payments, claims, txn: str, token: str) -> None:
         return
 
 
-async def _existing_payment(payments, txn: str):
-    """The payments row for this transaction, or None when there is none.
+def _row_is_committed(row: dict) -> bool:
+    """A row is committed once its insert token has been removed.
 
-    Raises when the read fails. ``payment_log_claims`` starts empty on deploy
-    while production already has payments rows, so a missing claim is not
-    proof that this transaction has no row.
+    ``log_claim_token`` is present only while the owner has not yet confirmed
+    the claim. That row is not a logged payment and must not block, or be
+    replaced by, the owner who still holds the token.
     """
+    token = row.get("log_claim_token")
+    return not (isinstance(token, str) and token.strip())
+
+
+async def _payment_rows(payments, txn: str) -> list:
+    """Every payments row for this transaction id. Raises when the read fails."""
     try:
-        return await payments.find_one({"transaction_id": txn})
+        finder = getattr(payments, "find", None)
+        if finder is None:
+            one = await payments.find_one({"transaction_id": txn})
+            return [one] if isinstance(one, dict) else []
+        cursor = finder({"transaction_id": txn})
+        if hasattr(cursor, "to_list"):
+            rows = await cursor.to_list(length=20)
+        else:
+            rows = []
+            async for doc in cursor:
+                rows.append(doc)
     except Exception as exc:
         logger.warning(
             "[payment_log] existing payment read failed txn_set=%s err=%s",
             bool(txn), type(exc).__name__,
         )
         raise
+    if not isinstance(rows, list):
+        raise RuntimeError("payment read failed")
+    if len(rows) >= 20:
+        # The read is capped. Fail closed rather than miss a committed row.
+        raise PaymentLogNotReady()
+    return [row for row in rows if isinstance(row, dict)]
+
+
+async def _existing_payment(payments, txn: str):
+    """The committed payments row for this transaction, or None.
+
+    Raises when the read fails. ``payment_log_claims`` starts empty on deploy
+    while production already has payments rows, so a missing claim is not
+    proof that this transaction has no row. A row that still carries
+    ``log_claim_token`` is an uncommitted insert and is ignored here.
+    """
+    for row in await _payment_rows(payments, txn):
+        if _row_is_committed(row):
+            return row
+    return None
+
+
+async def _delete_fenced_row(payments, payment_id, token: str) -> None:
+    """Drop the row this token inserted, or stop it counting as collected.
+
+    The filter includes the token so a committed row, or another writer's
+    row, is left alone. No index is created on ``payments``.
+    """
+    if payment_id is None or not token:
+        return
+    flt = {"_id": payment_id, "log_claim_token": token}
+    try:
+        res = await payments.delete_one(flt)
+    except Exception as exc:
+        logger.warning(
+            "[payment_log] fenced row delete failed err=%s", type(exc).__name__,
+        )
+        res = None
+    if getattr(res, "deleted_count", 0):
+        return
+    try:
+        await payments.update_one(
+            flt,
+            {"$set": {"status": "log_claim_fenced", "log_claim_dropped": True}},
+        )
+    except Exception as exc:
+        logger.warning(
+            "[payment_log] fenced row downgrade failed err=%s", type(exc).__name__,
+        )
 
 
 async def _begin_insert(claims, txn: str, token: str) -> bool:
@@ -284,8 +355,10 @@ async def insert_payment_once(payments, doc: dict, *, claims, source: str) -> bo
     The existing row keeps its claim so a later refund or completed webhook
     updates that row instead of inserting another. A claim that has no row
     is reclaimed once it is no longer a live writer. A live claim raises
-    ``PaymentLogNotReady`` instead of looking like a duplicate. The payments
-    collection is not indexed.
+    ``PaymentLogNotReady`` instead of looking like a duplicate. After
+    ``insert_one`` returns, the row is committed only when this token still
+    owns the claim. A writer that lost the token deletes its own row. The
+    payments collection is not indexed.
     """
     txn = str(doc.get("transaction_id") or "").strip()
     stored = {k: v for k, v in doc.items() if k != "txn_dedupe_key"}
@@ -311,12 +384,46 @@ async def insert_payment_once(payments, doc: dict, *, claims, source: str) -> bo
                 await _mark_logged(claims, txn, existing.get("_id"), source, token)
                 return False
             raise PaymentLogNotReady()
+        if not stored.get("_id"):
+            from bson import ObjectId
+            stored["_id"] = ObjectId()
+        # The token stays on the row until this owner confirms the claim.
+        # A reclaimer that starts during insert_one cannot commit this row.
+        stored["log_claim_token"] = token
     try:
         await payments.insert_one(stored)
     except Exception:
         if txn and token:
             await _release_if_no_row(payments, claims, txn, token)
         raise
-    if txn and token:
-        await _mark_logged(claims, txn, stored.get("_id"), source, token)
+    if not (txn and token):
+        return True
+    try:
+        refreshed = await claims.update_one(
+            {"transaction_id": txn, "reclaim_token": token, "status": "inserting"},
+            {"$set": {"claimed_at": _now()}},
+        )
+    except Exception:
+        await _delete_fenced_row(payments, stored.get("_id"), token)
+        raise
+    if not (getattr(refreshed, "matched_count", 0) or getattr(refreshed, "modified_count", 0)):
+        await _delete_fenced_row(payments, stored.get("_id"), token)
+        existing = await _existing_payment(payments, txn)
+        if existing is not None:
+            return False
+        raise PaymentLogNotReady()
+    try:
+        committed = await payments.update_one(
+            {"_id": stored.get("_id"), "log_claim_token": token},
+            {"$unset": {"log_claim_token": ""}},
+        )
+    except Exception:
+        await _delete_fenced_row(payments, stored.get("_id"), token)
+        raise
+    if not (getattr(committed, "matched_count", 0) or getattr(committed, "modified_count", 0)):
+        existing = await _existing_payment(payments, txn)
+        if existing is not None:
+            return False
+        raise PaymentLogNotReady()
+    await _mark_logged(claims, txn, stored.get("_id"), source, token)
     return True

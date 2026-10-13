@@ -56,19 +56,34 @@ def _terminal_payment_status(event_type: str, status: str) -> str | None:
     return _TERMINAL_PAYMENT_EVENTS.get(event)
 
 
+def _committed_payment_filter(transaction_id: str) -> dict:
+    """A committed payments row has no insert-fence token.
+
+    ``log_claim_token`` is set only until the log-claim owner confirms the
+    insert. That row is not a payment yet. This filter does not create an
+    index on ``payments``.
+    """
+    return {
+        "transaction_id": transaction_id,
+        "log_claim_token": {"$exists": False},
+    }
+
+
 async def _payment_rows_for_txn(payments, transaction_id: str):
-    """Rows for this transaction id, or None when the read failed.
+    """Committed rows for this transaction id, or None when the read failed.
 
     More than 20 rows is too many to update safely; the caller fails closed.
+    An uncommitted fenced insert is not a row this lifecycle may update.
     """
+    flt = _committed_payment_filter(transaction_id)
     try:
-        count = await payments.count_documents({"transaction_id": transaction_id})
+        count = await payments.count_documents(flt)
     except Exception:
         return None
     if count == 0 or count > 20:
         return [] if count == 0 else None
     try:
-        cursor = payments.find({"transaction_id": transaction_id})
+        cursor = payments.find(flt)
         if hasattr(cursor, "to_list"):
             rows = await cursor.to_list(length=20)
         else:
@@ -448,6 +463,9 @@ _REVERSAL_FIELDS = (
     "plan_status_before",
     "plan_status_after",
 )
+# Statuses that mean the installment was collected. A legacy plan paid before
+# applied_transaction_ids existed is recognized from these, not from a missing marker.
+_LEGACY_SETTLED_STATUSES = frozenset({"approved", "paid", "completed", "success"})
 
 
 def _snapshot_path(transaction_id: str, event_type: str) -> str:
@@ -575,15 +593,143 @@ async def _invalidate_applied_plan_claim(transaction_id: str, plan_id: str | Non
     return False
 
 
-async def _reverse_plan_balance(plans, plan, plan_id, transaction_id, event_type, amount, now):
-    """Restore the plan when this transaction is still applied.
+def _legacy_collection_evidence(claim, plan_id: str, prior_statuses) -> str:
+    """How a linked payment with no applied marker should be treated.
+
+    ``legacy`` — the installment was collected before ``applied_transaction_ids``
+    existed (an ``applied`` claim, or no claim at all on a settled row).
+    ``not_applied`` — an in-flight ``claimed`` / ``failed`` / ``reversed`` claim
+    never moved the balance. ``unknown`` — the claim cannot be classified.
+    """
+    if isinstance(claim, dict):
+        claim_plan = str(claim.get("plan_id") or "").strip()
+        if claim_plan and claim_plan != plan_id:
+            return "unknown"
+        status = claim.get("status")
+        if status == "applied":
+            return "legacy"
+        if status in ("claimed", "failed", "reversed"):
+            return "not_applied"
+        return "unknown"
+    priors = [str(item or "").strip().lower() for item in (prior_statuses or [])]
+    if priors and all(item in _LEGACY_SETTLED_STATUSES for item in priors):
+        return "legacy"
+    return "not_applied"
+
+
+async def _legacy_plan_claim(transaction_id: str):
+    """The plan claim for this transaction, or None when there is no claim.
+
+    Raises when the read fails. A missing document is not a failed read:
+    plans collected before claims existed have a linked payment and no claim.
+    """
+    claims = get_collection("payment_plan_payment_claims")
+    try:
+        return await claims.find_one({"transaction_id": transaction_id})
+    except Exception as exc:
+        logger.warning("[payment_webhook] legacy claim read failed err=%s", type(exc).__name__)
+        raise
+
+
+def _legacy_totals_support_reversal(plan: dict, amount) -> bool:
+    """True when the plan totals can give this installment back.
+
+    A missing total, or a total that does not contain this amount, is not
+    treated as "never applied". The caller fails closed instead.
+    """
+    if any(key not in plan for key in ("balance_remaining", "total_paid", "payments_made")):
+        return False
+    try:
+        restored = float(amount)
+        paid = float(plan["total_paid"])
+        made = int(plan["payments_made"])
+    except (TypeError, ValueError):
+        return False
+    return made >= 1 and paid + 1e-9 >= restored
+
+
+async def _attach_legacy_marker(plans, plan, plan_id, transaction_id, event_type, amount):
+    """Put this transaction on the plan so the normal reversal can match it.
+
+    Returns ``(plan, error)``. ``plan`` is the refreshed document when the
+    marker is present. ``error`` is a response. ``(None, None)`` is not used.
+    When a snapshot is already stored, ``plan`` is None and ``error`` is that
+    snapshot dict so the caller does not read a stale plan.
+    """
+    if not _legacy_totals_support_reversal(plan, amount):
+        return None, JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+    path = _snapshot_path(transaction_id, event_type)
+    try:
+        await plans.update_one(
+            {
+                "plan_id": plan_id,
+                "payments_made": {"$gte": 1},
+                path: {"$exists": False},
+            },
+            {"$addToSet": {"applied_transaction_ids": transaction_id}},
+        )
+    except Exception as exc:
+        logger.warning("[payment_webhook] legacy marker write failed err=%s", type(exc).__name__)
+        return None, JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+    try:
+        fresh = await plans.find_one({"plan_id": plan_id})
+    except Exception as exc:
+        logger.warning("[payment_webhook] legacy marker readback failed err=%s", type(exc).__name__)
+        return None, JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+    if not isinstance(fresh, dict):
+        return None, JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+    stored = _reversal_snapshot_for(fresh, transaction_id, event_type)
+    if stored is not None and transaction_id not in list(fresh.get("applied_transaction_ids") or []):
+        return None, stored
+    if transaction_id not in list(fresh.get("applied_transaction_ids") or []):
+        return None, JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+    if not _legacy_totals_support_reversal(fresh, amount):
+        return None, JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+    return fresh, None
+
+
+async def _reverse_plan_balance(
+    plans, plan, plan_id, transaction_id, event_type, amount, now,
+    prior_statuses=None,
+):
+    """Restore the plan when this transaction was applied.
 
     Returns ``(reversed, snapshot, error)``. ``error`` is a response the
     caller returns. The snapshot is stored under this transaction's own key.
+
+    A missing ``applied_transaction_ids`` entry is not proof the installment
+    was never collected. Plans paid before that marker existed are
+    reconstructed from an ``applied`` claim, or from a settled linked row
+    when no claim exists, and then reversed. An in-flight claim is not
+    reconstructed. When the legacy totals cannot be checked, the result is
+    an error rather than ``balance_reversed: false``.
     """
     applied = list(plan.get("applied_transaction_ids") or [])
+    legacy = False
     if transaction_id not in applied:
-        return False, None, None
+        stored = _reversal_snapshot_for(plan, transaction_id, event_type)
+        if stored is not None:
+            return True, stored, None
+        try:
+            claim = await _legacy_plan_claim(transaction_id)
+        except Exception:
+            return False, None, JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+        evidence = _legacy_collection_evidence(claim, plan_id, prior_statuses)
+        if evidence == "unknown":
+            return False, None, JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+        if evidence != "legacy":
+            return False, None, None
+        fresh, attach_error = await _attach_legacy_marker(
+            plans, plan, plan_id, transaction_id, event_type, amount,
+        )
+        if isinstance(attach_error, JSONResponse):
+            return False, None, attach_error
+        if isinstance(attach_error, dict):
+            return True, attach_error, None
+        if fresh is None:
+            return False, None, JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
+        plan = fresh
+        legacy = True
     if any(key not in plan for key in ("balance_remaining", "total_paid", "payments_made")):
         return False, None, JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
     try:
@@ -592,6 +738,8 @@ async def _reverse_plan_balance(plans, plan, plan_id, transaction_id, event_type
         snapshot = _build_reversal_snapshot(
             plan, transaction_id, event_type, restored, balance_now,
         )
+        if legacy:
+            snapshot["legacy_marker_reconstructed"] = True
     except (TypeError, ValueError):
         return False, None, JSONResponse({"error": "payment_lifecycle_update_failed"}, status_code=503)
     set_fields = {
@@ -730,6 +878,7 @@ async def _apply_later_payment_lifecycle(
     if isinstance(plan, dict) and plan_ids:
         did_reverse, snap, reverse_error = await _reverse_plan_balance(
             plans, plan, plan_ids[0], transaction_id, event_type, rows[0].get("amount"), now,
+            prior_statuses=status_before,
         )
         if reverse_error is not None:
             return reverse_error
@@ -766,6 +915,7 @@ async def _apply_later_payment_lifecycle(
         if isinstance(fresh_plan, dict):
             did_reverse, snap, reverse_error = await _reverse_plan_balance(
                 plans, fresh_plan, plan_ids[0], transaction_id, event_type, rows[0].get("amount"), now,
+                prior_statuses=status_before,
             )
             if reverse_error is not None:
                 return reverse_error
@@ -798,6 +948,11 @@ async def _apply_later_payment_lifecycle(
         if reversal_snapshot is not None:
             for key in _REVERSAL_FIELDS:
                 audit[key] = reversal_snapshot[key]
+            if reversal_snapshot.get("legacy_marker_reconstructed"):
+                audit["legacy_marker_reconstructed"] = True
+                audit["reason"] = (
+                    "refund of an installment collected before applied_transaction_ids existed"
+                )
         try:
             await audit_events.insert_one(audit)
         except Exception as exc:

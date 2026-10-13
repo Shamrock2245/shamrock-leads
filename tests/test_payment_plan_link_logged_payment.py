@@ -1073,6 +1073,7 @@ def _assert_payments_not_indexed(db):
     assert db["payments"].partial_unique == []
     for row in db["payments"].docs:
         assert "txn_dedupe_key" not in row
+        assert "log_claim_token" not in row
 
 
 def test_second_insert_of_same_transaction_id_is_rejected(rig, monkeypatch):
@@ -1085,16 +1086,21 @@ def test_second_insert_of_same_transaction_id_is_rejected(rig, monkeypatch):
     assert ("tenant_id", "transaction_id") in db["payment_log_claims"].unique
     assert db["payment_log_claims"].partial_unique == []
     _assert_payments_not_indexed(db)
-    real_find = db["payments"].find_one
+    real_find = db["payments"].find
     state = {"hide": True}
 
-    async def hide_first(flt=None, *a, **k):
+    def hide_first(flt=None, *a, **k):
         if state["hide"]:
             state["hide"] = False
-            return None
-        return await real_find(flt, *a, **k)
 
-    db["payments"].find_one = hide_first
+            class _Empty:
+                async def to_list(self, length=None):
+                    return []
+
+            return _Empty()
+        return real_find(flt, *a, **k)
+
+    db["payments"].find = hide_first
     again = _apply_poller(db)
     assert again.get("duplicate") is True
     assert len(db["payments"].docs) == 1
@@ -1477,13 +1483,17 @@ def test_orphan_reclaim_fails_closed_when_the_payment_read_fails(rig, monkeypatc
     _seed_log_claim(db, "claimed")
     state = {"n": 0}
 
-    async def fail_after_the_poller_check(flt=None, *a, **k):
+    def fail_reads(flt=None, *a, **k):
         state["n"] += 1
         if state["n"] == 1:
-            return None
+            class _Empty:
+                async def to_list(self, length=None):
+                    return []
+
+            return _Empty()
         raise RuntimeError("mongo down")
 
-    db["payments"].find_one = fail_after_the_poller_check
+    db["payments"].find = fail_reads
     applied = _apply_poller(db)
     assert applied.get("success") is False
     assert applied.get("duplicate") is not True
@@ -1491,3 +1501,135 @@ def test_orphan_reclaim_fails_closed_when_the_payment_read_fails(rig, monkeypatc
     assert db["payments"].docs == []
     assert db["payment_log_claims"].docs[0]["status"] == "claimed"
     assert db["payment_log_claims"].docs[0]["reclaim_token"] == "dead"
+
+
+def test_slow_insert_loses_the_row_when_the_claim_token_moves(rig, monkeypatch):
+    """A writer still inside insert_one must not commit after its token was reclaimed.
+
+    payments has no unique index. The fence is the claim token on the uncommitted
+    row: the old owner deletes that row, and only the new owner leaves one.
+    """
+    monkeypatch.delenv("SLACK_WEBHOOK_LEADS", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    db, _app = rig
+    real = db["payments"].insert_one
+    state = {"n": 0}
+
+    async def yield_during_insert(doc):
+        await real(doc)
+        state["n"] += 1
+        if state["n"] != 1:
+            return
+        db["payment_log_claims"].docs[0]["claimed_at"] = _old_stamp()
+        from dashboard.services.payment_txn_dedupe import insert_payment_once
+
+        await insert_payment_once(
+            db["payments"],
+            {
+                "_id": "pay-winner",
+                "transaction_id": "TX-CARD",
+                "amount": 100.0,
+                "status": "approved",
+                "booking_number": "TEST-PP-1",
+                "county": "Lee",
+                "state": "FL",
+            },
+            claims=db["payment_log_claims"],
+            source="race",
+        )
+
+    db["payments"].insert_one = yield_during_insert
+    applied = _apply_poller(db)
+    assert applied.get("duplicate") is True
+    assert applied.get("error") != "payment_dedupe_unavailable"
+    assert [row["_id"] for row in db["payments"].docs] == ["pay-winner"]
+    assert "log_claim_token" not in db["payments"].docs[0]
+    assert db["payment_log_claims"].docs[0]["status"] == "logged"
+    _assert_payments_not_indexed(db)
+    again = _apply_poller(db)
+    assert again.get("duplicate") is True
+    assert [row["_id"] for row in db["payments"].docs] == ["pay-winner"]
+    _assert_payments_not_indexed(db)
+
+
+def test_pay_audits_a_balance_restored_after_a_false_webhook_audit(rig):
+    """The webhook can record balance_reversed false, then /pay restores the balance.
+
+    That restore keeps its own before/after audit. A failed audit is not success,
+    and the retry does not restore the balance a second time.
+    """
+    db, app = rig
+    db["payments"].docs.append({
+        "_id": "pay-1",
+        "transaction_id": "TX-CARD",
+        "amount": 100.0,
+        "status": "refunded",
+        "plan_id": PLAN_ID,
+        "booking_number": "TEST-PP-1",
+        "county": "Lee",
+        "state": "FL",
+        "raw_payload": {"event_type": "payment.refunded"},
+    })
+    plan = _plan(db)
+    plan["balance_remaining"] = 700.0
+    plan["total_paid"] = 300.0
+    plan["payments_made"] = 2
+    plan["status"] = "active"
+    plan["applied_transaction_ids"] = ["TX-CARD"]
+    db["payment_plan_payment_claims"].docs.append({
+        "plan_id": PLAN_ID,
+        "transaction_id": "TX-CARD",
+        "amount": 100.0,
+        "status": "reversed",
+    })
+    db["audit_events"].docs.append({
+        "source": "swipesimple_webhook",
+        "event_type": "payment.refunded",
+        "transaction_id": "TX-CARD",
+        "balance_reversed": False,
+    })
+    orig = db["audit_events"].insert_one
+
+    async def fail_restore_audit(doc):
+        if doc.get("event_type") == "payment_plan_terminal_balance_restored":
+            raise RuntimeError("audit down")
+        return await orig(doc)
+
+    db["audit_events"].insert_one = fail_restore_audit
+    (first,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    assert first.status_code == 503
+    assert first.json().get("success") is not True
+    assert plan["balance_remaining"] == 800.0
+    assert plan["total_paid"] == 200.0 and plan["payments_made"] == 1
+    assert "TX-CARD" not in plan["applied_transaction_ids"]
+    assert [e["event_type"] for e in db["audit_events"].docs] == ["payment.refunded"]
+    snaps = [
+        item for item in (plan.get("reversal_snapshots") or {}).values()
+        if item.get("transaction_id") == "TX-CARD"
+    ]
+    assert len(snaps) == 1 and snaps[0]["restored_by"] == "payment_plan_pay"
+    assert snaps[0]["balance_remaining_before"] == 700.0
+    assert snaps[0]["balance_remaining_after"] == 800.0
+    assert snaps[0]["total_paid_before"] == 300.0 and snaps[0]["total_paid_after"] == 200.0
+    assert snaps[0]["payments_made_before"] == 2 and snaps[0]["payments_made_after"] == 1
+
+    db["audit_events"].insert_one = orig
+    (second,) = _post_many(app, [{"amount": 100, "transaction_id": "TX-CARD"}])
+    body = second.json()
+    assert second.status_code == 409 and body["error"] == "payment_reversed"
+    assert body.get("success") is not True
+    assert plan["balance_remaining"] == 800.0
+    restored = [
+        e for e in db["audit_events"].docs
+        if e["event_type"] == "payment_plan_terminal_balance_restored"
+    ]
+    assert len(restored) == 1
+    assert restored[0]["balance_remaining_before"] == 700.0
+    assert restored[0]["balance_remaining_after"] == 800.0
+    assert restored[0]["total_paid_before"] == 300.0 and restored[0]["total_paid_after"] == 200.0
+    assert restored[0]["payments_made_before"] == 2 and restored[0]["payments_made_after"] == 1
+    assert restored[0]["plan_status_before"] == "active" and restored[0]["plan_status_after"] == "active"
+    assert restored[0]["confidence"] == 1.0 and restored[0]["reason"]
+    assert restored[0]["actor"] == "payment_plan_pay"
+    assert db["audit_events"].docs[0]["balance_reversed"] is False
+    _assert_payments_not_indexed(db)
