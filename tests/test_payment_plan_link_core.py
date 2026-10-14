@@ -165,6 +165,8 @@ def test_link_happy_path_counts_once_and_creates_no_payments_index(rig):
     assert len(db["audit_events"].docs) == 1
     audit = db["audit_events"].docs[0]
     assert audit["event_type"] == pp._AUDIT_EVENT
+    assert audit["_id"] == f"plan-pay:{PLAN_ID}:TX-LOG"
+    assert "tenant_id" not in audit
     assert audit["old_state"] == {"balance_remaining": 800.0, "status": "active"}
     assert audit["new_state"] == {"balance_remaining": 700.0, "status": "active"}
     assert db["payments"].index_calls == 0 and db["payments"].unique == []
@@ -312,7 +314,7 @@ def test_live_inflight_claim_is_not_resumed(rig):
     db["payment_plan_payment_claims"].docs.append({
         "plan_id": PLAN_ID, "transaction_id": "TX-LIVE", "status": "claimed", "amount": 100,
     })
-    pp._inflight_txns.add("TX-LIVE")
+    pp._inflight_txns.add(pp._inflight_key("TX-LIVE"))
     r = _post(app, {"amount": 100, "transaction_id": "TX-LIVE"})
     assert r.status_code == 409 and r.json()["error"] == "payment_in_progress"
     assert db["payments"].docs == [] and _plan(db)["balance_remaining"] == 800.0
@@ -444,3 +446,129 @@ def test_transaction_probe_failure_returns_503_with_no_writes(rig, monkeypatch):
     assert db["payments"].docs == []
     assert db["payment_plan_payment_claims"].docs == []
     assert _plan(db)["balance_remaining"] == 800.0
+
+
+_TENANT_A = "gulf_coast_bail"
+_TENANT_B = "other_agency"
+_SHARED_TXN = "TX-SHARED"
+
+
+def _tenant_plan(tenant: str) -> dict:
+    return {
+        "plan_id": PLAN_ID,
+        "tenant_id": tenant,
+        "booking_number": "TEST-PP-1",
+        "total_premium": 1000.0,
+        "down_payment": 200.0,
+        "balance_remaining": 800.0,
+        "installment_amount": 100.0,
+        "frequency": "weekly",
+        "payments_made": 1,
+        "total_paid": 200.0,
+        "status": "active",
+    }
+
+
+class _ClaimGate(Coll):
+    """Hold each new claim insert until both tenants have inserted one.
+
+    The in-flight guard is taken after that insert returns and before the
+    next await. Waiting here forces the two holds to overlap.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.gate: asyncio.Event | None = None
+        self.arrivals = 0
+
+    async def insert_one(self, doc, session=None, **kwargs):
+        await super().insert_one(doc, session=session, **kwargs)
+        if doc.get("status") == "claimed" and doc.get("transaction_id") == _SHARED_TXN:
+            if self.gate is None:
+                self.gate = asyncio.Event()
+            self.arrivals += 1
+            if self.arrivals >= 2:
+                self.gate.set()
+            await asyncio.wait_for(self.gate.wait(), timeout=5)
+
+
+def test_two_tenants_same_txn_both_commit_and_replay_is_idempotent(monkeypatch):
+    """Flag on: the same transaction id on two agencies both commit.
+
+    Each keeps its own claim and its own audit row. A second post from the
+    first agency does not move either balance.
+    """
+    from dashboard.tenancy.context import bind_job_tenant
+    from dashboard.tenancy.scope import TenantScopedCollection
+
+    monkeypatch.setenv("SAAS_MULTI_TENANT", "1")
+    db = DB()
+    db["payment_plans"].docs.extend([_tenant_plan(_TENANT_A), _tenant_plan(_TENANT_B)])
+    claims = _ClaimGate()
+    db["payment_plan_payment_claims"] = claims
+    pp._inflight_txns.clear()
+    pp._txn_support_cache.clear()
+    monkeypatch.setattr(pp, "_payment_claim_index_ready", False)
+
+    client = TxnClient(db)
+
+    async def _txn():
+        return client
+
+    monkeypatch.setattr(pp, "get_collection", lambda name: TenantScopedCollection(db[name], name))
+    monkeypatch.setattr(pp, "_txn_client", _txn)
+    app = FastAPI()
+    app.include_router(pp.payment_plans_bp)
+
+    async def both():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as http:
+            async def one(tenant):
+                with bind_job_tenant(tenant):
+                    return await http.post(
+                        f"/api/payments/plans/{PLAN_ID}/pay",
+                        json={"amount": 100, "transaction_id": _SHARED_TXN},
+                    )
+            return await asyncio.gather(one(_TENANT_A), one(_TENANT_B))
+
+    async def replay():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as http:
+            with bind_job_tenant(_TENANT_A):
+                return await http.post(
+                    f"/api/payments/plans/{PLAN_ID}/pay",
+                    json={"amount": 100, "transaction_id": _SHARED_TXN},
+                )
+
+    try:
+        with patch("dashboard.routers.events.publish_event", new=AsyncMock()):
+            rs = asyncio.run(both())
+            again = asyncio.run(replay())
+    finally:
+        pp._inflight_txns.clear()
+
+    assert claims.arrivals == 2
+    assert all(r.status_code == 200 and r.json()["idempotent"] is False for r in rs)
+    assert {c["tenant_id"] for c in claims.docs} == {_TENANT_A, _TENANT_B}
+    assert all(
+        c["status"] == "applied" and c["transaction_id"] == _SHARED_TXN and c["plan_id"] == PLAN_ID
+        for c in claims.docs
+    )
+    audits = db["audit_events"].docs
+    assert {a["_id"] for a in audits} == {
+        f"plan-pay:{_TENANT_A}:{PLAN_ID}:{_SHARED_TXN}",
+        f"plan-pay:{_TENANT_B}:{PLAN_ID}:{_SHARED_TXN}",
+    }
+    assert {a.get("tenant_id") for a in audits} == {_TENANT_A, _TENANT_B}
+    assert len(db["payments"].docs) == 2
+    assert {row["tenant_id"] for row in db["payments"].docs} == {_TENANT_A, _TENANT_B}
+    assert db["payments"].index_calls == 0 and db["payments"].unique == []
+    for plan in db["payment_plans"].docs:
+        assert plan["balance_remaining"] == 700.0
+        assert plan["payments_made"] == 2 and plan["total_paid"] == 300.0
+
+    assert again.status_code == 200 and again.json()["idempotent"] is True
+    assert again.json()["balance_remaining"] == 700.0
+    assert len(claims.docs) == 2 and len(db["audit_events"].docs) == 2 and len(db["payments"].docs) == 2
+    balances = {plan["tenant_id"]: plan["balance_remaining"] for plan in db["payment_plans"].docs}
+    assert balances == {_TENANT_A: 700.0, _TENANT_B: 700.0}

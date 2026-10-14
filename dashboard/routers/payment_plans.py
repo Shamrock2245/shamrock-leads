@@ -22,6 +22,8 @@ import json as _json
 from decimal import Decimal
 
 from dashboard.extensions import get_collection
+from dashboard.tenancy.context import current_tenant_id
+from dashboard.tenancy.flag import multi_tenant_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -356,8 +358,13 @@ _SETTLED_EVENTS = frozenset({
 _AUDIT_EVENT = "payment_plan_payment_applied"
 
 # In-process guard so two concurrent requests in this process don't both run
-# the transaction after one of them has inserted the claim.
-_inflight_txns: set[str] = set()
+# the transaction after one of them has inserted the claim. The key is
+# (tenant, transaction id). Flag off uses one empty tenant for every request,
+# so a transaction id still has a single hold. Flag on, two agencies with the
+# same transaction id do not share a hold: the unique claim index already
+# allows both inserts, and a shared hold would return payment_in_progress
+# after the second claim was written, leaving it stuck as ``claimed``.
+_inflight_txns: set[tuple[str, str]] = set()
 _txn_support_cache: dict[int, bool] = {}
 _last_apply_path: str = ""
 
@@ -392,15 +399,23 @@ class RetryableTxnError(Exception):
     """
 
 
+def _inflight_key(txn: str) -> tuple[str, str]:
+    """Hold identity. Flag off is one key per transaction id."""
+    if not multi_tenant_enabled():
+        return ("", txn)
+    return (current_tenant_id() or "", txn)
+
+
 def _try_hold(txn: str) -> bool:
-    if txn in _inflight_txns:
+    key = _inflight_key(txn)
+    if key in _inflight_txns:
         return False
-    _inflight_txns.add(txn)
+    _inflight_txns.add(key)
     return True
 
 
 def _release(txn: str) -> None:
-    _inflight_txns.discard(txn)
+    _inflight_txns.discard(_inflight_key(txn))
 
 
 def _sess(session) -> dict:
@@ -793,6 +808,19 @@ async def _apply_balance(plans_col, plan_id, txn, amount, now, session=None) -> 
         raise RuntimeError("balance update did not stick")
 
 
+def _audit_id(plan_id: str, txn: str) -> str:
+    """Deterministic ``audit_events`` ``_id``.
+
+    Flag off stays ``plan-pay:{plan_id}:{txn}``. Flag on includes the tenant
+    so two agencies with the same plan id and transaction id do not collide
+    on the global ``_id`` index and abort the second transaction. The
+    tenant-scoped lookup cannot see the other agency's row.
+    """
+    if not multi_tenant_enabled():
+        return f"plan-pay:{plan_id}:{txn}"
+    return f"plan-pay:{current_tenant_id() or ''}:{plan_id}:{txn}"
+
+
 async def _audit(audit_col, actor: str, plan, plan_id: str, txn: str, amount, linked: bool, before: dict, after: dict, session=None) -> None:
     from pymongo.errors import DuplicateKeyError
 
@@ -806,7 +834,7 @@ async def _audit(audit_col, actor: str, plan, plan_id: str, txn: str, amount, li
     try:
         await audit_col.insert_one({
             # _id is unique on audit_events without adding an index on payments.
-            "_id": f"plan-pay:{plan_id}:{txn}",
+            "_id": _audit_id(plan_id, txn),
             "event_type": _AUDIT_EVENT,
             "entity_type": "payment_plan",
             "entity_id": plan_id,
@@ -1062,7 +1090,8 @@ async def record_payment(request: Request, plan_id):
         )
 
     # Hold synchronously after the insert returns, before the next await, so a
-    # concurrent request observes the guard.
+    # concurrent request for this same tenant and transaction id observes the
+    # guard. Another tenant's identical transaction id is a different hold.
     if not _try_hold(txn):
         return _refuse(
             "payment_in_progress", txn,
