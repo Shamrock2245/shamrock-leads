@@ -282,8 +282,15 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         )
 
     # -- 2. Payload validation (fail closed on empty or invalid payload) -------
+    # Numbers stay Decimal so a plan payment is exact cents. The HMAC, when
+    # required, already read this same body above.
+    import json as _json
+    from decimal import Decimal
+
+    if "raw_body" not in locals():
+        raw_body = await request.body()
     try:
-        data = await request.json()
+        data = _json.loads(raw_body, parse_float=Decimal) if raw_body else None
     except Exception:
         return JSONResponse({"error": "Invalid or empty JSON body"}, status_code=400)
 
@@ -298,6 +305,15 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
             status_code=400,
         )
 
+    # Installment events post through the plan transaction. A booking mismatch
+    # is 409 with no payment row. Down-payment events stay on the legacy log.
+    from dashboard.services.plan_payment_poster import post_gateway_event
+
+    routed = await post_gateway_event(data, actor="swipesimple_webhook")
+    if isinstance(routed, JSONResponse):
+        return routed
+    plan_handled = bool(isinstance(routed, dict) and routed.get("handled"))
+
     # -- 3. Parse booking number -----------------------------------------------
     custom_fields = data.get("custom_fields", {})
     booking_number = (
@@ -307,6 +323,8 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
 
     # -- 3. Update bond case ---------------------------------------------------
     amount = data.get("amount", 0)
+    if isinstance(amount, Decimal):
+        amount = float(amount)
     status = data.get("status", "")
     transaction_id = data.get("transaction_id", "")
     card_last4 = data.get("card_last4", "")
@@ -335,20 +353,22 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         )
 
     # -- 4. Log to payments collection ----------------------------------------
-    payments = get_collection("payments")
-    await payments.insert_one({
-        "transaction_id": transaction_id,
-        "booking_number": booking_number,
-        "amount": amount,
-        "status": status,
-        "card_last4": card_last4,
-        "card_brand": card_brand,
-        "customer_name": customer_name,
-        "indemnitor_phone": indemnitor_phone,
-        "custom_fields": custom_fields,
-        "raw_payload": data,
-        "created_at": now.isoformat(),
-    })
+    # A handled plan payment already inserted or linked its own row.
+    if not plan_handled:
+        payments = get_collection("payments")
+        await payments.insert_one({
+            "transaction_id": transaction_id,
+            "booking_number": booking_number,
+            "amount": amount,
+            "status": status,
+            "card_last4": card_last4,
+            "card_brand": card_brand,
+            "customer_name": customer_name,
+            "indemnitor_phone": indemnitor_phone,
+            "custom_fields": custom_fields,
+            "raw_payload": data,
+            "created_at": now.isoformat(),
+        })
 
     # -- 5. Send BlueBubbles receipt ------------------------------------------
     if indemnitor_phone and status == "approved":
@@ -388,15 +408,23 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
     })
 
     # -- 8. Log audit event ---------------------------------------------------
-    audit_events = get_collection("audit_events")
-    await audit_events.insert_one({
-        "source": "swipesimple_webhook",
-        "event_type": f"payment.{status}",
-        "payload": data,
-        "timestamp": now.isoformat(),
-    })
+    # Plan payments already wrote payment_plan_payment_applied (or the
+    # decline / reversal audit). A second row would hide that one-event count.
+    if not plan_handled:
+        audit_events = get_collection("audit_events")
+        await audit_events.insert_one({
+            "source": "swipesimple_webhook",
+            "event_type": f"payment.{status}",
+            "payload": data,
+            "timestamp": now.isoformat(),
+        })
 
-    return JSONResponse(status_code=200, content={"success": True})
+    body = {"success": True}
+    if plan_handled and isinstance(routed, dict):
+        body["plan_id"] = routed.get("plan_id")
+        body["idempotent"] = bool(routed.get("idempotent"))
+        body["balance_remaining"] = routed.get("balance_remaining")
+    return JSONResponse(status_code=200, content=body)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
