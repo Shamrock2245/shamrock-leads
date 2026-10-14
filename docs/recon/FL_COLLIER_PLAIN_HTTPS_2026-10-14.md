@@ -1,4 +1,4 @@
-# Collier (FL): plain verified HTTPS, custody unknown, fail_closed (2026-10-14)
+# Collier (FL): plain verified HTTPS, custody unknown (2026-10-14)
 
 CoS asked to drop Collier's curl_cffi Chrome disguise and stop hard-coding
 "In Custody".
@@ -12,9 +12,8 @@ CoS asked to drop Collier's curl_cffi Chrome disguise and stop hard-coding
 
 No CAPTCHA and no 403, but the postback that loads the grid is refused for
 the plain client every time. I didn't re-test with impersonation (not
-allowed), so I can't tell a fingerprint block from a site fault. Under the
-no-workaround rule the county is fail_closed until a plain read works. A
-read from the Leads Ops relay (stock client, honest UA) is the next test.
+allowed), so I can't tell a fingerprint block from a site fault. CoS (2026-10-14) kept Collier `unverified`, not fail_closed: each run now
+fails visibly with `egress_block` until a plain read works. A read from the Leads Ops relay (stock client, honest UA) is the next test.
 
 ## Custody
 

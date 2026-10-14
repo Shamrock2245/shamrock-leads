@@ -47,20 +47,11 @@ BACKOFF_BASE_S = 2.0
 class CollierCountyScraper(BaseScraper):
     """Collier County (FL) arrest scraper — ASP.NET ViewState + AJAX POST.
 
-    Fail closed (2026-10-14): with the Chrome disguise removed, the plain
-    verified client gets the page, but the UpdatePanel postback answers
-    ``pageRedirect`` -> ``errorpage.aspx`` every time (two reads a minute
-    apart from the agent box). Per the no-workaround rule the county is
-    closed until a plain read is proven (e.g. from the Leads Ops relay).
+    Stays unverified (CoS 2026-10-14). Without the Chrome disguise the plain
+    client's grid postback was redirected to errorpage.aspx in two reads; that
+    now raises EgressBlocked (``egress_block:``) so the run fails visibly
+    instead of parsing an empty roster. No workaround.
     """
-
-    SOURCE_CONTRACT_VALIDATED = False
-    SOURCE_CONTRACT_REASON = (
-        "Collier arrest report refuses the plain, honest client (UpdatePanel "
-        "postback redirects to errorpage.aspx) once TLS fingerprint impersonation "
-        "is removed; impersonation is not allowed, so refuse emission until a plain "
-        "read is proven."
-    )
 
     @property
     def county(self) -> str:

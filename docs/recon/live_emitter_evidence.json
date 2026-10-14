@@ -211,12 +211,6 @@
       "emitter": "hold",
       "evidence": "MyOCV inmates.json has only inmateID HCSO<YY>MNI<NNNNNN>, a person (Master Name Index) id, not a booking number; old v4 parser keyed rows on it. Fail closed 2026-10-08 (CoS approved)",
       "source": "docs/recon/FL_HENDRY_FAIL_CLOSED_2026-10-08.md"
-    },
-    {
-      "label": "Collier (FL)",
-      "emitter": "hold",
-      "evidence": "Plain honest client refused (UpdatePanel postback redirects to errorpage.aspx) after curl_cffi impersonation was removed; no workaround. Fail closed 2026-10-14 (proposed, CoS to approve)",
-      "source": "docs/recon/FL_COLLIER_PLAIN_HTTPS_2026-10-14.md"
     }
   ]
 }
