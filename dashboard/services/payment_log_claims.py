@@ -21,10 +21,13 @@ booking is compared with every sibling row for this tenant and transaction
 id, of every event kind. A disagreement, or more than one sibling booking,
 is 409 ``payment_needs_review`` and writes nothing. A blank booking inherits
 the charge booking only when every sibling names that one booking. The
-``needs_review`` flag then goes on that booking's bond case and on plans for
-that booking only. After the commit, one staff Slack alert is sent for that
-``(tenant, txn_key, kind)``. A Slack failure is logged and does not roll the
-payment back. A refused refund does not alert.
+``needs_review`` flag goes on that bond case and on the one plan named by a
+sibling ``plan_id``. No sibling ``plan_id`` flags the bond case only. Two
+different sibling plan ids are 409 ``payment_needs_review`` and write
+nothing. The audit event records each review-state transition (bond case id
+or plan id, old and new ``needs_review`` and review reason). After the
+commit, one staff Slack alert names that plan only. A Slack failure is
+logged and does not roll the payment back. A refused refund does not alert.
 
 Out of scope: reversing a plan balance, reclaiming a stale claim, and
 backfilling rows that were logged before this claim existed. A recorded row
@@ -432,14 +435,60 @@ def _agreed_booking(event_booking: str, siblings: list) -> str:
     return sibling or event_booking
 
 
-def _plan_ids_for_booking(plans: list) -> list:
-    """Plan ids from plan rows already limited to the agreed booking."""
+def _sibling_plan_id(siblings: list) -> str:
+    """The one plan id named by sibling payment rows, or empty.
+
+    Siblings of every event kind are included. Two different plan ids are 409
+    ``payment_needs_review``. A row with no plan id does not count.
+    """
     found: list[str] = []
-    for plan in plans:
-        plan_id = str(plan.get("plan_id") or "").strip()
-        if plan_id and plan_id not in found:
-            found.append(plan_id)
-    return found
+    seen: set[str] = set()
+    for row in siblings:
+        plan_id = str(row.get("plan_id") or "").strip()
+        if not plan_id or plan_id in seen:
+            continue
+        seen.add(plan_id)
+        found.append(plan_id)
+    if len(found) > 1:
+        raise PaymentLogError(
+            "payment_needs_review",
+            409,
+            "This transaction id is already on more than one payment plan. Nothing was written.",
+        )
+    return found[0] if found else ""
+
+
+def _review_view(doc: Optional[dict]) -> dict:
+    if not doc:
+        return {"needs_review": None, "review_reason": None}
+    reason = doc.get("needs_review_reason")
+    return {
+        "needs_review": doc.get("needs_review"),
+        "review_reason": reason if reason not in ("", None) else None,
+    }
+
+
+def _bond_case_id(doc: dict) -> str:
+    for key in ("Bond_Case_ID", "bond_case_id"):
+        value = str(doc.get(key) or "").strip()
+        if value:
+            return value
+    raw = doc.get("_id")
+    if raw not in (None, ""):
+        return str(raw)
+    return _booking(doc.get("booking_number"))
+
+
+def _review_transition(entity_type: str, ident_key: str, ident: str, old_doc: Optional[dict], new_reason: str) -> dict:
+    old = _review_view(old_doc)
+    return {
+        "entity_type": entity_type,
+        ident_key: ident,
+        "old_needs_review": old["needs_review"],
+        "new_needs_review": True,
+        "old_review_reason": old["review_reason"],
+        "new_review_reason": new_reason,
+    }
 
 
 async def _apply(
@@ -468,10 +517,12 @@ async def _apply(
     if rows:
         raise AlreadyRecorded()
 
-    # All kinds. A refund must not attach to a different case than the charge.
+    # All kinds. A refund must not attach to a different case or plan.
     siblings = await _docs(db["payments"], {"transaction_id": txn_key}, session)
+    plan_id = ""
     if kind in ("refund", "failed"):
         booking = _agreed_booking(booking, siblings)
+        plan_id = _sibling_plan_id(siblings)
 
     # The unique index was ensured before this transaction opened.
     claims = db[LOG_CLAIMS_COLLECTION]
@@ -509,15 +560,10 @@ async def _apply(
         doc.pop(field, None)
     await db["payments"].insert_one(doc, **_sess(session))
 
-    plan_rows: list = []
-    if booking:
-        plan_rows = await _docs(
-            db["payment_plans"], {"booking_number": booking}, session,
-        )
-    # Plans for this booking only. A plan id on a sibling row is not enough.
-    plan_ids = _plan_ids_for_booking(plan_rows)
     review = kind in ("refund", "failed")
     flag = _review_flag(kind, amount, txn_key) if review else None
+    transitions: list = []
+    reason = _review_reason(kind) if review else ""
 
     if booking:
         payment_update = {
@@ -529,6 +575,17 @@ async def _apply(
         }
         if flag:
             payment_update.update(flag)
+            for coll_name, entity_type, ident_key in (
+                ("bond_cases", "bond_case", "bond_case_id"),
+                ("active_bonds", "active_bond", "active_bond_id"),
+            ):
+                matched = await _docs(db[coll_name], {"booking_number": booking}, session)
+                current = matched[0] if matched else None
+                if current is None:
+                    continue
+                transitions.append(_review_transition(
+                    entity_type, ident_key, _bond_case_id(current), current, reason,
+                ))
         await db["bond_cases"].update_one(
             {"booking_number": booking},
             {"$set": payment_update},
@@ -540,14 +597,18 @@ async def _apply(
             **_sess(session),
         )
 
-    # The flag is the review signal. Balance fields are not in this update.
-    if flag:
-        for plan_id in plan_ids:
-            await db["payment_plans"].update_one(
-                {"plan_id": plan_id},
-                {"$set": flag},
-                **_sess(session),
-            )
+    # Only the plan the sibling charge named. Other plans on the booking stay.
+    if flag and plan_id:
+        matched = await _docs(db["payment_plans"], {"plan_id": plan_id}, session)
+        current = matched[0] if matched else None
+        transitions.append(_review_transition(
+            "payment_plan", "plan_id", plan_id, current, reason,
+        ))
+        await db["payment_plans"].update_one(
+            {"plan_id": plan_id},
+            {"$set": flag},
+            **_sess(session),
+        )
 
     audit_id = _audit_id(txn_key, kind)
     try:
@@ -567,12 +628,14 @@ async def _apply(
             "event_kind": kind,
             "reason": "provider payment recorded",
             "confidence": 1.0,
+            "review_transitions": transitions,
             "payload": {
                 "amount": amount,
                 "booking_number": booking,
                 "transaction_id": txn_key,
                 "status": status,
                 "event_kind": kind,
+                "review_transitions": transitions,
             },
         }, **_sess(session))
     except DuplicateKeyError:
@@ -590,7 +653,7 @@ async def _apply(
         "kind": kind,
         "amount": amount,
         "booking": booking,
-        "plan_ids": plan_ids,
+        "plan_ids": [plan_id] if plan_id else [],
     }
 
 
@@ -684,11 +747,12 @@ async def record_provider_payment(
     if client is None:
         raise TransactionsUnavailable()
 
-    # A refund or failure must agree with every sibling booking before the
-    # claim index or any other write. Ambiguous siblings are 409 as well.
+    # A refund or failure must agree with every sibling booking and plan id
+    # before the claim index or any other write.
     if kind in ("refund", "failed"):
         siblings = await _read_rows(db, txn_key)
         booking = _agreed_booking(booking, siblings)
+        _sibling_plan_id(siblings)
 
     # A recorded row of this kind is classified before the claim index is touched.
     # A charge does not block a later refund or failure that shares its txn id.
