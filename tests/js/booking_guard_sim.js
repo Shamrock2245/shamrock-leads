@@ -119,6 +119,15 @@ const rb4Form = makeForm([rb4, loose]);
 rb4.value = ''; rb4.dataset.internalKey = KEY; loose.value = KEY;
 rb4._v = ''; loose._v = ''; fire('reset', { target: rb4Form });
 out.formResetPost = nativeSubmit(rb4Form).booking_number; out.formResetLoose = loose.value;
+// 10. Manatee Clerk key (mc_case_v1:<sha256>) gets the same treatment.
+const MC = 'mc_case_v1:' + 'cd'.repeat(32);
+const mcText = new HTMLInputElement('text'); mcText.value = MC;
+out.mcShown = mcText._v; out.mcRead = mcText.value; mcText.value = ''; out.mcResetRead = mcText.value;
+const mcBk = new HTMLInputElement('text', { name: 'booking_number' }); const mcForm = makeForm([mcBk]);
+mcBk.value = MC; out.mcMasked = mcBk.hasAttribute('data-sl-masked'); out.mcPost = nativeSubmit(mcForm).booking_number;
+const mcNote = new HTMLTextAreaElement(); mcNote.value = 'case ' + MC + ' filed'; out.mcMixed = mcNote.value;
+out.mcLabel = window.slBookingLabel(MC) + '|' + window.slRedactKeys('x ' + MC + ' y');
+out.mcShort = window.slBookingLabel('mc_case_v1:abc');  // not a key shape: shown as-is
 out.label = window.slBookingLabel(KEY) + '|' + window.slBookingLabel('2026-123456');
 out.css = head.children.some((n) => n.id === 'sl-booking-mask-css');
 console.log(JSON.stringify(out));

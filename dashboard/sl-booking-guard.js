@@ -20,24 +20,29 @@
  */
 (function () {
   'use strict';
-  var KEY_RE = /md_dedupe_v\d+:[0-9a-f]{16,64}/g;
-  var MARK = 'md_dedupe_v';
+  // Internal keys: Miami-Dade md_dedupe_vN:<hex> and Manatee Clerk mc_case_vN:<sha256>.
+  var KEY_RE = /(?:md_dedupe_v\d+:[0-9a-f]{16,64}|mc_case_v\d+:[0-9a-f]{64})/g;
+  var MARKS = ['md_dedupe_v', 'mc_case_v'];
+  function hasMark(s) {
+    for (var i = 0; i < MARKS.length; i++) if (s.indexOf(MARKS[i]) !== -1) return true;
+    return false;
+  }
 
   function redact(text) {
     if (text === null || text === undefined) return text;
     var s = String(text);
-    return s.indexOf(MARK) === -1 ? s : s.replace(KEY_RE, '');
+    return !hasMark(s) ? s : s.replace(KEY_RE, '');
   }
   function label(v) {
     if (v === null || v === undefined) return '';
     var s = String(v);
-    return s.indexOf(MARK) !== -1 && /md_dedupe_v\d+:[0-9a-f]{16,}/.test(s) ? '' : s;
+    return hasMark(s) && /(?:md_dedupe_v\d+:[0-9a-f]{16,}|mc_case_v\d+:[0-9a-f]{64})/.test(s) ? '' : s;
   }
   window.slRedactKeys = redact;
   window.slBookingLabel = label;
 
   var ATTRS = ['title', 'placeholder', 'aria-label', 'alt'];
-  var KEY_ONLY_RE = /^\s*md_dedupe_v\d+:[0-9a-f]{16,64}\s*$/;
+  var KEY_ONLY_RE = /^\s*(?:md_dedupe_v\d+:[0-9a-f]{16,64}|mc_case_v\d+:[0-9a-f]{64})\s*$/;
   // Only controls whose value is printed on screen. Checkbox/radio/hidden/
   // button values are routing data (e.g. Bulk Exonerate) and are never touched.
   var TEXT_TYPES = { '': 1, text: 1, search: 1, tel: 1, email: 1, url: 1 };
@@ -66,7 +71,7 @@
   }
   function setMask(el, raw) {
     if (!el.setAttribute) return;
-    if (raw && raw.indexOf(MARK) !== -1) {
+    if (raw && hasMark(raw)) {
       if (!el.hasAttribute || !el.hasAttribute(MASK_ATTR)) el.setAttribute(MASK_ATTR, '1');
     } else if (el.hasAttribute && el.hasAttribute(MASK_ATTR)) {
       el.removeAttribute(MASK_ATTR);
@@ -106,7 +111,7 @@
           setMask(this, d.get.call(this));
           return;
         }
-        if (v !== null && v !== undefined && String(v).indexOf(MARK) !== -1) {
+        if (v !== null && v !== undefined && hasMark(String(v))) {
           var s = String(v);
           if (KEY_ONLY_RE.test(s)) {
             this.dataset.internalKey = s.trim();
@@ -135,18 +140,18 @@
     if (!el || el.nodeType !== 1) return;
     for (var i = 0; i < ATTRS.length; i++) {
       var a = el.getAttribute && el.getAttribute(ATTRS[i]);
-      if (a && a.indexOf(MARK) !== -1) el.setAttribute(ATTRS[i], redact(a));
+      if (a && hasMark(a)) el.setAttribute(ATTRS[i], redact(a));
     }
     if (isTextEntry(el)) {
       var raw = rawValue(el);
       if (isFormBound(el)) setMask(el, raw);             // value untouched
-      else if (raw && raw.indexOf(MARK) !== -1) el.value = raw;  // patched setter hides it
+      else if (raw && hasMark(raw)) el.value = raw;  // patched setter hides it
     }
   }
   function scrubTree(root) {
     if (!root) return;
     if (root.nodeType === 3) {
-      if (root.nodeValue && root.nodeValue.indexOf(MARK) !== -1) root.nodeValue = redact(root.nodeValue);
+      if (root.nodeValue && hasMark(root.nodeValue)) root.nodeValue = redact(root.nodeValue);
       return;
     }
     if (root.nodeType !== 1 && root.nodeType !== 9 && root.nodeType !== 11) return;
@@ -157,7 +162,7 @@
     var n;
     while ((n = walker.nextNode())) {
       if (n.nodeType === 3) {
-        if (n.nodeValue && n.nodeValue.indexOf(MARK) !== -1) n.nodeValue = redact(n.nodeValue);
+        if (n.nodeValue && hasMark(n.nodeValue)) n.nodeValue = redact(n.nodeValue);
       } else {
         scrubElement(n);
       }

@@ -402,6 +402,18 @@ def test_booking_guard_user_clear_and_form_reset_drop_cached_routing_key():
     assert out["formResetPost"] == "" and out["formResetLoose"] == ""  # form.reset()
 
 
+def test_booking_guard_hides_manatee_clerk_keys_too():
+    """mc_case_v keys (Manatee Clerk) are hidden, masked and still routed like Miami-Dade keys."""
+    out = _guard_sim()
+    mc = "mc_case_v1:" + "cd" * 32
+    assert out["mcShown"] == "" and out["mcRead"] == mc and out["mcResetRead"] == ""
+    assert out["mcMasked"] is True and out["mcPost"] == mc      # form-bound: masked, real key posted
+    assert out["mcMixed"] == "case  filed"
+    assert out["mcLabel"] == "|x  y" and out["mcShort"] == "mc_case_v1:abc"
+    js = (DASH / "sl-booking-guard.js").read_text()
+    assert "mc_case_v\\d+:[0-9a-f]{64}" in js and "'mc_case_v'" in js
+
+
 def test_booking_guard_keeps_routing_values_and_intercepts_assignments():
     """Codex #171 P1/P2 still hold: non-text values untouched; free-standing text inputs hidden but readable."""
     out = _guard_sim()
