@@ -19,7 +19,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 import gspread
 from google.oauth2.service_account import Credentials
-from core.booking_identity import is_internal_booking_key
+from core.booking_identity import is_internal_booking_key, redact_internal_keys
 from core.models import ArrestRecord
 from scoring.lead_scorer import score_and_update
 
@@ -163,7 +163,7 @@ class SheetsWriter:
 
             # Write new records
             if new_records:
-                rows = [record.to_sheet_row() for record in new_records]
+                rows = redact_internal_keys([record.to_sheet_row() for record in new_records])
                 sheet.insert_rows(rows, row=2, value_input_option='USER_ENTERED')
                 # Dynamically prune county sheets beyond 1500 rows
                 self._prune_sheet_if_needed(sheet, max_rows=1500)
@@ -221,7 +221,7 @@ class SheetsWriter:
                     new_records.append(record)
 
             if new_records:
-                rows = [record.to_sheet_row() for record in new_records]
+                rows = redact_internal_keys([record.to_sheet_row() for record in new_records])
                 sheet.insert_rows(rows, row=2, value_input_option='USER_ENTERED')
                 # Dynamically prune Qualified_Arrests sheet beyond 3000 rows
                 self._prune_sheet_if_needed(sheet, max_rows=3000)

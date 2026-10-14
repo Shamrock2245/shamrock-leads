@@ -3,6 +3,35 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-09 (Miami-Dade key never printed in outbound alerts, rendered pages or the browser; stacked on #168)
+
+### Changed
+- **Browser guard covers Manatee Clerk keys (2026-10-14).** `sl-booking-guard.js` now hides, masks and routes `mc_case_vN:<sha256>` keys exactly like `md_dedupe_vN:` keys: text-node and attribute redaction, `slBookingLabel` / `slRedactKeys`, key-only free-standing inputs (shown blank, read as the key, dropped on reset), and masked form-bound fields that still post the real key. A non-key string such as `mc_case_v1:abc` is left alone. Test: `test_booking_guard_hides_manatee_clerk_keys_too` (`tests/js/booking_guard_sim.js` case 10).
+- **Booking guard: no stale routing key after a reset (Codex P1 follow-up, 2026-10-14).** 5309ac9 dropped the cached `data-internal-key` when the app assigned a new value (the Bulk Assign `value = ''` reset). Two reset paths that skip the setter could still read or post the previous defendant's key: the user clearing the field by typing (the `input` listener only dropped the key on a non-empty edit), and `form.reset()`. Any user edit now drops the cached key unless the field holds a key itself, and a capture-phase `reset` listener clears every cached key in the reset form. Test: `test_booking_guard_user_clear_and_form_reset_drop_cached_routing_key` (`tests/js/booking_guard_sim.js` cases 8 and 9).
+- **Outbound alerts and messages never print a Miami-Dade internal key.** They use `redact_internal_keys` from #168.
+  - **Slack and Telegram:** every `json=` payload is redacted. That covers the notifier and `/api/notifications`, the automation digest, DocuSeal completion, the court email scheduler, SwipeSimple receipts, intake fan-out, paperwork chase, the error tracker, the docket monitor, webhooks, the re-arrest detector, data retention, intake, Shannon ID, BB health, the ALPR matcher, the POA inventory alert, iMessage automation and the Telegram service.
+  - **Senders:** Twilio `send_sms`, BlueBubbles `send_imessage` / `send_message_universal` / attachments / private API, and Gmail `send_email` redact where the message is sent.
+  - **Notifications:** dashboard notification title and message, and the geofence alert title.
+  - **Google Sheets:** the Apps Script intake ledger (`appendIntakeLedger`) payload and the `SheetsWriter` row inserts.
+- **`BookingKeyRedactMiddleware`** (`dashboard/booking_key_middleware.py`), with a narrow scope for safety and speed:
+  - It rewrites only single-message `text/html`, `text/csv` and `text/plain` bodies, and recomputes `Content-Length` only when a body changed.
+  - JSON, XML, binary and streaming responses (StreamingResponse, FileResponse, SSE) are untouched.
+  - Bodies over 2 MB pass through unchanged and are logged (size only).
+  - Only the `Content-Disposition` header (the download filename) is rewritten; `Location` and other headers are left alone, so redirects keep working.
+  - A body without the `md_dedupe_v` marker is forwarded as the same bytes object.
+- **`sl-booking-guard.js`** loads first on every dashboard page except the recovery portal: index, mobile, tablet, portal, start_bond_packet and the four platform pages.
+  - It blanks a key in page text, attributes, desktop Notifications, alert/confirm/prompt and clipboard copies.
+  - **Form-bound controls** (a form owner or a `name` attribute) never have `.value` changed. Only their presentation is masked (`[data-sl-masked]`, transparent text; native copy/cut redacted; focusing selects the hidden key so typing replaces it), so a native submit or `FormData` posts the real key. Belt-and-braces: capture-phase `submit` and `formdata` listeners put back a key an app kept in `data-internal-key` when the named field would post blank.
+  - Free-standing text controls (no form, no name) show a key blank, including on programmatic `.value =`. Reading `.value` while blank returns the routing id, and typing clears it. Checkbox, radio, hidden and button values are never touched (Bulk Exonerate keeps working). Codex #171 P1/P2; a node simulation is in `tests/js/booking_guard_sim.js`. Any non-key assignment, including a reset to `''`, drops a cached key, so a cleared field (e.g. the Bulk Assign reset) never reads or posts a previous record's key (Codex #171).
+  - The mobile and tablet bond lists and the start-bond-packet header use the label directly.
+- **Server guard:** `protect_internal_booking_key` (in `core/booking_identity.py`) drops a blank/whitespace/None `booking_number` / `Booking_Number` from any update to a record whose stored booking number is an internal key. It's applied to update-lead-details, the admin-hygiene arrest patch and the paperwork packet bind. update-lead-details already rejects a blank `booking_number` with 400, so a form can never blank a stored Miami-Dade key.
+- **`recovery_portal.html`:** its recovery scope serves no scripts, so it carries an inline `bkl()` label. Selecting a Miami-Dade case keeps the key hidden for the share request.
+- **Tests:** `tests/test_booking_key_outbound_and_middleware.py`, added to the CI list.
+  - Slack, Telegram and Twilio payloads; the middleware's rewrite scope, size cap, JSON/stream/Location pass-through and byte-identical output for non-Miami-Dade bodies and headers.
+  - Byte-identical pass-through of every redact helper on non-Miami-Dade values.
+  - Native form submit on a Miami-Dade record posts the real key (node simulation); a blank booking from a form never overwrites a stored key (server tests); checkbox, radio and hidden behaviour from P1.
+  - Guards on Slack/Telegram `json=`, message entry points, Sheets/notification text, middleware registration, guard-first page loading and recovery portal labels.
+
 ## [Unreleased] — 2026-10-14 (Duval: never click the ATIMS robot gate)
 
 ### Fixed
