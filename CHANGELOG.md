@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-13 (plan /pay links a committed payment)
+
+### Fixed
+- **`POST /api/payments/plans/{plan_id}/pay` links one committed `payments` row, or inserts one, through a single serialized path.** A `transaction_id` that already has a logged row is applied only when that row is committed (no `log_claim_token`, `claim_token`, or `payment_claim_token`), settled (`approved`, `paid`, `completed`, `complete`, `success`, `succeeded`, `captured`, `settled`, and a settled `event_type` when one is stored), the same exact cents as the request, and the same non-blank `booking_number` as the plan. Anything else returns 409 and does not change the balance. The link sets `plan_id`, `type: installment`, and `status: completed` (the original status is kept on `logged_status`, and a `timestamp` is added when the row has none) so `GET /payments/summary` counts it once. The update is pinned to the status, amount, booking number, and absent `plan_id` read beforehand. No index is created on `payments`.
+- **The claim is taken first** in `payment_plan_payment_claims` (unique `tenant_id` + `transaction_id`), and only after the server is confirmed to be a replica set or Atlas. A failed transaction probe, or a standalone server, returns 503 `transactions_unavailable` and writes nothing (no claim, no payment row, no balance change). Inside the transaction, booking, settled status, exact cents, and claim state are read before any write. A plan with a blank booking number and no logged row returns 409 and leaves no payment row and no claim. The row write, the plan balance `$inc` (including the paid-in-full clamp), and the `audit_events` insert then run in that same `ClientSession.with_transaction` (the driver retries transient transaction errors). The audit event records `old_state` and `new_state` (balance and status before the increment and after the paid-in-full clamp). There is no non-transactional fallback and no step resume. The claim is marked `applied` only after those writes finish. When no logged row exists, the payment row is inserted inside that same transaction. Rows written here do not carry claim or log tokens.
+- **Not in this change:** refund and reversal lifecycle, county or state backfill, email-only bond matching, and poller or webhook claim changes.
+
+### Tests
+- `tests/test_payment_plan_link_core.py` (added to `ci.yml`): link happy path, each 409 refusal, a blank booking with no logged row writes nothing, transactions unavailable returns 503 with no writes, transaction abort leaves the balance and the row untouched, idempotent replay, and paid-in-full. The in-memory double plus a transaction shim stands in for Mongo. No SwipeSimple, Gmail, or Slack calls.
+
 ## [Unreleased] — 2026-10-12 (plan payments: exact cents)
 
 ### Fixed
