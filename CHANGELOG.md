@@ -11,6 +11,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_fl_pvp_bond_unknown.py` (added to the `ci.yml` list).
 
+
 ## [Unreleased] — 2026-10-14 (Polk / Volusia / Pasco: plain verified HTTPS)
 
 ### Changed
@@ -18,6 +19,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `tests/test_fl_plain_https_polk_volusia_pasco.py` (added to the `ci.yml` list).
+
+
+## [Unreleased] — 2026-10-14 (powers pack saved to generated reports)
+
+### Added
+- **`GET /api/reports/powers-pack/{pack}` archives a successful pack on `generated_reports`.** After the pack builds, one row is inserted with `surety_id`, pack, date range, filename, section counts, `history_complete` taken from the built pack, the session actor, `created_at`, and the XLSX blob (`xlsx_b64`, same 12MB cap as the bond report). `GET /api/reports/generated` lists it, and the existing generated-report download returns that blob. The streamed XLSX or JSON body and headers are unchanged, including `Cache-Control: no-store`. A failed build (unknown or inactive surety, a bad pack, or a build error) writes no row. The actor is the session email, or the session agent name when the email is blank. It is not read from the query string or from headers.
+
+### Tests
+- `tests/test_powers_pack_archive.py` (added to `ci.yml`): one successful build inserts one row and the list returns it; the stored blob matches the stream; a second download is byte-identical; a failed build inserts nothing; the actor comes from the session. Mocked Mongo and `TEST-` rows only.
 
 ## [Unreleased] — 2026-10-14 (powers pack transfer history banner)
 

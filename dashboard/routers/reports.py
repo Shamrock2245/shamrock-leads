@@ -61,6 +61,80 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _session_actor(request: Request) -> str:
+    """Identity from the signed session only.
+
+    Email when the session has one, otherwise the session agent name.
+    Query parameters and request headers are not an actor.
+    """
+    try:
+        from dashboard.auth.pin_middleware import get_session_from_request
+        sess = get_session_from_request(request) or {}
+    except Exception:
+        sess = {}
+    if not isinstance(sess, dict):
+        return ""
+    return str(sess.get("email") or sess.get("agent_name") or "").strip()
+
+
+def _powers_pack_counts(contract: dict) -> dict:
+    counts = {}
+    for name in ("execution", "void", "transfer", "liability"):
+        section = contract.get(name)
+        counts[name] = section.get("count") if isinstance(section, dict) else None
+    return counts
+
+
+async def _archive_powers_pack(
+    db,
+    contract: dict,
+    *,
+    pack: str,
+    request: Request,
+    xlsx: bytes | None,
+) -> None:
+    """Insert one generated_reports row after a successful powers-pack build.
+
+    The blob is the XLSX, base64, with the same 12MB cap as the bond report.
+    ``history_complete`` is copied from the built pack. Archive failures are
+    logged and do not change the streamed response. A failed build never
+    reaches this function.
+    """
+    try:
+        import base64
+
+        blob = xlsx
+        if blob is None:
+            try:
+                from dashboard.services.powers_pack import build_powers_pack_xlsx
+                blob = build_powers_pack_xlsx(contract, pack=pack)
+            except Exception as render_err:
+                logger.warning("powers-pack archive render failed: %s", render_err)
+                blob = None
+        encoded = None
+        if blob is not None and len(blob) < 12_000_000:
+            encoded = base64.b64encode(blob).decode("ascii")
+        meta = {
+            "ok": True,
+            "report_type": "powers_pack",
+            "source": "dashboard_xlsx",
+            "surety_id": contract.get("surety_id"),
+            "pack": pack,
+            "start_date": contract.get("start_date"),
+            "end_date": contract.get("end_date"),
+            "filename": contract.get("filename"),
+            "counts": _powers_pack_counts(contract),
+            "history_complete": contract.get("history_complete"),
+            "actor": _session_actor(request),
+            "created_at": _utc_now(),
+            "size_bytes": len(blob) if blob is not None else None,
+            "xlsx_b64": encoded,
+        }
+        await db["generated_reports"].insert_one(meta)
+    except Exception as store_err:
+        logger.warning("powers-pack archive failed: %s", store_err)
+
+
 def _parse_date(s: str | None) -> datetime | None:
     """Parse YYYY-MM-DD string to UTC datetime (legacy helper; clamps via window parser preferred)."""
     start, _, _ = parse_report_date_window(s, None)
@@ -1226,6 +1300,7 @@ async def upload_spreadsheet(
 @reports_bp.get("/reports/powers-pack/{pack}")
 async def powers_pack_download(
     pack: str,
+    request: Request,
     surety: str = Query(default=""),
     start_date: str = Query(default=None),
     end_date: str = Query(default=None),
@@ -1288,9 +1363,15 @@ async def powers_pack_download(
             end_date=end_date,
         )
         if fmt_key == "json":
+            await _archive_powers_pack(
+                db, contract, pack=pack_key, request=request, xlsx=None,
+            )
             return contract
         xlsx = build_powers_pack_xlsx(contract, pack=pack_key)
         fname = contract["filename"]
+        await _archive_powers_pack(
+            db, contract, pack=pack_key, request=request, xlsx=xlsx,
+        )
         return Response(
             content=xlsx,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
