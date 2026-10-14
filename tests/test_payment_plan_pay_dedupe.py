@@ -84,6 +84,23 @@ class Coll:
                 return
         return
 
+    async def delete_one(self, flt, session=None, **kwargs):
+        await asyncio.sleep(0)
+        kept = []
+        deleted = 0
+        for d in self.docs:
+            if matches(d, flt or {}):
+                deleted += 1
+            else:
+                kept.append(d)
+        self.docs[:] = kept
+
+        class _Result:
+            def __init__(self, count):
+                self.deleted_count = count
+
+        return _Result(deleted)
+
 
 class DB(dict):
     def __missing__(self, name):
