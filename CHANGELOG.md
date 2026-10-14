@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-14 (Polk / Volusia / Pasco: plain verified HTTPS)
+
+### Changed
+- **Polk, Volusia and Pasco (FL) use plain `requests` with an honest User-Agent and certificate checks on.** The curl_cffi Chrome impersonation, the browser User-Agent and `verify=False` are gone. New `scrapers/plain_http.py` (`make_session`, `request`) always verifies TLS. A bad certificate raises `SourceTLSInvalid` (`tls_cert_invalid: <county> ...`) and a 401 / 403 / 429 or challenge page raises `EgressBlocked` (`egress_block: <county> ...`). Both are `AntiBotBlocked`, so they are never retried and never worked around, and the per-row `except Exception` handlers now re-raise them instead of swallowing them. A plain verified read from the agent box on 2026-10-14 got HTTP 200 from all three (Polk SearchJail JSON, Volusia disclaimer page, Pasco GetInCustody JSON), so no county is moved to fail_closed here. If a block or bad certificate shows up in prod, the run fails with that error class and the county goes to fail_closed in a follow-up PR. States are unchanged (all three `unverified`).
+
+### Tests
+- `tests/test_fl_plain_https_polk_volusia_pasco.py` (added to the `ci.yml` list).
+
 ## [Unreleased] — 2026-10-14 (powers pack saved to generated reports)
 
 ### Added
