@@ -93,7 +93,10 @@ MONGODB_URI=<prod> python scripts/smoke_evidence_check.py --county Collier --sta
 ```
 Expected: status `ok`, a MongoWriter result, `booking_number_shapes` only `NNNNNNNNNNNN`, duplicates 0, rows equal to the report's "N matches found", charges on every row, bond empty or positive with no figure copied from offense text, and mugshots present.
 
-### Charlotte and Manatee: dated relay evidence (home relay, VPN off)
+### Charlotte: dated relay evidence (home relay, VPN off)
+
+> **2026-10-12:** the Manatee (FL) jail relay read and write requests are withdrawn. Manatee is `fail_closed` since 2026-10-09 (Revize roster challenged from every exit), so they are moot and no longer in `docs/recon/smoke_evidence.json`. The Manatee lines below are kept only as history; do not run them.
+
 1. Read smoke. It writes nothing and prints one JSON line:
    ```bash
    CHARLOTTE_EGRESS_MODE=direct python scripts/charlotte_residential_smoke.py

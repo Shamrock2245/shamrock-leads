@@ -22,6 +22,7 @@ from abc import ABC, abstractmethod
 from typing import List, Optional
 from datetime import datetime, timezone
 
+from core.booking_identity import public_booking_number
 from core.models import ArrestRecord
 from scoring.lead_scorer import LeadScorer
 from config.relay_only import is_relay_only
@@ -872,6 +873,9 @@ class BaseScraper(ABC):
 
         # ── Preflight: auto-disable gate ──
         status_writer = self._status_writer(writers)
+        # Scrapers with a durable cursor (scraper_status.cursors) read it via
+        # this writer during scrape() and commit it in after_records_written().
+        self._run_status_writer = status_writer
         res_state = self._load_resilience_state(status_writer)
         gate = gate_decision(res_state, start, force=force_canary) if auto_disable_enabled() else "run"
         if gate == GATE_SKIP:
@@ -1030,11 +1034,14 @@ class BaseScraper(ABC):
                 if not (r.County or "").strip():
                     r.County = self.county
 
+            status_writer_ok = False
             if writers and records:
                 for writer in writers:
                     try:
                         result = writer.write_records(records, self.county)
                         combined_stats["writer_results"].append(result)
+                        if writer is status_writer:
+                            status_writer_ok = True
 
                         # Use first writer's dedup stats for Slack
                         if "new_records" not in combined_stats:
@@ -1051,6 +1058,16 @@ class BaseScraper(ABC):
                             "❌ %s: writer %s failed: %s",
                             self.county, type(writer).__name__, type(write_err).__name__,
                         )
+
+            # Durable cursor commit: only after the system-of-record writer
+            # (the one that owns scraper_status) wrote without raising.
+            hook = getattr(self, "after_records_written", None)
+            if callable(hook):
+                try:
+                    hook(status_writer, records, ok=status_writer_ok or not records)
+                except Exception as hook_err:
+                    logger.error("❌ %s: cursor commit failed (%s); cases stay queued",
+                                 self.county_label, type(hook_err).__name__)
 
             # Fill defaults if no writer provided stats
             if "new_records" not in combined_stats:
@@ -1353,7 +1370,7 @@ class BaseScraper(ABC):
                 "state": st,
                 "county_label": f"{self.county} ({st})",
                 "full_name": record.Full_Name,
-                "booking_number": record.Booking_Number,
+                "booking_number": public_booking_number(record.Booking_Number),
                 "charges": record.Charges,
                 "bond_amount": record.Bond_Amount,
                 "mugshot_url": record.Mugshot_URL,
@@ -1368,7 +1385,7 @@ class BaseScraper(ABC):
                 "state": st,
                 "county_label": f"{self.county} ({st})",
                 "full_name": record.Full_Name,
-                "booking_number": record.Booking_Number,
+                "booking_number": public_booking_number(record.Booking_Number),
                 "charges": record.Charges,
                 "bond_amount": record.Bond_Amount,
                 "lead_score": record.Lead_Score,
