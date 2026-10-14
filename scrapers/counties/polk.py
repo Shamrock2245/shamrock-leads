@@ -9,10 +9,11 @@ import re
 import time
 from datetime import datetime, timedelta
 from typing import List
-from curl_cffi import requests as cffi_requests
 from bs4 import BeautifulSoup
 
 from scrapers.base_scraper import BaseScraper
+from scrapers.plain_http import make_session, request
+from scrapers.scraper_resilience import AntiBotBlocked
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
@@ -24,12 +25,10 @@ FACILITY = "Polk County Jail"
 DAYS_BACK = 3  # 3 days of booking date coverage
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Connection": "keep-alive"
 }
-IMPERSONATE = "chrome131"
 
 
 RACE_MAP = {
@@ -43,8 +42,7 @@ class PolkCountyScraper(BaseScraper):
         return "Polk"
 
     def scrape(self) -> List[ArrestRecord]:
-        session = cffi_requests.Session()
-        session.headers.update(HEADERS)
+        session = make_session(HEADERS)
         
         all_records = []
         seen_bookings = set()
@@ -61,8 +59,8 @@ class PolkCountyScraper(BaseScraper):
             }
             
             try:
-                # We disable SSL verification because of government intermediate certificate chain issues
-                resp = session.post(SEARCH_URL, data=payload, timeout=30, verify=False, impersonate=IMPERSONATE)
+                # Certificate verification stays on; a bad chain raises SourceTLSInvalid.
+                resp = request(session, "POST", SEARCH_URL, data=payload, timeout=30, county="Polk")
                 if resp.status_code != 200:
                     logger.warning(f"Polk: SearchJail for {date_str} returned {resp.status_code}")
                     continue
@@ -80,12 +78,15 @@ class PolkCountyScraper(BaseScraper):
                         record = self._scrape_booking_details(session, b)
                         if record:
                             all_records.append(record)
+                    except AntiBotBlocked:
+                        raise
                     except Exception as be:
                         logger.warning(f"Polk: Failed to fetch details for booking {booking_num}: {be}")
                         
                     # Polite rate-limiting between detail calls
                     time.sleep(0.1)
-                    
+            except AntiBotBlocked:
+                raise
             except Exception as e:
                 logger.error(f"Polk: Search error for {date_str}: {e}")
                 
@@ -147,12 +148,14 @@ class PolkCountyScraper(BaseScraper):
         # Load profile page to extract CSRF token for charges API
         token = ""
         try:
-            profile_resp = session.get(detail_url, timeout=20, verify=False, impersonate=IMPERSONATE)
+            profile_resp = request(session, "GET", detail_url, timeout=20, county="Polk")
             if profile_resp.status_code == 200:
                 soup = BeautifulSoup(profile_resp.text, "html.parser")
                 token_el = soup.find("input", {"name": "__RequestVerificationToken"})
                 if token_el:
                     token = token_el["value"]
+        except AntiBotBlocked:
+            raise
         except Exception as pe:
             logger.warning(f"Polk: Profile page fetch failed for {booking_num}: {pe}")
             
@@ -173,7 +176,7 @@ class PolkCountyScraper(BaseScraper):
                 "__RequestVerificationToken": token
             }
             try:
-                charges_resp = session.post(CHARGES_URL, data=charges_payload, headers=post_headers, timeout=20, verify=False, impersonate=IMPERSONATE)
+                charges_resp = request(session, "POST", CHARGES_URL, data=charges_payload, headers=post_headers, timeout=20, county="Polk")
                 if charges_resp.status_code == 200:
                     content_type = charges_resp.headers.get("Content-Type", "")
                     if "json" in content_type.lower():
@@ -195,6 +198,8 @@ class PolkCountyScraper(BaseScraper):
                                 pass
                     else:
                         logger.debug(f"Polk: GetCharges returned non-JSON/HTML for {booking_num} (likely no charges).")
+            except AntiBotBlocked:
+                raise
             except Exception as ce:
                 logger.warning(f"Polk: GetCharges call failed for {booking_num}: {ce}")
                 
