@@ -2115,7 +2115,10 @@ async def maybe_issue_share_invoice_for_bond(
         bond_id,
         dispatch,
     )
-    create_result = await create_locked_invoice(bond_id, amount=amount)
+    if amount is None:
+        create_result = await create_locked_invoice(bond_id)
+    else:
+        create_result = await create_locked_invoice(bond_id, amount=amount)
     out: Dict[str, Any] = {
         "ok": True,
         "source": source,
