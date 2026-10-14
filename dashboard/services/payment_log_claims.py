@@ -21,8 +21,11 @@ A refund or failure inserts only its own ``payments`` row (``event_kind``
 ``refund`` or ``failure``) and an audit, then sets ``needs_review`` on the
 one matched bond and the one originating plan when each is unambiguous. It
 does not write ``last_payment_*``, a plan balance, or claim state. One
-staff Slack alert is sent after the commit. A Slack failure is logged and
-does not roll the payment back.
+staff Slack alert is sent after the commit for a reversal and for a charge
+stored with ``needs_review``. The alert includes the transaction id and the
+resolved booking when one is known. A Slack failure is logged and does not
+roll the payment back. A later event that adds a booking to a blank charge
+enriches that row under the same ownership rules, or returns a conflict.
 
 If the server cannot run a transaction, the caller gets 503
 ``transactions_unavailable`` and this function writes nothing.
@@ -456,11 +459,39 @@ def _one_plan_id(rows: list) -> str:
     return ""
 
 
+def _case_id(doc: dict) -> str:
+    return str(doc.get("bond_case_id") or doc.get("Bond_Case_ID") or "").strip()
+
+
+def _case_ids_agree(left: dict, right: dict) -> bool:
+    """Blank ids do not disagree. Two different BondCase ids are different cases."""
+    a = _case_id(left)
+    b = _case_id(right)
+    if not a or not b:
+        return True
+    return a.casefold() == b.casefold()
+
+
+def _logical_bond_groups(bonds: list) -> list:
+    """Group a staff-chain mirror into one case. Anything else stays separate.
+
+    ``bond_cases`` and ``active_bonds`` for the same booking are one case when
+    their BondCase ids agree (both blank, equal, or only one is set). Two
+    documents in the same collection, or two ids that disagree, are not a
+    mirror and stay fail-closed.
+    """
+    if len(bonds) == 2:
+        (name_a, doc_a), (name_b, doc_b) = bonds
+        if {name_a, name_b} == set(_BOND_COLLECTIONS) and _case_ids_agree(doc_a, doc_b):
+            return [sorted(bonds, key=lambda item: 0 if item[0] == "bond_cases" else 1)]
+    return [[item] for item in bonds]
+
+
 def _charge_block_reason(booking: str, bonds: list, siblings: list) -> str:
     """Empty when the charge may stamp. Otherwise a fail-closed reason."""
     if not booking:
         return "booking_not_provided"
-    if len(bonds) != 1:
+    if len(_logical_bond_groups(bonds)) != 1:
         return "booking_not_unique"
     for other in _sibling_bookings(siblings):
         if other.casefold() != booking.casefold():
@@ -479,26 +510,32 @@ def _review_flag(kind: str, txn_key: str) -> dict:
     }
 
 
-async def _flag_bond(db, booking: str, flag: dict, session) -> Optional[dict]:
-    """Set ``needs_review`` on the one matching bond. Does not stamp ``last_payment_*``."""
-    bonds = await _matching_bonds(db, booking, session)
-    if len(bonds) != 1:
-        return None
-    name, current = bonds[0]
-    await db[name].update_one(
-        {"booking_number": booking, **({"_id": current["_id"]} if current.get("_id") is not None else {})},
-        {"$set": flag},
-        **_sess(session),
-    )
-    return {
-        "collection": name,
-        "record_id": "" if current.get("_id") is None else str(current["_id"]),
-        "booking_number": booking,
-        "old_needs_review": current.get("needs_review"),
-        "new_needs_review": True,
-        "old_needs_review_reason": current.get("needs_review_reason"),
-        "new_needs_review_reason": flag.get("needs_review_reason"),
-    }
+async def _flag_bond(db, booking: str, flag: dict, session) -> list:
+    """Set ``needs_review`` on the one logical bond, including a staff-chain mirror.
+
+    Returns one review dict per document. Empty when the booking is not one case.
+    Does not stamp ``last_payment_*``.
+    """
+    groups = _logical_bond_groups(await _matching_bonds(db, booking, session))
+    if len(groups) != 1:
+        return []
+    reviews = []
+    for name, current in groups[0]:
+        await db[name].update_one(
+            {"booking_number": booking, **({"_id": current["_id"]} if current.get("_id") is not None else {})},
+            {"$set": flag},
+            **_sess(session),
+        )
+        reviews.append({
+            "collection": name,
+            "record_id": "" if current.get("_id") is None else str(current["_id"]),
+            "booking_number": booking,
+            "old_needs_review": current.get("needs_review"),
+            "new_needs_review": True,
+            "old_needs_review_reason": current.get("needs_review_reason"),
+            "new_needs_review_reason": flag.get("needs_review_reason"),
+        })
+    return reviews
 
 
 async def _flag_plan(db, plan_id: str, flag: dict, session) -> Optional[dict]:
@@ -520,6 +557,113 @@ async def _flag_plan(db, plan_id: str, flag: dict, session) -> Optional[dict]:
     }
 
 
+async def _stamp_bonds(db, booking: str, group: list, payment_update: dict, session) -> list:
+    """Stamp every document in one logical case. Returns one audit per document."""
+    audits = []
+    for coll_name, current in group:
+        filt = {"booking_number": booking}
+        if current.get("_id") is not None:
+            filt["_id"] = current["_id"]
+        await db[coll_name].update_one(filt, {"$set": payment_update}, **_sess(session))
+        audits.append({
+            "collection": coll_name,
+            "record_id": "" if current.get("_id") is None else str(current["_id"]),
+            "booking_number": booking,
+            "old_last_payment": _stamp_view(current),
+            "new_last_payment": _stamp_view(payment_update),
+        })
+    return audits
+
+
+async def _enrich_blank_charge(
+    db, *, row: dict, txn_key: str, amount: float, status: str, booking: str,
+    source: str, extra: dict, session,
+) -> None:
+    """Apply a booking that arrived after a blank charge, or refuse.
+
+    Ownership uses the same rules as a new charge. A refusal writes nothing.
+    A success updates the row, clears ``needs_review``, stamps the bond, and
+    writes its own audit. It is not an ``AlreadyRecorded`` duplicate.
+    """
+    siblings = await _read_rows(db, txn_key, session)
+    bonds = await _matching_bonds(db, booking, session)
+    reason = _charge_block_reason(booking, bonds, siblings)
+    if reason:
+        raise PaymentLogError(
+            "payment_conflict",
+            409,
+            "This charge was recorded without a booking, and the booking on this "
+            f"event cannot be applied ({reason}). Nothing was written.",
+        )
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    payment_update = {
+        "last_payment_amount": amount,
+        "last_payment_at": now_iso,
+        "last_payment_status": status or "approved",
+        "last_transaction_id": txn_key,
+        "last_payment_source": source,
+    }
+    stamp_audits = await _stamp_bonds(
+        db, booking, _logical_bond_groups(bonds)[0], payment_update, session,
+    )
+    filt = {"transaction_id": txn_key, "event_kind": "charge"}
+    if row.get("_id") is not None:
+        filt = {"_id": row["_id"]}
+    await db["payments"].update_one(
+        filt,
+        {
+            "$set": {"booking_number": booking},
+            "$unset": {"needs_review": "", "needs_review_reason": ""},
+        },
+        **_sess(session),
+    )
+    await db[LOG_CLAIMS_COLLECTION].update_one(
+        {"txn_key": txn_key, "event_kind": "charge"},
+        {"$set": {"booking_number": booking}},
+        **_sess(session),
+    )
+    audit = {
+        "_id": _audit_id(txn_key, "charge:booking"),
+        "source": source,
+        "event_type": str(extra.get("event_type") or "payment.booking_enriched"),
+        "entity_type": "payment",
+        "entity_id": txn_key,
+        "actor": source,
+        "agent_name": source,
+        "timestamp": now,
+        "created_at": now,
+        "booking_number": booking,
+        "transaction_id": txn_key,
+        "amount": amount,
+        "event_kind": "charge",
+        "stamped": True,
+        "reason": "provider booking enriched",
+        "confidence": 1.0,
+        "old_booking_number": "",
+        "new_booking_number": booking,
+        "old_last_payment": stamp_audits[0]["old_last_payment"],
+        "new_last_payment": stamp_audits[0]["new_last_payment"],
+        "stamped_collection": stamp_audits[0]["collection"],
+        "payment_review": {
+            "old_needs_review": row.get("needs_review"),
+            "new_needs_review": False,
+            "old_needs_review_reason": row.get("needs_review_reason"),
+            "new_needs_review_reason": None,
+        },
+    }
+    if len(stamp_audits) > 1:
+        audit["stamped_bonds"] = stamp_audits
+    try:
+        await db["audit_events"].insert_one(audit, **_sess(session))
+    except DuplicateKeyError:
+        raise PaymentLogError(
+            "payment_record_failed",
+            500,
+            "The payment audit could not be recorded. Nothing was written.",
+        ) from None
+
+
 async def _apply(
     db,
     *,
@@ -539,6 +683,24 @@ async def _apply(
     await acquire_txn_lock(db[LOCKS_COLLECTION], txn_key, session)
 
     same_kind = await _read_rows(db, txn_key, session, kind=kind)
+    if (
+        kind == "charge"
+        and len(same_kind) == 1
+        and not _booking(same_kind[0].get("booking_number"))
+        and booking
+    ):
+        await _enrich_blank_charge(
+            db,
+            row=same_kind[0],
+            txn_key=txn_key,
+            amount=amount,
+            status=status,
+            booking=booking,
+            source=source,
+            extra=extra,
+            session=session,
+        )
+        return None
     _raise_if_conflict(same_kind, cents=cents, status=status, booking=booking)
     if same_kind:
         raise AlreadyRecorded()
@@ -549,6 +711,7 @@ async def _apply(
     review_note = ""
     stamped = False
     stamp_audit = None
+    stamp_all = None
 
     if kind == "charge":
         bonds = await _matching_bonds(db, booking, session)
@@ -569,7 +732,6 @@ async def _apply(
         except DuplicateKeyError:
             raise AlreadyRecorded() from None
         if not review_note:
-            coll_name, current = bonds[0]
             payment_update = {
                 "last_payment_amount": amount,
                 "last_payment_at": now_iso,
@@ -577,17 +739,11 @@ async def _apply(
                 "last_transaction_id": txn_key,
                 "last_payment_source": source,
             }
-            filt = {"booking_number": booking}
-            if current.get("_id") is not None:
-                filt["_id"] = current["_id"]
-            await db[coll_name].update_one(filt, {"$set": payment_update}, **_sess(session))
+            stamp_all = await _stamp_bonds(
+                db, booking, _logical_bond_groups(bonds)[0], payment_update, session,
+            )
             stamped = True
-            stamp_audit = {
-                "collection": coll_name,
-                "booking_number": booking,
-                "old_last_payment": _stamp_view(current),
-                "new_last_payment": _stamp_view(payment_update),
-            }
+            stamp_audit = stamp_all[0]
 
     doc = {
         "transaction_id": txn_key,
@@ -617,12 +773,12 @@ async def _apply(
     bond_review = None
     plan_review = None
     plan_id = ""
+    flag_booking = ""
     if kind in REVERSAL_KINDS:
         flag = _review_flag(kind, txn_key)
         # Flag the bond the event names when that booking is exactly one
         # document. A blank event booking may use the single sibling booking.
         # A disagreement is not a guess: no bond is flagged.
-        flag_booking = ""
         sibling_bookings = _sibling_bookings(siblings)
         if booking and (not sibling_bookings or (
             len(sibling_bookings) == 1 and sibling_bookings[0].casefold() == booking.casefold()
@@ -658,6 +814,8 @@ async def _apply(
         audit["old_last_payment"] = stamp_audit["old_last_payment"]
         audit["new_last_payment"] = stamp_audit["new_last_payment"]
         audit["stamped_collection"] = stamp_audit["collection"]
+        if stamp_all and len(stamp_all) > 1:
+            audit["stamped_bonds"] = stamp_all
     if doc.get("needs_review"):
         audit["payment_review"] = {
             "old_needs_review": None,
@@ -666,7 +824,9 @@ async def _apply(
             "new_needs_review_reason": doc.get("needs_review_reason"),
         }
     if bond_review:
-        audit["bond_review"] = bond_review
+        audit["bond_review"] = bond_review[0]
+        if len(bond_review) > 1:
+            audit["bond_reviews"] = bond_review
     if plan_review:
         audit["plan_id"] = plan_review["plan_id"]
         audit["plan_review"] = plan_review
@@ -679,31 +839,37 @@ async def _apply(
             "The payment audit could not be recorded. Nothing was written.",
         ) from None
 
-    if kind not in REVERSAL_KINDS:
+    if kind not in REVERSAL_KINDS and not review_note:
         return None
     return {
         "kind": kind,
         "amount": amount,
-        "booking": booking or "none",
+        "booking": flag_booking or booking or "none",
         "plan_id": plan_id or "none",
+        "txn_key": txn_key,
+        "reason": review_note or _review_reason(kind),
     }
 
 
 def _notify_staff_review(hit: dict) -> None:
     """One #alerts post after commit. Failure is logged and does not roll back.
 
-    The message is the event kind, amount, booking, and plan id. No name,
-    phone, email, or card.
+    The message is the event kind, amount, booking, plan id, and transaction
+    id. No name, phone, email, or card.
     """
     kind = hit.get("kind") or ""
     booking = hit.get("booking") or "none"
     plan_id = hit.get("plan_id") or "none"
+    txn_key = hit.get("txn_key") or ""
     amount = hit.get("amount")
     try:
         amount_text = f"{float(amount):.2f}"
     except (TypeError, ValueError):
         amount_text = ""
-    message = f"event_kind {kind}; amount {amount_text}; booking {booking}; plan {plan_id}"
+    message = (
+        f"event_kind {kind}; amount {amount_text}; booking {booking}; "
+        f"plan {plan_id}; txn {txn_key}"
+    )
     try:
         from writers.slack_notifier import SlackNotifier
         delivered = SlackNotifier().notify_alert(
@@ -715,6 +881,7 @@ def _notify_staff_review(hit: dict) -> None:
                 "amount": amount_text,
                 "booking_number": booking,
                 "plan_id": plan_id,
+                "transaction_id": txn_key,
             },
             source="payment_log",
         )

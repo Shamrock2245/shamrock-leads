@@ -81,6 +81,8 @@ class Coll:
                 for k, v in (update.get("$inc") or {}).items():
                     d[k] = d.get(k, 0) + v
                 d.update(update.get("$set") or {})
+                for key in (update.get("$unset") or {}):
+                    d.pop(key, None)
                 return
         if not upsert:
             return

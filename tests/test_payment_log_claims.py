@@ -13,6 +13,8 @@ from dashboard.routers import payment_plans as pp
 from dashboard.routers.webhooks import webhooks_bp
 from dashboard.services import payment_log_claims as plc
 from dashboard.services.swipesimple_receipt_poller import SwipeSimpleReceiptPoller
+
+_real_notify = plc._notify_staff_review
 from tests.test_payment_plan_pay_dedupe import PLAN_ID, Coll, DB, _plan
 
 TXN = "TX-REV-1"
@@ -45,7 +47,9 @@ class CommitSession:
             self.client.db[name].docs = copy.deepcopy(docs)
 
     async def with_transaction(self, callback):
-        while self.client.attempts < 4:
+        tries = 0
+        while tries < 4:
+            tries += 1
             self.client.attempts += 1
             snap = {name: copy.deepcopy(coll.docs) for name, coll in self.client.db.items()}
             try:
@@ -379,7 +383,7 @@ def test_cross_booking_charge_records_needs_review_without_stamp(db, slack_alert
         assert bond.get("last_payment_amount") is None
         assert bond.get("last_transaction_id") is None
     assert _audit(db, "charge")["stamped"] is False
-    assert len(slack_alerts) == 1
+    assert [hit["kind"] for hit in slack_alerts] == ["refund", "charge"]
 
 
 def test_refund_and_failure_record_own_rows_without_balance_or_stamp(db, slack_alerts):
@@ -521,6 +525,211 @@ def test_review_state_audit_records_before_and_after(db, slack_alerts):
     assert failure_audit["plan_review"]["old_needs_review_reason"] == "provider_refund"
     assert failure_audit["plan_review"]["new_needs_review_reason"] == "provider_failure"
     assert failure_audit["payment_review"]["new_needs_review_reason"] == "provider_failure"
+
+
+def test_mirrored_bond_documents_stamp_and_distinct_cases_do_not(db, slack_alerts):
+    """Staff-chain mirrors share one booking and both receive last_payment_*."""
+    case_id = "case-1"
+    db["bond_cases"].docs.append(_bond(
+        _id="bc-1", bond_case_id=case_id, Bond_Case_ID=case_id,
+        last_payment_amount=5, last_transaction_id="OLD",
+    ))
+    db["active_bonds"].docs.append(_bond(
+        _id="ab-1", bond_case_id=case_id, Bond_Case_ID=case_id,
+    ))
+    recorded = _run(_record(db, kind="charge"))
+    assert recorded["committed"] is True
+    assert db["bond_cases"].docs[0]["last_transaction_id"] == TXN
+    assert db["bond_cases"].docs[0]["last_payment_amount"] == 100.0
+    assert db["active_bonds"].docs[0]["last_transaction_id"] == TXN
+    assert db["active_bonds"].docs[0]["last_payment_amount"] == 100.0
+    assert _rows(db, "charge")[0].get("needs_review") is not True
+    audit = _audit(db, "charge")
+    assert audit["stamped"] is True
+    assert audit["old_last_payment"]["last_transaction_id"] == "OLD"
+    assert len(audit["stamped_bonds"]) == 2
+    assert slack_alerts == []
+
+    _run(_record(db, kind="refund"))
+    assert db["bond_cases"].docs[0]["needs_review"] is True
+    assert db["active_bonds"].docs[0]["needs_review"] is True
+    assert db["bond_cases"].docs[0]["last_transaction_id"] == TXN
+    assert db["active_bonds"].docs[0]["last_transaction_id"] == TXN
+    assert len(_audit(db, "refund")["bond_reviews"]) == 2
+
+    db["bond_cases"].docs.append(_bond(booking="BK-SPLIT", _id="bc-a", bond_case_id="case-a"))
+    db["active_bonds"].docs.append(_bond(booking="BK-SPLIT", _id="ab-b", bond_case_id="case-b"))
+    split = _run(_record(db, kind="charge", booking="BK-SPLIT", txn="TX-SPLIT"))
+    assert split["committed"] is True
+    row = [item for item in _rows(db, "charge") if item["transaction_id"] == "TX-SPLIT"][0]
+    assert row["needs_review_reason"] == "booking_not_unique"
+    assert db["bond_cases"].docs[-1].get("last_transaction_id") is None
+    assert db["active_bonds"].docs[-1].get("last_transaction_id") is None
+
+    db["bond_cases"].docs.append(_bond(booking="BK-TWO", _id="bc-3"))
+    db["bond_cases"].docs.append(_bond(booking="BK-TWO", _id="bc-4"))
+    doubled = _run(_record(db, kind="charge", booking="BK-TWO", txn="TX-TWO"))
+    assert doubled["committed"] is True
+    doubled_row = [item for item in _rows(db, "charge") if item["transaction_id"] == "TX-TWO"][0]
+    assert doubled_row["needs_review_reason"] == "booking_not_unique"
+    assert db["bond_cases"].docs[-1].get("last_payment_amount") is None
+    assert db["bond_cases"].docs[-2].get("last_payment_amount") is None
+
+
+def test_needs_review_charge_alerts_once_after_commit(db, slack_alerts, monkeypatch):
+    """A blank receipt is marked read only after one staff alert for the review."""
+    db["bond_cases"].docs.append(_bond(last_payment_amount=7, last_transaction_id="KEEP"))
+    body = "Amount $100.00\nTransaction id: TX-POLL\n"
+    read = []
+
+    class Reader:
+        is_configured = True
+
+        def search_messages(self, query, max_results=20):
+            return [{"message_id": "m-blank", "subject": "Receipt", "body": body}]
+
+        def mark_as_read(self, mid):
+            read.append(mid)
+
+    monkeypatch.setattr(
+        "dashboard.services.gmail_reader.GmailReaderService",
+        lambda: Reader(),
+    )
+    result = _run(SwipeSimpleReceiptPoller(db=db).poll())
+    assert result["processed"] == 1
+    assert read == ["m-blank"]
+    assert len(slack_alerts) == 1
+    assert slack_alerts[0]["kind"] == "charge"
+    assert slack_alerts[0]["txn_key"] == "TX-POLL"
+    assert slack_alerts[0]["booking"] == "none"
+    assert slack_alerts[0]["reason"] == "booking_not_provided"
+    assert db["bond_cases"].docs[0]["last_transaction_id"] == "KEEP"
+    charge = [row for row in db["payments"].docs if row.get("transaction_id") == "TX-POLL"][0]
+    assert charge["needs_review"] is True
+
+    read.clear()
+    again = _run(SwipeSimpleReceiptPoller(db=db).poll())
+    assert again["processed"] == 0
+    assert read == ["m-blank"]
+    assert len(slack_alerts) == 1
+
+
+def test_applied_pay_retry_rechecks_reversal_inside_the_lock(plan_db, monkeypatch):
+    """A refund revealed once the applied claim is read cannot return 200."""
+    class RevealPayments(Coll):
+        def __init__(self):
+            super().__init__()
+            self.claim_read = False
+            self.revealed = False
+
+        def find(self, flt=None, *a, **k):
+            if self.claim_read and not self.revealed:
+                self.revealed = True
+                self.docs.append({
+                    "transaction_id": TXN,
+                    "event_kind": "refund",
+                    "booking_number": BOOKING,
+                    "amount": 100.0,
+                    "status": "refunded",
+                })
+            return super().find(flt, *a, **k)
+
+    class ClaimWatch(Coll):
+        def __init__(self, reveal):
+            super().__init__()
+            self.reveal = reveal
+
+        async def find_one(self, flt=None, *a, **k):
+            doc = await super().find_one(flt, *a, **k)
+            if doc and doc.get("status") == "applied":
+                self.reveal.claim_read = True
+            return doc
+
+    reveal = RevealPayments()
+    claims = ClaimWatch(reveal)
+    claims.docs.append({
+        "plan_id": PLAN_ID, "transaction_id": TXN, "status": "applied", "amount": 100,
+    })
+    plan_db["payments"] = reveal
+    plan_db["payment_plan_payment_claims"] = claims
+    _plan(plan_db)["balance_remaining"] = 700.0
+    _plan(plan_db)["payments_made"] = 2
+    _plan(plan_db)["total_paid"] = 300.0
+    app = _pay_app(plan_db, monkeypatch)
+    with patch("dashboard.routers.events.publish_event", new=AsyncMock()):
+        response = _post_pay(app)
+    assert response.status_code == 409
+    assert response.json()["error"] == "payment_needs_review"
+    assert reveal.claim_read is True
+    assert reveal.revealed is True
+    plan = _plan(plan_db)
+    assert plan["balance_remaining"] == 700.0
+    assert plan["payments_made"] == 2 and plan["total_paid"] == 300.0
+    assert claims.docs[0]["status"] == "applied"
+
+
+def test_later_booking_enriches_blank_charge_or_conflicts(db, slack_alerts):
+    """A booking that arrives later stamps the blank charge, or conflicts."""
+    db["bond_cases"].docs.append(_bond(_id="bond-1"))
+    first = _run(_record(db, kind="charge", booking=""))
+    assert first["duplicate"] is False and first["committed"] is True
+    assert _rows(db, "charge")[0]["needs_review_reason"] == "booking_not_provided"
+    assert len(slack_alerts) == 1
+
+    enriched = _run(_record(db, kind="charge", booking=BOOKING))
+    assert enriched["committed"] is True and enriched["duplicate"] is False
+    row = _rows(db, "charge")[0]
+    assert row["booking_number"] == BOOKING
+    assert "needs_review" not in row
+    assert "needs_review_reason" not in row
+    assert db["bond_cases"].docs[0]["last_transaction_id"] == TXN
+    assert db["payment_log_claims"].docs[0]["booking_number"] == BOOKING
+    audits = [doc for doc in db["audit_events"].docs if doc.get("reason") == "provider booking enriched"]
+    assert len(audits) == 1
+    assert audits[0]["old_booking_number"] == ""
+    assert audits[0]["new_booking_number"] == BOOKING
+    assert audits[0]["payment_review"]["old_needs_review"] is True
+    assert audits[0]["payment_review"]["new_needs_review"] is False
+    assert audits[0]["old_last_payment"]["last_transaction_id"] is None
+    assert audits[0]["new_last_payment"]["last_transaction_id"] == TXN
+    assert len(slack_alerts) == 1
+
+    _run(_record(db, kind="charge", booking="", txn="TX-BLOCK"))
+    _run(_record(db, kind="refund", booking=BOOKING, txn="TX-BLOCK"))
+    with pytest.raises(plc.PaymentLogError) as raised:
+        _run(_record(db, kind="charge", booking=BOOKING, txn="TX-BLOCK"))
+    assert raised.value.status_code == 409
+    assert raised.value.error == "payment_conflict"
+    blocked = [item for item in _rows(db, "charge") if item["transaction_id"] == "TX-BLOCK"][0]
+    assert blocked["booking_number"] == ""
+    assert blocked["needs_review"] is True
+    assert db["bond_cases"].docs[0]["last_transaction_id"] == TXN
+
+
+def test_review_alert_includes_txn_key_and_resolved_booking(db, slack_alerts, monkeypatch):
+    """Reversal alerts name the transaction and the booking the bond was flagged with."""
+    db["bond_cases"].docs.append(_bond())
+    db["payment_plans"].docs.append({"plan_id": PLAN_ID, "balance_remaining": 800.0})
+    _run(_record(db, kind="charge", plan_id=PLAN_ID))
+    assert slack_alerts == []
+    _run(_record(db, kind="refund", booking=""))
+    hit = slack_alerts[0]
+    assert hit["kind"] == "refund"
+    assert hit["txn_key"] == TXN
+    assert hit["booking"] == BOOKING
+    assert hit["plan_id"] == PLAN_ID
+    captured = {}
+
+    def notify_alert(self, **kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr("writers.slack_notifier.SlackNotifier.notify_alert", notify_alert)
+    _real_notify(hit)
+    assert TXN in captured["message"]
+    assert BOOKING in captured["message"]
+    assert captured["details"]["transaction_id"] == TXN
+    assert captured["details"]["booking_number"] == BOOKING
 
 
 def test_blank_booking_webhook_does_not_stamp(db, monkeypatch):

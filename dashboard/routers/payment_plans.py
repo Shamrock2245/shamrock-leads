@@ -343,10 +343,10 @@ async def _idempotent_reply(
 # ``audit_events`` insert run in that same ``ClientSession.with_transaction``.
 # The driver retries transient transaction errors. There is no fallback and
 # no step resume. The first write inside the transaction is the shared
-# ``payment_txn_locks`` upsert. Sibling refund and failure rows are read
-# after that lock and before any decision, including an idempotent retry of
-# an applied claim. Any such sibling is 409 ``payment_needs_review`` and
-# does not change the balance. This path does not reverse a plan balance.
+# ``payment_txn_locks`` upsert. An applied-claim retry reads that claim and
+# then the refund or failure siblings inside the same locked transaction.
+# Any such sibling is 409 ``payment_needs_review`` and does not change the
+# balance. This path does not reverse a plan balance.
 
 _TOKEN_FIELDS = ("log_claim_token", "claim_token", "payment_claim_token")
 _SETTLED_STATUSES = frozenset({
@@ -969,17 +969,20 @@ async def _run_apply(client, work) -> str:
     return _last_apply_path
 
 
-async def _reversal_gate(client, payments_col, txn):
-    """Lock, then refuse when a refund or failure sibling exists.
+async def _locked_prior_decision(client, claims, payments_col, txn):
+    """Lock, read the claim, then re-read reversal siblings before deciding.
 
-    Runs before every decision, including the idempotent retry of an applied
-    claim. The balance is not changed. The lock bump commits only when no
-    sibling is present; a refusal aborts the transaction.
+    The idempotent retry of an applied claim stays inside this transaction.
+    A refund that is visible before the decision returns 409. The balance is
+    not changed. A refusal aborts, so the lock bump is not committed.
     """
     from dashboard.services.payment_log_claims import LOCKS_COLLECTION, acquire_txn_lock
 
+    found = {}
+
     async def work(session):
         await acquire_txn_lock(get_collection(LOCKS_COLLECTION), txn, session)
+        claim = await claims.find_one({"transaction_id": txn}, **_sess(session))
         rows = await _docs(payments_col, {"transaction_id": txn}, session)
         if _reversal_sibling(rows):
             raise PlanPaymentRefused(
@@ -987,9 +990,10 @@ async def _reversal_gate(client, payments_col, txn):
                 "This transaction id was refunded or failed and needs review. "
                 "The plan balance was not changed.",
             )
+        found["claim"] = claim
 
     await _run_apply(client, work)
-    return None
+    return found.get("claim")
 
 
 async def _continue_claim(request, claims, plans_col, payments_col, plan, plan_id, txn, amount, data, client):
@@ -1114,18 +1118,17 @@ async def record_payment(request: Request, plan_id):
         logger.warning("[payment_plans] txn lock index unavailable")
         return _unavailable()
 
-    # Lock, then read refund/failure siblings before any decision, including
-    # the idempotent retry of an applied claim. A sibling is 409 and does
-    # not change the balance or the claim.
+    # The claim lookup and the reversal read share one lock. A sibling that
+    # lands before this decision is 409 and does not change the balance or
+    # the claim, including an idempotent retry of an applied claim.
     try:
-        await _reversal_gate(client, payments_col, txn)
+        existing_claim = await _locked_prior_decision(client, claims, payments_col, txn)
     except TransactionsUnavailable:
         return _unavailable()
     except PlanPaymentRefused as exc:
         return _refuse(exc.error, txn, exc.message)
 
     # A finished claim decides. Anything still claimed is not resumed and is not success.
-    existing_claim = await claims.find_one({"transaction_id": txn})
     if existing_claim is not None:
         return await _enter_existing(
             request, claims, plans_col, payments_col, plan, plan_id, txn, amount, data, existing_claim,
@@ -1150,7 +1153,12 @@ async def record_payment(request: Request, plan_id):
             "claimed_at": now.isoformat(),
         })
     except DuplicateKeyError:
-        existing = await claims.find_one({"transaction_id": txn})
+        try:
+            existing = await _locked_prior_decision(client, claims, payments_col, txn)
+        except TransactionsUnavailable:
+            return _unavailable()
+        except PlanPaymentRefused as exc:
+            return _refuse(exc.error, txn, exc.message)
         return await _enter_existing(
             request, claims, plans_col, payments_col, plan, plan_id, txn, amount, data,
             existing or {"status": "unknown"},
