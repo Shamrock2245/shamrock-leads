@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-14 (staff premium confirmation at Write Bond)
+
+### Added
+- **`POST /api/paperwork/confirm-premium` confirms the premium, the down payment, and the financed balance on a bond case.** The actor is the signed-in agent or staff user (session only). Amounts use the same exact-cent parse as plan payments. The premium must equal the down payment plus the financed balance. The fields `premium_confirmed_amount`, `premium_confirmed_at`, and `premium_confirmed_by` are written to `paperwork_packets`, `bond_cases`, and `active_bonds`, with an `audit_events` row `premium_confirmed`. A second call with the same amounts is a no-op. A different amount returns 409 unless the request includes a `reason`; with a reason the prior values stay on `premium_confirmation_history` and a new audit row is written. Sub-cent amounts return 400. The #165 identity gate must already pass (422 when it does not). No session returns 401.
+- **A financed balance creates one payment plan inside the same Mongo transaction as the confirmation.** The route calls `ensure_payment_plan_for_confirmation` from `dashboard.services.payment_plan_creation` (Invoicing Desk, #187) and passes the Mongo session. The confirmation id is deterministic, so a replay does not create a second plan. `PlanTermsConflict` returns 409. `ValueError` returns 400. A missing plan module, `NotImplementedError`, or a server that cannot run a transaction returns 503 and writes nothing. This PR does not add that module, so either PR can land first.
+- **Who may confirm, and the Florida filed-rate check, live in `dashboard/services/premium_confirmation.py`.** Agents (`sub_agent`) and staff/admin may confirm. Recovery may not. A premium below 10% of the bond, or below $100, requires a reason.
+- **Write Bond shows the confirm step** (premium, down, financed, installments, frequency, and a reason field when the amount is below the filed rate or the server asks for one). 400, 409, and 422 messages stay on the screen. With the tenant flag off the route is disabled and Write Bond continues as before.
+- **DocuSeal completion, when `SAAS_MULTI_TENANT` is on.** `legacy_payment_link` and `share_invoice` stamp `skipped: premium_unconfirmed` until the case is confirmed. After confirmation, `share_invoice` stages the down-payment invoice with `dispatch=False` (nothing is sent while the SwipeSimple flags are off). With the tenant flag off, those steps are unchanged.
+
+### Tests
+- `tests/test_premium_confirmation.py` (added to `ci.yml`). Mocked Mongo, a `TEST-` case, and a mocked plan function. No live sends, charges, or production writes.
+
 ## [Unreleased] — 2026-10-14 (Duval: never click the ATIMS robot gate)
 
 ### Fixed

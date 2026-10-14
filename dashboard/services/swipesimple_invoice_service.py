@@ -1421,7 +1421,7 @@ async def _finish_dispatch_claim(claim_key: str, claim_id: str, status: str, **f
 # Public API
 # ---------------------------------------------------------------------------
 
-async def create_locked_invoice(bond_id: str) -> Dict[str, Any]:
+async def create_locked_invoice(bond_id: str, *, amount: Optional[Decimal] = None) -> Dict[str, Any]:
     """
     Create (or return existing) locked SwipeSimple invoice for a bond.
 
@@ -1457,8 +1457,12 @@ async def create_locked_invoice(bond_id: str) -> Dict[str, Any]:
     _require_test_case_invoices_allowed(bond, booking_number)
     # Fail closed with a reason code: missing / zero / sub-cent / ambiguous /
     # intake-promote 10% estimate / bond_cases vs active_bonds disagreement
-    # never reaches SwipeSimple.
-    premium = await resolve_premium_across_collections(bond, booking_number)
+    # never reaches SwipeSimple. ``amount`` is the confirmed down payment
+    # from Write Bond; when it is omitted the resolver is unchanged.
+    if amount is not None:
+        premium = _exact_premium(amount)
+    else:
+        premium = await resolve_premium_across_collections(bond, booking_number)
     _ = premium_dollars_to_cents(premium)
 
     existing = _existing_payment_link(bond)
@@ -2077,6 +2081,7 @@ async def maybe_issue_share_invoice_for_bond(
     channel: Channel = "imessage",
     dispatch: bool = False,
     source: str = "manual",
+    amount: Optional[Decimal] = None,
 ) -> Dict[str, Any]:
     """
     Thin integration entrypoint: create_locked_invoice, then dispatch ONLY on
@@ -2110,7 +2115,7 @@ async def maybe_issue_share_invoice_for_bond(
         bond_id,
         dispatch,
     )
-    create_result = await create_locked_invoice(bond_id)
+    create_result = await create_locked_invoice(bond_id, amount=amount)
     out: Dict[str, Any] = {
         "ok": True,
         "source": source,

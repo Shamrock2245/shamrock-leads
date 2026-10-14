@@ -512,6 +512,33 @@ function openBondModal(nameOrLead, bond, county, booking) {
         </div>
       </div>
     </div>
+    <div class="wb-section" id="wbPremiumConfirm">
+      <div class="wb-section-label">Confirm premium</div>
+      <div class="wb-meta-grid">
+        <div>
+          <span class="wb-meta-label">Financed balance ($)</span>
+          <input type="text" id="wbFinancedDisplay" readonly tabindex="-1" value="0.00" style="width:140px;margin-top:4px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-weight:700">
+        </div>
+        <div>
+          <span class="wb-meta-label">Installments</span>
+          <input type="number" id="wbInstallments" min="0" step="1" value="4" style="width:100px;margin-top:4px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+        </div>
+        <div>
+          <span class="wb-meta-label">Frequency</span>
+          <select id="wbPayFrequency" style="margin-top:4px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+            <option value="weekly" selected>Weekly</option>
+            <option value="biweekly">Every two weeks</option>
+            <option value="monthly">Monthly</option>
+          </select>
+        </div>
+        <div id="wbPremiumReasonWrap" style="grid-column:1/-1;display:none">
+          <span class="wb-meta-label">Reason</span>
+          <input type="text" id="wbPremiumReason" placeholder="Required below the Florida 10% / $100 minimum, or to change a confirmed premium" style="width:100%;margin-top:4px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+        </div>
+        <div id="wbPremiumConfirmStatus" style="display:none;grid-column:1/-1;font-size:12px;line-height:1.45;padding:8px 10px;border-radius:8px"></div>
+        <div style="grid-column:1/-1;font-size:11px;color:var(--muted)">Confirm once. The down payment is what the signer is invoiced. A financed balance opens one payment plan. Nothing is sent or charged from this step.</div>
+      </div>
+    </div>
     ${lead._priorBond && lead._priorBond.found ? `
     <div class="wb-section" id="returningClientBanner" style="background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.35);border-radius:10px;padding:12px 14px">
       <div class="wb-section-label" style="margin:0 0 6px">☘️ Returning Shamrock client</div>
@@ -707,8 +734,11 @@ function openBondModal(nameOrLead, bond, county, booking) {
     surety: initialSurety,
     date: new Date().toLocaleDateString('en-US'),
     poaNumbers: [],  // will be populated by fetchPoaNumbers()
+    bond_case_id: lead.bond_case_id || lead.Bond_Case_ID || '',
+    packet_id: lead.packet_id || lead.Packet_ID || '',
   };
 
+  syncWriteBondFinanced();
   fetchPoaNumbers(initialSurety, bondAmt, chargeList);
   if (initialSurety !== 'osi') {
     const osi = document.getElementById('suretyOSI');
@@ -1566,6 +1596,16 @@ async function submitBond() {
     if (wbAmtEl) wbAmtEl.focus();
     return;
   }
+  const confirmed = await confirmWriteBondPremium();
+  if (!confirmed.ok) {
+    if (statusEl) {
+      statusEl.style.background = 'rgba(239,68,68,0.15)';
+      statusEl.style.color = 'var(--danger)';
+      statusEl.textContent = confirmed.error || 'Confirm the premium before writing the bond';
+    }
+    toast(confirmed.error || 'Confirm the premium before writing the bond', 'error');
+    return;
+  }
   const moneySaved = await persistWriteBondAR();
   if (!moneySaved.ok) {
     if (statusEl) {
@@ -2009,6 +2049,7 @@ function onWriteBondAmountChange(raw, persist) {
   if (persist && data.surety && data.chargeList) {
     fetchPoaNumbers(data.surety, amount, data.chargeList);
   }
+  if (typeof syncWriteBondFinanced === 'function') syncWriteBondFinanced();
 }
 
 function onWriteBondPremiumEdit() {
@@ -2017,11 +2058,127 @@ function onWriteBondPremiumEdit() {
   if (premEl) premEl.dataset.manualEdit = '1';
   if (downEl && !downEl.dataset.manualEdit) downEl.value = premEl ? premEl.value : '';
   onWriteBondAmountChange(document.getElementById('wbBondAmountInput')?.value, false);
+  syncWriteBondFinanced();
 }
 
 function onWriteBondDownEdit() {
   const downEl = document.getElementById('wbDownPayment');
   if (downEl) downEl.dataset.manualEdit = '1';
+  syncWriteBondFinanced();
+}
+
+function writeBondFiledMinimumCents(bondDollars) {
+  const cents = Math.round(Number(bondDollars) * 100);
+  if (!Number.isFinite(cents) || cents <= 0) return 10000;
+  const ten = Math.ceil(cents * 10 / 100);
+  return Math.max(ten, 10000);
+}
+
+function syncWriteBondFinanced() {
+  const money = readWriteBondMoney();
+  const finEl = document.getElementById('wbFinancedDisplay');
+  let financed = null;
+  if (money.premium != null && money.down_payment != null) {
+    financed = Math.round((money.premium - money.down_payment) * 100) / 100;
+    if (finEl) finEl.value = financed.toFixed(2);
+  }
+  const wrap = document.getElementById('wbPremiumReasonWrap');
+  if (!wrap || wrap.dataset.force === '1') return;
+  const bond = window._bondModalData ? window._bondModalData.bond : 0;
+  const premiumCents = money.premium == null ? null : Math.round(money.premium * 100);
+  const below = premiumCents != null && premiumCents < writeBondFiledMinimumCents(bond);
+  wrap.style.display = below ? 'block' : 'none';
+}
+
+function premiumConfirmErrorText(status, body) {
+  const msg = (body && (body.message || body.error)) || 'Could not confirm the premium';
+  if (status === 409) return msg;
+  if (status === 400) return msg;
+  if (status === 422) return (body && body.message) || 'The indemnitor ID check has not passed.';
+  if (status === 401) return 'Sign in to confirm the premium.';
+  if (status === 503) return (body && body.message) || 'Premium confirmation is unavailable. Nothing was saved.';
+  return msg;
+}
+
+function showPremiumConfirmError(text, status) {
+  const el = document.getElementById('wbPremiumConfirmStatus');
+  if (el) {
+    el.style.display = 'block';
+    el.style.background = status === 409 ? 'rgba(245,158,11,0.15)' : 'rgba(239,68,68,0.15)';
+    el.style.color = status === 409 ? '#fbbf24' : 'var(--danger)';
+    el.textContent = text;
+  }
+  if (status === 409 || status === 400) {
+    const wrap = document.getElementById('wbPremiumReasonWrap');
+    if (wrap && /reason/i.test(text)) {
+      wrap.style.display = 'block';
+      wrap.dataset.force = '1';
+    }
+  }
+}
+
+async function confirmWriteBondPremium() {
+  const data = window._bondModalData;
+  if (!data) return { ok: false, error: 'No bond is open' };
+  syncWriteBondFinanced();
+  const money = readWriteBondMoney();
+  if (money.premium == null || money.down_payment == null) {
+    return { ok: false, error: 'Enter premium and down payment' };
+  }
+  const financed = Math.round((money.premium - money.down_payment) * 100) / 100;
+  if (financed < 0) {
+    return { ok: false, error: 'Down payment cannot exceed premium' };
+  }
+  const installmentsEl = document.getElementById('wbInstallments');
+  const frequencyEl = document.getElementById('wbPayFrequency');
+  const reason = (document.getElementById('wbPremiumReason')?.value || '').trim();
+  const body = {
+    bond_case_id: data.bond_case_id || (data.lead && (data.lead.bond_case_id || data.lead.Bond_Case_ID)) || '',
+    booking_number: data.booking || '',
+    packet_id: data.packet_id || (data.lead && data.lead.packet_id) || '',
+    premium: money.premium.toFixed(2),
+    down: money.down_payment.toFixed(2),
+    financed: financed.toFixed(2),
+    installments: financed > 0 ? Number(installmentsEl ? installmentsEl.value : 0) : 0,
+    frequency: (frequencyEl && frequencyEl.value) || 'weekly',
+  };
+  if (reason) body.reason = reason;
+  const statusEl = document.getElementById('wbPremiumConfirmStatus');
+  if (statusEl) {
+    statusEl.style.display = 'block';
+    statusEl.style.background = 'var(--panel)';
+    statusEl.style.color = 'var(--text)';
+    statusEl.textContent = 'Confirming premium...';
+  }
+  try {
+    const r = await fetch(`${API}/api/paperwork/confirm-premium`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.status === 404 && d.error === 'premium_confirmation_disabled') {
+      if (statusEl) statusEl.style.display = 'none';
+      return { ok: true, skipped: true };
+    }
+    if (!r.ok || d.success === false) {
+      const text = premiumConfirmErrorText(r.status, d);
+      showPremiumConfirmError(text, r.status);
+      return { ok: false, error: text, status: r.status };
+    }
+    if (statusEl) {
+      statusEl.style.display = 'block';
+      statusEl.style.background = 'rgba(34,197,94,0.15)';
+      statusEl.style.color = 'var(--success)';
+      statusEl.textContent = d.idempotent ? 'Premium already confirmed.' : 'Premium confirmed.';
+    }
+    return { ok: true, confirmation: d };
+  } catch (e) {
+    const text = 'Could not confirm the premium';
+    showPremiumConfirmError(text, 0);
+    return { ok: false, error: text };
+  }
 }
 
 function readWriteBondMoney() {
@@ -2395,6 +2552,8 @@ function openWriteBond(opts) {
     county:         booking.county || def.county || '',
     booking_number: booking.booking_number || def.bookingNumber || '',
     charges:        opts.charges || '',
+    bond_case_id:   bond.bond_case_id || bond.Bond_Case_ID || opts.bond_case_id || '',
+    packet_id:      opts.packet_id || bond.packet_id || bond.Packet_ID || '',
     _intake_indemnitors: indemnitors,
     _intake_id:     opts.intake_id || '',
     _intake_source: opts.intake_source || '',
@@ -3137,6 +3296,8 @@ function openBondFromActiveBond(bond) {
     county:         bond.county || '',
     booking_number: bond.booking_number || '',
     charges:        bond.charges || '',
+    bond_case_id:   bond.bond_case_id || bond.Bond_Case_ID || '',
+    packet_id:      bond.packet_id || bond.Packet_ID || '',
   };
   openBondModal(syntheticLead);
   // Pre-select the surety after the modal renders
@@ -3159,6 +3320,13 @@ async function triggerDocuSealPacket() {
   const poaInput = document.getElementById('poaInput_0');
   const poaNumber = poaInput ? poaInput.value.trim() : '';
 
+  if (snStatus) snStatus.textContent = 'Confirming premium...';
+  const confirmed = await confirmWriteBondPremium();
+  if (!confirmed.ok) {
+    if (snStatus) snStatus.textContent = confirmed.error || 'Confirm the premium first';
+    toast(confirmed.error || 'Confirm the premium first', 'error');
+    return;
+  }
   if (snStatus) snStatus.textContent = 'Saving premium to Accounts Receivable...';
   const moneySaved = await persistWriteBondAR();
   if (!moneySaved.ok) {

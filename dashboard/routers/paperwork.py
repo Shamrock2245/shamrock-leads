@@ -1216,6 +1216,29 @@ async def attest_indemnitor_id(request: Request):
     return JSONResponse({"success": True, "attested": True, "action": result.get("action")})
 
 
+@paperwork_bp.post("/paperwork/confirm-premium")
+async def confirm_premium(request: Request):
+    """Staff confirms premium, down payment, and financed balance for one case.
+
+    The actor is the session user. Invoicing Desk creates the payment plan
+    when a balance is financed. This route does not send or charge.
+    """
+    from dashboard.services.premium_confirmation import PremiumConfirmError
+    from dashboard.services.premium_confirmation import confirm_premium as _confirm
+    from dashboard.tenancy.scope import TenantScopeError
+
+    try:
+        result = await _confirm(request)
+    except PremiumConfirmError as exc:
+        return JSONResponse(
+            {"success": False, "error": exc.error, "message": exc.message},
+            status_code=exc.status,
+        )
+    except TenantScopeError:
+        return JSONResponse({"success": False, "error": "tenant_required"}, status_code=403)
+    return JSONResponse(result)
+
+
 @paperwork_bp.post("/paperwork/packet/finalize")
 async def packet_builder_finalize(request: Request):
     """

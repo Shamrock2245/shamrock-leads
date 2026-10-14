@@ -209,13 +209,20 @@ def test_endpoints_route_through_gated_helpers():
 
 
 def test_nothing_in_app_code_sets_premium_confirmed_fields():
-    """No setter exists yet (no staff confirmation UI): nothing may auto-mark a
-    premium as confirmed. App code may only READ the field names via the
-    service constants. If a staff-authenticated setter is added later, update
-    this test deliberately."""
+    """Only the staff confirmation setter may write these field names.
+
+    ``premium_confirmation.py`` is that setter (POST /api/paperwork/confirm-premium).
+    Every other module may only read the names via the service constants.
+    """
     import re
 
     field_re = re.compile(r"^premium_confirmed_\w+$")
+    # Staff confirmation (Write Bond) is the one setter. It may spell the
+    # field names. Everywhere else may only read the service constants.
+    allowed = {
+        "dashboard/services/packet_payment_link_service.py",
+        "dashboard/services/premium_confirmation.py",
+    }
     offenders = []
     for base in ("dashboard", "api", "core", "services", "scripts"):
         for f in (ROOT / base).rglob("*.py"):
@@ -223,14 +230,13 @@ def test_nothing_in_app_code_sets_premium_confirmed_fields():
             rel = str(f.relative_to(ROOT))
             for node in ast.walk(tree):
                 if isinstance(node, ast.Constant) and isinstance(node.value, str) and field_re.match(node.value):
-                    # only the constant definitions in the service may spell the names
-                    if rel != "dashboard/services/packet_payment_link_service.py":
+                    if rel not in allowed:
                         offenders.append(f"{rel}: literal {node.value}")
                 if isinstance(node, ast.Dict):
                     for k in node.keys:
-                        if isinstance(k, ast.Name) and k.id.startswith("PREMIUM_CONFIRMED"):
+                        if isinstance(k, ast.Name) and k.id.startswith("PREMIUM_CONFIRMED") and rel not in allowed:
                             offenders.append(f"{rel}: dict key {k.id}")
-                        if isinstance(k, ast.Constant) and isinstance(k.value, str) and "premium_confirmed" in k.value:
+                        if isinstance(k, ast.Constant) and isinstance(k.value, str) and "premium_confirmed" in k.value and rel not in allowed:
                             offenders.append(f"{rel}: dict key {k.value}")
     assert offenders == []
     for name in ("premium_confirmed_amount", "premium_confirmed_at", "premium_confirmed_by"):

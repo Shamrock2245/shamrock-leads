@@ -51,8 +51,16 @@ Even when enabled, the service sends ONLY when a STAFF-CONFIRMED premium is
 present (``premium_confirmed_amount`` + ``premium_confirmed_at`` +
 ``premium_confirmed_by``); otherwise the step is stamped
 ``skipped: premium_unconfirmed``. Stored ``premium`` values (often the 10%
-estimate) never count. Nothing sets the confirmed fields yet, so in practice
-enabling the switch still sends nothing until a staff confirmation UI exists.
+estimate) never count. Staff set those fields with
+``POST /api/paperwork/confirm-premium`` (Write Bond). That route is off
+unless ``SAAS_MULTI_TENANT`` is on.
+
+When the tenant flag is on, both ``legacy_payment_link`` and ``share_invoice``
+stamp ``skipped: premium_unconfirmed`` until that confirmation exists.
+``share_invoice`` then stages the confirmed down payment with
+``dispatch=False`` (no customer send while the SwipeSimple flags are off).
+When the tenant flag is off, ``share_invoice`` keeps the previous full-premium
+stage and ``legacy_payment_link`` keeps the switch-first order.
 
 Reversible with the env flag (or the one-line ``LEGACY_PAYMENT_LINK_DEFAULT``
 constant in ``legacy_payment_link_switch``). When enabled, sends are send-once
@@ -170,6 +178,23 @@ def _share_source(source: str) -> str:
 def _legacy_payment_link_mode() -> str:
     """'off' (default) | 'webhook' | 'all' — see ``legacy_payment_link_switch``."""
     return _switch.legacy_payment_link_mode()
+
+
+def _tenant_confirmation_required() -> bool:
+    """The down-payment gate is on only while multi-tenant is on.
+
+    Flag off keeps the previous share-invoice and legacy-link order so other
+    agencies see no change.
+    """
+    from dashboard.tenancy.flag import multi_tenant_enabled
+
+    return multi_tenant_enabled()
+
+
+def _packet_premium_confirmed(packet: Optional[Mapping[str, Any]]) -> bool:
+    from dashboard.services.packet_payment_link_service import confirmed_premium
+
+    return confirmed_premium(packet, None) > 0
 
 
 def _lease_seconds() -> int:
@@ -693,6 +718,11 @@ class _Run:
     async def step_legacy_payment_link(self) -> None:
         if _step(self.doc, STEP_LEGACY).get("state"):
             return  # at-most-once: any stamp (started/done/skipped/failed) is final
+        if _tenant_confirmation_required() and not _packet_premium_confirmed(self.doc):
+            await self.stamp(STEP_LEGACY, "skipped", reason="premium_unconfirmed")
+            logger.info("%s payment_link skip packet=%s reason=premium_unconfirmed",
+                        self.pfx, self.packet_id)
+            return
         mode = self.mode
         if mode == "off":
             await self.stamp(STEP_LEGACY, "skipped", reason="switch_off")
@@ -760,14 +790,30 @@ class _Run:
             return
         from dashboard.services import swipesimple_invoice_service as _ss
 
+        share_amount = None
+        if _tenant_confirmation_required():
+            from dashboard.services.premium_confirmation import confirmed_down_amount
+
+            share_amount = confirmed_down_amount(self.doc)
+            if share_amount is None:
+                await self.stamp(STEP_SHARE, "skipped", reason="premium_unconfirmed")
+                logger.info("%s share_invoice stage skipped reason=premium_unconfirmed packet=%s",
+                            self.pfx, self.packet_id)
+                return
         try:
             # Stage only: ALWAYS pass dispatch=False explicitly — never rely on
             # the function's default. No customer message from this path.
+            # With the tenant flag on, the amount is the confirmed down payment.
+            share_kwargs = {
+                "channel": "imessage",
+                "dispatch": False,
+                "source": _share_source(self.source),
+            }
+            if share_amount is not None:
+                share_kwargs["amount"] = share_amount
             share_result = await _ss.maybe_issue_share_invoice_for_bond(
                 share_bond_id,
-                channel="imessage",
-                dispatch=False,
-                source=_share_source(self.source),
+                **share_kwargs,
             )
         except (_ss.SwipeSimpleInvoiceError, _ss.SwipeSimpleInvoiceNotWired) as exc:
             # Fail-closed business rule (missing premium, mismatch, unresolved
