@@ -1216,6 +1216,53 @@ async def attest_indemnitor_id(request: Request):
     return JSONResponse({"success": True, "attested": True, "action": result.get("action")})
 
 
+@paperwork_bp.post("/paperwork/confirm-premium")
+async def confirm_packet_premium(request: Request):
+    """Staff confirms premium, down payment, and financed balance at Write Bond.
+
+    The actor is the session user. A body ``premium_confirmed_by`` is ignored.
+    """
+    from dashboard.services.packet_payment_link_service import (
+        PREMIUM_CONFIRMED_AT_FIELD,
+        PREMIUM_CONFIRMED_BY_FIELD,
+    )
+    from dashboard.services.premium_confirmation_service import (
+        PremiumConfirmationError,
+        confirm_premium,
+    )
+
+    allowed = _attestation_actor(request)
+    if allowed is None:
+        from dashboard.auth.pin_middleware import get_session_from_request
+
+        sess = get_session_from_request(request)
+        if not sess or not sess.get("auth"):
+            return JSONResponse({"success": False, "error": "auth_required"}, status_code=401)
+        return JSONResponse({"success": False, "error": "staff_required"}, status_code=403)
+    _sess, actor = allowed
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"success": False, "error": "invalid_body"}, status_code=400)
+    if isinstance(body, dict):
+        body = {
+            key: value
+            for key, value in body.items()
+            if key not in {PREMIUM_CONFIRMED_BY_FIELD, "created_by", "actor", PREMIUM_CONFIRMED_AT_FIELD}
+        }
+    try:
+        result = await confirm_premium(actor, body if isinstance(body, dict) else {})
+    except PremiumConfirmationError as exc:
+        return JSONResponse(
+            {"success": False, "error": exc.error, "message": exc.message},
+            status_code=exc.status,
+        )
+    except Exception as exc:
+        logger.warning("confirm-premium failed closed error_type=%s", type(exc).__name__)
+        return JSONResponse({"success": False, "error": "confirmation_failed"}, status_code=500)
+    return JSONResponse({"success": True, **result})
+
+
 @paperwork_bp.post("/paperwork/packet/finalize")
 async def packet_builder_finalize(request: Request):
     """

@@ -89,6 +89,10 @@ def _packet(**overrides) -> dict:
         "docuseal_submission_id": SUBMISSION_ID,
         # already archived → poller skips Drive
         "signed_pdf_drive_url": "https://drive.example.invalid/f/1",
+        # Completion invoices only after staff confirm the premium.
+        "premium_confirmed_amount": PREMIUM,
+        "premium_confirmed_at": "2026-09-24T15:00:00+00:00",
+        "premium_confirmed_by": "staff-test",
     }
     pkt.update(overrides)
     return pkt

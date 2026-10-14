@@ -372,6 +372,9 @@ def resolve_locked_premium(bond: Dict[str, Any]) -> Decimal:
 
     Precedence:
       1. Staff-confirmed trio ``premium_confirmed_amount/_at/_by`` (all set).
+         When that confirmation also stores ``down_payment_amount``, the
+         invoice is the down payment (the amount due now), not the financed
+         balance. A confirmed down of zero raises ``down_payment_zero``.
       2. ``premium_cents`` (written only by staff money writes —
          Write Bond / Record Bond via ar_service.money_fields).
       3. Legacy dollar fields (premium_amount / total_premium / premium /
@@ -394,7 +397,20 @@ def resolve_locked_premium(bond: Dict[str, Any]) -> Decimal:
 
     confirmed = (PREMIUM_CONFIRMED_AMOUNT_FIELD, PREMIUM_CONFIRMED_AT_FIELD, PREMIUM_CONFIRMED_BY_FIELD)
     if all(not _blank(bond.get(k)) for k in confirmed):
-        return _exact_premium(bond.get(PREMIUM_CONFIRMED_AMOUNT_FIELD))
+        premium = _exact_premium(bond.get(PREMIUM_CONFIRMED_AMOUNT_FIELD))
+        if not _blank(bond.get("down_payment_amount")):
+            raw_down = str(bond.get("down_payment_amount")).strip().replace(",", "").replace("$", "")
+            try:
+                down_dec = Decimal(raw_down)
+            except (InvalidOperation, ValueError):
+                raise SwipeSimpleInvoiceError("premium_not_numeric_on_bondcase") from None
+            if down_dec == 0:
+                raise SwipeSimpleInvoiceError("down_payment_zero")
+            due = _exact_premium(bond.get("down_payment_amount"))
+            if due > premium:
+                raise SwipeSimpleInvoiceError("premium_ambiguous_on_bondcase")
+            return due
+        return premium
 
     legacy: list[Decimal] = []
     for key in _LEGACY_PREMIUM_FIELDS:

@@ -508,7 +508,23 @@ function openBondModal(nameOrLead, bond, county, booking) {
             <span class="wb-meta-label">Next payment due</span>
             <input type="date" id="wbNextDue" style="margin-top:4px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
           </div>
-          <div style="grid-column:1/-1;font-size:11px;color:var(--muted)">Entered once here. Accounts Receivable picks this up. Balance is calculated — do not type it again. Leave next due blank when the down payment covers the premium.</div>
+          <div>
+            <span class="wb-meta-label">Financed installments</span>
+            <input type="number" id="wbInstallments" min="1" max="36" step="1" value="4" style="width:80px;margin-top:4px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+          </div>
+          <div>
+            <span class="wb-meta-label">Frequency</span>
+            <select id="wbFrequency" style="margin-top:4px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+              <option value="weekly">Weekly</option>
+              <option value="biweekly">Every two weeks</option>
+              <option value="monthly">Monthly</option>
+            </select>
+          </div>
+          <div style="grid-column:1/-1">
+            <span class="wb-meta-label">Reason (required to change a confirmed premium, or to go under the filed rate)</span>
+            <input type="text" id="wbPremiumReason" placeholder="Only if you are changing the premium or going under 10% / $100" style="width:100%;margin-top:4px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+          </div>
+          <div style="grid-column:1/-1;font-size:11px;color:var(--muted)">Confirming here sets the premium, the down payment, and the financed balance once. The signing invoice is the down payment. The plan is the financed balance. The 10% estimate is not invoiced. A second amount needs a reason.</div>
         </div>
       </div>
     </div>
@@ -2073,7 +2089,61 @@ async function persistWriteBondAR() {
   if (!r.ok || d.ok === false) {
     return { ok: false, error: d.message || d.error || 'Could not save premium to Accounts Receivable', status: r.status };
   }
-  return { ok: true, money };
+  const confirmed = await confirmWriteBondPremium(data, money);
+  if (!confirmed.ok) return confirmed;
+  return { ok: true, money, confirmation: confirmed };
+}
+
+function _moneyCents(value) {
+  const text = String(value == null ? '' : value).trim().replace(/[$,]/g, '');
+  if (!/^\d+(\.\d{1,2})?$/.test(text)) return null;
+  const parts = text.split('.');
+  const frac = (parts[1] || '').padEnd(2, '0');
+  return (parseInt(parts[0], 10) * 100) + parseInt(frac, 10);
+}
+
+function _centsText(cents) {
+  const n = Math.abs(cents);
+  return (cents < 0 ? '-' : '') + Math.floor(n / 100) + '.' + String(n % 100).padStart(2, '0');
+}
+
+async function confirmWriteBondPremium(data, money) {
+  const premiumCents = _moneyCents(money.premium);
+  const downCents = _moneyCents(money.down_payment);
+  if (premiumCents == null || downCents == null || downCents > premiumCents) {
+    return { ok: false, error: 'Enter premium and down payment in dollars and cents' };
+  }
+  const premium = _centsText(premiumCents);
+  const down = _centsText(downCents);
+  const financed = _centsText(premiumCents - downCents);
+  const count = parseInt(document.getElementById('wbInstallments')?.value || '4', 10);
+  const body = {
+    booking_number: data.booking,
+    packet_id: data.packet_id || data.lead?.packet_id || '',
+    bond_case_id: data.bond_case_id || data.lead?.bond_case_id || '',
+    premium: premium,
+    down: down,
+    financed: financed,
+    installments: Number.isFinite(count) ? count : 4,
+    frequency: document.getElementById('wbFrequency')?.value || 'weekly',
+    reason: (document.getElementById('wbPremiumReason')?.value || '').trim(),
+  };
+  const r = await fetch(`${API}/api/paperwork/confirm-premium`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || d.success === false) {
+    const code = d.error || '';
+    let message = d.message || code || 'Could not confirm the premium';
+    if (code === 'premium_change_requires_reason' || code === 'premium_below_filed_rate') {
+      message = d.message || 'Enter a reason, then write the bond again.';
+    }
+    return { ok: false, error: message, status: r.status };
+  }
+  return { ok: true, confirmation: d };
 }
 
 async function saveWriteBondAmount() {

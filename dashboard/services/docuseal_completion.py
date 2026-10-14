@@ -29,7 +29,10 @@ Design
      bond_cases     Packet_Status / Signature_Status = signed
      sse_event      publish_event("docuseal_submission_completed")
      legacy_payment_link   (behind the switch below; never retried)
-     share_invoice  stage-only SwipeSimple Share Invoice (dispatch=False, PR #56)
+     share_invoice  SwipeSimple Share Invoice for the confirmed down payment.
+                    Skipped (premium_unconfirmed) until staff confirm.
+                    Customer dispatch only when SWIPESIMPLE_DISPATCH_LIVE=1;
+                    otherwise the invoice is staged and dispatch is a dry-run.
      court_sync     seed_court_calendar_for_bond
      slack          non-PII Slack post
 
@@ -51,8 +54,8 @@ Even when enabled, the service sends ONLY when a STAFF-CONFIRMED premium is
 present (``premium_confirmed_amount`` + ``premium_confirmed_at`` +
 ``premium_confirmed_by``); otherwise the step is stamped
 ``skipped: premium_unconfirmed``. Stored ``premium`` values (often the 10%
-estimate) never count. Nothing sets the confirmed fields yet, so in practice
-enabling the switch still sends nothing until a staff confirmation UI exists.
+estimate) never count. Staff set the trio with
+``POST /api/paperwork/confirm-premium`` (session user, never the body).
 
 Reversible with the env flag (or the one-line ``LEGACY_PAYMENT_LINK_DEFAULT``
 constant in ``legacy_payment_link_switch``). When enabled, sends are send-once
@@ -758,20 +761,50 @@ class _Run:
                         self.pfx, share_skip, self.packet_id)
             await self.stamp(STEP_SHARE, "skipped", reason=share_skip)
             return
+        from dashboard.services.packet_payment_link_service import confirmed_premium
         from dashboard.services import swipesimple_invoice_service as _ss
 
+        if confirmed_premium(self.doc, None) <= 0:
+            logger.info("%s share_invoice skipped reason=premium_unconfirmed packet=%s",
+                        self.pfx, self.packet_id)
+            await self.stamp(STEP_SHARE, "skipped", reason="premium_unconfirmed")
+            return
+
+        # Dispatch only when the owner flag is on. Off = stage the invoice and
+        # leave dispatch_invoice uncalled (dry-run stays inside that flag).
+        dispatch_live = _ss.dispatch_live_enabled()
         try:
-            # Stage only: ALWAYS pass dispatch=False explicitly — never rely on
-            # the function's default. No customer message from this path.
             share_result = await _ss.maybe_issue_share_invoice_for_bond(
                 share_bond_id,
                 channel="imessage",
-                dispatch=False,
+                dispatch=dispatch_live,
                 source=_share_source(self.source),
             )
+        except _ss.SwipeSimpleLiveDisabled:
+            # Flags off: record the confirmed amount and do not call SwipeSimple.
+            from dashboard.services.premium_confirmation_service import (
+                cents_to_amount,
+                invoice_due_cents,
+            )
+
+            due = invoice_due_cents(self.doc)
+            logger.info(
+                "%s share_invoice dry-run SWIPESIMPLE_LIVE off bond_id=%s amount_cents=%s",
+                self.pfx, share_bond_id, due,
+            )
+            await self.stamp(
+                STEP_SHARE, "done", ok=True, dry_run=True, dispatched=False,
+                bond_id=share_bond_id,
+                amount=cents_to_amount(due) if due else "",
+            )
+            return
         except (_ss.SwipeSimpleInvoiceError, _ss.SwipeSimpleInvoiceNotWired) as exc:
             # Fail-closed business rule (missing premium, mismatch, unresolved
             # create…). Retrying could create a second vendor draft → terminal.
+            code = str(exc).split("—", 1)[0].strip().split(" ", 1)[0]
+            if code in {"down_payment_zero", "premium_estimate_unconfirmed", "premium_unconfirmed"}:
+                await self.stamp(STEP_SHARE, "skipped", reason=code, bond_id=share_bond_id)
+                return
             logger.warning(
                 "%s share_invoice stage failed (non-fatal) bond_id=%s err_type=%s",
                 self.pfx, share_bond_id, type(exc).__name__,

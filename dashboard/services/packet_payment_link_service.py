@@ -41,9 +41,9 @@ SEND_ONCE_FIELD = "payment_link_send_once"
 # used for auto sends: they are often the 10%-of-bond estimate written by
 # intake promote (intake.py), packet_builder_service, or the DocuSeal prefill,
 # and are indistinguishable from staff-entered values.
-# NOTHING in the codebase sets these fields yet (no staff confirmation UI) — so
-# automatic sends stay skipped with reason=premium_unconfirmed until one exists.
-# Never auto-set / backfill them.
+# Staff set these with POST /api/paperwork/confirm-premium (session user).
+# Automatic sends stay skipped with reason=premium_unconfirmed until then.
+# Never auto-set / backfill them from the 10% estimate.
 PREMIUM_CONFIRMED_AMOUNT_FIELD = "premium_confirmed_amount"
 PREMIUM_CONFIRMED_AT_FIELD = "premium_confirmed_at"
 PREMIUM_CONFIRMED_BY_FIELD = "premium_confirmed_by"

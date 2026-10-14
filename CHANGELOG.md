@@ -198,6 +198,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_verbatim_bond_charges.py` (already on the `ci.yml` pytest list). Synthetic TEST data only. Covers OSI counts 2, 3, and 4 byte-identical, OSI 5 and 8 fail closed at 4 rows, Palmetto summary byte-identical when it fits, 200 characters passing and 201 returning 422 with capacity 200, the comma rule, live-template field names on the submission, non-ASCII text, and finalize for both sureties.
 
+## [Unreleased] — 2026-10-14 (Write Bond premium confirmation)
+
+### Added
+- **Staff premium confirmation at Write Bond.** `POST /api/paperwork/confirm-premium` records `premium_confirmed_amount`, `premium_confirmed_at`, and `premium_confirmed_by` on the packet, the bond case, and the active bond. The actor is the session user (god_admin, admin, staff, or sub_agent). Recovery is refused. A body `premium_confirmed_by` is ignored. Amounts use the same exact-cents parser as plan payments. A second amount is 409 unless `reason` is set; the prior value stays on `premium_confirmation_history` and a new `premium_confirmed` audit row is written. A premium under the filed floor (10% of the bond, minimum $100) needs a reason.
+- **One financed plan.** When the financed balance is greater than zero, exactly one `payment_plans` row is created (`source: premium_confirmation`) whose installments sum to that balance. A replay does not create another plan and does not mark the down payment paid.
+- **Signing invoice uses the confirmed down payment.** DocuSeal completion skips `share_invoice` with `premium_unconfirmed` until the trio is set. With the trio, the invoice amount is `down_payment_amount`. `SWIPESIMPLE_LIVE` off stages that amount and does not call SwipeSimple. `SWIPESIMPLE_DISPATCH_LIVE` off does not dispatch. Both flags on, the existing send-once claim still applies. Production env values are not changed in this change.
+
+### Tests
+- `tests/test_premium_confirmation.py`.
+
 ## [Unreleased] — 2026-10-09 (Pinellas modal fix + diagnostics; relay egress blocks never auto-disable)
 
 ### Fixed
