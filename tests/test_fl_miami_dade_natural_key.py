@@ -274,3 +274,101 @@ def test_report_keeps_the_stored_fallback_flag_for_internal_keys(monkeypatch):
     assert out["booking_number_shapes"] == {"internal_natural_key": 2}
     assert out["rows_keyed_fallback"] == 1 and out["rows_keyed_dob_or_internal"] == 1
     assert out["rows_in_runtime_window_without_dob"] == 1
+
+
+# ── Codex P1 (10/9) re-check: no row data in ANY log or alert path ──────────
+
+class _LeakyWriter:
+    """System-of-record stand-in whose driver error embeds the documents, like
+    pymongo's BulkWriteError / DuplicateKeyError do."""
+
+    def __init__(self):
+        self.seen = []
+
+    def upsert_scraper_status(self, **kw):
+        pass
+
+    def get_scraper_resilience(self, **kw):
+        return {}
+
+    def write_records(self, records, county):
+        self.seen = [r.to_mongo_doc() for r in records]
+        raise RuntimeError(f"batch op errors occurred, full error: {{'writeErrors': [{{'op': {self.seen!r}}}]}}")
+
+
+def test_malformed_row_run_leaks_no_dob_booking_or_internal_key_in_logs_or_alerts(monkeypatch, caplog):
+    from scrapers import base_scraper
+
+    dob_text = "1990-01-02"
+    bad = _row(4243, "g-bad", name="ZZSYNTH, LEAKCHECK")
+    bad["BookDate"] = object()         # forces the parse failure
+    bad["ObjectId"] = f"oid {dob_text}"  # a malformed row may carry person data in any slot
+    good = _row(4244, "g-good", name="ZZSYNTH, GOODROW")
+    _install(monkeypatch, 2, [([bad, good], False)])
+
+    # Capture the real Slack payloads the notifiers build (every webhook "set").
+    alerts = []
+    sl = base_scraper._slack
+    for hook in ("webhook_arrests", "webhook_leads", "webhook_errors", "webhook_alerts"):
+        monkeypatch.setattr(sl, hook, f"https://hooks.invalid/{hook}", raising=False)
+    monkeypatch.setattr(sl, "_post", lambda url, payload: alerts.append((url, payload)) or True)
+    events = []
+    monkeypatch.setattr(BaseScraper, "_post_dashboard_event", lambda self, kind, payload: events.append(payload))
+    caplog.set_level(logging.DEBUG)
+
+    writer = _LeakyWriter()
+    out = MiamiDadeCountyScraper().run(writers=[writer])
+    assert writer.seen, "the good row reached the writer"
+    key = writer.seen[0]["md_dedupe"] if "md_dedupe" in writer.seen[0] else writer.seen[0].get("extra_data", {}).get("md_dedupe")
+    key = key or miami_dade.md_dedupe_key("ZZSYNTH, GOODROW", dob_text, "2026-10-08", "BATTERY")[0]
+    assert key.startswith("md_dedupe_v")
+
+    blob = caplog.text + repr(alerts) + repr(events) + repr(out)
+    assert alerts, "the run posted Slack payloads"
+    for needle in (dob_text, "1990", key, "md_dedupe_v", "LEAKCHECK", "ZZSYNTH, GOODROW"):
+        assert needle not in caplog.text, needle  # logs: no person data at all
+    for needle in (dob_text, "1990", key, "md_dedupe_v", "LEAKCHECK"):
+        assert needle not in repr(alerts), needle  # alerts: no DOB, no key; the bad row never surfaces
+    for needle in (dob_text, key, "md_dedupe_v"):
+        assert needle not in blob, needle
+    assert "ObjectId=?" in caplog.text  # the malformed id is not echoed
+    assert "writer _LeakyWriter failed: RuntimeError" in caplog.text
+
+
+def test_arcgis_failure_messages_never_echo_the_response(monkeypatch):
+    import requests as _rq
+
+    class _Boom:
+        status_code = 500
+
+    err = _rq.HTTPError("500 Server Error: ZZSYNTH, ALPHA 1990-01-02 md_dedupe_v1:abc")
+    err.response = _Boom()
+
+    class _S:
+        headers = {}
+
+        def get(self, *a, **k):
+            raise err
+
+    with pytest.raises(miami_dade.MiamiDadeContractError) as exc:
+        MiamiDadeCountyScraper()._get_json(_S(), {})
+    msg = str(exc.value)
+    assert msg == "Miami-Dade: ArcGIS query failed: HTTPError (HTTP 500)"
+    assert exc.value.__cause__ is None and exc.value.__suppress_context__
+
+    class _R:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"error": "ZZSYNTH, ALPHA 1990-01-02"}
+
+    class _S2:
+        headers = {}
+
+        def get(self, *a, **k):
+            return _R()
+
+    with pytest.raises(miami_dade.MiamiDadeContractError) as exc:
+        MiamiDadeCountyScraper()._get_json(_S2(), {})
+    assert "1990" not in str(exc.value) and "ZZSYNTH" not in str(exc.value)

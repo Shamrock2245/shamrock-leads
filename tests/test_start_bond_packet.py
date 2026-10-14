@@ -55,7 +55,23 @@ def _install(monkeypatch):
             [{"Defendant_ID": "def-1", "name": "Ada Defendant", "email": "ada@example.com", "tenant_id": "shamrock"}]
         ),
         "indemnitors": MemoryCollection(
-            [{"Indemnitor_ID": "ind-1", "name": "Pat Indemnitor", "email": "pat@example.com", "tenant_id": "shamrock"}]
+            [{
+                "Indemnitor_ID": "ind-1",
+                "name": "Pat Indemnitor",
+                "email": "pat@example.com",
+                "tenant_id": "shamrock",
+                "booking_number": "B-100",
+                "bond_case_id": "BC-1",
+                "id_scan": {
+                    "success": True,
+                    "extracted": {
+                        "full_name": "Pat Indemnitor",
+                        "first_name": "Pat",
+                        "last_name": "Indemnitor",
+                        "dl_state": "FL",
+                    },
+                },
+            }]
         ),
         "matches": MemoryCollection(
             [{"Match_ID": "match-1", "Status": "validated", "tenant_id": "shamrock"}]
@@ -402,7 +418,23 @@ def test_other_tenant_does_not_receive_shamrock_template(monkeypatch):
         {"Defendant_ID": "def-9", "name": "Ada Defendant", "email": "ada@example.com", "tenant_id": "gulf_coast_bail"}
     )
     _mongo_db["indemnitors"].docs.append(
-        {"Indemnitor_ID": "ind-9", "name": "Pat Indemnitor", "email": "pat@example.com", "tenant_id": "gulf_coast_bail"}
+        {
+            "Indemnitor_ID": "ind-9",
+            "name": "Pat Indemnitor",
+            "email": "pat@example.com",
+            "tenant_id": "gulf_coast_bail",
+            "booking_number": "B-100",
+            "bond_case_id": "BC-9",
+            "id_scan": {
+                "success": True,
+                "extracted": {
+                    "full_name": "Pat Indemnitor",
+                    "first_name": "Pat",
+                    "last_name": "Indemnitor",
+                    "dl_state": "FL",
+                },
+            },
+        }
     )
     _mongo_db["matches"].docs.append(
         {"Match_ID": "match-9", "Status": "validated", "tenant_id": "gulf_coast_bail"}

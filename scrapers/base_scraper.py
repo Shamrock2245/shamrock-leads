@@ -989,7 +989,7 @@ class BaseScraper(ABC):
                         if fta_level in ("high", "critical"):
                             fta_high_count += 1
                     except Exception as hybrid_err:
-                        logger.debug(f"⚠️ Hybrid score failed for {record.Booking_Number}: {hybrid_err}")
+                        logger.debug("⚠️ %s: hybrid score failed (%s)", self.county, type(hybrid_err).__name__)
 
                 # Recount after potential ML upgrades
                 hot_count = sum(1 for r in records if r.Lead_Status == "Hot")
@@ -1051,9 +1051,12 @@ class BaseScraper(ABC):
                             combined_stats["total_records"] = result.get("total_records", len(records))
 
                     except Exception as write_err:
+                        # Type only: a driver error (e.g. BulkWriteError,
+                        # DuplicateKeyError) embeds the failing documents,
+                        # i.e. names, DOBs and booking/internal keys.
                         logger.error(
-                            f"❌ {self.county}: writer {type(writer).__name__} "
-                            f"failed: {write_err}"
+                            "❌ %s: writer %s failed: %s",
+                            self.county, type(writer).__name__, type(write_err).__name__,
                         )
 
             # Durable cursor commit: only after the system-of-record writer
@@ -1094,7 +1097,7 @@ class BaseScraper(ABC):
                 if new_records:
                     self._broadcast_scraper_events(new_records)
             except Exception as broadcast_err:
-                logger.debug(f"⚠️ {self.county}: SSE broadcast skipped: {broadcast_err}")
+                logger.debug("⚠️ %s: SSE broadcast skipped (%s)", self.county, type(broadcast_err).__name__)
 
             # ── Step 3b: Check for repeat offenders ──
             try:
@@ -1109,7 +1112,7 @@ class BaseScraper(ABC):
                     combined_stats["rearrest_matches"] = rearrest_results["matches_found"]
                 _rearrest.close()
             except Exception as rearrest_err:
-                logger.debug(f"⚠️ Rearrest check skipped: {rearrest_err}")
+                logger.debug("⚠️ %s: rearrest check skipped (%s)", self.county, type(rearrest_err).__name__)
 
             # ── Step 4: Slack alerts ──
             try:
@@ -1120,7 +1123,7 @@ class BaseScraper(ABC):
                     if record.Lead_Status == "Hot" and record._parse_bond_numeric() >= 2500:
                         _slack.notify_hot_lead(record)
             except Exception as slack_err:
-                logger.warning(f"⚠️ Slack notification failed: {slack_err}")
+                logger.warning("⚠️ %s: Slack notification failed (%s)", self.county, type(slack_err).__name__)
 
 
             # ── Step 5: Update dashboard (in-memory Flask, legacy) ──
