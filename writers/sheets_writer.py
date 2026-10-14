@@ -19,6 +19,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 import gspread
 from google.oauth2.service_account import Credentials
+from core.booking_identity import is_internal_booking_key, redact_internal_keys
 from core.models import ArrestRecord
 from scoring.lead_scorer import score_and_update
 
@@ -147,6 +148,12 @@ class SheetsWriter:
             duplicates_skipped = 0
 
             for record in records:
+                if is_internal_booking_key(record.Booking_Number):
+                    # Internal-key records (no source booking number) live in
+                    # Mongo only: the sheet shows a blank booking column, so it
+                    # could not dedupe them across runs.
+                    duplicates_skipped += 1
+                    continue
                 if deduplicate:
                     dedup_key = record.get_dedup_key()
                     if dedup_key in existing_keys:
@@ -156,7 +163,7 @@ class SheetsWriter:
 
             # Write new records
             if new_records:
-                rows = [record.to_sheet_row() for record in new_records]
+                rows = redact_internal_keys([record.to_sheet_row() for record in new_records])
                 sheet.insert_rows(rows, row=2, value_input_option='USER_ENTERED')
                 # Dynamically prune county sheets beyond 1500 rows
                 self._prune_sheet_if_needed(sheet, max_rows=1500)
@@ -207,12 +214,14 @@ class SheetsWriter:
 
             new_records = []
             for record in records:
+                if is_internal_booking_key(record.Booking_Number):
+                    continue  # Mongo-only; see write_records
                 dedup_key = record.get_dedup_key()
                 if dedup_key not in existing_keys:
                     new_records.append(record)
 
             if new_records:
-                rows = [record.to_sheet_row() for record in new_records]
+                rows = redact_internal_keys([record.to_sheet_row() for record in new_records])
                 sheet.insert_rows(rows, row=2, value_input_option='USER_ENTERED')
                 # Dynamically prune Qualified_Arrests sheet beyond 3000 rows
                 self._prune_sheet_if_needed(sheet, max_rows=3000)
