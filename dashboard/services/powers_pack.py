@@ -1044,5 +1044,7 @@ def build_powers_pack_xlsx(contract: dict, *, pack: str) -> bytes:
         ws.oddFooter.right.text = contract.get("filename") or ""
 
     buf = io.BytesIO()
+    from core.booking_identity import redact_workbook
+    redact_workbook(wb)  # XLSX never prints a Miami-Dade internal key
     wb.save(buf)
     return buf.getvalue()

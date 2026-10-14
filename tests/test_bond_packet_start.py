@@ -7,6 +7,19 @@ from dashboard.services.bond_packet_start import start_indemnitor_bond_packet
 from dashboard.services.docuseal_service import DocuSealPacketValidationError
 
 
+@pytest.fixture(autouse=True)
+def _assume_verified_indemnitor(monkeypatch):
+    """Binding, POA, and template gates. Identity is tested on its own."""
+
+    async def _ok(*_args, **_kwargs):
+        return {"ok": True, "exempt": "test_fixture", "issues": [], "methods": ["scan"]}
+
+    monkeypatch.setattr(
+        "dashboard.services.identity_verification_service.require_verified_indemnitors",
+        _ok,
+    )
+
+
 class _FakeDocuSeal:
     def __init__(self):
         self.calls = []
