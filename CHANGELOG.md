@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-14 (Collier: plain verified HTTPS, custody unknown, fail_closed)
+
+### Changed
+- **Collier (FL) uses plain `requests` with an honest User-Agent and TLS verified** (`scrapers/plain_http.py`, same helper as the Polk/Volusia/Pasco PR). The curl_cffi `impersonate="chrome120"` calls and the Chrome User-Agent are gone. A bad certificate (`tls_cert_invalid:`) or a 401/403/429 (`egress_block:`) is raised at once and never retried; 429 is no longer retried. The UpdatePanel `pageRedirect` -> `errorpage.aspx` answer now raises `EgressBlocked` instead of parsing as an empty roster.
+- **Collier no longer hard-codes `Status="In Custody"`.** The arrest report publishes no custody field, so `Status` is `""` (unknown).
+- **`MongoWriter` never `$set`s a blank `status`.** A blank status means not published, so a stored status (e.g. "Released" from a recheck) is kept. A published status still updates.
+- **Collier (FL) fail closed** (`SOURCE_CONTRACT_VALIDATED = False` + Health `fail_closed`). Two plain reads from the agent box (8:22 / 8:23 AM ET) got the page but the grid postback redirected to `errorpage.aspx`. Per the no-workaround rule it stays closed until a plain read works (next: Leads Ops relay). See `docs/recon/FL_COLLIER_PLAIN_HTTPS_2026-10-14.md`. No stored data touched.
+
+### Tests
+- `tests/test_fl_collier_plain_custody.py` (added to the `ci.yml` list).
+
 ## [Unreleased] — 2026-10-14 (Duval: never click the ATIMS robot gate)
 
 ### Fixed

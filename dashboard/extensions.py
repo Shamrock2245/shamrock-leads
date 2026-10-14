@@ -826,6 +826,10 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     # Hendry's MyOCV inmates.json has only inmateID = HCSO<YY>MNI<NNNNNN>, a
     # person (Master Name Index) id, not a booking number. CoS approved.
     "Hendry (FL)": "fail_closed",
+    # 2026-10-14 (docs/recon/FL_COLLIER_PLAIN_HTTPS_2026-10-14.md): without
+    # curl_cffi Chrome impersonation the arrest report's UpdatePanel postback
+    # redirects to errorpage.aspx. No workaround; closed until a plain read works.
+    "Collier (FL)": "fail_closed",
     # Pinellas (FL) is deliberately absent, so Health reads "unverified".
     # Owner exception (Brendan 2026-10-08 1:38 PM ET, CoS agreed): Who's In Jail
     # (Blazor Server, no plain-HTTP listing) runs relay-only through the Leads

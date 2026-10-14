@@ -359,6 +359,10 @@ class MongoWriter:
             record.State = state
 
             doc = record.to_mongo_doc()
+            # A blank custody status means "not published", not "cleared":
+            # never $set it over a stored status (e.g. a recheck's Released).
+            if not str(doc.get("status") or "").strip():
+                doc.pop("status", None)
             doc["state"] = state
             doc["county"] = county_name
             doc["booking_number"] = identity

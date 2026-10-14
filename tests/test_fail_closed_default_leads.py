@@ -180,8 +180,10 @@ def test_default_lead_list_hides_fail_closed_counties(monkeypatch):
     out, arrests = _api_leads(monkeypatch)
     got = _bookings(out)
     assert {"SAR-1", "SAR-2", "SAR-3", "SAR-4", "ALA-1", "LEESC-1"}.isdisjoint(got), got
-    assert {"LEE-1", "LEE-2", "COL-1", "LEEGA-1"} <= got
-    assert out["total"] == 4
+    # Collier (FL) is fail_closed since 2026-10-14 (plain client refused).
+    assert "COL-1" not in got
+    assert {"LEE-1", "LEE-2", "LEEGA-1"} <= got
+    assert out["total"] == 3
     # Nothing was deleted: the rows are still in the collection.
     assert len(arrests.rows) == len(ROWS)
 
@@ -258,7 +260,7 @@ def test_bond_ready_queue_hides_fail_closed_counties():
     now = datetime(2026, 10, 8, 12, tzinfo=timezone.utc)
     spec = resolve_preset("bond_ready")
     got = _population(population_stages(spec, now=now))
-    assert {"LEE-1", "LEE-2", "COL-1", "LEEGA-1"} == got
+    assert {"LEE-1", "LEE-2", "LEEGA-1"} == got  # Collier (FL) fail_closed 2026-10-14
 
     got = _population(population_stages(spec, county="Sarasota (FL)", now=now))
     assert got == {"SAR-1", "SAR-2", "SAR-3", "SAR-4"}
