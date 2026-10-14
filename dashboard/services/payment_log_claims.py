@@ -7,17 +7,25 @@ the ``bond_cases`` / ``active_bonds`` ``last_payment_*`` update, and the
 The driver retries transient transaction errors. A crash rolls the whole
 transaction back: no claim, no payment row, no bond stamp, no audit.
 
-The dedupe is a unique index on ``payment_log_claims`` ``(tenant_id, txn_key)``.
-``txn_key`` is the stripped transaction id. A ``DuplicateKeyError`` on that
-insert means the charge is already recorded, so the caller returns duplicate
-and writes nothing else. There is no index on ``payments``. There is no
-provisional claim, no token field on the payment row, and no stale-claim
-takeover.
+The dedupe is a unique index on ``payment_log_claims``
+``(tenant_id, txn_key, event_kind)``. ``txn_key`` is the stripped transaction
+id. ``event_kind`` is ``charge``, ``refund``, or ``failed``, so a
+``payment.refunded`` or ``payment.failed`` that reuses the charge's
+transaction id is its own row. A ``DuplicateKeyError`` on that insert means
+this kind is already recorded, so the caller returns duplicate and writes
+nothing else. There is no index on ``payments``. There is no provisional
+claim, no token field on the payment row, and no stale-claim takeover.
 
-Out of scope: refund and failed-payment reversals, reclaiming a stale claim,
-and backfilling rows that were logged before this claim existed. A recorded
-row whose amount, settled status, or booking disagrees with the new payload
-is a 409 and is left unchanged.
+A refund or failure does not change a plan balance. When it links to a
+booking or a plan, the same transaction sets ``needs_review`` on that bond
+case and that plan. After the commit, one staff Slack alert is sent for that
+``(tenant, txn_key, kind)``. A Slack failure is logged and does not roll the
+payment back.
+
+Out of scope: reversing a plan balance, reclaiming a stale claim, and
+backfilling rows that were logged before this claim existed. A recorded row
+of the same kind whose amount, settled status, or booking disagrees with the
+new payload is a 409 and is left unchanged.
 """
 from __future__ import annotations
 
@@ -29,7 +37,7 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 LOG_CLAIMS_COLLECTION = "payment_log_claims"
-_INDEX_NAME = "uniq_tenant_txn_key"
+_INDEX_NAME = "uniq_tenant_txn_kind"
 _TOKEN_FIELDS = ("log_claim_token", "claim_token", "payment_claim_token")
 
 # Same settled vocabulary as plan /pay. ``approved`` (poller and webhook) and
@@ -124,6 +132,41 @@ def dollars_from_cents(cents: int) -> float:
     return float(Decimal(cents) / Decimal(100))
 
 
+def event_kind(status: Any, event_type: Any = None) -> str:
+    """``charge``, ``refund``, or ``failed``.
+
+    A provider refund or failure is its own kind even when it reuses the
+    charge's transaction id. Event type wins when it names one of those,
+    and so does the status. Anything else settled (or blank) is a charge.
+    """
+    event = str(event_type or "").strip().lower()
+    fact = _status_fact(status)
+    refund_event = event.endswith((".refunded", ".refund", ".reversed")) or "refund" in event
+    failed_event = event.endswith((".failed", ".declined", ".denied", ".voided", ".error"))
+    if refund_event or fact == "refunded":
+        return "refund"
+    if failed_event or fact == "declined":
+        return "failed"
+    if fact in (None, "settled"):
+        return "charge"
+    return fact
+
+
+def row_kind(row: dict) -> str:
+    """Kind stored on the row, or inferred for a row logged before kinds existed."""
+    stored = str(row.get("event_kind") or "").strip()
+    if stored:
+        return stored
+    event = row.get("event_type") or (row.get("raw_payload") or {}).get("event_type")
+    return event_kind(row.get("status"), event)
+
+
+def _review_reason(kind: str) -> str:
+    if kind == "refund":
+        return "provider_refund_unreversed"
+    return "provider_failure_unreversed"
+
+
 def _status_fact(value: Any) -> Optional[str]:
     status = str(value or "").strip().lower()
     if not status:
@@ -198,19 +241,20 @@ async def _docs(coll, flt: dict, session=None) -> list:
     return out
 
 
-def _audit_id(txn_key: str) -> str:
+def _audit_id(txn_key: str, kind: str) -> str:
     """Deterministic ``audit_events`` ``_id``.
 
-    Flag off is ``payment-log:{txn_key}``. Flag on includes the tenant so two
-    agencies with the same transaction id do not collide on the global ``_id``
-    index. No index is added on ``payments``.
+    Flag off is ``payment-log:{txn_key}:{kind}``. Flag on includes the tenant
+    so two agencies with the same transaction id do not collide on the global
+    ``_id`` index. The kind keeps a refund from colliding with the charge.
+    No index is added on ``payments``.
     """
     from dashboard.tenancy.context import current_tenant_id
     from dashboard.tenancy.flag import multi_tenant_enabled
 
     if not multi_tenant_enabled():
-        return f"payment-log:{txn_key}"
-    return f"payment-log:{current_tenant_id() or ''}:{txn_key}"
+        return f"payment-log:{txn_key}:{kind}"
+    return f"payment-log:{current_tenant_id() or ''}:{txn_key}:{kind}"
 
 
 async def _claims(db):
@@ -218,7 +262,7 @@ async def _claims(db):
     coll = db[LOG_CLAIMS_COLLECTION]
     if not _index_ready:
         await coll.create_index(
-            [("tenant_id", 1), ("txn_key", 1)],
+            [("tenant_id", 1), ("txn_key", 1), ("event_kind", 1)],
             unique=True,
             name=_INDEX_NAME,
         )
@@ -307,8 +351,11 @@ def _validate(transaction_id: Any, amount: Any, booking_number: Any) -> tuple[st
     return txn_key, cents, _booking(booking_number), dollars_from_cents(cents)
 
 
-async def _read_rows(db, txn_key: str, session=None) -> list:
-    return await _docs(db["payments"], {"transaction_id": txn_key}, session)
+async def _read_rows(db, txn_key: str, session=None, kind: Optional[str] = None) -> list:
+    rows = await _docs(db["payments"], {"transaction_id": txn_key}, session)
+    if kind is None:
+        return rows
+    return [row for row in rows if row_kind(row) == kind]
 
 
 def _raise_if_conflict(rows: list, *, cents: int, status: Any, booking: str, txn_key: str) -> None:
@@ -322,6 +369,36 @@ def _raise_if_conflict(rows: list, *, cents: int, status: Any, booking: str, txn
         )
 
 
+def _review_flag(kind: str, amount: float, txn_key: str) -> dict:
+    """Visible flag. Does not touch a plan balance."""
+    return {
+        "needs_review": True,
+        "needs_review_reason": _review_reason(kind),
+        "needs_review_event_kind": kind,
+        "needs_review_amount": amount,
+        "needs_review_transaction_id": txn_key,
+    }
+
+
+def _linked_booking(booking: str, siblings: list) -> str:
+    if booking:
+        return booking
+    for row in siblings:
+        found = _booking(row.get("booking_number"))
+        if found:
+            return found
+    return ""
+
+
+def _linked_plan_ids(siblings: list, plans: list) -> list:
+    found: list[str] = []
+    for row in list(siblings) + list(plans):
+        plan_id = str(row.get("plan_id") or "").strip()
+        if plan_id and plan_id not in found:
+            found.append(plan_id)
+    return found
+
+
 async def _apply(
     db,
     *,
@@ -330,17 +407,25 @@ async def _apply(
     amount: float,
     status: str,
     booking: str,
+    kind: str,
     source: str,
     extra: dict,
     session,
-) -> None:
-    """Re-read, then write the claim, the payment, the bond stamps, and the audit."""
+) -> Optional[dict]:
+    """Re-read, then write the claim, the payment, the bond stamps, and the audit.
+
+    A refund or failure also sets ``needs_review`` on the linked bond case and
+    plan. It does not change ``balance_remaining``. The returned dict is the
+    staff alert, sent only after this transaction commits.
+    """
     from pymongo.errors import DuplicateKeyError
 
-    rows = await _read_rows(db, txn_key, session)
+    rows = await _read_rows(db, txn_key, session, kind=kind)
     _raise_if_conflict(rows, cents=cents, status=status, booking=booking, txn_key=txn_key)
     if rows:
         raise AlreadyRecorded()
+
+    siblings = await _docs(db["payments"], {"transaction_id": txn_key}, session)
 
     # The unique index was ensured before this transaction opened.
     claims = db[LOG_CLAIMS_COLLECTION]
@@ -349,6 +434,7 @@ async def _apply(
     try:
         await claims.insert_one({
             "txn_key": txn_key,
+            "event_kind": kind,
             "source": source,
             "amount_cents": cents,
             "booking_number": booking,
@@ -361,6 +447,7 @@ async def _apply(
 
     doc = {
         "transaction_id": txn_key,
+        "event_kind": kind,
         "booking_number": booking,
         "amount": amount,
         "amount_cents": cents,
@@ -376,7 +463,17 @@ async def _apply(
         doc.pop(field, None)
     await db["payments"].insert_one(doc, **_sess(session))
 
-    if booking:
+    linked_booking = _linked_booking(booking, siblings)
+    plan_rows: list = []
+    if linked_booking:
+        plan_rows = await _docs(
+            db["payment_plans"], {"booking_number": linked_booking}, session,
+        )
+    plan_ids = _linked_plan_ids(siblings, plan_rows)
+    review = kind in ("refund", "failed")
+    flag = _review_flag(kind, amount, txn_key) if review else None
+
+    if linked_booking:
         payment_update = {
             "last_payment_amount": amount,
             "last_payment_at": now_iso,
@@ -384,18 +481,29 @@ async def _apply(
             "last_transaction_id": txn_key,
             "last_payment_source": source,
         }
+        if flag:
+            payment_update.update(flag)
         await db["bond_cases"].update_one(
-            {"booking_number": booking},
+            {"booking_number": linked_booking},
             {"$set": payment_update},
             **_sess(session),
         )
         await db["active_bonds"].update_one(
-            {"booking_number": booking},
+            {"booking_number": linked_booking},
             {"$set": payment_update},
             **_sess(session),
         )
 
-    audit_id = _audit_id(txn_key)
+    # The flag is the review signal. Balance fields are not in this update.
+    if flag:
+        for plan_id in plan_ids:
+            await db["payment_plans"].update_one(
+                {"plan_id": plan_id},
+                {"$set": flag},
+                **_sess(session),
+            )
+
+    audit_id = _audit_id(txn_key, kind)
     try:
         await db["audit_events"].insert_one({
             "_id": audit_id,
@@ -407,16 +515,18 @@ async def _apply(
             "agent_name": source,
             "timestamp": now,
             "created_at": now,
-            "booking_number": booking,
+            "booking_number": linked_booking or booking,
             "transaction_id": txn_key,
             "amount": amount,
+            "event_kind": kind,
             "reason": "provider payment recorded",
             "confidence": 1.0,
             "payload": {
                 "amount": amount,
-                "booking_number": booking,
+                "booking_number": linked_booking or booking,
                 "transaction_id": txn_key,
                 "status": status,
+                "event_kind": kind,
             },
         }, **_sess(session))
     except DuplicateKeyError:
@@ -428,15 +538,65 @@ async def _apply(
             "The payment audit could not be recorded. Nothing was written.",
         ) from None
 
+    if not review:
+        return None
+    return {
+        "kind": kind,
+        "amount": amount,
+        "booking": linked_booking,
+        "plan_ids": plan_ids,
+    }
 
-async def _duplicate_or_conflict(db, *, txn_key: str, cents: int, status: Any, booking: str, amount: float) -> dict:
+
+def _notify_staff_review(hit: dict) -> None:
+    """One #alerts post after commit. Failure is logged and does not roll back.
+
+    The message is the plan id, booking id, amount, and event kind. Nothing
+    else: no name, phone, email, or card. Once per committed
+    ``(tenant, txn_key, kind)`` because a replay returns duplicate and does
+    not call this.
+    """
+    kind = hit.get("kind") or ""
+    booking = hit.get("booking") or "none"
+    plan_ids = hit.get("plan_ids") or []
+    plans = ", ".join(plan_ids) if plan_ids else "none"
+    amount = hit.get("amount")
+    try:
+        amount_text = f"{float(amount):.2f}"
+    except (TypeError, ValueError):
+        amount_text = ""
+    message = f"event_kind {kind}; amount {amount_text}; booking {booking}; plan {plans}"
+    try:
+        from writers.slack_notifier import SlackNotifier
+        delivered = SlackNotifier().notify_alert(
+            title="Provider payment needs review",
+            message=message,
+            level="warning",
+            details={
+                "event_kind": kind,
+                "amount": amount_text,
+                "booking_number": booking,
+                "plan_id": plans,
+            },
+            source="payment_log",
+        )
+        if not delivered:
+            logger.warning("[payment_log] staff review alert was not delivered kind=%s", kind)
+    except Exception:
+        logger.warning("[payment_log] staff review alert failed kind=%s", kind)
+
+
+async def _duplicate_or_conflict(
+    db, *, txn_key: str, cents: int, status: Any, booking: str, amount: float, kind: str,
+) -> dict:
     """After a duplicate claim, re-read. A conflicting row is 409, not success.
 
-    ``DuplicateKeyError`` means the charge is already recorded: the claim and
-    the payment commit together, and this attempt writes nothing. A recorded
-    row that disagrees is still 409. There is no stale-claim takeover.
+    ``DuplicateKeyError`` means this event kind is already recorded: the claim
+    and the payment commit together, and this attempt writes nothing. A
+    recorded row of the same kind that disagrees is still 409. There is no
+    stale-claim takeover and no second staff alert.
     """
-    rows = await _read_rows(db, txn_key)
+    rows = await _read_rows(db, txn_key, kind=kind)
     _raise_if_conflict(rows, cents=cents, status=status, booking=booking, txn_key=txn_key)
     return {
         "ok": True,
@@ -445,6 +605,7 @@ async def _duplicate_or_conflict(db, *, txn_key: str, cents: int, status: Any, b
         "amount": amount,
         "booking_number": booking,
         "status": status,
+        "event_kind": kind,
     }
 
 
@@ -467,6 +628,7 @@ async def record_provider_payment(
     txn_key, cents, booking, amount_value = _validate(transaction_id, amount, booking_number)
     provider_status = str(status or "").strip()
     fields = dict(extra or {})
+    kind = event_kind(provider_status, fields.get("event_type"))
 
     try:
         client = await _transaction_client()
@@ -476,8 +638,9 @@ async def record_provider_payment(
     if client is None:
         raise TransactionsUnavailable()
 
-    # A recorded row is classified before the claim index is touched.
-    existing = await _read_rows(db, txn_key)
+    # A recorded row of this kind is classified before the claim index is touched.
+    # A charge does not block a later refund or failure that shares its txn id.
+    existing = await _read_rows(db, txn_key, kind=kind)
     if existing:
         _raise_if_conflict(
             existing, cents=cents, status=provider_status, booking=booking, txn_key=txn_key,
@@ -489,6 +652,7 @@ async def record_provider_payment(
             "amount": amount_value,
             "booking_number": booking,
             "status": provider_status,
+            "event_kind": kind,
         }
 
     try:
@@ -503,14 +667,17 @@ async def record_provider_payment(
             "The payment claim index could not be ensured. Nothing was recorded.",
         ) from None
 
+    review: dict = {}
+
     async def work(session):
-        await _apply(
+        review["hit"] = await _apply(
             db,
             txn_key=txn_key,
             cents=cents,
             amount=amount_value,
             status=provider_status,
             booking=booking,
+            kind=kind,
             source=source,
             extra=fields,
             session=session,
@@ -521,7 +688,7 @@ async def record_provider_payment(
     except AlreadyRecorded:
         return await _duplicate_or_conflict(
             db, txn_key=txn_key, cents=cents, status=provider_status,
-            booking=booking, amount=amount_value,
+            booking=booking, amount=amount_value, kind=kind,
         )
     except PaymentLogError:
         raise
@@ -533,6 +700,10 @@ async def record_provider_payment(
             "The payment could not be recorded. Nothing was written.",
         ) from None
 
+    # After commit. A Slack failure must not undo the payment.
+    if review.get("hit"):
+        _notify_staff_review(review["hit"])
+
     return {
         "ok": True,
         "duplicate": False,
@@ -540,4 +711,5 @@ async def record_provider_payment(
         "amount": amount_value,
         "booking_number": booking,
         "status": provider_status,
+        "event_kind": kind,
     }

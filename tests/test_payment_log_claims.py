@@ -235,11 +235,12 @@ def test_webhook_commit_normalizes_the_txn_and_writes_once(rig, monkeypatch):
     for field in plc._TOKEN_FIELDS:
         assert field not in row
     assert db["payment_log_claims"].docs[0]["txn_key"] == "TX-1"
+    assert db["payment_log_claims"].docs[0]["event_kind"] == "charge"
     assert db["payment_log_claims"].docs[0]["status"] == "recorded"
-    assert db["payment_log_claims"].unique == [("tenant_id", "txn_key")]
+    assert db["payment_log_claims"].unique == [("tenant_id", "txn_key", "event_kind")]
     assert db["payments"].index_calls == 0 and db["payments"].unique == []
     audit = db["audit_events"].docs[0]
-    assert audit["_id"] == "payment-log:TX-1"
+    assert audit["_id"] == "payment-log:TX-1:charge"
     assert "tenant_id" not in audit
     for bond in (db["bond_cases"].docs[0], db["active_bonds"].docs[0]):
         assert bond["last_transaction_id"] == "TX-1"
@@ -257,7 +258,7 @@ def test_poller_commit_marks_read_only_after_commit(rig):
     row = db["payments"].docs[0]
     assert row["transaction_id"] == "TX-POLL" and row["source"] == "swipesimple_gmail_poll"
     assert row["amount_cents"] == 4000 and row["booking_number"] == "BK-1"
-    assert db["audit_events"].docs[0]["_id"] == "payment-log:TX-POLL"
+    assert db["audit_events"].docs[0]["_id"] == "payment-log:TX-POLL:charge"
     assert db["bond_cases"].docs[0]["last_transaction_id"] == "TX-POLL"
     assert db["payments"].index_calls == 0 and db["payments"].unique == []
     for field in plc._TOKEN_FIELDS:
@@ -352,14 +353,14 @@ def test_cross_tenant_same_txn_both_commit(rig, monkeypatch):
         "gulf_coast_bail", "other_agency",
     }
     assert {row["_id"] for row in raw["audit_events"].docs} == {
-        "payment-log:gulf_coast_bail:TX-SHARED",
-        "payment-log:other_agency:TX-SHARED",
+        "payment-log:gulf_coast_bail:TX-SHARED:charge",
+        "payment-log:other_agency:TX-SHARED:charge",
     }
     stamped = {row["tenant_id"] for row in raw["bond_cases"].docs if row.get("last_transaction_id")}
     assert stamped == {"gulf_coast_bail", "other_agency"}
     assert len(raw["payments"].docs) == 2
     assert raw["payments"].index_calls == 0 and raw["payments"].unique == []
-    assert raw["payment_log_claims"].unique == [("tenant_id", "txn_key")]
+    assert raw["payment_log_claims"].unique == [("tenant_id", "txn_key", "event_kind")]
 
 
 def test_crash_leaves_nothing_and_the_email_stays_unread(rig):
@@ -444,9 +445,96 @@ def test_fractional_cents_are_400(rig, monkeypatch):
     assert db["payment_log_claims"].index_calls == 0
 
 
+@pytest.mark.parametrize("event_type,status,kind,reason", [
+    ("payment.refunded", "refunded", "refund", "provider_refund_unreversed"),
+    ("payment.failed", "failed", "failed", "provider_failure_unreversed"),
+])
+def test_refund_or_failure_after_charge_flags_review_and_alerts_once(
+    rig, monkeypatch, event_type, status, kind, reason,
+):
+    """A later refund or failure shares the txn id and does not move the plan balance."""
+    db, app, _client = rig
+    monkeypatch.setenv("SWIPESIMPLE_WEBHOOK_SECRET", SECRET)
+    db["payment_plans"].docs.append({
+        "plan_id": "plan-1",
+        "booking_number": "BK-1",
+        "balance_remaining": 800.0,
+        "total_paid": 200.0,
+        "payments_made": 1,
+        "status": "active",
+    })
+    alerts = []
+
+    def fake_alert(self, title, message="", level="warning", details=None, source=None):
+        alerts.append({
+            "title": title, "message": message, "level": level,
+            "details": details, "source": source,
+        })
+        return True
+
+    monkeypatch.setattr("writers.slack_notifier.SlackNotifier.notify_alert", fake_alert)
+    with patch("dashboard.routers.events.publish_event", new=AsyncMock()):
+        charge = _webhook(app, _pay())
+        follow = _webhook(app, _pay(event_type=event_type, status=status))
+        replay = _webhook(app, _pay(event_type=event_type, status=status))
+
+    assert charge.status_code == 200 and charge.json()["duplicate"] is False
+    assert follow.status_code == 200 and follow.json()["duplicate"] is False
+    assert replay.status_code == 200 and replay.json()["duplicate"] is True
+    assert len(db["payments"].docs) == 2
+    assert {row["event_kind"] for row in db["payments"].docs} == {"charge", kind}
+    assert {row["event_kind"] for row in db["payment_log_claims"].docs} == {"charge", kind}
+    charge_row = next(row for row in db["payments"].docs if row["event_kind"] == "charge")
+    other = next(row for row in db["payments"].docs if row["event_kind"] == kind)
+    assert charge_row["status"] == "approved" and other["status"] == status
+    assert other["transaction_id"] == "TX-1"
+    plan = db["payment_plans"].docs[0]
+    assert plan["balance_remaining"] == 800.0
+    assert plan["total_paid"] == 200.0 and plan["payments_made"] == 1
+    assert plan["status"] == "active"
+    assert plan["needs_review"] is True and plan["needs_review_reason"] == reason
+    for bond in (db["bond_cases"].docs[0], db["active_bonds"].docs[0]):
+        assert bond["needs_review"] is True and bond["needs_review_reason"] == reason
+        assert bond["last_payment_status"] == status
+    assert len(alerts) == 1
+    details = alerts[0]["details"]
+    assert details == {
+        "event_kind": kind,
+        "amount": "100.00",
+        "booking_number": "BK-1",
+        "plan_id": "plan-1",
+    }
+    blob = json.dumps(alerts[0]).lower()
+    assert "customer" not in blob and "@" not in blob and "card" not in blob
+    assert len(db["audit_events"].docs) == 2
+    assert db["payments"].index_calls == 0 and db["payments"].unique == []
+
+
+def test_staff_alert_failure_leaves_the_refund_committed(rig, monkeypatch):
+    db, app, _client = rig
+    monkeypatch.setenv("SWIPESIMPLE_WEBHOOK_SECRET", SECRET)
+    db["payment_plans"].docs.append({
+        "plan_id": "plan-1",
+        "booking_number": "BK-1",
+        "balance_remaining": 800.0,
+        "status": "active",
+    })
+
+    def boom(self, *args, **kwargs):
+        raise RuntimeError("slack down")
+
+    monkeypatch.setattr("writers.slack_notifier.SlackNotifier.notify_alert", boom)
+    with patch("dashboard.routers.events.publish_event", new=AsyncMock()):
+        _webhook(app, _pay())
+        refund = _webhook(app, _pay(event_type="payment.refunded", status="refunded"))
+    assert refund.status_code == 200 and refund.json()["duplicate"] is False
+    assert len(db["payments"].docs) == 2
+    assert db["payment_plans"].docs[0]["balance_remaining"] == 800.0
+    assert db["payment_plans"].docs[0]["needs_review"] is True
+
+
 @pytest.mark.parametrize("seed,payload", [
     ({"amount": 50, "status": "approved", "booking_number": "BK-1"}, _pay(amount="100.00")),
-    ({"amount": 100, "status": "refunded", "booking_number": "BK-1"}, _pay()),
     ({"amount": 100, "status": "approved", "booking_number": "OTHER-BK"}, _pay()),
 ])
 def test_conflicting_payload_is_409_and_leaves_the_email_unread(rig, monkeypatch, seed, payload):
