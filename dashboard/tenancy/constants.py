@@ -154,6 +154,7 @@ KNOWN_APP_COLLECTIONS = frozenset(
         "payment_dispatches",
         "payment_plan_payment_claims",
         "payment_plans",
+        "payment_txn_locks",
         "payments",
         "persons",
         "phone_validations",

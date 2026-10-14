@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-14 (plan create audits a transaction down payment)
+
+### Fixed
+- **`POST /api/payments/plans` with `down_payment_transaction_id` audits an inserted down payment.** When no poller or webhook row exists yet, the route inserts the completed payment inside `ClientSession.with_transaction` and writes one `audit_events` row (`payment_plan_down_payment_recorded`) with the signed-in actor, the plan id, the payment id, the transaction id, the amount, and `old_state` / `new_state`. The `_id` follows the #185 rule: `plan-create:{plan_id}:{transaction_id}`, or `plan-create:{tenant_id}:{plan_id}:{transaction_id}` when `SAAS_MULTI_TENANT` is on. If that audit cannot be saved, the transaction aborts and the claim is released.
+- **A failed plan-create finalization writes a compensating audit.** `_undo_plan_create` appends `payment_plan_create_rolled_back` (`plan-create-rollback:...`, same tenant rule) after the link or insert audit was attempted and the claim could not be marked applied. The event records the actor, the record ids, the amount, and the transition from the attempted completed payment to `undone`, `retained`, or `incomplete`. If that audit cannot be saved, the claim stays `failed` and the route returns 500 `payment_needs_review`.
+- **The same transaction and lock as a provider charge.** The probe runs first. A standalone server or a failed probe returns 503 `transactions_unavailable` and writes nothing (no claim, no plan, no payment, no lock, no audit). Inside the transaction the first write is the `payment_txn_locks` upsert (`tenant_id` + `txn_key`, `$inc` version), the same lock #187 uses, and the driver retries a transient transaction error. No index is added on `payments`. Cash down payments with no transaction id are unchanged.
+
+### Tests
+- `tests/test_payment_plan_create_down_payment_claim.py`: `test_inserted_down_payment_audit_is_tenant_scoped` and `test_plan_create_undo_writes_compensating_audit`. The same file covers 503 with no writes and a transient-error retry. No SwipeSimple, Gmail, or Slack calls.
+
 ## [Unreleased] — 2026-10-12 (payment agent KPIs: settled and deduplicated)
 
 ### Fixed

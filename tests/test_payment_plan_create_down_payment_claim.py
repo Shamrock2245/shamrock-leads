@@ -28,15 +28,17 @@ class Coll:
         self.fail_insert = False
         self.fail_update = False
         self.before_update = None
+        self.index_calls = 0
 
     async def create_index(self, keys, unique=False, name=None, **_):
         await asyncio.sleep(0)
+        self.index_calls += 1
         fields = tuple(k for k, _ in keys)
         if unique and fields not in self.unique:
             self.unique.append(fields)
         return name
 
-    async def insert_one(self, doc):
+    async def insert_one(self, doc, session=None, **kwargs):
         await asyncio.sleep(0)
         if self.fail_insert:
             raise RuntimeError("write failed")
@@ -44,6 +46,9 @@ class Coll:
             key = tuple(doc.get(f) for f in fields)
             if any(tuple(d.get(f) for f in fields) == key for d in self.docs):
                 raise DuplicateKeyError("dup")
+        explicit_id = doc.get("_id")
+        if explicit_id is not None and any(d.get("_id") == explicit_id for d in self.docs):
+            raise DuplicateKeyError("dup _id")
         self.docs.append(copy.deepcopy(doc))
 
     async def find_one(self, flt=None, *a, **k):
@@ -62,7 +67,7 @@ class Coll:
                 yield d
         return gen()
 
-    async def update_one(self, flt, update, upsert=False):
+    async def update_one(self, flt, update, upsert=False, session=None, **kwargs):
         await asyncio.sleep(0)
         if self.before_update:
             self.before_update(self, flt, update)
@@ -70,11 +75,25 @@ class Coll:
             raise RuntimeError("update failed")
         for d in self.docs:
             if matches(d, flt):
+                for key, value in update.get("$inc", {}).items():
+                    d[key] = d.get(key, 0) + value
                 d.update(update.get("$set", {}))
                 for key in update.get("$unset", {}):
                     d.pop(key, None)
-                return SimpleNamespace(matched_count=1, modified_count=1)
-        return SimpleNamespace(matched_count=0, modified_count=0)
+                return SimpleNamespace(matched_count=1, modified_count=1, upserted_id=None)
+        if upsert:
+            doc = {}
+            doc.update(update.get("$setOnInsert") or {})
+            doc.update(update.get("$set") or {})
+            for key, value in update.get("$inc", {}).items():
+                doc[key] = doc.get(key, 0) + value
+            for fields in self.unique:
+                key = tuple(doc.get(f) for f in fields)
+                if any(tuple(d.get(f) for f in fields) == key for d in self.docs):
+                    raise DuplicateKeyError("dup")
+            self.docs.append(copy.deepcopy(doc))
+            return SimpleNamespace(matched_count=0, modified_count=0, upserted_id=doc.get("_id"))
+        return SimpleNamespace(matched_count=0, modified_count=0, upserted_id=None)
 
     async def delete_one(self, flt):
         await asyncio.sleep(0)
@@ -98,15 +117,87 @@ class DB(dict):
         return self[name]
 
 
+class _Admin:
+    async def command(self, name, *args, **kwargs):
+        if name in ("hello", "ismaster"):
+            return {"setName": "atlas-rs", "ok": 1}
+        raise RuntimeError(name)
+
+
+class TxnSession:
+    """Commits on success. Any other error restores the snapshot, matching with_transaction."""
+
+    def __init__(self, client):
+        self.client = client
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def _restore(self, snap):
+        # A row marked ``_external`` was committed by another writer during the
+        # attempt. The abort drops our uncommitted writes and leaves that row.
+        kept = []
+        for name, coll in self.client.db.items():
+            for doc in coll.docs:
+                if doc.get("_external"):
+                    kept.append((name, copy.deepcopy(doc)))
+        for name in list(self.client.db.keys()):
+            if name not in snap:
+                self.client.db[name].docs = []
+        for name, docs in snap.items():
+            self.client.db[name].docs = copy.deepcopy(docs)
+        for name, doc in kept:
+            present = [d.get("_id") for d in self.client.db[name].docs]
+            if doc.get("_id") not in present:
+                self.client.db[name].docs.append(doc)
+
+    async def with_transaction(self, callback):
+        while True:
+            snap = {name: copy.deepcopy(coll.docs) for name, coll in self.client.db.items()}
+            self.client.attempts += 1
+            try:
+                await callback(self)
+                return
+            except pp.RetryableTxnError:
+                self._restore(snap)
+                continue
+            except Exception:
+                self._restore(snap)
+                raise
+
+
+class TxnClient:
+    def __init__(self, db):
+        self.db = db
+        self.attempts = 0
+        self.admin = _Admin()
+
+    async def start_session(self):
+        return TxnSession(self)
+
+
 @pytest.fixture
 def rig(monkeypatch):
     db = DB()
     monkeypatch.setattr(pp, "get_collection", lambda name: db[name])
     monkeypatch.setattr(pp, "_payment_claim_index_ready", False)
+    monkeypatch.setattr(pp, "_plan_lock_index_ready", False)
+    pp._txn_support_cache.clear()
+    client = TxnClient(db)
+
+    async def _txn():
+        return client
+
+    monkeypatch.setattr(pp, "_txn_client", _txn)
+    db.txn_client = client
     app = FastAPI()
     app.include_router(pp.payment_plans_bp)
     with patch("dashboard.routers.events.publish_event", new=AsyncMock()):
         yield db, app
+    pp._txn_support_cache.clear()
 
 
 def _body(booking="BK-1", txn="SS-77", dp=200, **kw):
@@ -283,10 +374,10 @@ def test_claim_mark_applied_failure_unlinks_row(rig):
     claims = db["payment_plan_payment_claims"]
     real = Coll.update_one
 
-    async def boom(self, flt, update, upsert=False):
+    async def boom(self, flt, update, upsert=False, session=None, **kwargs):
         if (update.get("$set") or {}).get("status") == "applied":
             raise RuntimeError("claim write failed")
-        return await real(self, flt, update, upsert)
+        return await real(self, flt, update, upsert=upsert, session=session)
     claims.update_one = boom.__get__(claims)
     (r,) = _post(app, [_body()])
     assert r.status_code == 500
@@ -326,53 +417,53 @@ def test_audit_failure_rolls_back_link_plan_and_claim(rig):
     assert db["payment_plans"].docs == [] and _claims(db) == []
 
 
-def _assert_plan_retained_for_changed_payment(db, response):
-    """Payment still points at a plan that exists, marked for review."""
-    assert response.status_code == 500
-    body = response.json()
-    assert body["error"] == "payment_needs_review"
-    assert "Nothing was recorded" not in body["message"]
-    row = db["payments"].docs[0]
-    assert row["status"] == "reconciled" and row.get("plan_id")
+def test_rollback_keeps_newer_reconciliation_status_and_blocks_txn(rig):
+    """A payment that still carries this plan_id is not detached.
+
+    The route's transaction aborts our own uncommitted link. This calls the
+    undo directly for the case the abort cannot see: a newer write already
+    replaced the fields we set and left ``plan_id`` in place.
+    """
+    db, app = rig
+    plan_id = "plan-kept"
+    row = _poller()
+    row.update({
+        "plan_id": plan_id, "type": "down_payment", "status": "reconciled",
+        "logged_status": "approved", "timestamp": row["created_at"],
+        "plan_linked_at": "2026-10-12T12:00:00+00:00",
+    })
+    db["payment_plans"].docs.append({
+        "plan_id": plan_id, "booking_number": "BK-1", "status": "active", "total_paid": 200,
+    })
+    db["payments"].docs.append(row)
+    _claims(db).append({
+        "plan_id": plan_id, "transaction_id": "SS-77", "status": "claimed", "amount": 200.0,
+    })
+    link_set = {
+        "plan_id": plan_id, "booking_number": "BK-1", "type": "down_payment",
+        "logged_status": "approved", "status": "completed",
+        "timestamp": row["created_at"], "plan_linked_at": "2026-10-12T12:00:00+00:00",
+    }
+    outcome = asyncio.run(pp._undo_plan_create(
+        db["payment_plans"], db["payments"], db["payment_plan_payment_claims"],
+        plan_id, "SS-77", _poller(), link_set, None, True,
+        actor="Kayla Lukesic", compensate=True, amount=200.0, booking="BK-1",
+        payment_id=row["_id"],
+    ))
+    assert outcome == "retained"
+    assert db["payments"].docs[0]["status"] == "reconciled"
+    assert db["payments"].docs[0]["plan_id"] == plan_id
     (plan,) = db["payment_plans"].docs
-    assert plan["plan_id"] == row["plan_id"] == body["plan_id"]
     assert plan["status"] == "needs_review"
     assert plan["review_reason"] == "plan_create_rollback_incomplete"
     (claim,) = _claims(db)
-    assert claim["status"] == "failed" and claim["failed_reason"] == "plan_create_rollback_incomplete"
-    assert claim["plan_id"] == plan["plan_id"]
-
-
-def test_rollback_keeps_newer_reconciliation_status_and_blocks_txn(rig):
-    db, app = rig
-    db["payments"].docs.append(_poller())
-
-    async def reconcile_then_fail(doc):
-        db["payments"].docs[0]["status"] = "reconciled"
-        raise RuntimeError("audit down")
-    db["audit_events"].insert_one = reconcile_then_fail
-    (r,) = _post(app, [_body()])
-    _assert_plan_retained_for_changed_payment(db, r)
-    # The booking already has a plan that needs review; a second one is refused.
+    assert claim["status"] == "failed"
+    (ev,) = db["audit_events"].docs
+    assert ev["event_type"] == pp._CREATE_ROLLBACK_AUDIT
+    assert ev["new_state"]["outcome"] == "retained"
     (again,) = _post(app, [_body(txn="SS-OTHER")])
     assert again.status_code == 409 and again.json()["error"] == "payment_needs_review"
     assert len(db["payment_plans"].docs) == 1
-
-
-def test_claim_finalization_failure_retains_plan_when_payment_changed(rig):
-    db, app = rig
-    db["payments"].docs.append(_poller())
-    claims = db["payment_plan_payment_claims"]
-    real = Coll.update_one
-
-    async def reconcile_then_fail(self, flt, update, upsert=False):
-        if (update.get("$set") or {}).get("status") == "applied":
-            db["payments"].docs[0]["status"] = "reconciled"
-            raise RuntimeError("claim write failed")
-        return await real(self, flt, update, upsert)
-    claims.update_one = reconcile_then_fail.__get__(claims)
-    (r,) = _post(app, [_body()])
-    _assert_plan_retained_for_changed_payment(db, r)
 
 
 def _fail_applied_claim(db):
@@ -380,29 +471,34 @@ def _fail_applied_claim(db):
     claims = db["payment_plan_payment_claims"]
     real = Coll.update_one
 
-    async def boom(self, flt, update, upsert=False):
+    async def boom(self, flt, update, upsert=False, session=None, **kwargs):
         if (update.get("$set") or {}).get("status") == "applied":
             raise RuntimeError("claim write failed")
-        return await real(self, flt, update, upsert)
+        return await real(self, flt, update, upsert=upsert, session=session)
     claims.update_one = boom.__get__(claims)
 
 
 def _assert_incomplete_undo(db, response):
+    """Delete failed during undo. The transaction already dropped our writes.
+
+    The claim stays failed, the response does not say nothing was recorded,
+    and the compensating audit says the rollback is incomplete.
+    """
     assert response.status_code == 500
     body = response.json()
     assert body["error"] == "payment_needs_review"
     assert body["transaction_id"] == "SS-77"
     assert "Nothing was recorded" not in body["message"]
-    (plan,) = db["payment_plans"].docs
-    assert plan["status"] == "needs_review"
-    assert plan["review_reason"] == "plan_create_rollback_incomplete"
-    assert plan["plan_id"] == body["plan_id"]
-    assert plan["total_paid"] == 200
+    assert db["payment_plans"].docs == []
+    assert db["payments"].docs == []
     (claim,) = _claims(db)
     assert claim["status"] == "failed"
     assert claim["failed_reason"] == "plan_create_rollback_incomplete"
-    assert claim["plan_id"] == plan["plan_id"]
-    return plan
+    (ev,) = [d for d in db["audit_events"].docs if d["event_type"] == pp._CREATE_ROLLBACK_AUDIT]
+    assert ev["new_state"]["outcome"] == "incomplete"
+    assert ev["_id"] == f"plan-create-rollback:{ev['plan_id']}:SS-77"
+    assert ev["actor"] and ev["amount"] == 200
+    return claim
 
 
 def test_incomplete_undo_when_payment_delete_throws(rig):
@@ -410,13 +506,11 @@ def test_incomplete_undo_when_payment_delete_throws(rig):
     _fail_applied_claim(db)
     payments = db["payments"]
 
-    async def boom(self, flt):
+    async def boom(self, flt, session=None, **kwargs):
         raise RuntimeError("delete failed")
     payments.delete_one = boom.__get__(payments)
     (r,) = _post(app, [_body()])
-    plan = _assert_incomplete_undo(db, r)
-    (pay,) = db["payments"].docs
-    assert pay["plan_id"] == plan["plan_id"]
+    _assert_incomplete_undo(db, r)
 
 
 def test_incomplete_undo_when_plan_delete_throws(rig):
@@ -424,7 +518,7 @@ def test_incomplete_undo_when_plan_delete_throws(rig):
     _fail_applied_claim(db)
     plans = db["payment_plans"]
 
-    async def boom(self, flt):
+    async def boom(self, flt, session=None, **kwargs):
         raise RuntimeError("delete failed")
     plans.delete_one = boom.__get__(plans)
     (r,) = _post(app, [_body()])
@@ -433,29 +527,35 @@ def test_incomplete_undo_when_plan_delete_throws(rig):
 
 
 def test_incomplete_undo_when_delete_matches_nothing(rig):
-    """delete_one reports nothing deleted and leaves the plan and payment."""
+    """A delete that matches nothing after the transaction abort is a finished undo.
+
+    The plan and the inserted payment are already gone. ``find_one`` sees that,
+    so the claim is released and the compensating audit says ``undone``.
+    """
     db, app = rig
     _fail_applied_claim(db)
     payments = db["payments"]
     plans = db["payment_plans"]
 
-    async def miss(self, flt):
+    async def miss(self, flt, session=None, **kwargs):
         return SimpleNamespace(deleted_count=0)
     payments.delete_one = miss.__get__(payments)
     plans.delete_one = miss.__get__(plans)
     (r,) = _post(app, [_body()])
-    plan = _assert_incomplete_undo(db, r)
-    (pay,) = db["payments"].docs
-    assert pay["plan_id"] == plan["plan_id"]
+    assert r.status_code == 500 and r.json()["error"] == "payment_record_failed"
+    assert db["payment_plans"].docs == [] and db["payments"].docs == [] and _claims(db) == []
+    (ev,) = db["audit_events"].docs
+    assert ev["event_type"] == pp._CREATE_ROLLBACK_AUDIT
+    assert ev["new_state"]["outcome"] == "undone"
 
 
 def test_poller_row_arriving_during_insert_rolls_back(rig):
     db, app = rig
     real = db["payments"].insert_one
 
-    async def insert_then_poller(doc):
-        await real(doc)
-        db["payments"].docs.append(_poller(_id="late"))
+    async def insert_then_poller(doc, session=None, **kwargs):
+        await real(doc, session=session)
+        db["payments"].docs.append(_poller(_id="late", _external=True))
     db["payments"].insert_one = insert_then_poller
     (r,) = _post(app, [_body()])
     assert r.status_code == 409 and r.json()["error"] == "logged_payment_ambiguous"
@@ -469,14 +569,19 @@ def test_poller_row_arriving_during_insert_rolls_back(rig):
 def test_booking_reassigned_between_check_and_link_fails_closed(rig):
     db, app = rig
     db["payments"].docs.append(_poller())
+    seen = {}
 
     def reassign(coll, flt, update):
+        seen["booking_number"] = flt.get("booking_number")
         coll.docs[0]["booking_number"] = "BK-OTHER"
     db["payments"].before_update = reassign
     (r,) = _post(app, [_body()])
     assert r.status_code == 409 and r.json()["error"] == "logged_payment_changed"
+    # The conditional update pinned the booking read beforehand. The in-flight
+    # reassignment aborted with the transaction, and the row was not linked.
+    assert seen["booking_number"] == "BK-1"
     row = db["payments"].docs[0]
-    assert row["booking_number"] == "BK-OTHER" and "plan_id" not in row
+    assert row["booking_number"] == "BK-1" and "plan_id" not in row
     assert db["payment_plans"].docs == [] and _claims(db) == []
 
 
@@ -568,3 +673,175 @@ def test_session_actor_wins_over_machine_key(rig, monkeypatch):
     assert r.status_code == 201
     (ev,) = db["audit_events"].docs
     assert ev["actor"] == "Kayla Lukesic" and ev["agent_name"] == "Kayla Lukesic"
+
+
+# ── Codex P1s on #182 @a51123e: insert audit, and a compensating undo audit ──
+
+
+def test_inserted_down_payment_audit_is_tenant_scoped(rig, monkeypatch):
+    """A new down-payment row written from ``down_payment_transaction_id`` is audited.
+
+    The ``audit_events`` ``_id`` uses the #185 rule: ``plan-create:{plan}:{txn}``
+    with the flag off, and ``plan-create:{tenant}:{plan}:{txn}`` with the flag
+    on. The actor is the signed session. If the audit cannot be saved, the
+    plan, the payment, and the claim are not left behind. The first write in
+    the transaction is the shared ``payment_txn_locks`` upsert. No index is
+    added on ``payments``.
+    """
+    from dashboard.tenancy.context import bind_job_tenant
+    from dashboard.tenancy.scope import TenantScopedCollection
+
+    db, app = rig
+    cookies = _session_cookie(
+        monkeypatch, email="kayla@shamrockbailbonds.biz", agent_name="Kayla Lukesic",
+    )
+    (r,) = _post(app, [_body(created_by="Someone Else")], cookies=cookies)
+    assert r.status_code == 201
+    plan_id = r.json()["plan"]["plan_id"]
+    (row,) = db["payments"].docs
+    (ev,) = db["audit_events"].docs
+    assert ev["event_type"] == pp._DOWN_PAYMENT_AUDIT
+    assert ev["_id"] == f"plan-create:{plan_id}:SS-77"
+    assert ev["actor"] == "Kayla Lukesic" and ev["agent_name"] == "Kayla Lukesic"
+    assert ev["amount"] == 200
+    assert ev["payment_id"] == str(row["_id"]) and ev["plan_id"] == plan_id
+    assert ev["transaction_id"] == "SS-77" and ev["booking_number"] == "BK-1"
+    assert ev["old_state"] == {"plan_id": None, "status": None, "payment_id": None}
+    assert ev["new_state"] == {
+        "plan_id": plan_id, "status": "completed", "payment_id": str(row["_id"]),
+    }
+    assert ev["confidence"] == 1.0 and ev["reason"]
+    (lock,) = db["payment_txn_locks"].docs
+    assert lock["txn_key"] == "SS-77" and lock["version"] == 1 and lock["tenant_id"] is None
+    assert db["payments"].unique == [] and db["payments"].index_calls == 0
+    assert pp._last_apply_path == "transaction"
+
+    real_insert = Coll.insert_one
+
+    async def fail_down(self, doc, session=None, **kwargs):
+        if doc.get("event_type") == pp._DOWN_PAYMENT_AUDIT:
+            raise RuntimeError("audit down")
+        await real_insert(self, doc, session=session)
+
+    db["audit_events"].insert_one = fail_down.__get__(db["audit_events"])
+    (bad,) = _post(app, [_body(booking="BK-FAIL", txn="SS-FAIL", created_by="Someone Else")], cookies=cookies)
+    assert bad.status_code == 500 and bad.json()["error"] == "payment_record_failed"
+    assert [d.get("transaction_id") for d in db["payments"].docs] == ["SS-77"]
+    assert all(c.get("transaction_id") != "SS-FAIL" for c in _claims(db))
+    assert all(p.get("booking_number") != "BK-FAIL" for p in db["payment_plans"].docs)
+    assert all(a.get("transaction_id") != "SS-FAIL" for a in db["audit_events"].docs)
+
+    monkeypatch.setenv("SAAS_MULTI_TENANT", "1")
+    monkeypatch.setattr(pp, "_payment_claim_index_ready", False)
+    monkeypatch.setattr(pp, "_plan_lock_index_ready", False)
+    pp._txn_support_cache.clear()
+    db2 = DB()
+    client = TxnClient(db2)
+
+    async def _txn():
+        return client
+
+    monkeypatch.setattr(pp, "_txn_client", _txn)
+    monkeypatch.setattr(pp, "get_collection", lambda name: TenantScopedCollection(db2[name], name))
+    app2 = FastAPI()
+    app2.include_router(pp.payment_plans_bp)
+
+    async def both():
+        transport = httpx.ASGITransport(app=app2)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as http:
+            out = []
+            for tenant, booking in (("gulf_coast_bail", "BK-A"), ("other_agency", "BK-B")):
+                with bind_job_tenant(tenant):
+                    out.append(await http.post(
+                        "/api/payments/plans",
+                        json=_body(booking=booking, txn="SS-SHARED"),
+                    ))
+            return out
+
+    rs = asyncio.run(both())
+    assert [r.status_code for r in rs] == [201, 201]
+    plans = {p["plan_id"]: p["tenant_id"] for p in db2["payment_plans"].docs}
+    assert {a["_id"] for a in db2["audit_events"].docs} == {
+        f"plan-create:{tenant}:{plan}:SS-SHARED" for plan, tenant in plans.items()
+    }
+    assert {a.get("tenant_id") for a in db2["audit_events"].docs} == {"gulf_coast_bail", "other_agency"}
+    assert {row["tenant_id"] for row in db2["payment_txn_locks"].docs} == {"gulf_coast_bail", "other_agency"}
+    assert {row["txn_key"] for row in db2["payment_txn_locks"].docs} == {"SS-SHARED"}
+    assert db2["payments"].unique == []
+
+
+def test_plan_create_undo_writes_compensating_audit(rig, monkeypatch):
+    """Finalization failure after the link audit writes a compensating audit.
+
+    The claim update raises after the link audit was inserted. The transaction
+    aborts that audit. ``_undo_plan_create`` appends ``payment_plan_create_rolled_back``
+    with the signed-in actor, the record ids, the amount, and the state change.
+    The logged row is not left pointing at a plan. The rollback ``_id`` uses the
+    same tenant rule as #185.
+    """
+    from dashboard.tenancy.context import bind_job_tenant
+
+    db, app = rig
+    db["payments"].docs.append(_poller())
+    _fail_applied_claim(db)
+    cookies = _session_cookie(
+        monkeypatch, email="kayla@shamrockbailbonds.biz", agent_name="Kayla Lukesic",
+    )
+    (r,) = _post(app, [_body(created_by="Someone Else")], cookies=cookies)
+    assert r.status_code == 500 and r.json()["error"] == "payment_record_failed"
+    row = db["payments"].docs[0]
+    assert "plan_id" not in row and row["status"] == "approved" and "type" not in row
+    assert db["payment_plans"].docs == [] and _claims(db) == []
+    (ev,) = db["audit_events"].docs
+    assert ev["event_type"] == pp._CREATE_ROLLBACK_AUDIT
+    assert ev["_id"] == f"plan-create-rollback:{ev['plan_id']}:SS-77"
+    assert ev["actor"] == "Kayla Lukesic" and ev["agent_name"] == "Kayla Lukesic"
+    assert ev["amount"] == 200 and ev["payment_id"] == str(row["_id"])
+    assert ev["transaction_id"] == "SS-77" and ev["booking_number"] == "BK-1"
+    assert ev["linked_existing_row"] is True and ev["confidence"] == 1.0
+    assert ev["old_state"]["plan_id"] == ev["plan_id"]
+    assert ev["old_state"]["status"] == "completed" and ev["old_state"]["claim_status"] == "claimed"
+    assert ev["new_state"] == {
+        "outcome": "undone", "plan_id": None, "plan_status": None, "claim_status": "deleted",
+    }
+    assert all(d["event_type"] != "payment_plan_logged_payment_linked" for d in db["audit_events"].docs)
+    monkeypatch.setenv("SAAS_MULTI_TENANT", "1")
+    with bind_job_tenant("gulf_coast_bail"):
+        assert pp._scoped_audit_id("plan-create-rollback", ev["plan_id"], "SS-77") == (
+            f"plan-create-rollback:gulf_coast_bail:{ev['plan_id']}:SS-77"
+        )
+
+
+def test_create_with_down_payment_txn_unavailable_writes_nothing(rig, monkeypatch):
+    db, app = rig
+
+    async def _none():
+        return None
+
+    monkeypatch.setattr(pp, "_txn_client", _none)
+    pp._txn_support_cache.clear()
+    (r,) = _post(app, [_body()])
+    assert r.status_code == 503 and r.json()["error"] == "transactions_unavailable"
+    assert db["payment_plans"].docs == [] and db["payments"].docs == [] and _claims(db) == []
+    assert db["audit_events"].docs == [] and db["payment_txn_locks"].docs == []
+    assert db["payment_plan_payment_claims"].index_calls == 0
+
+
+def test_create_down_payment_retries_transient_transaction_error(rig):
+    db, app = rig
+    locks = db["payment_txn_locks"]
+    real = Coll.update_one
+    calls = {"n": 0}
+
+    async def once(self, flt, update, upsert=False, session=None, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise pp.RetryableTxnError()
+        return await real(self, flt, update, upsert=upsert, session=session)
+
+    locks.update_one = once.__get__(locks)
+    (r,) = _post(app, [_body()])
+    assert r.status_code == 201
+    assert db.txn_client.attempts == 2 and calls["n"] == 2
+    assert len(db["payments"].docs) == 1 and len(db["audit_events"].docs) == 1
+    assert locks.docs[0]["version"] == 1 and locks.docs[0]["txn_key"] == "SS-77"
