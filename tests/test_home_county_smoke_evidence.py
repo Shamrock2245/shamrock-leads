@@ -82,7 +82,8 @@ def test_home_counties_matrix_state_after_source_checks():
     # 2026-10-08: main also moved Orange (#134) and Indian River (#136) to candidate_productive;
     # #143 moved Hendry from recon_only to fail_closed; 2026-10-09 Miami-Dade too (no booking number).
     # 2026-10-09 Charlotte and Manatee recon_only -> fail_closed.
-    assert "| FL | 67 | 67 | 4 | 20 | 22 | 0 | 21 |" in text
+        # 2026-10-14 Hillsborough and Marion recon_only -> fail_closed (rule conflicts).
+    assert "| FL | 67 | 67 | 4 | 20 | 20 | 0 | 23 |" in text
 
 
 def test_no_home_county_is_promoted_in_health():

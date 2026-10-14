@@ -66,12 +66,29 @@ STEALTH_HEADERS = {
 }
 
 class HillsboroughCountyScraper(BaseScraper):
+    """Fail closed (2026-10-14): the only path is login + reCAPTCHA solve + proxy.
+
+    See docs/recon/FL_RULE_CONFLICT_FAIL_CLOSED_2026-10-14.md. The owner
+    approved CAPTCHA solving only for Broward and Lake; proxies and
+    authenticated (login) access are not allowed. No source request is made
+    until a public, unauthenticated roster contract is proven.
+    """
+
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "HCSO inmate search needs an account login, a solved reCAPTCHA v2 and a "
+        "SOCKS/residential proxy fallback; CAPTCHA solving is owner-approved only "
+        "for Broward/Lake and proxies/login are not allowed, so refuse emission."
+    )
 
     @property
     def county(self) -> str:
         return "Hillsborough"
 
     def scrape(self) -> List[ArrestRecord]:
+        if not self.SOURCE_CONTRACT_VALIDATED:
+            logger.warning("Hillsborough: SOURCE_CONTRACT_VALIDATED=False — %s", self.SOURCE_CONTRACT_REASON)
+            return []
         hcso_email = os.getenv("HCSO_EMAIL")
         hcso_password = os.getenv("HCSO_PASSWORD")
         if not hcso_email or not hcso_password:

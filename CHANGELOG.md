@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-14 (FL rule-conflict fail_closed: Hillsborough, Marion)
+
+### Changed
+- **Hillsborough (FL) and Marion (FL) fail closed** (`SOURCE_CONTRACT_VALIDATED = False` + Health `fail_closed`), found in the 2026-10-14 health snapshot. Hillsborough's only path was an account login plus SolveCaptcha reCAPTCHA v2 plus a proxy fallback (CAPTCHA solving is owner-approved only for Broward and Lake). Marion reached its AWS WAF listing only through a residential proxy with TLS impersonation. Each `scrape()` now returns `[]` before any request, and `config.source_guard` maps both source hosts so refetch / recheck / manual paths stay closed too. Evidence, live-emitter rows and the matrix are updated; `docs/recon/FL_RULE_CONFLICT_FAIL_CLOSED_2026-10-14.md` has the reopen path. No stored data touched.
+
+### Tests
+- `tests/test_fl_rule_conflict_fail_closed.py` (added to the `ci.yml` list).
+
 ## [Unreleased] — 2026-10-14 (plan /pay tenant guard and audit id)
 
 ### Fixed

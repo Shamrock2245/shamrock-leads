@@ -822,6 +822,12 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     # Hendry's MyOCV inmates.json has only inmateID = HCSO<YY>MNI<NNNNNN>, a
     # person (Master Name Index) id, not a booking number. CoS approved.
     "Hendry (FL)": "fail_closed",
+    # 2026-10-14 (docs/recon/FL_RULE_CONFLICT_FAIL_CLOSED_2026-10-14.md):
+    # Hillsborough needs login + reCAPTCHA solving + proxy; Marion needs a
+    # residential proxy + TLS impersonation. Both break the no-CAPTCHA (except
+    # Broward/Lake) / no-proxy / no-impersonation rules. Proposed for CoS.
+    "Hillsborough (FL)": "fail_closed",
+    "Marion (FL)": "fail_closed",
     # Pinellas (FL) is deliberately absent, so Health reads "unverified".
     # Owner exception (Brendan 2026-10-08 1:38 PM ET, CoS agreed): Who's In Jail
     # (Blazor Server, no plain-HTTP listing) runs relay-only through the Leads
