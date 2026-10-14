@@ -103,7 +103,7 @@ function exportActiveBondsCSV() {
     const cd = b.court_date ? new Date(b.court_date) : null;
     const daysUntil = cd ? Math.ceil((cd - new Date()) / 86400000) : '';
     return [
-      b.defendant_name || '', b.booking_number || '', b.county || '',
+      b.defendant_name || '', (window.slBookingLabel ? window.slBookingLabel(b.booking_number) : b.booking_number) || '', b.county || '',
       b.bond_amount || 0, b.premium || '', (b.insurance_company || b.surety || ''),
       b.poa_number || '', b.court_date ? cd.toLocaleDateString() : '', daysUntil,
       b.indemnitor?.name || b.indemnitor_name || '', b.indemnitor?.phone || b.indemnitor_phone || '',
@@ -113,7 +113,7 @@ function exportActiveBondsCSV() {
     ].map(v => `"${String(v).replace(/"/g, '""')}"`);
   });
   const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-  const blob = new Blob([csv], { type: 'text/csv' });
+  const blob = new Blob([(window.slRedactKeys ? window.slRedactKeys(csv) : csv)], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = `active-bonds-${new Date().toISOString().slice(0, 10)}.csv`;
@@ -286,7 +286,7 @@ function renderActiveBondsTable() {
     return `<tr class="${overdue ? 'row-alert' : ''}" style="${overdue ? 'background:rgba(239,68,68,0.05)' : ''}">
       <td>
         <div style="font-weight:600">${escHtml(b.defendant_name || '—')}${alertBadge}</div>
-        <div style="font-size:11px;color:var(--muted)">${escHtml(b.booking_number || '—')}${bookingLink}</div>
+        <div style="font-size:11px;color:var(--muted)">${escHtml((window.slBookingLabel ? window.slBookingLabel(b.booking_number) : b.booking_number) || '—')}${bookingLink}</div>
       </td>
       <td>${b.county && b.county !== '—' ? `<span class="county-badge" data-county="${escHtml(b.county)}">${escHtml(b.county)}</span>` : '—'}</td>
       <td><strong>$${(b.bond_amount || 0).toLocaleString()}</strong></td>
@@ -406,7 +406,7 @@ window.openEditDrawer = function (bookingNumber) {
   if (ciReq) ciReq.checked = !!bond.check_in_required;
 
   const hdr = document.getElementById('abEditDrawerTitle');
-  if (hdr) hdr.textContent = `✏️ Edit Bond — ${bond.defendant_name || bookingNumber}`;
+  if (hdr) hdr.textContent = `✏️ Edit Bond — ${bond.defendant_name || (window.slBookingLabel ? window.slBookingLabel(bookingNumber) : bookingNumber)}`;
 
   window._abEditBookingNumber = bookingNumber;
   window._abEditingBooking = bookingNumber;
@@ -964,7 +964,7 @@ window.downloadCheckinEvidence = async function (booking) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    const safe = bk.replace(/[^A-Za-z0-9._-]+/g, '_');
+    const safe = ((window.slBookingLabel ? window.slBookingLabel(bk) : bk) || 'booking').replace(/[^A-Za-z0-9._-]+/g, '_');
     a.download = `Checkin_Evidence_${safe}.zip`;
     document.body.appendChild(a);
     a.click();
@@ -1149,7 +1149,7 @@ function showRiskBreakdown(bookingNumber, defName, risk, factorsEncoded) {
   modal.innerHTML = `
     <div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;width:min(400px,90vw);max-height:80vh;overflow-y:auto">
       <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:var(--panel);border-radius:12px 12px 0 0">
-        <h3 style="margin:0;font-size:15px">⚠️ Risk Profile — ${escHtml(defName || bookingNumber)}</h3>
+        <h3 style="margin:0;font-size:15px">⚠️ Risk Profile — ${escHtml(defName || (window.slBookingLabel ? window.slBookingLabel(bookingNumber) : bookingNumber))}</h3>
         <button onclick="this.closest('[style*=fixed]').remove()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer">✕</button>
       </div>
       <div style="padding:20px">
