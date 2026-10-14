@@ -9,6 +9,7 @@ import logging, json, re, time
 from datetime import datetime, timezone
 from typing import List
 from scrapers.base_scraper import BaseScraper
+from scrapers.scraper_resilience import AntiBotBlocked
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
@@ -34,15 +35,12 @@ class DuvalCountyScraper(BaseScraper):
             page.get(BASE_URL)
             time.sleep(8)  # Give Angular SPA time to bootstrap
 
-            # Handle ATIMS click-to-verify CAPTCHA gate if present
-            try:
-                captcha_btn = page.ele("tag:button@@text():I'm not a robot", timeout=5)
-                if captcha_btn:
-                    logger.info("Duval: Found click-to-verify CAPTCHA button. Clicking it...")
-                    captcha_btn.click()
-                    time.sleep(8)
-            except Exception:
-                pass
+            # ATIMS click-to-verify ("I'm not a robot") gate: never click it.
+            # Clicking a CAPTCHA gate is CAPTCHA solving, which is owner-approved
+            # only for Broward and Lake. Stop the run as an anti-bot block so
+            # Health shows the real error class instead of an empty run.
+            if self._captcha_gate_present(page):
+                raise AntiBotBlocked("captcha_gate: Duval ATIMS 'I'm not a robot' gate shown; not clicked")
 
             # Fill name inputs to avoid JS alerts
             try:
@@ -85,6 +83,14 @@ class DuvalCountyScraper(BaseScraper):
         finally:
             try: page.listen.stop(); page.quit()
             except: pass
+
+    @staticmethod
+    def _captcha_gate_present(page) -> bool:
+        """True when the ATIMS robot-check button is on the page. Read-only."""
+        try:
+            return bool(page.ele("tag:button@@text():I'm not a robot", timeout=5))
+        except Exception:
+            return False
 
     def _extract_from_api(self, data) -> List[ArrestRecord]:
         records = []

@@ -729,9 +729,13 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     "Lauderdale (MS)": "fail_closed",
     "Madison (MS)": "fail_closed",
     "Sarasota (FL)": "fail_closed",
-    # 2026-10-09: the ArcGIS jail layer has no booking/jail/case number and its
-    # ObjectId/GlobalID are reissued on republish (840/841 changed). Writes off.
-    "Miami-Dade (FL)": "fail_closed",
+    # Miami-Dade (FL) is deliberately absent, so Health reads "unverified".
+    # Owner exception (Brendan 2026-10-09 9:32 AM ET): the ArcGIS jail layer has
+    # no booking/jail/case number and its ObjectId/GlobalID are reissued on
+    # republish (840/841 changed, 2026-10-09), so rows are keyed on an approved
+    # internal natural key (md_dedupe_v2 = sha256 of defendant + DOB + BookDate;
+    # core/booking_identity.py). Booking_Number stays blank. Not verified_public
+    # until a Leads Ops write smoke after the backed-up cleanup.
     # 2026-10-09: Revize rosters answer a Cloudflare challenge from every tested
     # exit (box, T-Mobile AS21928, Comcast AS7922); no other official source
     # publishes a booking roster with a source booking number. Relay skips them.
