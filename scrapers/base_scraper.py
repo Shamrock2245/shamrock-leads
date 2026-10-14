@@ -22,6 +22,7 @@ from abc import ABC, abstractmethod
 from typing import List, Optional
 from datetime import datetime, timezone
 
+from core.booking_identity import public_booking_number
 from core.models import ArrestRecord
 from scoring.lead_scorer import LeadScorer
 from config.relay_only import is_relay_only
@@ -135,6 +136,11 @@ class BaseScraper(ABC):
     # ``run`` then returns before any network, score, writer, broadcast, or alert
     # behavior can occur.
     SOURCE_CONTRACT_VALIDATED = True
+    # Narrow owner exception for sources with no booking number at all
+    # (Miami-Dade, 2026-10-09). Only a scraper that sets this AND whose records
+    # pass core.booking_identity.internal_natural_key (allow-listed state/county,
+    # exact key pattern) keeps rows with a blank Booking_Number. Default off.
+    ALLOWS_INTERNAL_NATURAL_KEY = False
     SOURCE_CONTRACT_REASON = ""
 
     # ── Self-healing (scrapers/scraper_resilience.py) ──
@@ -672,9 +678,17 @@ class BaseScraper(ABC):
     @classmethod
     def _filter_records_without_source_booking(cls, records: List[ArrestRecord]) -> List[ArrestRecord]:
         """Fail closed on missing or known synthetic booking identifiers."""
+        if not cls.ALLOWS_INTERNAL_NATURAL_KEY:
+            return [
+                record for record in records
+                if cls._has_source_booking_identifier(getattr(record, "Booking_Number", ""))
+            ]
+        from core.booking_identity import internal_natural_key
+
         return [
             record for record in records
             if cls._has_source_booking_identifier(getattr(record, "Booking_Number", ""))
+            or internal_natural_key(record)
         ]
 
     @property
@@ -859,6 +873,9 @@ class BaseScraper(ABC):
 
         # ── Preflight: auto-disable gate ──
         status_writer = self._status_writer(writers)
+        # Scrapers with a durable cursor (scraper_status.cursors) read it via
+        # this writer during scrape() and commit it in after_records_written().
+        self._run_status_writer = status_writer
         res_state = self._load_resilience_state(status_writer)
         gate = gate_decision(res_state, start, force=force_canary) if auto_disable_enabled() else "run"
         if gate == GATE_SKIP:
@@ -972,7 +989,7 @@ class BaseScraper(ABC):
                         if fta_level in ("high", "critical"):
                             fta_high_count += 1
                     except Exception as hybrid_err:
-                        logger.debug(f"⚠️ Hybrid score failed for {record.Booking_Number}: {hybrid_err}")
+                        logger.debug("⚠️ %s: hybrid score failed (%s)", self.county, type(hybrid_err).__name__)
 
                 # Recount after potential ML upgrades
                 hot_count = sum(1 for r in records if r.Lead_Status == "Hot")
@@ -1017,11 +1034,14 @@ class BaseScraper(ABC):
                 if not (r.County or "").strip():
                     r.County = self.county
 
+            status_writer_ok = False
             if writers and records:
                 for writer in writers:
                     try:
                         result = writer.write_records(records, self.county)
                         combined_stats["writer_results"].append(result)
+                        if writer is status_writer:
+                            status_writer_ok = True
 
                         # Use first writer's dedup stats for Slack
                         if "new_records" not in combined_stats:
@@ -1031,10 +1051,23 @@ class BaseScraper(ABC):
                             combined_stats["total_records"] = result.get("total_records", len(records))
 
                     except Exception as write_err:
+                        # Type only: a driver error (e.g. BulkWriteError,
+                        # DuplicateKeyError) embeds the failing documents,
+                        # i.e. names, DOBs and booking/internal keys.
                         logger.error(
-                            f"❌ {self.county}: writer {type(writer).__name__} "
-                            f"failed: {write_err}"
+                            "❌ %s: writer %s failed: %s",
+                            self.county, type(writer).__name__, type(write_err).__name__,
                         )
+
+            # Durable cursor commit: only after the system-of-record writer
+            # (the one that owns scraper_status) wrote without raising.
+            hook = getattr(self, "after_records_written", None)
+            if callable(hook):
+                try:
+                    hook(status_writer, records, ok=status_writer_ok or not records)
+                except Exception as hook_err:
+                    logger.error("❌ %s: cursor commit failed (%s); cases stay queued",
+                                 self.county_label, type(hook_err).__name__)
 
             # Fill defaults if no writer provided stats
             if "new_records" not in combined_stats:
@@ -1064,7 +1097,7 @@ class BaseScraper(ABC):
                 if new_records:
                     self._broadcast_scraper_events(new_records)
             except Exception as broadcast_err:
-                logger.debug(f"⚠️ {self.county}: SSE broadcast skipped: {broadcast_err}")
+                logger.debug("⚠️ %s: SSE broadcast skipped (%s)", self.county, type(broadcast_err).__name__)
 
             # ── Step 3b: Check for repeat offenders ──
             try:
@@ -1079,7 +1112,7 @@ class BaseScraper(ABC):
                     combined_stats["rearrest_matches"] = rearrest_results["matches_found"]
                 _rearrest.close()
             except Exception as rearrest_err:
-                logger.debug(f"⚠️ Rearrest check skipped: {rearrest_err}")
+                logger.debug("⚠️ %s: rearrest check skipped (%s)", self.county, type(rearrest_err).__name__)
 
             # ── Step 4: Slack alerts ──
             try:
@@ -1090,7 +1123,7 @@ class BaseScraper(ABC):
                     if record.Lead_Status == "Hot" and record._parse_bond_numeric() >= 2500:
                         _slack.notify_hot_lead(record)
             except Exception as slack_err:
-                logger.warning(f"⚠️ Slack notification failed: {slack_err}")
+                logger.warning("⚠️ %s: Slack notification failed (%s)", self.county, type(slack_err).__name__)
 
 
             # ── Step 5: Update dashboard (in-memory Flask, legacy) ──
@@ -1337,7 +1370,7 @@ class BaseScraper(ABC):
                 "state": st,
                 "county_label": f"{self.county} ({st})",
                 "full_name": record.Full_Name,
-                "booking_number": record.Booking_Number,
+                "booking_number": public_booking_number(record.Booking_Number),
                 "charges": record.Charges,
                 "bond_amount": record.Bond_Amount,
                 "mugshot_url": record.Mugshot_URL,
@@ -1352,7 +1385,7 @@ class BaseScraper(ABC):
                 "state": st,
                 "county_label": f"{self.county} ({st})",
                 "full_name": record.Full_Name,
-                "booking_number": record.Booking_Number,
+                "booking_number": public_booking_number(record.Booking_Number),
                 "charges": record.Charges,
                 "bond_amount": record.Bond_Amount,
                 "lead_score": record.Lead_Score,

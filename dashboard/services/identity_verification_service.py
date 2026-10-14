@@ -46,6 +46,12 @@ with a ``TEST-`` booking and a ``PKT-TEST-`` packet id, so they never use a
 live power or a real signer. ``validate_docuseal_packet_binding`` still
 runs. A real booking is never skipped.
 
+A staff request may set ``enforce_identity`` true to turn that skip off.
+The flag is honored only when the request is staff-authenticated, staff
+test mode is on, and the booking and packet are ``TEST-`` / ``PKT-TEST-``.
+It never creates a skip. ``false`` and a missing field leave the gate as it
+is.
+
 Open BondCases (count script) use the kanban statuses that are not terminal:
 ``active``, ``monitoring``, ``alert``, ``reinstated``.
 """
@@ -58,7 +64,11 @@ from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from dashboard.services.docuseal_service import DocuSealPacketValidationError
 from dashboard.services.id_ocr_service import US_STATES, name_letters_key, normalize_person_name
-from dashboard.services.staff_test_case import is_test_booking, is_test_packet_id
+from dashboard.services.staff_test_case import (
+    is_test_booking,
+    is_test_packet_id,
+    staff_test_case_mode_enabled,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +133,7 @@ _FULL_ID_KEYS = frozenset({
 _DIGIT_RUN = re.compile(r"\d{5,}")
 _LAST4 = re.compile(r"^\d{4}$")
 _ID_TYPE = re.compile(r"^[a-z][a-z0-9 _-]{0,39}$")
+_OPT_IN = frozenset({"1", "true", "yes", "on"})
 
 # A blocked case lands in exactly one bucket, most specific first.
 _REASON_PRIORITY = (
@@ -153,22 +164,39 @@ class IdentityLookupError(Exception):
         super().__init__(error_type)
 
 
+def enforce_identity_opt_in(value: Any) -> bool:
+    """True only for an explicit opt-in. False and a missing value stay off."""
+    if value is True or value == 1:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in _OPT_IN
+    return False
+
+
 def synthetic_staff_test_exempt(
     *,
     staff_test_case: bool,
     booking_number: Any,
     packet_id: Any,
+    enforce_identity: bool = False,
+    staff_authenticated: bool = False,
 ) -> bool:
     """True only for a synthetic TEST- / PKT-TEST- staff packet.
 
     Those packets never reserve a live power and never contact a real signer.
     The binding gate still runs. A real booking is not exempt.
+
+    ``enforce_identity`` turns this exemption off. It is honored only together
+    with ``staff_authenticated`` and staff test mode, and only for a
+    ``TEST-`` / ``PKT-TEST-`` packet. It cannot exempt a real booking.
     """
     if not staff_test_case:
         return False
     if not is_test_booking(booking_number):
         return False
     if not is_test_packet_id(packet_id):
+        return False
+    if enforce_identity and staff_authenticated and staff_test_case_mode_enabled():
         return False
     return True
 
@@ -956,16 +984,22 @@ async def require_verified_indemnitors(
     booking_number: str = "",
     packet_id: str = "",
     staff_test_case: bool = False,
+    enforce_identity: bool = False,
+    staff_authenticated: bool = False,
 ) -> dict[str, Any]:
     """Raise IndemnitorIdentityError before a packet may be built or sent.
 
     Returns the decision when every indemnitor and co-indemnitor is verified.
     Lookup errors fail closed with the same machine code.
+
+    ``enforce_identity`` can only turn the synthetic staff-test exemption off.
     """
     if synthetic_staff_test_exempt(
         staff_test_case=staff_test_case,
         booking_number=booking_number or _text(bond_data, "booking_number", "Booking_Number"),
         packet_id=packet_id,
+        enforce_identity=bool(enforce_identity),
+        staff_authenticated=bool(staff_authenticated),
     ):
         return {"ok": True, "exempt": "synthetic_staff_test", "issues": [], "methods": []}
     resolved = list(parties) if parties is not None else packet_parties(bond_data, indemnitors)

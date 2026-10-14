@@ -32,6 +32,7 @@ from dashboard.models.osint import (
     OSINTScanRequest,
 )
 from dashboard.services.audit_service import AuditService
+from core.booking_identity import redacting_csv_writer
 
 log = logging.getLogger("shamrock.osint")
 
@@ -795,7 +796,7 @@ class OSINTService:
             return None
 
         output = io.StringIO()
-        writer = csv.writer(output)
+        writer = redacting_csv_writer(output)
 
         # Accounts section
         writer.writerow([

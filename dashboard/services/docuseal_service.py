@@ -23,6 +23,8 @@ import uuid
 from datetime import datetime, timezone
 import re
 from typing import Any, Dict, List, Mapping, Optional, Union
+
+from core.booking_identity import public_booking_number
 from urllib.parse import urljoin
 
 import httpx
@@ -613,6 +615,15 @@ class DocuSealService:
         defendant can each open their /s/{slug} link immediately (OpenAPI).
         send_sms is omitted unless the caller sets it. Staff test cases set it false.
         """
+        # Internal natural keys (core/booking_identity.py) never reach a document.
+        from core.booking_identity import scrub_internal_keys
+
+        submitters = [
+            {**s, **({"values": scrub_internal_keys(s["values"])} if "values" in s else {}),
+             **({"fields": scrub_internal_keys(s["fields"])} if "fields" in s else {})}
+            if isinstance(s, dict) else s
+            for s in submitters
+        ]
         body: Dict[str, Any] = {
             "template_id": int(template_id) if str(template_id).isdigit() else template_id,
             "send_email": send_email,
@@ -946,7 +957,7 @@ class DocuSealService:
             poa = poa_list[0] if poa_list else ""
             poa_all = ", ".join(poa_list)
 
-        booking = (
+        booking = public_booking_number(
             bond_data.get("booking_number")
             or bond_data.get("defendant_booking_number")
             or def_.get("booking_number")
@@ -1761,6 +1772,8 @@ class DocuSealService:
         completed_redirect_url: Optional[str] = None,
         skip_bond_binding: bool = False,
         staff_test_case: bool = False,
+        enforce_identity: bool = False,
+        staff_authenticated: bool = False,
         template_field_names: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """
@@ -1784,8 +1797,9 @@ class DocuSealService:
         if template_id is None or str(template_id).strip() in ("", "0", "null", "none"):
             raise DocuSealPacketValidationError("DocuSeal packet blocked: a valid template_id is required.")
         # Identity gate first, before binding, the field payload, the HTTP
-        # client, and any status change. Synthetic TEST- packets skip it.
-        # validate_docuseal_packet_binding is unchanged and runs next.
+        # client, and any status change. Synthetic TEST- packets skip it
+        # unless enforce_identity is honored. validate_docuseal_packet_binding
+        # is unchanged and runs next.
         from dashboard.services.identity_verification_service import require_verified_indemnitors
 
         if not skip_bond_binding:
@@ -1796,6 +1810,8 @@ class DocuSealService:
                 booking_number=str(bond_data.get("booking_number") or ""),
                 packet_id=str(packet_id or ""),
                 staff_test_case=bool(staff_test_case),
+                enforce_identity=bool(enforce_identity),
+                staff_authenticated=bool(staff_authenticated),
             )
         if skip_bond_binding:
             validate_shannon_voice_packet(
@@ -1820,6 +1836,8 @@ class DocuSealService:
                 booking_number=str(bond_data.get("booking_number") or ""),
                 packet_id=str(packet_id or ""),
                 staff_test_case=bool(staff_test_case),
+                enforce_identity=bool(enforce_identity),
+                staff_authenticated=bool(staff_authenticated),
             )
         bond_data = dict(bond_data or {})
         agent_name, agent_license = resolve_writing_agent(bond_data)

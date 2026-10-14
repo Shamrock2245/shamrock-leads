@@ -59,6 +59,7 @@
     <div id="done-links"></div>
   </section>
 </main>
+<script src="/sl-booking-guard.js?v=4"></script>
 <script>
 (function () {
   var prepared = null;
@@ -86,7 +87,7 @@
       .then(function (result) {
         if (!result.ok) return fail(result.body);
         prepared = result.body;
-        document.getElementById("defendant").textContent = prepared.defendant.defendant_name + " · " + prepared.defendant.booking_number;
+        document.getElementById("defendant").textContent = prepared.defendant.defendant_name + " · " + (window.slBookingLabel ? window.slBookingLabel(prepared.defendant.booking_number) : prepared.defendant.booking_number);
         show(2);
       });
   };

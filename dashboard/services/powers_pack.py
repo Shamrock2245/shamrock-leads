@@ -23,6 +23,14 @@ Transfer evidence that actually exists
   ``released_at`` is appended to ``release_history`` and is not dropped.
   A manual release stored before that stamp still has no timestamp.
 
+Each transfer row carries ``evidence_complete``. It is true when that row is
+backed by an ``audit_events`` action ``poa_reassigned`` or by a
+``release_history`` / ``released_at`` stamp. The partial-history banner is
+included on the contract, the transfer section, and the XLSX cover only when
+at least one row in range is legacy: a string ``reassigned_from``, or a
+release that has neither stamp. ``history_complete`` is true when no row in
+range is legacy.
+
 Void rows use the same filter as ``GET /api/reports/voided-powers``:
 ``poa_inventory.status == voided``, exact ``surety_id``, ``voided_at`` in range.
 """
@@ -439,6 +447,17 @@ def _renewal_when(bond: dict) -> Any:
     return None
 
 
+_RELEASE_STAMP_SOURCES = (
+    "poa_inventory.release_history",
+    "poa_inventory.released_at",
+)
+_RELEASE_AUDIT_SOURCES = (
+    "audit_events.auto_released",
+    "audit_events.released",
+)
+_RELEASE_EVENT_TYPES = frozenset({"release", "auto_released", "released"})
+
+
 def _transfer_row(
     *,
     event_date: Optional[str],
@@ -449,6 +468,7 @@ def _transfer_row(
     reason: Optional[str],
     defendant: Optional[str],
     sources: list[str],
+    string_reassign: bool = False,
 ) -> dict:
     return {
         "event_date": event_date,
@@ -459,7 +479,38 @@ def _transfer_row(
         "reason": reason,
         "defendant": defendant,
         "sources": sources,
+        # Rewritten by ``_finalize_transfer_rows`` once sources are merged.
+        "evidence_complete": False,
+        "_string_reassign": string_reassign,
     }
+
+
+def _row_is_legacy(row: dict) -> bool:
+    """A string reassigned_from, or a release with no #172 stamp."""
+    sources = row.get("sources") or []
+    if row.get("_string_reassign"):
+        return True
+    stamped = any(source in sources for source in _RELEASE_STAMP_SOURCES)
+    if stamped:
+        return False
+    if row.get("event_type") in _RELEASE_EVENT_TYPES:
+        return True
+    return any(source in sources for source in _RELEASE_AUDIT_SOURCES)
+
+
+def _finalize_transfer_rows(rows: list[dict]) -> bool:
+    """Set ``evidence_complete``. True when no in-range row is legacy."""
+    history_complete = True
+    for row in rows:
+        sources = row.get("sources") or []
+        stamped = any(source in sources for source in _RELEASE_STAMP_SOURCES)
+        row["evidence_complete"] = bool(
+            stamped or "audit_events.poa_reassigned" in sources
+        )
+        if _row_is_legacy(row):
+            history_complete = False
+        row.pop("_string_reassign", None)
+    return history_complete
 
 
 def _select_transfers(
@@ -470,7 +521,7 @@ def _select_transfers(
     surety_id: str,
     start_dt: Optional[datetime],
     end_dt: Optional[datetime],
-) -> tuple[list[dict], int, int]:
+) -> tuple[list[dict], int, int, bool]:
     inv_rows = [d for d in inventory if inventory_surety_matches(d, surety_id)]
     audit_by_poa: dict[str, dict] = {}
     for doc in audit_inventory:
@@ -485,7 +536,13 @@ def _select_transfers(
     release_index: dict[tuple[str, Optional[str]], dict] = {}
     reassign_index: dict[tuple[str, Optional[str]], dict] = {}
 
-    def _note_reassign(raw: Any, from_ref: Optional[str], to_ref: Optional[str]) -> None:
+    def _note_reassign(
+        raw: Any,
+        from_ref: Optional[str],
+        to_ref: Optional[str],
+        *,
+        string_reassign: bool,
+    ) -> None:
         nonlocal omitted_undated
         day = _iso_day(raw)
         if window and not _in_window(raw, start_dt, end_dt):
@@ -504,6 +561,7 @@ def _select_transfers(
             reason=None,
             defendant=_stored_defendant(doc),
             sources=["poa_inventory.reassigned_from"],
+            string_reassign=string_reassign,
         )
         rows.append(row)
         reassign_index[(poa, day)] = row
@@ -534,12 +592,18 @@ def _select_transfers(
                     raw = doc.get("used_at")
                     from_ref = _clean_text(entry)
                     to_ref = _clean_text(doc.get("bond_case_id"))
-                _note_reassign(raw, from_ref, to_ref)
+                _note_reassign(
+                    raw,
+                    from_ref,
+                    to_ref,
+                    string_reassign=not isinstance(entry, dict),
+                )
         elif _meaningful_reassign(history):
             _note_reassign(
                 doc.get("used_at"),
                 _clean_text(history),
                 _clean_text(doc.get("bond_case_id")),
+                string_reassign=True,
             )
         release_sources: list[tuple[Any, Optional[str], str]] = []
         prior_releases = doc.get("release_history")
@@ -692,7 +756,8 @@ def _select_transfers(
         r.get("poa_number") or "",
         r.get("event_type") or "",
     ))
-    return rows, omitted_undated, unattributed
+    history_complete = _finalize_transfer_rows(rows)
+    return rows, omitted_undated, unattributed, history_complete
 
 
 def _select_liability(
@@ -766,9 +831,10 @@ async def assemble_powers_pack(
 
     executions, exec_undated = _select_executions(inventory, bond_docs, surety_id, start_dt, end_dt)
     voids, void_undated = _select_voids(inventory, surety_id, start_dt, end_dt)
-    transfers, xfer_undated, unattributed = _select_transfers(
+    transfers, xfer_undated, unattributed, history_complete = _select_transfers(
         inventory, bond_docs, audits, audit_inventory, surety_id, start_dt, end_dt
     )
+    transfer_banner = None if history_complete else TRANSFER_HISTORY_BANNER
     liability, liab_undated = _select_liability(bond_docs, surety_id, start_dt, end_dt)
 
     if exec_undated:
@@ -796,8 +862,8 @@ async def assemble_powers_pack(
         "start_date": resolved_start,
         "end_date": resolved_end,
         "warnings": warnings,
-        "history_complete": False,
-        "transfer_banner": TRANSFER_HISTORY_BANNER,
+        "history_complete": history_complete,
+        "transfer_banner": transfer_banner,
         "execution_note": EXECUTION_PACK_NOTE,
         "void_note": VOID_PACK_NOTE,
         "liability_note": LIABILITY_PACK_NOTE,
@@ -818,8 +884,8 @@ async def assemble_powers_pack(
             "rows": transfers,
             "omitted_undated": xfer_undated,
             "unattributed_audit_events": unattributed,
-            "banner": TRANSFER_HISTORY_BANNER,
-            "history_complete": False,
+            "banner": transfer_banner,
+            "history_complete": history_complete,
             "truncated": inv_trunc or bond_trunc or audit_trunc or audit_inv_trunc,
         },
         "liability": {
@@ -914,7 +980,7 @@ def _sheet_for(contract: dict, pack: str) -> list[tuple[str, str, list[str], lis
             ])
         add(
             "Transfer",
-            contract["transfer_banner"],
+            contract.get("transfer_banner") or "",
             ["Event date", "Event type", "Power #", "From", "To", "Reason", "Defendant", "Evidence"],
             data,
             "No transfer evidence in this range.",
@@ -951,7 +1017,8 @@ def build_powers_pack_xlsx(contract: dict, *, pack: str) -> bytes:
     sid = contract["surety_id"]
     carrier = contract["carrier"]
     wb = Workbook()
-    # Cover is always first so the partial-history banner ships inside the file.
+    # Cover stays first. The partial-history banner is written only when a
+    # transfer row in range is legacy (string reassigned_from or unstamped release).
     cover = wb.active
     cover.title = sheet_title(sid, "Cover")
     title_font = Font(name="Calibri", size=16, bold=True, color="FFFFFF")
@@ -973,14 +1040,18 @@ def build_powers_pack_xlsx(contract: dict, *, pack: str) -> bytes:
         ("Execution rows", contract["execution"]["count"]),
         ("Void rows", contract["void"]["count"]),
         ("Transfer rows", contract["transfer"]["count"]),
-        ("Transfer history complete", "no"),
+        ("Transfer history complete", "yes" if contract.get("history_complete") else "no"),
         ("Liability rows", contract["liability"]["count"] if pack == "combined" else "see Surety Liability report"),
         ("Amounts", "Stored values only. Blank means the field was not on the record."),
-        ("Transfer log", contract["transfer_banner"]),
+    ]
+    banner = contract.get("transfer_banner")
+    if banner:
+        cover_rows.append(("Transfer log", banner))
+    cover_rows.extend([
         ("Execution", contract["execution_note"]),
         ("Void", contract["void_note"]),
         ("Liability", contract["liability_note"] if pack == "combined" else "Not included on this single pack."),
-    ]
+    ])
     warnings = contract.get("warnings") or []
     if warnings:
         cover_rows.append(("Warnings", " | ".join(warnings)))
@@ -1044,5 +1115,7 @@ def build_powers_pack_xlsx(contract: dict, *, pack: str) -> bytes:
         ws.oddFooter.right.text = contract.get("filename") or ""
 
     buf = io.BytesIO()
+    from core.booking_identity import redact_workbook
+    redact_workbook(wb)  # XLSX never prints a Miami-Dade internal key
     wb.save(buf)
     return buf.getvalue()

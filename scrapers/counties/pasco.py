@@ -8,6 +8,8 @@ import logging
 import datetime
 from typing import List
 from scrapers.base_scraper import BaseScraper
+from scrapers.plain_http import make_session, request
+from scrapers.scraper_resilience import AntiBotBlocked
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
@@ -22,18 +24,17 @@ class PascoCountyScraper(BaseScraper):
         return "Pasco"
 
     def scrape(self) -> List[ArrestRecord]:
-        try:
-            from curl_cffi import requests as cffi_requests
-        except ImportError:
-            import requests as cffi_requests
+        session = make_session({"Accept": "application/json"})
 
         logger.info(f"Pasco: Querying custody roster from {CUSTODY_API}")
         try:
-            # We disable SSL verification because of the government's misconfigured intermediate certificates
-            resp = cffi_requests.get(CUSTODY_API, verify=False, timeout=30)
+            # Certificate verification stays on; a bad chain raises SourceTLSInvalid.
+            resp = request(session, "GET", CUSTODY_API, timeout=30, county="Pasco")
             if resp.status_code != 200:
                 raise Exception(f"Failed to fetch custody roster: {resp.status_code}")
             inmates = resp.json()
+        except AntiBotBlocked:
+            raise
         except Exception as e:
             logger.error(f"Pasco roster fetch error: {e}")
             raise
@@ -92,7 +93,7 @@ class PascoCountyScraper(BaseScraper):
                 charge_url = CHARGE_API.format(name_id=name_id)
                 try:
                     logger.debug(f"Pasco: Fetching charges for {full_name} ({name_id})")
-                    c_resp = cffi_requests.get(charge_url, verify=False, timeout=15)
+                    c_resp = request(session, "GET", charge_url, timeout=15, county="Pasco")
                     if c_resp.status_code == 200:
                         charge_list = c_resp.json()
                         charge_items = []
@@ -110,6 +111,8 @@ class PascoCountyScraper(BaseScraper):
                             total_bond += bond_val
                             
                         charges_str = " | ".join(charge_items)
+                except AntiBotBlocked:
+                    raise
                 except Exception as ce:
                     logger.warning(f"Pasco: Failed to fetch charges for nameId {name_id}: {ce}")
                     

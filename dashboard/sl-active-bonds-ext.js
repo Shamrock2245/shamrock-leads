@@ -150,7 +150,7 @@
         var overdueLabel = overdue ? '<br><span style="color:var(--danger);font-size:10px">⚠️ ' + hoursOver + 'h overdue</span>' : '';
 
         return '<tr class="' + (overdue ? 'row-alert' : '') + '" style="' + (overdue ? 'background:rgba(239,68,68,0.05)' : '') + '">'
-          + '<td><div style="font-weight:600">' + escHtml(b.defendant_name || '—') + alertBadge + '</div><div style="font-size:11px;color:var(--muted)">' + escHtml(b.booking_number || '—') + '</div></td>'
+          + '<td><div style="font-weight:600">' + escHtml(b.defendant_name || '—') + alertBadge + '</div><div style="font-size:11px;color:var(--muted)">' + escHtml((window.slBookingLabel ? window.slBookingLabel(b.booking_number) : b.booking_number) || '—') + '</div></td>'
           + '<td>' + escHtml(b.county || '—') + '</td>'
           + '<td><strong>$' + (b.bond_amount || 0).toLocaleString() + '</strong></td>'
           + '<td>' + insBadge + '</td>'
@@ -198,7 +198,7 @@
       return [b.booking_number || '', b.defendant_name || '', b.county || '', b.bond_amount || 0, b.insurance_company || b.surety || '', indName, indPhone, charges, b.risk_score || 0, b.fta_risk_level || '', b.fta_risk_score || '', cdStr, days !== null ? days : '', b.status || '', b.last_check_in ? new Date(b.last_check_in).toLocaleString() : '', b.case_number || ''].map(function (v) { return '"' + String(v).replace(/"/g, '""') + '"'; }).join(',');
     });
     var csv = [headers.map(function (h) { return '"' + h + '"'; }).join(',')].concat(rows).join('\n');
-    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    var blob = new Blob([(window.slRedactKeys ? window.slRedactKeys(csv) : csv)], { type: 'text/csv;charset=utf-8;' });
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
@@ -265,7 +265,7 @@
       var phone = (((b.indemnitor && b.indemnitor.phone) ? b.indemnitor.phone : '') || b.indemnitor_phone || '').replace(/\D/g, '');
       if (!phone) return;
       if (!phoneMap[phone]) phoneMap[phone] = [];
-      phoneMap[phone].push(b.defendant_name || b.booking_number || '?');
+      phoneMap[phone].push(b.defendant_name || (window.slBookingLabel ? window.slBookingLabel(b.booking_number) : b.booking_number) || '?');
     });
     var dupes = Object.keys(phoneMap).filter(function (p) { return phoneMap[p].length > 1; });
     if (!dupes.length) { toast('✅ No duplicate indemnitor phones found', 'success'); return; }

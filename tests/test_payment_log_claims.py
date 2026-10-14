@@ -732,6 +732,29 @@ def test_review_alert_includes_txn_key_and_resolved_booking(db, slack_alerts, mo
     assert captured["details"]["booking_number"] == BOOKING
 
 
+def test_review_alert_redacts_internal_booking_keys(monkeypatch):
+    """An internal booking key is removed from the staff review Slack text."""
+    key = "md_dedupe_v2:" + ("ab" * 32)
+    captured = {}
+
+    def notify_alert(self, **kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr("writers.slack_notifier.SlackNotifier.notify_alert", notify_alert)
+    _real_notify({
+        "kind": "charge",
+        "amount": 100.0,
+        "booking": key,
+        "plan_id": "none",
+        "txn_key": TXN,
+        "reason": "booking_not_unique",
+    })
+    assert key not in captured["message"]
+    assert captured["details"]["booking_number"] == ""
+    assert captured["details"]["transaction_id"] == TXN
+
+
 def test_blank_booking_webhook_does_not_stamp(db, monkeypatch):
     db["bond_cases"].docs.append(_bond(last_payment_amount=7, last_transaction_id="KEEP"))
     monkeypatch.setenv("ENV", "development")

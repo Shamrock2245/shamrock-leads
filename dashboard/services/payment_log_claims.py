@@ -871,18 +871,23 @@ def _notify_staff_review(hit: dict) -> None:
         f"plan {plan_id}; txn {txn_key}"
     )
     try:
+        from core.booking_identity import redact_internal_keys
         from writers.slack_notifier import SlackNotifier
-        delivered = SlackNotifier().notify_alert(
-            title="Provider payment needs review",
-            message=message,
-            level="warning",
-            details={
+        payload = redact_internal_keys({
+            "message": message,
+            "details": {
                 "event_kind": kind,
                 "amount": amount_text,
                 "booking_number": booking,
                 "plan_id": plan_id,
                 "transaction_id": txn_key,
             },
+        })
+        delivered = SlackNotifier().notify_alert(
+            title="Provider payment needs review",
+            message=payload["message"],
+            level="warning",
+            details=payload["details"],
             source="payment_log",
         )
         if not delivered:

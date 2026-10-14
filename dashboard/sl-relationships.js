@@ -68,7 +68,7 @@ const SLRelationships = {
               return `<tr>
                 <td><strong>${this._esc(b.defendant_name || '—')}</strong></td>
                 <td>${this._esc(ind)}${indPh ? `<div style="font-size:10px;color:var(--muted)">${this._esc(indPh)}</div>` : ''}</td>
-                <td style="font-family:monospace;font-size:11px">${this._esc(b.booking_number || '')}</td>
+                <td style="font-family:monospace;font-size:11px">${this._esc((window.slBookingLabel ? window.slBookingLabel(b.booking_number) : b.booking_number) || '')}</td>
                 <td>${this._esc(b.county || '')}</td>
                 <td>${this._money(b.bond_amount)}</td>
                 <td>${this._esc(b.status || 'active')}</td>
@@ -132,7 +132,7 @@ const SLRelationships = {
           <div>
             <strong>${this._esc(b.defendant_name || '—')}</strong>
             <span style="color:var(--muted)"> · ${this._esc(ind)}</span>
-            <div style="font-size:10px;color:var(--muted)">${this._esc(b.booking_number)} · ${this._esc(b.county || '')} · ${this._esc(b.status || '')} · ${this._money(b.bond_amount)}</div>
+            <div style="font-size:10px;color:var(--muted)">${this._esc((window.slBookingLabel ? window.slBookingLabel(b.booking_number) : b.booking_number))} · ${this._esc(b.county || '')} · ${this._esc(b.status || '')} · ${this._money(b.bond_amount)}</div>
           </div>
           <button class="btn-export" style="font-size:10px;padding:3px 8px" onclick="SLRelationships.openCase('${this._esc(b.booking_number)}')">Open</button>
         </div>`;

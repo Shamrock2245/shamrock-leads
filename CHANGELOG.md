@@ -11,9 +11,100 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **A webhook refund or failure records only its own row.** `event_kind` is `refund` or `failure`. The same lock is taken, then the row, an audit, and `needs_review` on the one matched bond and the one originating plan when each is unambiguous. It does not write `last_payment_*`, a plan balance, or claim state. The audit stores the old and new `needs_review` and `needs_review_reason` for the payment row, that bond, and that plan. One staff Slack alert is sent after the commit. A Slack failure does not roll the payment back.
 - **`POST /api/payments/plans/{plan_id}/pay` takes the same lock and reads the claim, then refund and failure siblings, inside that transaction,** including an idempotent retry of an applied claim. Any sibling returns 409 `payment_needs_review` and does not change the balance.
 - **A later charge event that supplies a booking for a blank charge is not a silent duplicate.** When the ownership rules pass, the row is updated, `needs_review` is cleared, the bond is stamped, and a separate audit records the old and new booking, review state, and `last_payment_*`. When they do not, the event returns 409 `payment_conflict` and the blank row is left unchanged.
+- **Review alerts and the payment-received Slack note pass through `redact_internal_keys`.** An internal booking key is removed from the message and the details. A normal booking is unchanged.
 
 ### Tests
-- `tests/test_payment_log_claims.py` (added to `ci.yml`): charge then refund, refund then charge, `/pay` then refund, refund then `/pay` retry, a forced write-conflict retry on the charge and on `/pay`, a cross-booking charge, a blank booking that does not stamp, refund and failure rows that do not move a balance or stamp, the review-state audit's before and after values, a staff-chain mirror that stamps both bond documents, a needs-review charge alert before the poller marks Gmail read, an applied `/pay` retry that sees a reversal inside the lock, and a later booking that enriches or conflicts. No SwipeSimple, Gmail, or live Slack calls.
+- `tests/test_payment_log_claims.py` (added to `ci.yml`): charge then refund, refund then charge, `/pay` then refund, refund then `/pay` retry, a forced write-conflict retry on the charge and on `/pay`, a cross-booking charge, a blank booking that does not stamp, refund and failure rows that do not move a balance or stamp, the review-state audit's before and after values, a staff-chain mirror that stamps both bond documents, a needs-review charge alert before the poller marks Gmail read, an applied `/pay` retry that sees a reversal inside the lock, a later booking that enriches or conflicts, and a review alert that drops an internal booking key. No SwipeSimple, Gmail, or live Slack calls.
+
+## [Unreleased] — 2026-10-14 (staff TEST identity opt-in)
+
+### Added
+- **`enforce_identity` on Write Bond finalize and the DocuSeal push.** Field name: `enforce_identity`. Endpoints: `POST /api/paperwork/packet/finalize` and `POST /api/paperwork/{packet_id}/docuseal`. A staff-authenticated request, with staff test mode on, for a `TEST-` booking and a `PKT-TEST-` packet, still skips the #165 indemnitor identity gate when the field is false or absent. `enforce_identity: true` turns that skip off. The normal gate then runs, and an unverified indemnitor gets 422 `indemnitor_identity_unverified` before a packet is built, a POA is reserved, or DocuSeal is called. The flag cannot loosen the gate. A real booking, a request that is not staff-authorized, and a request while staff test mode is off ignore it and stay gated. Gate order is unchanged (identity, then binding, then POA and charge capacity). `self_indemnitor` is unchanged.
+- **A staff DocuSeal push of an existing `TEST-` / `PKT-TEST-` packet follows that same skip.** It did not before. The skip applies only while staff test mode is on and the caller is staff-authorized. `enforce_identity: true` turns it off. Any other push is still gated.
+
+### Tests
+- `tests/test_enforce_identity_flag.py` (added to the `ci.yml` list, which names files explicitly). Mocked Mongo and a stubbed DocuSeal. A staff TEST case with `enforce_identity` and no scan or attestation returns 422, with zero `create_submission` calls and zero POA reservations, on both the DocuSeal push and finalize. The same case without the flag still takes the exempt path. A passed scan with the flag proceeds. A real booking with the flag false or absent is still 422. A non-staff request and a test-mode-off request ignore the flag.
+
+## [Unreleased] — 2026-10-14 (Polk / Volusia / Pasco: plain verified HTTPS)
+
+### Changed
+- **Polk, Volusia and Pasco (FL) use plain `requests` with an honest User-Agent and certificate checks on.** The curl_cffi Chrome impersonation, the browser User-Agent and `verify=False` are gone. New `scrapers/plain_http.py` (`make_session`, `request`) always verifies TLS. A bad certificate raises `SourceTLSInvalid` (`tls_cert_invalid: <county> ...`) and a 401 / 403 / 429 or challenge page raises `EgressBlocked` (`egress_block: <county> ...`). Both are `AntiBotBlocked`, so they are never retried and never worked around, and the per-row `except Exception` handlers now re-raise them instead of swallowing them. A plain verified read from the agent box on 2026-10-14 got HTTP 200 from all three (Polk SearchJail JSON, Volusia disclaimer page, Pasco GetInCustody JSON), so no county is moved to fail_closed here. If a block or bad certificate shows up in prod, the run fails with that error class and the county goes to fail_closed in a follow-up PR. States are unchanged (all three `unverified`).
+
+### Tests
+- `tests/test_fl_plain_https_polk_volusia_pasco.py` (added to the `ci.yml` list).
+
+## [Unreleased] — 2026-10-14 (powers pack saved to generated reports)
+
+### Added
+- **`GET /api/reports/powers-pack/{pack}` archives a successful pack on `generated_reports`.** After the pack builds, one row is inserted with `surety_id`, pack, date range, filename, section counts, `history_complete` taken from the built pack, the session actor, `created_at`, and the XLSX blob (`xlsx_b64`, same 12MB cap as the bond report). `GET /api/reports/generated` lists it, and the existing generated-report download returns that blob. The streamed XLSX or JSON body and headers are unchanged, including `Cache-Control: no-store`. A failed build (unknown or inactive surety, a bad pack, or a build error) writes no row. The actor is the session email, or the session agent name when the email is blank. It is not read from the query string or from headers.
+
+### Tests
+- `tests/test_powers_pack_archive.py` (added to `ci.yml`): one successful build inserts one row and the list returns it; the stored blob matches the stream; a second download is byte-identical; a failed build inserts nothing; the actor comes from the session. Mocked Mongo and `TEST-` rows only.
+
+## [Unreleased] — 2026-10-14 (powers pack transfer history banner)
+
+### Changed
+- **The powers-pack partial-history banner follows the rows in range.** Each transfer row has `evidence_complete`. It is true when that row is backed by an `audit_events` action `poa_reassigned`, or by a `poa_inventory.release_history` or `released_at` stamp. The banner is on the pack contract, the transfer section, and the XLSX cover only when at least one row in range is legacy: a string `reassigned_from`, or a release with neither stamp. `history_complete` is true when no row in range is legacy. `X-History-Complete` and `X-Transfer-Partial` on `GET /api/reports/powers-pack/{pack}` follow that flag.
+
+### Tests
+- `tests/test_powers_pack_history_banner.py` (added to the `ci.yml` list). Mocked Mongo only, `TEST-` powers. A range of post-#172 reassigns and releases has no banner and `history_complete` true. One legacy string row brings the banner back and sets `history_complete` false. Per-row `evidence_complete` matches the backing evidence. An audit-only release with no stamp is legacy.
+
+## [Unreleased] — 2026-10-09 (Miami-Dade key never printed in outbound alerts, rendered pages or the browser; stacked on #168)
+
+### Changed
+- **Browser guard covers Manatee Clerk keys (2026-10-14).** `sl-booking-guard.js` now hides, masks and routes `mc_case_vN:<sha256>` keys exactly like `md_dedupe_vN:` keys: text-node and attribute redaction, `slBookingLabel` / `slRedactKeys`, key-only free-standing inputs (shown blank, read as the key, dropped on reset), and masked form-bound fields that still post the real key. A non-key string such as `mc_case_v1:abc` is left alone. Test: `test_booking_guard_hides_manatee_clerk_keys_too` (`tests/js/booking_guard_sim.js` case 10).
+- **Booking guard: no stale routing key after a reset (Codex P1 follow-up, 2026-10-14).** 5309ac9 dropped the cached `data-internal-key` when the app assigned a new value (the Bulk Assign `value = ''` reset). Two reset paths that skip the setter could still read or post the previous defendant's key: the user clearing the field by typing (the `input` listener only dropped the key on a non-empty edit), and `form.reset()`. Any user edit now drops the cached key unless the field holds a key itself, and a capture-phase `reset` listener clears every cached key in the reset form. Test: `test_booking_guard_user_clear_and_form_reset_drop_cached_routing_key` (`tests/js/booking_guard_sim.js` cases 8 and 9).
+- **Outbound alerts and messages never print a Miami-Dade internal key.** They use `redact_internal_keys` from #168.
+  - **Slack and Telegram:** every `json=` payload is redacted. That covers the notifier and `/api/notifications`, the automation digest, DocuSeal completion, the court email scheduler, SwipeSimple receipts, intake fan-out, paperwork chase, the error tracker, the docket monitor, webhooks, the re-arrest detector, data retention, intake, Shannon ID, BB health, the ALPR matcher, the POA inventory alert, iMessage automation and the Telegram service.
+  - **Senders:** Twilio `send_sms`, BlueBubbles `send_imessage` / `send_message_universal` / attachments / private API, and Gmail `send_email` redact where the message is sent.
+  - **Notifications:** dashboard notification title and message, and the geofence alert title.
+  - **Google Sheets:** the Apps Script intake ledger (`appendIntakeLedger`) payload and the `SheetsWriter` row inserts.
+- **`BookingKeyRedactMiddleware`** (`dashboard/booking_key_middleware.py`), with a narrow scope for safety and speed:
+  - It rewrites only single-message `text/html`, `text/csv` and `text/plain` bodies, and recomputes `Content-Length` only when a body changed.
+  - JSON, XML, binary and streaming responses (StreamingResponse, FileResponse, SSE) are untouched.
+  - Bodies over 2 MB pass through unchanged and are logged (size only).
+  - Only the `Content-Disposition` header (the download filename) is rewritten; `Location` and other headers are left alone, so redirects keep working.
+  - A body without the `md_dedupe_v` marker is forwarded as the same bytes object.
+- **`sl-booking-guard.js`** loads first on every dashboard page except the recovery portal: index, mobile, tablet, portal, start_bond_packet and the four platform pages.
+  - It blanks a key in page text, attributes, desktop Notifications, alert/confirm/prompt and clipboard copies.
+  - **Form-bound controls** (a form owner or a `name` attribute) never have `.value` changed. Only their presentation is masked (`[data-sl-masked]`, transparent text; native copy/cut redacted; focusing selects the hidden key so typing replaces it), so a native submit or `FormData` posts the real key. Belt-and-braces: capture-phase `submit` and `formdata` listeners put back a key an app kept in `data-internal-key` when the named field would post blank.
+  - Free-standing text controls (no form, no name) show a key blank, including on programmatic `.value =`. Reading `.value` while blank returns the routing id, and typing clears it. Checkbox, radio, hidden and button values are never touched (Bulk Exonerate keeps working). Codex #171 P1/P2; a node simulation is in `tests/js/booking_guard_sim.js`. Any non-key assignment, including a reset to `''`, drops a cached key, so a cleared field (e.g. the Bulk Assign reset) never reads or posts a previous record's key (Codex #171).
+  - The mobile and tablet bond lists and the start-bond-packet header use the label directly.
+- **Server guard:** `protect_internal_booking_key` (in `core/booking_identity.py`) drops a blank/whitespace/None `booking_number` / `Booking_Number` from any update to a record whose stored booking number is an internal key. It's applied to update-lead-details, the admin-hygiene arrest patch and the paperwork packet bind. update-lead-details already rejects a blank `booking_number` with 400, so a form can never blank a stored Miami-Dade key.
+- **`recovery_portal.html`:** its recovery scope serves no scripts, so it carries an inline `bkl()` label. Selecting a Miami-Dade case keeps the key hidden for the share request.
+- **Tests:** `tests/test_booking_key_outbound_and_middleware.py`, added to the CI list.
+  - Slack, Telegram and Twilio payloads; the middleware's rewrite scope, size cap, JSON/stream/Location pass-through and byte-identical output for non-Miami-Dade bodies and headers.
+  - Byte-identical pass-through of every redact helper on non-Miami-Dade values.
+  - Native form submit on a Miami-Dade record posts the real key (node simulation); a blank booking from a form never overwrites a stored key (server tests); checkbox, radio and hidden behaviour from P1.
+  - Guards on Slack/Telegram `json=`, message entry points, Sheets/notification text, middleware registration, guard-first page loading and recovery portal labels.
+
+## [Unreleased] — 2026-10-14 (Duval: never click the ATIMS robot gate)
+
+### Fixed
+- **Duval (FL) no longer clicks the ATIMS "I'm not a robot" button.** Clicking a CAPTCHA gate is CAPTCHA solving, which is owner-approved only for Broward and Lake. When the gate shows, the run now stops with `AntiBotBlocked("captcha_gate: ...")`, so Health records an anti-bot block instead of an empty run. Found in the 2026-10-14 health snapshot. Runs without the gate are unchanged. Duval stays `unverified`.
+
+### Tests
+- `tests/test_fl_duval_no_robot_click.py` (added to the `ci.yml` list).
+
+## [Unreleased] — 2026-10-10 (Manatee Clerk court-filing scraper; owner exception)
+
+### Added
+- **Manatee Clerk (FL)**: a new, separate scraper (`scrapers/counties/manatee_clerk.py`) for court filings on records.manateeclerk.com (FELONY 10, MISDEMEANOR 35/37; list GET by filing date, detail anti-forgery POST). Owner exception (Brendan, 2026-10-10). Staff see the source as "Manatee Clerk (court filing)". The Manatee (FL) jail scraper is untouched and stays `fail_closed`.
+  - Plain HTTPS, honest UA, 2.5 s pacing, 80 detail POSTs per run, one session per case type, every 120 min. `config/source_guard.py` is checked first; `manateeclerk.com` maps to `Manatee Clerk (FL)`.
+  - A challenge / CAPTCHA / 401 / 403 / 429 stops the run with `EgressBlocked` (classified non-retryable, so never retried). Transient 5xx / timeouts keep the base retry. Structural drift raises `ParseDriftError`.
+  - Multi-defendant cases fail closed: case-wide charges, bond and OBTS can't be attributed to one person, so a case with more than one Defendant (on the list or the detail) is skipped and counted. DOB and sex come only from the detail Defendant whose name matches the list row; no match leaves them blank.
+  - The list walk fails loudly (`ParseDriftError`) when the published count is over the page cap, when a page repeats rows already listed, or when the walk ends short of the count.
+  - No booking number: `Booking_Number` stays blank and never holds the case number. Internal key `mc_case_v1:` + sha256(normalised case number) only: upper-case, every character other than A-Z / 0-9 dropped, so case and space/dash/dot variants share one key. OBTS is not in the key; `obts_number` is a plain field that a later scrape fills when the Clerk adds one (same record, no duplicate) and a later blank never clears. `case_number`, `obts_number`, `filing_date`, `case_status` and `source_label` are their own fields.
+  - Charges verbatim; per-charge offense date, statute, degree, citation and Arrest Summons Served in `charge_details`; `Arrest_Date` from Arrest Summons Served; next court event; agency code.
+  - Bond only from the Bonds table's bond rows; the `N Bond(s)` totals row is ignored, so no bond rows gives `""` (never `"0"`), and a published `$0.00` bond row counts.
+- Manatee Clerk detail cap (Codex P2, revised 2026-10-12 per CoS): the fail-the-run cap is replaced by a durable detail queue. Each run lists every eligible case, sorts them oldest first by filing date, and fetches at most `MAX_DETAILS_PER_RUN` (80) details. Those cases are written whole; the rest stay queued. The queue lives in Mongo `scraper_status.cursors.detail_queue` (the same doc and identity as the resilience state; new `MongoWriter.get_scraper_cursor` / `set_scraper_cursor`). It holds internal case keys, filing dates and counts only. `BaseScraper.run` calls the new `after_records_written` hook, and the cursor advances there only after the system-of-record writer wrote without raising. A crash, a block (challenge / 401 / 403 / 429 still stops at once), or a failed write leaves the queue intact. A half-parsed case (no charges or no usable defendant) is never written and stays queued. Each run logs the backlog count. If the backlog grows on 3 consecutive runs, it alerts once through `notify_scraper_error` (#scraper-errors, counts only). The list window widens back to the oldest queued case, up to `MAX_LOOKBACK_DAYS` (7), and `MAX_LIST_PAGES` rises from 4 to 8. Tests: `test_200_cases_drain_over_3_runs_oldest_first_no_dupes_no_skips`, `test_partial_parse_case_is_not_written_and_stays_queued`, `test_crash_mid_batch_resumes_without_skips`, `test_backlog_growth_alert_fires_on_third_growing_run_not_before`, `test_blocked_run_does_not_advance_the_cursor`, `test_cursor_lives_in_scraper_status_and_holds_no_case_numbers`.
+- Manatee Clerk bond attribution (Codex P1, 2026-10-14): the Bonds table is case-level, so it now becomes a record's `Bond_Amount` / `Bond_Type` only when the detail lists exactly one Defendant and that Defendant matches the list row. With no parsed Defendant or a name mismatch, the bond stays `""` (unknown, never a guess), `extra_data.bond_attribution` reads `ambiguous_left_blank`, and the run logs `bond_unattributed` as a count. Multi-defendant cases are still skipped before any detail fetch (list) or after it (detail Parties). Tests: `test_bond_kept_only_for_the_sole_matching_defendant`, `test_bond_left_blank_when_the_defendant_cannot_be_tied`, `test_co_defendant_case_never_yields_a_bonded_record`.
+- Manatee Clerk queue, no silent drops (CoS, 2026-10-12): the cursor now keeps each queued case's internal key and filing date (`pending`). When a queued case ages out of the list window, the run logs the count and sends one alert to #scraper-errors through `notify_scraper_error` (class `queue_aged_out`, count only: no keys, case numbers or names), on the run whose write succeeds. Queued cases still inside the window that the Clerk no longer lists are logged as a count. `MAX_LOOKBACK_DAYS` goes from 7 to 14: at the observed ~11 rows per case type per 2-day window, 14 days is about 77 rows per type, well under the 400-row (8 x 50) cap, and the walk still fails loudly above it. No live read was needed. Tests: `test_aged_out_queued_cases_alert_with_count_only`, `test_list_window_boundary_is_14_days`.
+- Manatee (FL) jail relay smokes withdrawn: the `relay_read` / `relay_write` requests are removed from `docs/recon/smoke_evidence.json` and the matrix, because the county is `fail_closed` (2026-10-09). The home-county runbook and the Manatee ops note are marked accordingly; `tests/test_home_county_smoke_evidence.py` now asserts no Manatee (FL) smoke row. Charlotte's requests are unchanged.
+- `MongoWriter` internal key on the record (Codex P1): with no source booking number, the written `ArrestRecord.Booking_Number` now carries the stored internal key (Miami-Dade or Manatee Clerk) so RearrestChecker, `lead_subscriptions._record_pointer` and SheetsWriter dedupe get a unique identity. Scraper output stays blank, and a re-write recomputes the key. Display paths blank it: `to_sheet_row`, the Slack `Booking #` fields and the dashboard `new_arrest` / `hot_lead` events go through `public_booking_number`. SheetsWriter skips internal-key records (Mongo only), since a blank sheet column can't dedupe across runs. Tests: `test_writer_keeps_internal_key_on_record_for_downstream_but_displays_blank`, `test_slack_and_dashboard_events_blank_the_internal_key`, plus the updated Miami-Dade `test_key_never_reaches_booking_number_fields`.
+- `core/booking_identity.py`: `MC_KEY_PREFIX` / `MC_INTERNAL_KEY_RE`, scope `("FL", "Manatee Clerk")`, and `INTERNAL_NATURAL_KEY_FIELDS` (each scope reads its own extra field). Every internal-key regex (Python and `sl-core.js`) now also matches `mc_case_v\d+:`, so the key prints blank everywhere the Miami-Dade key does. `MongoWriter` stores `mc_case_key` (not `md_dedupe`) for this scope and promotes `obts_number` / `filing_date` / `case_status` / `source_label`. Every other county's blank-booking guard is unchanged.
+- Health `unverified` (no `SCRAPER_SOURCE_STATES` entry, with a comment); `REGISTERED_COUNTIES`, FL/081 evidence note, a requested write smoke in `smoke_evidence.json`, the regenerated matrix, `COUNTY_REGISTRY.md`, the FL 67-status doc, `STATUS.md` and `docs/recon/FL_MANATEE_CLERK_SCRAPER_2026-10-10.md` (with the 2026-10-10 live read: status, labels and counts only).
+- Tests: `tests/test_manatee_clerk_scraper.py` (synthetic fixtures).
 
 ## [Unreleased] — 2026-10-14 (plan /pay tenant guard and audit id)
 
@@ -52,6 +143,61 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `tests/test_payment_webhook.py` (now in the `ci.yml` list): unset-secret cases for each `ENV`/`ENVIRONMENT` value, precedence, rejection before the body is read, `REQUIRE_DASHBOARD_PIN`, and the HMAC check in every environment. `tests/test_prod_auth_allowlist.py` now uses `ENV=development` for its no-secret payload test.
 - `tests/test_payment_plan_pay_dedupe.py` (added to `ci.yml`): repeat and concurrent same-transaction requests, concurrent different transactions, missing transaction id, bad amounts, legacy rows, index unavailable, failed write, and overpayment.
 - `tests/test_tenant_scope.py`: the known-collection count is now 121 (`payment_plan_payment_claims` is tenant-owned).
+
+## [Unreleased] — 2026-10-09 (Miami-Dade reopen on an internal natural key; owner exception)
+
+### Changed
+- **No row data in any log or alert path (Codex P1 re-check, 2026-10-14).** Miami-Dade now logs the ObjectId only when it is an integer (otherwise `?`), because a malformed row can carry a name or DOB in that slot. ArcGIS failures raise with the exception type and HTTP status only, never the response text or `str(exc)`, and with the cause suppressed. An ArcGIS `error` field reports only an integer code. `BaseScraper.run` logs writer, hybrid-score, rearrest, SSE and Slack failures by exception type only, because pymongo's `BulkWriteError` / `DuplicateKeyError` text embeds the failing documents (names, DOBs, booking and internal keys). `MongoWriter` lead fan-out failures log the type instead of a traceback. Tests: `test_malformed_row_run_leaks_no_dob_booking_or_internal_key_in_logs_or_alerts` (a full `run()` with a malformed row and a writer whose error embeds the documents; captured logs and the real Slack payloads carry no DOB, key or `md_dedupe_v`), and `test_arcgis_failure_messages_never_echo_the_response`.
+- **Miami-Dade (FL) reopened as `unverified`.** It had been `fail_closed` since #166. Owner exception (Brendan, 2026-10-09 9:32 AM ET): the ArcGIS jail layer has no booking, jail or case number, and the owner approved an internal natural key. The county runs on the same 60-minute schedule. `SOURCE_CONTRACT_VALIDATED=True`. The exception is recorded in Health (no `SCRAPER_SOURCE_STATES` entry, with a comment like Pinellas), evidence FL/086 (`recon_only`), the regenerated matrix, `COUNTY_REGISTRY.md`, `STATUS.md` and the FL 67-status doc (now 39 unverified / 18 fail_closed). It is not `verified_public` until a Leads Ops write smoke after the cleanup.
+- **Key:** `md_dedupe_v2:` + sha256 of the normalised defendant, DOB and BookDate.
+  - Charges are not in the key, so an amended charge updates the same record.
+  - Without a DOB, the key falls back to defendant + BookDate + full verbatim charges, and the record is flagged `md_key_fallback`. Logs carry counts only, never names.
+  - Two rows with the same key in one snapshot (same person and DOB, same BookDate, e.g. a same-day re-booking) are merged into one record with the union of their charges, never written as two rows.
+  - `DOB` is now fetched (stored as `dob`, YYYY-MM-DD); address and ZIP are still excluded.
+- **`Booking_Number` stays blank.** The scraper never sets it to the key.
+- **`MongoWriter` narrow path** (`core/booking_identity.py`):
+  - A record with a blank `Booking_Number` is written only when (state, county) is in `INTERNAL_NATURAL_KEY_SCOPES` (only `("FL", "Miami-Dade")`) and `extra.md_dedupe` exactly matches `^md_dedupe_v2:[0-9a-f]{64}$`.
+  - The arrests collection is uniquely indexed on (state, county, booking_number) and the dashboard addresses records by `booking_number`, so the stored doc's `booking_number` carries the key as its record id. The doc also gets `booking_key_internal: true`, `md_dedupe` and `md_key_fallback`.
+  - Staff edits are preserved (`protect_scraped_update`), the charges/bond pair guard is unchanged, and unknown bond stays `""`.
+  - Every other county or state, and any malformed key, is skipped exactly as before.
+  - `BaseScraper.ALLOWS_INTERNAL_NATURAL_KEY` (default False; True only on `MiamiDadeCountyScraper`) applies the same check to the pre-write filter.
+  - The writer's skip log no longer prints a name.
+  - The scraper's parse-failure warning logs only the ObjectId and the error type. The row now carries a DOB, and an exception message may echo a field value.
+- **The key is never printed or hydrated as a booking number:**
+  - `build_adaptive_field_map` blanks it.
+  - DocuSeal `create_submission` scrubs submitter values and fields.
+  - The PDF fills (`_apply_field_values`, OSI/Palmetto builders, packet filename) blank it.
+  - `serialize_doc` adds `booking_key_internal` and `booking_number_display` (blank for the key) while `booking_number` stays the record id.
+  - The dashboard's `slBookingLabel` shows it blank in the lead table, defendant cards, lead detail, arrest search, Record Bond and the paperwork seed (Record Bond keeps it as a hidden link). Script `?v=` cache-bust versions are bumped.
+- **The key is never printed in dashboard displays, documents or exports (CoS rule, 2026-10-09).** The shared rule (`core/booking_identity.py`: `public_booking_number` / `booking_number_display`, `redact_internal_keys`; JS twins `slBookingLabel` / `slRedactKeys` in `sl-core.js`) is used directly at each site:
+  - **Dashboard lists:** tasks, relationships, indemnitors (card 🔖 and toast), active bonds (rows, header, risk title, CSV row, check-in evidence filename) and active-bonds-ext views use `slBookingLabel`.
+  - **JS downloads:** every text `Blob` (reports, active bonds, prospective, inventory, paperwork exports) passes `slRedactKeys` from `sl-core.js`.
+  - **CSV exports:** every `csv.writer` / `csv.DictWriter` in dashboard/core/writers/services is now `redacting_csv_writer` / `redacting_dict_writer` (leads/stats streamers, accounting, surety bordereau, OSINT).
+  - **XLSX:** the official bond report and powers pack call `redact_workbook` before saving.
+  - **PDF/ZIP:** the check-in evidence pack prints and names the file with the public booking number only.
+  - Outbound alerts and messages (Slack, Telegram, SMS, iMessage, email, Sheets, notifications), the response-rewriting middleware and the global JS guard moved to the stacked follow-up PR (#170).
+  - Tests: `tests/test_booking_key_never_printed.py` (helpers, CSV/XLSX, evidence filename) plus grep-style guards that fail on any raw `csv.writer`, unredacted `wb.save`, list view without the label, or JS text download without `slRedactKeys`. Added to the CI list.
+
+### Added
+- `scripts/miami_dade_dedupe_report.py` now groups stored rows by the runtime key function: the stored internal key, else DOB + BookDate, else the fallback on the saved source charges. Cleanup and runtime therefore agree.
+  - Legacy GlobalID rows carry no DOB, so in-window rows without a DOB are counted (`rows_in_runtime_window_without_dob`). The cleanup must set those survivors' key from the source DOB, or the next run stores them again.
+  - `--with-source-dob` reads the public layer for the runtime window (read-only) and counts how many resolve to exactly one runtime key.
+  - It stays read-only and counts-only: no names, DOBs, keys or hashes are printed.
+
+### Tests
+- New `tests/test_fl_miami_dade_natural_key.py` (added to the `ci.yml` list):
+  - two snapshots with regenerated ObjectId/GlobalID add 0 rows
+  - a charge change updates in place
+  - staff bond and charge edits survive
+  - the DOB-missing fallback is flagged and logged as counts only
+  - two people on the same BookDate don't collide
+  - a same-person same-day pair is merged
+  - the key never reaches booking fields (API doc, field map, OSI/Palmetto PDF values, DocuSeal submission)
+  - the blank-booking guard is unchanged for other counties/states and malformed keys, and in the BaseScraper filter
+  - unknown bond stays `""` and a stored positive bond is kept
+  - the report groups by the runtime key and keeps the stored `md_key_fallback` flag for runtime-written rows
+  - parse-failure logs carry no person data
+- Updated `tests/test_fl_miami_dade_no_row_id_key.py` (#166's hash-display test kept and extended to the stored doc), `tests/test_miami_dade_scraper.py`, `tests/test_fl_miami_dade_arcgis_contract.py` and the FL matrix summary in `tests/test_home_county_smoke_evidence.py`, and the Miami-Dade field-list check in `tests/test_fl_bond_charges_hydrate.py` (DOB now fetched; Address/Zip still excluded).
 
 ## [Unreleased] — 2026-10-10 (dashboard auth fails closed without a PIN)
 
@@ -369,10 +515,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - A detail fetch failure or a drifted detail page skips that booking, so nothing blank is written over stored data. The run raises when every detail fetch fails, when no detail page is usable, or when no page in the run has a charge grid. Detail requests are paced (0.4 s) and use plain requests.
   - A row whose roster Offenses cell is blank and whose detail page has no charge grid is skipped, instead of `$set`ting blank charges over stored ones.
 - Tests: `tests/test_fl_hernando_detail_status.py`.
+
 ## [Unreleased] — 2026-10-08 (Pinellas unknown bond)
 
 ### Fixed
 - **Pinellas (FL):** an unread charge-report modal, a modal with no `Bond Assessed`, or any blank or non-numeric charge bond (`NO BOND`, `HOLD`) was written as a $0 bond. Now the booking total is `""` (unknown) unless every charge publishes an amount. Real published `$0.00` values are kept: 33 of 82 cells in the 2026-10-06/07 live check were `$0.00`, so they stay `"0"`, and old Pinellas `"0"` rows still hydrate as a known $0. Live re-check (2026-10-07, 25 bookings): 13 positive, 10 published $0, 2 unknown. A booking whose charge-report modal did not render is now skipped for the run instead of being written roster-only, which would `$set` a blank bond and abbreviated charges over stored values. The run raises if every modal fails or every date search fails. Details in `docs/recon/FL_PINELLAS_BOND_2026-10-08.md`.
+
 ## [Unreleased] — 2026-10-08 (SmartWEB unknown bond stays empty)
 
 ### Fixed
@@ -383,6 +531,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - A run in which no booking has charges raises instead of `$set`ting blank charges over stored rows.
   - These counties publish real `$0.00`, so they are **not** added to `NO_BOND_ROSTER_COUNTIES`.
 - Tests: `tests/test_fl_smartweb_unknown_bond.py`.
+
 ## [Unreleased] — 2026-10-08 (Palmetto application header placement)
 
 ### Changed
@@ -392,18 +541,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 - **Hernando (FL):** the JailSearch results grid publishes no bond, yet every row was written with `Bond_Amount="0"`. Now it is `""` (unknown), and old Hernando `"0"` rows hydrate as unknown (`NO_BOND_ROSTER_COUNTIES`). Rows without a source `HCSO<YY>JBN<NNNNNN>` booking number are skipped instead of being keyed on the name. A response without the results table, or with no keyed rows, raises instead of returning an empty success. The scraper uses plain `requests` (curl_cffi impersonation retired). Live 7-day read: 82/82 rows with source keys, 81 with offenses, 0 bonds (`docs/recon/FL_HERNANDO_BOND_2026-10-08.md`).
+
 ## [Unreleased] — 2026-10-08 (Indian River FL booking search)
 
 ### Fixed
 - **Indian River (FL):** rows were keyed on the `/booking-details/<id>` **portal id**, not the booking number, had no booking date, and wrote bond `0` when none was shown. The scraper now uses the IRCSO site's own booking-date search (form POST with its `_token`, then `?page=N`) for the last 7 days. It reads each booking's detail `Booking Info`: the source `Booking Number` (`YYYY-NNNNNNNN`), a Booking Date that must equal the searched date, Arrest Date, Agency, Case Number, Bond (`$amount`; `No Bond` gives `Bond_Type=NO BOND` with the amount left empty; absent means unknown), Charges cards, and Release Date (→ Released). It uses plain `requests` with TLS verification on; curl_cffi, `verify=False` and the DrissionPage fallback are retired. `_fetch_single_booking` (custody recheck) now returns a record only when the page still shows the same source Booking Number. Legacy portal-id rows are reported as not found, and nothing is deleted. Box read smoke: 59 rows / 59 unique over 7 days, 0 dropped. Health stays `unverified` until a Leads Ops write smoke (`docs/recon/FL_INDIAN_RIVER_BOOKING_SEARCH_2026-10-08.md`). Legacy rows keyed on the portal id now get `None` from the custody recheck. That is recorded as a `source_found: False` note only, and the arrest's status, bond, charges and the record itself are unchanged (pinned by a test). Codex follow-up: a first results page with no result ids is accepted only when it carries the site's "No results found" text, and result links without `inmate-list` cards raise, so a changed or maintenance page is never read as "no bookings". A detail request failure now raises (BaseScraper retry and alert) instead of dropping the booking. Read smoke at 08:35 EDT: 60/60 rows, 15 with a bond, 15 No Bond, 23 released, 50 s. Shape guards (CoS): a booking-details page without the `Booking Info` table or the `Charges` heading raises `IndianRiverContractError`, and the run raises if no record in it has charges or a recognized `Bond` value (`$amount` / `No Bond`; `extra_data.bond_published`). A renamed heading, card class or Bond label can therefore never `$set` blank charges or bond over stored values. Live read at 08:50 EDT: 60 rows, 59 with charges, 30 with a recognized bond.
+
 ## [Unreleased] — 2026-10-08 (Okaloosa FL Inmate Locator API)
 
 ### Fixed
 - **Okaloosa (FL):** rows were saved with no booking date, because the legacy `Default.aspx` grid publishes none and was parsed by walking flattened cells. The scraper now uses the official Inmate Locator's public JSON API with plain `requests`. The roster comes from `/api/Inmates/search`, paged to the source `total` (it raises on a short walk or duplicate keys) and keyed on the source 10-digit `bookingNo`, with `custodyDate` as the booking timestamp. The bond is the sum of the detail `bailAmt` only when every charge publishes one (a published 0 counts). If any charge is blank, which can mean a hold, the total is unknown (`""`). The roster `totalBondAmt` is never used, because it is only the sum of the published charges (on 2026-10-08, 9 of 60 sampled bookings mixed a blank charge with a positive total), so bookings without a detail (outside the window) have an unknown bond. Charges, statute, degree and per-charge bond come from `/api/Inmates/<bookingNo>` for the last 7 days. Only status `1` (in custody) is emitted. Box read smoke: 781 rows / 781 unique, booking date on all, 11 s. Health stays `unverified` until a Leads Ops write smoke (`docs/recon/FL_OKALOOSA_API_2026-10-08.md`). Codex follow-up: only in-custody bookings from the last 7 days that have a fetched detail are emitted, so an older booking is never rewritten with blank charges, case or bond. A detail request failure raises (BaseScraper retry and alert), and a detail naming another booking skips that booking (if every detail does, the run raises). `Bond_Type` joins the distinct published `bailType` values (for example `CASH`). A `bailAmt` of 0 is read as unpublished (the source uses null, 82 of 82 sampled, and the roster's 0 means none). Paced read smoke at 08:33 EDT: 70/70 rows, all with charges, 15 complete bonds, 55 unknown, 24 `CASH`, 11 s. Shape drift in a detail now raises `OkaloosaContractError` instead of blanking every booking's charges: a missing or non-list `charges`, or a charge row that is not an object with `chargeDesc`/`charge`/`bailAmt`/`bailType` (all 71 live rows had those keys). An explicit empty `charges` list is still accepted.
+
 ## [Unreleased] — 2026-10-08 (Orange FL BestJail contract)
 
 ### Fixed
 - **Orange (FL):** the BestJail scraper timed out (it fetched details and charges for all ~2,400 current-year inmates). It also wrote `$0.00` when no bond was published and stored the age (`BIRTH`) as the DOB. It now uses plain `requests` (curl_cffi impersonation retired) on the county's public JSON endpoints: a 26-letter roster (any failed letter raises), deduped on the source 8-digit `bookingNumber` (the roster repeats a booking once per alias). It walks the newest bookings first and stops after the 7-day window. The booking's total bond is the sum of `BondAmount` only when every charge publishes an amount (a published `0.00` counts). If any charge cell is blank or unparsed, which can mean a hold, the total is empty, never a partial sum. Per-charge known amounts stay in `charge_details`. Charges come with per-charge `charge_details`, and the age goes to `Age_At_Arrest`. Box read smoke: 303 rows / 303 unique in 37 s. Codex follow-up: a successful `getCharges` response with a changed shape (not a list, or a row without `Charge`/`BondAmount`) now raises `OrangeContractError` instead of blanking known charges and bonds. A failed per-booking `getCharges` fetch skips that booking for the run, so its stored charges and bond are never overwritten with blanks (the writer `$set`s every field). The run raises only if every charges fetch fails. Roster calls are paced 0.5 s apart and detail/charges calls 0.25 s apart (paced read smoke: 302/302 rows in 189 s). Health stays `unverified` until a Leads Ops write smoke (`docs/recon/FL_ORANGE_BESTJAIL_2026-10-08.md`).
+
 ## [Unreleased] — 2026-10-08 (Palmetto agent license boxes)
 
 ### Added
@@ -566,6 +719,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 - **Charlotte (FL):** moved onto the shared Revize roster contract (`scrapers/revize_roster.py`, same as Manatee #113). Columns are mapped by header (Booking # / Last / First / Middle / Charge / Arrest Date / Released); the source `Booking #` is checked against the row's `/bookings/<id>` link; a row with a blank or unrecognised booking number (or too few cells) and a booking that names two people both fail closed. Every charge row for a booking is kept (`Charges` joined with ` | `, plus `extra_data.charge_details`). `Bond_Amount`/`Bond_Type` are `""` (the roster publishes no bond), no longer `"0"`. `Released` is required and an unrecognised value fails closed. Paging fails closed on a missing table or column, an empty first page, an empty or repeated page, hitting `MAX_PAGES` with a next page still offered, or a walked count that differs from a published total. A Cloudflare challenge/block, or no verified US residential exit, raises `EgressBlocked` and writes nothing (`CHARLOTTE_EGRESS_MODE=direct` for Leads Ops residential runs; default `auto` keeps the existing resolver). Live check from the box: `/`, `/bookings` and `?page=2` → 403 CF challenge (`docs/recon/FL_CHARLOTTE_REVIZE_2026-10-07.md`). Health stays `unverified`.
 - **Hydrate:** legacy Charlotte/Manatee docs that carry a scraped `"0"` for a bond the roster never published now hydrate as unknown (blank), not `$0`. A staff `bond_override` / `MANUAL_CHARGE_BONDS` flag left behind a rescrape that rewrote `bond_amount` to `0.0` also stays unknown; a staff-set positive amount still wins.
+
 ## [Unreleased] — 2026-10-07 (Sarasota / Manatee FL audit)
 
 ### Fixed
@@ -1371,6 +1525,7 @@ leaving those real-time flows dark even after the 2.16.0 named-dispatch fix:
 ### Changed — Documentation
 - **Registry**: Updated `GEORGIA_COUNTY_REGISTRY.md` to mark 10 new counties as Active.
 - **Core Docs**: Updated `README.md`, `ROADMAP.md`, `STATUS.md`, `AGENTS.md`, `DATA_MODEL.md`, and `GEMINI.md` to reflect the new scale: 100 total scrapers (52 FL, 48 GA).
+
 ## [2.7.0] — 2026-07-08 (Super CRM hub + security hygiene + docs truth)
 
 ### Added

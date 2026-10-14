@@ -736,6 +736,8 @@ def build_official_bond_report(
     ws_sum.column_dimensions["B"].width = 42
 
     buf = io.BytesIO()
+    from core.booking_identity import redact_workbook
+    redact_workbook(wb)  # XLSX never prints a Miami-Dade internal key
     wb.save(buf)
     return buf.getvalue()
 
