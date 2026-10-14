@@ -154,8 +154,8 @@ def test_building_a_pack_inserts_one_row(mock_get_db, reports_app, session_secre
     )
     assert resp.status_code == 200
     assert resp.headers["cache-control"] == "no-store"
-    assert resp.headers["x-history-complete"] == "false"
-    assert resp.headers["x-transfer-partial"] == "true"
+    assert resp.headers["x-history-complete"] == "true"
+    assert resp.headers["x-transfer-partial"] == "false"
     assert resp.headers["x-execution-count"] == "1"
     assert resp.headers["x-void-count"] == "0"
     assert resp.headers["x-transfer-count"] == "0"
@@ -178,7 +178,7 @@ def test_building_a_pack_inserts_one_row(mock_get_db, reports_app, session_secre
         "transfer": 0,
         "liability": 0,
     }
-    assert row["history_complete"] is False
+    assert row["history_complete"] is True
     assert row["actor"] == _SESSION_EMAIL
     assert row["actor"] != _OTHER_ACTOR
     assert row["created_at"] is not None
@@ -191,15 +191,18 @@ def test_building_a_pack_inserts_one_row(mock_get_db, reports_app, session_secre
 def test_history_complete_is_read_from_the_pack(mock_get_db, reports_app, session_secret):
     from dashboard.services.powers_pack import assemble_powers_pack as real_assemble
 
-    async def _complete(*args, **kwargs):
+    async def _force_incomplete(*args, **kwargs):
         contract = await real_assemble(*args, **kwargs)
-        contract["history_complete"] = True
+        # This fixture has no legacy transfer row, so the pack computes true.
+        # Overwrite the built value to prove the archive copies the field.
+        assert contract["history_complete"] is True
+        contract["history_complete"] = False
         return contract
 
     db = _db()
     mock_get_db.return_value = db
     client = TestClient(reports_app)
-    with patch("dashboard.services.powers_pack.assemble_powers_pack", _complete):
+    with patch("dashboard.services.powers_pack.assemble_powers_pack", _force_incomplete):
         resp = client.get(
             "/api/reports/powers-pack/transfer",
             params=_params(surety="osi"),
@@ -207,9 +210,10 @@ def test_history_complete_is_read_from_the_pack(mock_get_db, reports_app, sessio
         )
     assert resp.status_code == 200
     assert resp.headers["x-history-complete"] == "false"
+    assert resp.headers["x-transfer-partial"] == "true"
     assert resp.headers["cache-control"] == "no-store"
     row = db["generated_reports"].docs[0]
-    assert row["history_complete"] is True
+    assert row["history_complete"] is False
     assert row["pack"] == "transfer"
     assert row["surety_id"] == "osi"
 
@@ -287,7 +291,7 @@ def test_list_generated_reports_returns_the_pack(mock_get_db, reports_app, sessi
     assert report["start_date"] == "2026-09-01"
     assert report["end_date"] == "2026-09-30"
     assert report["counts"]["execution"] == 1
-    assert report["history_complete"] is False
+    assert report["history_complete"] is True
     assert report["actor"] == _SESSION_EMAIL
     assert report["has_file"] is True
     assert report["id"]

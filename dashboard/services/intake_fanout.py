@@ -35,6 +35,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
+from core.booking_identity import redact_internal_keys
 
 logger = logging.getLogger(__name__)
 
@@ -230,7 +231,7 @@ async def _send_sheets(row: Dict[str, Any]) -> tuple[bool, str, bool]:
 
     body = {"action": "appendIntakeLedger", "apiKey": key, "row": row}
     async with httpx.AsyncClient(follow_redirects=True, timeout=20.0) as client:
-        resp = await client.post(url, json=body)
+        resp = await client.post(url, json=redact_internal_keys(body))
     try:
         data = resp.json()
     except Exception:

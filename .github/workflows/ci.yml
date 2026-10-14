@@ -107,6 +107,8 @@ jobs:
             tests/test_fl_miami_dade_no_row_id_key.py \
             tests/test_fl_miami_dade_natural_key.py \
             tests/test_booking_key_never_printed.py \
+            tests/test_booking_key_outbound_and_middleware.py \
+            tests/test_manatee_clerk_scraper.py \
             tests/test_fl_sarasota_manatee_audit.py \
             tests/test_fl_charlotte_revize.py \
             tests/test_collier_glades_published_bond.py \
@@ -143,6 +145,7 @@ jobs:
             tests/test_newberry_pdf_scraper.py \
             tests/test_powers_pack.py \
             tests/test_powers_pack_archive.py \
+            tests/test_powers_pack_history_banner.py \
             tests/test_poa_reassign_release_audit.py \
             tests/test_lee_rate_limit.py \
             tests/test_swipesimple_invoice_service.py \

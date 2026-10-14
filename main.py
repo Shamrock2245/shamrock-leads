@@ -36,6 +36,7 @@ from scrapers.counties.charlotte import CharlotteCountyScraper
 from scrapers.counties.hendry import HendryCountyScraper
 from scrapers.counties.desoto import DeSotoCountyScraper
 from scrapers.counties.manatee import ManateeCountyScraper
+from scrapers.counties.manatee_clerk import ManateeClerkScraper
 from scrapers.counties.sarasota import SarasotaCountyScraper
 
 # ── Wave 1 — Tampa Bay / Central FL ─────────────────────────────────────────
@@ -476,6 +477,10 @@ def register_scrapers(sched):
     # interval job. Leads Ops runs them from the home relay.
     sched.register_scraper(CharlotteCountyScraper())
     sched.register_scraper(ManateeCountyScraper())
+    # Manatee Clerk (FL): court filings from records.manateeclerk.com, plain
+    # HTTPS. Owner exception (Brendan 2026-10-10); separate from the
+    # fail_closed Manatee jail scraper above. No booking number (internal key).
+    sched.register_scraper(ManateeClerkScraper(), interval_minutes=120)
     sched.register_scraper(DeSotoCountyScraper(), interval_minutes=180)
     sched.register_scraper(HendryCountyScraper(), interval_minutes=120)
 

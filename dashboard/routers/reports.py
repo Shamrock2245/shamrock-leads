@@ -1310,6 +1310,8 @@ async def powers_pack_download(
 
     Unknown, missing, or inactive surety fails closed (same posture as
     ``require_surety``). Transfer rows come only from stored POA evidence.
+    ``X-History-Complete`` and ``X-Transfer-Partial`` follow the pack:
+    the partial-history banner is on only when a row in range is legacy.
     """
     from dashboard.services.powers_pack import (
         PACK_KINDS,
@@ -1380,8 +1382,8 @@ async def powers_pack_download(
                 "X-Execution-Count": str(contract["execution"]["count"]),
                 "X-Void-Count": str(contract["void"]["count"]),
                 "X-Transfer-Count": str(contract["transfer"]["count"]),
-                "X-Transfer-Partial": "true",
-                "X-History-Complete": "false",
+                "X-Transfer-Partial": "false" if contract.get("history_complete") else "true",
+                "X-History-Complete": "true" if contract.get("history_complete") else "false",
             },
         )
     except Exception as exc:
