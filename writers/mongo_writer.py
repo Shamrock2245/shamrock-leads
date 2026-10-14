@@ -478,8 +478,9 @@ class MongoWriter:
                 from dashboard.services.lead_subscriptions import record_lead_fanout
 
                 record_lead_fanout(self.db, [records[i] for i in new_record_indexes])
-            except Exception:
-                logger.exception("lead fan-out skipped")
+            except Exception as fanout_err:
+                # Type only: a traceback/driver message can embed the pointers.
+                logger.warning("lead fan-out skipped (%s)", type(fanout_err).__name__)
         return stats
 
     def get_arrests_by_county(

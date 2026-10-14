@@ -144,6 +144,12 @@ class MiamiDadeContractError(RuntimeError):
     """The ArcGIS jail-bookings layer no longer matches the verified contract."""
 
 
+
+def _safe_oid(value: Any) -> str:
+    """ObjectId for logs: an integer only. A malformed row may carry any text
+    (a name, a DOB) in this slot, so anything else prints as "?"."""
+    return str(value) if isinstance(value, int) and not isinstance(value, bool) else "?"
+
 class MiamiDadeCountyScraper(BaseScraper):
     """Miami-Dade County (FL) arrest scraper — ArcGIS Open Data API.
 
@@ -216,7 +222,7 @@ class MiamiDadeCountyScraper(BaseScraper):
                     raise MiamiDadeContractError("Miami-Dade: feature attribute drift")
                 oid = attrs.get("ObjectId")
                 if oid in seen:
-                    raise MiamiDadeContractError(f"Miami-Dade: ObjectId {oid} repeated across pages")
+                    raise MiamiDadeContractError(f"Miami-Dade: ObjectId {_safe_oid(oid)} repeated across pages")
                 seen.add(oid)
                 fetched += 1
                 record = self._parse_record(attrs)
@@ -255,11 +261,17 @@ class MiamiDadeCountyScraper(BaseScraper):
             resp.raise_for_status()
             data = resp.json()
         except (requests.RequestException, ValueError) as exc:
-            raise MiamiDadeContractError(f"Miami-Dade: ArcGIS query failed: {exc}") from exc
+            # Exception type and HTTP status only: never echo a response body.
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            raise MiamiDadeContractError(
+                f"Miami-Dade: ArcGIS query failed: {type(exc).__name__}" + (f" (HTTP {status})" if status else "")
+            ) from None
         if not isinstance(data, dict):
             raise MiamiDadeContractError("Miami-Dade: ArcGIS response is not a JSON object")
         if "error" in data:
-            raise MiamiDadeContractError(f"Miami-Dade: ArcGIS error {data['error'].get('code') if isinstance(data['error'], dict) else data['error']}")
+            err = data["error"]
+            code = err.get("code") if isinstance(err, dict) else None
+            raise MiamiDadeContractError(f"Miami-Dade: ArcGIS error {code if isinstance(code, int) else 'unknown'}")
         return data
 
     def _count(self, session: requests.Session, where_clause: str) -> int:
@@ -332,7 +344,7 @@ class MiamiDadeCountyScraper(BaseScraper):
         except Exception as e:
             # Row id and error type only: the row carries name and DOB, and an
             # exception message may echo a field value.
-            logger.warning("[%s] Error parsing record ObjectId=%s: %s", self.county, attrs.get("ObjectId"), type(e).__name__)
+            logger.warning("[%s] Error parsing record ObjectId=%s: %s", self.county, _safe_oid(attrs.get("ObjectId")), type(e).__name__)
             return None
 
     @staticmethod
