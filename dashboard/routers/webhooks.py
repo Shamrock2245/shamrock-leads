@@ -315,18 +315,52 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
     plan_handled = bool(isinstance(routed, dict) and routed.get("handled"))
 
     # -- 3. Parse booking number -----------------------------------------------
-    custom_fields = data.get("custom_fields", {})
+    custom_fields = data.get("custom_fields", {}) or {}
+    if not isinstance(custom_fields, dict):
+        custom_fields = {}
     booking_number = (
         custom_fields.get("booking_number")
         or booking_number
     )
+    status = data.get("status", "")
+    transaction_id = data.get("transaction_id", "")
+
+    # Down-payment receipts (reference = booking #, not an installment) post
+    # through the #159 reconcile BEFORE the legacy last_payment stamp.
+    # That stamp sets last_payment_status to approved, which _is_paid treats
+    # as already paid and would skip the premium_paid flip. A missing staged
+    # invoice is logged and does not fail the webhook.
+    if (
+        not plan_handled
+        and str(status or "").strip().lower() in {"approved", "paid", "completed", "complete"}
+    ):
+        reference = str(
+            custom_fields.get("reference_id") or data.get("reference_id") or ""
+        ).strip()
+        if reference and "-I" not in reference and reference == str(booking_number or "").strip():
+            try:
+                from dashboard.services.swipesimple_invoice_service import reconcile_payment
+
+                await reconcile_payment(
+                    booking_number=reference,
+                    receipt={
+                        "reference_id": reference,
+                        "status": status,
+                        "transaction_id": transaction_id,
+                        "amount": data.get("amount"),
+                    },
+                )
+                from dashboard.services.cosigner_link_service import note_cosigner_paid
+
+                await note_cosigner_paid(reference, str(transaction_id or ""))
+            except Exception as exc:
+                code = getattr(exc, "code", None) or type(exc).__name__
+                logger.info("[payment_webhook] reconcile skipped code=%s", str(code)[:80])
 
     # -- 3. Update bond case ---------------------------------------------------
     amount = data.get("amount", 0)
     if isinstance(amount, Decimal):
         amount = float(amount)
-    status = data.get("status", "")
-    transaction_id = data.get("transaction_id", "")
     card_last4 = data.get("card_last4", "")
     card_brand = data.get("card_brand", "")
     customer_name = data.get("customer_name", "")
@@ -354,21 +388,24 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
 
     # -- 4. Log to payments collection ----------------------------------------
     # A handled plan payment already inserted or linked its own row.
+    # The same transaction id is written once.
     if not plan_handled:
         payments = get_collection("payments")
-        await payments.insert_one({
-            "transaction_id": transaction_id,
-            "booking_number": booking_number,
-            "amount": amount,
-            "status": status,
-            "card_last4": card_last4,
-            "card_brand": card_brand,
-            "customer_name": customer_name,
-            "indemnitor_phone": indemnitor_phone,
-            "custom_fields": custom_fields,
-            "raw_payload": data,
-            "created_at": now.isoformat(),
-        })
+        already = await payments.find_one({"transaction_id": transaction_id})
+        if not already:
+            await payments.insert_one({
+                "transaction_id": transaction_id,
+                "booking_number": booking_number,
+                "amount": amount,
+                "status": status,
+                "card_last4": card_last4,
+                "card_brand": card_brand,
+                "customer_name": customer_name,
+                "indemnitor_phone": indemnitor_phone,
+                "custom_fields": custom_fields,
+                "raw_payload": data,
+                "created_at": now.isoformat(),
+            })
 
     # -- 5. Send BlueBubbles receipt ------------------------------------------
     if indemnitor_phone and status == "approved":
