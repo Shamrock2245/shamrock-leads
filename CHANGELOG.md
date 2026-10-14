@@ -8,6 +8,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 - **Collier (FL) uses plain `requests` with an honest User-Agent and TLS verified** (`scrapers/plain_http.py`, same helper as the Polk/Volusia/Pasco PR). The curl_cffi `impersonate="chrome120"` calls and the Chrome User-Agent are gone. A bad certificate (`tls_cert_invalid:`) or a 401/403/429 (`egress_block:`) is raised at once and never retried; 429 is no longer retried. The UpdatePanel `pageRedirect` -> `errorpage.aspx` answer now raises `EgressBlocked` instead of parsing as an empty roster.
 - **Collier no longer hard-codes `Status="In Custody"`.** The arrest report publishes no custody field, so `Status` is `""` (unknown).
+- **A blocked Collier refetch stops the First Appearance watcher for that booking.** `_fetch_single_booking` re-raises `AntiBotBlocked`, and the watcher returns no record instead of falling through to its generic browser-UA refetch, so a block is never worked around.
 - **`MongoWriter` never `$set`s a blank `status`.** A blank status means not published, so a stored status (e.g. "Released" from a recheck) is kept. A published status still updates.
 - **Collier stays `unverified`** (CoS 2026-10-14). Two plain reads from the agent box (8:22 / 8:23 AM ET) got the page, but the grid postback redirected to `errorpage.aspx`. Until a plain read works (next: Leads Ops relay), each run fails visibly with `egress_block` rather than being switched off. See `docs/recon/FL_COLLIER_PLAIN_HTTPS_2026-10-14.md`. No stored data touched.
 

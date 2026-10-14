@@ -500,6 +500,8 @@ class CollierCountyScraper(BaseScraper):
                 f"Collier _fetch_single_booking: booking {booking_id} not found in current roster"
             )
             return None
+        except AntiBotBlocked:
+            raise  # the watcher stops; it must not retry through a generic fetch
         except Exception as e:
-            logger.warning(f"Collier _fetch_single_booking error ({booking_id}): {e}")
+            logger.warning(f"Collier _fetch_single_booking error ({booking_id}): {type(e).__name__}")
             return None

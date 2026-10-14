@@ -136,3 +136,27 @@ def test_writer_published_status_still_updates():
     rec = ArrestRecord(Booking_Number="C3", County="Lee", State="FL", Full_Name="SYN, THREE", Status="Released")
     _writer(arrests).write_records([rec], "Lee")
     assert arrests.one("C3")["status"] == "Released"
+
+
+def test_single_booking_block_raises(fake_http):
+    fake_http(lambda m, u, kw: _resp(200, GET_HTML) if m == "GET" else _resp(200, ERROR_DELTA, "text/plain"))
+    with pytest.raises(EgressBlocked):
+        CollierCountyScraper()._fetch_single_booking("202600000123", "https://www2.colliersheriff.org/arrestsearch/Report.aspx")
+
+
+def test_watcher_never_falls_back_to_generic_fetch_after_a_block(monkeypatch):
+    from core.first_appearance_watcher import FirstAppearanceWatcher
+
+    class _Blocked:
+        def _fetch_single_booking(self, *_a):
+            raise EgressBlocked("egress_block: Collier synthetic")
+
+    w = FirstAppearanceWatcher.__new__(FirstAppearanceWatcher)
+    w._scrapers = {"Collier": _Blocked()}
+    monkeypatch.setattr(w, "_source_blocked", lambda *a, **k: False, raising=False)
+    generic = []
+    monkeypatch.setattr(w, "_generic_refetch", lambda *a, **k: generic.append(1), raising=False)
+    doc = {"county": "Collier", "booking_number": "B1",
+           "detail_url": "https://www2.colliersheriff.org/arrestsearch/Report.aspx"}
+    assert w._refetch_record(doc) is None
+    assert generic == []
