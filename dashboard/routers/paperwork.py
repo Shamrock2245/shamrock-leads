@@ -1147,6 +1147,75 @@ async def _finalize_auto_payment_link(packet_id: str, packet_doc: dict) -> dict:
     )
 
 
+def _attestation_actor(request: Request) -> tuple[dict, str] | None:
+    """Session user for an in-person ID attestation. Never the request body.
+
+    Staff, admin, and god_admin may attest. A sub-agent may attest because
+    Write Bond / paperwork is already open to that role. Recovery may not.
+    """
+    from dashboard.auth.pin_middleware import get_session_from_request
+    from dashboard.auth.recovery_scope import STAFF_ROLES
+
+    sess = get_session_from_request(request)
+    if not sess or not sess.get("auth"):
+        return None
+    role = str(sess.get("role") or "")
+    if role == "recovery" or role not in (set(STAFF_ROLES) | {"sub_agent"}):
+        return None
+    actor = str(sess.get("email") or sess.get("agent_name") or "").strip()
+    if not actor:
+        return None
+    return sess, actor
+
+
+@paperwork_bp.post("/paperwork/attest-id")
+async def attest_indemnitor_id(request: Request):
+    """Record a staff in-person ID check. Last 4 only. Session user only."""
+    from dashboard.auth.pin_middleware import get_session_from_request
+    from dashboard.services.identity_verification_service import (
+        ATTESTATION_INVALID,
+        ATTESTATION_NUMBER_REJECTED,
+        record_staff_id_attestation,
+    )
+
+    sess = get_session_from_request(request)
+    if not sess or not sess.get("auth"):
+        return JSONResponse({"success": False, "error": "auth_required"}, status_code=401)
+    allowed = _attestation_actor(request)
+    if allowed is None:
+        return JSONResponse({"success": False, "error": "staff_required"}, status_code=403)
+    _sess, actor = allowed
+    try:
+        body = (await request.json()) or {}
+    except Exception:
+        return JSONResponse({"success": False, "error": ATTESTATION_INVALID}, status_code=422)
+    if not isinstance(body, dict):
+        return JSONResponse({"success": False, "error": ATTESTATION_INVALID}, status_code=422)
+    try:
+        result = await record_staff_id_attestation(actor, body)
+    except Exception as exc:
+        logger.warning("staff id attestation failed closed error_type=%s", type(exc).__name__)
+        return JSONResponse({"success": False, "error": "attestation_write_failed"}, status_code=422)
+    if not result.get("ok"):
+        code = str(result.get("error") or ATTESTATION_INVALID)
+        status = 422
+        if code == ATTESTATION_NUMBER_REJECTED:
+            status = 422
+        return JSONResponse(
+            {
+                "success": False,
+                "error": code,
+                "message": (
+                    "A full ID number was rejected. Send the last 4 only."
+                    if code == ATTESTATION_NUMBER_REJECTED
+                    else "ID attestation is missing a required field."
+                ),
+            },
+            status_code=status,
+        )
+    return JSONResponse({"success": True, "attested": True, "action": result.get("action")})
+
+
 @paperwork_bp.post("/paperwork/packet/finalize")
 async def packet_builder_finalize(request: Request):
     """
@@ -1560,6 +1629,31 @@ async def packet_builder_finalize(request: Request):
             )
             if staff_test is not None:
                 apply_staff_test_contacts(bond_data, staff_test.signer_email)
+            from dashboard.services.identity_verification_service import (
+                IndemnitorIdentityError,
+                require_verified_indemnitors,
+            )
+
+            # Identity gate first. Binding is next and is unchanged.
+            try:
+                await require_verified_indemnitors(
+                    bond_data=bond_data,
+                    indemnitors=bond_data.get("indemnitors"),
+                    bond_case_id=str(bond_data.get("bond_case_id") or ""),
+                    booking_number=str(bond_data.get("booking_number") or ctx.get("booking_number") or ""),
+                    packet_id=str(packet_id or ""),
+                    staff_test_case=staff_test is not None,
+                )
+            except IndemnitorIdentityError as exc:
+                return JSONResponse(
+                    {
+                        "success": False,
+                        "error": exc.code,
+                        "message": str(exc),
+                        "issues": exc.issues,
+                    },
+                    status_code=422,
+                )
             try:
                 validate_docuseal_packet_binding(
                     packet_id=packet_id,
@@ -3187,6 +3281,8 @@ async def shannon_email_indemnitor_paperwork(request: Request):
     ds = get_docuseal_service()
     from dashboard.services.charge_verbatim import ChargeCapacityError
     try:
+        from dashboard.services.identity_verification_service import IndemnitorIdentityError
+
         submission = await ds.create_submission_for_packet(
             template_id=template_id,
             packet_id=packet_id,
@@ -3196,6 +3292,11 @@ async def shannon_email_indemnitor_paperwork(request: Request):
             send_email=False,
             include_defendant=True,
             skip_bond_binding=True,
+        )
+    except IndemnitorIdentityError as exc:
+        return JSONResponse(
+            {"success": False, "error": exc.code, "message": str(exc), "issues": exc.issues},
+            status_code=422,
         )
     except DocuSealPacketValidationError as exc:
         return JSONResponse({"success": False, "error": str(exc)}, status_code=422)
@@ -3393,6 +3494,8 @@ async def paperwork_push_docuseal(packet_id: str, request: Request):
 
     from dashboard.services.charge_verbatim import ChargeCapacityError
     try:
+        from dashboard.services.identity_verification_service import IndemnitorIdentityError
+
         result = await svc.create_submission_for_packet(
             template_id=template_id,
             packet_id=packet_id,
@@ -3402,6 +3505,11 @@ async def paperwork_push_docuseal(packet_id: str, request: Request):
             send_email=bool(body.get("send_email", False)),
             include_defendant=bool(body.get("include_defendant", True)),
             completed_redirect_url=body.get("completed_redirect_url"),
+        )
+    except IndemnitorIdentityError as exc:
+        return JSONResponse(
+            {"success": False, "error": exc.code, "message": str(exc), "issues": exc.issues},
+            status_code=422,
         )
     except ChargeCapacityError as exc:
         from dashboard.services.charge_verbatim import capacity_error_body

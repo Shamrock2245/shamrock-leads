@@ -1794,6 +1794,20 @@ class DocuSealService:
         bond_data = dict(bond_data or {})
         if template_id is None or str(template_id).strip() in ("", "0", "null", "none"):
             raise DocuSealPacketValidationError("DocuSeal packet blocked: a valid template_id is required.")
+        # Identity gate first, before binding, the field payload, the HTTP
+        # client, and any status change. Synthetic TEST- packets skip it.
+        # validate_docuseal_packet_binding is unchanged and runs next.
+        from dashboard.services.identity_verification_service import require_verified_indemnitors
+
+        if not skip_bond_binding:
+            await require_verified_indemnitors(
+                bond_data=bond_data,
+                indemnitors=indemnitors,
+                bond_case_id=str(bond_data.get("bond_case_id") or ""),
+                booking_number=str(bond_data.get("booking_number") or ""),
+                packet_id=str(packet_id or ""),
+                staff_test_case=bool(staff_test_case),
+            )
         if skip_bond_binding:
             validate_shannon_voice_packet(
                 packet_id=packet_id,
@@ -1808,6 +1822,15 @@ class DocuSealService:
                 indemnitors=indemnitors,
                 defendant=defendant,
                 include_defendant=include_defendant,
+            )
+        if skip_bond_binding:
+            await require_verified_indemnitors(
+                bond_data=bond_data,
+                indemnitors=indemnitors,
+                bond_case_id=str(bond_data.get("bond_case_id") or ""),
+                booking_number=str(bond_data.get("booking_number") or ""),
+                packet_id=str(packet_id or ""),
+                staff_test_case=bool(staff_test_case),
             )
         bond_data = dict(bond_data or {})
         agent_name, agent_license = resolve_writing_agent(bond_data)
@@ -2595,6 +2618,11 @@ def build_bond_data_from_dashboard(
         "payment_due_date_4": body.get("payment_due_date_4") or ctx.get("payment_due_date_4"),
         "payment_amount_4": body.get("payment_amount_4") or ctx.get("payment_amount_4"),
     }
+    # The packet-context flag from apply_self_indemnitor. Not inferred.
+    from dashboard.services.identity_verification_service import explicit_self_indemnitor
+
+    if explicit_self_indemnitor(ctx) or explicit_self_indemnitor(intake_doc):
+        bond_data["self_indemnitor"] = True
 
     # Multi-indemnitor list for Co-Indemnitor role
     inds = ctx.get("indemnitors") or intake_doc.get("indemnitors")
