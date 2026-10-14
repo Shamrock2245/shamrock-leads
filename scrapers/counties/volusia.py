@@ -11,6 +11,7 @@ from typing import List
 from bs4 import BeautifulSoup
 
 from scrapers.base_scraper import BaseScraper
+from scrapers.published_bond import charge_bond_amount, total_published_bond
 from scrapers.plain_http import make_session, request
 from scrapers.scraper_resilience import AntiBotBlocked
 from core.models import ArrestRecord
@@ -159,7 +160,7 @@ class VolusiaCountyScraper(BaseScraper):
                 city = ""
                 state = "FL"
                 charges_list = []
-                total_bond = 0.0
+                charge_bonds = []  # published amounts per charge; None = unknown
                 bond_types = []
                 case_number = ""
                 mugshot_url = f"https://volusiamug.vcgov.org/FullsizeMugshotHandler.ashx?InmateRID={inmate_rid}"
@@ -222,15 +223,14 @@ class VolusiaCountyScraper(BaseScraper):
                                         bond_types.append(c_bond_type)
                                         
                                     # Parse bond amount
-                                    bond_val = self._parse_bond_val(c_bond_amount)
-                                    total_bond += bond_val
+                                    charge_bonds.append(charge_bond_amount(c_bond_amount))
                 except AntiBotBlocked:
                     raise
                 except Exception as dex:
                     logger.warning(f"Volusia: Failed to parse details for inmate_rid {inmate_rid}: {dex}")
                 
                 charges_str = " | ".join(charges_list)
-                bond_amount_str = str(int(total_bond)) if total_bond.is_integer() else f"{total_bond:.2f}"
+                bond_amount_str = total_published_bond(charge_bonds)
                 bond_type_str = ", ".join(bond_types)
                 
                 records.append(ArrestRecord(
@@ -274,14 +274,6 @@ class VolusiaCountyScraper(BaseScraper):
             raise
             
     @staticmethod
-    def _parse_bond_val(bond_str: str) -> float:
-        if not bond_str:
-            return 0.0
-        import re
-        cleaned = re.sub(r"[$,\s]", "", bond_str.strip().upper())
-        if any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
-            return 0.0
-        try:
-            return float(cleaned)
-        except (ValueError, TypeError):
-            return 0.0
+    def _parse_bond_val(bond_str: str):
+        """Published amount (a real 0 included) or None when not published."""
+        return charge_bond_amount(bond_str)

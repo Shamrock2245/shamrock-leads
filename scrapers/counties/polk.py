@@ -12,6 +12,7 @@ from typing import List
 from bs4 import BeautifulSoup
 
 from scrapers.base_scraper import BaseScraper
+from scrapers.published_bond import charge_bond_amount, total_published_bond
 from scrapers.plain_http import make_session, request
 from scrapers.scraper_resilience import AntiBotBlocked
 from core.models import ArrestRecord
@@ -160,7 +161,7 @@ class PolkCountyScraper(BaseScraper):
             logger.warning(f"Polk: Profile page fetch failed for {booking_num}: {pe}")
             
         charges_list = []
-        total_bond = 0.0
+        charge_bonds = []  # published amounts per charge; None = unknown
         
         # Fetch detailed charges/bonds if token is available
         if token:
@@ -184,18 +185,14 @@ class PolkCountyScraper(BaseScraper):
                         for chg in charges_data:
                             statute = chg.get("Statute", "").strip()
                             desc = chg.get("ChargeDesc", "").strip()
-                            bond_str = chg.get("BondAmountDue", "0.00").strip()
+                            bond_str = str(chg.get("BondAmountDue") or "").strip()
                             
                             item = f"{statute} - {desc}" if statute and desc else statute or desc
                             if item:
                                 charges_list.append(item)
                                 
-                            # Sum up bond
-                            try:
-                                bond_val = float(re.sub(r"[$,\s]", "", bond_str))
-                                total_bond += bond_val
-                            except Exception:
-                                pass
+                            # Only a published dollar amount counts (a real 0 included).
+                            charge_bonds.append(charge_bond_amount(bond_str))
                     else:
                         logger.debug(f"Polk: GetCharges returned non-JSON/HTML for {booking_num} (likely no charges).")
             except AntiBotBlocked:
@@ -219,7 +216,7 @@ class PolkCountyScraper(BaseScraper):
             Facility=facility,
             Race=race,
             Sex=sex,
-            Bond_Amount=str(int(total_bond)) if total_bond.is_integer() else f"{total_bond:.2f}",
+            Bond_Amount=total_published_bond(charge_bonds),
             Charges=charges_str,
             Detail_URL=detail_url,
             LastCheckedMode="INITIAL"

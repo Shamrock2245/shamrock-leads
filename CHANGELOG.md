@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-14 (Polk / Volusia / Pasco: unpublished bond is "", never a counted 0)
+
+### Fixed
+- **Polk, Volusia and Pasco (FL) no longer store an unpublished bond as `"0"`.** Each started its total at `0.0`, read a missing bond as `"0"` / `"0.00"`, and counted NO BOND / HOLD / blank / unparseable text as 0. New `scrapers/published_bond.py` (`charge_bond_amount`, `total_published_bond`) follows the SmartWEB convention. A charge counts only when the source shows a dollar amount, and a real published `0` / `$0.00` is kept as `"0"`. The booking total is the sum only when every charge has a published amount; any unknown charge, no charges, or no charge fetch (Pasco bookings older than the 5-day detail window; Polk with no profile token) gives `""`. Stacked on the Polk/Volusia/Pasco plain-HTTPS PR. Stored rows already written with an invented `"0"` are not touched; a correction needs Leads Ops and the owner's OK.
+
+### Tests
+- `tests/test_fl_pvp_bond_unknown.py` (added to the `ci.yml` list).
+
 ## [Unreleased] — 2026-10-14 (Polk / Volusia / Pasco: plain verified HTTPS)
 
 ### Changed
