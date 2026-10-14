@@ -1772,6 +1772,8 @@ class DocuSealService:
         completed_redirect_url: Optional[str] = None,
         skip_bond_binding: bool = False,
         staff_test_case: bool = False,
+        enforce_identity: bool = False,
+        staff_authenticated: bool = False,
         template_field_names: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """
@@ -1795,8 +1797,9 @@ class DocuSealService:
         if template_id is None or str(template_id).strip() in ("", "0", "null", "none"):
             raise DocuSealPacketValidationError("DocuSeal packet blocked: a valid template_id is required.")
         # Identity gate first, before binding, the field payload, the HTTP
-        # client, and any status change. Synthetic TEST- packets skip it.
-        # validate_docuseal_packet_binding is unchanged and runs next.
+        # client, and any status change. Synthetic TEST- packets skip it
+        # unless enforce_identity is honored. validate_docuseal_packet_binding
+        # is unchanged and runs next.
         from dashboard.services.identity_verification_service import require_verified_indemnitors
 
         if not skip_bond_binding:
@@ -1807,6 +1810,8 @@ class DocuSealService:
                 booking_number=str(bond_data.get("booking_number") or ""),
                 packet_id=str(packet_id or ""),
                 staff_test_case=bool(staff_test_case),
+                enforce_identity=bool(enforce_identity),
+                staff_authenticated=bool(staff_authenticated),
             )
         if skip_bond_binding:
             validate_shannon_voice_packet(
@@ -1831,6 +1836,8 @@ class DocuSealService:
                 booking_number=str(bond_data.get("booking_number") or ""),
                 packet_id=str(packet_id or ""),
                 staff_test_case=bool(staff_test_case),
+                enforce_identity=bool(enforce_identity),
+                staff_authenticated=bool(staff_authenticated),
             )
         bond_data = dict(bond_data or {})
         agent_name, agent_license = resolve_writing_agent(bond_data)
