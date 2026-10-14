@@ -8,17 +8,17 @@ Same pattern as Bail School GAS (`BailSchoolPayments.js` pollSwipeSimpleReceipts
   parse amount + customer identity, and log/apply payments for **bond leads**.
 
 School amounts ($199 / $649) are **skipped** here (handled by GAS school unlock).
-Bond premiums and other amounts are written to `payments` + bond_cases when matched.
+Bond premiums are recorded in one transaction. ``last_payment_*`` is stamped
+only when the receipt states a booking, exactly one bond matches it, and no
+refund or failure sibling exists. A blank booking is not inferred from email.
 
 Uses existing `GmailReaderService` (Google free API tier) — no new vendor.
 """
 from __future__ import annotations
 
 import logging
-import os
 import re
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -154,9 +154,12 @@ class SwipeSimpleReceiptPoller:
                     gmail_message_id=mid,
                     raw_subject=email_data.get("subject") or "",
                 )
-                if applied.get("success"):
-                    result["processed"] += 1
-                    result["payments"].append(applied)
+                # Mark read only after the payment transaction commits, or when
+                # this receipt was already committed on an earlier run.
+                if applied.get("success") and (applied.get("committed") or applied.get("duplicate")):
+                    if applied.get("committed"):
+                        result["processed"] += 1
+                        result["payments"].append(applied)
                     if mark_read and mid:
                         reader.mark_as_read(mid)
                 else:
@@ -191,129 +194,43 @@ class SwipeSimpleReceiptPoller:
     ) -> Dict[str, Any]:
         amount = parsed.get("amount")
         customer_email = parsed.get("customer_email")
+        # Only a booking written on the receipt counts. Do not copy one off a bond.
         booking = parsed.get("booking_number") or ""
         txn = parsed.get("transaction_id") or gmail_message_id
-        now = datetime.now(timezone.utc).isoformat()
 
-        # Idempotency
-        payments = db["payments"]
-        existing = await payments.find_one(
-            {
-                "$or": [
-                    {"transaction_id": txn},
-                    {"gmail_message_id": gmail_message_id},
-                ]
-            }
+        from dashboard.services.payment_log_claims import (
+            PaymentLogError,
+            TransactionsUnavailable,
+            record_provider_payment,
         )
-        if existing:
-            return {"success": True, "duplicate": True, "transaction_id": txn}
 
-        match_query: Dict[str, Any] = {}
-        if booking:
-            match_query = {"booking_number": booking}
-        elif customer_email:
-            match_query = {
-                "$or": [
-                    {"indemnitor_email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
-                    {"Indemnitor_Email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
-                ]
-            }
-
-        bond = None
-        if match_query:
-            bond = await db["bond_cases"].find_one(match_query)
-            if not bond:
-                bond = await db["active_bonds"].find_one(match_query)
-            if not bond and customer_email:
-                bond = await db["intake_queue"].find_one(
-                    {
-                        "$or": [
-                            {"indemnitor_email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
-                            {"indemnitor.email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
-                        ]
-                    }
-                )
-
-        booking_number = booking or (bond or {}).get("booking_number") or ""
-
-        doc = {
-            "transaction_id": txn,
-            "gmail_message_id": gmail_message_id,
-            "source": "swipesimple_gmail_poll",
-            "amount": amount,
-            "status": "approved",
-            "customer_email": customer_email,
-            "customer_name": "",
-            "booking_number": booking_number,
-            "subject": raw_subject[:200],
-            "matched_bond": bool(bond),
-            "created_at": now,
-        }
-        await payments.insert_one(doc)
-
-        if booking_number:
-            payment_update = {
-                "last_payment_amount": amount,
-                "last_payment_at": now,
-                "last_payment_status": "approved",
-                "last_transaction_id": txn,
-                "last_payment_source": "swipesimple_gmail_poll",
-            }
-            await db["bond_cases"].update_one(
-                {"booking_number": booking_number},
-                {"$set": payment_update},
-            )
-            await db["active_bonds"].update_one(
-                {"booking_number": booking_number},
-                {"$set": payment_update},
-            )
-
-        # Audit (no PII dump of full body)
         try:
-            await db["audit_events"].insert_one(
-                {
-                    "source": "swipesimple_gmail_poll",
+            recorded = await record_provider_payment(
+                db,
+                source="swipesimple_gmail_poll",
+                transaction_id=txn,
+                amount=amount,
+                status="approved",
+                booking_number=booking,
+                extra={
                     "event_type": "payment.approved",
-                    "timestamp": now,
-                    "payload": {
-                        "amount": amount,
-                        "booking_number": booking_number,
-                        "transaction_id": txn,
-                        "matched": bool(bond),
-                        "has_customer_email": bool(customer_email),
-                    },
-                }
+                    "gmail_message_id": gmail_message_id,
+                    "customer_email": customer_email or "",
+                    "subject": (raw_subject or "")[:200],
+                },
             )
-        except Exception:
-            pass
-
-        # Slack (optional)
-        try:
-            import httpx
-
-            slack = os.getenv("SLACK_WEBHOOK_LEADS") or os.getenv("SLACK_WEBHOOK_URL") or ""
-            if slack:
-                async with httpx.AsyncClient(timeout=8) as client:
-                    await client.post(
-                        slack,
-                        json={
-                            "text": (
-                                f":moneybag: *SwipeSimple receipt (Gmail poll)* — "
-                                f"${amount:.2f}"
-                                f"{f' | Booking: {booking_number}' if booking_number else ''}"
-                                f"{' | unmatched' if not bond else ''}"
-                            )
-                        },
-                    )
-        except Exception as exc:
-            logger.debug("[SwipeSimplePoll] slack failed: %s", exc)
+        except TransactionsUnavailable as exc:
+            return {"success": False, "committed": False, "error": exc.error}
+        except PaymentLogError as exc:
+            return {"success": False, "committed": False, "error": exc.error}
 
         return {
             "success": True,
-            "amount": amount,
-            "booking_number": booking_number,
-            "transaction_id": txn,
-            "matched": bool(bond),
+            "committed": bool(recorded.get("committed")),
+            "duplicate": bool(recorded.get("duplicate")),
+            "amount": recorded.get("amount"),
+            "booking_number": recorded.get("booking_number") or "",
+            "transaction_id": recorded.get("transaction_id"),
         }
 
 

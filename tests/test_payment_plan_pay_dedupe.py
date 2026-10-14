@@ -78,11 +78,28 @@ class Coll:
         await asyncio.sleep(0)
         for d in self.docs:
             if matches(d, flt):
-                for k, v in update.get("$inc", {}).items():
+                for k, v in (update.get("$inc") or {}).items():
                     d[k] = d.get(k, 0) + v
-                d.update(update.get("$set", {}))
+                d.update(update.get("$set") or {})
                 return
-        return
+        if not upsert:
+            return
+        doc = {}
+        for key, expected in (flt or {}).items():
+            if not isinstance(expected, dict):
+                doc[key] = expected
+        doc.update(update.get("$setOnInsert") or {})
+        for key, value in (update.get("$inc") or {}).items():
+            doc[key] = doc.get(key, 0) + value
+        doc.update(update.get("$set") or {})
+        for fields in self.unique:
+            key = tuple(doc.get(field) for field in fields)
+            if any(tuple(existing.get(field) for field in fields) == key for existing in self.docs):
+                raise DuplicateKeyError("dup")
+        explicit_id = doc.get("_id")
+        if explicit_id is not None and any(existing.get("_id") == explicit_id for existing in self.docs):
+            raise DuplicateKeyError("dup _id")
+        self.docs.append(copy.deepcopy(doc))
 
 
 class DB(dict):
@@ -159,6 +176,10 @@ def rig(monkeypatch):
     monkeypatch.setattr(pp, "get_collection", lambda name: db[name])
     monkeypatch.setattr(pp, "_payment_claim_index_ready", False)
     monkeypatch.setattr(pp, "_txn_client", _txn)
+    import dashboard.services.payment_log_claims as payment_log
+    monkeypatch.setattr(payment_log, "_lock_index_ready", False)
+    monkeypatch.setattr(payment_log, "_index_ready", False)
+    payment_log._txn_support_cache.clear()
     app = FastAPI()
     app.include_router(pp.payment_plans_bp)
     with patch("dashboard.routers.events.publish_event", new=AsyncMock()):

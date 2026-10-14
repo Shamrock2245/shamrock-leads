@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-14 (fail-closed payment reversal recording)
+
+### Added
+- **Provider charges, the SwipeSimple receipt poller, and `POST /api/webhooks/payment` record a payment in one MongoDB transaction.** The first write is an upsert on `payment_txn_locks` keyed by `tenant_id` + `txn_key` (`$inc` version). The unique index is on that collection. No index is added on `payments`. A charge then inserts its `payments` row, a tenant-scoped `payment_log_claims` row, and one deterministic audit. If the server cannot run a transaction, the webhook returns 503 `transactions_unavailable` and the poller leaves the Gmail message unread. Nothing is written.
+- **`last_payment_*` is stamped only for a clean explicit booking.** The booking must be on the event (staff assign bookings; a blank booking is not inferred), exactly one bond document must match it, and no refund or failure sibling may exist. Otherwise the charge is stored with `needs_review` and the bond is not stamped. Out-of-order reversals and cross-booking follow that rule. When a stamp is written, the audit stores the old and new `last_payment_*` values. The poller marks Gmail read only after the commit (or when the receipt was already committed).
+- **A webhook refund or failure records only its own row.** `event_kind` is `refund` or `failure`. The same lock is taken, then the row, an audit, and `needs_review` on the one matched bond and the one originating plan when each is unambiguous. It does not write `last_payment_*`, a plan balance, or claim state. One staff Slack alert is sent after the commit. A Slack failure does not roll the payment back.
+- **`POST /api/payments/plans/{plan_id}/pay` takes the same lock and reads refund and failure siblings before any decision,** including an idempotent retry of an applied claim. Any sibling returns 409 `payment_needs_review` and does not change the balance.
+
+### Tests
+- `tests/test_payment_log_claims.py` (added to `ci.yml`): charge then refund, refund then charge, `/pay` then refund, refund then `/pay` retry, a forced write-conflict retry, a cross-booking charge, and a blank booking that does not stamp. No SwipeSimple, Gmail, or live Slack calls.
+
 ## [Unreleased] — 2026-10-14 (plan /pay tenant guard and audit id)
 
 ### Fixed
