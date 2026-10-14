@@ -392,6 +392,16 @@ def test_booking_guard_native_form_submit_posts_real_key():
     assert out["plainFormMasked"] is False and out["css"] is True
 
 
+def test_booking_guard_user_clear_and_form_reset_drop_cached_routing_key():
+    """Codex #171 P1 (Bulk Assign reset): a user clearing the field, or form.reset(),
+    never leaves a previous defendant's key behind to be read or posted."""
+    out = _guard_sim()
+    assert out["resetRead"] == "" and out["resetCleared"] is True      # programmatic reset
+    assert out["userClearedRead"] == "" and out["userClearedKey"] is True  # user deletes the text
+    assert out["userClearedFormPost"] == ""                            # form-bound: no stale restore
+    assert out["formResetPost"] == "" and out["formResetLoose"] == ""  # form.reset()
+
+
 def test_booking_guard_keeps_routing_values_and_intercepts_assignments():
     """Codex #171 P1/P2 still hold: non-text values untouched; free-standing text inputs hidden but readable."""
     out = _guard_sim()

@@ -211,8 +211,18 @@
       var t = e.target;
       if (!isTextEntry(t)) return;
       var raw = rawValue(t);
-      if (t.dataset && t.dataset.internalKey && raw !== '') delete t.dataset.internalKey;
+      // Any user edit drops a cached key, including clearing the field to ''
+      // (a cleared Bulk Assign field must not read or post the prior key).
+      if (t.dataset && t.dataset.internalKey && !KEY_ONLY_RE.test(raw)) delete t.dataset.internalKey;
       if (isFormBound(t)) setMask(t, raw);
+    }, true);
+    // form.reset() restores defaults without calling the value setter: drop
+    // every cached key in that form so no control can post a stale key.
+    document.addEventListener('reset', function (e) {
+      var f = e.target, els = (f && f.elements) || [];
+      for (var i = 0; i < els.length; i++) {
+        if (els[i] && els[i].dataset && els[i].dataset.internalKey) delete els[i].dataset.internalKey;
+      }
     }, true);
     document.addEventListener('submit', onSubmitCapture, true);
     document.addEventListener('formdata', onFormDataCapture, true);

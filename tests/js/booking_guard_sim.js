@@ -106,6 +106,19 @@ out.replacedRead = ba2.value;
 const rb2 = new HTMLInputElement('text', { name: 'booking_number' }); const rb2Form = makeForm([rb2]);
 rb2.value = ''; rb2.dataset.internalKey = KEY; rb2.value = '';
 out.resetFormPost = nativeSubmit(rb2Form).booking_number;
+// 8. User clears a key-backed field by typing (no setter call): no stale key.
+const ba3 = new HTMLInputElement('text'); ba3.value = KEY;
+ba3._v = ''; fire('input', { target: ba3 });
+out.userClearedRead = ba3.value; out.userClearedKey = !ba3.dataset.internalKey;
+const rb3 = new HTMLInputElement('text', { name: 'booking_number' }); const rb3Form = makeForm([rb3]);
+rb3.value = ''; rb3.dataset.internalKey = KEY; fire('input', { target: rb3 });
+out.userClearedFormPost = nativeSubmit(rb3Form).booking_number;
+// 9. form.reset() (no setter, no input event) drops every cached key in the form.
+const rb4 = new HTMLInputElement('text', { name: 'booking_number' }); const loose = new HTMLInputElement('text');
+const rb4Form = makeForm([rb4, loose]);
+rb4.value = ''; rb4.dataset.internalKey = KEY; loose.value = KEY;
+rb4._v = ''; loose._v = ''; fire('reset', { target: rb4Form });
+out.formResetPost = nativeSubmit(rb4Form).booking_number; out.formResetLoose = loose.value;
 out.label = window.slBookingLabel(KEY) + '|' + window.slBookingLabel('2026-123456');
 out.css = head.children.some((n) => n.id === 'sl-booking-mask-css');
 console.log(JSON.stringify(out));
