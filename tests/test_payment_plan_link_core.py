@@ -21,13 +21,14 @@ from tests.test_payment_plan_pay_dedupe import PLAN_ID, Coll, DB, _plan
 def _app(db, monkeypatch):
     pp._inflight_txns.clear()
     pp._txn_support_cache.clear()
+    client = TxnClient(db)
 
-    async def _no_txn():
-        return None
+    async def _txn():
+        return client
 
     monkeypatch.setattr(pp, "get_collection", lambda name: db[name])
     monkeypatch.setattr(pp, "_payment_claim_index_ready", False)
-    monkeypatch.setattr(pp, "_txn_client", _no_txn)
+    monkeypatch.setattr(pp, "_txn_client", _txn)
     app = FastAPI()
     app.include_router(pp.payment_plans_bp)
     return app
@@ -167,7 +168,7 @@ def test_link_happy_path_counts_once_and_creates_no_payments_index(rig):
     assert audit["old_state"] == {"balance_remaining": 800.0, "status": "active"}
     assert audit["new_state"] == {"balance_remaining": 700.0, "status": "active"}
     assert db["payments"].index_calls == 0 and db["payments"].unique == []
-    assert pp._last_apply_path == "fallback"
+    assert pp._last_apply_path == "transaction"
     again = _post(app, {"amount": 100, "transaction_id": "TX-LOG"})
     assert again.status_code == 200 and again.json()["idempotent"] is True
     assert len(db["payments"].docs) == 1 and _plan(db)["balance_remaining"] == 700.0
@@ -233,6 +234,18 @@ def test_blank_plan_booking_is_refused(rig):
     assert r.status_code == 409 and r.json()["error"] == "logged_payment_booking_mismatch"
     assert _plan(db)["balance_remaining"] == 800.0
     assert db["payment_plan_payment_claims"].docs == []
+
+
+def test_blank_booking_with_no_logged_row_writes_nothing(rig):
+    db, app = rig
+    _plan(db)["booking_number"] = "   "
+    r = _post(app, {"amount": 100, "transaction_id": "TX-NEW"})
+    assert r.status_code == 409 and r.json()["error"] == "logged_payment_booking_mismatch"
+    assert db["payments"].docs == []
+    assert db["payment_plan_payment_claims"].docs == []
+    assert db["audit_events"].docs == []
+    assert _plan(db)["balance_remaining"] == 800.0
+    assert "collected_transaction_ids" not in _plan(db)
 
 
 def test_two_logged_rows_are_ambiguous(rig):
@@ -303,102 +316,6 @@ def test_live_inflight_claim_is_not_resumed(rig):
     r = _post(app, {"amount": 100, "transaction_id": "TX-LIVE"})
     assert r.status_code == 409 and r.json()["error"] == "payment_in_progress"
     assert db["payments"].docs == [] and _plan(db)["balance_remaining"] == 800.0
-
-
-def _seed_claim(db, step, **extra):
-    doc = {
-        "plan_id": PLAN_ID, "transaction_id": "TX-STEP", "status": "claimed",
-        "amount": 100, "step": step, "booking_number": "TEST-PP-1",
-    }
-    if step in ("balance_applied", "audited"):
-        doc.update({
-            "balance_before": 800.0, "status_before": "active",
-            "balance_after": 700.0, "status_after": "active",
-        })
-    doc.update(extra)
-    db["payment_plan_payment_claims"].docs.append(doc)
-
-
-def _seed_linked_row(db):
-    db["payments"].docs.append({
-        "transaction_id": "TX-STEP", "plan_id": PLAN_ID, "amount": 100,
-        "status": "completed", "logged_status": "approved", "booking_number": "TEST-PP-1",
-        "type": "installment", "timestamp": "2026-10-13T00:00:00+00:00",
-    })
-
-
-@pytest.mark.parametrize("step", ["row_linked", "balance_applied", "audited"])
-def test_fallback_resumes_after_each_checkpoint(rig, step):
-    db, app = rig
-    _seed_linked_row(db)
-    _seed_claim(db, step)
-    if step in ("balance_applied", "audited"):
-        _plan(db)["balance_remaining"] = 700.0
-        _plan(db)["total_paid"] = 300.0
-        _plan(db)["payments_made"] = 2
-        _plan(db)["collected_transaction_ids"] = ["TX-STEP"]
-    if step == "audited":
-        db["audit_events"].docs.append({
-            "event_type": pp._AUDIT_EVENT, "entity_id": PLAN_ID, "transaction_id": "TX-STEP",
-        })
-    r = _post(app, {"amount": 100, "transaction_id": "TX-STEP"})
-    assert r.status_code == 200
-    assert pp._last_apply_path == "fallback"
-    assert len(db["payments"].docs) == 1
-    assert _plan(db)["balance_remaining"] == 700.0
-    assert _plan(db)["payments_made"] == 2
-    assert db["payment_plan_payment_claims"].docs[0]["status"] == "applied"
-    audits = [d for d in db["audit_events"].docs if d.get("event_type") == pp._AUDIT_EVENT]
-    assert len(audits) == 1
-    if step == "balance_applied":
-        assert audits[0]["old_state"] == {"balance_remaining": 800.0, "status": "active"}
-        assert audits[0]["new_state"] == {"balance_remaining": 700.0, "status": "active"}
-    again = _post(app, {"amount": 100, "transaction_id": "TX-STEP"})
-    assert again.status_code == 200 and again.json()["idempotent"] is True
-    assert _plan(db)["balance_remaining"] == 700.0
-
-
-def test_resume_refuses_a_blank_row_booking(rig):
-    db, app = rig
-    db["payments"].docs.append({
-        "transaction_id": "TX-BLANK", "plan_id": PLAN_ID, "amount": 100,
-        "status": "completed", "logged_status": "approved", "booking_number": "",
-        "type": "installment",
-    })
-    db["payment_plan_payment_claims"].docs.append({
-        "plan_id": PLAN_ID, "transaction_id": "TX-BLANK", "status": "claimed",
-        "step": "row_linked", "amount": 100,
-    })
-    r = _post(app, {"amount": 100, "transaction_id": "TX-BLANK"})
-    assert r.status_code == 409 and r.json()["error"] == "logged_payment_booking_mismatch"
-    assert _plan(db)["balance_remaining"] == 800.0
-    assert "collected_transaction_ids" not in _plan(db)
-    row = db["payments"].docs[0]
-    assert row.get("plan_id") in (None, "")
-    assert row["status"] == "approved"
-    assert db["audit_events"].docs == []
-
-
-def test_fallback_reverses_a_link_that_no_longer_matches(rig):
-    db, app = rig
-    db["payments"].docs.append({
-        "transaction_id": "TX-REV", "plan_id": PLAN_ID, "amount": 100,
-        "status": "completed", "logged_status": "approved", "booking_number": "OTHER-BK",
-        "type": "installment",
-    })
-    db["payment_plan_payment_claims"].docs.append({
-        "plan_id": PLAN_ID, "transaction_id": "TX-REV", "status": "claimed",
-        "step": "row_linked", "amount": 100,
-    })
-    r = _post(app, {"amount": 100, "transaction_id": "TX-REV"})
-    assert r.status_code == 409 and r.json()["error"] == "logged_payment_booking_mismatch"
-    assert _plan(db)["balance_remaining"] == 800.0
-    assert "collected_transaction_ids" not in _plan(db)
-    row = db["payments"].docs[0]
-    assert row.get("plan_id") in (None, "")
-    assert row["status"] == "approved"
-    assert db["payment_plan_payment_claims"].docs[0]["status"] == "failed"
-    assert db["audit_events"].docs == []
 
 
 def _use_transactions(monkeypatch, db):
@@ -472,13 +389,58 @@ def test_transaction_abort_on_insert_leaves_no_payment_row(rig, monkeypatch):
     assert db["payment_plan_payment_claims"].docs[0]["status"] != "applied"
 
 
-def test_transaction_resume_from_row_linked(rig, monkeypatch):
+def test_transactions_unavailable_returns_503_with_no_writes(rig, monkeypatch):
     db, app = rig
-    _seed_linked_row(db)
-    _seed_claim(db, "row_linked")
-    _use_transactions(monkeypatch, db)
-    r = _post(app, {"amount": 100, "transaction_id": "TX-STEP"})
-    assert r.status_code == 200 and pp._last_apply_path == "transaction"
-    assert _plan(db)["balance_remaining"] == 700.0
-    assert len(db["payments"].docs) == 1
-    assert db["payment_plan_payment_claims"].docs[0]["status"] == "applied"
+
+    async def _none():
+        return None
+
+    monkeypatch.setattr(pp, "_txn_client", _none)
+    r = _post(app, {"amount": 100, "transaction_id": "TX-NEW"})
+    assert r.status_code == 503 and r.json()["error"] == "transactions_unavailable"
+    assert db["payments"].docs == []
+    assert db["payment_plan_payment_claims"].docs == []
+    assert db["audit_events"].docs == []
+    assert _plan(db)["balance_remaining"] == 800.0
+    assert db["payment_plan_payment_claims"].index_calls == 0
+
+
+def test_standalone_server_returns_503_with_no_writes(rig, monkeypatch):
+    db, app = rig
+
+    class _Standalone:
+        def __init__(self):
+            self.admin = _Admin({"ismaster": True, "ok": 1})
+            self.sessions = 0
+
+        async def start_session(self):
+            self.sessions += 1
+            raise AssertionError("session opened without a replica set")
+
+    standalone = _Standalone()
+
+    async def _client():
+        return standalone
+
+    monkeypatch.setattr(pp, "_txn_client", _client)
+    pp._txn_support_cache.clear()
+    r = _post(app, {"amount": 100, "transaction_id": "TX-NEW"})
+    assert r.status_code == 503 and r.json()["error"] == "transactions_unavailable"
+    assert standalone.sessions == 0
+    assert db["payments"].docs == []
+    assert db["payment_plan_payment_claims"].docs == []
+    assert _plan(db)["balance_remaining"] == 800.0
+
+
+def test_transaction_probe_failure_returns_503_with_no_writes(rig, monkeypatch):
+    db, app = rig
+
+    async def _boom():
+        raise RuntimeError("hello failed")
+
+    monkeypatch.setattr(pp, "_txn_client", _boom)
+    r = _post(app, {"amount": 100, "transaction_id": "TX-NEW"})
+    assert r.status_code == 503 and r.json()["error"] == "transactions_unavailable"
+    assert db["payments"].docs == []
+    assert db["payment_plan_payment_claims"].docs == []
+    assert _plan(db)["balance_remaining"] == 800.0
