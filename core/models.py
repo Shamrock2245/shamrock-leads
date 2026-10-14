@@ -296,9 +296,10 @@ class ArrestRecord:
 
     # ── Google Sheets serialization (backward compat) ──
     def to_sheet_row(self) -> list:
+        from core.booking_identity import public_booking_number as _public_booking
         """Returns the 41 fields in canonical column order."""
         return [
-            self.Scrape_Timestamp, self.County, self.Booking_Number, self.Person_ID,
+            self.Scrape_Timestamp, self.County, _public_booking(self.Booking_Number), self.Person_ID,
             self.Full_Name, self.First_Name, self.Middle_Name, self.Last_Name,
             self.DOB, self.Arrest_Date, self.Arrest_Time, self.Booking_Date,
             self.Booking_Time, self.Status, self.Release_Date, self.Facility, self.Agency,

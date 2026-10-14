@@ -6,6 +6,7 @@ so the Scraper Health / Multi-State Ops UIs never showed them.
 from __future__ import annotations
 
 from dashboard.extensions import (
+    NON_COUNTY_SOURCE_SCOPES,
     REGISTERED_COUNTIES,
     county_label,
     registered_county_to_trigger_key,
@@ -39,11 +40,14 @@ def test_wave2_fl_counties_are_registered():
 
 
 def test_fl_is_full_67_and_total_361_including_guarded_ohio_pilot():
-    fl = [c for c in REGISTERED_COUNTIES if c.endswith("(FL)")]
+    fl = [c for c in REGISTERED_COUNTIES if c.endswith("(FL)") and c not in NON_COUNTY_SOURCE_SCOPES]
     ohio = [c for c in REGISTERED_COUNTIES if c.endswith("(OH)")]
     assert len(fl) == 67, f"Expected 67 FL counties, got {len(fl)}"
     assert sorted(ohio) == ["Clermont (OH)", "Clinton (OH)", "Huron (OH)"]
-    assert len(REGISTERED_COUNTIES) == 361, f"Expected 361 total, got {len(REGISTERED_COUNTIES)}"
+    # 361 county-level scopes + the Manatee Clerk (FL) court-filing scope (2026-10-10).
+    assert NON_COUNTY_SOURCE_SCOPES == {"Manatee Clerk (FL)"}
+    assert NON_COUNTY_SOURCE_SCOPES <= set(REGISTERED_COUNTIES)
+    assert len(REGISTERED_COUNTIES) == 362, f"Expected 362 total, got {len(REGISTERED_COUNTIES)}"
 
 
 # Wave-3 NC/TN/TX metros (2026-07-26)
