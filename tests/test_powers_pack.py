@@ -13,7 +13,6 @@ from fastapi.testclient import TestClient
 from openpyxl import load_workbook
 
 from dashboard.services.powers_pack import (
-    TRANSFER_HISTORY_BANNER,
     assemble_powers_pack,
     voided_powers_mongo_query,
 )
@@ -73,7 +72,7 @@ def test_voided_powers_query_matches_existing_filter():
     assert query["voided_at"] == {"$gte": "2026-09-01", "$lt": "2026-10-01"}
 
 
-def test_empty_range_has_no_rows_and_keeps_transfer_banner():
+def test_empty_range_has_no_rows_and_no_transfer_banner():
     db = _db(
         inventory=[{
             "surety_id": "palmetto",
@@ -97,10 +96,10 @@ def test_empty_range_has_no_rows_and_keeps_transfer_banner():
     assert pack["liability"]["count"] == 0
     assert pack["execution"]["rows"] == []
     assert pack["transfer"]["rows"] == []
-    assert pack["history_complete"] is False
-    assert pack["transfer"]["history_complete"] is False
-    assert "best-effort" in pack["transfer_banner"]
-    assert pack["transfer_banner"] == TRANSFER_HISTORY_BANNER
+    assert pack["history_complete"] is True
+    assert pack["transfer"]["history_complete"] is True
+    assert pack["transfer_banner"] is None
+    assert pack["transfer"]["banner"] is None
     assert pack["filename"] == "Palmetto_Combined_Powers_2020-01-31.xlsx"
     blob = str(pack["execution"]["rows"]) + str(pack["void"]["rows"]) + str(pack["transfer"]["rows"])
     assert "PSC-OUT" not in blob
@@ -319,9 +318,12 @@ def test_combined_workbook_sheets_and_empty_message():
     assert "No powers executed in this range." in exec_text
     assert _column_after_header(raw, "Palmetto Execution", "Power #") == []
     assert _column_after_header(raw, "Palmetto Transfer", "Power #") == []
-    cover = " ".join(str(v) for row in _sheet_values(raw, "Palmetto Cover") for v in row if v)
-    assert "best-effort" in cover
-    assert "history complete" in cover.lower()
+    cover_rows = _sheet_values(raw, "Palmetto Cover")
+    cover = " ".join(str(v) for row in cover_rows for v in row if v)
+    assert "best-effort" not in cover
+    complete = next(row[1] for row in cover_rows if row[0] == "Transfer history complete")
+    assert complete == "yes"
+    assert not any(row[0] == "Transfer log" for row in cover_rows)
 
 
 def test_execution_workbook_does_not_include_other_pack_rows():
@@ -414,7 +416,10 @@ def test_endpoint_json_contract_and_xlsx_download(mock_get_db, reports_app):
     assert data["execution"]["count"] == 1
     assert data["execution"]["rows"][0]["gross_premium"] == 800
     assert data["void"]["count"] == 0
-    assert data["history_complete"] is False
+    assert data["history_complete"] is True
+    assert data["transfer_banner"] is None
+    assert data["transfer"]["history_complete"] is True
+    assert data["transfer"]["banner"] is None
 
     xl = client.get(
         "/api/reports/powers-pack/combined",
@@ -423,8 +428,8 @@ def test_endpoint_json_contract_and_xlsx_download(mock_get_db, reports_app):
     assert xl.status_code == 200
     assert "spreadsheetml" in xl.headers["content-type"]
     assert 'filename="Palmetto_Combined_Powers_2026-09-30.xlsx"' in xl.headers["content-disposition"]
-    assert xl.headers["x-transfer-partial"] == "true"
-    assert xl.headers["x-history-complete"] == "false"
+    assert xl.headers["x-transfer-partial"] == "false"
+    assert xl.headers["x-history-complete"] == "true"
     assert xl.headers["x-execution-count"] == "1"
     assert xl.content[:2] == b"PK"
     assert _column_after_header(xl.content, "Palmetto Execution", "Power #") == ["PSC-LIVE"]
