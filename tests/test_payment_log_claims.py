@@ -533,6 +533,179 @@ def test_staff_alert_failure_leaves_the_refund_committed(rig, monkeypatch):
     assert db["payment_plans"].docs[0]["needs_review"] is True
 
 
+def _capture_alerts(monkeypatch):
+    alerts = []
+
+    def fake_alert(self, title, message="", level="warning", details=None, source=None):
+        alerts.append({
+            "title": title, "message": message, "level": level,
+            "details": details, "source": source,
+        })
+        return True
+
+    monkeypatch.setattr("writers.slack_notifier.SlackNotifier.notify_alert", fake_alert)
+    return alerts
+
+
+def _plans(db):
+    db["payment_plans"].docs.extend([
+        {
+            "plan_id": "plan-1",
+            "booking_number": "BK-1",
+            "balance_remaining": 800.0,
+            "status": "active",
+        },
+        {
+            "plan_id": "plan-other",
+            "booking_number": "OTHER-BK",
+            "balance_remaining": 500.0,
+            "status": "active",
+        },
+    ])
+    db["bond_cases"].docs.append({"booking_number": "OTHER-BK"})
+    db["active_bonds"].docs.append({"booking_number": "OTHER-BK"})
+
+
+@pytest.mark.parametrize("event_type,status", [
+    ("payment.refunded", "refunded"),
+    ("payment.failed", "failed"),
+])
+def test_refund_booking_conflict_writes_nothing_and_does_not_alert(
+    rig, monkeypatch, event_type, status,
+):
+    db, app, _client = rig
+    monkeypatch.setenv("SWIPESIMPLE_WEBHOOK_SECRET", SECRET)
+    _plans(db)
+    db["payments"].docs.append({
+        "transaction_id": "TX-1",
+        "event_kind": "charge",
+        "booking_number": "BK-1",
+        "amount": 100,
+        "status": "approved",
+        "plan_id": "plan-other",
+    })
+    before = copy.deepcopy(db["payments"].docs)
+    alerts = _capture_alerts(monkeypatch)
+    with patch("dashboard.routers.events.publish_event", new=AsyncMock()) as published:
+        resp = _webhook(app, _pay(
+            event_type=event_type,
+            status=status,
+            custom_fields={"booking_number": "OTHER-BK"},
+        ))
+    assert resp.status_code == 409
+    assert resp.json()["error"] == "payment_needs_review"
+    assert published.await_count == 0
+    assert alerts == []
+    assert db["payments"].docs == before
+    assert db["payment_log_claims"].docs == []
+    assert db["audit_events"].docs == []
+    assert db["payment_log_claims"].index_calls == 0
+    assert all(not plan.get("needs_review") for plan in db["payment_plans"].docs)
+    assert all(plan["balance_remaining"] in (800.0, 500.0) for plan in db["payment_plans"].docs)
+    for coll in ("bond_cases", "active_bonds"):
+        for bond in db[coll].docs:
+            assert not bond.get("needs_review")
+            assert "last_payment_amount" not in bond
+
+
+@pytest.mark.parametrize("event_booking", ["", "BK-1"])
+def test_ambiguous_sibling_bookings_are_409(rig, monkeypatch, event_booking):
+    db, app, _client = rig
+    monkeypatch.setenv("SWIPESIMPLE_WEBHOOK_SECRET", SECRET)
+    _plans(db)
+    db["payments"].docs.extend([
+        {
+            "transaction_id": "TX-1",
+            "event_kind": "charge",
+            "booking_number": "BK-1",
+            "amount": 100,
+            "status": "approved",
+        },
+        {
+            "transaction_id": "TX-1",
+            "event_kind": "charge",
+            "booking_number": "BK-2",
+            "amount": 100,
+            "status": "approved",
+        },
+    ])
+    before = copy.deepcopy(db["payments"].docs)
+    alerts = _capture_alerts(monkeypatch)
+    with patch("dashboard.routers.events.publish_event", new=AsyncMock()):
+        resp = _webhook(app, _pay(
+            event_type="payment.refunded",
+            status="refunded",
+            custom_fields={"booking_number": event_booking},
+        ))
+    assert resp.status_code == 409
+    assert resp.json()["error"] == "payment_needs_review"
+    assert alerts == []
+    assert db["payments"].docs == before
+    assert db["payment_log_claims"].docs == []
+    assert db["audit_events"].docs == []
+    assert db["payment_log_claims"].index_calls == 0
+    assert all(not plan.get("needs_review") for plan in db["payment_plans"].docs)
+
+
+def test_blank_refund_booking_inherits_the_single_sibling(rig, monkeypatch):
+    db, app, _client = rig
+    monkeypatch.setenv("SWIPESIMPLE_WEBHOOK_SECRET", SECRET)
+    _plans(db)
+    alerts = _capture_alerts(monkeypatch)
+    with patch("dashboard.routers.events.publish_event", new=AsyncMock()):
+        charge = _webhook(app, _pay())
+        refund = _webhook(app, _pay(
+            event_type="payment.refunded",
+            status="refunded",
+            custom_fields={"booking_number": ""},
+        ))
+    assert charge.status_code == 200 and charge.json()["duplicate"] is False
+    assert refund.status_code == 200 and refund.json()["duplicate"] is False
+    refund_row = next(row for row in db["payments"].docs if row["event_kind"] == "refund")
+    assert refund_row["booking_number"] == "BK-1"
+    plans = {plan["plan_id"]: plan for plan in db["payment_plans"].docs}
+    assert plans["plan-1"]["needs_review"] is True
+    assert plans["plan-1"]["needs_review_reason"] == "provider_refund_unreversed"
+    assert plans["plan-1"]["balance_remaining"] == 800.0
+    assert "needs_review" not in plans["plan-other"]
+    assert plans["plan-other"]["balance_remaining"] == 500.0
+    assert len(alerts) == 1
+    assert alerts[0]["details"]["booking_number"] == "BK-1"
+    assert alerts[0]["details"]["plan_id"] == "plan-1"
+    other_bond = next(row for row in db["bond_cases"].docs if row["booking_number"] == "OTHER-BK")
+    assert "needs_review" not in other_bond
+    agreed = next(row for row in db["bond_cases"].docs if row["booking_number"] == "BK-1")
+    assert agreed["needs_review"] is True
+
+
+def test_matching_booking_flags_only_that_bookings_plan(rig, monkeypatch):
+    db, app, _client = rig
+    monkeypatch.setenv("SWIPESIMPLE_WEBHOOK_SECRET", SECRET)
+    _plans(db)
+    alerts = _capture_alerts(monkeypatch)
+    with patch("dashboard.routers.events.publish_event", new=AsyncMock()):
+        charge = _webhook(app, _pay())
+        # A plan id on the charge must not pull in a plan for a different booking.
+        db["payments"].docs[0]["plan_id"] = "plan-other"
+        refund = _webhook(app, _pay(
+            event_type="payment.refunded",
+            status="refunded",
+            custom_fields={"booking_number": "BK-1"},
+        ))
+    assert charge.status_code == 200
+    assert refund.status_code == 200 and refund.json()["duplicate"] is False
+    plans = {plan["plan_id"]: plan for plan in db["payment_plans"].docs}
+    assert plans["plan-1"]["needs_review"] is True
+    assert plans["plan-1"]["balance_remaining"] == 800.0
+    assert "needs_review" not in plans["plan-other"]
+    assert plans["plan-other"]["balance_remaining"] == 500.0
+    assert len(alerts) == 1
+    assert alerts[0]["details"]["plan_id"] == "plan-1"
+    assert alerts[0]["details"]["booking_number"] == "BK-1"
+    other_bond = next(row for row in db["active_bonds"].docs if row["booking_number"] == "OTHER-BK")
+    assert "needs_review" not in other_bond
+
+
 @pytest.mark.parametrize("seed,payload", [
     ({"amount": 50, "status": "approved", "booking_number": "BK-1"}, _pay(amount="100.00")),
     ({"amount": 100, "status": "approved", "booking_number": "OTHER-BK"}, _pay()),

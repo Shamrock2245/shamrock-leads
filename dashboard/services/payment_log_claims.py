@@ -16,11 +16,15 @@ this kind is already recorded, so the caller returns duplicate and writes
 nothing else. There is no index on ``payments``. There is no provisional
 claim, no token field on the payment row, and no stale-claim takeover.
 
-A refund or failure does not change a plan balance. When it links to a
-booking or a plan, the same transaction sets ``needs_review`` on that bond
-case and that plan. After the commit, one staff Slack alert is sent for that
+A refund or failure does not change a plan balance. Before any write, its
+booking is compared with every sibling row for this tenant and transaction
+id, of every event kind. A disagreement, or more than one sibling booking,
+is 409 ``payment_needs_review`` and writes nothing. A blank booking inherits
+the charge booking only when every sibling names that one booking. The
+``needs_review`` flag then goes on that booking's bond case and on plans for
+that booking only. After the commit, one staff Slack alert is sent for that
 ``(tenant, txn_key, kind)``. A Slack failure is logged and does not roll the
-payment back.
+payment back. A refused refund does not alert.
 
 Out of scope: reversing a plan balance, reclaiming a stale claim, and
 backfilling rows that were logged before this claim existed. A recorded row
@@ -380,20 +384,59 @@ def _review_flag(kind: str, amount: float, txn_key: str) -> dict:
     }
 
 
-def _linked_booking(booking: str, siblings: list) -> str:
-    if booking:
-        return booking
-    for row in siblings:
-        found = _booking(row.get("booking_number"))
-        if found:
-            return found
-    return ""
+def _sibling_bookings(siblings: list) -> list:
+    """Distinct non-blank bookings on these rows. Comparison is case-insensitive.
 
-
-def _linked_plan_ids(siblings: list, plans: list) -> list:
+    The first spelling is kept so a later plan lookup uses the booking already
+    stored on the charge.
+    """
     found: list[str] = []
-    for row in list(siblings) + list(plans):
-        plan_id = str(row.get("plan_id") or "").strip()
+    folded: set[str] = set()
+    for row in siblings:
+        booking = _booking(row.get("booking_number"))
+        if not booking:
+            continue
+        key = booking.casefold()
+        if key in folded:
+            continue
+        folded.add(key)
+        found.append(booking)
+    return found
+
+
+def _agreed_booking(event_booking: str, siblings: list) -> str:
+    """The one booking a refund or failure may attach to.
+
+    Reads siblings of every event kind. Two sibling bookings, or an event
+    booking that disagrees with the sibling booking, raise 409
+    ``payment_needs_review``. A blank event booking inherits the sibling
+    booking only when there is exactly one. No sibling booking leaves the
+    event booking unchanged.
+    """
+    sibling_bookings = _sibling_bookings(siblings)
+    if len(sibling_bookings) > 1:
+        raise PaymentLogError(
+            "payment_needs_review",
+            409,
+            "This transaction id is already on more than one booking. Nothing was written.",
+        )
+    sibling = sibling_bookings[0] if sibling_bookings else ""
+    if event_booking and sibling and event_booking.casefold() != sibling.casefold():
+        raise PaymentLogError(
+            "payment_needs_review",
+            409,
+            "This refund or failure names a different booking than the recorded payment. Nothing was written.",
+        )
+    if not event_booking:
+        return sibling
+    return sibling or event_booking
+
+
+def _plan_ids_for_booking(plans: list) -> list:
+    """Plan ids from plan rows already limited to the agreed booking."""
+    found: list[str] = []
+    for plan in plans:
+        plan_id = str(plan.get("plan_id") or "").strip()
         if plan_id and plan_id not in found:
             found.append(plan_id)
     return found
@@ -425,7 +468,10 @@ async def _apply(
     if rows:
         raise AlreadyRecorded()
 
+    # All kinds. A refund must not attach to a different case than the charge.
     siblings = await _docs(db["payments"], {"transaction_id": txn_key}, session)
+    if kind in ("refund", "failed"):
+        booking = _agreed_booking(booking, siblings)
 
     # The unique index was ensured before this transaction opened.
     claims = db[LOG_CLAIMS_COLLECTION]
@@ -463,17 +509,17 @@ async def _apply(
         doc.pop(field, None)
     await db["payments"].insert_one(doc, **_sess(session))
 
-    linked_booking = _linked_booking(booking, siblings)
     plan_rows: list = []
-    if linked_booking:
+    if booking:
         plan_rows = await _docs(
-            db["payment_plans"], {"booking_number": linked_booking}, session,
+            db["payment_plans"], {"booking_number": booking}, session,
         )
-    plan_ids = _linked_plan_ids(siblings, plan_rows)
+    # Plans for this booking only. A plan id on a sibling row is not enough.
+    plan_ids = _plan_ids_for_booking(plan_rows)
     review = kind in ("refund", "failed")
     flag = _review_flag(kind, amount, txn_key) if review else None
 
-    if linked_booking:
+    if booking:
         payment_update = {
             "last_payment_amount": amount,
             "last_payment_at": now_iso,
@@ -484,12 +530,12 @@ async def _apply(
         if flag:
             payment_update.update(flag)
         await db["bond_cases"].update_one(
-            {"booking_number": linked_booking},
+            {"booking_number": booking},
             {"$set": payment_update},
             **_sess(session),
         )
         await db["active_bonds"].update_one(
-            {"booking_number": linked_booking},
+            {"booking_number": booking},
             {"$set": payment_update},
             **_sess(session),
         )
@@ -515,7 +561,7 @@ async def _apply(
             "agent_name": source,
             "timestamp": now,
             "created_at": now,
-            "booking_number": linked_booking or booking,
+            "booking_number": booking,
             "transaction_id": txn_key,
             "amount": amount,
             "event_kind": kind,
@@ -523,7 +569,7 @@ async def _apply(
             "confidence": 1.0,
             "payload": {
                 "amount": amount,
-                "booking_number": linked_booking or booking,
+                "booking_number": booking,
                 "transaction_id": txn_key,
                 "status": status,
                 "event_kind": kind,
@@ -543,7 +589,7 @@ async def _apply(
     return {
         "kind": kind,
         "amount": amount,
-        "booking": linked_booking,
+        "booking": booking,
         "plan_ids": plan_ids,
     }
 
@@ -637,6 +683,12 @@ async def record_provider_payment(
         raise TransactionsUnavailable() from None
     if client is None:
         raise TransactionsUnavailable()
+
+    # A refund or failure must agree with every sibling booking before the
+    # claim index or any other write. Ambiguous siblings are 409 as well.
+    if kind in ("refund", "failed"):
+        siblings = await _read_rows(db, txn_key)
+        booking = _agreed_booking(booking, siblings)
 
     # A recorded row of this kind is classified before the claim index is touched.
     # A charge does not block a later refund or failure that shares its txn id.
