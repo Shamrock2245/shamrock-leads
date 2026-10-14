@@ -18,7 +18,7 @@ from pymongo.collection import Collection
 from pymongo.errors import OperationFailure
 
 from core.models import ArrestRecord
-from core.booking_identity import internal_natural_key
+from core.booking_identity import MC_KEY_PREFIX, internal_natural_key, is_internal_booking_key
 from core.staff_edits import fetch_provenance_docs, protect_scraped_update
 from config.settings import settings
 
@@ -337,10 +337,14 @@ class MongoWriter:
         internal_keyed = 0
         for idx, record in enumerate(records):
             booking = (record.Booking_Number or "").strip()
+            if is_internal_booking_key(booking):
+                # Re-entry: a record this writer already keyed carries its
+                # internal key; recompute it so the scope fields stay set.
+                booking = ""
             county_name = (record.County or county or "").strip()
             state = (record.State or "FL").strip().upper() or "FL"
             # Narrow owner exception (core/booking_identity.py): an allow-listed
-            # scope with no source booking number (FL/Miami-Dade) is keyed on
+            # scope with no source booking number (FL/Miami-Dade, FL/Manatee Clerk) is keyed on
             # its exact-pattern internal natural key. Any other blank booking is
             # still skipped below, unchanged.
             internal_key = "" if booking or not county_name else internal_natural_key(record, county_name, state)
@@ -352,9 +356,13 @@ class MongoWriter:
                 )
                 continue
             # Normalize identity onto the record so writers/downstream agree.
-            # An internal key is never copied onto Booking_Number.
+            # With no source booking number the internal key is kept on the
+            # record as its routing identity (RearrestChecker, lead fan-out
+            # pointers, SheetsWriter dedupe all read Booking_Number). It is
+            # never a display value: every display/export path goes through
+            # public_booking_number / redact_internal_keys, which blank it.
             identity = booking or internal_key
-            record.Booking_Number = booking
+            record.Booking_Number = identity
             record.County = county_name
             record.State = state
 
@@ -367,8 +375,13 @@ class MongoWriter:
                 # Displays print it blank (public_booking_number / serialize_doc).
                 internal_keyed += 1
                 doc["booking_key_internal"] = True
-                doc["md_dedupe"] = internal_key
-                doc["md_key_fallback"] = bool((record.extra_data or {}).get("md_key_fallback"))
+                if internal_key.startswith(MC_KEY_PREFIX):
+                    # Manatee Clerk (court filing): the case number and OBTS
+                    # live in case_number / obts_number, never booking_number.
+                    doc["mc_case_key"] = internal_key
+                else:
+                    doc["md_dedupe"] = internal_key
+                    doc["md_key_fallback"] = bool((record.extra_data or {}).get("md_key_fallback"))
             doc["updated_at"] = now  # Track when record was last refreshed (retention signal)
             doc["last_seen_at"] = now
             # Refresh scraped_at on every write so live activity KPIs stay honest;
@@ -379,6 +392,13 @@ class MongoWriter:
             extra = record.extra_data or {}
             if extra.get("charge_details"):
                 doc["charge_details"] = extra["charge_details"]
+            # Court-filing sources (Manatee Clerk): their own labelled fields.
+            # Set only when present, so a later scrape that publishes a value
+            # (e.g. an OBTS number added after filing) updates it, and a later
+            # blank never wipes a stored one (the field is left out of $set).
+            for fld in ("obts_number", "filing_date", "case_status", "source_label"):
+                if extra.get(fld):
+                    doc[fld] = extra[fld]
             if extra.get("fta_risk_score") is not None:
                 doc["fta_risk_score"] = extra["fta_risk_score"]
                 doc["fta_risk_level"] = extra.get("fta_risk_level")
@@ -644,6 +664,35 @@ class MongoWriter:
         "last_error_class",
         "egress_blocked_failures",
     )
+
+    def get_scraper_cursor(self, county: str, state: str = None, name: str = "detail_queue") -> dict:
+        """Durable per-scraper cursor/backlog state (``scraper_status.cursors.<name>``), or ``{}``.
+
+        Same doc and identity as the resilience state, so it survives restarts
+        and redeploys. Holds counts and internal case keys only (no person data).
+        """
+        filter_q, _bare, _st, _label = self._scraper_status_identity(county, state)
+        doc = self.scraper_status.find_one(filter_q, {f"cursors.{name}": 1, "_id": 0}) or {}
+        return dict((doc.get("cursors") or {}).get(name) or {})
+
+    def set_scraper_cursor(self, county: str, state: str = None, name: str = "detail_queue", value: dict = None) -> None:
+        """Persist the cursor/backlog state written by :meth:`get_scraper_cursor`."""
+        filter_q, bare, st, label = self._scraper_status_identity(county, state)
+        now = datetime.now(timezone.utc)
+        self.scraper_status.update_one(
+            filter_q,
+            {
+                "$set": {
+                    f"cursors.{name}": dict(value or {}),
+                    "county": bare or county,
+                    "county_label": label,
+                    "state": st,
+                    "updated_at": now,
+                },
+                "$setOnInsert": {"created_at": now},
+            },
+            upsert=True,
+        )
 
     def get_scraper_resilience(self, county: str, state: str = None) -> dict:
         """Read persisted consecutive-failure / auto-disable state (or ``{}``)."""
