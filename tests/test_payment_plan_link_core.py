@@ -19,8 +19,11 @@ from tests.test_payment_plan_pay_dedupe import PLAN_ID, Coll, DB, _plan
 
 
 def _app(db, monkeypatch):
+    from dashboard.services import payment_log_claims as plc
+
     pp._inflight_txns.clear()
     pp._txn_support_cache.clear()
+    plc._lock_index_ready = False
     client = TxnClient(db)
 
     async def _txn():
@@ -205,11 +208,11 @@ def test_insert_when_no_logged_row_has_no_token_fields(rig):
     ({"log_claim_token": "tok"}, "logged_payment_uncommitted"),
     ({"claim_token": "tok"}, "logged_payment_uncommitted"),
     ({"payment_claim_token": "tok"}, "logged_payment_uncommitted"),
-    ({"status": "declined"}, "logged_payment_not_settled"),
-    ({"status": "refunded"}, "logged_payment_not_settled"),
+    ({"status": "declined"}, "payment_needs_review"),
+    ({"status": "refunded"}, "payment_needs_review"),
     ({"status": "pending"}, "logged_payment_not_settled"),
     ({"status": ""}, "logged_payment_not_settled"),
-    ({"raw_payload": {"event_type": "payment.refunded"}}, "logged_payment_not_settled"),
+    ({"raw_payload": {"event_type": "payment.refunded"}}, "payment_needs_review"),
     ({"amount": 50}, "logged_payment_amount_mismatch"),
     ({"amount": 100.004}, "logged_payment_amount_mismatch"),
     ({"booking_number": "OTHER-BK"}, "logged_payment_booking_mismatch"),

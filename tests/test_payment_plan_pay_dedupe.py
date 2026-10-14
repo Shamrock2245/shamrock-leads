@@ -124,7 +124,22 @@ class Coll:
                     d[k] = d.get(k, 0) + v
                 d.update(update.get("$set", {}))
                 return
-        return
+        if not upsert:
+            return
+        doc = {}
+        for key, cond in (flt or {}).items():
+            if key.startswith("$") or isinstance(cond, dict):
+                continue
+            doc[key] = cond
+        doc.update(update.get("$setOnInsert") or {})
+        doc.update(update.get("$set") or {})
+        for k, v in (update.get("$inc") or {}).items():
+            doc[k] = doc.get(k, 0) + v
+        for fields in self.unique:
+            key = tuple(doc.get(f) for f in fields)
+            if any(tuple(existing.get(f) for f in fields) == key for existing in self.docs):
+                raise DuplicateKeyError("dup")
+        self.docs.append(copy.deepcopy(doc))
 
 
 class DB(dict):
@@ -192,6 +207,8 @@ def rig(monkeypatch):
     })
     pp._inflight_txns.clear()
     pp._txn_support_cache.clear()
+    from dashboard.services import payment_log_claims as plc
+    plc._lock_index_ready = False
 
     client = TxnClient(db)
 

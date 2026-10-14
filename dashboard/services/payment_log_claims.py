@@ -16,18 +16,23 @@ this kind is already recorded, so the caller returns duplicate and writes
 nothing else. There is no index on ``payments``. There is no provisional
 claim, no token field on the payment row, and no stale-claim takeover.
 
-A refund or failure does not change a plan balance. Before any write, its
-booking is compared with every sibling row for this tenant and transaction
-id, of every event kind. A disagreement, or more than one sibling booking,
-is 409 ``payment_needs_review`` and writes nothing. A blank booking inherits
-the charge booking only when every sibling names that one booking. The
-``needs_review`` flag goes on that bond case and on the one plan named by a
-sibling ``plan_id``. No sibling ``plan_id`` flags the bond case only. Two
-different sibling plan ids are 409 ``payment_needs_review`` and write
-nothing. The audit event records each review-state transition (bond case id
-or plan id, old and new ``needs_review`` and review reason). After the
-commit, one staff Slack alert names that plan only. A Slack failure is
-logged and does not roll the payment back. A refused refund does not alert.
+A refund or failure does not change a plan balance. Inside the transaction,
+before any sibling read, the writer upserts one ``payment_txn_locks``
+document keyed by tenant and transaction id and increments its version.
+The charge, the poller, the webhook, and plan ``/pay`` share that lock, so
+overlapping transactions write-conflict and the retry re-reads committed
+rows. Ownership is decided from that re-read. A disagreement, or more than
+one sibling booking, is 409 ``payment_needs_review`` and writes nothing. A
+blank booking inherits the charge booking only when every sibling names
+that one booking. The ``needs_review`` flag goes on that bond case and on
+the one plan named by a sibling ``plan_id``. No sibling ``plan_id`` flags
+the bond case only. Two different sibling plan ids are 409
+``payment_needs_review`` and write nothing. The audit event records each
+review-state transition (bond case id or plan id, old and new
+``needs_review`` and review reason) and, for each matched bond, the old and
+new ``last_payment_*`` stamp. After the commit, one staff Slack alert names
+that plan only. A Slack failure is logged and does not roll the payment
+back. A refused refund does not alert.
 
 Out of scope: reversing a plan balance, reclaiming a stale claim, and
 backfilling rows that were logged before this claim existed. A recorded row
@@ -44,8 +49,17 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 LOG_CLAIMS_COLLECTION = "payment_log_claims"
+LOCKS_COLLECTION = "payment_txn_locks"
 _INDEX_NAME = "uniq_tenant_txn_kind"
+_LOCK_INDEX_NAME = "uniq_tenant_txn_lock"
 _TOKEN_FIELDS = ("log_claim_token", "claim_token", "payment_claim_token")
+_STAMP_FIELDS = (
+    "last_payment_amount",
+    "last_payment_at",
+    "last_payment_status",
+    "last_transaction_id",
+    "last_payment_source",
+)
 
 # Same settled vocabulary as plan /pay. ``approved`` (poller and webhook) and
 # ``completed`` (a plan row) are one settled charge.
@@ -57,6 +71,7 @@ _DECLINED = frozenset({"declined", "failed", "denied", "voided", "error"})
 _REFUNDED = frozenset({"refunded", "refund", "reversed"})
 
 _index_ready = False
+_lock_index_ready = False
 _txn_support_cache: dict[int, bool] = {}
 
 
@@ -277,6 +292,39 @@ async def _claims(db):
     return coll
 
 
+async def ensure_txn_lock_index(coll) -> None:
+    """Unique ``(tenant_id, txn_key)`` on ``payment_txn_locks``. Not on ``payments``.
+
+    Created lazily before the transaction that upserts the lock. A failure
+    here means the caller records nothing.
+    """
+    global _lock_index_ready
+    if _lock_index_ready:
+        return
+    await coll.create_index(
+        [("tenant_id", 1), ("txn_key", 1)],
+        unique=True,
+        name=_LOCK_INDEX_NAME,
+    )
+    _lock_index_ready = True
+
+
+async def acquire_txn_lock(coll, txn_key: str, session) -> None:
+    """Upsert the shared lock and bump ``version`` before any sibling read.
+
+    Charge, poller, webhook refund/failure, and plan ``/pay`` all call this
+    inside their transaction. Two transactions that touch the same tenant and
+    transaction id write-conflict on this document. ``with_transaction`` retries,
+    and the retry reads the winner's committed payment rows.
+    """
+    await coll.update_one(
+        {"txn_key": txn_key},
+        {"$inc": {"version": 1}, "$setOnInsert": {"txn_key": txn_key}},
+        upsert=True,
+        **_sess(session),
+    )
+
+
 async def _supports_transactions(client) -> bool:
     """True on a replica set or mongos (Atlas). Standalone is false.
 
@@ -491,6 +539,21 @@ def _review_transition(entity_type: str, ident_key: str, ident: str, old_doc: Op
     }
 
 
+def _stamp_view(doc: Optional[dict]) -> dict:
+    if not doc:
+        return {field: None for field in _STAMP_FIELDS}
+    return {field: doc.get(field) for field in _STAMP_FIELDS}
+
+
+def _stamp_transition(entity_type: str, ident_key: str, ident: str, old_doc: dict, new_stamp: dict) -> dict:
+    return {
+        "entity_type": entity_type,
+        ident_key: ident,
+        "old_last_payment": _stamp_view(old_doc),
+        "new_last_payment": _stamp_view(new_stamp),
+    }
+
+
 async def _apply(
     db,
     *,
@@ -512,12 +575,15 @@ async def _apply(
     """
     from pymongo.errors import DuplicateKeyError
 
+    # Shared with plan /pay. The write conflict makes a retry re-read siblings.
+    await acquire_txn_lock(db[LOCKS_COLLECTION], txn_key, session)
+
     rows = await _read_rows(db, txn_key, session, kind=kind)
     _raise_if_conflict(rows, cents=cents, status=status, booking=booking, txn_key=txn_key)
     if rows:
         raise AlreadyRecorded()
 
-    # All kinds. A refund must not attach to a different case or plan.
+    # All kinds. Ownership is decided only after the lock is held.
     siblings = await _docs(db["payments"], {"transaction_id": txn_key}, session)
     plan_id = ""
     if kind in ("refund", "failed"):
@@ -563,6 +629,7 @@ async def _apply(
     review = kind in ("refund", "failed")
     flag = _review_flag(kind, amount, txn_key) if review else None
     transitions: list = []
+    stamp_transitions: list = []
     reason = _review_reason(kind) if review else ""
 
     if booking:
@@ -575,16 +642,21 @@ async def _apply(
         }
         if flag:
             payment_update.update(flag)
-            for coll_name, entity_type, ident_key in (
-                ("bond_cases", "bond_case", "bond_case_id"),
-                ("active_bonds", "active_bond", "active_bond_id"),
-            ):
-                matched = await _docs(db[coll_name], {"booking_number": booking}, session)
-                current = matched[0] if matched else None
-                if current is None:
-                    continue
+        for coll_name, entity_type, ident_key in (
+            ("bond_cases", "bond_case", "bond_case_id"),
+            ("active_bonds", "active_bond", "active_bond_id"),
+        ):
+            matched = await _docs(db[coll_name], {"booking_number": booking}, session)
+            current = matched[0] if matched else None
+            if current is None:
+                continue
+            ident = _bond_case_id(current)
+            stamp_transitions.append(_stamp_transition(
+                entity_type, ident_key, ident, current, payment_update,
+            ))
+            if flag:
                 transitions.append(_review_transition(
-                    entity_type, ident_key, _bond_case_id(current), current, reason,
+                    entity_type, ident_key, ident, current, reason,
                 ))
         await db["bond_cases"].update_one(
             {"booking_number": booking},
@@ -629,6 +701,7 @@ async def _apply(
             "reason": "provider payment recorded",
             "confidence": 1.0,
             "review_transitions": transitions,
+            "stamp_transitions": stamp_transitions,
             "payload": {
                 "amount": amount,
                 "booking_number": booking,
@@ -636,6 +709,7 @@ async def _apply(
                 "status": status,
                 "event_kind": kind,
                 "review_transitions": transitions,
+                "stamp_transitions": stamp_transitions,
             },
         }, **_sess(session))
     except DuplicateKeyError:
@@ -773,6 +847,7 @@ async def record_provider_payment(
 
     try:
         await _claims(db)
+        await ensure_txn_lock_index(db[LOCKS_COLLECTION])
     except PaymentLogError:
         raise
     except Exception:

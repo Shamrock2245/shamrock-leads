@@ -344,9 +344,12 @@ async def _idempotent_reply(
 # the row write, the plan ``$inc`` (and the paid-in-full clamp), and the
 # ``audit_events`` insert run in that same ``ClientSession.with_transaction``.
 # The driver retries transient transaction errors. There is no fallback and
-# no step resume. This path does not implement refund/reversal lifecycle,
-# county/state backfill, email-only bond matching, or poller/webhook claim
-# changes.
+# no step resume. The first write inside the transaction is the shared
+# ``payment_txn_locks`` upsert (same tenant + transaction id as the provider
+# charge, poller, and webhook). Sibling payment rows are read after that
+# lock. A refund or failure for this transaction id is 409
+# ``payment_needs_review`` and does not change the balance. This path does
+# not reverse a plan balance, backfill county or state, or match on email.
 
 _TOKEN_FIELDS = ("log_claim_token", "claim_token", "payment_claim_token")
 _SETTLED_STATUSES = frozenset({
@@ -506,6 +509,27 @@ def _qualify(plan: dict, row: dict, amount, txn: str):
     return _refuse(code[0], txn, code[1])
 
 
+def _reversed_payment(rows: list) -> bool:
+    """True when a sibling row is a refund, a failure, or already flagged."""
+    from dashboard.services.payment_log_claims import row_kind
+
+    for row in rows:
+        if row_kind(row) in ("refund", "failed"):
+            return True
+        if row.get("needs_review") is True:
+            return True
+    return False
+
+
+def _reversed_refusal(txn: str):
+    return _refuse(
+        "payment_needs_review",
+        txn,
+        "This transaction id was refunded or failed and needs review. "
+        "The plan balance was not changed.",
+    )
+
+
 async def _docs(coll, flt: dict, session=None) -> list:
     kwargs = _sess(session)
     cursor = coll.find(flt, **kwargs) if kwargs else coll.find(flt)
@@ -645,6 +669,8 @@ async def _classify_rows(payments_col, plan: dict, txn: str, amount):
     ``target`` is the single committed unlinked row to link. None means insert.
     """
     rows = await _docs(payments_col, {"transaction_id": txn})
+    if _reversed_payment(rows):
+        return "error", _reversed_refusal(txn)
     if not rows:
         if not _booking(plan.get("booking_number")):
             return "error", _refuse(
@@ -704,6 +730,12 @@ async def _assert_preconditions(claims, payments_col, plans_col, plan_id, txn, a
             "The plan must have a non-blank booking number before a payment can be recorded.",
         )
     rows = await _docs(payments_col, {"transaction_id": txn}, session)
+    if _reversed_payment(rows):
+        raise PlanPaymentRefused(
+            "payment_needs_review",
+            "This transaction id was refunded or failed and needs review. "
+            "The plan balance was not changed.",
+        )
     token_rows = [row for row in rows if _has_token(row)]
     committed = [row for row in rows if not _has_token(row)]
     if token_rows:
@@ -891,7 +923,10 @@ async def _mark_applied(claims, plans_col, plan_id, txn, now, session=None) -> d
 
 
 async def _apply_in_transaction(claims, payments_col, plans_col, audit_col, plan_id, txn, amount, data, actor, now, session) -> None:
-    """Validate, then write the row, the balance, the audit, and the claim, in that order."""
+    """Lock, re-read ownership, then write the row, the balance, the audit, and the claim."""
+    from dashboard.services.payment_log_claims import LOCKS_COLLECTION, acquire_txn_lock
+
+    await acquire_txn_lock(get_collection(LOCKS_COLLECTION), txn, session)
     plan, mode, row = await _assert_preconditions(
         claims, payments_col, plans_col, plan_id, txn, amount, session,
     )
@@ -1068,6 +1103,13 @@ async def record_payment(request: Request, plan_id):
 
     client = await _transaction_client()
     if client is None:
+        return _unavailable()
+
+    try:
+        from dashboard.services.payment_log_claims import LOCKS_COLLECTION, ensure_txn_lock_index
+        await ensure_txn_lock_index(get_collection(LOCKS_COLLECTION))
+    except Exception:
+        logger.warning("[payment_plans] txn lock index unavailable")
         return _unavailable()
 
     try:
