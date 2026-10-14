@@ -19,6 +19,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_fl_plain_https_polk_volusia_pasco.py` (added to the `ci.yml` list).
 
+## [Unreleased] — 2026-10-14 (powers pack transfer history banner)
+
+### Changed
+- **The powers-pack partial-history banner follows the rows in range.** Each transfer row has `evidence_complete`. It is true when that row is backed by an `audit_events` action `poa_reassigned`, or by a `poa_inventory.release_history` or `released_at` stamp. The banner is on the pack contract, the transfer section, and the XLSX cover only when at least one row in range is legacy: a string `reassigned_from`, or a release with neither stamp. `history_complete` is true when no row in range is legacy. `X-History-Complete` and `X-Transfer-Partial` on `GET /api/reports/powers-pack/{pack}` follow that flag.
+
+### Tests
+- `tests/test_powers_pack_history_banner.py` (added to the `ci.yml` list). Mocked Mongo only, `TEST-` powers. A range of post-#172 reassigns and releases has no banner and `history_complete` true. One legacy string row brings the banner back and sets `history_complete` false. Per-row `evidence_complete` matches the backing evidence. An audit-only release with no stamp is legacy.
+
 ## [Unreleased] — 2026-10-09 (Miami-Dade key never printed in outbound alerts, rendered pages or the browser; stacked on #168)
 
 ### Changed
