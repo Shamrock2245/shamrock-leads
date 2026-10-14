@@ -128,7 +128,7 @@
 ### Miami-Dade
 | County | Module | Runtime state | Source posture |
 |---|---|---|---|
-| **Miami-Dade** | `miami_dade.py` | Registered, **fail_closed** (Health `fail_closed`; matrix `fail_closed`; `SOURCE_CONTRACT_VALIDATED=False`, 2026-10-09) | ArcGIS FeatureServer table `miamidade_jail_data` (plain `requests`). It publishes no booking, jail or case number. Its ObjectId/GlobalID are map row ids that get reissued on republish: on 2026-10-09 08:03 ET, 840 of 841 snapshot rows got a new GlobalID. `Booking_Number` is therefore left blank, never a row id or hash. `extra.md_dedupe` holds an internal dedupe key (sha256 of defendant, booking date and full charges), labelled as not a booking number. No bond field, so bond is `""`, never `$0`. No rows are fetched or written until an owner decision on keying by `md_dedupe` plus a backed-up cleanup. Stored GlobalID duplicates are counted read-only by `scripts/miami_dade_dedupe_report.py`. |
+| **Miami-Dade** | `miami_dade.py` | Registered, **unverified** (Health `unverified`; matrix `recon_only`; owner exception, Brendan 2026-10-09 9:32 AM ET) | ArcGIS FeatureServer table `miamidade_jail_data` (plain `requests`, every 60 min). It publishes no booking, jail or case number, and its ObjectId/GlobalID are reissued on republish (2026-10-09 08:03 ET: 840 of 841 snapshot rows got a new GlobalID). `Booking_Number` stays blank. Rows are keyed on the approved internal natural key `md_dedupe_v2` = sha256 of normalised defendant + DOB + BookDate (charges excluded, so an amended charge updates in place; without a DOB: defendant + BookDate + full verbatim charges, flagged `md_key_fallback`). `MongoWriter` upserts on it through a narrow allow-listed path (`core/booking_identity.py`); every other county keeps the blank-booking guard. The key is the stored record id only and is printed blank in hydrate, PDF/DocuSeal and the dashboard. No bond field, so bond is `""`, never `$0`. Stored GlobalID duplicates are counted read-only by `scripts/miami_dade_dedupe_report.py`; cleanup is Leads Ops, backed up. |
 
 ### Rural source-recon queue — scaffolded and registered
 
@@ -148,7 +148,7 @@ Dataset ID: c2275711ced240c6bc4e998ee1910e85
 Hub URL:    https://gis-mdc.opendata.arcgis.com/datasets/c2275711ced240c6bc4e998ee1910e85/about
 Note:       opendata.miamidade.gov now redirects to hub.arcgis.com (legacy Socrata gone)
 Update freq: Daily (not real-time)
-Approach:   Query the anonymous FeatureServer directly with `ObjectId,GlobalID,BookDate,Defendant,Charge1,Code2,Charge3`; exclude address, ZIP, and DOB fields. Fail closed without a complete name, source key, or booking date. The source is date-granular, so it must not fabricate a booking time or custody status.
+Approach:   Query the anonymous FeatureServer directly with `ObjectId,BookDate,Defendant,DOB,Charge1,Code2,Charge3`; exclude address and ZIP fields (DOB is part of the approved internal natural key, owner exception 2026-10-09). Drop rows without a complete name or booking date. ObjectId/GlobalID are never keys (reissued on republish). The source is date-granular, so it must not fabricate a booking time or custody status.
 ```
 
 ---
