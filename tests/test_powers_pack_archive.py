@@ -141,6 +141,20 @@ def _spoof_headers():
     }
 
 
+def _workbook_values(xlsx: bytes) -> list[tuple]:
+    """Sheet names and cell values. Ignores the openpyxl core timestamp."""
+    from io import BytesIO
+    from openpyxl import load_workbook
+
+    wb = load_workbook(BytesIO(xlsx))
+    sheets = []
+    for name in wb.sheetnames:
+        ws = wb[name]
+        rows = [tuple(cell.value for cell in row) for row in ws.iter_rows()]
+        sheets.append((name, tuple(rows)))
+    return sheets
+
+
 @patch("dashboard.routers.reports.get_db")
 def test_building_a_pack_inserts_one_row(mock_get_db, reports_app, session_secret):
     db = _db()
@@ -308,9 +322,9 @@ def test_list_generated_reports_returns_the_pack(mock_get_db, reports_app, sessi
         cookies=_cookie(),
     )
     assert second.status_code == 200
-    assert second.content == first.content
+    assert _workbook_values(second.content) == _workbook_values(first.content)
     assert len(db["generated_reports"].docs) == 2
-    assert base64.b64decode(db["generated_reports"].docs[1]["xlsx_b64"]) == first.content
+    assert base64.b64decode(db["generated_reports"].docs[1]["xlsx_b64"]) == second.content
 
 
 @patch("dashboard.routers.reports.get_db")
