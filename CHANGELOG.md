@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-14 (staff TEST identity opt-in)
+
+### Added
+- **`enforce_identity` on Write Bond finalize and the DocuSeal push.** Field name: `enforce_identity`. Endpoints: `POST /api/paperwork/packet/finalize` and `POST /api/paperwork/{packet_id}/docuseal`. A staff-authenticated request, with staff test mode on, for a `TEST-` booking and a `PKT-TEST-` packet, still skips the #165 indemnitor identity gate when the field is false or absent. `enforce_identity: true` turns that skip off. The normal gate then runs, and an unverified indemnitor gets 422 `indemnitor_identity_unverified` before a packet is built, a POA is reserved, or DocuSeal is called. The flag cannot loosen the gate. A real booking, a request that is not staff-authorized, and a request while staff test mode is off ignore it and stay gated. Gate order is unchanged (identity, then binding, then POA and charge capacity). `self_indemnitor` is unchanged.
+- **A staff DocuSeal push of an existing `TEST-` / `PKT-TEST-` packet follows that same skip.** It did not before. The skip applies only while staff test mode is on and the caller is staff-authorized. `enforce_identity: true` turns it off. Any other push is still gated.
+
+### Tests
+- `tests/test_enforce_identity_flag.py` (added to the `ci.yml` list, which names files explicitly). Mocked Mongo and a stubbed DocuSeal. A staff TEST case with `enforce_identity` and no scan or attestation returns 422, with zero `create_submission` calls and zero POA reservations, on both the DocuSeal push and finalize. The same case without the flag still takes the exempt path. A passed scan with the flag proceeds. A real booking with the flag false or absent is still 422. A non-staff request and a test-mode-off request ignore the flag.
+
 ## [Unreleased] — 2026-10-14 (powers pack transfer history banner)
 
 ### Changed
