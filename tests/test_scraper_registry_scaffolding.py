@@ -105,8 +105,14 @@ def _registered_runtime_modules() -> set[str]:
 
 
 def test_registered_counties_have_one_unique_state_qualified_label():
-    counts = Counter(_label_parts(label)[1] for label in REGISTERED_COUNTIES)
-    assert len(REGISTERED_COUNTIES) == sum(EXPECTED_COUNTS.values()) == 361
+    # County-level scopes; the Manatee Clerk (FL) court-filing scope (2026-10-10)
+    # is registered on top of them (NON_COUNTY_SOURCE_SCOPES).
+    from dashboard.extensions import NON_COUNTY_SOURCE_SCOPES
+
+    county_level = [label for label in REGISTERED_COUNTIES if label not in NON_COUNTY_SOURCE_SCOPES]
+    counts = Counter(_label_parts(label)[1] for label in county_level)
+    assert len(county_level) == sum(EXPECTED_COUNTS.values()) == 361
+    assert len(REGISTERED_COUNTIES) == 362
     assert counts == EXPECTED_COUNTS
     assert len(REGISTERED_COUNTIES) == len(set(REGISTERED_COUNTIES))
 

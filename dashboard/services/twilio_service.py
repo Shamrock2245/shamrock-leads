@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
+from core.booking_identity import redact_internal_keys
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,8 @@ class TwilioService:
             RuntimeError: If Twilio credentials are not configured.
             httpx.HTTPStatusError: On 4xx/5xx from Twilio.
         """
+        # Internal natural keys (core/booking_identity.py) are never sent.
+        body = redact_internal_keys(body)
         if not self._is_configured():
             raise RuntimeError(
                 "Twilio credentials not configured. "
