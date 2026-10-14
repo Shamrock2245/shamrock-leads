@@ -492,9 +492,31 @@ async def _flag_bond(db, booking: str, flag: dict, session) -> Optional[dict]:
     )
     return {
         "collection": name,
+        "record_id": "" if current.get("_id") is None else str(current["_id"]),
         "booking_number": booking,
         "old_needs_review": current.get("needs_review"),
         "new_needs_review": True,
+        "old_needs_review_reason": current.get("needs_review_reason"),
+        "new_needs_review_reason": flag.get("needs_review_reason"),
+    }
+
+
+async def _flag_plan(db, plan_id: str, flag: dict, session) -> Optional[dict]:
+    """Set ``needs_review`` on the one plan with this id. No balance write."""
+    plans = await _docs(db["payment_plans"], {"plan_id": plan_id}, session)
+    if len(plans) != 1:
+        return None
+    current = plans[0]
+    filt = {"plan_id": plan_id}
+    if current.get("_id") is not None:
+        filt["_id"] = current["_id"]
+    await db["payment_plans"].update_one(filt, {"$set": flag}, **_sess(session))
+    return {
+        "plan_id": plan_id,
+        "old_needs_review": current.get("needs_review"),
+        "new_needs_review": True,
+        "old_needs_review_reason": current.get("needs_review_reason"),
+        "new_needs_review_reason": flag.get("needs_review_reason"),
     }
 
 
@@ -593,6 +615,7 @@ async def _apply(
     await db["payments"].insert_one(doc, **_sess(session))
 
     bond_review = None
+    plan_review = None
     plan_id = ""
     if kind in REVERSAL_KINDS:
         flag = _review_flag(kind, txn_key)
@@ -611,11 +634,7 @@ async def _apply(
             bond_review = await _flag_bond(db, flag_booking, flag, session)
         plan_id = _one_plan_id(siblings)
         if plan_id:
-            await db["payment_plans"].update_one(
-                {"plan_id": plan_id},
-                {"$set": flag},
-                **_sess(session),
-            )
+            plan_review = await _flag_plan(db, plan_id, flag, session)
 
     audit = {
         "_id": _audit_id(txn_key, kind),
@@ -639,11 +658,18 @@ async def _apply(
         audit["old_last_payment"] = stamp_audit["old_last_payment"]
         audit["new_last_payment"] = stamp_audit["new_last_payment"]
         audit["stamped_collection"] = stamp_audit["collection"]
+    if doc.get("needs_review"):
+        audit["payment_review"] = {
+            "old_needs_review": None,
+            "new_needs_review": True,
+            "old_needs_review_reason": None,
+            "new_needs_review_reason": doc.get("needs_review_reason"),
+        }
     if bond_review:
         audit["bond_review"] = bond_review
-    if plan_id and kind in REVERSAL_KINDS:
-        audit["plan_id"] = plan_id
-        audit["plan_needs_review"] = True
+    if plan_review:
+        audit["plan_id"] = plan_review["plan_id"]
+        audit["plan_review"] = plan_review
     try:
         await db["audit_events"].insert_one(audit, **_sess(session))
     except DuplicateKeyError:

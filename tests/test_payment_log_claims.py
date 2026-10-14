@@ -53,8 +53,9 @@ class CommitSession:
                 return
             except plc.RetryableTxnError:
                 self._restore(snap)
-                if self.client.plant and self.client.attempts == 1:
+                if self.client.plant:
                     self.client.plant()
+                    self.client.plant = None
                 continue
             except Exception:
                 self._restore(snap)
@@ -74,17 +75,21 @@ class TxnClient:
 
 
 class ConflictColl(Coll):
-    """The first lock upsert raises a transient write conflict."""
+    """The Nth lock upsert raises a transient write conflict. Default is the first."""
 
-    def __init__(self):
+    def __init__(self, raise_on=1):
         super().__init__()
         self.raised = False
+        self.raise_on = raise_on
+        self.incs = 0
 
     async def update_one(self, flt, update, upsert=False, session=None, **kwargs):
         await super().update_one(flt, update, upsert=upsert, session=session)
-        if not self.raised and (update.get("$inc") or {}).get("version"):
-            self.raised = True
-            raise plc.RetryableTxnError()
+        if (update.get("$inc") or {}).get("version"):
+            self.incs += 1
+            if not self.raised and self.incs == self.raise_on:
+                self.raised = True
+                raise plc.RetryableTxnError()
 
 
 @pytest.fixture
@@ -133,7 +138,7 @@ def _stamp(doc):
     }
 
 
-async def _record(db, *, kind="charge", booking=BOOKING, txn=TXN, amount=100, status=None, event_type=None):
+async def _record(db, *, kind="charge", booking=BOOKING, txn=TXN, amount=100, status=None, event_type=None, plan_id=None):
     if kind == "refund":
         status = status or "refunded"
         event_type = event_type or "payment.refunded"
@@ -146,6 +151,9 @@ async def _record(db, *, kind="charge", booking=BOOKING, txn=TXN, amount=100, st
         status = status or "approved"
         event_type = event_type or "payment.completed"
         source = "swipesimple_webhook"
+    extra = {"event_type": event_type}
+    if plan_id:
+        extra["plan_id"] = plan_id
     return await plc.record_provider_payment(
         db,
         source=source,
@@ -153,7 +161,7 @@ async def _record(db, *, kind="charge", booking=BOOKING, txn=TXN, amount=100, st
         amount=amount,
         status=status,
         booking_number=booking,
-        extra={"event_type": event_type},
+        extra=extra,
     )
 
 
@@ -187,6 +195,7 @@ def _pay_app(db, monkeypatch):
     monkeypatch.setattr(pp, "_txn_client", _txn)
     monkeypatch.setattr(plc, "_transaction_client", _txn)
     app = FastAPI()
+    app.state.txn_client = client
     app.include_router(pp.payment_plans_bp)
     return app
 
@@ -371,6 +380,147 @@ def test_cross_booking_charge_records_needs_review_without_stamp(db, slack_alert
         assert bond.get("last_transaction_id") is None
     assert _audit(db, "charge")["stamped"] is False
     assert len(slack_alerts) == 1
+
+
+def test_refund_and_failure_record_own_rows_without_balance_or_stamp(db, slack_alerts):
+    """(a) A refund and a failure are their own rows plus needs_review. No balance or stamp change."""
+    db["bond_cases"].docs.append(_bond(
+        last_payment_amount=50,
+        last_payment_at="yesterday",
+        last_payment_status="approved",
+        last_transaction_id="OLD",
+        last_payment_source="manual",
+    ))
+    db["payment_plans"].docs.append({
+        "plan_id": PLAN_ID, "balance_remaining": 800.0, "total_paid": 200.0, "payments_made": 1,
+    })
+    charged = _run(_record(db, kind="charge", plan_id=PLAN_ID))
+    assert charged["committed"] is True
+    bond = db["bond_cases"].docs[0]
+    stamp = _stamp(bond)
+    assert stamp["amount"] == 100.0 and stamp["txn"] == TXN
+    balance = db["payment_plans"].docs[0]["balance_remaining"]
+
+    refunded = _run(_record(db, kind="refund"))
+    failed = _run(_record(db, kind="failure"))
+    assert refunded["committed"] is True and failed["committed"] is True
+    assert len(_rows(db, "refund")) == 1 and len(_rows(db, "failure")) == 1
+    assert _rows(db, "refund")[0]["needs_review"] is True
+    assert _rows(db, "failure")[0]["needs_review"] is True
+    assert _rows(db, "failure")[0]["event_kind"] == "failure"
+    assert _stamp(bond) == stamp
+    plan = db["payment_plans"].docs[0]
+    assert plan["balance_remaining"] == balance
+    assert plan["total_paid"] == 200.0 and plan["payments_made"] == 1
+    assert plan["needs_review"] is True
+    assert bond["needs_review"] is True
+    assert len(db["payment_log_claims"].docs) == 1
+    assert [hit["kind"] for hit in slack_alerts] == ["refund", "failure"]
+
+
+def test_charge_after_reversal_checks_ownership_and_does_not_stamp(db, slack_alerts):
+    """(b) A charge after its reversal is needs_review, with no stamp, after the sibling booking is checked."""
+    db["bond_cases"].docs.append(_bond(BOOKING, _id="bond-owned"))
+    db["bond_cases"].docs.append(_bond("BK-2", _id="bond-other"))
+
+    _run(_record(db, kind="refund", booking=BOOKING, txn="TX-OWN"))
+    late = _run(_record(db, kind="charge", booking="BK-2", txn="TX-OWN"))
+    assert late["committed"] is True
+    crossed = [row for row in _rows(db, "charge") if row["transaction_id"] == "TX-OWN"][0]
+    assert crossed["booking_number"] == "BK-2"
+    assert crossed["needs_review"] is True
+    assert crossed["needs_review_reason"] == "cross_booking"
+    assert _audit(db, "charge")["stamped"] is False
+
+    _run(_record(db, kind="failure", booking=BOOKING, txn="TX-SAME"))
+    same = _run(_record(db, kind="charge", booking=BOOKING, txn="TX-SAME"))
+    assert same["committed"] is True
+    owned = [row for row in _rows(db, "charge") if row["transaction_id"] == "TX-SAME"][0]
+    assert owned["booking_number"] == BOOKING
+    assert owned["needs_review_reason"] == "reversal_sibling"
+    for bond in db["bond_cases"].docs:
+        assert bond.get("last_payment_amount") is None
+        assert bond.get("last_transaction_id") is None
+
+
+def test_pay_write_conflict_retry_sees_reversal_and_does_not_change_balance(plan_db, monkeypatch):
+    """(d) /pay re-reads siblings after a payment_txn_locks write conflict and does not apply."""
+    app = _pay_app(plan_db, monkeypatch)
+    locks = ConflictColl(raise_on=2)
+    plan_db["payment_txn_locks"] = locks
+    client = app.state.txn_client
+
+    def plant():
+        plan_db["payments"].docs.append({
+            "transaction_id": TXN,
+            "event_kind": "refund",
+            "booking_number": BOOKING,
+            "amount": 100.0,
+            "status": "refunded",
+        })
+
+    client.plant = plant
+    with patch("dashboard.routers.events.publish_event", new=AsyncMock()):
+        response = _post_pay(app)
+    assert response.status_code == 409
+    assert response.json()["error"] == "payment_needs_review"
+    assert client.attempts == 3
+    assert locks.raised is True
+    plan = _plan(plan_db)
+    assert plan["balance_remaining"] == 800.0
+    assert plan["payments_made"] == 1 and plan["total_paid"] == 200.0
+    assert "collected_transaction_ids" not in plan
+    assert plan_db["bond_cases"].docs[0].get("last_payment_amount") is None
+    claim = plan_db["payment_plan_payment_claims"].docs[0]
+    assert claim["status"] == "failed"
+    assert len(_rows(plan_db, "refund")) == 1
+
+
+def test_review_state_audit_records_before_and_after(db, slack_alerts):
+    """(e) Each needs_review write is audited with the old and new values."""
+    db["bond_cases"].docs.append(_bond(
+        _id="bond-1",
+        needs_review=False,
+        needs_review_reason="clear",
+    ))
+    db["payment_plans"].docs.append({
+        "plan_id": PLAN_ID,
+        "needs_review": False,
+        "needs_review_reason": "clear",
+        "balance_remaining": 800.0,
+    })
+    _run(_record(db, kind="charge", plan_id=PLAN_ID))
+    _run(_record(db, kind="refund"))
+    refund_audit = _audit(db, "refund")
+    bond_review = refund_audit["bond_review"]
+    assert bond_review["record_id"] == "bond-1"
+    assert bond_review["old_needs_review"] is False
+    assert bond_review["new_needs_review"] is True
+    assert bond_review["old_needs_review_reason"] == "clear"
+    assert bond_review["new_needs_review_reason"] == "provider_refund"
+    plan_review = refund_audit["plan_review"]
+    assert plan_review["plan_id"] == PLAN_ID
+    assert plan_review["old_needs_review"] is False
+    assert plan_review["new_needs_review"] is True
+    assert plan_review["old_needs_review_reason"] == "clear"
+    assert plan_review["new_needs_review_reason"] == "provider_refund"
+    assert refund_audit["payment_review"] == {
+        "old_needs_review": None,
+        "new_needs_review": True,
+        "old_needs_review_reason": None,
+        "new_needs_review_reason": "provider_refund",
+    }
+    assert db["payment_plans"].docs[0]["balance_remaining"] == 800.0
+
+    _run(_record(db, kind="failure"))
+    failure_audit = _audit(db, "failure")
+    assert failure_audit["bond_review"]["old_needs_review"] is True
+    assert failure_audit["bond_review"]["old_needs_review_reason"] == "provider_refund"
+    assert failure_audit["bond_review"]["new_needs_review"] is True
+    assert failure_audit["bond_review"]["new_needs_review_reason"] == "provider_failure"
+    assert failure_audit["plan_review"]["old_needs_review_reason"] == "provider_refund"
+    assert failure_audit["plan_review"]["new_needs_review_reason"] == "provider_failure"
+    assert failure_audit["payment_review"]["new_needs_review_reason"] == "provider_failure"
 
 
 def test_blank_booking_webhook_does_not_stamp(db, monkeypatch):
