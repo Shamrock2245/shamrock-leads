@@ -124,6 +124,7 @@ jobs:
             tests/test_prod_auth_allowlist.py \
             tests/test_payment_webhook.py \
             tests/test_payment_plan_pay_dedupe.py \
+            tests/test_payment_plan_link_core.py \
             tests/test_auth_no_pin_fail_closed.py \
             tests/test_pinellas_relay_only.py \
             tests/test_pinellas_modal_wait.py \
@@ -196,6 +197,8 @@ jobs:
             tests/test_bond_packet_start.py \
             tests/test_staff_test_case_write_bond.py \
             tests/test_write_bond_golden_smoke.py \
+            tests/test_write_bond_identity_gate.py \
+            tests/test_count_unverified_open_bondcases.py \
             tests/test_write_bond_template_goldens.py \
             tests/test_surety_review_fixes.py \
             tests/test_wix_intake_webhook.py \

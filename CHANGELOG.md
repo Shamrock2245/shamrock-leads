@@ -3,6 +3,25 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-14 (plan /pay tenant guard and audit id)
+
+### Fixed
+- **`POST /api/payments/plans/{plan_id}/pay` in-flight guard is per tenant.** With `SAAS_MULTI_TENANT` on, the process-local hold was only the transaction id. Two agencies could each insert a claim (the unique index is `tenant_id` + `transaction_id`), and the second then lost the hold and returned 409 `payment_in_progress` with its claim left `claimed`. A later retry will not resume a `claimed` row. The hold key is now `(tenant_id, transaction_id)`. Flag off still uses one hold per transaction id.
+- **The plan-payment `audit_events` `_id` includes the tenant when multi-tenant is on.** It is `plan-pay:{tenant_id}:{plan_id}:{transaction_id}`. Two agencies with the same plan id and transaction id each get an audit row, and the second transaction is not aborted by a duplicate `_id`. Flag off stays `plan-pay:{plan_id}:{transaction_id}`. No index is added on `payments`.
+
+### Tests
+- `tests/test_payment_plan_link_core.py`: with `SAAS_MULTI_TENANT` on, two tenants posting the same transaction id both commit, each with its own claim and audit. A same-tenant replay stays idempotent. The single-tenant audit `_id` is unchanged. No SwipeSimple, Gmail, or Slack calls.
+
+## [Unreleased] — 2026-10-13 (plan /pay links a committed payment)
+
+### Fixed
+- **`POST /api/payments/plans/{plan_id}/pay` links one committed `payments` row, or inserts one, through a single serialized path.** A `transaction_id` that already has a logged row is applied only when that row is committed (no `log_claim_token`, `claim_token`, or `payment_claim_token`), settled (`approved`, `paid`, `completed`, `complete`, `success`, `succeeded`, `captured`, `settled`, and a settled `event_type` when one is stored), the same exact cents as the request, and the same non-blank `booking_number` as the plan. Anything else returns 409 and does not change the balance. The link sets `plan_id`, `type: installment`, and `status: completed` (the original status is kept on `logged_status`, and a `timestamp` is added when the row has none) so `GET /payments/summary` counts it once. The update is pinned to the status, amount, booking number, and absent `plan_id` read beforehand. No index is created on `payments`.
+- **The claim is taken first** in `payment_plan_payment_claims` (unique `tenant_id` + `transaction_id`), and only after the server is confirmed to be a replica set or Atlas. A failed transaction probe, or a standalone server, returns 503 `transactions_unavailable` and writes nothing (no claim, no payment row, no balance change). Inside the transaction, booking, settled status, exact cents, and claim state are read before any write. A plan with a blank booking number and no logged row returns 409 and leaves no payment row and no claim. The row write, the plan balance `$inc` (including the paid-in-full clamp), and the `audit_events` insert then run in that same `ClientSession.with_transaction` (the driver retries transient transaction errors). The audit event records `old_state` and `new_state` (balance and status before the increment and after the paid-in-full clamp). There is no non-transactional fallback and no step resume. The claim is marked `applied` only after those writes finish. When no logged row exists, the payment row is inserted inside that same transaction. Rows written here do not carry claim or log tokens.
+- **Not in this change:** refund and reversal lifecycle, county or state backfill, email-only bond matching, and poller or webhook claim changes.
+
+### Tests
+- `tests/test_payment_plan_link_core.py` (added to `ci.yml`): link happy path, each 409 refusal, a blank booking with no logged row writes nothing, transactions unavailable returns 503 with no writes, transaction abort leaves the balance and the row untouched, idempotent replay, and paid-in-full. The in-memory double plus a transaction shim stands in for Mongo. No SwipeSimple, Gmail, or Slack calls.
+
 ## [Unreleased] — 2026-10-12 (plan payments: exact cents)
 
 ### Fixed
@@ -85,6 +104,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_auth_no_pin_fail_closed.py` (added to the `ci.yml` list): missing PIN with `ENV` unset, `production`, `prod`, `staging`, `test` or `dev` returns 503 on `/api/stats`, `/openapi.json`, `/docs`, Traccar device status and `/`, and `/health` stays 200. `ENVIRONMENT=production` returns 503. `ENV=development` (or `ENVIRONMENT=development`) passes through. `ENV=development` with `REQUIRE_DASHBOARD_PIN=true` returns 503. A PIN set keeps 401 / 302 under every `ENV`. Public allowlist statuses are the same with and without a PIN. Synthetic values only.
 - `tests/test_bb_webhook_register_auth.py`: the two route-guard tests that rely on an open middleware now set `ENV=development` explicitly. Their 401 assertions are unchanged.
+
+## [Unreleased] — 2026-10-09 (Write Bond identity gate)
+
+### Added
+- **Write Bond refuses an unverified indemnitor.** OSI and Palmetto packets (finalize, packet start, DocuSeal submission, Shannon email, packet push, and bond-packet send) require every indemnitor and co-indemnitor to be verified before a DocuSeal payload is built, before any DocuSeal call, and before a POA lookup. The machine code is `indemnitor_identity_unverified` (HTTP 422). The message names the person and the gap: no scan and no attestation, scan failed, name mismatch, or a failed lookup. The identity gate runs first. `validate_docuseal_packet_binding` is unchanged and runs immediately after it.
+- **Passed scan.** The scanner `success` flag is the pass/fail result (`passed` / `status` when that is what was stored). A bare extract is a pass only when a successful read was stored. Scans are read from `intake_queue.id_extracted`, `portal_pins.id_extracted`, `paperwork_packets.id_ocr` / `id_ocr_fields`, `indemnitors.id_scan`, and nested scans on `active_bonds`, `prospective_bonds`, and `bond_cases`. The issuing state must be a US state, DC, or territory. Empty is no scan. `success: false` is a failed scan.
+- **Name rule.** Case, whitespace, and punctuation are normalized. `Last, First` is reordered. Suffixes and middle names or initials are ignored. First and last must both match on letters. O'Neal does not match O'Neill.
+- **Self-indemnitor.** A passed defendant-role scan verifies the indemnitor only when the packet or case is explicitly marked `self_indemnitor` (the boolean from `apply_self_indemnitor`, stored on `paperwork_packets` and read from `bond_cases` / `active_bonds` when present; true, 1, or yes). The scanned first and last name must match. The mark is not inferred from the name or from relationship Self. Co-indemnitors and every unmarked packet still ignore defendant-role scans. The open-BondCase count uses the same rule.
+- **Staff in-person attestation.** `POST /api/paperwork/attest-id` (PIN session; staff, admin, god_admin, and sub-agents who can already Write Bond; recovery denied). The staff user comes from the session. The body may carry ID type, issuing state, and the last 4 only. A full ID number is rejected and nothing is stored. The row is `audit_events` action `staff_id_attestation`.
+- **Synthetic staff test packets stay on the old path.** `STAFF_TEST_CASE_MODE` with a `TEST-` booking and a `PKT-TEST-` packet still skips this gate, because those packets never reserve a live power and never contact a real signer. A real booking is not exempt.
+- **Read-only tally.** `scripts/count_unverified_open_bondcases.py` uses only `SHAMROCK_MONGO_RO_URI`. Open BondCases are status `active`, `monitoring`, `alert`, or `reinstated`. It prints counts only.
+
+### Tests
+- `tests/test_write_bond_identity_gate.py` and `tests/test_count_unverified_open_bondcases.py` (added to the `ci.yml` list). No Mongo, DocuSeal, or network.
+
+### Fixed
+- **Staff attestation lookup reads the nested link.** `staff_id_attestation` rows keep `bond_case_id`, `booking_number`, `packet_id`, and `indemnitor_id` under `details`, with `entity_id` at the top. The Write Bond gate and the read-only open-BondCase tally query those paths. A top-level-only filter never saw the row, so a saved attestation still failed closed as unverified.
+- **Conflicting bond-case ids are a 422.** A shared booking number, packet id, or indemnitor id does not verify the case when another row carries a different `bond_case_id`. The gate does not pick the matching row. A different county on that weaker key is the same refusal (`bond case conflict`), unless both rows name the same bond-case id.
+- **A country is not an issuing state.** `country` / `issuing_country` (`US`, `USA`) does not verify a scan. An address `state` does not count when a country field is set and no explicit issuer (`dl_state`, `issuing_state`, `id_state`) is a US state, DC, or territory. The 422 says `no US issuing state`. A lone `state` with no country still counts when that value is a US jurisdiction, because portal extracts store the issuer there.
+- **A matched deferred intake is evidence. An unmatched one is not.** Portal intakes store the scan at `_raw.id_extracted` and the booking at `matched_booking_number` after staff match. The gate reads that scan and still applies the name, state, and `self_indemnitor` rules. An intake with no booking is not attached to a case. Disagreeing `booking_number` and `matched_booking_number` values are not a match: the 422 says `deferred intake is not tied to this booking`. A non-document `_raw` is ignored and does not crash the gate.
 
 ## [Unreleased] — 2026-10-09 (pre-existing test failures outside the CI list)
 
