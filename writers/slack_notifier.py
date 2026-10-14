@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 
 import requests
 
+from core.booking_identity import public_booking_number
+
 from core.models import ArrestRecord
 from core.booking_identity import redact_internal_keys
 
@@ -187,7 +189,7 @@ class SlackNotifier:
                     {"type": "mrkdwn", "text": f"*Score:* {record.Lead_Score}"},
                     {"type": "mrkdwn", "text": f"*Status:* {record.Status}"},
                     {"type": "mrkdwn", "text": f"*Charges:* {record.Charges[:120]}"},
-                    {"type": "mrkdwn", "text": f"*Booking #:* {record.Booking_Number}"},
+                    {"type": "mrkdwn", "text": f"*Booking #:* {public_booking_number(record.Booking_Number)}"},
                 ],
             },
         ]
@@ -378,7 +380,7 @@ class SlackNotifier:
                     {"type": "mrkdwn", "text": f"*Score:* {score} — {status_lbl}"},
                     {"type": "mrkdwn", "text": f"*Arrested:* {arrest_dt}"},
                     {"type": "mrkdwn", "text": f"*Charges:* {record.Charges[:120]}"},
-                    {"type": "mrkdwn", "text": f"*Booking #:* {record.Booking_Number}"},
+                    {"type": "mrkdwn", "text": f"*Booking #:* {public_booking_number(record.Booking_Number)}"},
                 ],
             },
             {
