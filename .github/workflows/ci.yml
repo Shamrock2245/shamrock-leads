@@ -128,6 +128,7 @@ jobs:
             tests/test_payment_plan_link_core.py \
             tests/test_premium_confirmation.py \
             tests/test_installment_invoices.py \
+            tests/test_cosigner_link.py \
             tests/test_auth_no_pin_fail_closed.py \
             tests/test_pinellas_relay_only.py \
             tests/test_pinellas_modal_wait.py \

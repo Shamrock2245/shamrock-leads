@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-14 (co-signer scan, sign, pay)
+
+### Added
+- **One co-signer link.** Staff `POST /api/paperwork/cosigner-link` (same roles as ID attestation) returns `/cosigner/{token}`. The public page is open in English and Spanish. The page uploads an ID photo; the server runs the in-house scanner and keeps the full ID number out of the stored scan. A typed name is not a scan. `POST /api/cosigner/{token}/scan` with an extracted name still fail-closes on `#165`: O'Neill does not match O'Neal, and a mismatch does not unlock DocuSeal. A matching scan writes `id_ocr` and the Write Bond gate passes. After the packet is signed, the same page shows the confirmed down payment. `SWIPESIMPLE_DISPATCH_LIVE` off leaves that amount undispatched.
+- **Down-payment webhooks post through reconcile.** `POST /api/webhooks/payment` calls `#159` `reconcile_payment` when `reference_id` is the booking number (not an `{booking}-I{n}` installment), before the legacy last-payment stamp, then marks the co-signer timeline paid. A replay does not insert a second `payments` row or a second paid audit. A missing staged invoice is logged and the webhook still returns 200.
+
+### Tests
+- `tests/test_cosigner_link.py`.
+
 ## [Unreleased] — 2026-10-14 (financed installment invoices)
 
 ### Added
