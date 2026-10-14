@@ -32,6 +32,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from dashboard.extensions import get_collection, get_db
+from core.booking_identity import redact_internal_keys
 
 logger = logging.getLogger(__name__)
 
@@ -376,7 +377,7 @@ async def _maybe_alert_slack(db_stats: dict) -> None:
             f"Run `/api/retention/purge` to free space."
         )
         async with httpx.AsyncClient(timeout=5) as client:
-            await client.post(_SLACK_WEBHOOK, json={"text": msg})
+            await client.post(_SLACK_WEBHOOK, json=redact_internal_keys({"text": msg}))
         logger.warning("[Retention] Slack alert sent: DB at %s%%", pct)
     except Exception as exc:
         logger.warning("[Retention] Slack alert failed: %s", exc)

@@ -24,6 +24,7 @@ Background:
   start_inbox_poller(app) — asyncio task polling BB every 30s for inbound messages
 """
 
+from core.booking_identity import redact_internal_keys
 import asyncio
 import hashlib
 import logging
@@ -992,7 +993,7 @@ def _post_slack_alert(bond: dict, phone: str, message: str, agent_result: dict):
         def _send():
             try:
                 import httpx as hx
-                hx.post(webhook_url, json={"text": text}, timeout=5)
+                hx.post(webhook_url, json=redact_internal_keys({"text": text}), timeout=5)
             except Exception:
                 pass
         threading.Thread(target=_send, daemon=True).start()

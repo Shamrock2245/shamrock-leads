@@ -41,6 +41,8 @@ SOURCE_HOST_LABELS = {
     "desotosheriff.com": "DeSoto (FL)",
     "manateesheriff.com": "Manatee (FL)",
     "manatee-sheriff.revize.com": "Manatee (FL)",
+    # Clerk court records: its own scope (owner exception 2026-10-10), not the jail.
+    "manateeclerk.com": "Manatee Clerk (FL)",
     "sarasotasheriff.org": "Sarasota (FL)",
     "hillsboroughcounty.org": "Hillsborough (FL)",
     "pcsoweb.com": "Pinellas (FL)",
