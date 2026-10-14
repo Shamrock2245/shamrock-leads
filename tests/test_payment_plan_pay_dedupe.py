@@ -74,6 +74,48 @@ class Coll:
 
         return _Cur()
 
+    def aggregate(self, pipeline, session=None):
+        docs = [copy.deepcopy(d) for d in self.docs]
+        for stage in pipeline:
+            if "$match" in stage:
+                docs = [d for d in docs if matches(d, stage["$match"])]
+            elif "$group" in stage:
+                if not docs:
+                    docs = []
+                    break
+                spec = stage["$group"]
+                grouped = {"_id": spec.get("_id")}
+                for key, expr in spec.items():
+                    if key == "_id" or not isinstance(expr, dict) or "$sum" not in expr:
+                        continue
+                    src = expr["$sum"]
+                    if src == 1:
+                        grouped[key] = len(docs)
+                    elif isinstance(src, str) and src.startswith("$"):
+                        grouped[key] = sum((d.get(src[1:]) or 0) for d in docs)
+                    else:
+                        grouped[key] = 0
+                docs = [grouped]
+            else:
+                raise AssertionError(stage)
+
+        class _Agg:
+            def __aiter__(self):
+                self._it = iter(docs)
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self._it)
+                except StopIteration:
+                    raise StopAsyncIteration
+
+        return _Agg()
+
+    async def count_documents(self, flt=None, session=None, **kwargs):
+        await asyncio.sleep(0)
+        return sum(1 for doc in self.docs if matches(doc, flt or {}))
+
     async def update_one(self, flt, update, upsert=False, session=None, **kwargs):
         await asyncio.sleep(0)
         for d in self.docs:

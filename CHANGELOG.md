@@ -3,6 +3,19 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-14 (provider payments commit in one transaction)
+
+### Fixed
+- **The Gmail SwipeSimple receipt poller and `POST /api/webhooks/payment` record a payment in one MongoDB transaction.** The claim (`payment_log_claims`, unique `tenant_id` + normalized `txn_key`), the `payments` insert (the row stores that normalized key), the `bond_cases` / `active_bonds` `last_payment_*` update, and the `audit_events` insert run inside one `ClientSession.with_transaction`. The driver retries transient transaction errors. A crash rolls all of it back: no claim, no payment row, no bond stamp, no audit. There is no provisional claim, no token field on the payment row, and no stale-claim takeover. No index is created on `payments`.
+- **Validation happens before any write.** A blank normalized transaction id returns 400 `transaction_id_required` (the poller does not substitute the Gmail message id). An amount that is not a positive finite number of exact cents returns 400 `invalid_amount`. A recorded row that disagrees on amount, settled status (`approved` and `completed` are the same settled charge), or booking number returns 409 `payment_conflict` and is left unchanged. A `DuplicateKeyError` on the claim, or a recorded row that agrees, is a duplicate: 200 `duplicate: true` for the webhook, and the poller may mark the Gmail message read. Anything else leaves the message unread, including 503 when the server cannot run a transaction (nothing is written).
+- **The audit `_id` is deterministic and tenant-scoped when multi-tenant is on.** Flag off is `payment-log:{txn_key}`. Flag on is `payment-log:{tenant_id}:{txn_key}`. Two agencies can record the same provider transaction id. Slack and the BlueBubbles receipt run only after a fresh commit.
+- **`POST /api/payments/plans/{plan_id}/pay` reusing a logged row counts it and stamps a blank booking.** The link already runs inside the plan transaction. It sets `status: completed` (the provider status stays on `logged_status`) so `GET /payments/summary` includes the amount, and it writes the plan's booking number when the logged row's booking is blank. A different non-blank booking is still 409. The stamp rolls back with the transaction.
+- **Not in this change:** refund and failed-payment reversals, stale-claim takeover, and backfill of rows logged before this claim existed.
+
+### Tests
+- `tests/test_payment_log_claims.py` (added to `ci.yml`): commit for the webhook and the poller, duplicate replay, the same transaction id on two tenants, a crash that leaves nothing and keeps the email unread, 503 with no transaction support and no writes, 400 for a blank transaction id, 409 when the recorded amount, status, or booking disagrees. No SwipeSimple, Gmail, or Slack calls.
+- `tests/test_payment_plan_link_core.py`: a logged row with a blank booking is counted by `revenue_summary` and carries the plan booking; an aborted transaction leaves the booking blank and the status `approved`.
+
 ## [Unreleased] — 2026-10-14 (plan /pay tenant guard and audit id)
 
 ### Fixed

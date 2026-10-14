@@ -1,0 +1,470 @@
+"""Provider payment recording: one transaction for the poller and the webhook.
+
+Offline. An in-memory Mongo double plus a session shim stands in for a
+replica set. No SwipeSimple, Gmail, or Slack calls.
+"""
+from __future__ import annotations
+
+import asyncio
+import copy
+import hashlib
+import hmac
+import json
+from unittest.mock import AsyncMock, patch
+
+import httpx
+import pytest
+from fastapi import FastAPI
+
+from dashboard.routers.webhooks import webhooks_bp
+from dashboard.services import payment_log_claims as plc
+from dashboard.services.swipesimple_receipt_poller import SwipeSimpleReceiptPoller
+from dashboard.tenancy.context import bind_job_tenant
+from dashboard.tenancy.scope import TenantScopedCollection
+from tests.test_payment_plan_pay_dedupe import Coll, DB
+
+SECRET = "swipe-test-secret-not-real"
+_COLLS = ("payments", "payment_log_claims", "bond_cases", "active_bonds", "audit_events")
+
+
+class _Admin:
+    def __init__(self, hello):
+        self._hello = hello
+
+    async def command(self, name, *args, **kwargs):
+        if name in ("hello", "ismaster"):
+            return self._hello
+        raise RuntimeError(name)
+
+
+class TxnSession:
+    def __init__(self, client):
+        self.client = client
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def _restore(self, snap):
+        for name, docs in snap.items():
+            self.client.db[name].docs = copy.deepcopy(docs)
+
+    async def with_transaction(self, callback):
+        attempts = 0
+        while True:
+            attempts += 1
+            self.client.attempts += 1
+            snap = {name: copy.deepcopy(coll.docs) for name, coll in self.client.db.items()}
+            try:
+                await callback(self)
+                return
+            except plc.RetryableTxnError:
+                self._restore(snap)
+                if attempts >= 4:
+                    raise
+                continue
+            except Exception:
+                self._restore(snap)
+                raise
+
+
+class TxnClient:
+    def __init__(self, db):
+        self.db = db
+        self.attempts = 0
+        self.admin = _Admin({"setName": "atlas-rs"})
+
+    async def start_session(self):
+        return TxnSession(self)
+
+
+class BoomAudit(Coll):
+    async def insert_one(self, doc, session=None, **kwargs):
+        if str(doc.get("_id", "")).startswith("payment-log:"):
+            raise RuntimeError("audit down")
+        await super().insert_one(doc, session=session)
+
+
+class FlakyAudit(Coll):
+    def __init__(self):
+        super().__init__()
+        self.left = 1
+
+    async def insert_one(self, doc, session=None, **kwargs):
+        if str(doc.get("_id", "")).startswith("payment-log:") and self.left:
+            self.left -= 1
+            raise plc.RetryableTxnError()
+        await super().insert_one(doc, session=session)
+
+
+class FakeReader:
+    is_configured = True
+
+    def __init__(self, emails):
+        self.emails = emails
+        self.read: list[str] = []
+
+    def search_messages(self, query, max_results=20):
+        return list(self.emails)
+
+    def mark_as_read(self, message_id):
+        self.read.append(message_id)
+        return True
+
+
+class ScopedDB:
+    def __init__(self, raw):
+        self.raw = raw
+
+    def __getitem__(self, name):
+        return TenantScopedCollection(self.raw[name], name)
+
+
+def _receipt(amount="100.00", txn="TX-1", booking="BK-1", message_id="msg-1"):
+    lines = [f"Amount ${amount}"]
+    if txn is not None:
+        lines.append(f"Transaction ID: {txn}")
+    if booking is not None:
+        lines.append(f"Booking: {booking}")
+    return {
+        "message_id": message_id,
+        "subject": "Payment",
+        "body": "\n".join(lines),
+    }
+
+
+def _touch(db):
+    for name in _COLLS:
+        db[name]
+    return db
+
+
+def _bonds(db, booking="BK-1"):
+    db["bond_cases"].docs.append({"booking_number": booking})
+    db["active_bonds"].docs.append({"booking_number": booking})
+
+
+@pytest.fixture
+def rig(monkeypatch):
+    db = _touch(DB())
+    _bonds(db)
+    plc._index_ready = False
+    plc._txn_support_cache.clear()
+    client = TxnClient(db)
+
+    async def _txn():
+        return client
+
+    monkeypatch.setattr(plc, "_transaction_client", _txn)
+    monkeypatch.delenv("SAAS_MULTI_TENANT", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_LEADS", raising=False)
+    monkeypatch.setattr("dashboard.extensions.get_db", lambda: db)
+    app = FastAPI()
+    app.include_router(webhooks_bp)
+    yield db, app, client
+    plc._index_ready = False
+    plc._txn_support_cache.clear()
+
+
+def _webhook(app, body, *, raw=None):
+    payload = raw if raw is not None else json.dumps(body).encode()
+    sig = hmac.new(SECRET.encode(), payload, hashlib.sha256).hexdigest()
+
+    async def go():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+            return await client.post(
+                "/api/webhooks/payment",
+                content=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-SwipeSimple-Signature": sig,
+                },
+            )
+
+    return asyncio.run(go())
+
+
+def _poll(db, emails):
+    reader = FakeReader(emails)
+
+    async def go():
+        with patch(
+            "dashboard.services.gmail_reader.GmailReaderService",
+            return_value=reader,
+        ):
+            return await SwipeSimpleReceiptPoller(db=db).poll()
+
+    result = asyncio.run(go())
+    return result, reader
+
+
+def _pay(**extra):
+    body = {
+        "event_type": "payment.completed",
+        "transaction_id": "TX-1",
+        "amount": "100.00",
+        "status": "approved",
+        "custom_fields": {"booking_number": "BK-1"},
+    }
+    body.update(extra)
+    return body
+
+
+def test_webhook_commit_normalizes_the_txn_and_writes_once(rig, monkeypatch):
+    db, app, client = rig
+    monkeypatch.setenv("SWIPESIMPLE_WEBHOOK_SECRET", SECRET)
+    published = AsyncMock()
+    with patch("dashboard.routers.events.publish_event", new=published):
+        resp = _webhook(app, _pay(transaction_id="  TX-1  ", amount="100.10"))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True and body["duplicate"] is False
+    assert body["transaction_id"] == "TX-1"
+    assert client.attempts == 1
+    assert len(db["payments"].docs) == 1
+    row = db["payments"].docs[0]
+    assert row["transaction_id"] == "TX-1"
+    assert row["amount_cents"] == 10010
+    assert plc.amount_cents(row["amount"]) == 10010
+    assert row["booking_number"] == "BK-1" and row["status"] == "approved"
+    assert row["source"] == "swipesimple_webhook"
+    for field in plc._TOKEN_FIELDS:
+        assert field not in row
+    assert db["payment_log_claims"].docs[0]["txn_key"] == "TX-1"
+    assert db["payment_log_claims"].docs[0]["status"] == "recorded"
+    assert db["payment_log_claims"].unique == [("tenant_id", "txn_key")]
+    assert db["payments"].index_calls == 0 and db["payments"].unique == []
+    audit = db["audit_events"].docs[0]
+    assert audit["_id"] == "payment-log:TX-1"
+    assert "tenant_id" not in audit
+    for bond in (db["bond_cases"].docs[0], db["active_bonds"].docs[0]):
+        assert bond["last_transaction_id"] == "TX-1"
+        assert bond["last_payment_status"] == "approved"
+        assert plc.amount_cents(bond["last_payment_amount"]) == 10010
+    assert published.await_count == 1
+
+
+def test_poller_commit_marks_read_only_after_commit(rig):
+    db, app, client = rig
+    result, reader = _poll(db, [_receipt(amount="40.00", txn="TX-POLL")])
+    assert result["errors"] == 0 and result["processed"] == 1
+    assert reader.read == ["msg-1"]
+    assert client.attempts == 1
+    row = db["payments"].docs[0]
+    assert row["transaction_id"] == "TX-POLL" and row["source"] == "swipesimple_gmail_poll"
+    assert row["amount_cents"] == 4000 and row["booking_number"] == "BK-1"
+    assert db["audit_events"].docs[0]["_id"] == "payment-log:TX-POLL"
+    assert db["bond_cases"].docs[0]["last_transaction_id"] == "TX-POLL"
+    assert db["payments"].index_calls == 0 and db["payments"].unique == []
+    for field in plc._TOKEN_FIELDS:
+        assert field not in row
+
+
+def test_duplicate_replay_marks_the_email_read_and_does_not_write(rig, monkeypatch):
+    db, app, client = rig
+    monkeypatch.setenv("SWIPESIMPLE_WEBHOOK_SECRET", SECRET)
+    published = AsyncMock()
+    with patch("dashboard.routers.events.publish_event", new=published):
+        first = _webhook(app, _pay())
+        again = _webhook(app, _pay())
+    assert first.status_code == 200 and first.json()["duplicate"] is False
+    assert again.status_code == 200 and again.json()["duplicate"] is True
+    assert len(db["payments"].docs) == 1
+    assert len(db["payment_log_claims"].docs) == 1
+    assert len(db["audit_events"].docs) == 1
+    assert published.await_count == 1
+
+    result, reader = _poll(db, [_receipt()])
+    assert result["processed"] == 1 and result["errors"] == 0
+    assert reader.read == ["msg-1"]
+    assert result["payments"][0]["duplicate"] is True
+    assert len(db["payments"].docs) == 1
+    assert len(db["audit_events"].docs) == 1
+    assert client.attempts == 1
+
+
+def test_settled_completed_row_is_a_duplicate_not_a_conflict(rig, monkeypatch):
+    db, app, _client = rig
+    monkeypatch.setenv("SWIPESIMPLE_WEBHOOK_SECRET", SECRET)
+    db["payments"].docs.append({
+        "transaction_id": "TX-1",
+        "amount": 100,
+        "status": "completed",
+        "booking_number": "BK-1",
+        "plan_id": "plan-1",
+    })
+    with patch("dashboard.routers.events.publish_event", new=AsyncMock()):
+        resp = _webhook(app, _pay())
+    assert resp.status_code == 200 and resp.json()["duplicate"] is True
+    assert len(db["payments"].docs) == 1
+    assert db["payments"].docs[0]["status"] == "completed"
+    assert db["payment_log_claims"].docs == []
+    assert "last_payment_amount" not in db["bond_cases"].docs[0]
+
+
+def test_cross_tenant_same_txn_both_commit(rig, monkeypatch):
+    raw, _app, _client = rig
+    monkeypatch.setenv("SAAS_MULTI_TENANT", "1")
+    plc._index_ready = False
+    plc._txn_support_cache.clear()
+    for tenant in ("gulf_coast_bail", "other_agency"):
+        raw["bond_cases"].docs.append({"booking_number": "BK-1", "tenant_id": tenant})
+        raw["active_bonds"].docs.append({"booking_number": "BK-1", "tenant_id": tenant})
+    # The unscoped bond rows from the fixture are not this test's book.
+    raw["bond_cases"].docs = [d for d in raw["bond_cases"].docs if d.get("tenant_id")]
+    raw["active_bonds"].docs = [d for d in raw["active_bonds"].docs if d.get("tenant_id")]
+    scoped = ScopedDB(raw)
+    client = TxnClient(raw)
+
+    async def _txn():
+        return client
+
+    monkeypatch.setattr(plc, "_transaction_client", _txn)
+
+    async def once(tenant):
+        with bind_job_tenant(tenant):
+            return await plc.record_provider_payment(
+                scoped,
+                source="swipesimple_webhook",
+                transaction_id="TX-SHARED",
+                amount="25.00",
+                status="approved",
+                booking_number="BK-1",
+                extra={"event_type": "payment.completed"},
+            )
+
+    async def go():
+        first = await once("gulf_coast_bail")
+        second = await once("other_agency")
+        replay = await once("gulf_coast_bail")
+        return first, second, replay
+
+    first, second, replay = asyncio.run(go())
+    assert first["duplicate"] is False and second["duplicate"] is False
+    assert replay["duplicate"] is True
+    assert {row["tenant_id"] for row in raw["payments"].docs} == {"gulf_coast_bail", "other_agency"}
+    assert {row["txn_key"] for row in raw["payment_log_claims"].docs} == {"TX-SHARED"}
+    assert {row["tenant_id"] for row in raw["payment_log_claims"].docs} == {
+        "gulf_coast_bail", "other_agency",
+    }
+    assert {row["_id"] for row in raw["audit_events"].docs} == {
+        "payment-log:gulf_coast_bail:TX-SHARED",
+        "payment-log:other_agency:TX-SHARED",
+    }
+    stamped = {row["tenant_id"] for row in raw["bond_cases"].docs if row.get("last_transaction_id")}
+    assert stamped == {"gulf_coast_bail", "other_agency"}
+    assert len(raw["payments"].docs) == 2
+    assert raw["payments"].index_calls == 0 and raw["payments"].unique == []
+    assert raw["payment_log_claims"].unique == [("tenant_id", "txn_key")]
+
+
+def test_crash_leaves_nothing_and_the_email_stays_unread(rig):
+    db, _app, _client = rig
+    db["audit_events"] = BoomAudit()
+    result, reader = _poll(db, [_receipt(txn="TX-CRASH")])
+    assert reader.read == []
+    assert result["errors"] == 1 and result["processed"] == 0
+    assert db["payments"].docs == []
+    assert db["payment_log_claims"].docs == []
+    assert db["audit_events"].docs == []
+    assert "last_payment_amount" not in db["bond_cases"].docs[0]
+    assert "last_payment_amount" not in db["active_bonds"].docs[0]
+
+
+def test_transient_retry_commits_once_and_marks_read_once(rig):
+    db, _app, client = rig
+    db["audit_events"] = FlakyAudit()
+    result, reader = _poll(db, [_receipt(txn="TX-RETRY")])
+    assert result["errors"] == 0 and result["processed"] == 1
+    assert reader.read == ["msg-1"]
+    assert client.attempts == 2
+    assert len(db["payments"].docs) == 1
+    assert len(db["payment_log_claims"].docs) == 1
+    assert len(db["audit_events"].docs) == 1
+    assert db["bond_cases"].docs[0]["last_transaction_id"] == "TX-RETRY"
+
+
+def test_transactions_unavailable_writes_nothing_and_leaves_email_unread(rig, monkeypatch):
+    db, app, _client = rig
+
+    async def _none():
+        return None
+
+    monkeypatch.setattr(plc, "_transaction_client", _none)
+    monkeypatch.setenv("SWIPESIMPLE_WEBHOOK_SECRET", SECRET)
+    resp = _webhook(app, _pay())
+    assert resp.status_code == 503
+    assert resp.json()["error"] == "transactions_unavailable"
+    result, reader = _poll(db, [_receipt()])
+    assert reader.read == []
+    assert result["errors"] == 1 and result["processed"] == 0
+    assert db["payments"].docs == []
+    assert db["payment_log_claims"].docs == []
+    assert db["audit_events"].docs == []
+    assert db["payment_log_claims"].index_calls == 0
+    assert "last_payment_amount" not in db["bond_cases"].docs[0]
+
+
+def test_blank_txn_is_400_and_the_email_stays_unread(rig, monkeypatch):
+    db, app, _client = rig
+    monkeypatch.setenv("SWIPESIMPLE_WEBHOOK_SECRET", SECRET)
+
+    def _db():
+        raise AssertionError("db opened for a blank transaction id")
+
+    monkeypatch.setattr("dashboard.extensions.get_db", _db)
+    resp = _webhook(app, _pay(transaction_id="   "))
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "transaction_id_required"
+    monkeypatch.setattr("dashboard.extensions.get_db", lambda: db)
+    result, reader = _poll(db, [_receipt(txn=None)])
+    assert reader.read == []
+    assert result["errors"] == 1 and result["processed"] == 0
+    assert db["payments"].docs == []
+    assert db["payment_log_claims"].docs == []
+
+
+def test_fractional_cents_are_400(rig, monkeypatch):
+    db, app, _client = rig
+    monkeypatch.setenv("SWIPESIMPLE_WEBHOOK_SECRET", SECRET)
+    raw = (
+        b'{"event_type":"payment.completed","transaction_id":"TX-1",'
+        b'"amount":100.001,"status":"approved",'
+        b'"custom_fields":{"booking_number":"BK-1"}}'
+    )
+    resp = _webhook(app, {}, raw=raw)
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_amount"
+    assert db["payments"].docs == []
+    assert db["payment_log_claims"].docs == []
+    assert db["payment_log_claims"].index_calls == 0
+
+
+@pytest.mark.parametrize("seed,payload", [
+    ({"amount": 50, "status": "approved", "booking_number": "BK-1"}, _pay(amount="100.00")),
+    ({"amount": 100, "status": "refunded", "booking_number": "BK-1"}, _pay()),
+    ({"amount": 100, "status": "approved", "booking_number": "OTHER-BK"}, _pay()),
+])
+def test_conflicting_payload_is_409_and_leaves_the_email_unread(rig, monkeypatch, seed, payload):
+    db, app, _client = rig
+    monkeypatch.setenv("SWIPESIMPLE_WEBHOOK_SECRET", SECRET)
+    db["payments"].docs.append({"transaction_id": "TX-1", **seed})
+    before = copy.deepcopy(db["payments"].docs[0])
+    with patch("dashboard.routers.events.publish_event", new=AsyncMock()) as published:
+        resp = _webhook(app, payload)
+    assert resp.status_code == 409
+    assert resp.json()["error"] == "payment_conflict"
+    assert published.await_count == 0
+    assert db["payments"].docs == [before]
+    assert db["payment_log_claims"].docs == []
+    assert db["audit_events"].docs == []
+    assert "last_payment_amount" not in db["bond_cases"].docs[0]
+
+    result, reader = _poll(db, [_receipt()])
+    assert reader.read == []
+    assert result["errors"] == 1 and result["processed"] == 0
+    assert db["payments"].docs == [before]

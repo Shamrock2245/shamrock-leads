@@ -123,6 +123,7 @@ jobs:
             tests/test_payment_webhook.py \
             tests/test_payment_plan_pay_dedupe.py \
             tests/test_payment_plan_link_core.py \
+            tests/test_payment_log_claims.py \
             tests/test_auth_no_pin_fail_closed.py \
             tests/test_pinellas_relay_only.py \
             tests/test_pinellas_modal_wait.py \

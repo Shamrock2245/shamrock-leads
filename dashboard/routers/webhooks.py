@@ -16,11 +16,13 @@ Data Flow (DocuSeal submission.completed): validated by the active DocuSeal webh
 
 from fastapi import APIRouter, BackgroundTasks, Query, Request
 from fastapi.responses import JSONResponse
-import hmac
 import hashlib
+import hmac
+import json as _json
 import logging
 import os
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from dashboard.extensions import get_collection
 
@@ -236,23 +238,11 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         custom_fields:    { booking_number, county, indemnitor_name, indemnitor_phone }
         created_at:       ISO timestamp
 
-    On success:
-      1. Validate HMAC signature (SWIPESIMPLE_WEBHOOK_SECRET set); unset → 503
-         unless ENV is exactly ``development``
-      2. Parse booking_number from custom_fields or query params
-      3. Update bond case payment status in active_bonds / prospective_bonds
-      4. Log to payments collection
-      5. Send BlueBubbles receipt to indemnitor
-      6. Fire Slack alert
-      7. Publish SSE event
-      8. Log audit event
+    On success the claim, the payments row, the bond ``last_payment_*`` stamps,
+    and the audit event commit in one MongoDB transaction. A duplicate returns
+    200 and does not write again. Slack and the BlueBubbles receipt run only
+    after that commit. Transactions unavailable returns 503 and writes nothing.
     """
-    import httpx
-    from dashboard.routers.events import publish_event
-    from dashboard.services.bb_client import send_message_universal
-
-    now = datetime.now(timezone.utc)
-
     # -- 1. HMAC signature validation / Auth check ---------------------------
     # Production = ENV or ENVIRONMENT (VPS uses ENV=production per .env.example).
     webhook_secret = (os.getenv("SWIPESIMPLE_WEBHOOK_SECRET") or "").strip()
@@ -282,8 +272,11 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         )
 
     # -- 2. Payload validation (fail closed on empty or invalid payload) -------
+    # Numbers stay Decimal so fractional cents are visible. request.json()
+    # would turn them into floats first.
     try:
-        data = await request.json()
+        raw_body = await request.body()
+        data = _json.loads(raw_body, parse_float=Decimal) if raw_body else None
     except Exception:
         return JSONResponse({"error": "Invalid or empty JSON body"}, status_code=400)
 
@@ -291,80 +284,90 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         return JSONResponse({"error": "Empty payload"}, status_code=400)
 
     event_type = data.get("event_type")
-    transaction_id = data.get("transaction_id")
-    if not event_type or not transaction_id:
+    if not event_type or not str(event_type).strip():
+        return JSONResponse(
+            {"error": "Missing required fields: event_type and transaction_id"},
+            status_code=400,
+        )
+    if "transaction_id" not in data or data.get("transaction_id") in (None, ""):
         return JSONResponse(
             {"error": "Missing required fields: event_type and transaction_id"},
             status_code=400,
         )
 
-    # -- 3. Parse booking number -----------------------------------------------
-    custom_fields = data.get("custom_fields", {})
-    booking_number = (
-        custom_fields.get("booking_number")
-        or booking_number
-    )
+    from dashboard.extensions import get_db
+    from dashboard.services.payment_log_claims import PaymentLogError, normalize_txn_key, record_provider_payment
 
-    # -- 3. Update bond case ---------------------------------------------------
-    amount = data.get("amount", 0)
-    status = data.get("status", "")
-    transaction_id = data.get("transaction_id", "")
+    # Whitespace-only ids are truthy and used to pass the check above.
+    if not normalize_txn_key(data.get("transaction_id")):
+        return JSONResponse(
+            {"error": "transaction_id_required",
+             "message": "A non-blank transaction id is required."},
+            status_code=400,
+        )
+
+    custom_fields = data.get("custom_fields") or {}
+    if not isinstance(custom_fields, dict):
+        custom_fields = {}
+    booking_number = custom_fields.get("booking_number") or booking_number
+    status = str(data.get("status") or "").strip()
     card_last4 = data.get("card_last4", "")
     card_brand = data.get("card_brand", "")
     customer_name = data.get("customer_name", "")
     indemnitor_phone = custom_fields.get("indemnitor_phone", "")
 
-    payment_update = {
-        "last_payment_amount": amount,
-        "last_payment_at": now.isoformat(),
-        "last_payment_status": status,
-        "last_transaction_id": transaction_id,
-    }
-
-    if booking_number:
-        bond_cases = get_collection("bond_cases")
-        await bond_cases.update_one(
-            {"booking_number": booking_number},
-            {"$set": payment_update},
+    # Claim, payment row, bond last_payment_*, and audit commit together.
+    # A duplicate or a conflict does not send a receipt or a Slack message.
+    try:
+        recorded = await record_provider_payment(
+            get_db(),
+            source="swipesimple_webhook",
+            transaction_id=data.get("transaction_id"),
+            amount=data.get("amount"),
+            status=status,
+            booking_number=booking_number,
+            extra={
+                "event_type": str(event_type).strip(),
+                "card_last4": card_last4,
+                "card_brand": card_brand,
+                "customer_name": customer_name,
+                "indemnitor_phone": indemnitor_phone,
+                "custom_fields": custom_fields,
+                "raw_payload": data,
+            },
         )
-        # Also try active_bonds for legacy records
-        active_bonds = get_collection("active_bonds")
-        await active_bonds.update_one(
-            {"booking_number": booking_number},
-            {"$set": payment_update},
-        )
+    except PaymentLogError as exc:
+        body = {"error": exc.error, "message": exc.message}
+        txn_key = normalize_txn_key(data.get("transaction_id"))
+        if txn_key:
+            body["transaction_id"] = txn_key
+        return JSONResponse(body, status_code=exc.status_code)
 
-    # -- 4. Log to payments collection ----------------------------------------
-    payments = get_collection("payments")
-    await payments.insert_one({
-        "transaction_id": transaction_id,
-        "booking_number": booking_number,
-        "amount": amount,
-        "status": status,
-        "card_last4": card_last4,
-        "card_brand": card_brand,
-        "customer_name": customer_name,
-        "indemnitor_phone": indemnitor_phone,
-        "custom_fields": custom_fields,
-        "raw_payload": data,
-        "created_at": now.isoformat(),
-    })
+    txn_key = recorded["transaction_id"]
+    amount = recorded["amount"]
+    booking_number = recorded["booking_number"]
 
-    # -- 5. Send BlueBubbles receipt ------------------------------------------
+    if recorded.get("duplicate"):
+        return JSONResponse(status_code=200, content={
+            "success": True, "duplicate": True, "transaction_id": txn_key,
+        })
+
+    # Side effects run only after the transaction commits.
+    import httpx
+    from dashboard.routers.events import publish_event
+    from dashboard.services.bb_client import send_message_universal
     if indemnitor_phone and status == "approved":
         try:
             receipt_msg = (
                 f"✅ Payment received! Thank you, {customer_name}.\n"
                 f"Amount: ${amount:.2f} ({card_brand} ending {card_last4})\n"
-                f"Transaction: {transaction_id}\n"
+                f"Transaction: {txn_key}\n"
                 f"Shamrock Bail Bonds — (239) 332-2245"
             )
             await send_message_universal(indemnitor_phone, receipt_msg)
         except Exception as exc:
             logger.warning("[payment_webhook] BB receipt failed: %s", exc)
 
-    # -- 6. Slack alert -------------------------------------------------------
-    # Payment received → #intake (bond operations / intake channel)
     slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL") or os.getenv("SLACK_WEBHOOK_LEADS", "")
     if slack_webhook_url and status == "approved":
         try:
@@ -378,25 +381,17 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         except Exception as exc:
             logger.warning("[payment_webhook] Slack alert failed: %s", exc)
 
-    # -- 7. Publish SSE event -------------------------------------------------
     await publish_event('payment_received', {
-        "transaction_id": transaction_id,
+        "transaction_id": txn_key,
         "booking_number": booking_number,
         "amount": amount,
         "status": status,
         "customer_name": customer_name,
     })
 
-    # -- 8. Log audit event ---------------------------------------------------
-    audit_events = get_collection("audit_events")
-    await audit_events.insert_one({
-        "source": "swipesimple_webhook",
-        "event_type": f"payment.{status}",
-        "payload": data,
-        "timestamp": now.isoformat(),
+    return JSONResponse(status_code=200, content={
+        "success": True, "duplicate": False, "transaction_id": txn_key,
     })
-
-    return JSONResponse(status_code=200, content={"success": True})
 
 
 # ─────────────────────────────────────────────────────────────────────────────

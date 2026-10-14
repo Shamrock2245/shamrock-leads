@@ -213,8 +213,6 @@ def test_insert_when_no_logged_row_has_no_token_fields(rig):
     ({"amount": 50}, "logged_payment_amount_mismatch"),
     ({"amount": 100.004}, "logged_payment_amount_mismatch"),
     ({"booking_number": "OTHER-BK"}, "logged_payment_booking_mismatch"),
-    ({"booking_number": ""}, "logged_payment_booking_mismatch"),
-    ({"booking_number": "   "}, "logged_payment_booking_mismatch"),
 ])
 def test_link_refusals_do_not_move_the_balance(rig, extra, error):
     db, app = rig
@@ -236,6 +234,59 @@ def test_blank_plan_booking_is_refused(rig):
     assert r.status_code == 409 and r.json()["error"] == "logged_payment_booking_mismatch"
     assert _plan(db)["balance_remaining"] == 800.0
     assert db["payment_plan_payment_claims"].docs == []
+
+
+@pytest.mark.parametrize("blank", ["", "   ", None])
+def test_reuse_blank_booking_is_counted_and_stamped(rig, blank):
+    """A logged row with no booking becomes plan-collected inside the transaction.
+
+    ``revenue_summary`` only sums ``status: completed``. The plan booking is
+    written on that same update, so a crash cannot leave the row counted
+    without a booking or stamped without being counted.
+    """
+    db, app = rig
+    row = _logged(status="approved", amount=100)
+    if blank is None:
+        row.pop("booking_number", None)
+    else:
+        row["booking_number"] = blank
+    db["payments"].docs.append(row)
+    r = _post(app, {"amount": "100.00", "transaction_id": "TX-LOG"})
+    assert r.status_code == 200 and r.json()["idempotent"] is False
+    assert pp._last_apply_path == "transaction"
+    saved = db["payments"].docs[0]
+    assert saved["booking_number"] == "TEST-PP-1"
+    assert saved["status"] == "completed" and saved["logged_status"] == "approved"
+    assert saved["plan_id"] == PLAN_ID
+    assert _plan(db)["balance_remaining"] == 700.0
+    summary = _summary(app)
+    assert summary.status_code == 200
+    body = summary.json()
+    assert body["total_collected"] == 100.0
+    assert body["total_payments"] == 1
+
+
+def _summary(app):
+    async def go():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+            return await client.get("/api/payments/summary")
+    return asyncio.run(go())
+
+
+def test_blank_booking_stamp_rolls_back_with_the_transaction(rig, monkeypatch):
+    db, app = rig
+    db["payments"].docs.append(_logged(booking_number=""))
+    db["audit_events"] = FlakyAudit(1, RuntimeError("audit down"))
+    _use_transactions(monkeypatch, db)
+    r = _post(app, {"amount": 100, "transaction_id": "TX-LOG"})
+    assert r.status_code == 500 and r.json().get("success") is not True
+    row = db["payments"].docs[0]
+    assert row.get("booking_number") in ("", None)
+    assert row["status"] == "approved"
+    assert row.get("plan_id") in (None, "")
+    assert _plan(db)["balance_remaining"] == 800.0
+    assert db["audit_events"].docs == []
 
 
 def test_blank_booking_with_no_logged_row_writes_nothing(rig):

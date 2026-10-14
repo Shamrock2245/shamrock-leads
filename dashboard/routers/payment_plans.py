@@ -331,8 +331,9 @@ async def _idempotent_reply(
 # ── Link a committed logged payment, or insert one, in one serialized path ──
 #
 # A logged row is linkable only when it is committed (no claim/log token
-# fields), settled, the same exact cents, and the same non-blank booking
-# number as the plan. Anything else is 409 and the balance does not move.
+# fields), settled, the same exact cents, and either the same booking number
+# as the plan or a blank booking (the plan's booking is stamped on the row).
+# A different non-blank booking is 409 and the balance does not move.
 # No index is created on ``payments``.
 #
 # The claim insert is the gate, and only after a replica set or Atlas is
@@ -457,9 +458,26 @@ def _settled(row: dict) -> bool:
 
 
 def _same_booking(plan: dict, row: dict) -> bool:
+    """True when both sides carry the same non-blank booking number."""
     plan_booking = _booking(plan.get("booking_number"))
     row_booking = _booking(row.get("booking_number"))
     return bool(plan_booking) and plan_booking == row_booking
+
+
+def _row_booking_linkable(plan: dict, row: dict) -> bool:
+    """True when the row may be linked.
+
+    The plan booking must be non-blank. A blank row booking is linkable: the
+    plan's booking is stamped inside the same transaction. A different
+    non-blank booking is not.
+    """
+    plan_booking = _booking(plan.get("booking_number"))
+    if not plan_booking:
+        return False
+    row_booking = _booking(row.get("booking_number"))
+    if not row_booking:
+        return True
+    return plan_booking == row_booking
 
 
 def _refuse(error: str, txn: str, message: str) -> JSONResponse:
@@ -482,10 +500,10 @@ def _qualify_code(plan: dict, row: dict, amount):
             "logged_payment_amount_mismatch",
             "The logged payment with this transaction id has a different amount.",
         )
-    if not _same_booking(plan, row):
+    if not _row_booking_linkable(plan, row):
         return (
             "logged_payment_booking_mismatch",
-            "The logged payment must have the same non-blank booking number as this plan.",
+            "The logged payment must have the same booking number as this plan, or a blank one.",
         )
     return None
 
@@ -585,8 +603,13 @@ def _link_pin(row: dict, txn: str) -> dict:
     return pin
 
 
-def _link_set(row: dict, plan_id: str, now: datetime) -> dict:
-    """Plan-collected shape. ``revenue_summary`` counts ``status: completed``."""
+def _link_set(row: dict, plan_id: str, now: datetime, plan: dict | None = None) -> dict:
+    """Plan-collected shape. ``revenue_summary`` counts ``status: completed``.
+
+    A blank booking on the logged row is replaced with the plan's booking so
+    booking-scoped history can see the payment. A non-blank booking is left
+    as it was (the pin already required it to match).
+    """
     fields = {
         "plan_id": plan_id,
         "type": "installment",
@@ -594,6 +617,10 @@ def _link_set(row: dict, plan_id: str, now: datetime) -> dict:
         "logged_status": row.get("status"),
         "plan_linked_at": now.isoformat(),
     }
+    if plan is not None and not _booking(row.get("booking_number")):
+        stamped = _booking(plan.get("booking_number"))
+        if stamped:
+            fields["booking_number"] = stamped
     if not row.get("timestamp"):
         fields["timestamp"] = row.get("created_at") or now.isoformat()
     return fields
@@ -730,7 +757,9 @@ async def _assert_preconditions(claims, payments_col, plans_col, plan_id, txn, a
 async def _write_payment_row(payments_col, plan, plan_id, txn, amount, data, now, mode, row, session):
     """Link or insert. Preconditions have already passed; this is the first payment write."""
     if mode == "link":
-        await payments_col.update_one(_link_pin(row, txn), {"$set": _link_set(row, plan_id, now)}, **_sess(session))
+        await payments_col.update_one(
+            _link_pin(row, txn), {"$set": _link_set(row, plan_id, now, plan)}, **_sess(session),
+        )
         fresh_rows = await _docs(payments_col, {"transaction_id": txn, "plan_id": plan_id}, session)
         fresh = fresh_rows[0] if fresh_rows else None
         if (not fresh or fresh.get("status") != "completed"
@@ -1012,6 +1041,8 @@ async def record_payment(request: Request, plan_id):
     transaction id on the same plan returns ``idempotent: true`` with no second
     payment row and no balance change, including under concurrent requests.
     A committed logged payment with the same id is linked instead of inserted again.
+    A blank booking on that row is stamped with the plan's booking number, and
+    the row's status becomes ``completed`` so ``GET /payments/summary`` counts it.
     """
     from pymongo.errors import DuplicateKeyError
 
