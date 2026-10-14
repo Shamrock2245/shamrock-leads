@@ -18,6 +18,7 @@ import requests
 from core.booking_identity import public_booking_number
 
 from core.models import ArrestRecord
+from core.booking_identity import redact_internal_keys
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ class SlackNotifier:
         try:
             resp = requests.post(
                 webhook_url,
-                json=payload,
+                json=redact_internal_keys(payload),
                 headers={"Content-Type": "application/json"},
                 timeout=10,
             )
@@ -224,14 +225,14 @@ class SlackNotifier:
         try:
             requests.post(
                 f"{dashboard_url}/api/notifications",
-                json={
+                json=redact_internal_keys({
                     "type": notification_type,
                     "title": title,
                     "message": message,
                     "entity_id": entity_id,
                     "entity_type": "arrest",
                     "metadata": metadata or {},
-                },
+                }),
                 timeout=3,
             )
         except Exception:
