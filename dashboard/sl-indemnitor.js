@@ -824,7 +824,7 @@ const SLIndemnitor = (() => {
             <div style="display:flex;gap:12px;font-size:12px;color:var(--text-secondary)">
               ${r.phone ? `<span>📱 ${r.phone}</span>` : ''}
               ${r.county ? `<span>📍 ${r.county}</span>` : ''}
-              ${r.booking_number ? `<span>🔖 ${r.booking_number}</span>` : ''}
+              ${(window.slBookingLabel ? window.slBookingLabel(r.booking_number) : r.booking_number) ? `<span>🔖 ${(window.slBookingLabel ? window.slBookingLabel(r.booking_number) : r.booking_number)}</span>` : ''}
             </div>
           </div>`;
         }).join('');
@@ -1418,7 +1418,7 @@ const SLIndemnitor = (() => {
         toast(`❌ ${d.error || 'Failed to link'}`, 'error');
         return;
       }
-      toast(`✅ Linked to booking ${d.booking_number || booking}`, 'success');
+      toast(`✅ Linked to booking ${(window.slBookingLabel ? window.slBookingLabel(d.booking_number || booking) : d.booking_number || booking)}`, 'success');
       closeDetail();
       load();
       // Open the newly linked bond detail if we have a booking#

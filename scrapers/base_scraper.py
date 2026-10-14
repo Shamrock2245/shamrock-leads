@@ -135,6 +135,11 @@ class BaseScraper(ABC):
     # ``run`` then returns before any network, score, writer, broadcast, or alert
     # behavior can occur.
     SOURCE_CONTRACT_VALIDATED = True
+    # Narrow owner exception for sources with no booking number at all
+    # (Miami-Dade, 2026-10-09). Only a scraper that sets this AND whose records
+    # pass core.booking_identity.internal_natural_key (allow-listed state/county,
+    # exact key pattern) keeps rows with a blank Booking_Number. Default off.
+    ALLOWS_INTERNAL_NATURAL_KEY = False
     SOURCE_CONTRACT_REASON = ""
 
     # ── Self-healing (scrapers/scraper_resilience.py) ──
@@ -672,9 +677,17 @@ class BaseScraper(ABC):
     @classmethod
     def _filter_records_without_source_booking(cls, records: List[ArrestRecord]) -> List[ArrestRecord]:
         """Fail closed on missing or known synthetic booking identifiers."""
+        if not cls.ALLOWS_INTERNAL_NATURAL_KEY:
+            return [
+                record for record in records
+                if cls._has_source_booking_identifier(getattr(record, "Booking_Number", ""))
+            ]
+        from core.booking_identity import internal_natural_key
+
         return [
             record for record in records
             if cls._has_source_booking_identifier(getattr(record, "Booking_Number", ""))
+            or internal_natural_key(record)
         ]
 
     @property
@@ -972,7 +985,7 @@ class BaseScraper(ABC):
                         if fta_level in ("high", "critical"):
                             fta_high_count += 1
                     except Exception as hybrid_err:
-                        logger.debug(f"⚠️ Hybrid score failed for {record.Booking_Number}: {hybrid_err}")
+                        logger.debug("⚠️ %s: hybrid score failed (%s)", self.county, type(hybrid_err).__name__)
 
                 # Recount after potential ML upgrades
                 hot_count = sum(1 for r in records if r.Lead_Status == "Hot")
@@ -1031,9 +1044,12 @@ class BaseScraper(ABC):
                             combined_stats["total_records"] = result.get("total_records", len(records))
 
                     except Exception as write_err:
+                        # Type only: a driver error (e.g. BulkWriteError,
+                        # DuplicateKeyError) embeds the failing documents,
+                        # i.e. names, DOBs and booking/internal keys.
                         logger.error(
-                            f"❌ {self.county}: writer {type(writer).__name__} "
-                            f"failed: {write_err}"
+                            "❌ %s: writer %s failed: %s",
+                            self.county, type(writer).__name__, type(write_err).__name__,
                         )
 
             # Fill defaults if no writer provided stats
@@ -1064,7 +1080,7 @@ class BaseScraper(ABC):
                 if new_records:
                     self._broadcast_scraper_events(new_records)
             except Exception as broadcast_err:
-                logger.debug(f"⚠️ {self.county}: SSE broadcast skipped: {broadcast_err}")
+                logger.debug("⚠️ %s: SSE broadcast skipped (%s)", self.county, type(broadcast_err).__name__)
 
             # ── Step 3b: Check for repeat offenders ──
             try:
@@ -1079,7 +1095,7 @@ class BaseScraper(ABC):
                     combined_stats["rearrest_matches"] = rearrest_results["matches_found"]
                 _rearrest.close()
             except Exception as rearrest_err:
-                logger.debug(f"⚠️ Rearrest check skipped: {rearrest_err}")
+                logger.debug("⚠️ %s: rearrest check skipped (%s)", self.county, type(rearrest_err).__name__)
 
             # ── Step 4: Slack alerts ──
             try:
@@ -1090,7 +1106,7 @@ class BaseScraper(ABC):
                     if record.Lead_Status == "Hot" and record._parse_bond_numeric() >= 2500:
                         _slack.notify_hot_lead(record)
             except Exception as slack_err:
-                logger.warning(f"⚠️ Slack notification failed: {slack_err}")
+                logger.warning("⚠️ %s: Slack notification failed (%s)", self.county, type(slack_err).__name__)
 
 
             # ── Step 5: Update dashboard (in-memory Flask, legacy) ──
