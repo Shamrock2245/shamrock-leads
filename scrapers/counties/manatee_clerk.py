@@ -507,6 +507,7 @@ class ManateeClerkScraper(BaseScraper):
         start = time.time()
         self._requests_made = 0
         self._unmatched_defendants = 0
+        self._unattributed_bonds = 0
         end_d = date.today()
         floor_d = end_d - timedelta(days=MAX_LOOKBACK_DAYS - 1)
         queue = self._load_queue()
@@ -608,10 +609,10 @@ class ManateeClerkScraper(BaseScraper):
         logger.info(
             "[%s] %d records (listed=%d, eligible=%d, details=%d, backlog=%d, partial_requeued=%d, "
             "already_done=%d, non_defendant=%d, bond_unknown=%d, defendant_unmatched=%d, "
-            "multi_defendant_skipped=%d) in %.1fs",
+            "multi_defendant_skipped=%d, bond_unattributed=%d) in %.1fs",
             self.county_label, len(records), listed, len(eligible), details, backlog, partial,
             already_done, skipped_non_defendant, no_bond, self._unmatched_defendants,
-            multi_defendant, time.time() - start,
+            multi_defendant, self._unattributed_bonds, time.time() - start,
         )
         return records
 
@@ -747,16 +748,25 @@ class ManateeClerkScraper(BaseScraper):
         if not key or len(name.replace(",", " ").split()) < 2:
             return None
         first, middle, last = self._parse_name(name)
-        defendant = match_defendant(detail.get("defendants") or [], name) or {}
+        detail_defendants = detail.get("defendants") or []
+        defendant = match_defendant(detail_defendants, name) or {}
         if not defendant:
             self._unmatched_defendants += 1
+        # The Bonds table is case-level. It is this person's bond only when the
+        # detail lists exactly one Defendant AND that Defendant is this list
+        # row's person. Anything else (no parsed Parties, a name mismatch,
+        # several defendants) is ambiguous: bond stays "" (unknown), never a
+        # guess and never another co-defendant's figure.
+        bond_tied = len(detail_defendants) == 1 and bool(defendant)
         charges = detail.get("charges") or []
         obts = detail.get("obts") or {}
         served = [d for d in obts.get("served", []) if d]
         if len(obts.get("served", [])) == len(charges):
             for item, srv in zip(charges, obts["served"]):
                 item["arrest_summons_served"] = srv
-        bonds = detail.get("bonds") or {}
+        bonds = (detail.get("bonds") or {}) if bond_tied else {}
+        if not bond_tied and (detail.get("bonds") or {}).get("rows"):
+            self._unattributed_bonds = getattr(self, "_unattributed_bonds", 0) + 1
         event = detail.get("next_event") or {}
         filed = detail.get("filed") or row.get("file_date") or ""
         return ArrestRecord(
@@ -795,6 +805,7 @@ class ManateeClerkScraper(BaseScraper):
                 "next_event": event.get("event", ""),
                 "charge_details": charges,
                 "bond_published": bool(bonds.get("rows")),
+                "bond_attribution": "sole_defendant" if bond_tied else "ambiguous_left_blank",
                 # OBTS only when the Clerk lists one: MongoWriter promotes it to
                 # obts_number; a later blank scrape leaves the stored value alone.
                 **({"obts_number": ", ".join(obts["obts"])} if obts.get("obts") else {}),

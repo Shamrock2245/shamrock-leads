@@ -924,3 +924,42 @@ def test_aged_out_queued_cases_alert_with_count_only(monkeypatch, caplog):
     sc, _ = _queue_scraper(monkeypatch, rows, details)
     sc.run(writers=[store])
     assert len(alerts) == 1
+
+
+# ── Codex P1: a case-level bond never attaches to an ambiguous defendant ─────
+
+_SOLE = "<tr><td>Defendant</td><td>ALPHA ZED ZZSYNTH<br/>"
+_BOND = bonds_table([("SURETY BOND", "$1,500.00")], total="$1,500.00")
+
+
+def _one(monkeypatch, html, name="ZZSYNTH, ALPHA ZED"):
+    sc, _ = _scraper(monkeypatch, {10: list_page([_list_row(1, CASE_A, name)])}, {"9900001": html})
+    return sc.scrape()
+
+
+def test_bond_kept_only_for_the_sole_matching_defendant(monkeypatch):
+    (rec,) = _one(monkeypatch, detail_page(CASE_A, bonds=_BOND))
+    assert rec.Bond_Amount == "1500.00" and rec.extra_data["bond_attribution"] == "sole_defendant"
+
+
+def test_bond_left_blank_when_the_defendant_cannot_be_tied(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    page = detail_page(CASE_A, bonds=_BOND)
+    # 1. Detail Defendant is a different person than the list row.
+    (rec,) = _one(monkeypatch, page.replace(_SOLE, "<tr><td>Defendant</td><td>OTHER QQ ZZSYNTH<br/>"))
+    assert rec.Bond_Amount == "" and rec.Bond_Type == ""
+    assert rec.extra_data["bond_attribution"] == "ambiguous_left_blank" and rec.DOB == ""
+    assert "bond_unattributed=1" in caplog.text
+    # 2. No Defendant parsed from Parties at all.
+    (rec,) = _one(monkeypatch, page.replace(_SOLE, "<tr><td>Witness</td><td>ALPHA ZED ZZSYNTH<br/>"))
+    assert rec.Bond_Amount == "" and rec.Bond_Type == ""
+    # 3. Two same-name Defendant rows (ambiguous match): no record (multi-defendant skip).
+    two = page.replace(_SOLE, _SOLE.replace("<br/>", "</td><td>Male</td><td>01/02/1990</td></tr>" + _SOLE, 1), 1)
+    assert _one(monkeypatch, two) == []
+
+
+def test_co_defendant_case_never_yields_a_bonded_record(monkeypatch):
+    rows = [_list_row(1, CASE_A, "ZZSYNTH, ALPHA ZED"), _list_row(2, CASE_A, "ZZSYNTH, OTHER QQ")]
+    sc, sessions = _scraper(monkeypatch, {10: list_page(rows)}, {"9900001": detail_page(CASE_A, bonds=_BOND)})
+    assert sc.scrape() == []
+    assert not any(c[0] == "POST" for s in sessions for c in s.calls)  # case-level data never fetched
