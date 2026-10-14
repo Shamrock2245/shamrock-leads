@@ -31,6 +31,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Native form submit on a Miami-Dade record posts the real key (node simulation); a blank booking from a form never overwrites a stored key (server tests); checkbox, radio and hidden behaviour from P1.
   - Guards on Slack/Telegram `json=`, message entry points, Sheets/notification text, middleware registration, guard-first page loading and recovery portal labels.
 
+## [Unreleased] — 2026-10-14 (Duval: never click the ATIMS robot gate)
+
+### Fixed
+- **Duval (FL) no longer clicks the ATIMS "I'm not a robot" button.** Clicking a CAPTCHA gate is CAPTCHA solving, which is owner-approved only for Broward and Lake. When the gate shows, the run now stops with `AntiBotBlocked("captcha_gate: ...")`, so Health records an anti-bot block instead of an empty run. Found in the 2026-10-14 health snapshot. Runs without the gate are unchanged. Duval stays `unverified`.
+
+### Tests
+- `tests/test_fl_duval_no_robot_click.py` (added to the `ci.yml` list).
+
 ## [Unreleased] — 2026-10-14 (plan /pay tenant guard and audit id)
 
 ### Fixed
