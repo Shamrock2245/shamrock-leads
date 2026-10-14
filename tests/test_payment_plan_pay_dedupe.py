@@ -44,6 +44,11 @@ class Coll:
             key = tuple(doc.get(f) for f in fields)
             if any(tuple(d.get(f) for f in fields) == key for d in self.docs):
                 raise DuplicateKeyError("dup")
+        # Mongo's ``_id`` index is always unique. Missing ``_id`` is not a key
+        # here (the double does not assign one).
+        explicit_id = doc.get("_id")
+        if explicit_id is not None and any(d.get("_id") == explicit_id for d in self.docs):
+            raise DuplicateKeyError("dup _id")
         self.docs.append(copy.deepcopy(doc))
 
     async def find_one(self, flt=None, *a, **k):

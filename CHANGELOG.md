@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-14 (plan /pay tenant guard and audit id)
+
+### Fixed
+- **`POST /api/payments/plans/{plan_id}/pay` in-flight guard is per tenant.** With `SAAS_MULTI_TENANT` on, the process-local hold was only the transaction id. Two agencies could each insert a claim (the unique index is `tenant_id` + `transaction_id`), and the second then lost the hold and returned 409 `payment_in_progress` with its claim left `claimed`. A later retry will not resume a `claimed` row. The hold key is now `(tenant_id, transaction_id)`. Flag off still uses one hold per transaction id.
+- **The plan-payment `audit_events` `_id` includes the tenant when multi-tenant is on.** It is `plan-pay:{tenant_id}:{plan_id}:{transaction_id}`. Two agencies with the same plan id and transaction id each get an audit row, and the second transaction is not aborted by a duplicate `_id`. Flag off stays `plan-pay:{plan_id}:{transaction_id}`. No index is added on `payments`.
+
+### Tests
+- `tests/test_payment_plan_link_core.py`: with `SAAS_MULTI_TENANT` on, two tenants posting the same transaction id both commit, each with its own claim and audit. A same-tenant replay stays idempotent. The single-tenant audit `_id` is unchanged. No SwipeSimple, Gmail, or Slack calls.
+
 ## [Unreleased] — 2026-10-13 (plan /pay links a committed payment)
 
 ### Fixed
