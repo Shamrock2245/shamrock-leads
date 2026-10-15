@@ -8,6 +8,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 - **Palm Beach (FL) no longer drives a Chrome browser or sends a Chrome User-Agent.** `palm_beach.py` reads the PBSO blotter with `scrapers.plain_http` (honest UA, certificate verified). It submits the page's own date-search form, parses cards with `parse_pbso_html`, and follows the page's own pagination links. The hCaptcha wait loop is gone: a challenge page (including hCaptcha) or 401/403/429 raises `egress_block:`, a dropped handshake raises `egress_block: ... connection_reset:`, a certificate failure raises `tls_cert_invalid:`, and a missing search form raises `PalmBeachSourceChanged`. `_fetch_single_booking` uses the same honest session, and a block now raises instead of reading as "not found". The one honest probe from the agent box (2026-10-15) got **connection_reset**. Tests: `tests/test_fl_palmbeach_plain_https.py`.
 
+## [Unreleased] — 2026-10-15 (status-fallback writers: unknown custody status is "")
+
+### Fixed
+- **The bookmarklet merge and the PBSO Mongo ingest fallback no longer invent "In Custody".** `booking_extract_merge.merge_booking_extract` keeps the stored status, else the status the page published (`published_status`), else `""`. That applies to both the scoring record and the newly inserted arrest row. `url_ingest_service._ingest_pbso_from_mongo` returns the stored `status`/`Status` or `""`. Stored rows are not rewritten. Tests: `tests/test_status_fallback_writers.py`.
+
 ## [Unreleased] — 2026-10-15 (Duval and Palm Beach: unknown bond is "", published 0 kept)
 
 ### Fixed

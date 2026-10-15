@@ -632,7 +632,7 @@ async def _ingest_pbso_from_mongo(booking_id: str, source_url: str) -> Optional[
             "county": "Palm Beach",
             "state": "FL",
             "facility": _first_str(doc.get("facility"), doc.get("Facility"), "Palm Beach County Jail"),
-            "status": _first_str(doc.get("status"), doc.get("Status"), "In Custody"),
+            "status": _first_str(doc.get("status"), doc.get("Status")),  # unknown is "", never invented
             "booking_date": _first_str(doc.get("booking_date"), doc.get("Booking_Date")),
             "dob": dob_iso or dob_display,
             "source_url": source_url,

@@ -101,6 +101,7 @@ jobs:
             tests/test_fl_bay_bond_custody_defaults.py \
             tests/test_fl_duval_palmbeach_bond_defaults.py \
             tests/test_fl_palmbeach_plain_https.py \
+            tests/test_status_fallback_writers.py \
             tests/test_fl_desoto_bond_custody_defaults.py \
             tests/test_fl_smartweb_plain_https.py \
             tests/test_lee_outreach_unknown_status.py \
