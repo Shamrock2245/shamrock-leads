@@ -47,6 +47,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Status is "" (was hard-coded "In Custody"). The roster `status` code is never shown by the official app, so it isn't a published custody label, and the roster isn't custody-only (9/100 rows were "0"). The `status == "1"` filter is kept. The detail `releaseDate` ("Released Date" in the app) is recorded as Release_Date when published.
 - Bond (CoS: $0 is unpublished), charges and booking keys are unchanged. Tests: `tests/test_fl_okaloosa_honest.py` (on the ci.yml list); the existing Okaloosa API tests' fake sessions now route through `request`. Recon: `docs/recon/FL_OKALOOSA_HONEST_2026-10-15.md`.
 
+## 2026-10-15 — Pinellas FL: status only from the published booking-cell custody line
+
+- `scrapers/counties/pinellas.py` `_row_to_record`: a blank custody line in the row's booking cell now gives Status "" (it was "In Custody"). A published line gives "Released" (contains "released"), "In Custody" ("in custody" / "in jail"), or the published text verbatim, recorded as `extra_data.status_source = "published_booking_cell_custody"`. The booking-date search is not a proven custody-only view.
+- Relay-only setup, modal flow, bond, charges and keys are unchanged. No live probe (relay-only). Tests: `tests/test_fl_pinellas_status_only.py` (on the ci.yml list). Recon: `docs/recon/FL_PINELLAS_STATUS_2026-10-15.md`.
+
 ## [Unreleased] — 2026-10-15 (Gaston NC: honest identity; published-only charges/bond/status)
 
 ### Fixed
