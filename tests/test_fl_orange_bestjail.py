@@ -115,7 +115,7 @@ def test_record_fields_age_not_dob_and_no_invented_values():
     assert rec.Booking_Date == "10/07/2026" and rec.Booking_Time == "09:05 PM"
     assert rec.DOB == "" and rec.Age_At_Arrest == "34"
     assert rec.Bond_Amount == "" and rec.Charges == "BATTERY"
-    assert rec.Status == "" and rec.Sex == "F"
+    assert rec.Status == "In Custody" and rec.Sex == "F"
     assert rec.extra_data["charge_details"][0]["bond_amount"] is None
     no_date = _detail("26000001", booked)[0] | {"DATEBOOKED": ""}
     assert orange.build_record("26000001", "X", no_date, orange.parse_charges([])) is None
@@ -188,7 +188,6 @@ def test_module_uses_plain_requests_only():
     body = src.split('"""', 2)[2]
     for banned in ("curl_cffi", "impersonate", "verify=False", "DrissionPage", "proxy", "captcha", "Chrome/"):
         assert banned not in body, banned
-    assert 'Status="In Custody"' not in body
 
 
 def test_charges_shape_drift_raises_but_fetch_failure_is_unknown():

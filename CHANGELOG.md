@@ -3,10 +3,10 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased] — 2026-10-15 (Orange FL: honest UA; status only from source)
+## [Unreleased] — 2026-10-15 (Orange FL: honest UA; status published or roster presence)
 
 ### Fixed
-- **Orange (FL) no longer sends a Chrome User-Agent or invents "In Custody".** `orange.py` uses `scrapers.plain_http` (honest UA, certificate verified) for every BestJail JSON GET. Status comes only from a published custody field (`published_status`); otherwise `""`. Bond was already published-only (blank cell → `""`; published `0.00` kept). Blocks raise `egress_block:` / `tls_cert_invalid:` with no stealth, proxy or `verify=False`. One honest probe (2026-10-15) of the inmate portal got **HTTP 200**. Tests: `tests/test_fl_orange_honest_status.py`.
+- **Orange (FL) no longer sends a Chrome User-Agent or invents "In Custody".** `orange.py` uses `scrapers.plain_http` (honest UA, certificate verified) for every BestJail JSON GET. Status is a published custody field if there is one (`published_status`); otherwise "In Custody" from roster presence, because the roster is proven custody-only. The county page reads "Current Inmate Database ... people currently in jail" and "When a person is released from jail, they will no longer appear in these listings". Roster rows carry no release fields. 2,919 roster bookings vs the county's published daily population of 2,976 (`docs/recon/FL_ORANGE_ROSTER_SCOPE_2026-10-15.md`). `extra_data.status_origin` records `published` or `roster_presence`. Bond was already published-only (blank cell → `""`; published `0.00` kept). Blocks raise `egress_block:` / `tls_cert_invalid:` with no stealth, proxy or `verify=False`. One honest probe (2026-10-15) of the inmate portal got **HTTP 200**. Tests: `tests/test_fl_orange_honest_status.py`.
 
 ## [Unreleased] — 2026-10-15 (Aiken SC: plain honest HTTPS; published-only bond/status)
 

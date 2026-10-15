@@ -32,8 +32,12 @@ Source contract (recon 2026-10-08, docs/recon/FL_ORANGE_BESTJAIL_2026-10-08.md):
     (or no charges, or a failed charges fetch) → ``Bond_Amount=""`` (unknown),
     never ``$0.00``. A published ``0.00`` stays ``0.00``.
   * ``BIRTH`` is an age, so it goes to ``Age_At_Arrest``; DOB stays empty.
-  * Status is never invented as "In Custody". The BestJail JSON does not
-    publish a custody field on these endpoints, so Status is ``""``.
+  * Status: a published custody field wins (``published_status``). Otherwise
+    roster presence means in custody: the county labels the roster "Current
+    Inmate Database ... people currently in jail" and states "When a person is
+    released from jail, they will no longer appear in these listings." Records
+    are only built for bookings on that roster, so they get ``ROSTER_STATUS``.
+    See docs/recon/FL_ORANGE_ROSTER_SCOPE_2026-10-15.md.
   * Health stays ``unverified`` until a Leads Ops write smoke.
 """
 from __future__ import annotations
@@ -217,6 +221,14 @@ def published_status(detail: Dict[str, Any]) -> str:
     return ""
 
 
+ROSTER_STATUS = "In Custody"  # roster is custody-only per the county's own notice
+
+
+def roster_status(detail: Dict[str, Any]) -> str:
+    """Published status if any; else roster presence (custody-only roster)."""
+    return published_status(detail) or ROSTER_STATUS
+
+
 def build_record(booking: str, name: str, detail: Dict[str, Any], charges: Dict[str, Any]) -> Optional[ArrestRecord]:
     booked_at = parse_booked_at(detail)
     if booked_at is None:
@@ -254,12 +266,13 @@ def build_record(booking: str, name: str, detail: Dict[str, Any], charges: Dict[
         Bond_Amount=charges["bond"],
         Case_Number=" | ".join(charges["case_numbers"]),
         Agency=charges["agency"],
-        Status=published_status(detail),
+        Status=roster_status(detail),
         Detail_URL=ROSTER_URL,
         LastCheckedMode="INITIAL",
         extra_data={
             "charge_details": charges["details"],
             "booking_date_origin": "BestJail DATEBOOKED/TIMEBOOKED",
+            "status_origin": "published" if published_status(detail) else "roster_presence",
         },
     )
 
