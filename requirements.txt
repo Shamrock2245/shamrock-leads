@@ -59,7 +59,7 @@ sse-starlette>=2.1.0,<2.2      # Cap <2.2 — 2.2+ needs starlette>=0.41.3; 3.0.
 motor>=3.3.0                  # Async MongoDB driver
 httpx[socks]>=0.28.1            # Async HTTP client + SOCKS proxy (Hillsborough scraper)
 cryptography>=43.0.0          # Fernet symmetric encryption (OAuth token storage)
-PyJWT>=2.8.0                  # JWT state tokens for OAuth CSRF protection
+PyJWT>=2.15.1                  # JWT state tokens for OAuth CSRF protection
 aiohttp>=3.9.0                # Async HTTP client for contact discovery OSINT pipeline
 python-multipart>=0.0.9       # Required by FastAPI for form data / file uploads
 itsdangerous>=2.1.2           # Signed-cookie state for dashboard PIN auth
