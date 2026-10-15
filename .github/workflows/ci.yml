@@ -105,6 +105,7 @@ jobs:
             tests/test_lee_scraper_incustody_unknown.py \
             tests/test_lee_roster_status_unknown.py \
             tests/test_dcn_base_cleanup.py \
+            tests/test_fl_lake_honest_status.py \
             tests/test_fl_desoto_bond_custody_defaults.py \
             tests/test_fl_smartweb_plain_https.py \
             tests/test_lee_outreach_unknown_status.py \

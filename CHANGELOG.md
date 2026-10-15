@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-15 (Lake: honest UA, published-only status/bond; SolveCaptcha kept)
+
+### Fixed
+- **Lake (FL) no longer sends a Chrome User-Agent or invents "In Custody".** `lake.py` uses `scrapers.plain_http` (honest UA, certificate verified) for the inmate-search landing GET and the recent_data API POST. The owner-approved SolveCaptcha Turnstile path is unchanged. Status comes only from a published custody field/flag (`published_status`); otherwise `""`. Bond is published-only (`total_bond_amount` missing/blank → `""`; explicit 0 kept; negative → `NO BOND` + `""`). One honest probe of the landing page (2026-10-15) got **connection_reset**. Tests: `tests/test_fl_lake_honest_status.py`.
+
 ## [Unreleased] — 2026-10-15 (DCN base: honest identity, published-only bond/status, bid-only keys)
 
 ### Fixed
