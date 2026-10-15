@@ -8,6 +8,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 - **Palm Beach (FL) no longer drives a Chrome browser or sends a Chrome User-Agent.** `palm_beach.py` reads the PBSO blotter with `scrapers.plain_http` (honest UA, certificate verified). It submits the page's own date-search form, parses cards with `parse_pbso_html`, and follows the page's own pagination links. The hCaptcha wait loop is gone: a challenge page (including hCaptcha) or 401/403/429 raises `egress_block:`, a dropped handshake raises `egress_block: ... connection_reset:`, a certificate failure raises `tls_cert_invalid:`, and a missing search form raises `PalmBeachSourceChanged`. `_fetch_single_booking` uses the same honest session, and a block now raises instead of reading as "not found". The one honest probe from the agent box (2026-10-15) got **connection_reset**. Tests: `tests/test_fl_palmbeach_plain_https.py`.
 
+## [Unreleased] — 2026-10-15 (DCN base: honest identity, published-only bond/status, bid-only keys)
+
+### Fixed
+- **`scrapers/dcn_base.py` no longer invents bond, custody status or booking keys, and drops the Chrome disguise.** Shared by Carteret / Lee / Halifax / Richmond / Moore (NC), Darlington (SC) and DeSoto (FL). HTTP goes through an honest `plain_http` session (verified certs; 401/403/429 / challenge / TLS failures raise). Bond uses `charge_bond_amount` / `total_published_bond` (`""` when unknown; a published 0 is kept). Status is `""` (never hard-coded "In Custody"). Roster rows without a URL `bid` are dropped (no name/date hash, no person `id`). DeSoto's fail_closed `scrape()` is unchanged. Tests: `tests/test_dcn_base_cleanup.py`.
+
 ## [Unreleased] — 2026-10-15 (Lee bulk roster: unknown status is "")
 
 ### Fixed
