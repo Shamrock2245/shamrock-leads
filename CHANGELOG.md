@@ -14,6 +14,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_fl_st_lucie_plain_https.py` (added to the `ci.yml` list).
 
+## [Unreleased] — 2026-10-15 (Martin: plain HTTPS; published bond only; State always FL)
+
+### Fixed
+- **Martin (FL) no longer disguises itself as Chrome or turns off certificate checks.** `scrapers/counties/martin.py` used curl_cffi `impersonate="chrome131"`, a Chrome User-Agent, `verify=False` and silenced urllib3 warnings. It now uses `scrapers.plain_http` (honest UA, TLS verified). A plain verified GET from the box returned 200 JSON.
+- **Bond is published-only:** the old code summed only the bonds that had an amount and wrote `"0"` when none did. The total is now set only when every bond publishes an amount, else `""`; a published `0` stays `"0"`.
+- **Status only from the published `IsReleased` flag:** `""` when the flag is absent (was defaulted to `"In Custody"`).
+- **State is always `FL`.** It was taken from the defendant's address, so out-of-state addresses (3 of 100 on the live page) produced rows with State `NE` / `AK` / `MH`.
+- **No fallback booking key:** a row without `soNumber` is skipped instead of keyed on the API's internal `id`.
+- **Booking date** comes from the source `bookingDate` (falls back to the latest arrest date as before).
+
+### Tests
+- `tests/test_fl_martin_plain_https.py` (added to the `ci.yml` list).
+
 ## [Unreleased] — 2026-10-15 (Osceola: plain HTTPS with TLS verified; no invented $0; blank cells keep the day)
 
 ### Fixed
