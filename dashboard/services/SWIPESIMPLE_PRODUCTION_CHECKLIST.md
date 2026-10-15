@@ -27,6 +27,32 @@ Related: `SWIPESIMPLE_INVOICE_CONTRACT.md`, `swipesimple_invoice_service.py`,
 
 ---
 
+## Go-live (owner sets these; this repo does not)
+
+Do not flip production env from a pull request. Brendan sets the values on the VPS after the staging smoke below.
+
+| Variable | Set to | Effect when unset |
+|---|---|---|
+| `SWIPESIMPLE_LIVE` | `1` | No HTTP to SwipeSimple. Completion records a dry-run stage of the confirmed down payment. |
+| `SWIPESIMPLE_DISPATCH_LIVE` | `1` | No BlueBubbles/email send. `dispatch_invoice` logs the payload only. |
+| `SWIPESIMPLE_SESSION` or `SWIPESIMPLE_COOKIE_JAR` | session secret | Live HTTP fails closed (`swipesimple_session_not_configured`). Never commit the value. |
+| `SWIPESIMPLE_WEBHOOK_SECRET` | webhook HMAC secret | `POST /api/webhooks/payment` returns 503 outside `ENV=development`. |
+| `SWIPESIMPLE_CSRF_TOKEN` | optional cached token | Bootstrap refreshes it. Not required to start. |
+| `SWIPESIMPLE_NEW_INVOICE_PATH` | optional, default `/invoices/new` | Only if the merchant HTML path differs. |
+| `DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK` | leave unset | Static pay-link auto-text stays off. The invoice path is the one to turn on. |
+| `SWIPESIMPLE_SHARE_INVOICE_ON_PROMOTE` | leave unset | Intake promote does not create an invoice. |
+| `SAAS_MULTI_TENANT` | leave unset / off | Shamrock stays the only tenant. |
+
+BlueBubbles (`BLUEBUBBLES_URL_0178`, `BLUEBUBBLES_PASSWORD_0178`) must already work before `SWIPESIMPLE_DISPATCH_LIVE=1`. Texts go through BlueBubbles, not Twilio SMS.
+
+### Staging smoke (before either flag stays on)
+
+1. Deploy the build with both flags **unset**. Write a staff test case, confirm premium `1500.00` / down `500.00` / financed `1000.00` / 4 weekly. Expect one plan and no SwipeSimple HTTP.
+2. Complete DocuSeal on that packet. The `share_invoice` step should show a dry-run of **$500.00**, undispatched.
+3. On a staging shell only: `SWIPESIMPLE_LIVE=1` and a session secret, `SWIPESIMPLE_DISPATCH_LIVE` still unset. Run `python scripts/swipesimple_smoke_create.py` ($0.01, reference starts with `SMOKE`, no customer dispatch).
+4. Unset `SWIPESIMPLE_LIVE` unless the $0.01 draft looks right and go-live is the same day.
+5. Only then set `SWIPESIMPLE_LIVE=1` and `SWIPESIMPLE_DISPATCH_LIVE=1` in production. The first real send is the confirmed down payment, once. A second completion does not send again.
+
 ## Remaining human steps (Brendan / Leads Ops)
 
 ### 1. Secrets & session (Leads Ops)

@@ -57,6 +57,11 @@ def _packet(**overrides) -> dict:
         "status": "pending_signature",
         "docuseal_status": "sent",
         "docuseal_submission_id": SUBMISSION_ID,
+        # Staff confirmation (POST /api/paperwork/confirm-premium). Without
+        # this trio the share-invoice step stamps premium_unconfirmed.
+        "premium_confirmed_amount": "650.00",
+        "premium_confirmed_at": "2026-09-24T15:00:00+00:00",
+        "premium_confirmed_by": "staff-test",
     }
     pkt.update(overrides)
     return pkt
@@ -839,7 +844,17 @@ _CONFIRMED = {
 ])
 def test_completion_switch_on_unconfirmed_premium_skips(premium_fields, caplog):
     caplog.set_level(logging.INFO)
-    h, sent, patched = _real_pay_world(_packet(indemnitor_phone="2395550142", **premium_fields))
+    packet = _packet(indemnitor_phone="2395550142", **premium_fields)
+    confirmed_by = str(premium_fields.get("premium_confirmed_by") or "").strip()
+    if not (
+        premium_fields.get("premium_confirmed_amount")
+        and premium_fields.get("premium_confirmed_at")
+        and confirmed_by
+    ):
+        for key in ("premium_confirmed_amount", "premium_confirmed_at", "premium_confirmed_by"):
+            packet.pop(key, None)
+        packet.update(premium_fields)
+    h, sent, patched = _real_pay_world(packet)
     with patched({dc.LEGACY_PAYMENT_LINK_ENV: "true"}):
         body = _body()
         client = TestClient(h.app())
@@ -852,6 +867,54 @@ def test_completion_switch_on_unconfirmed_premium_skips(premium_fields, caplog):
     assert st["state"] == "skipped" and st["reason"] == "premium_unconfirmed"
     assert "payment_link_send_once" not in h.packet_doc()
     assert "500" not in caplog.text and "2395550142" not in caplog.text
+
+
+def test_share_invoice_skips_when_premium_unconfirmed():
+    packet = _packet()
+    for key in ("premium_confirmed_amount", "premium_confirmed_at", "premium_confirmed_by"):
+        packet.pop(key, None)
+    h = Harness(packet)
+    with h.patched():
+        asyncio.run(h.run_poller())
+    assert h.calls["share_invoice"] == 0
+    assert h.step(dc.STEP_SHARE)["state"] == "skipped"
+    assert h.step(dc.STEP_SHARE)["reason"] == "premium_unconfirmed"
+
+
+def test_share_invoice_never_dispatches_even_when_the_flag_is_on(monkeypatch):
+    h = Harness()
+    dispatch = AsyncMock(side_effect=AssertionError("completion must not dispatch"))
+    send = AsyncMock(side_effect=AssertionError("completion must not send"))
+    http = AsyncMock(side_effect=AssertionError("completion must not charge"))
+    monkeypatch.setattr(ss, "dispatch_invoice", dispatch)
+    monkeypatch.setattr(ss, "_share_invoice_http", http)
+    monkeypatch.setattr("dashboard.services.bb_client.send_message_universal", send)
+    with h.patched(env={"SWIPESIMPLE_DISPATCH_LIVE": "1", "SWIPESIMPLE_LIVE": "1"}):
+        asyncio.run(h.run_poller())
+    h.share.assert_awaited_once_with(
+        BOND_ID, channel="imessage", dispatch=False, source="docuseal_poller_completed",
+    )
+    dispatch.assert_not_called()
+    send.assert_not_called()
+    http.assert_not_called()
+    assert h.step(dc.STEP_SHARE).get("dispatched") is False
+
+
+def test_share_invoice_dry_run_stages_confirmed_down_payment():
+    packet = _packet(
+        premium_confirmed_amount="1500.00",
+        down_payment_amount="500.00",
+        financed_balance="1000.00",
+    )
+    h = Harness(packet)
+    h.share.side_effect = ss.SwipeSimpleLiveDisabled("live off")
+    with h.patched():
+        asyncio.run(h.run_poller())
+    step = h.step(dc.STEP_SHARE)
+    assert step["state"] == "done"
+    assert step["dry_run"] is True
+    assert step["dispatched"] is False
+    assert step["amount"] == "500.00"
 
 
 def test_completion_switch_on_confirmed_premium_exactly_one_send():
