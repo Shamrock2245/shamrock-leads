@@ -59,7 +59,7 @@ sse-starlette>=2.1.0,<2.2      # Cap <2.2 — 2.2+ needs starlette>=0.41.3; 3.0.
 motor>=3.3.0                  # Async MongoDB driver
 httpx[socks]>=0.28.1            # Async HTTP client + SOCKS proxy (Hillsborough scraper)
 cryptography>=43.0.0          # Fernet symmetric encryption (OAuth token storage)
-PyJWT>=2.8.0                  # JWT state tokens for OAuth CSRF protection
+PyJWT>=2.15.1                  # JWT state tokens for OAuth CSRF protection
 aiohttp>=3.9.0                # Async HTTP client for contact discovery OSINT pipeline
 python-multipart>=0.0.9       # Required by FastAPI for form data / file uploads
 itsdangerous>=2.1.2           # Signed-cookie state for dashboard PIN auth
@@ -67,7 +67,7 @@ PyYAML>=6.0                   # Blog auto-publisher YAML frontmatter parsing
 
 # Active Bonds PDF generation & date parsing
 reportlab>=4.0.0
-fpdf2>=2.7.0                  # OSINT PDF export (dashboard/services/osint_pdf_export.py)
+fpdf2>=2.8.9                  # OSINT PDF export (dashboard/services/osint_pdf_export.py)
 python-dateutil>=2.8.0
 PyMuPDF>=1.24.0
 
@@ -89,7 +89,7 @@ SpeechRecognition>=3.17.0  # Google Speech Recognition (free, no API key)
 
 # Development
 pytest>=8.0.0
-pytest-asyncio>=0.23.0
+pytest-asyncio>=0.26.0
 nodriver>=0.38  # Seminole, Lake — JS-rendered jail portals (headless Chrome via CDP)
 
 # Adobe PDF Services (official SDK — fill/combine/compress)

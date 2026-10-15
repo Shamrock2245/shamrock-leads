@@ -65,6 +65,63 @@ def _session_agent(request: Request) -> dict:
     return ident if isinstance(ident, dict) else {}
 
 
+def _enforce_identity_opt_in(body) -> bool:
+    from dashboard.services.identity_verification_service import enforce_identity_opt_in
+
+    if not isinstance(body, dict):
+        return False
+    return enforce_identity_opt_in(body.get("enforce_identity"))
+
+
+def _identity_gate_flags(body, *, staff_test) -> dict:
+    """Identity-gate kwargs. ``enforce_identity`` can only turn a staff-test skip off.
+
+    ``staff_authenticated`` is true only after ``prepare_staff_test_case``
+    accepted this request. A real booking, a missing flag, and a request that
+    is not a staff test all leave the gate as it is.
+    """
+    return {
+        "staff_test_case": staff_test is not None,
+        "enforce_identity": _enforce_identity_opt_in(body),
+        "staff_authenticated": staff_test is not None,
+    }
+
+
+def _push_identity_flags(request, body, packet, bond_data, packet_id: str) -> dict:
+    """Same opt-in for a DocuSeal push of an existing staff TEST packet.
+
+    The synthetic skip applies only when this request is staff-authorized,
+    staff test mode is on, and the stored packet is ``TEST-`` / ``PKT-TEST-``.
+    ``enforce_identity: true`` turns that skip off. Every other push stays gated.
+    """
+    from dashboard.services.staff_test_case import (
+        is_test_booking,
+        is_test_packet_id,
+        packet_is_staff_test,
+        staff_request_authorized,
+        staff_test_case_mode_enabled,
+    )
+
+    booking = str(
+        (bond_data or {}).get("booking_number")
+        or (packet or {}).get("booking_number")
+        or ""
+    )
+    authorized = staff_request_authorized(request)
+    staff_test_packet = bool(
+        authorized
+        and staff_test_case_mode_enabled()
+        and packet_is_staff_test(packet if isinstance(packet, dict) else None)
+        and is_test_booking(booking)
+        and is_test_packet_id(packet_id)
+    )
+    return {
+        "staff_test_case": staff_test_packet,
+        "enforce_identity": _enforce_identity_opt_in(body),
+        "staff_authenticated": bool(authorized and staff_test_packet),
+    }
+
+
 def _copy_session_agent(target: dict, ident: dict) -> None:
     if not isinstance(target, dict) or not isinstance(ident, dict):
         return
@@ -1635,6 +1692,7 @@ async def packet_builder_finalize(request: Request):
             )
 
             # Identity gate first. Binding is next and is unchanged.
+            identity_flags = _identity_gate_flags(body, staff_test=staff_test)
             try:
                 await require_verified_indemnitors(
                     bond_data=bond_data,
@@ -1642,7 +1700,7 @@ async def packet_builder_finalize(request: Request):
                     bond_case_id=str(bond_data.get("bond_case_id") or ""),
                     booking_number=str(bond_data.get("booking_number") or ctx.get("booking_number") or ""),
                     packet_id=str(packet_id or ""),
-                    staff_test_case=staff_test is not None,
+                    **identity_flags,
                 )
             except IndemnitorIdentityError as exc:
                 return JSONResponse(
@@ -1816,7 +1874,7 @@ async def packet_builder_finalize(request: Request):
                     include_defendant=bool(body.get("include_defendant", True)),
                     poa_record=poa_doc,
                     session=user,
-                    staff_test_case=staff_test is not None,
+                    **identity_flags,
                 )
             except ChargeCapacityError as exc:
                 from dashboard.services.charge_verbatim import capacity_error_body
@@ -3505,6 +3563,7 @@ async def paperwork_push_docuseal(packet_id: str, request: Request):
             send_email=bool(body.get("send_email", False)),
             include_defendant=bool(body.get("include_defendant", True)),
             completed_redirect_url=body.get("completed_redirect_url"),
+            **_push_identity_flags(request, body, packet, bond_data, packet_id),
         )
     except IndemnitorIdentityError as exc:
         return JSONResponse(

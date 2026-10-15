@@ -38,6 +38,53 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - New `tests/test_agent_analytics_payment_agent.py` (added to `ci.yml`): poller+webhook and poller+plan duplicates, which row is preferred, declined/refunded/voided/pending/blank statuses, webhook failed/refunded events, plan `/pay` rows, rows with no transaction id, and the KPIs from the endpoint itself, refund/void/chargeback cancellation, down-payment matching (matched, not matched, one-to-one, transaction id, refunded card row), and the analytics side of down payments. Future `paid_at` / `created_at` rows are outside the 30-day KPIs. New `tests/test_payment_plan_create_down_payment_claim.py` (added to `ci.yml`): claim and row on a new id, concurrent creates with the same id (one winner, also when linking the same poller row), 409 when claimed or on a plan row, linking settled poller and webhook rows, refusing unsettled/refunded/wrong-amount/wrong-booking/ambiguous rows, rollback when the plan insert, payment write, link or claim update fails, and 503 when dedupe is unavailable. The link audit names the signed-in agent, or `machine_key` for a trusted machine call, and ignores `created_by` on the body. When a newer write blocks unlinking, the plan is kept as `needs_review` and a second plan for that booking is refused. An incomplete undo (delete throws, or delete matches nothing while the row remains) also leaves the plan `needs_review` and keeps the claim.
 
+## [Unreleased] — 2026-10-14 (Polk / Volusia / Pasco: unpublished bond is "", never a counted 0)
+
+### Fixed
+- **Polk, Volusia and Pasco (FL) no longer store an unpublished bond as `"0"`.** Each started its total at `0.0`, read a missing bond as `"0"` / `"0.00"`, and counted NO BOND / HOLD / blank / unparseable text as 0. New `scrapers/published_bond.py` (`charge_bond_amount`, `total_published_bond`) follows the SmartWEB convention. A charge counts only when the source shows a dollar amount, and a real published `0` / `$0.00` is kept as `"0"`. The booking total is the sum only when every charge has a published amount; any unknown charge, no charges, or no charge fetch (Pasco bookings older than the 5-day detail window; Polk with no profile token) gives `""`. Stacked on the Polk/Volusia/Pasco plain-HTTPS PR. Stored rows already written with an invented `"0"` are not touched; a correction needs Leads Ops and the owner's OK.
+
+### Tests
+- `tests/test_fl_pvp_bond_unknown.py` (added to the `ci.yml` list).
+
+
+## [Unreleased] — 2026-10-14 (Collier: plain verified HTTPS, custody unknown)
+
+### Changed
+- **Collier (FL) uses plain `requests` with an honest User-Agent and TLS verified** (`scrapers/plain_http.py`, same helper as the Polk/Volusia/Pasco PR). The curl_cffi `impersonate="chrome120"` calls and the Chrome User-Agent are gone. A bad certificate (`tls_cert_invalid:`) or a 401/403/429 (`egress_block:`) is raised at once and never retried; 429 is no longer retried. The UpdatePanel `pageRedirect` -> `errorpage.aspx` answer now raises `EgressBlocked` instead of parsing as an empty roster.
+- **Collier no longer hard-codes `Status="In Custody"`.** The arrest report publishes no custody field, so `Status` is `""` (unknown).
+- **A blocked Collier refetch stops the First Appearance watcher for that booking.** `_fetch_single_booking` re-raises `AntiBotBlocked`, and the watcher returns no record instead of falling through to its generic browser-UA refetch, so a block is never worked around.
+- **`MongoWriter` never `$set`s a blank `status`.** A blank status means not published, so a stored status (e.g. "Released" from a recheck) is kept. A published status still updates.
+- **Collier stays `unverified`** (CoS 2026-10-14). Two plain reads from the agent box (8:22 / 8:23 AM ET) got the page, but the grid postback redirected to `errorpage.aspx`. Until a plain read works (next: Leads Ops relay), each run fails visibly with `egress_block` rather than being switched off. See `docs/recon/FL_COLLIER_PLAIN_HTTPS_2026-10-14.md`. No stored data touched.
+
+### Tests
+- `tests/test_fl_collier_plain_custody.py` (added to the `ci.yml` list).
+
+## [Unreleased] — 2026-10-14 (staff TEST identity opt-in)
+
+### Added
+- **`enforce_identity` on Write Bond finalize and the DocuSeal push.** Field name: `enforce_identity`. Endpoints: `POST /api/paperwork/packet/finalize` and `POST /api/paperwork/{packet_id}/docuseal`. A staff-authenticated request, with staff test mode on, for a `TEST-` booking and a `PKT-TEST-` packet, still skips the #165 indemnitor identity gate when the field is false or absent. `enforce_identity: true` turns that skip off. The normal gate then runs, and an unverified indemnitor gets 422 `indemnitor_identity_unverified` before a packet is built, a POA is reserved, or DocuSeal is called. The flag cannot loosen the gate. A real booking, a request that is not staff-authorized, and a request while staff test mode is off ignore it and stay gated. Gate order is unchanged (identity, then binding, then POA and charge capacity). `self_indemnitor` is unchanged.
+- **A staff DocuSeal push of an existing `TEST-` / `PKT-TEST-` packet follows that same skip.** It did not before. The skip applies only while staff test mode is on and the caller is staff-authorized. `enforce_identity: true` turns it off. Any other push is still gated.
+
+### Tests
+- `tests/test_enforce_identity_flag.py` (added to the `ci.yml` list, which names files explicitly). Mocked Mongo and a stubbed DocuSeal. A staff TEST case with `enforce_identity` and no scan or attestation returns 422, with zero `create_submission` calls and zero POA reservations, on both the DocuSeal push and finalize. The same case without the flag still takes the exempt path. A passed scan with the flag proceeds. A real booking with the flag false or absent is still 422. A non-staff request and a test-mode-off request ignore the flag.
+
+## [Unreleased] — 2026-10-14 (Polk / Volusia / Pasco: plain verified HTTPS)
+
+### Changed
+- **Polk, Volusia and Pasco (FL) use plain `requests` with an honest User-Agent and certificate checks on.** The curl_cffi Chrome impersonation, the browser User-Agent and `verify=False` are gone. New `scrapers/plain_http.py` (`make_session`, `request`) always verifies TLS. A bad certificate raises `SourceTLSInvalid` (`tls_cert_invalid: <county> ...`) and a 401 / 403 / 429 or challenge page raises `EgressBlocked` (`egress_block: <county> ...`). Both are `AntiBotBlocked`, so they are never retried and never worked around, and the per-row `except Exception` handlers now re-raise them instead of swallowing them. A plain verified read from the agent box on 2026-10-14 got HTTP 200 from all three (Polk SearchJail JSON, Volusia disclaimer page, Pasco GetInCustody JSON), so no county is moved to fail_closed here. If a block or bad certificate shows up in prod, the run fails with that error class and the county goes to fail_closed in a follow-up PR. States are unchanged (all three `unverified`).
+
+### Tests
+- `tests/test_fl_plain_https_polk_volusia_pasco.py` (added to the `ci.yml` list).
+
+
+## [Unreleased] — 2026-10-14 (powers pack saved to generated reports)
+
+### Added
+- **`GET /api/reports/powers-pack/{pack}` archives a successful pack on `generated_reports`.** After the pack builds, one row is inserted with `surety_id`, pack, date range, filename, section counts, `history_complete` taken from the built pack, the session actor, `created_at`, and the XLSX blob (`xlsx_b64`, same 12MB cap as the bond report). `GET /api/reports/generated` lists it, and the existing generated-report download returns that blob. The streamed XLSX or JSON body and headers are unchanged, including `Cache-Control: no-store`. A failed build (unknown or inactive surety, a bad pack, or a build error) writes no row. The actor is the session email, or the session agent name when the email is blank. It is not read from the query string or from headers.
+
+### Tests
+- `tests/test_powers_pack_archive.py` (added to `ci.yml`): one successful build inserts one row and the list returns it; the stored blob matches the stream; a second download is byte-identical; a failed build inserts nothing; the actor comes from the session. Mocked Mongo and `TEST-` rows only.
+
 ## [Unreleased] — 2026-10-14 (powers pack transfer history banner)
 
 ### Changed
