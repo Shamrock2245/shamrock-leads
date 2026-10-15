@@ -28,6 +28,9 @@ def _registered_counts() -> Counter[str]:
             value = value.args[0]
         assert isinstance(value, ast.List)
         labels = [element.value for element in value.elts if isinstance(element, ast.Constant) and isinstance(element.value, str)]
+        # County-level counts: the Manatee Clerk (FL) court-filing scope is a
+        # second source for Manatee, not a county (NON_COUNTY_SOURCE_SCOPES).
+        labels = [label for label in labels if label != "Manatee Clerk (FL)"]
         return Counter(re.search(r"\(([A-Z]{2})\)$", label).group(1) for label in labels)
     raise AssertionError("REGISTERED_COUNTIES assignment not found")
 
@@ -224,14 +227,14 @@ def test_active_docs_match_the_canonical_registry_including_guarded_ohio_pilot()
     assert counts == expected
 
     readme = README.read_text()
-    assert "361 registered scraper scopes" in readme
-    assert "| **Total** | **361**" in readme
+    assert "362 registered scraper scopes" in readme  # 361 + the Manatee Clerk scope
+    assert "| **Total** | **362**" in readme
     for state, count in expected.items():
         assert f"{state} {count}" in readme
 
     assert "947 scopes" in readme
     assert "947 rows total" in AGENTS.read_text()
-    assert "= **361**" in ROADMAP.read_text()
+    assert "= **362**" in ROADMAP.read_text()
     roadmap = ROADMAP.read_text()
     assert "947 rows total" in roadmap
     assert "20 county paths are explicitly `fail_closed`" in roadmap

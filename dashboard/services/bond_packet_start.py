@@ -138,6 +138,8 @@ async def start_indemnitor_bond_packet(
     docuseal: Any = None,
     session: Optional[Mapping[str, Any]] = None,
     staff_test_case: bool = False,
+    enforce_identity: bool = False,
+    staff_authenticated: bool = False,
 ) -> Dict[str, Any]:
     """
     Resolve, gate, and submit one indemnitor bond packet.
@@ -167,8 +169,9 @@ async def start_indemnitor_bond_packet(
     parties = indemnitors if indemnitors is not None else hydrated.get("indemnitors")
 
     # Identity gate first, then validate_docuseal_packet_binding, then POA.
-    # Synthetic TEST- packets skip the identity gate. IndemnitorIdentityError
-    # is a binding-error subclass, so it has its own handler and is not recoded
+    # Synthetic TEST- packets skip the identity gate unless enforce_identity
+    # is honored for this staff request. IndemnitorIdentityError is a
+    # binding-error subclass, so it has its own handler and is not recoded
     # as a binding failure. Shannon voice keeps its validator ahead of the gate.
     from dashboard.services.identity_verification_service import (
         IndemnitorIdentityError,
@@ -184,6 +187,8 @@ async def start_indemnitor_bond_packet(
                 booking_number=str(hydrated.get("booking_number") or ""),
                 packet_id=str(packet_id or ""),
                 staff_test_case=bool(staff_test_case),
+                enforce_identity=bool(enforce_identity),
+                staff_authenticated=bool(staff_authenticated),
             )
         except IndemnitorIdentityError as exc:
             raise BondPacketStartError(str(exc), code=exc.code) from exc
@@ -251,6 +256,8 @@ async def start_indemnitor_bond_packet(
         completed_redirect_url=completed_redirect_url,
         skip_bond_binding=skip_bond_binding,
         staff_test_case=staff_test_case,
+        enforce_identity=bool(enforce_identity),
+        staff_authenticated=bool(staff_authenticated),
     )
     return {
         "template_id": template_id,

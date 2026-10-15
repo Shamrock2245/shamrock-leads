@@ -295,6 +295,9 @@ async def patch_arrest(request: Request, body: ArrestPatch):
         sets.update(staff_charges_marker(existing, rows, by=who, source="admin-hygiene"))
     if body.new_booking_number:
         sets["booking_number"] = body.new_booking_number.strip()
+    # A blank value never overwrites a stored Miami-Dade internal key.
+    from core.booking_identity import protect_internal_booking_key
+    protect_internal_booking_key(sets, existing)
     if body.new_county:
         sets["county"] = body.new_county.strip()
     if body.new_state:

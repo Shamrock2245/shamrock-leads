@@ -36,7 +36,7 @@ sse-starlette>=2.1.0,<2.2      # Cap <2.2 for FastAPI/Starlette 0.37–0.40 pin
 motor>=3.3.0
 httpx[socks]>=0.28.1
 cryptography>=43.0.0
-PyJWT>=2.8.0
+PyJWT>=2.15.1
 aiohttp>=3.9.0
 python-multipart>=0.0.9
 itsdangerous>=2.1.2
@@ -44,7 +44,7 @@ PyYAML>=6.0
 
 # PDFs + XLSX
 reportlab>=4.0.0
-fpdf2>=2.7.0
+fpdf2>=2.8.9
 python-dateutil>=2.8.0
 PyMuPDF>=1.24.0
 openpyxl>=3.1.5
