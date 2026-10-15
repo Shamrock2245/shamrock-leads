@@ -177,7 +177,8 @@ def test_orange_report_rows_use_source_bk_number():
     first = rows[0]
     assert (first["last"], first["first"], first["middle"]) == ("DOE-SMITH", "John", "Quincy")
     assert first["charges"] == ["Larceny - Misdemeanor", "Resisting Officer"]
-    assert first["bond"] == 3000.0
+    assert first["bond"] == "3000"
+    assert rows[1]["bond"] == ""  # charge prints no amount -> unknown, never 0
     assert (first["booking_date"], first["booking_time"], first["days_in"]) == ("09/10/2026", "16:31", "15")
     assert rows[1]["booking_date"] == "09/25/2026" and rows[1]["days_in"] == ""
     assert rows[2]["booking_date"] == "09/21/2026"  # date glued to previous token
