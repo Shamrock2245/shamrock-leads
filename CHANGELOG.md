@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-15 (ArrestRecord bond default is "" (unknown), never an invented "0")
+
+### Fixed
+- **`core/models.py`: `ArrestRecord.Bond_Amount` defaults to `""`.** It used to default to `"0"`, so every scraper that never sets a bond (22 modules, listed in the PR, plus Broward rows whose detail page shows no bond) stored an invented $0 and took the scorer's -50 "$0 bond" penalty. A published amount, including a real `"0"`, is still set by the scraper and kept.
+- **`ArrestRecord.from_mongo`** reads the stored `bond_amount_raw` when present (a stored published `"0"` is kept). A legacy doc with only a numeric `0` reads back as unknown (`""`), and a positive numeric is kept.
+- **`core/staff_edits.py`** staff re-score no longer falls back to `"0"` when there is no staff amount.
+- **`writers/rearrest_checker.py`** notifications carry `bond_amount_raw` and `bond_known`, so an unknown bond is no longer indistinguishable from $0 (numeric `bond_amount` stays `0.0` for existing readers; the $1K Slack gate is unchanged).
+- **Bond sanity-cap log** no longer prints a person's name (county only).
+
+### Tests
+- `tests/test_models_bond_unknown_default.py` (added to the `ci.yml` list).
+
 ## [Unreleased] — 2026-10-15 (Osceola: plain HTTPS with TLS verified; no invented $0; blank cells keep the day)
 
 ### Fixed

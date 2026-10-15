@@ -20,6 +20,22 @@ logger = logging.getLogger(__name__)
 # See docs/specs/surety-config-schema.md for full documentation.
 # ══════════════════════════════════════════════════════════════
 
+def _bond_raw_from_doc(doc: Dict[str, Any]) -> str:
+    """Bond string for a stored doc: the stored raw string when present
+    (including a real published "0"); else a positive numeric bond; else ""
+    (unknown). A legacy doc with only a numeric 0 has no proof the 0 was
+    published, so it reads back as unknown, never as an invented "0"."""
+    if "bond_amount_raw" in doc and doc.get("bond_amount_raw") is not None:
+        return str(doc.get("bond_amount_raw"))
+    num = doc.get("bond_amount")
+    try:
+        if num is not None and float(num) > 0:
+            return str(num)
+    except (TypeError, ValueError):
+        pass
+    return ""
+
+
 @dataclass
 class POATier:
     """A POA prefix tier with its maximum bond value."""
@@ -162,7 +178,9 @@ class ArrestRecord:
     ZIP: str = ""
     Mugshot_URL: str = ""
     Charges: str = ""
-    Bond_Amount: str = "0"
+    # Unknown is "" (never an invented "0"). A scraper that reads a published
+    # amount, including a real $0, sets it explicitly.
+    Bond_Amount: str = ""
     Bond_Paid: str = "NO"
     Bond_Type: str = ""
     Court_Type: str = ""
@@ -278,7 +296,7 @@ class ArrestRecord:
             ZIP=doc.get("zip", ""),
             Mugshot_URL=doc.get("mugshot_url", ""),
             Charges=doc.get("charges", ""),
-            Bond_Amount=doc.get("bond_amount_raw", str(doc.get("bond_amount", "0"))),
+            Bond_Amount=_bond_raw_from_doc(doc),
             Bond_Paid=doc.get("bond_paid", "NO"),
             Bond_Type=doc.get("bond_type", ""),
             Court_Type=doc.get("court_type", ""),
@@ -346,7 +364,7 @@ class ArrestRecord:
             if val > self._MAX_REASONABLE_BOND:
                 logger.warning(
                     f"Bond sanity cap: ${val:,.0f} exceeds ${self._MAX_REASONABLE_BOND:,.0f} "
-                    f"for {self.Full_Name} ({self.County}) — zeroing out"
+                    f"for a {self.County} record — zeroing out"
                 )
                 return 0.0
             return val
