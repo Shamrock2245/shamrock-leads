@@ -1059,7 +1059,7 @@
     {
       "state": "FL",
       "county_fips": "115",
-      "passive_recommendation": "recon_only",
+      "passive_recommendation": "fail_closed",
       "official_source_url": "https://cms.revize.com/revize/apps/sarasota/",
       "access_posture": "2026-10-07 live: listing root 200 (plain HTTPS); 2026-10-08 07:54 EDT re-check: listing root now also HTTP 403 `cf-mitigated: challenge` from the box; sheriff-linked `index.php`, `viewInmate.php` and `personSearch.php` return HTTP 403 `cf-mitigated: challenge`. Fail closed in `sarasota.py` (`SOURCE_CONTRACT_VALIDATED=False`) and `SCRAPER_SOURCE_STATES`; no network fetch",
       "evidence_note": "2026-10-07 audit (`docs/recon/FL_SARASOTA_MANATEE_AUDIT_2026-10-07.md`): official \"Current Inmate Population\" listing has 1,081 entries, each only an opaque 10-digit `viewInmate.php?id=` link id + name + date of birth; no booking number and no booking date/time (same block as Alachua/Clay). Reopen gate encoded in `scrapers/counties/sarasota_contract.py`. Third-party mirror / JailTracker CAPTCHA / proxy paths stay retired. Reopen only after an official listing or ordinary-access detail page proves a source booking number + booking timestamp. See `SWFL_SOURCE_CONTRACT_QUEUE.md`."
