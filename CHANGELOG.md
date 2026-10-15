@@ -16,6 +16,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_premium_confirmation.py` (already on the `ci.yml` list). Covers identity 422 with zero writes, paid-in-full rollback, plan conflict 409, a missing or non-callable plan function returning 503 with nothing written, plan stub 503, no SwipeSimple / DocuSeal / email / SMS calls, confirmation before a packet exists, and the invoice amount fail-closed.
 
+## [Unreleased] — 2026-10-15 (Osceola: plain HTTPS with TLS verified; no invented $0; blank cells keep the day)
+
+### Fixed
+- **Osceola (FL) no longer disguises itself as Chrome or turns off certificate checks.** `scrapers/counties/osceola.py` used curl_cffi `impersonate="chrome131"`, a Chrome User-Agent and `verify=False`. It now uses `scrapers.plain_http` (honest User-Agent, TLS always verified). The daily CSV now redirects to legacy-apps.osceola.org, whose server omits its intermediate certificate, so runs raise `SourceTLSInvalid` (`tls_cert_invalid:`), re-raised past the per-day handler so Health records it (same handling as the Nassau TLS chain hold). Nothing works around it.
+- **Osceola bond is `""`, never the model's `"0"` default.** The CSV publishes no bond, and rows previously took `ArrestRecord.Bond_Amount = "0"`.
+- **Blank CSV cells no longer drop a whole day.** pandas read blank cells (e.g. no middle name) as NaN, `.strip()` raised, and the per-day handler discarded every row for that date. `keep_default_na=False` keeps them as `""`.
+
+### Tests
+- `tests/test_fl_osceola_plain_https.py` (added to the `ci.yml` list).
+
 ## [Unreleased] — 2026-10-15 (Marion SC host/proxy cleanup; Sarasota evidence matches Health)
 
 ### Fixed
