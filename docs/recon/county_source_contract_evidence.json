@@ -819,10 +819,10 @@
     {
       "state": "FL",
       "county_fips": "057",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "fail_closed",
+      "official_source_url": "https://webapps.hcso.tampa.fl.us/arrestinquiry/",
+      "access_posture": "Fail closed: inmate search requires account login + reCAPTCHA v2 (solver) + proxy fallback; no CAPTCHA solving (owner-approved only Broward/Lake), no proxy, no authenticated access",
+      "evidence_note": "2026-10-14 rule-conflict review (`docs/recon/FL_RULE_CONFLICT_FAIL_CLOSED_2026-10-14.md`): hillsborough.py v3 logged in with HCSO_EMAIL/HCSO_PASSWORD, solved reCAPTCHA v2 through SolveCaptcha and fell back to a SOCKS/residential proxy. None of those are allowed for this county. `SOURCE_CONTRACT_VALIDATED=False` + Health fail_closed until a public unauthenticated roster with a source booking number is proven."
     },
     {
       "state": "FL",
@@ -923,10 +923,10 @@
     {
       "state": "FL",
       "county_fips": "083",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "fail_closed",
+      "official_source_url": "https://jail.marionso.com/",
+      "access_posture": "Fail closed: AWS WAF; module reached it only through a residential/Tailscale proxy with curl_cffi Chrome impersonation; no proxy, no impersonation",
+      "evidence_note": "2026-10-14 rule-conflict review (`docs/recon/FL_RULE_CONFLICT_FAIL_CLOSED_2026-10-14.md`): marion.py used resolve_residential_proxy + impersonate=chrome131 to pass AWS WAF. `SOURCE_CONTRACT_VALIDATED=False` + Health fail_closed until a plain direct public read with a source booking number is proven."
     },
     {
       "state": "FL",
@@ -1059,7 +1059,7 @@
     {
       "state": "FL",
       "county_fips": "115",
-      "passive_recommendation": "recon_only",
+      "passive_recommendation": "fail_closed",
       "official_source_url": "https://cms.revize.com/revize/apps/sarasota/",
       "access_posture": "2026-10-07 live: listing root 200 (plain HTTPS); 2026-10-08 07:54 EDT re-check: listing root now also HTTP 403 `cf-mitigated: challenge` from the box; sheriff-linked `index.php`, `viewInmate.php` and `personSearch.php` return HTTP 403 `cf-mitigated: challenge`. Fail closed in `sarasota.py` (`SOURCE_CONTRACT_VALIDATED=False`) and `SCRAPER_SOURCE_STATES`; no network fetch",
       "evidence_note": "2026-10-07 audit (`docs/recon/FL_SARASOTA_MANATEE_AUDIT_2026-10-07.md`): official \"Current Inmate Population\" listing has 1,081 entries, each only an opaque 10-digit `viewInmate.php?id=` link id + name + date of birth; no booking number and no booking date/time (same block as Alachua/Clay). Reopen gate encoded in `scrapers/counties/sarasota_contract.py`. Third-party mirror / JailTracker CAPTCHA / proxy paths stay retired. Reopen only after an official listing or ordinary-access detail page proves a source booking number + booking timestamp. See `SWFL_SOURCE_CONTRACT_QUEUE.md`."

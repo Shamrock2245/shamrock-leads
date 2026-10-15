@@ -56,13 +56,30 @@ HEADERS = {
 
 
 class MarionCountyScraper(BaseScraper):
-    """Marion County (FL) — AWS WAF; residential egress required."""
+    """Marion County (FL) — fail closed (2026-10-14).
+
+    The listing sits behind AWS WAF and the module only reached it through a
+    residential / Tailscale proxy with curl_cffi Chrome impersonation. Proxies
+    and impersonation are not allowed, so no source request is made until a
+    plain, direct public read is proven (docs/recon/FL_RULE_CONFLICT_FAIL_CLOSED_2026-10-14.md).
+    ``parse_detail_charges`` stays for that future path and its tests.
+    """
+
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "Marion inmate lookup is AWS-WAF gated and was reached only via a residential "
+        "proxy with TLS impersonation; proxies/impersonation are not allowed, so refuse "
+        "emission until a plain direct read is proven."
+    )
 
     @property
     def county(self) -> str:
         return "Marion"
 
     def scrape(self) -> List[ArrestRecord]:
+        if not self.SOURCE_CONTRACT_VALIDATED:
+            logger.warning("Marion: SOURCE_CONTRACT_VALIDATED=False — %s", self.SOURCE_CONTRACT_REASON)
+            return []
         try:
             from curl_cffi import requests as cffi_requests
             from bs4 import BeautifulSoup

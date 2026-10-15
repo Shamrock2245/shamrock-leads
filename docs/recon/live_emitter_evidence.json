@@ -211,6 +211,18 @@
       "emitter": "hold",
       "evidence": "MyOCV inmates.json has only inmateID HCSO<YY>MNI<NNNNNN>, a person (Master Name Index) id, not a booking number; old v4 parser keyed rows on it. Fail closed 2026-10-08 (CoS approved)",
       "source": "docs/recon/FL_HENDRY_FAIL_CLOSED_2026-10-08.md"
+    },
+    {
+      "label": "Hillsborough (FL)",
+      "emitter": "hold",
+      "evidence": "Only path is login + reCAPTCHA v2 solving + proxy fallback; CAPTCHA solving is owner-approved only for Broward/Lake, proxies/login not allowed. Fail closed 2026-10-14 (proposed, CoS to approve)",
+      "source": "docs/recon/FL_RULE_CONFLICT_FAIL_CLOSED_2026-10-14.md"
+    },
+    {
+      "label": "Marion (FL)",
+      "emitter": "hold",
+      "evidence": "AWS WAF reached only via residential proxy + TLS impersonation; neither allowed. Fail closed 2026-10-14 (proposed, CoS to approve)",
+      "source": "docs/recon/FL_RULE_CONFLICT_FAIL_CLOSED_2026-10-14.md"
     }
   ]
 }
