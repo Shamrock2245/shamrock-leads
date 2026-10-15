@@ -3,6 +3,24 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-15 (DeSoto: plain honest HTTPS, no browser stealth / cert bypass; bond published-only; custody only from source)
+
+### Fixed
+- **DeSoto (FL) no longer drives a stealth browser with certificate checks off.** `desoto.py` used DrissionPage via `BaseScraper._get_browser_options()` (a stealth Chrome UA and `--ignore-certificate-errors`). It now reads the DCN roster with `scrapers.plain_http` (honest UA, certificate verified), using the `DCNBaseScraper` roster parser and the grid's own DevExpress pager callback (the path documented in `FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md`). Every request, including the pager POST and the detail GETs, raises `egress_block:` on a block and `tls_cert_invalid:` on a real certificate failure, with no workaround. The one honest probe from the agent box (2026-10-15) got **HTTP 403**; on 2026-10-08 it was 200.
+- **Bond:** it used to sum only the numeric cells and default to `"0"`, and stored amounts as `"1500.0"`. It now uses a per-charge `published_bond` slot: the sum only when every charge shows an amount, a published `0` stays `"0"`, and otherwise `""` (including when no detail page was fetched).
+- **Status:** it was `"In Custody"` unless a release date was shown. It is now `"Released"` only when the source publishes a release date, and `""` otherwise.
+- **Booking key unchanged:** the URL `bid`, as before. Rows without a `bid` are dropped and never synthesized. **Health stays `unverified` / matrix `recon_only`**; the 2026-10-08 CoS finding (`bid` is an internal record id, not a booking number) still stands, and there is no new evidence.
+
+### Changed
+- **DeSoto (FL) is now `fail_closed` (CoS option 1 on #222, 2026-10-15): no source request and no writes.** The DCN roster publishes no booking number; the only key is the site's internal `bid` (CoS 2026-10-08).
+  - `desoto.py` is `SOURCE_CONTRACT_VALIDATED=False` and `scrape()` returns `[]` before any request. The plain-HTTPS rewrite above is kept in `_fetch_and_parse()`, ready to lift.
+  - Health `SCRAPER_SOURCE_STATES["DeSoto (FL)"]="fail_closed"`.
+  - `source_guard.SOURCE_HOST_LABELS` adds `desotosheriff.org`. The existing entry was `.com`, but the roster lives on `jail.desotosheriff.org`, so re-checks and detail fetches were not actually being refused.
+  - Evidence files, the matrix (`--check` ok; fail_closed 133 → 134), `FL_67_STATUS` row 49 (counts 33/24) and the new `docs/recon/FL_DESOTO_FAIL_CLOSED_2026-10-15.md` are updated.
+
+### Tests
+- `tests/test_fl_desoto_bond_custody_defaults.py` (added to the `ci.yml` list).
+
 ## [Unreleased] — 2026-10-15 (SmartWEB: honest plain HTTPS; blocks fail visibly)
 
 ### Fixed

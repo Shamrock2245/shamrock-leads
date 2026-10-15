@@ -699,10 +699,10 @@
     {
       "state": "FL",
       "county_fips": "027",
-      "passive_recommendation": "recon_only",
+      "passive_recommendation": "fail_closed",
       "official_source_url": "https://jail.desotosheriff.org/DCN/inmates",
       "access_posture": "2026-10-08 ~8:05 AM ET from the agent box: DCN DevExpress roster over plain HTTPS (Cloudflare-fronted, no challenge), honest User-Agent; page 1 server-rendered (100 rows, \"Page 1 of 2\", 161 items), page 2 via the grid's own DevExpress pager callback (`scrapers/dcn_base.py`). No browser needed for the read; the current `desoto.py` still drives DrissionPage",
-      "evidence_note": "2026-10-08 source-contract check (`docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md`): roster lists Full Name / Age / Race / Sex / Admit Date with `inmate-details?id=&bid=` links; `bid` is stable across two fresh sessions (100/100) and unique per row (161/161 through the pager). Detail page shows Admit Date + Admit Time and per-charge Offense Date / Court Type / Court Date / Docket Number / Bond / Bond Type, but no printed booking number. CoS review 2026-10-08: `bid` is the jail site's internal record id, not a source booking number (same kind of id #136 rejects), so DeSoto stays `recon_only` until the source publishes a booking number. Health stays `unverified`."
+      "evidence_note": "2026-10-08 source-contract check (`docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md`): roster lists Full Name / Age / Race / Sex / Admit Date with `inmate-details?id=&bid=` links; `bid` is stable across two fresh sessions (100/100) and unique per row (161/161 through the pager). Detail page shows Admit Date + Admit Time and per-charge Offense Date / Court Type / Court Date / Docket Number / Bond / Bond Type, but no printed booking number. CoS review 2026-10-08: `bid` is the jail site's internal record id, not a source booking number (same kind of id #136 rejects), so DeSoto stays `recon_only` until the source publishes a booking number. Health stays `unverified`. **2026-10-15: CoS chose fail_closed (option 1 on #222, `docs/recon/FL_DESOTO_FAIL_CLOSED_2026-10-15.md`)**; `desoto.py` is `SOURCE_CONTRACT_VALIDATED=False` and fetches nothing; the plain-HTTPS rewrite is kept for when a booking number is proven. One honest probe from the agent box 2026-10-15 got HTTP 403."
     },
     {
       "state": "FL",

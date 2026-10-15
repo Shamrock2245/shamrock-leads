@@ -213,6 +213,12 @@
       "source": "docs/recon/FL_HENDRY_FAIL_CLOSED_2026-10-08.md"
     },
     {
+      "label": "DeSoto (FL)",
+      "emitter": "hold",
+      "evidence": "DCN roster publishes no booking number; only key is the site's internal bid (CoS 2026-10-08). Fail closed 2026-10-15 (CoS option 1 on #222)",
+      "source": "docs/recon/FL_DESOTO_FAIL_CLOSED_2026-10-15.md"
+    },
+    {
       "label": "Monroe (FL)",
       "emitter": "hold",
       "evidence": "Keys SO arrest log has no booking number; rows keyed on a person-level MNI (mugshot filename) or a synthesized MONROE-{OffenseNo or CADno}; offense-number key not proven per booking. Fail closed 2026-10-15 (CoS)",
