@@ -12,6 +12,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `tests/test_fl_citrus_bond_custody_defaults.py` (added to the `ci.yml` list).
+## 2026-10-15 — SC Lancaster/York honest identity; published-only status, bond and charges
+- Lancaster: plain_http via the shared New World `_HonestSession` (honest UA, TLS verified); Chrome UA removed; EgressBlocked/SourceTLSInvalid propagate. Hard-coded "In Custody" removed: status only when the listing echoes the source's InCustody checkbox as checked (`status_source=published_in_custody_filter`) or a published InCustody column; else "". Unknown bond/charges are "" (no "0"/"Unknown"); published $0 kept; per-charge bonds summed only when every charge publishes one. Bond format "1500". Detail logs carry no URL.
+- York: plain_http with the honest UA; 403/challenge/reset raise typed blocks. Status "In Custody" from the published "In Jail" release cell (`published_release_cell_in_jail`), "Released" from a published release date (`published_release_date`), else "" (was "Unknown"). Blank Total Bond is "" (was "0"); published 0 kept.
+
 ## 2026-10-15 — Orange NC honest identity; published-only charges, bond and status
 
 - `scrapers/counties_nc/orange.py`: every request goes through `scrapers.plain_http` (honest UA, certificate verified, Chrome UA removed). Egress/TLS blocks are re-raised from the PDF loop instead of being skipped.

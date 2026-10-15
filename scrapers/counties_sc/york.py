@@ -30,6 +30,8 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 import requests
+
+from scrapers.plain_http import HONEST_USER_AGENT, make_session, request as plain_request
 from bs4 import BeautifulSoup, Tag
 
 from core.models import ArrestRecord
@@ -41,7 +43,7 @@ logger = logging.getLogger(__name__)
 PORTAL_URL = "https://inmatesinjail.yorkcountygov.com/detentioncenter/inmatesinjail.aspx"
 PHOTO_BASE = "https://inmatesinjail.yorkcountygov.com"
 FACILITY = "York County Detention Center"
-USER_AGENT = "Mozilla/5.0 (compatible; ShamrockRoster/1.0)"
+USER_AGENT = HONEST_USER_AGENT
 BOOKING_RE = re.compile(r"^DC\d{9}$")
 PHOTO_KEY_RE = re.compile(r"/photos/([A-Za-z0-9]+)\.jpg", re.I)
 DATETIME_RE = re.compile(r"^(\d{1,2}/\d{1,2}/\d{4})\s+(\d{1,2}:\d{2}(?::\d{2})?\s*[AP]M)$", re.I)
@@ -61,15 +63,19 @@ def _split_datetime(raw: str) -> Tuple[str, str]:
     return m.group(1), m.group(2).upper()
 
 
+STATUS_SOURCE_IN_JAIL = "published_release_cell_in_jail"
+STATUS_SOURCE_RELEASE_DATE = "published_release_date"
+
+
 def _bond(raw: str) -> str:
-    """Published Total Bond dollars ("$1,250.00" -> "1250"); "0" when blank."""
+    """Published Total Bond dollars ("$1,250.00" -> "1250"); "" when blank, published 0 kept."""
     cleaned = re.sub(r"[^\d.]", "", raw or "")
     if not cleaned:
-        return "0"
+        return ""
     try:
         amount = float(cleaned)
     except ValueError:
-        return "0"
+        return ""
     return ("%.2f" % amount).rstrip("0").rstrip(".") or "0"
 
 
@@ -199,7 +205,7 @@ def parse_page(html: str) -> Tuple[List[ArrestRecord], int]:
                 Booking_Time=booking_time,
                 Arrest_Date=booking_date,
                 Arrest_Time=booking_time,
-                Status="In Custody" if in_jail else ("Released" if release_date else "Unknown"),
+                Status="In Custody" if in_jail else ("Released" if release_date else ""),
                 Release_Date=release_date,
                 Facility=FACILITY,
                 Agency=bk.get("_agency", ""),
@@ -211,7 +217,11 @@ def parse_page(html: str) -> Tuple[List[ArrestRecord], int]:
                 Bond_Amount=_bond(bk.get("total bond", "")),
                 Mugshot_URL=f"{PHOTO_BASE}/photos/{booking}.jpg" if photo_key == booking else "",
                 Detail_URL=PORTAL_URL,
-                extra_data={"booking_key_origin": "source-issued public Booking Number"},
+                extra_data={
+                    "booking_key_origin": "source-issued public Booking Number",
+                    **({"status_source": STATUS_SOURCE_IN_JAIL} if in_jail else
+                       {"status_source": STATUS_SOURCE_RELEASE_DATE} if release_date else {}),
+                },
             ))
     return records, len(items)
 
@@ -296,9 +306,9 @@ class YorkScraper(BaseScraper):
 
     def _fetch(self, session: requests.Session, data: Optional[Dict[str, str]] = None) -> str:
         if data is None:
-            resp = session.get(PORTAL_URL, timeout=45)
+            resp = plain_request(session, "GET", PORTAL_URL, county="York", timeout=45)
         else:
-            resp = session.post(PORTAL_URL, data=data, timeout=45)
+            resp = plain_request(session, "POST", PORTAL_URL, county="York", data=data, timeout=45)
         if resp.status_code == 403:
             raise AntiBotBlocked("York roster returned 403")
         resp.raise_for_status()
@@ -317,8 +327,7 @@ class YorkScraper(BaseScraper):
           the repeat / MAX_PAGES guards still apply, a warning is logged, and the
           walked records are returned (pre-existing behaviour).
         """
-        session = requests.Session()
-        session.headers.update({"User-Agent": USER_AGENT, "Referer": PORTAL_URL})
+        session = make_session({"Referer": PORTAL_URL})
         html = self._fetch(session)
         expected = _results_count(html)
         records: List[ArrestRecord] = []
