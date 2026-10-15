@@ -11,6 +11,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Status:** it was `"In Custody"` unless a release date was shown. It is now `"Released"` only when the source publishes a release date, and `""` otherwise.
 - **Booking key unchanged:** the URL `bid`, as before. Rows without a `bid` are dropped and never synthesized. **Health stays `unverified` / matrix `recon_only`**; the 2026-10-08 CoS finding (`bid` is an internal record id, not a booking number) still stands, and there is no new evidence.
 
+### Changed
+- **DeSoto (FL) is now `fail_closed` (CoS option 1 on #222, 2026-10-15): no source request and no writes.** The DCN roster publishes no booking number; the only key is the site's internal `bid` (CoS 2026-10-08).
+  - `desoto.py` is `SOURCE_CONTRACT_VALIDATED=False` and `scrape()` returns `[]` before any request. The plain-HTTPS rewrite above is kept in `_fetch_and_parse()`, ready to lift.
+  - Health `SCRAPER_SOURCE_STATES["DeSoto (FL)"]="fail_closed"`.
+  - `source_guard.SOURCE_HOST_LABELS` adds `desotosheriff.org`. The existing entry was `.com`, but the roster lives on `jail.desotosheriff.org`, so re-checks and detail fetches were not actually being refused.
+  - Evidence files, the matrix (`--check` ok; fail_closed 133 → 134), `FL_67_STATUS` row 49 (counts 33/24) and the new `docs/recon/FL_DESOTO_FAIL_CLOSED_2026-10-15.md` are updated.
+
 ### Tests
 - `tests/test_fl_desoto_bond_custody_defaults.py` (added to the `ci.yml` list).
 

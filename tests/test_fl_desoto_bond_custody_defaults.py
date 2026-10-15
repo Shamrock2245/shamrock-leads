@@ -92,7 +92,7 @@ def _install(monkeypatch, resp=None, exc=None):
 
 def test_honest_ua_verify_and_empty_roster(monkeypatch):
     calls = _install(monkeypatch, _Resp(text="<html></html>"))
-    assert desoto.DeSotoCountyScraper().scrape() == []
+    assert desoto.DeSotoCountyScraper()._fetch_and_parse() == []
     assert calls[0]["headers"]["User-Agent"] == HONEST_USER_AGENT and calls[0]["kw"]["verify"] is True
 
 
@@ -100,15 +100,28 @@ def test_honest_ua_verify_and_empty_roster(monkeypatch):
 def test_block_fails_visibly(monkeypatch, code):
     _install(monkeypatch, _Resp(code=code))
     with pytest.raises(EgressBlocked, match=r"^egress_block: DeSoto"):
-        desoto.DeSotoCountyScraper().scrape()
+        desoto.DeSotoCountyScraper()._fetch_and_parse()
 
 
 def test_bad_certificate_fails_visibly(monkeypatch):
     _install(monkeypatch, exc=requests.exceptions.SSLError("certificate verify failed"))
     with pytest.raises(SourceTLSInvalid, match=r"^tls_cert_invalid: DeSoto"):
-        desoto.DeSotoCountyScraper().scrape()
+        desoto.DeSotoCountyScraper()._fetch_and_parse()
 
 
-def test_health_state_unchanged():
+# ── fail_closed (CoS option 1, 2026-10-15) ─────────────────────────────────
+
+def test_fail_closed_scrape_makes_no_request(monkeypatch):
+    calls = _install(monkeypatch, _Resp(text="<html></html>"))
+    assert desoto.DeSotoCountyScraper.SOURCE_CONTRACT_VALIDATED is False
+    assert desoto.DeSotoCountyScraper().scrape() == []
+    assert calls == []
+
+
+def test_health_fail_closed_and_guard_refuses_host():
+    from config.source_guard import fail_closed_reason
     from dashboard.extensions import scraper_source_state
-    assert scraper_source_state("DeSoto (FL)") == "unverified"
+    assert scraper_source_state("DeSoto (FL)") == "fail_closed"
+    assert fail_closed_reason(scraper=desoto.DeSotoCountyScraper())
+    assert fail_closed_reason(url="https://jail.desotosheriff.org/DCN/inmate-details?id=1&bid=ABC")
+    assert fail_closed_reason(url=desoto.INMATES_URL)

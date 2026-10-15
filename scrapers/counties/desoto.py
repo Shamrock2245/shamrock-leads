@@ -3,15 +3,18 @@ DeSoto County (FL) jail roster — DCN DevExpress grid over plain, honest HTTPS.
 
 Source: https://jail.desotosheriff.org/DCN/inmates (DeSoto County Sheriff's Office)
 
+FAIL CLOSED since 2026-10-15 (docs/recon/FL_DESOTO_FAIL_CLOSED_2026-10-15.md):
+``scrape()`` returns ``[]`` before any request; nothing is written.
+
 Source-contract status (docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md):
   * Roster: Full Name / Age / Race / Sex / Admit Date, each row linking to
     ``inmate-details?id=…&bid=…``. Page 1 is server-rendered; pages 2..N come from
     the grid's own DevExpress pager callback (``scrapers.dcn_base``).
   * No printed booking number. CoS (2026-10-08): ``bid`` is the jail site's
     internal record id, not a source booking number, so DeSoto stays
-    ``recon_only`` / Health ``unverified``. This module does not change that;
-    rows keep the ``bid`` key exactly as before, and rows without one are dropped
-    (never a synthesized name/date hash).
+    ``recon_only`` / Health ``unverified``; CoS then chose fail_closed
+    (2026-10-15). The kept fetch path keys rows on ``bid`` exactly as before and
+    drops rows without one (never a synthesized name/date hash).
 
 Honest access and no invented values (2026-10-15):
   * Replaces the DrissionPage browser (stealth Chrome UA,
@@ -142,7 +145,20 @@ def parse_detail(html: str, url: str = INMATES_URL) -> Dict[str, str]:
 
 
 class DeSotoCountyScraper(DCNBaseScraper):
-    """DeSoto County (FL) — DCN roster + detail pages, plain honest HTTPS."""
+    """DeSoto County (FL) — DCN roster + detail pages, plain honest HTTPS.
+
+    FAIL CLOSED (CoS 2026-10-15, option 1 on #222): the only row key is the
+    site's internal ``bid``, not a source booking number (CoS 2026-10-08).
+    ``scrape()`` makes no request and returns nothing until a booking number is
+    published and proven. The plain-HTTPS path below is kept in
+    ``_fetch_and_parse()``, ready to lift.
+    """
+
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "DeSoto DCN roster publishes no booking number; the only key is the site's "
+        "internal bid (CoS 2026-10-08). Refuse emission until a source booking number is proven."
+    )
 
     require_source_bid = True       # never a synthesized name/date key
     paginate_callbacks = True       # pages 2..N via the grid's own pager callback
@@ -166,6 +182,14 @@ class DeSotoCountyScraper(DCNBaseScraper):
         return FACILITY
 
     def scrape(self) -> List[ArrestRecord]:
+        if not self.SOURCE_CONTRACT_VALIDATED:
+            logger.warning("DeSoto: SOURCE_CONTRACT_VALIDATED=False — %s", self.SOURCE_CONTRACT_REASON)
+            return []
+        return self._fetch_and_parse()
+
+    def _fetch_and_parse(self) -> List[ArrestRecord]:
+        """Unguarded plain-HTTPS fetch + parse. Only scrape() may call it, once the
+        source contract is validated; tests call it directly."""
         session = _HonestSession(self.county)
         resp = session.get(self.inmates_url, timeout=45)   # blocks raise, never swallowed
         resp.raise_for_status()
