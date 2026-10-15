@@ -3,6 +3,13 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 2026-10-15 — Orange NC honest identity; published-only charges, bond and status
+
+- `scrapers/counties_nc/orange.py`: every request goes through `scrapers.plain_http` (honest UA, certificate verified, Chrome UA removed). Egress/TLS blocks are re-raised from the PDF loop instead of being skipped.
+- Bond_Amount sums the printed per-charge `$` amounts only when every charge prints one (a printed `$0` is kept); blank or `NOBD` makes it "" (was "0" or a partial sum). Charges is "" when none are printed (was "Unknown").
+- Status is "In Custody" only under the source's own current-only report title ("Daily In Custody Report" / "Detainees In Confinement Report"), recorded as `extra_data.status_source = "published_in_custody_report_label"`; otherwise "".
+- Booking keys stay the source `Bk #`. Tests: `tests/test_nc_orange_honest.py` (on the ci.yml list). Recon: `docs/recon/NC_ORANGE_ROSTER_SCOPE_2026-10-15.md`.
+
 ## [Unreleased] — 2026-10-15 (Gaston NC: honest identity; published-only charges/bond/status)
 
 ### Fixed
