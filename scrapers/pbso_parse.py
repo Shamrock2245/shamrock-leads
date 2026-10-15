@@ -3,6 +3,11 @@
 No network. Used by the county scraper and by dashboard URL ingest.
 Fail closed unless a card has both a displayed name and a source booking number.
 Does not invent booking identifiers or probe unpublished endpoints.
+
+Status is never defaulted to "In Custody". The blotter is a booking-date-range
+search whose cards publish a "Release Date", so released people are listed and
+presence alone doesn't prove custody. A published release date gives
+"Released", a published status line is kept as written, and anything else is "".
 """
 from __future__ import annotations
 
@@ -107,7 +112,7 @@ def parse_pbso_card_text(card_text: str) -> Optional[dict]:
         "agency": _extract("Arresting Agency") or "PBSO",
         "booking_date": "",
         "booking_time": "",
-        "status": "In Custody",
+        "status": "",  # unknown unless published (blotter is not custody-only)
         "release_date": "",
         "charges": "",
         "bond_amount": "",
@@ -127,6 +132,10 @@ def parse_pbso_card_text(card_text: str) -> Optional[dict]:
     if release_raw and "N/A" not in release_raw.upper() and release_raw.strip():
         data["status"] = "Released"
         data["release_date"] = release_raw.strip()
+    else:
+        status_m = re.search(r"^[ \t]*(?:Custody[ \t]+)?Status[ \t]*:[ \t]*(.+?)[ \t]*$", card_text, re.I | re.M)
+        if status_m and status_m.group(1).strip():
+            data["status"] = status_m.group(1).strip()
 
     booking_num_m = re.search(r"Booking\s*Number\s*:\s*(\d{6,})", card_text, re.I)
     if booking_num_m:
@@ -241,7 +250,7 @@ def row_to_ingest_dict(row: dict, source_url: str) -> dict:
         "state": "FL",
         "facility": row.get("facility") or FACILITY,
         "agency": row.get("agency") or "PBSO",
-        "status": row.get("status") or "In Custody",
+        "status": row.get("status") or "",  # never default to In Custody
         "booking_date": row.get("booking_date") or "",
         "booking_time": row.get("booking_time") or "",
         "dob": row.get("dob") or "",

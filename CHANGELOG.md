@@ -13,6 +13,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_fl_citrus_bond_custody_defaults.py` (added to the `ci.yml` list).
 
+## [Unreleased] — 2026-10-15 (Palm Beach pbso_parse: no In Custody default)
+
+### Fixed
+- **`scrapers/pbso_parse.py` no longer defaults status to "In Custody".** Both the card default and `row_to_ingest_dict`'s `or "In Custody"` are gone. A published release date gives `Released`, a published `Status:` / `Custody Status:` line is kept as written, and anything else is `""`. The PBSO blotter is **not proven custody-only**: it's a booking-date-range search (`#start_date`/`#end_date`) and its cards publish a `Release Date`, so released people are listed. Parse-only; the request path (#224) and `palm_beach.py` are untouched. Tests: `tests/test_pbso_parse_status.py`.
+
 ## [Unreleased] — 2026-10-15 (Orange FL: honest UA; status published or roster presence)
 
 ### Fixed
