@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-15 (SmartWEB: Status only from the source; unknown is "")
+
+### Fixed
+- **`scrapers/fl_smartweb.py` no longer invents custody.** A card with no recognised `Status:` token fell through to `"In Custody"`. The new `status_from_source()` uses a whole-token lookup with no substring tests: `In Jail`/`In Custody` give `"In Custody"`, `Out of Jail`/`Released` give `"Released"`, and anything else or no status gives `""`. It is the same mapping as Suwannee (#218). It affects every SmartWEB county: Bradford, Dixie, Escambia, Gilchrist, Glades, Hamilton, Madison, Putnam, Santa Rosa, Sumter and Taylor. An honest probe of Hamilton (2026-10-15) confirmed the source tokens are `Status: In Jail` and `Status: Released`; the separate `Visitation Status:` line is not matched.
+- Downstream checks: the re-check predicates (`is_in_custody` / `is_released`), lead scoring, feature engineering, the Mongo round trip and the sheet row all treat `""` as unknown or neutral. The custody-filtered re-check queries skip a blank-status row rather than assuming custody.
+
+### Tests
+- `tests/test_fl_smartweb_status_from_source.py` (added to the `ci.yml` list).
+
 ## [Unreleased] — 2026-10-15 (Suwannee: unpublished bond is "", published 0 kept; custody only from source; honest HTTPS)
 
 ### Fixed

@@ -99,6 +99,7 @@ jobs:
             tests/test_fl_highlands_monroe_plain_https.py \
             tests/test_monroe_scraper.py \
             tests/test_fl_bay_bond_custody_defaults.py \
+            tests/test_fl_smartweb_status_from_source.py \
             tests/test_fl_suwannee_bond_custody_defaults.py \
             tests/test_fl_indian_river_tls_bond_guard.py \
             tests/test_plain_http_tls_vs_connection_reset.py \
