@@ -12,9 +12,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Signing invoice follows the bond case.** DocuSeal completion reads a confirmed bond case or active bond when the packet itself has no trio, so a packet created after confirmation is not stamped `premium_unconfirmed`. An unconfirmed case still stamps `premium_unconfirmed`.
 - **Existing SwipeSimple link must match the confirmed amount.** A stored link with no `swipesimple_invoice_amount_cents` after a staff confirmation, or cents that differ from the confirmed down payment, is not returned. The error is `invoice_amount_unproven` or `invoice_amount_mismatch`. No SwipeSimple call is made. A link with no confirmation and no stored cents still returns as before.
 - **`SAAS_MULTI_TENANT` off still confirms.** Shamrock writes the bond with the flag off. Tenant scope applies only when the flag is on, and another agency's row is not updated.
+- **Completion never dispatches.** DocuSeal completion stages the signing invoice with `dispatch=False` even when `SWIPESIMPLE_DISPATCH_LIVE` is on. A result that reports a send is refused. Confirmation does not call SwipeSimple, DocuSeal, email, or SMS.
+- **Down payment is not the full premium.** `resolve_locked_premium` stays the confirmed premium. `resolve_invoice_due` is the down payment on the signing invoice. A receipt for the down payment is `receipt_partial_payment` and does not set `premium_paid`.
+- **One case per confirmation.** A packet, booking number, and bond case that do not name the same case return 422 `case_identity_conflict`. Nothing is written.
 
 ### Tests
-- `tests/test_premium_confirmation.py` (already on the `ci.yml` list). Covers identity 422 with zero writes, paid-in-full rollback, plan conflict 409, a missing or non-callable plan function returning 503 with nothing written, plan stub 503, no SwipeSimple / DocuSeal / email / SMS calls, confirmation before a packet exists, and the invoice amount fail-closed.
+- `tests/test_premium_confirmation.py` (already on the `ci.yml` list). Covers identity 422 with zero writes, paid-in-full rollback, plan conflict 409, a missing or non-callable plan function returning 503 with nothing written, plan stub 503, no SwipeSimple / DocuSeal / email / SMS calls, confirmation before a packet exists, the invoice amount fail-closed, a down-payment receipt that does not mark the premium paid, and mixed case identifiers.
+- `tests/test_docuseal_completion_handler.py` (already on the `ci.yml` list). Completion with `SWIPESIMPLE_DISPATCH_LIVE` on still passes `dispatch=False` and does not call dispatch or SwipeSimple HTTP.
 
 ## [Unreleased] — 2026-10-15 (Osceola: plain HTTPS with TLS verified; no invented $0; blank cells keep the day)
 

@@ -16,7 +16,10 @@ from dashboard.services.premium_confirmation_service import (
     load_plan_creator,
     non_negative_cents,
 )
-from dashboard.services.swipesimple_invoice_service import resolve_locked_premium
+from dashboard.services.swipesimple_invoice_service import (
+    resolve_invoice_due,
+    resolve_locked_premium,
+)
 from dashboard.tenancy.flag import multi_tenant_enabled
 
 BOOKING = "TEST-1001"
@@ -363,9 +366,10 @@ def test_confirm_writes_trio_audit_and_one_plan(monkeypatch):
     assert len(stores["payment_plans"].docs) == 1
     assert len([row for row in stores["audit_events"].docs if row.get("action") == "premium_confirmed"]) == 1
 
-    # The signing invoice is the down payment, not the financed balance.
-    due = resolve_locked_premium(stores["active_bonds"].docs[0])
-    assert due == Decimal("500.00")
+    # The signing invoice is the down payment. Reconciliation uses the full premium.
+    confirmed = stores["active_bonds"].docs[0]
+    assert resolve_locked_premium(confirmed) == Decimal("1500.00")
+    assert resolve_invoice_due(confirmed) == Decimal("500.00")
     _assert_no_sends(spies)
 
 
@@ -580,6 +584,102 @@ def test_paid_in_full_confirms_without_a_plan_module(monkeypatch):
     assert stores["active_bonds"].docs[0]["premium_confirmed_amount"] == "1500.00"
     assert stores["payment_plans"].docs == []
     assert len(stores["audit_events"].docs) == 1
+
+
+def test_confirm_does_not_send_when_live_flags_are_on(monkeypatch):
+    monkeypatch.setenv("SWIPESIMPLE_LIVE", "1")
+    monkeypatch.setenv("SWIPESIMPLE_DISPATCH_LIVE", "1")
+    stores, get, client = _world()
+    _bind(monkeypatch, stores, get)
+    _install_plan_writer(monkeypatch, stores)
+    spies = _silence_sends(monkeypatch)
+    response = client.post("/api/paperwork/confirm-premium", json=_body(), cookies=_cookie())
+    assert response.status_code == 200, response.text
+    _assert_no_sends(spies)
+
+
+def test_split_identifiers_are_422_and_write_nothing(monkeypatch):
+    stores, get, client = _world()
+    stores["paperwork_packets"].docs.append({
+        "packet_id": "PKT-TEST-2",
+        "booking_number": "TEST-1002",
+        "bond_case_id": "BC-TEST-2",
+        "bond_amount": 15000,
+        "indemnitor_name": "Casey Sample",
+    })
+    stores["bond_cases"].docs.append({
+        "bond_case_id": "BC-TEST-2",
+        "booking_number": "TEST-1002",
+        "bond_amount": 15000,
+        "indemnitor_name": "Casey Sample",
+    })
+    stores["active_bonds"].docs.append({
+        "booking_number": "TEST-1002",
+        "bond_case_id": "BC-TEST-2",
+        "bond_amount": 15000,
+    })
+    _bind(monkeypatch, stores, get)
+    mismatches = (
+        {"packet_id": "PKT-TEST-1", "booking_number": "TEST-1002", "bond_case_id": "BC-TEST-1"},
+        {"packet_id": "PKT-TEST-1", "booking_number": "TEST-1001", "bond_case_id": "BC-TEST-2"},
+        {"packet_id": "PKT-TEST-2", "booking_number": "TEST-1001", "bond_case_id": "BC-TEST-2"},
+    )
+    for overrides in mismatches:
+        response = client.post(
+            "/api/paperwork/confirm-premium",
+            json=_body(**overrides),
+            cookies=_cookie(),
+        )
+        assert response.status_code == 422, response.text
+        assert response.json()["error"] == "case_identity_conflict"
+    for name in ("paperwork_packets", "bond_cases", "active_bonds"):
+        for doc in stores[name].docs:
+            assert not _confirmed(doc)
+    assert stores["audit_events"].docs == []
+    assert stores["payment_plans"].docs == []
+
+
+def test_down_payment_receipt_does_not_mark_the_premium_paid(monkeypatch):
+    from dashboard.services.swipesimple_invoice_service import (
+        SwipeSimpleInvoiceError,
+        reconcile_payment,
+    )
+
+    bond = {
+        "booking_number": "TEST-1001",
+        "swipesimple_invoice_number": "TEST-1001",
+        "premium_confirmed_amount": "1500.00",
+        "premium_confirmed_at": "2026-10-15T12:00:00+00:00",
+        "premium_confirmed_by": ACTOR,
+        "down_payment_amount": "500.00",
+        "financed_balance": "1000.00",
+        "premium_paid": False,
+    }
+    active = dict(bond)
+    stores = {"bond_cases": _Col([bond]), "active_bonds": _Col([active])}
+
+    def get(name):
+        if name not in stores:
+            stores[name] = _Col()
+        return stores[name]
+
+    monkeypatch.setattr("dashboard.extensions.get_collection", get)
+    monkeypatch.setattr("dashboard.services.swipesimple_invoice_service.get_collection", get)
+    ledger = AsyncMock()
+    monkeypatch.setattr("dashboard.services.ledger_service.LedgerService.add_entry", ledger)
+    assert resolve_locked_premium(bond) == Decimal("1500.00")
+    assert resolve_invoice_due(bond) == Decimal("500.00")
+    receipt = {
+        "reference_id": "TEST-1001",
+        "status": "paid",
+        "transaction_id": "txn-TEST-1",
+        "amount": "500.00",
+    }
+    with pytest.raises(SwipeSimpleInvoiceError, match="receipt_partial_payment"):
+        asyncio.run(reconcile_payment("TEST-1001", receipt))
+    assert bond.get("premium_paid") is not True
+    assert active.get("premium_paid") is not True
+    ledger.assert_not_called()
 
 
 def test_unimplemented_plan_is_503_and_rolls_back(monkeypatch):

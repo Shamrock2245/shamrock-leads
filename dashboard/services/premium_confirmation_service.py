@@ -462,6 +462,64 @@ async def _commit_confirmation(
     return held.get("plan")
 
 
+def _present(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _ids_agree(left: Any, right: Any) -> bool:
+    a, b = _present(left), _present(right)
+    return not a or not b or a == b
+
+
+def _reject_split_case(
+    *,
+    packet: Optional[dict],
+    bond_case: Optional[dict],
+    active: Optional[dict],
+    booking: str,
+    packet_id: str,
+    bond_case_id: str,
+) -> None:
+    """Packet, booking, and bond case must name one case. No writes yet."""
+    docs = [doc for doc in (packet, bond_case, active) if isinstance(doc, dict)]
+    if packet_id and isinstance(packet, dict) and _present(packet.get("packet_id")) != packet_id:
+        raise PremiumConfirmationError(
+            "case_identity_conflict",
+            422,
+            "The packet, booking number, and bond case do not name one case. Nothing was saved.",
+        )
+    for doc in docs:
+        if not _ids_agree(booking, doc.get("booking_number") or doc.get("Booking_Number")):
+            raise PremiumConfirmationError(
+                "case_identity_conflict",
+                422,
+                "The packet, booking number, and bond case do not name one case. Nothing was saved.",
+            )
+        if not _ids_agree(bond_case_id, doc.get("bond_case_id") or doc.get("Bond_Case_ID")):
+            raise PremiumConfirmationError(
+                "case_identity_conflict",
+                422,
+                "The packet, booking number, and bond case do not name one case. Nothing was saved.",
+            )
+    for left, right in ((packet, bond_case), (packet, active), (bond_case, active)):
+        if not isinstance(left, dict) or not isinstance(right, dict):
+            continue
+        same_booking = _ids_agree(
+            left.get("booking_number") or left.get("Booking_Number"),
+            right.get("booking_number") or right.get("Booking_Number"),
+        )
+        same_case = _ids_agree(
+            left.get("bond_case_id") or left.get("Bond_Case_ID"),
+            right.get("bond_case_id") or right.get("Bond_Case_ID"),
+        )
+        if not same_booking or not same_case:
+            raise PremiumConfirmationError(
+                "case_identity_conflict",
+                422,
+                "The packet, booking number, and bond case do not name one case. Nothing was saved.",
+            )
+
+
 def _identity_query(doc: dict, *, booking: str, packet_id: str, bond_case_id: str) -> dict:
     if doc.get("packet_id"):
         return {"packet_id": doc.get("packet_id")}
@@ -559,6 +617,15 @@ async def confirm_premium(actor: str, body: dict) -> dict:
     rows = [("paperwork_packets", packet), ("bond_cases", bond_case), ("active_bonds", active)]
     if not any(doc for _name, doc in rows):
         raise PremiumConfirmationError("case_not_found", 404, "No packet or bond matches that case.")
+
+    _reject_split_case(
+        packet=packet,
+        bond_case=bond_case,
+        active=active,
+        booking=booking,
+        packet_id=packet_id,
+        bond_case_id=bond_case_id,
+    )
 
     await _require_identity(
         packet=packet,
