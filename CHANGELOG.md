@@ -13,6 +13,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_fl_citrus_bond_custody_defaults.py` (added to the `ci.yml` list).
 
+## [Unreleased] — 2026-10-15 (Polk FL: no In Custody default)
+
+### Fixed
+- **Polk (FL) no longer defaults status to "In Custody".** `polk.py` uses `published_status(row, release_date)`: a published `ReleaseDate` gives `Released`, a published status field is kept as written, and anything else is `""`. SearchJail is a booking-date search whose rows carry `ReleaseDate`, so it's **not custody-only**. The one honest probe (2026-10-15) got `connection_reset` (`docs/recon/FL_POLK_ROSTER_SCOPE_2026-10-15.md`). Bonds stay published-only. Tests: `tests/test_fl_polk_honest_status.py`.
+
 ## [Unreleased] — 2026-10-15 (Duval FL: no invented custody)
 
 ### Fixed

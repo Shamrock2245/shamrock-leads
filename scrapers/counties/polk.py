@@ -37,6 +37,21 @@ RACE_MAP = {
     "A": "Asian", "I": "American Indian", "U": "Unknown",
 }
 
+_STATUS_KEYS = ("Status", "status", "CustodyStatus", "InmateStatus")
+
+
+def published_status(b, release_date: str = "") -> str:
+    """Release date -> "Released"; else a published status string; else "" (never invented)."""
+    if release_date:
+        return "Released"
+    if isinstance(b, dict):
+        for key in _STATUS_KEYS:
+            val = b.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    return ""
+
+
 class PolkCountyScraper(BaseScraper):
     @property
     def county(self) -> str:
@@ -112,10 +127,10 @@ class PolkCountyScraper(BaseScraper):
             
         first_name, middle_name, last_name = self._parse_name(full_name)
         
-        # Determine status
-        status = "In Custody"
-        if release_date:
-            status = "Released"
+        # Status only as published: a release date gives "Released", a published
+        # status field is kept, else "". SearchJail is a booking-date search that
+        # returns released bookings too, so presence is not custody.
+        status = published_status(b, release_date)
             
         # Determine facility from location code
         facility = FACILITY
