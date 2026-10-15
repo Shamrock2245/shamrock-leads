@@ -13,6 +13,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_fl_citrus_bond_custody_defaults.py` (added to the `ci.yml` list).
 
+## [Unreleased] — 2026-10-15 (DCN base: honest identity, published-only bond/status, bid-only keys)
+
+### Fixed
+- **`scrapers/dcn_base.py` no longer invents bond, custody status or booking keys, and drops the Chrome disguise.** Shared by Carteret / Lee / Halifax / Richmond / Moore (NC), Darlington (SC) and DeSoto (FL). HTTP goes through an honest `plain_http` session (verified certs; 401/403/429 / challenge / TLS failures raise). Bond uses `charge_bond_amount` / `total_published_bond` (`""` when unknown; a published 0 is kept). Status is `""` (never hard-coded "In Custody"). Roster rows without a URL `bid` are dropped (no name/date hash, no person `id`). DeSoto's fail_closed `scrape()` is unchanged. Tests: `tests/test_dcn_base_cleanup.py`.
+
 ## [Unreleased] — 2026-10-15 (Lee bulk roster: unknown status is "")
 
 ### Fixed

@@ -16,12 +16,14 @@ Notes
   ``__CALLBACKPARAM=c0:KV|…;GB|…;<PAGERONCLICK PN{n}>``, grid state posted as
   the ``gvInmates`` hidden field, exactly as ``ASPx.GVPagerOnClick`` sends it).
   Rows are optionally enriched via the public detail URL (plain HTTP).
-* Booking key = URL ``bid`` param when present (stable opaque id), else a
-  deterministic hash of name + admit date.
+* Booking key = URL ``bid`` param only (never a name/date hash, never the
+  person ``id`` query param). Rows without ``bid`` are dropped.
+* Bond is published-only (``""`` when unknown; a published 0 is kept).
+* Status is never invented as "In Custody" (``""`` unless a subclass sets it).
+* HTTP goes through ``scrapers.plain_http`` (honest UA, certificate verified).
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import re
@@ -33,18 +35,36 @@ import requests
 from bs4 import BeautifulSoup
 
 from core.models import ArrestRecord
+from scrapers import plain_http
 from scrapers.base_scraper import BaseScraper
+from scrapers.published_bond import charge_bond_amount, total_published_bond
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": plain_http.HONEST_USER_AGENT,
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
 }
+
+
+class _HonestDCNSession(requests.Session):
+    """requests.Session whose every call goes through plain_http (typed block errors)."""
+
+    def __init__(self, county: str):
+        super().__init__()
+        self._county = county
+        self.headers.update(DEFAULT_HEADERS)
+        self.verify = True
+
+    def request(self, method, url, **kwargs):  # noqa: D401
+        sess = self
+
+        class _Raw:
+            def request(self, m, u, **kw):
+                return requests.Session.request(sess, m, u, **kw)
+
+        return plain_http.request(_Raw(), method, url, county=self._county, **kwargs)
 
 
 class DCNBaseScraper(BaseScraper):
@@ -54,8 +74,8 @@ class DCNBaseScraper(BaseScraper):
     max_detail_fetches: int = 120
     detail_delay_s: float = 0.35
     enrich_details: bool = True
-    # When True, skip roster rows that lack a URL bid (no name/date hash keys).
-    require_source_bid: bool = False
+    # Skip roster rows that lack a URL bid (never invent name/date hash keys).
+    require_source_bid: bool = True
     # When True, fetch roster pages 2..N through the grid's DevExpress pager
     # callback (same request the browser sends). Off by default per county.
     paginate_callbacks: bool = False
@@ -82,15 +102,14 @@ class DCNBaseScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         start = time.time()
-        session = requests.Session()
-        session.headers.update(DEFAULT_HEADERS)
+        session = self._make_session()
 
         try:
-            resp = session.get(self.inmates_url, timeout=45, verify=True)
+            resp = self._http_get(session, self.inmates_url, timeout=45)
             resp.raise_for_status()
         except Exception as e:
             logger.error("%s DCN roster GET failed: %s", self.county, e)
-            return []
+            raise
 
         origin = self._origin(self.inmates_url)
         roster = self._parse_roster(resp.text, origin)
@@ -158,10 +177,11 @@ class DCNBaseScraper(BaseScraper):
             sex = cells[3] if len(cells) > 3 else ""
             admit = cells[4] if len(cells) > 4 else ""
 
-            if not bid and self.require_source_bid:
+            if not bid:
+                # Never invent a booking key (no name/date hash, no person id).
                 continue
-            booking = bid or self._synthetic_booking(name, admit, age)
-            if not booking or booking in seen:
+            booking = bid
+            if booking in seen:
                 continue
             seen.add(booking)
 
@@ -181,7 +201,7 @@ class DCNBaseScraper(BaseScraper):
         return out
 
     def _fetch_detail(self, session: requests.Session, url: str) -> Dict[str, str]:
-        resp = session.get(url, timeout=35, verify=True)
+        resp = self._http_get(session, url, timeout=35)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
         info: Dict[str, str] = {}
@@ -222,10 +242,9 @@ class DCNBaseScraper(BaseScraper):
                 info["facility"] = value
 
         charges: List[str] = []
-        total_bond = 0.0
+        bonds: List = []
         bond_type = ""
         for tr in soup.select("tr[id*='ChargeGrid'][id*='DXDataRow'], tr[id*='DXDataRow']"):
-            # Prefer ChargeGrid rows when present
             row_id = tr.get("id") or ""
             if "ChargeGrid" not in row_id and soup.select("tr[id*='ChargeGrid_DXDataRow']"):
                 continue
@@ -237,33 +256,31 @@ class DCNBaseScraper(BaseScraper):
                 continue
             if charge not in charges:
                 charges.append(charge)
-            # Bond amount usually near end of charge row.
-            # Prefer per-$ token sums so "$2,000 $55,000" does not become 200055000.
-            for cell in cells:
-                if "$" in cell:
-                    amounts = re.findall(r"\$\s*([\d,]+(?:\.\d+)?)", cell)
-                    if amounts:
-                        for raw in amounts:
-                            try:
-                                total_bond += float(raw.replace(",", ""))
-                            except ValueError:
-                                pass
+            amount = None
+            found_amount_cell = False
+            for cell in cells[1:]:
+                if "$" in cell or re.fullmatch(r"[\d,]+(?:\.\d+)?", (cell or "").strip()):
+                    found_amount_cell = True
+                    # Prefer $-token sums on the cell so "$2,000 $55,000" stays two amounts.
+                    tokens = re.findall(r"\$\s*([\d,]+(?:\.\d+)?)", cell)
+                    if tokens:
+                        vals = [charge_bond_amount("$" + t) for t in tokens]
+                        if any(v is None for v in vals):
+                            amount = None
+                        else:
+                            amount = sum(vals)  # type: ignore[arg-type]
                     else:
-                        cleaned = re.sub(r"[^\d.]", "", cell.replace(",", ""))
-                        try:
-                            total_bond += float(cleaned)
-                        except ValueError:
-                            pass
-                elif not bond_type and any(
+                        amount = charge_bond_amount(cell)
+                    break
+                if not bond_type and any(
                     k in cell.upper() for k in ("SECURED", "UNSECURED", "CASH", "BOND", "ROR")
-                ):
-                    if "INCLUDED" not in cell.upper():
-                        bond_type = cell
+                ) and "INCLUDED" not in cell.upper():
+                    bond_type = cell
+            bonds.append(amount if found_amount_cell else None)
 
         if charges:
             info["charges"] = " | ".join(charges)
-        if total_bond > 0:
-            info["bond"] = f"{total_bond:.2f}"
+            info["bond"] = total_published_bond(bonds)
         if bond_type:
             info["bond_type"] = bond_type
 
@@ -283,8 +300,12 @@ class DCNBaseScraper(BaseScraper):
         middle = row.get("middle") or ""
         last = row.get("last") or ""
 
-        charges = detail.get("charges") or "Unknown"
-        bond = detail.get("bond") or "0"
+        charges = detail.get("charges") or ""
+        # Unknown bond is ""; a published "0" is kept (detail["bond"] key present).
+        if "bond" in detail:
+            bond = detail.get("bond") or ""
+        else:
+            bond = ""
         bond_type = detail.get("bond_type") or ""
         dob = detail.get("dob") or ""
         height = detail.get("height") or ""
@@ -318,9 +339,9 @@ class DCNBaseScraper(BaseScraper):
             Weight=weight,
             DOB=dob,
             Charges=charges,
-            Bond_Amount=re.sub(r"[^\d.]", "", str(bond)) or "0",
+            Bond_Amount=str(bond) if bond != "" else "",
             Bond_Type=bond_type,
-            Status="In Custody",
+            Status="",  # never invent "In Custody"
             Detail_URL=row.get("detail_url") or self.inmates_url,
             Facility=facility,
             Address=address,
@@ -401,10 +422,12 @@ class DCNBaseScraper(BaseScraper):
         # Keep URL-safe compact form
         return re.sub(r"[^A-Za-z0-9_\-+=]", "", raw)[:64] or ""
 
-    @staticmethod
-    def _synthetic_booking(name: str, admit: str, age: str) -> str:
-        key = f"{name}|{admit}|{age}".upper()
-        return "DCN_" + hashlib.md5(key.encode()).hexdigest()[:12]
+    def _make_session(self) -> requests.Session:
+        """Session whose every call goes through plain_http (honest UA, verify on)."""
+        return _HonestDCNSession(self.county)
+
+    def _http_get(self, session: requests.Session, url: str, **kwargs):
+        return session.get(url, **kwargs)
 
     @staticmethod
     def _split_name(name: str) -> Tuple[str, str, str]:
