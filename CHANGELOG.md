@@ -11,6 +11,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_payment_plan_creation.py` (mocked Mongo only). `tests/test_payment_plan_link_core.py`, which `ci.yml` already names, runs that file in CI.
 
+## [Unreleased] — 2026-10-14 (financed installment invoices)
+
+### Added
+- **Due installments stage one SwipeSimple invoice.** The hourly `installment_invoices` cron writes a send-once claim for each `premium_confirmation` installment whose due date is today or earlier. The reference is `{booking}-I{n}` and the amount is that row's `amount_cents`. `SWIPESIMPLE_LIVE` off records a dry-run and does not call SwipeSimple. LIVE without a session leaves the row unstaged so the next run can retry. `SWIPESIMPLE_DISPATCH_LIVE` off does not text. A second run the same day stages nothing. Staff `TEST-` bookings do not HTTP unless `SWIPESIMPLE_TEST_CASE_INVOICES=1`.
+- **Paid, failed, and refunded gateway events post to the plan.** `POST /api/webhooks/payment` (HMAC unchanged) and the Gmail receipt poller call `apply_plan_payment` / `reverse_plan_payment`. A paid installment drops `balance_remaining_cents` once; a replay does not. A booking that does not match the plan is 409 and writes nothing. A decline writes one `payment_plan_payment_failed` audit and does not move the balance. A refund restores the balance once and marks the row reversed. The down-payment invoice (reference = booking number, no installment) does not consume the financed balance. Production flags are not changed.
+
+### Fixed
+- **A paid installment against a confirmation plan increments numeric balances.** `ensure_payment_plan_for_confirmation` stores `balance_remaining` and `total_paid` as decimal strings (`1000.00`). Posting rewrites those strings to numbers in the same transaction, then `$inc`s them. `balance_remaining_cents` stays the integer source of truth. A string that is not an amount, and has no cent field, posts nothing.
+
+### Tests
+- `tests/test_installment_invoices.py`. `installment_invoice_claims` is tenant-owned in `dashboard/tenancy/constants.py` (known-collection count 122).
+
 ## [Unreleased] — 2026-10-15 (Aiken SC: plain honest HTTPS; published-only bond/status)
 
 ### Fixed
@@ -314,7 +326,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Byte-identical pass-through of every redact helper on non-Miami-Dade values.
   - Native form submit on a Miami-Dade record posts the real key (node simulation); a blank booking from a form never overwrites a stored key (server tests); checkbox, radio and hidden behaviour from P1.
   - Guards on Slack/Telegram `json=`, message entry points, Sheets/notification text, middleware registration, guard-first page loading and recovery portal labels.
-
 ## [Unreleased] — 2026-10-14 (Duval: never click the ATIMS robot gate)
 
 ### Fixed
