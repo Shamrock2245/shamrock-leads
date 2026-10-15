@@ -273,7 +273,7 @@ async def _notify_clean_charge(recorded: Dict[str, Any]) -> None:
 
 
 async def _maybe_send_customer_receipt(db, recorded: Dict[str, Any], *, phone: str) -> None:
-    """Send the BlueBubbles receipt only if this caller wins the claim marker."""
+    """Send the BlueBubbles receipt only if this caller wins the sending claim."""
     phone = str(phone or "").strip()
     if not phone:
         return
@@ -282,28 +282,24 @@ async def _maybe_send_customer_receipt(db, recorded: Dict[str, Any], *, phone: s
     if not (recorded.get("committed") or recorded.get("duplicate")):
         return
     txn = str(recorded.get("transaction_id") or "")
+    amount = recorded.get("amount")
     try:
-        from dashboard.services.bb_client import send_message_universal
-        from dashboard.services.payment_log_claims import claim_customer_receipt
+        amount_text = f"{float(amount):.2f}"
+    except (TypeError, ValueError):
+        amount_text = ""
+    from dashboard.services.payment_log_claims import send_customer_receipt_once
 
-        if not await claim_customer_receipt(db, txn):
-            return
-        amount = recorded.get("amount")
-        try:
-            amount_text = f"{float(amount):.2f}"
-        except (TypeError, ValueError):
-            amount_text = ""
-        await send_message_universal(
-            phone,
-            (
-                "✅ Payment received! Thank you.\n"
-                f"Amount: ${amount_text}\n"
-                f"Transaction: {txn}\n"
-                "Shamrock Bail Bonds — (239) 332-2245"
-            ),
-        )
-    except Exception:
-        logger.warning("[SwipeSimplePoll] BB receipt failed")
+    await send_customer_receipt_once(
+        db,
+        txn,
+        phone,
+        (
+            "✅ Payment received! Thank you.\n"
+            f"Amount: ${amount_text}\n"
+            f"Transaction: {txn}\n"
+            "Shamrock Bail Bonds — (239) 332-2245"
+        ),
+    )
 
 
 async def run_swipesimple_receipt_poll(config: Optional[dict] = None) -> Dict[str, Any]:

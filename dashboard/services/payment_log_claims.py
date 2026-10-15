@@ -864,11 +864,29 @@ async def _apply(
     }
 
 
-async def claim_customer_receipt(db, txn_key: str) -> bool:
-    """Atomically claim the one customer receipt for this charge.
+def _receipt_accepted(result) -> bool:
+    """True when BlueBubbles accepted the send (delivered or queued).
 
-    True only for the caller that sets ``bb_receipt_sent`` on the charge
-    claim. A second poller or webhook call gets False and must not send.
+    ``None`` counts as accepted so a caller that does not return a result
+    dict is treated as a completed send. A failure dict or any other value
+    does not.
+    """
+    if result is None:
+        return True
+    if not isinstance(result, dict):
+        return False
+    if result.get("channel") == "failed" or result.get("success") is False:
+        return False
+    return bool(result.get("sent") or result.get("queued") or result.get("success"))
+
+
+async def claim_customer_receipt(db, txn_key: str) -> bool:
+    """Atomically claim the in-flight customer receipt for this charge.
+
+    True only for the caller that sets ``bb_receipt_sending``. A second
+    caller, and a charge that already has ``bb_receipt_sent``, gets False
+    and must not send. ``bb_receipt_sent`` is set only after BlueBubbles
+    accepts the send.
     """
     if not txn_key:
         return False
@@ -878,10 +896,60 @@ async def claim_customer_receipt(db, txn_key: str) -> bool:
             "txn_key": txn_key,
             "event_kind": "charge",
             "bb_receipt_sent": {"$ne": True},
+            "bb_receipt_sending": {"$ne": True},
         },
-        {"$set": {"bb_receipt_sent": True}},
+        {"$set": {"bb_receipt_sending": True}},
     )
     return bool(getattr(result, "modified_count", 0))
+
+
+async def finish_customer_receipt(db, txn_key: str, *, accepted: bool) -> None:
+    """Set ``bb_receipt_sent`` after an accepted send, or release the claim.
+
+    The update matches only a claim that still has ``bb_receipt_sending``,
+    so a late finish cannot mark or clear a different caller's send.
+    """
+    if not txn_key:
+        return
+    filt = {
+        "tenant_id": _tenant_value(),
+        "txn_key": txn_key,
+        "event_kind": "charge",
+        "bb_receipt_sending": True,
+    }
+    if accepted:
+        update = {
+            "$set": {"bb_receipt_sent": True},
+            "$unset": {"bb_receipt_sending": ""},
+        }
+    else:
+        update = {"$unset": {"bb_receipt_sending": ""}}
+    await db[LOG_CLAIMS_COLLECTION].update_one(filt, update)
+
+
+async def send_customer_receipt_once(db, txn_key: str, phone: str, message: str) -> bool:
+    """Claim, send, then mark the receipt sent only if BlueBubbles accepts.
+
+    A failed send clears ``bb_receipt_sending`` so a later caller can retry.
+    Returns True only when this caller claimed the send and BlueBubbles
+    accepted it. The phone number and message are not logged.
+    """
+    if not await claim_customer_receipt(db, txn_key):
+        return False
+    accepted = False
+    try:
+        from dashboard.services.bb_client import send_message_universal
+
+        accepted = _receipt_accepted(await send_message_universal(phone, message))
+        if not accepted:
+            logger.warning("[payment_log] BB receipt was not accepted txn=%s", txn_key)
+    except Exception:
+        logger.warning("[payment_log] BB receipt send failed txn=%s", txn_key)
+    try:
+        await finish_customer_receipt(db, txn_key, accepted=accepted)
+    except Exception:
+        logger.warning("[payment_log] BB receipt marker update failed txn=%s", txn_key)
+    return accepted
 
 
 def _notify_staff_review(hit: dict) -> None:

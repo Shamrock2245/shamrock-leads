@@ -948,6 +948,119 @@ def test_bb_receipt_webhook_then_poller_sends_once(db, monkeypatch):
     assert db["payment_log_claims"].docs[0]["bb_receipt_sent"] is True
 
 
+def test_bb_receipt_sent_only_after_accept(db, monkeypatch):
+    """bb_receipt_sent is set only after BlueBubbles accepts the send."""
+    db["bond_cases"].docs.append(_bond())
+    during = {}
+
+    async def fake_send(phone, message):
+        claim = db["payment_log_claims"].docs[0]
+        during["sending"] = claim.get("bb_receipt_sending")
+        during["sent"] = claim.get("bb_receipt_sent")
+        return {"success": True, "sent": True, "channel": "imessage"}
+
+    app = _receipt_app(db, monkeypatch)
+    with patch("dashboard.services.bb_client.send_message_universal", new=fake_send), \
+            patch("dashboard.routers.events.publish_event", new=AsyncMock()):
+        response = _post_paid_webhook(app, "TX-ACCEPT")
+    assert response.status_code == 200
+    assert during == {"sending": True, "sent": None}
+    claim = db["payment_log_claims"].docs[0]
+    assert claim["bb_receipt_sent"] is True
+    assert "bb_receipt_sending" not in claim
+
+
+def test_bb_receipt_failed_send_clears_marker_and_retry_succeeds(db, monkeypatch):
+    """A failed send clears the sending marker. The retry is accepted."""
+    db["bond_cases"].docs.append(_bond())
+    calls = {"n": 0}
+
+    async def fake_send(phone, message):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("bb down")
+        return {"success": True, "queued": True, "channel": "queued"}
+
+    app = _receipt_app(db, monkeypatch)
+    with patch("dashboard.services.bb_client.send_message_universal", new=fake_send), \
+            patch("dashboard.routers.events.publish_event", new=AsyncMock()):
+        first = _post_paid_webhook(app, "TX-RETRY")
+        claim = db["payment_log_claims"].docs[0]
+        assert claim.get("bb_receipt_sending") is not True
+        assert claim.get("bb_receipt_sent") is not True
+        second = _post_paid_webhook(app, "TX-RETRY")
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["duplicate"] is True
+    assert calls["n"] == 2
+    claim = db["payment_log_claims"].docs[0]
+    assert claim["bb_receipt_sent"] is True
+    assert "bb_receipt_sending" not in claim
+
+
+def test_bb_receipt_concurrent_paths_send_once(db, monkeypatch):
+    """The poller and the webhook race. Exactly one receipt is sent."""
+    db["bond_cases"].docs.append(_bond())
+    sent = []
+
+    async def fake_send(phone, message):
+        sent.append(phone)
+        await asyncio.sleep(0)
+
+    app = _receipt_app(db, monkeypatch)
+
+    async def race():
+        poller = SwipeSimpleReceiptPoller(db=db)._apply_bond_payment(
+            db,
+            {
+                "amount": 100.0,
+                "booking_number": BOOKING,
+                "transaction_id": "TX-RACE",
+                "indemnitor_phone": PHONE,
+            },
+            gmail_message_id="m-TX-RACE",
+            raw_subject="Receipt",
+        )
+        transport = httpx.ASGITransport(app=app)
+
+        async def post():
+            async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+                return await client.post("/api/webhooks/payment", json={
+                    "event_type": "payment.completed",
+                    "transaction_id": "TX-RACE",
+                    "amount": 100,
+                    "status": "approved",
+                    "customer_name": "Test Payer",
+                    "custom_fields": {
+                        "indemnitor_phone": PHONE,
+                        "booking_number": BOOKING,
+                    },
+                })
+
+        return await asyncio.gather(poller, post())
+
+    with patch("dashboard.services.bb_client.send_message_universal", new=fake_send), \
+            patch("dashboard.routers.events.publish_event", new=AsyncMock()):
+        recorded = _run(plc.record_provider_payment(
+            db,
+            source="swipesimple_gmail_poll",
+            transaction_id="TX-RACE",
+            amount=100,
+            status="approved",
+            booking_number=BOOKING,
+        ))
+        assert recorded["committed"] is True
+        assert sent == []
+        poller_result, response = _run(race())
+    assert poller_result["duplicate"] is True
+    assert response.status_code == 200
+    assert response.json()["duplicate"] is True
+    assert sent == [PHONE]
+    claim = db["payment_log_claims"].docs[0]
+    assert claim["bb_receipt_sent"] is True
+    assert claim.get("bb_receipt_sending") is not True
+
+
 def test_bb_receipt_replay_does_not_send_again(db, monkeypatch):
     """Replaying the webhook, then the poller, still sends one receipt."""
     db["bond_cases"].docs.append(_bond())

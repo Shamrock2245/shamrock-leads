@@ -245,7 +245,6 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
     """
     import httpx
     from dashboard.routers.events import publish_event
-    from dashboard.services.bb_client import send_message_universal
 
     # -- 1. HMAC signature validation / Auth check ---------------------------
     # Production = ENV or ENVIRONMENT (VPS uses ENV=production per .env.example).
@@ -353,19 +352,20 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         and (recorded.get("committed") or recorded.get("duplicate"))
     )
     if recorded_charge and indemnitor_phone:
-        try:
-            from dashboard.services.payment_log_claims import claim_customer_receipt
+        from dashboard.services.payment_log_claims import send_customer_receipt_once
 
-            if await claim_customer_receipt(get_db(), recorded.get("transaction_id")):
-                receipt_msg = (
-                    f"✅ Payment received! Thank you, {customer_name}.\n"
-                    f"Amount: ${float(recorded.get('amount') or 0):.2f} ({card_brand} ending {card_last4})\n"
-                    f"Transaction: {recorded.get('transaction_id')}\n"
-                    f"Shamrock Bail Bonds — (239) 332-2245"
-                )
-                await send_message_universal(indemnitor_phone, receipt_msg)
-        except Exception as exc:
-            logger.warning("[payment_webhook] BB receipt failed: %s", exc)
+        receipt_msg = (
+            f"✅ Payment received! Thank you, {customer_name}.\n"
+            f"Amount: ${float(recorded.get('amount') or 0):.2f} ({card_brand} ending {card_last4})\n"
+            f"Transaction: {recorded.get('transaction_id')}\n"
+            f"Shamrock Bail Bonds — (239) 332-2245"
+        )
+        await send_customer_receipt_once(
+            get_db(),
+            str(recorded.get("transaction_id") or ""),
+            indemnitor_phone,
+            receipt_msg,
+        )
 
     # Payment received → #intake only after a committed charge. Refunds and
     # failures alert from the recorder. Internal booking keys are not printed.
