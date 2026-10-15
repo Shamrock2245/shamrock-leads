@@ -9,6 +9,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Palm Beach (FL) no longer drives a Chrome browser or sends a Chrome User-Agent.** `palm_beach.py` reads the PBSO blotter with `scrapers.plain_http` (honest UA, certificate verified). It submits the page's own date-search form, parses cards with `parse_pbso_html`, and follows the page's own pagination links. The hCaptcha wait loop is gone: a challenge page (including hCaptcha) or 401/403/429 raises `egress_block:`, a dropped handshake raises `egress_block: ... connection_reset:`, a certificate failure raises `tls_cert_invalid:`, and a missing search form raises `PalmBeachSourceChanged`. `_fetch_single_booking` uses the same honest session, and a block now raises instead of reading as "not found". The one honest probe from the agent box (2026-10-15) got **connection_reset**. Tests: `tests/test_fl_palmbeach_plain_https.py`.
 - **Palm Beach records never default status to "In Custody".** `_row_to_arrest_record` uses `row.get("status") or ""`, so an unknown status is `""` and a published one (e.g. `Released` from a card release date via `pbso_parse`) is kept. The blotter isn't custody-only (#233).
 
+## [Unreleased] — 2026-10-15 (Hernando FL: honest identity; no roster custody default)
+
+### Fixed
+- **Hernando (FL) drops the Chrome User-Agent and the roster "In Custody" default.** Every request (search GET/POST, detail GETs, and the #156 `fetch_bond_recheck`) goes through `scrapers.plain_http` via `_HonestSession`: honest UA, certificate verified. A 401/403/429, challenge page, dropped handshake or bad certificate raises `egress_block:` / `tls_cert_invalid:` instead of being counted as a skipped booking. In the re-check the worker records `fetch_error:<type>` and writes nothing. Roster rows start with `Status=""`: the search is **not custody-only** (the form's own "Include Released?" box is ticked). Custody still comes only from the detail page's published `Release Date/Time` (#149). Bond (published-only), the detail pacing (`REQUEST_PAUSE_S`) and `MAX_DETAILS_PER_RUN` cap are unchanged. One honest probe (2026-10-15) got **HTTP 200** (`docs/recon/FL_HERNANDO_ROSTER_SCOPE_2026-10-15.md`). Tests: `tests/test_fl_hernando_honest_identity.py`; re-check hook tests now patch `_HonestSession.get`.
+
 ## [Unreleased] — 2026-10-15 (Polk FL: no In Custody default)
 
 ### Fixed
