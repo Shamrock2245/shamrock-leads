@@ -52,7 +52,9 @@ def test_bay_fp_field_matches_unigui_encoding():
 
 def test_bay_landing_contract_drift_raises():
     sess = bay.BayUniGuiSession(http=mock.Mock())
-    sess.http.get.return_value = mock.Mock(text="<html>_S_ID=abc123</html>", raise_for_status=lambda: None)
+    sess.http.request.return_value = mock.Mock(
+        status_code=200, headers={"content-type": "text/html"},
+        text="<html>_S_ID=abc123</html>", raise_for_status=lambda: None)
     with pytest.raises(bay.BaySourceContractError):
         sess.open()
 

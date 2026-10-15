@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-15 (Bay: unpublished bond is "", published 0 kept; no invented custody; honest HTTPS)
+
+### Fixed
+- **Bay (FL) no longer invents a `$0` bond.** `parse_store_row` summed only the numeric `Bond:` lines and started from `0.0`, so a booking with no bond shown, `NO BOND`/`HOLD`, or a charge missing its bond came out as `"0"` (or as a partial sum). Each charge now has its own slot, filled by `published_bond.charge_bond_amount`, and the booking total uses `total_published_bond`. It is the sum only when every charge shows an amount; otherwise it is `""`. A published `$0` stays `"0"`.
+- **Custody is no longer invented.** `Status` was hard-coded `"In Custody"`, but the source never states custody, so it is now `""`.
+- **Chrome disguise removed.** The Chrome `User-Agent` is gone and every request goes through `scrapers.plain_http` (honest UA, certificate verified). A block raises `egress_block:` and a real certificate failure raises `tls_cert_invalid:`. There was no `verify=False` to remove.
+
+### Tests
+- `tests/test_fl_bay_bond_custody_defaults.py` (added to the `ci.yml` list). `tests/test_fl_gap_queue.py`'s landing-drift fake now stubs `session.request` (the plain_http path).
+
 ## [Unreleased] — 2026-10-15 (Highlands / Monroe: plain HTTPS, no stealth; no invented $0 or custody)
 
 ### Fixed
