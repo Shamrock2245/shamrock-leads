@@ -118,6 +118,7 @@ jobs:
             tests/test_nc_pitt_honest.py \
             tests/test_nc_gaston_honest.py \
             tests/test_nc_orange_honest.py \
+            tests/test_fl_seminole_plain_https.py \
             tests/test_fl_desoto_bond_custody_defaults.py \
             tests/test_fl_smartweb_plain_https.py \
             tests/test_lee_outreach_unknown_status.py \
