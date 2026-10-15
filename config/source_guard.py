@@ -50,6 +50,7 @@ SOURCE_HOST_LABELS = {
     "jail.marionso.com": "Marion (FL)",
     "webapps.hcso.tampa.fl.us": "Hillsborough (FL)",
     "pbso.org": "Palm Beach (FL)",
+    "keysso.net": "Monroe (FL)",
 }
 
 
