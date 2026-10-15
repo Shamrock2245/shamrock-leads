@@ -32,7 +32,7 @@
 ## Tier 2 — Tampa Bay / I-4 Corridor (8 Counties)
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
-| 8 | **Hillsborough** | httpx direct-first + reCAPTCHA + SOLVECAPTCHA (HCSO login) | `hillsborough.py` | ✅ Active (needs HCSO_* + SOLVECAPTCHA_KEY) | 90 min | 2026-07-24 |
+| 8 | **Hillsborough** | httpx direct-first + reCAPTCHA + SOLVECAPTCHA (HCSO login) | `hillsborough.py` | 🔴 Fail closed (`SOURCE_CONTRACT_VALIDATED=False` + Health `fail_closed`): login + CAPTCHA solving + proxy are not allowed. See `docs/recon/FL_RULE_CONFLICT_FAIL_CLOSED_2026-10-14.md` | 90 min | 2026-10-14 |
 | 9 | **Pinellas** | Who's In Jail (Blazor Server) booking-date search + Subject Charge Report modal, **relay-only**: stock Playwright Chromium on the Leads Ops home relay's own residential exit (`PINELLAS_EGRESS_MODE=direct`, the only mode), honest bot User-Agent, no patchright / stealth / proxy / impersonation / challenge solving; owner exception (Brendan 2026-10-08 1:38 PM ET); a non-residential exit raises `EgressBlocked` before any browser start | `pinellas.py` | ⚠️ Contract **unverified** (Health default) until a Leads Ops write smoke through the relay; plain HTTP gets only the JS shell (see `docs/recon/FL_PINELLAS_RELAY_ONLY_2026-10-08.md`, `docs/ops/PINELLAS_RELAY_RUN.md`) | relay-only (Leads Ops; was 90 min on VPS) | 2026-10-08 |
 | 10 | **Seminole** | Custom | `seminole.py` | ✅ Active | 90 min | 2026-04-27 |
 | 11 | **Orange** | BestJail public JSON — getInmates/<letter> roster + getInmateDetails/getCharges per booking (plain requests, newest first, 7-day window) | `orange.py` | ✅ Active (unverified until write smoke; source `bookingNumber` 8 digits). See `docs/recon/FL_ORANGE_BESTJAIL_2026-10-08.md` | 90 min | 2026-10-08 |
@@ -83,7 +83,7 @@
 | 32 | **Putnam** | SmartWEB JAIL View (`PCSO<YY>JBN######`, legacy AddMoreResults) — plain requests | `putnam.py` | ✅ Active (unverified until write smoke) | 180 min | 2026-10-07 |
 | 33 | **Columbia** | Legacy SmartWEB IP returns 503; no replacement public roster URL | `columbia.py` | 🔴 Fail closed (`SOURCE_CONTRACT_VALIDATED=False`) | 120 min | 2026-10-07 |
 | 34 | **Suwannee** | SmartWEB JAIL View (`SCSO<YY>JBN######`, modern AddMoreResults) — plain requests | `suwannee.py` | ✅ `verified_public` (Mac write smoke 44 new) | 180 min | 2026-09-25 |
-| 35 | **Marion** | curl_cffi + **required residential** (Warren/Tailscale) — jail.marionso.com AWS WAF | `marion.py` | ✅ Active (residential egress) | 90 min | 2026-08-04 |
+| 35 | **Marion** | curl_cffi + **required residential** (Warren/Tailscale) — jail.marionso.com AWS WAF | `marion.py` | 🔴 Fail closed (`SOURCE_CONTRACT_VALIDATED=False` + Health `fail_closed`): residential proxy + TLS impersonation are not allowed. See `docs/recon/FL_RULE_CONFLICT_FAIL_CLOSED_2026-10-14.md` | 90 min | 2026-10-14 |
 
 > **Note:** Marion fails closed without US residential exit (APE Warren / Tailscale SOCKS). Direct VPS IP is always 403.
 
@@ -202,7 +202,7 @@ Approach:   Query the anonymous FeatureServer directly with `ObjectId,BookDate,D
 
 ### New World / InmateInquiry (Tyler Technologies)
 - **Pattern**: Server-rendered HTML listing + detail pages (GET)
-- **Active Counties**: Hillsborough, Walton, Flagler. Nassau is fail closed (TLS chain hold, 2026-10-08).
+- **Active Counties**: Walton, Flagler. Hillsborough is fail closed (login + CAPTCHA + proxy, 2026-10-14). Nassau is fail closed (TLS chain hold, 2026-10-08).
 
 ### SmartWeb (Black Creek ISC)
 - **Pattern**: ASP.NET POST form with ViewState, returns HTML table
