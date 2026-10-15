@@ -202,6 +202,23 @@ def scrape_smartweb_jail_view(
     return all_records
 
 
+_STATUS_MAP = {
+    "in jail": "In Custody",
+    "in custody": "In Custody",
+    "out of jail": "Released",
+    "released": "Released",
+}
+
+
+def status_from_source(raw: str) -> str:
+    """Map the card's own ``Status:`` token; anything else (or none) is "".
+
+    Whole-token lookup only, never a substring test, so "Out of Jail" can
+    never read as in custody and a missing status is never invented.
+    """
+    return _STATUS_MAP.get(" ".join(str(raw or "").split()).lower(), "")
+
+
 def _charge_bond_amount(bond_str: str) -> Optional[float]:
     """A charge row's published dollar amount, else None (unknown).
 
@@ -343,13 +360,7 @@ def _parse_html(
             block_text,
             re.IGNORECASE,
         )
-        status_raw = status_m.group(1).strip() if status_m else ""
-        if re.search(r"released|out\s+of", status_raw, re.I):
-            status = "Released"
-        elif re.search(r"jail|custody", status_raw, re.I):
-            status = "In Custody"
-        else:
-            status = "In Custody"
+        status = status_from_source(status_m.group(1) if status_m else "")
 
         addr_m = re.search(r"Address Given:\s*([^\n\r\t]+?)(?:\s+CHARGES\b|\s+STATUTE\b|$)", block_text)
         address = addr_m.group(1).strip() if addr_m else ""
