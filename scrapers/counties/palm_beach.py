@@ -157,7 +157,7 @@ class PalmBeachCountyScraper(BaseScraper):
             Booking_Time=row.get("booking_time", ""),
             Arrest_Date=row.get("booking_date", ""),
             Arrest_Time=row.get("booking_time", ""),
-            Status=row.get("status", "In Custody"),
+            Status=row.get("status") or "",  # unknown is ""; never default In Custody
             Release_Date=row.get("release_date", ""),
             Charges=row.get("charges", ""),
             Bond_Amount=row.get("bond_amount", ""),  # unknown is ""; a published "0" is kept

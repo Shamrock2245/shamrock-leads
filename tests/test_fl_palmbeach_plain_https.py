@@ -102,3 +102,11 @@ def test_single_booking_block_raises_not_none(monkeypatch):
     with pytest.raises(EgressBlocked):
         PalmBeachCountyScraper()._fetch_single_booking(
             "2026012709", "https://www3.pbso.org/blotter/index.cfm?booking=2026012709")
+
+
+def test_record_status_never_defaults_in_custody():
+    assert 'row.get("status", "In Custody")' not in inspect.getsource(pb)
+    s = PalmBeachCountyScraper.__new__(PalmBeachCountyScraper)
+    assert s._row_to_arrest_record({"booking_num": "2026012709"}).Status == ""
+    assert s._row_to_arrest_record({"booking_num": "1", "status": ""}).Status == ""
+    assert s._row_to_arrest_record({"booking_num": "1", "status": "Released"}).Status == "Released"
