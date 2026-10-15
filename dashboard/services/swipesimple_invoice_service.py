@@ -258,6 +258,29 @@ def money_to_decimal(value: Any) -> Optional[Decimal]:
         return None
 
 
+def _reject_unproven_invoice_amount(bond: Dict[str, Any], resolved_cents: int) -> None:
+    """Fail closed when a stored link cannot be proven to match this amount.
+
+    A bond with no staff confirmation keeps the previous idempotent return:
+    older rows did not store ``swipesimple_invoice_amount_cents``. After a
+    confirmation, a link with no stored cents, or cents that differ from the
+    confirmed down payment, is not returned as if it were that new amount.
+    """
+    from dashboard.services.packet_payment_link_service import confirmed_premium
+
+    stored = bond.get("swipesimple_invoice_amount_cents")
+    if stored in (None, ""):
+        if confirmed_premium(bond, None) > 0:
+            raise SwipeSimpleInvoiceError("invoice_amount_unproven")
+        return
+    try:
+        stored_cents = int(stored)
+    except (TypeError, ValueError):
+        raise SwipeSimpleInvoiceError("invoice_amount_unproven") from None
+    if stored_cents != int(resolved_cents):
+        raise SwipeSimpleInvoiceError("invoice_amount_mismatch")
+
+
 def premium_dollars_to_cents(premium: Decimal) -> int:
     """
     BondCase premium is dollars; SwipeSimple form wants cents (100 = $1.00).
@@ -1097,6 +1120,7 @@ async def _persist_invoice_fields(
     booking_number: str,
     payment_link: str,
     invoice_id: str = "",
+    amount_cents: Optional[int] = None,
 ) -> None:
     """Write link fields onto bond_cases + active_bonds by booking_number / bond id."""
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -1106,6 +1130,7 @@ async def _persist_invoice_fields(
         "swipesimple_payment_link": payment_link,
         "swipesimple_invoice_created_at": now_iso,
         "swipesimple_invoice_bond_id": bond_id,
+        "swipesimple_invoice_amount_cents": amount_cents,
         "swipesimple_invoice_unresolved": False,
         "payment_status": bond.get("payment_status") or "sent",
         "updated_at": now_iso,
@@ -1475,7 +1500,7 @@ async def create_locked_invoice(bond_id: str) -> Dict[str, Any]:
     # intake-promote 10% estimate / bond_cases vs active_bonds disagreement
     # never reaches SwipeSimple.
     premium = await resolve_premium_across_collections(bond, booking_number)
-    _ = premium_dollars_to_cents(premium)
+    premium_cents = premium_dollars_to_cents(premium)
 
     existing = _existing_payment_link(bond)
     if existing and (
@@ -1483,6 +1508,7 @@ async def create_locked_invoice(bond_id: str) -> Dict[str, Any]:
         or str(bond.get("swipesimple_invoice_number") or "") == booking_number
         or bond.get("swipesimple_payment_link")
     ):
+        _reject_unproven_invoice_amount(bond, premium_cents)
         logger.info(
             "[ss_invoice] idempotent hit bond_id=%s has_link=%s has_invoice_id=%s",
             bond_id,
@@ -1520,6 +1546,7 @@ async def create_locked_invoice(bond_id: str) -> Dict[str, Any]:
             booking_number=booking_number,
             payment_link=payment_link,
             invoice_id=vendor_id_existing,
+            amount_cents=premium_cents,
         )
         return {
             "ok": True,
@@ -1604,6 +1631,7 @@ async def create_locked_invoice(bond_id: str) -> Dict[str, Any]:
         booking_number=booking_number,
         payment_link=payment_link,
         invoice_id=str(http_result.get("invoice_id") or ""),
+        amount_cents=premium_cents,
     )
     await _finish_invoice_claim(
         claim_key,

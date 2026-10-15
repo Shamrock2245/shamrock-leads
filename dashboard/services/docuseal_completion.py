@@ -763,10 +763,14 @@ class _Run:
                         self.pfx, share_skip, self.packet_id)
             await self.stamp(STEP_SHARE, "skipped", reason=share_skip)
             return
-        from dashboard.services.packet_payment_link_service import confirmed_premium
+        from dashboard.services.premium_confirmation_service import (
+            confirmation_complete,
+            confirmed_case_doc,
+        )
         from dashboard.services import swipesimple_invoice_service as _ss
 
-        if confirmed_premium(self.doc, None) <= 0:
+        confirmed_doc = self.doc if confirmation_complete(self.doc) else await confirmed_case_doc(self.doc)
+        if not confirmation_complete(confirmed_doc):
             logger.info("%s share_invoice skipped reason=premium_unconfirmed packet=%s",
                         self.pfx, self.packet_id)
             await self.stamp(STEP_SHARE, "skipped", reason="premium_unconfirmed")
@@ -789,7 +793,7 @@ class _Run:
                 invoice_due_cents,
             )
 
-            due = invoice_due_cents(self.doc)
+            due = invoice_due_cents(confirmed_doc)
             logger.info(
                 "%s share_invoice dry-run SWIPESIMPLE_LIVE off bond_id=%s amount_cents=%s",
                 self.pfx, share_bond_id, due,

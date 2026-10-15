@@ -150,13 +150,14 @@ class InvoiceStore:
             "status_code": 302,
         }
 
-    async def persist(self, _bond, *, bond_id, booking_number, payment_link, invoice_id=""):
+    async def persist(self, _bond, *, bond_id, booking_number, payment_link, invoice_id="", amount_cents=None):
         self.bond.update(
             {
                 "swipesimple_payment_link": payment_link,
                 "swipesimple_invoice_id": invoice_id,
                 "swipesimple_invoice_number": booking_number,
                 "swipesimple_invoice_bond_id": bond_id,
+                "swipesimple_invoice_amount_cents": amount_cents,
             }
         )
 

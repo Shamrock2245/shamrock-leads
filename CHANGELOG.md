@@ -3,6 +3,19 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-15 (premium confirmation fail-closed)
+
+### Fixed
+- **One confirmation transaction, including paid in full.** `POST /api/paperwork/confirm-premium` writes the packet, bond case, active bond, payment plan, and `premium_confirmed` audit row in one MongoDB transaction. No replica set or Atlas means 503 `transactions_unavailable` and nothing is saved. A failed audit or plan write rolls the confirmation back.
+- **#165 identity gate on confirm.** An unverified indemnitor gets 422 `indemnitor_identity_unverified`. A `TEST-` booking is not exempt on this route. Nothing is written.
+- **Plan adapter.** When `dashboard.services.payment_plan_creation.ensure_payment_plan_for_confirmation` is present, confirmation calls it inside the same transaction. `PlanTermsConflict` is 409. `ValueError` is 400. `NotImplementedError` is 503 `plan_unavailable` and the confirmation rolls back. A missing module keeps this service's own `payment_plans` row (`source: premium_confirmation`), which the installment stack reads.
+- **Signing invoice follows the bond case.** DocuSeal completion reads a confirmed bond case or active bond when the packet itself has no trio, so a packet created after confirmation is not stamped `premium_unconfirmed`. An unconfirmed case still stamps `premium_unconfirmed`.
+- **Existing SwipeSimple link must match the confirmed amount.** A stored link with no `swipesimple_invoice_amount_cents` after a staff confirmation, or cents that differ from the confirmed down payment, is not returned. The error is `invoice_amount_unproven` or `invoice_amount_mismatch`. No SwipeSimple call is made. A link with no confirmation and no stored cents still returns as before.
+- **`SAAS_MULTI_TENANT` off still confirms.** Shamrock writes the bond with the flag off. Tenant scope applies only when the flag is on, and another agency's row is not updated.
+
+### Tests
+- `tests/test_premium_confirmation.py` (already on the `ci.yml` list). Covers identity 422 with zero writes, paid-in-full rollback, plan conflict 409, plan stub 503, no SwipeSimple / DocuSeal / email / SMS calls, confirmation before a packet exists, and the invoice amount fail-closed.
+
 ## [Unreleased] — 2026-10-14 (Polk / Volusia / Pasco: unpublished bond is "", never a counted 0)
 
 ### Fixed
