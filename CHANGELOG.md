@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-15 (Lee bulk roster: unknown status is "")
+
+### Fixed
+- **`LeeCountyScraper._normalize_record` no longer defaults every roster row to "In Custody".** The roster merges `/public-api/bookings?inCustody=true` with a `startBooking`/`endBooking` date range that also lists released and bonded rows (per the scraper's own variant comment and the 2026-10-08 source contract: rows publish `inCustody` and `releaseDate`). Status is now "In Custody" only when the row publishes `inCustody: true`, "Released" on a release date or `inCustody: false`, the published `status`/`currentStatus` when present, else `""`. `""` is blocked by the #220 outreach guard. Stored rows are not touched. Tests: `tests/test_lee_roster_status_unknown.py`.
+
 ## [Unreleased] — 2026-10-15 (Lee scraper refresh: missing inCustody flag is "")
 
 ### Fixed
