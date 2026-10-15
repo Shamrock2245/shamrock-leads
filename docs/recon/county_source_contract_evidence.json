@@ -947,10 +947,10 @@
     {
       "state": "FL",
       "county_fips": "087",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "fail_closed",
+      "official_source_url": "https://data.keysso.net/api/arrests",
+      "access_posture": "2026-10-15 ~9:10 AM ET from the agent box: one plain HTTPS GET, honest UA, certificate verified, HTTP 200 JSON (63 rows), no challenge; not an access problem, an identifier problem",
+      "evidence_note": "2026-10-15 source-contract check (`docs/recon/FL_MONROE_FAIL_CLOSED_2026-10-15.md`): the Keys SO arrest-log JSON has no source booking number. The old parser keyed rows on the MNI in the mugshot filename (`MCSO<YY>MNI<NNNNNN>`, a person-level Master Name Index id, the Hendry problem) or a synthesized `MONROE-{OffenseNo or CADno}`; the offense number is not proven to be one-per-booking. It is an arrest log, so there is no custody field. Fail closed per CoS 2026-10-15 until the offense-number key is proven per booking. `monroe.py` is `SOURCE_CONTRACT_VALIDATED=False` and fetches nothing; the honest-HTTPS parser (unknown bond \"\", published 0 kept, Status \"\") is kept. Rows already stored are untouched."
     },
     {
       "state": "FL",

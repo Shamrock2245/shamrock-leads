@@ -55,13 +55,37 @@ _MNI_RE = re.compile(r"ArrestLogs/([A-Z0-9]+?)L?\.(?:jpg|jpeg|png)", re.I)
 
 
 class MonroeCountyScraper(BaseScraper):
-    """Monroe County (FL) — Keys SO official arrest-log JSON API."""
+    """Monroe County (FL) — Keys SO official arrest-log JSON API.
+
+    FAIL CLOSED (CoS 2026-10-15): the feed has no source booking number. Rows
+    are keyed on the MNI in the mugshot filename (a person-level Master Name
+    Index id, the Hendry problem) or a synthesized ``MONROE-{OffenseNo|CADno}``,
+    and the offense number is not yet proven to be one-per-booking. Until it
+    is, ``scrape()`` makes no source request and returns nothing, so nothing
+    is written. The parser below is kept (honest HTTPS, no invented bond or
+    custody) for when the key is proven.
+    """
+
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "Keys SO arrest log has no source booking number; rows key on a "
+        "person-level MNI (mugshot filename) or a synthesized MONROE-{OffenseNo|CADno}; "
+        "the offense-number key is not proven per booking. Refuse emission."
+    )
 
     @property
     def county(self) -> str:
         return "Monroe"
 
     def scrape(self) -> List[ArrestRecord]:
+        if not self.SOURCE_CONTRACT_VALIDATED:
+            logger.warning("Monroe: SOURCE_CONTRACT_VALIDATED=False — %s", self.SOURCE_CONTRACT_REASON)
+            return []
+        return self._fetch_and_parse()
+
+    def _fetch_and_parse(self) -> List[ArrestRecord]:
+        """Unguarded fetch + parse. Only scrape() may call it, and only once the
+        source contract is validated; tests call it directly."""
         logger.info("📡 %s: Fetching Keys SO arrest API...", self.county)
         session = make_session(HEADERS)
         resp = request(session, "GET", API_URL, timeout=45, county="Monroe")

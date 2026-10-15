@@ -82,7 +82,7 @@ def test_highlands_fields(fake):
 
 def test_monroe_fields(fake):
     calls = fake(MO)
-    recs = {r.Booking_Number: r for r in mo.MonroeCountyScraper().scrape()}
+    recs = {r.Booking_Number: r for r in mo.MonroeCountyScraper()._fetch_and_parse()}
     assert calls[0]["headers"]["User-Agent"] == HONEST_USER_AGENT and calls[0]["kw"].get("verify") is True
     assert recs["MCSO78MNI183475"].Bond_Amount == "0"   # published 0 kept
     assert recs["MONROE-CAD-9"].Bond_Amount == ""
@@ -90,12 +90,17 @@ def test_monroe_fields(fake):
     assert all(r.Status == "" for r in recs.values())
 
 
+def _run(cls):
+    # Monroe is fail_closed: exercise its (kept) fetch path directly.
+    return cls()._fetch_and_parse() if cls is mo.MonroeCountyScraper else cls().scrape()
+
+
 @pytest.mark.parametrize("cls", [hl.HighlandsCountyScraper, mo.MonroeCountyScraper])
 @pytest.mark.parametrize("code", [401, 403, 429])
 def test_block_fails_visibly(fake, cls, code):
     fake(status=code)
     with pytest.raises(EgressBlocked) as ei:
-        cls().scrape()
+        _run(cls)
     assert str(ei.value).startswith("egress_block:")
 
 
@@ -103,5 +108,21 @@ def test_block_fails_visibly(fake, cls, code):
 def test_bad_certificate_fails_visibly(fake, cls):
     fake(exc=requests.exceptions.SSLError("certificate verify failed"))
     with pytest.raises(SourceTLSInvalid) as ei:
-        cls().scrape()
+        _run(cls)
     assert str(ei.value).startswith("tls_cert_invalid:")
+
+
+def test_monroe_fail_closed_makes_no_request(fake):
+    calls = fake(MO)
+    assert mo.MonroeCountyScraper.SOURCE_CONTRACT_VALIDATED is False
+    assert mo.MonroeCountyScraper().scrape() == []
+    assert calls == []
+
+
+def test_monroe_health_fail_closed_and_guarded():
+    from config.source_guard import fail_closed_reason
+    from dashboard.extensions import scraper_source_state
+    assert scraper_source_state("Monroe (FL)") == "fail_closed"
+    assert scraper_source_state("Highlands (FL)") == "unverified"
+    assert fail_closed_reason(scraper=mo.MonroeCountyScraper())
+    assert fail_closed_reason(url="https://data.keysso.net/api/arrests")

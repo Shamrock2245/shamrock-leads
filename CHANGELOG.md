@@ -11,6 +11,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Monroe bond:** missing / `NO BOND` / text is `""` (was `"0"`); a published `0` stays `"0"`.
 - **Custody:** both hard-coded `Status="In Custody"`. Highlands' feed has no custody field and Monroe's is an arrest log, so Status is `""`.
 
+### Changed
+- **Monroe (FL) is now `fail_closed` (CoS 2026-10-15), with no source request and no writes.** The Keys SO arrest log has no booking number. Rows were keyed on the MNI in the mugshot filename (a person-level Master Name Index id, the Hendry problem) or a synthesized `MONROE-{OffenseNo|CADno}`, and the offense number is not proven to be one-per-booking. `monroe.py` is `SOURCE_CONTRACT_VALIDATED=False` and `scrape()` returns `[]` before any request. The parser cleanup above is kept in `_fetch_and_parse()`. Health `SCRAPER_SOURCE_STATES["Monroe (FL)"]="fail_closed"`, `keysso.net` is added to `source_guard.SOURCE_HOST_LABELS`, the evidence files and the matrix are updated (`build_recon_matrix.py --check` ok), and the reasoning is in `docs/recon/FL_MONROE_FAIL_CLOSED_2026-10-15.md`. Highlands stays `unverified`.
+
 ### Tests
 - `tests/test_fl_highlands_monroe_plain_https.py` and `tests/test_monroe_scraper.py` (both added to the `ci.yml` list; the latter now patches `plain_http.request` and asserts NO BOND is `""`).
 
