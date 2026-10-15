@@ -642,7 +642,13 @@ class LeeCountyScraper(BaseScraper):
         zip_code = self._safe(raw.get("zip") or raw.get("zipcode") or raw.get("postalCode"))
 
         # Determine status and release date
-        status = "In Custody"
+        # Status only as the source published it. The roster merges an
+        # inCustody=true query with a booking-date range that also lists
+        # released / bonded rows, so a row with no custody flag, release date
+        # or status is unknown (""), never an invented "In Custody".
+        status = ""
+        if raw.get("inCustody") is True or raw.get("in_custody") is True:
+            status = "In Custody"
         release_date = ""
         release_raw = raw.get("releaseDate") or raw.get("release_date") or ""
         if release_raw:
