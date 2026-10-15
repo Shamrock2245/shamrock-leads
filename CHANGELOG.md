@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Palm Beach (FL) no longer drives a Chrome browser or sends a Chrome User-Agent.** `palm_beach.py` reads the PBSO blotter with `scrapers.plain_http` (honest UA, certificate verified). It submits the page's own date-search form, parses cards with `parse_pbso_html`, and follows the page's own pagination links. The hCaptcha wait loop is gone: a challenge page (including hCaptcha) or 401/403/429 raises `egress_block:`, a dropped handshake raises `egress_block: ... connection_reset:`, a certificate failure raises `tls_cert_invalid:`, and a missing search form raises `PalmBeachSourceChanged`. `_fetch_single_booking` uses the same honest session, and a block now raises instead of reading as "not found". The one honest probe from the agent box (2026-10-15) got **connection_reset**. Tests: `tests/test_fl_palmbeach_plain_https.py`.
 - **Palm Beach records never default status to "In Custody".** `_row_to_arrest_record` uses `row.get("status") or ""`, so an unknown status is `""` and a published one (e.g. `Released` from a card release date via `pbso_parse`) is kept. The blotter isn't custody-only (#233).
 
+## [Unreleased] — 2026-10-15 (Newberry SC: honest identity; published-only bond/status)
+
+### Fixed
+- **Newberry (SC) drops the Chrome User-Agent and `verify=False`.** `newberry.py` sends the inmate-search page and PDF requests through `scrapers.plain_http` via `_HonestSession` (honest UA, certificate verified). A block or bad certificate raises `egress_block:` / `tls_cert_invalid:`, and a missing PDF or unreadable text raises `NewberryContractError` instead of returning `[]`.
+- **Bond is published-only.** It's the explicit `Bond $N` line only; with none it's `""`, and a printed `$0.00` is kept. It never defaults to `"0"` (both layouts).
+- **Status is never invented.** The PDF is "Prisoners/Charges Booked In by Date Range" and lists released people (21 `Released` lines across 32 bookings on 2026-10-15), so it's **not custody-only** and has no current-only label or view. A published `Released <date>` line gives `Released` + `Release_Date` (`status_source="published_release_line"`); anything else is `""`. `Booking_Date` is no longer back-filled from the release date. Probe: page and PDF **HTTP 200** (`docs/recon/SC_NEWBERRY_ROSTER_SCOPE_2026-10-15.md`). Tests: `tests/test_sc_newberry_honest.py`.
+
 ## [Unreleased] — 2026-10-15 (Florence SC: honest identity; published-only bond; no invented custody)
 
 ### Fixed
