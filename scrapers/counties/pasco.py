@@ -8,6 +8,7 @@ import logging
 import datetime
 from typing import List
 from scrapers.base_scraper import BaseScraper
+from scrapers.published_bond import charge_bond_amount, total_published_bond
 from scrapers.plain_http import make_session, request
 from scrapers.scraper_resilience import AntiBotBlocked
 from core.models import ArrestRecord
@@ -86,7 +87,7 @@ class PascoCountyScraper(BaseScraper):
             booking_time = x.get("bookingTime", "")
             
             charges_str = ""
-            total_bond = 0.0
+            charge_bonds = []  # published amounts per charge; None = unknown
             
             # Fetch detailed charges/bonds only for recent bookings
             if is_recent and name_id:
@@ -100,15 +101,14 @@ class PascoCountyScraper(BaseScraper):
                         for c in charge_list:
                             c_code = c.get("arrestCharge", "").strip()
                             c_desc = c.get("chargeDescription", "").strip()
-                            c_bond = c.get("bondAmount", "0").strip()
+                            c_bond = str(c.get("bondAmount") or "").strip()
                             
                             item = f"{c_code} - {c_desc}" if c_code and c_desc else c_code or c_desc
                             if item:
                                 charge_items.append(item)
                                 
                             # Parse bond
-                            bond_val = self._parse_bond_val(c_bond)
-                            total_bond += bond_val
+                            charge_bonds.append(charge_bond_amount(c_bond))
                             
                         charges_str = " | ".join(charge_items)
                 except AntiBotBlocked:
@@ -126,7 +126,7 @@ class PascoCountyScraper(BaseScraper):
                 DOB=dob,
                 Booking_Date=booking_date,
                 Charges=charges_str,
-                Bond_Amount=str(int(total_bond)) if total_bond.is_integer() else f"{total_bond:.2f}",
+                Bond_Amount=total_published_bond(charge_bonds),
                 Status="In Custody",
                 Detail_URL=BASE_URL,
                 Facility=FACILITY,
@@ -137,14 +137,6 @@ class PascoCountyScraper(BaseScraper):
         return records
 
     @staticmethod
-    def _parse_bond_val(bond_str: str) -> float:
-        if not bond_str:
-            return 0.0
-        import re
-        cleaned = re.sub(r"[$,\s]", "", bond_str.strip().upper())
-        if any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
-            return 0.0
-        try:
-            return float(cleaned)
-        except (ValueError, TypeError):
-            return 0.0
+    def _parse_bond_val(bond_str: str):
+        """Published amount (a real 0 included) or None when not published."""
+        return charge_bond_amount(bond_str)

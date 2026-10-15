@@ -16,6 +16,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_payment_log_claims.py` (added to `ci.yml`): charge then refund, refund then charge, `/pay` then refund, refund then `/pay` retry, a forced write-conflict retry on the charge and on `/pay`, a cross-booking charge, a blank booking that does not stamp, refund and failure rows that do not move a balance or stamp, the review-state audit's before and after values, a staff-chain mirror that stamps both bond documents, a needs-review charge alert before the poller marks Gmail read, an applied `/pay` retry that sees a reversal inside the lock, a later booking that enriches or conflicts, and a review alert that drops an internal booking key. No SwipeSimple, Gmail, or live Slack calls.
 
+## [Unreleased] — 2026-10-14 (Polk / Volusia / Pasco: unpublished bond is "", never a counted 0)
+
+### Fixed
+- **Polk, Volusia and Pasco (FL) no longer store an unpublished bond as `"0"`.** Each started its total at `0.0`, read a missing bond as `"0"` / `"0.00"`, and counted NO BOND / HOLD / blank / unparseable text as 0. New `scrapers/published_bond.py` (`charge_bond_amount`, `total_published_bond`) follows the SmartWEB convention. A charge counts only when the source shows a dollar amount, and a real published `0` / `$0.00` is kept as `"0"`. The booking total is the sum only when every charge has a published amount; any unknown charge, no charges, or no charge fetch (Pasco bookings older than the 5-day detail window; Polk with no profile token) gives `""`. Stacked on the Polk/Volusia/Pasco plain-HTTPS PR. Stored rows already written with an invented `"0"` are not touched; a correction needs Leads Ops and the owner's OK.
+
+### Tests
+- `tests/test_fl_pvp_bond_unknown.py` (added to the `ci.yml` list).
+
+
+## [Unreleased] — 2026-10-14 (Collier: plain verified HTTPS, custody unknown)
+
+### Changed
+- **Collier (FL) uses plain `requests` with an honest User-Agent and TLS verified** (`scrapers/plain_http.py`, same helper as the Polk/Volusia/Pasco PR). The curl_cffi `impersonate="chrome120"` calls and the Chrome User-Agent are gone. A bad certificate (`tls_cert_invalid:`) or a 401/403/429 (`egress_block:`) is raised at once and never retried; 429 is no longer retried. The UpdatePanel `pageRedirect` -> `errorpage.aspx` answer now raises `EgressBlocked` instead of parsing as an empty roster.
+- **Collier no longer hard-codes `Status="In Custody"`.** The arrest report publishes no custody field, so `Status` is `""` (unknown).
+- **A blocked Collier refetch stops the First Appearance watcher for that booking.** `_fetch_single_booking` re-raises `AntiBotBlocked`, and the watcher returns no record instead of falling through to its generic browser-UA refetch, so a block is never worked around.
+- **`MongoWriter` never `$set`s a blank `status`.** A blank status means not published, so a stored status (e.g. "Released" from a recheck) is kept. A published status still updates.
+- **Collier stays `unverified`** (CoS 2026-10-14). Two plain reads from the agent box (8:22 / 8:23 AM ET) got the page, but the grid postback redirected to `errorpage.aspx`. Until a plain read works (next: Leads Ops relay), each run fails visibly with `egress_block` rather than being switched off. See `docs/recon/FL_COLLIER_PLAIN_HTTPS_2026-10-14.md`. No stored data touched.
+
+### Tests
+- `tests/test_fl_collier_plain_custody.py` (added to the `ci.yml` list).
+
 ## [Unreleased] — 2026-10-14 (staff TEST identity opt-in)
 
 ### Added
@@ -32,6 +53,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `tests/test_fl_plain_https_polk_volusia_pasco.py` (added to the `ci.yml` list).
+
 
 ## [Unreleased] — 2026-10-14 (powers pack saved to generated reports)
 
