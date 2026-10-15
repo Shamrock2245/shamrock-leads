@@ -9,6 +9,19 @@ Listing rows expose name / age / race / sex / admit date and an
 agency, and the source-issued ``Name ID`` live on the detail page — the
 listing never publishes them. Booking_Number is the detail ``Name ID`` only
 (no FLO_ / name-hash keys). Rows without a parseable Name ID are skipped.
+
+2026-10-15: honest identity, published-only bond, no invented custody.
+Every request goes through scrapers.plain_http (honest User-Agent, certificate
+verified); a 401/403/429, challenge page, dropped handshake or bad certificate
+raises (egress_block: / tls_cert_invalid:) and fails the run instead of
+returning an empty roster. Bond is the sum of the published per-charge Bond
+cells only when every charge publishes one (blank / "No Bond" -> ""; a
+published $0.00 is kept); never "0" by default. Status (CoS decision (b), 2026-10-15): a published
+detail status wins; otherwise rows from the portal's own "Current" view
+(/index, CURRENT_VIEWS) get "In Custody" with status_source
+"published_current_label"; rows from *-released pages or any unknown origin
+get "". The county publishes no population figure to compare against. See
+docs/recon/SC_FLORENCE_ROSTER_SCOPE_2026-10-15.md.
 """
 from __future__ import annotations
 
@@ -17,25 +30,79 @@ import re
 import string
 import time
 from typing import Dict, List, Optional, Set
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
-import urllib3
 from bs4 import BeautifulSoup
 
 from scrapers.base_scraper import BaseScraper
+from scrapers.plain_http import HONEST_USER_AGENT, SourceTLSInvalid
+from scrapers.plain_http import request as plain_request
+from scrapers.published_bond import charge_bond_amount, total_published_bond
+from scrapers.scraper_resilience import EgressBlocked
 from core.models import ArrestRecord
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logger = logging.getLogger(__name__)
 
 PORTAL_URL = "https://booking.fcso.org/index"
+# The portal's own views (scripts/index.js): "Current" stays on index /
+# inmates / charges; "Released" goes to *-released pages.
+CURRENT_VIEWS = frozenset({"index", "inmates", "charges"})
+RELEASED_VIEWS = frozenset({"index-released", "inmates-released", "charges-released"})
+CURRENT_STATUS = "In Custody"
+STATUS_SOURCE_CURRENT = "published_current_label"
+STATUS_SOURCE_PUBLISHED = "published_status"
+
+
+def source_view(url: str) -> str:
+    """'current' / 'released' / '' (unknown) from the portal page a row came from."""
+    path = (urlparse(url or "").path or "").rstrip("/").rsplit("/", 1)[-1].lower()
+    if (urlparse(url or "").hostname or "").lower() != "booking.fcso.org":
+        return ""
+    if path in RELEASED_VIEWS:
+        return "released"
+    if path in CURRENT_VIEWS:
+        return "current"
+    return ""
+
+
+def custody_status(view: str, published: str = "") -> tuple:
+    """(Status, status_source). Published wins; Current view -> In Custody; else ""."""
+    if published:
+        return published, STATUS_SOURCE_PUBLISHED
+    if view == "current":
+        return CURRENT_STATUS, STATUS_SOURCE_CURRENT
+    return "", ""
 ORIGIN = "https://booking.fcso.org"
 REQUEST_PAUSE_S = 0.3
 DETAIL_PAUSE_S = 0.25
 MAX_DETAIL_FETCHES = 800
-_MONEY = re.compile(r"\$\s*([\d,]+(?:\.\d{1,2})?)")
 _NAME_ID = re.compile(r"^\d{2,}$")
+
+
+_BLOCKS = (EgressBlocked, SourceTLSInvalid)
+
+
+class FlorenceContractError(RuntimeError):
+    """The roster no longer matches the verified contract (every letter failed)."""
+
+
+class _HonestSession(requests.Session):
+    """requests.Session whose every call goes through plain_http (honest UA, verify on, typed blocks)."""
+
+    def __init__(self):
+        super().__init__()
+        self.headers.update({"User-Agent": HONEST_USER_AGENT})
+        self.verify = True
+
+    def request(self, method, url, **kwargs):  # noqa: D401
+        sess = self
+
+        class _Raw:
+            def request(self, m, u, **kw):
+                return requests.Session.request(sess, m, u, **kw)
+
+        return plain_request(_Raw(), method, url, county="Florence", **kwargs)
 
 
 class FlorenceScraper(BaseScraper):
@@ -56,12 +123,8 @@ class FlorenceScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         start = time.time()
-        session = requests.Session()
+        session = _HonestSession()
         session.headers.update({
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-            ),
             "Referer": PORTAL_URL,
             "Origin": ORIGIN,
         })
@@ -69,25 +132,27 @@ class FlorenceScraper(BaseScraper):
         seen_list: Set[str] = set()
         roster: List[dict] = []
 
-        try:
-            for letter in string.ascii_uppercase:
-                try:
-                    rows = self._search_letter(session, letter)
-                except Exception as e:
-                    logger.warning(f"Florence letter {letter}: {e}")
+        failed_letters = 0
+        for letter in string.ascii_uppercase:
+            try:
+                rows = self._search_letter(session, letter)
+            except _BLOCKS:
+                raise  # blocked or bad certificate: fail visibly, never an empty success
+            except Exception as e:
+                failed_letters += 1
+                logger.warning("Florence letter %s: %s", letter, type(e).__name__)
+                continue
+            for row in rows:
+                key = row.get("detail_url") or (
+                    f"{row['name']}|{row.get('booked','')}|{row.get('age','')}"
+                )
+                if key in seen_list:
                     continue
-                for row in rows:
-                    key = row.get("detail_url") or (
-                        f"{row['name']}|{row.get('booked','')}|{row.get('age','')}"
-                    )
-                    if key in seen_list:
-                        continue
-                    seen_list.add(key)
-                    roster.append(row)
-                time.sleep(REQUEST_PAUSE_S)
-        except Exception as e:
-            logger.error(f"Florence scrape failed: {e}")
-            return []
+                seen_list.add(key)
+                roster.append(row)
+            time.sleep(REQUEST_PAUSE_S)
+        if failed_letters == len(string.ascii_uppercase):
+            raise FlorenceContractError("Florence: every letter search failed")
 
         records: List[ArrestRecord] = []
         seen_booking: Set[str] = set()
@@ -100,6 +165,8 @@ class FlorenceScraper(BaseScraper):
                     detail = self._parse_detail(session, detail_url)
                     detail_fetches += 1
                     time.sleep(DETAIL_PAUSE_S)
+                except _BLOCKS:
+                    raise
                 except Exception as e:
                     logger.debug("Florence detail %s: %s", detail_url, e)
             rec = self._to_record(row, detail)
@@ -120,7 +187,7 @@ class FlorenceScraper(BaseScraper):
         return records
 
     def _search_letter(self, session: requests.Session, letter: str) -> List[dict]:
-        resp = session.get(PORTAL_URL, timeout=25, verify=False)
+        resp = session.get(PORTAL_URL, timeout=25)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
         data = self._all_fields(soup)
@@ -135,9 +202,13 @@ class FlorenceScraper(BaseScraper):
         if "DaysSearchBox" in data:
             data["DaysSearchBox"] = ""
 
-        resp = session.post(PORTAL_URL, data=data, timeout=40, verify=False)
+        resp = session.post(PORTAL_URL, data=data, timeout=40)
         resp.raise_for_status()
-        return self._parse_grid(BeautifulSoup(resp.text, "html.parser"))
+        rows = self._parse_grid(BeautifulSoup(resp.text, "html.parser"))
+        view = source_view(getattr(resp, "url", "") or "")  # unknown origin -> ""
+        for row in rows:
+            row["source_view"] = view
+        return rows
 
     @staticmethod
     def _all_fields(soup: BeautifulSoup) -> Dict[str, str]:
@@ -184,7 +255,7 @@ class FlorenceScraper(BaseScraper):
         return rows_out
 
     def _parse_detail(self, session: requests.Session, url: str) -> Dict[str, str]:
-        resp = session.get(url, timeout=30, verify=False, headers={"Referer": PORTAL_URL})
+        resp = session.get(url, timeout=30, headers={"Referer": PORTAL_URL})
         resp.raise_for_status()
         return self.parse_detail_html(resp.text)
 
@@ -211,11 +282,13 @@ class FlorenceScraper(BaseScraper):
                 info["age"] = value
             elif label_l == "race":
                 info["race"] = value
+            elif label_l in ("status", "custody status", "inmate status"):
+                info["status"] = value
             elif label_l in ("sex", "gender"):
                 info["sex"] = value[:1].upper()
 
         charges: List[str] = []
-        total_bond = 0.0
+        charge_bonds: List[Optional[float]] = []  # published per-charge amounts; None = unknown
         bond_types: List[str] = []
         agencies: List[str] = []
 
@@ -228,7 +301,8 @@ class FlorenceScraper(BaseScraper):
                 continue
             if charge.lower() in ("charge", "count=1", "loading…", "loading..."):
                 continue
-            if charge not in charges:
+            new_charge = charge not in charges
+            if new_charge:
                 charges.append(charge)
 
             # Column order observed 2026-10-07:
@@ -237,11 +311,8 @@ class FlorenceScraper(BaseScraper):
             bond_type_cell = cells[4] if len(cells) > 4 else ""
             agency_cell = cells[5] if len(cells) > 5 else ""
 
-            for raw in _MONEY.findall(bond_cell or ""):
-                try:
-                    total_bond += float(raw.replace(",", ""))
-                except ValueError:
-                    pass
+            if new_charge:
+                charge_bonds.append(charge_bond_amount(bond_cell))
 
             if bond_type_cell and bond_type_cell not in bond_types:
                 bond_types.append(bond_type_cell)
@@ -250,8 +321,9 @@ class FlorenceScraper(BaseScraper):
 
         if charges:
             info["charges"] = " | ".join(charges)
-        if total_bond > 0:
-            info["bond"] = f"{total_bond:.2f}"
+        bond = total_published_bond(charge_bonds)  # "" unless every charge publishes one
+        if bond:
+            info["bond"] = bond
         if bond_types:
             info["bond_type"] = " | ".join(bond_types)
         if agencies:
@@ -278,8 +350,9 @@ class FlorenceScraper(BaseScraper):
 
         booked = detail.get("admit") or row.get("booked") or ""
         charges = detail.get("charges") or ""
-        bond = detail.get("bond") or "0"
+        bond = detail.get("bond") or ""  # unknown stays ""; a published "0" is kept
         bond_type = detail.get("bond_type") or ""
+        status, status_source = custody_status(row.get("source_view", ""), (detail.get("status") or "").strip())
 
         return ArrestRecord(
             County=self.county,
@@ -296,10 +369,11 @@ class FlorenceScraper(BaseScraper):
             Race=str(detail.get("race") or row.get("race") or ""),
             Sex=(detail.get("sex") or row.get("sex") or "")[:1].upper(),
             Charges=charges,
-            Bond_Amount=re.sub(r"[^\d.]", "", str(bond)) or "0",
+            Bond_Amount=bond,
             Bond_Type=bond_type,
             Agency=detail.get("agency") or "",
-            Status="In Custody",
+            Status=status,
+            extra_data={"status_source": status_source, "source_view": row.get("source_view", "")},
             Detail_URL=row.get("detail_url") or PORTAL_URL,
             Facility="Florence County Detention Center",
         )
