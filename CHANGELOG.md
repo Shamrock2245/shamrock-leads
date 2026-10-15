@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-15 (Lee scraper refresh: missing inCustody flag is "")
+
+### Fixed
+- **`LeeCountyScraper._fetch_single_booking` no longer turns a missing `inCustody` flag into "In Custody".** It reuses `url_ingest_service.published_custody_status` (published status string, else an explicit flag mapped to "In Custody"/"Released", else `""`). A `""` status is not in `IN_CUSTODY_STATUSES`, so the #220 outreach guard keeps blocking it. Stored rows are not touched. Tests: `tests/test_lee_scraper_incustody_unknown.py`.
+
 ## [Unreleased] — 2026-10-15 (Lee URL ingest: missing inCustody flag is "")
 
 ### Fixed
