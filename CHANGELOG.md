@@ -8,6 +8,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 - **Palm Beach (FL) no longer drives a Chrome browser or sends a Chrome User-Agent.** `palm_beach.py` reads the PBSO blotter with `scrapers.plain_http` (honest UA, certificate verified). It submits the page's own date-search form, parses cards with `parse_pbso_html`, and follows the page's own pagination links. The hCaptcha wait loop is gone: a challenge page (including hCaptcha) or 401/403/429 raises `egress_block:`, a dropped handshake raises `egress_block: ... connection_reset:`, a certificate failure raises `tls_cert_invalid:`, and a missing search form raises `PalmBeachSourceChanged`. `_fetch_single_booking` uses the same honest session, and a block now raises instead of reading as "not found". The one honest probe from the agent box (2026-10-15) got **connection_reset**. Tests: `tests/test_fl_palmbeach_plain_https.py`.
 
+## [Unreleased] — 2026-10-15 (one financed plan per premium confirmation)
+
+### Added
+- **`ensure_payment_plan_for_confirmation` writes one `payment_plans` row per confirmation.** `dashboard/services/payment_plan_creation.py`. The row uses the premium-confirmation fallback shape (`source: premium_confirmation`, installment `amount_cents`, remainder on the last installment). `_id` and `plan_id` are `sha256(tenant_id|confirmation_id)`, so a row already stored under that key is reused (`created: false`). A fallback row found by booking number and that source is the same plan. Different financed terms raise `PlanTermsConflict`. A passed session joins the caller's transaction. With no session, the plan and the `payment_plan_created` audit row run in `with_transaction`; no replica set raises `transactions_unavailable` and writes nothing. The audit `_id` is `payment-plan-created:{tenant}:{plan_id}`. No index is created on `payments`.
+
+### Tests
+- `tests/test_payment_plan_creation.py` (mocked Mongo only). `tests/test_payment_plan_link_core.py`, which `ci.yml` already names, runs that file in CI.
+
 ## [Unreleased] — 2026-10-15 (Aiken SC: plain honest HTTPS; published-only bond/status)
 
 ### Fixed
