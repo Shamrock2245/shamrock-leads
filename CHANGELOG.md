@@ -8,6 +8,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 - **Palm Beach (FL) no longer drives a Chrome browser or sends a Chrome User-Agent.** `palm_beach.py` reads the PBSO blotter with `scrapers.plain_http` (honest UA, certificate verified). It submits the page's own date-search form, parses cards with `parse_pbso_html`, and follows the page's own pagination links. The hCaptcha wait loop is gone: a challenge page (including hCaptcha) or 401/403/429 raises `egress_block:`, a dropped handshake raises `egress_block: ... connection_reset:`, a certificate failure raises `tls_cert_invalid:`, and a missing search form raises `PalmBeachSourceChanged`. `_fetch_single_booking` uses the same honest session, and a block now raises instead of reading as "not found". The one honest probe from the agent box (2026-10-15) got **connection_reset**. Tests: `tests/test_fl_palmbeach_plain_https.py`.
 
+## [Unreleased] — 2026-10-15 (Palm Beach pbso_parse: no In Custody default)
+
+### Fixed
+- **`scrapers/pbso_parse.py` no longer defaults status to "In Custody".** Both the card default and `row_to_ingest_dict`'s `or "In Custody"` are gone. A published release date gives `Released`, a published `Status:` / `Custody Status:` line is kept as written, and anything else is `""`. The PBSO blotter is **not proven custody-only**: it's a booking-date-range search (`#start_date`/`#end_date`) and its cards publish a `Release Date`, so released people are listed. Parse-only; the request path (#224) and `palm_beach.py` are untouched. Tests: `tests/test_pbso_parse_status.py`.
+
 ## [Unreleased] — 2026-10-15 (Orange FL: honest UA; status published or roster presence)
 
 ### Fixed
