@@ -63,6 +63,7 @@ from core.models import ArrestRecord
 from core.staff_edits import protect_scraped_update, staff_provenance
 from scoring.lead_scorer import LeadScorer
 
+from scrapers.scraper_resilience import AntiBotBlocked
 logger = logging.getLogger(__name__)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
@@ -503,6 +504,14 @@ class FirstAppearanceWatcher:
                     record.LastCheckedMode = "UPDATE"
                     record.LastChecked = datetime.now(timezone.utc).isoformat()
                     return record
+            except AntiBotBlocked as e:
+                # The source refused the county scraper (block / bad TLS). Never
+                # fall through to the generic browser-UA refetch to get around it.
+                logger.warning(
+                    "FirstAppearanceWatcher: source blocked (%s/%s): %s",
+                    county, booking_id, str(e)[:120],
+                )
+                return None
             except Exception as e:
                 logger.warning(
                     f"FirstAppearanceWatcher: county scraper re-fetch failed "

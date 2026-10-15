@@ -6,13 +6,14 @@ Method: Browserless ASP.NET session postback + details parse
 """
 import logging
 import datetime
-import urllib3
 import re
 from typing import List
-from curl_cffi import requests as cffi_requests
 from bs4 import BeautifulSoup
 
 from scrapers.base_scraper import BaseScraper
+from scrapers.published_bond import charge_bond_amount, total_published_bond
+from scrapers.plain_http import make_session, request
+from scrapers.scraper_resilience import AntiBotBlocked
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
@@ -20,7 +21,6 @@ logger = logging.getLogger(__name__)
 FACILITY = "Volusia County Branch Jail"
 COUNTY = "Volusia"
 BASE_URL = "https://volusiamug.vcgov.org/"
-IMPERSONATE = "chrome131"
 
 class VolusiaCountyScraper(BaseScraper):
     @property
@@ -30,16 +30,11 @@ class VolusiaCountyScraper(BaseScraper):
     def scrape(self) -> List[ArrestRecord]:
         logger.info("Volusia: Querying inmate search...")
         
-        session = cffi_requests.Session()
-        session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        })
+        session = make_session()
         
         try:
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            
             # Step 1: GET disclaimer page
-            resp = session.get(BASE_URL, verify=False, timeout=20, impersonate=IMPERSONATE)
+            resp = request(session, "GET", BASE_URL, timeout=20, county="Volusia")
             if resp.status_code != 200:
                 raise Exception(f"Failed to fetch Volusia homepage: HTTP {resp.status_code}")
                 
@@ -64,7 +59,7 @@ class VolusiaCountyScraper(BaseScraper):
             }
             
             post_url = "https://volusiamug.vcgov.org/Disclaimer.aspx"
-            post_resp = session.post(post_url, data=payload, verify=False, timeout=20, impersonate=IMPERSONATE)
+            post_resp = request(session, "POST", post_url, data=payload, timeout=20, county="Volusia")
             if post_resp.status_code != 200:
                 raise Exception(f"Failed to submit disclaimer accept: HTTP {post_resp.status_code}")
                 
@@ -89,7 +84,7 @@ class VolusiaCountyScraper(BaseScraper):
             }
             
             recent_url = "https://volusiamug.vcgov.org/Default.aspx"
-            recent_resp = session.post(recent_url, data=recent_payload, verify=False, timeout=20, impersonate=IMPERSONATE)
+            recent_resp = request(session, "POST", recent_url, data=recent_payload, timeout=20, county="Volusia")
             if recent_resp.status_code != 200:
                 raise Exception(f"Failed to fetch recent bookings list: HTTP {recent_resp.status_code}")
                 
@@ -165,7 +160,7 @@ class VolusiaCountyScraper(BaseScraper):
                 city = ""
                 state = "FL"
                 charges_list = []
-                total_bond = 0.0
+                charge_bonds = []  # published amounts per charge; None = unknown
                 bond_types = []
                 case_number = ""
                 mugshot_url = f"https://volusiamug.vcgov.org/FullsizeMugshotHandler.ashx?InmateRID={inmate_rid}"
@@ -173,7 +168,7 @@ class VolusiaCountyScraper(BaseScraper):
                 # Fetch details page
                 try:
                     logger.debug(f"Volusia: Fetching details for {full_name} ({inmate_rid})")
-                    d_resp = session.get(detail_url, verify=False, timeout=15, impersonate=IMPERSONATE)
+                    d_resp = request(session, "GET", detail_url, timeout=15, county="Volusia")
                     if d_resp.status_code == 200:
                         d_soup = BeautifulSoup(d_resp.text, 'html.parser')
                         
@@ -228,13 +223,14 @@ class VolusiaCountyScraper(BaseScraper):
                                         bond_types.append(c_bond_type)
                                         
                                     # Parse bond amount
-                                    bond_val = self._parse_bond_val(c_bond_amount)
-                                    total_bond += bond_val
+                                    charge_bonds.append(charge_bond_amount(c_bond_amount))
+                except AntiBotBlocked:
+                    raise
                 except Exception as dex:
                     logger.warning(f"Volusia: Failed to parse details for inmate_rid {inmate_rid}: {dex}")
                 
                 charges_str = " | ".join(charges_list)
-                bond_amount_str = str(int(total_bond)) if total_bond.is_integer() else f"{total_bond:.2f}"
+                bond_amount_str = total_published_bond(charge_bonds)
                 bond_type_str = ", ".join(bond_types)
                 
                 records.append(ArrestRecord(
@@ -271,20 +267,13 @@ class VolusiaCountyScraper(BaseScraper):
                 
             logger.info(f"Volusia: parsed {len(records)} records")
             return records
-            
+        except AntiBotBlocked:
+            raise
         except Exception as e:
             logger.error(f"Volusia roster fetch failed: {e}")
             raise
             
     @staticmethod
-    def _parse_bond_val(bond_str: str) -> float:
-        if not bond_str:
-            return 0.0
-        import re
-        cleaned = re.sub(r"[$,\s]", "", bond_str.strip().upper())
-        if any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
-            return 0.0
-        try:
-            return float(cleaned)
-        except (ValueError, TypeError):
-            return 0.0
+    def _parse_bond_val(bond_str: str):
+        """Published amount (a real 0 included) or None when not published."""
+        return charge_bond_amount(bond_str)

@@ -108,8 +108,10 @@ def test_committed_smoke_rows_are_requests_only_until_leads_ops_reports():
     for r in rows:
         if r["label"] in ("Collier (FL)", "Glades (FL)"):
             assert r["blocked_on"].startswith("HOLD")
-    for county in ("Charlotte (FL)", "Manatee (FL)"):
-        assert (county, "relay_read") in by and (county, "relay_write") in by
+    assert ("Charlotte (FL)", "relay_read") in by and ("Charlotte (FL)", "relay_write") in by
+    # Manatee (FL) jail is fail_closed (2026-10-09): its relay read/write
+    # requests were withdrawn 2026-10-12 as moot.
+    assert not any(r["label"] == "Manatee (FL)" for r in rows)
     for r in rows:
         assert r["status"] == "requested"
         assert not r.get("result") and not r.get("run_on") and not r.get("commit")

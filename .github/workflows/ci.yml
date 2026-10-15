@@ -96,6 +96,9 @@ jobs:
             tests/test_hendry_fail_closed.py \
             tests/test_fl_rule_conflict_fail_closed.py \
             tests/test_fl_duval_no_robot_click.py \
+            tests/test_fl_collier_plain_custody.py \
+            tests/test_fl_plain_https_polk_volusia_pasco.py \
+            tests/test_fl_pvp_bond_unknown.py \
             tests/test_fl_idle_eight.py \
             tests/test_fl_bond_charges_hydrate.py \
             tests/test_fl_pinellas_bond_unknown.py \
@@ -108,6 +111,8 @@ jobs:
             tests/test_fl_miami_dade_no_row_id_key.py \
             tests/test_fl_miami_dade_natural_key.py \
             tests/test_booking_key_never_printed.py \
+            tests/test_booking_key_outbound_and_middleware.py \
+            tests/test_manatee_clerk_scraper.py \
             tests/test_fl_sarasota_manatee_audit.py \
             tests/test_fl_charlotte_revize.py \
             tests/test_collier_glades_published_bond.py \
@@ -143,6 +148,8 @@ jobs:
             tests/test_florence_sc_parser.py \
             tests/test_newberry_pdf_scraper.py \
             tests/test_powers_pack.py \
+            tests/test_powers_pack_archive.py \
+            tests/test_powers_pack_history_banner.py \
             tests/test_poa_reassign_release_audit.py \
             tests/test_lee_rate_limit.py \
             tests/test_swipesimple_invoice_service.py \
@@ -200,6 +207,7 @@ jobs:
             tests/test_staff_test_case_write_bond.py \
             tests/test_write_bond_golden_smoke.py \
             tests/test_write_bond_identity_gate.py \
+            tests/test_enforce_identity_flag.py \
             tests/test_count_unverified_open_bondcases.py \
             tests/test_write_bond_template_goldens.py \
             tests/test_surety_review_fixes.py \
