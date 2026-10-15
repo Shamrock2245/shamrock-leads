@@ -45,6 +45,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Status is no longer hard-coded "In Custody". It is set only for an open booking, and only from the listing's published per-row In Custody column (Walton, `status_source = "published_in_custody_column"`) or, without that column, from the source's own echoed "In Custody" filter (Flagler, `"published_in_custody_filter"`). Otherwise it is "".
 - Bond, charges and booking keys are unchanged (published only; source `YYYY-NNNNNNNN`). Tests: `tests/test_fl_newworld_honest.py` (on the ci.yml list). Recon: `docs/recon/FL_NEWWORLD_HONEST_2026-10-15.md`.
 
+## 2026-10-15 — Okaloosa FL: honest identity; no invented custody status
+
+- `scrapers/counties/okaloosa.py`: requests go through `scrapers.plain_http` (honest UA, certificate verified; the Chrome UA is removed). Blocks raise as typed errors (not wrapped as contract errors).
+- Status is "" (was hard-coded "In Custody"). The roster `status` code is never shown by the official app, so it isn't a published custody label, and the roster isn't custody-only (9/100 rows were "0"). The `status == "1"` filter is kept. The detail `releaseDate` ("Released Date" in the app) is recorded as Release_Date when published.
+- Bond (CoS: $0 is unpublished), charges and booking keys are unchanged. Tests: `tests/test_fl_okaloosa_honest.py` (on the ci.yml list); the existing Okaloosa API tests' fake sessions now route through `request`. Recon: `docs/recon/FL_OKALOOSA_HONEST_2026-10-15.md`.
+
 ## [Unreleased] — 2026-10-15 (Gaston NC: honest identity; published-only charges/bond/status)
 
 ### Fixed

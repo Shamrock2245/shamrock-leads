@@ -45,7 +45,7 @@ def test_record_uses_source_booking_and_custody_date():
     assert rec.Booking_Date == "10/07/2026" and rec.Booking_Time == "09:05 PM"
     assert rec.Last_Name == "DOE" and rec.First_Name == "JANE" and rec.Middle_Name == "Q"
     assert rec.DOB == "01/15/1990" and rec.Sex == "F" and rec.Person_ID == "12345"
-    assert rec.Bond_Amount == "" and rec.Status == "In Custody"  # no detail: roster total not trusted
+    assert rec.Bond_Amount == "" and rec.Status == ""  # no detail: roster total not trusted; status code is not a custody label
 
 
 def test_zero_roster_bond_is_unknown_not_zero():
@@ -103,6 +103,7 @@ def test_total_bond_empty_when_any_charge_bond_is_blank():
 class _Resp:
     def __init__(self, data, status=200):
         self._data, self.status_code = data, status
+        self.headers = {"content-type": "application/json"}
 
     def raise_for_status(self):
         if self.status_code != 200:
@@ -116,6 +117,9 @@ def _install(monkeypatch, pages, details, calls):
     class _S:
         def __init__(self):
             self.headers = {}
+
+        def request(self, method, url, **kw):
+            return self.get(url, params=kw.get("params"), timeout=kw.get("timeout"))
 
         def get(self, url, params=None, timeout=None):
             calls.append((url, dict(params or {})))
@@ -202,6 +206,9 @@ def test_detail_request_failure_raises_and_mismatch_skips(monkeypatch):
     class _Down:
         def __init__(self):
             self.headers = {}
+
+        def request(self, method, url, **kw):
+            return self.get(url, params=kw.get("params"), timeout=kw.get("timeout"))
 
         def get(self, url, params=None, timeout=None):
             if url == okaloosa.SEARCH_URL:
