@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-15 (Marion SC host/proxy cleanup; Sarasota evidence matches Health)
+
+### Fixed
+- **Marion (SC) no longer has a source host or proxy path.** `scrapers/counties_sc/marion.py` fetched `jail.marionso.com` (the Marion County FL jail host, not South Carolina's) with an optional SOCKS/residential proxy, `verify=False`, a browser User-Agent, name-hash booking keys and `"0"` bonds. All of that is removed. The module stays `SOURCE_CONTRACT_VALIDATED=False` + Health `fail_closed`, makes no request and guesses no replacement source.
+- **Sarasota (FL) evidence row is `fail_closed`**, matching `SCRAPER_SOURCE_STATES` (was `recon_only`). The matrix rebuild is byte-identical (it already showed `fail_closed`) and `--check` passes.
+
+### Tests
+- `tests/test_marion_sc_sarasota_cleanup.py` (added to the `ci.yml` list).
+
 ## [Unreleased] — 2026-10-14 (FL rule-conflict fail_closed: Hillsborough, Marion)
 
 ### Changed
