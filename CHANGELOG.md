@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-15 (Aiken SC: plain honest HTTPS; published-only bond/status)
+
+### Fixed
+- **Aiken (SC) no longer uses curl_cffi, Chrome impersonation, or `verify=False`.** `aiken.py` reads DTNSearch with `scrapers.plain_http` (honest UA, certificate verified). Blocks raise `egress_block:` / `connection_reset:` / `tls_cert_invalid:` with no verify-off fallback. Bond is published-only (`""` when unknown; a published 0 is kept). Status is never hard-coded "In Custody". Charges default to `""` instead of "Unknown". One honest probe (2026-10-15) of the DTNSearch form got **connection_reset**. Tests: `tests/test_sc_aiken_plain_https.py`.
+
 ## [Unreleased] — 2026-10-15 (Lake: honest UA, published-only status/bond; SolveCaptcha kept)
 
 ### Fixed
