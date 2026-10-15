@@ -258,10 +258,72 @@ def _assert_no_sends(spies):
         spy.assert_not_called()
 
 
+def _install_plan_writer(monkeypatch, stores):
+    """Stand in for Invoicing's plan function. This service does not insert plans."""
+
+    def creator(*, tenant_id="", bond_case_id="", confirmation_id="", financed=None, installments=0, frequency="", actor="", session=None, **kwargs):
+        count = int(installments)
+        cents = int((Decimal(str(financed)) * 100).to_integral_value())
+        base, extra = divmod(cents, count) if count else (0, 0)
+        schedule = [
+            {
+                "n": index + 1,
+                "amount_cents": base + (extra if index == count - 1 else 0),
+                "status": "scheduled",
+            }
+            for index in range(count)
+        ]
+        plans = stores["payment_plans"].docs
+        existing = plans[0] if plans else None
+        if existing and existing.get("confirmation_id") == confirmation_id:
+            return {"plan_id": existing["plan_id"], "created": False, "schedule": existing["installments"]}
+        if existing:
+            existing.update({
+                "confirmation_id": confirmation_id,
+                "bond_case_id": bond_case_id,
+                "installments": schedule,
+                "balance_remaining_cents": cents,
+                "created_by": actor,
+                "source": "premium_confirmation",
+                "frequency": frequency,
+            })
+            return {"plan_id": existing["plan_id"], "created": False, "schedule": schedule}
+        plan = {
+            "plan_id": "plan-TEST-1",
+            "booking_number": BOOKING,
+            "confirmation_id": confirmation_id,
+            "bond_case_id": bond_case_id,
+            "source": "premium_confirmation",
+            "installments": schedule,
+            "balance_remaining_cents": cents,
+            "created_by": actor,
+            "payments_made": 0,
+            "status": "active",
+            "frequency": frequency,
+        }
+        if tenant_id:
+            plan["tenant_id"] = tenant_id
+        plans.append(plan)
+        return {"plan_id": plan["plan_id"], "created": True, "schedule": schedule}
+
+    monkeypatch.setattr(
+        "dashboard.services.premium_confirmation_service.load_plan_creator",
+        lambda: creator,
+    )
+
+
+def _assert_nothing_written(stores):
+    for name in ("paperwork_packets", "bond_cases", "active_bonds"):
+        assert not _confirmed(stores[name].docs[0])
+    assert stores["audit_events"].docs == []
+    assert stores["payment_plans"].docs == []
+    assert not any(doc.get("source") == "premium_confirmation" for doc in stores["payment_plans"].docs)
+
+
 def test_confirm_writes_trio_audit_and_one_plan(monkeypatch):
     stores, get, client = _world()
     _bind(monkeypatch, stores, get)
-    assert load_plan_creator() is None
+    _install_plan_writer(monkeypatch, stores)
     spies = _silence_sends(monkeypatch)
     first = client.post("/api/paperwork/confirm-premium", json=_body(), cookies=_cookie())
     assert first.status_code == 200, first.text
@@ -310,6 +372,7 @@ def test_confirm_writes_trio_audit_and_one_plan(monkeypatch):
 def test_amount_change_requires_reason_and_keeps_history(monkeypatch):
     stores, get, client = _world()
     _bind(monkeypatch, stores, get)
+    _install_plan_writer(monkeypatch, stores)
     assert client.post("/api/paperwork/confirm-premium", json=_body(), cookies=_cookie()).status_code == 200
     blocked = client.post(
         "/api/paperwork/confirm-premium",
@@ -381,6 +444,7 @@ def test_below_filed_rate_needs_a_reason(monkeypatch):
 def test_auth_and_recovery_fail_closed(monkeypatch):
     stores, get, client = _world()
     _bind(monkeypatch, stores, get)
+    _install_plan_writer(monkeypatch, stores)
     missing = client.post("/api/paperwork/confirm-premium", json=_body())
     assert missing.status_code == 401
     recovery = client.post(
@@ -403,6 +467,7 @@ def test_tenant_flag_off_does_not_require_tenant_id(monkeypatch):
     stores, get, client = _world()
     assert "tenant_id" not in stores["active_bonds"].docs[0]
     _bind(monkeypatch, stores, get)
+    _install_plan_writer(monkeypatch, stores)
     response = client.post("/api/paperwork/confirm-premium", json=_body(), cookies=_cookie())
     assert response.status_code == 200
     assert "tenant_id" not in stores["payment_plans"].docs[0]
@@ -469,6 +534,54 @@ def test_plan_terms_conflict_is_409_and_rolls_back(monkeypatch):
     assert stores["audit_events"].docs == []
 
 
+def test_missing_plan_module_writes_nothing(monkeypatch):
+    stores, get, client = _world()
+    _bind(monkeypatch, stores, get)
+    assert load_plan_creator() is None
+    spies = _silence_sends(monkeypatch)
+    response = client.post("/api/paperwork/confirm-premium", json=_body(), cookies=_cookie())
+    assert response.status_code == 503
+    assert response.json()["error"] == "plan_unavailable"
+    _assert_nothing_written(stores)
+    again = client.post("/api/paperwork/confirm-premium", json=_body(), cookies=_cookie())
+    assert again.status_code == 503
+    _assert_nothing_written(stores)
+    _assert_no_sends(spies)
+
+
+def test_non_callable_plan_function_writes_nothing(monkeypatch):
+    import sys
+    import types
+
+    module = types.ModuleType("dashboard.services.payment_plan_creation")
+    module.ensure_payment_plan_for_confirmation = "not-callable"
+    monkeypatch.setitem(sys.modules, "dashboard.services.payment_plan_creation", module)
+    assert load_plan_creator() is None
+
+    stores, get, client = _world()
+    _bind(monkeypatch, stores, get)
+    response = client.post("/api/paperwork/confirm-premium", json=_body(), cookies=_cookie())
+    assert response.status_code == 503
+    assert response.json()["error"] == "plan_unavailable"
+    _assert_nothing_written(stores)
+
+
+def test_paid_in_full_confirms_without_a_plan_module(monkeypatch):
+    stores, get, client = _world()
+    _bind(monkeypatch, stores, get)
+    assert load_plan_creator() is None
+    response = client.post(
+        "/api/paperwork/confirm-premium",
+        json=_body(premium="1500.00", down="1500.00", financed="0.00", installments=0),
+        cookies=_cookie(),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["financed_balance"] == "0.00"
+    assert stores["active_bonds"].docs[0]["premium_confirmed_amount"] == "1500.00"
+    assert stores["payment_plans"].docs == []
+    assert len(stores["audit_events"].docs) == 1
+
+
 def test_unimplemented_plan_is_503_and_rolls_back(monkeypatch):
     stores, get, client = _world()
     _bind(monkeypatch, stores, get)
@@ -513,6 +626,7 @@ def test_confirm_without_a_packet_binds_the_bond_case(monkeypatch):
     stores, get, client = _world()
     stores["paperwork_packets"].docs.clear()
     _bind(monkeypatch, stores, get)
+    _install_plan_writer(monkeypatch, stores)
     body = _body()
     body.pop("packet_id")
     response = client.post("/api/paperwork/confirm-premium", json=body, cookies=_cookie())
@@ -543,6 +657,7 @@ def test_flag_on_does_not_update_another_tenant(monkeypatch):
         "bond_amount": 15000,
     })
     _bind(monkeypatch, stores, get)
+    _install_plan_writer(monkeypatch, stores)
     monkeypatch.setattr(
         "dashboard.services.premium_confirmation_service.current_tenant_id",
         lambda: "shamrock",
@@ -560,6 +675,7 @@ def test_flag_on_does_not_update_another_tenant(monkeypatch):
 def test_later_packet_uses_the_bond_case_confirmation(monkeypatch):
     stores, get, client = _world()
     _bind(monkeypatch, stores, get)
+    _install_plan_writer(monkeypatch, stores)
     spies = _silence_sends(monkeypatch)
     assert client.post("/api/paperwork/confirm-premium", json=_body(), cookies=_cookie()).status_code == 200
     packet = {

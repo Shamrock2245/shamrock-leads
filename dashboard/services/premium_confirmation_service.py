@@ -8,10 +8,14 @@ Who may confirm: the same desk that writes the bond — god_admin, admin,
 staff, and sub_agent. Recovery may not. The actor is the session user.
 ``created_by`` / ``premium_confirmed_by`` in the body are ignored.
 
-A plan is created exactly once when the financed balance is greater than
-zero. A replay of the same amounts returns that plan and does not write a
-second audit row. A different amount is refused unless ``reason`` is set;
-the prior confirmation is kept on ``premium_confirmation_history``.
+When the financed balance is greater than zero, confirmation calls
+``ensure_payment_plan_for_confirmation`` inside the same transaction. If
+that function is missing or not callable, the route returns 503 and writes
+nothing: no plan row, no confirmation stamps, and no audit row. Paid in
+full does not need the plan function. A replay of the same amounts does
+not write a second audit row. A different amount is refused unless
+``reason`` is set; the prior confirmation is kept on
+``premium_confirmation_history``.
 
 A premium under the filed floor (10% of the bond, and at least $100, for
 OSI and Palmetto) is allowed only with ``reason``.
@@ -25,7 +29,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Optional
 
@@ -48,7 +52,6 @@ FINANCED_FIELD = "financed_balance"
 HISTORY_FIELD = "premium_confirmation_history"
 FINGERPRINT_FIELD = "premium_confirmation_fingerprint"
 FREQUENCIES = frozenset({"weekly", "biweekly", "monthly"})
-_PERIOD_DAYS = {"weekly": 7, "biweekly": 14, "monthly": 30}
 _MIN_PREMIUM_CENTS = 10000  # $100 filed minimum, OSI and Palmetto
 _FILED_RATE_NUM = 10
 _FILED_RATE_DEN = 100
@@ -87,11 +90,12 @@ PLAN_FUNC = "ensure_payment_plan_for_confirmation"
 
 
 def load_plan_creator():
-    """Invoicing's plan function, or None when that module is not on this branch.
+    """Invoicing's plan function, or None when it is missing or not callable.
 
-    A missing module keeps this service's own plan writer, which is what the
-    installment stack records. A present function that raises
-    ``NotImplementedError`` fails closed inside the confirmation transaction.
+    A missing module fails closed when the financed balance is greater than
+    zero: 503 and no writes. Paid-in-full confirmation does not call it.
+    A present function that raises ``NotImplementedError`` fails closed
+    inside the confirmation transaction.
     """
     import importlib
 
@@ -181,23 +185,6 @@ def filed_floor_cents(bond_amount: Any) -> int:
         return _MIN_PREMIUM_CENTS
     ten = (bond * _FILED_RATE_NUM) // _FILED_RATE_DEN
     return max(_MIN_PREMIUM_CENTS, ten)
-
-
-def _schedule(financed_cents: int, count: int, frequency: str, now: datetime) -> list[dict]:
-    base, extra = divmod(financed_cents, count)
-    step = _PERIOD_DAYS[frequency]
-    rows = []
-    for index in range(count):
-        cents = base + (extra if index == count - 1 else 0)
-        due = (now + timedelta(days=step * (index + 1))).date().isoformat()
-        rows.append({
-            "n": index + 1,
-            "amount": cents_to_amount(cents),
-            "amount_cents": cents,
-            "due_date": due,
-            "status": "scheduled",
-        })
-    return rows
 
 
 def _fingerprint(premium: int, down: int, financed: int, count: int, frequency: str) -> str:
@@ -761,101 +748,11 @@ async def _ensure_plan(
                 "The payment plan could not be created. Nothing was saved.",
             )
         return result
-    if not booking:
-        raise PremiumConfirmationError("booking_required_for_plan", 400, "A financed plan needs a booking number.")
-    plans = get_collection("payment_plans")
-    query = _scope({"booking_number": booking, "source": PLAN_SOURCE, "status": {"$in": ["active", "paid"]}})
-    try:
-        existing = await plans.find_one(query, **_session_kwargs(session))
-    except Exception as exc:
-        logger.warning("[premium_confirm] plan lookup failed err_type=%s", type(exc).__name__)
-        raise PremiumConfirmationError("plan_lookup_failed", 503) from exc
-    now = datetime.now(timezone.utc)
-    installments = _schedule(financed, count, frequency, now)
-    if existing:
-        if str(existing.get(FINGERPRINT_FIELD) or "") == fingerprint and not replace:
-            return existing
-        if _plan_has_collections(existing):
-            raise PremiumConfirmationError(
-                "plan_payments_started",
-                409,
-                "Payments have already posted to this plan. The financed balance was not changed.",
-            )
-        if not replace and str(existing.get(FINGERPRINT_FIELD) or "") not in ("", fingerprint):
-            raise PremiumConfirmationError("premium_change_requires_reason", 409)
-        try:
-            await plans.update_one(
-                {"plan_id": existing.get("plan_id")},
-                {"$set": {
-                    "total_premium": cents_to_amount(premium),
-                    "total_premium_cents": premium,
-                    "down_payment": cents_to_amount(down),
-                    "down_payment_cents": down,
-                    "balance_remaining": cents_to_amount(financed),
-                    "balance_remaining_cents": financed,
-                    FINANCED_FIELD: cents_to_amount(financed),
-                    "installment_count": count,
-                    "installments": installments,
-                    "installment_amount": installments[0]["amount"] if installments else cents_to_amount(0),
-                    "frequency": frequency,
-                    "next_due_date": installments[0]["due_date"] if installments else "",
-                    FINGERPRINT_FIELD: fingerprint,
-                    "updated_at": now.isoformat(),
-                    "updated_by": actor,
-                    "change_reason": reason,
-                }},
-                **_session_kwargs(session),
-            )
-        except Exception as exc:
-            logger.warning("[premium_confirm] plan update failed err_type=%s", type(exc).__name__)
-            raise PremiumConfirmationError("plan_write_failed", 503) from exc
-        existing.update({
-            "balance_remaining_cents": financed,
-            "installments": installments,
-            FINGERPRINT_FIELD: fingerprint,
-        })
-        return existing
-
-    source_doc = active or bond_case or packet or {}
-    plan = {
-        "plan_id": uuid.uuid4().hex[:12],
-        "booking_number": booking,
-        "packet_id": (packet or {}).get("packet_id") or "",
-        "bond_case_id": (bond_case or {}).get("bond_case_id") or "",
-        "defendant_name": str(source_doc.get("defendant_name") or source_doc.get("Defendant_Name") or ""),
-        "surety_id": str(source_doc.get("surety_id") or source_doc.get("surety") or ""),
-        "total_premium": cents_to_amount(premium),
-        "total_premium_cents": premium,
-        "down_payment": cents_to_amount(down),
-        "down_payment_cents": down,
-        "balance_remaining": cents_to_amount(financed),
-        "balance_remaining_cents": financed,
-        FINANCED_FIELD: cents_to_amount(financed),
-        "installment_count": count,
-        "installments": installments,
-        "installment_amount": installments[0]["amount"],
-        "frequency": frequency,
-        "next_due_date": installments[0]["due_date"],
-        "payments_made": 0,
-        "total_paid": "0.00",
-        "total_paid_cents": 0,
-        "status": "active",
-        "source": PLAN_SOURCE,
-        FINGERPRINT_FIELD: fingerprint,
-        "delinquent": False,
-        "created_at": now.isoformat(),
-        "updated_at": now.isoformat(),
-        "created_by": actor,
-    }
-    if multi_tenant_enabled():
-        plan["tenant_id"] = current_tenant_id()
-    # The down payment is invoiced. It is not marked paid here.
-    try:
-        await plans.insert_one(plan, **_session_kwargs(session))
-    except Exception as exc:
-        logger.warning("[premium_confirm] plan insert failed err_type=%s", type(exc).__name__)
-        raise PremiumConfirmationError("plan_write_failed", 503) from exc
-    return plan
+    raise PremiumConfirmationError(
+        "plan_unavailable",
+        503,
+        "The payment plan could not be created. Nothing was saved.",
+    )
 
 
 def _plan_has_collections(plan: dict) -> bool:
