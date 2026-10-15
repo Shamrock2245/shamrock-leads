@@ -39,6 +39,8 @@ SOURCE_HOST_LABELS = {
     "colliersheriff.org": "Collier (FL)",
     "hendryso.com": "Hendry (FL)",
     "desotosheriff.com": "DeSoto (FL)",
+    # The jail roster actually lives on .org (jail.desotosheriff.org).
+    "desotosheriff.org": "DeSoto (FL)",
     "manateesheriff.com": "Manatee (FL)",
     "manatee-sheriff.revize.com": "Manatee (FL)",
     # Clerk court records: its own scope (owner exception 2026-10-10), not the jail.

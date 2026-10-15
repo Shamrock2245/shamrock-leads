@@ -1,378 +1,253 @@
 """
-DeSoto County Arrest Scraper — DevExpress Grid with DrissionPage.
+DeSoto County (FL) jail roster — DCN DevExpress grid over plain, honest HTTPS.
 
-Source: DeSoto County Sheriff's Office jail roster
-URL: https://jail.desotosheriff.org/DCN/inmates
-Method: DrissionPage browser automation (Chromium headless)
+Source: https://jail.desotosheriff.org/DCN/inmates (DeSoto County Sheriff's Office)
 
-Architecture:
-1. Load roster page → sort by Admit Date descending (newest first)
-2. Paginate through DevExpress grid → collect inmate detail links
-3. Visit each detail page → extract demographics, charges, bond
-4. Date-gated: stops when records fall outside the cutoff window
+FAIL CLOSED since 2026-10-15 (docs/recon/FL_DESOTO_FAIL_CLOSED_2026-10-15.md):
+``scrape()`` returns ``[]`` before any request; nothing is written.
 
-Note: DeSoto uses a DevExpress ASP.NET grid (same component as many FL jails).
-Requires DrissionPage for JavaScript-rendered pagination and AJAX sorting.
+Source-contract status (docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md):
+  * Roster: Full Name / Age / Race / Sex / Admit Date, each row linking to
+    ``inmate-details?id=…&bid=…``. Page 1 is server-rendered; pages 2..N come from
+    the grid's own DevExpress pager callback (``scrapers.dcn_base``).
+  * No printed booking number. CoS (2026-10-08): ``bid`` is the jail site's
+    internal record id, not a source booking number, so DeSoto stays
+    ``recon_only`` / Health ``unverified``; CoS then chose fail_closed
+    (2026-10-15). The kept fetch path keys rows on ``bid`` exactly as before and
+    drops rows without one (never a synthesized name/date hash).
 
-Ported from: swfl-arrest-scrapers/python_scrapers/scrapers/desoto_solver.py
+Honest access and no invented values (2026-10-15):
+  * Replaces the DrissionPage browser (stealth Chrome UA,
+    ``--ignore-certificate-errors``) with ``scrapers.plain_http``: honest
+    User-Agent, certificate verified. 401/403/429 or a challenge raises
+    ``egress_block:``, a real certificate failure ``tls_cert_invalid:``; nothing
+    works around a block.
+  * Bond: a charge counts only when the source shows a dollar amount (a
+    published 0 is kept); any blank / NO BOND / text charge, or no charges,
+    makes the booking bond ``""``.
+  * Status: "Released" only when the detail page publishes a release date;
+    otherwise ``""`` (the source never says "in custody").
 """
+from __future__ import annotations
 
 import logging
 import re
 import time
-from datetime import datetime, timedelta
-from typing import List, Optional, Tuple
-from urllib.parse import urljoin, urlparse, parse_qs, unquote
+from typing import Dict, List, Optional
+from urllib.parse import urljoin
 
+import requests
 from bs4 import BeautifulSoup
 
-from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
+from scrapers.dcn_base import DCNBaseScraper
+from scrapers.plain_http import HONEST_USER_AGENT, request as plain_request
+from scrapers.published_bond import charge_bond_amount, total_published_bond
 
 logger = logging.getLogger(__name__)
 
-# ── Config ──
 BASE_URL = "https://jail.desotosheriff.org"
 INMATES_URL = f"{BASE_URL}/DCN/inmates"
-DAYS_BACK = 90  # Extended: capture all in-custody inmates (some booked weeks/months ago)
-MAX_PAGES = 10
-DETAIL_DELAY_S = 1.0
+FACILITY = "DeSoto County Jail"
+
+_NO_RELEASE = {"", "N/A", "NA", "NONE", "-"}
 
 
-class DeSotoCountyScraper(BaseScraper):
-    """DeSoto County (FL) arrest scraper — DevExpress grid via DrissionPage."""
+class _HonestSession(requests.Session):
+    """requests.Session whose every call goes through plain_http (verify on, typed blocks)."""
+
+    def __init__(self, county: str):
+        super().__init__()
+        self._county = county
+        self.headers.update({
+            "User-Agent": HONEST_USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        })
+        self.verify = True
+
+    def request(self, method, url, **kwargs):  # noqa: D401
+        sess = self
+
+        class _Raw:
+            def request(self, m, u, **kw):
+                return requests.Session.request(sess, m, u, **kw)
+
+        return plain_request(_Raw(), method, url, county=self._county, **kwargs)
+
+
+def parse_detail(html: str, url: str = INMATES_URL) -> Dict[str, str]:
+    """DeSoto detail page -> plain fields. Bond is published-only ("" when unknown)."""
+    soup = BeautifulSoup(html or "", "html.parser")
+    info: Dict[str, str] = {}
+
+    name_el = soup.find("h3", class_="header-text") or soup.find(id="HeaderText")
+    if name_el:
+        span = name_el.find("span") if name_el.name == "h3" else None
+        info["header_name"] = (span or name_el).get_text(strip=True)
+
+    released = False
+    table = soup.find(id="tblDetails")
+    for row in (table.find_all("tr") if table else []):
+        cells = row.find_all("td")
+        if len(cells) != 2:
+            continue
+        label = cells[0].get_text(strip=True).rstrip(":").lower()
+        value = cells[1].get_text(strip=True)
+        if not label or not value or "drag a column" in label or "change offset" in label:
+            continue
+        if "date of birth" in label or label == "dob":
+            info["dob"] = value
+        elif "sex" in label or "gender" in label:
+            info["sex"] = value[:1].upper()
+        elif "race" in label:
+            info["race"] = value
+        elif any(k in label for k in ("booking date", "date in", "admit date")):
+            info["admit"] = value
+        elif "release date" in label or "date out" in label:
+            if value.strip().upper() not in _NO_RELEASE:
+                released = True
+                info["release_date"] = value
+        elif "facility" in label or "housing" in label:
+            info["facility"] = value
+        elif "height" in label:
+            info["height"] = value
+        elif "weight" in label:
+            info["weight"] = value
+        elif "address" in label:
+            info["address"] = value
+
+    charges: List[str] = []
+    bonds: List[Optional[float]] = []
+    bond_type = ""
+    for tr in soup.select('[id*="ChargeGrid_DXDataRow"]'):
+        cells = tr.find_all("td")
+        if not cells:
+            continue
+        charge = cells[0].get_text(strip=True)
+        if not charge or "drag a column" in charge.lower():
+            continue
+        charges.append(charge)
+        bonds.append(charge_bond_amount(cells[5].get_text(strip=True)) if len(cells) > 5 else None)
+        if len(cells) > 6 and not bond_type:
+            bond_type = cells[6].get_text(strip=True)
+
+    info["charges"] = " | ".join(charges)
+    info["bond"] = total_published_bond(bonds)
+    info["bond_type"] = bond_type
+    info["status"] = "Released" if released else ""
+
+    for img in soup.find_all("img"):
+        src = img.get("src") or ""
+        if ("photo" in src.lower() or "mugshot" in src.lower()) and not src.startswith("data:"):
+            info["mugshot"] = urljoin(BASE_URL + "/", src)
+            break
+    return info
+
+
+class DeSotoCountyScraper(DCNBaseScraper):
+    """DeSoto County (FL) — DCN roster + detail pages, plain honest HTTPS.
+
+    FAIL CLOSED (CoS 2026-10-15, option 1 on #222): the only row key is the
+    site's internal ``bid``, not a source booking number (CoS 2026-10-08).
+    ``scrape()`` makes no request and returns nothing until a booking number is
+    published and proven. The plain-HTTPS path below is kept in
+    ``_fetch_and_parse()``, ready to lift.
+    """
+
+    SOURCE_CONTRACT_VALIDATED = False
+    SOURCE_CONTRACT_REASON = (
+        "DeSoto DCN roster publishes no booking number; the only key is the site's "
+        "internal bid (CoS 2026-10-08). Refuse emission until a source booking number is proven."
+    )
+
+    require_source_bid = True       # never a synthesized name/date key
+    paginate_callbacks = True       # pages 2..N via the grid's own pager callback
+    max_detail_fetches = 400
+    detail_delay_s = 0.5
 
     @property
     def county(self) -> str:
         return "DeSoto"
 
+    @property
+    def state(self) -> str:
+        return "FL"
+
+    @property
+    def inmates_url(self) -> str:
+        return INMATES_URL
+
+    @property
+    def facility_name(self) -> str:
+        return FACILITY
+
     def scrape(self) -> List[ArrestRecord]:
-        """Scrape DeSoto County via DrissionPage browser automation."""
-        try:
-            from DrissionPage import ChromiumPage, ChromiumOptions
-        except ImportError:
-            logger.error(
-                "❌ DrissionPage not installed. "
-                "Install with: pip install DrissionPage"
-            )
-            raise
+        if not self.SOURCE_CONTRACT_VALIDATED:
+            logger.warning("DeSoto: SOURCE_CONTRACT_VALIDATED=False — %s", self.SOURCE_CONTRACT_REASON)
+            return []
+        return self._fetch_and_parse()
 
-        page = self._setup_browser()
-        cutoff_date = datetime.now() - timedelta(days=DAYS_BACK)
+    def _fetch_and_parse(self) -> List[ArrestRecord]:
+        """Unguarded plain-HTTPS fetch + parse. Only scrape() may call it, once the
+        source contract is validated; tests call it directly."""
+        session = _HonestSession(self.county)
+        resp = session.get(self.inmates_url, timeout=45)   # blocks raise, never swallowed
+        resp.raise_for_status()
+        origin = self._origin(self.inmates_url)
+        roster = self._parse_roster(resp.text, origin)
+        if not roster:
+            logger.warning("DeSoto: no roster rows with a bid parsed")
+            return []
+        roster = self._paginate_roster(session, resp.text, origin, roster)
+        records: List[ArrestRecord] = []
+        budget = self.max_detail_fetches
+        for row in roster:
+            detail: Dict[str, str] = {}
+            if budget > 0 and row.get("detail_url"):
+                detail = self._fetch_detail(session, row["detail_url"])
+                budget -= 1
+                time.sleep(self.detail_delay_s)
+            records.append(self._to_record(row, detail))
+        logger.info("DeSoto: %d records", len(records))
+        return records
 
-        try:
-            detail_urls = self._collect_roster_links(page)
+    def _fetch_detail(self, session, url: str) -> Dict[str, str]:
+        resp = session.get(url, timeout=35)
+        resp.raise_for_status()
+        return parse_detail(resp.text, url)
 
-            if not detail_urls:
-                logger.warning("⚠️ No inmate detail links found on DeSoto roster")
-                return []
-
-            logger.info(f"📋 Collected {len(detail_urls)} inmate detail links")
-
-            records: List[ArrestRecord] = []
-
-            for idx, url in enumerate(detail_urls, 1):
-                if idx % 10 == 0:
-                    logger.info(
-                        f"🔍 Progress: {idx}/{len(detail_urls)} "
-                        f"({len(records)} records so far)"
-                    )
-
-                try:
-                    record = self._extract_detail(page, url)
-
-                    if not record:
-                        continue
-
-                    if record.Booking_Date:
-                        try:
-                            for fmt in ["%m/%d/%Y", "%Y-%m-%d", "%m/%d/%Y %I:%M %p"]:
-                                try:
-                                    book_dt = datetime.strptime(
-                                        record.Booking_Date.split()[0], fmt
-                                    )
-                                    if book_dt < cutoff_date:
-                                        logger.info(
-                                            f"⏸️ Past cutoff ({record.Booking_Date}), "
-                                            f"stopping. Got {len(records)} records."
-                                        )
-                                        return records
-                                    break
-                                except ValueError:
-                                    continue
-                        except Exception:
-                            pass
-
-                    if record.Full_Name and record.Booking_Number:
-                        records.append(record)
-
-                except Exception as e:
-                    logger.warning(f"⚠️ Error on detail page: {e}")
-
-                time.sleep(DETAIL_DELAY_S)
-
-            logger.info(f"✅ Scraped {len(records)} records from DeSoto")
-            return records
-
-        except Exception as e:
-            logger.error(f"❌ DeSoto scraper fatal error: {e}")
-            raise
-
-        finally:
-            try:
-                page.quit()
-            except Exception:
-                pass
-
-    def _setup_browser(self):
-        from DrissionPage import ChromiumPage
-        co = self._get_browser_options()
-        return ChromiumPage(addr_or_opts=co)
-
-    def _collect_roster_links(self, page) -> List[str]:
-        logger.info(f"📡 Loading roster: {INMATES_URL}")
-        page.get(INMATES_URL)
-        time.sleep(3)
-
-        self._sort_by_admit_date(page)
-
-        all_links = self._extract_links_from_page(page)
-        logger.info(f"📄 Page 1: {len(all_links)} links")
-
-        page_num = 2
-        while page_num <= MAX_PAGES:
-            try:
-                next_btn = None
-                pager_btns = page.eles('css:.dxp-num')
-                for btn in pager_btns:
-                    if btn.text.strip() == str(page_num):
-                        next_btn = btn
-                        break
-
-                if not next_btn:
-                    try:
-                        next_btn = page.ele('#gvInmates_DXPagerBottom_PBN')
-                    except Exception:
-                        break
-
-                if not next_btn:
-                    break
-
-                next_btn.click()
-                time.sleep(2)
-
-                new_links = self._extract_links_from_page(page)
-                if not new_links:
-                    break
-
-                added = 0
-                for link in new_links:
-                    if link not in all_links:
-                        all_links.append(link)
-                        added += 1
-
-                logger.info(f"📄 Page {page_num}: {added} new links")
-
-                if added == 0:
-                    break
-
-                page_num += 1
-
-            except Exception as e:
-                logger.warning(f"⚠️ Pagination error on page {page_num}: {e}")
-                break
-
-        return all_links
-
-    def _sort_by_admit_date(self, page):
-        try:
-            headers = page.eles('tag:th')
-            admit_header = None
-            for h in headers:
-                text = h.text.strip()
-                if 'admit date' in text.lower():
-                    admit_header = h
-                    break
-
-            if not admit_header:
-                logger.warning("⚠️ Could not find Admit Date column header, skipping sort")
-                return
-
-            logger.debug("Sorting by Admit Date descending...")
-            admit_header.click()
-            time.sleep(2)
-            admit_header.click()
-            time.sleep(2)
-            logger.debug("✅ Sorted by Admit Date DESC")
-
-        except Exception as e:
-            logger.warning(f"⚠️ Sort failed: {e}, continuing without sort")
-
-    @staticmethod
-    def _extract_links_from_page(page) -> List[str]:
-        html = page.html
-        soup = BeautifulSoup(html, 'html.parser')
-
-        links = []
-        for a in soup.find_all('a', href=True):
-            href = a['href']
-            if 'inmate-details' in href:
-                full_url = urljoin(BASE_URL, href)
-                if full_url not in links:
-                    links.append(full_url)
-        return links
-
-    def _extract_detail(self, page, detail_url: str) -> Optional[ArrestRecord]:
-        page.get(detail_url)
-        time.sleep(1.5)
-
-        html = page.html
-        soup = BeautifulSoup(html, 'html.parser')
-
-        parsed = urlparse(detail_url)
-        qs = parse_qs(parsed.query)
-        booking_number = unquote(qs.get('bid', [''])[0])
-
-        full_name = ""
-        first_name = ""
-        middle_name = ""
-        last_name = ""
-
-        name_el = soup.find('h3', class_='header-text')
-        if name_el:
-            span = name_el.find('span')
-            full_name = (span.get_text(strip=True) if span
-                         else name_el.get_text(strip=True))
-        else:
-            header = soup.find(id='HeaderText')
-            if header:
-                full_name = header.get_text(strip=True)
-
-        if full_name and ',' in full_name:
-            parts = full_name.split(',', 1)
-            last_name = parts[0].strip()
-            first_parts = parts[1].strip().split()
-            if first_parts:
-                first_name = first_parts[0]
-                if len(first_parts) > 1:
-                    middle_name = ' '.join(first_parts[1:])
-
-        dob = ""
-        sex = ""
-        race = ""
-        booking_date = ""
-        facility = ""
-        height = ""
-        weight = ""
-        address = ""
-        city = ""
-        state = "FL"
-        zipcode = ""
-        status = "In Custody"
-
-        detail_table = soup.find(id='tblDetails')
-        if detail_table:
-            rows = detail_table.find_all('tr')
-            for row in rows:
-                cells = row.find_all('td')
-                if len(cells) == 2:
-                    label = cells[0].get_text(strip=True).rstrip(':')
-                    value = cells[1].get_text(strip=True)
-                    if not label or not value:
-                        continue
-                    if 'Drag a column' in label or 'Change Offset' in label:
-                        continue
-
-                    label_lower = label.lower()
-                    if 'date of birth' in label_lower or label_lower == 'dob':
-                        dob = value
-                    elif 'sex' in label_lower or 'gender' in label_lower:
-                        sex = value[0].upper() if value else ''
-                    elif 'race' in label_lower:
-                        race = value
-                    elif any(k in label_lower for k in ['booking date', 'date in', 'admit date']):
-                        booking_date = value
-                    elif 'release date' in label_lower or 'date out' in label_lower:
-                        if value and value != 'N/A':
-                            status = 'Released'
-                    elif 'facility' in label_lower or 'housing' in label_lower:
-                        facility = value
-                    elif 'height' in label_lower:
-                        height = value
-                    elif 'weight' in label_lower:
-                        weight = value
-                    elif 'address' in label_lower:
-                        address = value
-                        addr_match = re.search(
-                            r',\s*(\w[\w\s]*?)\s+([A-Z]{2})\s+(\d{5})', value
-                        )
-                        if addr_match:
-                            city = addr_match.group(1).strip()
-                            state = addr_match.group(2)
-                            zipcode = addr_match.group(3)
-
-        charges = []
-        total_bond = 0.0
-        bond_type = ""
-        charge_rows = soup.select('[id*="ChargeGrid_DXDataRow"]')
-
-        for cr in charge_rows:
-            cells = cr.find_all('td')
-            if cells:
-                charge_text = cells[0].get_text(strip=True) if len(cells) > 0 else ''
-                if charge_text and 'Drag a column' not in charge_text:
-                    charges.append(charge_text)
-
-                if len(cells) > 5:
-                    bond_text = cells[5].get_text(strip=True)
-                    if bond_text:
-                        clean = bond_text.replace('$', '').replace(',', '').strip()
-                        try:
-                            total_bond += float(clean)
-                        except ValueError:
-                            pass
-
-                if len(cells) > 6 and not bond_type:
-                    bond_type = cells[6].get_text(strip=True)
-
-        charges_str = ' | '.join(charges) if charges else ''
-
-        mugshot_url = ""
-        for img in soup.find_all('img'):
-            src = img.get('src', '')
-            if 'photo' in src.lower() or 'mugshot' in src.lower():
-                if not src.startswith('data:'):
-                    mugshot_url = urljoin(BASE_URL, src)
-                    break
-
-        if not full_name and not booking_number:
-            return None
-
+    def _to_record(self, row: Dict[str, str], detail: Dict[str, str]) -> ArrestRecord:
+        address = detail.get("address") or ""
+        city = state = zipcode = ""
+        m = re.search(r",\s*(\w[\w\s]*?)\s+([A-Z]{2})\s+(\d{5})", address)
+        if m:
+            city, state, zipcode = m.group(1).strip(), m.group(2), m.group(3)
+        sex = detail.get("sex") or row.get("sex") or ""
         return ArrestRecord(
             County=self.county,
-            Booking_Number=booking_number,
-            Full_Name=full_name,
-            First_Name=first_name,
-            Middle_Name=middle_name,
-            Last_Name=last_name,
-            DOB=dob,
-            Booking_Date=booking_date,
-            Status=status,
-                        Release_Date="",
-            Facility=facility or "DeSoto County Jail",
-            Race=race,
-            Sex=sex,
-            Height=height,
-            Weight=weight,
+            State="FL",
+            Booking_Number=str(row["booking"]),
+            Full_Name=row["name"],
+            First_Name=row.get("first") or "",
+            Middle_Name=row.get("middle") or "",
+            Last_Name=row.get("last") or "",
+            DOB=detail.get("dob") or "",
+            Booking_Date=detail.get("admit") or row.get("admit") or "",
+            Status=detail.get("status", ""),
+            Release_Date=detail.get("release_date", ""),
+            Facility=detail.get("facility") or FACILITY,
+            Race=detail.get("race") or row.get("race") or "",
+            Sex=sex[:1].upper() if sex else "",
+            Age_At_Arrest=str(row.get("age") or ""),
+            Height=detail.get("height") or "",
+            Weight=detail.get("weight") or "",
             Address=address,
             City=city,
-            State=state,
             ZIP=zipcode,
-            Mugshot_URL=mugshot_url,
-            Charges=charges_str,
-            Bond_Amount=str(total_bond) if total_bond > 0 else "0",
-            Bond_Type=bond_type,
-            Bond_Paid="NO",
-            Detail_URL=detail_url,
+            Mugshot_URL=detail.get("mugshot") or "",
+            Charges=detail.get("charges") or "",
+            Bond_Amount=detail.get("bond", ""),   # no detail fetched -> unknown
+            Bond_Type=detail.get("bond_type") or "",
+            Detail_URL=row.get("detail_url") or self.inmates_url,
             LastCheckedMode="INITIAL",
         )

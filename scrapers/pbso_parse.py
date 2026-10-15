@@ -13,6 +13,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from bs4 import BeautifulSoup
 
+from scrapers.published_bond import charge_bond_amount
+
 BLOTTER_URL = "https://www3.pbso.org/blotter/index.cfm"
 FACILITY = "Palm Beach County Jail"
 COUNTY = "Palm Beach"
@@ -108,7 +110,7 @@ def parse_pbso_card_text(card_text: str) -> Optional[dict]:
         "status": "In Custody",
         "release_date": "",
         "charges": "",
-        "bond_amount": "0",
+        "bond_amount": "",
         "mug_url": "",
     }
 
@@ -147,27 +149,48 @@ def parse_pbso_card_text(card_text: str) -> Optional[dict]:
                 if "Bond" not in line and "Booking" not in line:
                     charges.append(" ".join(line.split()))
 
-    total_bond = 0.0
-    for amt_str in re.findall(r"Current\s+Bond\s*:\s*\$([0-9,]+(?:\.\d{2})?)", card_text, re.I):
-        try:
-            total_bond += float(amt_str.replace(",", ""))
-        except (ValueError, TypeError):
-            pass
-    if total_bond == 0:
-        for amt_str in re.findall(r"Original\s+Bond\s*:\s*\$([0-9,]+(?:\.\d{2})?)", card_text, re.I):
-            try:
-                total_bond += float(amt_str.replace(",", ""))
-            except (ValueError, TypeError):
-                pass
-
     data["charges"] = " | ".join(charges) if charges else ""
-    data["bond_amount"] = f"{total_bond:.2f}" if total_bond > 0 else "0"
+    data["bond_amount"] = published_card_bond(card_text)
     if data["full_name"]:
         data["first_name"], data["middle_name"], data["last_name"] = parse_name(data["full_name"])
 
     if not data["full_name"] or not data["booking_num"]:
         return None
     return data
+
+
+def _label_amounts(label: str, card_text: str) -> list:
+    """Every ``<label>: value`` on the card -> published amount or None."""
+    return [charge_bond_amount(v) for v in re.findall(rf"{label}\s+Bond\s*:\s*([^\n]*)", card_text, re.I)]
+
+
+def _fmt_total(values: list) -> str:
+    total = sum(values)
+    return f"{total:.2f}" if total > 0 else "0"
+
+
+def published_card_bond(card_text: str) -> str:
+    """Booking bond from the card's own Current / Original Bond lines.
+
+    * every ``Current Bond`` shows an amount -> their sum; when that sum is 0 and
+      every ``Original Bond`` shows an amount summing above 0, the original sum
+      (same precedence as before);
+    * all shown amounts are $0.00 -> ``"0"`` (a published 0 is kept);
+    * any bond line without a dollar amount (NO BOND, blank, text), or no bond
+      line at all -> ``""`` (unknown, never a counted 0).
+    """
+    current = _label_amounts("Current", card_text)
+    original = _label_amounts("Original", card_text)
+    orig_ok = bool(original) and all(v is not None for v in original)
+    if current:
+        if any(v is None for v in current):
+            return ""
+        if sum(current) == 0 and orig_ok and sum(original) > 0:
+            return _fmt_total(original)
+        return _fmt_total(current)
+    if orig_ok:
+        return _fmt_total(original)
+    return ""
 
 
 def parse_pbso_html(html: str) -> list[dict]:
@@ -213,7 +236,7 @@ def row_to_ingest_dict(row: dict, source_url: str) -> dict:
         "last_name": row.get("last_name") or "",
         "booking_number": booking,
         "charges": row.get("charges") or "",
-        "bond_amount": row.get("bond_amount") or "0",
+        "bond_amount": row.get("bond_amount") or "",  # unknown stays ""; a real "0" is kept
         "county": COUNTY,
         "state": "FL",
         "facility": row.get("facility") or FACILITY,
