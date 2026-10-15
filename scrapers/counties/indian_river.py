@@ -26,6 +26,17 @@ Source contract (recon 2026-10-08, docs/recon/FL_INDIAN_RIVER_BOOKING_SEARCH_202
     bond is kept on recheck). An unrecognised Bond value still yields empty
     amount (unknown). Never ``0`` unless published.
   * Health stays ``unverified`` until a Leads Ops write smoke.
+  * 2026-10-15: requests go through ``scrapers.plain_http`` (honest
+    User-Agent instead of a Chrome one, TLS verified; a block raises
+    EgressBlocked, a TLS failure raises SourceTLSInvalid, neither swallowed).
+    Per-record guard: the booking-scoped fields (Booking Number, dates, Bond,
+    Case Number, Agency, Release Date) are read only from this page's
+    ``Booking Info`` table, so a Bond or booking value elsewhere on the page
+    (e.g. the ``Bookings`` history table) can never bleed into the record; a
+    Booking Info table that repeats one of those labels with different values
+    is ambiguous and the record is skipped. Card-header guard: only top-level
+    cards in the Charges section are charges; a card nested in another card
+    is not a separate charge.
 """
 from __future__ import annotations
 
@@ -40,6 +51,8 @@ import requests
 from bs4 import BeautifulSoup
 
 from scrapers.base_scraper import BaseScraper
+from scrapers.plain_http import make_session, request
+from scrapers.scraper_resilience import AntiBotBlocked
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
@@ -59,10 +72,6 @@ BOOKING_RE = re.compile(r"^\d{4}-\d{8}$")
 _DETAIL_ID_RE = re.compile(r"/booking-details/(\d+)")
 _MONEY_RE = re.compile(r"^\$\s*([\d,]+(?:\.\d{1,2})?)$")
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": SEARCH_PAGE_URL,
@@ -123,26 +132,55 @@ def parse_source_datetime(text: str) -> Optional[datetime]:
     return None
 
 
-def parse_detail(html: str) -> Dict[str, object]:
-    """Labelled fields + charge cards from one booking-details page."""
-    soup = BeautifulSoup(html, "html.parser")
-    fields: Dict[str, str] = {}
-    for tr in soup.find_all("tr"):
+# Booking-scoped labels: read only from the Booking Info table (per-record guard).
+BOOKING_SCOPED = ("Booking Number", "Booking Date", "Arrest Date", "Arresting Agency",
+                  "Case Number", "Bond", "Release Date")
+
+
+def _labelled_rows(scope) -> List[tuple]:
+    out = []
+    for tr in scope.find_all("tr"):
         tds = tr.find_all("td")
         if len(tds) != 2 or tds[0].find("strong") is None:
             continue
         label = _clean(tds[0].get_text(" ", strip=True)).rstrip(":")
-        if label and label not in fields:
-            fields[label] = _clean(tds[1].get_text(" ", strip=True))
+        if label:
+            out.append((label, _clean(tds[1].get_text(" ", strip=True))))
+    return out
+
+
+def parse_detail(html: str) -> Dict[str, object]:
+    """Labelled fields + charge cards from one booking-details page.
+
+    Person fields (Name, DOB, Race, Sex) are the first value on the page.
+    Booking-scoped fields come only from the Booking Info table. If that table
+    repeats a booking-scoped label with a different value, ``ambiguous`` is set
+    and the scraper skips the record rather than guess which booking it is.
+    """
+    soup = BeautifulSoup(html, "html.parser")
     # Page shape is part of the contract: without these the record would be
     # written with blank charges/bond over the stored values.
     info = soup.find(lambda t: t.name in ("h3", "h4") and _clean(t.get_text()) == "Booking Info")
-    if info is None or info.find_next("table") is None:
+    info_table = info.find_next("table") if info is not None else None
+    if info_table is None:
         raise IndianRiverContractError("Indian River: booking-details page has no 'Booking Info' table")
     heading = soup.find(lambda t: t.name in ("h3", "h4") and _clean(t.get_text()) == "Charges")
     if heading is None:
         raise IndianRiverContractError("Indian River: booking-details page has no 'Charges' heading")
-    return {"fields": fields, "charges": _charge_headers(heading)}
+
+    fields: Dict[str, str] = {}
+    for label, value in _labelled_rows(soup):
+        if label not in BOOKING_SCOPED and label not in fields:
+            fields[label] = value
+    ambiguous: List[str] = []
+    for label, value in _labelled_rows(info_table):
+        if label not in BOOKING_SCOPED:
+            fields.setdefault(label, value)
+            continue
+        if label in fields and fields[label] != value:
+            ambiguous.append(label)
+        fields.setdefault(label, value)
+    return {"fields": fields, "charges": _charge_headers(heading), "ambiguous": ambiguous}
 
 
 _SECTION_TAGS = ("h1", "h2", "h3", "h4")
@@ -160,8 +198,9 @@ def _charge_headers(heading) -> List[str]:
     for tag in heading.find_all_next(True):
         if tag.name in _SECTION_TAGS and tag.find_parent("div", class_="card") is None:
             break
+        card = tag.find_parent("div", class_="card") if tag.name == "div" else None
         if tag.name == "div" and "card-header" in (tag.get("class") or []) \
-                and tag.find_parent("div", class_="card") is not None:
+                and card is not None and card.find_parent("div", class_="card") is None:
             text = _clean(tag.get_text(" ", strip=True))
             if text:
                 charges.append(text)
@@ -255,24 +294,23 @@ class IndianRiverCountyScraper(BaseScraper):
         return "FL"
 
     def _session(self) -> requests.Session:
-        session = requests.Session()
-        session.headers.update(HEADERS)
-        return session
+        return make_session(HEADERS)
 
     def _ids_for_day(self, session: requests.Session, token: str, day: datetime) -> List[str]:
         date_s = day.strftime("%m/%d/%Y")
-        resp = session.post(
-            SEARCH_URL,
+        resp = request(
+            session, "POST", SEARCH_URL,
             data={"_token": token, "lname": "", "fname": "", "booking_date": date_s,
                   "release_date": "", "booking_number": "", "dob": ""},
-            timeout=REQUEST_TIMEOUT,
+            timeout=REQUEST_TIMEOUT, county="Indian River",
         )
         resp.raise_for_status()
         ids = parse_first_results_page(resp.text)
         for page in range(2, MAX_PAGES_PER_DAY + 1):
             if not ids or len(ids) < 10 * (page - 1):
                 break
-            more = session.get(SEARCH_URL, params={"booking_date": date_s, "page": page}, timeout=REQUEST_TIMEOUT)
+            more = request(session, "GET", SEARCH_URL, params={"booking_date": date_s, "page": page},
+                           timeout=REQUEST_TIMEOUT, county="Indian River")
             more.raise_for_status()
             new = [i for i in parse_result_ids(more.text) if i not in ids]
             if not new:
@@ -286,7 +324,7 @@ class IndianRiverCountyScraper(BaseScraper):
     def scrape(self, lookback_days: Optional[int] = None) -> List[ArrestRecord]:
         days = lookback_days or LOOKBACK_DAYS
         session = self._session()
-        landing = session.get(SEARCH_PAGE_URL, timeout=REQUEST_TIMEOUT)
+        landing = request(session, "GET", SEARCH_PAGE_URL, timeout=REQUEST_TIMEOUT, county="Indian River")
         landing.raise_for_status()
         token = parse_token(landing.text)
 
@@ -300,15 +338,19 @@ class IndianRiverCountyScraper(BaseScraper):
 
         records: List[ArrestRecord] = []
         seen: set = set()
-        fetched = dropped = no_bond_label = 0
+        fetched = dropped = no_bond_label = ambiguous = 0
         for detail_id, day in wanted[:MAX_DETAILS]:
             url = f"{DETAIL_URL}/{detail_id}"
             fetched += 1
             # A request failure escapes (BaseScraper retries, classifies and
             # alerts) instead of silently dropping the booking.
-            resp = session.get(url, timeout=REQUEST_TIMEOUT)
+            resp = request(session, "GET", url, timeout=REQUEST_TIMEOUT, county="Indian River")
             resp.raise_for_status()
             detail = parse_detail(resp.text)
+            if detail["ambiguous"]:
+                ambiguous += 1
+                time.sleep(REQUEST_PAUSE_S)
+                continue
             # Per-record guard: a page without a Bond row is not read as an
             # unknown bond; the record is skipped so a stored bond is kept.
             if "Bond" not in detail["fields"]:  # type: ignore[operator]
@@ -335,6 +377,8 @@ class IndianRiverCountyScraper(BaseScraper):
             raise IndianRiverContractError("Indian River: no record in the run has charges (card markup drift?)")
         if records and not any(r.extra_data.get("bond_published") for r in records):
             raise IndianRiverContractError("Indian River: no record in the run has a recognized Bond value (label drift?)")
+        if ambiguous:
+            logger.warning("Indian River: skipped %d/%d details with conflicting booking-scoped values", ambiguous, fetched)
         if dropped:
             logger.warning("Indian River: dropped %d/%d details (no key/date, wrong date or duplicate)", dropped, fetched)
         logger.info("Indian River: %d bookings over %d days (%d details)", len(records), days, fetched)
@@ -352,13 +396,15 @@ class IndianRiverCountyScraper(BaseScraper):
         if not detail_url or not _DETAIL_ID_RE.search(detail_url) or not detail_url.startswith(BASE_URL + "/"):
             return None
         try:
-            resp = self._session().get(detail_url, timeout=REQUEST_TIMEOUT)
+            resp = request(self._session(), "GET", detail_url, timeout=REQUEST_TIMEOUT, county="Indian River")
             resp.raise_for_status()
+        except AntiBotBlocked:
+            raise
         except requests.RequestException as exc:
             logger.warning("Indian River re-fetch failed for %s: %s", detail_url, exc)
             return None
         detail = parse_detail(resp.text)
-        if "Bond" not in detail["fields"]:  # type: ignore[operator]
+        if detail["ambiguous"] or "Bond" not in detail["fields"]:  # type: ignore[operator]
             return None
         rec = build_record(detail, detail_url)
         if rec is None or rec.Booking_Number != booking_id:

@@ -3,6 +3,24 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-15 (plain_http: a dropped handshake is connection_reset, not tls_cert_invalid)
+
+### Fixed
+- **`scrapers/plain_http.py` no longer labels every `SSLError` as `tls_cert_invalid`.** `tls_cert_invalid:` (SourceTLSInvalid) is used only when a certificate was presented and failed verification (`SSLCertVerificationError`, verify failed, hostname mismatch, self-signed, expired, missing issuer). A handshake the far side drops or resets before any certificate is verified (unexpected EOF, connection reset) now raises `EgressBlocked` with `egress_block: <county> connection_reset: ...`, so it is reported as a connection/egress failure (still never retried, never bypassed). Shared with Polk, Volusia, Pasco, Collier, Osceola, St. Lucie, Martin and Indian River; all their tests pass.
+
+### Tests
+- `tests/test_plain_http_tls_vs_connection_reset.py` (added to the `ci.yml` list): unexpected EOF and reset give `egress_block`/`connection_reset`; real certificate failures still give `tls_cert_invalid`.
+
+## [Unreleased] — 2026-10-15 (Indian River: honest UA via plain_http; per-record bond guard; card-header guard)
+
+### Fixed
+- **Indian River (FL) no longer sends a Chrome User-Agent.** `scrapers/counties/indian_river.py` used plain `requests` (TLS verification was already on) with a Chrome UA. It now uses `scrapers.plain_http` (honest UA, `verify=True` on every call; a block raises `EgressBlocked`, a TLS failure raises `SourceTLSInvalid`). The custody/bond re-check re-raises those instead of swallowing them; the watcher and bond re-check worker already handle them without writing.
+- **Per-record bond guard:** booking-scoped fields (Booking Number, Booking/Arrest/Release Date, Agency, Case Number, Bond) are read only from the page's `Booking Info` table. Before, the first matching label anywhere on the page won, so a `Bond` row in the `Bookings` history table could bleed into this booking. A Booking Info table that repeats one of those labels with different values is skipped (scrape and re-check) instead of guessed. Unknown bond stays `""`; a published `$0.00` stays `"0.00"`.
+- **Card-header guard:** only top-level cards in the Charges section are charges; a card nested inside a charge card is no longer a separate charge.
+
+### Tests
+- `tests/test_fl_indian_river_tls_bond_guard.py` (added to the `ci.yml` list); `tests/test_fl_indian_river_booking_search.py` session fake gains `request()` for plain_http.
+
 ## [Unreleased] — 2026-10-15 (ArrestRecord bond default is "" (unknown), never an invented "0")
 
 ### Fixed
