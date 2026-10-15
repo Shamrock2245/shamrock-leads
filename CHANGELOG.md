@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-15 (Duval and Palm Beach: unknown bond is "", published 0 kept)
+
+### Fixed
+- Duval and Palm Beach: an unknown bond is now "" instead of a counted "0". PBSO cards sum only published Current/Original Bond amounts (any NO BOND/blank line gives ""); a published $0.00 stays "0". Duval JSON bond values are normalized through `charge_bond_amount`, and the DOM fallback is "". Stored rows and prod data are not touched. Tests: `tests/test_fl_duval_palmbeach_bond_defaults.py`.
+
 ## [Unreleased] — 2026-10-15 (DeSoto: plain honest HTTPS, no browser stealth / cert bypass; bond published-only; custody only from source)
 
 ### Fixed
