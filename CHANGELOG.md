@@ -15,6 +15,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Status is "In Custody" only under the source's own current-only report title ("Daily In Custody Report" / "Detainees In Confinement Report"), recorded as `extra_data.status_source = "published_in_custody_report_label"`; otherwise "".
 - Booking keys stay the source `Bk #`. Tests: `tests/test_nc_orange_honest.py` (on the ci.yml list). Recon: `docs/recon/NC_ORANGE_ROSTER_SCOPE_2026-10-15.md`.
 
+## 2026-10-15 — plain_http: connection reset/abort/EOF before response is egress_block connection_reset
+
+- `scrapers/plain_http.py`: `http.client.RemoteDisconnected`, `ConnectionResetError`/`ConnectionAbortedError`, urllib3 `ProtocolError('Connection aborted.')` (raw or wrapped in `requests.ConnectionError`) and EOF before any response now raise `EgressBlocked("egress_block: <county> connection_reset: ...")`, so Health records them as egress-blocked (anti_bot, egress_block, not retried) instead of a generic network error.
+- `tls_cert_invalid` stays limited to a certificate that was presented and rejected. Timeouts (`requests.Timeout`, urllib3/socket timeouts) are re-raised unchanged under their existing network label; DNS and refused connections are unchanged. Nothing is retried, with weaker settings or otherwise.
+- Tests: `tests/test_plain_http_connection_reset_mapping.py` (on the ci.yml list) covers each exception path and the Health classification.
+
 ## [Unreleased] — 2026-10-15 (Gaston NC: honest identity; published-only charges/bond/status)
 
 ### Fixed
