@@ -13,6 +13,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_fl_citrus_bond_custody_defaults.py` (added to the `ci.yml` list).
 
+## [Unreleased] — 2026-10-15 (Lee URL ingest: missing inCustody flag is "")
+
+### Fixed
+- **`url_ingest_service._ingest_lee_county_api` no longer turns a missing `inCustody` flag into "In Custody".** New `published_custody_status()`: a published status string wins; an explicit `inCustody` (bool or "true"/"false") maps to "In Custody"/"Released"; a missing, null or unrecognized flag is `""`. Stored rows are not touched. Tests: `tests/test_url_ingest_incustody_unknown.py`.
+
 ## [Unreleased] — 2026-10-15 (status-fallback writers: unknown custody status is "")
 
 ### Fixed
