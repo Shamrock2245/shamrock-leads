@@ -10,7 +10,13 @@ Contract (2026-09-24 Mac smoke):
 - List fields: last, first, arrest date, age, sex, race
 - Detail (optional): charges, bond, arrest agency/status
 
-TLS: curl_cffi chrome impersonation preferred; requests verify=False fallback.
+Honest access (2026-10-15): plain HTTPS through ``scrapers.plain_http``
+(honest User-Agent, certificate verified). No curl_cffi, Chrome disguise,
+stealth, proxy, impersonation, or ``verify=False`` fallback. Blocks raise
+``egress_block:`` / ``connection_reset:`` / ``tls_cert_invalid:``.
+
+Bond is published-only (``""`` when unknown; a published 0 is kept).
+Status is never invented as "In Custody" (``""`` unless the source publishes it).
 """
 from __future__ import annotations
 
@@ -23,8 +29,11 @@ from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
-from scrapers.base_scraper import BaseScraper
 from core.models import ArrestRecord
+from scrapers import plain_http
+from scrapers.base_scraper import BaseScraper
+from scrapers.published_bond import charge_bond_amount
+from scrapers.scraper_resilience import EgressBlocked
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +44,31 @@ DETAIL_BASE = "https://lookups.aikencountysc.gov/DTNSearch/"
 
 MAX_DETAIL_FETCHES = 400
 DETAIL_DELAY_S = 0.15
+
+
+def published_status(detail: dict, list_row: dict | None = None) -> str:
+    """Custody status only as the source published it; unknown is ""."""
+    for src in (detail, list_row or {}):
+        if not isinstance(src, dict):
+            continue
+        for key in ("status", "Status", "custody_status", "custodyStatus"):
+            val = src.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    return ""
+
+
+def published_bond(detail: dict) -> str:
+    """Detail bond text -> amount string; missing/blank/NO BOND/text -> ""."""
+    if not isinstance(detail, dict) or "bond" not in detail:
+        return ""
+    raw = detail.get("bond")
+    if raw is None or (isinstance(raw, str) and not str(raw).strip()):
+        return ""
+    amt = charge_bond_amount(raw if not isinstance(raw, (int, float)) else repr(raw))
+    if amt is None:
+        return ""
+    return str(int(amt)) if float(amt).is_integer() else f"{amt:.2f}"
 
 
 class AikenScraper(BaseScraper):
@@ -54,24 +88,15 @@ class AikenScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         start = time.time()
-        session = self._session()
-        if session is None:
-            logger.warning("Aiken: no HTTP session available")
-            return []
-
-        try:
-            session.get(SEARCH_URL, timeout=30, verify=False)
-        except Exception as e:
-            logger.warning("Aiken: search GET failed: %s", e)
-            return []
+        session = plain_http.make_session({
+            "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+        })
+        # Warm the search form; blocks / TLS failures raise (never swallowed).
+        plain_http.request(session, "GET", SEARCH_URL, county="Aiken", timeout=30)
 
         by_id: Dict[str, dict] = {}
         for letter in string.ascii_uppercase:
-            try:
-                html = self._post_letter(session, letter)
-            except Exception as e:
-                logger.warning("Aiken: letter %s failed: %s", letter, e)
-                continue
+            html = self._post_letter(session, letter)
             if not html:
                 continue
             for row in self._parse_results(html):
@@ -93,8 +118,10 @@ class AikenScraper(BaseScraper):
                     detail = self._fetch_detail(session, row["detail_url"])
                     detail_budget -= 1
                     time.sleep(DETAIL_DELAY_S)
+                except EgressBlocked:
+                    raise
                 except Exception as e:
-                    logger.debug("Aiken detail fail %s: %s", so, e)
+                    logger.debug("Aiken detail fail %s: %s", so, type(e).__name__)
             rec = self._to_record(row, detail)
             if rec:
                 records.append(rec)
@@ -106,22 +133,6 @@ class AikenScraper(BaseScraper):
         )
         return records
 
-    def _session(self):
-        try:
-            from curl_cffi import requests as cr
-
-            return cr.Session(impersonate="chrome131")
-        except Exception as e:
-            logger.debug("Aiken curl_cffi unavailable: %s", e)
-        try:
-            import requests
-
-            s = requests.Session()
-            s.headers.update({"User-Agent": "Mozilla/5.0 Chrome/131.0.0.0"})
-            return s
-        except Exception:
-            return None
-
     def _post_letter(self, session, letter: str) -> str:
         data = {
             "LNAME": letter,
@@ -130,14 +141,16 @@ class AikenScraper(BaseScraper):
             "InRace": "All",
             "Search": "Search",
         }
-        resp = session.post(
+        resp = plain_http.request(
+            session,
+            "POST",
             RESULTS_URL,
+            county="Aiken",
             data=data,
             timeout=45,
-            verify=False,
             headers={"Referer": SEARCH_URL},
         )
-        if getattr(resp, "status_code", 0) != 200:
+        if resp.status_code != 200:
             return ""
         return resp.text or ""
 
@@ -177,8 +190,15 @@ class AikenScraper(BaseScraper):
         return out
 
     def _fetch_detail(self, session, url: str) -> Dict[str, str]:
-        resp = session.get(url, timeout=30, verify=False, headers={"Referer": RESULTS_URL})
-        if getattr(resp, "status_code", 0) != 200:
+        resp = plain_http.request(
+            session,
+            "GET",
+            url,
+            county="Aiken",
+            timeout=30,
+            headers={"Referer": RESULTS_URL},
+        )
+        if resp.status_code != 200:
             return {}
         soup = BeautifulSoup(resp.text or "", "html.parser")
         text = soup.get_text("\n", strip=True)
@@ -192,11 +212,14 @@ class AikenScraper(BaseScraper):
                 val = line.split(":", 1)[-1].strip()
                 if val and val.upper() not in {"", "N/A", "NONE"}:
                     charges.append(val)
+            sm = re.match(r"^Status\s*:\s*(.+)$", line, re.I)
+            if sm and "status" not in info:
+                info["status"] = sm.group(1).strip()
         if charges:
             info["charges"] = " | ".join(charges[:12])
-        bm = re.search(r"Bond\s*:?\s*\$?([\d,]+(?:\.\d+)?)", text, re.I)
+        bm = re.search(r"Bond\s*:?\s*(\$?[\d,]+(?:\.\d+)?|NO\s*BOND|N/?A|NONE|HOLD)", text, re.I)
         if bm:
-            info["bond"] = bm.group(1).replace(",", "")
+            info["bond"] = bm.group(1).strip()
         am = re.search(
             r"Arrest Date\s*:?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})",
             text,
@@ -214,8 +237,7 @@ class AikenScraper(BaseScraper):
         last = row.get("last") or ""
         full = row.get("full") or f"{last}, {first}".strip(", ")
         arrest = detail.get("arrest") or row.get("arrest") or ""
-        charges = detail.get("charges") or "Unknown"
-        bond = detail.get("bond") or "0"
+        charges = detail.get("charges") or ""
         return ArrestRecord(
             County=self.county,
             State="SC",
@@ -229,8 +251,8 @@ class AikenScraper(BaseScraper):
             Sex=row.get("sex") or "",
             Race=row.get("race") or "",
             Charges=charges,
-            Bond_Amount=str(bond),
-            Status="In Custody",
+            Bond_Amount=published_bond(detail),
+            Status=published_status(detail, row),
             Detail_URL=row.get("detail_url") or PORTAL_URL,
             Facility="Aiken County Detention Center",
         )
