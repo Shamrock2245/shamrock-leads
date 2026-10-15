@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-15 (payment KPIs drop a transaction whose amounts disagree)
+
+### Fixed
+- **`summarize_settled_payments` leaves out a transaction whose settled rows disagree on the amount.** A plan-linked row and a SwipeSimple poller or webhook row that share a transaction id but not the cents are no longer reported as the plan amount. The transaction is omitted (`amount_conflicts`). Rows that agree on the cents still count once, preferring the plan-linked row, then a `completed` row.
+
+### Tests
+- `tests/test_agent_analytics_payment_agent.py`: `test_conflicting_amounts_for_one_transaction_are_excluded`.
+
 ## [Unreleased] — 2026-10-14 (plan create audits a transaction down payment)
 
 ### Fixed
@@ -19,7 +27,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **`GET /api/analytics/agent-performance`, "the_payment_agent" `payments_recorded` and `total_collected`.** These used to count and sum every `payments` row with a recent `created_at`, whatever its status. That included declined and refunded webhook rows, and one card payment counted twice when both the poller and the webhook logged it. Plan `/pay` rows were missed entirely because they have `timestamp`, not `created_at`. Now:
   - Rows in the window by `timestamp` or by `created_at` both count, so plan `/pay`, AR and poller/webhook rows are all included. The window is closed on both ends (`start` through `end` of the requested period). A future `paid_at` that AR stores on `payments.timestamp`, or a future `created_at`, is not in the current period (Codex P2 @c0cbce7).
   - Only settled statuses count: approved, paid, completed or success, case-insensitive (so `"Completed"` from `/api/payments` counts). This is the same rule as the plan-payment link in #181. A webhook row also needs `event_type` `payment.completed`.
-  - Each transaction id counts once. The preferred row is the one linked to a plan, then a `completed` row. Rows with no transaction id count on their own.
+  - Each transaction id counts once. The preferred row is the one linked to a plan, then a `completed` row, and only when every settled row for that id has the same cents. Settled rows that disagree on the amount are left out (`amount_conflicts`) instead of reporting the plan amount (Codex P2). Rows with no transaction id count on their own.
 
   - **Refunds and chargebacks (Codex P2):** rows are grouped by transaction id first. If any row for a transaction is a refund, void, chargeback, reversal or dispute (by status or webhook `event_type`), the whole transaction is left out, including a plan-linked row. A partial refund also drops the transaction from these KPIs (conservative).
   - **Card down payments (Codex P2):** `POST /api/payments/plans` now saves `down_payment_transaction_id` as the down-payment row's `transaction_id`, so it dedupes against the poller or webhook row for the same charge. Older down-payment rows have no transaction id. Such a row is suppressed when a settled poller or webhook row has the same booking, the exact same amount and a time within 3 days; each card row can absorb only one down payment.

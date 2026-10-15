@@ -44,11 +44,25 @@ def test_poller_plus_plan_pay_same_txn_counts_once_prefers_plan_row():
 
 
 def test_preference_linked_then_completed():
-    # Mismatched amounts make the chosen row visible in the total.
-    assert S([poller("T1", amount=1.0), plan_pay("T1", amount=2.0)])["total"] == 2.0
-    assert S([plan_pay("T1", amount=2.0), poller("T1", amount=1.0)])["total"] == 2.0
+    # Same cents: one count. The plan-linked row is preferred, then a completed row.
+    assert S([poller("T1", amount=2.0), plan_pay("T1", amount=2.0)])["total"] == 2.0
+    assert S([plan_pay("T1", amount=2.0), poller("T1", amount=2.0)])["count"] == 1
     completed = {"_id": "c", "transaction_id": "T2", "amount": 5.0, "status": "completed", "timestamp": RECENT}
-    assert S([poller("T2", amount=3.0), completed])["total"] == 5.0
+    assert S([poller("T2", amount=5.0), completed])["total"] == 5.0
+
+
+def test_conflicting_amounts_for_one_transaction_are_excluded():
+    """Codex P2: settled rows that share a transaction id but disagree on the
+    amount are left out. A $1 provider row is not reported as the plan's $2."""
+    out = S([poller("T1", amount=1.0), plan_pay("T1", amount=2.0), poller("T9", amount=30.0)])
+    assert out["count"] == 1 and out["total"] == 30.0 and out["amount_conflicts"] == 1
+    swapped = S([plan_pay("T1", amount=2.0), poller("T1", amount=1.0)])
+    assert swapped["count"] == 0 and swapped["total"] == 0.0 and swapped["amount_conflicts"] == 1
+    completed = {"_id": "c", "transaction_id": "T2", "amount": 5.0, "status": "completed", "timestamp": RECENT}
+    disagree = S([poller("T2", amount=3.0), completed])
+    assert disagree["count"] == 0 and disagree["amount_conflicts"] == 1
+    agreed = S([poller("T3", amount=100.0), plan_pay("T3", amount=100.0)])
+    assert agreed["count"] == 1 and agreed["total"] == 100.0 and agreed["amount_conflicts"] == 0
 
 
 @pytest.mark.parametrize("status", ["declined", "refunded", "voided", "pending", "failed", "", None])

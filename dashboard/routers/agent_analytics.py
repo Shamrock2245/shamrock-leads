@@ -157,7 +157,9 @@ def _card_matches(row: dict, card: dict) -> bool:
 
 def summarize_settled_payments(rows) -> dict:
     """{count, total, duplicates_skipped, unsettled_skipped, reversed_skipped,
-    down_payments_matched, down_payments_reversed} — settled money, one per transaction id."""
+    amount_conflicts, down_payments_matched, down_payments_reversed} — settled
+    money, one per transaction id. Settled rows that share an id but disagree
+    on the cents are left out."""
     rows = list(rows or [])
     by_txn: dict = {}
     loose: list = []
@@ -168,7 +170,7 @@ def summarize_settled_payments(rows) -> dict:
         else:
             loose.append((idx, row))
 
-    unsettled = dupes = reversed_txns = 0
+    unsettled = dupes = reversed_txns = amount_conflicts = 0
     chosen: list = []
     reversed_cards: list = []
     for txn, group in by_txn.items():
@@ -184,6 +186,12 @@ def summarize_settled_payments(rows) -> dict:
         settled = [r for r in group if _settled_payment(r)]
         unsettled += len(group) - len(settled)
         if not settled:
+            continue
+        # A plan row and a provider row (or two settled rows) that share this
+        # id but disagree on the cents are a conflict. Leave the transaction
+        # out instead of reporting the plan amount (Codex P2).
+        if len({_cents(r) for r in settled}) > 1:
+            amount_conflicts += 1
             continue
         dupes += len(settled) - 1
         chosen.append(min(settled, key=_payment_rank))  # min keeps first on ties
@@ -219,6 +227,7 @@ def summarize_settled_payments(rows) -> dict:
         "duplicates_skipped": dupes,
         "unsettled_skipped": unsettled,
         "reversed_skipped": reversed_txns,
+        "amount_conflicts": amount_conflicts,
         "down_payments_matched": matched,
         "down_payments_reversed": dp_reversed,
     }
