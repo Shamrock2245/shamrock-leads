@@ -13,6 +13,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_fl_citrus_bond_custody_defaults.py` (added to the `ci.yml` list).
 
+## [Unreleased] — 2026-10-15 (status-fallback writers: unknown custody status is "")
+
+### Fixed
+- **The bookmarklet merge and the PBSO Mongo ingest fallback no longer invent "In Custody".** `booking_extract_merge.merge_booking_extract` keeps the stored status, else the status the page published (`published_status`), else `""`. That applies to both the scoring record and the newly inserted arrest row. `url_ingest_service._ingest_pbso_from_mongo` returns the stored `status`/`Status` or `""`. Stored rows are not rewritten. Tests: `tests/test_status_fallback_writers.py`.
+
 ## [Unreleased] — 2026-10-15 (Duval and Palm Beach: unknown bond is "", published 0 kept)
 
 ### Fixed
