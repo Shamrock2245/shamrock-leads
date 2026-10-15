@@ -9,6 +9,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Palm Beach (FL) no longer drives a Chrome browser or sends a Chrome User-Agent.** `palm_beach.py` reads the PBSO blotter with `scrapers.plain_http` (honest UA, certificate verified). It submits the page's own date-search form, parses cards with `parse_pbso_html`, and follows the page's own pagination links. The hCaptcha wait loop is gone: a challenge page (including hCaptcha) or 401/403/429 raises `egress_block:`, a dropped handshake raises `egress_block: ... connection_reset:`, a certificate failure raises `tls_cert_invalid:`, and a missing search form raises `PalmBeachSourceChanged`. `_fetch_single_booking` uses the same honest session, and a block now raises instead of reading as "not found". The one honest probe from the agent box (2026-10-15) got **connection_reset**. Tests: `tests/test_fl_palmbeach_plain_https.py`.
 - **Palm Beach records never default status to "In Custody".** `_row_to_arrest_record` uses `row.get("status") or ""`, so an unknown status is `""` and a published one (e.g. `Released` from a card release date via `pbso_parse`) is kept. The blotter isn't custody-only (#233).
 
+## [Unreleased] — 2026-10-15 (Pitt NC: honest identity; no invented charges/bond/status)
+
+### Fixed
+- **Pitt (NC) drops the Chrome User-Agent.** `pitt.py` sends every request through `scrapers.plain_http` via `_HonestSession` (honest UA, certificate verified). Blocks raise `egress_block:` / `tls_cert_invalid:`, and other transport errors propagate.
+- **No invented fields.** `Charges="Unknown"` becomes `""` and `Bond_Amount="0"` becomes `""` (the public listing publishes neither). `Status="In Custody"` becomes `""`: the source is titled "Detainee Search" with no current-only label or view, no release column and no population figure, so custody-only isn't proven. A published grid status would win (`extra_data.status_source`). Only digit `Booking Number` keys are kept, as before. The one honest probe (2026-10-15) got **ConnectionError (remote closed the connection)** (`docs/recon/NC_PITT_ROSTER_SCOPE_2026-10-15.md`). Tests: `tests/test_nc_pitt_honest.py`; `tests/test_gap_queue_nc_tx_sc.py` now expects `""` for charges/bond.
+
 ## [Unreleased] — 2026-10-15 (Newberry SC: honest identity; published-only bond/status)
 
 ### Fixed
