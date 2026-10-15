@@ -8,6 +8,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 - **Palm Beach (FL) no longer drives a Chrome browser or sends a Chrome User-Agent.** `palm_beach.py` reads the PBSO blotter with `scrapers.plain_http` (honest UA, certificate verified). It submits the page's own date-search form, parses cards with `parse_pbso_html`, and follows the page's own pagination links. The hCaptcha wait loop is gone: a challenge page (including hCaptcha) or 401/403/429 raises `egress_block:`, a dropped handshake raises `egress_block: ... connection_reset:`, a certificate failure raises `tls_cert_invalid:`, and a missing search form raises `PalmBeachSourceChanged`. `_fetch_single_booking` uses the same honest session, and a block now raises instead of reading as "not found". The one honest probe from the agent box (2026-10-15) got **connection_reset**. Tests: `tests/test_fl_palmbeach_plain_https.py`.
 
+## [Unreleased] — 2026-10-15 (Lake: honest UA, published-only status/bond; SolveCaptcha kept)
+
+### Fixed
+- **Lake (FL) no longer sends a Chrome User-Agent or invents "In Custody".** `lake.py` uses `scrapers.plain_http` (honest UA, certificate verified) for the inmate-search landing GET and the recent_data API POST. The owner-approved SolveCaptcha Turnstile path is unchanged. Status comes only from a published custody field/flag (`published_status`); otherwise `""`. Bond is published-only (`total_bond_amount` missing/blank → `""`; explicit 0 kept; negative → `NO BOND` + `""`). One honest probe of the landing page (2026-10-15) got **connection_reset**. Tests: `tests/test_fl_lake_honest_status.py`.
+
 ## [Unreleased] — 2026-10-15 (DCN base: honest identity, published-only bond/status, bid-only keys)
 
 ### Fixed

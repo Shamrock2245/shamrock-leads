@@ -131,6 +131,7 @@ def test_lake_parses_source_booking_pin_and_fields():
     assert rec.Charges == "PETIT THEFT (SECOND DEGREE MISDEMEANOR) | RESISTING (FIRST DEGREE MISDEMEANOR)"
     assert rec.Case_Number == "2026-MM-000001"
     assert rec.Bond_Amount == "1500" and rec.Agency == "EXAMPLE P.D."
+    assert rec.Status == ""
 
 
 @pytest.mark.parametrize("over", [{"pin": ""}, {"pin": "ABC12345"}, {"pin": "123"}, {"exemption": 1}, {"lastname": ""}])
@@ -139,7 +140,10 @@ def test_lake_drops_rows_without_source_key_or_exempt(over):
 
 
 def test_lake_no_bond_and_dedupe():
-    assert lake.parse_record(_lake_row(total_bond_amount=-1)).Bond_Type == "NO BOND"
+    nobond = lake.parse_record(_lake_row(total_bond_amount=-1))
+    assert nobond.Bond_Type == "NO BOND" and nobond.Bond_Amount == ""
+    assert lake.parse_record(_lake_row(total_bond_amount=0)).Bond_Amount == "0"
+    assert lake.parse_record({k: v for k, v in _lake_row().items() if k != "total_bond_amount"}).Bond_Amount == ""
     recs = lake.parse_records([_lake_row(), _lake_row(), _lake_row(pin="26000124")])
     assert [r.Booking_Number for r in recs] == ["26000123", "26000124"]
 
@@ -159,36 +163,48 @@ def test_lake_requires_solvecaptcha_key(monkeypatch):
 
 def test_lake_scrape_posts_recent_data_with_one_token(monkeypatch):
     monkeypatch.setenv("SOLVECAPTCHA_KEY", "test-key")
-    sess = mock.Mock()
-    sess.headers = {}
-    sess.get.return_value = _resp(text=f'data-sitekey="{lake.TURNSTILE_SITEKEY}"')
-    sess.post.return_value = _resp(js={"records": [_lake_row()], "captcha": {"success": True}})
-    with mock.patch.object(lake.requests, "Session", return_value=sess), \
+    calls = []
+
+    def fake_request(session, method, url, **kw):
+        calls.append((method, url, kw))
+        if method == "GET":
+            return _resp(text=f'data-sitekey="{lake.TURNSTILE_SITEKEY}"')
+        return _resp(js={"records": [_lake_row()], "captcha": {"success": True}})
+
+    with mock.patch.object(lake.plain_http, "make_session", return_value=mock.Mock()), \
+         mock.patch.object(lake.plain_http, "request", side_effect=fake_request), \
          mock.patch.object(lake, "solve_turnstile", return_value="tok") as solver:
         recs = lake.LakeCountyScraper().scrape()
     assert [r.Booking_Number for r in recs] == ["26000123"]
     solver.assert_called_once()
     assert solver.call_args.kwargs["sitekey"] == lake.TURNSTILE_SITEKEY
     import json as _json
-    body = _json.loads(sess.post.call_args.kwargs["data"])
-    assert body == {"token": "tok", "recent_data": True}
+    post = next(c for c in calls if c[0] == "POST")
+    assert _json.loads(post[2]["data"]) == {"token": "tok", "recent_data": True}
 
 
 def test_lake_sitekey_drift_and_bad_payload_raise(monkeypatch):
     from scrapers.scraper_resilience import AntiBotBlocked, ParseDriftError
     monkeypatch.setenv("SOLVECAPTCHA_KEY", "test-key")
-    sess = mock.Mock()
-    sess.headers = {}
-    sess.get.return_value = _resp(text="<html>no widget</html>")
-    with mock.patch.object(lake.requests, "Session", return_value=sess), \
+    state = {"mode": "no_widget"}
+
+    def fake_request(session, method, url, **kw):
+        if state["mode"] == "no_widget":
+            return _resp(text="<html>no widget</html>")
+        if method == "GET":
+            return _resp(text=lake.TURNSTILE_SITEKEY)
+        return _resp(js={"records": [_lake_row(pin="x")]})
+
+    with mock.patch.object(lake.plain_http, "make_session", return_value=mock.Mock()), \
+         mock.patch.object(lake.plain_http, "request", side_effect=fake_request), \
          mock.patch.object(lake, "solve_turnstile", return_value="tok"):
         with pytest.raises(ParseDriftError):
             lake.LakeCountyScraper().scrape()
-        sess.get.return_value = _resp(text=lake.TURNSTILE_SITEKEY)
-        sess.post.return_value = _resp(js={"records": [_lake_row(pin="x")]})
+        state["mode"] = "bad_pin"
         with pytest.raises(ParseDriftError):
             lake.LakeCountyScraper().scrape()
-    with mock.patch.object(lake.requests, "Session", return_value=sess), \
+    with mock.patch.object(lake.plain_http, "make_session", return_value=mock.Mock()), \
+         mock.patch.object(lake.plain_http, "request", return_value=_resp(text=lake.TURNSTILE_SITEKEY)), \
          mock.patch.object(lake, "solve_turnstile", return_value=None):
         with pytest.raises(AntiBotBlocked):
             lake.LakeCountyScraper().scrape()
