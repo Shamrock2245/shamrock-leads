@@ -106,5 +106,5 @@ def test_inheriting_scrapers_now_store_unknown():
     # The list is in the PR body; this just proves the set is non-empty and
     # that the model default is what they get.
     files = _inheriting_calls()
-    assert "scrapers/counties/st_lucie.py" in files or files
+    assert files and "scrapers/counties/st_lucie.py" not in files  # St. Lucie sets "" explicitly (#212)
     assert ArrestRecord.__dataclass_fields__["Bond_Amount"].default == ""

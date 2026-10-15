@@ -6,7 +6,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased] — 2026-10-15 (ArrestRecord bond default is "" (unknown), never an invented "0")
 
 ### Fixed
-- **`core/models.py`: `ArrestRecord.Bond_Amount` defaults to `""`.** It used to default to `"0"`, so every scraper that never sets a bond (22 modules, listed in the PR, plus Broward rows whose detail page shows no bond) stored an invented $0 and took the scorer's -50 "$0 bond" penalty. A published amount, including a real `"0"`, is still set by the scraper and kept.
+- **`core/models.py`: `ArrestRecord.Bond_Amount` defaults to `""`.** It used to default to `"0"`, so every scraper that never sets a bond (21 modules, listed in the PR, plus Broward rows whose detail page shows no bond) stored an invented $0 and took the scorer's -50 "$0 bond" penalty. A published amount, including a real `"0"`, is still set by the scraper and kept.
 - **`ArrestRecord.from_mongo`** reads the stored `bond_amount_raw` when present (a stored published `"0"` is kept). A legacy doc with only a numeric `0` reads back as unknown (`""`), and a positive numeric is kept.
 - **`core/staff_edits.py`** staff re-score no longer falls back to `"0"` when there is no staff amount.
 - **`writers/rearrest_checker.py`** notifications carry `bond_amount_raw` and `bond_known`, so an unknown bond is no longer indistinguishable from $0 (numeric `bond_amount` stays `0.0` for existing readers; the $1K Slack gate is unchanged).
@@ -14,6 +14,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `tests/test_models_bond_unknown_default.py` (added to the `ci.yml` list).
+
+## [Unreleased] — 2026-10-15 (St. Lucie: plain HTTPS, no assumed custody, no invented bond)
+
+### Fixed
+- **St. Lucie (FL) no longer disguises itself as Chrome or turns off certificate checks.** `scrapers/counties/st_lucie.py` used curl_cffi `impersonate="chrome131"`, a Chrome User-Agent and `verify=False`. It now uses `scrapers.plain_http` (honest UA, TLS verified; a block raises `EgressBlocked`, a bad certificate raises `SourceTLSInvalid`). A plain verified POST from the box returned 200 with the full list.
+- **Status is no longer assumed "In Custody".** A published Release Date gives `"Released"` and is now stored (it was dropped); otherwise Status is `""`.
+- **Bond is `""`** (the list publishes none), never `"0"`.
+- **No name-keyed rows:** a row without an Inmate Id is skipped instead of being de-duplicated on the name.
+
+### Tests
+- `tests/test_fl_st_lucie_plain_https.py` (added to the `ci.yml` list).
+
+## [Unreleased] — 2026-10-15 (Martin: plain HTTPS; published bond only; State always FL)
+
+### Fixed
+- **Martin (FL) no longer disguises itself as Chrome or turns off certificate checks.** `scrapers/counties/martin.py` used curl_cffi `impersonate="chrome131"`, a Chrome User-Agent, `verify=False` and silenced urllib3 warnings. It now uses `scrapers.plain_http` (honest UA, TLS verified). A plain verified GET from the box returned 200 JSON.
+- **Bond is published-only:** the old code summed only the bonds that had an amount and wrote `"0"` when none did. The total is now set only when every bond publishes an amount, else `""`; a published `0` stays `"0"`.
+- **Status only from the published `IsReleased` flag:** `""` when the flag is absent (was defaulted to `"In Custody"`).
+- **State is always `FL`.** It was taken from the defendant's address, so out-of-state addresses (3 of 100 on the live page) produced rows with State `NE` / `AK` / `MH`.
+- **No fallback booking key:** a row without `soNumber` is skipped instead of keyed on the API's internal `id`.
+- **Booking date** comes from the source `bookingDate` (falls back to the latest arrest date as before).
+
+### Tests
+- `tests/test_fl_martin_plain_https.py` (added to the `ci.yml` list).
 
 ## [Unreleased] — 2026-10-15 (Osceola: plain HTTPS with TLS verified; no invented $0; blank cells keep the day)
 

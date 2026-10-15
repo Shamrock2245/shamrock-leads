@@ -2,12 +2,22 @@
 Martin County Arrest Scraper — Direct REST API.
 Source: https://correctionsrecordssearch.com/martincountyfl
 Method: Direct Tyler Technologies API queries
+
+2026-10-15: plain ``requests`` via ``scrapers.plain_http`` (honest User-Agent,
+TLS verified; no curl_cffi Chrome impersonation, no ``verify=False``). A block
+raises EgressBlocked and a bad certificate raises SourceTLSInvalid.
+Status comes only from the published ``IsReleased`` flag ("" when absent).
+Bond is the sum of published bond amounts only when every bond publishes one,
+else "" (never an invented "0"; a published 0 is kept). Rows without a source
+``soNumber`` are skipped (the API's internal ``id`` is not a booking number).
+State is always FL (the jail's state), never the defendant's address state.
 """
 import logging
 import datetime
 from typing import List
-from curl_cffi import requests as cffi_requests
 from scrapers.base_scraper import BaseScraper
+from scrapers.plain_http import make_session, request
+from scrapers.published_bond import charge_bond_amount, total_published_bond
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
@@ -15,7 +25,6 @@ logger = logging.getLogger(__name__)
 FACILITY = "Martin County Jail"
 COUNTY = "Martin"
 API_URL = "https://api.correctionsrecordssearch.com/instances/01K343RER5XCX3V9KQA5876BE8/inmates"
-IMPERSONATE = "chrome131"
 
 class MartinCountyScraper(BaseScraper):
     @property
@@ -25,7 +34,6 @@ class MartinCountyScraper(BaseScraper):
     def scrape(self) -> List[ArrestRecord]:
         logger.info("Martin: Querying inmate API...")
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "application/json, text/plain, */*",
             "Origin": "https://correctionsrecordssearch.com",
             "Referer": "https://correctionsrecordssearch.com/"
@@ -40,11 +48,8 @@ class MartinCountyScraper(BaseScraper):
         }
         
         try:
-            # Enforce verify=False and suppress warnings
-            import urllib3
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            
-            resp = cffi_requests.get(API_URL, headers=headers, params=params, verify=False, timeout=30, impersonate=IMPERSONATE)
+            session = make_session(headers)
+            resp = request(session, "GET", API_URL, params=params, timeout=30, county="Martin")
             if resp.status_code != 200:
                 raise Exception(f"Failed to fetch roster: HTTP {resp.status_code}")
             
@@ -70,15 +75,20 @@ class MartinCountyScraper(BaseScraper):
                     if middle_name:
                         full_name += f" {middle_name}"
                 
-                so_number = x.get("soNumber", "").strip()
+                so_number = str(x.get("soNumber") or "").strip()
                 if not so_number:
-                    so_number = x.get("id", "").strip()
+                    continue  # no source booking key; never fall back to the internal id
                     
                 dob = x.get("dateOfBirth", "").strip()
                 
                 # Status
-                is_released = x.get("IsReleased", False)
-                status = "Released" if is_released else "In Custody"
+                is_released = x.get("IsReleased")
+                if is_released is True:
+                    status = "Released"
+                elif is_released is False:
+                    status = "In Custody"  # published flag, not an assumption
+                else:
+                    status = ""
                 
                 # Physicals
                 height = x.get("height", "").strip()
@@ -133,27 +143,29 @@ class MartinCountyScraper(BaseScraper):
                 
                 charges_str = " | ".join(charges_list)
                 
-                # Accumulate bond amount
-                bond_val = 0.0
+                # Bond: total only when every bond publishes an amount
+                bond_amounts = []
                 bond_types = []
-                for b in x.get("bonds", []):
-                    amt = b.get("amount", 0)
-                    if amt:
-                        try:
-                            bond_val += float(amt)
-                        except:
-                            pass
-                    btype = b.get("type", "").strip()
+                for b in x.get("bonds") or []:
+                    bond_amounts.append(charge_bond_amount(b.get("amount")))
+                    btype = str(b.get("type") or "").strip()
                     if btype and btype not in bond_types:
                         bond_types.append(btype)
-                        
-                bond_amount_str = str(int(bond_val)) if bond_val.is_integer() else f"{bond_val:.2f}"
+
+                bond_amount_str = total_published_bond(bond_amounts)
                 bond_type_str = ", ".join(bond_types)
                 
                 # City, State
-                addr_info = x.get("address", {})
-                city = addr_info.get("city", "").strip()
-                state = addr_info.get("state", "FL").strip()
+                addr_info = x.get("address") or {}
+                city = str(addr_info.get("city") or "").strip()
+                source_booking_date = str(x.get("bookingDate") or "").strip()
+                if source_booking_date:
+                    if "T" in source_booking_date:
+                        bd, bt = source_booking_date.split("T", 1)
+                    else:
+                        bd, bt = source_booking_date, ""
+                else:
+                    bd, bt = booking_date, booking_time
                 
                 records.append(ArrestRecord(
                     Scrape_Timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -166,8 +178,8 @@ class MartinCountyScraper(BaseScraper):
                     DOB=dob,
                     Arrest_Date=booking_date,
                     Arrest_Time=booking_time,
-                    Booking_Date=booking_date,
-                    Booking_Time=booking_time,
+                    Booking_Date=bd,
+                    Booking_Time=bt,
                     Status=status,
                     Facility=FACILITY,
                     Agency=agency,
@@ -177,7 +189,7 @@ class MartinCountyScraper(BaseScraper):
                     Weight=weight,
                     Age_At_Arrest=age_at_arrest,
                     City=city.upper(),
-                    State=state.upper(),
+                    State="FL",
                     Mugshot_URL=mugshot_url,
                     Charges=charges_str,
                     Bond_Amount=bond_amount_str,
