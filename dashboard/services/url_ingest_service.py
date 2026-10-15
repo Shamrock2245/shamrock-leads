@@ -205,6 +205,29 @@ async def ingest_url(url: str, county: Optional[str] = None, state: Optional[str
         return {"success": False, "error": str(e)}
 
 
+def published_custody_status(b_data: dict) -> str:
+    """Custody status only as the source published it; unknown is "".
+
+    A published status string wins. Otherwise an explicit inCustody flag
+    (bool, or "true"/"false") maps to "In Custody" / "Released". A missing,
+    null or unrecognized flag is "" (never an invented "In Custody").
+    """
+    if not isinstance(b_data, dict):
+        return ""
+    for key in ("status", "custodyStatus", "custody_status"):
+        val = b_data.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    flag = b_data.get("inCustody")
+    if isinstance(flag, str):
+        flag = {"true": True, "false": False}.get(flag.strip().lower())
+    if flag is True:
+        return "In Custody"
+    if flag is False:
+        return "Released"
+    return ""
+
+
 async def _ingest_lee_county_api(booking_id: str, source_url: str) -> Optional[dict]:
     """Fetch booking info and charges directly from Lee County Sheriff's public API.
 
@@ -350,7 +373,7 @@ async def _ingest_lee_county_api(booking_id: str, source_url: str) -> Optional[d
         except Exception:
             court_date_val = h_str[:10] if len(h_str) >= 10 else "TBN"
 
-    status_str = "In Custody" if b_data.get("inCustody", True) else "Released"
+    status_str = published_custody_status(b_data)
 
     dob_iso, dob_display = _normalize_dob(_first_str(
         b_data.get("birthDate"),
@@ -632,7 +655,7 @@ async def _ingest_pbso_from_mongo(booking_id: str, source_url: str) -> Optional[
             "county": "Palm Beach",
             "state": "FL",
             "facility": _first_str(doc.get("facility"), doc.get("Facility"), "Palm Beach County Jail"),
-            "status": _first_str(doc.get("status"), doc.get("Status"), "In Custody"),
+            "status": _first_str(doc.get("status"), doc.get("Status")),  # unknown is "", never invented
             "booking_date": _first_str(doc.get("booking_date"), doc.get("Booking_Date")),
             "dob": dob_iso or dob_display,
             "source_url": source_url,
