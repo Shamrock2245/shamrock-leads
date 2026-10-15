@@ -315,6 +315,25 @@ def _install_plan_writer(monkeypatch, stores):
     )
 
 
+def _hide_plan_module(monkeypatch):
+    """Pretend ``payment_plan_creation`` is not importable.
+
+    #211 lands that module. These cases still cover the fail-closed path
+    the confirmation service uses when the writer is absent.
+    """
+    import importlib
+
+    name = "dashboard.services.payment_plan_creation"
+    real_import = importlib.import_module
+
+    def _blocked(mod_name, package=None):
+        if mod_name == name:
+            raise ImportError(name)
+        return real_import(mod_name, package)
+
+    monkeypatch.setattr(importlib, "import_module", _blocked)
+
+
 def _assert_nothing_written(stores):
     for name in ("paperwork_packets", "bond_cases", "active_bonds"):
         assert not _confirmed(stores[name].docs[0])
@@ -539,6 +558,7 @@ def test_plan_terms_conflict_is_409_and_rolls_back(monkeypatch):
 
 
 def test_missing_plan_module_writes_nothing(monkeypatch):
+    _hide_plan_module(monkeypatch)
     stores, get, client = _world()
     _bind(monkeypatch, stores, get)
     assert load_plan_creator() is None
@@ -571,6 +591,7 @@ def test_non_callable_plan_function_writes_nothing(monkeypatch):
 
 
 def test_paid_in_full_confirms_without_a_plan_module(monkeypatch):
+    _hide_plan_module(monkeypatch)
     stores, get, client = _world()
     _bind(monkeypatch, stores, get)
     assert load_plan_creator() is None
