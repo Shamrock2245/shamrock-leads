@@ -46,6 +46,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - New `tests/test_agent_analytics_payment_agent.py` (added to `ci.yml`): poller+webhook and poller+plan duplicates, which row is preferred, declined/refunded/voided/pending/blank statuses, webhook failed/refunded events, plan `/pay` rows, rows with no transaction id, and the KPIs from the endpoint itself, refund/void/chargeback cancellation, down-payment matching (matched, not matched, one-to-one, transaction id, refunded card row), and the analytics side of down payments. Future `paid_at` / `created_at` rows are outside the 30-day KPIs. New `tests/test_payment_plan_create_down_payment_claim.py` (added to `ci.yml`): claim and row on a new id, concurrent creates with the same id (one winner, also when linking the same poller row), 409 when claimed or on a plan row, linking settled poller and webhook rows, refusing unsettled/refunded/wrong-amount/wrong-booking/ambiguous rows, rollback when the plan insert, payment write, link or claim update fails, and 503 when dedupe is unavailable. The link audit names the signed-in agent, or `machine_key` for a trusted machine call, and ignores `created_by` on the body. When a newer write blocks unlinking, the plan is kept as `needs_review` and a second plan for that booking is refused. An incomplete undo (delete throws, or delete matches nothing while the row remains) also leaves the plan `needs_review` and keeps the claim.
 
+## [Unreleased] — 2026-10-14 (FL rule-conflict fail_closed: Hillsborough, Marion)
+
+### Changed
+- **Hillsborough (FL) and Marion (FL) fail closed** (`SOURCE_CONTRACT_VALIDATED = False` + Health `fail_closed`), found in the 2026-10-14 health snapshot. Hillsborough's only path was an account login plus SolveCaptcha reCAPTCHA v2 plus a proxy fallback (CAPTCHA solving is owner-approved only for Broward and Lake). Marion reached its AWS WAF listing only through a residential proxy with TLS impersonation. Each `scrape()` now returns `[]` before any request, and `config.source_guard` maps both source hosts so refetch / recheck / manual paths stay closed too. Evidence, live-emitter rows and the matrix are updated; `docs/recon/FL_RULE_CONFLICT_FAIL_CLOSED_2026-10-14.md` has the reopen path. No stored data touched.
+
+### Tests
+- `tests/test_fl_rule_conflict_fail_closed.py` (added to the `ci.yml` list).
+
 ## [Unreleased] — 2026-10-14 (Polk / Volusia / Pasco: unpublished bond is "", never a counted 0)
 
 ### Fixed

@@ -94,6 +94,7 @@ jobs:
             tests/test_fl_orange_bestjail.py \
             tests/test_fl_67_status.py \
             tests/test_hendry_fail_closed.py \
+            tests/test_fl_rule_conflict_fail_closed.py \
             tests/test_fl_duval_no_robot_click.py \
             tests/test_fl_collier_plain_custody.py \
             tests/test_fl_plain_https_polk_volusia_pasco.py \
