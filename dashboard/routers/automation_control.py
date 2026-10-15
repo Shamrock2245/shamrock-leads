@@ -139,7 +139,7 @@ ALL_SERVICE_KEYS = {
     "alpha_engine", "docket_monitor", "court_intel", "nlp_enrichment",
     # Monitoring & Compliance
     "court_reminders", "rearrest_detection", "delinquency_scanner",
-    "fta_alert", "missed_payment", "court_email", "bb_health", "data_retention",
+    "fta_alert", "missed_payment", "installment_invoices", "court_email", "bb_health", "data_retention",
     "bounty_hunter", "watchdog",
     # Geo Intelligence
     "geo_intelligence", "findmy_geofence",
@@ -183,6 +183,7 @@ SERVICE_META = {
     "delinquency_scanner": {"name": "Delinquency Scanner", "icon": "💳", "category": "monitor",  "desc": "Flag overdue payment plans (>30 days)"},
     "fta_alert":           {"name": "FTA Alert Engine",    "icon": "🚨", "category": "monitor",  "desc": "Multi-level FTA escalation (staff → BB → surrender)"},
     "missed_payment":      {"name": "Missed Payment Alert","icon": "💸", "category": "monitor",  "desc": "Alert staff on missed premium installments"},
+    "installment_invoices": {"name": "Installment Invoices", "icon": "🧾", "category": "revenue", "desc": "Stage one SwipeSimple invoice per due financed installment (dry-run unless LIVE)"},
     "court_email":         {"name": "Court Email Scanner",  "icon": "📧", "category": "monitor",  "desc": "Gmail discharge/exoneration pipeline"},
     "bb_health":           {"name": "iMessage Health",     "icon": "📱", "category": "monitor",  "desc": "BlueBubbles bridge connectivity monitor"},
     "data_retention":      {"name": "Data Retention",      "icon": "🗑️", "category": "monitor",  "desc": "Weekly purge of old low-value records"},

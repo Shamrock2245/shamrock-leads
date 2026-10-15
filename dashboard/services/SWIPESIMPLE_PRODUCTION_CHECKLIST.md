@@ -52,6 +52,7 @@ BlueBubbles (`BLUEBUBBLES_URL_0178`, `BLUEBUBBLES_PASSWORD_0178`) must already w
 3. On a staging shell only: `SWIPESIMPLE_LIVE=1` and a session secret, `SWIPESIMPLE_DISPATCH_LIVE` still unset. Run `python scripts/swipesimple_smoke_create.py` ($0.01, reference starts with `SMOKE`, no customer dispatch).
 4. Unset `SWIPESIMPLE_LIVE` unless the $0.01 draft looks right and go-live is the same day.
 5. Only then set `SWIPESIMPLE_LIVE=1` and `SWIPESIMPLE_DISPATCH_LIVE=1` in production. The first real send is the confirmed down payment, once. A second completion does not send again.
+6. Financed installments use those same two flags. With both unset, the hourly `installment_invoices` cron writes a dry-run marker (`{booking}-I{n}`, amount = that installment only) and does not HTTP or text. A second run the same day stages nothing. A paid webhook or Gmail receipt posts to the plan once. LIVE without a session does not mark the installment sent, so the next run can retry. DISPATCH sends the pay link by BlueBubbles once per installment, and only when the link is a real URL.
 
 ## Remaining human steps (Brendan / Leads Ops)
 

@@ -8,6 +8,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 - **Palm Beach (FL) no longer drives a Chrome browser or sends a Chrome User-Agent.** `palm_beach.py` reads the PBSO blotter with `scrapers.plain_http` (honest UA, certificate verified). It submits the page's own date-search form, parses cards with `parse_pbso_html`, and follows the page's own pagination links. The hCaptcha wait loop is gone: a challenge page (including hCaptcha) or 401/403/429 raises `egress_block:`, a dropped handshake raises `egress_block: ... connection_reset:`, a certificate failure raises `tls_cert_invalid:`, and a missing search form raises `PalmBeachSourceChanged`. `_fetch_single_booking` uses the same honest session, and a block now raises instead of reading as "not found". The one honest probe from the agent box (2026-10-15) got **connection_reset**. Tests: `tests/test_fl_palmbeach_plain_https.py`.
 
+## [Unreleased] — 2026-10-15 (Orange FL: honest UA; status published or roster presence)
+
+### Fixed
+- **Orange (FL) no longer sends a Chrome User-Agent or invents "In Custody".** `orange.py` uses `scrapers.plain_http` (honest UA, certificate verified) for every BestJail JSON GET. Status is a published custody field if there is one (`published_status`); otherwise "In Custody" from roster presence, because the roster is proven custody-only. The county page reads "Current Inmate Database ... people currently in jail" and "When a person is released from jail, they will no longer appear in these listings". Roster rows carry no release fields. 2,919 roster bookings vs the county's published daily population of 2,976 (`docs/recon/FL_ORANGE_ROSTER_SCOPE_2026-10-15.md`). `extra_data.status_origin` records `published` or `roster_presence`. Bond was already published-only (blank cell → `""`; published `0.00` kept). Blocks raise `egress_block:` / `tls_cert_invalid:` with no stealth, proxy or `verify=False`. One honest probe (2026-10-15) of the inmate portal got **HTTP 200**. Tests: `tests/test_fl_orange_honest_status.py`.
+
 ## [Unreleased] — 2026-10-15 (one financed plan per premium confirmation)
 
 ### Added
@@ -15,6 +20,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `tests/test_payment_plan_creation.py` (mocked Mongo only). `tests/test_payment_plan_link_core.py`, which `ci.yml` already names, runs that file in CI.
+
+## [Unreleased] — 2026-10-14 (financed installment invoices)
+
+### Added
+- **Due installments stage one SwipeSimple invoice.** The hourly `installment_invoices` cron writes a send-once claim for each `premium_confirmation` installment whose due date is today or earlier. The reference is `{booking}-I{n}` and the amount is that row's `amount_cents`. `SWIPESIMPLE_LIVE` off records a dry-run and does not call SwipeSimple. LIVE without a session leaves the row unstaged so the next run can retry. `SWIPESIMPLE_DISPATCH_LIVE` off does not text. A second run the same day stages nothing. Staff `TEST-` bookings do not HTTP unless `SWIPESIMPLE_TEST_CASE_INVOICES=1`.
+- **Paid, failed, and refunded gateway events post to the plan.** `POST /api/webhooks/payment` (HMAC unchanged) and the Gmail receipt poller call `apply_plan_payment` / `reverse_plan_payment`. A paid installment drops `balance_remaining_cents` once; a replay does not. A booking that does not match the plan is 409 and writes nothing. A decline writes one `payment_plan_payment_failed` audit and does not move the balance. A refund restores the balance once and marks the row reversed. The down-payment invoice (reference = booking number, no installment) does not consume the financed balance. Production flags are not changed.
+
+### Fixed
+- **A paid installment against a confirmation plan increments numeric balances.** `ensure_payment_plan_for_confirmation` stores `balance_remaining` and `total_paid` as decimal strings (`1000.00`). Posting rewrites those strings to numbers in the same transaction, then `$inc`s them. `balance_remaining_cents` stays the integer source of truth. A string that is not an amount, and has no cent field, posts nothing.
+
+### Tests
+- `tests/test_installment_invoices.py`. `installment_invoice_claims` is tenant-owned in `dashboard/tenancy/constants.py` (known-collection count 122).
 
 ## [Unreleased] — 2026-10-15 (Aiken SC: plain honest HTTPS; published-only bond/status)
 

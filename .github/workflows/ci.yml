@@ -108,6 +108,7 @@ jobs:
             tests/test_dcn_base_cleanup.py \
             tests/test_fl_lake_honest_status.py \
             tests/test_sc_aiken_plain_https.py \
+            tests/test_fl_orange_honest_status.py \
             tests/test_fl_desoto_bond_custody_defaults.py \
             tests/test_fl_smartweb_plain_https.py \
             tests/test_lee_outreach_unknown_status.py \
@@ -157,6 +158,7 @@ jobs:
             tests/test_payment_plan_pay_dedupe.py \
             tests/test_payment_plan_link_core.py \
             tests/test_premium_confirmation.py \
+            tests/test_installment_invoices.py \
             tests/test_auth_no_pin_fail_closed.py \
             tests/test_pinellas_relay_only.py \
             tests/test_pinellas_modal_wait.py \
