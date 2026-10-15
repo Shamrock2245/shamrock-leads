@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-15 (Highlands / Monroe: plain HTTPS, no stealth; no invented $0 or custody)
+
+### Fixed
+- **Highlands (FL) and Monroe (FL) no longer disguise themselves or turn off certificate checks.** Both used curl_cffi `impersonate="chrome131"`, a Chrome User-Agent, a "Stealth Stack" header block and `verify=False` (with urllib3 warnings silenced). Both now use `scrapers.plain_http` (honest UA, TLS verified). A block fails visibly with `egress_block:` and a TLS failure with `tls_cert_invalid:`; nothing works around it. Plain verified GETs from the box returned 200 JSON for both (the keysso.net chain now verifies).
+- **Highlands bond:** `NO BOND` (319 of 469 live rows) was stored as `"0"`; it is now `Bond_Type="NO BOND"` with the amount `""`. Blank or text is `""`; a published `$0.00` stays `"0"`.
+- **Monroe bond:** missing / `NO BOND` / text is `""` (was `"0"`); a published `0` stays `"0"`.
+- **Custody:** both hard-coded `Status="In Custody"`. Highlands' feed has no custody field and Monroe's is an arrest log, so Status is `""`.
+
+### Tests
+- `tests/test_fl_highlands_monroe_plain_https.py` and `tests/test_monroe_scraper.py` (both added to the `ci.yml` list; the latter now patches `plain_http.request` and asserts NO BOND is `""`).
+
 ## [Unreleased] — 2026-10-15 (ArrestRecord bond default is "" (unknown), never an invented "0")
 
 ### Fixed

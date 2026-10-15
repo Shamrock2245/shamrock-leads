@@ -76,7 +76,7 @@ def make_scraper():
 
 class TestMonroeScraper(unittest.TestCase):
     def _scrape(self):
-        with patch("scrapers.counties.monroe.cffi_requests.get", return_value=FakeResp()):
+        with patch("scrapers.counties.monroe.request", return_value=FakeResp()):
             return MonroeCountyScraper.scrape(make_scraper())
 
     def test_parses_and_dedupes(self):
@@ -94,16 +94,17 @@ class TestMonroeScraper(unittest.TestCase):
         aviles = next(r for r in recs if r.Last_Name == "AVILES")
         self.assertEqual(aviles.County, "Monroe")
         self.assertEqual(aviles.First_Name, "ADRIAN")
-        self.assertEqual(aviles.Bond_Amount, "7500.0")
+        self.assertEqual(aviles.Bond_Amount, "7500")
+        self.assertEqual(aviles.Status, "")  # arrest log: custody not published
         self.assertEqual(aviles.Court_Date, "08/12/2026")
         self.assertEqual(aviles.Court_Time, "09:00")
         self.assertIn("HIT AND RUN", aviles.Charges)
         self.assertEqual(aviles.Address, "")  # "Not Available" scrubbed
 
-    def test_no_bond_is_zero(self):
+    def test_no_bond_is_unknown_not_zero(self):
         recs = self._scrape()
         doe = next(r for r in recs if r.Last_Name == "DOE")
-        self.assertEqual(float(doe.Bond_Amount), 0.0)
+        self.assertEqual(doe.Bond_Amount, "")  # NO BOND is not a $0 bond
         self.assertEqual(doe.Booking_Number, "MONROE-CAD-001")
 
     def test_skips_row_without_source_issued_identifier(self):

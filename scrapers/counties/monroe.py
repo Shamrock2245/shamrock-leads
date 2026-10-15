@@ -14,6 +14,14 @@ HISTORY:
         No captcha, no proxy, no disclaimer. Returns ArrestLog1..8.json
         buckets, one per day, ~80 records/week.
 
+2026-10-15: plain ``requests`` via ``scrapers.plain_http`` (honest User-Agent,
+TLS verified; the keysso.net chain now verifies). The curl_cffi Chrome
+impersonation, Chrome UA, "stealth" headers and ``verify=False`` are gone; a
+block raises EgressBlocked and a TLS failure raises SourceTLSInvalid. Bond is
+the published amount only ("" when blank / NO BOND / text; a published 0 is
+kept). This is an arrest log, not a custody roster, so Status is "" (it was
+hard-coded "In Custody").
+
 Natural key: the source-issued MNI id embedded in the mugshot filename
 (e.g. MCSO78MNI183475), offense number, or CAD number. Rows without one of
 those source-issued identifiers are skipped.
@@ -25,12 +33,10 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
-import requests
-from curl_cffi import requests as cffi_requests
-import urllib3
-
 from core.models import ArrestRecord
 from scrapers.base_scraper import BaseScraper
+from scrapers.plain_http import make_session, request
+from scrapers.published_bond import charge_bond_amount, total_published_bond
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +46,6 @@ FACILITY = "Monroe County Detention Center"
 AGENCY = "Monroe County Sheriff's Office"
 
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/131.0.0.0 Safari/537.36"
-    ),
     "Accept": "application/json, text/plain, */*",
     "Origin": "https://www.keysso.net",
     "Referer": "https://www.keysso.net/",
@@ -52,19 +53,6 @@ HEADERS = {
 
 _MNI_RE = re.compile(r"ArrestLogs/([A-Z0-9]+?)L?\.(?:jpg|jpeg|png)", re.I)
 
-# ── Stealth Stack ──────────────────────────────────────────────────────────────
-IMPERSONATE = "chrome131"
-STEALTH_HEADERS = {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "Upgrade-Insecure-Requests": "1",
-    "DNT": "1",
-}
 
 class MonroeCountyScraper(BaseScraper):
     """Monroe County (FL) — Keys SO official arrest-log JSON API."""
@@ -75,11 +63,8 @@ class MonroeCountyScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         logger.info("📡 %s: Fetching Keys SO arrest API...", self.county)
-        # keysso.net serves an incomplete intermediate chain (same as v1) —
-        # verify=False is required; suppress the noisy warning locally.
-        with urllib3.warnings.catch_warnings():
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            resp = cffi_requests.get(API_URL, headers=HEADERS, timeout=45, verify=False, impersonate=IMPERSONATE)
+        session = make_session(HEADERS)
+        resp = request(session, "GET", API_URL, timeout=45, county="Monroe")
         resp.raise_for_status()
         data = resp.json()
 
@@ -160,7 +145,7 @@ class MonroeCountyScraper(BaseScraper):
             Arrest_Date=arrest_date,
             Arrest_Time=arrest_time,
             Booking_Date=arrest_date,
-            Status="In Custody",
+            Status="",  # arrest log, not a custody roster
             Facility=FACILITY,
             Agency=AGENCY,
             Race=str(item.get("Race") or "").strip(),
@@ -168,7 +153,7 @@ class MonroeCountyScraper(BaseScraper):
             Address=address,
             Mugshot_URL=str(item.get("mugShot") or "").strip(),
             Charges=charges,
-            Bond_Amount=str(self._parse_bond(item.get("Bond"))),
+            Bond_Amount=self._parse_bond(item.get("Bond")),
             Court_Date=court_date,
             Court_Time=court_time,
             Detail_URL=PUBLIC_PAGE,
@@ -219,13 +204,6 @@ class MonroeCountyScraper(BaseScraper):
         return parts[0], " ".join(parts[1:-1]), parts[-1]
 
     @staticmethod
-    def _parse_bond(bond_val) -> float:
-        if bond_val is None:
-            return 0.0
-        cleaned = re.sub(r"[$,\s]", "", str(bond_val).strip().upper())
-        if not cleaned or any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
-            return 0.0
-        try:
-            return float(cleaned)
-        except (ValueError, TypeError):
-            return 0.0
+    def _parse_bond(bond_val) -> str:
+        """Published amount only: "" for missing / NO BOND / text; a published 0 is "0"."""
+        return total_published_bond([charge_bond_amount(bond_val)])
