@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-15 (SmartWEB: honest plain HTTPS; blocks fail visibly)
+
+### Fixed
+- **`scrapers/fl_smartweb.py` no longer sends a Chrome User-Agent.** The shared fetch now uses `scrapers.plain_http` (honest UA, certificate verified) for the form GET, the form POST and the `AddMoreResults` POSTs. A 401/403/429 or a challenge page raises `egress_block:`, a real certificate failure raises `tls_cert_invalid:`, and a dropped handshake raises `egress_block: … connection_reset`. Nothing works around a block. This affects Bradford, Dixie, Escambia, Gilchrist, Glades, Hamilton, Madison, Putnam, Santa Rosa, Sumter and Taylor; no county module had its own disguise. The honest probe from the agent box (2026-10-15): 8 of 11 returned 200 with the search form; Santa Rosa got a dropped TLS handshake (connection_reset); Bradford and Taylor (plain-HTTP hosts) timed out on connect. They are flagged only, not switched off.
+
+### Tests
+- `tests/test_fl_smartweb_plain_https.py` (added to the `ci.yml` list). The `test_fl_smartweb_legacy_paging` / `_unknown_bond` fakes gained `request()` and response headers for the plain_http path.
+
 ## [Unreleased] — 2026-10-15 (SmartWEB: Status only from the source; unknown is "")
 
 ### Fixed
