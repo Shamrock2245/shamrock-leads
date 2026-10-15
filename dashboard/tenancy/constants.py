@@ -126,6 +126,7 @@ KNOWN_APP_COLLECTIONS = frozenset(
         "imessage_outreach",
         "indemnitors",
         "ingestion_log",
+        "installment_invoice_claims",
         "intake_fanout_outbox",
         "intake_queue",
         "intake_recovery_log",

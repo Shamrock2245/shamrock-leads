@@ -179,6 +179,21 @@ async def _run_fta_alert():
     else:
         logger.info("[FTAAlert] scanned=%d — no new FTAs", result.get("scanned", 0))
 
+async def _run_installment_invoices():
+    """Hourly: stage one SwipeSimple invoice per financed installment that is due."""
+    from dashboard.services.installment_invoice_service import stage_due_installments
+
+    result = await stage_due_installments()
+    logger.info(
+        "[InstallmentInvoice] staged=%s skipped=%s failed=%s blocked=%s dry_run=%s",
+        result.get("staged"),
+        result.get("skipped"),
+        result.get("failed"),
+        result.get("blocked"),
+        result.get("dry_run"),
+    )
+
+
 async def _run_missed_payment():
     """Every 12h: scan payment plans for overdue installments, fire BB alert + geo link."""
     from dashboard.services.missed_payment_alert_service import MissedPaymentAlertService
@@ -813,6 +828,7 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("rearrest_detection", "ReArrest",           7200, 180, _run_rearrest),
     CronDef("fta_alert",          "FTAAlert",          14400, 120, _run_fta_alert),
     CronDef("missed_payment",     "MissedPayment",     43200, 240, _run_missed_payment),
+    CronDef("installment_invoices", "InstallmentInvoice", 3600, 180, _run_installment_invoices),
     CronDef("data_retention",     "DataRetention",     86400, 300, _run_retention),
     CronDef("court_email",        "CourtEmail",          900,  90, _run_court_email),
     CronDef("blog_publisher",     "Blog",              21600, 300, _run_blog),

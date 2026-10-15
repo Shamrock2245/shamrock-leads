@@ -90,6 +90,12 @@ DEFAULT_CONFIG = {
         "slack_digest": True,
     },
 
+    # ── Financed installment invoices (SwipeSimple; dry-run unless LIVE) ──
+    "installment_invoices": {
+        "enabled": True,
+        "interval_seconds": 3600,
+    },
+
     # ── Abandoned Intake Recovery ──
     "intake_recovery": {
         "enabled": True,
