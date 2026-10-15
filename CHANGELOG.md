@@ -25,6 +25,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `tls_cert_invalid` stays limited to a certificate that was presented and rejected. Timeouts (`requests.Timeout`, urllib3/socket timeouts) are re-raised unchanged under their existing network label; DNS and refused connections are unchanged. Nothing is retried, with weaker settings or otherwise.
 - Tests: `tests/test_plain_http_connection_reset_mapping.py` (on the ci.yml list) covers each exception path and the Health classification.
 
+## 2026-10-15 — Seminole FL honest plain HTTPS (supersedes #208)
+
+- `scrapers/counties/seminole.py`: curl_cffi `chrome131` impersonation and the Chrome UA are removed. All requests go through `scrapers.plain_http` (honest UA, TLS verified). Blocks (`AntiBotBlocked`: egress_block / tls_cert_invalid) are re-raised past the per-letter and per-detail handlers.
+- Bond is the published Total Bond only: "" when blank, NO BOND, HOLD or text, and a published $0 stays "0". Charges are "" when no charge rows are published.
+- Status comes only from the published detail Status label, recorded as `extra_data.status_source = "published_detail_status"`. Otherwise it is "" (no more default "In Custody"). Detail-error logs no longer include names.
+- The box probe got a Cloudflare 403 (`docs/recon/FL_SEMINOLE_HONEST_2026-10-15.md`). Health stays `unverified`; fail_closed is a CoS call after a Leads Ops read. Tests: `tests/test_fl_seminole_plain_https.py` (on the ci.yml list).
+
 ## [Unreleased] — 2026-10-15 (Gaston NC: honest identity; published-only charges/bond/status)
 
 ### Fixed
