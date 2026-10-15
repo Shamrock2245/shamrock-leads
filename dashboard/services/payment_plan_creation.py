@@ -27,6 +27,7 @@ from pymongo.errors import DuplicateKeyError
 
 from dashboard.extensions import get_collection
 from dashboard.routers.payment_plans import _amount_cents
+from dashboard.services.packet_payment_link_service import PREMIUM_CONFIRMED_AMOUNT_FIELD
 
 logger = logging.getLogger(__name__)
 
@@ -270,7 +271,7 @@ async def _case_facts(bond_case_id: str, tenant_id: str, session) -> dict:
         if not facts.get("packet_id"):
             facts["packet_id"] = _copy_text(doc, "packet_id")
         if not facts.get("total_premium"):
-            premium = _copy_text(doc, "premium_confirmed_amount")
+            premium = _copy_text(doc, PREMIUM_CONFIRMED_AMOUNT_FIELD)
             if premium:
                 facts["total_premium"] = premium
         if not facts.get("down_payment"):
