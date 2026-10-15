@@ -307,7 +307,7 @@ def protect_scraped_update(
                 from scoring.lead_scorer import LeadScorer
 
                 staff_rec = copy.copy(record)
-                staff_rec.Bond_Amount = f"{prov.bond_amount:.2f}" if prov.bond_amount else "0"
+                staff_rec.Bond_Amount = f"{prov.bond_amount:.2f}" if prov.bond_amount else ""
                 if prov.bond_type:
                     staff_rec.Bond_Type = prov.bond_type
                 LeadScorer().score_and_update(staff_rec)

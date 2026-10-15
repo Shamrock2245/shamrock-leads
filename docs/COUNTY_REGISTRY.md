@@ -47,7 +47,7 @@
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 16 | **Polk** | Direct Kendo UI REST API | `polk.py` | ✅ Active | 120 min | 2026-05-24 |
-| 17 | **Osceola** | DrissionPage — daily reports | `osceola.py` | ✅ Active | 120 min | 2026-04-27 |
+| 17 | **Osceola** | Corrections Daily Arrest Report CSV, plain HTTPS (honest UA, TLS verified, no impersonation). The download redirects to legacy-apps.osceola.org, which omits its intermediate certificate, so runs fail loud as `tls_cert_invalid` until the county fixes the chain | `osceola.py` | ✅ Active (unverified; TLS chain hold) | 120 min | 2026-10-15 |
 | 18 | **Sumter** | SmartWEB JAIL View (`SCSO<YY>JBN######`, modern AddMoreResults) — plain requests | `sumter.py` | ✅ Active (unverified until write smoke) | 180 min | 2026-10-07 |
 | 19 | **Highlands** | Direct OCV JSON API | `highlands.py` | ✅ Active | 120 min | 2026-05-24 |
 | 20 | **Glades** | JailTracker | `glades.py` | ✅ Active | 180 min | 2026-04-27 |
@@ -60,8 +60,8 @@
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 22 | **Palm Beach** | DrissionPage — PBSO ColdFusion blotter | `palm_beach.py` | ✅ Active (fixed page.html 2026-07-10) | 120 min | 2026-07-10 |
 | 23 | **Broward** | Official BSO arrest search | `broward.py` | ✅ Live — Turnstile Arrest Search name-prefix + paged grid; Mac smoke 2026-09-23 (30 new / status=ok; action=arrest_search); needs `SOLVECAPTCHA_KEY` | 60 min | Writes enabled after contract validation |
-| 24 | **Martin** | Direct Tyler Technologies REST API | `martin.py` | ✅ Active | 120 min | 2026-05-24 |
-| 25 | **St. Lucie** | requests POST — PHP table | `st_lucie.py` | ✅ Active | 90 min | 2026-04-27 |
+| 24 | **Martin** | Direct Tyler Technologies REST API, plain HTTPS (honest UA, TLS verified, no impersonation) | `martin.py` | ✅ Active (unverified) | 120 min | 2026-10-15 |
+| 25 | **St. Lucie** | plain HTTPS POST — PHP inmate list (honest UA, TLS verified, no impersonation; source Inmate Id as key, not yet proven to be a booking number) | `st_lucie.py` | ✅ Active (unverified) | 90 min | 2026-10-15 |
 | 26 | **Indian River** | IRCSO booking-date search (form POST + `?page=N`) → `/booking-details/<id>` Booking Info (source Booking Number `YYYY-NNNNNNNN`) — plain requests | `indian_river.py` | ✅ Active (unverified until write smoke). See `docs/recon/FL_INDIAN_RIVER_BOOKING_SEARCH_2026-10-08.md` | 180 min | 2026-10-08 |
 | 27 | **Okeechobee** | Wix shell page — no public data source | `okeechobee.py` | 🔴 No public roster URL | 120 min | 2026-07-24 |
 

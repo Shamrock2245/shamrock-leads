@@ -846,6 +846,15 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     # Broward/Lake) / no-proxy / no-impersonation rules. Proposed for CoS.
     "Hillsborough (FL)": "fail_closed",
     "Marion (FL)": "fail_closed",
+    # 2026-10-15 (docs/recon/FL_MONROE_FAIL_CLOSED_2026-10-15.md, CoS): Keys SO
+    # arrest log has no booking number; rows key on a person-level MNI or a
+    # synthesized MONROE-{OffenseNo|CADno}. Closed until the offense-number key
+    # is proven per booking. Highlands stays unverified.
+    "Monroe (FL)": "fail_closed",
+    # 2026-10-15 (docs/recon/FL_DESOTO_FAIL_CLOSED_2026-10-15.md, CoS option 1
+    # on #222): DCN roster has no booking number; the only key is the site's
+    # internal bid. Closed until a source booking number is proven.
+    "DeSoto (FL)": "fail_closed",
     # Pinellas (FL) is deliberately absent, so Health reads "unverified".
     # Owner exception (Brendan 2026-10-08 1:38 PM ET, CoS agreed): Who's In Jail
     # (Blazor Server, no plain-HTTP listing) runs relay-only through the Leads

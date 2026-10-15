@@ -642,7 +642,13 @@ class LeeCountyScraper(BaseScraper):
         zip_code = self._safe(raw.get("zip") or raw.get("zipcode") or raw.get("postalCode"))
 
         # Determine status and release date
-        status = "In Custody"
+        # Status only as the source published it. The roster merges an
+        # inCustody=true query with a booking-date range that also lists
+        # released / bonded rows, so a row with no custody flag, release date
+        # or status is unknown (""), never an invented "In Custody".
+        status = ""
+        if raw.get("inCustody") is True or raw.get("in_custody") is True:
+            status = "In Custody"
         release_date = ""
         release_raw = raw.get("releaseDate") or raw.get("release_date") or ""
         if release_raw:
@@ -1091,7 +1097,7 @@ class LeeCountyScraper(BaseScraper):
             b_resp = self._http_fetch(b_url)
             b_data = b_resp.json() if b_resp and b_resp.status_code == 200 and isinstance(b_resp.json(), dict) else {}
 
-            from dashboard.services.url_ingest_service import _title_case_name
+            from dashboard.services.url_ingest_service import _title_case_name, published_custody_status
             first = _title_case_name(str(b_data.get("givenName") or b_data.get("firstName") or ""))
             middle = _title_case_name(str(b_data.get("middleName") or ""))
             last = _title_case_name(str(b_data.get("surName") or b_data.get("lastName") or ""))
@@ -1119,7 +1125,7 @@ class LeeCountyScraper(BaseScraper):
                 "court_location": parsed.get("court_location", ""),
                 "full_name": full_name, "first_name": first, "middle_name": middle, "last_name": last,
                 "dob": d_date, "booking_date": b_date, "booking_time": b_time,
-                "status": "In Custody" if b_data.get("inCustody", True) else "Released",
+                "status": published_custody_status(b_data),  # missing flag is "", never "In Custody"
                 "release_date": "", "facility": self._safe(b_data.get("housing") or "Lee County Jail"),
                 "race": self._safe(b_data.get("race")), "sex": self._safe(b_data.get("sex")),
                 "height": self._safe(b_data.get("height")), "weight": self._safe(b_data.get("weight")),
