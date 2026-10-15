@@ -16,10 +16,11 @@ verified); a 401/403/429, challenge page, dropped handshake or bad certificate
 raises (egress_block: / tls_cert_invalid:) and fails the run instead of
 returning an empty roster. Bond is the sum of the published per-charge Bond
 cells only when every charge publishes one (blank / "No Bond" -> ""; a
-published $0.00 is kept); never "0" by default. Status is "": the roster is
-the county's "Current" page (released people are on separate *-released
-pages), but there is no published population figure to check the count against,
-so custody-only is not proven to the Orange standard. See
+published $0.00 is kept); never "0" by default. Status (CoS decision (b), 2026-10-15): a published
+detail status wins; otherwise rows from the portal's own "Current" view
+(/index, CURRENT_VIEWS) get "In Custody" with status_source
+"published_current_label"; rows from *-released pages or any unknown origin
+get "". The county publishes no population figure to compare against. See
 docs/recon/SC_FLORENCE_ROSTER_SCOPE_2026-10-15.md.
 """
 from __future__ import annotations
@@ -29,7 +30,7 @@ import re
 import string
 import time
 from typing import Dict, List, Optional, Set
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -44,6 +45,34 @@ from core.models import ArrestRecord
 logger = logging.getLogger(__name__)
 
 PORTAL_URL = "https://booking.fcso.org/index"
+# The portal's own views (scripts/index.js): "Current" stays on index /
+# inmates / charges; "Released" goes to *-released pages.
+CURRENT_VIEWS = frozenset({"index", "inmates", "charges"})
+RELEASED_VIEWS = frozenset({"index-released", "inmates-released", "charges-released"})
+CURRENT_STATUS = "In Custody"
+STATUS_SOURCE_CURRENT = "published_current_label"
+STATUS_SOURCE_PUBLISHED = "published_status"
+
+
+def source_view(url: str) -> str:
+    """'current' / 'released' / '' (unknown) from the portal page a row came from."""
+    path = (urlparse(url or "").path or "").rstrip("/").rsplit("/", 1)[-1].lower()
+    if (urlparse(url or "").hostname or "").lower() != "booking.fcso.org":
+        return ""
+    if path in RELEASED_VIEWS:
+        return "released"
+    if path in CURRENT_VIEWS:
+        return "current"
+    return ""
+
+
+def custody_status(view: str, published: str = "") -> tuple:
+    """(Status, status_source). Published wins; Current view -> In Custody; else ""."""
+    if published:
+        return published, STATUS_SOURCE_PUBLISHED
+    if view == "current":
+        return CURRENT_STATUS, STATUS_SOURCE_CURRENT
+    return "", ""
 ORIGIN = "https://booking.fcso.org"
 REQUEST_PAUSE_S = 0.3
 DETAIL_PAUSE_S = 0.25
@@ -175,7 +204,11 @@ class FlorenceScraper(BaseScraper):
 
         resp = session.post(PORTAL_URL, data=data, timeout=40)
         resp.raise_for_status()
-        return self._parse_grid(BeautifulSoup(resp.text, "html.parser"))
+        rows = self._parse_grid(BeautifulSoup(resp.text, "html.parser"))
+        view = source_view(getattr(resp, "url", "") or "")  # unknown origin -> ""
+        for row in rows:
+            row["source_view"] = view
+        return rows
 
     @staticmethod
     def _all_fields(soup: BeautifulSoup) -> Dict[str, str]:
@@ -249,6 +282,8 @@ class FlorenceScraper(BaseScraper):
                 info["age"] = value
             elif label_l == "race":
                 info["race"] = value
+            elif label_l in ("status", "custody status", "inmate status"):
+                info["status"] = value
             elif label_l in ("sex", "gender"):
                 info["sex"] = value[:1].upper()
 
@@ -317,6 +352,7 @@ class FlorenceScraper(BaseScraper):
         charges = detail.get("charges") or ""
         bond = detail.get("bond") or ""  # unknown stays ""; a published "0" is kept
         bond_type = detail.get("bond_type") or ""
+        status, status_source = custody_status(row.get("source_view", ""), (detail.get("status") or "").strip())
 
         return ArrestRecord(
             County=self.county,
@@ -336,7 +372,8 @@ class FlorenceScraper(BaseScraper):
             Bond_Amount=bond,
             Bond_Type=bond_type,
             Agency=detail.get("agency") or "",
-            Status="",  # custody-only not proven (no population figure); see module docstring
+            Status=status,
+            extra_data={"status_source": status_source, "source_view": row.get("source_view", "")},
             Detail_URL=row.get("detail_url") or PORTAL_URL,
             Facility="Florence County Detention Center",
         )

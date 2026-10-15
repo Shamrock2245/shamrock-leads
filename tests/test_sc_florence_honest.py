@@ -48,7 +48,7 @@ def test_bond_published_only():
     assert FlorenceScraper.parse_detail_html(DETAIL_HTML)["bond"] == "1250"
 
 
-def test_record_unknown_bond_and_status_blank():
+def test_record_unknown_bond_and_unknown_origin_status_blank():
     s = FlorenceScraper()
     row = s._parse_grid(florence.BeautifulSoup(LIST_HTML, "html.parser"))[0]
     rec = s._to_record(row, FlorenceScraper.parse_detail_html(NO_BOND_DETAIL_HTML))
@@ -92,3 +92,73 @@ def test_detail_block_fails_visibly(monkeypatch):
 
 def test_docstring_cites_recon():
     assert "SC_FLORENCE_ROSTER_SCOPE_2026-10-15" in florence.__doc__
+
+
+# ── CoS (b): In Custody only from the portal's own Current view ────────────
+from scrapers.counties_sc.florence import custody_status, source_view
+
+ROOT = "https://booking.fcso.org/"
+
+
+def _rec(view, detail_html=DETAIL_HTML):
+    s = FlorenceScraper()
+    row = s._parse_grid(florence.BeautifulSoup(LIST_HTML, "html.parser"))[0]
+    if view is not None:
+        row["source_view"] = view
+    return s._to_record(row, FlorenceScraper.parse_detail_html(detail_html))
+
+
+@pytest.mark.parametrize("page", ["index-released", "inmates-released", "charges-released"])
+def test_released_pages_never_get_in_custody(page):
+    assert source_view(ROOT + page) == "released"
+    assert source_view(ROOT + page + "?x=1") == "released"
+    rec = _rec(source_view(ROOT + page))
+    assert rec.Status == "" and rec.Status != "In Custody"
+    assert rec.extra_data["status_source"] == ""
+
+
+@pytest.mark.parametrize("page", ["index", "inmates", "charges"])
+def test_current_view_gets_in_custody_with_source(page):
+    assert source_view(ROOT + page) == "current"
+    rec = _rec(source_view(ROOT + page))
+    assert rec.Status == "In Custody"
+    assert rec.extra_data == {"status_source": "published_current_label", "source_view": "current"}
+
+
+@pytest.mark.parametrize("url", ["", "https://evil.example/index", ROOT + "inmate-details?id=1", ROOT + "other"])
+def test_unknown_origin_is_blank(url):
+    assert source_view(url) == ""
+    assert _rec(source_view(url)).Status == ""
+    assert _rec(None).Status == ""  # no source_view at all
+
+
+def test_published_status_wins_over_view():
+    html = DETAIL_HTML.replace("<tr><td>Age</td>", "<tr><td>Status</td><td>RELEASED</td></tr><tr><td>Age</td>")
+    rec = _rec("current", html)
+    assert rec.Status == "RELEASED" and rec.extra_data["status_source"] == "published_status"
+    assert custody_status("released", "IN JAIL") == ("IN JAIL", "published_status")
+    assert custody_status("released") == ("", "")
+
+
+def test_search_letter_tags_rows_from_response_url(monkeypatch):
+    class R:
+        def __init__(self, text, url):
+            self.text, self.url, self.status_code = text, url, 200
+
+        def raise_for_status(self):
+            pass
+
+    form = '<html><input name="__VIEWSTATE" value="v"/></html>'
+
+    class S:
+        def __init__(self, post_url):
+            self.post_url = post_url
+
+        def get(self, url, **kw):
+            return R(form, url)
+
+        def post(self, url, **kw):
+            return R(LIST_HTML, self.post_url)
+
+    assert FlorenceScraper()._search_letter(S(florence.PORTAL_URL), "A")[0]["source_view"] == "current"
+    assert FlorenceScraper()._search_letter(S(ROOT + "index-released"), "A")[0]["source_view"] == "released"
