@@ -13,6 +13,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_fl_citrus_bond_custody_defaults.py` (added to the `ci.yml` list).
 
+## [Unreleased] — 2026-10-15 (Pitt NC: honest identity; no invented charges/bond/status)
+
+### Fixed
+- **Pitt (NC) drops the Chrome User-Agent.** `pitt.py` sends every request through `scrapers.plain_http` via `_HonestSession` (honest UA, certificate verified). Blocks raise `egress_block:` / `tls_cert_invalid:`, and other transport errors propagate.
+- **No invented fields.** `Charges="Unknown"` becomes `""` and `Bond_Amount="0"` becomes `""` (the public listing publishes neither). `Status="In Custody"` becomes `""`: the source is titled "Detainee Search" with no current-only label or view, no release column and no population figure, so custody-only isn't proven. A published grid status would win (`extra_data.status_source`). Only digit `Booking Number` keys are kept, as before. The one honest probe (2026-10-15) got **ConnectionError (remote closed the connection)** (`docs/recon/NC_PITT_ROSTER_SCOPE_2026-10-15.md`). Tests: `tests/test_nc_pitt_honest.py`; `tests/test_gap_queue_nc_tx_sc.py` now expects `""` for charges/bond.
+
 ## [Unreleased] — 2026-10-15 (Newberry SC: honest identity; published-only bond/status)
 
 ### Fixed
