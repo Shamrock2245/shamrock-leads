@@ -12,6 +12,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `tests/test_fl_citrus_bond_custody_defaults.py` (added to the `ci.yml` list).
+## [Unreleased] — 2026-10-15 (Gaston NC: honest identity; published-only charges/bond/status)
+
+### Fixed
+- **Gaston (NC) drops the Chrome User-Agent.** `gaston.py` sends every request through `scrapers.plain_http` via `_HonestSession` (honest UA, certificate verified). A block or bad certificate raises `egress_block:` / `tls_cert_invalid:`, including on a detail page, where other single-detail failures still skip.
+- **Published-only fields.** `Charges` is `""` when none are published (was `"Unknown"`). Bond is the published Total Bond Amount, else the per-bond sum when every amount is published, else `""`; a published `$0.00` is kept as `"0"` (was `"0"` for unknown). Status comes from the listing's own **"In Custody"** column: `Yes` gives "In Custody" for the unreleased booking (`extra_data.status_source="published_in_custody_column"`), and anything else is `""`. Booking keys are unchanged (detail heading `YYYY-NNNNNNNN` only), with tests rejecting Subject Number and other non-source keys. One honest probe (2026-10-15) got **HTTP 200**, with 14/14 rows `In Custody = Yes` (`docs/recon/NC_GASTON_ROSTER_SCOPE_2026-10-15.md`). Tests: `tests/test_nc_gaston_honest.py`; the gap-queue Gaston tests now patch `_HonestSession`.
 
 ## [Unreleased] — 2026-10-15 (Pitt NC: honest identity; no invented charges/bond/status)
 
