@@ -47,6 +47,8 @@ SOURCE_HOST_LABELS = {
     "hillsboroughcounty.org": "Hillsborough (FL)",
     "pcsoweb.com": "Pinellas (FL)",
     "inmatelookup.mcso.org": "Marion (FL)",
+    "jail.marionso.com": "Marion (FL)",
+    "webapps.hcso.tampa.fl.us": "Hillsborough (FL)",
     "pbso.org": "Palm Beach (FL)",
 }
 
