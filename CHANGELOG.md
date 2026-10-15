@@ -9,6 +9,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Palm Beach (FL) no longer drives a Chrome browser or sends a Chrome User-Agent.** `palm_beach.py` reads the PBSO blotter with `scrapers.plain_http` (honest UA, certificate verified). It submits the page's own date-search form, parses cards with `parse_pbso_html`, and follows the page's own pagination links. The hCaptcha wait loop is gone: a challenge page (including hCaptcha) or 401/403/429 raises `egress_block:`, a dropped handshake raises `egress_block: ... connection_reset:`, a certificate failure raises `tls_cert_invalid:`, and a missing search form raises `PalmBeachSourceChanged`. `_fetch_single_booking` uses the same honest session, and a block now raises instead of reading as "not found". The one honest probe from the agent box (2026-10-15) got **connection_reset**. Tests: `tests/test_fl_palmbeach_plain_https.py`.
 - **Palm Beach records never default status to "In Custody".** `_row_to_arrest_record` uses `row.get("status") or ""`, so an unknown status is `""` and a published one (e.g. `Released` from a card release date via `pbso_parse`) is kept. The blotter isn't custody-only (#233).
 
+## [Unreleased] — 2026-10-15 (Duval FL: no invented custody)
+
+### Fixed
+- **Duval (FL) no longer invents custody status.** `duval.py` drops the `"Released" if release_date else "In Custody"` rule on the API path and the hard-coded `Status="In Custody"` on the DOM fallback. A published release date gives `Released`, a published status field (`published_status`) is kept as written, and anything else is `""`. The JSO inmate search is **not proven custody-only**: the API contract carries release-date fields, and the one honest probe (2026-10-15) failed TLS verification (`docs/recon/FL_DUVAL_ROSTER_SCOPE_2026-10-15.md`). The DrissionPage/ATIMS gate is unchanged (later PR). Tests: `tests/test_fl_duval_honest_status.py`.
+
 ## [Unreleased] — 2026-10-15 (Palm Beach pbso_parse: no In Custody default)
 
 ### Fixed
