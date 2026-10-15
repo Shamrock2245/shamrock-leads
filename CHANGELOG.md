@@ -39,6 +39,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Status: "In Custody" only for the source's "Current Confinements" view (`extra_data.status_source = "published_current_confinements_view"`). The last-7-days admits fallback gives "" (was "Unknown").
 - Affects 38 live subclasses: SC Dorchester, Chesterfield; 24 NC; 12 GA. The 12 AL/TN fail-closed guards are unchanged. Tests: `tests/test_southern_sw_honest.py` (on the ci.yml list), plus updated SSW parser tests. Recon: `docs/recon/SSW_CITIZEN_CONNECT_HONEST_2026-10-15.md`.
 
+## 2026-10-15 — FL New World (Flagler, Walton): honest identity; published-only status
+
+- `scrapers/fl_newworld.py`: every request goes through `scrapers.plain_http` (honest UA, certificate verified; the Chrome UA is removed). Blocks raise and are re-raised past the per-detail handler. Detail-fetch logs no longer include the URL or error text.
+- Status is no longer hard-coded "In Custody". It is set only for an open booking, and only from the listing's published per-row In Custody column (Walton, `status_source = "published_in_custody_column"`) or, without that column, from the source's own echoed "In Custody" filter (Flagler, `"published_in_custody_filter"`). Otherwise it is "".
+- Bond, charges and booking keys are unchanged (published only; source `YYYY-NNNNNNNN`). Tests: `tests/test_fl_newworld_honest.py` (on the ci.yml list). Recon: `docs/recon/FL_NEWWORLD_HONEST_2026-10-15.md`.
+
 ## [Unreleased] — 2026-10-15 (Gaston NC: honest identity; published-only charges/bond/status)
 
 ### Fixed
