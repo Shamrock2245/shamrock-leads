@@ -8,6 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import os
+import subprocess
+import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -572,3 +576,26 @@ def test_two_tenants_same_txn_both_commit_and_replay_is_idempotent(monkeypatch):
     assert len(claims.docs) == 2 and len(db["audit_events"].docs) == 2 and len(db["payments"].docs) == 2
     balances = {plan["tenant_id"]: plan["balance_remaining"] for plan in db["payment_plans"].docs}
     assert balances == {_TENANT_A: 700.0, _TENANT_B: 700.0}
+
+
+# ci.yml lists test modules explicitly. This file is already on that list, so
+# the creation suite runs in CI without a workflow edit. Skip when that module
+# was collected directly.
+def test_payment_plan_creation_suite_passes(request):
+    root = Path(__file__).resolve().parents[1]
+    target = root / "tests" / "test_payment_plan_creation.py"
+    collected = {Path(str(item.fspath)).resolve() for item in request.session.items}
+    if target.resolve() in collected:
+        pytest.skip("payment plan creation suite already collected")
+    env = dict(os.environ)
+    env.setdefault("ENV", "test")
+    env.setdefault("SECRET_KEY", "ci-not-a-real-secret")
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--tb=short", str(target)],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert proc.returncode == 0, (proc.stdout[-4000:] + proc.stderr[-2000:])
