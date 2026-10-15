@@ -2,7 +2,7 @@
 Seminole County Arrest Scraper — NorthPointe Custody Portal
 Source: Seminole County Sheriff's Office
 URL: https://seminole.northpointesuite.com/custodyportal
-Method: curl_cffi JSON DoSearch (A–Z last-name prefixes) → detail pages
+Method: plain requests JSON DoSearch (A–Z last-name prefixes) → detail pages
 
 HISTORY:
 - v1: Selenium roster click
@@ -11,6 +11,14 @@ HISTORY:
   Headless Chrome is IIS-blocked ("permission denied"). curl_cffi still
   reaches DoSearch. Sweep LastName starts-with A–Z for current inmates,
   sort by personId descending (newer bookings first), then fetch details.
+- v4 (2026-10-15): plain ``requests`` via ``scrapers.plain_http`` (honest
+  User-Agent, TLS verified, no curl_cffi Chrome impersonation, no browser UA).
+  A 401/403/429 or challenge raises EgressBlocked and a bad certificate raises
+  SourceTLSInvalid; neither is swallowed per letter or per detail, so Health
+  records the block instead of an empty "success". Status comes from the
+  detail page only (blank when absent, never assumed "In Custody"). Bond is the
+  published Total Bond only ("" when blank/NO BOND/HOLD/text, never "0"; a
+  published $0 stays "0").
 """
 from __future__ import annotations
 
@@ -23,6 +31,9 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from scrapers.base_scraper import BaseScraper
+from scrapers.plain_http import make_session, request
+from scrapers.published_bond import charge_bond_amount, total_published_bond
+from scrapers.scraper_resilience import AntiBotBlocked
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
@@ -35,7 +46,6 @@ FACILITY = "John E Polk Correctional Facility"
 DAYS_BACK = 14
 # Detail pages are ~1.6 MB each — cap bandwidth; personId-desc prioritizes recent.
 MAX_DETAIL_FETCHES = 200
-IMPERSONATE = "chrome131"
 LETTER_PAUSE_SEC = 0.35
 DETAIL_PAUSE_SEC = 0.2
 
@@ -48,14 +58,8 @@ class SeminoleCountyScraper(BaseScraper):
         return "Seminole"
 
     def scrape(self) -> List[ArrestRecord]:
-        try:
-            from curl_cffi import requests as cf
-        except ImportError as e:
-            logger.error("Seminole: missing curl_cffi: %s", e)
-            raise
-
-        session = cf.Session()
-        session.get(PORTAL_URL + "/", impersonate=IMPERSONATE, timeout=45)
+        session = make_session()
+        request(session, "GET", PORTAL_URL + "/", timeout=45, county="Seminole")
 
         inmates = self._roster_az(session)
         logger.info("Seminole: %d unique current inmates from A–Z DoSearch", len(inmates))
@@ -82,6 +86,8 @@ class SeminoleCountyScraper(BaseScraper):
                 seen_people.add(person_id)
                 if record:
                     records.append(record)
+            except AntiBotBlocked:
+                raise
             except Exception as e:
                 logger.debug(
                     "Seminole detail error for %s: %s", inmate.get("lastName"), e
@@ -114,14 +120,16 @@ class SeminoleCountyScraper(BaseScraper):
             params = {**base_params, "LastName": letter}
             query = f"&filter=LastName%3Asw%3A{letter}&inmatestatus=current"
             try:
-                r = session.get(
+                r = request(
+                    session,
+                    "GET",
                     DOSEARCH_URL,
                     params={
                         "searchParams": json.dumps(params),
                         "query": query,
                     },
-                    impersonate=IMPERSONATE,
                     timeout=120,
+                    county="Seminole",
                 )
                 r.raise_for_status()
                 data = r.json()
@@ -143,6 +151,8 @@ class SeminoleCountyScraper(BaseScraper):
                     sd.get("resultCountWasLimited"),
                     f" err={err}" if err else "",
                 )
+            except AntiBotBlocked:
+                raise
             except Exception as e:
                 logger.warning("Seminole DoSearch %s failed: %s", letter, e)
             time.sleep(LETTER_PAUSE_SEC)
@@ -156,22 +166,21 @@ class SeminoleCountyScraper(BaseScraper):
 
         data_param = json.dumps(inmate)
         try:
-            r = session.get(
+            r = request(
+                session,
+                "GET",
                 DETAIL_URL,
                 params={"data": data_param},
                 headers={
-                    "User-Agent": (
-                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/131.0.0.0 Safari/537.36"
-                    ),
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                     "Referer": PORTAL_URL,
                 },
                 timeout=60,
-                impersonate=IMPERSONATE,
+                county="Seminole",
             )
             r.raise_for_status()
+        except AntiBotBlocked:
+            raise
         except Exception as e:
             raise RuntimeError(f"Detail fetch failed: {e}")
 
@@ -194,8 +203,8 @@ class SeminoleCountyScraper(BaseScraper):
             except ValueError:
                 pass
 
-        status = self._label_next(soup, r"^Status$") or "In Custody"
-        bond = self._label_next(soup, r"^Total Bond$") or "0"
+        status = self._label_next(soup, r"^Status$")
+        bond = self._label_next(soup, r"^Total Bond$")
         release_date = self._label_next(soup, r"^Projected Release Date$") or ""
 
         charges = []
@@ -234,7 +243,7 @@ class SeminoleCountyScraper(BaseScraper):
             Status=status,
             Release_Date=release_date,
             Charges=" | ".join(charges),
-            Bond_Amount=str(self._parse_bond(bond)),
+            Bond_Amount=self._parse_bond(bond),
             Race=inmate.get("race", "") or "",
             Sex=inmate.get("gender", "") or "",
             Height=inmate.get("height", "") or "",
@@ -256,13 +265,6 @@ class SeminoleCountyScraper(BaseScraper):
         return nxt.get_text(strip=True) if nxt else ""
 
     @staticmethod
-    def _parse_bond(bond_str: str) -> float:
-        if not bond_str:
-            return 0.0
-        cleaned = re.sub(r"[$,\s]", "", str(bond_str).strip().upper())
-        if any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
-            return 0.0
-        try:
-            return float(cleaned)
-        except (ValueError, TypeError):
-            return 0.0
+    def _parse_bond(bond_str: str) -> str:
+        """Published Total Bond only: "" when unpublished, never an invented "0"."""
+        return total_published_bond([charge_bond_amount(bond_str)])

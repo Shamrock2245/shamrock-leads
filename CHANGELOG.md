@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-15 (Seminole: plain HTTPS, published bond only, no assumed custody)
+
+### Fixed
+- **Seminole (FL) no longer disguises itself as Chrome.** `scrapers/counties/seminole.py` used curl_cffi `impersonate="chrome131"` and a Chrome User-Agent on the NorthPointe portal, DoSearch and detail requests. It now uses `scrapers.plain_http` (honest User-Agent, TLS verified). A 401/403/429 or challenge raises `EgressBlocked` and a bad certificate raises `SourceTLSInvalid`, re-raised past the per-letter and per-detail handlers so Health records the block. From the box the portal answers HTTP 403 to the honest client, so this needs a Leads Ops direct read before merge.
+- **Seminole bond is the published Total Bond only:** blank / NO BOND / HOLD / N/A / text give `""`, never `"0"`; a published `$0.00` stays `"0"` (`scrapers.published_bond`).
+- **Seminole status comes from the detail page only:** blank when absent, never assumed `"In Custody"` (MongoWriter already drops a blank status from `$set`).
+
+### Tests
+- `tests/test_fl_seminole_plain_https.py` (added to the `ci.yml` list).
+
 ## [Unreleased] — 2026-10-15 (Marion SC host/proxy cleanup; Sarasota evidence matches Health)
 
 ### Fixed
