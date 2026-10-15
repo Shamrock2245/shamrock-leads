@@ -18,7 +18,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Paid, failed, and refunded gateway events post to the plan.** `POST /api/webhooks/payment` (HMAC unchanged) and the Gmail receipt poller call `apply_plan_payment` / `reverse_plan_payment`. A paid installment drops `balance_remaining_cents` once; a replay does not. A booking that does not match the plan is 409 and writes nothing. A decline writes one `payment_plan_payment_failed` audit and does not move the balance. A refund restores the balance once and marks the row reversed. The down-payment invoice (reference = booking number, no installment) does not consume the financed balance. Production flags are not changed.
 
 ### Tests
-- `tests/test_installment_invoices.py`.
+- `tests/test_installment_invoices.py`. `installment_invoice_claims` is tenant-owned in `dashboard/tenancy/constants.py` (known-collection count 122).
 
 ## [Unreleased] — 2026-10-15 (Aiken SC: plain honest HTTPS; published-only bond/status)
 
