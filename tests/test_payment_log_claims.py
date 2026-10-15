@@ -755,6 +755,218 @@ def test_review_alert_redacts_internal_booking_keys(monkeypatch):
     assert captured["details"]["transaction_id"] == TXN
 
 
+def test_enrich_rejects_amount_or_status_mismatch_before_stamp(db, slack_alerts):
+    """A later booking cannot stamp when the amount or status disagrees."""
+    db["bond_cases"].docs.append(_bond(_id="bond-1"))
+    first = _run(_record(db, kind="charge", booking="", amount=100))
+    assert first["committed"] is True
+    with pytest.raises(plc.PaymentLogError) as raised:
+        _run(_record(db, kind="charge", booking=BOOKING, amount=40))
+    assert raised.value.status_code == 409
+    assert raised.value.error == "payment_needs_review"
+    assert "amount" in raised.value.message
+    row = _rows(db, "charge")[0]
+    assert row["amount"] == 100.0
+    assert row["booking_number"] == ""
+    assert row["needs_review"] is True
+    assert db["bond_cases"].docs[0].get("last_transaction_id") is None
+    assert not any(
+        doc.get("reason") == "provider booking enriched" for doc in db["audit_events"].docs
+    )
+
+    row["status"] = "processing"
+    with pytest.raises(plc.PaymentLogError) as status_raised:
+        _run(_record(db, kind="charge", booking=BOOKING, amount=100, status="approved"))
+    assert status_raised.value.status_code == 409
+    assert status_raised.value.error == "payment_needs_review"
+    assert "status" in status_raised.value.message
+    assert row["booking_number"] == ""
+    assert row["needs_review"] is True
+    assert db["bond_cases"].docs[0].get("last_transaction_id") is None
+    assert not any(
+        doc.get("reason") == "provider booking enriched" for doc in db["audit_events"].docs
+    )
+
+
+class _SlackPost:
+    def __init__(self):
+        self.posts = []
+
+    def __call__(self, *args, **kwargs):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def post(self, url, json=None):
+        self.posts.append((url, json))
+        return httpx.Response(200, json={"ok": True})
+
+
+def test_clean_poller_charge_posts_leads_note_once_after_commit(db, slack_alerts, monkeypatch):
+    """A clean poller commit posts one #leads note. A review and a replay do not."""
+    hook = "https://hooks.example.test/leads"
+    monkeypatch.setenv("SLACK_WEBHOOK_LEADS", hook)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    client = _SlackPost()
+    monkeypatch.setattr("httpx.AsyncClient", client)
+    db["bond_cases"].docs.append(_bond(last_payment_amount=7, last_transaction_id="KEEP"))
+
+    class Reader:
+        def __init__(self):
+            self.queue = []
+            self.is_configured = True
+
+        def search_messages(self, query, max_results=20):
+            return list(self.queue)
+
+        def mark_as_read(self, mid):
+            return None
+
+    reader = Reader()
+    monkeypatch.setattr(
+        "dashboard.services.gmail_reader.GmailReaderService",
+        lambda: reader,
+    )
+    reader.queue = [{
+        "message_id": "m-blank",
+        "subject": "Receipt",
+        "body": "Amount $100.00\nTransaction id: TX-BLANK\n",
+    }]
+    blank = _run(SwipeSimpleReceiptPoller(db=db).poll())
+    assert blank["processed"] == 1
+    assert client.posts == []
+    assert len(slack_alerts) == 1
+    assert db["bond_cases"].docs[0]["last_transaction_id"] == "KEEP"
+
+    reader.queue = [{
+        "message_id": "m-clean",
+        "subject": "Receipt",
+        "body": "Amount $100.00\nBooking: BK-1\nTransaction id: TX-CLEAN\n",
+    }]
+    clean = _run(SwipeSimpleReceiptPoller(db=db).poll())
+    assert clean["processed"] == 1
+    assert len(client.posts) == 1
+    assert client.posts[0][0] == hook
+    assert "BK-1" in client.posts[0][1]["text"]
+    assert "100.00" in client.posts[0][1]["text"]
+    assert db["bond_cases"].docs[0]["last_transaction_id"] == "TX-CLEAN"
+    assert len(slack_alerts) == 1
+
+    again = _run(SwipeSimpleReceiptPoller(db=db).poll())
+    assert again["processed"] == 0
+    assert len(client.posts) == 1
+
+
+PHONE = "2395550199"
+
+
+def _receipt_app(db, monkeypatch):
+    monkeypatch.setenv("ENV", "development")
+    monkeypatch.delenv("SWIPESIMPLE_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_LEADS", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    monkeypatch.setattr("dashboard.extensions.get_db", lambda: db)
+    app = FastAPI()
+    app.include_router(webhooks_bp)
+    return app
+
+
+def _post_paid_webhook(app, txn):
+    async def go():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+            return await client.post("/api/webhooks/payment", json={
+                "event_type": "payment.completed",
+                "transaction_id": txn,
+                "amount": 100,
+                "status": "approved",
+                "customer_name": "Test Payer",
+                "custom_fields": {
+                    "indemnitor_phone": PHONE,
+                    "booking_number": BOOKING,
+                },
+            })
+    return _run(go())
+
+
+def _poller_paid(db, txn):
+    return _run(SwipeSimpleReceiptPoller(db=db)._apply_bond_payment(
+        db,
+        {
+            "amount": 100.0,
+            "booking_number": BOOKING,
+            "transaction_id": txn,
+            "indemnitor_phone": PHONE,
+        },
+        gmail_message_id="m-" + txn,
+        raw_subject="Receipt",
+    ))
+
+
+def test_bb_receipt_poller_then_webhook_sends_once(db, monkeypatch):
+    """The poller sends the receipt. The later webhook does not send a second one."""
+    db["bond_cases"].docs.append(_bond())
+    sent = []
+
+    async def fake_send(phone, message):
+        sent.append(phone)
+
+    app = _receipt_app(db, monkeypatch)
+    with patch("dashboard.services.bb_client.send_message_universal", new=fake_send), \
+            patch("dashboard.routers.events.publish_event", new=AsyncMock()):
+        recorded = _poller_paid(db, "TX-POLL-FIRST")
+        assert recorded["committed"] is True
+        assert sent == [PHONE]
+        response = _post_paid_webhook(app, "TX-POLL-FIRST")
+    assert response.status_code == 200
+    assert response.json()["duplicate"] is True
+    assert sent == [PHONE]
+    assert db["payment_log_claims"].docs[0]["bb_receipt_sent"] is True
+
+
+def test_bb_receipt_webhook_then_poller_sends_once(db, monkeypatch):
+    """The webhook sends the receipt. The later poller does not send a second one."""
+    db["bond_cases"].docs.append(_bond())
+    sent = []
+
+    async def fake_send(phone, message):
+        sent.append(phone)
+
+    app = _receipt_app(db, monkeypatch)
+    with patch("dashboard.services.bb_client.send_message_universal", new=fake_send), \
+            patch("dashboard.routers.events.publish_event", new=AsyncMock()):
+        response = _post_paid_webhook(app, "TX-HOOK-FIRST")
+        assert response.status_code == 200
+        assert sent == [PHONE]
+        recorded = _poller_paid(db, "TX-HOOK-FIRST")
+    assert recorded["duplicate"] is True
+    assert sent == [PHONE]
+    assert db["payment_log_claims"].docs[0]["bb_receipt_sent"] is True
+
+
+def test_bb_receipt_replay_does_not_send_again(db, monkeypatch):
+    """Replaying the webhook, then the poller, still sends one receipt."""
+    db["bond_cases"].docs.append(_bond())
+    sent = []
+
+    async def fake_send(phone, message):
+        sent.append(phone)
+
+    app = _receipt_app(db, monkeypatch)
+    with patch("dashboard.services.bb_client.send_message_universal", new=fake_send), \
+            patch("dashboard.routers.events.publish_event", new=AsyncMock()):
+        first = _post_paid_webhook(app, "TX-REPLAY")
+        second = _post_paid_webhook(app, "TX-REPLAY")
+        _poller_paid(db, "TX-REPLAY")
+    assert first.status_code == 200 and second.status_code == 200
+    assert second.json()["duplicate"] is True
+    assert sent == [PHONE]
+
+
 def test_blank_booking_webhook_does_not_stamp(db, monkeypatch):
     db["bond_cases"].docs.append(_bond(last_payment_amount=7, last_transaction_id="KEEP"))
     monkeypatch.setenv("ENV", "development")

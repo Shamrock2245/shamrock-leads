@@ -17,6 +17,7 @@ Uses existing `GmailReaderService` (Google free API tier) — no new vendor.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from typing import Any, Dict, Optional
 
@@ -224,6 +225,13 @@ class SwipeSimpleReceiptPoller:
         except PaymentLogError as exc:
             return {"success": False, "committed": False, "error": exc.error}
 
+        await _notify_clean_charge(recorded)
+        await _maybe_send_customer_receipt(
+            db,
+            recorded,
+            phone=str(parsed.get("indemnitor_phone") or ""),
+        )
+
         return {
             "success": True,
             "committed": bool(recorded.get("committed")),
@@ -232,6 +240,70 @@ class SwipeSimpleReceiptPoller:
             "booking_number": recorded.get("booking_number") or "",
             "transaction_id": recorded.get("transaction_id"),
         }
+
+
+async def _notify_clean_charge(recorded: Dict[str, Any]) -> None:
+    """One #leads note after a clean poller commit. A review or a replay does not post."""
+    if not (
+        recorded.get("committed")
+        and recorded.get("event_kind") == "charge"
+        and recorded.get("stamped")
+        and not recorded.get("needs_review")
+    ):
+        return
+    slack = os.getenv("SLACK_WEBHOOK_LEADS") or ""
+    if not slack:
+        return
+    booking = str(recorded.get("booking_number") or "")
+    try:
+        amount_text = f"{float(recorded.get('amount')):.2f}"
+    except (TypeError, ValueError):
+        amount_text = ""
+    text = f":moneybag: *SwipeSimple receipt (Gmail poll)* — ${amount_text}"
+    if booking:
+        text += f" | Booking: {booking}"
+    try:
+        import httpx
+        from core.booking_identity import redact_internal_keys
+
+        async with httpx.AsyncClient(timeout=8) as client:
+            await client.post(slack, json=redact_internal_keys({"text": text}))
+    except Exception:
+        logger.debug("[SwipeSimplePoll] payment-received note failed")
+
+
+async def _maybe_send_customer_receipt(db, recorded: Dict[str, Any], *, phone: str) -> None:
+    """Send the BlueBubbles receipt only if this caller wins the claim marker."""
+    phone = str(phone or "").strip()
+    if not phone:
+        return
+    if recorded.get("event_kind") != "charge":
+        return
+    if not (recorded.get("committed") or recorded.get("duplicate")):
+        return
+    txn = str(recorded.get("transaction_id") or "")
+    try:
+        from dashboard.services.bb_client import send_message_universal
+        from dashboard.services.payment_log_claims import claim_customer_receipt
+
+        if not await claim_customer_receipt(db, txn):
+            return
+        amount = recorded.get("amount")
+        try:
+            amount_text = f"{float(amount):.2f}"
+        except (TypeError, ValueError):
+            amount_text = ""
+        await send_message_universal(
+            phone,
+            (
+                "✅ Payment received! Thank you.\n"
+                f"Amount: ${amount_text}\n"
+                f"Transaction: {txn}\n"
+                "Shamrock Bail Bonds — (239) 332-2245"
+            ),
+        )
+    except Exception:
+        logger.warning("[SwipeSimplePoll] BB receipt failed")
 
 
 async def run_swipesimple_receipt_poll(config: Optional[dict] = None) -> Dict[str, Any]:

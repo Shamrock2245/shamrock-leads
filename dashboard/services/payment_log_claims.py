@@ -689,6 +689,15 @@ async def _apply(
         and not _booking(same_kind[0].get("booking_number"))
         and booking
     ):
+        # Amount and status must agree before a later booking can stamp.
+        reason = _conflict_reason(same_kind, cents=cents, status=status, booking=booking)
+        if reason:
+            raise PaymentLogError(
+                "payment_needs_review",
+                409,
+                "This transaction id is already recorded and the payload does not match "
+                f"({reason}). Nothing was written.",
+            )
         await _enrich_blank_charge(
             db,
             row=same_kind[0],
@@ -700,7 +709,7 @@ async def _apply(
             extra=extra,
             session=session,
         )
-        return None
+        return None, {"stamped": True, "needs_review": False}
     _raise_if_conflict(same_kind, cents=cents, status=status, booking=booking)
     if same_kind:
         raise AlreadyRecorded()
@@ -839,16 +848,40 @@ async def _apply(
             "The payment audit could not be recorded. Nothing was written.",
         ) from None
 
-    if kind not in REVERSAL_KINDS and not review_note:
-        return None
-    return {
-        "kind": kind,
-        "amount": amount,
-        "booking": flag_booking or booking or "none",
-        "plan_id": plan_id or "none",
-        "txn_key": txn_key,
-        "reason": review_note or _review_reason(kind),
+    review = None
+    if kind in REVERSAL_KINDS or review_note:
+        review = {
+            "kind": kind,
+            "amount": amount,
+            "booking": flag_booking or booking or "none",
+            "plan_id": plan_id or "none",
+            "txn_key": txn_key,
+            "reason": review_note or _review_reason(kind),
+        }
+    return review, {
+        "stamped": stamped,
+        "needs_review": bool(review_note) or kind in REVERSAL_KINDS,
     }
+
+
+async def claim_customer_receipt(db, txn_key: str) -> bool:
+    """Atomically claim the one customer receipt for this charge.
+
+    True only for the caller that sets ``bb_receipt_sent`` on the charge
+    claim. A second poller or webhook call gets False and must not send.
+    """
+    if not txn_key:
+        return False
+    result = await db[LOG_CLAIMS_COLLECTION].update_one(
+        {
+            "tenant_id": _tenant_value(),
+            "txn_key": txn_key,
+            "event_kind": "charge",
+            "bb_receipt_sent": {"$ne": True},
+        },
+        {"$set": {"bb_receipt_sent": True}},
+    )
+    return bool(getattr(result, "modified_count", 0))
 
 
 def _notify_staff_review(hit: dict) -> None:
@@ -916,6 +949,8 @@ async def _duplicate_or_conflict(
         "booking_number": booking,
         "status": status,
         "event_kind": kind,
+        "stamped": False,
+        "needs_review": False,
     }
 
 
@@ -964,7 +999,7 @@ async def record_provider_payment(
     alert: dict = {}
 
     async def work(session):
-        alert["hit"] = await _apply(
+        review, meta = await _apply(
             db,
             txn_key=txn_key,
             cents=cents,
@@ -976,6 +1011,9 @@ async def record_provider_payment(
             extra=fields,
             session=session,
         )
+        alert["hit"] = review
+        alert["stamped"] = bool(meta.get("stamped"))
+        alert["needs_review"] = bool(meta.get("needs_review"))
 
     try:
         await _run_apply(client, work)
@@ -1010,4 +1048,6 @@ async def record_provider_payment(
         "booking_number": booking,
         "status": provider_status,
         "event_kind": kind,
+        "stamped": bool(alert.get("stamped")),
+        "needs_review": bool(alert.get("needs_review")),
     }

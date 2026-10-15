@@ -18,6 +18,12 @@ from dashboard.routers import payment_plans as pp
 from tests._inmem_mongo import matches
 
 
+class _UpdateResult:
+    def __init__(self, matched: int):
+        self.matched_count = matched
+        self.modified_count = matched
+
+
 class Coll:
     def __init__(self):
         self.docs: list[dict] = []
@@ -83,9 +89,9 @@ class Coll:
                 d.update(update.get("$set") or {})
                 for key in (update.get("$unset") or {}):
                     d.pop(key, None)
-                return
+                return _UpdateResult(1)
         if not upsert:
-            return
+            return _UpdateResult(0)
         doc = {}
         for key, expected in (flt or {}).items():
             if not isinstance(expected, dict):
@@ -102,6 +108,7 @@ class Coll:
         if explicit_id is not None and any(existing.get("_id") == explicit_id for existing in self.docs):
             raise DuplicateKeyError("dup _id")
         self.docs.append(copy.deepcopy(doc))
+        return _UpdateResult(1)
 
 
 class DB(dict):

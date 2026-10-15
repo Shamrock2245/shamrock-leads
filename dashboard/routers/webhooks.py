@@ -339,22 +339,31 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
             status_code=exc.status_code,
         )
 
-    # Receipt and the payment-received note run only after a charge commits.
-    # A refund or failure alerts from the recorder, after its own commit.
+    # The staff note runs only after this webhook commits the charge.
+    # The customer receipt is once per transaction, even when the poller
+    # recorded the charge first. A refund or failure does not send either.
     fresh_charge = (
         recorded.get("committed")
         and recorded.get("event_kind") == "charge"
         and status == "approved"
     )
-    if fresh_charge and indemnitor_phone:
+    recorded_charge = (
+        recorded.get("event_kind") == "charge"
+        and status == "approved"
+        and (recorded.get("committed") or recorded.get("duplicate"))
+    )
+    if recorded_charge and indemnitor_phone:
         try:
-            receipt_msg = (
-                f"✅ Payment received! Thank you, {customer_name}.\n"
-                f"Amount: ${float(recorded.get('amount') or 0):.2f} ({card_brand} ending {card_last4})\n"
-                f"Transaction: {recorded.get('transaction_id')}\n"
-                f"Shamrock Bail Bonds — (239) 332-2245"
-            )
-            await send_message_universal(indemnitor_phone, receipt_msg)
+            from dashboard.services.payment_log_claims import claim_customer_receipt
+
+            if await claim_customer_receipt(get_db(), recorded.get("transaction_id")):
+                receipt_msg = (
+                    f"✅ Payment received! Thank you, {customer_name}.\n"
+                    f"Amount: ${float(recorded.get('amount') or 0):.2f} ({card_brand} ending {card_last4})\n"
+                    f"Transaction: {recorded.get('transaction_id')}\n"
+                    f"Shamrock Bail Bonds — (239) 332-2245"
+                )
+                await send_message_universal(indemnitor_phone, receipt_msg)
         except Exception as exc:
             logger.warning("[payment_webhook] BB receipt failed: %s", exc)
 
