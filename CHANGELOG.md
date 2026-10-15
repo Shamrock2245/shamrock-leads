@@ -13,6 +13,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_fl_citrus_bond_custody_defaults.py` (added to the `ci.yml` list).
 
+## [Unreleased] — 2026-10-15 (Suwannee: unpublished bond is "", published 0 kept; custody only from source; honest HTTPS)
+
+### Fixed
+- **Suwannee (FL) no longer invents a `$0` bond.** The charge loop started each booking at `0.0` and added only numeric bonds, so blank, NO BOND or HOLD bonds, a missing bond, or no charges gave `"0"` or a partial sum. Each charge now gets a slot from `published_bond.charge_bond_amount`, and the total uses `total_published_bond`: the sum only when every charge shows an amount, otherwise `""`. A published `$0.00` stays `"0"`.
+- **Custody only from the source.** A missing `Status:` used to default to `"In Custody"`, and the greedy status match treated `"Out of Jail"` as in custody because it contains "jail". The status is now read as a bounded token: `In Jail`/`In Custody` give `"In Custody"`, `Out of Jail`/`Released` give `"Released"`, and anything else, or no status, gives `""`.
+- **Chrome disguise removed.** The Chrome `User-Agent` is gone, and the form GET/POST and `AddMoreResults` calls go through `scrapers.plain_http` (honest UA, certificate verified). A block raises `egress_block:` and a real certificate failure raises `tls_cert_invalid:`. There was no `verify=False` to remove.
+
+### Tests
+- `tests/test_fl_suwannee_bond_custody_defaults.py` (added to the `ci.yml` list).
+
 ## [Unreleased] — 2026-10-15 (Bay: unpublished bond is "", published 0 kept; no invented custody; honest HTTPS)
 
 ### Fixed
