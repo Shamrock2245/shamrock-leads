@@ -19,6 +19,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_payment_log_claims.py` (added to `ci.yml`): charge then refund, refund then charge, `/pay` then refund, refund then `/pay` retry, a forced write-conflict retry on the charge and on `/pay`, a cross-booking charge, a blank booking that does not stamp, refund and failure rows that do not move a balance or stamp, the review-state audit's before and after values, a staff-chain mirror that stamps both bond documents, a needs-review charge alert before the poller marks Gmail read, an applied `/pay` retry that sees a reversal inside the lock, a later booking that enriches or conflicts, a review alert that drops an internal booking key, an amount or status mismatch that blocks enrichment, one poller payment-received note after a clean commit, one BlueBubbles receipt whether the poller or the webhook records first, `bb_receipt_sent` only after BlueBubbles accepts, a failed send that clears the sending marker and succeeds on retry, and two racing paths that send once. No SwipeSimple, Gmail, or live Slack calls.
 
+## [Unreleased] — 2026-10-15 (DCN base: honest identity, published-only bond/status, bid-only keys)
+
+### Fixed
+- **`scrapers/dcn_base.py` no longer invents bond, custody status or booking keys, and drops the Chrome disguise.** Shared by Carteret / Lee / Halifax / Richmond / Moore (NC), Darlington (SC) and DeSoto (FL). HTTP goes through an honest `plain_http` session (verified certs; 401/403/429 / challenge / TLS failures raise). Bond uses `charge_bond_amount` / `total_published_bond` (`""` when unknown; a published 0 is kept). Status is `""` (never hard-coded "In Custody"). Roster rows without a URL `bid` are dropped (no name/date hash, no person `id`). DeSoto's fail_closed `scrape()` is unchanged. Tests: `tests/test_dcn_base_cleanup.py`.
+
 ## [Unreleased] — 2026-10-15 (Lee bulk roster: unknown status is "")
 
 ### Fixed
