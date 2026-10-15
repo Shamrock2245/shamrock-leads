@@ -13,6 +13,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_fl_citrus_bond_custody_defaults.py` (added to the `ci.yml` list).
 
+## [Unreleased] — 2026-10-15 (Duval FL: no invented custody)
+
+### Fixed
+- **Duval (FL) no longer invents custody status.** `duval.py` drops the `"Released" if release_date else "In Custody"` rule on the API path and the hard-coded `Status="In Custody"` on the DOM fallback. A published release date gives `Released`, a published status field (`published_status`) is kept as written, and anything else is `""`. The JSO inmate search is **not proven custody-only**: the API contract carries release-date fields, and the one honest probe (2026-10-15) failed TLS verification (`docs/recon/FL_DUVAL_ROSTER_SCOPE_2026-10-15.md`). The DrissionPage/ATIMS gate is unchanged (later PR). Tests: `tests/test_fl_duval_honest_status.py`.
+
 ## [Unreleased] — 2026-10-15 (Palm Beach pbso_parse: no In Custody default)
 
 ### Fixed
