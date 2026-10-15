@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-15 (St. Lucie: plain HTTPS, no assumed custody, no invented bond)
+
+### Fixed
+- **St. Lucie (FL) no longer disguises itself as Chrome or turns off certificate checks.** `scrapers/counties/st_lucie.py` used curl_cffi `impersonate="chrome131"`, a Chrome User-Agent and `verify=False`. It now uses `scrapers.plain_http` (honest UA, TLS verified; a block raises `EgressBlocked`, a bad certificate raises `SourceTLSInvalid`). A plain verified POST from the box returned 200 with the full list.
+- **Status is no longer assumed "In Custody".** A published Release Date gives `"Released"` and is now stored (it was dropped); otherwise Status is `""`.
+- **Bond is `""`** (the list publishes none), never `"0"`.
+- **No name-keyed rows:** a row without an Inmate Id is skipped instead of being de-duplicated on the name.
+
+### Tests
+- `tests/test_fl_st_lucie_plain_https.py` (added to the `ci.yml` list).
+
 ## [Unreleased] — 2026-10-15 (Osceola: plain HTTPS with TLS verified; no invented $0; blank cells keep the day)
 
 ### Fixed
