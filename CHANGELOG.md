@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-15 (plain_http: a dropped handshake is connection_reset, not tls_cert_invalid)
+
+### Fixed
+- **`scrapers/plain_http.py` no longer labels every `SSLError` as `tls_cert_invalid`.** `tls_cert_invalid:` (SourceTLSInvalid) is used only when a certificate was presented and failed verification (`SSLCertVerificationError`, verify failed, hostname mismatch, self-signed, expired, missing issuer). A handshake the far side drops or resets before any certificate is verified (unexpected EOF, connection reset) now raises `EgressBlocked` with `egress_block: <county> connection_reset: ...`, so it is reported as a connection/egress failure (still never retried, never bypassed). Shared with Polk, Volusia, Pasco, Collier, Osceola, St. Lucie, Martin and Indian River; all their tests pass.
+
+### Tests
+- `tests/test_plain_http_tls_vs_connection_reset.py` (added to the `ci.yml` list): unexpected EOF and reset give `egress_block`/`connection_reset`; real certificate failures still give `tls_cert_invalid`.
+
 ## [Unreleased] — 2026-10-15 (Indian River: honest UA via plain_http; per-record bond guard; card-header guard)
 
 ### Fixed

@@ -97,6 +97,7 @@ jobs:
             tests/test_fl_rule_conflict_fail_closed.py \
             tests/test_marion_sc_sarasota_cleanup.py \
             tests/test_fl_indian_river_tls_bond_guard.py \
+            tests/test_plain_http_tls_vs_connection_reset.py \
             tests/test_models_bond_unknown_default.py \
             tests/test_fl_st_lucie_plain_https.py \
             tests/test_fl_martin_plain_https.py \
