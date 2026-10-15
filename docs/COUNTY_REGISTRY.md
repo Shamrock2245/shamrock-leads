@@ -47,7 +47,7 @@
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 16 | **Polk** | Direct Kendo UI REST API | `polk.py` | ✅ Active | 120 min | 2026-05-24 |
-| 17 | **Osceola** | DrissionPage — daily reports | `osceola.py` | ✅ Active | 120 min | 2026-04-27 |
+| 17 | **Osceola** | Corrections Daily Arrest Report CSV, plain HTTPS (honest UA, TLS verified, no impersonation). The download redirects to legacy-apps.osceola.org, which omits its intermediate certificate, so runs fail loud as `tls_cert_invalid` until the county fixes the chain | `osceola.py` | ✅ Active (unverified; TLS chain hold) | 120 min | 2026-10-15 |
 | 18 | **Sumter** | SmartWEB JAIL View (`SCSO<YY>JBN######`, modern AddMoreResults) — plain requests | `sumter.py` | ✅ Active (unverified until write smoke) | 180 min | 2026-10-07 |
 | 19 | **Highlands** | Direct OCV JSON API | `highlands.py` | ✅ Active | 120 min | 2026-05-24 |
 | 20 | **Glades** | JailTracker | `glades.py` | ✅ Active | 180 min | 2026-04-27 |

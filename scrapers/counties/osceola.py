@@ -2,13 +2,21 @@
 Osceola County Arrest Scraper — Corrections Daily Arrest Report CSV
 Source: Osceola County Corrections and Jail Services
 URL: https://apps.osceola.org/Apps/CorrectionsReports/Report/Download/YYYY-MM-DD
-Method: curl_cffi GET → CSV download (one row per charge, grouped by ARREST_NUMBER)
+Method: plain requests GET → CSV download (one row per charge, grouped by ARREST_NUMBER)
 
 Fix 2026-05-18: Replaced broken DrissionPage scraper with direct CSV download.
                 The old scraper used DrissionPage to interact with a date dropdown,
                 but the app exposes a clean CSV export endpoint at /Download/YYYY-MM-DD
                 that requires no browser automation and returns structured data.
-                SSL cert on apps.osceola.org is self-signed — verify=False required.
+Fix 2026-10-15: plain ``requests`` via ``scrapers.plain_http`` (honest
+                User-Agent, TLS always verified). No curl_cffi Chrome
+                impersonation, no browser User-Agent, no ``verify=False``.
+                The download now redirects (307) to legacy-apps.osceola.org,
+                whose server omits its intermediate certificate, so
+                verification fails and the run raises SourceTLSInvalid
+                (``tls_cert_invalid:``) instead of skipping checks. It is
+                re-raised past the per-day handler so Health records it.
+                Same handling as the Nassau TLS chain hold.
 """
 
 import io
@@ -17,6 +25,8 @@ from datetime import datetime, timedelta, timezone
 from typing import List
 
 from scrapers.base_scraper import BaseScraper
+from scrapers.plain_http import make_session, request
+from scrapers.scraper_resilience import AntiBotBlocked
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
@@ -24,14 +34,9 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://apps.osceola.org/Apps/CorrectionsReports/Report/Download"
 FACILITY = "Osceola County Jail"
 DAYS_BACK = 7
-IMPERSONATE = "chrome131"
 
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept": "text/csv,text/plain,*/*;q=0.8",
     "Referer": "https://apps.osceola.org/Apps/CorrectionsReports/Report/Daily/",
 }
 
@@ -45,13 +50,12 @@ class OsceolaCountyScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         try:
-            from curl_cffi import requests as cf
             import pandas as pd
         except ImportError as e:
             logger.error(f"Osceola: missing dependency: {e}")
             raise
 
-        session = cf.Session()
+        session = make_session(HEADERS)
         all_records: dict = {}  # keyed by ARREST_NUMBER to merge charges
 
         for days_ago in range(DAYS_BACK):
@@ -60,13 +64,7 @@ class OsceolaCountyScraper(BaseScraper):
             url = f"{BASE_URL}/{date_str}"
 
             try:
-                r = session.get(
-                    url,
-                    headers=HEADERS,
-                    timeout=20,
-                    impersonate=IMPERSONATE,
-                    verify=False,
-                )
+                r = request(session, "GET", url, timeout=20, county="Osceola")
                 if r.status_code != 200 or len(r.content) < 100:
                     logger.debug(f"Osceola: no data for {date_str} ({r.status_code})")
                     continue
@@ -75,6 +73,7 @@ class OsceolaCountyScraper(BaseScraper):
                 df = pd.read_csv(
                     io.StringIO(r.text),
                     dtype=str,
+                    keep_default_na=False,  # blank cells stay "" (NaN broke .strip() and dropped the whole day)
                     index_col=False,
                     on_bad_lines="skip",
                 )
@@ -132,11 +131,15 @@ class OsceolaCountyScraper(BaseScraper):
                         City=(row.get("CITY") or "").strip(),
                         Charges=charges,
                         Agency=(row.get("ARRESTING_AGENCY") or "").strip(),
+                        # The CSV publishes no bond; unknown is "", never the model's "0" default.
+                        Bond_Amount="",
                         Scrape_Timestamp=datetime.now(timezone.utc).isoformat(),
                         LastChecked=datetime.now(timezone.utc).isoformat(),
                         LastCheckedMode="INITIAL",
                     )
 
+            except AntiBotBlocked:
+                raise
             except Exception as e:
                 logger.warning(f"Osceola: error fetching {date_str}: {e}")
 
