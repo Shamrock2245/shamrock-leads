@@ -8,6 +8,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 - **Orange (FL) no longer sends a Chrome User-Agent or invents "In Custody".** `orange.py` uses `scrapers.plain_http` (honest UA, certificate verified) for every BestJail JSON GET. Status is a published custody field if there is one (`published_status`); otherwise "In Custody" from roster presence, because the roster is proven custody-only. The county page reads "Current Inmate Database ... people currently in jail" and "When a person is released from jail, they will no longer appear in these listings". Roster rows carry no release fields. 2,919 roster bookings vs the county's published daily population of 2,976 (`docs/recon/FL_ORANGE_ROSTER_SCOPE_2026-10-15.md`). `extra_data.status_origin` records `published` or `roster_presence`. Bond was already published-only (blank cell → `""`; published `0.00` kept). Blocks raise `egress_block:` / `tls_cert_invalid:` with no stealth, proxy or `verify=False`. One honest probe (2026-10-15) of the inmate portal got **HTTP 200**. Tests: `tests/test_fl_orange_honest_status.py`.
 
+## [Unreleased] — 2026-10-15 (one financed plan per premium confirmation)
+
+### Added
+- **`ensure_payment_plan_for_confirmation` writes one `payment_plans` row per confirmation.** `dashboard/services/payment_plan_creation.py`. The row uses the premium-confirmation fallback shape (`source: premium_confirmation`, installment `amount_cents`, remainder on the last installment). `_id` and `plan_id` are `sha256(tenant_id|confirmation_id)`, so a row already stored under that key is reused (`created: false`). A fallback row found by booking number and that source is the same plan. Different financed terms raise `PlanTermsConflict`. A passed session joins the caller's transaction. With no session, the plan and the `payment_plan_created` audit row run in `with_transaction`; no replica set raises `transactions_unavailable` and writes nothing. The audit `_id` is `payment-plan-created:{tenant}:{plan_id}`. No index is created on `payments`.
+
+### Tests
+- `tests/test_payment_plan_creation.py` (mocked Mongo only). `tests/test_payment_plan_link_core.py`, which `ci.yml` already names, runs that file in CI.
+
 ## [Unreleased] — 2026-10-15 (Aiken SC: plain honest HTTPS; published-only bond/status)
 
 ### Fixed
