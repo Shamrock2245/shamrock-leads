@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Palm Beach (FL) no longer drives a Chrome browser or sends a Chrome User-Agent.** `palm_beach.py` reads the PBSO blotter with `scrapers.plain_http` (honest UA, certificate verified). It submits the page's own date-search form, parses cards with `parse_pbso_html`, and follows the page's own pagination links. The hCaptcha wait loop is gone: a challenge page (including hCaptcha) or 401/403/429 raises `egress_block:`, a dropped handshake raises `egress_block: ... connection_reset:`, a certificate failure raises `tls_cert_invalid:`, and a missing search form raises `PalmBeachSourceChanged`. `_fetch_single_booking` uses the same honest session, and a block now raises instead of reading as "not found". The one honest probe from the agent box (2026-10-15) got **connection_reset**. Tests: `tests/test_fl_palmbeach_plain_https.py`.
 - **Palm Beach records never default status to "In Custody".** `_row_to_arrest_record` uses `row.get("status") or ""`, so an unknown status is `""` and a published one (e.g. `Released` from a card release date via `pbso_parse`) is kept. The blotter isn't custody-only (#233).
 
+## [Unreleased] — 2026-10-15 (Florence SC: honest identity; published-only bond; no invented custody)
+
+### Fixed
+- **Florence (SC) drops the Chrome User-Agent and `verify=False`.** `florence.py` sends every request through `scrapers.plain_http` via `_HonestSession` (honest UA, certificate verified; the `urllib3` warning suppression is gone). A block or bad certificate raises `egress_block:` / `tls_cert_invalid:` instead of the old `return []`, and every letter failing raises `FlorenceContractError`.
+- **Bond is published-only.** It's the per-charge `Bond` cells summed via `total_published_bond`: blank or "No Bond" on any charge gives `""`, and a published `$0.00` gives `"0"`. It never defaults to `"0"`, and the format now matches other counties (`1250`, not `1250.00`).
+- **Status comes from the portal's own view, never a hard-coded "In Custody".** CoS decision (b): rows parsed from the county's **Current** view (`/index`, plus `inmates`/`charges`, judged by the response URL) get "In Custody" with `extra_data.status_source="published_current_label"`. Rows from `index-released` / `inmates-released` / `charges-released`, or of unknown origin, get `""`. A published detail `Status` wins (`published_status`). The county publishes no population figure to compare against (`docs/recon/SC_FLORENCE_ROSTER_SCOPE_2026-10-15.md`). One honest probe (2026-10-15) got **HTTP 200**. Tests: `tests/test_sc_florence_honest.py`.
+
 ## [Unreleased] — 2026-10-15 (Hernando FL: honest identity; no roster custody default)
 
 ### Fixed
