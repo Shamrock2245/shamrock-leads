@@ -110,6 +110,7 @@ jobs:
             tests/test_fl_orange_honest_status.py \
             tests/test_pbso_parse_status.py \
             tests/test_fl_duval_honest_status.py \
+            tests/test_fl_polk_honest_status.py \
             tests/test_fl_desoto_bond_custody_defaults.py \
             tests/test_fl_smartweb_plain_https.py \
             tests/test_lee_outreach_unknown_status.py \
