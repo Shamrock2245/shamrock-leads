@@ -83,6 +83,9 @@ def test_run_raises_when_no_booking_has_charges(monkeypatch):
     results = "<table>" + _card("ECC26JBN000002", []) + _card("ECC26JBN000003", []) + "</table>"
 
     class _Resp:
+        status_code = 200
+        headers = {"content-type": "text/html"}
+
         def __init__(self, text):
             self.text = text
 
@@ -100,6 +103,12 @@ def test_run_raises_when_no_booking_has_charges(monkeypatch):
 
         def post(self, *a, **k):
             return _Resp(results)
+
+        def request(self, method, url, **kw):  # plain_http path
+            kw.pop("verify", None)
+            if method == "GET":
+                return self.get(url, timeout=kw.get("timeout"))
+            return self.post(url, **{k: v for k, v in kw.items() if k in ("data", "json", "headers", "timeout")})
 
     monkeypatch.setattr(fl_smartweb.requests, "Session", _Session)
     with pytest.raises(RuntimeError, match="no booking in the run has charges"):

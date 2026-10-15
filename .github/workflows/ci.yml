@@ -96,6 +96,26 @@ jobs:
             tests/test_hendry_fail_closed.py \
             tests/test_fl_rule_conflict_fail_closed.py \
             tests/test_marion_sc_sarasota_cleanup.py \
+            tests/test_fl_highlands_monroe_plain_https.py \
+            tests/test_monroe_scraper.py \
+            tests/test_fl_bay_bond_custody_defaults.py \
+            tests/test_fl_duval_palmbeach_bond_defaults.py \
+            tests/test_status_fallback_writers.py \
+            tests/test_url_ingest_incustody_unknown.py \
+            tests/test_lee_scraper_incustody_unknown.py \
+            tests/test_lee_roster_status_unknown.py \
+            tests/test_dcn_base_cleanup.py \
+            tests/test_fl_lake_honest_status.py \
+            tests/test_fl_desoto_bond_custody_defaults.py \
+            tests/test_fl_smartweb_plain_https.py \
+            tests/test_lee_outreach_unknown_status.py \
+            tests/test_fl_smartweb_status_from_source.py \
+            tests/test_fl_suwannee_bond_custody_defaults.py \
+            tests/test_fl_indian_river_tls_bond_guard.py \
+            tests/test_plain_http_tls_vs_connection_reset.py \
+            tests/test_models_bond_unknown_default.py \
+            tests/test_fl_st_lucie_plain_https.py \
+            tests/test_fl_martin_plain_https.py \
             tests/test_fl_osceola_plain_https.py \
             tests/test_fl_duval_no_robot_click.py \
             tests/test_fl_collier_plain_custody.py \
@@ -134,6 +154,7 @@ jobs:
             tests/test_payment_webhook.py \
             tests/test_payment_plan_pay_dedupe.py \
             tests/test_payment_plan_link_core.py \
+            tests/test_premium_confirmation.py \
             tests/test_auth_no_pin_fail_closed.py \
             tests/test_pinellas_relay_only.py \
             tests/test_pinellas_modal_wait.py \

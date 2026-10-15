@@ -5,7 +5,10 @@ HTTPS ASP.NET JAIL View with source-issued Booking No (``XXSO<YY>JBN<NNNNNN>``),
 booking date/time, charges, and bond on each card.
 
 Caller supplies base URL (…/smartwebclient), facility name, and county label.
-Uses plain ``requests`` only — no proxy, stealth browser, or CAPTCHA solver.
+Uses ``scrapers.plain_http`` only (honest User-Agent, certificate verified; a
+401/403/429 or challenge raises ``egress_block:``, a real certificate failure
+``tls_cert_invalid:``) — no proxy, stealth browser, impersonation or CAPTCHA
+solver, and nothing works around a block.
 
 Two ``AddMoreResults`` page-method builds exist in the wild (recon 2026-10-07):
 
@@ -28,10 +31,11 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
-import requests
+import requests  # noqa: F401  (kept so tests can stub requests.Session)
 from bs4 import BeautifulSoup
 
 from core.models import ArrestRecord
+from scrapers.plain_http import make_session, request
 
 logger = logging.getLogger(__name__)
 
@@ -41,13 +45,9 @@ REQUEST_DELAY_S = 0.3
 
 
 def _headers(search_url: str) -> dict:
+    """Extra request headers. The User-Agent is plain_http's honest one."""
     return {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-        ),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
         "Referer": search_url,
     }
 
@@ -112,9 +112,8 @@ def scrape_smartweb_jail_view(
     begin = (date.today() - timedelta(days=days)).strftime("%m/%d/%Y")
     end = date.today().strftime("%m/%d/%Y")
 
-    session = requests.Session()
-    session.headers.update(_headers(search_url))
-    resp = session.get(search_url, timeout=30)
+    session = make_session(_headers(search_url))
+    resp = request(session, "GET", search_url, county=county, timeout=30)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
     if not soup.find("input", {"name": "tbBeginDate"}):
@@ -139,7 +138,7 @@ def scrape_smartweb_jail_view(
     )
     if soup.find("select", {"name": "TypeSearch"}):
         form["TypeSearch"] = "0"  # Current Inmates Only
-    resp2 = session.post(search_url, data=form, timeout=60)
+    resp2 = request(session, "POST", search_url, county=county, data=form, timeout=60)
     resp2.raise_for_status()
 
     seen: set = set()
@@ -164,8 +163,8 @@ def scrape_smartweb_jail_view(
     while loaded and page < MAX_PAGES:
         time.sleep(REQUEST_DELAY_S)
         try:
-            r = session.post(
-                ajax_url,
+            r = request(
+                session, "POST", ajax_url, county=county,
                 json=_more_results_payload(begin, end, loaded, legacy=legacy),
                 headers=json_headers,
                 timeout=60,
@@ -200,6 +199,23 @@ def scrape_smartweb_jail_view(
         raise RuntimeError(f"{prefix}: no booking in the run has charges (JailViewCharges markup drift?)")
     logger.info("%s: %d source bookings from %d cards", prefix, len(all_records), loaded)
     return all_records
+
+
+_STATUS_MAP = {
+    "in jail": "In Custody",
+    "in custody": "In Custody",
+    "out of jail": "Released",
+    "released": "Released",
+}
+
+
+def status_from_source(raw: str) -> str:
+    """Map the card's own ``Status:`` token; anything else (or none) is "".
+
+    Whole-token lookup only, never a substring test, so "Out of Jail" can
+    never read as in custody and a missing status is never invented.
+    """
+    return _STATUS_MAP.get(" ".join(str(raw or "").split()).lower(), "")
 
 
 def _charge_bond_amount(bond_str: str) -> Optional[float]:
@@ -343,13 +359,7 @@ def _parse_html(
             block_text,
             re.IGNORECASE,
         )
-        status_raw = status_m.group(1).strip() if status_m else ""
-        if re.search(r"released|out\s+of", status_raw, re.I):
-            status = "Released"
-        elif re.search(r"jail|custody", status_raw, re.I):
-            status = "In Custody"
-        else:
-            status = "In Custody"
+        status = status_from_source(status_m.group(1) if status_m else "")
 
         addr_m = re.search(r"Address Given:\s*([^\n\r\t]+?)(?:\s+CHARGES\b|\s+STATUTE\b|$)", block_text)
         address = addr_m.group(1).strip() if addr_m else ""

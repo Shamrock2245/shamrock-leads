@@ -11,6 +11,194 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_payment_plan_creation.py` (mocked Mongo only). `tests/test_payment_plan_link_core.py`, which `ci.yml` already names, runs that file in CI.
 
+## [Unreleased] — 2026-10-15 (Lake: honest UA, published-only status/bond; SolveCaptcha kept)
+
+### Fixed
+- **Lake (FL) no longer sends a Chrome User-Agent or invents "In Custody".** `lake.py` uses `scrapers.plain_http` (honest UA, certificate verified) for the inmate-search landing GET and the recent_data API POST. The owner-approved SolveCaptcha Turnstile path is unchanged. Status comes only from a published custody field/flag (`published_status`); otherwise `""`. Bond is published-only (`total_bond_amount` missing/blank → `""`; explicit 0 kept; negative → `NO BOND` + `""`). One honest probe of the landing page (2026-10-15) got **connection_reset**. Tests: `tests/test_fl_lake_honest_status.py`.
+
+## [Unreleased] — 2026-10-15 (DCN base: honest identity, published-only bond/status, bid-only keys)
+
+### Fixed
+- **`scrapers/dcn_base.py` no longer invents bond, custody status or booking keys, and drops the Chrome disguise.** Shared by Carteret / Lee / Halifax / Richmond / Moore (NC), Darlington (SC) and DeSoto (FL). HTTP goes through an honest `plain_http` session (verified certs; 401/403/429 / challenge / TLS failures raise). Bond uses `charge_bond_amount` / `total_published_bond` (`""` when unknown; a published 0 is kept). Status is `""` (never hard-coded "In Custody"). Roster rows without a URL `bid` are dropped (no name/date hash, no person `id`). DeSoto's fail_closed `scrape()` is unchanged. Tests: `tests/test_dcn_base_cleanup.py`.
+
+## [Unreleased] — 2026-10-15 (Lee bulk roster: unknown status is "")
+
+### Fixed
+- **`LeeCountyScraper._normalize_record` no longer defaults every roster row to "In Custody".** The roster merges `/public-api/bookings?inCustody=true` with a `startBooking`/`endBooking` date range that also lists released and bonded rows (per the scraper's own variant comment and the 2026-10-08 source contract: rows publish `inCustody` and `releaseDate`). Status is now "In Custody" only when the row publishes `inCustody: true`, "Released" on a release date or `inCustody: false`, the published `status`/`currentStatus` when present, else `""`. `""` is blocked by the #220 outreach guard. Stored rows are not touched. Tests: `tests/test_lee_roster_status_unknown.py`.
+
+## [Unreleased] — 2026-10-15 (Lee scraper refresh: missing inCustody flag is "")
+
+### Fixed
+- **`LeeCountyScraper._fetch_single_booking` no longer turns a missing `inCustody` flag into "In Custody".** It reuses `url_ingest_service.published_custody_status` (published status string, else an explicit flag mapped to "In Custody"/"Released", else `""`). A `""` status is not in `IN_CUSTODY_STATUSES`, so the #220 outreach guard keeps blocking it. Stored rows are not touched. Tests: `tests/test_lee_scraper_incustody_unknown.py`.
+
+## [Unreleased] — 2026-10-15 (Lee URL ingest: missing inCustody flag is "")
+
+### Fixed
+- **`url_ingest_service._ingest_lee_county_api` no longer turns a missing `inCustody` flag into "In Custody".** New `published_custody_status()`: a published status string wins; an explicit `inCustody` (bool or "true"/"false") maps to "In Custody"/"Released"; a missing, null or unrecognized flag is `""`. Stored rows are not touched. Tests: `tests/test_url_ingest_incustody_unknown.py`.
+
+## [Unreleased] — 2026-10-15 (status-fallback writers: unknown custody status is "")
+
+### Fixed
+- **The bookmarklet merge and the PBSO Mongo ingest fallback no longer invent "In Custody".** `booking_extract_merge.merge_booking_extract` keeps the stored status, else the status the page published (`published_status`), else `""`. That applies to both the scoring record and the newly inserted arrest row. `url_ingest_service._ingest_pbso_from_mongo` returns the stored `status`/`Status` or `""`. Stored rows are not rewritten. Tests: `tests/test_status_fallback_writers.py`.
+
+## [Unreleased] — 2026-10-15 (Duval and Palm Beach: unknown bond is "", published 0 kept)
+
+### Fixed
+- Duval and Palm Beach: an unknown bond is now "" instead of a counted "0". PBSO cards sum only published Current/Original Bond amounts (any NO BOND/blank line gives ""); a published $0.00 stays "0". Duval JSON bond values are normalized through `charge_bond_amount`, and the DOM fallback is "". Stored rows and prod data are not touched. Tests: `tests/test_fl_duval_palmbeach_bond_defaults.py`.
+
+## [Unreleased] — 2026-10-15 (DeSoto: plain honest HTTPS, no browser stealth / cert bypass; bond published-only; custody only from source)
+
+### Fixed
+- **DeSoto (FL) no longer drives a stealth browser with certificate checks off.** `desoto.py` used DrissionPage via `BaseScraper._get_browser_options()` (a stealth Chrome UA and `--ignore-certificate-errors`). It now reads the DCN roster with `scrapers.plain_http` (honest UA, certificate verified), using the `DCNBaseScraper` roster parser and the grid's own DevExpress pager callback (the path documented in `FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md`). Every request, including the pager POST and the detail GETs, raises `egress_block:` on a block and `tls_cert_invalid:` on a real certificate failure, with no workaround. The one honest probe from the agent box (2026-10-15) got **HTTP 403**; on 2026-10-08 it was 200.
+- **Bond:** it used to sum only the numeric cells and default to `"0"`, and stored amounts as `"1500.0"`. It now uses a per-charge `published_bond` slot: the sum only when every charge shows an amount, a published `0` stays `"0"`, and otherwise `""` (including when no detail page was fetched).
+- **Status:** it was `"In Custody"` unless a release date was shown. It is now `"Released"` only when the source publishes a release date, and `""` otherwise.
+- **Booking key unchanged:** the URL `bid`, as before. Rows without a `bid` are dropped and never synthesized. **Health stays `unverified` / matrix `recon_only`**; the 2026-10-08 CoS finding (`bid` is an internal record id, not a booking number) still stands, and there is no new evidence.
+
+### Changed
+- **DeSoto (FL) is now `fail_closed` (CoS option 1 on #222, 2026-10-15): no source request and no writes.** The DCN roster publishes no booking number; the only key is the site's internal `bid` (CoS 2026-10-08).
+  - `desoto.py` is `SOURCE_CONTRACT_VALIDATED=False` and `scrape()` returns `[]` before any request. The plain-HTTPS rewrite above is kept in `_fetch_and_parse()`, ready to lift.
+  - Health `SCRAPER_SOURCE_STATES["DeSoto (FL)"]="fail_closed"`.
+  - `source_guard.SOURCE_HOST_LABELS` adds `desotosheriff.org`. The existing entry was `.com`, but the roster lives on `jail.desotosheriff.org`, so re-checks and detail fetches were not actually being refused.
+  - Evidence files, the matrix (`--check` ok; fail_closed 133 → 134), `FL_67_STATUS` row 49 (counts 33/24) and the new `docs/recon/FL_DESOTO_FAIL_CLOSED_2026-10-15.md` are updated.
+
+### Tests
+- `tests/test_fl_desoto_bond_custody_defaults.py` (added to the `ci.yml` list).
+
+## [Unreleased] — 2026-10-15 (SmartWEB: honest plain HTTPS; blocks fail visibly)
+
+### Fixed
+- **`scrapers/fl_smartweb.py` no longer sends a Chrome User-Agent.** The shared fetch now uses `scrapers.plain_http` (honest UA, certificate verified) for the form GET, the form POST and the `AddMoreResults` POSTs. A 401/403/429 or a challenge page raises `egress_block:`, a real certificate failure raises `tls_cert_invalid:`, and a dropped handshake raises `egress_block: … connection_reset`. Nothing works around a block. This affects Bradford, Dixie, Escambia, Gilchrist, Glades, Hamilton, Madison, Putnam, Santa Rosa, Sumter and Taylor; no county module had its own disguise. The honest probe from the agent box (2026-10-15): 8 of 11 returned 200 with the search form; Santa Rosa got a dropped TLS handshake (connection_reset); Bradford and Taylor (plain-HTTP hosts) timed out on connect. They are flagged only, not switched off.
+
+### Tests
+- `tests/test_fl_smartweb_plain_https.py` (added to the `ci.yml` list). The `test_fl_smartweb_legacy_paging` / `_unknown_bond` fakes gained `request()` and response headers for the plain_http path.
+
+## [Unreleased] — 2026-10-15 (Lee outreach / bounty alerts: a missing or unknown status is never in custody)
+
+### Fixed
+- **`core/lee_county_master.py`:**
+  - The Lee overview's "in custody" count also counted docs with **no** `status` (`$exists: False`). It now counts only recognised in-custody statuses (`IN_CUSTODY_FILTER`).
+  - The Lee leads list showed a missing status as `"In Custody"`. It now shows `""` and adds an `in_custody` boolean.
+  - The **autopilot outreach sweep** had no custody condition at all. It now requires `IN_CUSTODY_FILTER` in the query and also skips any candidate that isn't `is_in_custody_status`, so a lead with an unknown status is never auto-contacted as in custody.
+  - The manual send path is unchanged (staff choice).
+- **`dashboard/services/bounty_hunter_service.py`:** the high-value Slack alert treated a blank `custody_status` (`""`) as in custody. Blank is now excluded.
+
+### Tests
+- `tests/test_lee_outreach_unknown_status.py` (added to the `ci.yml` list).
+
+## [Unreleased] — 2026-10-15 (SmartWEB: Status only from the source; unknown is "")
+
+### Fixed
+- **`scrapers/fl_smartweb.py` no longer invents custody.** A card with no recognised `Status:` token fell through to `"In Custody"`. The new `status_from_source()` uses a whole-token lookup with no substring tests: `In Jail`/`In Custody` give `"In Custody"`, `Out of Jail`/`Released` give `"Released"`, and anything else or no status gives `""`. It is the same mapping as Suwannee (#218). It affects every SmartWEB county: Bradford, Dixie, Escambia, Gilchrist, Glades, Hamilton, Madison, Putnam, Santa Rosa, Sumter and Taylor. An honest probe of Hamilton (2026-10-15) confirmed the source tokens are `Status: In Jail` and `Status: Released`; the separate `Visitation Status:` line is not matched.
+- Downstream checks: the re-check predicates (`is_in_custody` / `is_released`), lead scoring, feature engineering, the Mongo round trip and the sheet row all treat `""` as unknown or neutral. The custody-filtered re-check queries skip a blank-status row rather than assuming custody.
+
+### Tests
+- `tests/test_fl_smartweb_status_from_source.py` (added to the `ci.yml` list).
+
+## [Unreleased] — 2026-10-15 (Suwannee: unpublished bond is "", published 0 kept; custody only from source; honest HTTPS)
+
+### Fixed
+- **Suwannee (FL) no longer invents a `$0` bond.** The charge loop started each booking at `0.0` and added only numeric bonds, so blank, NO BOND or HOLD bonds, a missing bond, or no charges gave `"0"` or a partial sum. Each charge now gets a slot from `published_bond.charge_bond_amount`, and the total uses `total_published_bond`: the sum only when every charge shows an amount, otherwise `""`. A published `$0.00` stays `"0"`.
+- **Custody only from the source.** A missing `Status:` used to default to `"In Custody"`, and the greedy status match treated `"Out of Jail"` as in custody because it contains "jail". The status is now read as a bounded token: `In Jail`/`In Custody` give `"In Custody"`, `Out of Jail`/`Released` give `"Released"`, and anything else, or no status, gives `""`.
+- **Chrome disguise removed.** The Chrome `User-Agent` is gone, and the form GET/POST and `AddMoreResults` calls go through `scrapers.plain_http` (honest UA, certificate verified). A block raises `egress_block:` and a real certificate failure raises `tls_cert_invalid:`. There was no `verify=False` to remove.
+
+### Tests
+- `tests/test_fl_suwannee_bond_custody_defaults.py` (added to the `ci.yml` list).
+
+## [Unreleased] — 2026-10-15 (Bay: unpublished bond is "", published 0 kept; no invented custody; honest HTTPS)
+
+### Fixed
+- **Bay (FL) no longer invents a `$0` bond.** `parse_store_row` summed only the numeric `Bond:` lines and started from `0.0`, so a booking with no bond shown, `NO BOND`/`HOLD`, or a charge missing its bond came out as `"0"` (or as a partial sum). Each charge now has its own slot, filled by `published_bond.charge_bond_amount`, and the booking total uses `total_published_bond`. It is the sum only when every charge shows an amount; otherwise it is `""`. A published `$0` stays `"0"`.
+- **Custody is no longer invented.** `Status` was hard-coded `"In Custody"`, but the source never states custody, so it is now `""`.
+- **Chrome disguise removed.** The Chrome `User-Agent` is gone and every request goes through `scrapers.plain_http` (honest UA, certificate verified). A block raises `egress_block:` and a real certificate failure raises `tls_cert_invalid:`. There was no `verify=False` to remove.
+
+### Tests
+- `tests/test_fl_bay_bond_custody_defaults.py` (added to the `ci.yml` list). `tests/test_fl_gap_queue.py`'s landing-drift fake now stubs `session.request` (the plain_http path).
+
+## [Unreleased] — 2026-10-15 (Highlands / Monroe: plain HTTPS, no stealth; no invented $0 or custody)
+
+### Fixed
+- **Highlands (FL) and Monroe (FL) no longer disguise themselves or turn off certificate checks.** Both used curl_cffi `impersonate="chrome131"`, a Chrome User-Agent, a "Stealth Stack" header block and `verify=False` (with urllib3 warnings silenced). Both now use `scrapers.plain_http` (honest UA, TLS verified). A block fails visibly with `egress_block:` and a TLS failure with `tls_cert_invalid:`; nothing works around it. Plain verified GETs from the box returned 200 JSON for both (the keysso.net chain now verifies).
+- **Highlands bond:** `NO BOND` (319 of 469 live rows) was stored as `"0"`; it is now `Bond_Type="NO BOND"` with the amount `""`. Blank or text is `""`; a published `$0.00` stays `"0"`.
+- **Monroe bond:** missing / `NO BOND` / text is `""` (was `"0"`); a published `0` stays `"0"`.
+- **Custody:** both hard-coded `Status="In Custody"`. Highlands' feed has no custody field and Monroe's is an arrest log, so Status is `""`.
+
+### Changed
+- **Monroe (FL) is now `fail_closed` (CoS 2026-10-15), with no source request and no writes.** The Keys SO arrest log has no booking number. Rows were keyed on the MNI in the mugshot filename (a person-level Master Name Index id, the Hendry problem) or a synthesized `MONROE-{OffenseNo|CADno}`, and the offense number is not proven to be one-per-booking. `monroe.py` is `SOURCE_CONTRACT_VALIDATED=False` and `scrape()` returns `[]` before any request. The parser cleanup above is kept in `_fetch_and_parse()`. Health `SCRAPER_SOURCE_STATES["Monroe (FL)"]="fail_closed"`, `keysso.net` is added to `source_guard.SOURCE_HOST_LABELS`, the evidence files and the matrix are updated (`build_recon_matrix.py --check` ok), and the reasoning is in `docs/recon/FL_MONROE_FAIL_CLOSED_2026-10-15.md`. Highlands stays `unverified`.
+
+### Tests
+- `tests/test_fl_highlands_monroe_plain_https.py` and `tests/test_monroe_scraper.py` (both added to the `ci.yml` list; the latter now patches `plain_http.request` and asserts NO BOND is `""`).
+
+## [Unreleased] — 2026-10-15 (plain_http: a dropped handshake is connection_reset, not tls_cert_invalid)
+
+### Fixed
+- **`scrapers/plain_http.py` no longer labels every `SSLError` as `tls_cert_invalid`.** `tls_cert_invalid:` (SourceTLSInvalid) is used only when a certificate was presented and failed verification (`SSLCertVerificationError`, verify failed, hostname mismatch, self-signed, expired, missing issuer). A handshake the far side drops or resets before any certificate is verified (unexpected EOF, connection reset) now raises `EgressBlocked` with `egress_block: <county> connection_reset: ...`, so it is reported as a connection/egress failure (still never retried, never bypassed). Shared with Polk, Volusia, Pasco, Collier, Osceola, St. Lucie, Martin and Indian River; all their tests pass.
+
+### Tests
+- `tests/test_plain_http_tls_vs_connection_reset.py` (added to the `ci.yml` list): unexpected EOF and reset give `egress_block`/`connection_reset`; real certificate failures still give `tls_cert_invalid`.
+
+## [Unreleased] — 2026-10-15 (Indian River: honest UA via plain_http; per-record bond guard; card-header guard)
+
+### Fixed
+- **Indian River (FL) no longer sends a Chrome User-Agent.** `scrapers/counties/indian_river.py` used plain `requests` (TLS verification was already on) with a Chrome UA. It now uses `scrapers.plain_http` (honest UA, `verify=True` on every call; a block raises `EgressBlocked`, a TLS failure raises `SourceTLSInvalid`). The custody/bond re-check re-raises those instead of swallowing them; the watcher and bond re-check worker already handle them without writing.
+- **Per-record bond guard:** booking-scoped fields (Booking Number, Booking/Arrest/Release Date, Agency, Case Number, Bond) are read only from the page's `Booking Info` table. Before, the first matching label anywhere on the page won, so a `Bond` row in the `Bookings` history table could bleed into this booking. A Booking Info table that repeats one of those labels with different values is skipped (scrape and re-check) instead of guessed. Unknown bond stays `""`; a published `$0.00` stays `"0.00"`.
+- **Card-header guard:** only top-level cards in the Charges section are charges; a card nested inside a charge card is no longer a separate charge.
+
+### Tests
+- `tests/test_fl_indian_river_tls_bond_guard.py` (added to the `ci.yml` list); `tests/test_fl_indian_river_booking_search.py` session fake gains `request()` for plain_http.
+
+## [Unreleased] — 2026-10-15 (ArrestRecord bond default is "" (unknown), never an invented "0")
+
+### Fixed
+- **`core/models.py`: `ArrestRecord.Bond_Amount` defaults to `""`.** It used to default to `"0"`, so every scraper that never sets a bond (21 modules, listed in the PR, plus Broward rows whose detail page shows no bond) stored an invented $0 and took the scorer's -50 "$0 bond" penalty. A published amount, including a real `"0"`, is still set by the scraper and kept.
+- **`ArrestRecord.from_mongo`** reads the stored `bond_amount_raw` when present (a stored published `"0"` is kept). A legacy doc with only a numeric `0` reads back as unknown (`""`), and a positive numeric is kept.
+- **`core/staff_edits.py`** staff re-score no longer falls back to `"0"` when there is no staff amount.
+- **`writers/rearrest_checker.py`** notifications carry `bond_amount_raw` and `bond_known`, so an unknown bond is no longer indistinguishable from $0 (numeric `bond_amount` stays `0.0` for existing readers; the $1K Slack gate is unchanged).
+- **Bond sanity-cap log** no longer prints a person's name (county only).
+
+### Tests
+- `tests/test_models_bond_unknown_default.py` (added to the `ci.yml` list).
+
+## [Unreleased] — 2026-10-15 (St. Lucie: plain HTTPS, no assumed custody, no invented bond)
+
+### Fixed
+- **St. Lucie (FL) no longer disguises itself as Chrome or turns off certificate checks.** `scrapers/counties/st_lucie.py` used curl_cffi `impersonate="chrome131"`, a Chrome User-Agent and `verify=False`. It now uses `scrapers.plain_http` (honest UA, TLS verified; a block raises `EgressBlocked`, a bad certificate raises `SourceTLSInvalid`). A plain verified POST from the box returned 200 with the full list.
+- **Status is no longer assumed "In Custody".** A published Release Date gives `"Released"` and is now stored (it was dropped); otherwise Status is `""`.
+- **Bond is `""`** (the list publishes none), never `"0"`.
+- **No name-keyed rows:** a row without an Inmate Id is skipped instead of being de-duplicated on the name.
+
+### Tests
+- `tests/test_fl_st_lucie_plain_https.py` (added to the `ci.yml` list).
+
+## [Unreleased] — 2026-10-15 (Martin: plain HTTPS; published bond only; State always FL)
+
+### Fixed
+- **Martin (FL) no longer disguises itself as Chrome or turns off certificate checks.** `scrapers/counties/martin.py` used curl_cffi `impersonate="chrome131"`, a Chrome User-Agent, `verify=False` and silenced urllib3 warnings. It now uses `scrapers.plain_http` (honest UA, TLS verified). A plain verified GET from the box returned 200 JSON.
+- **Bond is published-only:** the old code summed only the bonds that had an amount and wrote `"0"` when none did. The total is now set only when every bond publishes an amount, else `""`; a published `0` stays `"0"`.
+- **Status only from the published `IsReleased` flag:** `""` when the flag is absent (was defaulted to `"In Custody"`).
+- **State is always `FL`.** It was taken from the defendant's address, so out-of-state addresses (3 of 100 on the live page) produced rows with State `NE` / `AK` / `MH`.
+- **No fallback booking key:** a row without `soNumber` is skipped instead of keyed on the API's internal `id`.
+- **Booking date** comes from the source `bookingDate` (falls back to the latest arrest date as before).
+
+### Tests
+- `tests/test_fl_martin_plain_https.py` (added to the `ci.yml` list).
+
+## [Unreleased] — 2026-10-15 (premium confirmation fail-closed)
+
+### Fixed
+- **One confirmation transaction, including paid in full.** `POST /api/paperwork/confirm-premium` writes the packet, bond case, active bond, payment plan, and `premium_confirmed` audit row in one MongoDB transaction. No replica set or Atlas means 503 `transactions_unavailable` and nothing is saved. A failed audit or plan write rolls the confirmation back.
+- **#165 identity gate on confirm.** An unverified indemnitor gets 422 `indemnitor_identity_unverified`. A `TEST-` booking is not exempt on this route. Nothing is written.
+- **Plan adapter.** When `dashboard.services.payment_plan_creation.ensure_payment_plan_for_confirmation` is present and callable, confirmation calls it inside the same transaction. `PlanTermsConflict` is 409. `ValueError` is 400. `NotImplementedError` is 503 `plan_unavailable` and the confirmation rolls back. If that module or function is missing or not callable and the financed balance is greater than zero, the route returns 503 `plan_unavailable` and writes nothing: no `payment_plans` row, no confirmation stamps, and no audit row. Paid in full does not need the plan function.
+- **Signing invoice follows the bond case.** DocuSeal completion reads a confirmed bond case or active bond when the packet itself has no trio, so a packet created after confirmation is not stamped `premium_unconfirmed`. An unconfirmed case still stamps `premium_unconfirmed`.
+- **Existing SwipeSimple link must match the confirmed amount.** A stored link with no `swipesimple_invoice_amount_cents` after a staff confirmation, or cents that differ from the confirmed down payment, is not returned. The error is `invoice_amount_unproven` or `invoice_amount_mismatch`. No SwipeSimple call is made. A link with no confirmation and no stored cents still returns as before.
+- **`SAAS_MULTI_TENANT` off still confirms.** Shamrock writes the bond with the flag off. Tenant scope applies only when the flag is on, and another agency's row is not updated.
+- **Completion never dispatches.** DocuSeal completion stages the signing invoice with `dispatch=False` even when `SWIPESIMPLE_DISPATCH_LIVE` is on. A result that reports a send is refused. Confirmation does not call SwipeSimple, DocuSeal, email, or SMS.
+- **Down payment is not the full premium.** `resolve_locked_premium` stays the confirmed premium. `resolve_invoice_due` is the down payment on the signing invoice. A receipt for the down payment is `receipt_partial_payment` and does not set `premium_paid`.
+- **One case per confirmation.** A packet, booking number, and bond case that do not name the same case return 422 `case_identity_conflict`. Nothing is written.
+
+### Tests
+- `tests/test_premium_confirmation.py` (already on the `ci.yml` list). Covers identity 422 with zero writes, paid-in-full rollback, plan conflict 409, a missing or non-callable plan function returning 503 with nothing written, plan stub 503, no SwipeSimple / DocuSeal / email / SMS calls, confirmation before a packet exists, the invoice amount fail-closed, a down-payment receipt that does not mark the premium paid, and mixed case identifiers.
+- `tests/test_docuseal_completion_handler.py` (already on the `ci.yml` list). Completion with `SWIPESIMPLE_DISPATCH_LIVE` on still passes `dispatch=False` and does not call dispatch or SwipeSimple HTTP.
+
 ## [Unreleased] — 2026-10-15 (Osceola: plain HTTPS with TLS verified; no invented $0; blank cells keep the day)
 
 ### Fixed
@@ -336,6 +524,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `tests/test_verbatim_bond_charges.py` (already on the `ci.yml` pytest list). Synthetic TEST data only. Covers OSI counts 2, 3, and 4 byte-identical, OSI 5 and 8 fail closed at 4 rows, Palmetto summary byte-identical when it fits, 200 characters passing and 201 returning 422 with capacity 200, the comma rule, live-template field names on the submission, non-ASCII text, and finalize for both sureties.
+
+## [Unreleased] — 2026-10-14 (Write Bond premium confirmation)
+
+### Added
+- **Staff premium confirmation at Write Bond.** `POST /api/paperwork/confirm-premium` records `premium_confirmed_amount`, `premium_confirmed_at`, and `premium_confirmed_by` on the packet, the bond case, and the active bond. The actor is the session user (god_admin, admin, staff, or sub_agent). Recovery is refused. A body `premium_confirmed_by` is ignored. Amounts use the same exact-cents parser as plan payments. A second amount is 409 unless `reason` is set; the prior value stays on `premium_confirmation_history` and a new `premium_confirmed` audit row is written. A premium under the filed floor (10% of the bond, minimum $100) needs a reason.
+- **One financed plan.** When the financed balance is greater than zero, exactly one `payment_plans` row is created (`source: premium_confirmation`) whose installments sum to that balance. A replay does not create another plan and does not mark the down payment paid.
+- **Signing invoice uses the confirmed down payment.** DocuSeal completion skips `share_invoice` with `premium_unconfirmed` until the trio is set. With the trio, the invoice amount is `down_payment_amount`. `SWIPESIMPLE_LIVE` off stages that amount and does not call SwipeSimple. `SWIPESIMPLE_DISPATCH_LIVE` off does not dispatch. Both flags on, the existing send-once claim still applies. Production env values are not changed in this change.
+
+### Tests
+- `tests/test_premium_confirmation.py`.
 
 ## [Unreleased] — 2026-10-09 (Pinellas modal fix + diagnostics; relay egress blocks never auto-disable)
 

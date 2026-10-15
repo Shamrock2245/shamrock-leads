@@ -2,18 +2,24 @@
 St. Lucie County Arrest Scraper — PHP Inmate List
 Source: St. Lucie County Sheriff's Office
 URL: https://jail.stluciesheriff.com/inmateList.php (POST with Last=%)
-Method: requests + BeautifulSoup — simple POST, returns HTML table with 1000+ records
+Method: plain requests (scrapers.plain_http: honest User-Agent, TLS verified, no
+        curl_cffi impersonation) + BeautifulSoup — simple POST, HTML table
 Note: The main site /215/Inmate-Lookup embeds an iframe at jail.stluciesheriff.com
       The iframe form POSTs to inmateList.php — no JS required.
 Columns: Name | DOB | Age | Inmate Id | Booking Date | Release Date
+
+2026-10-15: a published Release Date gives Status "Released" and is stored;
+otherwise Status is "" (never assumed "In Custody"). The list publishes no
+bond, so Bond_Amount is "" (unknown). A row without an Inmate Id is skipped
+(no name fallback). A block or bad certificate raises and Health records it.
 """
 import logging
 import re
 from typing import List
 from scrapers.base_scraper import BaseScraper
+from scrapers.plain_http import make_session, request
 from core.models import ArrestRecord
 
-from curl_cffi import requests as cffi_requests
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://jail.stluciesheriff.com"
@@ -22,13 +28,11 @@ LIST_URL = f"{BASE_URL}/inmateList.php"
 FACILITY = "St. Lucie County Jail"
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": SEARCH_URL,
     "Content-Type": "application/x-www-form-urlencoded",
 }
-IMPERSONATE = "chrome131"
 
 
 class StLucieCountyScraper(BaseScraper):
@@ -38,17 +42,15 @@ class StLucieCountyScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         try:
-            import requests
             from bs4 import BeautifulSoup
         except ImportError:
-            logger.error("requests/bs4 not installed")
+            logger.error("bs4 not installed")
             raise
 
-        session = cffi_requests.Session()
-        session.headers.update(HEADERS)
+        session = make_session(HEADERS)
 
         try:
-            resp = session.post(LIST_URL, data={"First": "", "Last": "%", "Submit": "Search"}, timeout=60, impersonate=IMPERSONATE, verify=False)
+            resp = request(session, "POST", LIST_URL, data={"First": "", "Last": "%", "Submit": "Search"}, timeout=60, county="St. Lucie")
             resp.raise_for_status()
         except Exception as e:
             logger.error(f"St. Lucie: failed to fetch inmate list: {e}")
@@ -86,11 +88,15 @@ class StLucieCountyScraper(BaseScraper):
             inmate_id = texts[3] if len(texts) > 3 else ""
             booking_date = texts[4] if len(texts) > 4 else ""
             release_date = texts[5] if len(texts) > 5 else ""
-            status = "Released" if release_date and release_date.strip() not in (":", "", "N/A") else "In Custody"
+            release_date = release_date.strip()
+            if release_date in (":", "N/A"):
+                release_date = ""
+            # Released only when the source publishes a release date; otherwise unknown.
+            status = "Released" if release_date else ""
 
-            key = inmate_id or full_name
+            key = inmate_id.strip()
             if not key or key in seen:
-                continue
+                continue  # no source id: skip, never key on the name
             seen.add(key)
 
             detail_url = ""
@@ -102,7 +108,7 @@ class StLucieCountyScraper(BaseScraper):
             f, m, l = self._pn(full_name)
             records.append(ArrestRecord(
                 County=self.county,
-                Booking_Number=inmate_id,
+                Booking_Number=key,
                 Full_Name=full_name,
                 First_Name=f,
                 Middle_Name=m,
@@ -110,7 +116,8 @@ class StLucieCountyScraper(BaseScraper):
                 DOB=dob,
                 Booking_Date=booking_date,
                 Status=status,
-                        Release_Date="",
+                Release_Date=release_date,
+                Bond_Amount="",  # the list publishes no bond: unknown, never "0"
                 Facility=FACILITY,
                 Detail_URL=detail_url,
                 LastCheckedMode="INITIAL",

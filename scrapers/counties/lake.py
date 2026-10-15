@@ -6,8 +6,10 @@ Source: Lake County Sheriff's Office Inmate Search
 Owner decision (Brendan, 2026-09-25): handle Lake like Broward — obtain the
 Turnstile token the endpoint requires from SolveCaptcha (env
 ``SOLVECAPTCHA_KEY``) via the shared helper ``scrapers/solvecaptcha.py``.
-Plain HTTPS ``requests``; no proxy, Obscura, stealth browser or TLS
-impersonation.
+Plain HTTPS through ``scrapers.plain_http`` (honest User-Agent, certificate
+verified); no proxy, Obscura, stealth browser, Chrome disguise or TLS
+impersonation. Status is never invented as "In Custody" (``""`` unless the
+source publishes a custody field). Bond is published-only.
 
 Contract (verified 2026-09-25):
 * The page renders Turnstile (reCAPTCHA-compat) with sitekey
@@ -29,10 +31,10 @@ import re
 from datetime import datetime, timezone
 from typing import Iterable, List, Optional
 
-import requests
-
 from core.models import ArrestRecord
+from scrapers import plain_http
 from scrapers.base_scraper import BaseScraper
+from scrapers.published_bond import charge_bond_amount
 from scrapers.scraper_resilience import AntiBotBlocked, ParseDriftError
 from scrapers.solvecaptcha import solve_turnstile, solvecaptcha_key
 
@@ -44,10 +46,6 @@ API_URL = f"{BASE_URL}/inmate-search/api/inmates"
 TURNSTILE_SITEKEY = "0x4AAAAAAEFZn-Q0bIVuiZHe"
 FACILITY = "Lake County Jail"
 BOOKING_RE = re.compile(r"^\d{8}$")
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-)
 API_HEADERS = {
     "Accept": "application/json, text/javascript, */*; q=0.01",
     "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -74,6 +72,47 @@ def _fmt_datetime(raw: str) -> tuple[str, str]:
 def _clean(val) -> str:
     s = re.sub(r"\s+", " ", str(val or "")).strip()
     return "" if s.lower() in ("n/a", "none", "null") else s
+
+
+def published_status(row: dict) -> str:
+    """Custody status only as LCSO published it; unknown is ""."""
+    if not isinstance(row, dict):
+        return ""
+    for key in ("status", "Status", "custody_status", "custodyStatus", "in_custody_text"):
+        val = row.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    flag = row.get("in_custody")
+    if flag is None:
+        flag = row.get("inCustody")
+    if isinstance(flag, str):
+        flag = {"true": True, "false": False, "1": True, "0": False}.get(flag.strip().lower())
+    if flag is True:
+        return "In Custody"
+    if flag is False:
+        return "Released"
+    return ""
+
+
+def _published_bond(row: dict) -> tuple[str, str]:
+    """``total_bond_amount``: missing/blank -> ""; explicit 0 kept; negative -> NO BOND + ""."""
+    if "total_bond_amount" not in row and "total_bond" not in row:
+        return "", ""
+    raw = row.get("total_bond_amount", row.get("total_bond"))
+    if raw is None or (isinstance(raw, str) and not str(raw).strip()):
+        return "", ""
+    try:
+        bond_val = float(raw)
+    except (TypeError, ValueError):
+        amt = charge_bond_amount(raw)
+        if amt is None:
+            return "", ""
+        bond_val = float(amt)
+    if bond_val < 0:
+        return "", "NO BOND"
+    if bond_val == 0:
+        return "0", ""
+    return (str(int(bond_val)) if float(bond_val).is_integer() else f"{bond_val:.2f}"), ""
 
 
 def parse_record(row: dict) -> Optional[ArrestRecord]:
@@ -108,13 +147,7 @@ def parse_record(row: dict) -> Optional[ArrestRecord]:
         if case and case.upper() != "N/A" and case not in cases:
             cases.append(case)
 
-    bond_raw = row.get("total_bond_amount")
-    try:
-        bond_val = float(bond_raw or 0)
-    except (TypeError, ValueError):
-        bond_val = 0.0
-    bond_type = "NO BOND" if bond_val < 0 else ""
-    bond_amount = "0" if bond_val <= 0 else (str(int(bond_val)) if bond_val.is_integer() else f"{bond_val:.2f}")
+    bond_amount, bond_type = _published_bond(row)
 
     full = f"{last}, {first}" + (f" {middle}" if middle else "")
     return ArrestRecord(
@@ -135,7 +168,7 @@ def parse_record(row: dict) -> Optional[ArrestRecord]:
         Booking_Time=booking_time,
         Agency=_clean(row.get("arrest")),
         Facility=FACILITY,
-        Status="In Custody",
+        Status=published_status(row),
         Charges=" | ".join(charges),
         Case_Number=" | ".join(cases),
         Bond_Amount=bond_amount,
@@ -184,10 +217,9 @@ class LakeCountyScraper(BaseScraper):
         if not api_key:
             raise RuntimeError(f"Lake requires SOLVECAPTCHA_KEY to solve Turnstile on {SEARCH_PAGE_URL}")
 
-        session = requests.Session()
-        session.headers["User-Agent"] = USER_AGENT
-        landing = session.get(SEARCH_PAGE_URL, timeout=30)
-        landing.raise_for_status()
+        session = plain_http.make_session(API_HEADERS)
+        # Landing GET: blocks / TLS failures raise egress_block / tls_cert_invalid.
+        landing = plain_http.request(session, "GET", SEARCH_PAGE_URL, county="Lake", timeout=30)
         if TURNSTILE_SITEKEY not in landing.text:
             raise ParseDriftError("Lake inmate-search page no longer carries the verified Turnstile sitekey")
 
@@ -195,15 +227,17 @@ class LakeCountyScraper(BaseScraper):
         if not token:
             raise AntiBotBlocked("Lake Turnstile token could not be obtained from SolveCaptcha")
 
-        resp = session.post(
+        # API POST keeps the same session (honest UA, verify on). SolveCaptcha
+        # stays on its own transport inside solve_turnstile (unchanged).
+        resp = plain_http.request(
+            session,
+            "POST",
             API_URL,
+            county="Lake",
             data=json.dumps({"token": token, "recent_data": True}),
             headers=API_HEADERS,
             timeout=60,
         )
-        if resp.status_code in (401, 403):
-            raise AntiBotBlocked(f"Lake inmate API HTTP {resp.status_code}")
-        resp.raise_for_status()
         try:
             data = resp.json()
         except ValueError as e:
