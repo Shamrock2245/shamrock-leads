@@ -28,7 +28,7 @@ class TestSouthernSoftwareSafety(unittest.TestCase):
         self.assertEqual(record.State, "AL")
         self.assertEqual(record.Booking_Number, "ABC-24590")
         self.assertEqual(record.Booking_Date, "08/14/2026 02:35 PM")
-        self.assertEqual(record.Status, "Unknown")
+        self.assertEqual(record.Status, "")  # direct card parse is not the Current Confinements view
         self.assertEqual(
             record.extra_data["booking_key_origin"],
             "source-issued Citizen Connect booking/inmate ID",
