@@ -35,6 +35,22 @@ Source contract (recon 2026-10-08, docs/recon/FL_OKALOOSA_API_2026-10-08.md):
     never rewritten with blank charges. A detail request failure raises; a
     detail naming another booking skips that booking (all of them: raise).
   * Health stays ``unverified`` until a Leads Ops write smoke.
+
+2026-10-15 honest identity and published-only status
+(docs/recon/FL_OKALOOSA_HONEST_2026-10-15.md):
+  * Every request goes through scrapers.plain_http (honest User-Agent,
+    certificate verified; Chrome UA removed). 401/403/429, a challenge page, a
+    connection reset or a bad certificate raises (egress_block: /
+    tls_cert_invalid:) and is not wrapped as a contract error.
+  * Status is "" (was hard-coded "In Custody"). The roster ``status`` code is
+    never shown by the official app (its UI has no custody label; 9 of the
+    first 100 rows were "0" on 2026-10-15), so it is not a published custody
+    field and the search is not a proven custody-only view. The ``status == "1"``
+    emission filter is kept (CoS 2026-10-08) but no longer labels custody.
+  * Release_Date is the detail ``releaseDate`` (shown by the app as "Released
+    Date") when published.
+  * Bond is unchanged: $0 / null bailAmt is unpublished (CoS decision); total
+    only when every charge publishes a positive bailAmt, else "".
 """
 from __future__ import annotations
 
@@ -47,6 +63,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 
 from scrapers.base_scraper import BaseScraper
+from scrapers.plain_http import HONEST_USER_AGENT
+from scrapers.plain_http import request as plain_request
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
@@ -66,10 +84,7 @@ IN_CUSTODY_STATUS = "1"
 
 BOOKING_RE = re.compile(r"^\d{10}$")
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": HONEST_USER_AGENT,
     "Accept": "application/json, text/plain, */*",
     "Referer": PORTAL_URL,
 }
@@ -230,7 +245,8 @@ def build_record(row: Dict[str, Any], detail: Optional[Dict[str, Any]]) -> Optio
         Bond_Amount=bond,
         Bond_Type=detail["bond_type"] if detail else "",
         Case_Number=" | ".join(detail["case_numbers"]) if detail else "",
-        Status="In Custody",
+        Status="",  # roster status code is not a published custody label
+        Release_Date=(detail or {}).get("release_date", "") if detail else "",
         Detail_URL=PORTAL_URL,
         LastCheckedMode="INITIAL",
         extra_data=extra,
@@ -251,7 +267,7 @@ class OkaloosaCountyScraper(BaseScraper):
         return "FL"
 
     def _get_json(self, session: requests.Session, url: str, params: Optional[dict] = None) -> Any:
-        resp = session.get(url, params=params, timeout=REQUEST_TIMEOUT)
+        resp = plain_request(session, "GET", url, params=params, timeout=REQUEST_TIMEOUT, county="Okaloosa")
         resp.raise_for_status()
         return resp.json()
 
@@ -287,6 +303,7 @@ class OkaloosaCountyScraper(BaseScraper):
         days = lookback_days or LOOKBACK_DAYS
         session = requests.Session()
         session.headers.update(HEADERS)
+        session.verify = True
         rows = self.fetch_roster(session)
 
         cutoff = datetime.now() - timedelta(days=days)
