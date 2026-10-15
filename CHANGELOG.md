@@ -28,6 +28,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Status comes only from the published detail Status label, recorded as `extra_data.status_source = "published_detail_status"`. Otherwise it is "" (no more default "In Custody"). Detail-error logs no longer include names.
 - The box probe got a Cloudflare 403 (`docs/recon/FL_SEMINOLE_HONEST_2026-10-15.md`). Health stays `unverified`; fail_closed is a CoS call after a Leads Ops read. Tests: `tests/test_fl_seminole_plain_https.py` (on the ci.yml list).
 
+## 2026-10-15 — Southern Software Citizen Connect base: honest identity; published-only bond, charges and status
+
+- `scrapers/southern_sw_base.py`: every request goes through `scrapers.plain_http` (honest UA, certificate verified; the Chrome UA is removed). Blocks raise. The whole-run `except Exception: return []` and the per-endpoint swallow are removed, so failures are visible.
+- Bond_Amount is the published Bond Total (a 0 is kept); else the per-charge Bond sum only when every charge publishes one; else "". It was "0". Charges come from published charge items only, "" when none (was "Unknown"; the free-text heuristic is removed).
+- Status: "In Custody" only for the source's "Current Confinements" view (`extra_data.status_source = "published_current_confinements_view"`). The last-7-days admits fallback gives "" (was "Unknown").
+- Affects 38 live subclasses: SC Dorchester, Chesterfield; 24 NC; 12 GA. The 12 AL/TN fail-closed guards are unchanged. Tests: `tests/test_southern_sw_honest.py` (on the ci.yml list), plus updated SSW parser tests. Recon: `docs/recon/SSW_CITIZEN_CONNECT_HONEST_2026-10-15.md`.
+
 ## [Unreleased] — 2026-10-15 (Gaston NC: honest identity; published-only charges/bond/status)
 
 ### Fixed
