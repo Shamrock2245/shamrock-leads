@@ -135,15 +135,15 @@ class MecklenburgNcParserTests(unittest.TestCase):
         self.assertIn("INJURY TO PERSONAL PROPERTY", rec.Charges)
         self.assertEqual(rec.Bond_Amount, "2000")
 
-    def test_empty_bail_stays_zero_not_invented(self) -> None:
+    def test_empty_bail_is_blank_not_invented(self) -> None:
         rec = self.scraper.record_from_detail(
             SEARCH_PAGE[0], SUMMARY, CHARGES_NO_BAIL
         )
         assert rec is not None
         self.assertEqual(rec.Charges, "HOLD FOR USMS")
-        self.assertEqual(rec.Bond_Amount, "0")
+        self.assertEqual(rec.Bond_Amount, "")
 
-    def test_non_numeric_bail_ignored(self) -> None:
+    def test_partial_bail_not_summed(self) -> None:
         rows = [
             {
                 "Description": "FOO",
@@ -156,7 +156,7 @@ class MecklenburgNcParserTests(unittest.TestCase):
         ]
         charges, bond = self.scraper._parse_charges(rows)
         self.assertEqual(charges, "FOO | BAR")
-        self.assertEqual(bond, "500.50")
+        self.assertEqual(bond, "")
 
 
 if __name__ == "__main__":
