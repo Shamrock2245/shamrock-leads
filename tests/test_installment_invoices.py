@@ -82,7 +82,7 @@ def _wire(db, monkeypatch):
     monkeypatch.delenv("REQUIRE_DASHBOARD_PIN", raising=False)
 
 
-def _paid(txn="TX1", booking=BOOKING, reference=f"{BOOKING}-I1", amount="250.00"):
+def _paid(txn="TX1", booking=BOOKING, reference=f"{BOOKING}-I1", amount="250.00", plan_id=PLAN):
     return {
         "event_type": "payment.completed",
         "status": "approved",
@@ -91,7 +91,7 @@ def _paid(txn="TX1", booking=BOOKING, reference=f"{BOOKING}-I1", amount="250.00"
         "custom_fields": {
             "booking_number": booking,
             "reference_id": reference,
-            "plan_id": PLAN,
+            "plan_id": plan_id,
         },
     }
 
@@ -389,6 +389,129 @@ def test_overdue_installment_alerts_once_via_bluebubbles(monkeypatch):
     assert second["alerted"] == 0
     assert sends["n"] == 1
     assert len(cols["missed_payment_alerts"].docs) == 1
+
+
+def test_confirmation_writer_string_balances_take_a_paid_installment(db, monkeypatch):
+    """Plans from ensure_payment_plan_for_confirmation store decimal strings.
+
+    Posting coerces those strings to numbers, then ``$inc``s them.
+    ``balance_remaining_cents`` stays the integer source of truth.
+    """
+    from decimal import Decimal
+
+    from dashboard.services import payment_plan_creation as creation
+
+    db["payment_plans"].docs.clear()
+    db["bond_cases"].docs.append({
+        "bond_case_id": "BC-1",
+        "booking_number": BOOKING,
+        "tenant_id": "shamrock",
+        "surety_id": "osi",
+        "premium_confirmed_amount": "1500.00",
+        "down_payment_amount": "500.00",
+    })
+    monkeypatch.setattr(creation, "get_collection", lambda name: db[name])
+
+    async def go():
+        created = await creation.ensure_payment_plan_for_confirmation(
+            tenant_id="shamrock",
+            bond_case_id="BC-1",
+            confirmation_id="pcf-1",
+            financed=Decimal("1000.00"),
+            installments=4,
+            frequency="weekly",
+            actor="office@example.invalid",
+            session=object(),
+        )
+        plan_id = created["plan_id"]
+        written = db["payment_plans"].docs[0]
+        assert written["balance_remaining"] == "1000.00"
+        assert written["total_paid"] == "0.00"
+        assert written["balance_remaining_cents"] == 100000
+        assert type(written["balance_remaining_cents"]) is int
+        # The dollar string is not the truth when it disagrees with cents.
+        written["balance_remaining"] = "900.00"
+        paid = await post_gateway_event(_paid(plan_id=plan_id), actor="swipesimple_webhook")
+        after = {
+            "balance_remaining": db["payment_plans"].docs[0]["balance_remaining"],
+            "balance_remaining_cents": db["payment_plans"].docs[0]["balance_remaining_cents"],
+            "total_paid": db["payment_plans"].docs[0]["total_paid"],
+            "total_paid_cents": db["payment_plans"].docs[0]["total_paid_cents"],
+            "payments_made": db["payment_plans"].docs[0]["payments_made"],
+            "status": db["payment_plans"].docs[0]["status"],
+        }
+        again = await post_gateway_event(_paid(plan_id=plan_id), actor="swipesimple_webhook")
+        refund = await post_gateway_event({
+            "event_type": "payment.refunded",
+            "status": "refunded",
+            "transaction_id": "TX1",
+            "amount": "250.00",
+            "custom_fields": {
+                "booking_number": BOOKING,
+                "reference_id": f"{BOOKING}-I1",
+                "plan_id": plan_id,
+            },
+        }, actor="swipesimple_webhook")
+        return paid, after, again, refund
+
+    paid, after, again, refund = asyncio.run(go())
+    plan = db["payment_plans"].docs[0]
+    assert paid["handled"] is True and paid.get("success") is True
+    assert after == {
+        "balance_remaining": 750.0,
+        "balance_remaining_cents": 75000,
+        "total_paid": 250.0,
+        "total_paid_cents": 25000,
+        "payments_made": 1,
+        "status": "active",
+    }
+    assert type(after["balance_remaining"]) is float
+    assert type(after["total_paid"]) is float
+    assert type(after["balance_remaining_cents"]) is int
+    assert again["idempotent"] is True
+    assert again["balance_remaining"] == 750.0
+    assert refund["handled"] is True and refund["idempotent"] is False
+    assert plan["balance_remaining"] == 1000.0
+    assert plan["balance_remaining_cents"] == 100000
+    assert plan["total_paid"] == 0.0
+    assert plan["total_paid_cents"] == 0
+    assert type(plan["balance_remaining_cents"]) is int
+    assert type(plan["total_paid_cents"]) is int
+    assert plan["status"] == "active"
+    assert len(db["payments"].docs) == 1
+    assert db["payments"].docs[0]["status"] == "reversed"
+
+
+def test_string_balance_pays_off_from_integer_cents(db):
+    plan = db["payment_plans"].docs[0]
+    plan["balance_remaining"] = "250.00"
+    plan["balance_remaining_cents"] = 25000
+    plan["total_paid"] = "0.00"
+    plan["total_paid_cents"] = 0
+
+    result = asyncio.run(post_gateway_event(_paid(), actor="swipesimple_webhook"))
+    stored = db["payment_plans"].docs[0]
+    assert result["handled"] is True
+    assert stored["status"] == "paid_in_full"
+    assert stored["balance_remaining"] == 0
+    assert stored["balance_remaining_cents"] == 0
+    assert type(stored["balance_remaining_cents"]) is int
+    assert stored["total_paid"] == 250.0
+    assert stored["total_paid_cents"] == 25000
+
+
+def test_unreadable_balance_string_does_not_post(db):
+    plan = db["payment_plans"].docs[0]
+    plan["balance_remaining"] = "not-money"
+    plan.pop("balance_remaining_cents", None)
+    plan["total_paid"] = "0.00"
+    plan.pop("total_paid_cents", None)
+
+    result = asyncio.run(post_gateway_event(_paid(), actor="swipesimple_webhook"))
+    assert result.status_code == 500
+    assert db["payments"].docs == []
+    assert db["payment_plans"].docs[0]["balance_remaining"] == "not-money"
+    assert db["payment_plans"].docs[0]["total_paid"] == "0.00"
 
 
 def test_installment_cron_is_registered():

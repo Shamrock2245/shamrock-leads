@@ -766,8 +766,144 @@ async def _write_payment_row(payments_col, plan, plan_id, txn, amount, data, now
     return False
 
 
+def _whole_cents(value) -> int | None:
+    """An integer cent field. Booleans are not cents."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _stored_dollars(value) -> float | None:
+    """A stored dollar amount as a float, including zero.
+
+    Numbers stay numbers. A decimal string such as ``1000.00`` becomes a
+    float so ``$inc`` can add it. Fractional cents are refused.
+    """
+    from decimal import Decimal, InvalidOperation
+
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+        if number != number or number in (float("inf"), float("-inf")):
+            return None
+        return number
+    if not isinstance(value, str):
+        return None
+    text = value.strip().replace(",", "").replace("$", "")
+    if not text or len(text) > 64:
+        return None
+    try:
+        dec = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return None
+    if not dec.is_finite():
+        return None
+    exponent = dec.as_tuple().exponent
+    if isinstance(exponent, str) or exponent < -2:
+        return None
+    return float(dec)
+
+
+def _numeric_money_patch(plan: dict) -> dict:
+    """Dollar fields ``$inc`` can add.
+
+    ``ensure_payment_plan_for_confirmation`` stores ``balance_remaining`` and
+    ``total_paid`` as decimal strings. When the matching ``*_cents`` field is
+    an integer, that integer is the source of truth and the dollar field
+    becomes ``cents / 100``. A string with no cent field is parsed. Values
+    that are already numbers are left alone.
+    """
+    patch = {}
+    for dollars_key, cents_key in (
+        ("balance_remaining", "balance_remaining_cents"),
+        ("total_paid", "total_paid_cents"),
+    ):
+        current = plan.get(dollars_key)
+        if not isinstance(current, str):
+            if current is not None and _stored_dollars(current) is None:
+                raise RuntimeError(f"{dollars_key} is not a numeric amount")
+            continue
+        cents = _whole_cents(plan.get(cents_key))
+        if cents is not None:
+            patch[dollars_key] = cents / 100
+            continue
+        number = _stored_dollars(current)
+        if number is None:
+            raise RuntimeError(f"{dollars_key} is not a numeric amount")
+        patch[dollars_key] = number
+    return patch
+
+
+async def _coerce_plan_money(plans_col, plan_id, plan, session=None) -> dict:
+    """Rewrite decimal-string balances to numbers inside the caller's transaction."""
+    patch = _numeric_money_patch(plan)
+    if not patch:
+        return plan
+    pinned = {"plan_id": plan_id}
+    for key in patch:
+        pinned[key] = plan.get(key)
+    await plans_col.update_one(pinned, {"$set": patch}, **_sess(session))
+    fresh = await plans_col.find_one({"plan_id": plan_id}, **_sess(session))
+    if not isinstance(fresh, dict):
+        raise RuntimeError("plan missing during balance update")
+    return fresh
+
+
+def _money_still_text(plan: dict) -> bool:
+    return any(isinstance(plan.get(key), str) for key in ("balance_remaining", "total_paid"))
+
+
+def _cent_increments(plan: dict, amount, *, paying: bool) -> dict:
+    """Integer cent companions. Absent fields stay absent.
+
+    A payment decreases ``balance_remaining_cents`` and increases
+    ``total_paid_cents``. A refund does the opposite.
+    """
+    cents = _amount_cents(amount)
+    if not cents:
+        return {}
+    balance_delta = -cents if paying else cents
+    paid_delta = cents if paying else -cents
+    inc = {}
+    if _whole_cents(plan.get("balance_remaining_cents")) is not None:
+        inc["balance_remaining_cents"] = balance_delta
+    if _whole_cents(plan.get("total_paid_cents")) is not None:
+        inc["total_paid_cents"] = paid_delta
+    return inc
+
+
+async def _close_if_paid_off(plans_col, plan_id, session=None) -> None:
+    """Mark paid in full from integer cents when that field is the contract."""
+    plan = await plans_col.find_one({"plan_id": plan_id}, **_sess(session)) or {}
+    if _whole_cents(plan.get("balance_remaining_cents")) is not None:
+        await plans_col.update_one(
+            {"plan_id": plan_id, "balance_remaining_cents": {"$lte": 0}},
+            {"$set": {
+                "balance_remaining": 0,
+                "balance_remaining_cents": 0,
+                "status": "paid_in_full",
+            }},
+            **_sess(session),
+        )
+        return
+    balance = plan.get("balance_remaining")
+    if isinstance(balance, str):
+        return
+    await plans_col.update_one(
+        {"plan_id": plan_id, "balance_remaining": {"$lte": 0}},
+        {"$set": {"balance_remaining": 0, "status": "paid_in_full"}},
+        **_sess(session),
+    )
+
+
 async def _apply_balance(plans_col, plan_id, txn, amount, now, session=None) -> None:
-    """Idempotent ``$inc``. A second run sees the transaction id already collected."""
+    """Idempotent ``$inc``. A second run sees the transaction id already collected.
+
+    Decimal-string balances from ``ensure_payment_plan_for_confirmation`` are
+    coerced to numbers in this same transaction before ``$inc``. Integer
+    ``balance_remaining_cents`` stays the source of truth.
+    """
     for _ in range(3):
         plan = await plans_col.find_one({"plan_id": plan_id}, **_sess(session))
         if not plan:
@@ -785,6 +921,10 @@ async def _apply_balance(plans_col, plan_id, txn, amount, now, session=None) -> 
             raise RuntimeError("collected_transaction_ids unreadable")
         if txn in ids:
             break
+        if _money_still_text(plan):
+            plan = await _coerce_plan_money(plans_col, plan_id, plan, session)
+            if _money_still_text(plan):
+                continue
         await plans_col.update_one(
             {"plan_id": plan_id, **pin},
             {
@@ -792,11 +932,7 @@ async def _apply_balance(plans_col, plan_id, txn, amount, now, session=None) -> 
                     "balance_remaining": -amount,
                     "total_paid": amount,
                     "payments_made": 1,
-                    **(
-                        {"balance_remaining_cents": -(_amount_cents(amount) or 0)}
-                        if isinstance(plan.get("balance_remaining_cents"), int)
-                        else {}
-                    ),
+                    **_cent_increments(plan, amount, paying=True),
                 },
                 "$set": {
                     "collected_transaction_ids": ids + [txn],
@@ -808,11 +944,7 @@ async def _apply_balance(plans_col, plan_id, txn, amount, now, session=None) -> 
             },
             **_sess(session),
         )
-    await plans_col.update_one(
-        {"plan_id": plan_id, "balance_remaining": {"$lte": 0}},
-        {"$set": {"balance_remaining": 0, "status": "paid_in_full"}},
-        **_sess(session),
-    )
+    await _close_if_paid_off(plans_col, plan_id, session)
     fresh = await plans_col.find_one({"plan_id": plan_id}, **_sess(session))
     if not _collected(fresh or {}, txn) or not _balance_ok(fresh or {}):
         raise RuntimeError("balance update did not stick")
@@ -1262,8 +1394,14 @@ async def _restore_balance(plans_col, plan_id, original_txn, amount, now, sessio
     ids = plan.get("collected_transaction_ids")
     if not isinstance(ids, list) or original_txn not in ids:
         return
+    if _money_still_text(plan):
+        plan = await _coerce_plan_money(plans_col, plan_id, plan, session)
+        if _money_still_text(plan):
+            raise RuntimeError("plan money field is not numeric")
+        ids = plan.get("collected_transaction_ids")
+        if not isinstance(ids, list) or original_txn not in ids:
+            return
     remaining = [item for item in ids if item != original_txn]
-    cents = _amount_cents(amount)
     await plans_col.update_one(
         {"plan_id": plan_id, "collected_transaction_ids": ids},
         {
@@ -1271,11 +1409,7 @@ async def _restore_balance(plans_col, plan_id, original_txn, amount, now, sessio
                 "balance_remaining": amount,
                 "total_paid": -amount,
                 "payments_made": -1,
-                **(
-                    {"balance_remaining_cents": cents}
-                    if isinstance(plan.get("balance_remaining_cents"), int) and cents
-                    else {}
-                ),
+                **_cent_increments(plan, amount, paying=False),
             },
             "$set": {
                 "collected_transaction_ids": remaining,
