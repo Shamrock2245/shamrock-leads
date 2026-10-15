@@ -113,6 +113,7 @@ jobs:
             tests/test_fl_polk_honest_status.py \
             tests/test_fl_hernando_honest_identity.py \
             tests/test_sc_florence_honest.py \
+            tests/test_sc_newberry_honest.py \
             tests/test_fl_desoto_bond_custody_defaults.py \
             tests/test_fl_smartweb_plain_https.py \
             tests/test_lee_outreach_unknown_status.py \
