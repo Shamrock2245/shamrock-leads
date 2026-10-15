@@ -74,6 +74,7 @@ class _Resp:
         self.text = text
         self._payload = payload
         self.status_code = status
+        self.headers = {"content-type": "text/html"}
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -99,6 +100,12 @@ class _FakeSession:
 
     def get(self, url, timeout=None):
         return _Resp(LANDING)
+
+    def request(self, method, url, **kw):  # plain_http path
+        kw.pop("verify", None)
+        if method == "GET":
+            return self.get(url, timeout=kw.get("timeout"))
+        return self.post(url, **{k: v for k, v in kw.items() if k in ("data", "json", "headers", "timeout")})
 
     def post(self, url, data=None, json=None, headers=None, timeout=None):
         if url.endswith("/AddMoreResults"):

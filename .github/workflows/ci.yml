@@ -100,6 +100,7 @@ jobs:
             tests/test_monroe_scraper.py \
             tests/test_fl_bay_bond_custody_defaults.py \
             tests/test_fl_citrus_bond_custody_defaults.py \
+            tests/test_fl_smartweb_plain_https.py \
             tests/test_lee_outreach_unknown_status.py \
             tests/test_fl_smartweb_status_from_source.py \
             tests/test_fl_suwannee_bond_custody_defaults.py \
