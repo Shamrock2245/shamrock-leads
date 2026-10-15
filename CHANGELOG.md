@@ -13,6 +13,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_fl_citrus_bond_custody_defaults.py` (added to the `ci.yml` list).
 
+## [Unreleased] — 2026-10-15 (Lee outreach / bounty alerts: a missing or unknown status is never in custody)
+
+### Fixed
+- **`core/lee_county_master.py`:**
+  - The Lee overview's "in custody" count also counted docs with **no** `status` (`$exists: False`). It now counts only recognised in-custody statuses (`IN_CUSTODY_FILTER`).
+  - The Lee leads list showed a missing status as `"In Custody"`. It now shows `""` and adds an `in_custody` boolean.
+  - The **autopilot outreach sweep** had no custody condition at all. It now requires `IN_CUSTODY_FILTER` in the query and also skips any candidate that isn't `is_in_custody_status`, so a lead with an unknown status is never auto-contacted as in custody.
+  - The manual send path is unchanged (staff choice).
+- **`dashboard/services/bounty_hunter_service.py`:** the high-value Slack alert treated a blank `custody_status` (`""`) as in custody. Blank is now excluded.
+
+### Tests
+- `tests/test_lee_outreach_unknown_status.py` (added to the `ci.yml` list).
+
 ## [Unreleased] — 2026-10-15 (SmartWEB: Status only from the source; unknown is "")
 
 ### Fixed
