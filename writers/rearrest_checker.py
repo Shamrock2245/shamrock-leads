@@ -213,11 +213,15 @@ class RearrestChecker:
             or (best_bond.get("indemnitor") or {}).get("email", "")
         )
 
-        bond_amount_raw = getattr(record, "Bond_Amount", "") or ""
+        bond_amount_raw = str(getattr(record, "Bond_Amount", "") or "").strip()
         try:
-            bond_amount = float(str(bond_amount_raw).replace(",", "").replace("$", ""))
+            bond_amount = float(bond_amount_raw.replace(",", "").replace("$", ""))
+            bond_known = True
         except (ValueError, TypeError):
+            # Unknown ("" / text) is not a $0 bond. Numeric stays 0.0 for
+            # existing readers; bond_known tells them apart.
             bond_amount = 0.0
+            bond_known = False
 
         notification = {
             # New arrest details
@@ -227,6 +231,8 @@ class RearrestChecker:
             "county": county,
             "charges": getattr(record, "Charges", "") or "",
             "bond_amount": bond_amount,
+            "bond_amount_raw": bond_amount_raw,
+            "bond_known": bond_known,
             "arrest_date": getattr(record, "Arrest_Date", "") or "",
             "custody_status": getattr(record, "Custody_Status", "") or "",
             # Prior bond / indemnitor details
