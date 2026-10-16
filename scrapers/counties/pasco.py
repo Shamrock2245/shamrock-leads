@@ -19,6 +19,12 @@ CUSTODY_API = "https://jailinfo.pascocorrections.net/jmcapi/custody/GetInCustody
 CHARGE_API = "https://jailinfo.pascocorrections.net/jmcapi/arrest/GetUserArrestCharge?nameId={name_id}"
 FACILITY = "Pasco County Jail - Land O' Lakes"
 
+# Status comes from the source's own custody-only view: the JMC app publishes
+# separate ``/inCustody`` and ``/pastArrests`` views, and the roster is read
+# from ``custody/GetInCustody`` (recon 2026-10-16: no release date on any row).
+# The value is recorded with status_source so the provenance is explicit.
+CUSTODY_VIEW_STATUS = ("In Custody", "published_in_custody_view")
+
 class PascoCountyScraper(BaseScraper):
     @property
     def county(self) -> str:
@@ -37,7 +43,7 @@ class PascoCountyScraper(BaseScraper):
         except AntiBotBlocked:
             raise
         except Exception as e:
-            logger.error(f"Pasco roster fetch error: {e}")
+            logger.error("Pasco roster fetch error: %s", type(e).__name__)
             raise
 
         logger.info(f"Pasco: Found {len(inmates)} total inmates in custody")
@@ -93,7 +99,6 @@ class PascoCountyScraper(BaseScraper):
             if is_recent and name_id:
                 charge_url = CHARGE_API.format(name_id=name_id)
                 try:
-                    logger.debug(f"Pasco: Fetching charges for {full_name} ({name_id})")
                     c_resp = request(session, "GET", charge_url, timeout=15, county="Pasco")
                     if c_resp.status_code == 200:
                         charge_list = c_resp.json()
@@ -114,7 +119,7 @@ class PascoCountyScraper(BaseScraper):
                 except AntiBotBlocked:
                     raise
                 except Exception as ce:
-                    logger.warning(f"Pasco: Failed to fetch charges for nameId {name_id}: {ce}")
+                    logger.warning("Pasco: charge fetch failed (%s)", type(ce).__name__)
                     
             records.append(ArrestRecord(
                 County=self.county,
@@ -127,10 +132,11 @@ class PascoCountyScraper(BaseScraper):
                 Booking_Date=booking_date,
                 Charges=charges_str,
                 Bond_Amount=total_published_bond(charge_bonds),
-                Status="In Custody",
+                Status=CUSTODY_VIEW_STATUS[0],
                 Detail_URL=BASE_URL,
                 Facility=FACILITY,
-                LastCheckedMode="INITIAL"
+                LastCheckedMode="INITIAL",
+                extra_data={"status_source": CUSTODY_VIEW_STATUS[1]},
             ))
             
         logger.info(f"Pasco: parsed {len(records)} records")
