@@ -1019,6 +1019,21 @@ async def _mark_installment_paid(plans_col, plan_id, data, txn, now, session=Non
     await plans_col.update_one({"plan_id": plan_id}, {"$set": patch}, **_sess(session))
 
 
+def _stamp_audit_fields(stamp_audits) -> dict:
+    """Old and new ``last_payment_*`` for the bond stamp, when one was written."""
+    if not stamp_audits:
+        return {}
+    fields = {
+        "stamped": True,
+        "old_last_payment": stamp_audits[0]["old_last_payment"],
+        "new_last_payment": stamp_audits[0]["new_last_payment"],
+        "stamped_collection": stamp_audits[0]["collection"],
+    }
+    if len(stamp_audits) > 1:
+        fields["stamped_bonds"] = stamp_audits
+    return fields
+
+
 def _audit_id(plan_id: str, txn: str) -> str:
     """Deterministic ``audit_events`` ``_id``.
 
@@ -1032,7 +1047,10 @@ def _audit_id(plan_id: str, txn: str) -> str:
     return f"plan-pay:{current_tenant_id() or ''}:{plan_id}:{txn}"
 
 
-async def _audit(audit_col, actor: str, plan, plan_id: str, txn: str, amount, linked: bool, before: dict, after: dict, session=None) -> None:
+async def _audit(
+    audit_col, actor: str, plan, plan_id: str, txn: str, amount, linked: bool,
+    before: dict, after: dict, session=None, stamp_audits=None,
+) -> None:
     from pymongo.errors import DuplicateKeyError
 
     existing = await audit_col.find_one(
@@ -1068,6 +1086,7 @@ async def _audit(audit_col, actor: str, plan, plan_id: str, txn: str, amount, li
                 "balance_remaining": after.get("balance_remaining"),
                 "status": after.get("status"),
             },
+            **_stamp_audit_fields(stamp_audits),
         }, **_sess(session))
     except DuplicateKeyError:
         return
@@ -1115,8 +1134,26 @@ async def _apply_in_transaction(claims, payments_col, plans_col, audit_col, plan
         "balance_remaining": fresh.get("balance_remaining"),
         "status": fresh.get("status"),
     }
+    stamp_audits = None
+    if _installment_n(data) is not None and actor in ("swipesimple_webhook", "swipesimple_gmail_poll"):
+        from dashboard.services.payment_log_claims import stamp_unique_bond_payment
+
+        class _BoundDb:
+            def __getitem__(self, name):
+                return get_collection(name)
+
+        stamp_audits = await stamp_unique_bond_payment(
+            _BoundDb(),
+            booking=_booking(plan.get("booking_number")),
+            amount=amount,
+            txn_key=txn,
+            status="approved",
+            source=actor,
+            session=session,
+        )
     await _audit(
         audit_col, actor, plan, plan_id, txn, amount, linked, before, after, session,
+        stamp_audits=stamp_audits,
     )
     await _mark_applied(claims, plans_col, plan_id, txn, now, session)
 

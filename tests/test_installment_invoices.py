@@ -254,6 +254,107 @@ def test_down_payment_does_not_reduce_financed_balance(db, monkeypatch):
     )
 
 
+def _mirror_bonds(db, *, old_amount=9, old_txn="KEEP"):
+    db["bond_cases"].docs.append({
+        "booking_number": BOOKING,
+        "bond_case_id": "case-1",
+        "last_payment_amount": old_amount,
+        "last_transaction_id": old_txn,
+    })
+    db["active_bonds"].docs.append({
+        "booking_number": BOOKING,
+        "Bond_Case_ID": "case-1",
+    })
+
+
+def _stamp(doc):
+    return {
+        "amount": doc.get("last_payment_amount"),
+        "at": doc.get("last_payment_at"),
+        "status": doc.get("last_payment_status"),
+        "txn": doc.get("last_transaction_id"),
+        "source": doc.get("last_payment_source"),
+    }
+
+
+def test_installment_webhook_stamps_last_payment_once_with_audit(db, monkeypatch):
+    """The first approved installment stamps both bond copies and audits the change."""
+    _mirror_bonds(db)
+    monkeypatch.setenv("ENV", "development")
+    monkeypatch.delenv("SWIPESIMPLE_WEBHOOK_SECRET", raising=False)
+    app = FastAPI()
+    app.include_router(webhooks_bp)
+    client = TestClient(app)
+    paid = client.post("/api/webhooks/payment", json=_paid(txn="TX-STAMP"))
+    assert paid.status_code == 200
+    assert paid.json()["idempotent"] is False
+    bond = _stamp(db["bond_cases"].docs[0])
+    mirror = _stamp(db["active_bonds"].docs[0])
+    assert bond["txn"] == "TX-STAMP" and bond["amount"] == 250
+    assert bond["status"] == "approved" and bond["source"] == "swipesimple_webhook"
+    assert mirror["txn"] == "TX-STAMP" and mirror["amount"] == 250
+    audits = _audits(db, "payment_plan_payment_applied")
+    assert len(audits) == 1
+    assert audits[0]["old_last_payment"]["last_transaction_id"] == "KEEP"
+    assert audits[0]["old_last_payment"]["last_payment_amount"] == 9
+    assert audits[0]["new_last_payment"]["last_transaction_id"] == "TX-STAMP"
+    assert audits[0]["new_last_payment"]["last_payment_amount"] == 250
+    assert len(audits[0]["stamped_bonds"]) == 2
+
+
+def test_installment_webhook_replay_does_not_restamp(db, monkeypatch):
+    """A second delivery of the same installment does not write last_payment_* again."""
+    _mirror_bonds(db)
+    monkeypatch.setenv("ENV", "development")
+    monkeypatch.delenv("SWIPESIMPLE_WEBHOOK_SECRET", raising=False)
+    app = FastAPI()
+    app.include_router(webhooks_bp)
+    client = TestClient(app)
+    first = client.post("/api/webhooks/payment", json=_paid(txn="TX-STAMP-REPLAY"))
+    assert first.status_code == 200
+    stamped = (
+        _stamp(db["bond_cases"].docs[0]),
+        _stamp(db["active_bonds"].docs[0]),
+    )
+    replay = client.post("/api/webhooks/payment", json=_paid(txn="TX-STAMP-REPLAY"))
+    assert replay.status_code == 200
+    assert replay.json()["idempotent"] is True
+    assert _stamp(db["bond_cases"].docs[0]) == stamped[0]
+    assert _stamp(db["active_bonds"].docs[0]) == stamped[1]
+    assert len(_audits(db, "payment_plan_payment_applied")) == 1
+    assert _cents(db) == 75000
+
+
+def test_poller_installment_stamps_last_payment(db):
+    """The poller installment path stamps the bond in the same apply."""
+    _mirror_bonds(db)
+    poller = SwipeSimpleReceiptPoller(db=db)
+    parsed = {
+        "amount": "250.00",
+        "booking_number": BOOKING,
+        "reference_id": f"{BOOKING}-I1",
+        "transaction_id": "TX-POLL-STAMP",
+        "customer_email": None,
+    }
+
+    async def go():
+        return await poller._apply_bond_payment(
+            db, parsed, gmail_message_id="m-stamp", raw_subject="receipt",
+        )
+
+    recorded = asyncio.run(go())
+    assert recorded["success"] is True and recorded["plan_applied"] is True
+    assert recorded["idempotent"] is False
+    bond = _stamp(db["bond_cases"].docs[0])
+    assert bond["txn"] == "TX-POLL-STAMP" and bond["amount"] == 250
+    assert bond["source"] == "swipesimple_gmail_poll"
+    assert _stamp(db["active_bonds"].docs[0])["txn"] == "TX-POLL-STAMP"
+    audits = _audits(db, "payment_plan_payment_applied")
+    assert len(audits) == 1
+    assert audits[0]["new_last_payment"]["last_transaction_id"] == "TX-POLL-STAMP"
+    assert audits[0]["old_last_payment"]["last_transaction_id"] == "KEEP"
+
+
 def test_poller_posts_the_same_installment_once(db):
     poller = SwipeSimpleReceiptPoller(db=db)
     parsed = {

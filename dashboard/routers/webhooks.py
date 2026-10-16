@@ -309,7 +309,8 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
     plan_handled = bool(isinstance(routed, dict) and routed.get("handled"))
 
     # -- 3. Parse an explicit booking. A blank booking is not inferred. -------
-    # Staff assign bookings. This handler does not stamp last_payment_*.
+    # Staff assign bookings. An installment stamp is written inside the plan
+    # transaction. This handler does not stamp last_payment_* itself.
     custom_fields = data.get("custom_fields") or {}
     if not isinstance(custom_fields, dict):
         custom_fields = {}

@@ -557,6 +557,34 @@ async def _flag_plan(db, plan_id: str, flag: dict, session) -> Optional[dict]:
     }
 
 
+async def stamp_unique_bond_payment(
+    db, *, booking: str, amount, txn_key: str, status: str, source: str, session,
+) -> Optional[list]:
+    """Stamp ``last_payment_*`` when the booking is exactly one logical bond.
+
+    A ``bond_cases`` document and an ``active_bonds`` document are one case
+    when their BondCase ids do not disagree, and both are stamped. A blank
+    booking, two documents in one collection, or two different BondCase ids
+    are not stamped. Returns one audit dict per stamped document, or None
+    when nothing was written. The caller records those old and new values
+    on its audit in the same transaction.
+    """
+    booking = str(booking or "").strip()
+    bonds = await _matching_bonds(db, booking, session)
+    if _charge_block_reason(booking, bonds, []):
+        return None
+    payment_update = {
+        "last_payment_amount": amount,
+        "last_payment_at": datetime.now(timezone.utc).isoformat(),
+        "last_payment_status": status or "approved",
+        "last_transaction_id": txn_key,
+        "last_payment_source": source,
+    }
+    return await _stamp_bonds(
+        db, booking, _logical_bond_groups(bonds)[0], payment_update, session,
+    )
+
+
 async def _stamp_bonds(db, booking: str, group: list, payment_update: dict, session) -> list:
     """Stamp every document in one logical case. Returns one audit per document."""
     audits = []
