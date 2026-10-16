@@ -73,7 +73,7 @@ def test_collier_bond_never_comes_from_the_next_person():
     )
     assert recs["202600000301"].Bond_Amount == ""
     assert recs["202600000301"].Bond_Paid == "NO"
-    assert recs["202600000302"].Bond_Amount == "2500.0"
+    assert recs["202600000302"].Bond_Amount == "2500"
     assert recs["202600000302"].Bond_Paid == "BONDED"
 
 
@@ -93,7 +93,7 @@ def test_collier_without_an_id_prefix_reads_no_bond():
 def test_collier_published_bond_span_still_counts():
     recs = _collier(_collier_person("ctl02", "202600000401", "GRAND THEFT $750-$5K",
                                     "No information available.", bond_amount="$5,000.00"))
-    assert recs["202600000401"].Bond_Amount == "5000.0"
+    assert recs["202600000401"].Bond_Amount == "5000"
 
 
 # ── Glades ──────────────────────────────────────────────────────────────────
