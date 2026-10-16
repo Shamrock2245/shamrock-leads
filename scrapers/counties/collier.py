@@ -166,7 +166,7 @@ class CollierCountyScraper(BaseScraper):
                     records.append(record_data)
             except Exception as e:
                 logger.warning(
-                    f"⚠️ Error parsing record at index {entry['index']}: {e}"
+                    f"⚠️ Error parsing record at index {entry['index']}: {type(e).__name__}"
                 )
 
         return records
@@ -224,7 +224,7 @@ class CollierCountyScraper(BaseScraper):
         status = ""
         charges_list = []
         bond_paid = "NO"
-        total_bond = 0.0
+        bond_amount = ""  # published bond-span figure only; "" when unpublished
         mugshot_url = ""
         hair_color = ""
         eye_color = ""
@@ -296,8 +296,8 @@ class CollierCountyScraper(BaseScraper):
             elif bond_text and bond_text != "No information available.":
                 bond_paid = bond_text
             amount = self._published_bond_amount(bond_text)
-            if amount and total_bond == 0.0:
-                total_bond = amount
+            if amount and not bond_amount:
+                bond_amount = amount
 
         # Mugshot
         if len(all_mugshots) > records_count:
@@ -338,7 +338,7 @@ class CollierCountyScraper(BaseScraper):
             ZIP=zip_code,
             Mugshot_URL=mugshot_url,
             Charges=charges_str,
-            Bond_Amount=str(total_bond) if total_bond > 0 else "",
+            Bond_Amount=bond_amount,
             Bond_Paid=bond_paid,
             Detail_URL=SEARCH_URL,
             LastCheckedMode="INITIAL",
@@ -371,15 +371,16 @@ class CollierCountyScraper(BaseScraper):
         return texts
 
     @staticmethod
-    def _published_bond_amount(text: str) -> float:
-        """A ``$`` figure printed in a bond span, else 0.0 (unknown)."""
+    def _published_bond_amount(text: str) -> str:
+        """The ``$`` figure printed in a bond span ("1500"; a published $0 is "0"), else "" (unknown)."""
         match = re.search(r"\$\s*([\d,]+(?:\.\d{1,2})?)", text or "")
         if not match:
-            return 0.0
+            return ""
         try:
-            return float(match.group(1).replace(",", ""))
+            amount = float(match.group(1).replace(",", ""))
         except ValueError:
-            return 0.0
+            return ""
+        return f"{amount:.2f}".rstrip("0").rstrip(".") or "0"
 
     # ── HTTP Helpers ──
 
