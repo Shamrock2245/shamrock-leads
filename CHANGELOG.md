@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 2026-10-16 — Hillsborough/Marion FL: strip impersonation, proxy, solver and invented defaults (still fail_closed)
+- Hillsborough: curl_cffi impersonation, Chrome UA, proxy resolver, login/cookie code and the SolveCaptcha client removed. Its only path is login-gated, so there is no public request to move to plain_http; `scrape` makes no source request and returns []. The kept parser sets Status only from a published RELEASE DATE (status_source recorded), else "" (was "In Custody"); bond is the per-charge sum only when every cell publishes an amount, else "" (was "0").
+- Marion: residential/Tailscale proxy, curl_cffi Chrome impersonation and the Chrome UA removed; the fetch path is plain_http with the honest UA (typed blocks), still behind the guard. Status from the published InCustody column or Release Date (status_source), else ""; bond "" when unknown (was "0"), published 0 kept.
+- Both stay fail_closed in Health, the source guard and the matrix.
+
 ## 2026-10-16 — Miami-Dade FL honest identity; no invented status
 - ArcGIS queries now go through plain_http with the honest UA and TLS verified; Chrome UA removed. EgressBlocked/SourceTLSInvalid propagate typed instead of being wrapped in MiamiDadeContractError.
 - Status is "" (was "Unknown"): the layer publishes no custody field. Bond stays "", and the owner-approved internal natural key is unchanged.
