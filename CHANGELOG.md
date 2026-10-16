@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-15 (Citrus: unpublished bond is "", published 0 kept; no invented custody; honest HTTPS)
+
+### Fixed
+- **Citrus (FL) no longer invents a `$0` bond.** `_parse_bond` returned `0.0` for blank, NO BOND, HOLD, N/A or text bonds, and the record stored `"0"`. A positive amount was stored as `"1000.0"`. It now uses `published_bond.charge_bond_amount`: a published amount is stored as `"1000"` / `"250.50"`, a published `0` stays `"0"`, and anything unpublished is `""`.
+- **Custody is no longer invented.** `Status` was hard-coded `"In Custody"`. The source is a recent-arrests PDF that never states custody, so it is now `""`.
+- **Chrome disguise removed.** The Chrome `User-Agent` is gone, and the landing and PDF requests go through `scrapers.plain_http` (honest UA, certificate verified). A block raises `egress_block:` and a real certificate failure raises `tls_cert_invalid:`, with no workaround. There was no `verify=False` to remove. The one honest probe from the agent box (2026-10-15) got **HTTP 403**, so it now fails visibly as `egress_block: Citrus HTTP 403` from that network.
+
+### Tests
+- `tests/test_fl_citrus_bond_custody_defaults.py` (added to the `ci.yml` list).
 ## 2026-10-16 — Re-confirm joins the payment plan to the confirmation session
 - A second `POST /api/paperwork/confirm-premium` with the same amounts calls `ensure_payment_plan_for_confirmation` with the confirmation Mongo session. Matching terms return the existing plan (`plan_created` false) and do not insert another `payment_plans` row or audit row. A different amount is still 409 `premium_change_requires_reason`.
 - The plan function is not called without that session. Tests stay in `tests/test_premium_confirmation.py` (already on the `ci.yml` list).
@@ -457,6 +466,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Byte-identical pass-through of every redact helper on non-Miami-Dade values.
   - Native form submit on a Miami-Dade record posts the real key (node simulation); a blank booking from a form never overwrites a stored key (server tests); checkbox, radio and hidden behaviour from P1.
   - Guards on Slack/Telegram `json=`, message entry points, Sheets/notification text, middleware registration, guard-first page loading and recovery portal labels.
+
 ## [Unreleased] — 2026-10-14 (Duval: never click the ATIMS robot gate)
 
 ### Fixed
