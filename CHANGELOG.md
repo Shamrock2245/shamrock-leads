@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-16 (down payment refuses a review hold or a reversal sibling)
+
+### Fixed
+- **Plan create will not link a down payment that needs review or was reversed.** Inside the payment lock, a `payments` row with `needs_review`, or a charge whose transaction has a refund or failure sibling (`row_kind` in `REVERSAL_KINDS`), returns 409 `payment_needs_review`. No plan, claim, or link is kept.
+
+### Tests
+- `tests/test_payment_plan_create_down_payment_claim.py`: `test_down_payment_refuses_needs_review_or_reversed_row`.
+
 ## [Unreleased] — 2026-10-16 (failure siblings drop a transaction; down payments accept settled events)
 
 ### Fixed

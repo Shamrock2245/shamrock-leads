@@ -322,11 +322,39 @@ def _row_settled(row: dict) -> bool:
     return True
 
 
+def _down_payment_review_block(rows: list):
+    """``(error, message)`` when a row needs review or the txn has a reversal sibling.
+
+    A lone refund or failure is left to the settled check. A charge plus a
+    refund or failure sibling, or any row with ``needs_review``, is
+    ``payment_needs_review``.
+    """
+    from dashboard.services.payment_log_claims import REVERSAL_KINDS, row_kind
+
+    if any(row.get("needs_review") for row in rows):
+        return (
+            "payment_needs_review",
+            "This transaction needs review before it can be used as a down payment.",
+        )
+    reversals = [row for row in rows if row_kind(row) in REVERSAL_KINDS]
+    if reversals and len(rows) > len(reversals):
+        return (
+            "payment_needs_review",
+            "This transaction was refunded or failed and needs review "
+            "before it can be used as a down payment.",
+        )
+    return None
+
+
 def _refuse_down_payment(rows: list, booking: str, amount, txn: str):
     """``(error, message)`` when these rows must not become this down payment.
 
     ``None`` when there is no row (insert) or exactly one linkable row.
+    Called again on the rows re-read after the payment lock is held.
     """
+    blocked = _down_payment_review_block(rows)
+    if blocked is not None:
+        return blocked
     linked = [row for row in rows if not _plan_id_blank(row)]
     if linked:
         return (

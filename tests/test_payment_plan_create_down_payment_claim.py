@@ -302,6 +302,38 @@ def test_links_settled_poller_row_instead_of_duplicating(rig):
     assert _claims(db)[0]["status"] == "applied"
 
 
+def test_down_payment_refuses_needs_review_or_reversed_row(rig):
+    """A needs_review charge, or a charge with a reversal sibling, is not linked.
+
+    Both return 409 ``payment_needs_review`` and leave no plan, claim, or link.
+    The reversal sibling is a recorder ``row_kind`` in ``REVERSAL_KINDS``.
+    """
+    from dashboard.services.payment_log_claims import REVERSAL_KINDS, row_kind
+
+    db, app = rig
+    db["payments"].docs.append(_poller(txn="SS-NR", needs_review=True))
+    (review,) = _post(app, [_body(txn="SS-NR")])
+    assert review.status_code == 409 and review.json()["error"] == "payment_needs_review"
+    assert db["payment_plans"].docs == [] and _claims(db) == []
+    kept = [row for row in db["payments"].docs if row.get("transaction_id") == "SS-NR"]
+    assert len(kept) == 1 and not kept[0].get("plan_id") and kept[0].get("needs_review") is True
+
+    charge = _poller(txn="SS-REV")
+    refund = _poller(
+        txn="SS-REV", status="refunded", _id="rev-ss-rev", event_kind="refund",
+        raw_payload={"event_type": "payment.refunded"},
+    )
+    assert row_kind(refund) in REVERSAL_KINDS
+    db["payments"].docs.extend([charge, refund])
+    (reversed_row,) = _post(app, [_body(txn="SS-REV")])
+    assert reversed_row.status_code == 409
+    assert reversed_row.json()["error"] == "payment_needs_review"
+    assert db["payment_plans"].docs == [] and _claims(db) == []
+    siblings = [row for row in db["payments"].docs if row.get("transaction_id") == "SS-REV"]
+    assert len(siblings) == 2
+    assert all(not row.get("plan_id") for row in siblings)
+
+
 def test_down_payment_accepts_all_recorder_settled_events(rig):
     """Every recorder settled charge event can be the down payment.
 
