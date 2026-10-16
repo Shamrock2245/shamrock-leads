@@ -3,7 +3,7 @@ Brevard County (FL) Arrest Scraper — BCSO Inmate Search (ASP.NET Core Razor Pa
 
 Source contract (recon 2026-10-07, docs/recon/FL_BREVARD_NEWWORLD_2026-10-07.md):
   * Portal: https://inmatesearch.brevardsheriff.org/ — ordinary public HTTPS,
-    plain ``requests`` with TLS verification on (curl_cffi / verify=False /
+    plain_http with the honest UA and TLS verification on (Chrome UA, curl_cffi / verify=False /
     DrissionPage paths retired).
   * Search: GET ``/`` for ``__RequestVerificationToken`` and the ``max`` date
     the form allows (the source publishes through the previous day), then POST
@@ -39,6 +39,8 @@ from typing import Dict, List, Optional
 from urllib.parse import urljoin
 
 import requests
+
+from scrapers.plain_http import HONEST_USER_AGENT, EgressBlocked, SourceTLSInvalid, request as plain_request
 from bs4 import BeautifulSoup
 
 from core.models import ArrestRecord
@@ -57,10 +59,7 @@ _MONEY_RE = re.compile(r"\$\s*([\d,]+(?:\.\d{1,2})?)")
 _DATETIME_RE = re.compile(r"^(\d{1,2}/\d{1,2}/\d{4})\s+(\d{1,2}:\d{2}\s*[AP]M)$", re.I)
 
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": HONEST_USER_AGENT,
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": BASE_URL + "/",
@@ -218,7 +217,7 @@ class BrevardCountyScraper(BaseScraper):
         session = requests.Session()
         session.headers.update(HEADERS)
 
-        home = session.get(BASE_URL + "/", timeout=30)
+        home = plain_request(session, "GET", BASE_URL + "/", county="Brevard", timeout=30)
         home.raise_for_status()
         soup = BeautifulSoup(home.text, "html.parser")
         token = soup.find("input", {"name": "__RequestVerificationToken"})
@@ -242,7 +241,7 @@ class BrevardCountyScraper(BaseScraper):
             ("SearchForm.BookingNumber", ""),
             ("__RequestVerificationToken", token["value"]),
         ]
-        resp = session.post(BASE_URL + "/?handler=Search", data=data, timeout=90)
+        resp = plain_request(session, "POST", BASE_URL + "/?handler=Search", county="Brevard", data=data, timeout=90)
         resp.raise_for_status()
         rows = parse_results_html(resp.text)
 
@@ -260,13 +259,15 @@ class BrevardCountyScraper(BaseScraper):
             if not released and row["detail_url"] and details < MAX_DETAILS:
                 details += 1
                 try:
-                    d = session.get(row["detail_url"], timeout=25)
+                    d = plain_request(session, "GET", row["detail_url"], county="Brevard", timeout=25)
                     if d.status_code == 200:
                         detail = parse_detail_html(d.text, booking) or {}
                     else:
-                        logger.debug("Brevard detail HTTP %s (%s)", d.status_code, row["detail_url"])
+                        logger.debug("Brevard detail HTTP %s", d.status_code)
+                except (EgressBlocked, SourceTLSInvalid):
+                    raise  # typed block: Health labels it, no retry
                 except requests.RequestException as exc:
-                    logger.debug("Brevard detail failed (%s): %s", row["detail_url"], exc)
+                    logger.debug("Brevard detail failed: %s", type(exc).__name__)
                 if not detail:
                     detail_failures += 1  # bond stays unknown (""), never $0
                 time.sleep(REQUEST_PAUSE_S)
