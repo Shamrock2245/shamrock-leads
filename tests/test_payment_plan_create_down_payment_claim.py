@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from pymongo.errors import DuplicateKeyError
 
 from dashboard.routers import payment_plans as pp
+from dashboard.services import payment_log_claims as plc
 from tests._inmem_mongo import matches
 
 
@@ -184,7 +185,7 @@ def rig(monkeypatch):
     db = DB()
     monkeypatch.setattr(pp, "get_collection", lambda name: db[name])
     monkeypatch.setattr(pp, "_payment_claim_index_ready", False)
-    monkeypatch.setattr(pp, "_plan_lock_index_ready", False)
+    plc._lock_index_ready = False
     pp._txn_support_cache.clear()
     client = TxnClient(db)
 
@@ -733,7 +734,7 @@ def test_inserted_down_payment_audit_is_tenant_scoped(rig, monkeypatch):
 
     monkeypatch.setenv("SAAS_MULTI_TENANT", "1")
     monkeypatch.setattr(pp, "_payment_claim_index_ready", False)
-    monkeypatch.setattr(pp, "_plan_lock_index_ready", False)
+    plc._lock_index_ready = False
     pp._txn_support_cache.clear()
     db2 = DB()
     client = TxnClient(db2)
@@ -810,6 +811,43 @@ def test_plan_create_undo_writes_compensating_audit(rig, monkeypatch):
         assert pp._scoped_audit_id("plan-create-rollback", ev["plan_id"], "SS-77") == (
             f"plan-create-rollback:gulf_coast_bail:{ev['plan_id']}:SS-77"
         )
+
+
+def test_rollback_audit_matches_final_claim_state(rig, monkeypatch):
+    """The compensating audit's claim_status is the claim row after it is finalized.
+
+    A finished undo deletes the claim, then records ``deleted``. When that
+    delete raises, the claim is stored ``failed`` and the audit says
+    ``failed``, not ``deleted``.
+    """
+    db, app = rig
+    db["payments"].docs.append(_poller())
+    _fail_applied_claim(db)
+    (ok,) = _post(app, [_body()])
+    assert ok.status_code == 500 and ok.json()["error"] == "payment_record_failed"
+    assert _claims(db) == []
+    (ev,) = [d for d in db["audit_events"].docs if d["event_type"] == pp._CREATE_ROLLBACK_AUDIT]
+    assert ev["new_state"]["claim_status"] == "deleted"
+    assert ev["new_state"]["outcome"] == "undone"
+
+    db["payments"].docs.append(_poller(txn="SS-88"))
+    claims = db["payment_plan_payment_claims"]
+
+    async def delete_fails(flt):
+        raise RuntimeError("claim delete failed")
+
+    claims.delete_one = delete_fails
+    (bad,) = _post(app, [_body(txn="SS-88")])
+    assert bad.status_code == 500
+    stored = [c for c in _claims(db) if c.get("transaction_id") == "SS-88"]
+    assert len(stored) == 1 and stored[0]["status"] == "failed"
+    audits = [
+        d for d in db["audit_events"].docs
+        if d["event_type"] == pp._CREATE_ROLLBACK_AUDIT and d.get("transaction_id") == "SS-88"
+    ]
+    assert len(audits) == 1
+    assert audits[0]["new_state"]["claim_status"] == stored[0]["status"] == "failed"
+    assert audits[0]["new_state"]["outcome"] == "incomplete"
 
 
 def test_create_with_down_payment_txn_unavailable_writes_nothing(rig, monkeypatch):

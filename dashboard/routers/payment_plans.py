@@ -259,15 +259,9 @@ async def create_plan(request: Request):
 # that inserts it may write the payment and move the balance.
 
 PAYMENT_CLAIMS_COLLECTION = "payment_plan_payment_claims"
-# Same collection, key, and index name as the provider recorder's lock (#187).
-# The unique index is on this collection. Nothing here creates an index on
-# ``payments``.
-TXN_LOCKS_COLLECTION = "payment_txn_locks"
-_TXN_LOCK_INDEX = "uniq_tenant_txn_lock"
 _DOWN_PAYMENT_AUDIT = "payment_plan_down_payment_recorded"
 _CREATE_ROLLBACK_AUDIT = "payment_plan_create_rolled_back"
 _payment_claim_index_ready = False
-_plan_lock_index_ready = False
 
 
 async def _payment_claims_collection():
@@ -310,43 +304,6 @@ def _row_settled(row: dict) -> bool:
     if isinstance(raw, dict) and raw.get("event_type") not in (None, "payment.completed"):
         return False
     return True
-
-
-def _lock_tenant_value():
-    """Lock tenant. Flag off stores None (one agency). Flag on stores the tenant."""
-    if not multi_tenant_enabled():
-        return None
-    return current_tenant_id() or ""
-
-
-async def _ensure_txn_lock_index() -> None:
-    """Unique ``(tenant_id, txn_key)`` on ``payment_txn_locks``. Not on ``payments``."""
-    global _plan_lock_index_ready
-    if _plan_lock_index_ready:
-        return
-    coll = get_collection(TXN_LOCKS_COLLECTION)
-    await coll.create_index(
-        [("tenant_id", 1), ("txn_key", 1)],
-        unique=True,
-        name=_TXN_LOCK_INDEX,
-    )
-    _plan_lock_index_ready = True
-
-
-async def _acquire_txn_lock(txn: str, session) -> None:
-    """Upsert the shared lock and bump ``version`` before any sibling read.
-
-    Same document #187's ``acquire_txn_lock`` writes, so a provider charge
-    and this plan create serialize on one transaction id.
-    """
-    coll = get_collection(TXN_LOCKS_COLLECTION)
-    key = {"tenant_id": _lock_tenant_value(), "txn_key": txn}
-    await coll.update_one(
-        key,
-        {"$inc": {"version": 1}, "$setOnInsert": dict(key)},
-        upsert=True,
-        **_sess(session),
-    )
 
 
 def _refuse_down_payment(rows: list, booking: str, amount, txn: str):
@@ -446,10 +403,10 @@ async def _create_plan_with_down_payment_txn(plans_col, plan_doc, txn, amount, m
     probe returns 503 ``transactions_unavailable`` and writes nothing.
 
     The claim in ``payment_plan_payment_claims`` is the gate, inserted only
-    after that probe. Inside ``ClientSession.with_transaction`` (the driver
-    retries transient errors) the first write is the ``payment_txn_locks``
-    upsert, then the plan, the payment insert or link, the audit, and the
-    claim mark. A new inserted down payment gets a deterministic tenant-scoped
+    after that probe.     Inside ``ClientSession.with_transaction`` (the driver
+    retries transient errors) the first write is #187's
+    ``payment_txn_locks`` upsert (``tenant_id`` + ``txn_key``), then the
+    plan, the payment insert or link, the audit, and the claim mark. A new inserted down payment gets a deterministic tenant-scoped
     audit (``plan-create:...``, the #185 id rule). If that audit cannot be
     saved, the transaction aborts and the claim is released.
 
@@ -469,8 +426,14 @@ async def _create_plan_with_down_payment_txn(plans_col, plan_doc, txn, amount, m
         claims = await _payment_claims_collection()
     except Exception:
         return JSONResponse({"error": "payment_dedupe_unavailable"}, status_code=503)
+    from dashboard.services.payment_log_claims import (
+        LOCKS_COLLECTION,
+        acquire_txn_lock,
+        ensure_txn_lock_index,
+    )
+
     try:
-        await _ensure_txn_lock_index()
+        await ensure_txn_lock_index(get_collection(LOCKS_COLLECTION))
     except Exception:
         logger.warning("[payment_plans] txn lock index unavailable")
         return _unavailable()
@@ -518,7 +481,7 @@ async def _create_plan_with_down_payment_txn(plans_col, plan_doc, txn, amount, m
         state["row"] = None
         state["payment_id"] = None
         state["audit_written"] = False
-        await _acquire_txn_lock(txn, session)
+        await acquire_txn_lock(get_collection(LOCKS_COLLECTION), txn, session)
         fresh_rows = await _docs(payments_col, {"transaction_id": txn}, session)
         code = _refuse_down_payment(fresh_rows, booking, amount, txn)
         if code is not None:
@@ -668,8 +631,12 @@ async def _delete_if_present(coll, flt, identity) -> bool:
 
 
 async def _write_create_rollback_audit(actor, plan_id, txn, booking, amount, payment_id,
-                                      linked: bool, outcome: str) -> bool:
-    """Compensating audit for a plan-create that did not finish. False if it cannot be saved."""
+                                      linked: bool, outcome: str, claim_status: str) -> bool:
+    """Compensating audit for a plan-create that did not finish. False if it cannot be saved.
+
+    ``claim_status`` is the claim row's state after it was finalized
+    (``deleted`` or ``failed``), not a guess made before that write.
+    """
     from pymongo.errors import DuplicateKeyError
 
     now = datetime.now(timezone.utc)
@@ -702,7 +669,7 @@ async def _write_create_rollback_audit(actor, plan_id, txn, booking, amount, pay
             "outcome": outcome,
             "plan_id": None if outcome == "undone" else plan_id,
             "plan_status": None if outcome == "undone" else "needs_review",
-            "claim_status": "deleted" if outcome == "undone" else "failed",
+            "claim_status": claim_status,
         },
     }
     try:
@@ -724,6 +691,44 @@ def _rollback_outcome(plan_inserted: bool, detached: bool, fully_undone: bool) -
     return "incomplete"
 
 
+async def _finalize_create_claim(claims, plan_id: str, txn: str, *, delete: bool) -> str:
+    """Delete the claim or leave it ``failed``. Returns the status that is stored.
+
+    ``deleted`` means no claim row remains. ``failed`` means the row is
+    stored with ``status: failed``. Anything else is the status still on
+    the row when that write did not stick.
+    """
+    ident = {"plan_id": plan_id, "transaction_id": txn}
+    failed = {
+        "plan_id": plan_id,
+        "transaction_id": txn,
+        "status": "failed",
+        "failed_reason": "plan_create_rollback_incomplete",
+        "failed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if delete:
+        try:
+            await claims.delete_one(ident)
+            if await claims.find_one(ident) is None:
+                return "deleted"
+        except Exception as exc:
+            logger.error("[payment_plans] claim delete failed plan_id=%s err=%s",
+                         plan_id, type(exc).__name__)
+    try:
+        await claims.update_one(ident, {"$set": failed}, upsert=True)
+    except Exception as exc:
+        logger.error("[payment_plans] claim fail-mark failed plan_id=%s err=%s",
+                     plan_id, type(exc).__name__)
+        try:
+            fresh = await claims.find_one(ident)
+        except Exception:
+            fresh = None
+        if fresh is None:
+            return "deleted"
+        return str(fresh.get("status") or "claimed")
+    return "failed"
+
+
 async def _undo_plan_create(plans_col, payments_col, claims, plan_id, txn, row,
                             link_set, inserted_id, plan_inserted, actor="",
                             compensate=False, amount=None, booking="", payment_id=None):
@@ -739,12 +744,11 @@ async def _undo_plan_create(plans_col, payments_col, claims, plan_id, txn, row,
     ``needs_review`` and the claim stays blocked.
 
     When ``compensate`` is set, an audit was already written for this
-    attempt. A compensating ``payment_plan_create_rolled_back`` event is
-    appended. If that event cannot be saved, the claim stays ``failed``
-    and the outcome is ``incomplete``.
-
-    The claim is deleted (txn free again) only when everything was undone
-    and the compensating audit, when one was required, was saved.
+    attempt. The claim is finalized first (deleted, or left ``failed``).
+    The compensating ``payment_plan_create_rolled_back`` event is written
+    after that, and its ``claim_status`` is the stored claim. If that
+    event cannot be saved, a deleted claim is put back as ``failed`` and
+    the outcome is ``incomplete``.
 
     Returns ``"undone"``, ``"retained"`` (plan kept because the payment could
     not be detached), or ``"incomplete"``.
@@ -799,35 +803,26 @@ async def _undo_plan_create(plans_col, payments_col, claims, plan_id, txn, row,
                          plan_id, type(exc).__name__)
     fully_undone = ok and detached and payment_cleared and plan_cleared
     outcome = _rollback_outcome(plan_inserted, detached, fully_undone)
+    claim_status = await _finalize_create_claim(claims, plan_id, txn, delete=fully_undone)
+    if claim_status != "deleted":
+        fully_undone = False
+        if outcome == "undone":
+            outcome = "incomplete"
     if compensate:
         saved = await _write_create_rollback_audit(
             actor, plan_id, txn, booking, amount, payment_id,
-            linked=link_set is not None, outcome=outcome,
+            linked=link_set is not None, outcome=outcome, claim_status=claim_status,
         )
         if not saved:
+            if claim_status == "deleted":
+                claim_status = await _finalize_create_claim(
+                    claims, plan_id, txn, delete=False,
+                )
             fully_undone = False
             outcome = "incomplete"
-    try:
-        if fully_undone:
-            await claims.delete_one({"plan_id": plan_id, "transaction_id": txn})
-        else:
-            await claims.update_one({"plan_id": plan_id, "transaction_id": txn},
-                                    {"$set": {"status": "failed",
-                                              "failed_reason": "plan_create_rollback_incomplete",
-                                              "failed_at": datetime.now(timezone.utc).isoformat()}})
-    except Exception:
-        fully_undone = False
-        outcome = "incomplete"
-        try:
-            await claims.update_one({"plan_id": plan_id, "transaction_id": txn},
-                                    {"$set": {"status": "failed",
-                                              "failed_reason": "plan_create_rollback_incomplete",
-                                              "failed_at": datetime.now(timezone.utc).isoformat()}})
-        except Exception:
-            pass
     if outcome == "retained":
         return "retained"
-    if fully_undone and outcome == "undone":
+    if fully_undone and outcome == "undone" and claim_status == "deleted":
         return "undone"
     return "incomplete"
 

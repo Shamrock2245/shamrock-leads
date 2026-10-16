@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-16 (plan create shares the payment lock; rollback audit matches the claim)
+
+### Fixed
+- **`POST /api/payments/plans` with `down_payment_transaction_id` takes #187's `payment_txn_locks` lock.** Inside the transaction the first write is `acquire_txn_lock` on `(tenant_id, txn_key)`, the same writer the webhook and the receipt poller use. A concurrent webhook, poller, and plan-create for one transaction id leave one `payments` row. No index is added on `payments`.
+- **The compensating plan-create audit is written after the claim is finalized.** `_undo_plan_create` deletes the claim or stores it `failed`, then writes `payment_plan_create_rolled_back` with that `claim_status`. A delete that raises leaves the claim `failed` and the audit says `failed`.
+
+### Tests
+- `tests/test_payment_log_claims.py`: `test_concurrent_webhook_and_poller_inserts_leave_one_row`.
+- `tests/test_payment_plan_create_down_payment_claim.py`: `test_rollback_audit_matches_final_claim_state`.
+- `tests/test_agent_analytics_payment_agent.py`: `test_conflicting_amounts_for_one_transaction_are_excluded` still counts a transaction once, and leaves it out when the settled amounts disagree.
+
 ## [Unreleased] — 2026-10-15 (payment KPIs drop a transaction whose amounts disagree)
 
 ### Fixed

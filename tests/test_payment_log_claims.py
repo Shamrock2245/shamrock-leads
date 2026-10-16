@@ -9,6 +9,8 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from bson import ObjectId
+
 from dashboard.routers import payment_plans as pp
 from dashboard.routers.webhooks import webhooks_bp
 from dashboard.services import payment_log_claims as plc
@@ -1248,3 +1250,172 @@ def test_poller_marks_gmail_read_only_after_commit(db, monkeypatch):
     assert unread["processed"] == 0
     assert unread["errors"] == 1
     assert read == []
+
+
+class _LockColl(Coll):
+    """Serialize ``payment_txn_locks`` upserts the way a document lock does."""
+
+    def __init__(self, client):
+        super().__init__()
+        self.client = client
+
+    async def update_one(self, flt, update, upsert=False, session=None, **kwargs):
+        if (
+            session is not None
+            and (update.get("$inc") or {}).get("version")
+            and (flt or {}).get("txn_key")
+            and hasattr(session, "note_lock")
+        ):
+            await session.note_lock(flt["txn_key"])
+        return await super().update_one(flt, update, upsert=upsert, session=session)
+
+
+class _OneRowSession(CommitSession):
+    def __init__(self, client):
+        super().__init__(client)
+        self.snap = None
+        self.held = []
+
+    def _release(self):
+        while self.held:
+            key, guard = self.held.pop()
+            owners = self.client.lock_owners.get(key) or []
+            if owners and owners[-1] is self:
+                owners.pop()
+            if guard.locked():
+                guard.release()
+
+    async def note_lock(self, key):
+        guard = self.client.lock_guards.setdefault(key, asyncio.Lock())
+        owners = self.client.lock_owners.setdefault(key, [])
+        if not (owners and owners[-1] is self):
+            await guard.acquire()
+            owners.append(self)
+            self.held.append((key, guard))
+        # Snapshot after the previous holder committed, so an abort here
+        # cannot wipe that row.
+        self.snap = {
+            name: copy.deepcopy(coll.docs) for name, coll in self.client.db.items()
+        }
+
+    async def with_transaction(self, callback):
+        self.snap = {
+            name: copy.deepcopy(coll.docs) for name, coll in self.client.db.items()
+        }
+        self.held = []
+        tries = 0
+        while tries < 4:
+            tries += 1
+            self.client.attempts += 1
+            try:
+                await callback(self)
+                return
+            except (plc.RetryableTxnError, pp.RetryableTxnError):
+                if self.snap is not None:
+                    self._restore(self.snap)
+                continue
+            except Exception:
+                if self.snap is not None:
+                    self._restore(self.snap)
+                raise
+            finally:
+                self._release()
+        raise AssertionError("transaction retries exhausted")
+
+
+class _IdColl(Coll):
+    """Assign ``_id`` on insert, as Mongo does, so a later link can pin the row."""
+
+    async def insert_one(self, doc, session=None, **kwargs):
+        if doc.get("_id") is None:
+            doc = dict(doc)
+            doc["_id"] = ObjectId()
+        return await super().insert_one(doc, session=session, **kwargs)
+
+
+class _OneRowClient(TxnClient):
+    def __init__(self, database):
+        super().__init__(database)
+        self.lock_guards = {}
+        self.lock_owners = {}
+
+    async def start_session(self):
+        return _OneRowSession(self)
+
+
+def test_concurrent_webhook_and_poller_inserts_leave_one_row(db, monkeypatch):
+    """Webhook, poller, and plan-create inserts for one txn leave one payments row.
+
+    Each takes #187's ``payment_txn_locks`` upsert (``tenant_id``, ``txn_key``)
+    inside its transaction. The second and third wait for that lock, see the
+    committed row, and do not insert another.
+    """
+    txn = "TX-ONE"
+    db["bond_cases"].docs.append(_bond())
+    client = _OneRowClient(db)
+    db["payment_txn_locks"] = _LockColl(client)
+    db["payments"] = _IdColl()
+
+    async def _txn():
+        return client
+
+    monkeypatch.setenv("ENV", "development")
+    monkeypatch.delenv("SWIPESIMPLE_WEBHOOK_SECRET", raising=False)
+    monkeypatch.setattr(plc, "_transaction_client", _txn)
+    monkeypatch.setattr(pp, "_txn_client", _txn)
+    monkeypatch.setattr(pp, "get_collection", lambda name: db[name])
+    monkeypatch.setattr("dashboard.extensions.get_db", lambda: db)
+    pp._payment_claim_index_ready = False
+    pp._inflight_txns.clear()
+    pp._txn_support_cache.clear()
+    plc._index_ready = False
+    plc._lock_index_ready = False
+    plc._txn_support_cache.clear()
+
+    app = FastAPI()
+    app.include_router(webhooks_bp)
+    app.include_router(pp.payment_plans_bp)
+
+    async def race():
+        poller = SwipeSimpleReceiptPoller(db=db)._apply_bond_payment(
+            db,
+            {"amount": 100.0, "booking_number": BOOKING, "transaction_id": txn},
+            gmail_message_id="m-" + txn,
+            raw_subject="Receipt",
+        )
+        transport = httpx.ASGITransport(app=app)
+
+        async def post_hook():
+            async with httpx.AsyncClient(transport=transport, base_url="http://t") as http:
+                return await http.post("/api/webhooks/payment", json={
+                    "event_type": "payment.completed",
+                    "transaction_id": txn,
+                    "amount": 100,
+                    "status": "approved",
+                    "customer_name": "Test Payer",
+                    "custom_fields": {"booking_number": BOOKING},
+                })
+
+        async def post_plan():
+            async with httpx.AsyncClient(transport=transport, base_url="http://t") as http:
+                return await http.post("/api/payments/plans", json={
+                    "booking_number": BOOKING,
+                    "total_premium": 1000,
+                    "down_payment": 100,
+                    "payment_method": "Card",
+                    "down_payment_transaction_id": txn,
+                })
+
+        return await asyncio.gather(poller, post_hook(), post_plan())
+
+    with patch("dashboard.routers.events.publish_event", new=AsyncMock()):
+        poller_result, hook, plan = _run(race())
+
+    rows = [row for row in db["payments"].docs if row.get("transaction_id") == txn]
+    assert len(rows) == 1
+    assert hook.status_code < 500 and plan.status_code < 500
+    assert poller_result.get("error") not in {"payment_record_failed", "transactions_unavailable"}
+    lock = db["payment_txn_locks"].docs
+    assert len(lock) == 1
+    assert lock[0]["txn_key"] == txn and lock[0].get("tenant_id") is None
+    assert lock[0]["version"] >= 1
