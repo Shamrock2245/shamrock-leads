@@ -3,6 +3,10 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 2026-10-16 — Miami-Dade FL honest identity; no invented status
+- ArcGIS queries now go through plain_http with the honest UA and TLS verified; Chrome UA removed. EgressBlocked/SourceTLSInvalid propagate typed instead of being wrapped in MiamiDadeContractError.
+- Status is "" (was "Unknown"): the layer publishes no custody field. Bond stays "", and the owner-approved internal natural key is unchanged.
+
 ## 2026-10-15 — Mecklenburg NC honest identity; typed errors; published-only status, bond and charges
 - plain_http (`make_session` + `request`) with the honest UA, TLS verified; Chrome UA removed.
 - Swallowed errors removed: the landing and roster pages raise typed errors (EgressBlocked/SourceTLSInvalid, HTTPError, ParseDriftError on non-JSON) instead of returning []. Per-booking detail failures keep "" fields and log the exception type only; blocks always raise.

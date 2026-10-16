@@ -29,7 +29,7 @@ class TestMiamiDadeCountyScraper(unittest.TestCase):
         self.assertEqual(record.First_Name, "JANE")
         self.assertEqual(record.Last_Name, "DOE")
         self.assertEqual(record.Booking_Date, "2026-08-14")
-        self.assertEqual(record.Status, "Unknown")
+        self.assertEqual(record.Status, "")
         self.assertEqual(record.extra_data["booking_key_origin"], "none: the source publishes no booking number")
         self.assertTrue(record.extra_data["md_dedupe"].startswith("md_dedupe_v2:"))
         self.assertIs(record.extra_data["md_key_fallback"], True)  # no DOB in this row
