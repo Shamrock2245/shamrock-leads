@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-16 (Write Bond to one installment, mocked)
+
+### Added
+- **Mocked end-to-end test** `tests/test_e2e_write_bond_to_installment.py` (on the `ci.yml` list). A `TEST-` Write Bond capture, `POST /api/paperwork/confirm-premium` with a financed balance, one down-payment invoice, and one installment-paid webhook. Asserts one plan, one down-payment invoice, the installment recorded once, cent balances, the audit rows, and a webhook replay that does not apply twice. SwipeSimple, Gmail, Slack, and BlueBubbles are mocked. `SWIPESIMPLE_DISPATCH_LIVE` stays unset. In-memory Mongo only.
+
 ## 2026-10-15 — Mecklenburg NC honest identity; typed errors; published-only status, bond and charges
 - plain_http (`make_session` + `request`) with the honest UA, TLS verified; Chrome UA removed.
 - Swallowed errors removed: the landing and roster pages raise typed errors (EgressBlocked/SourceTLSInvalid, HTTPError, ParseDriftError on non-JSON) instead of returning []. Per-booking detail failures keep "" fields and log the exception type only; blocks always raise.
