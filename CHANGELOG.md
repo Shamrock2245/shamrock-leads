@@ -20,8 +20,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_payment_log_claims.py` (added to `ci.yml`): charge then refund, refund then charge, `/pay` then refund, refund then `/pay` retry, a forced write-conflict retry on the charge and on `/pay`, a cross-booking charge, a blank booking that does not stamp, refund and failure rows that do not move a balance or stamp, the review-state audit's before and after values, a staff-chain mirror that stamps both bond documents, a needs-review charge alert before the poller marks Gmail read, an applied `/pay` retry that sees a reversal inside the lock, a later booking that enriches or conflicts, a review alert that drops an internal booking key, an amount or status mismatch that blocks enrichment, one poller payment-received note after a clean commit, one BlueBubbles receipt whether the poller or the webhook records first, `bb_receipt_sent` only after BlueBubbles accepts, a failed send that clears the sending marker and succeeds on retry, two racing paths that send once, an installment apply that stamps `last_payment_*` once, including from the poller, with no second stamp on replay, a partial installment that stamps `installment_applied` and is not treated as paid, a final installment that stamps `approved`, and a mirrored pair with a missing BondCase id that does not stamp and writes `needs_review` plus an audit. No SwipeSimple, Gmail, or live Slack calls.
 
+## 2026-10-16 — Re-confirm joins the payment plan to the confirmation session
+- A second `POST /api/paperwork/confirm-premium` with the same amounts calls `ensure_payment_plan_for_confirmation` with the confirmation Mongo session. Matching terms return the existing plan (`plan_created` false) and do not insert another `payment_plans` row or audit row. A different amount is still 409 `premium_change_requires_reason`.
+- The plan function is not called without that session. Tests stay in `tests/test_premium_confirmation.py` (already on the `ci.yml` list).
+
 ## 2026-10-16 — Manatee FL status only from a published Released label or date
 - A blank, "No", "N/A" or "-" Released cell now gives Status "" (it was "In Custody"). The published label "In Custody" gives In Custody; "Yes"/"Released" or a release date gives Released. status_source is recorded (`published_released_cell_label` / `published_release_date`). Unrecognised values still raise ParseDriftError.
+
 
 ## 2026-10-16 — Manatee Clerk FL status "" instead of "Unknown"
 - Court filings publish no custody field, so Status is "" (was "Unknown"); no status_source.
