@@ -3,6 +3,9 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 2026-10-16 — Manatee Clerk FL status "" instead of "Unknown"
+- Court filings publish no custody field, so Status is "" (was "Unknown"); no status_source.
+
 ## 2026-10-16 — Pasco FL status provenance; no PII in logs
 - Status is tied to the source's custody-only view (JMC `/inCustody` route, `custody/GetInCustody` endpoint, distinct from `/pastArrests`) and recorded as `status_source=published_in_custody_view`; no longer an unexplained constant.
 - Removed a debug log that printed the full name; charge/roster failure logs carry the exception type only. Bond rules unchanged (published 0 kept, unknown "").
