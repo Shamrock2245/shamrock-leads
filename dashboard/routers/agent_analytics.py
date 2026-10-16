@@ -18,6 +18,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from dashboard.extensions import get_db
+from dashboard.services.payment_log_claims import SETTLED_CHARGE_STATUSES, row_kind
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +35,13 @@ def _period_range(days: int = 30):
 
 
 # ── Payment agent: settled, deduped by transaction id ─────────────────────
-# Same settled rule as the plan-payment link (#181): approved / paid /
-# completed / success (case-insensitive); webhook rows only for event
-# ``payment.completed``. Plan /pay rows carry ``timestamp`` and poller /
-# webhook rows ``created_at``; both count. The KPI query keeps a row only when
+# Settled statuses are the recorder's ``SETTLED_CHARGE_STATUSES`` (case-
+# insensitive): approved, paid, completed, complete, success, succeeded,
+# captured, settled. A webhook event counts when the recorder classifies it
+# as a charge (``payment.completed``, ``payment.captured``, and the other
+# successful charge events). Refunds, failures, and ``needs_review`` rows
+# are excluded. Plan /pay rows carry ``timestamp`` and poller / webhook rows
+# ``created_at``; both count. The KPI query keeps a row only when
 # ``timestamp`` or ``created_at`` is inside the report window (``start``
 # through ``end``, inclusive), so a future ``paid_at`` on ``timestamp`` is
 # outside the current period.
@@ -52,13 +56,13 @@ def _period_range(days: int = 30):
 #    webhook) for the same booking and exact amount exists within
 #    ``_DOWN_PAYMENT_MATCH_WINDOW``; each card row absorbs at most one.
 
-_SETTLED_PAYMENT_STATUSES = frozenset({"approved", "paid", "completed", "success"})
 _REVERSAL_MARKERS = ("refund", "void", "chargeback", "charge_back", "reversal", "reversed", "dispute")
 _DOWN_PAYMENT_MATCH_WINDOW = timedelta(days=3)
 _PAYMENT_AGENT_FIELDS = {
     "_id": 1, "transaction_id": 1, "amount": 1, "status": 1, "plan_id": 1, "type": 1,
     "source": 1, "booking_number": 1, "timestamp": 1, "created_at": 1,
-    "raw_payload.event_type": 1, "method": 1,
+    "raw_payload.event_type": 1, "event_type": 1, "event_kind": 1,
+    "needs_review": 1, "method": 1,
 }
 
 
@@ -79,12 +83,18 @@ def _is_reversal(row: dict) -> bool:
 
 
 def _settled_payment(row: dict) -> bool:
-    if _status(row) not in _SETTLED_PAYMENT_STATUSES:
+    """Successful charge only.
+
+    The status must be one the provider recorder writes for a charge
+    (``SETTLED_CHARGE_STATUSES``). The recorder's ``row_kind`` must be
+    ``charge``, so a refund or failure event is out even when the status
+    text looks settled. A row stored with ``needs_review`` is out.
+    """
+    if row.get("needs_review"):
         return False
-    raw = row.get("raw_payload")
-    if isinstance(raw, dict) and raw.get("event_type") is not None:
-        return _event(row) == "payment.completed"
-    return True
+    if _status(row) not in SETTLED_CHARGE_STATUSES:
+        return False
+    return row_kind(row) == "charge"
 
 
 def _payment_rank(row: dict) -> int:

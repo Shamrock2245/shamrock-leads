@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-16 (payment KPIs use the recorder's settled charge statuses)
+
+### Fixed
+- **`summarize_settled_payments` counts the charge statuses the provider recorder writes.** The set is `payment_log_claims.SETTLED_CHARGE_STATUSES`: `approved`, `paid`, `completed`, `complete`, `success`, `succeeded`, `captured`, `settled`. A webhook event the recorder classifies as a charge counts with that status, including `payment.captured`. Refunds, failures, and rows stored with `needs_review` stay out.
+
+### Tests
+- `tests/test_agent_analytics_payment_agent.py`: `test_kpi_settled_statuses_match_recorder`. `test_conflicting_amounts_for_one_transaction_are_excluded` still passes.
+
 ## [Unreleased] — 2026-10-16 (plan create shares the payment lock; rollback audit matches the claim)
 
 ### Fixed

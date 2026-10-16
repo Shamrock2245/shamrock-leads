@@ -54,10 +54,14 @@ _STAMP_FIELDS = (
 _BOND_COLLECTIONS = ("bond_cases", "active_bonds")
 REVERSAL_KINDS = frozenset({"refund", "failure"})
 
-_SETTLED = frozenset({
+# Successful charge statuses the recorder stores on ``payments.status``.
+# The payment-agent KPI imports this set. Refund, failure, and
+# ``needs_review`` rows are not in it.
+SETTLED_CHARGE_STATUSES = frozenset({
     "approved", "paid", "completed", "complete", "success", "succeeded",
     "captured", "settled",
 })
+_SETTLED = SETTLED_CHARGE_STATUSES
 _DECLINED = frozenset({"declined", "failed", "failure", "denied", "voided", "error"})
 _REFUNDED = frozenset({"refunded", "refund", "reversed"})
 

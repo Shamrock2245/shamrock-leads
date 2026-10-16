@@ -51,6 +51,64 @@ def test_preference_linked_then_completed():
     assert S([poller("T2", amount=5.0), completed])["total"] == 5.0
 
 
+def test_kpi_settled_statuses_match_recorder():
+    """Each recorder charge status counts once. Reversals and needs_review do not.
+
+    The status set is the recorder's constant, not a second literal. A
+    ``payment.captured`` webhook counts with status ``captured``.
+    """
+    from dashboard.services.payment_log_claims import SETTLED_CHARGE_STATUSES, event_kind
+
+    assert aa.SETTLED_CHARGE_STATUSES is SETTLED_CHARGE_STATUSES
+    assert aa._PAYMENT_AGENT_FIELDS["needs_review"] == 1
+    assert aa._PAYMENT_AGENT_FIELDS["event_kind"] == 1
+    assert aa._PAYMENT_AGENT_FIELDS["event_type"] == 1
+    charge_events = {
+        "approved": "payment.approved",
+        "paid": "payment.paid",
+        "completed": "payment.completed",
+        "complete": "payment.complete",
+        "success": "payment.success",
+        "succeeded": "payment.succeeded",
+        "captured": "payment.captured",
+        "settled": "payment.settled",
+    }
+    assert set(charge_events) == set(SETTLED_CHARGE_STATUSES)
+    rows = [
+        webhook(f"CHG-{status}", status=status, event=charge_events[status], amount=25.0)
+        for status in sorted(SETTLED_CHARGE_STATUSES)
+    ]
+    out = S(rows)
+    assert out["count"] == len(SETTLED_CHARGE_STATUSES)
+    assert out["total"] == 25.0 * len(SETTLED_CHARGE_STATUSES)
+    assert out["unsettled_skipped"] == 0 and out["reversed_skipped"] == 0
+    once = S([
+        webhook("DUP", status="captured", event="payment.captured", amount=25.0),
+        poller("DUP", status="captured", amount=25.0),
+    ])
+    assert once["count"] == 1 and once["total"] == 25.0 and once["duplicates_skipped"] == 1
+
+    excluded = []
+    for status in (
+        "declined", "failed", "failure", "denied", "voided", "error",
+        "refunded", "refund", "reversed",
+    ):
+        assert status not in SETTLED_CHARGE_STATUSES
+        assert event_kind(status, None) != "charge"
+        excluded.append(poller(f"BAD-{status}", status=status, amount=25.0))
+    excluded.append(webhook(
+        "NR", status="approved", event="payment.completed", amount=25.0, needs_review=True,
+    ))
+    excluded.append(webhook(
+        "REF-KIND", status="approved", event="payment.completed", amount=25.0, event_kind="refund",
+    ))
+    excluded.append(webhook(
+        "FAIL-KIND", status="captured", event="payment.captured", amount=25.0, event_kind="failure",
+    ))
+    bad = S(excluded)
+    assert bad["count"] == 0 and bad["total"] == 0.0
+
+
 def test_conflicting_amounts_for_one_transaction_are_excluded():
     """Codex P2: settled rows that share a transaction id but disagree on the
     amount are left out. A $1 provider row is not reported as the plan's $2."""
