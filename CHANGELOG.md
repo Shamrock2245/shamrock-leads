@@ -19,6 +19,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `tests/test_payment_log_claims.py` (added to `ci.yml`): charge then refund, refund then charge, `/pay` then refund, refund then `/pay` retry, a forced write-conflict retry on the charge and on `/pay`, a cross-booking charge, a blank booking that does not stamp, refund and failure rows that do not move a balance or stamp, the review-state audit's before and after values, a staff-chain mirror that stamps both bond documents, a needs-review charge alert before the poller marks Gmail read, an applied `/pay` retry that sees a reversal inside the lock, a later booking that enriches or conflicts, a review alert that drops an internal booking key, an amount or status mismatch that blocks enrichment, one poller payment-received note after a clean commit, one BlueBubbles receipt whether the poller or the webhook records first, `bb_receipt_sent` only after BlueBubbles accepts, a failed send that clears the sending marker and succeeds on retry, two racing paths that send once, an installment apply that stamps `last_payment_*` once, including from the poller, with no second stamp on replay, a partial installment that stamps `installment_applied` and is not treated as paid, a final installment that stamps `approved`, and a mirrored pair with a missing BondCase id that does not stamp and writes `needs_review` plus an audit. No SwipeSimple, Gmail, or live Slack calls.
+## 2026-10-16 — Pasco FL status provenance; no PII in logs
+- Status is tied to the source's custody-only view (JMC `/inCustody` route, `custody/GetInCustody` endpoint, distinct from `/pastArrests`) and recorded as `status_source=published_in_custody_view`; no longer an unexplained constant.
+- Removed a debug log that printed the full name; charge/roster failure logs carry the exception type only. Bond rules unchanged (published 0 kept, unknown "").
+
+## 2026-10-16 — Brevard FL honest identity
+- Requests go through plain_http with the honest UA and TLS verified; Chrome UA removed. 401/403/429/challenge/reset raise EgressBlocked (detail fetches no longer swallow blocks). Detail logs carry the exception type only (no URL). Status/bond/booking rules unchanged.
 
 ## 2026-10-16 — Collier FL bond from the published bond span only
 - Bond_Amount comes only from this person's own lblBondAmount/lblBondSummary `$` figure; never from charge text; "" when none. A published $0 is now kept as "0" (it was dropped to ""). Format "1500" (was "1500.0").

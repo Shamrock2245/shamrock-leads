@@ -91,6 +91,8 @@ def test_brevard_scrape_end_to_end(monkeypatch):
     )
 
     class Resp:
+        headers = {"content-type": "text/html"}
+
         def __init__(self, text, status=200):
             self.text, self.status_code = text, status
 
@@ -101,6 +103,10 @@ def test_brevard_scrape_end_to_end(monkeypatch):
 
     class FakeSession:
         headers = {}
+
+        def request(self, method, url, **kw):
+            kw.pop("verify", None)
+            return self.post(url, **kw) if method == "POST" else self.get(url, **kw)
 
         def get(self, url, **kw):
             calls.append(("GET", url))
@@ -127,6 +133,8 @@ def test_brevard_scrape_end_to_end(monkeypatch):
 
 
 class _Resp:
+    headers = {"content-type": "text/html"}
+
     def __init__(self, text, status=200):
         self.text, self.status_code = text, status
 
@@ -146,6 +154,10 @@ def _scrape_with_detail(monkeypatch, detail_get):
 
     class FakeSession:
         headers = {}
+
+        def request(self, method, url, **kw):
+            kw.pop("verify", None)
+            return self.post(url, **kw) if method == "POST" else self.get(url, **kw)
 
         def get(self, url, **kw):
             return detail_get(url) if "/Details/" in url else _Resp(_HOME)
