@@ -3,6 +3,10 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 2026-10-16 — Hillsborough/Marion FL: strip impersonation, proxy, solver and invented defaults (still fail_closed)
+- Hillsborough: curl_cffi impersonation, Chrome UA, proxy resolver, login/cookie code and the SolveCaptcha client removed. Its only path is login-gated, so there is no public request to move to plain_http; `scrape` makes no source request and returns []. The kept parser sets Status only from a published RELEASE DATE (status_source recorded), else "" (was "In Custody"); bond is the per-charge sum only when every cell publishes an amount, else "" (was "0").
+- Marion: residential/Tailscale proxy, curl_cffi Chrome impersonation and the Chrome UA removed; the fetch path is plain_http with the honest UA (typed blocks), still behind the guard. Status from the published InCustody column or Release Date (status_source), else ""; bond "" when unknown (was "0"), published 0 kept.
+- Both stay fail_closed in Health, the source guard and the matrix.
 ## 2026-10-16 — Re-confirm joins the payment plan to the confirmation session
 - A second `POST /api/paperwork/confirm-premium` with the same amounts calls `ensure_payment_plan_for_confirmation` with the confirmation Mongo session. Matching terms return the existing plan (`plan_created` false) and do not insert another `payment_plans` row or audit row. A different amount is still 409 `premium_change_requires_reason`.
 - The plan function is not called without that session. Tests stay in `tests/test_premium_confirmation.py` (already on the `ci.yml` list).
