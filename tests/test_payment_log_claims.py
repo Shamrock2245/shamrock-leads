@@ -576,6 +576,48 @@ def test_mirrored_bond_documents_stamp_and_distinct_cases_do_not(db, slack_alert
     assert db["bond_cases"].docs[-2].get("last_payment_amount") is None
 
 
+def test_mirrored_bonds_missing_bondcase_id_fail_closed(db, slack_alerts):
+    """A mirror with a missing BondCase id is not one case: no stamp, review, audit."""
+    db["bond_cases"].docs.append(_bond(
+        _id="bc-miss", bond_case_id="case-1",
+        last_payment_amount=4, last_transaction_id="KEEP",
+    ))
+    db["active_bonds"].docs.append(_bond(_id="ab-miss"))
+    recorded = _run(_record(db, kind="charge", txn="TX-MISS"))
+    assert recorded["committed"] is True
+    row = [item for item in _rows(db, "charge") if item["transaction_id"] == "TX-MISS"][0]
+    assert row["needs_review"] is True
+    assert row["needs_review_reason"] == "booking_not_unique"
+    assert db["bond_cases"].docs[0]["last_transaction_id"] == "KEEP"
+    assert db["bond_cases"].docs[0]["last_payment_amount"] == 4
+    assert db["active_bonds"].docs[0].get("last_transaction_id") is None
+    assert db["active_bonds"].docs[0].get("last_payment_status") is None
+    audit = _audit(db, "charge")
+    assert audit["stamped"] is False
+    assert "old_last_payment" not in audit
+    assert audit["payment_review"]["new_needs_review"] is True
+    assert audit["payment_review"]["new_needs_review_reason"] == "booking_not_unique"
+    assert len(db["audit_events"].docs) == 1
+
+    db["bond_cases"].docs.append(_bond(booking="BK-NONE", _id="bc-none"))
+    db["active_bonds"].docs.append(_bond(
+        booking="BK-NONE", _id="ab-none", Bond_Case_ID="case-only-one",
+    ))
+    other = _run(_record(db, kind="charge", booking="BK-NONE", txn="TX-NONE"))
+    assert other["committed"] is True
+    other_row = [item for item in _rows(db, "charge") if item["transaction_id"] == "TX-NONE"][0]
+    assert other_row["needs_review"] is True
+    assert other_row["needs_review_reason"] == "booking_not_unique"
+    assert db["bond_cases"].docs[-1].get("last_payment_amount") is None
+    assert db["active_bonds"].docs[-1].get("last_payment_amount") is None
+    other_audit = [
+        doc for doc in db["audit_events"].docs if doc.get("transaction_id") == "TX-NONE"
+    ]
+    assert len(other_audit) == 1
+    assert other_audit[0]["stamped"] is False
+    assert other_audit[0]["payment_review"]["new_needs_review"] is True
+
+
 def test_needs_review_charge_alerts_once_after_commit(db, slack_alerts, monkeypatch):
     """A blank receipt is marked read only after one staff alert for the review."""
     db["bond_cases"].docs.append(_bond(last_payment_amount=7, last_transaction_id="KEEP"))

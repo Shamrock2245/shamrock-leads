@@ -119,7 +119,11 @@ def _is_paid(doc: Optional[dict]) -> bool:
         val = doc.get(key)
         if isinstance(val, bool) and val:
             return True
-        if str(val or "").strip().lower() in _PAID_STATUSES:
+        text = str(val or "").strip().lower()
+        # A partial installment stamp is not a paid premium.
+        if text == "installment_applied":
+            continue
+        if text in _PAID_STATUSES:
             return True
     try:
         if float(doc.get("total_paid") or 0) > 0 and str(

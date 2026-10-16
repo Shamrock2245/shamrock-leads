@@ -970,6 +970,22 @@ async def _apply_balance(plans_col, plan_id, txn, amount, now, session=None) -> 
         raise RuntimeError("balance update did not stick")
 
 
+def _bond_stamp_status(plan: dict) -> str:
+    """``approved`` only when this apply left the plan balance at zero.
+
+    Any remainder, or a balance that cannot be read, is ``installment_applied``.
+    That status is not a paid premium.
+    """
+    cents = _whole_cents(plan.get("balance_remaining_cents"))
+    if cents is not None:
+        return "approved" if cents == 0 else "installment_applied"
+    try:
+        balance = float(plan.get("balance_remaining"))
+    except (TypeError, ValueError):
+        return "installment_applied"
+    return "approved" if balance == 0.0 else "installment_applied"
+
+
 def _installment_n(data: dict | None):
     """Installment number from a pay body, or None when this is not one row."""
     if not isinstance(data, dict):
@@ -1147,7 +1163,7 @@ async def _apply_in_transaction(claims, payments_col, plans_col, audit_col, plan
             booking=_booking(plan.get("booking_number")),
             amount=amount,
             txn_key=txn,
-            status="approved",
+            status=_bond_stamp_status(fresh),
             source=actor,
             session=session,
         )

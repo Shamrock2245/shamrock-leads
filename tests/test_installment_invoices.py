@@ -291,7 +291,7 @@ def test_installment_webhook_stamps_last_payment_once_with_audit(db, monkeypatch
     bond = _stamp(db["bond_cases"].docs[0])
     mirror = _stamp(db["active_bonds"].docs[0])
     assert bond["txn"] == "TX-STAMP" and bond["amount"] == 250
-    assert bond["status"] == "approved" and bond["source"] == "swipesimple_webhook"
+    assert bond["status"] == "installment_applied" and bond["source"] == "swipesimple_webhook"
     assert mirror["txn"] == "TX-STAMP" and mirror["amount"] == 250
     audits = _audits(db, "payment_plan_payment_applied")
     assert len(audits) == 1
@@ -323,6 +323,62 @@ def test_installment_webhook_replay_does_not_restamp(db, monkeypatch):
     assert _stamp(db["active_bonds"].docs[0]) == stamped[1]
     assert len(_audits(db, "payment_plan_payment_applied")) == 1
     assert _cents(db) == 75000
+
+
+def test_partial_installment_stamps_installment_applied_not_paid(db, monkeypatch):
+    """A payment that leaves a balance stamps installment_applied, not a paid premium."""
+    from dashboard.services.packet_payment_link_service import _is_paid as link_is_paid
+    from dashboard.services.swipesimple_invoice_service import _is_paid as invoice_is_paid
+
+    _mirror_bonds(db)
+    monkeypatch.setenv("ENV", "development")
+    monkeypatch.delenv("SWIPESIMPLE_WEBHOOK_SECRET", raising=False)
+    app = FastAPI()
+    app.include_router(webhooks_bp)
+    client = TestClient(app)
+    paid = client.post("/api/webhooks/payment", json=_paid(txn="TX-PARTIAL"))
+    assert paid.status_code == 200
+    assert _cents(db) == 75000
+    bond = db["bond_cases"].docs[0]
+    mirror = db["active_bonds"].docs[0]
+    assert bond["last_payment_status"] == "installment_applied"
+    assert mirror["last_payment_status"] == "installment_applied"
+    assert bond["last_payment_status"] != "approved"
+    assert invoice_is_paid(bond) is False
+    assert link_is_paid(bond) is False
+    assert invoice_is_paid(mirror) is False
+    assert link_is_paid(mirror) is False
+    audits = _audits(db, "payment_plan_payment_applied")
+    assert len(audits) == 1
+    assert audits[0]["new_last_payment"]["last_payment_status"] == "installment_applied"
+
+
+def test_final_installment_stamps_approved(db, monkeypatch):
+    """approved is stamped only when the plan balance reaches zero."""
+    from dashboard.services.packet_payment_link_service import _is_paid as link_is_paid
+    from dashboard.services.swipesimple_invoice_service import _is_paid as invoice_is_paid
+
+    _mirror_bonds(db)
+    plan = db["payment_plans"].docs[0]
+    plan["balance_remaining"] = 250.0
+    plan["balance_remaining_cents"] = 25000
+    monkeypatch.setenv("ENV", "development")
+    monkeypatch.delenv("SWIPESIMPLE_WEBHOOK_SECRET", raising=False)
+    app = FastAPI()
+    app.include_router(webhooks_bp)
+    client = TestClient(app)
+    paid = client.post("/api/webhooks/payment", json=_paid(txn="TX-FINAL"))
+    assert paid.status_code == 200
+    assert _cents(db) == 0
+    assert db["payment_plans"].docs[0]["status"] == "paid_in_full"
+    bond = db["bond_cases"].docs[0]
+    assert bond["last_payment_status"] == "approved"
+    assert db["active_bonds"].docs[0]["last_payment_status"] == "approved"
+    assert invoice_is_paid(bond) is True
+    assert link_is_paid(bond) is True
+    audits = _audits(db, "payment_plan_payment_applied")
+    assert len(audits) == 1
+    assert audits[0]["new_last_payment"]["last_payment_status"] == "approved"
 
 
 def test_poller_installment_stamps_last_payment(db):

@@ -464,21 +464,21 @@ def _case_id(doc: dict) -> str:
 
 
 def _case_ids_agree(left: dict, right: dict) -> bool:
-    """Blank ids do not disagree. Two different BondCase ids are different cases."""
+    """Both BondCase ids must be present and equal. A missing id is not a match."""
     a = _case_id(left)
     b = _case_id(right)
     if not a or not b:
-        return True
+        return False
     return a.casefold() == b.casefold()
 
 
 def _logical_bond_groups(bonds: list) -> list:
     """Group a staff-chain mirror into one case. Anything else stays separate.
 
-    ``bond_cases`` and ``active_bonds`` for the same booking are one case when
-    their BondCase ids agree (both blank, equal, or only one is set). Two
-    documents in the same collection, or two ids that disagree, are not a
-    mirror and stay fail-closed.
+    ``bond_cases`` and ``active_bonds`` for the same booking are one case only
+    when both documents have a BondCase id and those ids match. A missing id,
+    two documents in the same collection, or two ids that disagree stay
+    separate and fail closed.
     """
     if len(bonds) == 2:
         (name_a, doc_a), (name_b, doc_b) = bonds
@@ -563,11 +563,11 @@ async def stamp_unique_bond_payment(
     """Stamp ``last_payment_*`` when the booking is exactly one logical bond.
 
     A ``bond_cases`` document and an ``active_bonds`` document are one case
-    when their BondCase ids do not disagree, and both are stamped. A blank
-    booking, two documents in one collection, or two different BondCase ids
-    are not stamped. Returns one audit dict per stamped document, or None
-    when nothing was written. The caller records those old and new values
-    on its audit in the same transaction.
+    only when both have a BondCase id and the ids match, and both are stamped.
+    A blank booking, a missing BondCase id, two documents in one collection,
+    or two different BondCase ids are not stamped. Returns one audit dict per
+    stamped document, or None when nothing was written. The caller records
+    those old and new values on its audit in the same transaction.
     """
     booking = str(booking or "").strip()
     bonds = await _matching_bonds(db, booking, session)
