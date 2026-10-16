@@ -252,7 +252,7 @@ def test_fetch_single_booking_skips_index_without_http():
     from scrapers.counties.palm_beach import PalmBeachCountyScraper
 
     scraper = PalmBeachCountyScraper()
-    with patch("requests.get") as get:
+    with patch("scrapers.plain_http.request") as get:
         rec = scraper._fetch_single_booking(
             "2026012709", "https://www3.pbso.org/blotter/index.cfm"
         )
@@ -267,7 +267,7 @@ def test_fetch_single_booking_parses_html_match():
     resp = MagicMock()
     resp.status_code = 200
     resp.text = PBSO_CARD_HTML
-    with patch("requests.get", return_value=resp) as get:
+    with patch("scrapers.plain_http.request", return_value=resp) as get:
         rec = scraper._fetch_single_booking(
             "2026012709",
             "https://www3.pbso.org/blotter/index.cfm?booking=2026012709",
