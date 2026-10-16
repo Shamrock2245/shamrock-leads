@@ -6,6 +6,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## 2026-10-16 — Collier FL bond from the published bond span only
 - Bond_Amount comes only from this person's own lblBondAmount/lblBondSummary `$` figure; never from charge text; "" when none. A published $0 is now kept as "0" (it was dropped to ""). Format "1500" (was "1500.0").
 - Record-parse warnings log the exception type only. Status stays "" (no hard-coded In Custody).
+## 2026-10-16 — Miami-Dade FL honest identity; no invented status
+- ArcGIS queries now go through plain_http with the honest UA and TLS verified; Chrome UA removed. EgressBlocked/SourceTLSInvalid propagate typed instead of being wrapped in MiamiDadeContractError.
+- Status is "" (was "Unknown"): the layer publishes no custody field. Bond stays "", and the owner-approved internal natural key is unchanged.
 
 ## 2026-10-15 — Mecklenburg NC honest identity; typed errors; published-only status, bond and charges
 - plain_http (`make_session` + `request`) with the honest UA, TLS verified; Chrome UA removed.
