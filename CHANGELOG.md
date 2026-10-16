@@ -3,6 +3,9 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 2026-10-16 — Brevard FL honest identity
+- Requests go through plain_http with the honest UA and TLS verified; Chrome UA removed. 401/403/429/challenge/reset raise EgressBlocked (detail fetches no longer swallow blocks). Detail logs carry the exception type only (no URL). Status/bond/booking rules unchanged.
+
 ## 2026-10-16 — Miami-Dade FL honest identity; no invented status
 - ArcGIS queries now go through plain_http with the honest UA and TLS verified; Chrome UA removed. EgressBlocked/SourceTLSInvalid propagate typed instead of being wrapped in MiamiDadeContractError.
 - Status is "" (was "Unknown"): the layer publishes no custody field. Bond stays "", and the owner-approved internal natural key is unchanged.
