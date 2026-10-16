@@ -781,7 +781,7 @@ class ManateeClerkScraper(BaseScraper):
             Sex=defendant.get("gender", ""),
             Arrest_Date=min(served) if served else "",
             Booking_Date="",  # a filing date is not a booking date
-            Status="Unknown",  # custody is not published
+            Status="",  # custody is not published: unknown is ""
             Facility=SOURCE_LABEL,
             Agency=", ".join(obts.get("agencies", [])),
             Charges=" | ".join(c["description"] for c in charges),
