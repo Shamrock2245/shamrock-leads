@@ -8,7 +8,9 @@ Same pattern as Bail School GAS (`BailSchoolPayments.js` pollSwipeSimpleReceipts
   parse amount + customer identity, and log/apply payments for **bond leads**.
 
 School amounts ($199 / $649) are **skipped** here (handled by GAS school unlock).
-Bond premiums and other amounts are written to `payments` + bond_cases when matched.
+Bond premiums are recorded in one transaction. ``last_payment_*`` is stamped
+only when the receipt states a booking, exactly one bond matches it, and no
+refund or failure sibling exists. A blank booking is not inferred from email.
 
 Uses existing `GmailReaderService` (Google free API tier) — no new vendor.
 """
@@ -17,9 +19,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
-from core.booking_identity import redact_internal_keys
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +74,11 @@ def parse_swipesimple_receipt(subject: str, body: str) -> Dict[str, Any]:
     if bm:
         booking = bm.group(1).strip()
 
+    reference = None
+    ref_match = re.search(r"\b([A-Za-z0-9][A-Za-z0-9_\-]{0,48}-I\d{1,2})\b", text)
+    if ref_match:
+        reference = ref_match.group(1).strip()
+
     txn = None
     tm = _TX_RE.search(text)
     if tm:
@@ -83,6 +88,7 @@ def parse_swipesimple_receipt(subject: str, body: str) -> Dict[str, Any]:
         "amount": amount,
         "customer_email": customer_email,
         "booking_number": booking,
+        "reference_id": reference,
         "transaction_id": txn,
         "subject": subject or "",
     }
@@ -155,9 +161,28 @@ class SwipeSimpleReceiptPoller:
                     gmail_message_id=mid,
                     raw_subject=email_data.get("subject") or "",
                 )
-                if applied.get("success"):
-                    result["processed"] += 1
-                    result["payments"].append(applied)
+                # Mark read after a committed charge, a confirmed duplicate, a
+                # posted installment, or a terminal plan refusal. A recorder
+                # error leaves the Gmail message unread.
+                # A charge replay that already has a reversal is needs_review.
+                # Mark the receipt read and do not treat it as a new payment.
+                review_hold = (
+                    applied.get("success")
+                    and applied.get("needs_review")
+                    and not applied.get("committed")
+                )
+                posted = applied.get("success") and (
+                    applied.get("committed")
+                    or applied.get("duplicate")
+                    or applied.get("plan_applied")
+                    or review_hold
+                )
+                if posted or applied.get("terminal"):
+                    if applied.get("committed") or applied.get("plan_applied"):
+                        result["processed"] += 1
+                        result["payments"].append(applied)
+                    elif applied.get("terminal"):
+                        result["skipped_other"] += 1
                     if mark_read and mid:
                         reader.mark_as_read(mid)
                 else:
@@ -192,130 +217,166 @@ class SwipeSimpleReceiptPoller:
     ) -> Dict[str, Any]:
         amount = parsed.get("amount")
         customer_email = parsed.get("customer_email")
+        # Only a booking written on the receipt counts. Do not copy one off a bond.
         booking = parsed.get("booking_number") or ""
         txn = parsed.get("transaction_id") or gmail_message_id
-        now = datetime.now(timezone.utc).isoformat()
 
-        # Idempotency
-        payments = db["payments"]
-        existing = await payments.find_one(
-            {
-                "$or": [
-                    {"transaction_id": txn},
-                    {"gmail_message_id": gmail_message_id},
-                ]
-            }
+        # Idempotency is the plan claim when this receipt is an installment.
+        # A booking mismatch returns terminal and does not insert a payment.
+        # Anything else is recorded by the fail-closed provider writer.
+        from fastapi.responses import JSONResponse
+
+        from dashboard.services.payment_log_claims import (
+            PaymentLogError,
+            TransactionsUnavailable,
+            record_provider_payment,
         )
-        if existing:
-            return {"success": True, "duplicate": True, "transaction_id": txn}
+        from dashboard.services.plan_payment_poster import post_gateway_event
 
-        match_query: Dict[str, Any] = {}
-        if booking:
-            match_query = {"booking_number": booking}
-        elif customer_email:
-            match_query = {
-                "$or": [
-                    {"indemnitor_email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
-                    {"Indemnitor_Email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
-                ]
+        routed = await post_gateway_event(
+            {
+                "event_type": "payment.completed",
+                "status": "approved",
+                "transaction_id": txn,
+                "amount": amount,
+                "booking_number": booking,
+                "reference_id": parsed.get("reference_id") or "",
+                "custom_fields": {
+                    "booking_number": booking,
+                    "reference_id": parsed.get("reference_id") or "",
+                    "plan_id": parsed.get("plan_id") or "",
+                    "installment_n": parsed.get("installment_n"),
+                },
+            },
+            actor="swipesimple_gmail_poll",
+        )
+        if isinstance(routed, JSONResponse):
+            code = "booking_mismatch"
+            try:
+                body = routed.body
+                if isinstance(body, bytes):
+                    import json as _json
+                    parsed_body = _json.loads(body.decode() or "{}")
+                    code = str(parsed_body.get("error") or code)
+            except Exception:
+                pass
+            logger.info("[SwipeSimplePoll] plan event refused code=%s", code)
+            return {
+                "success": False,
+                "terminal": True,
+                "error": code,
+                "transaction_id": txn,
+            }
+        if isinstance(routed, dict) and routed.get("handled"):
+            return {
+                "success": True,
+                "plan_applied": True,
+                "idempotent": bool(routed.get("idempotent")),
+                "committed": not bool(routed.get("idempotent")),
+                "duplicate": bool(routed.get("idempotent")),
+                "transaction_id": txn,
+                "booking_number": booking,
+                "amount": amount,
             }
 
-        bond = None
-        if match_query:
-            bond = await db["bond_cases"].find_one(match_query)
-            if not bond:
-                bond = await db["active_bonds"].find_one(match_query)
-            if not bond and customer_email:
-                bond = await db["intake_queue"].find_one(
-                    {
-                        "$or": [
-                            {"indemnitor_email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
-                            {"indemnitor.email": {"$regex": f"^{re.escape(customer_email)}$", "$options": "i"}},
-                        ]
-                    }
-                )
-
-        booking_number = booking or (bond or {}).get("booking_number") or ""
-
-        doc = {
-            "transaction_id": txn,
-            "gmail_message_id": gmail_message_id,
-            "source": "swipesimple_gmail_poll",
-            "amount": amount,
-            "status": "approved",
-            "customer_email": customer_email,
-            "customer_name": "",
-            "booking_number": booking_number,
-            "subject": raw_subject[:200],
-            "matched_bond": bool(bond),
-            "created_at": now,
-        }
-        await payments.insert_one(doc)
-
-        if booking_number:
-            payment_update = {
-                "last_payment_amount": amount,
-                "last_payment_at": now,
-                "last_payment_status": "approved",
-                "last_transaction_id": txn,
-                "last_payment_source": "swipesimple_gmail_poll",
-            }
-            await db["bond_cases"].update_one(
-                {"booking_number": booking_number},
-                {"$set": payment_update},
-            )
-            await db["active_bonds"].update_one(
-                {"booking_number": booking_number},
-                {"$set": payment_update},
-            )
-
-        # Audit (no PII dump of full body)
         try:
-            await db["audit_events"].insert_one(
-                {
-                    "source": "swipesimple_gmail_poll",
+            recorded = await record_provider_payment(
+                db,
+                source="swipesimple_gmail_poll",
+                transaction_id=txn,
+                amount=amount,
+                status="approved",
+                booking_number=booking,
+                extra={
                     "event_type": "payment.approved",
-                    "timestamp": now,
-                    "payload": {
-                        "amount": amount,
-                        "booking_number": booking_number,
-                        "transaction_id": txn,
-                        "matched": bool(bond),
-                        "has_customer_email": bool(customer_email),
-                    },
-                }
+                    "gmail_message_id": gmail_message_id,
+                    "customer_email": customer_email or "",
+                    "subject": (raw_subject or "")[:200],
+                },
             )
-        except Exception:
-            pass
+        except TransactionsUnavailable as exc:
+            return {"success": False, "committed": False, "error": exc.error}
+        except PaymentLogError as exc:
+            return {"success": False, "committed": False, "error": exc.error}
 
-        # Slack (optional)
-        try:
-            import httpx
-
-            slack = os.getenv("SLACK_WEBHOOK_LEADS") or os.getenv("SLACK_WEBHOOK_URL") or ""
-            if slack:
-                async with httpx.AsyncClient(timeout=8) as client:
-                    await client.post(
-                        slack,
-                        json=redact_internal_keys({
-                            "text": (
-                                f":moneybag: *SwipeSimple receipt (Gmail poll)* — "
-                                f"${amount:.2f}"
-                                f"{f' | Booking: {booking_number}' if booking_number else ''}"
-                                f"{' | unmatched' if not bond else ''}"
-                            )
-                        }),
-                    )
-        except Exception as exc:
-            logger.debug("[SwipeSimplePoll] slack failed: %s", exc)
+        await _notify_clean_charge(recorded)
+        await _maybe_send_customer_receipt(
+            db,
+            recorded,
+            phone=str(parsed.get("indemnitor_phone") or ""),
+        )
 
         return {
             "success": True,
-            "amount": amount,
-            "booking_number": booking_number,
-            "transaction_id": txn,
-            "matched": bool(bond),
+            "committed": bool(recorded.get("committed")),
+            "duplicate": bool(recorded.get("duplicate")),
+            "needs_review": bool(recorded.get("needs_review")),
+            "amount": recorded.get("amount"),
+            "booking_number": recorded.get("booking_number") or "",
+            "transaction_id": recorded.get("transaction_id"),
         }
+
+
+async def _notify_clean_charge(recorded: Dict[str, Any]) -> None:
+    """One #leads note after a clean poller commit. A review or a replay does not post."""
+    if not (
+        recorded.get("committed")
+        and recorded.get("event_kind") == "charge"
+        and recorded.get("stamped")
+        and not recorded.get("needs_review")
+    ):
+        return
+    slack = os.getenv("SLACK_WEBHOOK_LEADS") or ""
+    if not slack:
+        return
+    booking = str(recorded.get("booking_number") or "")
+    try:
+        amount_text = f"{float(recorded.get('amount')):.2f}"
+    except (TypeError, ValueError):
+        amount_text = ""
+    text = f":moneybag: *SwipeSimple receipt (Gmail poll)* — ${amount_text}"
+    if booking:
+        text += f" | Booking: {booking}"
+    try:
+        import httpx
+        from core.booking_identity import redact_internal_keys
+
+        async with httpx.AsyncClient(timeout=8) as client:
+            await client.post(slack, json=redact_internal_keys({"text": text}))
+    except Exception:
+        logger.debug("[SwipeSimplePoll] payment-received note failed")
+
+
+async def _maybe_send_customer_receipt(db, recorded: Dict[str, Any], *, phone: str) -> None:
+    """Send the BlueBubbles receipt only if this caller wins the sending claim."""
+    phone = str(phone or "").strip()
+    if not phone:
+        return
+    if recorded.get("event_kind") != "charge":
+        return
+    if recorded.get("needs_review") and not recorded.get("committed"):
+        return
+    if not (recorded.get("committed") or recorded.get("duplicate")):
+        return
+    txn = str(recorded.get("transaction_id") or "")
+    amount = recorded.get("amount")
+    try:
+        amount_text = f"{float(amount):.2f}"
+    except (TypeError, ValueError):
+        amount_text = ""
+    from dashboard.services.payment_log_claims import send_customer_receipt_once
+
+    await send_customer_receipt_once(
+        db,
+        txn,
+        phone,
+        (
+            "✅ Payment received! Thank you.\n"
+            f"Amount: ${amount_text}\n"
+            f"Transaction: {txn}\n"
+            "Shamrock Bail Bonds — (239) 332-2245"
+        ),
+    )
 
 
 async def run_swipesimple_receipt_poll(config: Optional[dict] = None) -> Dict[str, Any]:

@@ -104,12 +104,13 @@ class Rig:
     async def _copy(self, **_kw):
         return PAY_LINK
 
-    async def _persist(self, bond, *, bond_id, booking_number, payment_link, invoice_id):
+    async def _persist(self, bond, *, bond_id, booking_number, payment_link, invoice_id, amount_cents=None):
         self.bond.update(
             swipesimple_payment_link=payment_link,
             swipesimple_invoice_id=invoice_id,
             swipesimple_invoice_number=booking_number,
             swipesimple_invoice_bond_id=bond_id,
+            swipesimple_invoice_amount_cents=amount_cents,
         )
 
     def patches(self):

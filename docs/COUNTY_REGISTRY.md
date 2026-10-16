@@ -34,7 +34,7 @@
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 8 | **Hillsborough** | httpx direct-first + reCAPTCHA + SOLVECAPTCHA (HCSO login) | `hillsborough.py` | 🔴 Fail closed (`SOURCE_CONTRACT_VALIDATED=False` + Health `fail_closed`): login + CAPTCHA solving + proxy are not allowed. See `docs/recon/FL_RULE_CONFLICT_FAIL_CLOSED_2026-10-14.md` | 90 min | 2026-10-14 |
 | 9 | **Pinellas** | Who's In Jail (Blazor Server) booking-date search + Subject Charge Report modal, **relay-only**: stock Playwright Chromium on the Leads Ops home relay's own residential exit (`PINELLAS_EGRESS_MODE=direct`, the only mode), honest bot User-Agent, no patchright / stealth / proxy / impersonation / challenge solving; owner exception (Brendan 2026-10-08 1:38 PM ET); a non-residential exit raises `EgressBlocked` before any browser start | `pinellas.py` | ⚠️ Contract **unverified** (Health default) until a Leads Ops write smoke through the relay; plain HTTP gets only the JS shell (see `docs/recon/FL_PINELLAS_RELAY_ONLY_2026-10-08.md`, `docs/ops/PINELLAS_RELAY_RUN.md`) | relay-only (Leads Ops; was 90 min on VPS) | 2026-10-08 |
-| 10 | **Seminole** | Custom | `seminole.py` | ✅ Active | 90 min | 2026-04-27 |
+| 10 | **Seminole** | NorthPointe Custody Portal DoSearch + detail, plain HTTPS (honest UA, TLS verified, no impersonation; a 403 fails loud as `egress_block`) | `seminole.py` | ⚠️ unverified: box egress gets Cloudflare 403 (2026-10-15); needs a Leads Ops/VPS direct read, else fail_closed. See `docs/recon/FL_SEMINOLE_HONEST_2026-10-15.md` | 90 min | 2026-10-15 |
 | 11 | **Orange** | BestJail public JSON — getInmates/<letter> roster + getInmateDetails/getCharges per booking (plain requests, newest first, 7-day window) | `orange.py` | ✅ Active (unverified until write smoke; source `bookingNumber` 8 digits). See `docs/recon/FL_ORANGE_BESTJAIL_2026-10-08.md` | 90 min | 2026-10-08 |
 | 12 | **Pasco** | DrissionPage — Cloudflare bypass | `pasco.py` | ✅ Active | 90 min | 2026-04-27 |
 | 13 | **Lake** | requests POST `recent_data` + Turnstile token (SolveCaptcha, owner-approved; shared `scrapers/solvecaptcha.py`) | `lake.py` | ✅ `verified_public` (Mac write smoke 17 new; needs SOLVECAPTCHA_KEY) | 90 min | 2026-09-25 |
@@ -47,7 +47,7 @@
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 16 | **Polk** | Direct Kendo UI REST API | `polk.py` | ✅ Active | 120 min | 2026-05-24 |
-| 17 | **Osceola** | DrissionPage — daily reports | `osceola.py` | ✅ Active | 120 min | 2026-04-27 |
+| 17 | **Osceola** | Corrections Daily Arrest Report CSV, plain HTTPS (honest UA, TLS verified, no impersonation). The download redirects to legacy-apps.osceola.org, which omits its intermediate certificate, so runs fail loud as `tls_cert_invalid` until the county fixes the chain | `osceola.py` | ✅ Active (unverified; TLS chain hold) | 120 min | 2026-10-15 |
 | 18 | **Sumter** | SmartWEB JAIL View (`SCSO<YY>JBN######`, modern AddMoreResults) — plain requests | `sumter.py` | ✅ Active (unverified until write smoke) | 180 min | 2026-10-07 |
 | 19 | **Highlands** | Direct OCV JSON API | `highlands.py` | ✅ Active | 120 min | 2026-05-24 |
 | 20 | **Glades** | JailTracker | `glades.py` | ✅ Active | 180 min | 2026-04-27 |
@@ -60,8 +60,8 @@
 |---|--------|-------------|--------------|--------|----------|---------------|
 | 22 | **Palm Beach** | DrissionPage — PBSO ColdFusion blotter | `palm_beach.py` | ✅ Active (fixed page.html 2026-07-10) | 120 min | 2026-07-10 |
 | 23 | **Broward** | Official BSO arrest search | `broward.py` | ✅ Live — Turnstile Arrest Search name-prefix + paged grid; Mac smoke 2026-09-23 (30 new / status=ok; action=arrest_search); needs `SOLVECAPTCHA_KEY` | 60 min | Writes enabled after contract validation |
-| 24 | **Martin** | Direct Tyler Technologies REST API | `martin.py` | ✅ Active | 120 min | 2026-05-24 |
-| 25 | **St. Lucie** | requests POST — PHP table | `st_lucie.py` | ✅ Active | 90 min | 2026-04-27 |
+| 24 | **Martin** | Direct Tyler Technologies REST API, plain HTTPS (honest UA, TLS verified, no impersonation) | `martin.py` | ✅ Active (unverified) | 120 min | 2026-10-15 |
+| 25 | **St. Lucie** | plain HTTPS POST — PHP inmate list (honest UA, TLS verified, no impersonation; source Inmate Id as key, not yet proven to be a booking number) | `st_lucie.py` | ✅ Active (unverified) | 90 min | 2026-10-15 |
 | 26 | **Indian River** | IRCSO booking-date search (form POST + `?page=N`) → `/booking-details/<id>` Booking Info (source Booking Number `YYYY-NNNNNNNN`) — plain requests | `indian_river.py` | ✅ Active (unverified until write smoke). See `docs/recon/FL_INDIAN_RIVER_BOOKING_SEARCH_2026-10-08.md` | 180 min | 2026-10-08 |
 | 27 | **Okeechobee** | Wix shell page — no public data source | `okeechobee.py` | 🔴 No public roster URL | 120 min | 2026-07-24 |
 

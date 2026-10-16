@@ -141,10 +141,10 @@ class TestPinellasChargeReportParse(unittest.TestCase):
 
 
 class TestMarionDetailChargeParse(unittest.TestCase):
-    def test_empty_charge_section_stays_blank_and_zero(self):
+    def test_empty_charge_section_stays_blank_and_unknown(self):
         parsed = MarionCountyScraper.parse_detail_charges(MARION_EMPTY_DETAIL)
         self.assertEqual(parsed["charges"], "")
-        self.assertEqual(parsed["bond_amount"], "0")
+        self.assertEqual(parsed["bond_amount"], "")
 
     def test_table_charges_and_bond_sum(self):
         parsed = MarionCountyScraper.parse_detail_charges(MARION_CHARGED_DETAIL)

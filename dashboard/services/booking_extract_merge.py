@@ -119,6 +119,17 @@ def _safe_amount(val: Any) -> float:
         return 0.0
 
 
+def published_status(payload: dict) -> str:
+    """Custody status exactly as the source page published it; unknown is ""."""
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("status", "Status", "custody_status", "custodyStatus"):
+        val = payload.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return ""
+
+
 def charge_rows_from_payload(payload: dict, booking_number: str) -> list[dict]:
     """Normalize bookmarklet charges[] / charge_details[] into arrest charge_details."""
     raw = payload.get("charges") or payload.get("charge_details") or payload.get("Charges") or []
@@ -463,7 +474,8 @@ async def merge_booking_extract(payload: dict, *, actor: str = "dashboard_user")
         "bond_amount": f"{total_bond:.2f}",
         "bond_type": primary_bond_type,
         "charges": charges_raw,
-        "status": existing.get("status") or "In Custody",
+        # Custody status only as published (stored row, else this page); unknown is "".
+        "status": str(existing.get("status") or "").strip() or published_status(payload),
     })
     rec = ArrestRecord.from_mongo_doc(rec_dict)
     LeadScorer().score_and_update(rec)
@@ -548,7 +560,7 @@ async def merge_booking_extract(payload: dict, *, actor: str = "dashboard_user")
             "height": extract["height"],
             "weight": extract["weight"],
             "facility": extract["facility"],
-            "status": "In Custody",
+            "status": published_status(payload),  # never an invented custody default
             "source": "bookmarklet_extract",
             "scraped_at": now,
             "created_at": now,

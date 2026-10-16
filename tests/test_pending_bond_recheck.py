@@ -467,20 +467,20 @@ BK = "HCSO26JBN009001"
 def test_hernando_recheck_reads_the_existing_detail_page(monkeypatch):
     seen = []
 
-    def get(url, **kw):
+    def get(self, url, **kw):
         seen.append(url)
         return _Resp(_detail(cases=[_case("26 CF 1", [("$0.00", "")])]))
 
-    monkeypatch.setattr(hernando.requests, "get", get)
+    monkeypatch.setattr(hernando._HonestSession, "get", get)
     rec = hernando.HernandoCountyScraper().fetch_bond_recheck(BK)
     assert seen == [f"{hernando.DETAIL_URL}?BookNo={BK}"]
     assert (rec.Booking_Number, rec.Status, rec.Bond_Amount) == (BK, "In Custody", "")  # $0.00 = unknown
     assert rec.Full_Name == "" and stop_reason_for(rec) is None
 
-    monkeypatch.setattr(hernando.requests, "get", lambda url, **kw: _Resp(_detail(cases=[_case("26 CF 1", [("$0.00", "ROR")])])))
+    monkeypatch.setattr(hernando._HonestSession, "get", lambda self, url, **kw: _Resp(_detail(cases=[_case("26 CF 1", [("$0.00", "ROR")])])))
     assert stop_reason_for(hernando.HernandoCountyScraper().fetch_bond_recheck(BK)) == "bond_final_zero"
 
-    monkeypatch.setattr(hernando.requests, "get", lambda url, **kw: _Resp(_detail(release="10/07/2026 14:05")))
+    monkeypatch.setattr(hernando._HonestSession, "get", lambda self, url, **kw: _Resp(_detail(release="10/07/2026 14:05")))
     assert stop_reason_for(hernando.HernandoCountyScraper().fetch_bond_recheck(BK)) == "released"
 
 
@@ -494,12 +494,12 @@ def test_hernando_recheck_reads_the_existing_detail_page(monkeypatch):
     ],
 )
 def test_hernando_recheck_returns_none_instead_of_blanks(monkeypatch, page):
-    monkeypatch.setattr(hernando.requests, "get", lambda url, **kw: page)
+    monkeypatch.setattr(hernando._HonestSession, "get", lambda self, url, **kw: page)
     assert hernando.HernandoCountyScraper().fetch_bond_recheck(BK) is None
 
 
 def test_hernando_recheck_requires_a_source_booking_key(monkeypatch):
-    monkeypatch.setattr(hernando.requests, "get", lambda *a, **k: pytest.fail("no request expected"))
+    monkeypatch.setattr(hernando._HonestSession, "get", lambda *a, **k: pytest.fail("no request expected"))
     assert hernando.HernandoCountyScraper().fetch_bond_recheck("DOE-JANE-1990") is None
 
 

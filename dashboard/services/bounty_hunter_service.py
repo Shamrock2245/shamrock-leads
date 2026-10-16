@@ -24,7 +24,8 @@ class BountyHunterService:
                 "bond_written": {"$ne": True},
                 "bounty_alerted": {"$ne": True},
                 "bond_amount": {"$gte": 2500},
-                "custody_status": {"$in": ["In Custody", "IN CUSTODY", "Confined", "CONFINED", ""]}
+                # A blank / missing custody status is unknown, never "in custody".
+                "custody_status": {"$in": ["In Custody", "IN CUSTODY", "Confined", "CONFINED"]}
             }).sort("scraped_at", -1).limit(50)
             
             high_value_leads = await cursor.to_list(length=50)

@@ -24,7 +24,16 @@ except where the charge row says ROR, which is a real $0. A detail fetch failure
 or a drifted page skips that booking (nothing blank is written); the run
 raises when every detail fails or when no detail page has a charge grid.
 
-Fix 2026-05-18: Replaced DrissionPage with curl_cffi POST.
+2026-10-15: honest identity and no roster custody default. Every request goes
+through scrapers.plain_http (honest User-Agent, certificate verified); a
+401/403/429, challenge page, dropped handshake or bad certificate raises
+(egress_block: / tls_cert_invalid:) instead of reading as a skipped booking.
+The roster search is not custody-only: the scraper ticks the form's own
+"Include Released?" box, so roster rows start with Status "". Custody comes
+only from the detail page's published Release Date/Time (see above). See
+docs/recon/FL_HERNANDO_ROSTER_SCOPE_2026-10-15.md.
+
+History 2026-05-18: DrissionPage was replaced (since retired in favor of plain HTTPS).
                 Results are in Table 5 (last large table, 100+ rows).
                 Cell 1 contains: "LAST, FIRST RACE/SEX- DOB BOOKING_NO"
                 Cell 2 = Booking Date, Cell 3 = Offenses
@@ -40,6 +49,9 @@ from urllib.parse import urljoin
 import requests
 
 from scrapers.base_scraper import BaseScraper
+from scrapers.plain_http import HONEST_USER_AGENT, SourceTLSInvalid
+from scrapers.plain_http import request as plain_request
+from scrapers.scraper_resilience import EgressBlocked
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
@@ -162,12 +174,32 @@ def parse_detail(html: str, booking_number: str) -> Dict[str, Any]:
     }
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Content-Type": "application/x-www-form-urlencoded",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": SEARCH_URL,
 }
+
+
+_BLOCKS = (EgressBlocked, SourceTLSInvalid)
+
+
+class _HonestSession(requests.Session):
+    """requests.Session whose every call goes through plain_http (honest UA, verify on, typed blocks)."""
+
+    def __init__(self):
+        super().__init__()
+        self.headers.update({"User-Agent": HONEST_USER_AGENT})
+        self.verify = True
+
+    def request(self, method, url, **kwargs):  # noqa: D401
+        sess = self
+
+        class _Raw:
+            def request(self, m, u, **kw):
+                return requests.Session.request(sess, m, u, **kw)
+
+        return plain_request(_Raw(), method, url, county="Hernando", **kwargs)
 
 
 class HernandoCountyScraper(BaseScraper):
@@ -180,7 +212,7 @@ class HernandoCountyScraper(BaseScraper):
     def scrape(self) -> List[ArrestRecord]:
         from bs4 import BeautifulSoup
 
-        session = requests.Session()
+        session = _HonestSession()
 
         # Step 1: GET to retrieve ASP.NET ViewState tokens
         try:
@@ -243,6 +275,8 @@ class HernandoCountyScraper(BaseScraper):
             try:
                 resp = session.get(url, headers=HEADERS, timeout=20)
                 resp.raise_for_status()
+            except _BLOCKS:
+                raise  # a block or bad certificate fails the run visibly, never a quiet skip
             except Exception as exc:
                 fetch_failures += 1
                 logger.warning("Hernando: detail fetch failed, booking skipped (%s)", type(exc).__name__)
@@ -300,7 +334,7 @@ class HernandoCountyScraper(BaseScraper):
     def fetch_bond_recheck(self, booking_id: str, detail_url: str = "") -> Optional[ArrestRecord]:
         """Pending-bond re-check: re-read one booking's JailSearchDetails page.
 
-        Same detail path, headers and parser as the scrape (plain requests). The
+        Same detail path, headers and parser as the scrape (honest plain_http). The
         record carries only what the detail page publishes (custody, release,
         charges, case numbers, bond); core/pending_bond_recheck.py fills the
         rest from the stored doc. None (nothing written) when the key is not a
@@ -311,9 +345,11 @@ class HernandoCountyScraper(BaseScraper):
             return None
         url = f"{DETAIL_URL}?BookNo={booking}"
         try:
-            resp = requests.get(url, headers=HEADERS, timeout=20)
+            resp = _HonestSession().get(url, headers=HEADERS, timeout=20)
             resp.raise_for_status()
             detail = parse_detail(resp.text, booking)
+        except _BLOCKS:
+            raise  # the re-check worker records fetch_error:<type>; nothing written
         except HernandoDetailError as exc:
             logger.warning("Hernando re-check: detail page drift, booking skipped (%s)", exc)
             return None
@@ -436,7 +472,7 @@ class HernandoCountyScraper(BaseScraper):
                 First_Name=f, Middle_Name=m, Last_Name=l,
                 DOB=dob,
                 Booking_Date=booking_date,
-                Status="In Custody",
+                Status="",  # roster includes released bookings; custody comes from the detail page
                 Release_Date="",
                 Facility=FACILITY,
                 Race=race,

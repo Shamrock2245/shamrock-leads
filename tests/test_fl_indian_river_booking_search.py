@@ -119,6 +119,7 @@ def test_missing_or_malformed_booking_number_is_dropped(booking):
 class _Resp:
     def __init__(self, text, status=200):
         self.text, self.status_code = text, status
+        self.headers = {"content-type": "text/html"}
 
     def raise_for_status(self):
         if self.status_code != 200:
@@ -143,6 +144,11 @@ def _install(monkeypatch, by_date, details):
             assert data["_token"] == "tok123"
             pages = by_date.get(data["booking_date"], [])
             return _Resp(_results(pages[0] if pages else []))
+
+        def request(self, method, url, verify=None, **kw):
+            # scrapers.plain_http sends every call through Session.request.
+            assert verify is True
+            return self.post(url, **kw) if method == "POST" else self.get(url, **kw)
 
     monkeypatch.setattr(ir.requests, "Session", _S)
     monkeypatch.setattr(ir.time, "sleep", lambda *_: None)

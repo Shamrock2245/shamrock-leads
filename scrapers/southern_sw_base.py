@@ -8,6 +8,25 @@ Current Citizen Connect flow (2026):
      with JMSAgencyID (+ search/agency/sort)
 
 Returns HTML booking-card fragments with name, booked date, bond, charges.
+
+2026-10-15 honest identity and published-only fields:
+  * Every request goes through scrapers.plain_http (honest User-Agent,
+    certificate verified, no Chrome UA). 401/403/429, a challenge page, a
+    dropped connection or a bad certificate raises (egress_block: /
+    tls_cert_invalid:) and is never swallowed; other errors propagate (the run
+    fails visibly instead of returning []).
+  * Bond_Amount: the card's published "Bond Total:" (a published 0 is kept);
+    else the sum of per-charge "Bond:" amounts only when every charge item
+    publishes one; otherwise "" (never "0").
+  * Charges: published charge-item lines only; "" when none (never "Unknown",
+    no free-text line heuristic).
+  * Status: "In Custody" only for cards from the source's own "Current
+    Confinements" view (fetch_current_confinements; the portal lists it beside
+    "Admits/Releases by Date Range"), recorded as
+    extra_data.status_source = "published_current_confinements_view". Cards
+    from the last-7-days admits fallback get Status "" (scope not custody-only).
+  * Booking_Number: source BookingID only (unchanged).
+  See docs/recon/SSW_CITIZEN_CONNECT_HONEST_2026-10-15.md.
 """
 
 from __future__ import annotations
@@ -21,11 +40,54 @@ import requests
 from bs4 import BeautifulSoup
 
 from scrapers.base_scraper import BaseScraper
+from scrapers.plain_http import HONEST_USER_AGENT, SourceTLSInvalid
+from scrapers.plain_http import request as plain_request
+from scrapers.published_bond import charge_bond_amount, total_published_bond
+from scrapers.scraper_resilience import EgressBlocked
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
 CC_BASE = "https://cc.southernsoftware.com/bookingsearch"
+STATUS_SOURCE_CURRENT = "published_current_confinements_view"
+CURRENT_ENDPOINT = "fetch_current_confinements.php"
+_BLOCKS = (EgressBlocked, SourceTLSInvalid)
+
+
+class _HonestSession(requests.Session):
+    """requests.Session whose every call goes through plain_http (honest UA, verify on, typed blocks)."""
+
+    def __init__(self, county: str = ""):
+        super().__init__()
+        self.headers.update({"User-Agent": HONEST_USER_AGENT, "Accept": "text/html,application/xhtml+xml,*/*;q=0.8"})
+        self.verify = True
+        self._county = county
+
+    def request(self, method, url, **kwargs):  # noqa: D401
+        sess = self
+
+        class _Raw:
+            def request(self, m, u, **kw):
+                return requests.Session.request(sess, m, u, **kw)
+
+        return plain_request(_Raw(), method, url, county=self._county or "SouthernSW", **kwargs)
+
+
+def published_bond_amount(card, text: str) -> str:
+    """Published Bond Total (0 kept); else per-charge Bond: sum only if every charge has one; else ""."""
+    m = re.search(r"Bond Total:\s*(\$?\s*[\d,]+(?:\.\d+)?)", text, re.I)
+    if m:
+        total = charge_bond_amount(m.group(1))
+        if total is not None:
+            return total_published_bond([total])
+    items = card.find_all(class_=re.compile(r"charge-item|charge-details", re.I))
+    if not items:
+        return ""
+    amounts = []
+    for item in items:
+        bm = re.search(r"Bond:\s*(\$?\s*[\d,]+(?:\.\d+)?)", item.get_text(" ", strip=True), re.I)
+        amounts.append(charge_bond_amount(bm.group(1)) if bm else None)
+    return total_published_bond(amounts)
 
 
 class SouthernSWBaseScraper(BaseScraper):
@@ -45,74 +107,63 @@ class SouthernSWBaseScraper(BaseScraper):
         index_url = f"{CC_BASE}/index.php?AgencyID={agency}"
         logger.info(f"📥 Southern Software roster for {self.county} ({agency})")
 
-        session = requests.Session()
-        session.headers.update({
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-            ),
-            "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-        })
+        session = _HonestSession(self.county)
 
-        try:
-            resp = session.get(index_url, timeout=25)
-            jms = ""
-            if resp.status_code == 200:
-                soup = BeautifulSoup(resp.text, "html.parser")
-                jms = self._extract_jms_agency_id(soup)
-            else:
-                logger.warning(
-                    "%s: index HTTP %s — continuing with agency_id as JMS fallback",
-                    self.county,
-                    resp.status_code,
-                )
-            if not jms:
-                logger.warning(f"{self.county}: no JMSAgencyID on index; trying agency_id alone")
-                jms = agency
-
-            # Paginate current confinements via IDX (20 cards/page)
-            records: List[ArrestRecord] = []
-            seen: set = set()
-            for idx in range(1, 80):  # hard cap ~1600 inmates
-                html = self._fetch_endpoint(
-                    session,
-                    "fetch_current_confinements.php",
-                    jms,
-                    index_url,
-                    idx=idx,
-                )
-                if not html:
-                    break
-                page = self._parse_booking_cards(html)
-                if not page:
-                    break
-                new = 0
-                for rec in page:
-                    key = f"{rec.Full_Name}|{rec.Booking_Date}|{rec.Booking_Number}"
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    records.append(rec)
-                    new += 1
-                if new == 0:
-                    break
-                time.sleep(0.2)
-
-            if not records:
-                # Fallback: last 7 days admits (single page)
-                html = self._fetch_endpoint(
-                    session, "fetch_last7days.php", jms, index_url, idx=1
-                )
-                records = self._parse_booking_cards(html) if html else []
-
-            logger.info(
-                f"✅ {self.county}: Southern SW {len(records)} records "
-                f"in {time.time() - start:.1f}s"
+        resp = session.get(index_url, timeout=25)
+        jms = ""
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            jms = self._extract_jms_agency_id(soup)
+        else:
+            logger.warning(
+                "%s: index HTTP %s — continuing with agency_id as JMS fallback",
+                self.county,
+                resp.status_code,
             )
-            return records
-        except Exception as e:
-            logger.error(f"Error scraping Southern SW {self.county}: {e}")
-            return []
+        if not jms:
+            logger.warning(f"{self.county}: no JMSAgencyID on index; trying agency_id alone")
+            jms = agency
+
+        # Paginate current confinements via IDX (20 cards/page)
+        records: List[ArrestRecord] = []
+        seen: set = set()
+        for idx in range(1, 80):  # hard cap ~1600 inmates
+            html = self._fetch_endpoint(
+                session,
+                CURRENT_ENDPOINT,
+                jms,
+                index_url,
+                idx=idx,
+            )
+            if not html:
+                break
+            page = self._parse_booking_cards(html, current_view=True)
+            if not page:
+                break
+            new = 0
+            for rec in page:
+                key = f"{rec.Full_Name}|{rec.Booking_Date}|{rec.Booking_Number}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                records.append(rec)
+                new += 1
+            if new == 0:
+                break
+            time.sleep(0.2)
+
+        if not records:
+            # Fallback: last 7 days admits (single page)
+            html = self._fetch_endpoint(
+                session, "fetch_last7days.php", jms, index_url, idx=1
+            )
+            records = self._parse_booking_cards(html) if html else []
+
+        logger.info(
+            f"✅ {self.county}: Southern SW {len(records)} records "
+            f"in {time.time() - start:.1f}s"
+        )
+        return records
 
     @staticmethod
     def _extract_jms_agency_id(soup: BeautifulSoup) -> str:
@@ -147,17 +198,13 @@ class SouthernSWBaseScraper(BaseScraper):
             "Origin": "https://cc.southernsoftware.com",
             "Accept": "text/html, */*; q=0.01",
         }
-        try:
-            resp = session.post(url, data=data, headers=headers, timeout=45)
-            if resp.status_code != 200:
-                logger.warning(f"{self.county}: {endpoint} HTTP {resp.status_code}")
-                return ""
-            return resp.text or ""
-        except Exception as e:
-            logger.warning(f"{self.county}: {endpoint} failed: {e}")
+        resp = session.post(url, data=data, headers=headers, timeout=45)
+        if resp.status_code != 200:
+            logger.warning(f"{self.county}: {endpoint} HTTP {resp.status_code}")
             return ""
+        return resp.text or ""
 
-    def _parse_booking_cards(self, html: str) -> List[ArrestRecord]:
+    def _parse_booking_cards(self, html: str, current_view: bool = False) -> List[ArrestRecord]:
         soup = BeautifulSoup(html, "html.parser")
         cards = soup.find_all("div", class_=re.compile(r"booking-card", re.I))
         if not cards:
@@ -173,14 +220,14 @@ class SouthernSWBaseScraper(BaseScraper):
         records: List[ArrestRecord] = []
         for card in cards:
             try:
-                rec = self._parse_one_card(card)
+                rec = self._parse_one_card(card, current_view=current_view)
                 if rec:
                     records.append(rec)
             except Exception as e:
-                logger.debug(f"{self.county}: card parse error: {e}")
+                logger.debug("%s: card parse error (%s)", self.county, type(e).__name__)
         return records
 
-    def _parse_one_card(self, card) -> Optional[ArrestRecord]:
+    def _parse_one_card(self, card, current_view: bool = False) -> Optional[ArrestRecord]:
         # Name is typically first h5 in booking-header
         name_el = card.find(["h5", "h4", "h3"])
         if not name_el:
@@ -202,7 +249,6 @@ class SouthernSWBaseScraper(BaseScraper):
         agency = field(r"Arresting Agency:\s*([^\n]+)")
         if agency.lower().startswith(("arrest date", "booked", "bond", "demographics", "charges")):
             agency = ""
-        bond_total = field(r"Bond Total:\s*\$?\s*([\d,]+\.?\d*)")
         demo = field(r"Demographics:\s*([^\n]+)")
 
         # Charges: lines under Charges section / charge-item blocks
@@ -216,37 +262,6 @@ class SouthernSWBaseScraper(BaseScraper):
                 t = re.split(r"\bBond:|\bDocket:", t)[0].strip()
                 if t:
                     charges.append(t)
-        if not charges:
-            # Heuristic: lines that look like offense descriptions
-            for line in text.splitlines():
-                line = line.strip()
-                if not line or len(line) < 4:
-                    continue
-                if any(
-                    k in line.lower()
-                    for k in (
-                        "booked",
-                        "demographics",
-                        "arresting",
-                        "bond total",
-                        "view full",
-                        "years /",
-                        "docket",
-                        "charges",
-                    )
-                ):
-                    continue
-                if re.match(r"^\$?[\d,]+", line):
-                    continue
-                if line.isdigit():
-                    continue
-                if line == name:
-                    continue
-                if re.search(r"[A-Za-z]{3,}", line):
-                    charges.append(line)
-                    if len(charges) >= 8:
-                        break
-
         age = race = sex = ""
         if demo:
             # e.g. "47 years / W / F"
@@ -277,18 +292,11 @@ class SouthernSWBaseScraper(BaseScraper):
         # complete identity, a source-issued booking/inmate identifier, and Booked date.
         if not first or not last or not booking_num or not booked:
             return None
-        bond = re.sub(r"[^\d.]", "", bond_total) or "0"
-        if bond == "0":
-            # sum individual bond lines
-            bonds = re.findall(r"Bond:\s*\$?\s*([\d,]+\.?\d*)", text, re.I)
-            total = 0.0
-            for b in bonds:
-                try:
-                    total += float(b.replace(",", ""))
-                except ValueError:
-                    pass
-            if total:
-                bond = str(int(total) if total == int(total) else total)
+        bond = published_bond_amount(card, text)
+        status, status_source = ("In Custody", STATUS_SOURCE_CURRENT) if current_view else ("", "")
+        extra = {"booking_key_origin": "source-issued Citizen Connect booking/inmate ID"}
+        if status_source:
+            extra["status_source"] = status_source
 
         return ArrestRecord(
             County=self.county,
@@ -304,11 +312,11 @@ class SouthernSWBaseScraper(BaseScraper):
             Race=race,
             Sex=(sex or "")[:1].upper(),
             Agency=agency,
-            Charges=" | ".join(charges) if charges else "Unknown",
-            Bond_Amount=str(bond),
-            Status="Unknown",
+            Charges=" | ".join(charges),
+            Bond_Amount=bond,
+            Status=status,
             Detail_URL=f"{CC_BASE}/index.php?AgencyID={self.agency_id}",
-            extra_data={"booking_key_origin": "source-issued Citizen Connect booking/inmate ID"},
+            extra_data=extra,
         )
 
 

@@ -22,6 +22,22 @@ the same key (``History``). No name/date/row-id keys are ever synthesized and
 bond is the source ``Total Bond Amount`` of the open booking only. A blank or
 unparseable Total Bond Amount leaves ``Bond_Amount=""`` (unknown) rather than
 inventing $0; a failed detail fetch drops the row.
+
+2026-10-15 honest identity and published-only status:
+
+* Every request goes through scrapers.plain_http (honest User-Agent,
+  certificate verified; Chrome UA removed). 401/403/429, a challenge page, a
+  connection reset or a bad certificate raises (egress_block: /
+  tls_cert_invalid:) and is never swallowed by the per-detail handler.
+* Status is no longer hard-coded. "In Custody" is set only for an open booking
+  (empty Release Date) AND one of:
+  - the listing's published per-row "In Custody" column reads Yes
+    (status_source "published_in_custody_column"; Walton), or
+  - the listing has no such column but the page echoes the source's own
+    "In Custody" filter checked for the ?InCustody=True request
+    (status_source "published_in_custody_filter"; Flagler).
+  Otherwise Status is "". The column wins when present (a "No" gives "").
+  See docs/recon/FL_NEWWORLD_HONEST_2026-10-15.md.
 """
 from __future__ import annotations
 
@@ -35,6 +51,9 @@ import requests
 from bs4 import BeautifulSoup
 
 from core.models import ArrestRecord
+from scrapers.plain_http import HONEST_USER_AGENT, SourceTLSInvalid
+from scrapers.plain_http import request as plain_request
+from scrapers.scraper_resilience import EgressBlocked
 
 logger = logging.getLogger(__name__)
 
@@ -47,14 +66,68 @@ _MONEY_RE = re.compile(r"\$\s*([\d,]+(?:\.\d{1,2})?)")
 _DETAIL_HREF_RE = re.compile(r"/Inmate/Detail/-?\d+", re.I)
 _DATETIME_RE = re.compile(r"^(\d{1,2}/\d{1,2}/\d{4})\s+(\d{1,2}:\d{2}\s*[AP]M)$", re.I)
 
+STATUS_SOURCE_COLUMN = "published_in_custody_column"
+STATUS_SOURCE_FILTER = "published_in_custody_filter"
+_BLOCKS = (EgressBlocked, SourceTLSInvalid)
+
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": HONEST_USER_AGENT,
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
 }
+
+
+class _HonestSession(requests.Session):
+    """requests.Session whose every call goes through plain_http (honest UA, verify on, typed blocks)."""
+
+    def __init__(self, county: str = ""):
+        super().__init__()
+        self.headers.update(HEADERS)
+        self.verify = True
+        self._county = county
+
+    def request(self, method, url, **kwargs):  # noqa: D401
+        sess = self
+
+        class _Raw:
+            def request(self, m, u, **kw):
+                return requests.Session.request(sess, m, u, **kw)
+
+        return plain_request(_Raw(), method, url, county=self._county or "NewWorld", **kwargs)
+
+
+def listing_custody(html: str, base_url: str) -> Dict[str, str]:
+    """{detail_url: published In Custody cell text} when the listing has that column; else {}."""
+    soup = BeautifulSoup(html, "html.parser")
+    out: Dict[str, str] = {}
+    for td in soup.find_all("td", class_=re.compile(r"\bInCustody\b")):
+        tr = td.find_parent("tr")
+        a_tag = tr.find("a", href=_DETAIL_HREF_RE) if tr is not None else None
+        if a_tag is None:
+            continue
+        href = a_tag["href"]
+        out[href if href.startswith("http") else urljoin(base_url, href)] = td.get_text(" ", strip=True)
+    return out
+
+
+def custody_filter_echoed(html: str) -> bool:
+    """True when the page echoes the source's own "In Custody" filter checkbox as checked."""
+    soup = BeautifulSoup(html, "html.parser")
+    for inp in soup.find_all("input", attrs={"name": "InCustody"}):
+        if (inp.get("type") or "").lower() == "checkbox" and inp.has_attr("checked"):
+            return True
+    return False
+
+
+def status_fields(custody_cell: Optional[str], filter_echoed: bool):
+    """(Status, status_source) for an open booking; column wins, then the echoed source filter."""
+    if custody_cell is not None:
+        if custody_cell.strip().lower() in ("yes", "y", "true"):
+            return "In Custody", STATUS_SOURCE_COLUMN
+        return "", ""
+    if filter_echoed:
+        return "In Custody", STATUS_SOURCE_FILTER
+    return "", ""
 
 
 def parse_listing_links(html: str, base_url: str) -> List[Tuple[str, str]]:
@@ -164,6 +237,7 @@ def detail_to_record(
     facility: str,
     detail_url: str,
     fallback_name: str = "",
+    status: Tuple[str, str] = ("", ""),
 ) -> Optional[ArrestRecord]:
     parsed = parse_detail_html(html)
     subject = parsed["subject"]  # type: ignore[assignment]
@@ -184,7 +258,7 @@ def detail_to_record(
     sex_raw = (subject.get("sex") or "").strip().lower()  # type: ignore[union-attr]
     sex = "M" if sex_raw.startswith("m") else ("F" if sex_raw.startswith("f") else "")
 
-    return ArrestRecord(
+    rec = ArrestRecord(
         County=county,
         State="FL",
         Facility=facility,
@@ -203,10 +277,15 @@ def detail_to_record(
         # "" = source Total Bond Amount blank/unparseable (unknown); "0.00" only when published.
         Bond_Amount=booking.get("bond", ""),
         Agency=booking.get("agency", ""),
-        Status="In Custody",
+        Status=status[0],
         Detail_URL=detail_url,
         LastCheckedMode="INITIAL",
     )
+    if status[1]:
+        extra = dict(getattr(rec, "extra_data", None) or {})
+        extra["status_source"] = status[1]
+        rec.extra_data = extra
+    return rec
 
 
 def scrape_newworld_roster(
@@ -220,13 +299,15 @@ def scrape_newworld_roster(
 ) -> List[ArrestRecord]:
     """Walk the InCustody roster and emit one record per open source booking."""
     start = time.time()
-    sess = session or requests.Session()
+    sess = session or _HonestSession(county)
     sess.headers.update(HEADERS)
     sess.headers["Referer"] = portal_url
     base = portal_url.rstrip("/") + "/"
 
     links: List[Tuple[str, str]] = []
     seen_urls: Set[str] = set()
+    custody_cells: Dict[str, str] = {}
+    filter_echoed = False
     for page in range(1, max_pages + 1):
         params = {"InCustody": "True"}
         if page > 1:
@@ -237,6 +318,9 @@ def scrape_newworld_roster(
                 raise RuntimeError(f"{county}: NewWorld roster HTTP {resp.status_code}")
             logger.warning("%s: NewWorld page %d HTTP %s", county, page, resp.status_code)
             break
+        if page == 1:
+            filter_echoed = custody_filter_echoed(resp.text)
+        custody_cells.update(listing_custody(resp.text, base))
         new = 0
         for name, url in parse_listing_links(resp.text, base):
             if url in seen_urls:
@@ -256,12 +340,16 @@ def scrape_newworld_roster(
     for name, url in links[:max_details]:
         try:
             resp = sess.get(url, timeout=25)
+        except _BLOCKS:
+            raise
         except requests.RequestException as exc:
-            logger.debug("%s: detail fetch failed (%s): %s", county, url, exc)
+            logger.debug("%s: detail fetch failed (%s)", county, type(exc).__name__)
             continue
         if resp.status_code != 200:
             continue
-        rec = detail_to_record(resp.text, county=county, facility=facility, detail_url=url, fallback_name=name)
+        cell = custody_cells.get(url) if custody_cells else None
+        rec = detail_to_record(resp.text, county=county, facility=facility, detail_url=url, fallback_name=name,
+                               status=status_fields(cell, filter_echoed))
         if rec is None or rec.Booking_Number in emitted:
             dropped += 1
         else:
