@@ -3,8 +3,13 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 2026-10-16 — Re-confirm joins the payment plan to the confirmation session
+- A second `POST /api/paperwork/confirm-premium` with the same amounts calls `ensure_payment_plan_for_confirmation` with the confirmation Mongo session. Matching terms return the existing plan (`plan_created` false) and do not insert another `payment_plans` row or audit row. A different amount is still 409 `premium_change_requires_reason`.
+- The plan function is not called without that session. Tests stay in `tests/test_premium_confirmation.py` (already on the `ci.yml` list).
+
 ## 2026-10-16 — Manatee FL status only from a published Released label or date
 - A blank, "No", "N/A" or "-" Released cell now gives Status "" (it was "In Custody"). The published label "In Custody" gives In Custody; "Yes"/"Released" or a release date gives Released. status_source is recorded (`published_released_cell_label` / `published_release_date`). Unrecognised values still raise ParseDriftError.
+
 
 ## 2026-10-16 — Manatee Clerk FL status "" instead of "Unknown"
 - Court filings publish no custody field, so Status is "" (was "Unknown"); no status_source.
@@ -19,6 +24,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## 2026-10-16 — Collier FL bond from the published bond span only
 - Bond_Amount comes only from this person's own lblBondAmount/lblBondSummary `$` figure; never from charge text; "" when none. A published $0 is now kept as "0" (it was dropped to ""). Format "1500" (was "1500.0").
 - Record-parse warnings log the exception type only. Status stays "" (no hard-coded In Custody).
+
 ## 2026-10-16 — Miami-Dade FL honest identity; no invented status
 - ArcGIS queries now go through plain_http with the honest UA and TLS verified; Chrome UA removed. EgressBlocked/SourceTLSInvalid propagate typed instead of being wrapped in MiamiDadeContractError.
 - Status is "" (was "Unknown"): the layer publishes no custody field. Bond stays "", and the owner-approved internal natural key is unchanged.

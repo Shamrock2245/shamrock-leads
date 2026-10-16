@@ -12,10 +12,11 @@ When the financed balance is greater than zero, confirmation calls
 ``ensure_payment_plan_for_confirmation`` inside the same transaction. If
 that function is missing or not callable, the route returns 503 and writes
 nothing: no plan row, no confirmation stamps, and no audit row. Paid in
-full does not need the plan function. A replay of the same amounts does
-not write a second audit row. A different amount is refused unless
-``reason`` is set; the prior confirmation is kept on
-``premium_confirmation_history``.
+full does not need the plan function. A replay of the same amounts
+calls the plan function with this confirmation's Mongo session, returns
+the existing plan (``created`` false), and does not write a second plan
+or audit row. A different amount is refused unless ``reason`` is set;
+the prior confirmation is kept on ``premium_confirmation_history``.
 
 A premium under the filed floor (10% of the bond, and at least $100, for
 OSI and Palmetto) is allowed only with ``reason``.
@@ -325,6 +326,48 @@ async def confirmed_case_doc(packet: Optional[dict]) -> Optional[dict]:
     return None
 
 
+async def _run_confirmation_transaction(work):
+    """Run ``work(session)`` on the confirmation's Mongo session.
+
+    Every call to the plan function receives this session. Without it the
+    plan function opens its own transaction and returns 503
+    ``plan_write_failed`` when Mongo is not a replica set.
+    """
+    client = await _transaction_client()
+    if client is None:
+        raise PremiumConfirmationError(
+            "transactions_unavailable",
+            503,
+            "Recording a confirmed premium needs a MongoDB replica set or Atlas. Nothing was saved.",
+        )
+    started = client.start_session()
+    if hasattr(started, "__await__"):
+        started = await started
+    try:
+        async with started as session:
+            return await session.with_transaction(work)
+    except PremiumConfirmationError:
+        raise
+    except Exception as exc:
+        if _is_terms_conflict(exc):
+            raise PremiumConfirmationError(
+                "plan_terms_conflict",
+                409,
+                "A payment plan for this case already uses different terms. Nothing was changed.",
+            ) from None
+        if isinstance(exc, ValueError):
+            message = str(exc).strip() or "The payment plan terms were rejected."
+            if len(message) > 240:
+                message = "The payment plan terms were rejected."
+            raise PremiumConfirmationError("invalid_plan_terms", 400, message) from None
+        logger.warning("[premium_confirm] transaction failed err_type=%s", type(exc).__name__)
+        raise PremiumConfirmationError(
+            "confirmation_write_failed",
+            503,
+            "The premium could not be confirmed. Nothing was saved.",
+        ) from None
+
+
 async def _commit_confirmation(
     *,
     rows,
@@ -352,13 +395,6 @@ async def _commit_confirmation(
     Paid-in-full (financed == 0) uses the same transaction. A failure rolls
     every write back. No transaction client means 503 and nothing is written.
     """
-    client = await _transaction_client()
-    if client is None:
-        raise PremiumConfirmationError(
-            "transactions_unavailable",
-            503,
-            "Recording a confirmed premium needs a MongoDB replica set or Atlas. Nothing was saved.",
-        )
     fields = {
         PREMIUM_CONFIRMED_AMOUNT_FIELD: cents_to_amount(premium),
         PREMIUM_CONFIRMED_AT_FIELD: now_iso,
@@ -433,32 +469,7 @@ async def _commit_confirmation(
         held["plan"] = plan
         return plan
 
-    started = client.start_session()
-    if hasattr(started, "__await__"):
-        started = await started
-    try:
-        async with started as session:
-            await session.with_transaction(work)
-    except PremiumConfirmationError:
-        raise
-    except Exception as exc:
-        if _is_terms_conflict(exc):
-            raise PremiumConfirmationError(
-                "plan_terms_conflict",
-                409,
-                "A payment plan for this case already uses different terms. Nothing was changed.",
-            ) from None
-        if isinstance(exc, ValueError):
-            message = str(exc).strip() or "The payment plan terms were rejected."
-            if len(message) > 240:
-                message = "The payment plan terms were rejected."
-            raise PremiumConfirmationError("invalid_plan_terms", 400, message) from None
-        logger.warning("[premium_confirm] transaction failed err_type=%s", type(exc).__name__)
-        raise PremiumConfirmationError(
-            "confirmation_write_failed",
-            503,
-            "The premium could not be confirmed. Nothing was saved.",
-        ) from None
+    await _run_confirmation_transaction(work)
     return held.get("plan")
 
 
@@ -663,7 +674,7 @@ async def confirm_premium(actor: str, body: dict) -> dict:
             and non_negative_cents(existing.get(PREMIUM_CONFIRMED_AMOUNT_FIELD)) == premium
             and non_negative_cents(existing.get(DOWN_FIELD)) == down
         ):
-            plan = await _ensure_plan(
+            plan_kwargs = dict(
                 booking=booking,
                 packet=packet,
                 bond_case=bond_case,
@@ -677,6 +688,13 @@ async def confirm_premium(actor: str, body: dict) -> dict:
                 fingerprint=fingerprint,
                 create=financed > 0,
             )
+            if financed > 0:
+                async def replay(session):
+                    return await _ensure_plan(**plan_kwargs, session=session)
+
+                plan = await _run_confirmation_transaction(replay)
+            else:
+                plan = await _ensure_plan(**plan_kwargs)
             return {
                 "ok": True,
                 "idempotent": True,
@@ -685,6 +703,7 @@ async def confirm_premium(actor: str, body: dict) -> dict:
                 "financed_balance": cents_to_amount(financed),
                 "premium_confirmed_by": existing.get(PREMIUM_CONFIRMED_BY_FIELD),
                 "plan_id": (plan or {}).get("plan_id"),
+                "plan_created": bool((plan or {}).get("created")),
                 "booking_number": booking,
             }
         if not reason:
@@ -773,53 +792,59 @@ async def _ensure_plan(
     if not create:
         return None
     creator = load_plan_creator()
-    if creator is not None:
-        confirmation_id = "pcf-" + hashlib.sha256(
-            f"{current_tenant_id() or ''}|{booking}|{fingerprint}".encode()
-        ).hexdigest()[:32]
-        case_id = str(
-            (bond_case or {}).get("bond_case_id")
-            or (packet or {}).get("bond_case_id")
-            or ""
+    if creator is None:
+        raise PremiumConfirmationError(
+            "plan_unavailable",
+            503,
+            "The payment plan could not be created. Nothing was saved.",
         )
-        try:
-            result = creator(
-                tenant_id=current_tenant_id() or "",
-                bond_case_id=case_id,
-                confirmation_id=confirmation_id,
-                financed=Decimal(cents_to_amount(financed)),
-                installments=count,
-                frequency=frequency,
-                actor=actor,
-                session=session,
-            )
-            if hasattr(result, "__await__"):
-                result = await result
-        except NotImplementedError as exc:
-            raise PremiumConfirmationError(
-                "plan_unavailable",
-                503,
-                "The payment plan could not be created. Nothing was saved.",
-            ) from exc
-        except PremiumConfirmationError:
-            raise
-        except Exception as exc:
-            if _is_terms_conflict(exc) or isinstance(exc, ValueError):
-                raise
-            logger.warning("[premium_confirm] plan creator failed err_type=%s", type(exc).__name__)
-            raise PremiumConfirmationError("plan_write_failed", 503) from exc
-        if not isinstance(result, dict) or not result.get("plan_id"):
-            raise PremiumConfirmationError(
-                "plan_unavailable",
-                503,
-                "The payment plan could not be created. Nothing was saved.",
-            )
-        return result
-    raise PremiumConfirmationError(
-        "plan_unavailable",
-        503,
-        "The payment plan could not be created. Nothing was saved.",
+    if session is None:
+        raise PremiumConfirmationError(
+            "plan_write_failed",
+            503,
+            "The payment plan was not joined to the confirmation. Nothing was saved.",
+        )
+    confirmation_id = "pcf-" + hashlib.sha256(
+        f"{current_tenant_id() or ''}|{booking}|{fingerprint}".encode()
+    ).hexdigest()[:32]
+    case_id = str(
+        (bond_case or {}).get("bond_case_id")
+        or (packet or {}).get("bond_case_id")
+        or ""
     )
+    try:
+        result = creator(
+            tenant_id=current_tenant_id() or "",
+            bond_case_id=case_id,
+            confirmation_id=confirmation_id,
+            financed=Decimal(cents_to_amount(financed)),
+            installments=count,
+            frequency=frequency,
+            actor=actor,
+            session=session,
+        )
+        if hasattr(result, "__await__"):
+            result = await result
+    except NotImplementedError as exc:
+        raise PremiumConfirmationError(
+            "plan_unavailable",
+            503,
+            "The payment plan could not be created. Nothing was saved.",
+        ) from exc
+    except PremiumConfirmationError:
+        raise
+    except Exception as exc:
+        if _is_terms_conflict(exc) or isinstance(exc, ValueError):
+            raise
+        logger.warning("[premium_confirm] plan creator failed err_type=%s", type(exc).__name__)
+        raise PremiumConfirmationError("plan_write_failed", 503) from exc
+    if not isinstance(result, dict) or not result.get("plan_id"):
+        raise PremiumConfirmationError(
+            "plan_unavailable",
+            503,
+            "The payment plan could not be created. Nothing was saved.",
+        )
+    return result
 
 
 def _plan_has_collections(plan: dict) -> bool:
