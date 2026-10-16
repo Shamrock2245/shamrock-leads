@@ -19,6 +19,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_payment_log_claims.py` (added to `ci.yml`): charge then refund, refund then charge, `/pay` then refund, refund then `/pay` retry, a forced write-conflict retry on the charge and on `/pay`, a cross-booking charge, a blank booking that does not stamp, refund and failure rows that do not move a balance or stamp, the review-state audit's before and after values, a staff-chain mirror that stamps both bond documents, a needs-review charge alert before the poller marks Gmail read, an applied `/pay` retry that sees a reversal inside the lock, a later booking that enriches or conflicts, a review alert that drops an internal booking key, an amount or status mismatch that blocks enrichment, one poller payment-received note after a clean commit, one BlueBubbles receipt whether the poller or the webhook records first, `bb_receipt_sent` only after BlueBubbles accepts, a failed send that clears the sending marker and succeeds on retry, and two racing paths that send once. No SwipeSimple, Gmail, or live Slack calls.
 
+## 2026-10-16 — Miami-Dade FL honest identity; no invented status
+- ArcGIS queries now go through plain_http with the honest UA and TLS verified; Chrome UA removed. EgressBlocked/SourceTLSInvalid propagate typed instead of being wrapped in MiamiDadeContractError.
+- Status is "" (was "Unknown"): the layer publishes no custody field. Bond stays "", and the owner-approved internal natural key is unchanged.
+
 ## 2026-10-15 — Mecklenburg NC honest identity; typed errors; published-only status, bond and charges
 - plain_http (`make_session` + `request`) with the honest UA, TLS verified; Chrome UA removed.
 - Swallowed errors removed: the landing and roster pages raise typed errors (EgressBlocked/SourceTLSInvalid, HTTPError, ParseDriftError on non-JSON) instead of returning []. Per-booking detail failures keep "" fields and log the exception type only; blocks always raise.

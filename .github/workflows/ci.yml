@@ -121,7 +121,7 @@ jobs:
             tests/test_southern_sw_honest.py \
             tests/test_fl_newworld_honest.py \
             tests/test_fl_okaloosa_honest.py \
-            tests/test_fl_pinellas_status_only.py tests/test_sc_lancaster_york_honest.py tests/test_nc_mecklenburg_honest.py \
+            tests/test_fl_pinellas_status_only.py tests/test_sc_lancaster_york_honest.py tests/test_nc_mecklenburg_honest.py tests/test_fl_miami_dade_honest.py \
             tests/test_fl_desoto_bond_custody_defaults.py \
             tests/test_fl_smartweb_plain_https.py \
             tests/test_lee_outreach_unknown_status.py \
