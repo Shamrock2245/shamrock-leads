@@ -6,6 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## 2026-10-16 — Manatee Clerk FL status "" instead of "Unknown"
 - Court filings publish no custody field, so Status is "" (was "Unknown"); no status_source.
 
+## 2026-10-16 — Pasco FL status provenance; no PII in logs
+- Status is tied to the source's custody-only view (JMC `/inCustody` route, `custody/GetInCustody` endpoint, distinct from `/pastArrests`) and recorded as `status_source=published_in_custody_view`; no longer an unexplained constant.
+- Removed a debug log that printed the full name; charge/roster failure logs carry the exception type only. Bond rules unchanged (published 0 kept, unknown "").
+
+## 2026-10-16 — Brevard FL honest identity
+- Requests go through plain_http with the honest UA and TLS verified; Chrome UA removed. 401/403/429/challenge/reset raise EgressBlocked (detail fetches no longer swallow blocks). Detail logs carry the exception type only (no URL). Status/bond/booking rules unchanged.
+
+## 2026-10-16 — Collier FL bond from the published bond span only
+- Bond_Amount comes only from this person's own lblBondAmount/lblBondSummary `$` figure; never from charge text; "" when none. A published $0 is now kept as "0" (it was dropped to ""). Format "1500" (was "1500.0").
+- Record-parse warnings log the exception type only. Status stays "" (no hard-coded In Custody).
 ## 2026-10-16 — Miami-Dade FL honest identity; no invented status
 - ArcGIS queries now go through plain_http with the honest UA and TLS verified; Chrome UA removed. EgressBlocked/SourceTLSInvalid propagate typed instead of being wrapped in MiamiDadeContractError.
 - Status is "" (was "Unknown"): the layer publishes no custody field. Bond stays "", and the owner-approved internal natural key is unchanged.
