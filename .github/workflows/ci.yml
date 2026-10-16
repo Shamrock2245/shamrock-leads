@@ -105,6 +105,23 @@ jobs:
             tests/test_lee_scraper_incustody_unknown.py \
             tests/test_lee_roster_status_unknown.py \
             tests/test_dcn_base_cleanup.py \
+            tests/test_fl_lake_honest_status.py \
+            tests/test_sc_aiken_plain_https.py \
+            tests/test_fl_orange_honest_status.py \
+            tests/test_pbso_parse_status.py \
+            tests/test_fl_duval_honest_status.py \
+            tests/test_fl_polk_honest_status.py \
+            tests/test_fl_hernando_honest_identity.py \
+            tests/test_sc_florence_honest.py \
+            tests/test_sc_newberry_honest.py \
+            tests/test_nc_pitt_honest.py \
+            tests/test_nc_gaston_honest.py \
+            tests/test_nc_orange_honest.py \
+            tests/test_fl_seminole_plain_https.py \
+            tests/test_southern_sw_honest.py \
+            tests/test_fl_newworld_honest.py \
+            tests/test_fl_okaloosa_honest.py \
+            tests/test_fl_pinellas_status_only.py tests/test_sc_lancaster_york_honest.py tests/test_nc_mecklenburg_honest.py \
             tests/test_fl_desoto_bond_custody_defaults.py \
             tests/test_fl_smartweb_plain_https.py \
             tests/test_lee_outreach_unknown_status.py \
@@ -112,6 +129,7 @@ jobs:
             tests/test_fl_suwannee_bond_custody_defaults.py \
             tests/test_fl_indian_river_tls_bond_guard.py \
             tests/test_plain_http_tls_vs_connection_reset.py \
+            tests/test_plain_http_connection_reset_mapping.py \
             tests/test_models_bond_unknown_default.py \
             tests/test_fl_st_lucie_plain_https.py \
             tests/test_fl_martin_plain_https.py \
@@ -154,6 +172,8 @@ jobs:
             tests/test_payment_plan_pay_dedupe.py \
             tests/test_payment_plan_link_core.py \
             tests/test_payment_log_claims.py \
+            tests/test_premium_confirmation.py \
+            tests/test_installment_invoices.py \
             tests/test_auth_no_pin_fail_closed.py \
             tests/test_pinellas_relay_only.py \
             tests/test_pinellas_modal_wait.py \

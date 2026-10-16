@@ -346,7 +346,10 @@ async def _idempotent_reply(
 # ``payment_txn_locks`` upsert. An applied-claim retry reads that claim and
 # then the refund or failure siblings inside the same locked transaction.
 # Any such sibling is 409 ``payment_needs_review`` and does not change the
-# balance. This path does not reverse a plan balance.
+# balance. Refunds of a plan payment go through ``reverse_plan_payment``
+# (balance restored once). Declines are logged and do not move the balance.
+# Webhook and the receipt poller call ``apply_plan_payment`` with the
+# same claim. County/state backfill and email-only bond matching stay out.
 
 _TOKEN_FIELDS = ("log_claim_token", "claim_token", "payment_claim_token")
 _SETTLED_STATUSES = frozenset({
@@ -765,7 +768,7 @@ async def _write_payment_row(payments_col, plan, plan_id, txn, amount, data, now
             "logged_payment_booking_mismatch",
             "The plan must have a non-blank booking number before a payment can be recorded.",
         )
-    await payments_col.insert_one({
+    doc = {
         "booking_number": booking,
         "plan_id": plan_id,
         "amount": amount,
@@ -775,12 +778,152 @@ async def _write_payment_row(payments_col, plan, plan_id, txn, amount, data, now
         "timestamp": now.isoformat(),
         "transaction_id": txn,
         "notes": data.get("notes", ""),
-    }, **_sess(session))
+    }
+    installment_n = _installment_n(data)
+    if installment_n is not None:
+        doc["installment_n"] = installment_n
+    await payments_col.insert_one(doc, **_sess(session))
     return False
 
 
+def _whole_cents(value) -> int | None:
+    """An integer cent field. Booleans are not cents."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _stored_dollars(value) -> float | None:
+    """A stored dollar amount as a float, including zero.
+
+    Numbers stay numbers. A decimal string such as ``1000.00`` becomes a
+    float so ``$inc`` can add it. Fractional cents are refused.
+    """
+    from decimal import Decimal, InvalidOperation
+
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+        if number != number or number in (float("inf"), float("-inf")):
+            return None
+        return number
+    if not isinstance(value, str):
+        return None
+    text = value.strip().replace(",", "").replace("$", "")
+    if not text or len(text) > 64:
+        return None
+    try:
+        dec = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return None
+    if not dec.is_finite():
+        return None
+    exponent = dec.as_tuple().exponent
+    if isinstance(exponent, str) or exponent < -2:
+        return None
+    return float(dec)
+
+
+def _numeric_money_patch(plan: dict) -> dict:
+    """Dollar fields ``$inc`` can add.
+
+    ``ensure_payment_plan_for_confirmation`` stores ``balance_remaining`` and
+    ``total_paid`` as decimal strings. When the matching ``*_cents`` field is
+    an integer, that integer is the source of truth and the dollar field
+    becomes ``cents / 100``. A string with no cent field is parsed. Values
+    that are already numbers are left alone.
+    """
+    patch = {}
+    for dollars_key, cents_key in (
+        ("balance_remaining", "balance_remaining_cents"),
+        ("total_paid", "total_paid_cents"),
+    ):
+        current = plan.get(dollars_key)
+        if not isinstance(current, str):
+            if current is not None and _stored_dollars(current) is None:
+                raise RuntimeError(f"{dollars_key} is not a numeric amount")
+            continue
+        cents = _whole_cents(plan.get(cents_key))
+        if cents is not None:
+            patch[dollars_key] = cents / 100
+            continue
+        number = _stored_dollars(current)
+        if number is None:
+            raise RuntimeError(f"{dollars_key} is not a numeric amount")
+        patch[dollars_key] = number
+    return patch
+
+
+async def _coerce_plan_money(plans_col, plan_id, plan, session=None) -> dict:
+    """Rewrite decimal-string balances to numbers inside the caller's transaction."""
+    patch = _numeric_money_patch(plan)
+    if not patch:
+        return plan
+    pinned = {"plan_id": plan_id}
+    for key in patch:
+        pinned[key] = plan.get(key)
+    await plans_col.update_one(pinned, {"$set": patch}, **_sess(session))
+    fresh = await plans_col.find_one({"plan_id": plan_id}, **_sess(session))
+    if not isinstance(fresh, dict):
+        raise RuntimeError("plan missing during balance update")
+    return fresh
+
+
+def _money_still_text(plan: dict) -> bool:
+    return any(isinstance(plan.get(key), str) for key in ("balance_remaining", "total_paid"))
+
+
+def _cent_increments(plan: dict, amount, *, paying: bool) -> dict:
+    """Integer cent companions. Absent fields stay absent.
+
+    A payment decreases ``balance_remaining_cents`` and increases
+    ``total_paid_cents``. A refund does the opposite.
+    """
+    cents = _amount_cents(amount)
+    if not cents:
+        return {}
+    balance_delta = -cents if paying else cents
+    paid_delta = cents if paying else -cents
+    inc = {}
+    if _whole_cents(plan.get("balance_remaining_cents")) is not None:
+        inc["balance_remaining_cents"] = balance_delta
+    if _whole_cents(plan.get("total_paid_cents")) is not None:
+        inc["total_paid_cents"] = paid_delta
+    return inc
+
+
+async def _close_if_paid_off(plans_col, plan_id, session=None) -> None:
+    """Mark paid in full from integer cents when that field is the contract."""
+    plan = await plans_col.find_one({"plan_id": plan_id}, **_sess(session)) or {}
+    if _whole_cents(plan.get("balance_remaining_cents")) is not None:
+        await plans_col.update_one(
+            {"plan_id": plan_id, "balance_remaining_cents": {"$lte": 0}},
+            {"$set": {
+                "balance_remaining": 0,
+                "balance_remaining_cents": 0,
+                "status": "paid_in_full",
+            }},
+            **_sess(session),
+        )
+        return
+    balance = plan.get("balance_remaining")
+    if isinstance(balance, str):
+        return
+    await plans_col.update_one(
+        {"plan_id": plan_id, "balance_remaining": {"$lte": 0}},
+        {"$set": {"balance_remaining": 0, "status": "paid_in_full"}},
+        **_sess(session),
+    )
+
+
 async def _apply_balance(plans_col, plan_id, txn, amount, now, session=None) -> None:
-    """Idempotent ``$inc``. A second run sees the transaction id already collected."""
+    """Idempotent ``$inc``. A second run sees the transaction id already collected.
+
+    Decimal-string balances from ``ensure_payment_plan_for_confirmation`` are
+    coerced to numbers in this same transaction before ``$inc``. Integer
+    ``balance_remaining_cents`` stays the source of truth.
+    """
     for _ in range(3):
         plan = await plans_col.find_one({"plan_id": plan_id}, **_sess(session))
         if not plan:
@@ -798,6 +941,10 @@ async def _apply_balance(plans_col, plan_id, txn, amount, now, session=None) -> 
             raise RuntimeError("collected_transaction_ids unreadable")
         if txn in ids:
             break
+        if _money_still_text(plan):
+            plan = await _coerce_plan_money(plans_col, plan_id, plan, session)
+            if _money_still_text(plan):
+                continue
         await plans_col.update_one(
             {"plan_id": plan_id, **pin},
             {
@@ -805,6 +952,7 @@ async def _apply_balance(plans_col, plan_id, txn, amount, now, session=None) -> 
                     "balance_remaining": -amount,
                     "total_paid": amount,
                     "payments_made": 1,
+                    **_cent_increments(plan, amount, paying=True),
                 },
                 "$set": {
                     "collected_transaction_ids": ids + [txn],
@@ -816,14 +964,59 @@ async def _apply_balance(plans_col, plan_id, txn, amount, now, session=None) -> 
             },
             **_sess(session),
         )
-    await plans_col.update_one(
-        {"plan_id": plan_id, "balance_remaining": {"$lte": 0}},
-        {"$set": {"balance_remaining": 0, "status": "paid_in_full"}},
-        **_sess(session),
-    )
+    await _close_if_paid_off(plans_col, plan_id, session)
     fresh = await plans_col.find_one({"plan_id": plan_id}, **_sess(session))
     if not _collected(fresh or {}, txn) or not _balance_ok(fresh or {}):
         raise RuntimeError("balance update did not stick")
+
+
+def _installment_n(data: dict | None):
+    """Installment number from a pay body, or None when this is not one row."""
+    if not isinstance(data, dict):
+        return None
+    raw = data.get("installment_n")
+    if raw in (None, ""):
+        return None
+    try:
+        number = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if number <= 0 or number > 36:
+        return None
+    return number
+
+
+async def _mark_installment_paid(plans_col, plan_id, data, txn, now, session=None) -> None:
+    """Stamp the schedule row paid and point next_due_date at the next open row."""
+    number = _installment_n(data)
+    if number is None:
+        return
+    plan = await plans_col.find_one({"plan_id": plan_id}, **_sess(session)) or {}
+    rows = plan.get("installments")
+    if not isinstance(rows, list):
+        return
+    next_due = None
+    changed = False
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            row_n = int(row.get("n") or 0)
+        except (TypeError, ValueError):
+            continue
+        if row_n == number and row.get("status") != "reversed":
+            row["status"] = "paid"
+            row["paid_transaction_id"] = txn
+            row["paid_at"] = now.isoformat()
+            changed = True
+        elif row.get("status") in {"scheduled", "invoiced"} and not next_due:
+            next_due = row.get("due_date")
+    if not changed:
+        return
+    patch = {"installments": rows}
+    if next_due:
+        patch["next_due_date"] = next_due
+    await plans_col.update_one({"plan_id": plan_id}, {"$set": patch}, **_sess(session))
 
 
 def _audit_id(plan_id: str, txn: str) -> str:
@@ -916,6 +1109,7 @@ async def _apply_in_transaction(claims, payments_col, plans_col, audit_col, plan
         payments_col, plan, plan_id, txn, amount, data, now, mode, row, session,
     )
     await _apply_balance(plans_col, plan_id, txn, amount, now, session)
+    await _mark_installment_paid(plans_col, plan_id, data, txn, now, session)
     fresh = await plans_col.find_one({"plan_id": plan_id}, **_sess(session)) or {}
     after = {
         "balance_remaining": fresh.get("balance_remaining"),
@@ -996,7 +1190,7 @@ async def _locked_prior_decision(client, claims, payments_col, txn):
     return found.get("claim")
 
 
-async def _continue_claim(request, claims, plans_col, payments_col, plan, plan_id, txn, amount, data, client):
+async def _continue_claim(actor, claims, plans_col, payments_col, plan, plan_id, txn, amount, data, client):
     """Apply inside the transaction the caller already confirmed is available."""
     try:
         audit_col = get_collection("audit_events")
@@ -1005,7 +1199,7 @@ async def _continue_claim(request, claims, plans_col, payments_col, plan, plan_i
         async def work(session):
             await _apply_in_transaction(
                 claims, payments_col, plans_col, audit_col, plan_id, txn,
-                amount, data, _actor(request), now, session,
+                amount, data, actor, now, session,
             )
 
         await _run_apply(client, work)
@@ -1041,7 +1235,7 @@ async def _continue_claim(request, claims, plans_col, payments_col, plan, plan_i
     }
 
 
-async def _enter_existing(request, claims, plans_col, payments_col, plan, plan_id, txn, amount, data, claim):
+async def _enter_existing(claims, plans_col, payments_col, plan, plan_id, txn, amount, data, claim):
     """Idempotent success or 409. A claim that is not applied is not resumed."""
     if claim.get("plan_id") and claim.get("plan_id") != plan_id:
         return _refuse(
@@ -1058,25 +1252,16 @@ async def _enter_existing(request, claims, plans_col, payments_col, plan, plan_i
     return await _idempotent_reply(plans_col, plan_id, txn, claim, amount)
 
 
-@payment_plans_bp.post("/payments/plans/{plan_id}/pay")
-async def record_payment(request: Request, plan_id):
-    """Record a payment against an existing plan — at most once per transaction id.
+async def apply_plan_payment(plan_id, data, actor: str):
+    """Apply one settled amount to a plan. Webhook, poller, and ``/pay`` share this.
 
-    ``transaction_id`` is required (400 ``transaction_id_required``). The same
-    transaction id on the same plan returns ``idempotent: true`` with no second
-    payment row and no balance change, including under concurrent requests.
-    A committed logged payment with the same id is linked instead of inserted again.
+    ``actor`` is the session user or the gateway name. It is never taken from
+    the body. The claim, the payment row, the balance, and the audit commit
+    in one transaction, or none of them do.
     """
     from pymongo.errors import DuplicateKeyError
 
-    try:
-        # Parse JSON numbers as Decimal straight from the raw body: request.json()
-        # would turn {"amount": 1.00000000000000000000000000001} into the float
-        # 1.0 before validation, hiding the fractional cents.
-        data = _json.loads(await request.body(), parse_float=Decimal)
-    except Exception:
-        data = None
-    if not data or not isinstance(data, dict) or 'amount' not in data:
+    if not data or not isinstance(data, dict) or "amount" not in data:
         return JSONResponse({"error": "Missing amount"}, status_code=400)
 
     txn = str(data.get("transaction_id") or "").strip()
@@ -1131,7 +1316,7 @@ async def record_payment(request: Request, plan_id):
     # A finished claim decides. Anything still claimed is not resumed and is not success.
     if existing_claim is not None:
         return await _enter_existing(
-            request, claims, plans_col, payments_col, plan, plan_id, txn, amount, data, existing_claim,
+            claims, plans_col, payments_col, plan, plan_id, txn, amount, data, existing_claim,
         )
 
     kind, payload = await _classify_rows(payments_col, plan, txn, amount)
@@ -1160,7 +1345,7 @@ async def record_payment(request: Request, plan_id):
         except PlanPaymentRefused as exc:
             return _refuse(exc.error, txn, exc.message)
         return await _enter_existing(
-            request, claims, plans_col, payments_col, plan, plan_id, txn, amount, data,
+            claims, plans_col, payments_col, plan, plan_id, txn, amount, data,
             existing or {"status": "unknown"},
         )
 
@@ -1175,10 +1360,378 @@ async def record_payment(request: Request, plan_id):
         )
     try:
         return await _continue_claim(
-            request, claims, plans_col, payments_col, plan, plan_id, txn, amount, data, client,
+            actor, claims, plans_col, payments_col, plan, plan_id, txn, amount, data, client,
         )
     finally:
         _release(txn)
+
+
+@payment_plans_bp.post("/payments/plans/{plan_id}/pay")
+async def record_payment(request: Request, plan_id):
+    """Record a payment against an existing plan — at most once per transaction id.
+
+    ``transaction_id`` is required (400 ``transaction_id_required``). The same
+    transaction id on the same plan returns ``idempotent: true`` with no second
+    payment row and no balance change, including under concurrent requests.
+    A committed logged payment with the same id is linked instead of inserted again.
+    """
+    try:
+        # Parse JSON numbers as Decimal straight from the raw body: request.json()
+        # would turn {"amount": 1.00000000000000000000000000001} into the float
+        # 1.0 before validation, hiding the fractional cents.
+        data = _json.loads(await request.body(), parse_float=Decimal)
+    except Exception:
+        data = None
+    return await apply_plan_payment(plan_id, data, _actor(request))
+
+
+_REVERSED_AUDIT = "payment_plan_payment_reversed"
+_FAILED_AUDIT = "payment_plan_payment_failed"
+_REVERSE_REJECTED = "payment_plan_payment_reverse_rejected"
+
+
+def _scoped_audit_id(prefix: str, plan_id: str, txn: str) -> str:
+    if not multi_tenant_enabled():
+        return f"{prefix}:{plan_id}:{txn}"
+    return f"{prefix}:{current_tenant_id() or ''}:{plan_id}:{txn}"
+
+
+async def _insert_audit_once(audit_col, doc: dict, session=None) -> bool:
+    """Insert one audit row. A duplicate ``_id`` is a replay, not a second event."""
+    from pymongo.errors import DuplicateKeyError
+
+    existing = await audit_col.find_one({"_id": doc["_id"]}, **_sess(session))
+    if existing:
+        return False
+    try:
+        await audit_col.insert_one(doc, **_sess(session))
+    except DuplicateKeyError:
+        return False
+    return True
+
+
+async def note_plan_payment_failure(plan_id, data, actor: str):
+    """Log one decline. The balance, the claim, and the payment row stay put."""
+    txn = str((data or {}).get("transaction_id") or "").strip()
+    if not txn:
+        return JSONResponse(
+            {"error": "transaction_id_required",
+             "message": "A declined payment still needs its transaction id."},
+            status_code=400,
+        )
+    plans_col = get_collection("payment_plans")
+    plan = await plans_col.find_one({"plan_id": plan_id})
+    if not plan:
+        return JSONResponse({"error": "Plan not found"}, status_code=404)
+    before = plan.get("balance_remaining")
+    audit_col = get_collection("audit_events")
+    now = datetime.now(timezone.utc)
+    wrote = await _insert_audit_once(audit_col, {
+        "_id": _scoped_audit_id("plan-fail", plan_id, txn),
+        "event_type": _FAILED_AUDIT,
+        "entity_type": "payment_plan",
+        "entity_id": plan_id,
+        "actor": actor,
+        "agent_name": actor,
+        "timestamp": now,
+        "created_at": now,
+        "booking_number": _booking(plan.get("booking_number")),
+        "transaction_id": txn,
+        "plan_id": plan_id,
+        "amount": (data or {}).get("amount"),
+        "reason": "plan payment declined",
+        "confidence": 1.0,
+        "old_state": {"balance_remaining": before, "status": plan.get("status")},
+        "new_state": {"balance_remaining": before, "status": plan.get("status")},
+    })
+    fresh = await plans_col.find_one({"plan_id": plan_id}) or {}
+    return {
+        "success": True,
+        "idempotent": not wrote,
+        "balance_unchanged": True,
+        "transaction_id": txn,
+        "balance_remaining": fresh.get("balance_remaining"),
+        "status": fresh.get("status"),
+    }
+
+
+def _refund_ids(data: dict) -> tuple[str, str]:
+    original = str(data.get("original_transaction_id") or data.get("transaction_id") or "").strip()
+    refund_txn = str(data.get("refund_transaction_id") or "").strip()
+    if not refund_txn or refund_txn == original:
+        refund_txn = f"{original}:refund"
+    return original, refund_txn
+
+
+async def _restore_balance(plans_col, plan_id, original_txn, amount, now, session=None) -> None:
+    """Put one applied amount back. A second call sees the transaction id already gone."""
+    plan = await plans_col.find_one({"plan_id": plan_id}, **_sess(session))
+    if not plan:
+        raise RuntimeError("plan missing during refund")
+    ids = plan.get("collected_transaction_ids")
+    if not isinstance(ids, list) or original_txn not in ids:
+        return
+    if _money_still_text(plan):
+        plan = await _coerce_plan_money(plans_col, plan_id, plan, session)
+        if _money_still_text(plan):
+            raise RuntimeError("plan money field is not numeric")
+        ids = plan.get("collected_transaction_ids")
+        if not isinstance(ids, list) or original_txn not in ids:
+            return
+    remaining = [item for item in ids if item != original_txn]
+    await plans_col.update_one(
+        {"plan_id": plan_id, "collected_transaction_ids": ids},
+        {
+            "$inc": {
+                "balance_remaining": amount,
+                "total_paid": -amount,
+                "payments_made": -1,
+                **_cent_increments(plan, amount, paying=False),
+            },
+            "$set": {
+                "collected_transaction_ids": remaining,
+                "status": "active",
+                "updated_at": now.isoformat(),
+            },
+        },
+        **_sess(session),
+    )
+    fresh = await plans_col.find_one({"plan_id": plan_id}, **_sess(session)) or {}
+    if _collected(fresh, original_txn):
+        raise RuntimeError("refund did not stick")
+
+
+async def _mark_installment_reversed(plans_col, plan_id, data, original_txn, now, session=None) -> None:
+    number = _installment_n(data)
+    plan = await plans_col.find_one({"plan_id": plan_id}, **_sess(session)) or {}
+    rows = plan.get("installments")
+    if not isinstance(rows, list):
+        return
+    changed = False
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        paid_txn = str(row.get("paid_transaction_id") or "")
+        row_n = _installment_n({"installment_n": row.get("n")})
+        if (number is not None and row_n == number) or (paid_txn and paid_txn == original_txn):
+            if row.get("status") != "reversed":
+                row["status"] = "reversed"
+                row["reversed_at"] = now.isoformat()
+                changed = True
+    if changed:
+        await plans_col.update_one(
+            {"plan_id": plan_id},
+            {"$set": {"installments": rows}},
+            **_sess(session),
+        )
+
+
+async def reverse_plan_payment(plan_id, data, actor: str):
+    """Restore a plan balance once for a refund of an applied payment.
+
+    The refund has its own transaction id. Replaying that id does not move
+    the balance again. A decline is not a refund; this function is not called
+    for those.
+    """
+    from pymongo.errors import DuplicateKeyError
+
+    if not isinstance(data, dict):
+        return JSONResponse({"error": "Missing amount"}, status_code=400)
+    original, refund_txn = _refund_ids(data)
+    if not original:
+        return JSONResponse(
+            {"error": "transaction_id_required",
+             "message": "A refund needs the original transaction id."},
+            status_code=400,
+        )
+    plans_col = get_collection("payment_plans")
+    payments_col = get_collection("payments")
+    plan = await plans_col.find_one({"plan_id": plan_id})
+    if not plan:
+        return JSONResponse({"error": "Plan not found"}, status_code=404)
+
+    client = await _transaction_client()
+    if client is None:
+        return _unavailable()
+    try:
+        claims = await _payment_claims_collection()
+    except Exception:
+        return JSONResponse({"error": "payment_dedupe_unavailable"}, status_code=503)
+
+    existing_refund = await claims.find_one({"transaction_id": refund_txn})
+    if existing_refund is not None and existing_refund.get("status") == "applied":
+        fresh = await plans_col.find_one({"plan_id": plan_id}) or {}
+        return {
+            "success": True,
+            "idempotent": True,
+            "transaction_id": refund_txn,
+            "balance_remaining": fresh.get("balance_remaining"),
+            "status": fresh.get("status"),
+        }
+
+    original_claim = await claims.find_one({"transaction_id": original, "plan_id": plan_id})
+    if not original_claim or original_claim.get("status") not in {"applied", "reversed"}:
+        audit_col = get_collection("audit_events")
+        now = datetime.now(timezone.utc)
+        await _insert_audit_once(audit_col, {
+            "_id": _scoped_audit_id("plan-rev-reject", plan_id, refund_txn),
+            "event_type": _REVERSE_REJECTED,
+            "entity_type": "payment_plan",
+            "entity_id": plan_id,
+            "actor": actor,
+            "agent_name": actor,
+            "timestamp": now,
+            "created_at": now,
+            "booking_number": _booking(plan.get("booking_number")),
+            "transaction_id": refund_txn,
+            "plan_id": plan_id,
+            "reason": "refund rejected; payment was not applied",
+            "confidence": 1.0,
+            "old_state": {"balance_remaining": plan.get("balance_remaining"), "status": plan.get("status")},
+            "new_state": {"balance_remaining": plan.get("balance_remaining"), "status": plan.get("status")},
+        })
+        return _refuse(
+            "payment_not_applied", refund_txn,
+            "This refund does not match an applied plan payment. The balance was not changed.",
+        )
+    if original_claim.get("status") == "reversed":
+        fresh = await plans_col.find_one({"plan_id": plan_id}) or {}
+        return {
+            "success": True,
+            "idempotent": True,
+            "transaction_id": refund_txn,
+            "balance_remaining": fresh.get("balance_remaining"),
+            "status": fresh.get("status"),
+        }
+    amount = original_claim.get("amount")
+    if _amount_cents(amount) is None:
+        return _refuse(
+            "invalid_amount", refund_txn,
+            "The applied payment amount cannot be reversed.",
+        )
+    if data.get("amount") not in (None, "") and not _same_amount(data.get("amount"), amount):
+        return _refuse(
+            "transaction_id_amount_mismatch", refund_txn,
+            "This refund amount does not match the applied payment. The balance was not changed.",
+        )
+
+    now = datetime.now(timezone.utc)
+    if existing_refund is None:
+        try:
+            await claims.insert_one({
+                "plan_id": plan_id,
+                "transaction_id": refund_txn,
+                "original_transaction_id": original,
+                "booking_number": plan.get("booking_number"),
+                "amount": amount,
+                "status": "claimed",
+                "kind": "reversal",
+                "claimed_at": now.isoformat(),
+            })
+        except DuplicateKeyError:
+            existing_refund = await claims.find_one({"transaction_id": refund_txn}) or {}
+            if existing_refund.get("status") == "applied":
+                fresh = await plans_col.find_one({"plan_id": plan_id}) or {}
+                return {
+                    "success": True,
+                    "idempotent": True,
+                    "transaction_id": refund_txn,
+                    "balance_remaining": fresh.get("balance_remaining"),
+                    "status": fresh.get("status"),
+                }
+            return _refuse(
+                "payment_in_progress", refund_txn,
+                "This refund is already being recorded. The balance was not changed again.",
+            )
+
+    if not _try_hold(refund_txn):
+        return _refuse(
+            "payment_in_progress", refund_txn,
+            "This refund is already being recorded. The balance was not changed again.",
+        )
+    try:
+        audit_col = get_collection("audit_events")
+
+        async def work(session):
+            claim = await claims.find_one(
+                {"transaction_id": original, "plan_id": plan_id}, **_sess(session),
+            )
+            if not claim or claim.get("status") != "applied":
+                return
+            before = await plans_col.find_one({"plan_id": plan_id}, **_sess(session)) or {}
+            await _restore_balance(plans_col, plan_id, original, amount, now, session)
+            await payments_col.update_one(
+                {"transaction_id": original, "plan_id": plan_id},
+                {"$set": {
+                    "status": "reversed",
+                    "reversed_at": now.isoformat(),
+                    "reversal_transaction_id": refund_txn,
+                }},
+                **_sess(session),
+            )
+            await _mark_installment_reversed(plans_col, plan_id, data, original, now, session)
+            fresh = await plans_col.find_one({"plan_id": plan_id}, **_sess(session)) or {}
+            await _insert_audit_once(audit_col, {
+                "_id": _scoped_audit_id("plan-rev", plan_id, refund_txn),
+                "event_type": _REVERSED_AUDIT,
+                "entity_type": "payment_plan",
+                "entity_id": plan_id,
+                "actor": actor,
+                "agent_name": actor,
+                "timestamp": now,
+                "created_at": now,
+                "booking_number": _booking(before.get("booking_number")),
+                "transaction_id": refund_txn,
+                "original_transaction_id": original,
+                "plan_id": plan_id,
+                "amount": amount,
+                "reason": "plan payment reversed",
+                "confidence": 1.0,
+                "old_state": {
+                    "balance_remaining": before.get("balance_remaining"),
+                    "status": before.get("status"),
+                },
+                "new_state": {
+                    "balance_remaining": fresh.get("balance_remaining"),
+                    "status": fresh.get("status"),
+                },
+            }, session=session)
+            await claims.update_one(
+                {"transaction_id": original, "plan_id": plan_id, "status": "applied"},
+                {"$set": {
+                    "status": "reversed",
+                    "reversed_at": now.isoformat(),
+                    "reversal_transaction_id": refund_txn,
+                }},
+                **_sess(session),
+            )
+            await claims.update_one(
+                {"transaction_id": refund_txn, "plan_id": plan_id},
+                {"$set": {"status": "applied", "applied_at": now.isoformat()}},
+                **_sess(session),
+            )
+
+        try:
+            await _run_apply(client, work)
+        except TransactionsUnavailable:
+            await _fail_claim(claims, plan_id, refund_txn, "transactions_unavailable")
+            return _unavailable()
+        except Exception:
+            logger.warning("[payment_plans] plan refund failed plan_id=%s", plan_id)
+            await _fail_claim(claims, plan_id, refund_txn, "refund_write_error")
+            return JSONResponse({"error": "payment_reverse_failed", "transaction_id": refund_txn}, status_code=500)
+    finally:
+        _release(refund_txn)
+
+    fresh = await plans_col.find_one({"plan_id": plan_id}) or {}
+    return {
+        "success": True,
+        "idempotent": False,
+        "transaction_id": refund_txn,
+        "balance_remaining": fresh.get("balance_remaining"),
+        "balance_remaining_cents": fresh.get("balance_remaining_cents"),
+        "status": fresh.get("status"),
+    }
 
 
 # ── Delinquency Detection ──────────────────────────────────────────────────────

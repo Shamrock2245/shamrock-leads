@@ -74,6 +74,7 @@ logger = logging.getLogger(__name__)
 SEARCH_URL = "https://whosinjail.pinellassheriff.gov/"
 DAYS_BACK = 3  # Relay runs on a launchd/cron cadence; 3 days covers plenty of ground
 MAX_PAGES_PER_DAY = 40
+STATUS_SOURCE_BOOKING_CELL = "published_booking_cell_custody"
 FACILITY = "Pinellas County Jail"
 EGRESS_ENV = "PINELLAS_EGRESS_MODE"
 # Honest User-Agent: names the bot and its operator; no Chrome spoofing.
@@ -536,13 +537,7 @@ class PinellasCountyScraper(BaseScraper):
 
         first, middle, last = self._parse_name(name)
         booking_date, booking_time = self._parse_booking_dt(raw.get("booking_dt") or "")
-        custody_raw = (raw.get("custody") or "").strip().lower()
-        if "released" in custody_raw:
-            status = "Released"
-        elif custody_raw:
-            status = "In Custody"
-        else:
-            status = "In Custody"
+        status, status_source = self.status_fields(raw.get("custody") or "")
 
         sex_raw = (raw.get("sex") or "").strip().upper()
         sex = sex_raw[:1] if sex_raw else ""
@@ -572,7 +567,30 @@ class PinellasCountyScraper(BaseScraper):
             Case_Number=self._clean(raw.get("case_number") or ""),
             Detail_URL=SEARCH_URL,
             LastCheckedMode="INITIAL",
+            extra_data={"status_source": status_source} if status_source else {},
         )
+
+    @staticmethod
+    def status_fields(custody_cell: str):
+        """(Status, status_source) from the row's published booking-cell custody line only.
+
+        2026-10-15: the old code defaulted a blank cell to "In Custody". The
+        booking-date search is not a custody-only view (it lists a date's
+        bookings, released ones included), so a blank cell is "" (unknown).
+        A published "...released..." line gives "Released", a published
+        "in custody" / "in jail" line gives "In Custody", and any other
+        published text is kept verbatim. See
+        docs/recon/FL_PINELLAS_STATUS_2026-10-15.md.
+        """
+        text = " ".join((custody_cell or "").split())
+        if not text:
+            return "", ""
+        low = text.lower()
+        if "released" in low:
+            return "Released", STATUS_SOURCE_BOOKING_CELL
+        if low in ("in custody", "in jail", "incustody"):
+            return "In Custody", STATUS_SOURCE_BOOKING_CELL
+        return text, STATUS_SOURCE_BOOKING_CELL
 
 
     _modal_attempts = 0

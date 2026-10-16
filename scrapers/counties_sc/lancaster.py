@@ -23,6 +23,9 @@ import requests
 from bs4 import BeautifulSoup
 
 from scrapers.base_scraper import BaseScraper
+from scrapers.fl_newworld import _HonestSession, custody_filter_echoed, listing_custody, status_fields
+from scrapers.plain_http import HONEST_USER_AGENT
+from scrapers.plain_http import EgressBlocked, SourceTLSInvalid
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
@@ -32,13 +35,11 @@ ORIGIN = "https://inmate.lancastercountysc.net"
 FACILITY = "Lancaster County Detention Center"
 MAX_PAGES = 20
 MAX_DETAILS = 400
+_BLOCKS = (EgressBlocked, SourceTLSInvalid)
 REQUEST_PAUSE_S = 0.25
 
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": HONEST_USER_AGENT,
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": PORTAL_URL,
@@ -70,10 +71,11 @@ class LancasterScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         start = time.time()
-        session = requests.Session()
+        session = _HonestSession(self.county)
         session.headers.update(HEADERS)
 
         links: List[Tuple[str, str]] = []
+        statuses: Dict[str, Tuple[str, str]] = {}
         seen_hrefs: Set[str] = set()
 
         for page_num in range(1, MAX_PAGES + 1):
@@ -82,6 +84,8 @@ class LancasterScraper(BaseScraper):
                 params["Page"] = str(page_num)
             try:
                 resp = session.get(PORTAL_URL, params=params, timeout=30)
+            except _BLOCKS:
+                raise
             except requests.RequestException as exc:
                 logger.warning("Lancaster listing page %s failed: %s", page_num, exc)
                 break
@@ -92,6 +96,10 @@ class LancasterScraper(BaseScraper):
                 break
 
             page_links = self.parse_listing_links(resp.text, base_url=PORTAL_URL)
+            cells = listing_custody(resp.text, PORTAL_URL)
+            echoed = custody_filter_echoed(resp.text)
+            for _n, u in page_links:
+                statuses.setdefault(u, status_fields(cells.get(u) if cells else None, echoed))
             new_on_page = 0
             for name, url in page_links:
                 if url in seen_hrefs:
@@ -110,12 +118,17 @@ class LancasterScraper(BaseScraper):
         for name, detail_url in links[:MAX_DETAILS]:
             try:
                 resp = session.get(detail_url, timeout=25)
+            except _BLOCKS:
+                raise
             except requests.RequestException as exc:
-                logger.debug("Lancaster detail fetch failed (%s): %s", detail_url, exc)
+                logger.debug("Lancaster detail fetch failed: %s", type(exc).__name__)
                 continue
             if resp.status_code != 200:
                 continue
-            rec = self.parse_detail_to_record(resp.text, fallback_name=name, detail_url=detail_url)
+            rec = self.parse_detail_to_record(
+                resp.text, fallback_name=name, detail_url=detail_url,
+                status=statuses.get(detail_url, ("", "")),
+            )
             if rec:
                 records.append(rec)
             time.sleep(REQUEST_PAUSE_S)
@@ -169,7 +182,8 @@ class LancasterScraper(BaseScraper):
             elif lab == "total bond amount":
                 money = _MONEY_RE.search(val)
                 if money:
-                    info["bond"] = money.group(1).replace(",", "")
+                    amt = float(money.group(1).replace(",", ""))
+                    info["bond"] = f"{amt:.2f}".rstrip("0").rstrip(".") or "0"
             elif lab == "booking origin":
                 info["agency"] = val
             elif lab == "name":
@@ -234,10 +248,10 @@ class LancasterScraper(BaseScraper):
 
         # If Total Bond Amount was missing/zero but a charge cell published $, keep Total
         # Bond as authoritative when present; otherwise sum only explicit $ cells.
-        if "bond" not in info and charge_bond_dollars:
+        if "bond" not in info and charge_bond_dollars and len(charge_bond_dollars) == len(charges):
             try:
                 total = sum(float(x) for x in charge_bond_dollars)
-                info["bond"] = f"{total:.2f}".rstrip("0").rstrip(".") if total else "0"
+                info["bond"] = f"{total:.2f}".rstrip("0").rstrip(".") or "0"
             except ValueError:
                 pass
 
@@ -268,6 +282,7 @@ class LancasterScraper(BaseScraper):
         *,
         fallback_name: str,
         detail_url: str,
+        status: Tuple[str, str] = ("", ""),
     ) -> Optional[ArrestRecord]:
         info = self.parse_detail_html(html)
         booking = (info.get("booking") or "").strip()
@@ -307,8 +322,8 @@ class LancasterScraper(BaseScraper):
         if m:
             booking_date, booking_time = m.group(1), m.group(2)
 
-        bond = info.get("bond", "0") or "0"
-        charges = info.get("charges") or "Unknown"
+        bond = info.get("bond", "")
+        charges = info.get("charges", "")
 
         sex = (info.get("sex") or "")[:1].upper()
         if sex and sex not in "MF":
@@ -331,7 +346,7 @@ class LancasterScraper(BaseScraper):
             Charges=charges,
             Bond_Amount=bond,
             Bond_Type=info.get("bond_type", ""),
-            Status="In Custody",
+            Status=status[0],
             Facility=FACILITY,
             Agency=info.get("agency", ""),
             Race=info.get("race", ""),
@@ -342,5 +357,6 @@ class LancasterScraper(BaseScraper):
             extra_data={
                 "source": "newworld_inmateinquiry",
                 "portal": "SC0290000",
+                **({"status_source": status[1]} if status[1] else {}),
             },
         )

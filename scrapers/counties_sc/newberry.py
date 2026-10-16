@@ -10,6 +10,20 @@ Charges are taken from the PDF charge lines under each inmate. Dollar bond
 amounts are taken only when the PDF prints a ``$`` amount — release labels
 like ``BOND POSTED`` / ``PR BOND`` are not bond dollars and are not invented
 into ``Bond_Amount``.
+
+2026-10-15: honest identity, published-only bond and status. Every request
+goes through scrapers.plain_http (honest User-Agent, certificate verified; no
+verify=False). A 401/403/429, challenge page, dropped handshake or bad
+certificate raises (egress_block: / tls_cert_invalid:), and a missing PDF link
+or an unreadable PDF raises NewberryContractError instead of an empty success.
+Bond_Amount is the explicit ``Bond $N`` line only; with none it is "" (a
+printed $0.00 is kept), never "0". Status: the PDF is "Prisoners/Charges
+Booked In by Date Range" and lists released people ("Released MM/DD/YYYY - ..."),
+so it is NOT custody-only and there is no current-only label or view. A
+published "Released <date>" line gives Status "Released" + Release_Date
+(status_source "published_release_line"); anything else is "". Booking_Date is
+the PDF's section date only (never the release date). See
+docs/recon/SC_NEWBERRY_ROSTER_SCOPE_2026-10-15.md.
 """
 from __future__ import annotations
 
@@ -24,6 +38,9 @@ import requests
 
 from core.models import ArrestRecord
 from scrapers.base_scraper import BaseScraper
+from scrapers.plain_http import HONEST_USER_AGENT, SourceTLSInvalid
+from scrapers.plain_http import request as plain_request
+from scrapers.scraper_resilience import EgressBlocked
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +78,61 @@ _SKIP_CHARGE = re.compile(
 )
 
 
+STATUS_SOURCE_RELEASE = "published_release_line"
+_BLOCKS = (EgressBlocked, SourceTLSInvalid)
+
+
+class NewberryContractError(RuntimeError):
+    """The official page/PDF no longer matches the verified contract."""
+
+
+class _HonestSession(requests.Session):
+    """requests.Session whose every call goes through plain_http (honest UA, verify on, typed blocks)."""
+
+    def __init__(self):
+        super().__init__()
+        self.headers.update({"User-Agent": HONEST_USER_AGENT})
+        self.verify = True
+
+    def request(self, method, url, **kwargs):  # noqa: D401
+        sess = self
+
+        class _Raw:
+            def request(self, m, u, **kw):
+                return requests.Session.request(sess, m, u, **kw)
+
+        return plain_request(_Raw(), method, url, county="Newberry", **kwargs)
+
+
+def published_release(lines) -> str:
+    """Release date from a published "Released MM/DD/YYYY" line, else ""."""
+    for raw in lines:
+        m = _RELEASED.search(raw or "")
+        if m:
+            return m.group(1)
+    return ""
+
+
+def status_fields(release_date: str) -> Tuple[str, str]:
+    """(Status, status_source): published release -> Released; else "" (not custody-only)."""
+    if release_date:
+        return "Released", STATUS_SOURCE_RELEASE
+    return "", ""
+
+
+def _explicit_bond(lines) -> str:
+    """Dollar amount from an explicit ``Bond $N`` line (last wins); else "" (unknown)."""
+    amount = ""
+    for raw in lines:
+        line = (raw or "").strip()
+        if not re.match(r"(?i)^bond\b", line):
+            continue
+        money = _BOND.findall(line)
+        if money:
+            amount = money[-1].replace(",", "")
+    return amount
+
+
 class NewberryScraper(BaseScraper):
     SOURCE_CONTRACT_VALIDATED = True
     SOURCE_CONTRACT_REASON = (
@@ -79,25 +151,15 @@ class NewberryScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         start = time.time()
-        session = requests.Session()
-        session.headers.update(
-            {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-                )
-            }
-        )
+        session = _HonestSession()
 
         pdf_url, content = self._fetch_current_bookings_pdf(session)
         if not content or not pdf_url:
-            logger.warning("Newberry: no current official bookings PDF available")
-            return []
+            raise NewberryContractError("Newberry: no official bookings PDF could be fetched")
 
         text = self._extract_text(content)
         if not text:
-            logger.warning("Newberry: current bookings PDF has no extractable text")
-            return []
+            raise NewberryContractError("Newberry: bookings PDF has no extractable text")
 
         records = self._parse_pdf_text(text, pdf_url)
         logger.info(
@@ -111,8 +173,10 @@ class NewberryScraper(BaseScraper):
         self, session: requests.Session
     ) -> Tuple[Optional[str], Optional[bytes]]:
         try:
-            page = session.get(PORTAL_URL, timeout=35, verify=False)
+            page = session.get(PORTAL_URL, timeout=35)
             page.raise_for_status()
+        except _BLOCKS:
+            raise
         except Exception as exc:
             logger.warning("Newberry inmate-search page unavailable: %s", exc)
             return None, None
@@ -124,9 +188,11 @@ class NewberryScraper(BaseScraper):
 
         for pdf_url in pdf_urls:
             try:
-                response = session.get(pdf_url, timeout=45, verify=False)
+                response = session.get(pdf_url, timeout=45)
                 if response.status_code == 200 and response.content.startswith(b"%PDF"):
                     return pdf_url, response.content
+            except _BLOCKS:
+                raise
             except Exception as exc:
                 logger.debug("Newberry PDF fetch failed: %s", exc)
         return None, None
@@ -207,11 +273,8 @@ class NewberryScraper(BaseScraper):
                 line = raw.strip()
                 if not line or _PAGE_NOISE.search(line):
                     continue
-                released = _RELEASED.search(line)
-                if released:
-                    if not booking_date:
-                        booking_date = released.group(1)
-                    continue
+                if _RELEASED.search(line):
+                    continue  # release line: status below; never used as Booking_Date
                 if _SKIP_CHARGE.match(line):
                     continue
                 if _INMATE_HEADER.search(line):
@@ -225,14 +288,9 @@ class NewberryScraper(BaseScraper):
             # Dollar bonds only from explicit Bond lines — never from charge
             # statute text like "VALUE $2,000 OR LESS", and never from release
             # labels like "BOND POSTED" / "PR BOND".
-            bond_amount = "0"
-            for raw in block_lines:
-                line = raw.strip()
-                if not re.match(r"(?i)^bond\b", line):
-                    continue
-                money = _BOND.findall(line)
-                if money:
-                    bond_amount = money[-1].replace(",", "")
+            bond_amount = _explicit_bond(block_lines)
+            release_date = published_release(block_lines)
+            status, status_source = status_fields(release_date)
 
             full_name = re.sub(r"\s+", " ", match.group("name")).strip().title()
             last_name, _, rest = full_name.partition(",")
@@ -255,11 +313,13 @@ class NewberryScraper(BaseScraper):
                     Age_At_Arrest=match.group("age"),
                     Charges=" | ".join(charges) if charges else "",
                     Bond_Amount=bond_amount,
-                    Status="In Custody",
+                    Status=status,
+                    Release_Date=release_date,
                     Facility=FACILITY,
                     Agency="Newberry County Sheriff",
                     Detail_URL=pdf_url,
                     LastCheckedMode="INITIAL",
+                    extra_data={"status_source": status_source},
                 )
             )
         return records
@@ -298,10 +358,9 @@ class NewberryScraper(BaseScraper):
             full_name = f"{last_name}, {first_name} {middle_name}".strip()
 
             dates = _DATE.findall(context)
-            bonds = _BOND.findall(context)
-            bond_amount = "0"
-            if bonds:
-                bond_amount = bonds[-1].replace(",", "")
+            bond_amount = _explicit_bond(context.splitlines())
+            release_date = published_release(context.splitlines())
+            status, status_source = status_fields(release_date)
 
             # Legacy layout rarely printed charge lines; leave empty rather than
             # inventing "Unknown".
@@ -336,11 +395,13 @@ class NewberryScraper(BaseScraper):
                     Booking_Date=dates[-1] if dates else "",
                     Charges=charges,
                     Bond_Amount=bond_amount,
-                    Status="In Custody",
+                    Status=status,
+                    Release_Date=release_date,
                     Facility=FACILITY,
                     Agency="Newberry County Sheriff",
                     Detail_URL=pdf_url,
                     LastCheckedMode="INITIAL",
+                    extra_data={"status_source": status_source},
                 )
             )
         return records

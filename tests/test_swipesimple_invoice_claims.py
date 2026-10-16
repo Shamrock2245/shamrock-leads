@@ -206,12 +206,13 @@ class Harness:
         return {"payment_link": PAY_LINK, "invoice_id": "inv-claim-1",
                 "amount": float(PREMIUM), "amount_cents": 25000}
 
-    async def persist(self, _bond, *, bond_id, booking_number, payment_link, invoice_id=""):
+    async def persist(self, _bond, *, bond_id, booking_number, payment_link, invoice_id="", amount_cents=None):
         self.bond.update({
             "swipesimple_payment_link": payment_link,
             "swipesimple_invoice_id": invoice_id,
             "swipesimple_invoice_number": booking_number,
             "swipesimple_invoice_bond_id": bond_id,
+            "swipesimple_invoice_amount_cents": amount_cents,
         })
 
     async def send(self, channel, payload):

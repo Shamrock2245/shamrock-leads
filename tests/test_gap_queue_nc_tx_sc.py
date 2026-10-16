@@ -76,7 +76,7 @@ def test_gaston_detail_uses_booking_heading_not_subject_number():
     bk = bookings[0]
     assert bk["booking_number"] == "2026-00001234"
     assert (bk["booking_date"], bk["booking_time"]) == ("9/24/2026", "3:05 PM")
-    assert bk["bond"] == "1500.00" and bk["charges"] == "Larceny" and bk["dockets"] == "26CR000001"
+    assert bk["bond"] == "1500" and bk["charges"] == "Larceny" and bk["dockets"] == "26CR000001"
 
 
 def test_gaston_scrape_skips_released_and_unkeyed_bookings():
@@ -92,7 +92,7 @@ def test_gaston_scrape_skips_released_and_unkeyed_bookings():
             body = body + "<form><input name='BookingFromDate'></form><title>Inmate Search</title>"
         return mock.Mock(text=body, raise_for_status=lambda: None)
 
-    with mock.patch.object(gaston.requests, "Session") as sess_cls:
+    with mock.patch.object(gaston, "_HonestSession") as sess_cls:
         sess = sess_cls.return_value
         sess.headers = {}
         sess.get.side_effect = fake_get
@@ -101,6 +101,8 @@ def test_gaston_scrape_skips_released_and_unkeyed_bookings():
         recs = s.scrape()
     assert [r.Booking_Number for r in recs] == ["2026-00001234"]
     assert recs[0].Person_ID == "123456" and recs[0].State == "NC"
+    assert recs[0].Status == "In Custody"  # listing In Custody = Yes (published column)
+    assert recs[0].extra_data["status_source"] == "published_in_custody_column"
 
 
 def test_gaston_listing_without_any_source_booking_raises_drift():
@@ -110,7 +112,7 @@ def test_gaston_listing_without_any_source_booking_raises_drift():
         body = GASTON_LISTING.replace(">Next<", "><") + "<input name='BookingFromDate'><title>Inmate Search</title>"
         return mock.Mock(text=body, raise_for_status=lambda: None)
 
-    with mock.patch.object(gaston.requests, "Session") as sess_cls:
+    with mock.patch.object(gaston, "_HonestSession") as sess_cls:
         sess_cls.return_value.headers = {}
         sess_cls.return_value.get.side_effect = fake_get
         s = gaston.GastonScraper()
@@ -175,7 +177,8 @@ def test_orange_report_rows_use_source_bk_number():
     first = rows[0]
     assert (first["last"], first["first"], first["middle"]) == ("DOE-SMITH", "John", "Quincy")
     assert first["charges"] == ["Larceny - Misdemeanor", "Resisting Officer"]
-    assert first["bond"] == 3000.0
+    assert first["bond"] == "3000"
+    assert rows[1]["bond"] == ""  # charge prints no amount -> unknown, never 0
     assert (first["booking_date"], first["booking_time"], first["days_in"]) == ("09/10/2026", "16:31", "15")
     assert rows[1]["booking_date"] == "09/25/2026" and rows[1]["days_in"] == ""
     assert rows[2]["booking_date"] == "09/21/2026"  # date glued to previous token
@@ -286,8 +289,8 @@ def test_pitt_listing_only_hydrate_limitation_no_invented_bond():
         "dob": "01/01/1990", "booking": "123456", "gender": "M", "race": "W",
     })
     assert rec.Booking_Number == "123456"
-    assert rec.Charges == "Unknown"
-    assert rec.Bond_Amount == "0"
+    assert rec.Charges == ""  # unknown, never "Unknown"
+    assert rec.Bond_Amount == ""  # unknown, never "0"
     assert rec.extra_data.get("listing_only_for_hydrate") is True
     assert "do not invent" in rec.extra_data["hydrate_limitation"].lower()
     # Booking key remains source digits; never invent bond dollars

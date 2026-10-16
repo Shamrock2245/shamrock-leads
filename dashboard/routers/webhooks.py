@@ -275,8 +275,15 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         )
 
     # -- 2. Payload validation (fail closed on empty or invalid payload) -------
+    # Numbers stay Decimal so a plan payment is exact cents. The HMAC, when
+    # required, already read this same body above.
+    import json as _json
+    from decimal import Decimal
+
+    if "raw_body" not in locals():
+        raw_body = await request.body()
     try:
-        data = await request.json()
+        data = _json.loads(raw_body, parse_float=Decimal) if raw_body else None
     except Exception:
         return JSONResponse({"error": "Invalid or empty JSON body"}, status_code=400)
 
@@ -291,6 +298,16 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
             status_code=400,
         )
 
+    # Installment events post through the plan transaction. A booking mismatch
+    # is 409 with no payment row. A down payment is not an installment: it
+    # falls through to the fail-closed provider recorder below.
+    from dashboard.services.plan_payment_poster import post_gateway_event
+
+    routed = await post_gateway_event(data, actor="swipesimple_webhook")
+    if isinstance(routed, JSONResponse):
+        return routed
+    plan_handled = bool(isinstance(routed, dict) and routed.get("handled"))
+
     # -- 3. Parse an explicit booking. A blank booking is not inferred. -------
     # Staff assign bookings. This handler does not stamp last_payment_*.
     custom_fields = data.get("custom_fields") or {}
@@ -299,6 +316,8 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
     booking_number = str(custom_fields.get("booking_number") or booking_number or "").strip()
 
     amount = data.get("amount", 0)
+    if isinstance(amount, Decimal):
+        amount = float(amount)
     status = str(data.get("status") or "")
     card_last4 = data.get("card_last4", "")
     card_brand = data.get("card_brand", "")
@@ -312,37 +331,51 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         record_provider_payment,
     )
 
-    try:
-        recorded = await record_provider_payment(
-            get_db(),
-            source="swipesimple_webhook",
-            transaction_id=transaction_id,
-            amount=amount,
-            status=status,
-            booking_number=booking_number,
-            extra={
-                "event_type": event_type,
-                "card_last4": card_last4,
-                "card_brand": card_brand,
-                "customer_name": customer_name,
-                "indemnitor_phone": indemnitor_phone,
-                "custom_fields": custom_fields,
-                "raw_payload": data,
-            },
-        )
-    except TransactionsUnavailable as exc:
-        return JSONResponse({"error": exc.error, "message": exc.message}, status_code=503)
-    except PaymentLogError as exc:
-        return JSONResponse(
-            {"error": exc.error, "message": exc.message},
-            status_code=exc.status_code,
-        )
+    # A handled installment already wrote its plan row, balance, and audit.
+    # Anything else is recorded fail-closed. Neither path inserts a second row.
+    if plan_handled:
+        recorded = {
+            "committed": not bool(routed.get("idempotent")),
+            "duplicate": bool(routed.get("idempotent")),
+            "transaction_id": transaction_id,
+            "event_kind": "charge" if status == "approved" else "",
+            "amount": amount,
+        }
+    else:
+        try:
+            recorded = await record_provider_payment(
+                get_db(),
+                source="swipesimple_webhook",
+                transaction_id=transaction_id,
+                amount=amount,
+                status=status,
+                booking_number=booking_number,
+                extra={
+                    "event_type": event_type,
+                    "card_last4": card_last4,
+                    "card_brand": card_brand,
+                    "customer_name": customer_name,
+                    "indemnitor_phone": indemnitor_phone,
+                    "custom_fields": custom_fields,
+                    "raw_payload": data,
+                },
+            )
+        except TransactionsUnavailable as exc:
+            return JSONResponse({"error": exc.error, "message": exc.message}, status_code=503)
+        except PaymentLogError as exc:
+            return JSONResponse(
+                {"error": exc.error, "message": exc.message},
+                status_code=exc.status_code,
+            )
 
     # The staff note runs only after this webhook commits the charge.
     # The customer receipt is once per transaction, even when the poller
     # recorded the charge first. A refund or failure does not send either.
+    # An installment already applied by the plan poster uses the same receipt
+    # text, and a replay of that installment does not send it again.
     fresh_charge = (
-        recorded.get("committed")
+        not plan_handled
+        and recorded.get("committed")
         and recorded.get("event_kind") == "charge"
         and status == "approved"
     )
@@ -350,50 +383,79 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         recorded.get("event_kind") == "charge"
         and status == "approved"
         and (recorded.get("committed") or recorded.get("duplicate"))
+        and not (plan_handled and recorded.get("duplicate"))
     )
     if recorded_charge and indemnitor_phone:
-        from dashboard.services.payment_log_claims import send_customer_receipt_once
+        if plan_handled:
+            from dashboard.services.bb_client import send_message_universal
 
-        receipt_msg = (
-            f"✅ Payment received! Thank you, {customer_name}.\n"
-            f"Amount: ${float(recorded.get('amount') or 0):.2f} ({card_brand} ending {card_last4})\n"
-            f"Transaction: {recorded.get('transaction_id')}\n"
-            f"Shamrock Bail Bonds — (239) 332-2245"
-        )
-        await send_customer_receipt_once(
-            get_db(),
-            str(recorded.get("transaction_id") or ""),
-            indemnitor_phone,
-            receipt_msg,
-        )
+            try:
+                receipt_msg = (
+                    f"✅ Payment received! Thank you, {customer_name}.\n"
+                    f"Amount: ${float(amount or 0):.2f} ({card_brand} ending {card_last4})\n"
+                    f"Transaction: {transaction_id}\n"
+                    f"Shamrock Bail Bonds — (239) 332-2245"
+                )
+                await send_message_universal(indemnitor_phone, receipt_msg)
+            except Exception:
+                logger.warning("[payment_webhook] BB receipt failed")
+        else:
+            from dashboard.services.payment_log_claims import send_customer_receipt_once
 
-    # Payment received → #intake only after a committed charge. Refunds and
-    # failures alert from the recorder. Internal booking keys are not printed.
-    if fresh_charge:
+            receipt_msg = (
+                f"✅ Payment received! Thank you, {customer_name}.\n"
+                f"Amount: ${float(recorded.get('amount') or 0):.2f} ({card_brand} ending {card_last4})\n"
+                f"Transaction: {recorded.get('transaction_id')}\n"
+                f"Shamrock Bail Bonds — (239) 332-2245"
+            )
+            await send_customer_receipt_once(
+                get_db(),
+                str(recorded.get("transaction_id") or ""),
+                indemnitor_phone,
+                receipt_msg,
+            )
+
+    # Payment received → #intake only after a committed charge, or after a
+    # plan installment that was not an idempotent replay. Refunds and failures
+    # alert from the recorder. Internal booking keys are not printed.
+    if fresh_charge or (plan_handled and status == "approved" and not recorded.get("duplicate")):
         slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL") or os.getenv("SLACK_WEBHOOK_LEADS", "")
         if slack_webhook_url:
             try:
+                shown = recorded.get("amount") if not plan_handled else amount
                 async with httpx.AsyncClient(timeout=10) as client:
                     await client.post(slack_webhook_url, json=redact_internal_keys({
                         "text": (
-                            f":moneybag: *Payment Received* — ${float(recorded.get('amount') or 0):.2f} "
+                            f":moneybag: *Payment Received* — ${float(shown or 0):.2f} "
                             f"from {customer_name} ({card_brand} ****{card_last4}) | "
                             f"Booking: {booking_number or 'N/A'}"
                         )
                     }))
-            except Exception as exc:
-                logger.warning("[payment_webhook] Slack alert failed: %s", exc)
+            except Exception:
+                logger.warning("[payment_webhook] Slack alert failed")
 
     try:
-        await publish_event("payment_received", {
-            "transaction_id": recorded.get("transaction_id"),
+        event_payload = {
+            "transaction_id": recorded.get("transaction_id") or transaction_id,
             "booking_number": booking_number,
-            "amount": recorded.get("amount"),
+            "amount": recorded.get("amount") if not plan_handled else amount,
             "status": status,
             "event_kind": recorded.get("event_kind"),
-        })
+        }
+        if plan_handled:
+            event_payload["customer_name"] = customer_name
+            event_payload["plan_id"] = routed.get("plan_id")
+        await publish_event("payment_received", event_payload)
     except Exception:
         logger.warning("[payment_webhook] payment event publish failed")
+
+    if plan_handled:
+        return JSONResponse(status_code=200, content={
+            "success": True,
+            "plan_id": routed.get("plan_id"),
+            "idempotent": bool(routed.get("idempotent")),
+            "balance_remaining": routed.get("balance_remaining"),
+        })
 
     return JSONResponse(status_code=200, content={
         "success": True,
@@ -401,7 +463,6 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         "transaction_id": recorded.get("transaction_id"),
         "event_kind": recorded.get("event_kind"),
     })
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /webhooks/wix-intake

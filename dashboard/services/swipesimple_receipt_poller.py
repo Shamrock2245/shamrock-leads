@@ -74,6 +74,11 @@ def parse_swipesimple_receipt(subject: str, body: str) -> Dict[str, Any]:
     if bm:
         booking = bm.group(1).strip()
 
+    reference = None
+    ref_match = re.search(r"\b([A-Za-z0-9][A-Za-z0-9_\-]{0,48}-I\d{1,2})\b", text)
+    if ref_match:
+        reference = ref_match.group(1).strip()
+
     txn = None
     tm = _TX_RE.search(text)
     if tm:
@@ -83,6 +88,7 @@ def parse_swipesimple_receipt(subject: str, body: str) -> Dict[str, Any]:
         "amount": amount,
         "customer_email": customer_email,
         "booking_number": booking,
+        "reference_id": reference,
         "transaction_id": txn,
         "subject": subject or "",
     }
@@ -155,12 +161,20 @@ class SwipeSimpleReceiptPoller:
                     gmail_message_id=mid,
                     raw_subject=email_data.get("subject") or "",
                 )
-                # Mark read only after the payment transaction commits, or when
-                # this receipt was already committed on an earlier run.
-                if applied.get("success") and (applied.get("committed") or applied.get("duplicate")):
-                    if applied.get("committed"):
+                # Mark read after a committed charge, a confirmed duplicate, a
+                # posted installment, or a terminal plan refusal. A recorder
+                # error leaves the Gmail message unread.
+                posted = applied.get("success") and (
+                    applied.get("committed")
+                    or applied.get("duplicate")
+                    or applied.get("plan_applied")
+                )
+                if posted or applied.get("terminal"):
+                    if applied.get("committed") or applied.get("plan_applied"):
                         result["processed"] += 1
                         result["payments"].append(applied)
+                    elif applied.get("terminal"):
+                        result["skipped_other"] += 1
                     if mark_read and mid:
                         reader.mark_as_read(mid)
                 else:
@@ -199,11 +213,63 @@ class SwipeSimpleReceiptPoller:
         booking = parsed.get("booking_number") or ""
         txn = parsed.get("transaction_id") or gmail_message_id
 
+        # Idempotency is the plan claim when this receipt is an installment.
+        # A booking mismatch returns terminal and does not insert a payment.
+        # Anything else is recorded by the fail-closed provider writer.
+        from fastapi.responses import JSONResponse
+
         from dashboard.services.payment_log_claims import (
             PaymentLogError,
             TransactionsUnavailable,
             record_provider_payment,
         )
+        from dashboard.services.plan_payment_poster import post_gateway_event
+
+        routed = await post_gateway_event(
+            {
+                "event_type": "payment.completed",
+                "status": "approved",
+                "transaction_id": txn,
+                "amount": amount,
+                "booking_number": booking,
+                "reference_id": parsed.get("reference_id") or "",
+                "custom_fields": {
+                    "booking_number": booking,
+                    "reference_id": parsed.get("reference_id") or "",
+                    "plan_id": parsed.get("plan_id") or "",
+                    "installment_n": parsed.get("installment_n"),
+                },
+            },
+            actor="swipesimple_gmail_poll",
+        )
+        if isinstance(routed, JSONResponse):
+            code = "booking_mismatch"
+            try:
+                body = routed.body
+                if isinstance(body, bytes):
+                    import json as _json
+                    parsed_body = _json.loads(body.decode() or "{}")
+                    code = str(parsed_body.get("error") or code)
+            except Exception:
+                pass
+            logger.info("[SwipeSimplePoll] plan event refused code=%s", code)
+            return {
+                "success": False,
+                "terminal": True,
+                "error": code,
+                "transaction_id": txn,
+            }
+        if isinstance(routed, dict) and routed.get("handled"):
+            return {
+                "success": True,
+                "plan_applied": True,
+                "idempotent": bool(routed.get("idempotent")),
+                "committed": not bool(routed.get("idempotent")),
+                "duplicate": bool(routed.get("idempotent")),
+                "transaction_id": txn,
+                "booking_number": booking,
+                "amount": amount,
+            }
 
         try:
             recorded = await record_provider_payment(
