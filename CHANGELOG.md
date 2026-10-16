@@ -12,6 +12,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `tests/test_fl_citrus_bond_custody_defaults.py` (added to the `ci.yml` list).
+## 2026-10-15 — Mecklenburg NC honest identity; typed errors; published-only status, bond and charges
+- plain_http (`make_session` + `request`) with the honest UA, TLS verified; Chrome UA removed.
+- Swallowed errors removed: the landing and roster pages raise typed errors (EgressBlocked/SourceTLSInvalid, HTTPError, ParseDriftError on non-JSON) instead of returning []. Per-booking detail failures keep "" fields and log the exception type only; blocks always raise.
+- All three hard-coded "In Custody" values removed: Status is "" (the `activeOnly=true` roster scope is not proven custody-only and no per-person custody field is published).
+- Bond is the ActualBailAmount sum only when every charge publishes a numeric amount; otherwise "" (was "0"). A published 0 is kept. Unknown charges are "" (was "Unknown").
+
 ## 2026-10-15 — SC Lancaster/York honest identity; published-only status, bond and charges
 - Lancaster: plain_http via the shared New World `_HonestSession` (honest UA, TLS verified); Chrome UA removed; EgressBlocked/SourceTLSInvalid propagate. Hard-coded "In Custody" removed: status only when the listing echoes the source's InCustody checkbox as checked (`status_source=published_in_custody_filter`) or a published InCustody column; else "". Unknown bond/charges are "" (no "0"/"Unknown"); published $0 kept; per-charge bonds summed only when every charge publishes one. Bond format "1500". Detail logs carry no URL.
 - York: plain_http with the honest UA; 403/challenge/reset raise typed blocks. Status "In Custody" from the published "In Jail" release cell (`published_release_cell_in_jail`), "Released" from a published release date (`published_release_date`), else "" (was "Unknown"). Blank Total Bond is "" (was "0"); published 0 kept.
