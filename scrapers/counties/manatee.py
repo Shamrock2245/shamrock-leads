@@ -22,8 +22,9 @@ Source contract (columns mapped by header, never by position):
 * The roster publishes no bond, statute or degree, and detail pages are
   CF-blocked, so ``Bond_Amount`` and ``Bond_Type`` stay ``""`` (unknown; the
   scorer gives no bond points and hydrate leaves the amount blank). Never "0".
-* ``Released`` is a required column. Blank / In Custody / No / N/A means in
-  custody; Yes / Released or a date means released. Anything else raises
+* ``Released`` is a required column. The published label "In Custody" gives
+  In Custody; Yes / Released or a date gives Released (status_source recorded);
+  Blank / No / N/A / "-" publish no status, so Status is "" (2026-10-16). Anything else raises
   ParseDriftError, so header or value drift fails closed instead of marking
   everyone In Custody.
 * Paging fails closed (ParseDriftError, nothing written) on a missing table,
@@ -82,7 +83,10 @@ REQUIRED_COLUMNS = ("booking", "last", "first", "charge", "arrest_date", "releas
 
 _BOOKING_RE = re.compile(r"^(?=.*\d)[A-Z0-9][A-Z0-9-]{3,19}$", re.I)
 _DETAIL_ID_RE = re.compile(r"/bookings/([A-Za-z0-9-]+)/?(?:[?#].*)?$")
-_IN_CUSTODY_VALUES = {"", "in custody", "no", "n/a", "na", "-"}
+_IN_CUSTODY_VALUES = {"in custody"}  # the source's own label
+_BLANK_RELEASED_VALUES = {"", "no", "n/a", "na", "-"}  # no published status: ""
+STATUS_SOURCE_LABEL = "published_released_cell_label"
+STATUS_SOURCE_RELEASE_DATE = "published_release_date"
 _RELEASED_VALUES = {"yes", "released", "y"}
 # Only unambiguous "published total" phrasings (a bare "100 entries" can be a
 # page-size selector, so it is deliberately not matched).
@@ -281,6 +285,8 @@ def parse_released(value: str) -> Tuple[str, str]:
     low = v.lower()
     if low in _IN_CUSTODY_VALUES:
         return "In Custody", ""
+    if low in _BLANK_RELEASED_VALUES:
+        return "", ""
     if low in _RELEASED_VALUES:
         return "Released", ""
     try:
@@ -379,7 +385,14 @@ def build_records(rows: List[Dict[str, Any]]) -> List[ArrestRecord]:
     records: List[ArrestRecord] = []
     for key in order:
         g = grouped[key]
-        released = all(s == "Released" for s in g["statuses"])
+        released = bool(g["statuses"]) and all(s == "Released" for s in g["statuses"])
+        if released:
+            status = "Released"
+            status_source = STATUS_SOURCE_RELEASE_DATE if g["release_dates"] else STATUS_SOURCE_LABEL
+        elif "In Custody" in g["statuses"]:
+            status, status_source = "In Custody", STATUS_SOURCE_LABEL
+        else:
+            status, status_source = "", ""
         full_name = f"{g['last']}, {g['first']}" + (f" {g['middle']}" if g["middle"] else "")
         charges = g["charges"]
         records.append(ArrestRecord(
@@ -401,7 +414,7 @@ def build_records(rows: List[Dict[str, Any]]) -> List[ArrestRecord]:
             Bond_Amount="",
             Bond_Type="",
             Facility="Manatee County Jail",
-            Status="Released" if released else "In Custody",
+            Status=status,
             Release_Date=max(g["release_dates"]) if released and g["release_dates"] else "",
             Mugshot_URL=g["mugshot_url"],
             Detail_URL=g["detail_url"] or f"{BASE_URL}/bookings/{key}",
@@ -410,6 +423,7 @@ def build_records(rows: List[Dict[str, Any]]) -> List[ArrestRecord]:
                 "booking_date_origin": "roster Arrest Date",
                 "bond_published": False,
                 "charge_details": [{"charge": c, "description": c} for c in charges],
+                **({"status_source": status_source} if status_source else {}),
             },
         ))
     return records
