@@ -9,7 +9,7 @@ ignorant>=1.2
 # Email registration checks (120+ sites incl. Instagram) — does not alert target
 holehe>=1.61
 trio>=0.22.0
-termcolor>=2.0.0
+termcolor>=3.3.0
 beautifulsoup4>=4.12.0
 # Instagram username enrichment (email/phone) — requires INSTAGRAM_SESSION_ID cookie
 toutatis>=1.31
