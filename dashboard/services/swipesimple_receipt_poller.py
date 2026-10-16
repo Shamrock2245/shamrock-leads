@@ -164,10 +164,18 @@ class SwipeSimpleReceiptPoller:
                 # Mark read after a committed charge, a confirmed duplicate, a
                 # posted installment, or a terminal plan refusal. A recorder
                 # error leaves the Gmail message unread.
+                # A charge replay that already has a reversal is needs_review.
+                # Mark the receipt read and do not treat it as a new payment.
+                review_hold = (
+                    applied.get("success")
+                    and applied.get("needs_review")
+                    and not applied.get("committed")
+                )
                 posted = applied.get("success") and (
                     applied.get("committed")
                     or applied.get("duplicate")
                     or applied.get("plan_applied")
+                    or review_hold
                 )
                 if posted or applied.get("terminal"):
                     if applied.get("committed") or applied.get("plan_applied"):
@@ -302,6 +310,7 @@ class SwipeSimpleReceiptPoller:
             "success": True,
             "committed": bool(recorded.get("committed")),
             "duplicate": bool(recorded.get("duplicate")),
+            "needs_review": bool(recorded.get("needs_review")),
             "amount": recorded.get("amount"),
             "booking_number": recorded.get("booking_number") or "",
             "transaction_id": recorded.get("transaction_id"),
@@ -344,6 +353,8 @@ async def _maybe_send_customer_receipt(db, recorded: Dict[str, Any], *, phone: s
     if not phone:
         return
     if recorded.get("event_kind") != "charge":
+        return
+    if recorded.get("needs_review") and not recorded.get("committed"):
         return
     if not (recorded.get("committed") or recorded.get("duplicate")):
         return

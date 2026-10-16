@@ -89,6 +89,14 @@ class AlreadyRecorded(Exception):
     """This event kind is already stored. The transaction aborts; the caller re-reads."""
 
 
+class ReversalReplay(Exception):
+    """A charge replay whose transaction already has a refund or failure.
+
+    The transaction aborts. The caller returns ``needs_review`` and does not
+    send another staff alert.
+    """
+
+
 class RetryableTxnError(Exception):
     """Signals a transient transaction error to a test session shim.
 
@@ -557,34 +565,6 @@ async def _flag_plan(db, plan_id: str, flag: dict, session) -> Optional[dict]:
     }
 
 
-async def stamp_unique_bond_payment(
-    db, *, booking: str, amount, txn_key: str, status: str, source: str, session,
-) -> Optional[list]:
-    """Stamp ``last_payment_*`` when the booking is exactly one logical bond.
-
-    A ``bond_cases`` document and an ``active_bonds`` document are one case
-    only when both have a BondCase id and the ids match, and both are stamped.
-    A blank booking, a missing BondCase id, two documents in one collection,
-    or two different BondCase ids are not stamped. Returns one audit dict per
-    stamped document, or None when nothing was written. The caller records
-    those old and new values on its audit in the same transaction.
-    """
-    booking = str(booking or "").strip()
-    bonds = await _matching_bonds(db, booking, session)
-    if _charge_block_reason(booking, bonds, []):
-        return None
-    payment_update = {
-        "last_payment_amount": amount,
-        "last_payment_at": datetime.now(timezone.utc).isoformat(),
-        "last_payment_status": status or "approved",
-        "last_transaction_id": txn_key,
-        "last_payment_source": source,
-    }
-    return await _stamp_bonds(
-        db, booking, _logical_bond_groups(bonds)[0], payment_update, session,
-    )
-
-
 async def _stamp_bonds(db, booking: str, group: list, payment_update: dict, session) -> list:
     """Stamp every document in one logical case. Returns one audit per document."""
     audits = []
@@ -740,6 +720,12 @@ async def _apply(
         return None, {"stamped": True, "needs_review": False}
     _raise_if_conflict(same_kind, cents=cents, status=status, booking=booking)
     if same_kind:
+        # A replay is not a clean duplicate when this transaction already has
+        # a refund or failure. The lock is held, so the sibling read is the
+        # same one a new charge would use. Nothing is written and no alert
+        # is sent.
+        if kind == "charge" and has_reversal_sibling(await _read_rows(db, txn_key, session)):
+            raise ReversalReplay()
         raise AlreadyRecorded()
 
     siblings = await _read_rows(db, txn_key, session)
@@ -1113,6 +1099,19 @@ async def record_provider_payment(
 
     try:
         await _run_apply(client, work)
+    except ReversalReplay:
+        return {
+            "ok": True,
+            "duplicate": False,
+            "committed": False,
+            "transaction_id": txn_key,
+            "amount": amount_value,
+            "booking_number": booking,
+            "status": provider_status,
+            "event_kind": kind,
+            "stamped": False,
+            "needs_review": True,
+        }
     except AlreadyRecorded:
         return await _duplicate_or_conflict(
             db, txn_key=txn_key, cents=cents, status=provider_status,

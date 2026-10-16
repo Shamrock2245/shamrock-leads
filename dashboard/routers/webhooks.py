@@ -309,8 +309,8 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
     plan_handled = bool(isinstance(routed, dict) and routed.get("handled"))
 
     # -- 3. Parse an explicit booking. A blank booking is not inferred. -------
-    # Staff assign bookings. An installment stamp is written inside the plan
-    # transaction. This handler does not stamp last_payment_* itself.
+    # Staff assign bookings. An installment updates the plan only. This
+    # handler does not stamp last_payment_* for that installment.
     custom_fields = data.get("custom_fields") or {}
     if not isinstance(custom_fields, dict):
         custom_fields = {}
@@ -380,11 +380,20 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         and recorded.get("event_kind") == "charge"
         and status == "approved"
     )
+    # A charge replay whose transaction already has a refund or failure is
+    # needs_review. It is not a clean duplicate, so it does not send a receipt
+    # or publish payment_received again.
+    review_hold = (
+        not plan_handled
+        and recorded.get("needs_review")
+        and not recorded.get("committed")
+    )
     recorded_charge = (
         recorded.get("event_kind") == "charge"
         and status == "approved"
         and (recorded.get("committed") or recorded.get("duplicate"))
         and not (plan_handled and recorded.get("duplicate"))
+        and not review_hold
     )
     if recorded_charge and indemnitor_phone:
         if plan_handled:
@@ -435,20 +444,21 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
             except Exception:
                 logger.warning("[payment_webhook] Slack alert failed")
 
-    try:
-        event_payload = {
-            "transaction_id": recorded.get("transaction_id") or transaction_id,
-            "booking_number": booking_number,
-            "amount": recorded.get("amount") if not plan_handled else amount,
-            "status": status,
-            "event_kind": recorded.get("event_kind"),
-        }
-        if plan_handled:
-            event_payload["customer_name"] = customer_name
-            event_payload["plan_id"] = routed.get("plan_id")
-        await publish_event("payment_received", event_payload)
-    except Exception:
-        logger.warning("[payment_webhook] payment event publish failed")
+    if not review_hold:
+        try:
+            event_payload = {
+                "transaction_id": recorded.get("transaction_id") or transaction_id,
+                "booking_number": booking_number,
+                "amount": recorded.get("amount") if not plan_handled else amount,
+                "status": status,
+                "event_kind": recorded.get("event_kind"),
+            }
+            if plan_handled:
+                event_payload["customer_name"] = customer_name
+                event_payload["plan_id"] = routed.get("plan_id")
+            await publish_event("payment_received", event_payload)
+        except Exception:
+            logger.warning("[payment_webhook] payment event publish failed")
 
     if plan_handled:
         return JSONResponse(status_code=200, content={
@@ -461,6 +471,7 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
     return JSONResponse(status_code=200, content={
         "success": True,
         "duplicate": bool(recorded.get("duplicate")),
+        "needs_review": bool(recorded.get("needs_review")),
         "transaction_id": recorded.get("transaction_id"),
         "event_kind": recorded.get("event_kind"),
     })

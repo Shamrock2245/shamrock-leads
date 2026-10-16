@@ -447,6 +447,38 @@ def test_charge_after_reversal_checks_ownership_and_does_not_stamp(db, slack_ale
         assert bond.get("last_transaction_id") is None
 
 
+def test_duplicate_charge_with_reversal_sibling_goes_to_needs_review(db, slack_alerts):
+    """A retried charge is not a clean duplicate when a refund or failure shares the txn."""
+    db["bond_cases"].docs.append(_bond())
+    first = _run(_record(db, kind="charge"))
+    assert first["committed"] is True and first["needs_review"] is False
+    assert first["duplicate"] is False
+    assert slack_alerts == []
+    stamped = _stamp(db["bond_cases"].docs[0])
+
+    _run(_record(db, kind="refund"))
+    assert len(slack_alerts) == 1
+    retry = _run(_record(db, kind="charge"))
+    assert retry["needs_review"] is True
+    assert retry["committed"] is False
+    assert retry["duplicate"] is False
+    assert len(_rows(db, "charge")) == 1
+    assert len(_rows(db, "refund")) == 1
+    assert _stamp(db["bond_cases"].docs[0]) == stamped
+    assert len(slack_alerts) == 1
+
+    _run(_record(db, kind="charge", txn="TX-FAIL-SIB"))
+    _run(_record(db, kind="failure", txn="TX-FAIL-SIB"))
+    notes = len(slack_alerts)
+    rows = len(db["payments"].docs)
+    again = _run(_record(db, kind="charge", txn="TX-FAIL-SIB"))
+    assert again["needs_review"] is True
+    assert again["committed"] is False
+    assert again["duplicate"] is False
+    assert len(db["payments"].docs) == rows
+    assert len(slack_alerts) == notes
+
+
 def test_pay_write_conflict_retry_sees_reversal_and_does_not_change_balance(plan_db, monkeypatch):
     """(d) /pay re-reads siblings after a payment_txn_locks write conflict and does not apply."""
     app = _pay_app(plan_db, monkeypatch)

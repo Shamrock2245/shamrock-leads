@@ -623,9 +623,6 @@ def _is_paid(bond: Dict[str, Any]) -> bool:
     if bond.get("premium_paid") is True or bond.get("payment_received") is True:
         return True
     status = str(bond.get("payment_status") or bond.get("last_payment_status") or "").strip().lower()
-    # A partial installment stamp is not a paid premium.
-    if status == "installment_applied":
-        return False
     return status in {"paid", "collected", "complete", "completed", "approved", "received"}
 
 
