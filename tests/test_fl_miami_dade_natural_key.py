@@ -347,7 +347,7 @@ def test_arcgis_failure_messages_never_echo_the_response(monkeypatch):
     class _S:
         headers = {}
 
-        def get(self, *a, **k):
+        def request(self, *a, **k):
             raise err
 
     with pytest.raises(miami_dade.MiamiDadeContractError) as exc:
@@ -357,6 +357,9 @@ def test_arcgis_failure_messages_never_echo_the_response(monkeypatch):
     assert exc.value.__cause__ is None and exc.value.__suppress_context__
 
     class _R:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+
         def raise_for_status(self):
             pass
 
@@ -366,7 +369,7 @@ def test_arcgis_failure_messages_never_echo_the_response(monkeypatch):
     class _S2:
         headers = {}
 
-        def get(self, *a, **k):
+        def request(self, *a, **k):
             return _R()
 
     with pytest.raises(miami_dade.MiamiDadeContractError) as exc:

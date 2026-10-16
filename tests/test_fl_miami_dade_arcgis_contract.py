@@ -29,6 +29,8 @@ def _attrs(oid, **over):
 class _Resp:
     def __init__(self, data, status=200):
         self._data, self.status_code = data, status
+        self.headers = {"content-type": "application/json"}
+        self.text = ""
 
     def raise_for_status(self):
         if self.status_code != 200:
@@ -45,6 +47,9 @@ def _install(monkeypatch, count, pages, calls=None):
     class _S:
         def __init__(self):
             self.headers = {}
+
+        def request(self, method, url, params=None, timeout=None, **_kw):
+            return self.get(url, params=params, timeout=timeout)
 
         def get(self, url, params=None, timeout=None):
             assert url == miami_dade.QUERY_ENDPOINT
