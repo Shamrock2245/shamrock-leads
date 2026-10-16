@@ -175,6 +175,7 @@ jobs:
             tests/test_premium_confirmation.py \
             tests/test_installment_invoices.py \
             tests/test_auth_no_pin_fail_closed.py \
+            tests/test_agent_analytics_payment_agent.py tests/test_payment_plan_create_down_payment_claim.py \
             tests/test_pinellas_relay_only.py \
             tests/test_pinellas_modal_wait.py \
             tests/test_relay_egress_auto_disable.py \

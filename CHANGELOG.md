@@ -3,6 +3,85 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-16 (down payment refuses a review hold or a reversal sibling)
+
+### Fixed
+- **Plan create will not link a down payment that needs review or was reversed.** Inside the payment lock, a `payments` row with `needs_review`, or a charge whose transaction has a refund or failure sibling (`row_kind` in `REVERSAL_KINDS`), returns 409 `payment_needs_review`. No plan, claim, or link is kept.
+
+### Tests
+- `tests/test_payment_plan_create_down_payment_claim.py`: `test_down_payment_refuses_needs_review_or_reversed_row`.
+
+## [Unreleased] — 2026-10-16 (failure siblings drop a transaction; down payments accept settled events)
+
+### Fixed
+- **`summarize_settled_payments` drops a transaction that has a failure or refund sibling.** The check uses the recorder's `row_kind` and `REVERSAL_KINDS`, so a later `payment.failed` or declined row excludes that transaction's settled charge. Refunds still do too.
+- **Plan create accepts every recorder-settled down-payment event.** A logged `payment.captured`, `payment.succeeded`, or `payment.settled` charge (and the other `SETTLED_CHARGE_STATUSES` event names) can be linked. A refund or failure event is still `logged_payment_not_settled`.
+
+### Tests
+- `tests/test_agent_analytics_payment_agent.py`: `test_kpi_excludes_txn_with_failure_or_refund_sibling`.
+- `tests/test_payment_plan_create_down_payment_claim.py`: `test_down_payment_accepts_all_recorder_settled_events`.
+
+## [Unreleased] — 2026-10-16 (payment KPIs use the recorder's settled charge statuses)
+
+### Fixed
+- **`summarize_settled_payments` counts the charge statuses the provider recorder writes.** The set is `payment_log_claims.SETTLED_CHARGE_STATUSES`: `approved`, `paid`, `completed`, `complete`, `success`, `succeeded`, `captured`, `settled`. A webhook event the recorder classifies as a charge counts with that status, including `payment.captured`. Refunds, failures, and rows stored with `needs_review` stay out.
+
+### Tests
+- `tests/test_agent_analytics_payment_agent.py`: `test_kpi_settled_statuses_match_recorder`. `test_conflicting_amounts_for_one_transaction_are_excluded` still passes.
+
+## [Unreleased] — 2026-10-16 (plan create shares the payment lock; rollback audit matches the claim)
+
+### Fixed
+- **`POST /api/payments/plans` with `down_payment_transaction_id` takes #187's `payment_txn_locks` lock.** Inside the transaction the first write is `acquire_txn_lock` on `(tenant_id, txn_key)`, the same writer the webhook and the receipt poller use. A concurrent webhook, poller, and plan-create for one transaction id leave one `payments` row. No index is added on `payments`.
+- **The compensating plan-create audit is written after the claim is finalized.** `_undo_plan_create` deletes the claim or stores it `failed`, then writes `payment_plan_create_rolled_back` with that `claim_status`. A delete that raises leaves the claim `failed` and the audit says `failed`.
+
+### Tests
+- `tests/test_payment_log_claims.py`: `test_concurrent_webhook_and_poller_inserts_leave_one_row`.
+- `tests/test_payment_plan_create_down_payment_claim.py`: `test_rollback_audit_matches_final_claim_state`.
+- `tests/test_agent_analytics_payment_agent.py`: `test_conflicting_amounts_for_one_transaction_are_excluded` still counts a transaction once, and leaves it out when the settled amounts disagree.
+
+## [Unreleased] — 2026-10-15 (payment KPIs drop a transaction whose amounts disagree)
+
+### Fixed
+- **`summarize_settled_payments` leaves out a transaction whose settled rows disagree on the amount.** A plan-linked row and a SwipeSimple poller or webhook row that share a transaction id but not the cents are no longer reported as the plan amount. The transaction is omitted (`amount_conflicts`). Rows that agree on the cents still count once, preferring the plan-linked row, then a `completed` row.
+
+### Tests
+- `tests/test_agent_analytics_payment_agent.py`: `test_conflicting_amounts_for_one_transaction_are_excluded`.
+
+## [Unreleased] — 2026-10-14 (plan create audits a transaction down payment)
+
+### Fixed
+- **`POST /api/payments/plans` with `down_payment_transaction_id` audits an inserted down payment.** When no poller or webhook row exists yet, the route inserts the completed payment inside `ClientSession.with_transaction` and writes one `audit_events` row (`payment_plan_down_payment_recorded`) with the signed-in actor, the plan id, the payment id, the transaction id, the amount, and `old_state` / `new_state`. The `_id` follows the #185 rule: `plan-create:{plan_id}:{transaction_id}`, or `plan-create:{tenant_id}:{plan_id}:{transaction_id}` when `SAAS_MULTI_TENANT` is on. If that audit cannot be saved, the transaction aborts and the claim is released.
+- **A failed plan-create finalization writes a compensating audit.** `_undo_plan_create` appends `payment_plan_create_rolled_back` (`plan-create-rollback:...`, same tenant rule) after the link or insert audit was attempted and the claim could not be marked applied. The event records the actor, the record ids, the amount, and the transition from the attempted completed payment to `undone`, `retained`, or `incomplete`. If that audit cannot be saved, the claim stays `failed` and the route returns 500 `payment_needs_review`.
+- **The same transaction and lock as a provider charge.** The probe runs first. A standalone server or a failed probe returns 503 `transactions_unavailable` and writes nothing (no claim, no plan, no payment, no lock, no audit). Inside the transaction the first write is the `payment_txn_locks` upsert (`tenant_id` + `txn_key`, `$inc` version), the same lock #187 uses, and the driver retries a transient transaction error. No index is added on `payments`. Cash down payments with no transaction id are unchanged.
+
+### Tests
+- `tests/test_payment_plan_create_down_payment_claim.py`: `test_inserted_down_payment_audit_is_tenant_scoped` and `test_plan_create_undo_writes_compensating_audit`. The same file covers 503 with no writes and a transient-error retry. No SwipeSimple, Gmail, or Slack calls.
+
+## [Unreleased] — 2026-10-12 (payment agent KPIs: settled and deduplicated)
+
+### Fixed
+- **`GET /api/analytics/agent-performance`, "the_payment_agent" `payments_recorded` and `total_collected`.** These used to count and sum every `payments` row with a recent `created_at`, whatever its status. That included declined and refunded webhook rows, and one card payment counted twice when both the poller and the webhook logged it. Plan `/pay` rows were missed entirely because they have `timestamp`, not `created_at`. Now:
+  - Rows in the window by `timestamp` or by `created_at` both count, so plan `/pay`, AR and poller/webhook rows are all included. The window is closed on both ends (`start` through `end` of the requested period). A future `paid_at` that AR stores on `payments.timestamp`, or a future `created_at`, is not in the current period (Codex P2 @c0cbce7).
+  - Only settled statuses count: approved, paid, completed or success, case-insensitive (so `"Completed"` from `/api/payments` counts). This is the same rule as the plan-payment link in #181. A webhook row also needs `event_type` `payment.completed`.
+  - Each transaction id counts once. The preferred row is the one linked to a plan, then a `completed` row, and only when every settled row for that id has the same cents. Settled rows that disagree on the amount are left out (`amount_conflicts`) instead of reporting the plan amount (Codex P2). Rows with no transaction id count on their own.
+
+  - **Refunds and chargebacks (Codex P2):** rows are grouped by transaction id first. If any row for a transaction is a refund, void, chargeback, reversal or dispute (by status or webhook `event_type`), the whole transaction is left out, including a plan-linked row. A partial refund also drops the transaction from these KPIs (conservative).
+  - **Card down payments (Codex P2):** `POST /api/payments/plans` now saves `down_payment_transaction_id` as the down-payment row's `transaction_id`, so it dedupes against the poller or webhook row for the same charge. Older down-payment rows have no transaction id. Such a row is suppressed when a settled poller or webhook row has the same booking, the exact same amount and a time within 3 days; each card row can absorb only one down payment.
+  - **Only card down payments are matched (Codex P2 @e975130):** a down payment with no transaction id is matched only when its `method` is a card (card, credit, debit or swipe, case-insensitive). Cash, check, other or missing methods are always counted, so a separate cash payment is never dropped. `method` is now loaded by the KPI query.
+  - **Refunded card down payments (Codex P2 @e975130):** if such a card down payment matches a provider charge that was refunded, voided or charged back, the down payment is left out too (`down_payments_reversed`), instead of still counting.
+
+  The logic is in `agent_analytics.summarize_settled_payments`.
+
+- **`POST /api/payments/plans` with `down_payment_transaction_id`: one application per transaction id.** The down payment's transaction id is now claimed in `payment_plan_payment_claims` (unique index `uniq_tenant_txn`, the same claim as plan `/pay` in #179) before the plan is created. Two plans created at the same time with the same id get exactly one winner; the rest get 409 `transaction_id_used_on_other_plan`. It is also 409 when the id is already claimed, or already on a payment row that belongs to a plan. If an unlinked poller or webhook row has the id, the plan links that row instead of writing a second one, under the #181 rules: it must be settled (and a webhook row must be `payment.completed`), have the same amount and the same booking, and be the only such row (409 `logged_payment_not_settled`, `transaction_id_amount_mismatch`, `logged_payment_booking_mismatch` or `logged_payment_ambiguous`). The link is a conditional update; if the row changed in between, the request returns 409 `logged_payment_changed`. If anything fails after the claim (plan insert, payment row, link, marking the claim applied), the plan, the payment row or link, and the claim are all undone and the route returns 500 `payment_record_failed`, so nothing is left half-written and the id can be used again. That full undo is skipped when the linked payment was changed by a newer write and can no longer be detached (see below). 503 `payment_dedupe_unavailable` if the claim index can't be ensured. Plans without a transaction id behave as before.
+  - Linking writes an `audit_events` record (`payment_plan_logged_payment_linked`, with `reason`, `confidence: 1.0`, `match_method: exact_transaction_id`); if it can't be saved, everything is rolled back. `actor` and `agent_name` come from the signed session (`agent_name`, then `email`, then `role`). A trusted machine key with no session is recorded as `machine_key`. A `created_by` value in the request body is not copied into the audit (Codex P1 @c0cbce7).
+  - After the link or insert, the route checks for any other `payments` row with the same id (a poller or webhook row that arrived meanwhile). If one appeared, everything is rolled back and the route returns 409 `logged_payment_ambiguous`.
+  - **Codex @bbee713:** the conditional link also pins the validated `booking_number`, so a booking reassigned in between returns 409 `logged_payment_changed` instead of being overwritten (P1). A linked row with no `timestamp` gets the provider's `created_at`, not the link time (P2). Following the #181 rule, an unmatched logged row (blank booking) returns 409 `logged_payment_unowned` and is never attached.
+  - Undoing a link only matches while every field this request wrote is unchanged, so a newer write (for example `reconciled`) is kept. In that case the claim is kept as `failed` (`plan_create_rollback_incomplete`) so the id stays blocked for review. The plan is not deleted: it is marked `needs_review` with the same reason, so the payment's `plan_id` still points at a plan. The route returns 500 `payment_needs_review` instead of saying nothing was recorded. Another plan for that booking is refused with 409 `payment_needs_review` until this one is reviewed (Codex P1 @dfb48de).
+  - The same review response is used when the rollback itself does not finish (Codex P2 @60fdc19). If deleting the inserted payment or the plan throws, or `delete_one` matches nothing while that row is still there, any plan that remains is marked `needs_review`, the claim stays `failed`, and the route returns 500 `payment_needs_review` (`transaction_id` and `plan_id`). It does not say nothing was recorded. A delete of a payment row that was never inserted still counts as cleared, so a failed insert can roll the plan back.
+
+### Tests
+- New `tests/test_agent_analytics_payment_agent.py` (added to `ci.yml`): poller+webhook and poller+plan duplicates, which row is preferred, declined/refunded/voided/pending/blank statuses, webhook failed/refunded events, plan `/pay` rows, rows with no transaction id, and the KPIs from the endpoint itself, refund/void/chargeback cancellation, down-payment matching (matched, not matched, one-to-one, transaction id, refunded card row), and the analytics side of down payments. Future `paid_at` / `created_at` rows are outside the 30-day KPIs. New `tests/test_payment_plan_create_down_payment_claim.py` (added to `ci.yml`): claim and row on a new id, concurrent creates with the same id (one winner, also when linking the same poller row), 409 when claimed or on a plan row, linking settled poller and webhook rows, refusing unsettled/refunded/wrong-amount/wrong-booking/ambiguous rows, rollback when the plan insert, payment write, link or claim update fails, and 503 when dedupe is unavailable. The link audit names the signed-in agent, or `machine_key` for a trusted machine call, and ignores `created_by` on the body. When a newer write blocks unlinking, the plan is kept as `needs_review` and a second plan for that booking is refused. An incomplete undo (delete throws, or delete matches nothing while the row remains) also leaves the plan `needs_review` and keeps the claim.
 ## [Unreleased] — 2026-10-14 (fail-closed payment reversal recording)
 
 ### Added
