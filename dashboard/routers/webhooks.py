@@ -237,22 +237,14 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         custom_fields:    { booking_number, county, indemnitor_name, indemnitor_phone }
         created_at:       ISO timestamp
 
-    On success:
-      1. Validate HMAC signature (SWIPESIMPLE_WEBHOOK_SECRET set); unset → 503
-         unless ENV is exactly ``development``
-      2. Parse booking_number from custom_fields or query params
-      3. Update bond case payment status in active_bonds / prospective_bonds
-      4. Log to payments collection
-      5. Send BlueBubbles receipt to indemnitor
-      6. Fire Slack alert
-      7. Publish SSE event
-      8. Log audit event
+    On success the charge, refund, or failure is recorded in one MongoDB
+    transaction. A bond ``last_payment_*`` stamp happens only for a charge
+    whose booking was explicitly provided, matches exactly one bond, and has
+    no refund or failure sibling. A blank booking is not stamped. A refund
+    or failure records its own row and does not change ``last_payment_*``.
     """
     import httpx
     from dashboard.routers.events import publish_event
-    from dashboard.services.bb_client import send_message_universal
-
-    now = datetime.now(timezone.utc)
 
     # -- 1. HMAC signature validation / Auth check ---------------------------
     # Production = ENV or ENVIRONMENT (VPS uses ENV=production per .env.example).
@@ -307,7 +299,8 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         )
 
     # Installment events post through the plan transaction. A booking mismatch
-    # is 409 with no payment row. Down-payment events stay on the legacy log.
+    # is 409 with no payment row. A down payment is not an installment: it
+    # falls through to the fail-closed provider recorder below.
     from dashboard.services.plan_payment_poster import post_gateway_event
 
     routed = await post_gateway_event(data, actor="swipesimple_webhook")
@@ -315,118 +308,173 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         return routed
     plan_handled = bool(isinstance(routed, dict) and routed.get("handled"))
 
-    # -- 3. Parse booking number -----------------------------------------------
-    custom_fields = data.get("custom_fields", {})
-    booking_number = (
-        custom_fields.get("booking_number")
-        or booking_number
-    )
+    # -- 3. Parse an explicit booking. A blank booking is not inferred. -------
+    # Staff assign bookings. An installment updates the plan only. This
+    # handler does not stamp last_payment_* for that installment.
+    custom_fields = data.get("custom_fields") or {}
+    if not isinstance(custom_fields, dict):
+        custom_fields = {}
+    booking_number = str(custom_fields.get("booking_number") or booking_number or "").strip()
 
-    # -- 3. Update bond case ---------------------------------------------------
     amount = data.get("amount", 0)
     if isinstance(amount, Decimal):
         amount = float(amount)
-    status = data.get("status", "")
-    transaction_id = data.get("transaction_id", "")
+    status = str(data.get("status") or "")
     card_last4 = data.get("card_last4", "")
     card_brand = data.get("card_brand", "")
     customer_name = data.get("customer_name", "")
     indemnitor_phone = custom_fields.get("indemnitor_phone", "")
 
-    payment_update = {
-        "last_payment_amount": amount,
-        "last_payment_at": now.isoformat(),
-        "last_payment_status": status,
-        "last_transaction_id": transaction_id,
-    }
+    from dashboard.extensions import get_db
+    from dashboard.services.payment_log_claims import (
+        PaymentLogError,
+        TransactionsUnavailable,
+        record_provider_payment,
+    )
 
-    if booking_number:
-        bond_cases = get_collection("bond_cases")
-        await bond_cases.update_one(
-            {"booking_number": booking_number},
-            {"$set": payment_update},
-        )
-        # Also try active_bonds for legacy records
-        active_bonds = get_collection("active_bonds")
-        await active_bonds.update_one(
-            {"booking_number": booking_number},
-            {"$set": payment_update},
-        )
-
-    # -- 4. Log to payments collection ----------------------------------------
-    # A handled plan payment already inserted or linked its own row.
-    if not plan_handled:
-        payments = get_collection("payments")
-        await payments.insert_one({
+    # A handled installment already wrote its plan row, balance, and audit.
+    # Anything else is recorded fail-closed. Neither path inserts a second row.
+    if plan_handled:
+        recorded = {
+            "committed": not bool(routed.get("idempotent")),
+            "duplicate": bool(routed.get("idempotent")),
             "transaction_id": transaction_id,
-            "booking_number": booking_number,
+            "event_kind": "charge" if status == "approved" else "",
             "amount": amount,
-            "status": status,
-            "card_last4": card_last4,
-            "card_brand": card_brand,
-            "customer_name": customer_name,
-            "indemnitor_phone": indemnitor_phone,
-            "custom_fields": custom_fields,
-            "raw_payload": data,
-            "created_at": now.isoformat(),
-        })
-
-    # -- 5. Send BlueBubbles receipt ------------------------------------------
-    if indemnitor_phone and status == "approved":
+        }
+    else:
         try:
+            recorded = await record_provider_payment(
+                get_db(),
+                source="swipesimple_webhook",
+                transaction_id=transaction_id,
+                amount=amount,
+                status=status,
+                booking_number=booking_number,
+                extra={
+                    "event_type": event_type,
+                    "card_last4": card_last4,
+                    "card_brand": card_brand,
+                    "customer_name": customer_name,
+                    "indemnitor_phone": indemnitor_phone,
+                    "custom_fields": custom_fields,
+                    "raw_payload": data,
+                },
+            )
+        except TransactionsUnavailable as exc:
+            return JSONResponse({"error": exc.error, "message": exc.message}, status_code=503)
+        except PaymentLogError as exc:
+            return JSONResponse(
+                {"error": exc.error, "message": exc.message},
+                status_code=exc.status_code,
+            )
+
+    # The staff note runs only after this webhook commits the charge.
+    # The customer receipt is once per transaction, even when the poller
+    # recorded the charge first. A refund or failure does not send either.
+    # An installment already applied by the plan poster uses the same receipt
+    # text, and a replay of that installment does not send it again.
+    fresh_charge = (
+        not plan_handled
+        and recorded.get("committed")
+        and recorded.get("event_kind") == "charge"
+        and status == "approved"
+    )
+    # A charge replay whose transaction already has a refund or failure is
+    # needs_review. It is not a clean duplicate, so it does not send a receipt
+    # or publish payment_received again.
+    review_hold = (
+        not plan_handled
+        and recorded.get("needs_review")
+        and not recorded.get("committed")
+    )
+    recorded_charge = (
+        recorded.get("event_kind") == "charge"
+        and status == "approved"
+        and (recorded.get("committed") or recorded.get("duplicate"))
+        and not (plan_handled and recorded.get("duplicate"))
+        and not review_hold
+    )
+    if recorded_charge and indemnitor_phone:
+        if plan_handled:
+            from dashboard.services.bb_client import send_message_universal
+
+            try:
+                receipt_msg = (
+                    f"✅ Payment received! Thank you, {customer_name}.\n"
+                    f"Amount: ${float(amount or 0):.2f} ({card_brand} ending {card_last4})\n"
+                    f"Transaction: {transaction_id}\n"
+                    f"Shamrock Bail Bonds — (239) 332-2245"
+                )
+                await send_message_universal(indemnitor_phone, receipt_msg)
+            except Exception:
+                logger.warning("[payment_webhook] BB receipt failed")
+        else:
+            from dashboard.services.payment_log_claims import send_customer_receipt_once
+
             receipt_msg = (
                 f"✅ Payment received! Thank you, {customer_name}.\n"
-                f"Amount: ${amount:.2f} ({card_brand} ending {card_last4})\n"
-                f"Transaction: {transaction_id}\n"
+                f"Amount: ${float(recorded.get('amount') or 0):.2f} ({card_brand} ending {card_last4})\n"
+                f"Transaction: {recorded.get('transaction_id')}\n"
                 f"Shamrock Bail Bonds — (239) 332-2245"
             )
-            await send_message_universal(indemnitor_phone, receipt_msg)
-        except Exception as exc:
-            logger.warning("[payment_webhook] BB receipt failed: %s", exc)
+            await send_customer_receipt_once(
+                get_db(),
+                str(recorded.get("transaction_id") or ""),
+                indemnitor_phone,
+                receipt_msg,
+            )
 
-    # -- 6. Slack alert -------------------------------------------------------
-    # Payment received → #intake (bond operations / intake channel)
-    slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL") or os.getenv("SLACK_WEBHOOK_LEADS", "")
-    if slack_webhook_url and status == "approved":
+    # Payment received → #intake only after a committed charge, or after a
+    # plan installment that was not an idempotent replay. Refunds and failures
+    # alert from the recorder. Internal booking keys are not printed.
+    if fresh_charge or (plan_handled and status == "approved" and not recorded.get("duplicate")):
+        slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL") or os.getenv("SLACK_WEBHOOK_LEADS", "")
+        if slack_webhook_url:
+            try:
+                shown = recorded.get("amount") if not plan_handled else amount
+                async with httpx.AsyncClient(timeout=10) as client:
+                    await client.post(slack_webhook_url, json=redact_internal_keys({
+                        "text": (
+                            f":moneybag: *Payment Received* — ${float(shown or 0):.2f} "
+                            f"from {customer_name} ({card_brand} ****{card_last4}) | "
+                            f"Booking: {booking_number or 'N/A'}"
+                        )
+                    }))
+            except Exception:
+                logger.warning("[payment_webhook] Slack alert failed")
+
+    if not review_hold:
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                await client.post(slack_webhook_url, json=redact_internal_keys({
-                    "text": (
-                        f":moneybag: *Payment Received* — ${amount:.2f} from {customer_name} "
-                        f"({card_brand} ****{card_last4}) | Booking: {booking_number or 'N/A'}"
-                    )
-                }))
-        except Exception as exc:
-            logger.warning("[payment_webhook] Slack alert failed: %s", exc)
+            event_payload = {
+                "transaction_id": recorded.get("transaction_id") or transaction_id,
+                "booking_number": booking_number,
+                "amount": recorded.get("amount") if not plan_handled else amount,
+                "status": status,
+                "event_kind": recorded.get("event_kind"),
+            }
+            if plan_handled:
+                event_payload["customer_name"] = customer_name
+                event_payload["plan_id"] = routed.get("plan_id")
+            await publish_event("payment_received", event_payload)
+        except Exception:
+            logger.warning("[payment_webhook] payment event publish failed")
 
-    # -- 7. Publish SSE event -------------------------------------------------
-    await publish_event('payment_received', {
-        "transaction_id": transaction_id,
-        "booking_number": booking_number,
-        "amount": amount,
-        "status": status,
-        "customer_name": customer_name,
-    })
-
-    # -- 8. Log audit event ---------------------------------------------------
-    # Plan payments already wrote payment_plan_payment_applied (or the
-    # decline / reversal audit). A second row would hide that one-event count.
-    if not plan_handled:
-        audit_events = get_collection("audit_events")
-        await audit_events.insert_one({
-            "source": "swipesimple_webhook",
-            "event_type": f"payment.{status}",
-            "payload": data,
-            "timestamp": now.isoformat(),
+    if plan_handled:
+        return JSONResponse(status_code=200, content={
+            "success": True,
+            "plan_id": routed.get("plan_id"),
+            "idempotent": bool(routed.get("idempotent")),
+            "balance_remaining": routed.get("balance_remaining"),
         })
 
-    body = {"success": True}
-    if plan_handled and isinstance(routed, dict):
-        body["plan_id"] = routed.get("plan_id")
-        body["idempotent"] = bool(routed.get("idempotent"))
-        body["balance_remaining"] = routed.get("balance_remaining")
-    return JSONResponse(status_code=200, content=body)
-
+    return JSONResponse(status_code=200, content={
+        "success": True,
+        "duplicate": bool(recorded.get("duplicate")),
+        "needs_review": bool(recorded.get("needs_review")),
+        "transaction_id": recorded.get("transaction_id"),
+        "event_kind": recorded.get("event_kind"),
+    })
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /webhooks/wix-intake

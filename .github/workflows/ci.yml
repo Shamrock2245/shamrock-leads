@@ -121,13 +121,7 @@ jobs:
             tests/test_southern_sw_honest.py \
             tests/test_fl_newworld_honest.py \
             tests/test_fl_okaloosa_honest.py \
-            tests/test_fl_pinellas_status_only.py tests/test_sc_lancaster_york_honest.py tests/test_nc_mecklenburg_honest.py tests/test_fl_miami_dade_honest.py tests/test_fl_hillsborough_marion_stripped.py \
-            tests/test_fl_pinellas_status_only.py tests/test_sc_lancaster_york_honest.py tests/test_nc_mecklenburg_honest.py tests/test_fl_miami_dade_honest.py tests/test_fl_manatee_released_status.py \
-            tests/test_fl_pinellas_status_only.py tests/test_sc_lancaster_york_honest.py tests/test_nc_mecklenburg_honest.py tests/test_fl_miami_dade_honest.py tests/test_fl_manatee_clerk_status_blank.py \
-            tests/test_fl_pinellas_status_only.py tests/test_sc_lancaster_york_honest.py tests/test_nc_mecklenburg_honest.py tests/test_fl_miami_dade_honest.py tests/test_fl_pasco_status_source.py \
-            tests/test_fl_pinellas_status_only.py tests/test_sc_lancaster_york_honest.py tests/test_nc_mecklenburg_honest.py tests/test_fl_miami_dade_honest.py tests/test_fl_brevard_honest_ua.py \
-            tests/test_fl_pinellas_status_only.py tests/test_sc_lancaster_york_honest.py tests/test_nc_mecklenburg_honest.py tests/test_fl_collier_bond_published_only.py \
-            tests/test_fl_pinellas_status_only.py tests/test_sc_lancaster_york_honest.py tests/test_nc_mecklenburg_honest.py tests/test_fl_miami_dade_honest.py \
+            tests/test_fl_pinellas_status_only.py tests/test_sc_lancaster_york_honest.py tests/test_nc_mecklenburg_honest.py tests/test_fl_miami_dade_honest.py tests/test_fl_collier_bond_published_only.py tests/test_fl_pasco_status_source.py tests/test_fl_brevard_honest_ua.py tests/test_fl_manatee_clerk_status_blank.py tests/test_fl_manatee_released_status.py tests/test_fl_hillsborough_marion_stripped.py \
             tests/test_fl_desoto_bond_custody_defaults.py \
             tests/test_fl_smartweb_plain_https.py \
             tests/test_lee_outreach_unknown_status.py \
@@ -177,6 +171,7 @@ jobs:
             tests/test_payment_webhook.py \
             tests/test_payment_plan_pay_dedupe.py \
             tests/test_payment_plan_link_core.py \
+            tests/test_payment_log_claims.py \
             tests/test_premium_confirmation.py \
             tests/test_installment_invoices.py \
             tests/test_auth_no_pin_fail_closed.py \
