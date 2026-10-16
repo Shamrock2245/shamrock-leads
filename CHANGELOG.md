@@ -3,6 +3,10 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 2026-10-16 — Pasco FL status provenance; no PII in logs
+- Status is tied to the source's custody-only view (JMC `/inCustody` route, `custody/GetInCustody` endpoint, distinct from `/pastArrests`) and recorded as `status_source=published_in_custody_view`; no longer an unexplained constant.
+- Removed a debug log that printed the full name; charge/roster failure logs carry the exception type only. Bond rules unchanged (published 0 kept, unknown "").
+
 ## 2026-10-16 — Brevard FL honest identity
 - Requests go through plain_http with the honest UA and TLS verified; Chrome UA removed. 401/403/429/challenge/reset raise EgressBlocked (detail fetches no longer swallow blocks). Detail logs carry the exception type only (no URL). Status/bond/booking rules unchanged.
 
