@@ -3,6 +3,9 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## 2026-10-16 — Manatee FL status only from a published Released label or date
+- A blank, "No", "N/A" or "-" Released cell now gives Status "" (it was "In Custody"). The published label "In Custody" gives In Custody; "Yes"/"Released" or a release date gives Released. status_source is recorded (`published_released_cell_label` / `published_release_date`). Unrecognised values still raise ParseDriftError.
+
 ## 2026-10-16 — Manatee Clerk FL status "" instead of "Unknown"
 - Court filings publish no custody field, so Status is "" (was "Unknown"); no status_source.
 
