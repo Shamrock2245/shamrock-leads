@@ -8,6 +8,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 - **Palm Beach (FL) no longer drives a Chrome browser or sends a Chrome User-Agent.** `palm_beach.py` reads the PBSO blotter with `scrapers.plain_http` (honest UA, certificate verified). It submits the page's own date-search form, parses cards with `parse_pbso_html`, and follows the page's own pagination links. The hCaptcha wait loop is gone: a challenge page (including hCaptcha) or 401/403/429 raises `egress_block:`, a dropped handshake raises `egress_block: ... connection_reset:`, a certificate failure raises `tls_cert_invalid:`, and a missing search form raises `PalmBeachSourceChanged`. `_fetch_single_booking` uses the same honest session, and a block now raises instead of reading as "not found". The one honest probe from the agent box (2026-10-15) got **connection_reset**. Tests: `tests/test_fl_palmbeach_plain_https.py`.
 - **Palm Beach records never default status to "In Custody".** `_row_to_arrest_record` uses `row.get("status") or ""`, so an unknown status is `""` and a published one (e.g. `Released` from a card release date via `pbso_parse`) is kept. The blotter isn't custody-only (#233).
+## 2026-10-16 — Manatee FL status only from a published Released label or date
+- A blank, "No", "N/A" or "-" Released cell now gives Status "" (it was "In Custody"). The published label "In Custody" gives In Custody; "Yes"/"Released" or a release date gives Released. status_source is recorded (`published_released_cell_label` / `published_release_date`). Unrecognised values still raise ParseDriftError.
+
+## 2026-10-16 — Manatee Clerk FL status "" instead of "Unknown"
+- Court filings publish no custody field, so Status is "" (was "Unknown"); no status_source.
+
+## 2026-10-16 — Pasco FL status provenance; no PII in logs
+- Status is tied to the source's custody-only view (JMC `/inCustody` route, `custody/GetInCustody` endpoint, distinct from `/pastArrests`) and recorded as `status_source=published_in_custody_view`; no longer an unexplained constant.
+- Removed a debug log that printed the full name; charge/roster failure logs carry the exception type only. Bond rules unchanged (published 0 kept, unknown "").
+
+## 2026-10-16 — Brevard FL honest identity
+- Requests go through plain_http with the honest UA and TLS verified; Chrome UA removed. 401/403/429/challenge/reset raise EgressBlocked (detail fetches no longer swallow blocks). Detail logs carry the exception type only (no URL). Status/bond/booking rules unchanged.
+
 ## 2026-10-16 — Collier FL bond from the published bond span only
 - Bond_Amount comes only from this person's own lblBondAmount/lblBondSummary `$` figure; never from charge text; "" when none. A published $0 is now kept as "0" (it was dropped to ""). Format "1500" (was "1500.0").
 - Record-parse warnings log the exception type only. Status stays "" (no hard-coded In Custody).
