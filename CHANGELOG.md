@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-16 (failure siblings drop a transaction; down payments accept settled events)
+
+### Fixed
+- **`summarize_settled_payments` drops a transaction that has a failure or refund sibling.** The check uses the recorder's `row_kind` and `REVERSAL_KINDS`, so a later `payment.failed` or declined row excludes that transaction's settled charge. Refunds still do too.
+- **Plan create accepts every recorder-settled down-payment event.** A logged `payment.captured`, `payment.succeeded`, or `payment.settled` charge (and the other `SETTLED_CHARGE_STATUSES` event names) can be linked. A refund or failure event is still `logged_payment_not_settled`.
+
+### Tests
+- `tests/test_agent_analytics_payment_agent.py`: `test_kpi_excludes_txn_with_failure_or_refund_sibling`.
+- `tests/test_payment_plan_create_down_payment_claim.py`: `test_down_payment_accepts_all_recorder_settled_events`.
+
 ## [Unreleased] — 2026-10-16 (payment KPIs use the recorder's settled charge statuses)
 
 ### Fixed

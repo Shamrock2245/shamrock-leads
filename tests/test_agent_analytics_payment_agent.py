@@ -158,9 +158,32 @@ def test_rows_without_txn_count_individually_and_bad_amounts_are_zero():
     assert out["count"] == 4 and out["total"] == 20.0
 
 
-def test_declined_duplicate_does_not_displace_settled_row():
-    out = S([poller("T1", status="declined", amount=999.0), poller("T1", amount=100.0)])
-    assert out["count"] == 1 and out["total"] == 100.0
+def test_kpi_excludes_txn_with_failure_or_refund_sibling():
+    """A failure or refund sibling drops that transaction's settled charge.
+
+    The sibling is classified with the recorder's ``row_kind`` /
+    ``REVERSAL_KINDS``, so failed and declined count as well as refunds.
+    """
+    from dashboard.services.payment_log_claims import REVERSAL_KINDS, row_kind
+
+    siblings = [
+        webhook("FAIL", status="failed", event="payment.failed", amount=40.0),
+        webhook("DECL", status="declined", event="payment.declined", amount=40.0),
+        webhook("REF", status="refunded", event="payment.refunded", amount=40.0),
+        webhook("LATE", status="approved", event="payment.failed", amount=40.0),
+        webhook("KIND", status="approved", event="payment.completed", amount=40.0, event_kind="failure"),
+    ]
+    rows = [poller("KEEP", amount=15.0)]
+    for sibling in siblings:
+        assert row_kind(sibling) in REVERSAL_KINDS
+        txn = sibling["transaction_id"]
+        rows.append(poller(txn, amount=40.0))
+        rows.append(sibling)
+    out = S(rows)
+    assert out["count"] == 1 and out["total"] == 15.0
+    assert out["reversed_skipped"] == len(siblings)
+
+
 
 
 # ── Endpoint wiring ───────────────────────────────────────────────────────────
@@ -271,9 +294,9 @@ def test_refund_cancels_even_plan_linked_row():
     assert out["count"] == 0 and out["total"] == 0
 
 
-def test_declined_row_alone_does_not_cancel_settled_row():
+def test_declined_sibling_excludes_settled_charge():
     out = S([poller("T1", status="declined"), poller("T1", amount=100.0, _id="ok")])
-    assert out["count"] == 1 and out["total"] == 100.0
+    assert out["count"] == 0 and out["total"] == 0.0 and out["reversed_skipped"] == 1
 
 
 def _down(amount=200.0, booking="BK-1", when=RECENT, txn=None, **kw):

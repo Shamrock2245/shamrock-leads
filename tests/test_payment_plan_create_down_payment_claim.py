@@ -302,6 +302,54 @@ def test_links_settled_poller_row_instead_of_duplicating(rig):
     assert _claims(db)[0]["status"] == "applied"
 
 
+def test_down_payment_accepts_all_recorder_settled_events(rig):
+    """Every recorder settled charge event can be the down payment.
+
+    ``payment.captured``, ``payment.succeeded``, and ``payment.settled`` link.
+    A refund or failure event is still ``logged_payment_not_settled``.
+    """
+    from dashboard.services.payment_log_claims import (
+        SETTLED_CHARGE_EVENTS,
+        SETTLED_CHARGE_STATUSES,
+    )
+
+    db, app = rig
+    assert SETTLED_CHARGE_EVENTS == frozenset(
+        f"payment.{status}" for status in SETTLED_CHARGE_STATUSES
+    )
+    for status in sorted(SETTLED_CHARGE_STATUSES):
+        event = f"payment.{status}"
+        txn = f"OK-{status}"
+        booking = f"BK-{status}"
+        db["payments"].docs.append(_poller(
+            txn=txn, amount=200.0, status=status, booking_number=booking,
+            raw_payload={"event_type": event},
+        ))
+        (response,) = _post(app, [_body(txn=txn, booking=booking)])
+        assert response.status_code == 201, (status, response.text)
+        linked = [row for row in db["payments"].docs if row.get("transaction_id") == txn]
+        assert len(linked) == 1 and linked[0].get("plan_id")
+
+    refused = (
+        ("payment.failed", "failed"),
+        ("payment.declined", "declined"),
+        ("payment.refunded", "refunded"),
+        ("payment.failed", "approved"),
+        ("payment.refunded", "approved"),
+        ("payment.voided", "voided"),
+        ("payment.reversed", "reversed"),
+    )
+    for event, status in refused:
+        txn = f"NO-{status}-{event.split('.')[-1]}"
+        db["payments"].docs.append(_poller(
+            txn=txn, status=status, raw_payload={"event_type": event},
+        ))
+        (response,) = _post(app, [_body(txn=txn)])
+        assert response.status_code == 409, (event, status, response.text)
+        assert response.json()["error"] == "logged_payment_not_settled"
+        assert not any(row.get("plan_id") for row in db["payments"].docs if row.get("transaction_id") == txn)
+
+
 def test_links_settled_webhook_row(rig):
     db, app = rig
     db["payments"].docs.append(_poller(status="completed", source="swipesimple_webhook",

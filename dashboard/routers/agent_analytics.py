@@ -18,7 +18,11 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
 from dashboard.extensions import get_db
-from dashboard.services.payment_log_claims import SETTLED_CHARGE_STATUSES, row_kind
+from dashboard.services.payment_log_claims import (
+    REVERSAL_KINDS,
+    SETTLED_CHARGE_STATUSES,
+    row_kind,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +49,10 @@ def _period_range(days: int = 30):
 # ``timestamp`` or ``created_at`` is inside the report window (``start``
 # through ``end``, inclusive), so a future ``paid_at`` on ``timestamp`` is
 # outside the current period.
-#  * Rows are grouped by transaction id FIRST. If any row for a transaction
-#    is a refund / void / chargeback / reversal (status or webhook event),
-#    the whole transaction is excluded (conservative: a partial refund also
+#  * Rows are grouped by transaction id FIRST. If any row is a recorder
+#    reversal (``REVERSAL_KINDS`` via ``row_kind``: refund or failure,
+#    including failed and declined) or a void / chargeback / dispute, the
+#    whole transaction is excluded (conservative: a partial refund also
 #    drops it from these KPIs).
 #  * A transaction id counts once, preferring the plan-linked row, then a
 #    ``completed`` row.
@@ -78,6 +83,15 @@ def _status(row: dict) -> str:
 
 
 def _is_reversal(row: dict) -> bool:
+    """A refund or a failure sibling drops the whole transaction.
+
+    ``row_kind`` covers the recorder's ``REVERSAL_KINDS`` (refund and
+    failure, including failed and declined). Void, chargeback, and dispute
+    markers still drop the transaction when the recorder stores them as a
+    charge-shaped status.
+    """
+    if row_kind(row) in REVERSAL_KINDS:
+        return True
     text = f"{_status(row)} {_event(row)}"
     return any(marker in text for marker in _REVERSAL_MARKERS)
 

@@ -61,6 +61,11 @@ SETTLED_CHARGE_STATUSES = frozenset({
     "approved", "paid", "completed", "complete", "success", "succeeded",
     "captured", "settled",
 })
+# Webhook event names that match those charge statuses (payment.captured,
+# payment.succeeded, payment.settled, and the rest). Not refunds or failures.
+SETTLED_CHARGE_EVENTS = frozenset(
+    f"payment.{status}" for status in SETTLED_CHARGE_STATUSES
+)
 _SETTLED = SETTLED_CHARGE_STATUSES
 _DECLINED = frozenset({"declined", "failed", "failure", "denied", "voided", "error"})
 _REFUNDED = frozenset({"refunded", "refund", "reversed"})

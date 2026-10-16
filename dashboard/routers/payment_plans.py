@@ -277,7 +277,6 @@ async def _payment_claims_collection():
     return coll
 
 
-_SETTLED_STATUSES = {"approved", "paid", "completed", "success"}
 _UNLINKED = {"$or": [{"plan_id": {"$exists": False}}, {"plan_id": None}, {"plan_id": ""}]}
 
 
@@ -298,10 +297,27 @@ def _needs_review_response(txn: str, plan_id: str, message: str) -> JSONResponse
 
 
 def _row_settled(row: dict) -> bool:
-    if str(row.get("status") or "").strip().lower() not in _SETTLED_STATUSES:
+    """A logged row can be this down payment when the recorder calls it a charge.
+
+    Status must be ``SETTLED_CHARGE_STATUSES``. A present event must be the
+    matching settled name (``payment.captured``, ``payment.succeeded``,
+    ``payment.settled``, and the rest of that set). Refund and failure
+    events are not.
+    """
+    from dashboard.services.payment_log_claims import (
+        REVERSAL_KINDS,
+        SETTLED_CHARGE_EVENTS,
+        SETTLED_CHARGE_STATUSES,
+        row_kind,
+    )
+
+    status = str(row.get("status") or "").strip().lower()
+    if status not in SETTLED_CHARGE_STATUSES:
         return False
-    raw = row.get("raw_payload")
-    if isinstance(raw, dict) and raw.get("event_type") not in (None, "payment.completed"):
+    if row_kind(row) in REVERSAL_KINDS:
+        return False
+    event = _event_type(row)
+    if event and event not in SETTLED_CHARGE_EVENTS:
         return False
     return True
 
