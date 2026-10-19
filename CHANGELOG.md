@@ -13,6 +13,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 - **Mocked end-to-end test** `tests/test_e2e_write_bond_to_installment.py` (on the `ci.yml` list). A `TEST-` Write Bond capture, `POST /api/paperwork/confirm-premium` with a financed balance, one down-payment invoice, and one installment-paid webhook. Asserts one plan, one down-payment invoice, the installment recorded once, cent balances, the audit rows, and a webhook replay that does not apply twice. SwipeSimple, Gmail, Slack, and BlueBubbles are mocked. `SWIPESIMPLE_DISPATCH_LIVE` stays unset. In-memory Mongo only.
 
+## [Unreleased] — 2026-10-19 (pin PyMuPDF below 2.0)
+
+### Fixed
+- **`PyMuPDF>=1.24.0,<2.0`** in `requirements.txt` and `requirements-dashboard.txt`. PyMuPDF 2.0 breaks the Palmetto packet field tests (`test_required_palmetto_fields_match_context`, `test_agent_license_matches_the_writing_agent_pair`): the Palmetto PDF widgets such as `app_defendant_name` and `app_agent_name` are not found. 1.28.2 passes. The 2.0 migration is tracked separately by Paperwork Desk.
+
 ## [Unreleased] — 2026-10-16 (down payment refuses a review hold or a reversal sibling)
 
 ### Fixed
