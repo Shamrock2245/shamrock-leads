@@ -37,6 +37,14 @@ logger = logging.getLogger(__name__)
 LINKS = "cosigner_links"
 _SIGNED = frozenset({"signed", "completed", "complete"})
 _FAIL_STATUS = frozenset({"failed", "fail", "error", "unreadable", "rejected"})
+_CLOSED_PACKET = frozenset({
+    "void",
+    "voided",
+    "cancelled",
+    "canceled",
+    "superseded",
+})
+_AUDIT_STATE_KEYS = ("step", "id_verified", "signed", "paid", "timeline", "packet_status")
 _COSIGNER_KEYS = (
     "cosigner_name",
     "co_signer_name",
@@ -217,6 +225,79 @@ def _paid(bond: Optional[dict]) -> bool:
     return status in {"paid", "approved", "completed", "complete"}
 
 
+def _as_utc(value: Any) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _link_block(link: dict) -> str:
+    """Expired or revoked bearer links are not a public OCR endpoint."""
+    status = str(link.get("status") or "").strip().lower()
+    if (
+        link.get("revoked") is True
+        or status in {"revoked", "expired"}
+        or str(link.get("revoked_at") or "").strip()
+    ):
+        return "link_revoked" if status != "expired" else "link_expired"
+    if link.get("expires_at"):
+        expires = _as_utc(link.get("expires_at"))
+        if expires is None or expires <= _now():
+            return "link_expired"
+    return ""
+
+
+def _packet_closed(packet: Optional[dict]) -> bool:
+    """A voided, canceled, or superseded packet is not signable."""
+    if not isinstance(packet, dict) or not packet:
+        return False
+    if packet.get("voided") is True or packet.get("superseded") is True:
+        return True
+    for key in ("status", "docuseal_status", "packet_status"):
+        if str(packet.get(key) or "").strip().lower() in _CLOSED_PACKET:
+            return True
+    return False
+
+
+def _audit_state(link: dict, packet: Optional[dict] = None) -> dict:
+    """Workflow snapshot. Full ID numbers are never copied onto the audit."""
+    timeline = [
+        str(row.get("step"))
+        for row in (link.get("timeline") or [])
+        if isinstance(row, dict) and row.get("step")
+    ]
+    verified = bool(link.get("id_verified"))
+    signed = "signed" in timeline
+    paid = "paid" in timeline or bool(str(link.get("paid_transaction_id") or "").strip())
+    if paid:
+        step = "paid"
+    elif signed:
+        step = "pay"
+    elif verified:
+        step = "sign"
+    else:
+        step = "scan"
+    state = {
+        "step": step,
+        "id_verified": verified,
+        "signed": signed,
+        "paid": paid,
+        "timeline": timeline,
+        "packet_status": str((packet or {}).get("status") or ""),
+    }
+    return {key: state[key] for key in _AUDIT_STATE_KEYS}
+
+
 async def _find_packet(packet_id: str) -> Optional[dict]:
     query = _scope({"packet_id": packet_id})
     if query is None:
@@ -224,25 +305,43 @@ async def _find_packet(packet_id: str) -> Optional[dict]:
     return await get_collection("paperwork_packets").find_one(query)
 
 
-async def _find_bond(packet: dict) -> Optional[dict]:
-    booking = str(packet.get("booking_number") or "").strip()
-    case_id = str(packet.get("bond_case_id") or "").strip()
-    query = {"$or": []}
-    if booking:
-        query["$or"].append({"booking_number": booking})
-    if case_id:
-        query["$or"].append({"bond_case_id": case_id})
-    if not query["$or"]:
-        return None
+async def _matching_bonds(query: dict) -> list:
     scoped = _scope(query)
     if scoped is None:
         raise CosignerLinkError("tenant_required", 403)
+    found = []
     for name in ("bond_cases", "active_bonds"):
-        doc = await get_collection(name).find_one(scoped)
-        if doc:
+        cursor = get_collection(name).find(scoped)
+        async for doc in _iter(cursor):
             doc["_collection"] = name
-            return doc
-    return None
+            found.append(doc)
+    return found
+
+
+async def _find_bond(packet: dict) -> Optional[dict]:
+    """The packet's case id wins. Booking is used only when no case id exists.
+
+    Two bond rows that share a booking number are not a guess. That fallback
+    fails closed.
+    """
+    booking = str(packet.get("booking_number") or "").strip()
+    case_id = str(packet.get("bond_case_id") or "").strip()
+    if case_id:
+        for name in ("bond_cases", "active_bonds"):
+            scoped = _scope({"bond_case_id": case_id})
+            if scoped is None:
+                raise CosignerLinkError("tenant_required", 403)
+            doc = await get_collection(name).find_one(scoped)
+            if doc:
+                doc["_collection"] = name
+                return doc
+        return None
+    if not booking:
+        return None
+    matches = await _matching_bonds({"booking_number": booking})
+    if len(matches) > 1:
+        raise CosignerLinkError("bond_ambiguous", 409)
+    return matches[0] if matches else None
 
 
 def _timeline_push(link: dict, step: str, now: datetime) -> bool:
@@ -256,7 +355,7 @@ def _timeline_push(link: dict, step: str, now: datetime) -> bool:
     return True
 
 
-async def _audit(step: str, link: dict, now: datetime) -> None:
+async def _audit(step: str, link: dict, now: datetime, *, old_state: dict, new_state: dict) -> None:
     await get_collection("audit_events").insert_one({
         "event_type": step,
         "action": step,
@@ -269,8 +368,28 @@ async def _audit(step: str, link: dict, now: datetime) -> None:
         "booking_number": link.get("booking_number") or "",
         "packet_id": link.get("packet_id") or "",
         "reason": step,
+        "old_state": _audit_state_only(old_state),
+        "new_state": _audit_state_only(new_state),
         "confidence": 1.0,
     })
+
+
+def _audit_state_only(state: dict) -> dict:
+    """Keep the workflow delta. Drop anything that could be an ID number."""
+    if not isinstance(state, dict):
+        return {}
+    clean = {}
+    for key in _AUDIT_STATE_KEYS:
+        if key not in state:
+            continue
+        value = state[key]
+        if key == "timeline":
+            clean[key] = [str(step) for step in value] if isinstance(value, list) else []
+        elif key in {"id_verified", "signed", "paid"}:
+            clean[key] = bool(value)
+        else:
+            clean[key] = str(value or "")
+    return clean
 
 
 async def create_cosigner_link(*, actor: str, packet_id: str, lang: str = "en") -> dict:
@@ -316,6 +435,21 @@ async def _link_by_token(token: str) -> dict:
     link = await get_collection(LINKS).find_one(query)
     if not link:
         raise CosignerLinkError("link_not_found", 404)
+    blocked = _link_block(link)
+    if blocked:
+        status = 410
+        raise CosignerLinkError(blocked, status)
+    return link
+
+
+async def require_cosigner_scan(token: str) -> dict:
+    """Resolve the bearer link before any upload is read or scanned."""
+    link = await _link_by_token(token)
+    packet = await _find_packet(str(link.get("packet_id") or ""))
+    if not packet:
+        raise CosignerLinkError("packet_not_found", 404)
+    if _packet_closed(packet):
+        raise CosignerLinkError("packet_inactive", 409)
     return link
 
 
@@ -375,6 +509,8 @@ async def submit_cosigner_scan(token: str, body: dict) -> dict:
     packet = await _find_packet(str(link.get("packet_id") or ""))
     if not packet:
         raise CosignerLinkError("packet_not_found", 404)
+    if _packet_closed(packet):
+        raise CosignerLinkError("packet_inactive", 409)
     name = str(body.get("full_name") or body.get("name") or "").strip()
     expected = str(link.get("signer_name") or link.get("indemnitor_name") or "")
     role = str(link.get("signer_role") or "indemnitor")
@@ -404,10 +540,14 @@ async def submit_cosigner_scan(token: str, body: dict) -> dict:
     bond = await _find_bond(packet)
     await _store_scan(packet, bond, name, state, role)
     now = _now()
+    before = _audit_state(link, packet)
     link["id_verified"] = True
     link["id_verified_at"] = now.isoformat()
     if _timeline_push(link, "id_verified", now):
-        await _audit("id_verified", link, now)
+        await _audit(
+            "id_verified", link, now,
+            old_state=before, new_state=_audit_state(link, packet),
+        )
     await _save_link(link)
     logger.info("[cosigner] id verified packet_id=%s", link.get("packet_id"))
     return await cosigner_state(token, lang=link.get("lang"))
@@ -450,10 +590,17 @@ async def note_cosigner_paid(booking_number: str, transaction_id: str, amount: A
         if paid_cents is None or due is None or paid_cents != due:
             logger.info("[cosigner] paid amount refused packet_id=%s", link.get("packet_id"))
             continue
+        if packet and _packet_closed(packet):
+            logger.info("[cosigner] paid refused closed packet_id=%s", link.get("packet_id"))
+            continue
+        before = _audit_state(link, packet)
         if _timeline_push(link, "paid", now):
             link["paid_transaction_id"] = transaction_id
             await _save_link(link)
-            await _audit("paid", link, now)
+            await _audit(
+                "paid", link, now,
+                old_state=before, new_state=_audit_state(link, packet),
+            )
 
 
 async def _iter(cursor):
@@ -488,7 +635,10 @@ async def cosigner_state(token: str, lang: Optional[str] = None) -> dict:
     link = await _link_by_token(token)
     if lang:
         link["lang"] = _lang(lang)
-    packet = await _find_packet(str(link.get("packet_id") or "")) or {}
+    packet = await _find_packet(str(link.get("packet_id") or ""))
+    if packet and _packet_closed(packet):
+        raise CosignerLinkError("packet_inactive", 409)
+    packet = packet or {}
     bond = await _find_bond(packet) if packet else None
     language = _lang(link.get("lang"))
     verified = bool(link.get("id_verified"))
@@ -496,11 +646,19 @@ async def cosigner_state(token: str, lang: Optional[str] = None) -> dict:
     paid = _link_paid(link) or _paid(bond)
     now = _now()
     changed = False
+    before = _audit_state(link, packet)
     if signed and _timeline_push(link, "signed", now):
-        await _audit("signed", link, now)
+        await _audit(
+            "signed", link, now,
+            old_state=before, new_state=_audit_state(link, packet),
+        )
+        before = _audit_state(link, packet)
         changed = True
     if paid and _timeline_push(link, "paid", now):
-        await _audit("paid", link, now)
+        await _audit(
+            "paid", link, now,
+            old_state=before, new_state=_audit_state(link, packet),
+        )
         changed = True
     if changed or lang:
         await _save_link(link)

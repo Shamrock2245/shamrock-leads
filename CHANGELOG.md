@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-19 (co-signer link fails closed on OCR, void, and bond identity)
+
+### Fixed
+- **The public scan route checks the bearer link before it reads or scans an upload.** An unknown, revoked, or expired token returns an error and does not call the ID scanner.
+- **A voided, canceled, or superseded packet fails closed on every state and scan request.** The response has no DocuSeal URL, and the scan is refused.
+- **Bond lookup uses the packet's `bond_case_id` first** (`bond_cases`, then `active_bonds`). Booking number is used only when the packet has no case id. More than one booking match fails closed.
+- **`id_verified`, `signed`, and `paid` audits store `old_state` and `new_state`.** The snapshot is the workflow step and timeline. Full ID numbers are not stored.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_unknown_token_does_not_run_ocr`, `test_voided_packet_hides_the_sign_url_and_refuses_scan`, `test_case_id_wins_and_ambiguous_booking_fails_closed`, `test_link_audits_record_old_and_new_state`.
+
 ## [Unreleased] — 2026-10-19 (co-signer link: US-state ID, then DocuSeal, then down payment)
 
 ### Added

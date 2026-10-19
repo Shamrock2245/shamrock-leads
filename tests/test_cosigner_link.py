@@ -740,3 +740,164 @@ def test_active_bond_scan_and_invoice_link_alias(monkeypatch):
     assert paying["step"] == "pay"
     assert paying["payment"]["url"] == "https://pay.example/down"
     assert paying["payment"]["dispatched"] is False
+
+
+def _scanner(monkeypatch, calls):
+    async def _scan(image_bytes, filename=""):
+        calls["n"] += 1
+        return {
+            "success": True,
+            "extracted": {"full_name": NAME, "dl_state": "FL", "dl_number": "D12345678"},
+        }
+
+    monkeypatch.setattr(
+        "dashboard.services.id_scanner_service.IDScannerService.scan_id_image",
+        _scan,
+    )
+
+
+def _post_scan(client, token):
+    return client.post(
+        f"/api/cosigner/{token}/scan",
+        files={"id_image": ("id.jpg", b"id-photo", "image/jpeg")},
+    )
+
+
+def test_unknown_token_does_not_run_ocr(monkeypatch):
+    stores, client = _world(monkeypatch)
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    unknown = _post_scan(client, "not-a-real-token")
+    assert unknown.status_code == 404
+    assert unknown.json()["error"] == "link_not_found"
+    assert calls["n"] == 0
+
+    token = _token(client)
+    stores["cosigner_links"].docs[0]["revoked"] = True
+    revoked = _post_scan(client, token)
+    assert revoked.status_code == 410
+    assert revoked.json()["error"] == "link_revoked"
+    assert calls["n"] == 0
+
+    stores["cosigner_links"].docs[0]["revoked"] = False
+    stores["cosigner_links"].docs[0]["expires_at"] = "2020-01-01T00:00:00+00:00"
+    expired = _post_scan(client, token)
+    assert expired.status_code == 410
+    assert expired.json()["error"] == "link_expired"
+    assert calls["n"] == 0
+    assert "id_ocr" not in stores["paperwork_packets"].docs[0]
+
+
+def test_voided_packet_hides_the_sign_url_and_refuses_scan(monkeypatch):
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL", "dl_number": "D12345678"},
+    )
+    assert opened.status_code == 200
+    assert client.get(f"/api/cosigner/{token}").json()["sign_url"] == "https://sign.example/s/abc"
+
+    packet = stores["paperwork_packets"].docs[0]
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    for marker in (
+        {"voided": True, "status": "voided", "superseded": False},
+        {"voided": False, "status": "canceled", "superseded": False},
+        {"voided": False, "status": "cancelled", "superseded": False},
+        {"voided": False, "status": "draft", "superseded": True},
+        {"voided": False, "status": "superseded", "superseded": False},
+    ):
+        packet.update(marker)
+        state = client.get(f"/api/cosigner/{token}")
+        assert state.status_code == 409, marker
+        assert state.json()["error"] == "packet_inactive"
+        assert "sign.example" not in state.text
+        page = client.get(f"/cosigner/{token}")
+        assert "sign.example" not in page.text
+        refused = _post_scan(client, token)
+        assert refused.status_code == 409, marker
+        assert refused.json()["error"] == "packet_inactive"
+        assert "sign.example" not in refused.text
+    assert calls["n"] == 0
+
+
+def test_case_id_wins_and_ambiguous_booking_fails_closed(monkeypatch):
+    stores, client = _world(monkeypatch)
+    exact = stores["bond_cases"].docs[0]
+    other = {
+        "bond_case_id": "BC-TEST-OTHER",
+        "booking_number": BOOKING,
+        "status": "active",
+        "indemnitor_name": "Pat Other",
+        "surety_id": "osi",
+        "premium_paid": False,
+        **CONFIRMED,
+    }
+    stores["bond_cases"].docs.insert(0, other)
+    token = _token(client)
+    uploaded = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    assert "id_ocr" not in stores["bond_cases"].docs[0]
+    assert stores["bond_cases"].docs[1]["bond_case_id"] == CASE
+    assert stores["bond_cases"].docs[1]["id_ocr"]["extracted"]["full_name"] == NAME
+
+    stores["paperwork_packets"].docs[0]["bond_case_id"] = ""
+    state = client.get(f"/api/cosigner/{token}")
+    assert state.status_code == 409
+    assert state.json()["error"] == "bond_ambiguous"
+    assert "sign.example" not in state.text
+    refused = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert refused.status_code == 409
+    assert _error_text(refused) == "bond_ambiguous"
+    assert "id_ocr" not in stores["bond_cases"].docs[0]
+    assert exact.get("id_ocr", {}).get("extracted", {}).get("full_name") == NAME
+
+
+def test_link_audits_record_old_and_new_state(monkeypatch):
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    uploaded = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL", "dl_number": "D12345678"},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    verified = _audits(stores, "id_verified")
+    assert len(verified) == 1
+    assert verified[0]["old_state"]["id_verified"] is False
+    assert verified[0]["old_state"]["step"] == "scan"
+    assert verified[0]["new_state"]["id_verified"] is True
+    assert verified[0]["new_state"]["step"] == "sign"
+    assert "id_verified" not in verified[0]["old_state"]["timeline"]
+    assert verified[0]["new_state"]["timeline"] == ["id_verified"]
+
+    stores["paperwork_packets"].docs[0]["status"] = "completed"
+    paying = client.get(f"/api/cosigner/{token}")
+    assert paying.status_code == 200
+    signed = _audits(stores, "signed")
+    assert len(signed) == 1
+    assert signed[0]["old_state"]["signed"] is False
+    assert signed[0]["old_state"]["step"] == "sign"
+    assert signed[0]["new_state"]["signed"] is True
+    assert signed[0]["new_state"]["step"] == "pay"
+    assert signed[0]["new_state"]["timeline"] == ["id_verified", "signed"]
+
+    from dashboard.services.cosigner_link_service import note_cosigner_paid
+
+    asyncio.run(note_cosigner_paid(BOOKING, "TX-PAY", "500.00"))
+    paid = _audits(stores, "paid")
+    assert len(paid) == 1
+    assert paid[0]["old_state"]["paid"] is False
+    assert paid[0]["new_state"]["paid"] is True
+    assert paid[0]["new_state"]["step"] == "paid"
+    assert "paid" not in paid[0]["old_state"]["timeline"]
+    assert paid[0]["new_state"]["timeline"][-1] == "paid"
+    dumped = str(stores["audit_events"].docs)
+    assert "D12345678" not in dumped
+    assert "dl_number" not in dumped

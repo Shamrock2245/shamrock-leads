@@ -12,6 +12,7 @@ from dashboard.services.cosigner_link_service import (
     cosigner_state,
     create_cosigner_link,
     render_cosigner_page,
+    require_cosigner_scan,
     submit_cosigner_scan,
 )
 
@@ -104,6 +105,10 @@ async def _scan_body_from_upload(form) -> dict | None:
 
 @cosigner_bp.post("/api/cosigner/{token}/scan")
 async def cosigner_scan(token: str, request: Request):
+    try:
+        await require_cosigner_scan(token)
+    except CosignerLinkError as exc:
+        return JSONResponse({"error": exc.code}, status_code=exc.status)
     content_type = (request.headers.get("content-type") or "").lower()
     if "application/json" in content_type or "multipart/form-data" not in content_type:
         return JSONResponse({"error": "scan_image_required"}, status_code=400)
