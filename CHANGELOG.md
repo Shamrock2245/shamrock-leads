@@ -24,6 +24,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_cosigner_link.py`.
 
+## [Unreleased] — 2026-10-19 (e2e covers merged #187 and #182)
+
+### Tests
+- `tests/test_e2e_write_bond_to_installment.py`: `test_poller_dupe_counts_once_and_refund_does_not_stamp_last_payment`. On the same `TEST-` bond after installment 1, the Gmail receipt poller records that installment again (booking only, then with the plan reference) and no second `payments` row is written. The payment-agent KPIs count it once (`$250.00`). A down-payment charge webhook (`$500.00`) stamps `last_payment_*` on both bond mirrors. Its refund webhook records a reversal, flags `needs_review`, leaves `last_payment_*` exactly as the charge stamped it, and does not move the plan balance. The refunded down payment drops out of the KPIs. The staff review alert (Slack) is mocked. Amounts are the test's fixture constants. No product code changes.
+
+## [Unreleased] — 2026-10-16 (Write Bond to one installment, mocked)
+
+### Added
+- **Mocked end-to-end test** `tests/test_e2e_write_bond_to_installment.py` (on the `ci.yml` list). A `TEST-` Write Bond capture, `POST /api/paperwork/confirm-premium` with a financed balance, one down-payment invoice, and one installment-paid webhook. Asserts one plan, one down-payment invoice, the installment recorded once, cent balances, the audit rows, and a webhook replay that does not apply twice. SwipeSimple, Gmail, Slack, and BlueBubbles are mocked. `SWIPESIMPLE_DISPATCH_LIVE` stays unset. In-memory Mongo only.
+
 ## [Unreleased] — 2026-10-19 (pin PyMuPDF below 2.0)
 
 ### Fixed
