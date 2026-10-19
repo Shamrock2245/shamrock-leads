@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-19 (PyMuPDF 2.x keeps Palmetto widget names)
+
+### Fixed
+- **Re-stamped Palmetto and surety widgets keep `/T` and `/V` on the annotation under PyMuPDF 2.x.** PyMuPDF 2.0 `Page.add_widget` always runs `_adjust_widget` and builds a one-kid parent field, then moves the field name and value off the page annotation. `widget.field_name` still resolves through that parent. pdfplumber reads the annotation `/T` only, so `app_defendant_name`, `app_agent_name`, and the other re-stamped packet fields were missing. `restore_classic_widget_field` copies the field keys back onto the annotation and points AcroForm at that widget. On PyMuPDF 1.28.x the annotation already holds `/T` and `/V`, and the helper leaves it unchanged. A dotted field name or a parent with more than one kid stays a hierarchy.
+
+### Changed
+- **`PyMuPDF>=1.24.0,<3.0`** in `requirements.txt` and `requirements-dashboard.txt`.
+
+### Tests
+- `tests/test_palmetto_packet_fields.py`: `test_added_text_widget_keeps_its_name_on_the_annotation` (this file is already on the CI list). Palmetto, OSI, and golden suites pass on 1.28.2 and 2.0.0.
+
 ## [Unreleased] — 2026-10-19 (pin PyMuPDF below 2.0)
 
 ### Fixed

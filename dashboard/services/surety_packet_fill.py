@@ -247,6 +247,8 @@ def _missing_fail_closed(form: Mapping[str, Any], canonical: Mapping[str, str]) 
 
 
 def _place_widgets(doc: fitz.Document, form: Mapping[str, Any], values: Mapping[str, str]) -> None:
+    from dashboard.bond_pdf_service import restore_classic_widget_field
+
     for field in form.get("placed_fields") or []:
         if not isinstance(field, Mapping):
             continue
@@ -262,7 +264,9 @@ def _place_widgets(doc: fitz.Document, form: Mapping[str, Any], values: Mapping[
         widget.field_type = fitz.PDF_WIDGET_TYPE_TEXT
         widget.rect = fitz.Rect(*rect)
         widget.field_value = str(values.get(widget.field_name) or "")
-        page.add_widget(widget)
+        annot = page.add_widget(widget)
+        if annot is not None:
+            restore_classic_widget_field(doc, annot.xref)
 
 
 def _stamp_sample_marks(doc: fitz.Document, form: Mapping[str, Any]) -> None:
