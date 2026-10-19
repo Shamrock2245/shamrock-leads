@@ -8,6 +8,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 - **One co-signer link.** Staff `POST /api/paperwork/cosigner-link` returns `/cosigner/{token}`. The public page is open in English and Spanish. Signing stays locked until a verified ID scan matches the co-signer and the issuer is a US state, DC, or territory. No scan, a failed scan, a wrong name (O'Neill does not match O'Neal), and a country-only scan (US/USA) do not write `id_ocr` and do not reveal the DocuSeal URL. When the co-signer is a different person from the indemnitor, only the co-signer's scan unlocks the link, and the stored scan role is `co_indemnitor`. The page reveals the packet's existing DocuSeal URL and does not create a submission. After the packet is signed, the page shows the confirmed down payment. `SWIPESIMPLE_DISPATCH_LIVE` off leaves that amount undispatched.
 - **A down-payment webhook notes the co-signer timeline.** `POST /api/webhooks/payment` still records the charge through the fail-closed provider recorder. When `reference_id` is the booking number and not an installment, the co-signer link is marked paid once. A partial down payment does not set `premium_paid`. A replay does not write a second paid audit.
+- **`cosigner_links` is tenant-owned.** It is in `dashboard/tenancy/constants.py`. The known-collection count is 125.
 
 ### Tests
 - `tests/test_cosigner_link.py`.
