@@ -20,6 +20,11 @@ Flow on current main:
 4. One ``POST /api/webhooks/payment`` for installment 1, then the same body
    again. The installment is recorded once and the replay does not move
    the balance.
+5. Merged #182/#187 behavior on the same bond: the Gmail receipt poller sees
+   installment 1 too, and the payment-agent KPIs still count it once. A
+   down-payment charge stamps ``last_payment_*``; its refund webhook records
+   a reversal, flags review, and does not re-stamp ``last_payment_*``. The
+   refunded down payment drops out of the KPIs.
 """
 from __future__ import annotations
 
@@ -27,8 +32,9 @@ import asyncio
 import copy
 import os
 import socket
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi import FastAPI
@@ -39,10 +45,12 @@ from pymongo.errors import DuplicateKeyError
 import dashboard.services.swipesimple_invoice_service as ss
 from dashboard.auth.pin_middleware import COOKIE_NAME, _sign_token
 from dashboard.routers import payment_plans as pp
+from dashboard.routers.agent_analytics import summarize_settled_payments
 from dashboard.routers.accounts_receivable import ar_bp
 from dashboard.routers.paperwork import paperwork_bp
 from dashboard.routers.webhooks import webhooks_bp
 from tests._inmem_mongo import matches
+from dashboard.services.swipesimple_receipt_poller import SwipeSimpleReceiptPoller
 from tests.test_payment_plan_pay_dedupe import TxnClient
 
 BOOKING = "TEST-E2E-INST"
@@ -63,6 +71,7 @@ INSTALLMENT_CENTS = 25000
 INVOICE_ID = "inv_e2e_installment"
 PAY_LINK = "https://swipesimple.test.invalid/invoices/inv_e2e_installment/payment"
 TXN = "TX-E2E-INST-1"
+DOWN_TXN = "TX-E2E-DOWN-1"
 
 
 def _money(value) -> Decimal:
@@ -306,10 +315,16 @@ def world(monkeypatch):
 
     monkeypatch.setattr("dashboard.services.premium_confirmation_service._transaction_client", txn)
     monkeypatch.setattr(pp, "_txn_client", txn)
+    monkeypatch.setattr("dashboard.services.payment_log_claims._transaction_client", txn)
     pp._inflight_txns.clear()
     pp._txn_support_cache.clear()
     pp._payment_claim_index_ready = False
     ss._claim_indexes_ready = False
+    import dashboard.services.payment_log_claims as payment_log
+
+    monkeypatch.setattr(payment_log, "_lock_index_ready", False)
+    monkeypatch.setattr(payment_log, "_index_ready", False)
+    payment_log._txn_support_cache.clear()
 
     monkeypatch.setenv("SECRET_KEY", "ci-not-a-real-secret")
     monkeypatch.setenv("ENV", "development")
@@ -361,6 +376,9 @@ def world(monkeypatch):
     monkeypatch.setattr(ss, "dispatch_invoice", sends["dispatch"])
     monkeypatch.setattr(ss, "_send_dispatch", sends["dispatch"])
     monkeypatch.setattr("dashboard.routers.events.publish_event", AsyncMock())
+    # The recorder's staff "needs review" alert goes to Slack. Mocked here.
+    review_alerts = Mock(return_value=True)
+    monkeypatch.setattr("writers.slack_notifier.SlackNotifier.notify_alert", review_alerts)
 
     forms = []
 
@@ -395,7 +413,14 @@ def world(monkeypatch):
     )
 
     try:
-        yield {"db": db, "http": http, "forms": forms, "net": net, "sends": sends}
+        yield {
+            "db": db,
+            "http": http,
+            "forms": forms,
+            "net": net,
+            "sends": sends,
+            "review_alerts": review_alerts,
+        }
     finally:
         pp._inflight_txns.clear()
         pp._txn_support_cache.clear()
@@ -413,7 +438,11 @@ def _audits(db, **wanted):
     return rows
 
 
-def test_write_bond_confirm_creates_one_plan_and_down_invoice_then_one_installment(world):
+def _flow_through_installment(world) -> str:
+    """Write Bond → confirm → down-payment invoice → installment 1 (+ replay).
+
+    Returns the plan id. Every amount is a fixture constant above.
+    """
     db = world["db"]
     http = world["http"]
     forms = world["forms"]
@@ -549,8 +578,143 @@ def test_write_bond_confirm_creates_one_plan_and_down_invoice_then_one_installme
     assert len(_audits(db, event_type="payment_plan_payment_applied")) == 1
     assert len(_plans(db)) == 1
     assert len(db["swipesimple_invoice_claims"].docs) == 1
+    return plan_id
 
+
+def _assert_nothing_sent(world):
     for spy in world["sends"].values():
         spy.assert_not_called()
     assert world["net"]["calls"] == []
     assert os.getenv("SWIPESIMPLE_DISPATCH_LIVE") in (None, "")
+
+
+def test_write_bond_confirm_creates_one_plan_and_down_invoice_then_one_installment(world):
+    _flow_through_installment(world)
+    _assert_nothing_sent(world)
+
+
+_LAST_PAYMENT_FIELDS = (
+    "last_payment_amount",
+    "last_payment_at",
+    "last_payment_status",
+    "last_payment_source",
+)
+
+
+def _last_payment(row):
+    return {key: row.get(key) for key in _LAST_PAYMENT_FIELDS}
+
+
+def _payment_agent_kpis(db):
+    """The payment-agent KPI query and summary, over the in-memory rows."""
+    now = datetime.now(timezone.utc)
+    window = {
+        "$gte": (now - timedelta(days=30)).isoformat(),
+        "$lte": (now + timedelta(minutes=5)).isoformat(),
+    }
+    flt = {"$or": [{"timestamp": dict(window)}, {"created_at": dict(window)}]}
+    rows = [copy.deepcopy(doc) for doc in db["payments"].docs if matches(doc, flt)]
+    return summarize_settled_payments(rows)
+
+
+def test_poller_dupe_counts_once_and_refund_does_not_stamp_last_payment(world):
+    db = world["db"]
+    http = world["http"]
+    plan_id = _flow_through_installment(world)
+
+    # The Gmail receipt poller sees installment 1 as well: once with only the
+    # booking on the receipt, once with the plan reference. Neither adds a row.
+    poller = SwipeSimpleReceiptPoller(db=db)
+    bare = asyncio.run(poller._apply_bond_payment(
+        db,
+        {"amount": INSTALLMENT, "booking_number": BOOKING, "transaction_id": TXN},
+        gmail_message_id="gm-test-e2e-1",
+        raw_subject="Payment receipt",
+    ))
+    assert bare["success"] is True
+    assert bare["committed"] is False
+    assert bare["duplicate"] is True
+    referenced = asyncio.run(poller._apply_bond_payment(
+        db,
+        {
+            "amount": INSTALLMENT,
+            "booking_number": BOOKING,
+            "transaction_id": TXN,
+            "reference_id": f"{BOOKING}-I1",
+            "plan_id": plan_id,
+        },
+        gmail_message_id="gm-test-e2e-2",
+        raw_subject="Payment receipt",
+    ))
+    assert referenced["success"] is True
+    assert referenced["plan_applied"] is True
+    assert referenced["idempotent"] is True
+    assert [row["transaction_id"] for row in db["payments"].docs] == [TXN]
+    assert _plans(db)[0]["total_paid_cents"] == INSTALLMENT_CENTS
+    assert _plans(db)[0]["payments_made"] == 1
+    assert len(_audits(db, event_type="payment_plan_payment_applied")) == 1
+
+    kpis = _payment_agent_kpis(db)
+    assert kpis["count"] == 1
+    assert round(kpis["total"] * 100) == INSTALLMENT_CENTS
+    assert kpis["reversed_skipped"] == 0
+    assert kpis["amount_conflicts"] == 0
+
+    # An installment never stamps last_payment_* on the bond.
+    for name in ("bond_cases", "active_bonds"):
+        assert _last_payment(db[name].docs[0]) == dict.fromkeys(_LAST_PAYMENT_FIELDS)
+
+    # The down-payment charge for this booking stamps both bond mirrors.
+    down_charge = {
+        "event_type": "payment.completed",
+        "status": "approved",
+        "transaction_id": DOWN_TXN,
+        "amount": DOWN,
+        "custom_fields": {"booking_number": BOOKING},
+    }
+    charged = http.post("/api/webhooks/payment", json=down_charge)
+    assert charged.status_code == 200, charged.text
+    assert charged.json()["event_kind"] == "charge"
+    assert charged.json()["needs_review"] is False
+    stamped = {}
+    for name in ("bond_cases", "active_bonds"):
+        row = db[name].docs[0]
+        assert round(row["last_payment_amount"] * 100) == DOWN_CENTS
+        assert row["last_payment_status"] == "approved"
+        assert row["last_payment_source"] == "swipesimple_webhook"
+        assert not row.get("needs_review")
+        stamped[name] = _last_payment(row)
+    assert _payment_agent_kpis(db)["count"] == 2
+    assert round(_payment_agent_kpis(db)["total"] * 100) == DOWN_CENTS + INSTALLMENT_CENTS
+
+    # Its refund records a reversal row and flags review. last_payment_* stays
+    # exactly the charge's stamp.
+    refund = dict(down_charge, event_type="payment.refunded", status="refunded")
+    refunded = http.post("/api/webhooks/payment", json=refund)
+    assert refunded.status_code == 200, refunded.text
+    assert refunded.json()["event_kind"] == "refund"
+    assert refunded.json()["needs_review"] is True
+    for name in ("bond_cases", "active_bonds"):
+        row = db[name].docs[0]
+        assert _last_payment(row) == stamped[name]
+        assert row["needs_review"] is True
+        assert row["needs_review_transaction_id"] == DOWN_TXN
+    down_rows = [row for row in db["payments"].docs if row["transaction_id"] == DOWN_TXN]
+    assert sorted(row["status"] for row in down_rows) == ["approved", "refunded"]
+    world["review_alerts"].assert_called_once()
+    assert world["review_alerts"].call_args.kwargs["title"] == "Provider payment needs review"
+
+    # The refund does not touch the financed plan balance.
+    plan = _plans(db)[0]
+    assert plan["balance_remaining_cents"] == FINANCED_CENTS - INSTALLMENT_CENTS
+    assert plan["total_paid_cents"] == INSTALLMENT_CENTS
+    assert plan["payments_made"] == 1
+
+    # KPIs: the refunded down payment drops out; installment 1 counts once.
+    kpis = _payment_agent_kpis(db)
+    assert kpis["count"] == 1
+    assert round(kpis["total"] * 100) == INSTALLMENT_CENTS
+    assert kpis["reversed_skipped"] == 1
+    assert kpis["amount_conflicts"] == 0
+
+    _assert_nothing_sent(world)

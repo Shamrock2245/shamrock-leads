@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-19 (e2e covers merged #187 and #182)
+
+### Tests
+- `tests/test_e2e_write_bond_to_installment.py`: `test_poller_dupe_counts_once_and_refund_does_not_stamp_last_payment`. On the same `TEST-` bond after installment 1, the Gmail receipt poller records that installment again (booking only, then with the plan reference) and no second `payments` row is written. The payment-agent KPIs count it once (`$250.00`). A down-payment charge webhook (`$500.00`) stamps `last_payment_*` on both bond mirrors. Its refund webhook records a reversal, flags `needs_review`, leaves `last_payment_*` exactly as the charge stamped it, and does not move the plan balance. The refunded down payment drops out of the KPIs. The staff review alert (Slack) is mocked. Amounts are the test's fixture constants. No product code changes.
+
 ## [Unreleased] — 2026-10-16 (Write Bond to one installment, mocked)
 
 ### Added
