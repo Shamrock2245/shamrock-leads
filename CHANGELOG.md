@@ -8,6 +8,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Changed
 - **Palm Beach (FL) no longer drives a Chrome browser or sends a Chrome User-Agent.** `palm_beach.py` reads the PBSO blotter with `scrapers.plain_http` (honest UA, certificate verified). It submits the page's own date-search form, parses cards with `parse_pbso_html`, and follows the page's own pagination links. The hCaptcha wait loop is gone: a challenge page (including hCaptcha) or 401/403/429 raises `egress_block:`, a dropped handshake raises `egress_block: ... connection_reset:`, a certificate failure raises `tls_cert_invalid:`, and a missing search form raises `PalmBeachSourceChanged`. `_fetch_single_booking` uses the same honest session, and a block now raises instead of reading as "not found". The one honest probe from the agent box (2026-10-15) got **connection_reset**. Tests: `tests/test_fl_palmbeach_plain_https.py`.
 - **Palm Beach records never default status to "In Custody".** `_row_to_arrest_record` uses `row.get("status") or ""`, so an unknown status is `""` and a published one (e.g. `Released` from a card release date via `pbso_parse`) is kept. The blotter isn't custody-only (#233).
+## [Unreleased] — 2026-10-19 (pin PyMuPDF below 2.0)
+
+### Fixed
+- **`PyMuPDF>=1.24.0,<2.0`** in `requirements.txt` and `requirements-dashboard.txt`. PyMuPDF 2.0 breaks the Palmetto packet field tests (`test_required_palmetto_fields_match_context`, `test_agent_license_matches_the_writing_agent_pair`): the Palmetto PDF widgets such as `app_defendant_name` and `app_agent_name` are not found. 1.28.2 passes. The 2.0 migration is tracked separately by Paperwork Desk.
+
 ## [Unreleased] — 2026-10-16 (down payment refuses a review hold or a reversal sibling)
 
 ### Fixed
