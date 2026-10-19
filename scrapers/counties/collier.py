@@ -3,7 +3,11 @@ Collier County Arrest Scraper — ASP.NET ViewState Approach.
 
 Source: Collier County Sheriff's Office public arrest search
 URL: https://www2.colliersheriff.org/arrestsearch/Report.aspx
-Method: Pure HTTP (curl_cffi) — no browser automation needed.
+Method: plain requests (scrapers.plain_http): honest User-Agent, TLS verified,
+no browser fingerprint impersonation.
+
+Custody: this is an arrest report, not a custody roster, and it publishes no
+custody / release field. Status is left "" (unknown), never assumed.
 
 Architecture:
 1. GET initial page → extract __VIEWSTATE + __VIEWSTATEGENERATOR
@@ -18,6 +22,8 @@ from typing import List, Dict, Any, Optional
 from urllib.parse import urljoin
 
 from scrapers.base_scraper import BaseScraper
+from scrapers.plain_http import make_session, request
+from scrapers.scraper_resilience import AntiBotBlocked, EgressBlocked
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
@@ -27,11 +33,6 @@ BASE_URL = "https://www2.colliersheriff.org"
 SEARCH_URL = f"{BASE_URL}/arrestsearch/Report.aspx"
 
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
     "Accept": (
         "text/html,application/xhtml+xml,application/xml;q=0.9,"
         "image/avif,image/webp,*/*;q=0.8"
@@ -44,7 +45,13 @@ BACKOFF_BASE_S = 2.0
 
 
 class CollierCountyScraper(BaseScraper):
-    """Collier County (FL) arrest scraper — ASP.NET ViewState + AJAX POST."""
+    """Collier County (FL) arrest scraper — ASP.NET ViewState + AJAX POST.
+
+    Stays unverified (CoS 2026-10-14). Without the Chrome disguise the plain
+    client's grid postback was redirected to errorpage.aspx in two reads; that
+    now raises EgressBlocked (``egress_block:``) so the run fails visibly
+    instead of parsing an empty roster. No workaround.
+    """
 
     @property
     def county(self) -> str:
@@ -52,17 +59,9 @@ class CollierCountyScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         """Scrape current inmate roster via ASP.NET ViewState postback."""
-        try:
-            from curl_cffi import requests as cffi_requests
-            from bs4 import BeautifulSoup
-        except ImportError as e:
-            logger.error(
-                f"❌ Missing dependency for Collier scraper: {e}. "
-                f"Install with: pip install curl-cffi beautifulsoup4"
-            )
-            raise
+        from bs4 import BeautifulSoup
 
-        session = cffi_requests.Session()
+        session = make_session()
 
         # ── Step 1: GET the initial page to extract ViewState ──
         logger.info(f"📡 Loading {SEARCH_URL}...")
@@ -109,6 +108,7 @@ class CollierCountyScraper(BaseScraper):
         if resp is None or resp.status_code != 200:
             logger.error(f"❌ AJAX POST failed")
             return []
+        self._raise_if_error_redirect(resp.text)
 
         # ── Step 3: Parse the HTML grid ──
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -166,7 +166,7 @@ class CollierCountyScraper(BaseScraper):
                     records.append(record_data)
             except Exception as e:
                 logger.warning(
-                    f"⚠️ Error parsing record at index {entry['index']}: {e}"
+                    f"⚠️ Error parsing record at index {entry['index']}: {type(e).__name__}"
                 )
 
         return records
@@ -220,10 +220,11 @@ class CollierCountyScraper(BaseScraper):
         weight = ""
         agency = ""
         age = ""
-        status = "In Custody"
+        # The arrest report publishes no custody/release field: unknown, never assumed.
+        status = ""
         charges_list = []
         bond_paid = "NO"
-        total_bond = 0.0
+        bond_amount = ""  # published bond-span figure only; "" when unpublished
         mugshot_url = ""
         hair_color = ""
         eye_color = ""
@@ -295,8 +296,8 @@ class CollierCountyScraper(BaseScraper):
             elif bond_text and bond_text != "No information available.":
                 bond_paid = bond_text
             amount = self._published_bond_amount(bond_text)
-            if amount and total_bond == 0.0:
-                total_bond = amount
+            if amount and not bond_amount:
+                bond_amount = amount
 
         # Mugshot
         if len(all_mugshots) > records_count:
@@ -337,7 +338,7 @@ class CollierCountyScraper(BaseScraper):
             ZIP=zip_code,
             Mugshot_URL=mugshot_url,
             Charges=charges_str,
-            Bond_Amount=str(total_bond) if total_bond > 0 else "",
+            Bond_Amount=bond_amount,
             Bond_Paid=bond_paid,
             Detail_URL=SEARCH_URL,
             LastCheckedMode="INITIAL",
@@ -370,15 +371,16 @@ class CollierCountyScraper(BaseScraper):
         return texts
 
     @staticmethod
-    def _published_bond_amount(text: str) -> float:
-        """A ``$`` figure printed in a bond span, else 0.0 (unknown)."""
+    def _published_bond_amount(text: str) -> str:
+        """The ``$`` figure printed in a bond span ("1500"; a published $0 is "0"), else "" (unknown)."""
         match = re.search(r"\$\s*([\d,]+(?:\.\d{1,2})?)", text or "")
         if not match:
-            return 0.0
+            return ""
         try:
-            return float(match.group(1).replace(",", ""))
+            amount = float(match.group(1).replace(",", ""))
         except ValueError:
-            return 0.0
+            return ""
+        return f"{amount:.2f}".rstrip("0").rstrip(".") or "0"
 
     # ── HTTP Helpers ──
 
@@ -391,24 +393,19 @@ class CollierCountyScraper(BaseScraper):
     def _fetch_with_retry(
         self, session, method: str, url: str, **kwargs
     ) -> Optional[Any]:
-        """HTTP request with retries + exponential backoff."""
-        from curl_cffi import requests as cffi_requests
+        """Verified plain HTTP with retries for 5xx / network errors only.
 
+        A bad certificate (``SourceTLSInvalid``) or a 401/403/429 / challenge
+        (``EgressBlocked``) is raised at once: never retried, never worked around.
+        """
         for attempt in range(RETRY_LIMIT):
             try:
-                if method.upper() == "GET":
-                    resp = session.get(
-                        url, impersonate="chrome120", timeout=30, **kwargs
-                    )
-                else:
-                    resp = session.post(
-                        url, impersonate="chrome120", timeout=30, **kwargs
-                    )
+                resp = request(session, method.upper(), url, county="Collier", **kwargs)
 
                 if resp.status_code == 200:
                     return resp
 
-                if resp.status_code in (429, 500, 502, 503):
+                if resp.status_code in (500, 502, 503):
                     sleep_s = BACKOFF_BASE_S * (2 ** attempt)
                     logger.warning(
                         f"⏳ HTTP {resp.status_code}, retry in {sleep_s:.1f}s"
@@ -418,11 +415,13 @@ class CollierCountyScraper(BaseScraper):
 
                 return resp
 
+            except AntiBotBlocked:
+                raise
             except Exception as e:
                 sleep_s = BACKOFF_BASE_S * (2 ** attempt)
                 if attempt < RETRY_LIMIT - 1:
                     logger.warning(
-                        f"⚠️ HTTP error, retrying in {sleep_s:.1f}s: {e}"
+                        f"⚠️ HTTP error, retrying in {sleep_s:.1f}s: {type(e).__name__}"
                     )
                     time.sleep(sleep_s)
                 else:
@@ -430,6 +429,14 @@ class CollierCountyScraper(BaseScraper):
                     return None
 
         return None
+
+    @staticmethod
+    def _raise_if_error_redirect(body: str) -> None:
+        """The UpdatePanel answers a refused postback with ``pageRedirect`` to
+        ``errorpage.aspx``. Treat it as a block, not as an empty roster."""
+        text = (body or "")[:2000].lower()
+        if "pageredirect" in text and "errorpage" in text:
+            raise EgressBlocked("egress_block: Collier UpdatePanel redirected to errorpage.aspx")
 
     # ── FirstAppearanceWatcher hook ───────────────────────────────────────────
     def _fetch_single_booking(
@@ -447,12 +454,11 @@ class CollierCountyScraper(BaseScraper):
         if not booking_id:
             return None
         try:
-            from curl_cffi import requests as cffi_requests
             from bs4 import BeautifulSoup
         except ImportError:
             return None
         try:
-            session = cffi_requests.Session()
+            session = make_session()
             resp = self._fetch_with_retry(session, "GET", SEARCH_URL, headers=HEADERS)
             if resp is None or resp.status_code != 200:
                 return None
@@ -482,6 +488,7 @@ class CollierCountyScraper(BaseScraper):
             )
             if resp is None or resp.status_code != 200:
                 return None
+            self._raise_if_error_redirect(resp.text)
             soup = BeautifulSoup(resp.text, "html.parser")
             tables = soup.find_all("table")
             records = self._parse_arrest_tables(tables, soup)
@@ -494,6 +501,8 @@ class CollierCountyScraper(BaseScraper):
                 f"Collier _fetch_single_booking: booking {booking_id} not found in current roster"
             )
             return None
+        except AntiBotBlocked:
+            raise  # the watcher stops; it must not retry through a generic fetch
         except Exception as e:
-            logger.warning(f"Collier _fetch_single_booking error ({booking_id}): {e}")
+            logger.warning(f"Collier _fetch_single_booking error ({booking_id}): {type(e).__name__}")
             return None

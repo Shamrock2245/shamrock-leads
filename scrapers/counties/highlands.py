@@ -3,15 +3,23 @@ Highlands County Arrest Scraper — Direct OCV JSON.
 Source: Highlands County Sheriff's Office App
 URL: https://cdn.myocv.com/ocvapps/a26133870/inmates.json
 Method: Direct GET query on OCV JSON endpoint (highly stable & browserless)
+
+2026-10-15: plain ``requests`` via ``scrapers.plain_http`` (honest User-Agent,
+TLS verified). The curl_cffi Chrome impersonation, Chrome UA, "stealth"
+headers and ``verify=False`` are gone; a block raises EgressBlocked
+(``egress_block:``) and a TLS failure raises SourceTLSInvalid
+(``tls_cert_invalid:``). Bond: a published amount is kept (including $0);
+"NO BOND" is Bond_Type "NO BOND" with the amount "" (it was stored as "0");
+blank or unrecognised is "". The feed has no custody field, so Status is "".
 """
 import logging
 import datetime
-import urllib3
 import re
 from typing import List
-from curl_cffi import requests as cffi_requests
 
 from scrapers.base_scraper import BaseScraper
+from scrapers.plain_http import make_session, request
+from scrapers.published_bond import charge_bond_amount, total_published_bond
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
@@ -20,19 +28,6 @@ FACILITY = "Highlands County Jail"
 COUNTY = "Highlands"
 JSON_URL = "https://cdn.myocv.com/ocvapps/a26133870/inmates.json"
 
-# ── Stealth Stack ──────────────────────────────────────────────────────────────
-IMPERSONATE = "chrome131"
-STEALTH_HEADERS = {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "Upgrade-Insecure-Requests": "1",
-    "DNT": "1",
-}
 
 class HighlandsCountyScraper(BaseScraper):
     @property
@@ -42,13 +37,9 @@ class HighlandsCountyScraper(BaseScraper):
     def scrape(self) -> List[ArrestRecord]:
         logger.info("Highlands: Querying OCV inmate JSON...")
         
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-        
         try:
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            resp = cffi_requests.get(JSON_URL, headers=headers, verify=False, timeout=25, impersonate=IMPERSONATE)
+            session = make_session({"Accept": "application/json"})
+            resp = request(session, "GET", JSON_URL, timeout=25, county="Highlands")
             if resp.status_code != 200:
                 raise Exception(f"Failed to fetch Highlands OCV JSON: HTTP {resp.status_code}")
                 
@@ -134,9 +125,9 @@ class HighlandsCountyScraper(BaseScraper):
                 charges = " | ".join(charges_list)
                 
                 # Bond Amount
-                bond_raw = x.get("BondAmount", "0")
-                bond_amount = self._parse_bond_val(bond_raw)
-                bond_amount_str = str(int(bond_amount)) if bond_amount.is_integer() else f"{bond_amount:.2f}"
+                bond_raw = str(x.get("BondAmount") or "").strip()
+                bond_amount_str = self._parse_bond_val(bond_raw)
+                bond_type = "NO BOND" if re.sub(r"\s", "", bond_raw.upper()) == "NOBOND" else ""
                 
                 records.append(ArrestRecord(
                     Scrape_Timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -151,7 +142,7 @@ class HighlandsCountyScraper(BaseScraper):
                     Arrest_Time=booking_time,
                     Booking_Date=booking_date,
                     Booking_Time=booking_time,
-                    Status="In Custody",
+                    Status="",  # the feed publishes no custody field
                     Facility=FACILITY,
                     Race=race,
                     Sex=gender,
@@ -161,6 +152,7 @@ class HighlandsCountyScraper(BaseScraper):
                     Mugshot_URL=mugshot_url,
                     Charges=charges,
                     Bond_Amount=bond_amount_str,
+                    Bond_Type=bond_type,
                     LastCheckedMode="INITIAL"
                 ))
             except Exception as ex:
@@ -170,14 +162,6 @@ class HighlandsCountyScraper(BaseScraper):
         return records
 
     @staticmethod
-    def _parse_bond_val(bond_str: str) -> float:
-        if not bond_str:
-            return 0.0
-        import re
-        cleaned = re.sub(r"[$,\s]", "", str(bond_str).strip().upper())
-        if any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
-            return 0.0
-        try:
-            return float(cleaned)
-        except (ValueError, TypeError):
-            return 0.0
+    def _parse_bond_val(bond_str: str) -> str:
+        """Published amount only: "" for blank / NO BOND / HOLD / text, never "0"."""
+        return total_published_bond([charge_bond_amount(bond_str)])

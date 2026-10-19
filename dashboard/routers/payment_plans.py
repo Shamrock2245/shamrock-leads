@@ -27,6 +27,8 @@ from dashboard.tenancy.flag import multi_tenant_enabled
 
 logger = logging.getLogger(__name__)
 
+logger = logging.getLogger(__name__)
+
 payment_plans_bp = APIRouter(prefix="/api", tags=["payment_plans"])
 # ── Premium Calculator ──────────────────────────────────────────────────────────
 
@@ -82,6 +84,25 @@ async def premium_calculator(bond_amount: int = Query(default=0), surety_id: str
 
 # ── Payment Plans CRUD ──────────────────────────────────────────────────────────
 
+def _audit_actor(request: Request) -> str:
+    """Who an immutable financial audit row names.
+
+    The signed session wins: ``agent_name``, then ``email``, then ``role``
+    (same order as the AR and family-tree routers). A trusted machine key
+    (``GAS_API_KEY`` / ``LEADS_INTERNAL_TOKEN``) with no session is recorded
+    as ``machine_key``. The request body is never an identity.
+    """
+    from dashboard.auth.pin_middleware import get_session_from_request, is_machine_auth_valid
+
+    sess = get_session_from_request(request) or {}
+    if sess.get("auth"):
+        name = str(sess.get("agent_name") or sess.get("email") or sess.get("role") or "").strip()
+        return name or "dashboard"
+    if is_machine_auth_valid(request):
+        return "machine_key"
+    return "dashboard"
+
+
 @payment_plans_bp.get("/payments/plans")
 async def list_plans(status: str = Query(default='')):
     """List all payment plans with optional status filter."""
@@ -132,9 +153,20 @@ async def create_plan(request: Request):
 
     plans_col = get_collection("payment_plans")
 
-    # Check for existing plan
-    existing = await plans_col.find_one({"booking_number": data["booking_number"], "status": "active"})
+    # Check for existing plan. needs_review is a plan whose linked payment
+    # could not be detached after a failed finalization; another plan would
+    # leave two records for one booking.
+    existing = await plans_col.find_one({
+        "booking_number": data["booking_number"],
+        "status": {"$in": ["active", "needs_review"]},
+    })
     if existing:
+        if existing.get("status") == "needs_review":
+            return JSONResponse(
+                {"error": "payment_needs_review", "plan_id": existing.get("plan_id"),
+                 "message": "A payment plan for this booking needs review before another can be created."},
+                status_code=409,
+            )
         return JSONResponse({"error": "Active payment plan already exists for this booking"}, status_code=409)
 
     total_premium = float(data["total_premium"])
@@ -176,22 +208,32 @@ async def create_plan(request: Request):
         "created_by": data.get("created_by", "dashboard"),
     }
 
-    await plans_col.insert_one(plan_doc)
-    plan_doc["_id"] = str(plan_doc.get("_id", ""))
+    dp_txn = str(data.get("down_payment_transaction_id") or "").strip()
+    if dp_txn and down_payment > 0:
+        err = await _create_plan_with_down_payment_txn(
+            plans_col, plan_doc, dp_txn, down_payment,
+            data.get("payment_method", "Card"), now, _audit_actor(request))
+        if err is not None:
+            return err
+        plan_doc["_id"] = ""
+    else:
+        await plans_col.insert_one(plan_doc)
+        plan_doc["_id"] = str(plan_doc.get("_id", ""))
 
-    # Record the down payment
-    if down_payment > 0:
-        payments_col = get_collection("payments")
-        await payments_col.insert_one({
-            "booking_number": data["booking_number"],
-            "plan_id": plan_doc["plan_id"],
-            "amount": down_payment,
-            "method": data.get("payment_method", "Cash"),
-            "type": "down_payment",
-            "status": "completed",
-            "timestamp": now.isoformat(),
-            "notes": "Initial down payment",
-        })
+        # Record the down payment (cash/check or card without a provider txn id)
+        if down_payment > 0:
+            payments_col = get_collection("payments")
+            await payments_col.insert_one({
+                "booking_number": data["booking_number"],
+                "plan_id": plan_doc["plan_id"],
+                "amount": down_payment,
+                "method": data.get("payment_method", "Cash"),
+                "type": "down_payment",
+                "transaction_id": "",
+                "status": "completed",
+                "timestamp": now.isoformat(),
+                "notes": "Initial down payment",
+            })
 
     await publish_event("payment_plan_created", {
         "plan_id": plan_doc["plan_id"],
@@ -217,6 +259,8 @@ async def create_plan(request: Request):
 # that inserts it may write the payment and move the balance.
 
 PAYMENT_CLAIMS_COLLECTION = "payment_plan_payment_claims"
+_DOWN_PAYMENT_AUDIT = "payment_plan_down_payment_recorded"
+_CREATE_ROLLBACK_AUDIT = "payment_plan_create_rolled_back"
 _payment_claim_index_ready = False
 
 
@@ -231,6 +275,600 @@ async def _payment_claims_collection():
         )
         _payment_claim_index_ready = True
     return coll
+
+
+_UNLINKED = {"$or": [{"plan_id": {"$exists": False}}, {"plan_id": None}, {"plan_id": ""}]}
+
+
+def _conflict(error: str, txn: str, message: str, status_code: int = 409):
+    return JSONResponse(
+        {"error": error, "transaction_id": txn, "message": message},
+        status_code=status_code,
+    )
+
+
+def _needs_review_response(txn: str, plan_id: str, message: str) -> JSONResponse:
+    """Same shape for a kept link and for an incomplete rollback."""
+    return JSONResponse(
+        {"error": "payment_needs_review", "transaction_id": txn, "plan_id": plan_id,
+         "message": message},
+        status_code=500,
+    )
+
+
+def _row_settled(row: dict) -> bool:
+    """A logged row can be this down payment when the recorder calls it a charge.
+
+    Status must be ``SETTLED_CHARGE_STATUSES``. A present event must be the
+    matching settled name (``payment.captured``, ``payment.succeeded``,
+    ``payment.settled``, and the rest of that set). Refund and failure
+    events are not.
+    """
+    from dashboard.services.payment_log_claims import (
+        REVERSAL_KINDS,
+        SETTLED_CHARGE_EVENTS,
+        SETTLED_CHARGE_STATUSES,
+        row_kind,
+    )
+
+    status = str(row.get("status") or "").strip().lower()
+    if status not in SETTLED_CHARGE_STATUSES:
+        return False
+    if row_kind(row) in REVERSAL_KINDS:
+        return False
+    event = _event_type(row)
+    if event and event not in SETTLED_CHARGE_EVENTS:
+        return False
+    return True
+
+
+def _down_payment_review_block(rows: list):
+    """``(error, message)`` when a row needs review or the txn has a reversal sibling.
+
+    A lone refund or failure is left to the settled check. A charge plus a
+    refund or failure sibling, or any row with ``needs_review``, is
+    ``payment_needs_review``.
+    """
+    from dashboard.services.payment_log_claims import REVERSAL_KINDS, row_kind
+
+    if any(row.get("needs_review") for row in rows):
+        return (
+            "payment_needs_review",
+            "This transaction needs review before it can be used as a down payment.",
+        )
+    reversals = [row for row in rows if row_kind(row) in REVERSAL_KINDS]
+    if reversals and len(rows) > len(reversals):
+        return (
+            "payment_needs_review",
+            "This transaction was refunded or failed and needs review "
+            "before it can be used as a down payment.",
+        )
+    return None
+
+
+def _refuse_down_payment(rows: list, booking: str, amount, txn: str):
+    """``(error, message)`` when these rows must not become this down payment.
+
+    ``None`` when there is no row (insert) or exactly one linkable row.
+    Called again on the rows re-read after the payment lock is held.
+    """
+    blocked = _down_payment_review_block(rows)
+    if blocked is not None:
+        return blocked
+    linked = [row for row in rows if not _plan_id_blank(row)]
+    if linked:
+        return (
+            "transaction_id_used_on_other_plan",
+            "This transaction id is already recorded on a payment plan.",
+        )
+    open_rows = [row for row in rows if _plan_id_blank(row)]
+    if len(open_rows) > 1:
+        return (
+            "logged_payment_ambiguous",
+            "More than one logged payment has this transaction id.",
+        )
+    if not open_rows:
+        return None
+    row = open_rows[0]
+    if not _row_settled(row):
+        return (
+            "logged_payment_not_settled",
+            "The logged payment for this transaction id is not settled.",
+        )
+    if not _same_amount(row.get("amount"), amount):
+        return (
+            "transaction_id_amount_mismatch",
+            "The logged payment for this transaction id has a different amount.",
+        )
+    rb = str(row.get("booking_number") or "").strip()
+    if not rb:
+        return (
+            "logged_payment_unowned",
+            "The logged payment for this transaction id is not matched to a booking. "
+            "Assign it to the booking first.",
+        )
+    if rb != str(booking).strip():
+        return (
+            "logged_payment_booking_mismatch",
+            "The logged payment for this transaction id is for another booking.",
+        )
+    return None
+
+
+class _CreateRefused(Exception):
+    """A down-payment create must not proceed. The open transaction aborts."""
+
+    def __init__(self, error: str, message: str):
+        super().__init__(error)
+        self.error = error
+        self.message = message
+
+
+def _down_payment_audit(actor, plan_id, txn, booking, amount, payment_id, now) -> dict:
+    payment_s = str(payment_id)
+    return {
+        "_id": _scoped_audit_id("plan-create", plan_id, txn),
+        "event_type": _DOWN_PAYMENT_AUDIT,
+        "entity_type": "payment_plan",
+        "entity_id": plan_id,
+        "actor": actor,
+        "agent_name": actor,
+        "timestamp": now,
+        "created_at": now,
+        "booking_number": booking,
+        "transaction_id": txn,
+        "payment_id": payment_s,
+        "plan_id": plan_id,
+        "payment_type": "down_payment",
+        "amount": amount,
+        "reason": "plan down payment inserted for a provider transaction id "
+                  "before a poller or webhook row existed",
+        "confidence": 1.0,
+        "match_method": "exact_transaction_id",
+        "old_state": {"plan_id": None, "status": None, "payment_id": None},
+        "new_state": {"plan_id": plan_id, "status": "completed", "payment_id": payment_s},
+    }
+
+
+async def _insert_audit(doc: dict, session=None) -> None:
+    from pymongo.errors import DuplicateKeyError
+
+    try:
+        await get_collection("audit_events").insert_one(doc, **_sess(session))
+    except DuplicateKeyError:
+        return
+
+
+async def _create_plan_with_down_payment_txn(plans_col, plan_doc, txn, amount, method, now, actor):
+    """Create a plan whose down payment carries a provider transaction id.
+
+    Same rule as /pay (#179/#184): one application of a txn id per tenant.
+    Transaction support is checked first. A standalone server or a failed
+    probe returns 503 ``transactions_unavailable`` and writes nothing.
+
+    The claim in ``payment_plan_payment_claims`` is the gate, inserted only
+    after that probe.     Inside ``ClientSession.with_transaction`` (the driver
+    retries transient errors) the first write is #187's
+    ``payment_txn_locks`` upsert (``tenant_id`` + ``txn_key``), then the
+    plan, the payment insert or link, the audit, and the claim mark. A new inserted down payment gets a deterministic tenant-scoped
+    audit (``plan-create:...``, the #185 id rule). If that audit cannot be
+    saved, the transaction aborts and the claim is released.
+
+    A failure after an audit was written runs ``_undo_plan_create``, which
+    records a compensating audit. Returns a JSONResponse on refusal, else None.
+    """
+    from pymongo.errors import DuplicateKeyError
+
+    client = await _transaction_client()
+    if client is None:
+        return _unavailable()
+
+    payments_col = get_collection("payments")
+    plan_id = plan_doc["plan_id"]
+    booking = plan_doc["booking_number"]
+    try:
+        claims = await _payment_claims_collection()
+    except Exception:
+        return JSONResponse({"error": "payment_dedupe_unavailable"}, status_code=503)
+    from dashboard.services.payment_log_claims import (
+        LOCKS_COLLECTION,
+        acquire_txn_lock,
+        ensure_txn_lock_index,
+    )
+
+    try:
+        await ensure_txn_lock_index(get_collection(LOCKS_COLLECTION))
+    except Exception:
+        logger.warning("[payment_plans] txn lock index unavailable")
+        return _unavailable()
+
+    if await claims.find_one({"transaction_id": txn}) is not None:
+        return _conflict("transaction_id_used_on_other_plan", txn,
+                         "This transaction id is already recorded on a payment plan.")
+    if await payments_col.find_one(
+            {"transaction_id": txn, "plan_id": {"$exists": True, "$nin": [None, ""]}}):
+        return _conflict("transaction_id_used_on_other_plan", txn,
+                         "This transaction id is already recorded on a payment plan.")
+
+    rows = [r async for r in _iter_find(payments_col, {"transaction_id": txn, **_UNLINKED})]
+    refusal = _refuse_down_payment(rows, booking, amount, txn)
+    if refusal is not None:
+        return _conflict(refusal[0], txn, refusal[1])
+
+    try:
+        await claims.insert_one({
+            "plan_id": plan_id, "transaction_id": txn, "booking_number": booking,
+            "amount": amount, "kind": "down_payment", "status": "claimed",
+            "claimed_at": now.isoformat(),
+        })
+    except DuplicateKeyError:
+        return _conflict("transaction_id_used_on_other_plan", txn,
+                         "This transaction id is already recorded on a payment plan.")
+    except Exception:
+        return JSONResponse({"error": "payment_dedupe_unavailable"}, status_code=503)
+
+    from bson import ObjectId
+
+    state = {
+        "plan_inserted": False,
+        "link_set": None,
+        "inserted_id": None,
+        "row": None,
+        "payment_id": None,
+        "audit_written": False,
+    }
+
+    async def work(session):
+        state["plan_inserted"] = False
+        state["link_set"] = None
+        state["inserted_id"] = None
+        state["row"] = None
+        state["payment_id"] = None
+        state["audit_written"] = False
+        await acquire_txn_lock(get_collection(LOCKS_COLLECTION), txn, session)
+        fresh_rows = await _docs(payments_col, {"transaction_id": txn}, session)
+        code = _refuse_down_payment(fresh_rows, booking, amount, txn)
+        if code is not None:
+            raise _CreateRefused(code[0], code[1])
+        open_rows = [row for row in fresh_rows if _plan_id_blank(row)]
+        row = open_rows[0] if open_rows else None
+        state["row"] = row
+        await plans_col.insert_one(dict(plan_doc), **_sess(session))
+        state["plan_inserted"] = True
+        if row is not None:
+            pin = {"_id": row["_id"], "transaction_id": txn, "amount": row.get("amount"),
+                   "status": row.get("status"), "booking_number": row.get("booking_number"),
+                   **_UNLINKED}
+            raw = row.get("raw_payload")
+            if isinstance(raw, dict) and "event_type" in raw:
+                pin["raw_payload.event_type"] = raw["event_type"]
+            else:
+                pin["raw_payload.event_type"] = {"$exists": False}
+            candidate = {
+                "plan_id": plan_id, "booking_number": booking, "type": "down_payment",
+                "logged_status": row.get("status"), "status": "completed",
+                # Provider payment time, not the link time (revenue windows).
+                "timestamp": row.get("timestamp") or row.get("created_at") or now.isoformat(),
+                "plan_linked_at": now.isoformat(),
+            }
+            res = await payments_col.update_one(pin, {"$set": candidate}, **_sess(session))
+            if not getattr(res, "matched_count", 0):
+                raise _LinkLost()
+            state["link_set"] = candidate
+            state["payment_id"] = row["_id"]
+            own_id = row["_id"]
+        else:
+            own_id = ObjectId()
+            state["inserted_id"] = own_id
+            state["payment_id"] = own_id
+            await payments_col.insert_one({
+                "_id": own_id,
+                "booking_number": booking, "plan_id": plan_id, "amount": amount,
+                "method": method, "type": "down_payment", "transaction_id": txn,
+                "status": "completed", "timestamp": now.isoformat(),
+                "notes": "Initial down payment",
+            }, **_sess(session))
+            await _insert_audit(
+                _down_payment_audit(actor, plan_id, txn, booking, amount, own_id, now),
+                session,
+            )
+            state["audit_written"] = True
+        siblings = [
+            item for item in await _docs(payments_col, {"transaction_id": txn}, session)
+            if item.get("_id") != own_id
+        ]
+        if siblings:
+            raise _Ambiguous()
+        if state["link_set"] is not None:
+            await _insert_audit({
+                "event_type": "payment_plan_logged_payment_linked",
+                "entity_type": "payment_plan", "entity_id": plan_id,
+                "actor": actor,
+                "agent_name": actor,
+                "timestamp": now, "created_at": now,
+                "booking_number": booking, "transaction_id": txn,
+                "payment_id": str(row.get("_id")), "payment_type": "down_payment",
+                "plan_id_before": None, "plan_id_after": plan_id,
+                "status_before": row.get("status"), "status_after": "completed",
+                "amount": amount,
+                "reason": "plan down payment linked to logged card payment: exact transaction id, "
+                          "same amount, same booking, settled status, only row for the id",
+                "confidence": 1.0, "match_method": "exact_transaction_id",
+                "old_state": {"plan_id": None, "status": row.get("status")},
+                "new_state": {"plan_id": plan_id, "status": "completed"},
+            }, session)
+            state["audit_written"] = True
+        await claims.update_one(
+            {"plan_id": plan_id, "transaction_id": txn},
+            {"$set": {"status": "applied", "applied_at": now.isoformat()}},
+            **_sess(session),
+        )
+
+    try:
+        await _run_apply(client, work)
+    except Exception as exc:
+        outcome = await _undo_plan_create(
+            plans_col, payments_col, claims, plan_id, txn,
+            state["row"], state["link_set"], state["inserted_id"],
+            state["plan_inserted"], actor=actor, compensate=state["audit_written"],
+            amount=amount, booking=booking, payment_id=state["payment_id"],
+        )
+        if outcome != "undone":
+            if outcome == "retained":
+                message = (
+                    "The payment stayed linked to the plan, but the plan could not be finished. "
+                    "Review it before recording this payment again."
+                )
+            else:
+                message = (
+                    "The plan could not be finished and the rollback did not complete. "
+                    "Review it before recording this payment again."
+                )
+            return _needs_review_response(txn, plan_id, message)
+        if isinstance(exc, (_LinkLost, _CreateRefused)):
+            error = exc.error if isinstance(exc, _CreateRefused) else "logged_payment_changed"
+            message = (
+                exc.message if isinstance(exc, _CreateRefused)
+                else "The logged payment changed while the plan was being created. Try again."
+            )
+            return _conflict(error, txn, message)
+        if isinstance(exc, _Ambiguous):
+            return _conflict(
+                "logged_payment_ambiguous", txn,
+                "Another logged payment with this transaction id appeared while the plan was being created. Review before trying again.",
+            )
+        if isinstance(exc, TransactionsUnavailable):
+            return _unavailable()
+        return _conflict("payment_record_failed", txn,
+                         "The plan could not be created. Nothing was recorded.", 500)
+    return None
+
+
+class _Ambiguous(Exception):
+    pass
+
+
+class _LinkLost(Exception):
+    pass
+
+
+async def _iter_find(coll, flt):
+    cursor = coll.find(flt)
+    if hasattr(cursor, "__aiter__"):
+        async for d in cursor:
+            yield d
+    else:
+        for d in await cursor.to_list(length=None):
+            yield d
+
+
+async def _delete_if_present(coll, flt, identity) -> bool:
+    """True when no document with ``identity`` remains.
+
+    ``delete_one`` matching nothing is success only when that document is
+    already gone. A row that is still there was not cleared.
+    """
+    res = await coll.delete_one(flt)
+    if getattr(res, "deleted_count", 0):
+        return True
+    return await coll.find_one(identity) is None
+
+
+async def _write_create_rollback_audit(actor, plan_id, txn, booking, amount, payment_id,
+                                      linked: bool, outcome: str, claim_status: str) -> bool:
+    """Compensating audit for a plan-create that did not finish. False if it cannot be saved.
+
+    ``claim_status`` is the claim row's state after it was finalized
+    (``deleted`` or ``failed``), not a guess made before that write.
+    """
+    from pymongo.errors import DuplicateKeyError
+
+    now = datetime.now(timezone.utc)
+    payment_s = None if payment_id is None else str(payment_id)
+    doc = {
+        "_id": _scoped_audit_id("plan-create-rollback", plan_id, txn),
+        "event_type": _CREATE_ROLLBACK_AUDIT,
+        "entity_type": "payment_plan",
+        "entity_id": plan_id,
+        "actor": actor,
+        "agent_name": actor,
+        "timestamp": now,
+        "created_at": now,
+        "booking_number": booking,
+        "transaction_id": txn,
+        "payment_id": payment_s,
+        "plan_id": plan_id,
+        "amount": amount,
+        "linked_existing_row": linked,
+        "reason": "plan create finalization failed; compensating rollback",
+        "confidence": 1.0,
+        "old_state": {
+            "plan_id": plan_id,
+            "payment_id": payment_s,
+            "linked_existing_row": linked,
+            "claim_status": "claimed",
+            "status": "completed",
+        },
+        "new_state": {
+            "outcome": outcome,
+            "plan_id": None if outcome == "undone" else plan_id,
+            "plan_status": None if outcome == "undone" else "needs_review",
+            "claim_status": claim_status,
+        },
+    }
+    try:
+        await get_collection("audit_events").insert_one(doc)
+        return True
+    except DuplicateKeyError:
+        return True
+    except Exception as exc:
+        logger.error("[payment_plans] compensating audit failed plan_id=%s err=%s",
+                     plan_id, type(exc).__name__)
+        return False
+
+
+def _rollback_outcome(plan_inserted: bool, detached: bool, fully_undone: bool) -> str:
+    if plan_inserted and not detached:
+        return "retained"
+    if fully_undone:
+        return "undone"
+    return "incomplete"
+
+
+async def _finalize_create_claim(claims, plan_id: str, txn: str, *, delete: bool) -> str:
+    """Delete the claim or leave it ``failed``. Returns the status that is stored.
+
+    ``deleted`` means no claim row remains. ``failed`` means the row is
+    stored with ``status: failed``. Anything else is the status still on
+    the row when that write did not stick.
+    """
+    ident = {"plan_id": plan_id, "transaction_id": txn}
+    failed = {
+        "plan_id": plan_id,
+        "transaction_id": txn,
+        "status": "failed",
+        "failed_reason": "plan_create_rollback_incomplete",
+        "failed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if delete:
+        try:
+            await claims.delete_one(ident)
+            if await claims.find_one(ident) is None:
+                return "deleted"
+        except Exception as exc:
+            logger.error("[payment_plans] claim delete failed plan_id=%s err=%s",
+                         plan_id, type(exc).__name__)
+    try:
+        await claims.update_one(ident, {"$set": failed}, upsert=True)
+    except Exception as exc:
+        logger.error("[payment_plans] claim fail-mark failed plan_id=%s err=%s",
+                     plan_id, type(exc).__name__)
+        try:
+            fresh = await claims.find_one(ident)
+        except Exception:
+            fresh = None
+        if fresh is None:
+            return "deleted"
+        return str(fresh.get("status") or "claimed")
+    return "failed"
+
+
+async def _undo_plan_create(plans_col, payments_col, claims, plan_id, txn, row,
+                            link_set, inserted_id, plan_inserted, actor="",
+                            compensate=False, amount=None, booking="", payment_id=None):
+    """Best-effort rollback in reverse order, then a compensating audit.
+
+    The link revert matches only while every field this request wrote is
+    unchanged (a newer write, e.g. the reconciliation service, is kept).
+    When that revert matches nothing but the row no longer carries this
+    ``plan_id``, the transaction abort already detached it. When the row
+    still carries this ``plan_id``, the plan is kept as ``needs_review``.
+    A delete that throws, or that matches nothing while the row is still
+    there, is an incomplete rollback: any surviving plan is marked
+    ``needs_review`` and the claim stays blocked.
+
+    When ``compensate`` is set, an audit was already written for this
+    attempt. The claim is finalized first (deleted, or left ``failed``).
+    The compensating ``payment_plan_create_rolled_back`` event is written
+    after that, and its ``claim_status`` is the stored claim. If that
+    event cannot be saved, a deleted claim is put back as ``failed`` and
+    the outcome is ``incomplete``.
+
+    Returns ``"undone"``, ``"retained"`` (plan kept because the payment could
+    not be detached), or ``"incomplete"``.
+    """
+    ok = True
+    detached = link_set is None
+    payment_cleared = inserted_id is None
+    plan_cleared = not plan_inserted
+    try:
+        if link_set is not None and row is not None:
+            restore = {k: row[k] for k in link_set if k in row}
+            unset = {k: "" for k in link_set if k not in row}
+            upd = {"$unset": unset} if unset else {}
+            if restore:
+                upd["$set"] = restore
+            res = await payments_col.update_one({"_id": row["_id"], **link_set}, upd)
+            detached = bool(getattr(res, "matched_count", 0))
+            if not detached:
+                fresh = await payments_col.find_one({"_id": row["_id"]})
+                still_ours = fresh is not None and str(fresh.get("plan_id") or "") == str(plan_id)
+                if not still_ours:
+                    # Transaction abort (or a prior revert) already dropped the link.
+                    detached = True
+                else:
+                    ok = False
+                    logger.error("[payment_plans] down-payment link revert matched nothing plan_id=%s", plan_id)
+        if ok and detached and inserted_id is not None:
+            payment_cleared = await _delete_if_present(
+                payments_col, {"_id": inserted_id, "plan_id": plan_id}, {"_id": inserted_id})
+            if not payment_cleared:
+                ok = False
+                logger.error("[payment_plans] down-payment row delete did not clear plan_id=%s", plan_id)
+        if ok and detached and plan_inserted:
+            plan_cleared = await _delete_if_present(
+                plans_col, {"plan_id": plan_id}, {"plan_id": plan_id})
+            if not plan_cleared:
+                ok = False
+                logger.error("[payment_plans] plan delete did not clear plan_id=%s", plan_id)
+    except Exception as exc:
+        ok = False
+        logger.error("[payment_plans] plan create rollback failed plan_id=%s err=%s", plan_id, type(exc).__name__)
+    if plan_inserted and not plan_cleared:
+        try:
+            await plans_col.update_one(
+                {"plan_id": plan_id},
+                {"$set": {"status": "needs_review",
+                          "review_reason": "plan_create_rollback_incomplete"}},
+            )
+        except Exception as exc:
+            ok = False
+            logger.error("[payment_plans] could not mark plan needs_review plan_id=%s err=%s",
+                         plan_id, type(exc).__name__)
+    fully_undone = ok and detached and payment_cleared and plan_cleared
+    outcome = _rollback_outcome(plan_inserted, detached, fully_undone)
+    claim_status = await _finalize_create_claim(claims, plan_id, txn, delete=fully_undone)
+    if claim_status != "deleted":
+        fully_undone = False
+        if outcome == "undone":
+            outcome = "incomplete"
+    if compensate:
+        saved = await _write_create_rollback_audit(
+            actor, plan_id, txn, booking, amount, payment_id,
+            linked=link_set is not None, outcome=outcome, claim_status=claim_status,
+        )
+        if not saved:
+            if claim_status == "deleted":
+                claim_status = await _finalize_create_claim(
+                    claims, plan_id, txn, delete=False,
+                )
+            fully_undone = False
+            outcome = "incomplete"
+    if outcome == "retained":
+        return "retained"
+    if fully_undone and outcome == "undone" and claim_status == "deleted":
+        return "undone"
+    return "incomplete"
 
 
 def _next_due(frequency: str, now: datetime) -> datetime:
@@ -342,8 +980,12 @@ async def _idempotent_reply(
 # the row write, the plan ``$inc`` (and the paid-in-full clamp), and the
 # ``audit_events`` insert run in that same ``ClientSession.with_transaction``.
 # The driver retries transient transaction errors. There is no fallback and
-# no step resume. Refunds go through ``reverse_plan_payment`` (balance
-# restored once). Declines are logged and do not move the balance.
+# no step resume. The first write inside the transaction is the shared
+# ``payment_txn_locks`` upsert. An applied-claim retry reads that claim and
+# then the refund or failure siblings inside the same locked transaction.
+# Any such sibling is 409 ``payment_needs_review`` and does not change the
+# balance. Refunds of a plan payment go through ``reverse_plan_payment``
+# (balance restored once). Declines are logged and do not move the balance.
 # Webhook and the receipt poller call ``apply_plan_payment`` with the
 # same claim. County/state backfill and email-only bond matching stay out.
 
@@ -499,6 +1141,20 @@ def _qualify(plan: dict, row: dict, amount, txn: str):
     return _refuse(code[0], txn, code[1])
 
 
+def _reversal_sibling(rows: list) -> bool:
+    from dashboard.services.payment_log_claims import has_reversal_sibling
+    return has_reversal_sibling(rows)
+
+
+def _reversed_refusal(txn: str):
+    return _refuse(
+        "payment_needs_review",
+        txn,
+        "This transaction id was refunded or failed and needs review. "
+        "The plan balance was not changed.",
+    )
+
+
 async def _docs(coll, flt: dict, session=None) -> list:
     kwargs = _sess(session)
     cursor = coll.find(flt, **kwargs) if kwargs else coll.find(flt)
@@ -634,6 +1290,8 @@ async def _classify_rows(payments_col, plan: dict, txn: str, amount):
     ``target`` is the single committed unlinked row to link. None means insert.
     """
     rows = await _docs(payments_col, {"transaction_id": txn})
+    if _reversal_sibling(rows):
+        return "error", _reversed_refusal(txn)
     if not rows:
         if not _booking(plan.get("booking_number")):
             return "error", _refuse(
@@ -766,8 +1424,144 @@ async def _write_payment_row(payments_col, plan, plan_id, txn, amount, data, now
     return False
 
 
+def _whole_cents(value) -> int | None:
+    """An integer cent field. Booleans are not cents."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _stored_dollars(value) -> float | None:
+    """A stored dollar amount as a float, including zero.
+
+    Numbers stay numbers. A decimal string such as ``1000.00`` becomes a
+    float so ``$inc`` can add it. Fractional cents are refused.
+    """
+    from decimal import Decimal, InvalidOperation
+
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+        if number != number or number in (float("inf"), float("-inf")):
+            return None
+        return number
+    if not isinstance(value, str):
+        return None
+    text = value.strip().replace(",", "").replace("$", "")
+    if not text or len(text) > 64:
+        return None
+    try:
+        dec = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return None
+    if not dec.is_finite():
+        return None
+    exponent = dec.as_tuple().exponent
+    if isinstance(exponent, str) or exponent < -2:
+        return None
+    return float(dec)
+
+
+def _numeric_money_patch(plan: dict) -> dict:
+    """Dollar fields ``$inc`` can add.
+
+    ``ensure_payment_plan_for_confirmation`` stores ``balance_remaining`` and
+    ``total_paid`` as decimal strings. When the matching ``*_cents`` field is
+    an integer, that integer is the source of truth and the dollar field
+    becomes ``cents / 100``. A string with no cent field is parsed. Values
+    that are already numbers are left alone.
+    """
+    patch = {}
+    for dollars_key, cents_key in (
+        ("balance_remaining", "balance_remaining_cents"),
+        ("total_paid", "total_paid_cents"),
+    ):
+        current = plan.get(dollars_key)
+        if not isinstance(current, str):
+            if current is not None and _stored_dollars(current) is None:
+                raise RuntimeError(f"{dollars_key} is not a numeric amount")
+            continue
+        cents = _whole_cents(plan.get(cents_key))
+        if cents is not None:
+            patch[dollars_key] = cents / 100
+            continue
+        number = _stored_dollars(current)
+        if number is None:
+            raise RuntimeError(f"{dollars_key} is not a numeric amount")
+        patch[dollars_key] = number
+    return patch
+
+
+async def _coerce_plan_money(plans_col, plan_id, plan, session=None) -> dict:
+    """Rewrite decimal-string balances to numbers inside the caller's transaction."""
+    patch = _numeric_money_patch(plan)
+    if not patch:
+        return plan
+    pinned = {"plan_id": plan_id}
+    for key in patch:
+        pinned[key] = plan.get(key)
+    await plans_col.update_one(pinned, {"$set": patch}, **_sess(session))
+    fresh = await plans_col.find_one({"plan_id": plan_id}, **_sess(session))
+    if not isinstance(fresh, dict):
+        raise RuntimeError("plan missing during balance update")
+    return fresh
+
+
+def _money_still_text(plan: dict) -> bool:
+    return any(isinstance(plan.get(key), str) for key in ("balance_remaining", "total_paid"))
+
+
+def _cent_increments(plan: dict, amount, *, paying: bool) -> dict:
+    """Integer cent companions. Absent fields stay absent.
+
+    A payment decreases ``balance_remaining_cents`` and increases
+    ``total_paid_cents``. A refund does the opposite.
+    """
+    cents = _amount_cents(amount)
+    if not cents:
+        return {}
+    balance_delta = -cents if paying else cents
+    paid_delta = cents if paying else -cents
+    inc = {}
+    if _whole_cents(plan.get("balance_remaining_cents")) is not None:
+        inc["balance_remaining_cents"] = balance_delta
+    if _whole_cents(plan.get("total_paid_cents")) is not None:
+        inc["total_paid_cents"] = paid_delta
+    return inc
+
+
+async def _close_if_paid_off(plans_col, plan_id, session=None) -> None:
+    """Mark paid in full from integer cents when that field is the contract."""
+    plan = await plans_col.find_one({"plan_id": plan_id}, **_sess(session)) or {}
+    if _whole_cents(plan.get("balance_remaining_cents")) is not None:
+        await plans_col.update_one(
+            {"plan_id": plan_id, "balance_remaining_cents": {"$lte": 0}},
+            {"$set": {
+                "balance_remaining": 0,
+                "balance_remaining_cents": 0,
+                "status": "paid_in_full",
+            }},
+            **_sess(session),
+        )
+        return
+    balance = plan.get("balance_remaining")
+    if isinstance(balance, str):
+        return
+    await plans_col.update_one(
+        {"plan_id": plan_id, "balance_remaining": {"$lte": 0}},
+        {"$set": {"balance_remaining": 0, "status": "paid_in_full"}},
+        **_sess(session),
+    )
+
+
 async def _apply_balance(plans_col, plan_id, txn, amount, now, session=None) -> None:
-    """Idempotent ``$inc``. A second run sees the transaction id already collected."""
+    """Idempotent ``$inc``. A second run sees the transaction id already collected.
+
+    Decimal-string balances from ``ensure_payment_plan_for_confirmation`` are
+    coerced to numbers in this same transaction before ``$inc``. Integer
+    ``balance_remaining_cents`` stays the source of truth.
+    """
     for _ in range(3):
         plan = await plans_col.find_one({"plan_id": plan_id}, **_sess(session))
         if not plan:
@@ -785,6 +1579,10 @@ async def _apply_balance(plans_col, plan_id, txn, amount, now, session=None) -> 
             raise RuntimeError("collected_transaction_ids unreadable")
         if txn in ids:
             break
+        if _money_still_text(plan):
+            plan = await _coerce_plan_money(plans_col, plan_id, plan, session)
+            if _money_still_text(plan):
+                continue
         await plans_col.update_one(
             {"plan_id": plan_id, **pin},
             {
@@ -792,11 +1590,7 @@ async def _apply_balance(plans_col, plan_id, txn, amount, now, session=None) -> 
                     "balance_remaining": -amount,
                     "total_paid": amount,
                     "payments_made": 1,
-                    **(
-                        {"balance_remaining_cents": -(_amount_cents(amount) or 0)}
-                        if isinstance(plan.get("balance_remaining_cents"), int)
-                        else {}
-                    ),
+                    **_cent_increments(plan, amount, paying=True),
                 },
                 "$set": {
                     "collected_transaction_ids": ids + [txn],
@@ -808,11 +1602,7 @@ async def _apply_balance(plans_col, plan_id, txn, amount, now, session=None) -> 
             },
             **_sess(session),
         )
-    await plans_col.update_one(
-        {"plan_id": plan_id, "balance_remaining": {"$lte": 0}},
-        {"$set": {"balance_remaining": 0, "status": "paid_in_full"}},
-        **_sess(session),
-    )
+    await _close_if_paid_off(plans_col, plan_id, session)
     fresh = await plans_col.find_one({"plan_id": plan_id}, **_sess(session))
     if not _collected(fresh or {}, txn) or not _balance_ok(fresh or {}):
         raise RuntimeError("balance update did not stick")
@@ -867,20 +1657,28 @@ async def _mark_installment_paid(plans_col, plan_id, data, txn, now, session=Non
     await plans_col.update_one({"plan_id": plan_id}, {"$set": patch}, **_sess(session))
 
 
-def _audit_id(plan_id: str, txn: str) -> str:
-    """Deterministic ``audit_events`` ``_id``.
+def _scoped_audit_id(kind: str, plan_id: str, txn: str) -> str:
+    """Deterministic ``audit_events`` ``_id``. Same tenant rule as #185.
 
-    Flag off stays ``plan-pay:{plan_id}:{txn}``. Flag on includes the tenant
-    so two agencies with the same plan id and transaction id do not collide
-    on the global ``_id`` index and abort the second transaction. The
-    tenant-scoped lookup cannot see the other agency's row.
+    Flag off is ``{kind}:{plan_id}:{txn}``. Flag on is
+    ``{kind}:{tenant_id}:{plan_id}:{txn}`` so two agencies with the same plan
+    id and transaction id do not collide on the global ``_id`` index. No
+    index is added on ``payments``.
     """
     if not multi_tenant_enabled():
-        return f"plan-pay:{plan_id}:{txn}"
-    return f"plan-pay:{current_tenant_id() or ''}:{plan_id}:{txn}"
+        return f"{kind}:{plan_id}:{txn}"
+    return f"{kind}:{current_tenant_id() or ''}:{plan_id}:{txn}"
 
 
-async def _audit(audit_col, actor: str, plan, plan_id: str, txn: str, amount, linked: bool, before: dict, after: dict, session=None) -> None:
+def _audit_id(plan_id: str, txn: str) -> str:
+    """Plan ``/pay`` audit id (``plan-pay:...``)."""
+    return _scoped_audit_id("plan-pay", plan_id, txn)
+
+
+async def _audit(
+    audit_col, actor: str, plan, plan_id: str, txn: str, amount, linked: bool,
+    before: dict, after: dict, session=None,
+) -> None:
     from pymongo.errors import DuplicateKeyError
 
     existing = await audit_col.find_one(
@@ -936,7 +1734,16 @@ async def _mark_applied(claims, plans_col, plan_id, txn, now, session=None) -> d
 
 
 async def _apply_in_transaction(claims, payments_col, plans_col, audit_col, plan_id, txn, amount, data, actor, now, session) -> None:
-    """Validate, then write the row, the balance, the audit, and the claim, in that order."""
+    """Lock, re-read refund and failure siblings, then write. A sibling refuses before any balance change."""
+    from dashboard.services.payment_log_claims import LOCKS_COLLECTION, acquire_txn_lock
+
+    await acquire_txn_lock(get_collection(LOCKS_COLLECTION), txn, session)
+    if _reversal_sibling(await _docs(payments_col, {"transaction_id": txn}, session)):
+        raise PlanPaymentRefused(
+            "payment_needs_review",
+            "This transaction id was refunded or failed and needs review. "
+            "The plan balance was not changed.",
+        )
     plan, mode, row = await _assert_preconditions(
         claims, payments_col, plans_col, plan_id, txn, amount, session,
     )
@@ -1000,6 +1807,33 @@ async def _run_apply(client, work) -> str:
     async with started as session:
         await session.with_transaction(_callback)
     return _last_apply_path
+
+
+async def _locked_prior_decision(client, claims, payments_col, txn):
+    """Lock, read the claim, then re-read reversal siblings before deciding.
+
+    The idempotent retry of an applied claim stays inside this transaction.
+    A refund that is visible before the decision returns 409. The balance is
+    not changed. A refusal aborts, so the lock bump is not committed.
+    """
+    from dashboard.services.payment_log_claims import LOCKS_COLLECTION, acquire_txn_lock
+
+    found = {}
+
+    async def work(session):
+        await acquire_txn_lock(get_collection(LOCKS_COLLECTION), txn, session)
+        claim = await claims.find_one({"transaction_id": txn}, **_sess(session))
+        rows = await _docs(payments_col, {"transaction_id": txn}, session)
+        if _reversal_sibling(rows):
+            raise PlanPaymentRefused(
+                "payment_needs_review",
+                "This transaction id was refunded or failed and needs review. "
+                "The plan balance was not changed.",
+            )
+        found["claim"] = claim
+
+    await _run_apply(client, work)
+    return found.get("claim")
 
 
 async def _continue_claim(actor, claims, plans_col, payments_col, plan, plan_id, txn, amount, data, client):
@@ -1108,8 +1942,24 @@ async def apply_plan_payment(plan_id, data, actor: str):
     except Exception:
         return JSONResponse({"error": "payment_dedupe_unavailable"}, status_code=503)
 
+    try:
+        from dashboard.services.payment_log_claims import LOCKS_COLLECTION, ensure_txn_lock_index
+        await ensure_txn_lock_index(get_collection(LOCKS_COLLECTION))
+    except Exception:
+        logger.warning("[payment_plans] txn lock index unavailable")
+        return _unavailable()
+
+    # The claim lookup and the reversal read share one lock. A sibling that
+    # lands before this decision is 409 and does not change the balance or
+    # the claim, including an idempotent retry of an applied claim.
+    try:
+        existing_claim = await _locked_prior_decision(client, claims, payments_col, txn)
+    except TransactionsUnavailable:
+        return _unavailable()
+    except PlanPaymentRefused as exc:
+        return _refuse(exc.error, txn, exc.message)
+
     # A finished claim decides. Anything still claimed is not resumed and is not success.
-    existing_claim = await claims.find_one({"transaction_id": txn})
     if existing_claim is not None:
         return await _enter_existing(
             claims, plans_col, payments_col, plan, plan_id, txn, amount, data, existing_claim,
@@ -1134,7 +1984,12 @@ async def apply_plan_payment(plan_id, data, actor: str):
             "claimed_at": now.isoformat(),
         })
     except DuplicateKeyError:
-        existing = await claims.find_one({"transaction_id": txn})
+        try:
+            existing = await _locked_prior_decision(client, claims, payments_col, txn)
+        except TransactionsUnavailable:
+            return _unavailable()
+        except PlanPaymentRefused as exc:
+            return _refuse(exc.error, txn, exc.message)
         return await _enter_existing(
             claims, plans_col, payments_col, plan, plan_id, txn, amount, data,
             existing or {"status": "unknown"},
@@ -1262,8 +2117,14 @@ async def _restore_balance(plans_col, plan_id, original_txn, amount, now, sessio
     ids = plan.get("collected_transaction_ids")
     if not isinstance(ids, list) or original_txn not in ids:
         return
+    if _money_still_text(plan):
+        plan = await _coerce_plan_money(plans_col, plan_id, plan, session)
+        if _money_still_text(plan):
+            raise RuntimeError("plan money field is not numeric")
+        ids = plan.get("collected_transaction_ids")
+        if not isinstance(ids, list) or original_txn not in ids:
+            return
     remaining = [item for item in ids if item != original_txn]
-    cents = _amount_cents(amount)
     await plans_col.update_one(
         {"plan_id": plan_id, "collected_transaction_ids": ids},
         {
@@ -1271,11 +2132,7 @@ async def _restore_balance(plans_col, plan_id, original_txn, amount, now, sessio
                 "balance_remaining": amount,
                 "total_paid": -amount,
                 "payments_made": -1,
-                **(
-                    {"balance_remaining_cents": cents}
-                    if isinstance(plan.get("balance_remaining_cents"), int) and cents
-                    else {}
-                ),
+                **_cent_increments(plan, amount, paying=False),
             },
             "$set": {
                 "collected_transaction_ids": remaining,

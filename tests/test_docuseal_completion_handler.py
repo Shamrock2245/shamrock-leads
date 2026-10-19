@@ -881,13 +881,23 @@ def test_share_invoice_skips_when_premium_unconfirmed():
     assert h.step(dc.STEP_SHARE)["reason"] == "premium_unconfirmed"
 
 
-def test_share_invoice_dispatches_only_when_owner_flag_is_on():
+def test_share_invoice_never_dispatches_even_when_the_flag_is_on(monkeypatch):
     h = Harness()
-    with h.patched(env={"SWIPESIMPLE_DISPATCH_LIVE": "1"}):
+    dispatch = AsyncMock(side_effect=AssertionError("completion must not dispatch"))
+    send = AsyncMock(side_effect=AssertionError("completion must not send"))
+    http = AsyncMock(side_effect=AssertionError("completion must not charge"))
+    monkeypatch.setattr(ss, "dispatch_invoice", dispatch)
+    monkeypatch.setattr(ss, "_share_invoice_http", http)
+    monkeypatch.setattr("dashboard.services.bb_client.send_message_universal", send)
+    with h.patched(env={"SWIPESIMPLE_DISPATCH_LIVE": "1", "SWIPESIMPLE_LIVE": "1"}):
         asyncio.run(h.run_poller())
     h.share.assert_awaited_once_with(
-        BOND_ID, channel="imessage", dispatch=True, source="docuseal_poller_completed",
+        BOND_ID, channel="imessage", dispatch=False, source="docuseal_poller_completed",
     )
+    dispatch.assert_not_called()
+    send.assert_not_called()
+    http.assert_not_called()
+    assert h.step(dc.STEP_SHARE).get("dispatched") is False
 
 
 def test_share_invoice_dry_run_stages_confirmed_down_payment():

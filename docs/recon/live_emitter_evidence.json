@@ -211,6 +211,30 @@
       "emitter": "hold",
       "evidence": "MyOCV inmates.json has only inmateID HCSO<YY>MNI<NNNNNN>, a person (Master Name Index) id, not a booking number; old v4 parser keyed rows on it. Fail closed 2026-10-08 (CoS approved)",
       "source": "docs/recon/FL_HENDRY_FAIL_CLOSED_2026-10-08.md"
+    },
+    {
+      "label": "DeSoto (FL)",
+      "emitter": "hold",
+      "evidence": "DCN roster publishes no booking number; only key is the site's internal bid (CoS 2026-10-08). Fail closed 2026-10-15 (CoS option 1 on #222)",
+      "source": "docs/recon/FL_DESOTO_FAIL_CLOSED_2026-10-15.md"
+    },
+    {
+      "label": "Monroe (FL)",
+      "emitter": "hold",
+      "evidence": "Keys SO arrest log has no booking number; rows keyed on a person-level MNI (mugshot filename) or a synthesized MONROE-{OffenseNo or CADno}; offense-number key not proven per booking. Fail closed 2026-10-15 (CoS)",
+      "source": "docs/recon/FL_MONROE_FAIL_CLOSED_2026-10-15.md"
+    },
+    {
+      "label": "Hillsborough (FL)",
+      "emitter": "hold",
+      "evidence": "Only path is login + reCAPTCHA v2 solving + proxy fallback; CAPTCHA solving is owner-approved only for Broward/Lake, proxies/login not allowed. Fail closed 2026-10-14 (proposed, CoS to approve)",
+      "source": "docs/recon/FL_RULE_CONFLICT_FAIL_CLOSED_2026-10-14.md"
+    },
+    {
+      "label": "Marion (FL)",
+      "emitter": "hold",
+      "evidence": "AWS WAF reached only via residential proxy + TLS impersonation; neither allowed. Fail closed 2026-10-14 (proposed, CoS to approve)",
+      "source": "docs/recon/FL_RULE_CONFLICT_FAIL_CLOSED_2026-10-14.md"
     }
   ]
 }

@@ -74,16 +74,17 @@ def test_home_counties_matrix_state_after_source_checks():
     text, summary = _build(B.DEFAULT_SMOKE_EVIDENCE)
     for county in ("Lee", "Collier", "Glades"):
         assert _matrix_status(text, county) == "candidate_productive", county
-    assert _matrix_status(text, "DeSoto") == "recon_only"
     # Hendry: MyOCV feed has only a person-level MNI id, no booking number (#143).
     # Charlotte / Manatee: Revize roster challenged from every exit (2026-10-09).
-    for county in ("Hendry", "Charlotte", "Manatee"):
+    # DeSoto: only key is the site's internal bid; CoS fail_closed 2026-10-15 (#222).
+    for county in ("Hendry", "Charlotte", "Manatee", "DeSoto"):
         assert _matrix_status(text, county) == "fail_closed", county
     # 2026-10-08: main also moved Orange (#134) and Indian River (#136) to candidate_productive;
     # #143 moved Hendry from recon_only to fail_closed; 2026-10-09 Charlotte and Manatee
     # recon_only -> fail_closed; Miami-Dade was fail_closed 2026-10-09 (#166) and reopened
     # recon_only the same day (owner exception).
-    assert "| FL | 67 | 67 | 4 | 20 | 23 | 0 | 20 |" in text
+    # 2026-10-14 Hillsborough and Marion recon_only -> fail_closed (rule conflicts).
+    assert "| FL | 67 | 67 | 4 | 20 | 19 | 0 | 24 |" in text
 
 
 def test_no_home_county_is_promoted_in_health():
@@ -94,7 +95,8 @@ def test_no_home_county_is_promoted_in_health():
         assert state != "verified_public", county
         # Hendry is held fail_closed (#143: person-level MNI id, no booking number);
         # Charlotte / Manatee since 2026-10-09 (Revize roster challenged from every exit).
-        held = ("Hendry", "Charlotte", "Manatee")
+        # DeSoto since 2026-10-15 (only key is the site's internal bid; CoS option 1, #222).
+        held = ("Hendry", "Charlotte", "Manatee", "DeSoto")
         assert state == ("fail_closed" if county in held else "unverified"), county
 
 
@@ -107,8 +109,10 @@ def test_committed_smoke_rows_are_requests_only_until_leads_ops_reports():
     for r in rows:
         if r["label"] in ("Collier (FL)", "Glades (FL)"):
             assert r["blocked_on"].startswith("HOLD")
-    for county in ("Charlotte (FL)", "Manatee (FL)"):
-        assert (county, "relay_read") in by and (county, "relay_write") in by
+    assert ("Charlotte (FL)", "relay_read") in by and ("Charlotte (FL)", "relay_write") in by
+    # Manatee (FL) jail is fail_closed (2026-10-09): its relay read/write
+    # requests were withdrawn 2026-10-12 as moot.
+    assert not any(r["label"] == "Manatee (FL)" for r in rows)
     for r in rows:
         assert r["status"] == "requested"
         assert not r.get("result") and not r.get("run_on") and not r.get("commit")

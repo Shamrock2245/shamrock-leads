@@ -2141,6 +2141,9 @@ async function confirmWriteBondPremium(data, money) {
     if (code === 'premium_change_requires_reason' || code === 'premium_below_filed_rate') {
       message = d.message || 'Enter a reason, then write the bond again.';
     }
+    if (code === 'indemnitor_identity_unverified' || r.status === 422) {
+      message = d.message || 'Indemnitor identity is not verified. Nothing was saved.';
+    }
     return { ok: false, error: message, status: r.status };
   }
   return { ok: true, confirmation: d };

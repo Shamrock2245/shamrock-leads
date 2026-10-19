@@ -261,6 +261,7 @@ REGISTERED_COUNTIES = sorted([
     "Liberty (FL)",
     "Madison (FL)",
     "Manatee (FL)",
+    "Manatee Clerk (FL)",
     "Marion (FL)",
     "Martin (FL)",
     "Miami-Dade (FL)",
@@ -599,6 +600,12 @@ REGISTERED_COUNTIES = sorted([
     "Huron (OH)",
 ])
 
+# Registered scraper scopes that are a second source for a county, not a county
+# themselves (REGISTERED_COUNTIES still lists them so Health shows them). County
+# counts (67 FL, 361 county-level scopes) exclude them.
+# Manatee Clerk (FL): court filings, owner exception (Brendan 2026-10-10).
+NON_COUNTY_SOURCE_SCOPES = frozenset({"Manatee Clerk (FL)"})
+
 
 # ── Source-contract state for dashboard truthfulness ─────────────────────────
 # This is intentionally separate from Mongo run health. A run may be fresh while
@@ -741,6 +748,13 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     # publishes a booking roster with a source booking number. Relay skips them.
     "Charlotte (FL)": "fail_closed",
     "Manatee (FL)": "fail_closed",
+    # Manatee Clerk (FL) is deliberately absent, so Health reads "unverified".
+    # Owner exception (Brendan 2026-10-10): the Clerk's court-records site
+    # (records.manateeclerk.com, plain HTTPS) is read as court filings, keyed on
+    # an internal key (mc_case_v1 = sha256 of the normalised case number;
+    # core/booking_identity.py). Booking_Number stays blank; case number and OBTS
+    # have their own fields. Separate from the fail_closed Manatee (FL) jail
+    # scraper. Not verified_public until a Leads Ops write smoke.
     # Runtime-gated FL scopes aligned to Health Source Guards (SCRAPER_SOURCE_STATES).
     # Broward: cleared 2026-09-23 after Turnstile+prefix write smoke (action=arrest_search).
     # Baker/Calhoun/Gulf/Holmes/Levy/Wakulla/Washington: FL JailTracker wrappers
@@ -826,6 +840,21 @@ SCRAPER_SOURCE_STATES: dict[str, str] = {
     # Hendry's MyOCV inmates.json has only inmateID = HCSO<YY>MNI<NNNNNN>, a
     # person (Master Name Index) id, not a booking number. CoS approved.
     "Hendry (FL)": "fail_closed",
+    # 2026-10-14 (docs/recon/FL_RULE_CONFLICT_FAIL_CLOSED_2026-10-14.md):
+    # Hillsborough needs login + reCAPTCHA solving + proxy; Marion needs a
+    # residential proxy + TLS impersonation. Both break the no-CAPTCHA (except
+    # Broward/Lake) / no-proxy / no-impersonation rules. Proposed for CoS.
+    "Hillsborough (FL)": "fail_closed",
+    "Marion (FL)": "fail_closed",
+    # 2026-10-15 (docs/recon/FL_MONROE_FAIL_CLOSED_2026-10-15.md, CoS): Keys SO
+    # arrest log has no booking number; rows key on a person-level MNI or a
+    # synthesized MONROE-{OffenseNo|CADno}. Closed until the offense-number key
+    # is proven per booking. Highlands stays unverified.
+    "Monroe (FL)": "fail_closed",
+    # 2026-10-15 (docs/recon/FL_DESOTO_FAIL_CLOSED_2026-10-15.md, CoS option 1
+    # on #222): DCN roster has no booking number; the only key is the site's
+    # internal bid. Closed until a source booking number is proven.
+    "DeSoto (FL)": "fail_closed",
     # Pinellas (FL) is deliberately absent, so Health reads "unverified".
     # Owner exception (Brendan 2026-10-08 1:38 PM ET, CoS agreed): Who's In Jail
     # (Blazor Server, no plain-HTTP listing) runs relay-only through the Leads

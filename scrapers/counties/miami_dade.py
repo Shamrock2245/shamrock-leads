@@ -9,7 +9,7 @@ Features:
 - Fail-closed identity and booking-date validation
 - ArcGIS layer has NO bond/bail fields (confirmed 2026-10-07, 2026-10-08), so
   Bond_Amount stays "" (unknown) and is never written as $0
-- Plain ``requests``; any HTTP/ArcGIS error, field drift or short page walk
+- plain_http (honest UA, TLS verified; blocks raise EgressBlocked/SourceTLSInvalid); any HTTP/ArcGIS error, field drift or short page walk
   raises ``MiamiDadeContractError`` (BaseScraper alerts) instead of returning
   a silently truncated batch
 
@@ -48,6 +48,7 @@ from typing import List, Dict, Any, Optional, Tuple
 import requests
 
 from scrapers.base_scraper import BaseScraper
+from scrapers.plain_http import HONEST_USER_AGENT, EgressBlocked, SourceTLSInvalid, request as plain_request
 from core.booking_identity import MD_KEY_PREFIX
 from core.models import ArrestRecord
 
@@ -66,7 +67,7 @@ REQUEST_TIMEOUT = 30
 OUT_FIELDS = "ObjectId,BookDate,Defendant,DOB,Charge1,Code2,Charge3"
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "User-Agent": HONEST_USER_AGENT,
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://gis-mdc.opendata.arcgis.com/",
@@ -257,9 +258,13 @@ class MiamiDadeCountyScraper(BaseScraper):
 
     def _get_json(self, session: requests.Session, params: Dict[str, Any]) -> Dict[str, Any]:
         try:
-            resp = session.get(QUERY_ENDPOINT, params=params, timeout=REQUEST_TIMEOUT)
+            resp = plain_request(
+                session, "GET", QUERY_ENDPOINT, county="Miami-Dade", params=params, timeout=REQUEST_TIMEOUT
+            )
             resp.raise_for_status()
             data = resp.json()
+        except (EgressBlocked, SourceTLSInvalid):
+            raise  # typed block / bad certificate: Health labels it, no retry
         except (requests.RequestException, ValueError) as exc:
             # Exception type and HTTP status only: never echo a response body.
             status = getattr(getattr(exc, "response", None), "status_code", None)
@@ -330,7 +335,7 @@ class MiamiDadeCountyScraper(BaseScraper):
                 Charges=charges_str,
                 # ArcGIS miamidade_jail_data has no bond/bail fields: unknown, never $0.
                 Bond_Amount="",
-                Status="Unknown",
+                Status="",  # the layer publishes no custody field; unknown is ""
                 Facility="Miami-Dade Corrections",
                 LastCheckedMode="INITIAL",
                 extra_data={

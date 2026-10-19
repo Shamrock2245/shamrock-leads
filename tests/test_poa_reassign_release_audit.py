@@ -532,5 +532,9 @@ def test_pack_reads_appended_reassign_and_release_history():
         ("2026-09-04", "bond_renewal", ["poa_inventory.release_history"]),
         ("2026-09-18", "manual", ["poa_inventory.released_at"]),
     ]
-    assert pack["history_complete"] is False
-    assert "best-effort" in pack["transfer_banner"]
+    assert pack["history_complete"] is True
+    assert pack["transfer"]["history_complete"] is True
+    assert pack["transfer_banner"] is None
+    assert pack["transfer"]["banner"] is None
+    assert [row["evidence_complete"] for row in reassigns] == [False, False]
+    assert [row["evidence_complete"] for row in releases] == [True, True]

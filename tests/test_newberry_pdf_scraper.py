@@ -75,7 +75,7 @@ MILLS, KAMRYN RENEE - HP-0005878 - 25
         self.assertIn("TRAFFIC / UNINSURED MOTOR VEHICLE", so.Charges)
         self.assertIn("RECKLESS DRIVING", so.Charges)
         # "BOND POSTED" is a release label, not a dollar amount.
-        self.assertEqual(so.Bond_Amount, "0")
+        self.assertEqual(so.Bond_Amount, "")
         self.assertEqual(so.Booking_Date, "09/28/2026")
         self.assertNotEqual(so.Charges, "Unknown")
 
@@ -84,7 +84,7 @@ MILLS, KAMRYN RENEE - HP-0005878 - 25
         self.assertEqual(np.Charges.count(" | "), 0)
         self.assertIn("SHOPLIFTING", np.Charges)
         # $2,000 inside statute text is not a bond dollar.
-        self.assertEqual(np.Bond_Amount, "0")
+        self.assertEqual(np.Bond_Amount, "")
 
         hp = by_key["HP-0005878"]
         self.assertEqual(hp.Charges, "")  # no charge lines published

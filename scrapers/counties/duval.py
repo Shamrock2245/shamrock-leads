@@ -4,6 +4,12 @@ Source: Duval County Jail (JSO)
 URL: https://inmatesearch.jaxsheriff.org/
 Method: requests GET — API interception pattern
 Detail URL: https://inmatesearch.jaxsheriff.org/ (search page)
+
+Status is never invented. A published release date gives "Released", a
+published status field is kept as written, and anything else is "". The search
+is not proven custody-only (the API contract carries release-date fields, and a
+read-only probe on 2026-10-15 failed TLS verification), so presence alone is
+not custody. See docs/recon/FL_DUVAL_ROSTER_SCOPE_2026-10-15.md.
 """
 import logging, json, re, time
 from datetime import datetime, timezone
@@ -11,9 +17,35 @@ from typing import List
 from scrapers.base_scraper import BaseScraper
 from scrapers.scraper_resilience import AntiBotBlocked
 from core.models import ArrestRecord
+from scrapers.published_bond import charge_bond_amount
 
 logger = logging.getLogger(__name__)
 BASE_URL = "https://inmatesearch.jaxsheriff.org/"
+
+def _published_bond_str(value) -> str:
+    """Source bond value -> "1500" / "250.50" / "0"; None, blank, NO BOND or text -> ""."""
+    if isinstance(value, bool):
+        return ""
+    amount = charge_bond_amount(value if not isinstance(value, (int, float)) else repr(value))
+    if amount is None:
+        return ""
+    return str(int(amount)) if float(amount).is_integer() else f"{amount:.2f}"
+
+
+_STATUS_KEYS = ("status", "Status", "custodyStatus", "custody_status", "inmateStatus", "inmate_status")
+
+
+def published_status(entry, release_date: str = "") -> str:
+    """Release date -> "Released"; else a published status string; else ""."""
+    if release_date:
+        return "Released"
+    if isinstance(entry, dict):
+        for key in _STATUS_KEYS:
+            val = entry.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    return ""
+
 
 class DuvalCountyScraper(BaseScraper):
     @property
@@ -118,7 +150,7 @@ class DuvalCountyScraper(BaseScraper):
                 if key in entry: dob = str(entry[key]).strip(); break
             bond_amount = ""
             for key in ["bond","bondAmount","bond_amount","totalBond"]:
-                if key in entry: bond_amount = str(entry[key]).strip(); break
+                if key in entry: bond_amount = _published_bond_str(entry[key]); break
             charges = ""
             for key in ["charges","charge","offense","offenses"]:
                 val = entry.get(key)
@@ -142,7 +174,7 @@ class DuvalCountyScraper(BaseScraper):
             for key in ["releaseDate","release_date","releasedDate","dateReleased"]:
                 if key in entry and entry[key]:
                     release_date = str(entry[key]).strip(); break
-            status = "Released" if release_date else "In Custody"
+            status = published_status(entry, release_date)
             records.append(ArrestRecord(County=self.county, Booking_Number=booking_number,
                 Full_Name=full_name, First_Name=first_name, Middle_Name=middle_name, Last_Name=last_name,
                 Booking_Date=booking_date, DOB=dob, Race=race, Sex=sex, Charges=charges,
@@ -169,8 +201,8 @@ class DuvalCountyScraper(BaseScraper):
                 records.append(ArrestRecord(County=self.county,
                     Booking_Number=booking_match.group(1) if booking_match else "",
                     Full_Name=full_name, First_Name=first_name, Middle_Name=middle_name, Last_Name=last_name,
-                    Bond_Amount=bond_match.group(1).replace(",","") if bond_match else "0",
-                    Status="In Custody", Facility="Duval County Pre-Trial Detention Facility", LastCheckedMode="INITIAL"))
+                    Bond_Amount=bond_match.group(1).replace(",","") if bond_match else "",
+                    Status="", Facility="Duval County Pre-Trial Detention Facility", LastCheckedMode="INITIAL"))
         except Exception as e:
             logger.warning(f"DOM parse error: {e}")
         return records

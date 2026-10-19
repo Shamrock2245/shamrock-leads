@@ -134,23 +134,20 @@ class _Resp:
 
 
 def _fake_session(monkeypatch, pages, details, charges, calls):
-    class _S:
-        def __init__(self):
-            self.headers = {}
+    def fake_request(session, method, url, **kw):
+        calls.append(url)
+        assert method == "GET"
+        tail = url.rsplit("/", 1)[-1]
+        if "/getInmates/" in url:
+            return _Resp(pages[tail]) if tail in pages else _Resp(None, 500)
+        if "/getInmateDetails/" in url:
+            return _Resp(details.get(tail, []))
+        if "/getCharges/" in url:
+            return _Resp(charges.get(tail, []))
+        raise AssertionError(url)
 
-        def get(self, url, timeout=None):
-            calls.append(url)
-            assert "verify" not in url
-            tail = url.rsplit("/", 1)[-1]
-            if "/getInmates/" in url:
-                return _Resp(pages[tail]) if tail in pages else _Resp(None, 500)
-            if "/getInmateDetails/" in url:
-                return _Resp(details.get(tail, []))
-            if "/getCharges/" in url:
-                return _Resp(charges.get(tail, []))
-            raise AssertionError(url)
-
-    monkeypatch.setattr(orange.requests, "Session", _S)
+    monkeypatch.setattr(orange.plain_http, "make_session", lambda *a, **k: object())
+    monkeypatch.setattr(orange.plain_http, "request", fake_request)
     monkeypatch.setattr(orange.time, "sleep", lambda *_: None)
 
 
@@ -188,8 +185,9 @@ def test_scrape_raises_on_letter_failure_and_all_detail_failures(monkeypatch):
 
 def test_module_uses_plain_requests_only():
     src = open(orange.__file__).read()
-    for banned in ("curl_cffi", "impersonate", "verify=False", "DrissionPage", "proxy", "captcha"):
-        assert banned not in src.split('"""', 2)[2], banned
+    body = src.split('"""', 2)[2]
+    for banned in ("curl_cffi", "impersonate", "verify=False", "DrissionPage", "proxy", "captcha", "Chrome/"):
+        assert banned not in body, banned
 
 
 def test_charges_shape_drift_raises_but_fetch_failure_is_unknown():
@@ -212,7 +210,7 @@ def test_scrape_raises_on_charges_drift_and_when_every_charges_fetch_fails(monke
 
     def _get_json(self, session, url):
         if "/getCharges/" in url:
-            raise requests.ConnectionError("down")
+            raise OrangeContractError("down")
         return _orig(self, session, url)
 
     _fake_session(monkeypatch, pages, details, {}, [])
@@ -249,7 +247,7 @@ def test_one_failed_charges_fetch_skips_that_booking_not_blanks_it(monkeypatch):
 
     def _get_json(self, session, url):
         if url.endswith("/getCharges/26000003"):
-            raise requests.ConnectionError("down")
+            raise OrangeContractError("down")
         return _orig(self, session, url)
 
     monkeypatch.setattr(OrangeCountyScraper, "_get_json", _get_json)

@@ -74,6 +74,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
 
+from core.booking_identity import redact_internal_keys
+
 logger = logging.getLogger(__name__)
 
 # OWNER SWITCH — legacy static payment link. DEFAULT OFF. Single source of truth
@@ -761,23 +763,27 @@ class _Run:
                         self.pfx, share_skip, self.packet_id)
             await self.stamp(STEP_SHARE, "skipped", reason=share_skip)
             return
-        from dashboard.services.packet_payment_link_service import confirmed_premium
+        from dashboard.services.premium_confirmation_service import (
+            confirmation_complete,
+            confirmed_case_doc,
+        )
         from dashboard.services import swipesimple_invoice_service as _ss
 
-        if confirmed_premium(self.doc, None) <= 0:
+        confirmed_doc = self.doc if confirmation_complete(self.doc) else await confirmed_case_doc(self.doc)
+        if not confirmation_complete(confirmed_doc):
             logger.info("%s share_invoice skipped reason=premium_unconfirmed packet=%s",
                         self.pfx, self.packet_id)
             await self.stamp(STEP_SHARE, "skipped", reason="premium_unconfirmed")
             return
 
-        # Dispatch only when the owner flag is on. Off = stage the invoice and
-        # leave dispatch_invoice uncalled (dry-run stays inside that flag).
-        dispatch_live = _ss.dispatch_live_enabled()
+        # Completion never sends or charges. Staging stays dispatch=False even
+        # when SWIPESIMPLE_DISPATCH_LIVE is on. A result that claims a send
+        # is refused.
         try:
             share_result = await _ss.maybe_issue_share_invoice_for_bond(
                 share_bond_id,
                 channel="imessage",
-                dispatch=dispatch_live,
+                dispatch=False,
                 source=_share_source(self.source),
             )
         except _ss.SwipeSimpleLiveDisabled:
@@ -787,7 +793,7 @@ class _Run:
                 invoice_due_cents,
             )
 
-            due = invoice_due_cents(self.doc)
+            due = invoice_due_cents(confirmed_doc)
             logger.info(
                 "%s share_invoice dry-run SWIPESIMPLE_LIVE off bond_id=%s amount_cents=%s",
                 self.pfx, share_bond_id, due,
@@ -820,13 +826,26 @@ class _Run:
             await self.fail(STEP_SHARE, error_type=type(exc).__name__)
             return
         share_result = share_result or {}
+        dispatch_result = share_result.get("dispatch")
+        if isinstance(dispatch_result, dict) and dispatch_result.get("sent"):
+            logger.warning(
+                "%s share_invoice refused a live dispatch bond_id=%s",
+                self.pfx, share_bond_id,
+            )
+            await self.stamp(
+                STEP_SHARE, "done", ok=False, dispatched=False,
+                bond_id=share_bond_id, reason="live_dispatch_refused",
+            )
+            return
         idempotent = (share_result.get("create") or {}).get("idempotent")
         logger.info(
             "%s share_invoice staged bond_id=%s ok=%s idempotent=%s",
             self.pfx, share_bond_id, share_result.get("ok"), idempotent,
         )
-        await self.stamp(STEP_SHARE, "done", ok=bool(share_result.get("ok")),
-                         bond_id=share_bond_id, idempotent=idempotent)
+        await self.stamp(
+            STEP_SHARE, "done", ok=bool(share_result.get("ok")),
+            bond_id=share_bond_id, idempotent=idempotent, dispatched=False,
+        )
 
     # ── (c) court-date sync ────────────────────────────────────────────────
     async def step_court(self) -> None:
@@ -865,13 +884,13 @@ class _Run:
             async with httpx.AsyncClient(timeout=8) as client:
                 await client.post(
                     slack,
-                    json={
+                    json=redact_internal_keys({
                         "text": (
                             f":white_check_mark: *DocuSeal packet signed* — "
                             f"`{self.packet_id}` | {self.defendant_name}"
                             f"{' | Drive filed' if self.drive_url() else ' | Drive pending'}"
                         )
-                    },
+                    }),
                 )
         except Exception as exc:
             await self.fail(STEP_SLACK, error_type=type(exc).__name__)

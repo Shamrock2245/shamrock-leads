@@ -13,6 +13,15 @@ Source contract (re-verified 2026-09-25, docs/recon/FL_GAP_QUEUE_2026-09-25.md):
     Booking_Number is copied from the source; cards whose image ``bookno`` and
     ``Booking No:`` text disagree, or that lack one, are dropped.
 
+Honest access and no invented values (2026-10-15): every request goes through
+``scrapers.plain_http`` (honest User-Agent, certificate verified; a block raises
+``egress_block:``, a real certificate failure ``tls_cert_invalid:``). A charge's
+bond counts only when the source shows a dollar amount (a published 0 is kept);
+any charge with a blank / NO BOND / HOLD / text bond, or no charges, makes the
+booking bond ``""``. Status comes only from the card's ``Status:`` token
+(In Jail / In Custody -> "In Custody", Out of Jail / Released -> "Released");
+anything else is ``""``.
+
 Why it was silent before: the old code searched ``txbLastName="%"`` (not a
 supported criterion — the server answers "Please fill in at least one search
 criteria" with 0 rows) and posted a flat JSON body to AddMoreResults (the
@@ -25,10 +34,11 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
-import requests
 from bs4 import BeautifulSoup
 
 from scrapers.base_scraper import BaseScraper
+from scrapers.plain_http import make_session, request
+from scrapers.published_bond import charge_bond_amount, total_published_bond
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
@@ -42,9 +52,7 @@ MAX_PAGES = 60
 REQUEST_DELAY_S = 0.3
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
     "Referer": SEARCH_URL,
 }
 
@@ -79,9 +87,8 @@ class SuwanneeCountyScraper(BaseScraper):
         begin = (date.today() - timedelta(days=days)).strftime("%m/%d/%Y")
         end = date.today().strftime("%m/%d/%Y")
 
-        session = requests.Session()
-        session.headers.update(HEADERS)
-        resp = session.get(SEARCH_URL, timeout=30)
+        session = make_session(HEADERS)
+        resp = request(session, "GET", SEARCH_URL, county="Suwannee", timeout=30)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
         if not soup.find("input", {"name": "tbBeginDate"}) or not soup.find("select", {"name": "TypeSearch"}):
@@ -96,7 +103,7 @@ class SuwanneeCountyScraper(BaseScraper):
             "SearchOrderOption": "1",   # Descending
             "btnSumit": "Submit",
         })
-        resp2 = session.post(SEARCH_URL, data=form, timeout=60)
+        resp2 = request(session, "POST", SEARCH_URL, county="Suwannee", data=form, timeout=60)
         resp2.raise_for_status()
 
         seen: set = set()
@@ -114,8 +121,9 @@ class SuwanneeCountyScraper(BaseScraper):
         page = 1
         while loaded and page < MAX_PAGES:
             time.sleep(REQUEST_DELAY_S)
-            r = session.post(AJAX_URL, json={"searchVals": self._search_vals(begin, end, loaded)},
-                             headers=json_headers, timeout=60)
+            r = request(session, "POST", AJAX_URL, county="Suwannee",
+                        json={"searchVals": self._search_vals(begin, end, loaded)},
+                        headers=json_headers, timeout=60)
             r.raise_for_status()
             d = (r.json() or {}).get("d") or {}
             returned = int(d.get("resultsReturned") or 0)
@@ -194,10 +202,17 @@ class SuwanneeCountyScraper(BaseScraper):
             booking_time = (bd_m.group(2) or "") if bd_m else ""
 
             # Parse status from block text
-            status_m = re.search(r"Status:\s*([a-zA-Z\s]+)", block_text)
-            status = status_m.group(1).strip() if status_m else "In Custody"
-            if "jail" in status.lower() or "custody" in status.lower():
+            # Bounded token only; "Out of Jail" must not read as in custody, and
+            # a missing / unrecognised status is unknown (""), never invented.
+            status_m = re.search(r"Status:\s*(Out\s+of\s+Jail|In\s+Jail|In\s+Custody|Released)",
+                                 block_text, re.IGNORECASE)
+            status_raw = status_m.group(1) if status_m else ""
+            if re.search(r"released|out\s+of", status_raw, re.I):
+                status = "Released"
+            elif status_raw:
                 status = "In Custody"
+            else:
+                status = ""
 
             # Parse address from block text
             addr_m = re.search(r"Address Given:\s*([^\n\r\t]+)", block_text)
@@ -205,7 +220,7 @@ class SuwanneeCountyScraper(BaseScraper):
 
             # Find the charges sub-table using sibling rows
             charges_list = []
-            total_bond = 0.0
+            bonds: List[Optional[float]] = []  # one per charge row; None = unpublished
             charges_tables = []
             row = img.find_parent("tr")
             if row:
@@ -235,16 +250,8 @@ class SuwanneeCountyScraper(BaseScraper):
                         if statute or desc:
                             item = f"{statute} - {desc}" if statute and desc else statute or desc
                             charges_list.append(item)
-                        # Parse bond
-                        bond_val = 0.0
-                        if bond_str:
-                            cleaned = re.sub(r"[$,\s]", "", bond_str.strip().upper())
-                            if not any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
-                                try:
-                                    bond_val = float(cleaned)
-                                except ValueError:
-                                    pass
-                        total_bond += bond_val
+                        if statute or desc or bond_str:
+                            bonds.append(charge_bond_amount(bond_str))
 
             charges_str = " | ".join(charges_list)
 
@@ -254,7 +261,7 @@ class SuwanneeCountyScraper(BaseScraper):
                 First_Name=first.upper(), Middle_Name=middle.upper(), Last_Name=last.upper(),
                 DOB=dob, Race=race.upper() if race else "", Sex=sex.upper() if sex else "",
                 Booking_Number=booking_num, Booking_Date=booking_date, Booking_Time=booking_time,
-                Charges=charges_str, Bond_Amount=str(int(total_bond)) if total_bond.is_integer() else f"{total_bond:.2f}",
+                Charges=charges_str, Bond_Amount=total_published_bond(bonds),
                 Address=address, Status=status,
                 Detail_URL=SEARCH_URL,
                 Scrape_Timestamp=datetime.now(timezone.utc).isoformat(),

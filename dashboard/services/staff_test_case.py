@@ -288,6 +288,15 @@ def force_test_submitter(submitter: Mapping[str, Any], signer_email: str) -> dic
     return out
 
 
+def staff_request_authorized(request) -> bool:
+    """True when this request may run a staff test case. Does not raise."""
+    try:
+        _authorize(request, {})
+    except StaffTestCaseError:
+        return False
+    return True
+
+
 def _authorize(request, body: Mapping[str, Any]) -> str:
     """PIN admin/staff session, machine token, or dashboard PIN header."""
     sess = get_session_from_request(request)

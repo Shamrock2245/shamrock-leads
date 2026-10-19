@@ -69,11 +69,11 @@ class FlorenceScParserTests(unittest.TestCase):
         self.assertEqual(info["name_id"], "49073")
         self.assertIn("VEHICLE / USE OF VEHICLE WITHOUT PERMISSION", info["charges"])
         self.assertIn("TRAFFIC / RECKLESS DRIVING", info["charges"])
-        self.assertEqual(info["bond"], "1250.00")
+        self.assertEqual(info["bond"], "1250")
         self.assertIn("Surety Bond", info["bond_type"])
         self.assertIn("Cash Bond", info["bond_type"])
 
-    def test_parse_detail_no_bond_stays_zero(self):
+    def test_parse_detail_no_bond_is_unknown(self):
         info = FlorenceScraper.parse_detail_html(NO_BOND_DETAIL_HTML)
         self.assertEqual(info["name_id"], "44094")
         self.assertIn("Trafficking in Fentanyl", info["charges"])
@@ -94,7 +94,7 @@ class FlorenceScParserTests(unittest.TestCase):
         self.assertIsNotNone(rec)
         self.assertEqual(rec.Booking_Number, "49073")
         self.assertFalse(rec.Booking_Number.startswith("FLO_"))
-        self.assertEqual(rec.Bond_Amount, "1250.00")
+        self.assertEqual(rec.Bond_Amount, "1250")
         self.assertNotEqual(rec.Charges, "Unknown")
         self.assertNotEqual(rec.Charges, "")
 

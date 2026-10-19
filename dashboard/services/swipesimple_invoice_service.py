@@ -258,6 +258,29 @@ def money_to_decimal(value: Any) -> Optional[Decimal]:
         return None
 
 
+def _reject_unproven_invoice_amount(bond: Dict[str, Any], resolved_cents: int) -> None:
+    """Fail closed when a stored link cannot be proven to match this amount.
+
+    A bond with no staff confirmation keeps the previous idempotent return:
+    older rows did not store ``swipesimple_invoice_amount_cents``. After a
+    confirmation, a link with no stored cents, or cents that differ from the
+    confirmed down payment, is not returned as if it were that new amount.
+    """
+    from dashboard.services.packet_payment_link_service import confirmed_premium
+
+    stored = bond.get("swipesimple_invoice_amount_cents")
+    if stored in (None, ""):
+        if confirmed_premium(bond, None) > 0:
+            raise SwipeSimpleInvoiceError("invoice_amount_unproven")
+        return
+    try:
+        stored_cents = int(stored)
+    except (TypeError, ValueError):
+        raise SwipeSimpleInvoiceError("invoice_amount_unproven") from None
+    if stored_cents != int(resolved_cents):
+        raise SwipeSimpleInvoiceError("invoice_amount_mismatch")
+
+
 def premium_dollars_to_cents(premium: Decimal) -> int:
     """
     BondCase premium is dollars; SwipeSimple form wants cents (100 = $1.00).
@@ -372,9 +395,8 @@ def resolve_locked_premium(bond: Dict[str, Any]) -> Decimal:
 
     Precedence:
       1. Staff-confirmed trio ``premium_confirmed_amount/_at/_by`` (all set).
-         When that confirmation also stores ``down_payment_amount``, the
-         invoice is the down payment (the amount due now), not the financed
-         balance. A confirmed down of zero raises ``down_payment_zero``.
+         This is the full premium. ``down_payment_amount`` is not substituted
+         here; the signing invoice uses ``resolve_invoice_due``.
       2. ``premium_cents`` (written only by staff money writes —
          Write Bond / Record Bond via ar_service.money_fields).
       3. Legacy dollar fields (premium_amount / total_premium / premium /
@@ -397,20 +419,7 @@ def resolve_locked_premium(bond: Dict[str, Any]) -> Decimal:
 
     confirmed = (PREMIUM_CONFIRMED_AMOUNT_FIELD, PREMIUM_CONFIRMED_AT_FIELD, PREMIUM_CONFIRMED_BY_FIELD)
     if all(not _blank(bond.get(k)) for k in confirmed):
-        premium = _exact_premium(bond.get(PREMIUM_CONFIRMED_AMOUNT_FIELD))
-        if not _blank(bond.get("down_payment_amount")):
-            raw_down = str(bond.get("down_payment_amount")).strip().replace(",", "").replace("$", "")
-            try:
-                down_dec = Decimal(raw_down)
-            except (InvalidOperation, ValueError):
-                raise SwipeSimpleInvoiceError("premium_not_numeric_on_bondcase") from None
-            if down_dec == 0:
-                raise SwipeSimpleInvoiceError("down_payment_zero")
-            due = _exact_premium(bond.get("down_payment_amount"))
-            if due > premium:
-                raise SwipeSimpleInvoiceError("premium_ambiguous_on_bondcase")
-            return due
-        return premium
+        return _exact_premium(bond.get(PREMIUM_CONFIRMED_AMOUNT_FIELD))
 
     legacy: list[Decimal] = []
     for key in _LEGACY_PREMIUM_FIELDS:
@@ -432,6 +441,41 @@ def resolve_locked_premium(bond: Dict[str, Any]) -> Decimal:
     if any(v != chosen for v in legacy):
         raise SwipeSimpleInvoiceError("premium_ambiguous_on_bondcase")
     return chosen
+
+
+def _confirmation_trio(bond: Dict[str, Any]) -> bool:
+    from dashboard.services.packet_payment_link_service import (
+        PREMIUM_CONFIRMED_AMOUNT_FIELD,
+        PREMIUM_CONFIRMED_AT_FIELD,
+        PREMIUM_CONFIRMED_BY_FIELD,
+    )
+
+    confirmed = (PREMIUM_CONFIRMED_AMOUNT_FIELD, PREMIUM_CONFIRMED_AT_FIELD, PREMIUM_CONFIRMED_BY_FIELD)
+    return isinstance(bond, dict) and all(not _blank(bond.get(key)) for key in confirmed)
+
+
+def resolve_invoice_due(bond: Dict[str, Any]) -> Decimal:
+    """Amount to put on the signing invoice.
+
+    A confirmed ``down_payment_amount`` is the amount due now. The full
+    premium stays on ``resolve_locked_premium`` and is what a receipt must
+    match before the bond is marked paid. A down of zero raises
+    ``down_payment_zero``. A down above the premium is ambiguous.
+    """
+    premium = resolve_locked_premium(bond)
+    if not _confirmation_trio(bond) or _blank(bond.get("down_payment_amount")):
+        return premium
+    raw_down = str(bond.get("down_payment_amount")).strip().replace(",", "").replace("$", "")
+    try:
+        down_dec = Decimal(raw_down)
+    except (InvalidOperation, ValueError):
+        raise SwipeSimpleInvoiceError("premium_not_numeric_on_bondcase") from None
+    if down_dec == 0:
+        raise SwipeSimpleInvoiceError("down_payment_zero")
+    due = _exact_premium(bond.get("down_payment_amount"))
+    if due > premium:
+        raise SwipeSimpleInvoiceError("premium_ambiguous_on_bondcase")
+    return due
 
 
 def _bond_premium(bond: Dict[str, Any]) -> Optional[Decimal]:
@@ -470,6 +514,27 @@ async def resolve_premium_across_collections(bond: Dict[str, Any], booking_numbe
             if other != premium:
                 raise SwipeSimpleInvoiceError("premium_mismatch_across_collections")
     return premium
+
+
+async def resolve_invoice_due_across_collections(bond: Dict[str, Any], booking_number: str) -> Decimal:
+    """Invoice amount, cross-checked the same way as the locked premium.
+
+    ``bond_cases`` and ``active_bonds`` must agree on the down payment.
+    Reconciliation still uses ``resolve_premium_across_collections``.
+    """
+    due = resolve_invoice_due(bond)
+    if bond.get("_collection") == "bond_cases" and booking_number:
+        try:
+            active = await get_collection("active_bonds").find_one({"booking_number": booking_number})
+        except Exception as exc:
+            logger.warning(
+                "[ss_invoice] active_bonds invoice-due cross-check failed err_type=%s — fail closed",
+                type(exc).__name__,
+            )
+            raise SwipeSimpleInvoiceError("premium_cross_check_unavailable") from None
+        if isinstance(active, dict) and resolve_invoice_due(active) != due:
+            raise SwipeSimpleInvoiceError("premium_mismatch_across_collections")
+    return due
 
 
 _TEST_CASE_INVOICES_ENV = "SWIPESIMPLE_TEST_CASE_INVOICES"
@@ -1097,6 +1162,7 @@ async def _persist_invoice_fields(
     booking_number: str,
     payment_link: str,
     invoice_id: str = "",
+    amount_cents: Optional[int] = None,
 ) -> None:
     """Write link fields onto bond_cases + active_bonds by booking_number / bond id."""
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -1106,6 +1172,7 @@ async def _persist_invoice_fields(
         "swipesimple_payment_link": payment_link,
         "swipesimple_invoice_created_at": now_iso,
         "swipesimple_invoice_bond_id": bond_id,
+        "swipesimple_invoice_amount_cents": amount_cents,
         "swipesimple_invoice_unresolved": False,
         "payment_status": bond.get("payment_status") or "sent",
         "updated_at": now_iso,
@@ -1474,8 +1541,8 @@ async def create_locked_invoice(bond_id: str) -> Dict[str, Any]:
     # Fail closed with a reason code: missing / zero / sub-cent / ambiguous /
     # intake-promote 10% estimate / bond_cases vs active_bonds disagreement
     # never reaches SwipeSimple.
-    premium = await resolve_premium_across_collections(bond, booking_number)
-    _ = premium_dollars_to_cents(premium)
+    premium = await resolve_invoice_due_across_collections(bond, booking_number)
+    premium_cents = premium_dollars_to_cents(premium)
 
     existing = _existing_payment_link(bond)
     if existing and (
@@ -1483,6 +1550,7 @@ async def create_locked_invoice(bond_id: str) -> Dict[str, Any]:
         or str(bond.get("swipesimple_invoice_number") or "") == booking_number
         or bond.get("swipesimple_payment_link")
     ):
+        _reject_unproven_invoice_amount(bond, premium_cents)
         logger.info(
             "[ss_invoice] idempotent hit bond_id=%s has_link=%s has_invoice_id=%s",
             bond_id,
@@ -1520,6 +1588,7 @@ async def create_locked_invoice(bond_id: str) -> Dict[str, Any]:
             booking_number=booking_number,
             payment_link=payment_link,
             invoice_id=vendor_id_existing,
+            amount_cents=premium_cents,
         )
         return {
             "ok": True,
@@ -1604,6 +1673,7 @@ async def create_locked_invoice(bond_id: str) -> Dict[str, Any]:
         booking_number=booking_number,
         payment_link=payment_link,
         invoice_id=str(http_result.get("invoice_id") or ""),
+        amount_cents=premium_cents,
     )
     await _finish_invoice_claim(
         claim_key,
@@ -1934,9 +2004,10 @@ async def reconcile_payment(
         is a paid/approved status — a missing or blank status is refused
         (``receipt_status_missing``);
       * a transaction id is present (idempotency key);
-      * the receipt amount is exact cents and equals the locked BondCase
-        premium (``resolve_premium_across_collections``). Less = partial
-        payment, more/other = mismatch — neither flips PAID.
+      * the receipt amount is exact cents and equals the full locked premium
+        (``resolve_premium_across_collections``), not the down payment on
+        the signing invoice. A down-payment receipt is
+        ``receipt_partial_payment`` and does not mark the premium paid.
 
     Idempotent: a bond already PAID by the same transaction id is a no-op; a
     different transaction on an already-PAID bond is refused for manual review

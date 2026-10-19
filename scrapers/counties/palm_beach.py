@@ -220,7 +220,7 @@ class PalmBeachCountyScraper(BaseScraper):
             Status=row.get("status", "In Custody"),
             Release_Date=row.get("release_date", ""),
             Charges=row.get("charges", ""),
-            Bond_Amount=row.get("bond_amount", "0"),
+            Bond_Amount=row.get("bond_amount", ""),  # unknown is ""; a published "0" is kept
             Mugshot_URL=row.get("mug_url", ""),
             Detail_URL=detail,
             Scrape_Timestamp=datetime.now(timezone.utc).isoformat(),
