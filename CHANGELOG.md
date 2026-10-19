@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-19 (pin PyMuPDF below 2.0)
+
+### Fixed
+- **`PyMuPDF>=1.24.0,<2.0`** in `requirements.txt` and `requirements-dashboard.txt`. PyMuPDF 2.0 breaks the Palmetto packet field tests (`test_required_palmetto_fields_match_context`, `test_agent_license_matches_the_writing_agent_pair`): the Palmetto PDF widgets such as `app_defendant_name` and `app_agent_name` are not found. 1.28.2 passes. The 2.0 migration is tracked separately by Paperwork Desk.
+
 ## [Unreleased] — 2026-10-16 (down payment refuses a review hold or a reversal sibling)
 
 ### Fixed
