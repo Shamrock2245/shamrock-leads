@@ -33,6 +33,10 @@ def _app(db, monkeypatch):
     monkeypatch.setattr(pp, "get_collection", lambda name: db[name])
     monkeypatch.setattr(pp, "_payment_claim_index_ready", False)
     monkeypatch.setattr(pp, "_txn_client", _txn)
+    import dashboard.services.payment_log_claims as payment_log
+    monkeypatch.setattr(payment_log, "_lock_index_ready", False)
+    monkeypatch.setattr(payment_log, "_index_ready", False)
+    payment_log._txn_support_cache.clear()
     app = FastAPI()
     app.include_router(pp.payment_plans_bp)
     return app
@@ -209,11 +213,11 @@ def test_insert_when_no_logged_row_has_no_token_fields(rig):
     ({"log_claim_token": "tok"}, "logged_payment_uncommitted"),
     ({"claim_token": "tok"}, "logged_payment_uncommitted"),
     ({"payment_claim_token": "tok"}, "logged_payment_uncommitted"),
-    ({"status": "declined"}, "logged_payment_not_settled"),
-    ({"status": "refunded"}, "logged_payment_not_settled"),
+    ({"status": "declined"}, "payment_needs_review"),
+    ({"status": "refunded"}, "payment_needs_review"),
     ({"status": "pending"}, "logged_payment_not_settled"),
     ({"status": ""}, "logged_payment_not_settled"),
-    ({"raw_payload": {"event_type": "payment.refunded"}}, "logged_payment_not_settled"),
+    ({"raw_payload": {"event_type": "payment.refunded"}}, "payment_needs_review"),
     ({"amount": 50}, "logged_payment_amount_mismatch"),
     ({"amount": 100.004}, "logged_payment_amount_mismatch"),
     ({"booking_number": "OTHER-BK"}, "logged_payment_booking_mismatch"),
@@ -341,7 +345,8 @@ def test_transaction_links_once(rig, monkeypatch):
     r = _post(app, {"amount": 100, "transaction_id": "TX-LOG"})
     assert r.status_code == 200 and r.json()["idempotent"] is False
     assert pp._last_apply_path == "transaction"
-    assert client.attempts == 1
+    # The reversal gate is its own committed transaction, then the apply runs.
+    assert client.attempts == 2
     assert len(db["payments"].docs) == 1 and db["payments"].docs[0]["plan_id"] == PLAN_ID
     assert _plan(db)["balance_remaining"] == 700.0
     assert db["payment_plan_payment_claims"].docs[0]["status"] == "applied"
@@ -354,7 +359,8 @@ def test_transaction_retries_a_transient_error_once(rig, monkeypatch):
     client = _use_transactions(monkeypatch, db)
     r = _post(app, {"amount": 100, "transaction_id": "TX-LOG"})
     assert r.status_code == 200
-    assert client.attempts == 2
+    # Gate commits once, then the apply hits one transient error and retries.
+    assert client.attempts == 3
     assert len(db["payments"].docs) == 1
     assert db["payments"].docs[0]["plan_id"] == PLAN_ID
     assert _plan(db)["balance_remaining"] == 700.0

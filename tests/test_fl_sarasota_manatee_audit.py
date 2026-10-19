@@ -76,7 +76,7 @@ def test_manatee_maps_by_header_and_groups_charge_rows_per_booking():
     assert [c["charge"] for c in jane.extra_data["charge_details"]] == [
         "BATTERY (DOMESTIC)", "RESIST OFFICER WITHOUT VIOLENCE"]
     assert (jane.Arrest_Date, jane.Arrest_Time, jane.Booking_Date) == ("2026-10-06", "14:35", "2026-10-06")
-    assert jane.Status == "In Custody" and jane.Release_Date == ""
+    assert jane.Status == "" and jane.Release_Date == ""  # blank Released cell publishes no status
     assert jane.Detail_URL == "https://manatee-sheriff.revize.com/bookings/2026012345"
     assert jane.extra_data["booking_key_origin"] == "source-issued Revize Booking #"
     assert recs[1].Status == "Released"
@@ -124,9 +124,9 @@ def test_manatee_booking_key_collision_fails_closed():
 
 
 @pytest.mark.parametrize("value,expected", [
-    ("", ("In Custody", "")),
+    ("", ("", "")),
     ("In Custody", ("In Custody", "")),
-    ("No", ("In Custody", "")),
+    ("No", ("", "")),
     ("Yes", ("Released", "")),
     ("10/07/2026", ("Released", "2026-10-07")),
     ("10/07/2026 09:15", ("Released", "2026-10-07")),

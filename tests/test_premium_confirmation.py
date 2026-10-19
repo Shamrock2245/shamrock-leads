@@ -916,3 +916,83 @@ def test_existing_invoice_amount_must_match_the_confirmation():
     assert matched["idempotent"] is True
     assert matched["payment_link"].endswith("TEST-1001")
     assert matched["premium_amount"] == 500.0
+
+
+def test_reconfirm_same_amounts_passes_the_session(monkeypatch):
+    """A retry joins the plan function to the confirmation session.
+
+    Without that session the plan function opens its own transaction and
+    returns 503 plan_write_failed when Mongo is not a replica set.
+    """
+    from dashboard.services.payment_plan_creation import ensure_payment_plan_for_confirmation
+
+    stores, get, client = _world()
+    _bind(monkeypatch, stores, get)
+    monkeypatch.setattr("dashboard.services.payment_plan_creation.get_collection", get)
+    monkeypatch.setenv("SWIPESIMPLE_LIVE", "1")
+    monkeypatch.setenv("SWIPESIMPLE_DISPATCH_LIVE", "1")
+    spies = _silence_sends(monkeypatch)
+    results = []
+
+    async def wrapped(**kwargs):
+        result = await ensure_payment_plan_for_confirmation(**kwargs)
+        results.append({"session": kwargs.get("session"), "created": result.get("created")})
+        return result
+
+    monkeypatch.setattr(
+        "dashboard.services.premium_confirmation_service.load_plan_creator",
+        lambda: wrapped,
+    )
+
+    def counts():
+        return {
+            "plans": len(stores["payment_plans"].docs),
+            "premium_audits": len([
+                row for row in stores["audit_events"].docs
+                if row.get("action") == "premium_confirmed"
+            ]),
+            "plan_audits": len([
+                row for row in stores["audit_events"].docs
+                if row.get("action") == "payment_plan_created"
+            ]),
+        }
+
+    first = client.post("/api/paperwork/confirm-premium", json=_body(), cookies=_cookie())
+    assert first.status_code == 200, first.text
+    assert first.json()["idempotent"] is False
+    assert len(results) == 1
+    assert results[0]["session"] is not None
+    assert results[0]["created"] is True
+    after_first = counts()
+    assert after_first == {"plans": 1, "premium_audits": 1, "plan_audits": 1}
+
+    second = client.post("/api/paperwork/confirm-premium", json=_body(), cookies=_cookie())
+    assert second.status_code == 200, second.text
+    body = second.json()
+    assert body["idempotent"] is True
+    assert body["plan_created"] is False
+    assert len(results) == 2
+    assert results[1]["session"] is not None
+    assert results[1]["created"] is False
+    assert counts() == after_first
+
+    blocked = client.post(
+        "/api/paperwork/confirm-premium",
+        json=_body(premium="1600.00", down="600.00", financed="1000.00"),
+        cookies=_cookie(),
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["error"] == "premium_change_requires_reason"
+    assert len(results) == 2
+    assert counts() == after_first
+    assert stores["active_bonds"].docs[0]["premium_confirmed_amount"] == "1500.00"
+
+    del stores["bond_cases"].docs[0]["id_scan"]
+    denied = client.post("/api/paperwork/confirm-premium", json=_body(), cookies=_cookie())
+    assert denied.status_code == 422
+    assert denied.json()["error"] == "indemnitor_identity_unverified"
+    assert len(results) == 2
+    assert counts() == after_first
+    for name in ("paperwork_packets", "active_bonds"):
+        assert stores[name].docs[0]["premium_confirmed_amount"] == "1500.00"
+    _assert_no_sends(spies)

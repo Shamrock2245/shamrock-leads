@@ -153,7 +153,7 @@ def test_known_collection_split_is_fail_closed():
     assert "notifications" in TENANT_OWNED_COLLECTIONS
     assert GLOBAL_COLLECTIONS.isdisjoint(TENANT_OWNED_COLLECTIONS)
     assert TENANT_OWNED_COLLECTIONS <= KNOWN_APP_COLLECTIONS
-    assert len(KNOWN_APP_COLLECTIONS) == 122  # + installment_invoice_claims (financed installment invoices)
+    assert len(KNOWN_APP_COLLECTIONS) == 124  # + payment_log_claims, payment_txn_locks, installment_invoice_claims
     assert len(GLOBAL_COLLECTIONS) == 13
     for name in (
         "docket_events",
