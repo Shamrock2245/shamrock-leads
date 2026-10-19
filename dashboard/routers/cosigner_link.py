@@ -83,16 +83,21 @@ async def _scan_body_from_upload(form) -> dict | None:
     extracted = scanned.get("extracted") if isinstance(scanned, dict) else {}
     if not isinstance(extracted, dict):
         extracted = {}
-    # Full ID numbers from OCR stay out of the stored scan.
+    scanned = scanned if isinstance(scanned, dict) else {}
+    # Full ID numbers from OCR stay out of the stored scan. Issuer fields
+    # stay separate from the address so a country-only extract cannot pass
+    # as a US state.
     return {
         "full_name": extracted.get("full_name") or "",
-        "issuing_state": (
-            extracted.get("dl_state")
-            or extracted.get("issuing_state")
-            or extracted.get("state")
-            or ""
-        ),
-        "success": bool(isinstance(scanned, dict) and scanned.get("success") and extracted.get("full_name")),
+        "dl_state": extracted.get("dl_state") or "",
+        "issuing_state": extracted.get("issuing_state") or "",
+        "issuing_jurisdiction": extracted.get("issuing_jurisdiction") or "",
+        "id_state": extracted.get("id_state") or "",
+        "state": extracted.get("state") or "",
+        "issuing_country": extracted.get("issuing_country") or extracted.get("country") or "",
+        "success": bool(scanned.get("success") and extracted.get("full_name")),
+        "passed": scanned.get("passed"),
+        "status": scanned.get("status") or "",
         "lang": form.get("lang") or "",
     }
 

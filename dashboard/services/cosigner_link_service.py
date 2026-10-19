@@ -2,8 +2,11 @@
 One co-signer link: ID scan, then DocuSeal, then the down payment.
 
 The scan uses the same name rule as Write Bond (#165). O'Neill does not
-match O'Neal. A failed or mismatched scan does not unlock signing and does
-not store a passing ``id_ocr``. The full ID number is never stored.
+match O'Neal. Signing stays locked until the scan passed, the name matches
+the co-signer, and the issuer is a US state, DC, or territory. A failed
+scan, a wrong name, and a country-only scan (US/USA) do not store ``id_ocr``.
+The full ID number is never stored. When the co-signer is a different person
+from the indemnitor, only the co-signer's scan unlocks this link.
 
 Pay-before-sign is not offered. Spanish and English share this flow.
 Customer texting stays on BlueBubbles behind ``SWIPESIMPLE_DISPATCH_LIVE``.
@@ -18,6 +21,7 @@ from typing import Any, Optional
 
 from dashboard.extensions import get_collection
 from dashboard.services.identity_verification_service import (
+    _jurisdiction,
     _reject_full_id,
     names_match,
 )
@@ -30,6 +34,21 @@ logger = logging.getLogger(__name__)
 
 LINKS = "cosigner_links"
 _SIGNED = frozenset({"signed", "completed", "complete"})
+_FAIL_STATUS = frozenset({"failed", "fail", "error", "unreadable", "rejected"})
+_COSIGNER_KEYS = (
+    "cosigner_name",
+    "co_signer_name",
+    "coindemnitor_name",
+    "co_indemnitor_name",
+)
+_COSIGNER_ROLES = frozenset({
+    "cosigner",
+    "co_signer",
+    "co-signer",
+    "coindemnitor",
+    "co-indemnitor",
+    "co_indemnitor",
+})
 
 STRINGS = {
     "en": {
@@ -81,19 +100,60 @@ def _lang(value: Any) -> str:
     return "es" if str(value or "").strip().lower().startswith("es") else "en"
 
 
+def _person_name(raw: Any) -> str:
+    if isinstance(raw, dict):
+        return str(raw.get("name") or raw.get("full_name") or "").strip()
+    return str(raw or "").strip()
+
+
 def _indemnitor_name(packet: dict, bond: Optional[dict]) -> str:
     for doc in (packet, bond or {}):
         if not isinstance(doc, dict):
             continue
         for key in ("indemnitor_name", "indemnitor"):
-            raw = doc.get(key)
-            if isinstance(raw, dict):
-                name = str(raw.get("name") or raw.get("full_name") or "").strip()
+            name = _person_name(doc.get(key))
+            if name:
+                return name
+    return ""
+
+
+def _listed_people(doc: dict) -> list:
+    rows = []
+    for key in ("indemnitors", "parties", "submitters"):
+        raw = doc.get(key)
+        if isinstance(raw, list):
+            rows.extend(item for item in raw if isinstance(item, dict))
+    return rows
+
+
+def _cosigner_name(packet: dict, bond: Optional[dict]) -> str:
+    """The co-signer when the packet names one. Otherwise empty."""
+    for doc in (packet, bond or {}):
+        if not isinstance(doc, dict):
+            continue
+        for key in _COSIGNER_KEYS:
+            name = _person_name(doc.get(key))
+            if name:
+                return name
+        for person in _listed_people(doc):
+            role = str(person.get("role") or person.get("party_role") or "").strip().lower()
+            if role in _COSIGNER_ROLES:
+                name = _person_name(person)
                 if name:
                     return name
-            elif str(raw or "").strip():
-                return str(raw).strip()
+        for key in ("coindemnitor", "co_indemnitor", "cosigner", "co_signer"):
+            name = _person_name(doc.get(key))
+            if name:
+                return name
     return ""
+
+
+def _expected_signer(packet: dict, bond: Optional[dict]) -> tuple[str, str]:
+    """Who this link is for. A named co-signer is not the indemnitor."""
+    cosigner = _cosigner_name(packet, bond)
+    if cosigner:
+        return cosigner, "co_indemnitor"
+    return _indemnitor_name(packet, bond), "indemnitor"
 
 
 def _sign_url(packet: dict) -> str:
@@ -114,6 +174,13 @@ def _sign_url(packet: dict) -> str:
 def _signed(packet: dict) -> bool:
     status = str(packet.get("status") or packet.get("docuseal_status") or "").strip().lower()
     return status in _SIGNED
+
+
+def _link_paid(link: dict) -> bool:
+    if str(link.get("paid_transaction_id") or "").strip():
+        return True
+    rows = link.get("timeline") or []
+    return any(isinstance(row, dict) and row.get("step") == "paid" for row in rows)
 
 
 def _paid(bond: Optional[dict]) -> bool:
@@ -181,7 +248,7 @@ async def create_cosigner_link(*, actor: str, packet_id: str, lang: str = "en") 
     if not packet:
         raise CosignerLinkError("packet_not_found", 404)
     bond = await _find_bond(packet)
-    name = _indemnitor_name(packet, bond)
+    name, role = _expected_signer(packet, bond)
     if not name:
         raise CosignerLinkError("indemnitor_name_required", 400)
     now = _now()
@@ -191,7 +258,9 @@ async def create_cosigner_link(*, actor: str, packet_id: str, lang: str = "en") 
         "packet_id": packet_id,
         "booking_number": str(packet.get("booking_number") or ""),
         "bond_case_id": str(packet.get("bond_case_id") or ""),
-        "indemnitor_name": name,
+        "indemnitor_name": _indemnitor_name(packet, bond) or name,
+        "signer_name": name,
+        "signer_role": role,
         "lang": _lang(lang),
         "created_by": actor,
         "created_at": now.isoformat(),
@@ -233,10 +302,10 @@ async def _save_link(link: dict) -> None:
     )
 
 
-def _passing_scan(name: str, state: str) -> dict:
+def _passing_scan(name: str, state: str, role: str) -> dict:
     return {
         "success": True,
-        "role": "indemnitor",
+        "role": role,
         "extracted": {
             "full_name": name,
             "dl_state": state,
@@ -244,10 +313,10 @@ def _passing_scan(name: str, state: str) -> dict:
     }
 
 
-async def _store_scan(packet: dict, bond: Optional[dict], name: str, state: str) -> None:
+async def _store_scan(packet: dict, bond: Optional[dict], name: str, state: str, role: str) -> None:
     patch = {
-        "id_ocr_role": "indemnitor",
-        "id_ocr": _passing_scan(name, state),
+        "id_ocr_role": role,
+        "id_ocr": _passing_scan(name, state, role),
     }
     await get_collection("paperwork_packets").update_one(
         {"packet_id": packet.get("packet_id")},
@@ -273,18 +342,34 @@ async def submit_cosigner_scan(token: str, body: dict) -> dict:
     packet = await _find_packet(str(link.get("packet_id") or ""))
     if not packet:
         raise CosignerLinkError("packet_not_found", 404)
-    success = body.get("success") is True or body.get("passed") is True
     name = str(body.get("full_name") or body.get("name") or "").strip()
-    state = str(body.get("issuing_state") or body.get("dl_state") or "").strip()
-    expected = str(link.get("indemnitor_name") or "")
-    if not success or not names_match(name, expected):
+    expected = str(link.get("signer_name") or link.get("indemnitor_name") or "")
+    role = str(link.get("signer_role") or "indemnitor")
+    if role != "co_indemnitor":
+        role = "indemnitor"
+    status = str(body.get("status") or body.get("scan_status") or "").strip().lower()
+    passed = body.get("success") is True or body.get("passed") is True
+    failed = (
+        body.get("success") is False
+        or body.get("passed") is False
+        or status in _FAIL_STATUS
+        or not passed
+    )
+    if failed:
+        logger.info("[cosigner] scan failed packet_id=%s", link.get("packet_id"))
+        await _save_link(link)
+        raise CosignerLinkError("scan_failed", 409)
+    if not names_match(name, expected):
         logger.info("[cosigner] scan locked packet_id=%s", link.get("packet_id"))
         await _save_link(link)
         raise CosignerLinkError("name_mismatch", 409)
+    state = _jurisdiction(body)
     if not state:
-        raise CosignerLinkError("issuing_state_required", 400)
+        logger.info("[cosigner] no issuing state packet_id=%s", link.get("packet_id"))
+        await _save_link(link)
+        raise CosignerLinkError("no_issuing_state", 400)
     bond = await _find_bond(packet)
-    await _store_scan(packet, bond, name, state.upper())
+    await _store_scan(packet, bond, name, state, role)
     now = _now()
     link["id_verified"] = True
     link["id_verified_at"] = now.isoformat()
@@ -354,7 +439,7 @@ async def cosigner_state(token: str, lang: Optional[str] = None) -> dict:
     language = _lang(link.get("lang"))
     verified = bool(link.get("id_verified"))
     signed = _signed(packet)
-    paid = _paid(bond)
+    paid = _link_paid(link) or _paid(bond)
     now = _now()
     changed = False
     if signed and _timeline_push(link, "signed", now):
