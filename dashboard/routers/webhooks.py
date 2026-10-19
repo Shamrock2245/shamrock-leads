@@ -410,6 +410,7 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
                 await note_cosigner_paid(
                     reference,
                     str(recorded.get("transaction_id") or transaction_id or ""),
+                    amount=recorded.get("amount") if recorded.get("amount") is not None else amount,
                 )
             except Exception as exc:
                 logger.info(

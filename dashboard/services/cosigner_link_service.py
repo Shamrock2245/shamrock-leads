@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import secrets
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Optional
 
 from dashboard.extensions import get_collection
@@ -25,6 +26,7 @@ from dashboard.services.identity_verification_service import (
     _reject_full_id,
     names_match,
 )
+from dashboard.services.payment_links import case_invoice_link
 from dashboard.services.premium_confirmation_service import invoice_due_cents
 from dashboard.services.swipesimple_invoice_service import dispatch_live_enabled
 from dashboard.tenancy.context import current_tenant_id
@@ -156,18 +158,41 @@ def _expected_signer(packet: dict, bond: Optional[dict]) -> tuple[str, str]:
     return _indemnitor_name(packet, bond), "indemnitor"
 
 
-def _sign_url(packet: dict) -> str:
+def _party_role(row: dict) -> str:
+    meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    raw = str(
+        row.get("role") or row.get("party_role") or meta.get("party_role") or ""
+    ).strip().lower().replace("-", "_")
+    if raw in {"coindemnitor", "co_indemnitor", "cosigner", "co_signer"}:
+        return "co_indemnitor"
+    if raw == "indemnitor":
+        return "indemnitor"
+    return raw
+
+
+def _row_url(row: dict) -> str:
+    url = str(row.get("sign_url") or row.get("embed_src") or "").strip()
+    return url if url.startswith("http") else ""
+
+
+def _sign_url(packet: dict, role: str) -> str:
+    """The DocuSeal URL for this signer. Another party's link is not returned."""
+    wanted = "co_indemnitor" if role == "co_indemnitor" else "indemnitor"
+    for key in ("docuseal_submitters", "parties", "submitters"):
+        rows = packet.get(key)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if isinstance(row, dict) and _party_role(row) == wanted:
+                url = _row_url(row)
+                if url:
+                    return url
+    if wanted != "indemnitor":
+        return ""
     for key in ("docuseal_sign_url", "sign_url"):
         url = str(packet.get(key) or "").strip()
         if url.startswith("http"):
             return url
-    parties = packet.get("parties") or packet.get("submitters") or []
-    if isinstance(parties, list):
-        for row in parties:
-            if isinstance(row, dict):
-                url = str(row.get("sign_url") or row.get("embed_src") or "").strip()
-                if url.startswith("http"):
-                    return url
     return ""
 
 
@@ -212,7 +237,12 @@ async def _find_bond(packet: dict) -> Optional[dict]:
     scoped = _scope(query)
     if scoped is None:
         raise CosignerLinkError("tenant_required", 403)
-    return await get_collection("bond_cases").find_one(scoped)
+    for name in ("bond_cases", "active_bonds"):
+        doc = await get_collection(name).find_one(scoped)
+        if doc:
+            doc["_collection"] = name
+            return doc
+    return None
 
 
 def _timeline_push(link: dict, step: str, now: datetime) -> bool:
@@ -326,7 +356,10 @@ async def _store_scan(packet: dict, bond: Optional[dict], name: str, state: str,
         filt = {"bond_case_id": bond.get("bond_case_id")} if bond.get("bond_case_id") else {
             "booking_number": bond.get("booking_number"),
         }
-        await get_collection("bond_cases").update_one(filt, {"$set": patch})
+        collection = str(bond.get("_collection") or "bond_cases")
+        if collection not in {"bond_cases", "active_bonds"}:
+            collection = "bond_cases"
+        await get_collection(collection).update_one(filt, {"$set": patch})
 
 
 async def submit_cosigner_scan(token: str, body: dict) -> dict:
@@ -380,17 +413,43 @@ async def submit_cosigner_scan(token: str, body: dict) -> dict:
     return await cosigner_state(token, lang=link.get("lang"))
 
 
-async def note_cosigner_paid(booking_number: str, transaction_id: str) -> None:
-    """Stamp paid on every open link for this booking. Idempotent."""
+def _dollars_to_cents(amount: Any) -> Optional[int]:
+    try:
+        quantized = Decimal(str(amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    return int(quantized * 100)
+
+
+def _due_cents(packet: Optional[dict], bond: Optional[dict]) -> Optional[int]:
+    due = invoice_due_cents(packet) if packet else None
+    if due is None and bond:
+        due = invoice_due_cents(bond)
+    return due
+
+
+async def note_cosigner_paid(booking_number: str, transaction_id: str, amount: Any = None) -> None:
+    """Stamp paid when the charge equals the confirmed down payment. Idempotent.
+
+    A smaller charge is not the down payment. Nothing is stamped, and the
+    full premium stays unpaid.
+    """
     booking = str(booking_number or "").strip()
     if not booking:
         return
+    paid_cents = _dollars_to_cents(amount)
     query = _scope({"booking_number": booking})
     if query is None:
         return
     cursor = get_collection(LINKS).find(query)
     now = _now()
     async for link in _iter(cursor):
+        packet = await _find_packet(str(link.get("packet_id") or ""))
+        bond = await _find_bond(packet) if packet else None
+        due = _due_cents(packet, bond)
+        if paid_cents is None or due is None or paid_cents != due:
+            logger.info("[cosigner] paid amount refused packet_id=%s", link.get("packet_id"))
+            continue
         if _timeline_push(link, "paid", now):
             link["paid_transaction_id"] = transaction_id
             await _save_link(link)
@@ -415,12 +474,7 @@ def _payment_view(packet: dict, bond: Optional[dict]) -> dict:
     if cents is None and bond:
         cents = invoice_due_cents(bond)
     amount = f"{(cents or 0) / 100:.2f}" if cents is not None else ""
-    link = ""
-    for doc in (packet, bond or {}):
-        raw = str((doc or {}).get("swipesimple_payment_link") or "").strip()
-        if raw.startswith("http"):
-            link = raw
-            break
+    link = case_invoice_link(packet) or case_invoice_link(bond) or ""
     dry_run = not dispatch_live_enabled()
     return {
         "amount": amount,
@@ -458,7 +512,7 @@ async def cosigner_state(token: str, lang: Optional[str] = None) -> dict:
         step = "sign"
     else:
         step = "scan"
-    sign_url = _sign_url(packet) if verified else None
+    sign_url = _sign_url(packet, str(link.get("signer_role") or "indemnitor")) if verified else None
     return {
         "lang": language,
         "strings": STRINGS[language],
@@ -496,6 +550,8 @@ def render_cosigner_page(state: dict, token: str) -> str:
             f"<h1>{strings['sign_title']}</h1>"
             f"<p><a href='{sign_url}'>DocuSeal</a></p>"
         )
+    elif step == "sign":
+        body = f"<h1>{strings['sign_title']}</h1><p>{strings['locked']}</p>"
     elif step == "pay":
         note = strings["pay_dry_run"] if payment.get("dry_run") else strings["pay_title"]
         url = payment.get("url") or ""

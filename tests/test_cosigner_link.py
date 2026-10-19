@@ -310,15 +310,15 @@ def test_scan_locks_oneill_then_sign_and_pay(monkeypatch):
         json={"full_name": NAME, "issuing_state": "FL", "success": True, "id_number": "D12345678"},
     )
     assert rejected.status_code == 400
-    assert rejected.json()["error"] == "attestation_id_number_rejected"
+    assert rejected.json()["error"] == "scan_image_required"
     assert "id_ocr" not in stores["paperwork_packets"].docs[0]
 
-    mismatch = client.post(
-        f"/api/cosigner/{token}/scan",
-        json={"full_name": "Jamie O'Neill", "issuing_state": "FL", "success": True},
+    mismatch = _upload(
+        monkeypatch, client, token,
+        {"full_name": "Jamie O'Neill", "dl_state": "FL", "dl_number": "D12345678"},
     )
     assert mismatch.status_code == 409
-    assert mismatch.json()["error"] == "name_mismatch"
+    assert _error_text(mismatch) == "name_mismatch"
     assert "id_ocr" not in stores["paperwork_packets"].docs[0]
     assert "id_ocr" not in stores["bond_cases"].docs[0]
     still = client.get(f"/api/cosigner/{token}").json()
@@ -345,12 +345,14 @@ def test_scan_locks_oneill_then_sign_and_pay(monkeypatch):
         asyncio.run(_gate())
     assert raised.value.code == "indemnitor_identity_unverified"
 
-    matched = client.post(
-        f"/api/cosigner/{token}/scan",
-        json={"full_name": NAME, "issuing_state": "FL", "success": True},
+    matched = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL", "dl_number": "D12345678"},
     )
     assert matched.status_code == 200, matched.text
-    body = matched.json()
+    assert "DocuSeal" in matched.text
+    assert "D12345678" not in matched.text
+    body = client.get(f"/api/cosigner/{token}").json()
     assert body["step"] == "sign"
     assert body["sign_url"] == "https://sign.example/s/abc"
     assert body["signing_locked"] is False
@@ -380,6 +382,14 @@ def test_scan_locks_oneill_then_sign_and_pay(monkeypatch):
     assert "Pague el enganche" in spanish_pay.text
     assert "500.00" in spanish_pay.text
 
+    short = {
+        "event_type": "payment.completed",
+        "status": "approved",
+        "transaction_id": "TX-SHORT",
+        "amount": "1.00",
+        "custom_fields": {"booking_number": BOOKING, "reference_id": BOOKING},
+    }
+    # The recorder mock is installed below. A $1 charge must not mark paid.
     monkeypatch.setenv("ENV", "development")
     monkeypatch.setenv("SWIPESIMPLE_LIVE", "1")
     monkeypatch.setenv("SWIPESIMPLE_DISPATCH_LIVE", "1")
@@ -407,6 +417,16 @@ def test_scan_locks_oneill_then_sign_and_pay(monkeypatch):
         "dashboard.services.payment_log_claims.record_provider_payment",
         _record,
     )
+    short_paid = client.post("/api/webhooks/payment", json=short)
+    assert short_paid.status_code == 200, short_paid.text
+    assert stores["bond_cases"].docs[0]["premium_paid"] is False
+    assert not stores["cosigner_links"].docs[0].get("paid_transaction_id")
+    assert [row["step"] for row in stores["cosigner_links"].docs[0]["timeline"]] == [
+        "id_verified", "signed",
+    ]
+    assert len(_audits(stores, "paid")) == 0
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+
     payload = {
         "event_type": "payment.completed",
         "status": "approved",
@@ -429,7 +449,7 @@ def test_scan_locks_oneill_then_sign_and_pay(monkeypatch):
     assert replay.status_code == 200
     assert stores["bond_cases"].docs[0]["premium_paid"] is False
     assert len(_audits(stores, "paid")) == 1
-    assert calls["n"] == 2
+    assert calls["n"] == 3
     assert "payments" not in stores
     done = client.get(f"/api/cosigner/{token}").json()
     assert done["step"] == "paid"
@@ -481,6 +501,33 @@ def test_page_upload_scans_on_the_server(monkeypatch):
     assert "D12345678" not in uploaded.text
 
 
+def _upload(monkeypatch, client, token, extracted, *, success=True, status="", passed=None):
+    """Public scans are an ID photo. The scanner is mocked; nothing is charged."""
+
+    async def _scan(image_bytes, filename=""):
+        assert image_bytes == b"id-photo"
+        scanned = {"success": success, "status": status, "extracted": dict(extracted)}
+        if passed is not None:
+            scanned["passed"] = passed
+        return scanned
+
+    monkeypatch.setattr(
+        "dashboard.services.id_scanner_service.IDScannerService.scan_id_image",
+        _scan,
+    )
+    return client.post(
+        f"/api/cosigner/{token}/scan",
+        files={"id_image": ("id.jpg", b"id-photo", "image/jpeg")},
+    )
+
+
+def _error_text(response):
+    content_type = response.headers.get("content-type", "")
+    if content_type.startswith("application/json"):
+        return response.json().get("error")
+    return response.text
+
+
 def _token(client):
     created = client.post(
         "/api/paperwork/cosigner-link",
@@ -526,18 +573,21 @@ def test_no_scan_blocks_signing(monkeypatch):
 def test_failed_scan_blocks_signing(monkeypatch):
     stores, client = _world(monkeypatch)
     token = _token(client)
-    failed = client.post(
-        f"/api/cosigner/{token}/scan",
-        json={"full_name": NAME, "issuing_state": "FL", "success": False},
+    failed = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+        success=False,
     )
     assert failed.status_code == 409
-    assert failed.json()["error"] == "scan_failed"
-    unreadable = client.post(
-        f"/api/cosigner/{token}/scan",
-        json={"full_name": NAME, "issuing_state": "NY", "success": True, "status": "unreadable"},
+    assert _error_text(failed) == "scan_failed"
+    unreadable = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "NY"},
+        success=True,
+        status="unreadable",
     )
     assert unreadable.status_code == 409
-    assert unreadable.json()["error"] == "scan_failed"
+    assert _error_text(unreadable) == "scan_failed"
     _locked(client, stores, token)
     with pytest.raises(IndemnitorIdentityError) as raised:
         _gate(bond_data={"indemnitor_name": NAME, "booking_number": BOOKING})
@@ -547,12 +597,12 @@ def test_failed_scan_blocks_signing(monkeypatch):
 def test_wrong_name_blocks_signing(monkeypatch):
     stores, client = _world(monkeypatch)
     token = _token(client)
-    mismatch = client.post(
-        f"/api/cosigner/{token}/scan",
-        json={"full_name": "Jamie O'Neill", "issuing_state": "GA", "success": True},
+    mismatch = _upload(
+        monkeypatch, client, token,
+        {"full_name": "Jamie O'Neill", "issuing_state": "GA"},
     )
     assert mismatch.status_code == 409
-    assert mismatch.json()["error"] == "name_mismatch"
+    assert _error_text(mismatch) == "name_mismatch"
     _locked(client, stores, token)
 
 
@@ -566,9 +616,9 @@ def test_country_only_scan_blocks_signing(monkeypatch):
         {"full_name": NAME, "country": "United States", "state": "FL", "success": True},
     )
     for sample in samples:
-        blocked = client.post(f"/api/cosigner/{token}/scan", json=sample)
+        blocked = _upload(monkeypatch, client, token, sample)
         assert blocked.status_code == 400, sample
-        assert blocked.json()["error"] == "no_issuing_state"
+        assert _error_text(blocked) == "no_issuing_state"
         _locked(client, stores, token)
     with pytest.raises(IndemnitorIdentityError) as raised:
         _gate(bond_data={"indemnitor_name": NAME, "booking_number": BOOKING})
@@ -578,12 +628,12 @@ def test_country_only_scan_blocks_signing(monkeypatch):
 def test_any_us_state_scan_unlocks_signing(monkeypatch):
     stores, client = _world(monkeypatch)
     token = _token(client)
-    matched = client.post(
-        f"/api/cosigner/{token}/scan",
-        json={"full_name": NAME, "issuing_state": "Georgia", "success": True},
+    matched = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "issuing_state": "Georgia"},
     )
     assert matched.status_code == 200, matched.text
-    body = matched.json()
+    body = client.get(f"/api/cosigner/{token}").json()
     assert body["step"] == "sign"
     assert body["signing_locked"] is False
     assert body["sign_url"] == "https://sign.example/s/abc"
@@ -604,30 +654,41 @@ def test_cosigner_different_from_indemnitor(monkeypatch):
     assert link["signer_role"] == "co_indemnitor"
     assert link["indemnitor_name"] == INDEMNITOR
 
-    indemnitor_id = client.post(
-        f"/api/cosigner/{token}/scan",
-        json={"full_name": INDEMNITOR, "issuing_state": "FL", "success": True},
+    packet = stores["paperwork_packets"].docs[0]
+    packet["docuseal_sign_url"] = "https://sign.example/s/indemnitor"
+    packet["docuseal_submitters"] = [
+        {"role": "indemnitor", "sign_url": "https://sign.example/s/indemnitor"},
+        {
+            "role": "coindemnitor",
+            "sign_url": "https://sign.example/s/cosigner",
+            "metadata": {"party_role": "co_indemnitor"},
+        },
+    ]
+    indemnitor_id = _upload(
+        monkeypatch, client, token,
+        {"full_name": INDEMNITOR, "issuing_state": "FL"},
     )
     assert indemnitor_id.status_code == 409
-    assert indemnitor_id.json()["error"] == "name_mismatch"
+    assert _error_text(indemnitor_id) == "name_mismatch"
     _locked(client, stores, token)
 
-    country = client.post(
-        f"/api/cosigner/{token}/scan",
-        json={"full_name": NAME, "issuing_country": "USA", "success": True},
+    country = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "issuing_country": "USA"},
     )
     assert country.status_code == 400
-    assert country.json()["error"] == "no_issuing_state"
+    assert _error_text(country) == "no_issuing_state"
     _locked(client, stores, token)
 
-    matched = client.post(
-        f"/api/cosigner/{token}/scan",
-        json={"full_name": NAME, "issuing_state": "New York", "success": True},
+    matched = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "issuing_state": "New York"},
     )
     assert matched.status_code == 200, matched.text
-    body = matched.json()
+    body = client.get(f"/api/cosigner/{token}").json()
     assert body["step"] == "sign"
-    assert body["sign_url"] == "https://sign.example/s/abc"
+    assert body["sign_url"] == "https://sign.example/s/cosigner"
+    assert "https://sign.example/s/indemnitor" not in matched.text
     ocr = stores["bond_cases"].docs[0]["id_ocr"]
     assert ocr["role"] == "co_indemnitor"
     assert ocr["extracted"]["full_name"] == NAME
@@ -644,3 +705,38 @@ def test_cosigner_different_from_indemnitor(monkeypatch):
     co_only = _gate(parties=[{"role": "co_indemnitor", "name": NAME}])
     assert co_only["ok"] is True
     assert co_only["methods"] == ["scan"]
+
+
+def test_active_bond_scan_and_invoice_link_alias(monkeypatch):
+    stores, client = _world(monkeypatch, cosigner=NAME)
+    bond = stores["bond_cases"].docs.pop()
+    stores["active_bonds"] = _Col([bond])
+    packet = stores["paperwork_packets"].docs[0]
+    packet.pop("cosigner_name")
+    packet.pop("indemnitors")
+    packet["docuseal_sign_url"] = "https://sign.example/s/indemnitor"
+    packet["docuseal_submitters"] = [
+        {"role": "indemnitor", "sign_url": "https://sign.example/s/indemnitor"},
+        {"role": "coindemnitor", "sign_url": "https://sign.example/s/cosigner"},
+    ]
+    packet["payment_link"] = "https://shamrockbailbonds.biz/payment?amount=10"
+    token = _token(client)
+    assert stores["cosigner_links"].docs[0]["signer_role"] == "co_indemnitor"
+    uploaded = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "PR"},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    assert stores["bond_cases"].docs == []
+    ocr = stores["active_bonds"].docs[0]["id_ocr"]
+    assert ocr["role"] == "co_indemnitor"
+    assert ocr["extracted"]["dl_state"] == "PR"
+    state = client.get(f"/api/cosigner/{token}").json()
+    assert state["sign_url"] == "https://sign.example/s/cosigner"
+
+    packet["invoice_payment_link"] = "https://pay.example/down"
+    packet["status"] = "completed"
+    paying = client.get(f"/api/cosigner/{token}").json()
+    assert paying["step"] == "pay"
+    assert paying["payment"]["url"] == "https://pay.example/down"
+    assert paying["payment"]["dispatched"] is False

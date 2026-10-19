@@ -105,24 +105,16 @@ async def _scan_body_from_upload(form) -> dict | None:
 @cosigner_bp.post("/api/cosigner/{token}/scan")
 async def cosigner_scan(token: str, request: Request):
     content_type = (request.headers.get("content-type") or "").lower()
-    if "application/json" in content_type:
-        try:
-            body = _json.loads(await request.body() or b"{}")
-        except Exception:
-            body = None
-    else:
-        form = await request.form()
-        body = await _scan_body_from_upload(form)
-        if body is None:
-            return JSONResponse({"error": "scan_image_required"}, status_code=400)
+    if "application/json" in content_type or "multipart/form-data" not in content_type:
+        return JSONResponse({"error": "scan_image_required"}, status_code=400)
+    form = await request.form()
+    body = await _scan_body_from_upload(form)
+    if body is None:
+        return JSONResponse({"error": "scan_image_required"}, status_code=400)
     try:
-        state = await submit_cosigner_scan(token, body if isinstance(body, dict) else {})
+        state = await submit_cosigner_scan(token, body)
     except CosignerLinkError as exc:
-        if "application/json" in content_type:
-            return JSONResponse({"error": exc.code}, status_code=exc.status)
         return HTMLResponse(exc.code, status_code=exc.status)
-    if "application/json" in content_type:
-        return state
     return HTMLResponse(render_cosigner_page(state, token))
 
 
