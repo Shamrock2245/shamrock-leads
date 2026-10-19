@@ -22,6 +22,7 @@ from dashboard.bond_pdf_service import (
     _safe_float,
     _split_court_datetime,
     fill_palmetto_bond,
+    restore_classic_widget_field,
 )
 from dashboard.collateral_payment_method import (
     SOURCE_OTHER,
@@ -348,7 +349,9 @@ def stamp_document_widgets(doc: fitz.Document, slug: str) -> int:
         widget.text_fontsize = 8
         if kind == "text":
             widget.field_value = ""
-        page.add_widget(widget)
+        annot = page.add_widget(widget)
+        if annot is not None:
+            restore_classic_widget_field(doc, annot.xref)
         if kind == "text":
             for placed in page.widgets() or []:
                 if placed.field_name == field["name"] and abs(placed.rect.x0 - field["x"]) < 1:
