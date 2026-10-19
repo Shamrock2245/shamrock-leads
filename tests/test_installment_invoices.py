@@ -73,6 +73,14 @@ def _wire(db, monkeypatch):
     monkeypatch.setattr(pp, "get_collection", _col)
     monkeypatch.setattr(pp, "_txn_client", _txn)
     monkeypatch.setattr("dashboard.services.plan_payment_poster.get_collection", _col)
+    # A down payment is not an installment. The webhook records it through
+    # the fail-closed provider writer, on this same in-memory database.
+    import dashboard.services.payment_log_claims as plc
+    plc._index_ready = False
+    plc._lock_index_ready = False
+    plc._txn_support_cache.clear()
+    monkeypatch.setattr(plc, "_transaction_client", _txn)
+    monkeypatch.setattr("dashboard.extensions.get_db", lambda: db)
     monkeypatch.setattr("dashboard.services.installment_invoice_service.get_collection", _col)
     monkeypatch.setattr("dashboard.routers.webhooks.get_collection", _col)
     monkeypatch.delenv("SWIPESIMPLE_LIVE", raising=False)
