@@ -417,6 +417,31 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
                     "[payment_webhook] cosigner paid note skipped code=%s",
                     type(exc).__name__,
                 )
+    # A refund or failure of that same down payment reopens the co-signer
+    # pay step. It does not stamp the premium and it does not send a receipt.
+    recorded_reversal = (
+        not plan_handled
+        and recorded.get("event_kind") in {"refund", "failure"}
+        and (recorded.get("committed") or recorded.get("duplicate"))
+    )
+    if recorded_reversal:
+        reference = str(
+            custom_fields.get("reference_id") or data.get("reference_id") or ""
+        ).strip()
+        booking = str(booking_number or "").strip()
+        if reference and reference == booking and "-I" not in reference:
+            try:
+                from dashboard.services.cosigner_link_service import note_cosigner_reversed
+
+                await note_cosigner_reversed(
+                    reference,
+                    str(recorded.get("transaction_id") or transaction_id or ""),
+                )
+            except Exception as exc:
+                logger.info(
+                    "[payment_webhook] cosigner reversal note skipped code=%s",
+                    type(exc).__name__,
+                )
     if recorded_charge and indemnitor_phone:
         if plan_handled:
             from dashboard.services.bb_client import send_message_universal

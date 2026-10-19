@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-19 (co-signer link requires the bond, the signature, and the down payment)
+
+### Fixed
+- **A co-signer link is issued only for a bonded case whose signer matches the packet.** No bond row is `bond_required`. A packet signer that disagrees with the bond signer on name or role is `signer_mismatch`. Neither writes a token.
+- **An approved charge is not the down payment.** `premium_paid` is the only bond flag that counts. `last_payment_status` / `payment_status` do not move the page to paid and do not write a paid audit.
+- **The signer stays on the sign step until the packet is signed.** A down payment already collected still shows the DocuSeal URL after the ID scan. The paid step requires the scan, the signature, and the payment.
+- **A second ID upload is refused once the link is verified or the packet is signed.** The refusal is `scan_closed` and it runs before the upload is scanned. The state and pay pages stay open for a signed packet.
+- **A refund or failure of the stamped down payment reopens the pay step.** The link records `payment_reversed`, clears that transaction, and keeps the amount due. A replay does not audit twice. A different transaction id does not clear the stamp. The full premium flag is not changed and no receipt is sent.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_link_requires_a_matching_bond`, `test_approved_charge_is_not_the_down_payment`, `test_paid_bond_still_requires_a_signature`, `test_verified_or_signed_packet_refuses_another_scan`, `test_refund_reopens_the_down_payment`.
+
 ## [Unreleased] — 2026-10-19 (co-signer link fails closed on OCR, void, and bond identity)
 
 ### Fixed

@@ -712,8 +712,6 @@ def test_active_bond_scan_and_invoice_link_alias(monkeypatch):
     bond = stores["bond_cases"].docs.pop()
     stores["active_bonds"] = _Col([bond])
     packet = stores["paperwork_packets"].docs[0]
-    packet.pop("cosigner_name")
-    packet.pop("indemnitors")
     packet["docuseal_sign_url"] = "https://sign.example/s/indemnitor"
     packet["docuseal_submitters"] = [
         {"role": "indemnitor", "sign_url": "https://sign.example/s/indemnitor"},
@@ -850,14 +848,27 @@ def test_case_id_wins_and_ambiguous_booking_fails_closed(monkeypatch):
     assert state.status_code == 409
     assert state.json()["error"] == "bond_ambiguous"
     assert "sign.example" not in state.text
-    refused = _upload(
-        monkeypatch, client, token,
-        {"full_name": NAME, "dl_state": "FL"},
-    )
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    refused = _post_scan(client, token)
     assert refused.status_code == 409
-    assert _error_text(refused) == "bond_ambiguous"
+    assert refused.json()["error"] == "scan_closed"
+    assert calls["n"] == 0
     assert "id_ocr" not in stores["bond_cases"].docs[0]
     assert exact.get("id_ocr", {}).get("extracted", {}).get("full_name") == NAME
+
+    fresh, fresh_client = _world(monkeypatch)
+    fresh["bond_cases"].docs.insert(0, dict(other))
+    open_token = _token(fresh_client)
+    fresh["paperwork_packets"].docs[0]["bond_case_id"] = ""
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    ambiguous = _post_scan(fresh_client, open_token)
+    assert ambiguous.status_code == 409
+    assert _error_text(ambiguous) == "bond_ambiguous"
+    assert calls["n"] == 1
+    assert "id_ocr" not in fresh["paperwork_packets"].docs[0]
+    assert "id_ocr" not in fresh["bond_cases"].docs[0]
 
 
 def test_link_audits_record_old_and_new_state(monkeypatch):
@@ -901,3 +912,208 @@ def test_link_audits_record_old_and_new_state(monkeypatch):
     dumped = str(stores["audit_events"].docs)
     assert "D12345678" not in dumped
     assert "dl_number" not in dumped
+
+
+def _links(stores):
+    return stores.get("cosigner_links").docs if stores.get("cosigner_links") else []
+
+
+def test_link_requires_a_matching_bond(monkeypatch):
+    stores, client = _world(monkeypatch)
+    stores["bond_cases"].docs.clear()
+    missing = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert missing.status_code == 409
+    assert missing.json()["error"] == "bond_required"
+    assert _links(stores) == []
+
+    stores, client = _world(monkeypatch)
+    stores["bond_cases"].docs[0]["indemnitor_name"] = "Pat Other"
+    mismatched = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert mismatched.status_code == 409
+    assert mismatched.json()["error"] == "signer_mismatch"
+    assert _links(stores) == []
+    assert "token" not in mismatched.text
+
+
+def test_approved_charge_is_not_the_down_payment(monkeypatch):
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    uploaded = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    bond = stores["bond_cases"].docs[0]
+    bond["last_payment_status"] = "approved"
+    bond["payment_status"] = "approved"
+    bond["last_payment_amount"] = "1.00"
+    stores["paperwork_packets"].docs[0]["status"] = "completed"
+    state = client.get(f"/api/cosigner/{token}")
+    assert state.status_code == 200, state.text
+    body = state.json()
+    assert body["step"] == "pay"
+    assert body["payment"]["amount"] == "500.00"
+    assert len(_audits(stores, "paid")) == 0
+    assert not stores["cosigner_links"].docs[0].get("paid_transaction_id")
+
+
+def test_paid_bond_still_requires_a_signature(monkeypatch):
+    stores, client = _world(monkeypatch)
+    stores["bond_cases"].docs[0]["premium_paid"] = True
+    token = _token(client)
+    uploaded = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    signing = client.get(f"/api/cosigner/{token}").json()
+    assert signing["step"] == "sign"
+    assert signing["sign_url"] == "https://sign.example/s/abc"
+    stores["paperwork_packets"].docs[0]["status"] = "completed"
+    paid = client.get(f"/api/cosigner/{token}").json()
+    assert paid["step"] == "paid"
+    assert paid["sign_url"] == "https://sign.example/s/abc"
+
+
+def test_verified_or_signed_packet_refuses_another_scan(monkeypatch):
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    uploaded = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL", "dl_number": "D12345678"},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    original = dict(stores["paperwork_packets"].docs[0]["id_ocr"])
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    again = _post_scan(client, token)
+    assert again.status_code == 409
+    assert again.json()["error"] == "scan_closed"
+    assert calls["n"] == 0
+    assert stores["paperwork_packets"].docs[0]["id_ocr"] == original
+
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    for status in ("signed", "completed"):
+        stores["paperwork_packets"].docs[0]["status"] = status
+        assert stores["cosigner_links"].docs[0].get("id_verified") is not True
+        refused = _post_scan(client, token)
+        assert refused.status_code == 409, status
+        assert refused.json()["error"] == "scan_closed"
+        assert "id_ocr" not in stores["paperwork_packets"].docs[0]
+        page = client.get(f"/api/cosigner/{token}")
+        assert page.status_code == 200, status
+        assert page.json()["step"] == "scan"
+    assert calls["n"] == 0
+
+
+def _gateway(monkeypatch):
+    monkeypatch.setenv("ENV", "development")
+    monkeypatch.setenv("SWIPESIMPLE_LIVE", "1")
+    monkeypatch.delenv("SWIPESIMPLE_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("REQUIRE_DASHBOARD_PIN", raising=False)
+    seen = []
+
+    def _db():
+        return {"db": "mocked"}
+
+    async def _record(db, **kwargs):
+        extra = kwargs.get("extra") or {}
+        event = str(extra.get("event_type") or "").lower()
+        status = str(kwargs.get("status") or "").lower()
+        if "refund" in event or "revers" in event or status in {"refunded", "refund"}:
+            kind = "refund"
+        elif status in {"failed", "declined", "voided"} or event.endswith(".failed"):
+            kind = "failure"
+        else:
+            kind = "charge"
+        txn = kwargs.get("transaction_id")
+        seen.append(txn)
+        first = seen.count(txn) == 1
+        return {
+            "committed": first,
+            "duplicate": not first,
+            "needs_review": kind in {"refund", "failure"},
+            "transaction_id": txn,
+            "event_kind": kind,
+            "amount": kwargs.get("amount"),
+        }
+
+    monkeypatch.setattr("dashboard.extensions.get_db", _db)
+    monkeypatch.setattr(
+        "dashboard.services.payment_log_claims.record_provider_payment",
+        _record,
+    )
+
+
+def _payment(client, *, txn, amount, kind):
+    event = "payment.refunded" if kind == "refund" else "payment.completed"
+    status = "refunded" if kind == "refund" else "approved"
+    return client.post("/api/webhooks/payment", json={
+        "event_type": event,
+        "status": status,
+        "transaction_id": txn,
+        "amount": amount,
+        "custom_fields": {"booking_number": BOOKING, "reference_id": BOOKING},
+    })
+
+
+def test_refund_reopens_the_down_payment(monkeypatch):
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    uploaded = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    stores["paperwork_packets"].docs[0]["status"] = "completed"
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+    _gateway(monkeypatch)
+
+    paid = _payment(client, txn="TX-PAY", amount="500.00", kind="charge")
+    assert paid.status_code == 200, paid.text
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+    assert stores["bond_cases"].docs[0]["premium_paid"] is False
+
+    refunded = _payment(client, txn="TX-PAY", amount="500.00", kind="refund")
+    assert refunded.status_code == 200, refunded.text
+    reopened = client.get(f"/api/cosigner/{token}").json()
+    assert reopened["step"] == "pay"
+    assert reopened["payment"]["amount"] == "500.00"
+    link = stores["cosigner_links"].docs[0]
+    assert link["payment_reversed"] is True
+    assert not link.get("paid_transaction_id")
+    assert len(_audits(stores, "payment_reversed")) == 1
+    reversed_audit = _audits(stores, "payment_reversed")[0]
+    assert reversed_audit["old_state"]["paid"] is True
+    assert reversed_audit["new_state"]["paid"] is False
+    assert reversed_audit["new_state"]["payment_reversed"] is True
+
+    replay = _payment(client, txn="TX-PAY", amount="500.00", kind="refund")
+    assert replay.status_code == 200
+    assert len(_audits(stores, "payment_reversed")) == 1
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+
+    again = _payment(client, txn="TX-PAY-2", amount="500.00", kind="charge")
+    assert again.status_code == 200, again.text
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+    assert stores["cosigner_links"].docs[0]["paid_transaction_id"] == "TX-PAY-2"
+    assert stores["cosigner_links"].docs[0]["payment_reversed"] is False
+    assert stores["bond_cases"].docs[0]["premium_paid"] is False
+
+    other = _payment(client, txn="TX-OTHER", amount="500.00", kind="refund")
+    assert other.status_code == 200, other.text
+    assert stores["cosigner_links"].docs[0]["paid_transaction_id"] == "TX-PAY-2"
+    assert stores["cosigner_links"].docs[0]["payment_reversed"] is False
+    assert len(_audits(stores, "payment_reversed")) == 1
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"

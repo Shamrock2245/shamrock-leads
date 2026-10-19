@@ -44,7 +44,15 @@ _CLOSED_PACKET = frozenset({
     "canceled",
     "superseded",
 })
-_AUDIT_STATE_KEYS = ("step", "id_verified", "signed", "paid", "timeline", "packet_status")
+_AUDIT_STATE_KEYS = (
+    "step",
+    "id_verified",
+    "signed",
+    "paid",
+    "payment_reversed",
+    "timeline",
+    "packet_status",
+)
 _COSIGNER_KEYS = (
     "cosigner_name",
     "co_signer_name",
@@ -210,6 +218,9 @@ def _signed(packet: dict) -> bool:
 
 
 def _link_paid(link: dict) -> bool:
+    """The down-payment stamp. A reversal reopens the pay step."""
+    if link.get("payment_reversed") is True:
+        return False
     if str(link.get("paid_transaction_id") or "").strip():
         return True
     rows = link.get("timeline") or []
@@ -217,12 +228,8 @@ def _link_paid(link: dict) -> bool:
 
 
 def _paid(bond: Optional[dict]) -> bool:
-    if not isinstance(bond, dict):
-        return False
-    if bond.get("premium_paid") is True:
-        return True
-    status = str(bond.get("payment_status") or bond.get("last_payment_status") or "").strip().lower()
-    return status in {"paid", "approved", "completed", "complete"}
+    """The full premium flag only. An approved charge is not this down payment."""
+    return isinstance(bond, dict) and bond.get("premium_paid") is True
 
 
 def _as_utc(value: Any) -> Optional[datetime]:
@@ -278,8 +285,11 @@ def _audit_state(link: dict, packet: Optional[dict] = None) -> dict:
     ]
     verified = bool(link.get("id_verified"))
     signed = "signed" in timeline
-    paid = "paid" in timeline or bool(str(link.get("paid_transaction_id") or "").strip())
-    if paid:
+    reversed_pay = link.get("payment_reversed") is True
+    paid = not reversed_pay and (
+        "paid" in timeline or bool(str(link.get("paid_transaction_id") or "").strip())
+    )
+    if paid and signed:
         step = "paid"
     elif signed:
         step = "pay"
@@ -292,6 +302,7 @@ def _audit_state(link: dict, packet: Optional[dict] = None) -> dict:
         "id_verified": verified,
         "signed": signed,
         "paid": paid,
+        "payment_reversed": reversed_pay,
         "timeline": timeline,
         "packet_status": str((packet or {}).get("status") or ""),
     }
@@ -385,7 +396,7 @@ def _audit_state_only(state: dict) -> dict:
         value = state[key]
         if key == "timeline":
             clean[key] = [str(step) for step in value] if isinstance(value, list) else []
-        elif key in {"id_verified", "signed", "paid"}:
+        elif key in {"id_verified", "signed", "paid", "payment_reversed"}:
             clean[key] = bool(value)
         else:
             clean[key] = str(value or "")
@@ -397,9 +408,20 @@ async def create_cosigner_link(*, actor: str, packet_id: str, lang: str = "en") 
     if not packet:
         raise CosignerLinkError("packet_not_found", 404)
     bond = await _find_bond(packet)
-    name, role = _expected_signer(packet, bond)
-    if not name:
-        raise CosignerLinkError("indemnitor_name_required", 400)
+    if not bond:
+        raise CosignerLinkError("bond_required", 409)
+    # The packet and the bonded case must name the same signer. The packet
+    # does not win a disagreement, and a missing bond does not get a token.
+    packet_name, packet_role = _expected_signer(packet, None)
+    bond_name, bond_role = _expected_signer(bond, None)
+    if (
+        packet_role != bond_role
+        or not packet_name
+        or not bond_name
+        or not names_match(packet_name, bond_name)
+    ):
+        raise CosignerLinkError("signer_mismatch", 409)
+    name, role = packet_name, packet_role
     now = _now()
     token = secrets.token_urlsafe(24)
     doc = {
@@ -442,6 +464,11 @@ async def _link_by_token(token: str) -> dict:
     return link
 
 
+def _scan_locked(link: dict, packet: dict) -> bool:
+    """A passing scan, or a signed packet, does not accept another upload."""
+    return bool(link.get("id_verified")) or _signed(packet)
+
+
 async def require_cosigner_scan(token: str) -> dict:
     """Resolve the bearer link before any upload is read or scanned."""
     link = await _link_by_token(token)
@@ -450,6 +477,8 @@ async def require_cosigner_scan(token: str) -> dict:
         raise CosignerLinkError("packet_not_found", 404)
     if _packet_closed(packet):
         raise CosignerLinkError("packet_inactive", 409)
+    if _scan_locked(link, packet):
+        raise CosignerLinkError("scan_closed", 409)
     return link
 
 
@@ -462,6 +491,7 @@ async def _save_link(link: dict) -> None:
             "lang": link.get("lang") or "en",
             "id_verified_at": link.get("id_verified_at") or "",
             "paid_transaction_id": link.get("paid_transaction_id") or "",
+            "payment_reversed": link.get("payment_reversed") is True,
         }},
     )
 
@@ -511,6 +541,8 @@ async def submit_cosigner_scan(token: str, body: dict) -> dict:
         raise CosignerLinkError("packet_not_found", 404)
     if _packet_closed(packet):
         raise CosignerLinkError("packet_inactive", 409)
+    if _scan_locked(link, packet):
+        raise CosignerLinkError("scan_closed", 409)
     name = str(body.get("full_name") or body.get("name") or "").strip()
     expected = str(link.get("signer_name") or link.get("indemnitor_name") or "")
     role = str(link.get("signer_role") or "indemnitor")
@@ -594,13 +626,47 @@ async def note_cosigner_paid(booking_number: str, transaction_id: str, amount: A
             logger.info("[cosigner] paid refused closed packet_id=%s", link.get("packet_id"))
             continue
         before = _audit_state(link, packet)
-        if _timeline_push(link, "paid", now):
-            link["paid_transaction_id"] = transaction_id
-            await _save_link(link)
-            await _audit(
-                "paid", link, now,
-                old_state=before, new_state=_audit_state(link, packet),
-            )
+        reopened = link.get("payment_reversed") is True
+        pushed = _timeline_push(link, "paid", now)
+        if not pushed and not reopened:
+            continue
+        link["paid_transaction_id"] = transaction_id
+        link["payment_reversed"] = False
+        await _save_link(link)
+        await _audit(
+            "paid", link, now,
+            old_state=before, new_state=_audit_state(link, packet),
+        )
+
+
+async def note_cosigner_reversed(booking_number: str, transaction_id: str) -> None:
+    """Reopen the pay step when the stamped down payment is refunded or fails.
+
+    Only the link stamped with this transaction is cleared. A different
+    transaction leaves the stamp in place. A replay does not audit twice.
+    """
+    booking = str(booking_number or "").strip()
+    txn = str(transaction_id or "").strip()
+    if not booking or not txn:
+        return
+    query = _scope({"booking_number": booking})
+    if query is None:
+        return
+    cursor = get_collection(LINKS).find(query)
+    now = _now()
+    async for link in _iter(cursor):
+        if str(link.get("paid_transaction_id") or "").strip() != txn:
+            continue
+        packet = await _find_packet(str(link.get("packet_id") or ""))
+        before = _audit_state(link, packet)
+        link["payment_reversed"] = True
+        link["paid_transaction_id"] = ""
+        _timeline_push(link, "payment_reversed", now)
+        await _save_link(link)
+        await _audit(
+            "payment_reversed", link, now,
+            old_state=before, new_state=_audit_state(link, packet),
+        )
 
 
 async def _iter(cursor):
@@ -662,7 +728,9 @@ async def cosigner_state(token: str, lang: Optional[str] = None) -> dict:
         changed = True
     if changed or lang:
         await _save_link(link)
-    if paid and verified:
+    # Paid money does not skip the signature. The terminal paid step needs
+    # the scan, the signature, and the down payment.
+    if paid and signed and verified:
         step = "paid"
     elif signed and verified:
         step = "pay"
