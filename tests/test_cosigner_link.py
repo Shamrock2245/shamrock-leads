@@ -165,6 +165,9 @@ def _match(doc, query):
             elif "$ne" in expected:
                 if doc.get(key) == expected["$ne"]:
                     return False
+            elif "$exists" in expected:
+                if (key in doc) != bool(expected["$exists"]):
+                    return False
             else:
                 return False
         elif doc.get(key) != expected:
@@ -185,15 +188,21 @@ class _Col:
     def find(self, query=None, projection=None):
         return _Cursor([doc for doc in self.docs if _match(doc, query or {})])
 
-    async def update_one(self, query, update, upsert=False):
+    async def update_one(self, query, update, upsert=False, session=None, **kwargs):
         doc = await self.find_one(query)
         if doc is None:
             return _Result(0)
         for key, value in (update.get("$set") or {}).items():
             doc[key] = value
+        for key, value in (update.get("$push") or {}).items():
+            bucket = doc.get(key)
+            if not isinstance(bucket, list):
+                bucket = []
+                doc[key] = bucket
+            bucket.append(value)
         return _Result(1)
 
-    async def insert_one(self, doc):
+    async def insert_one(self, doc, session=None, **kwargs):
         self.docs.append(doc)
         return None
 
@@ -397,11 +406,10 @@ def test_scan_locks_oneill_then_sign_and_pay(monkeypatch):
     monkeypatch.delenv("REQUIRE_DASHBOARD_PIN", raising=False)
     calls = {"n": 0}
 
-    def _db():
-        return {"db": "mocked"}
+    pay_db = _install_payment_lock(monkeypatch)
 
     async def _record(db, **kwargs):
-        assert db == {"db": "mocked"}
+        assert db is pay_db
         calls["n"] += 1
         return {
             "committed": calls["n"] == 1,
@@ -412,7 +420,6 @@ def test_scan_locks_oneill_then_sign_and_pay(monkeypatch):
             "amount": kwargs.get("amount"),
         }
 
-    monkeypatch.setattr("dashboard.extensions.get_db", _db)
     monkeypatch.setattr(
         "dashboard.services.payment_log_claims.record_provider_payment",
         _record,
@@ -901,6 +908,7 @@ def test_link_audits_record_old_and_new_state(monkeypatch):
 
     from dashboard.services.cosigner_link_service import note_cosigner_paid
 
+    _install_payment_lock(monkeypatch)
     asyncio.run(note_cosigner_paid(BOOKING, "TX-PAY", "500.00"))
     paid = _audits(stores, "paid")
     assert len(paid) == 1
@@ -1017,15 +1025,31 @@ def test_verified_or_signed_packet_refuses_another_scan(monkeypatch):
     assert calls["n"] == 0
 
 
+def _install_payment_lock(monkeypatch):
+    """The in-memory transaction client the co-signer note locks on."""
+    import dashboard.services.payment_log_claims as payment_log
+    from tests.test_payment_plan_pay_dedupe import DB, TxnClient
+
+    db = DB()
+    txn_client = TxnClient(db)
+
+    async def _txn():
+        return txn_client
+
+    monkeypatch.setattr(payment_log, "_transaction_client", _txn)
+    monkeypatch.setattr(payment_log, "_lock_index_ready", False)
+    payment_log._txn_support_cache.clear()
+    monkeypatch.setattr("dashboard.extensions.get_db", lambda: db)
+    return db
+
+
 def _gateway(monkeypatch):
     monkeypatch.setenv("ENV", "development")
     monkeypatch.setenv("SWIPESIMPLE_LIVE", "1")
     monkeypatch.delenv("SWIPESIMPLE_WEBHOOK_SECRET", raising=False)
     monkeypatch.delenv("REQUIRE_DASHBOARD_PIN", raising=False)
+    _install_payment_lock(monkeypatch)
     seen = []
-
-    def _db():
-        return {"db": "mocked"}
 
     async def _record(db, **kwargs):
         extra = kwargs.get("extra") or {}
@@ -1049,7 +1073,6 @@ def _gateway(monkeypatch):
             "amount": kwargs.get("amount"),
         }
 
-    monkeypatch.setattr("dashboard.extensions.get_db", _db)
     monkeypatch.setattr(
         "dashboard.services.payment_log_claims.record_provider_payment",
         _record,
@@ -1409,3 +1432,68 @@ def test_refund_reopens_pay_step_without_moving_plan_balance(monkeypatch):
     assert plan["total_paid_cents"] == 0
     assert plan["payments_made"] == 0
     assert stores["bond_cases"].docs[0]["premium_paid"] is False
+
+
+def test_charge_refund_race_does_not_leave_step_paid(monkeypatch):
+    """Concurrent charge and refund cannot leave the pay step paid.
+
+    Two concurrent copies of the same charge write one paid audit. The link
+    update holds payment_txn_locks and is a conditional write.
+    """
+    import httpx
+
+    import dashboard.services.payment_log_claims as payment_log
+    from tests.test_payment_log_claims import _LockColl, _OneRowClient
+
+    stores, client, token, db = _recorder_world(monkeypatch)
+    locker = _OneRowClient(db)
+    db["payment_txn_locks"] = _LockColl(locker)
+
+    async def _txn():
+        return locker
+
+    monkeypatch.setattr(payment_log, "_transaction_client", _txn)
+    monkeypatch.setattr(payment_log, "_lock_index_ready", False)
+    payment_log._txn_support_cache.clear()
+
+    def _body(txn, *, refund=False):
+        return {
+            "event_type": "payment.refunded" if refund else "payment.completed",
+            "status": "refunded" if refund else "approved",
+            "transaction_id": txn,
+            "amount": "500.00",
+            "custom_fields": {"booking_number": BOOKING, "reference_id": BOOKING},
+        }
+
+    async def _both(bodies):
+        transport = httpx.ASGITransport(app=client.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as http:
+            return await asyncio.gather(*[
+                http.post("/api/webhooks/payment", json=body) for body in bodies
+            ])
+
+    charge, refund = asyncio.run(_both([
+        _body("TX-RACE"),
+        _body("TX-RACE", refund=True),
+    ]))
+    assert charge.status_code == 200, charge.text
+    assert refund.status_code == 200, refund.text
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+    raced = stores["cosigner_links"].docs[0]
+    assert not raced.get("paid_transaction_id")
+    assert len(_audits(stores, "paid")) <= 1
+    assert db["payment_txn_locks"].docs
+    assert db["payment_txn_locks"].docs[0]["txn_key"] == "TX-RACE"
+
+    before = len(_audits(stores, "paid"))
+    first, second = asyncio.run(_both([_body("TX-ONCE"), _body("TX-ONCE")]))
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+    assert stores["cosigner_links"].docs[0]["paid_transaction_id"] == "TX-ONCE"
+    assert len(_audits(stores, "paid")) - before == 1
+    paid_rows = [
+        row for row in stores["cosigner_links"].docs[0]["timeline"]
+        if row.get("step") == "paid"
+    ]
+    assert len(paid_rows) == 1

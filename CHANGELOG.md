@@ -8,9 +8,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 - **A charge stored with `needs_review` does not mark the co-signer pay step.** That includes a refund that arrived before the charge, and a booking that is not one bond. `note_cosigner_paid` re-reads `payments` and refuses the stamp when that charge is `needs_review` or the transaction has a refund or failure row.
 - **A refund or failure with no `reference_id` reopens the pay step.** The link is found by `paid_transaction_id`. A different transaction id does not clear the stamp.
+- **The co-signer pay stamp is taken inside `payment_txn_locks`.** The link update is conditional, so one charge writes one paid audit. A charge and its refund cannot leave the step paid.
 
 ### Tests
-- `tests/test_cosigner_link.py`: `test_refund_before_charge_does_not_mark_paid`, `test_refund_without_reference_reopens_by_transaction_id`.
+- `tests/test_cosigner_link.py`: `test_refund_before_charge_does_not_mark_paid`, `test_refund_without_reference_reopens_by_transaction_id`, `test_charge_refund_race_does_not_leave_step_paid`.
 
 ## [Unreleased] — 2026-10-19 (co-signer link requires the bond, the signature, and the down payment)
 

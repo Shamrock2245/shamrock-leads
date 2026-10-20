@@ -366,7 +366,10 @@ def _timeline_push(link: dict, step: str, now: datetime) -> bool:
     return True
 
 
-async def _audit(step: str, link: dict, now: datetime, *, old_state: dict, new_state: dict) -> None:
+async def _audit(
+    step: str, link: dict, now: datetime, *, old_state: dict, new_state: dict, session=None,
+) -> None:
+    kwargs = {"session": session} if session is not None else {}
     await get_collection("audit_events").insert_one({
         "event_type": step,
         "action": step,
@@ -382,7 +385,7 @@ async def _audit(step: str, link: dict, now: datetime, *, old_state: dict, new_s
         "old_state": _audit_state_only(old_state),
         "new_state": _audit_state_only(new_state),
         "confidence": 1.0,
-    })
+    }, **kwargs)
 
 
 def _audit_state_only(state: dict) -> dict:
@@ -585,7 +588,62 @@ async def submit_cosigner_scan(token: str, body: dict) -> dict:
     return await cosigner_state(token, lang=link.get("lang"))
 
 
-async def _charge_row_blocks_down_payment(transaction_id: str) -> bool:
+async def _with_payment_lock(txn_key: str, work) -> None:
+    """Run ``work`` inside ``payment_txn_locks`` for this transaction.
+
+    The provider recorder takes the same lock. The link write waits for it,
+    re-reads the payment rows, then does a conditional update. No client
+    means nothing is written.
+    """
+    from dashboard.extensions import get_db
+    from dashboard.services import payment_log_claims as payment_log
+
+    txn_key = str(txn_key or "").strip()
+    if not txn_key:
+        return
+    try:
+        db = get_db()
+        client = await payment_log._transaction_client()
+    except Exception:
+        logger.info("[cosigner] payment lock unavailable")
+        return
+    if client is None or db is None:
+        logger.info("[cosigner] payment lock unavailable")
+        return
+    try:
+        await payment_log.ensure_txn_lock_index(db[payment_log.LOCKS_COLLECTION])
+    except Exception:
+        logger.info("[cosigner] payment lock index unavailable")
+        return
+
+    async def wrapped(session):
+        await payment_log.acquire_txn_lock(db[payment_log.LOCKS_COLLECTION], txn_key, session)
+        await work(db, session)
+
+    try:
+        await payment_log._run_apply(client, wrapped)
+    except Exception:
+        logger.info("[cosigner] payment lock write skipped txn=%s", txn_key)
+
+
+async def _payment_rows(db, txn_key: str, session) -> Optional[list]:
+    """Payment rows for this transaction, or None when they cannot be read."""
+    from dashboard.services.payment_log_claims import _read_rows
+
+    try:
+        coll = db["payments"]
+    except Exception:
+        return None
+    if not hasattr(coll, "find"):
+        return None
+    try:
+        return await _read_rows(db, txn_key, session)
+    except Exception:
+        logger.info("[cosigner] payment rows unreadable")
+        return None
+
+
+async def _charge_row_blocks_down_payment(db, transaction_id: str, session) -> bool:
     """True when the stored charge must not mark the co-signer pay step.
 
     A committed charge can still be ``needs_review`` (the refund arrived
@@ -593,34 +651,97 @@ async def _charge_row_blocks_down_payment(transaction_id: str) -> bool:
     same transaction blocks the stamp too. When this process has no payment
     rows to read, the recorder's return value remains the gate.
     """
-    txn = str(transaction_id or "").strip()
-    if not txn:
-        return True
-    try:
-        from dashboard.extensions import get_db
-        from dashboard.services.payment_log_claims import has_reversal_sibling, row_kind
+    from dashboard.services.payment_log_claims import has_reversal_sibling, row_kind
 
-        coll = get_db()["payments"]
-        if not hasattr(coll, "find"):
-            return False
-        rows = []
-        cursor = coll.find({"transaction_id": txn})
-        if hasattr(cursor, "to_list"):
-            listed = await cursor.to_list(length=50)
-            rows = [row for row in listed if isinstance(row, dict)]
-        elif hasattr(cursor, "__aiter__"):
-            async for row in cursor:
-                if isinstance(row, dict):
-                    rows.append(row)
-    except Exception:
-        logger.info("[cosigner] payment rows unreadable")
-        return False
+    rows = await _payment_rows(db, str(transaction_id or "").strip(), session)
     if not rows:
         return False
     if has_reversal_sibling(rows):
         return True
     charges = [row for row in rows if row_kind(row) == "charge"]
     return any(row.get("needs_review") for row in charges)
+
+
+def _unpaid_link_query(token: str) -> dict:
+    """Compare-and-set filter: this link is not already stamped paid."""
+    return {
+        "token": token,
+        "$or": [
+            {"paid_transaction_id": {"$exists": False}},
+            {"paid_transaction_id": ""},
+            {"paid_transaction_id": None},
+        ],
+    }
+
+
+def _timeline_has(link: dict, step: str) -> bool:
+    return any(
+        isinstance(row, dict) and row.get("step") == step
+        for row in (link.get("timeline") or [])
+    )
+
+
+async def _cas_mark_paid(link: dict, packet: Optional[dict], txn: str, now: datetime, session) -> bool:
+    """Conditional paid stamp. A lost race writes no audit."""
+    token = str(link.get("token") or "")
+    if not token:
+        return False
+    before = _audit_state(link, packet)
+    update = {
+        "$set": {
+            "paid_transaction_id": txn,
+            "payment_reversed": False,
+        },
+    }
+    if not _timeline_has(link, "paid"):
+        update["$push"] = {"timeline": {"step": "paid", "at": now.isoformat()}}
+    result = await get_collection(LINKS).update_one(
+        _unpaid_link_query(token),
+        update,
+        session=session,
+    )
+    if not getattr(result, "modified_count", 0):
+        return False
+    fresh = await get_collection(LINKS).find_one({"token": token}) or link
+    await _audit(
+        "paid", fresh, now,
+        old_state=before, new_state=_audit_state(fresh, packet), session=session,
+    )
+    return True
+
+
+async def _cas_mark_reversed(link: dict, txn: str, now: datetime, session) -> bool:
+    """Conditional reopen. A replay matches nothing and writes no audit."""
+    token = str(link.get("token") or "")
+    if not token:
+        return False
+    packet = await _find_packet(str(link.get("packet_id") or ""))
+    before = _audit_state(link, packet)
+    result = await get_collection(LINKS).update_one(
+        {
+            "token": token,
+            "paid_transaction_id": txn,
+            "payment_reversed": {"$ne": True},
+        },
+        {
+            "$set": {
+                "payment_reversed": True,
+                "paid_transaction_id": "",
+            },
+            "$push": {
+                "timeline": {"step": "payment_reversed", "at": now.isoformat()},
+            },
+        },
+        session=session,
+    )
+    if not getattr(result, "modified_count", 0):
+        return False
+    fresh = await get_collection(LINKS).find_one({"token": token}) or link
+    await _audit(
+        "payment_reversed", fresh, now,
+        old_state=before, new_state=_audit_state(fresh, packet), session=session,
+    )
+    return True
 
 
 def _dollars_to_cents(amount: Any) -> Optional[int]:
@@ -642,51 +763,47 @@ async def note_cosigner_paid(booking_number: str, transaction_id: str, amount: A
     """Stamp paid when the charge equals the confirmed down payment. Idempotent.
 
     A smaller charge is not the down payment. Nothing is stamped, and the
-    full premium stays unpaid.
+    full premium stays unpaid. The write takes ``payment_txn_locks`` and
+    updates the link only when it is not already stamped, so one charge
+    writes one paid audit.
     """
     booking = str(booking_number or "").strip()
-    if not booking:
-        return
-    if await _charge_row_blocks_down_payment(transaction_id):
-        logger.info("[cosigner] paid refused review hold")
+    txn = str(transaction_id or "").strip()
+    if not booking or not txn:
         return
     paid_cents = _dollars_to_cents(amount)
     query = _scope({"booking_number": booking})
     if query is None:
         return
-    cursor = get_collection(LINKS).find(query)
-    now = _now()
-    async for link in _iter(cursor):
-        packet = await _find_packet(str(link.get("packet_id") or ""))
-        bond = await _find_bond(packet) if packet else None
-        due = _due_cents(packet, bond)
-        if paid_cents is None or due is None or paid_cents != due:
-            logger.info("[cosigner] paid amount refused packet_id=%s", link.get("packet_id"))
-            continue
-        if packet and _packet_closed(packet):
-            logger.info("[cosigner] paid refused closed packet_id=%s", link.get("packet_id"))
-            continue
-        before = _audit_state(link, packet)
-        reopened = link.get("payment_reversed") is True
-        pushed = _timeline_push(link, "paid", now)
-        if not pushed and not reopened:
-            continue
-        link["paid_transaction_id"] = transaction_id
-        link["payment_reversed"] = False
-        await _save_link(link)
-        await _audit(
-            "paid", link, now,
-            old_state=before, new_state=_audit_state(link, packet),
-        )
+
+    async def work(db, session):
+        if await _charge_row_blocks_down_payment(db, txn, session):
+            logger.info("[cosigner] paid refused review hold")
+            return
+        now = _now()
+        cursor = get_collection(LINKS).find(query)
+        async for link in _iter(cursor):
+            packet = await _find_packet(str(link.get("packet_id") or ""))
+            bond = await _find_bond(packet) if packet else None
+            due = _due_cents(packet, bond)
+            if paid_cents is None or due is None or paid_cents != due:
+                logger.info("[cosigner] paid amount refused packet_id=%s", link.get("packet_id"))
+                continue
+            if packet and _packet_closed(packet):
+                logger.info("[cosigner] paid refused closed packet_id=%s", link.get("packet_id"))
+                continue
+            await _cas_mark_paid(link, packet, txn, now, session)
+
+    await _with_payment_lock(txn, work)
 
 
 async def note_cosigner_reversed(booking_number: str, transaction_id: str) -> None:
     """Reopen the pay step when the stamped down payment is refunded or fails.
 
-    The link is found by ``paid_transaction_id``, scoped to the tenant. A
-    missing reference or a different booking on the refund does not keep the
-    step paid. A different transaction leaves the stamp in place. A replay
-    does not audit twice.
+    The link is found by ``paid_transaction_id``, scoped to the tenant, inside
+    ``payment_txn_locks``. A missing reference or a different booking on the
+    refund does not keep the step paid. A different transaction leaves the
+    stamp in place. A replay does not audit twice.
     """
     txn = str(transaction_id or "").strip()
     if not txn:
@@ -694,21 +811,25 @@ async def note_cosigner_reversed(booking_number: str, transaction_id: str) -> No
     query = _scope({"paid_transaction_id": txn})
     if query is None:
         return
-    cursor = get_collection(LINKS).find(query)
-    now = _now()
-    async for link in _iter(cursor):
-        if str(link.get("paid_transaction_id") or "").strip() != txn:
-            continue
-        packet = await _find_packet(str(link.get("packet_id") or ""))
-        before = _audit_state(link, packet)
-        link["payment_reversed"] = True
-        link["paid_transaction_id"] = ""
-        _timeline_push(link, "payment_reversed", now)
-        await _save_link(link)
-        await _audit(
-            "payment_reversed", link, now,
-            old_state=before, new_state=_audit_state(link, packet),
-        )
+
+    async def work(db, session):
+        rows = await _payment_rows(db, txn, session)
+        if rows is not None and rows and not _rows_include_reversal(rows):
+            return
+        now = _now()
+        cursor = get_collection(LINKS).find(query)
+        async for link in _iter(cursor):
+            if str(link.get("paid_transaction_id") or "").strip() != txn:
+                continue
+            await _cas_mark_reversed(link, txn, now, session)
+
+    await _with_payment_lock(txn, work)
+
+
+def _rows_include_reversal(rows: list) -> bool:
+    from dashboard.services.payment_log_claims import has_reversal_sibling
+
+    return has_reversal_sibling(rows)
 
 
 async def _iter(cursor):
