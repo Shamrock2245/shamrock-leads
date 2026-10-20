@@ -1210,6 +1210,57 @@ def test_pay_step_hides_an_unbound_sign_url(monkeypatch):
     assert "evil.example" not in paid.text
 
 
+def test_signed_signer_mismatch_keeps_the_invoice_link(monkeypatch):
+    """After signing, a name or email mismatch does not hide the invoice."""
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert opened.status_code == 200, opened.text
+    packet = stores["paperwork_packets"].docs[0]
+    packet["status"] = "completed"
+    packet["invoice_payment_link"] = "https://pay.example/down"
+    packet["swipesimple_invoice_amount_cents"] = 50000
+    bond = stores["bond_cases"].docs[0]
+    row = packet["docuseal_submitters"][0]
+
+    def _pay_keeps_invoice(body):
+        assert body.status_code == 200, body.text
+        payload = body.json()
+        assert payload["step"] == "pay"
+        assert payload["sign_url"] is None
+        assert payload["payment"]["url"] == "https://pay.example/down"
+        assert _sign("abc") not in body.text
+        assert _sign_hidden(body.text)
+        page = client.get(f"/cosigner/{token}")
+        assert page.status_code == 200
+        assert _sign_hidden(page.text)
+        assert "https://pay.example/down" in page.text
+
+    row["name"] = "Pat Other"
+    _pay_keeps_invoice(client.get(f"/api/cosigner/{token}"))
+
+    row["name"] = NAME
+    row["email"] = "other@example.invalid"
+    bond["indemnitor_email"] = "signer@example.invalid"
+    _pay_keeps_invoice(client.get(f"/api/cosigner/{token}"))
+
+    bond["premium_paid"] = True
+    paid = client.get(f"/api/cosigner/{token}")
+    assert paid.status_code == 200, paid.text
+    assert paid.json()["step"] == "paid"
+    assert paid.json()["sign_url"] is None
+    assert paid.json()["payment"]["url"] == "https://pay.example/down"
+    assert _sign("abc") not in paid.text
+    assert _sign_hidden(paid.text)
+    page = client.get(f"/cosigner/{token}")
+    assert page.status_code == 200
+    assert _sign_hidden(page.text)
+    assert ">Pay</a>" not in page.text
+
+
 def test_case_id_wins_and_ambiguous_booking_fails_closed(monkeypatch):
     stores, client = _world(monkeypatch)
     exact = stores["bond_cases"].docs[0]

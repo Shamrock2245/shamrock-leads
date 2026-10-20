@@ -3,6 +3,12 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-20 (signed mismatch still shows the invoice)
+
+### Tests
+- **After the packet is signed, a submitter name or email mismatch leaves pay and paid open.** Both return 200 with the proven invoice link and `sign_url` null.
+- `tests/test_cosigner_link.py`: `test_signed_signer_mismatch_keeps_the_invoice_link`.
+
 ## [Unreleased] — 2026-10-20 (co-signer bond mirror must agree)
 
 ### Fixed
