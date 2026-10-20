@@ -128,6 +128,7 @@ def _cookie(role="staff", email=ACTOR, name="Office Staff"):
 class _Result:
     def __init__(self, n):
         self.modified_count = n
+        self.deleted_count = n
 
 
 class _Cursor:
@@ -200,7 +201,16 @@ class _Col:
                 bucket = []
                 doc[key] = bucket
             bucket.append(value)
+        for key in (update.get("$unset") or {}):
+            doc.pop(key, None)
         return _Result(1)
+
+    async def delete_one(self, query, session=None, **kwargs):
+        for index, doc in enumerate(self.docs):
+            if _match(doc, query or {}):
+                self.docs.pop(index)
+                return _Result(1)
+        return _Result(0)
 
     async def insert_one(self, doc, session=None, **kwargs):
         self.docs.append(doc)
@@ -2008,6 +2018,42 @@ def _ready_to_pay(monkeypatch):
     assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
     pay_db = _install_payment_lock(monkeypatch)
     return stores, client, token, pay_db
+
+
+def test_failed_verification_removes_the_stored_scan(monkeypatch):
+    """A save failure after the scan does not leave id_ocr or a revoked sibling."""
+    import dashboard.services.cosigner_link_service as svc
+
+    stores, client = _world(monkeypatch)
+    winner = _token(client)
+    sibling = _token(client)
+    original = svc._save_link
+
+    async def _fail_verified(link):
+        if link.get("id_verified"):
+            raise RuntimeError("link save failed")
+        return await original(link)
+
+    monkeypatch.setattr(svc, "_save_link", _fail_verified)
+    _scanner(monkeypatch, {"n": 0})
+    with pytest.raises(RuntimeError, match="link save failed"):
+        _post_scan(client, winner)
+    packet = stores["paperwork_packets"].docs[0]
+    assert "id_ocr" not in packet
+    assert "id_ocr" not in stores["bond_cases"].docs[0]
+    assert packet.get("cosigner_verified_token") in {None, ""}
+    other = next(row for row in stores["cosigner_links"].docs if row["token"] == sibling)
+    assert other.get("revoked") is not True
+    assert stores.get("audit_events") is None or _audits(stores, "id_verified") == []
+    assert stores.get("audit_events") is None or _audits(stores, "link_revoked") == []
+    assert winner in [row["token"] for row in stores["cosigner_links"].docs]
+
+    monkeypatch.setattr(svc, "_save_link", original)
+    opened = _post_scan(client, winner)
+    assert opened.status_code == 200, opened.text
+    assert other.get("revoked") is True
+    assert len(_audits(stores, "id_verified")) == 1
+    assert len(_audits(stores, "link_revoked")) == 1
 
 
 def test_sibling_revocation_writes_an_audit(monkeypatch):

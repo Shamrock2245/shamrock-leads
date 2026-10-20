@@ -576,6 +576,53 @@ async def _claim_verification(packet: dict, token: str) -> bool:
     return False
 
 
+async def _clear_stored_scan(packet: dict, bond: Optional[dict]) -> None:
+    """Remove a scan that did not finish verification."""
+    unset = {"id_ocr": "", "id_ocr_role": ""}
+    await get_collection("paperwork_packets").update_one(
+        {"packet_id": packet.get("packet_id")},
+        {"$unset": unset},
+    )
+    packet.pop("id_ocr", None)
+    packet.pop("id_ocr_role", None)
+    if not bond:
+        return
+    filt = {"bond_case_id": bond.get("bond_case_id")} if bond.get("bond_case_id") else {
+        "booking_number": bond.get("booking_number"),
+    }
+    collection = str(bond.get("_collection") or "bond_cases")
+    if collection not in {"bond_cases", "active_bonds"}:
+        collection = "bond_cases"
+    await get_collection(collection).update_one(filt, {"$unset": unset})
+    bond.pop("id_ocr", None)
+    bond.pop("id_ocr_role", None)
+
+
+async def _restore_sibling_links(priors: list) -> None:
+    for prior in priors:
+        await get_collection(LINKS).update_one(
+            {"token": prior.get("token")},
+            {"$set": {
+                "revoked": prior.get("revoked") is True,
+                "status": prior.get("status") or "",
+                "revoked_at": prior.get("revoked_at") or "",
+            }},
+        )
+
+
+async def _drop_partial_audits(packet_id: str, created_at: str) -> None:
+    """Remove audits for a verification that did not finish."""
+    coll = get_collection("audit_events")
+    for event_type in ("id_verified", "link_revoked"):
+        query = {
+            "event_type": event_type,
+            "packet_id": packet_id,
+            "created_at": created_at,
+        }
+        while int(getattr(await coll.delete_one(query), "deleted_count", 0) or 0):
+            continue
+
+
 async def _release_verification_claim(packet: dict, token: str) -> None:
     """Drop a claim that did not finish verification, so the scan can be retried."""
     token = str(token or "").strip()
@@ -590,7 +637,12 @@ async def _release_verification_claim(packet: dict, token: str) -> None:
         packet["cosigner_verified_token"] = ""
 
 
-async def _revoke_sibling_links(packet_id: str, token: str, now: datetime) -> None:
+async def _revoke_sibling_links(
+    packet_id: str,
+    token: str,
+    now: datetime,
+    priors: Optional[list] = None,
+) -> None:
     query = _scope({"packet_id": packet_id})
     if query is None:
         return
@@ -598,6 +650,13 @@ async def _revoke_sibling_links(packet_id: str, token: str, now: datetime) -> No
     async for other in _iter(cursor):
         if str(other.get("token") or "") == token or other.get("revoked") is True:
             continue
+        if priors is not None:
+            priors.append({
+                "token": other.get("token"),
+                "revoked": other.get("revoked") is True,
+                "status": other.get("status") or "",
+                "revoked_at": other.get("revoked_at") or "",
+            })
         before = _audit_state(other, None)
         other["revoked"] = True
         other["status"] = "revoked"
@@ -735,13 +794,20 @@ async def submit_cosigner_scan(token: str, body: dict) -> dict:
     bond = await _require_current_bond(link, packet)
     if not await _claim_verification(packet, token):
         raise CosignerLinkError("scan_closed", 409)
+    priors: list = []
+    started = ""
+    verified_local = False
     try:
         now = _now()
-        await _revoke_sibling_links(str(packet.get("packet_id") or ""), token, now)
+        started = now.isoformat()
+        await _revoke_sibling_links(
+            str(packet.get("packet_id") or ""), token, now, priors,
+        )
         await _store_scan(packet, bond, name, state, role)
         before = _audit_state(link, packet)
         link["id_verified"] = True
         link["id_verified_at"] = now.isoformat()
+        verified_local = True
         if _timeline_push(link, "id_verified", now):
             await _audit(
                 "id_verified", link, now,
@@ -750,9 +816,20 @@ async def submit_cosigner_scan(token: str, body: dict) -> dict:
         await _save_link(link)
     except Exception:
         try:
+            if verified_local:
+                link["id_verified"] = False
+                link["id_verified_at"] = ""
+                link["timeline"] = [
+                    row for row in (link.get("timeline") or [])
+                    if not (isinstance(row, dict) and row.get("step") == "id_verified")
+                ]
+            await _clear_stored_scan(packet, bond)
+            await _restore_sibling_links(priors)
+            if started:
+                await _drop_partial_audits(str(packet.get("packet_id") or ""), started)
             await _release_verification_claim(packet, token)
         except Exception:
-            logger.info("[cosigner] scan claim release failed")
+            logger.info("[cosigner] scan rollback failed")
         raise
     logger.info("[cosigner] id verified packet_id=%s", link.get("packet_id"))
     return await cosigner_state(token, lang=link.get("lang"))

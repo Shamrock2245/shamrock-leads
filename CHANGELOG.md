@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-20 (co-signer scan rollback removes a partial verification)
+
+### Fixed
+- **A verification that does not finish removes its partial writes.** If the scan store, the audit, or the link save fails after the claim, the stored `id_ocr` is removed, sibling revocations are restored, partial audits from that attempt are removed, and the claim is released.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_failed_verification_removes_the_stored_scan`.
+
 ## [Unreleased] — 2026-10-20 (co-signer sibling revocation is audited)
 
 ### Fixed
