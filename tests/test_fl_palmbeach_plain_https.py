@@ -43,6 +43,8 @@ def _scrape_with(monkeypatch, responses):
     sess = FakeSession(responses)
     monkeypatch.setattr(plain_http, "make_session", lambda *a, **k: sess)
     monkeypatch.setattr(pb, "DAYS_BACK", 1)
+    sess.sleeps = []
+    monkeypatch.setattr(pb.time, "sleep", lambda s: sess.sleeps.append((len(sess.calls), s)))
     return PalmBeachCountyScraper().scrape(), sess
 
 
@@ -110,3 +112,28 @@ def test_record_status_never_defaults_in_custody():
     assert s._row_to_arrest_record({"booking_num": "2026012709"}).Status == ""
     assert s._row_to_arrest_record({"booking_num": "1", "status": ""}).Status == ""
     assert s._row_to_arrest_record({"booking_num": "1", "status": "Released"}).Status == "Released"
+
+
+# ── Codex review on fdc6a77 (2026-10-19) ─────────────────────────────────────
+def test_roster_page_without_cards_raises_instead_of_merging(monkeypatch):
+    merged = "<html><body>Name: DOE, JOHN<br>Booking Number: 2026012709<br>Name: ROE, JANE<br>Current Bond: $9,999.00</body></html>"
+    with pytest.raises(PalmBeachSourceChanged):
+        _scrape_with(monkeypatch, [FakeResp(FORM), FakeResp(merged)])
+
+
+def test_explicit_no_matches_page_is_empty(monkeypatch):
+    recs, _ = _scrape_with(monkeypatch, [FakeResp(FORM), FakeResp("<html><body>Your search returned 0 matches</body></html>")])
+    assert recs == []
+
+
+def test_booking_number_from_card_link_is_kept(monkeypatch):
+    card = '<div id="allresults_1">Name: DOE, JOHN<br><a href="detail.cfm?b=2026012711">2026012711</a></div>'
+    recs, _ = _scrape_with(monkeypatch, [FakeResp(FORM), FakeResp(f"<html><body>{card}</body></html>")])
+    assert [r.Booking_Number for r in recs] == ["2026012711"]
+
+
+def test_pagination_pauses_before_each_next_page(monkeypatch):
+    recs, sess = _scrape_with(monkeypatch, [FakeResp(FORM), FakeResp(PAGE1), FakeResp(PAGE2)])
+    assert [c[0] for c in sess.calls] == ["GET", "POST", "GET"]
+    assert sess.sleeps == [(2, pb.PAGE_PAUSE_S)] and pb.PAGE_PAUSE_S >= 1  # pause before the page-2 GET
+    assert len(recs) == 2

@@ -7,7 +7,7 @@ verified). No browser, no Chrome disguise, no stealth, no CAPTCHA handling.
 
 Flow: GET the blotter, read the search form the page itself publishes
 (action, method, hidden fields), submit it with ``start_date`` / ``end_date``
-(MM/DD/YYYY), parse result cards with ``scrapers.pbso_parse.parse_pbso_html``,
+(MM/DD/YYYY), parse the ``allresults_`` result cards (``pbso_parse.parse_pbso_card_text``),
 and follow the page's own numbered / » pagination links.
 
 Failure is visible, never worked around:
@@ -15,9 +15,11 @@ Failure is visible, never worked around:
   * TLS handshake dropped -> ``egress_block: ... connection_reset:``
   * certificate verification failure -> ``tls_cert_invalid:``
   * search form missing from the page -> ``PalmBeachSourceChanged``
+  * a results page with no result cards and no "no matches" notice -> ``PalmBeachSourceChanged``
 """
 import logging
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from urllib.parse import urljoin
@@ -34,13 +36,17 @@ from scrapers.pbso_parse import (
     extract_pbso_booking_id,
     is_pbso_index_only,
     parse_name,
-    parse_pbso_html,
+    parse_pbso_card_text,
 )
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
 
 DAYS_BACK = 2  # Search today + yesterday
+PAGE_PAUSE_S = 3.0  # polite pause before every pagination GET (the old browser flow paused 3 s)
+# The blotter's own empty-result wording (used by the previous implementation).
+_NO_MATCHES_RE = re.compile(r"\b0 matches\b|\bno results\b", re.I)
+_LINK_BOOKING_RE = re.compile(r"^\d{6,}$")
 
 
 class PalmBeachSourceChanged(RuntimeError):
@@ -91,13 +97,14 @@ class PalmBeachCountyScraper(BaseScraper):
 
         all_rows, seen_pages = [], set()
         for page_no in range(1, max_pages + 1):
-            rows = parse_pbso_html(resp.text)
+            rows = self._parse_result_cards(resp.text)
             logger.info(f"Palm Beach: page {page_no} → {len(rows)} records")
             all_rows.extend(r for r in rows if r.get("booking_num"))
             nxt = self._next_page_url(resp.text, resp.url or action)
             if not nxt or nxt in seen_pages:
                 break
             seen_pages.add(nxt)
+            time.sleep(PAGE_PAUSE_S)
             resp = self._get(session, "GET", nxt)
         logger.info(f"Palm Beach: collected {len(all_rows)} records for {target_date}")
         return all_rows
@@ -135,6 +142,40 @@ class PalmBeachCountyScraper(BaseScraper):
         return None
 
     # ── Result Card Parsing ────────────────────────────────────────────────
+
+    @staticmethod
+    def _parse_result_cards(html: str) -> list:
+        """Rows from the page's ``div[id^=allresults_]`` cards only.
+
+        A roster page is never parsed as one big card: with no result cards the
+        page must say it has no matches ("0 matches" / "no results"), otherwise
+        the result contract changed and ``PalmBeachSourceChanged`` is raised, so
+        facts from different people are never merged into one record.
+        A card whose source booking number is published only as its numeric link
+        text keeps that number (as the previous card parser did).
+        """
+        soup = BeautifulSoup(html or "", "html.parser")
+        cards = soup.select("div[id^=allresults_]")
+        if not cards:
+            if _NO_MATCHES_RE.search(soup.get_text(" ")):
+                return []
+            raise PalmBeachSourceChanged("Palm Beach: no allresults_ cards and no 'no matches' notice")
+        rows = []
+        for card in cards:
+            text = card.get_text("\n")
+            row = parse_pbso_card_text(text)
+            if not row:
+                link = next((a for a in card.find_all("a") if _LINK_BOOKING_RE.fullmatch(a.get_text(strip=True))), None)
+                if link is not None:
+                    row = parse_pbso_card_text(text + f"\nBooking Number: {link.get_text(strip=True)}\n")
+            if not row:
+                continue
+            img = card.find("img")
+            src = (img.get("src") or "").strip() if img else ""
+            if src and "noimage" not in src.lower():
+                row["mug_url"] = src if src.startswith("http") else f"https://www3.pbso.org{src}"
+            rows.append(row)
+        return rows
 
     def _row_to_arrest_record(self, row: dict, mode: str = "scrape") -> ArrestRecord:
         booking = str(row.get("booking_num") or "")
@@ -189,7 +230,10 @@ class PalmBeachCountyScraper(BaseScraper):
         resp = plain_http.request(session, "GET", url, county="Palm Beach", timeout=15)
         if resp is None or resp.status_code != 200:
             return None
-        rows = parse_pbso_html(resp.text)
+        try:
+            rows = self._parse_result_cards(resp.text)
+        except PalmBeachSourceChanged:
+            rows = []  # a single-booking page with no card is "not found", never a merged card
         wanted = str(booking_id).strip()
         matches = [r for r in rows if str(r.get("booking_num") or "") == wanted]
         if len(matches) != 1:
