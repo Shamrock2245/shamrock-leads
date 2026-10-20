@@ -1311,6 +1311,26 @@ def test_only_exact_settled_down_payment_on_this_booking_marks_paid(monkeypatch)
     assert plan["total_paid_cents"] == 0
 
 
+@pytest.mark.parametrize("status", ["captured", "paid", "succeeded"])
+def test_settled_charge_status_marks_the_pay_step(monkeypatch, status):
+    """Settled charge statuses mark paid. The set is the recorder's."""
+    from dashboard.services.payment_log_claims import REVERSAL_KINDS, SETTLED_CHARGE_STATUSES
+
+    assert status in SETTLED_CHARGE_STATUSES
+    assert {"refund", "failure"} == set(REVERSAL_KINDS)
+    stores, client, token, _db = _recorder_world(monkeypatch)
+    response = _webhook(
+        client, txn="TX-SETTLED", amount="500.00",
+        event=f"payment.{status}", status=status,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["event_kind"] == "charge"
+    assert response.json()["needs_review"] is False
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+    assert stores["cosigner_links"].docs[0]["paid_transaction_id"] == "TX-SETTLED"
+    assert len(_audits(stores, "paid")) == 1
+
+
 def test_refund_before_charge_does_not_mark_paid(monkeypatch):
     """A charge committed with needs_review does not mark the pay step.
 

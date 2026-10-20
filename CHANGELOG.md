@@ -10,9 +10,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **A refund or failure with no `reference_id` reopens the pay step.** The link is found by `paid_transaction_id`. A different transaction id does not clear the stamp.
 - **The co-signer pay stamp is taken inside `payment_txn_locks`.** The link update is conditional, so one charge writes one paid audit. A charge and its refund cannot leave the step paid.
 - **A down payment is scoped to the bond case's one open packet.** A link on another packet that only shares the booking number is not stamped. Two open packets on the same case stamp nothing. Two links on that one packet are stamped together.
+- **The pay step uses the recorder's settled and reversal sets.** `SETTLED_CHARGE_STATUSES` decides a charge, including `paid`, `captured`, and `succeeded`. `REVERSAL_KINDS` decides a refund or failure.
 
 ### Tests
-- `tests/test_cosigner_link.py`: `test_refund_before_charge_does_not_mark_paid`, `test_refund_without_reference_reopens_by_transaction_id`, `test_charge_refund_race_does_not_leave_step_paid`, `test_down_payment_is_scoped_to_one_packet`.
+- `tests/test_cosigner_link.py`: `test_refund_before_charge_does_not_mark_paid`, `test_refund_without_reference_reopens_by_transaction_id`, `test_charge_refund_race_does_not_leave_step_paid`, `test_down_payment_is_scoped_to_one_packet`, `test_settled_charge_status_marks_the_pay_step`.
 
 ## [Unreleased] — 2026-10-19 (co-signer link requires the bond, the signature, and the down payment)
 

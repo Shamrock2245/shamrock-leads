@@ -327,6 +327,8 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
 
     from dashboard.extensions import get_db
     from dashboard.services.payment_log_claims import (
+        REVERSAL_KINDS,
+        SETTLED_CHARGE_STATUSES,
         PaymentLogError,
         TransactionsUnavailable,
         record_provider_payment,
@@ -388,9 +390,10 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         and recorded.get("needs_review")
         and not recorded.get("committed")
     )
+    status_key = str(status or "").strip().lower()
     recorded_charge = (
         recorded.get("event_kind") == "charge"
-        and status == "approved"
+        and status_key in SETTLED_CHARGE_STATUSES
         and (recorded.get("committed") or recorded.get("duplicate"))
         and not (plan_handled and recorded.get("duplicate"))
         and not review_hold
@@ -423,7 +426,7 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
     # pay step. It does not stamp the premium and it does not send a receipt.
     recorded_reversal = (
         not plan_handled
-        and recorded.get("event_kind") in {"refund", "failure"}
+        and recorded.get("event_kind") in REVERSAL_KINDS
         and (recorded.get("committed") or recorded.get("duplicate"))
     )
     if recorded_reversal:

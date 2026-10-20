@@ -651,7 +651,11 @@ async def _charge_row_blocks_down_payment(db, transaction_id: str, session) -> b
     same transaction blocks the stamp too. When this process has no payment
     rows to read, the recorder's return value remains the gate.
     """
-    from dashboard.services.payment_log_claims import has_reversal_sibling, row_kind
+    from dashboard.services.payment_log_claims import (
+        SETTLED_CHARGE_STATUSES,
+        has_reversal_sibling,
+        row_kind,
+    )
 
     rows = await _payment_rows(db, str(transaction_id or "").strip(), session)
     if not rows:
@@ -659,6 +663,11 @@ async def _charge_row_blocks_down_payment(db, transaction_id: str, session) -> b
     if has_reversal_sibling(rows):
         return True
     charges = [row for row in rows if row_kind(row) == "charge"]
+    if not charges:
+        return True
+    charge_status = str(charges[0].get("status") or "").strip().lower()
+    if charge_status not in SETTLED_CHARGE_STATUSES:
+        return True
     return any(row.get("needs_review") for row in charges)
 
 
@@ -870,9 +879,9 @@ async def note_cosigner_reversed(booking_number: str, transaction_id: str) -> No
 
 
 def _rows_include_reversal(rows: list) -> bool:
-    from dashboard.services.payment_log_claims import has_reversal_sibling
+    from dashboard.services.payment_log_claims import REVERSAL_KINDS, row_kind
 
-    return has_reversal_sibling(rows)
+    return any(row_kind(row) in REVERSAL_KINDS for row in rows)
 
 
 async def _iter(cursor):
