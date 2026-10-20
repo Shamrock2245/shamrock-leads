@@ -15,12 +15,15 @@ Customer texting stays on BlueBubbles behind ``SWIPESIMPLE_DISPATCH_LIVE``.
 from __future__ import annotations
 
 import logging
+import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 from dashboard.extensions import get_collection
+from dashboard.services.docuseal_service import DEFAULT_DOCUSEAL_URL
 from dashboard.services.identity_verification_service import (
     OPEN_BOND_CASE_STATUSES,
     _jurisdiction,
@@ -189,29 +192,90 @@ def _party_role(row: dict) -> str:
     return raw
 
 
-def _row_url(row: dict) -> str:
-    url = str(row.get("sign_url") or row.get("embed_src") or "").strip()
-    return url if url.startswith("http") else ""
+def _configured_docuseal_origin() -> str:
+    """Public DocuSeal origin from ``DOCUSEAL_URL``, otherwise the app default."""
+    raw = (os.getenv("DOCUSEAL_URL") or DEFAULT_DOCUSEAL_URL).strip()
+    if raw and "://" not in raw:
+        raw = f"https://{raw}"
+    parsed = urlparse(raw)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not host:
+        return ""
+    return f"https://{host}"
+
+
+def _url_on_configured_docuseal_host(url: str) -> str:
+    """A direct ``/s/{slug}`` link on the configured DocuSeal host, or empty."""
+    raw = str(url or "").strip()
+    origin = _configured_docuseal_origin()
+    if not raw or not origin:
+        return ""
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return ""
+    parts = [part for part in parsed.path.split("/") if part]
+    host = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme != "https"
+        or f"https://{host}" != origin
+        or parsed.port not in (None, 443)
+        or parsed.username
+        or parsed.password
+        or len(parts) != 2
+        or parts[0] != "s"
+        or not parts[1]
+    ):
+        return ""
+    return raw
+
+
+def _row_submission_id(row: dict) -> str:
+    meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    direct = str(row.get("submission_id") or "").strip()
+    nested = str(meta.get("submission_id") or "").strip()
+    if direct and nested and direct != nested:
+        return ""
+    return direct or nested
+
+
+def _external_id_matches(packet_id: str, role: str, external_id: str) -> bool:
+    if role not in {"indemnitor", "co_indemnitor"} or not external_id:
+        return False
+    return external_id.startswith(f"{packet_id}:indemnitor:")
+
+
+def _bound_submitter_url(packet: dict, row: dict, role: str) -> str:
+    """Return this row's URL only when it is bound to this packet and role."""
+    packet_id = str(packet.get("packet_id") or "").strip()
+    expected_submission = str(packet.get("docuseal_submission_id") or "").strip()
+    if not packet_id or not expected_submission or _party_role(row) != role:
+        return ""
+    meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    if str(meta.get("packet_id") or "").strip() != packet_id:
+        return ""
+    submission_id = _row_submission_id(row)
+    if not submission_id or submission_id != expected_submission:
+        return ""
+    if not _external_id_matches(packet_id, role, str(row.get("external_id") or "").strip()):
+        return ""
+    stored = str(row.get("sign_url") or "").strip() or str(row.get("embed_src") or "").strip()
+    return _url_on_configured_docuseal_host(stored)
 
 
 def _sign_url(packet: dict, role: str) -> str:
-    """The DocuSeal URL for this signer. Another party's link is not returned."""
+    """The bound DocuSeal URL for this signer. An unbound URL is not returned."""
     wanted = "co_indemnitor" if role == "co_indemnitor" else "indemnitor"
     for key in ("docuseal_submitters", "parties", "submitters"):
         rows = packet.get(key)
         if not isinstance(rows, list):
             continue
         for row in rows:
-            if isinstance(row, dict) and _party_role(row) == wanted:
-                url = _row_url(row)
-                if url:
-                    return url
-    if wanted != "indemnitor":
-        return ""
-    for key in ("docuseal_sign_url", "sign_url"):
-        url = str(packet.get(key) or "").strip()
-        if url.startswith("http"):
-            return url
+            if not isinstance(row, dict):
+                continue
+            url = _bound_submitter_url(packet, row, wanted)
+            if url:
+                return url
     return ""
 
 
@@ -1351,7 +1415,11 @@ async def cosigner_state(token: str, lang: Optional[str] = None) -> dict:
         step = "sign"
     else:
         step = "scan"
-    sign_url = _sign_url(packet, str(link.get("signer_role") or "indemnitor")) if verified else None
+    sign_url = None
+    if verified:
+        sign_url = _sign_url(packet, str(link.get("signer_role") or "indemnitor"))
+        if not sign_url:
+            raise CosignerLinkError("sign_link_unbound", 409)
     payment = _payment_view(packet, bond) if step in {"pay", "paid"} else None
     if nothing_due and isinstance(payment, dict):
         payment = {**payment, "amount": "0.00", "url": None, "dispatched": False}

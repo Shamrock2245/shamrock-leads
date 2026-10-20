@@ -27,6 +27,7 @@ PACKET = "PKT-TEST-COS-1"
 CASE = "BC-TEST-COS-1"
 ACTOR = "office@example.invalid"
 NAME = "Jamie O'Neal"
+SUBMISSION = "DS-TEST-COS-1"
 CONFIRMED = {
     "premium_confirmed_amount": "1500.00",
     "premium_confirmed_at": "2026-10-14T12:00:00+00:00",
@@ -113,6 +114,50 @@ def _no_live_sends(monkeypatch):
     yield spies
     for spy in spies.values():
         spy.assert_not_called()
+
+
+def _sign(slug):
+    """The signer URL on the app's configured DocuSeal host."""
+    from dashboard.services.cosigner_link_service import _configured_docuseal_origin
+
+    return f"{_configured_docuseal_origin()}/s/{slug}"
+
+
+def _bound_submitter(role, url, *, packet_id=PACKET, submission=SUBMISSION, external=None):
+    party = "co_indemnitor" if role in {
+        "coindemnitor", "co_indemnitor", "cosigner", "co_signer",
+    } else "indemnitor"
+    if external is None:
+        suffix = "co" if party == "co_indemnitor" else "1"
+        external = f"{packet_id}:indemnitor:{suffix}"
+    return {
+        "role": role,
+        "sign_url": url,
+        "submission_id": submission,
+        "external_id": external,
+        "metadata": {
+            "packet_id": packet_id,
+            "party_role": party,
+            "submission_id": submission,
+        },
+    }
+
+
+def _sign_hidden(text):
+    """Error bodies do not carry a stored or configured signer URL."""
+    lowered = str(text or "").lower()
+    for marker in (
+        "sign.example",
+        "evil.example",
+        "/s/abc",
+        "/s/indemnitor",
+        "/s/cosigner",
+        "/s/other",
+        "shamrockbailbonds.biz/s/",
+    ):
+        if marker in lowered:
+            return False
+    return True
 
 
 def _cookie(role="staff", email=ACTOR, name="Office Staff"):
@@ -224,11 +269,19 @@ def _world(monkeypatch, *, cosigner=""):
         "booking_number": BOOKING,
         "bond_case_id": CASE,
         "indemnitor_name": indemnitor,
-        "docuseal_sign_url": "https://sign.example/s/abc",
+        "docuseal_submission_id": SUBMISSION,
+        "docuseal_sign_url": _sign("indemnitor") if cosigner else _sign("abc"),
+        "docuseal_submitters": [
+            _bound_submitter("indemnitor", _sign("indemnitor") if cosigner else _sign("abc")),
+        ],
         "status": "draft",
         "surety_id": "osi",
         **CONFIRMED,
     }
+    if cosigner:
+        packet["docuseal_submitters"].append(
+            _bound_submitter("coindemnitor", _sign("cosigner")),
+        )
     bond = {
         "bond_case_id": CASE,
         "booking_number": BOOKING,
@@ -373,7 +426,7 @@ def test_scan_locks_oneill_then_sign_and_pay(monkeypatch):
     assert "D12345678" not in matched.text
     body = client.get(f"/api/cosigner/{token}").json()
     assert body["step"] == "sign"
-    assert body["sign_url"] == "https://sign.example/s/abc"
+    assert body["sign_url"] == _sign("abc")
     assert body["signing_locked"] is False
     assert "id_verified" in body["timeline"]
     for collection in ("paperwork_packets", "bond_cases"):
@@ -654,7 +707,7 @@ def test_any_us_state_scan_unlocks_signing(monkeypatch):
     body = client.get(f"/api/cosigner/{token}").json()
     assert body["step"] == "sign"
     assert body["signing_locked"] is False
-    assert body["sign_url"] == "https://sign.example/s/abc"
+    assert body["sign_url"] == _sign("abc")
     ocr = stores["paperwork_packets"].docs[0]["id_ocr"]
     assert ocr["role"] == "indemnitor"
     assert ocr["extracted"]["dl_state"] == "GA"
@@ -673,14 +726,11 @@ def test_cosigner_different_from_indemnitor(monkeypatch):
     assert link["indemnitor_name"] == INDEMNITOR
 
     packet = stores["paperwork_packets"].docs[0]
-    packet["docuseal_sign_url"] = "https://sign.example/s/indemnitor"
+    packet["docuseal_submission_id"] = SUBMISSION
+    packet["docuseal_sign_url"] = _sign("indemnitor")
     packet["docuseal_submitters"] = [
-        {"role": "indemnitor", "sign_url": "https://sign.example/s/indemnitor"},
-        {
-            "role": "coindemnitor",
-            "sign_url": "https://sign.example/s/cosigner",
-            "metadata": {"party_role": "co_indemnitor"},
-        },
+        _bound_submitter("indemnitor", _sign("indemnitor")),
+        _bound_submitter("coindemnitor", _sign("cosigner")),
     ]
     indemnitor_id = _upload(
         monkeypatch, client, token,
@@ -705,8 +755,8 @@ def test_cosigner_different_from_indemnitor(monkeypatch):
     assert matched.status_code == 200, matched.text
     body = client.get(f"/api/cosigner/{token}").json()
     assert body["step"] == "sign"
-    assert body["sign_url"] == "https://sign.example/s/cosigner"
-    assert "https://sign.example/s/indemnitor" not in matched.text
+    assert body["sign_url"] == _sign("cosigner")
+    assert _sign("indemnitor") not in matched.text
     ocr = stores["bond_cases"].docs[0]["id_ocr"]
     assert ocr["role"] == "co_indemnitor"
     assert ocr["extracted"]["full_name"] == NAME
@@ -730,10 +780,11 @@ def test_active_bond_scan_and_invoice_link_alias(monkeypatch):
     bond = stores["bond_cases"].docs.pop()
     stores["active_bonds"] = _Col([bond])
     packet = stores["paperwork_packets"].docs[0]
-    packet["docuseal_sign_url"] = "https://sign.example/s/indemnitor"
+    packet["docuseal_submission_id"] = SUBMISSION
+    packet["docuseal_sign_url"] = _sign("indemnitor")
     packet["docuseal_submitters"] = [
-        {"role": "indemnitor", "sign_url": "https://sign.example/s/indemnitor"},
-        {"role": "coindemnitor", "sign_url": "https://sign.example/s/cosigner"},
+        _bound_submitter("indemnitor", _sign("indemnitor")),
+        _bound_submitter("coindemnitor", _sign("cosigner")),
     ]
     packet["payment_link"] = "https://shamrockbailbonds.biz/payment?amount=10"
     token = _token(client)
@@ -748,7 +799,7 @@ def test_active_bond_scan_and_invoice_link_alias(monkeypatch):
     assert ocr["role"] == "co_indemnitor"
     assert ocr["extracted"]["dl_state"] == "PR"
     state = client.get(f"/api/cosigner/{token}").json()
-    assert state["sign_url"] == "https://sign.example/s/cosigner"
+    assert state["sign_url"] == _sign("cosigner")
 
     packet["invoice_payment_link"] = "https://pay.example/down"
     packet["status"] = "completed"
@@ -812,7 +863,7 @@ def test_voided_packet_hides_the_sign_url_and_refuses_scan(monkeypatch):
         {"full_name": NAME, "dl_state": "FL", "dl_number": "D12345678"},
     )
     assert opened.status_code == 200
-    assert client.get(f"/api/cosigner/{token}").json()["sign_url"] == "https://sign.example/s/abc"
+    assert client.get(f"/api/cosigner/{token}").json()["sign_url"] == _sign("abc")
 
     packet = stores["paperwork_packets"].docs[0]
     calls = {"n": 0}
@@ -828,14 +879,66 @@ def test_voided_packet_hides_the_sign_url_and_refuses_scan(monkeypatch):
         state = client.get(f"/api/cosigner/{token}")
         assert state.status_code == 409, marker
         assert state.json()["error"] == "packet_inactive"
-        assert "sign.example" not in state.text
+        assert _sign_hidden(state.text)
         page = client.get(f"/cosigner/{token}")
-        assert "sign.example" not in page.text
+        assert _sign_hidden(page.text)
         refused = _post_scan(client, token)
         assert refused.status_code == 409, marker
         assert refused.json()["error"] == "packet_inactive"
-        assert "sign.example" not in refused.text
+        assert _sign_hidden(refused.text)
     assert calls["n"] == 0
+
+
+def test_unbound_docuseal_url_is_not_returned(monkeypatch):
+    """A stored signer URL is returned only when it is bound to this packet."""
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert opened.status_code == 200, opened.text
+    assert _sign("abc") in opened.text
+    ready = client.get(f"/api/cosigner/{token}")
+    assert ready.status_code == 200
+    assert ready.json()["sign_url"] == _sign("abc")
+
+    packet = stores["paperwork_packets"].docs[0]
+    row = packet["docuseal_submitters"][0]
+    good_url = row["sign_url"]
+    good_submission = row["submission_id"]
+    good_external = row["external_id"]
+
+    def _refuses(stored):
+        state = client.get(f"/api/cosigner/{token}")
+        assert state.status_code == 409
+        assert state.json() == {"error": "sign_link_unbound"}
+        assert stored not in state.text
+        assert _sign_hidden(state.text)
+        page = client.get(f"/cosigner/{token}")
+        assert page.status_code == 409
+        assert stored not in page.text
+        assert _sign_hidden(page.text)
+
+    row["sign_url"] = "https://evil.example/s/abc"
+    packet["docuseal_sign_url"] = "https://evil.example/s/abc"
+    _refuses("https://evil.example/s/abc")
+
+    row["sign_url"] = good_url
+    packet["docuseal_sign_url"] = good_url
+    row["submission_id"] = "DS-TEST-OTHER"
+    row["metadata"]["submission_id"] = "DS-TEST-OTHER"
+    _refuses(good_url)
+
+    row["submission_id"] = good_submission
+    row["metadata"]["submission_id"] = good_submission
+    row["external_id"] = f"{PACKET}:defendant"
+    _refuses(good_url)
+
+    row["external_id"] = good_external
+    restored = client.get(f"/api/cosigner/{token}")
+    assert restored.status_code == 200
+    assert restored.json()["sign_url"] == good_url
 
 
 def test_case_id_wins_and_ambiguous_booking_fails_closed(monkeypatch):
@@ -865,7 +968,7 @@ def test_case_id_wins_and_ambiguous_booking_fails_closed(monkeypatch):
     state = client.get(f"/api/cosigner/{token}")
     assert state.status_code == 409
     assert state.json()["error"] == "bond_ambiguous"
-    assert "sign.example" not in state.text
+    assert _sign_hidden(state.text)
     calls = {"n": 0}
     _scanner(monkeypatch, calls)
     refused = _post_scan(client, token)
@@ -1001,11 +1104,11 @@ def test_paid_bond_still_requires_a_signature(monkeypatch):
     assert uploaded.status_code == 200, uploaded.text
     signing = client.get(f"/api/cosigner/{token}").json()
     assert signing["step"] == "sign"
-    assert signing["sign_url"] == "https://sign.example/s/abc"
+    assert signing["sign_url"] == _sign("abc")
     stores["paperwork_packets"].docs[0]["status"] = "completed"
     paid = client.get(f"/api/cosigner/{token}").json()
     assert paid["step"] == "paid"
-    assert paid["sign_url"] == "https://sign.example/s/abc"
+    assert paid["sign_url"] == _sign("abc")
 
 
 def test_verified_or_signed_packet_refuses_another_scan(monkeypatch):
@@ -1583,7 +1686,11 @@ def _extra_link(stores, *, packet_id, case_id, token):
         "status": "completed",
         "indemnitor_name": NAME,
         "surety_id": "osi",
-        "docuseal_sign_url": "https://sign.example/s/other",
+        "docuseal_submission_id": SUBMISSION,
+        "docuseal_sign_url": _sign("other"),
+        "docuseal_submitters": [
+            _bound_submitter("indemnitor", _sign("other"), packet_id=packet_id),
+        ],
         **CONFIRMED,
     }
     stores["paperwork_packets"].docs.append(packet)
@@ -1613,9 +1720,10 @@ def test_cosigner_scan_keeps_an_existing_indemnitor_scan(monkeypatch):
     }
     packet = stores["paperwork_packets"].docs[0]
     bond = stores["bond_cases"].docs[0]
+    packet["docuseal_submission_id"] = SUBMISSION
     packet["docuseal_submitters"] = [
-        {"role": "indemnitor", "sign_url": "https://sign.example/s/indemnitor"},
-        {"role": "coindemnitor", "sign_url": "https://sign.example/s/cosigner"},
+        _bound_submitter("indemnitor", _sign("indemnitor")),
+        _bound_submitter("coindemnitor", _sign("cosigner")),
     ]
     for doc in (packet, bond):
         doc["id_ocr"] = {
@@ -1691,10 +1799,10 @@ def test_reassigned_packet_does_not_keep_the_issued_link(monkeypatch):
     state = client.get(f"/api/cosigner/{token}")
     assert state.status_code == 409
     assert state.json()["error"] == "bond_mismatch"
-    assert "sign.example" not in state.text
+    assert _sign_hidden(state.text)
     page = client.get(f"/cosigner/{token}")
     assert page.status_code == 409
-    assert "sign.example" not in page.text
+    assert _sign_hidden(page.text)
     calls = {"n": 0}
     _scanner(monkeypatch, calls)
     refused = _post_scan(client, token)
@@ -1865,9 +1973,9 @@ def test_scan_and_state_recheck_the_current_bond(monkeypatch):
         state = client.get(f"/api/cosigner/{token}")
         assert state.status_code == 409, code
         assert state.json()["error"] == code
-        assert "sign.example" not in state.text
+        assert _sign_hidden(state.text)
         page = client.get(f"/cosigner/{token}")
-        assert "sign.example" not in page.text
+        assert _sign_hidden(page.text)
         refused = _post_scan(client, token)
         assert refused.status_code == 409, code
         assert refused.json()["error"] == code
@@ -1886,8 +1994,8 @@ def test_scan_and_state_recheck_the_current_bond(monkeypatch):
     hidden = client.get(f"/api/cosigner/{token}")
     assert hidden.status_code == 409
     assert hidden.json()["error"] == "signer_mismatch"
-    assert "sign.example" not in hidden.text
-    assert "sign.example" not in client.get(f"/cosigner/{token}").text
+    assert _sign_hidden(hidden.text)
+    assert _sign_hidden(client.get(f"/cosigner/{token}").text)
 
 
 def test_first_verified_scan_closes_sibling_links(monkeypatch):
@@ -1911,7 +2019,7 @@ def test_first_verified_scan_closes_sibling_links(monkeypatch):
     assert calls["n"] == 0
     hidden = client.get(f"/api/cosigner/{second}")
     assert hidden.status_code == 410
-    assert "sign.example" not in hidden.text
+    assert _sign_hidden(hidden.text)
     assert len(_audits(stores, "id_verified")) == 1
     assert stores["paperwork_packets"].docs[0]["id_ocr"]["extracted"]["full_name"] == NAME
 
@@ -1973,7 +2081,7 @@ def test_foreign_address_state_does_not_unlock_signing(monkeypatch):
     )
     assert foreign.status_code == 400
     assert _error_text(foreign) == "no_issuing_state"
-    assert "sign.example" not in foreign.text
+    assert _sign_hidden(foreign.text)
     assert "id_ocr" not in stores["paperwork_packets"].docs[0]
     assert client.get(f"/api/cosigner/{token}").json()["sign_url"] is None
 
@@ -1988,7 +2096,7 @@ def test_foreign_address_state_does_not_unlock_signing(monkeypatch):
     )
     assert domestic.status_code == 200, domestic.text
     assert "DocuSeal" in domestic.text
-    assert client.get(f"/api/cosigner/{token}").json()["sign_url"] == "https://sign.example/s/abc"
+    assert client.get(f"/api/cosigner/{token}").json()["sign_url"] == _sign("abc")
 
 
 def test_receipt_poller_marks_the_down_payment(monkeypatch):
@@ -2061,7 +2169,7 @@ def test_confirmed_zero_down_payment_finishes_after_signing(monkeypatch):
     assert state.status_code == 200, state.text
     body = state.json()
     assert body["step"] == "paid"
-    assert body["sign_url"] == "https://sign.example/s/abc"
+    assert body["sign_url"] == _sign("abc")
     assert body["payment"]["amount"] == "0.00"
     assert body["payment"]["url"] is None
     assert "pay.example/zero" not in state.text
@@ -2082,7 +2190,7 @@ def test_only_an_open_bond_status_keeps_the_link(monkeypatch):
         state = client.get(f"/api/cosigner/{token}")
         assert state.status_code == 409, status
         assert state.json()["error"] == "bond_inactive"
-        assert "sign.example" not in state.text
+        assert _sign_hidden(state.text)
         refused = _post_scan(client, token)
         assert refused.status_code == 409, status
         assert refused.json()["error"] == "bond_inactive"
@@ -2097,7 +2205,7 @@ def test_only_an_open_bond_status_keeps_the_link(monkeypatch):
         {"full_name": NAME, "dl_state": "FL"},
     )
     assert opened.status_code == 200, opened.text
-    assert client.get(f"/api/cosigner/{token}").json()["sign_url"] == "https://sign.example/s/abc"
+    assert client.get(f"/api/cosigner/{token}").json()["sign_url"] == _sign("abc")
 
 
 def test_failed_verification_releases_the_scan_claim(monkeypatch):
@@ -2175,7 +2283,7 @@ def test_issued_link_expires_in_seven_days(monkeypatch):
     assert expires - created == timedelta(days=7)
     assert expires > datetime.now(timezone.utc)
     assert client.get(f"/api/cosigner/{token}").status_code == 200
-    assert "sign.example" not in client.get(f"/api/cosigner/{token}").text
+    assert _sign_hidden(client.get(f"/api/cosigner/{token}").text)
 
 
 def test_inactive_packet_does_not_get_a_public_link(monkeypatch):

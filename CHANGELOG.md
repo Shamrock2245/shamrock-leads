@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-20 (co-signer sign link must be bound to DocuSeal)
+
+### Fixed
+- **A stored DocuSeal URL is returned only when it belongs to this packet.** The host must be the configured DocuSeal host. The submitter's packet id, submission id, and external id must match. A wrong host, a wrong submission, or a wrong external id is 409 `sign_link_unbound`. The stored URL is not returned.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_unbound_docuseal_url_is_not_returned`.
+
 ## [Unreleased] — 2026-10-20 (co-signer scan keeps another party's ID)
 
 ### Fixed
