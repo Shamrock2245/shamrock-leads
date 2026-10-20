@@ -333,17 +333,15 @@ async def _note_cosigner_down_payment(
     """The same pay-step note the payment webhook uses.
 
     A Gmail receipt has a booking and no invoice reference. An installment
-    reference (``-I``) is not the down payment. Amount, settled status,
-    review holds, reversals, packet scope, and the payment lock all live in
-    ``note_cosigner_paid``.
+    reference (``-I``) is not the down payment. A ``needs_review`` charge is
+    not the down payment. Amount, settled status, reversals, packet scope,
+    and the payment lock all live in ``note_cosigner_paid``.
     """
     if recorded.get("event_kind") != "charge":
         return
-    if not (
-        recorded.get("committed")
-        or recorded.get("duplicate")
-        or recorded.get("needs_review")
-    ):
+    if recorded.get("needs_review"):
+        return
+    if not (recorded.get("committed") or recorded.get("duplicate")):
         return
     reference = str(reference or "").strip()
     if "-I" in reference:

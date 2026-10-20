@@ -411,6 +411,7 @@ def test_scan_locks_oneill_then_sign_and_pay(monkeypatch):
     async def _record(db, **kwargs):
         assert db is pay_db
         calls["n"] += 1
+        _remember_payment_row(db, **kwargs)
         return {
             "committed": calls["n"] == 1,
             "duplicate": calls["n"] > 1,
@@ -908,7 +909,13 @@ def test_link_audits_record_old_and_new_state(monkeypatch):
 
     from dashboard.services.cosigner_link_service import note_cosigner_paid
 
-    _install_payment_lock(monkeypatch)
+    pay_db = _install_payment_lock(monkeypatch)
+    _remember_payment_row(
+        pay_db,
+        transaction_id="TX-PAY",
+        amount="500.00",
+        status="approved",
+    )
     asyncio.run(note_cosigner_paid(BOOKING, "TX-PAY", "500.00"))
     paid = _audits(stores, "paid")
     assert len(paid) == 1
@@ -1025,6 +1032,27 @@ def test_verified_or_signed_packet_refuses_another_scan(monkeypatch):
     assert calls["n"] == 0
 
 
+def _remember_payment_row(db, **kwargs):
+    """A readable payments row, so the pay-step note can see what was recorded."""
+    extra = kwargs.get("extra") or {}
+    event = str(extra.get("event_type") or kwargs.get("event_type") or "").lower()
+    status = str(kwargs.get("status") or "").lower()
+    if "refund" in event or "revers" in event or status in {"refunded", "refund"}:
+        kind = "refund"
+    elif status in {"failed", "declined", "voided"} or event.endswith(".failed"):
+        kind = "failure"
+    else:
+        kind = "charge"
+    db["payments"].docs.append({
+        "transaction_id": str(kwargs.get("transaction_id") or ""),
+        "event_kind": kind,
+        "status": status or "approved",
+        "needs_review": bool(kwargs.get("needs_review")),
+        "amount": kwargs.get("amount"),
+        "booking_number": str(kwargs.get("booking_number") or ""),
+    })
+
+
 def _install_payment_lock(monkeypatch):
     """The in-memory transaction client the co-signer note locks on."""
     import dashboard.services.payment_log_claims as payment_log
@@ -1064,6 +1092,7 @@ def _gateway(monkeypatch):
         txn = kwargs.get("transaction_id")
         seen.append(txn)
         first = seen.count(txn) == 1
+        _remember_payment_row(db, **kwargs)
         return {
             "committed": first,
             "duplicate": not first,
@@ -1964,3 +1993,90 @@ def test_signed_packet_does_not_get_a_public_link(monkeypatch):
         assert _links(stores) == []
         issued = stores.get("audit_events")
         assert issued is None or _audits(stores, "link_issued") == []
+
+
+def _ready_to_pay(monkeypatch):
+    """A signed link on the pay step, with the payment lock installed."""
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    uploaded = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    stores["paperwork_packets"].docs[0]["status"] = "completed"
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+    pay_db = _install_payment_lock(monkeypatch)
+    return stores, client, token, pay_db
+
+
+def test_unreadable_or_empty_payment_rows_do_not_mark_paid(monkeypatch):
+    """No readable charge row means the pay step stays unpaid.
+
+    A read error, a missing transaction, and an empty payments collection
+    each write no paid audit. The poller does not hand a needs_review
+    charge to that note.
+    """
+    from dashboard.services.cosigner_link_service import note_cosigner_paid
+    from dashboard.services.swipesimple_receipt_poller import _note_cosigner_down_payment
+
+    stores, client, token, pay_db = _ready_to_pay(monkeypatch)
+    asyncio.run(note_cosigner_paid(BOOKING, "TX-EMPTY", "500.00", status="approved"))
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+    assert not stores["cosigner_links"].docs[0].get("paid_transaction_id")
+    assert len(_audits(stores, "paid")) == 0
+
+    stores, client, token, pay_db = _ready_to_pay(monkeypatch)
+    _remember_payment_row(
+        pay_db,
+        transaction_id="TX-OTHER",
+        amount="500.00",
+        status="approved",
+    )
+    asyncio.run(note_cosigner_paid(BOOKING, "TX-MISSING", "500.00", status="approved"))
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+    assert len(_audits(stores, "paid")) == 0
+
+    stores, client, token, pay_db = _ready_to_pay(monkeypatch)
+    _remember_payment_row(
+        pay_db,
+        transaction_id="TX-ERR",
+        amount="500.00",
+        status="approved",
+    )
+
+    async def _unreadable(*_args, **_kwargs):
+        raise RuntimeError("payments unreadable")
+
+    monkeypatch.setattr(
+        "dashboard.services.payment_log_claims._read_rows",
+        _unreadable,
+    )
+    asyncio.run(note_cosigner_paid(BOOKING, "TX-ERR", "500.00", status="approved"))
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+    assert not stores["cosigner_links"].docs[0].get("paid_transaction_id")
+    assert len(_audits(stores, "paid")) == 0
+
+    calls = {"n": 0}
+
+    async def _would_stamp(*_args, **_kwargs):
+        calls["n"] += 1
+
+    monkeypatch.setattr(
+        "dashboard.services.cosigner_link_service.note_cosigner_paid",
+        _would_stamp,
+    )
+    asyncio.run(_note_cosigner_down_payment(
+        {
+            "event_kind": "charge",
+            "committed": True,
+            "needs_review": True,
+            "transaction_id": "TX-HOLD",
+            "status": "approved",
+            "amount": "500.00",
+        },
+        booking=BOOKING,
+        reference="",
+        amount="500.00",
+    ))
+    assert calls["n"] == 0

@@ -802,8 +802,9 @@ async def _charge_row_blocks_down_payment(db, transaction_id: str, session) -> b
 
     A committed charge can still be ``needs_review`` (the refund arrived
     first, or the booking is not one bond). A refund or failure row on the
-    same transaction blocks the stamp too. When this process has no payment
-    rows to read, the recorder's return value remains the gate.
+    same transaction blocks the stamp too. A read error, a missing row, or
+    an empty row set blocks it as well: the charge was just recorded under
+    this lock, so no readable charge row is not a pass.
     """
     from dashboard.services.payment_log_claims import (
         SETTLED_CHARGE_STATUSES,
@@ -813,7 +814,8 @@ async def _charge_row_blocks_down_payment(db, transaction_id: str, session) -> b
 
     rows = await _payment_rows(db, str(transaction_id or "").strip(), session)
     if not rows:
-        return False
+        logger.info("[cosigner] paid refused unreadable payment rows")
+        return True
     if has_reversal_sibling(rows):
         return True
     charges = [row for row in rows if row_kind(row) == "charge"]

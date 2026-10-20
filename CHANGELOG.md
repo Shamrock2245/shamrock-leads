@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-20 (co-signer pay step fails closed without a payment row)
+
+### Fixed
+- **A down payment is stamped only when the charge row can be read.** Inside `payment_txn_locks`, a read error, a missing row, or an empty row set does not mark the pay step and writes no paid audit.
+- **The Gmail receipt poller skips a `needs_review` charge.** That matches the payment webhook. A review hold is not passed to `note_cosigner_paid`.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_unreadable_or_empty_payment_rows_do_not_mark_paid`.
+
 ## [Unreleased] — 2026-10-20 (co-signer link is not issued after signing)
 
 ### Fixed
