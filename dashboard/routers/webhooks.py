@@ -396,9 +396,11 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         and not review_hold
     )
     # A down payment is the booking number, not an {booking}-I{n} installment.
-    # Note the co-signer link once. This does not mark the full premium paid
+    # Note the co-signer link once. A charge the recorder stored with
+    # needs_review (a refund arrived first, or the booking is not one bond)
+    # is not this down payment. This does not mark the full premium paid
     # and does not send a message by itself.
-    if recorded_charge and not plan_handled:
+    if recorded_charge and not plan_handled and not recorded.get("needs_review"):
         reference = str(
             custom_fields.get("reference_id") or data.get("reference_id") or ""
         ).strip()

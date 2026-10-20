@@ -585,6 +585,44 @@ async def submit_cosigner_scan(token: str, body: dict) -> dict:
     return await cosigner_state(token, lang=link.get("lang"))
 
 
+async def _charge_row_blocks_down_payment(transaction_id: str) -> bool:
+    """True when the stored charge must not mark the co-signer pay step.
+
+    A committed charge can still be ``needs_review`` (the refund arrived
+    first, or the booking is not one bond). A refund or failure row on the
+    same transaction blocks the stamp too. When this process has no payment
+    rows to read, the recorder's return value remains the gate.
+    """
+    txn = str(transaction_id or "").strip()
+    if not txn:
+        return True
+    try:
+        from dashboard.extensions import get_db
+        from dashboard.services.payment_log_claims import has_reversal_sibling, row_kind
+
+        coll = get_db()["payments"]
+        if not hasattr(coll, "find"):
+            return False
+        rows = []
+        cursor = coll.find({"transaction_id": txn})
+        if hasattr(cursor, "to_list"):
+            listed = await cursor.to_list(length=50)
+            rows = [row for row in listed if isinstance(row, dict)]
+        elif hasattr(cursor, "__aiter__"):
+            async for row in cursor:
+                if isinstance(row, dict):
+                    rows.append(row)
+    except Exception:
+        logger.info("[cosigner] payment rows unreadable")
+        return False
+    if not rows:
+        return False
+    if has_reversal_sibling(rows):
+        return True
+    charges = [row for row in rows if row_kind(row) == "charge"]
+    return any(row.get("needs_review") for row in charges)
+
+
 def _dollars_to_cents(amount: Any) -> Optional[int]:
     try:
         quantized = Decimal(str(amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -608,6 +646,9 @@ async def note_cosigner_paid(booking_number: str, transaction_id: str, amount: A
     """
     booking = str(booking_number or "").strip()
     if not booking:
+        return
+    if await _charge_row_blocks_down_payment(transaction_id):
+        logger.info("[cosigner] paid refused review hold")
         return
     paid_cents = _dollars_to_cents(amount)
     query = _scope({"booking_number": booking})

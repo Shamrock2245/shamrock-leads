@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-20 (co-signer down payment follows the payment row)
+
+### Fixed
+- **A charge stored with `needs_review` does not mark the co-signer pay step.** That includes a refund that arrived before the charge, and a booking that is not one bond. `note_cosigner_paid` re-reads `payments` and refuses the stamp when that charge is `needs_review` or the transaction has a refund or failure row.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_refund_before_charge_does_not_mark_paid`.
+
 ## [Unreleased] — 2026-10-19 (co-signer link requires the bond, the signature, and the down payment)
 
 ### Fixed
