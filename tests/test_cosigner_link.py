@@ -1946,3 +1946,21 @@ def test_failed_verification_releases_the_scan_claim(monkeypatch):
     assert "DocuSeal" in opened.text
     assert stores["paperwork_packets"].docs[0]["cosigner_verified_token"] == token
     assert len(_audits(stores, "id_verified")) == 1
+
+
+def test_signed_packet_does_not_get_a_public_link(monkeypatch):
+    """A signed or completed packet is not issued a link that can never scan."""
+    for status in ("signed", "completed", "complete"):
+        stores, client = _world(monkeypatch)
+        stores["paperwork_packets"].docs[0]["status"] = status
+        created = client.post(
+            "/api/paperwork/cosigner-link",
+            json={"packet_id": PACKET},
+            cookies=_cookie(),
+        )
+        assert created.status_code == 409, status
+        assert created.json()["error"] == "packet_signed"
+        assert "token" not in created.json()
+        assert _links(stores) == []
+        issued = stores.get("audit_events")
+        assert issued is None or _audits(stores, "link_issued") == []

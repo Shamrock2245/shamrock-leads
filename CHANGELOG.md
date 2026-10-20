@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-20 (co-signer link is not issued after signing)
+
+### Fixed
+- **Staff cannot issue a public link for a packet that is already signed.** A packet status of `signed`, `completed`, or `complete` returns 409 `packet_signed`. No token and no `link_issued` audit are written.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_signed_packet_does_not_get_a_public_link`.
+
 ## [Unreleased] — 2026-10-20 (co-signer scan claim is released on failure)
 
 ### Fixed

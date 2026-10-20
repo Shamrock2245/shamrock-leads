@@ -434,6 +434,9 @@ async def create_cosigner_link(*, actor: str, packet_id: str, lang: str = "en") 
         raise CosignerLinkError("signer_mismatch", 409)
     if _bond_closed(bond):
         raise CosignerLinkError("bond_inactive", 409)
+    # A signed packet cannot accept the ID scan this link requires.
+    if _signed(packet):
+        raise CosignerLinkError("packet_signed", 409)
     name, role = packet_name, packet_role
     now = _now()
     token = secrets.token_urlsafe(24)
