@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-20 (co-signer link stays on an open bond)
+
+### Fixed
+- **A public link stays open only for a canonical open bond.** The status must be `active`, `monitoring`, `alert`, or `reinstated`. A missing, unknown, or `inactive` status is `bond_inactive`. The page does not include a DocuSeal URL, and the scan is refused before the upload is read.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_only_an_open_bond_status_keeps_the_link`.
+
 ## [Unreleased] — 2026-10-20 (co-signer down payment follows the payment row)
 
 ### Fixed

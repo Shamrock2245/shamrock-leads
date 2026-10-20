@@ -22,6 +22,7 @@ from typing import Any, Optional
 
 from dashboard.extensions import get_collection
 from dashboard.services.identity_verification_service import (
+    OPEN_BOND_CASE_STATUSES,
     _jurisdiction,
     _reject_full_id,
     names_match,
@@ -43,18 +44,6 @@ _CLOSED_PACKET = frozenset({
     "cancelled",
     "canceled",
     "superseded",
-})
-_CLOSED_BOND = frozenset({
-    "exonerated",
-    "forfeited",
-    "surrendered",
-    "discharged",
-    "closed",
-    "void",
-    "voided",
-    "cancelled",
-    "canceled",
-    "expired",
 })
 _AUDIT_STATE_KEYS = (
     "step",
@@ -502,10 +491,11 @@ def _scan_locked(link: dict, packet: dict) -> bool:
 
 
 def _bond_closed(bond: Optional[dict]) -> bool:
+    """Open is the kanban set. A missing or unknown status is closed."""
     if not isinstance(bond, dict):
         return True
     status = str(bond.get("status") or "").strip().lower()
-    return status in _CLOSED_BOND
+    return status not in OPEN_BOND_CASE_STATUSES
 
 
 def _blank_audit_state(packet: Optional[dict] = None) -> dict:

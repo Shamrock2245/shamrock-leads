@@ -1887,3 +1887,32 @@ def test_confirmed_zero_down_payment_finishes_after_signing(monkeypatch):
     assert "pay.example/zero" not in page.text
     assert stores["bond_cases"].docs[0]["premium_paid"] is False
     assert len(_audits(stores, "paid")) == 0
+
+
+def test_only_an_open_bond_status_keeps_the_link(monkeypatch):
+    """A missing, unknown, or inactive status is bond_inactive. The open set is not."""
+    for status in ("", "inactive", "posted", "unknown"):
+        stores, client = _world(monkeypatch)
+        token = _token(client)
+        stores["bond_cases"].docs[0]["status"] = status
+        calls = {"n": 0}
+        _scanner(monkeypatch, calls)
+        state = client.get(f"/api/cosigner/{token}")
+        assert state.status_code == 409, status
+        assert state.json()["error"] == "bond_inactive"
+        assert "sign.example" not in state.text
+        refused = _post_scan(client, token)
+        assert refused.status_code == 409, status
+        assert refused.json()["error"] == "bond_inactive"
+        assert calls["n"] == 0
+        assert "id_ocr" not in stores["paperwork_packets"].docs[0]
+
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    stores["bond_cases"].docs[0]["status"] = "monitoring"
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert opened.status_code == 200, opened.text
+    assert client.get(f"/api/cosigner/{token}").json()["sign_url"] == "https://sign.example/s/abc"
