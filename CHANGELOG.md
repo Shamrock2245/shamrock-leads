@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-20 (co-signer issuer, poller, claim, and zero down payment)
+
+### Fixed
+- **A US address state copied into `dl_state` does not unlock a foreign ID.** When the scanner copies the address state because no issuer was read, and the country is not the United States, the co-signer route drops that value before the jurisdiction check. A US issuer is unchanged.
+- **The Gmail receipt poller notes the co-signer down payment.** A clean charge for the booking marks the link paid once. A review hold, an installment, and a wrong amount do not. No receipt is added by this note.
+- **The packet scan claim is empty-to-owned.** A second upload for the same token, including one that overlaps before `id_verified` is saved, is `scan_closed` before the scanner runs and does not write another `id_ocr` or verification audit.
+- **A confirmed down payment of `$0.00` finishes the signed link.** The page moves to the paid step and does not offer an invoice link. A missing confirmation stays on the pay step.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_foreign_address_state_does_not_unlock_signing`, `test_receipt_poller_marks_the_down_payment`, `test_in_flight_claim_refuses_a_second_scan`, `test_confirmed_zero_down_payment_finishes_after_signing`.
+
 ## [Unreleased] — 2026-10-20 (co-signer link rechecks the bond and records issuance)
 
 ### Fixed

@@ -68,6 +68,33 @@ async def cosigner_status(token: str, lang: str = ""):
     return state
 
 
+def _country_conflicts_with_us_issuer(country: str) -> bool:
+    """A residence country that is not the United States. Blank is not a conflict."""
+    token = str(country or "").strip().upper().replace(".", "")
+    if not token:
+        return False
+    return token not in {"US", "USA", "UNITED STATES", "UNITED STATES OF AMERICA"}
+
+
+def _cosigner_issuer(extracted: dict) -> str:
+    """The document issuer. An address state copied into ``dl_state`` is not one.
+
+    The scanner fills ``dl_state`` from the address when no issuer was read.
+    A foreign country plus that copied state must not unlock signing.
+    """
+    issuer = str(extracted.get("dl_state") or "").strip()
+    address_state = str(extracted.get("state") or "").strip()
+    country = str(extracted.get("issuing_country") or extracted.get("country") or "")
+    same_state = (
+        issuer
+        and address_state
+        and issuer.upper()[:2] == address_state.upper()[:2]
+    )
+    if same_state and _country_conflicts_with_us_issuer(country):
+        return ""
+    return issuer
+
+
 async def _scan_body_from_upload(form) -> dict | None:
     """OCR the uploaded ID. The typed name is not a scan."""
     upload = form.get("id_image")
@@ -90,7 +117,7 @@ async def _scan_body_from_upload(form) -> dict | None:
     # as a US state.
     return {
         "full_name": extracted.get("full_name") or "",
-        "dl_state": extracted.get("dl_state") or "",
+        "dl_state": _cosigner_issuer(extracted),
         "issuing_state": extracted.get("issuing_state") or "",
         "issuing_jurisdiction": extracted.get("issuing_jurisdiction") or "",
         "id_state": extracted.get("id_state") or "",

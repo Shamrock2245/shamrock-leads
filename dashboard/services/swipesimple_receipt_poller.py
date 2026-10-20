@@ -305,6 +305,7 @@ class SwipeSimpleReceiptPoller:
             recorded,
             phone=str(parsed.get("indemnitor_phone") or ""),
         )
+        await _note_cosigner_down_payment(recorded, booking=booking, amount=amount)
 
         return {
             "success": True,
@@ -315,6 +316,33 @@ class SwipeSimpleReceiptPoller:
             "booking_number": recorded.get("booking_number") or "",
             "transaction_id": recorded.get("transaction_id"),
         }
+
+
+async def _note_cosigner_down_payment(recorded: Dict[str, Any], *, booking: Any, amount: Any) -> None:
+    """The Gmail poller is the payment source when webhooks are not delivered.
+
+    A clean charge for this booking notes the co-signer link. An installment
+    already returned above. A review hold does not count as the down payment.
+    """
+    if recorded.get("event_kind") != "charge":
+        return
+    if recorded.get("needs_review"):
+        return
+    if not (recorded.get("committed") or recorded.get("duplicate")):
+        return
+    reference = str(recorded.get("booking_number") or booking or "").strip()
+    if not reference or "-I" in reference:
+        return
+    try:
+        from dashboard.services.cosigner_link_service import note_cosigner_paid
+
+        await note_cosigner_paid(
+            reference,
+            str(recorded.get("transaction_id") or ""),
+            amount=recorded.get("amount") if recorded.get("amount") is not None else amount,
+        )
+    except Exception as exc:
+        logger.info("[SwipeSimplePoll] cosigner paid note skipped code=%s", type(exc).__name__)
 
 
 async def _notify_clean_charge(recorded: Dict[str, Any]) -> None:
