@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-20 (co-signer bearer link expires)
+
+### Fixed
+- **Every issued co-signer link expires after 7 days.** `expires_at` is set at creation. After that time the bearer is `link_expired` and is not an OCR endpoint.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_issued_link_expires_in_seven_days`.
+
 ## [Unreleased] — 2026-10-20 (co-signer link is not issued for an inactive packet)
 
 ### Fixed

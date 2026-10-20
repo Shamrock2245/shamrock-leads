@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Optional
 
@@ -36,6 +36,7 @@ from dashboard.tenancy.flag import multi_tenant_enabled
 logger = logging.getLogger(__name__)
 
 LINKS = "cosigner_links"
+_LINK_TTL = timedelta(days=7)
 _SIGNED = frozenset({"signed", "completed", "complete"})
 _FAIL_STATUS = frozenset({"failed", "fail", "error", "unreadable", "rejected"})
 _CLOSED_PACKET = frozenset({
@@ -455,6 +456,7 @@ async def create_cosigner_link(*, actor: str, packet_id: str, lang: str = "en") 
         "lang": _lang(lang),
         "created_by": actor,
         "created_at": now.isoformat(),
+        "expires_at": (now + _LINK_TTL).isoformat(),
         "timeline": [],
         "id_verified": False,
     }

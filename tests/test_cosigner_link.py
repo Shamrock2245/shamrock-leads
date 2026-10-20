@@ -2020,6 +2020,21 @@ def _ready_to_pay(monkeypatch):
     return stores, client, token, pay_db
 
 
+def test_issued_link_expires_in_seven_days(monkeypatch):
+    """A new bearer link carries a bounded expiry and still opens before then."""
+    from datetime import datetime, timedelta, timezone
+
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    link = stores["cosigner_links"].docs[0]
+    created = datetime.fromisoformat(link["created_at"])
+    expires = datetime.fromisoformat(link["expires_at"])
+    assert expires - created == timedelta(days=7)
+    assert expires > datetime.now(timezone.utc)
+    assert client.get(f"/api/cosigner/{token}").status_code == 200
+    assert "sign.example" not in client.get(f"/api/cosigner/{token}").text
+
+
 def test_inactive_packet_does_not_get_a_public_link(monkeypatch):
     """A voided, canceled, or superseded packet is not issued a bearer link."""
     cases = (
