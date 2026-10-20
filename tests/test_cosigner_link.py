@@ -1128,6 +1128,44 @@ def test_sign_url_matches_the_verified_signer(monkeypatch):
     assert _sign("cosigner") not in emailed.text
 
 
+def test_pay_step_hides_an_unbound_sign_url(monkeypatch):
+    """After signing, a bad DocuSeal URL does not block the invoice page."""
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert opened.status_code == 200, opened.text
+    packet = stores["paperwork_packets"].docs[0]
+    row = packet["docuseal_submitters"][0]
+    row["sign_url"] = "https://evil.example/s/abc"
+    packet["docuseal_sign_url"] = "https://evil.example/s/abc"
+    locked = client.get(f"/api/cosigner/{token}")
+    assert locked.status_code == 409
+    assert locked.json()["error"] == "sign_link_unbound"
+    assert "evil.example" not in locked.text
+
+    packet["status"] = "completed"
+    paying = client.get(f"/api/cosigner/{token}")
+    assert paying.status_code == 200, paying.text
+    assert paying.json()["step"] == "pay"
+    assert paying.json()["sign_url"] is None
+    assert "evil.example" not in paying.text
+    assert _sign_hidden(paying.text)
+    page = client.get(f"/cosigner/{token}")
+    assert page.status_code == 200
+    assert "evil.example" not in page.text
+    assert "500.00" in page.text
+
+    stores["bond_cases"].docs[0]["premium_paid"] = True
+    paid = client.get(f"/api/cosigner/{token}")
+    assert paid.status_code == 200, paid.text
+    assert paid.json()["step"] == "paid"
+    assert paid.json()["sign_url"] is None
+    assert "evil.example" not in paid.text
+
+
 def test_case_id_wins_and_ambiguous_booking_fails_closed(monkeypatch):
     stores, client = _world(monkeypatch)
     exact = stores["bond_cases"].docs[0]

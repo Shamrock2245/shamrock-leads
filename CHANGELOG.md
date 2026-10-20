@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-20 (co-signer pay step stays open without a sign link)
+
+### Fixed
+- **A missing DocuSeal URL does not block the pay step after the packet is signed.** While the step is still `sign`, an unbound or mismatched URL is 409 and is not shown. On `pay` or `paid`, the page returns with `sign_url` null.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_pay_step_hides_an_unbound_sign_url`.
+
 ## [Unreleased] — 2026-10-20 (co-signer sign link must name this signer)
 
 ### Fixed
