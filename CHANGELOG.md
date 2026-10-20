@@ -12,6 +12,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `tests/test_fl_citrus_bond_custody_defaults.py` (added to the `ci.yml` list).
+## [Unreleased] — 2026-10-19 (PyMuPDF 2.x keeps Palmetto widget names)
+
+### Fixed
+- **Re-stamped Palmetto and surety widgets keep `/T` and `/V` on the annotation under PyMuPDF 2.x.** PyMuPDF 2.0 `Page.add_widget` always runs `_adjust_widget` and builds a one-kid parent field, then moves the field name and value off the page annotation. `widget.field_name` still resolves through that parent. pdfplumber reads the annotation `/T` only, so `app_defendant_name`, `app_agent_name`, and the other re-stamped packet fields were missing. `restore_classic_widget_field` copies the field keys back onto the annotation and points AcroForm at that widget. On PyMuPDF 1.28.x the annotation already holds `/T` and `/V`, and the helper leaves it unchanged. A dotted field name or a parent with more than one kid stays a hierarchy.
+
+### Changed
+- **`PyMuPDF>=1.24.0,<3.0`** in `requirements.txt` and `requirements-dashboard.txt`.
+
+### Tests
+- `tests/test_palmetto_packet_fields.py`: `test_added_text_widget_keeps_its_name_on_the_annotation` (this file is already on the CI list). Palmetto, OSI, and golden suites pass on 1.28.2 and 2.0.0.
+
+## [Unreleased] — 2026-10-19 (e2e covers merged #187 and #182)
+
+### Tests
+- `tests/test_e2e_write_bond_to_installment.py`: `test_poller_dupe_counts_once_and_refund_does_not_stamp_last_payment`. On the same `TEST-` bond after installment 1, the Gmail receipt poller records that installment again (booking only, then with the plan reference) and no second `payments` row is written. The payment-agent KPIs count it once (`$250.00`). A down-payment charge webhook (`$500.00`) stamps `last_payment_*` on both bond mirrors. Its refund webhook records a reversal, flags `needs_review`, leaves `last_payment_*` exactly as the charge stamped it, and does not move the plan balance. The refunded down payment drops out of the KPIs. The staff review alert (Slack) is mocked. Amounts are the test's fixture constants. No product code changes.
+
+## [Unreleased] — 2026-10-16 (Write Bond to one installment, mocked)
+
+### Added
+- **Mocked end-to-end test** `tests/test_e2e_write_bond_to_installment.py` (on the `ci.yml` list). A `TEST-` Write Bond capture, `POST /api/paperwork/confirm-premium` with a financed balance, one down-payment invoice, and one installment-paid webhook. Asserts one plan, one down-payment invoice, the installment recorded once, cent balances, the audit rows, and a webhook replay that does not apply twice. SwipeSimple, Gmail, Slack, and BlueBubbles are mocked. `SWIPESIMPLE_DISPATCH_LIVE` stays unset. In-memory Mongo only.
+
 ## [Unreleased] — 2026-10-19 (pin PyMuPDF below 2.0)
 
 ### Fixed

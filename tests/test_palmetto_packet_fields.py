@@ -11,6 +11,7 @@ from dashboard.bond_pdf_service import (
     build_palmetto_field_values,
     fill_osi_bond,
     fill_palmetto_bond,
+    restore_classic_widget_field,
 )
 from dashboard.palmetto_field_placement import required_text_fields
 from dashboard.palmetto_packet_fill import (
@@ -131,6 +132,38 @@ def test_empty_agent_clears_sample_name():
     assert fields["agentBailLicNumField"] == ["G356764"]
     joined = " ".join(str(value) for values in fields.values() for value in values)
     assert "Brendan" not in joined
+
+
+def test_added_text_widget_keeps_its_name_on_the_annotation():
+    """PyMuPDF 2.0 parks /T on a parent field. The annotation must keep the name.
+
+    pdfplumber reads the widget annotation title, which is how the packet
+    tests find ``app_defendant_name``. 1.28 already stores /T on the
+    annotation; ``restore_classic_widget_field`` is a no-op there.
+    """
+    doc = fitz.open()
+    page = doc.new_page()
+    widget = fitz.Widget()
+    widget.field_type = fitz.PDF_WIDGET_TYPE_TEXT
+    widget.field_name = "app_defendant_name"
+    widget.rect = fitz.Rect(72, 72, 300, 90)
+    widget.field_value = "SAMPLE, NOT A PERSON"
+    widget.text_fontsize = 8
+    annot = page.add_widget(widget)
+    assert annot is not None
+    restore_classic_widget_field(doc, annot.xref)
+    buf = io.BytesIO()
+    doc.save(buf)
+    doc.close()
+    raw = buf.getvalue()
+    assert _annots(raw)["app_defendant_name"] == ["SAMPLE, NOT A PERSON"]
+    opened = fitz.open(stream=raw, filetype="pdf")
+    try:
+        widgets = list(opened[0].widgets() or [])
+        assert [item.field_name for item in widgets] == ["app_defendant_name"]
+        assert opened.xref_get_key(widgets[0].xref, "Parent")[0] == "null"
+    finally:
+        opened.close()
 
 
 def test_required_palmetto_fields_match_context():
