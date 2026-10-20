@@ -2300,6 +2300,60 @@ def test_scan_and_state_recheck_the_current_bond(monkeypatch):
     assert _sign_hidden(client.get(f"/cosigner/{token}").text)
 
 
+def _mirror_of(stores, **changes):
+    mirror = dict(stores["bond_cases"].docs[0])
+    mirror.pop("_id", None)
+    mirror.update(changes)
+    stores["active_bonds"] = _Col([mirror])
+
+
+def test_bond_mirror_and_duplicate_rows_fail_closed(monkeypatch):
+    """A disagreeing active-bond mirror, or two case rows, closes the link."""
+    def _terminal(stores):
+        _mirror_of(stores, status="exonerated")
+
+    def _renamed(stores):
+        _mirror_of(stores, indemnitor_name="Pat Other")
+
+    def _duplicate(stores):
+        extra = dict(stores["bond_cases"].docs[0])
+        extra.pop("_id", None)
+        stores["bond_cases"].docs.append(extra)
+
+    for mutate, code in (
+        (_terminal, "bond_mirror_mismatch"),
+        (_renamed, "bond_mirror_mismatch"),
+        (_duplicate, "bond_ambiguous"),
+    ):
+        stores, client = _world(monkeypatch)
+        token = _token(client)
+        mutate(stores)
+        calls = {"n": 0}
+        _scanner(monkeypatch, calls)
+        state = client.get(f"/api/cosigner/{token}")
+        assert state.status_code == 409, code
+        assert state.json()["error"] == code
+        assert _sign_hidden(state.text)
+        page = client.get(f"/cosigner/{token}")
+        assert page.status_code == 409
+        assert _sign_hidden(page.text)
+        refused = _post_scan(client, token)
+        assert refused.status_code == 409, code
+        assert refused.json()["error"] == code
+        assert calls["n"] == 0
+        assert "id_ocr" not in stores["paperwork_packets"].docs[0]
+
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    _mirror_of(stores)
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert opened.status_code == 200, opened.text
+    assert client.get(f"/api/cosigner/{token}").json()["sign_url"] == _sign("abc")
+
+
 def test_first_verified_scan_closes_sibling_links(monkeypatch):
     stores, client = _world(monkeypatch)
     first = _token(client)

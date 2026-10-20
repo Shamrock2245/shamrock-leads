@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-20 (co-signer bond mirror must agree)
+
+### Fixed
+- **A bearer link fails closed when the bonded case is not a single current row.** More than one `bond_cases` row for the case, or more than one `active_bonds` mirror, is 409 `bond_ambiguous`. A mirror whose status or signer does not match the case row is 409 `bond_mirror_mismatch`. The DocuSeal URL is not returned, and the scan does not run OCR.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_bond_mirror_and_duplicate_rows_fail_closed`.
+
 ## [Unreleased] — 2026-10-20 (co-signer pay link must match the amount due)
 
 ### Fixed

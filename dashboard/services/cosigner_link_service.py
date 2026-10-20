@@ -488,24 +488,55 @@ async def _matching_bonds(query: dict) -> list:
     return found
 
 
+async def _case_rows(collection: str, case_id: str) -> list:
+    scoped = _scope({"bond_case_id": case_id})
+    if scoped is None:
+        raise CosignerLinkError("tenant_required", 403)
+    found = []
+    cursor = get_collection(collection).find(scoped)
+    async for doc in _iter(cursor):
+        doc["_collection"] = collection
+        found.append(doc)
+    return found
+
+
+def _bond_status(bond: dict) -> str:
+    return str((bond or {}).get("status") or "").strip().lower()
+
+
+def _mirror_disagrees(case_row: dict, mirror: dict) -> bool:
+    """Status or signer binding differs between a case and its active mirror."""
+    if _bond_status(case_row) != _bond_status(mirror):
+        return True
+    case_name, case_role = _expected_signer(case_row, None)
+    mirror_name, mirror_role = _expected_signer(mirror, None)
+    if case_role != mirror_role:
+        return True
+    if not case_name or not mirror_name or not names_match(case_name, mirror_name):
+        return True
+    return False
+
+
 async def _find_bond(packet: dict) -> Optional[dict]:
     """The packet's case id wins. Booking is used only when no case id exists.
 
     Two bond rows that share a booking number are not a guess. That fallback
-    fails closed.
+    fails closed. A case id with more than one ``bond_cases`` row, or an
+    ``active_bonds`` mirror whose status or signer does not match, also fails
+    closed.
     """
     booking = str(packet.get("booking_number") or "").strip()
     case_id = str(packet.get("bond_case_id") or "").strip()
     if case_id:
-        for name in ("bond_cases", "active_bonds"):
-            scoped = _scope({"bond_case_id": case_id})
-            if scoped is None:
-                raise CosignerLinkError("tenant_required", 403)
-            doc = await get_collection(name).find_one(scoped)
-            if doc:
-                doc["_collection"] = name
-                return doc
-        return None
+        cases = await _case_rows("bond_cases", case_id)
+        mirrors = await _case_rows("active_bonds", case_id)
+        if len(cases) > 1 or len(mirrors) > 1:
+            raise CosignerLinkError("bond_ambiguous", 409)
+        if cases and mirrors and _mirror_disagrees(cases[0], mirrors[0]):
+            raise CosignerLinkError("bond_mirror_mismatch", 409)
+        if cases:
+            return cases[0]
+        return mirrors[0] if mirrors else None
     if not booking:
         return None
     matches = await _matching_bonds({"booking_number": booking})
