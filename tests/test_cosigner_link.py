@@ -866,7 +866,7 @@ def test_case_id_wins_and_ambiguous_booking_fails_closed(monkeypatch):
     ambiguous = _post_scan(fresh_client, open_token)
     assert ambiguous.status_code == 409
     assert _error_text(ambiguous) == "bond_ambiguous"
-    assert calls["n"] == 1
+    assert calls["n"] == 0
     assert "id_ocr" not in fresh["paperwork_packets"].docs[0]
     assert "id_ocr" not in fresh["bond_cases"].docs[0]
 
@@ -1308,3 +1308,116 @@ def test_refund_reopens_pay_step_without_moving_plan_balance(monkeypatch):
     assert plan["total_paid_cents"] == 0
     assert plan["payments_made"] == 0
     assert stores["bond_cases"].docs[0]["premium_paid"] is False
+
+
+def test_scan_and_state_recheck_the_current_bond(monkeypatch):
+    def _closed(stores):
+        stores["bond_cases"].docs[0]["status"] = "exonerated"
+
+    def _renamed(stores):
+        stores["bond_cases"].docs[0]["indemnitor_name"] = "Pat Other"
+
+    for mutate, code in (
+        (lambda stores: stores["bond_cases"].docs.clear(), "bond_required"),
+        (_closed, "bond_inactive"),
+        (_renamed, "signer_mismatch"),
+    ):
+        stores, client = _world(monkeypatch)
+        token = _token(client)
+        mutate(stores)
+        calls = {"n": 0}
+        _scanner(monkeypatch, calls)
+        state = client.get(f"/api/cosigner/{token}")
+        assert state.status_code == 409, code
+        assert state.json()["error"] == code
+        assert "sign.example" not in state.text
+        page = client.get(f"/cosigner/{token}")
+        assert "sign.example" not in page.text
+        refused = _post_scan(client, token)
+        assert refused.status_code == 409, code
+        assert refused.json()["error"] == code
+        assert calls["n"] == 0
+        assert "id_ocr" not in stores["paperwork_packets"].docs[0]
+
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert opened.status_code == 200, opened.text
+    assert "DocuSeal" in opened.text
+    stores["bond_cases"].docs[0]["indemnitor_name"] = "Pat Other"
+    hidden = client.get(f"/api/cosigner/{token}")
+    assert hidden.status_code == 409
+    assert hidden.json()["error"] == "signer_mismatch"
+    assert "sign.example" not in hidden.text
+    assert "sign.example" not in client.get(f"/cosigner/{token}").text
+
+
+def test_first_verified_scan_closes_sibling_links(monkeypatch):
+    stores, client = _world(monkeypatch)
+    first = _token(client)
+    second = _token(client)
+    assert first != second
+    opened = _upload(
+        monkeypatch, client, first,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert opened.status_code == 200, opened.text
+    assert stores["paperwork_packets"].docs[0]["cosigner_verified_token"] == first
+    sibling = next(row for row in stores["cosigner_links"].docs if row["token"] == second)
+    assert sibling["revoked"] is True
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    refused = _post_scan(client, second)
+    assert refused.status_code == 410
+    assert refused.json()["error"] == "link_revoked"
+    assert calls["n"] == 0
+    hidden = client.get(f"/api/cosigner/{second}")
+    assert hidden.status_code == 410
+    assert "sign.example" not in hidden.text
+    assert len(_audits(stores, "id_verified")) == 1
+    assert stores["paperwork_packets"].docs[0]["id_ocr"]["extracted"]["full_name"] == NAME
+
+    fresh, fresh_client = _world(monkeypatch)
+    token = _token(fresh_client)
+    fresh["paperwork_packets"].docs[0]["cosigner_verified_token"] = "other-token"
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    claimed = _post_scan(fresh_client, token)
+    assert claimed.status_code == 409
+    assert claimed.json()["error"] == "scan_closed"
+    assert calls["n"] == 0
+    assert "id_ocr" not in fresh["paperwork_packets"].docs[0]
+
+
+def test_link_creation_writes_an_issuance_audit(monkeypatch):
+    stores, client = _world(monkeypatch)
+    created = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert created.status_code == 200, created.text
+    token = created.json()["token"]
+    issued = _audits(stores, "link_issued")
+    assert len(issued) == 1
+    assert issued[0]["actor"] == ACTOR
+    assert issued[0]["confidence"] == 1.0
+    assert issued[0]["old_state"]["step"] == ""
+    assert issued[0]["old_state"]["id_verified"] is False
+    assert issued[0]["new_state"]["step"] == "scan"
+    assert issued[0]["new_state"]["id_verified"] is False
+    assert token not in str(issued)
+
+    stores["bond_cases"].docs[0]["status"] = "exonerated"
+    closed = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert closed.status_code == 409
+    assert closed.json()["error"] == "bond_inactive"
+    assert len(_links(stores)) == 1
+    assert len(_audits(stores, "link_issued")) == 1

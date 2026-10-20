@@ -44,6 +44,18 @@ _CLOSED_PACKET = frozenset({
     "canceled",
     "superseded",
 })
+_CLOSED_BOND = frozenset({
+    "exonerated",
+    "forfeited",
+    "surrendered",
+    "discharged",
+    "closed",
+    "void",
+    "voided",
+    "cancelled",
+    "canceled",
+    "expired",
+})
 _AUDIT_STATE_KEYS = (
     "step",
     "id_verified",
@@ -366,13 +378,21 @@ def _timeline_push(link: dict, step: str, now: datetime) -> bool:
     return True
 
 
-async def _audit(step: str, link: dict, now: datetime, *, old_state: dict, new_state: dict) -> None:
+async def _audit(
+    step: str,
+    link: dict,
+    now: datetime,
+    *,
+    old_state: dict,
+    new_state: dict,
+    actor: str = "cosigner_link",
+) -> None:
     await get_collection("audit_events").insert_one({
         "event_type": step,
         "action": step,
         "entity_type": "cosigner_link",
         "entity_id": link.get("packet_id") or "",
-        "actor": "cosigner_link",
+        "actor": actor or "cosigner_link",
         "agent_name": "cosigner_link",
         "timestamp": now,
         "created_at": now.isoformat(),
@@ -421,6 +441,8 @@ async def create_cosigner_link(*, actor: str, packet_id: str, lang: str = "en") 
         or not names_match(packet_name, bond_name)
     ):
         raise CosignerLinkError("signer_mismatch", 409)
+    if _bond_closed(bond):
+        raise CosignerLinkError("bond_inactive", 409)
     name, role = packet_name, packet_role
     now = _now()
     token = secrets.token_urlsafe(24)
@@ -441,6 +463,14 @@ async def create_cosigner_link(*, actor: str, packet_id: str, lang: str = "en") 
     if multi_tenant_enabled():
         doc["tenant_id"] = current_tenant_id()
     await get_collection(LINKS).insert_one(doc)
+    await _audit(
+        "link_issued",
+        doc,
+        now,
+        old_state=_blank_audit_state(packet),
+        new_state=_audit_state(doc, packet),
+        actor=actor,
+    )
     logger.info("[cosigner] link created packet_id=%s", packet_id)
     return {
         "token": token,
@@ -469,6 +499,111 @@ def _scan_locked(link: dict, packet: dict) -> bool:
     return bool(link.get("id_verified")) or _signed(packet)
 
 
+def _bond_closed(bond: Optional[dict]) -> bool:
+    if not isinstance(bond, dict):
+        return True
+    status = str(bond.get("status") or "").strip().lower()
+    return status in _CLOSED_BOND
+
+
+def _blank_audit_state(packet: Optional[dict] = None) -> dict:
+    """No link yet. Issuance records the transition into the scan step."""
+    return {
+        "step": "",
+        "id_verified": False,
+        "signed": False,
+        "paid": False,
+        "payment_reversed": False,
+        "timeline": [],
+        "packet_status": str((packet or {}).get("status") or ""),
+    }
+
+
+def _link_role(link: dict) -> str:
+    role = str(link.get("signer_role") or "indemnitor").strip()
+    return role if role == "co_indemnitor" else "indemnitor"
+
+
+async def _require_current_bond(link: dict, packet: dict) -> dict:
+    """The bond must still exist, still be open, and still name this signer."""
+    bond = await _find_bond(packet)
+    if not bond:
+        raise CosignerLinkError("bond_required", 409)
+    if _bond_closed(bond):
+        raise CosignerLinkError("bond_inactive", 409)
+    packet_name, packet_role = _expected_signer(packet, None)
+    bond_name, bond_role = _expected_signer(bond, None)
+    if (
+        packet_role != bond_role
+        or packet_role != _link_role(link)
+        or not names_match(packet_name, bond_name)
+        or not names_match(bond_name, str(link.get("signer_name") or ""))
+    ):
+        raise CosignerLinkError("signer_mismatch", 409)
+    return bond
+
+
+async def _held_by_other(packet: dict, token: str) -> bool:
+    """Another link already claimed this packet's verification."""
+    owner = str(packet.get("cosigner_verified_token") or "").strip()
+    if owner and owner != str(token or "").strip():
+        return True
+    query = _scope({"packet_id": str(packet.get("packet_id") or "")})
+    if query is None:
+        raise CosignerLinkError("tenant_required", 403)
+    cursor = get_collection(LINKS).find(query)
+    async for other in _iter(cursor):
+        if str(other.get("token") or "") == str(token or ""):
+            continue
+        if other.get("id_verified"):
+            return True
+    return False
+
+
+async def _claim_verification(packet: dict, token: str) -> bool:
+    """One token owns the packet scan. A second token does not overwrite it."""
+    token = str(token or "").strip()
+    result = await get_collection("paperwork_packets").update_one(
+        {
+            "packet_id": packet.get("packet_id"),
+            "cosigner_verified_token": {"$in": [None, "", token]},
+        },
+        {"$set": {"cosigner_verified_token": token}},
+    )
+    if int(getattr(result, "modified_count", 0) or 0) > 0:
+        packet["cosigner_verified_token"] = token
+        return True
+    fresh = await get_collection("paperwork_packets").find_one(
+        {"packet_id": packet.get("packet_id")},
+    )
+    owner = str((fresh or {}).get("cosigner_verified_token") or "").strip()
+    if owner == token:
+        packet["cosigner_verified_token"] = token
+        return True
+    return False
+
+
+async def _revoke_sibling_links(packet_id: str, token: str, now: datetime) -> None:
+    query = _scope({"packet_id": packet_id})
+    if query is None:
+        return
+    cursor = get_collection(LINKS).find(query)
+    async for other in _iter(cursor):
+        if str(other.get("token") or "") == token or other.get("revoked") is True:
+            continue
+        other["revoked"] = True
+        other["status"] = "revoked"
+        other["revoked_at"] = now.isoformat()
+        await get_collection(LINKS).update_one(
+            {"token": other.get("token")},
+            {"$set": {
+                "revoked": True,
+                "status": "revoked",
+                "revoked_at": other["revoked_at"],
+            }},
+        )
+
+
 async def require_cosigner_scan(token: str) -> dict:
     """Resolve the bearer link before any upload is read or scanned."""
     link = await _link_by_token(token)
@@ -478,6 +613,9 @@ async def require_cosigner_scan(token: str) -> dict:
     if _packet_closed(packet):
         raise CosignerLinkError("packet_inactive", 409)
     if _scan_locked(link, packet):
+        raise CosignerLinkError("scan_closed", 409)
+    await _require_current_bond(link, packet)
+    if await _held_by_other(packet, token):
         raise CosignerLinkError("scan_closed", 409)
     return link
 
@@ -543,6 +681,9 @@ async def submit_cosigner_scan(token: str, body: dict) -> dict:
         raise CosignerLinkError("packet_inactive", 409)
     if _scan_locked(link, packet):
         raise CosignerLinkError("scan_closed", 409)
+    await _require_current_bond(link, packet)
+    if await _held_by_other(packet, token):
+        raise CosignerLinkError("scan_closed", 409)
     name = str(body.get("full_name") or body.get("name") or "").strip()
     expected = str(link.get("signer_name") or link.get("indemnitor_name") or "")
     role = str(link.get("signer_role") or "indemnitor")
@@ -569,9 +710,12 @@ async def submit_cosigner_scan(token: str, body: dict) -> dict:
         logger.info("[cosigner] no issuing state packet_id=%s", link.get("packet_id"))
         await _save_link(link)
         raise CosignerLinkError("no_issuing_state", 400)
-    bond = await _find_bond(packet)
-    await _store_scan(packet, bond, name, state, role)
+    bond = await _require_current_bond(link, packet)
+    if not await _claim_verification(packet, token):
+        raise CosignerLinkError("scan_closed", 409)
     now = _now()
+    await _revoke_sibling_links(str(packet.get("packet_id") or ""), token, now)
+    await _store_scan(packet, bond, name, state, role)
     before = _audit_state(link, packet)
     link["id_verified"] = True
     link["id_verified_at"] = now.isoformat()
@@ -702,10 +846,11 @@ async def cosigner_state(token: str, lang: Optional[str] = None) -> dict:
     if lang:
         link["lang"] = _lang(lang)
     packet = await _find_packet(str(link.get("packet_id") or ""))
-    if packet and _packet_closed(packet):
+    if not packet:
+        raise CosignerLinkError("packet_not_found", 404)
+    if _packet_closed(packet):
         raise CosignerLinkError("packet_inactive", 409)
-    packet = packet or {}
-    bond = await _find_bond(packet) if packet else None
+    bond = await _require_current_bond(link, packet)
     language = _lang(link.get("lang"))
     verified = bool(link.get("id_verified"))
     signed = _signed(packet)

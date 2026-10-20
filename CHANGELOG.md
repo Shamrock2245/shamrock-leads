@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-20 (co-signer link rechecks the bond and records issuance)
+
+### Fixed
+- **Every scan and state request rechecks the bonded case.** A deleted bond is `bond_required`. An exonerated, forfeited, surrendered, or otherwise closed bond is `bond_inactive`. A signer or role that no longer matches the packet and the link is `signer_mismatch`. Those responses do not include a DocuSeal URL, and the scan is refused before the upload is read.
+- **The first successful scan claims the packet and revokes sibling links.** A second token cannot run OCR, overwrite `id_ocr`, or write another verification audit. A token that does not own `cosigner_verified_token` is `scan_closed` before the scanner runs.
+- **Issuing a public link writes a `link_issued` audit.** The audit stores the staff actor, confidence, and the old-to-new workflow state. The bearer token is not stored. A refused link writes neither a token nor an audit.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_scan_and_state_recheck_the_current_bond`, `test_first_verified_scan_closes_sibling_links`, `test_link_creation_writes_an_issuance_audit`.
+
 ## [Unreleased] — 2026-10-19 (co-signer link requires the bond, the signature, and the down payment)
 
 ### Fixed
