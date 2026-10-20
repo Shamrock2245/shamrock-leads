@@ -2,7 +2,7 @@ fastapi>=0.110.0
 uvicorn[standard]>=0.54.0
 pydantic>=2.0.0
 httpx>=0.28.1
-maigret>=0.6.0
+maigret>=0.6.6
 sherlock-project>=0.15.0
 # Phone registration checks (Instagram / Snapchat / Amazon) — does not alert target
 ignorant>=1.2
