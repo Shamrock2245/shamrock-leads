@@ -835,11 +835,55 @@ def test_active_bond_scan_and_invoice_link_alias(monkeypatch):
     assert state["sign_url"] == _sign("cosigner")
 
     packet["invoice_payment_link"] = "https://pay.example/down"
+    packet["swipesimple_invoice_amount_cents"] = 50000
     packet["status"] = "completed"
     paying = client.get(f"/api/cosigner/{token}").json()
     assert paying["step"] == "pay"
     assert paying["payment"]["url"] == "https://pay.example/down"
     assert paying["payment"]["dispatched"] is False
+    assert "error" not in paying["payment"]
+
+
+def test_unproven_invoice_amount_hides_the_pay_link(monkeypatch):
+    """A stored invoice URL is shown only when its cents equal the amount due."""
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert opened.status_code == 200, opened.text
+    packet = stores["paperwork_packets"].docs[0]
+    packet["status"] = "completed"
+    packet["invoice_payment_link"] = "https://pay.example/down"
+    packet["swipesimple_invoice_amount_cents"] = 30000
+
+    short = client.get(f"/api/cosigner/{token}")
+    assert short.status_code == 200, short.text
+    assert short.json()["step"] == "pay"
+    assert short.json()["payment"]["url"] is None
+    assert short.json()["payment"]["error"] == "invoice_amount_unproven"
+    assert short.json()["payment"]["amount"] == "500.00"
+    assert "https://pay.example/down" not in short.text
+    page = client.get(f"/cosigner/{token}")
+    assert page.status_code == 200
+    assert "https://pay.example/down" not in page.text
+    assert ">Pay</a>" not in page.text
+
+    packet["swipesimple_invoice_amount_cents"] = 50000
+    matched = client.get(f"/api/cosigner/{token}")
+    assert matched.status_code == 200, matched.text
+    assert matched.json()["payment"]["url"] == "https://pay.example/down"
+    assert "error" not in matched.json()["payment"]
+    assert "https://pay.example/down" in client.get(f"/cosigner/{token}").text
+
+    packet.pop("swipesimple_invoice_amount_cents", None)
+    missing = client.get(f"/api/cosigner/{token}")
+    assert missing.status_code == 200, missing.text
+    assert missing.json()["payment"]["url"] is None
+    assert missing.json()["payment"]["error"] == "invoice_amount_unproven"
+    assert "https://pay.example/down" not in missing.text
+    assert "https://pay.example/down" not in client.get(f"/cosigner/{token}").text
 
 
 def _scanner(monkeypatch, calls):

@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-20 (co-signer pay link must match the amount due)
+
+### Fixed
+- **The pay step does not show a SwipeSimple link whose amount is unproven.** The stored `swipesimple_invoice_amount_cents` must equal `invoice_due_cents`. A missing value, a non-integer, or a different amount hides the URL and returns `invoice_amount_unproven`.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_unproven_invoice_amount_hides_the_pay_link`.
+
 ## [Unreleased] — 2026-10-20 (co-signer pay step stays open without a sign link)
 
 ### Fixed

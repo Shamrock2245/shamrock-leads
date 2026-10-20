@@ -32,7 +32,11 @@ from dashboard.services.identity_verification_service import (
 )
 from dashboard.services.payment_links import case_invoice_link
 from dashboard.services.premium_confirmation_service import invoice_due_cents
-from dashboard.services.swipesimple_invoice_service import dispatch_live_enabled
+from dashboard.services.swipesimple_invoice_service import (
+    SwipeSimpleInvoiceError,
+    _reject_unproven_invoice_amount,
+    dispatch_live_enabled,
+)
 from dashboard.tenancy.context import current_tenant_id
 from dashboard.tenancy.flag import multi_tenant_enabled
 
@@ -1520,19 +1524,54 @@ async def _iter(cursor):
         return
 
 
+def _invoice_source(packet: dict, bond: Optional[dict]) -> tuple[str, Optional[dict]]:
+    """The case invoice URL and the document that stored it."""
+    for doc in (packet, bond):
+        link = case_invoice_link(doc)
+        if link:
+            return link, doc if isinstance(doc, dict) else None
+    return "", None
+
+
+def _invoice_amount_unproven(doc: Optional[dict], due_cents: Optional[int]) -> bool:
+    """The stored SwipeSimple cents are missing or are not this due amount.
+
+    Uses ``_reject_unproven_invoice_amount`` for a present value: a non-integer
+    or a value other than the due cents is unproven. A missing value is also
+    unproven on this page, including when that helper would keep an older row
+    that has no confirmed premium.
+    """
+    if not isinstance(doc, dict) or due_cents is None:
+        return True
+    stored = doc.get("swipesimple_invoice_amount_cents")
+    if stored in (None, ""):
+        return True
+    try:
+        _reject_unproven_invoice_amount(doc, int(due_cents))
+    except SwipeSimpleInvoiceError:
+        return True
+    return False
+
+
 def _payment_view(packet: dict, bond: Optional[dict]) -> dict:
     cents = invoice_due_cents(packet)
     if cents is None and bond:
         cents = invoice_due_cents(bond)
     amount = f"{(cents or 0) / 100:.2f}" if cents is not None else ""
-    link = case_invoice_link(packet) or case_invoice_link(bond) or ""
+    link, source = _invoice_source(packet, bond)
+    unproven = bool(link) and _invoice_amount_unproven(source, cents)
+    if unproven:
+        link = ""
     dry_run = not dispatch_live_enabled()
-    return {
+    view = {
         "amount": amount,
         "dry_run": dry_run,
         "dispatched": False if dry_run else bool(link),
         "url": link or None,
     }
+    if unproven:
+        view["error"] = "invoice_amount_unproven"
+    return view
 
 
 async def cosigner_state(token: str, lang: Optional[str] = None) -> dict:
