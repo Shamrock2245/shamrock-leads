@@ -40,6 +40,8 @@ logger = logging.getLogger(__name__)
 
 LINKS = "cosigner_links"
 _LINK_TTL = timedelta(days=7)
+SCAN_ATTEMPT_CAP = 5
+SCAN_COOLDOWN = timedelta(seconds=30)
 _SIGNED = frozenset({"signed", "completed", "complete"})
 _FAIL_STATUS = frozenset({"failed", "fail", "error", "unreadable", "rejected"})
 _CLOSED_PACKET = frozenset({
@@ -869,6 +871,58 @@ async def require_cosigner_scan(token: str) -> dict:
     if await _held_by_other(packet, token):
         raise CosignerLinkError("scan_closed", 409)
     return link
+
+
+async def reserve_scan_attempt(token: str) -> None:
+    """Count this upload before OCR. The cap and the cooldown both refuse.
+
+    The increment is one conditional update. A failed scan still counts,
+    because the count is stored before the scanner runs. A full cap writes
+    an audit row and does not scan.
+    """
+    now = _now()
+    cutoff = now - SCAN_COOLDOWN
+    result = await get_collection(LINKS).update_one(
+        {
+            "token": token,
+            "$and": [
+                {"$or": [
+                    {"scan_attempts": {"$exists": False}},
+                    {"scan_attempts": {"$lt": SCAN_ATTEMPT_CAP}},
+                ]},
+                {"$or": [
+                    {"scan_attempted_at": {"$exists": False}},
+                    {"scan_attempted_at": None},
+                    {"scan_attempted_at": ""},
+                    {"scan_attempted_at": {"$lte": cutoff}},
+                ]},
+            ],
+        },
+        {
+            "$inc": {"scan_attempts": 1},
+            "$set": {"scan_attempted_at": now},
+        },
+    )
+    matched = getattr(result, "matched_count", None)
+    if matched is None:
+        matched = getattr(result, "modified_count", 0)
+    if matched:
+        return
+    link = await _link_by_token(token)
+    try:
+        attempts = int(link.get("scan_attempts") or 0)
+    except (TypeError, ValueError):
+        attempts = SCAN_ATTEMPT_CAP
+    if attempts >= SCAN_ATTEMPT_CAP:
+        await _audit(
+            "scan_attempt_cap",
+            link,
+            now,
+            old_state=_audit_state(link, None),
+            new_state=_audit_state(link, None),
+        )
+        raise CosignerLinkError("scan_attempt_cap", 429)
+    raise CosignerLinkError("scan_cooldown", 429)
 
 
 async def _save_link(link: dict) -> None:

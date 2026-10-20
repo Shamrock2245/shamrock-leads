@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-20 (co-signer scan attempts are capped)
+
+### Fixed
+- **A bearer token cannot run paid OCR without a limit.** Each upload increments `scan_attempts` on the link before the scanner runs. Failed scans count. The next attempt waits 30 seconds. After 5 attempts the route returns 429 `scan_attempt_cap`, writes an audit row, and does not call OCR.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_scan_attempts_stop_before_another_ocr_charge`.
+
 ## [Unreleased] — 2026-10-20 (co-signer sign link must be bound to DocuSeal)
 
 ### Fixed

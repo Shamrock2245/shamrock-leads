@@ -13,6 +13,7 @@ from dashboard.services.cosigner_link_service import (
     create_cosigner_link,
     render_cosigner_page,
     require_cosigner_scan,
+    reserve_scan_attempt,
     submit_cosigner_scan,
 )
 
@@ -95,19 +96,23 @@ def _cosigner_issuer(extracted: dict) -> str:
     return issuer
 
 
-async def _scan_body_from_upload(form) -> dict | None:
-    """OCR the uploaded ID. The typed name is not a scan."""
+async def _read_id_upload(form):
+    """The uploaded photo, still unread by OCR. An empty file is not a scan."""
     upload = form.get("id_image")
     if upload is None or not hasattr(upload, "read"):
         return None
     raw = await upload.read()
     if not raw:
         return None
+    filename = str(getattr(upload, "filename", "") or "")
+    return raw, filename
+
+
+async def _scan_body_from_upload(raw: bytes, filename: str, lang: str) -> dict:
+    """OCR an ID photo that was already accepted for this token."""
     from dashboard.services.id_scanner_service import IDScannerService
 
-    scanned = await IDScannerService.scan_id_image(
-        raw, filename=str(getattr(upload, "filename", "") or "")
-    )
+    scanned = await IDScannerService.scan_id_image(raw, filename=filename)
     extracted = scanned.get("extracted") if isinstance(scanned, dict) else {}
     if not isinstance(extracted, dict):
         extracted = {}
@@ -126,7 +131,7 @@ async def _scan_body_from_upload(form) -> dict | None:
         "success": bool(scanned.get("success") and extracted.get("full_name")),
         "passed": scanned.get("passed"),
         "status": scanned.get("status") or "",
-        "lang": form.get("lang") or "",
+        "lang": lang,
     }
 
 
@@ -140,9 +145,15 @@ async def cosigner_scan(token: str, request: Request):
     if "application/json" in content_type or "multipart/form-data" not in content_type:
         return JSONResponse({"error": "scan_image_required"}, status_code=400)
     form = await request.form()
-    body = await _scan_body_from_upload(form)
-    if body is None:
+    uploaded = await _read_id_upload(form)
+    if uploaded is None:
         return JSONResponse({"error": "scan_image_required"}, status_code=400)
+    raw, filename = uploaded
+    try:
+        await reserve_scan_attempt(token)
+    except CosignerLinkError as exc:
+        return JSONResponse({"error": exc.code}, status_code=exc.status)
+    body = await _scan_body_from_upload(raw, filename, str(form.get("lang") or ""))
     try:
         state = await submit_cosigner_scan(token, body)
     except CosignerLinkError as exc:

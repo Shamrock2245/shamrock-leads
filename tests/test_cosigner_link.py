@@ -172,6 +172,7 @@ def _cookie(role="staff", email=ACTOR, name="Office Staff"):
 
 class _Result:
     def __init__(self, n):
+        self.matched_count = n
         self.modified_count = n
         self.deleted_count = n
 
@@ -214,6 +215,23 @@ def _match(doc, query):
             elif "$exists" in expected:
                 if (key in doc) != bool(expected["$exists"]):
                     return False
+            elif "$lt" in expected:
+                current = doc.get(key, 0)
+                if current is None:
+                    current = 0
+                try:
+                    if not current < expected["$lt"]:
+                        return False
+                except TypeError:
+                    return False
+            elif "$lte" in expected:
+                if key not in doc or doc.get(key) in (None, ""):
+                    return False
+                try:
+                    if not doc.get(key) <= expected["$lte"]:
+                        return False
+                except TypeError:
+                    return False
             else:
                 return False
         elif doc.get(key) != expected:
@@ -238,6 +256,8 @@ class _Col:
         doc = await self.find_one(query)
         if doc is None:
             return _Result(0)
+        for key, value in (update.get("$inc") or {}).items():
+            doc[key] = int(doc.get(key) or 0) + int(value)
         for key, value in (update.get("$set") or {}).items():
             doc[key] = value
         for key, value in (update.get("$push") or {}).items():
@@ -417,6 +437,7 @@ def test_scan_locks_oneill_then_sign_and_pay(monkeypatch):
         asyncio.run(_gate())
     assert raised.value.code == "indemnitor_identity_unverified"
 
+    _age_scan_cooldown(stores, token)
     matched = _upload(
         monkeypatch, client, token,
         {"full_name": NAME, "dl_state": "FL", "dl_number": "D12345678"},
@@ -651,6 +672,7 @@ def test_failed_scan_blocks_signing(monkeypatch):
     )
     assert failed.status_code == 409
     assert _error_text(failed) == "scan_failed"
+    _age_scan_cooldown(stores, token)
     unreadable = _upload(
         monkeypatch, client, token,
         {"full_name": NAME, "dl_state": "NY"},
@@ -687,6 +709,7 @@ def test_country_only_scan_blocks_signing(monkeypatch):
         {"full_name": NAME, "country": "United States", "state": "FL", "success": True},
     )
     for sample in samples:
+        _age_scan_cooldown(stores, token)
         blocked = _upload(monkeypatch, client, token, sample)
         assert blocked.status_code == 400, sample
         assert _error_text(blocked) == "no_issuing_state"
@@ -740,6 +763,7 @@ def test_cosigner_different_from_indemnitor(monkeypatch):
     assert _error_text(indemnitor_id) == "name_mismatch"
     _locked(client, stores, token)
 
+    _age_scan_cooldown(stores, token)
     country = _upload(
         monkeypatch, client, token,
         {"full_name": NAME, "issuing_country": "USA"},
@@ -748,6 +772,7 @@ def test_cosigner_different_from_indemnitor(monkeypatch):
     assert _error_text(country) == "no_issuing_state"
     _locked(client, stores, token)
 
+    _age_scan_cooldown(stores, token)
     matched = _upload(
         monkeypatch, client, token,
         {"full_name": NAME, "issuing_state": "New York"},
@@ -830,6 +855,23 @@ def _post_scan(client, token):
     )
 
 
+def _age_scan_cooldown(stores, token=None):
+    """Place the last attempt outside the cooldown so another upload can run."""
+    from datetime import datetime, timedelta, timezone
+
+    from dashboard.services.cosigner_link_service import SCAN_COOLDOWN
+
+    stale = datetime.now(timezone.utc) - SCAN_COOLDOWN - timedelta(seconds=1)
+    links = stores.get("cosigner_links")
+    if links is None:
+        return
+    for link in links.docs:
+        if token is not None and link.get("token") != token:
+            continue
+        if link.get("scan_attempts"):
+            link["scan_attempted_at"] = stale
+
+
 def test_unknown_token_does_not_run_ocr(monkeypatch):
     stores, client = _world(monkeypatch)
     calls = {"n": 0}
@@ -853,6 +895,87 @@ def test_unknown_token_does_not_run_ocr(monkeypatch):
     assert expired.json()["error"] == "link_expired"
     assert calls["n"] == 0
     assert "id_ocr" not in stores["paperwork_packets"].docs[0]
+
+
+def test_scan_attempts_stop_before_another_ocr_charge(monkeypatch):
+    """A failed scan counts, the next one waits, and the cap does not call OCR."""
+    from datetime import datetime, timedelta, timezone
+
+    from dashboard.services.cosigner_link_service import SCAN_ATTEMPT_CAP, SCAN_COOLDOWN
+
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    calls = {"n": 0}
+
+    async def _mismatch(image_bytes, filename=""):
+        calls["n"] += 1
+        return {
+            "success": True,
+            "extracted": {"full_name": "Jamie O'Neill", "dl_state": "FL"},
+        }
+
+    monkeypatch.setattr(
+        "dashboard.services.id_scanner_service.IDScannerService.scan_id_image",
+        _mismatch,
+    )
+    typed = client.post(f"/api/cosigner/{token}/scan", json={"full_name": NAME})
+    assert typed.status_code == 400
+    assert typed.json()["error"] == "scan_image_required"
+    assert calls["n"] == 0
+    link = stores["cosigner_links"].docs[0]
+    assert not link.get("scan_attempts")
+
+    failed = _post_scan(client, token)
+    assert failed.status_code == 409
+    assert _error_text(failed) == "name_mismatch"
+    assert calls["n"] == 1
+    assert link["scan_attempts"] == 1
+
+    cooled = _post_scan(client, token)
+    assert cooled.status_code == 429
+    assert cooled.json()["error"] == "scan_cooldown"
+    assert calls["n"] == 1
+    assert link["scan_attempts"] == 1
+    assert _audits(stores, "scan_attempt_cap") == []
+
+    stale = datetime.now(timezone.utc) - SCAN_COOLDOWN - timedelta(seconds=1)
+    for expected in range(2, SCAN_ATTEMPT_CAP + 1):
+        link["scan_attempted_at"] = stale
+        again = _post_scan(client, token)
+        assert again.status_code == 409, expected
+        assert _error_text(again) == "name_mismatch"
+        assert link["scan_attempts"] == expected
+        assert calls["n"] == expected
+
+    link["scan_attempted_at"] = stale
+    blocked = _post_scan(client, token)
+    assert blocked.status_code == 429
+    assert blocked.json()["error"] == "scan_attempt_cap"
+    assert calls["n"] == SCAN_ATTEMPT_CAP
+    assert link["scan_attempts"] == SCAN_ATTEMPT_CAP
+    audits = _audits(stores, "scan_attempt_cap")
+    assert len(audits) == 1
+    assert audits[0]["packet_id"] == PACKET
+    assert token not in str(audits[0])
+
+    async def _match(image_bytes, filename=""):
+        calls["n"] += 1
+        return {
+            "success": True,
+            "extracted": {"full_name": NAME, "dl_state": "FL"},
+        }
+
+    monkeypatch.setattr(
+        "dashboard.services.id_scanner_service.IDScannerService.scan_id_image",
+        _match,
+    )
+    fresh = _token(client)
+    opened = _post_scan(client, fresh)
+    assert opened.status_code == 200, opened.text
+    fresh_link = next(row for row in stores["cosigner_links"].docs if row["token"] == fresh)
+    assert fresh_link["scan_attempts"] == 1
+    assert fresh_link["id_verified"] is True
+    assert calls["n"] == SCAN_ATTEMPT_CAP + 1
 
 
 def test_voided_packet_hides_the_sign_url_and_refuses_scan(monkeypatch):
@@ -2085,6 +2208,7 @@ def test_foreign_address_state_does_not_unlock_signing(monkeypatch):
     assert "id_ocr" not in stores["paperwork_packets"].docs[0]
     assert client.get(f"/api/cosigner/{token}").json()["sign_url"] is None
 
+    _age_scan_cooldown(stores, token)
     domestic = _upload(
         monkeypatch, client, token,
         {
@@ -2231,6 +2355,7 @@ def test_failed_verification_releases_the_scan_claim(monkeypatch):
     assert "id_ocr" not in stores["paperwork_packets"].docs[0]
     assert len(_audits(stores, "id_verified")) == 0
 
+    _age_scan_cooldown(stores, token)
     opened = _post_scan(client, token)
     assert opened.status_code == 200, opened.text
     assert "DocuSeal" in opened.text
@@ -2340,6 +2465,7 @@ def test_failed_verification_removes_the_stored_scan(monkeypatch):
     assert winner in [row["token"] for row in stores["cosigner_links"].docs]
 
     monkeypatch.setattr(svc, "_save_link", original)
+    _age_scan_cooldown(stores, winner)
     opened = _post_scan(client, winner)
     assert opened.status_code == 200, opened.text
     assert other.get("revoked") is True
