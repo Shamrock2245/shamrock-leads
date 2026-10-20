@@ -1417,6 +1417,86 @@ def test_down_payment_replays_mark_once_and_write_one_row(monkeypatch):
     assert stores["bond_cases"].docs[0]["premium_paid"] is False
 
 
+def _poll_down_payment(db, *, txn, amount, reference=""):
+    from dashboard.services.swipesimple_receipt_poller import SwipeSimpleReceiptPoller
+
+    poller = SwipeSimpleReceiptPoller(db=db)
+    return asyncio.run(poller._apply_bond_payment(
+        db,
+        {
+            "amount": amount,
+            "booking_number": BOOKING,
+            "transaction_id": txn,
+            "reference_id": reference,
+        },
+        gmail_message_id="gm-" + txn,
+        raw_subject="Payment receipt",
+    ))
+
+
+def test_poller_down_payment_marks_paid_once(monkeypatch):
+    """A Gmail receipt for the down payment marks the pay step once."""
+    stores, client, token, db = _recorder_world(monkeypatch)
+    polled = _poll_down_payment(db, txn="TX-POLL", amount="500.00")
+    assert polled["success"] is True
+    assert polled["committed"] is True
+    state = client.get(f"/api/cosigner/{token}").json()
+    assert state["step"] == "paid"
+    assert stores["cosigner_links"].docs[0]["paid_transaction_id"] == "TX-POLL"
+    assert len(_audits(stores, "paid")) == 1
+    assert stores["bond_cases"].docs[0]["premium_paid"] is False
+
+    again = _poll_down_payment(db, txn="TX-POLL", amount="500.00")
+    assert again["duplicate"] is True
+    assert len(_audits(stores, "paid")) == 1
+    paid_rows = [
+        row for row in stores["cosigner_links"].docs[0]["timeline"]
+        if row.get("step") == "paid"
+    ]
+    assert len(paid_rows) == 1
+    assert db["payments"].docs[0]["source"] == "swipesimple_gmail_poll"
+
+
+def test_poller_review_hold_wrong_amount_and_reversal_do_not_mark_paid(monkeypatch):
+    """A poller row that is in review, the wrong amount, or already reversed stays on pay."""
+    stores, client, token, db = _recorder_world(monkeypatch)
+    low = _poll_down_payment(db, txn="TX-POLL-LOW", amount="499.99")
+    assert low["success"] is True
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+    assert not stores["cosigner_links"].docs[0].get("paid_transaction_id")
+    assert len(_audits(stores, "paid")) == 0
+
+    stores, client, token, db = _recorder_world(monkeypatch)
+    refunded = _webhook(
+        client, txn="TX-POLL-REV", amount="500.00",
+        event="payment.refunded", status="refunded",
+    )
+    assert refunded.status_code == 200, refunded.text
+    held = _poll_down_payment(db, txn="TX-POLL-REV", amount="500.00")
+    assert held["success"] is True
+    assert held["needs_review"] is True
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+    assert not stores["cosigner_links"].docs[0].get("paid_transaction_id")
+    assert len(_audits(stores, "paid")) == 0
+
+    stores, client, token, db = _recorder_world(monkeypatch)
+    marked = _poll_down_payment(db, txn="TX-POLL-OK", amount="500.00")
+    assert marked["committed"] is True
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+    refunded = _webhook(
+        client, txn="TX-POLL-OK", amount="500.00",
+        event="payment.refunded", status="refunded",
+    )
+    assert refunded.status_code == 200, refunded.text
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+    replay = _poll_down_payment(db, txn="TX-POLL-OK", amount="500.00")
+    assert replay["needs_review"] is True
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+    assert stores["cosigner_links"].docs[0]["payment_reversed"] is True
+    assert not stores["cosigner_links"].docs[0].get("paid_transaction_id")
+    assert len(_audits(stores, "paid")) == 1
+
+
 def test_refund_reopens_pay_step_without_moving_plan_balance(monkeypatch):
     stores, client, token, db = _recorder_world(monkeypatch)
 

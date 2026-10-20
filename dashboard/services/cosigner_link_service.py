@@ -817,7 +817,13 @@ async def _open_down_payment_links(booking: str) -> list:
     return next(iter(grouped.values()))
 
 
-async def note_cosigner_paid(booking_number: str, transaction_id: str, amount: Any = None) -> None:
+async def note_cosigner_paid(
+    booking_number: str,
+    transaction_id: str,
+    amount: Any = None,
+    *,
+    status: Any = None,
+) -> None:
     """Stamp paid when the charge equals the confirmed down payment. Idempotent.
 
     A smaller charge is not the down payment. Nothing is stamped, and the
@@ -830,6 +836,12 @@ async def note_cosigner_paid(booking_number: str, transaction_id: str, amount: A
     txn = str(transaction_id or "").strip()
     if not booking or not txn:
         return
+    if status is not None:
+        from dashboard.services.payment_log_claims import SETTLED_CHARGE_STATUSES
+
+        if str(status).strip().lower() not in SETTLED_CHARGE_STATUSES:
+            logger.info("[cosigner] paid refused unsettled status")
+            return
     paid_cents = _dollars_to_cents(amount)
 
     async def work(db, session):

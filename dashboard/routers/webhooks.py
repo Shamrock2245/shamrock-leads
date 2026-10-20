@@ -416,6 +416,7 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
                     reference,
                     str(recorded.get("transaction_id") or transaction_id or ""),
                     amount=recorded.get("amount") if recorded.get("amount") is not None else amount,
+                    status=status_key,
                 )
             except Exception as exc:
                 logger.info(
