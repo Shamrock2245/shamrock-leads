@@ -1117,3 +1117,194 @@ def test_refund_reopens_the_down_payment(monkeypatch):
     assert stores["cosigner_links"].docs[0]["payment_reversed"] is False
     assert len(_audits(stores, "payment_reversed")) == 1
     assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+
+
+# ── Payment side with the real fail-closed recorder (#187 / #182) ──────────
+# The recorder runs on the in-memory transaction fake. Its bond row is the
+# same case as the co-signer world, so a clean charge is not needs_review.
+
+DOWN_CENTS = 50000
+PLAN_BALANCE_CENTS = 100000
+
+
+def _recorder_world(monkeypatch):
+    import copy
+    import socket
+
+    import dashboard.services.payment_log_claims as payment_log
+    from tests.test_payment_plan_pay_dedupe import DB, TxnClient
+
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    uploaded = _upload(monkeypatch, client, token, {"full_name": NAME, "dl_state": "FL"})
+    assert uploaded.status_code == 200, uploaded.text
+    stores["paperwork_packets"].docs[0]["status"] = "completed"
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+
+    db = DB()
+    db["bond_cases"].docs.append(copy.deepcopy(stores["bond_cases"].docs[0]))
+    db["payment_plans"].docs.append({
+        "plan_id": "PLAN-TEST-COS-1",
+        "booking_number": BOOKING,
+        "balance_remaining_cents": PLAN_BALANCE_CENTS,
+        "total_paid_cents": 0,
+        "payments_made": 0,
+        "status": "active",
+    })
+    txn_client = TxnClient(db)
+
+    async def _txn():
+        return txn_client
+
+    alerts = []
+    monkeypatch.setenv("ENV", "development")
+    monkeypatch.delenv("SWIPESIMPLE_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("REQUIRE_DASHBOARD_PIN", raising=False)
+    monkeypatch.setattr(payment_log, "_transaction_client", _txn)
+    monkeypatch.setattr(payment_log, "_lock_index_ready", False)
+    monkeypatch.setattr(payment_log, "_index_ready", False)
+    monkeypatch.setattr(payment_log, "_notify_staff_review", alerts.append)
+    payment_log._txn_support_cache.clear()
+    monkeypatch.setattr("dashboard.extensions.get_db", lambda: db)
+    monkeypatch.setattr("dashboard.routers.events.publish_event", AsyncMock())
+
+    def _blocked(self, address):
+        raise AssertionError(f"real network connect blocked: {address!r}")
+
+    monkeypatch.setattr(socket.socket, "connect", _blocked)
+    return stores, client, token, db
+
+
+def _webhook(client, *, txn, amount, event="payment.completed", status="approved",
+             booking=BOOKING, reference=BOOKING):
+    body = {
+        "event_type": event,
+        "status": status,
+        "transaction_id": txn,
+        "custom_fields": {"booking_number": booking, "reference_id": reference},
+    }
+    if amount is not None:
+        body["amount"] = amount
+    return client.post("/api/webhooks/payment", json=body)
+
+
+def _cents(value) -> int:
+    from decimal import Decimal
+
+    return int(Decimal(str(value)) * 100)
+
+
+def test_only_exact_settled_down_payment_on_this_booking_marks_paid(monkeypatch):
+    stores, client, token, db = _recorder_world(monkeypatch)
+
+    refused = [
+        dict(txn="TX-COS-LOW", amount="499.99"),
+        dict(txn="TX-COS-HIGH", amount="500.01"),
+        dict(txn="TX-COS-OTHER", amount="500.00", booking="TEST-COS-OTHER", reference="TEST-COS-OTHER"),
+        dict(txn="TX-COS-NOREF", amount="500.00", reference=""),
+        dict(txn="TX-COS-INST", amount="500.00", reference=f"{BOOKING}-I1"),
+        dict(txn="TX-COS-DECL", amount="500.00", event="payment.failed", status="declined"),
+        dict(txn="TX-COS-PEND", amount="500.00", status="pending"),
+    ]
+    for kwargs in refused:
+        response = _webhook(client, **kwargs)
+        assert response.status_code in (200, 409), (kwargs, response.text)
+        state = client.get(f"/api/cosigner/{token}").json()
+        assert state["step"] == "pay", kwargs
+        assert not stores["cosigner_links"].docs[0].get("paid_transaction_id"), kwargs
+    missing = _webhook(client, txn="TX-COS-NOAMT", amount=None)
+    assert missing.status_code == 400, missing.text
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+    assert len(_audits(stores, "paid")) == 0
+
+    exact = _webhook(client, txn="TX-COS-DOWN", amount="500.00")
+    assert exact.status_code == 200, exact.text
+    assert exact.json()["needs_review"] is False
+    state = client.get(f"/api/cosigner/{token}").json()
+    assert state["step"] == "paid"
+    assert _cents(state["payment"]["amount"]) == DOWN_CENTS
+    assert stores["cosigner_links"].docs[0]["paid_transaction_id"] == "TX-COS-DOWN"
+    assert len(_audits(stores, "paid")) == 1
+    # The down payment is not the full premium and not a plan payment.
+    assert stores["bond_cases"].docs[0]["premium_paid"] is False
+    plan = db["payment_plans"].docs[0]
+    assert plan["balance_remaining_cents"] == PLAN_BALANCE_CENTS
+    assert plan["total_paid_cents"] == 0
+
+
+def test_down_payment_replays_mark_once_and_write_one_row(monkeypatch):
+    from dashboard.services.swipesimple_receipt_poller import SwipeSimpleReceiptPoller
+
+    stores, client, token, db = _recorder_world(monkeypatch)
+
+    # The poller sees the receipt first, then the webhook arrives twice.
+    poller = SwipeSimpleReceiptPoller(db=db)
+    polled = asyncio.run(poller._apply_bond_payment(
+        db,
+        {"amount": "500.00", "booking_number": BOOKING, "transaction_id": "TX-COS-DOWN"},
+        gmail_message_id="gm-test-cos-1",
+        raw_subject="Payment receipt",
+    ))
+    assert polled["success"] is True
+    assert polled["committed"] is True
+    for _ in range(2):
+        replay = _webhook(client, txn="TX-COS-DOWN", amount="500.00")
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["duplicate"] is True
+    again = asyncio.run(poller._apply_bond_payment(
+        db,
+        {"amount": "500.00", "booking_number": BOOKING, "transaction_id": "TX-COS-DOWN"},
+        gmail_message_id="gm-test-cos-2",
+        raw_subject="Payment receipt",
+    ))
+    assert again["duplicate"] is True
+
+    rows = [row for row in db["payments"].docs if row.get("transaction_id") == "TX-COS-DOWN"]
+    assert len(rows) == 1
+    assert _cents(rows[0]["amount"]) == DOWN_CENTS
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+    assert stores["cosigner_links"].docs[0]["paid_transaction_id"] == "TX-COS-DOWN"
+    assert len(_audits(stores, "paid")) == 1
+    paid_rows = [
+        row for row in stores["cosigner_links"].docs[0]["timeline"]
+        if row.get("step") == "paid"
+    ]
+    assert len(paid_rows) == 1
+    assert stores["bond_cases"].docs[0]["premium_paid"] is False
+
+
+def test_refund_reopens_pay_step_without_moving_plan_balance(monkeypatch):
+    stores, client, token, db = _recorder_world(monkeypatch)
+
+    paid = _webhook(client, txn="TX-COS-DOWN", amount="500.00")
+    assert paid.status_code == 200, paid.text
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+
+    refunded = _webhook(
+        client, txn="TX-COS-DOWN", amount="500.00",
+        event="payment.refunded", status="refunded",
+    )
+    assert refunded.status_code == 200, refunded.text
+    assert refunded.json()["event_kind"] == "refund"
+    assert refunded.json()["needs_review"] is True
+    state = client.get(f"/api/cosigner/{token}").json()
+    assert state["step"] == "pay"
+    assert _cents(state["payment"]["amount"]) == DOWN_CENTS
+    link = stores["cosigner_links"].docs[0]
+    assert link["payment_reversed"] is True
+    assert not link.get("paid_transaction_id")
+    assert len(_audits(stores, "payment_reversed")) == 1
+
+    # A replay of the original charge after its refund is a review hold.
+    replay = _webhook(client, txn="TX-COS-DOWN", amount="500.00")
+    assert replay.status_code == 200, replay.text
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+    assert len(_audits(stores, "paid")) == 1
+
+    rows = [row for row in db["payments"].docs if row.get("transaction_id") == "TX-COS-DOWN"]
+    assert sorted(row["status"] for row in rows) == ["approved", "refunded"]
+    plan = db["payment_plans"].docs[0]
+    assert plan["balance_remaining_cents"] == PLAN_BALANCE_CENTS
+    assert plan["total_paid_cents"] == 0
+    assert plan["payments_made"] == 0
+    assert stores["bond_cases"].docs[0]["premium_paid"] is False
