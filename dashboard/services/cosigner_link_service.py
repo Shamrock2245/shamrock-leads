@@ -445,11 +445,13 @@ async def create_cosigner_link(*, actor: str, packet_id: str, lang: str = "en") 
     name, role = packet_name, packet_role
     now = _now()
     token = secrets.token_urlsafe(24)
+    # The packet may have no case id. The bond resolved above is the case
+    # the payment lookup has to find later.
     doc = {
         "token": token,
         "packet_id": packet_id,
-        "booking_number": str(packet.get("booking_number") or ""),
-        "bond_case_id": str(packet.get("bond_case_id") or ""),
+        "booking_number": str(bond.get("booking_number") or packet.get("booking_number") or ""),
+        "bond_case_id": str(bond.get("bond_case_id") or packet.get("bond_case_id") or ""),
         "indemnitor_name": _indemnitor_name(packet, bond) or name,
         "signer_name": name,
         "signer_role": role,
@@ -1039,6 +1041,14 @@ async def _one_case_id(booking: str) -> str:
     return _case_id(groups[0][0][1])
 
 
+def _packet_on_case(packet: dict, case_id: str, booking: str) -> bool:
+    """The packet belongs to this case, including the booking-only fallback."""
+    packet_case = str(packet.get("bond_case_id") or "").strip()
+    if packet_case:
+        return packet_case == case_id
+    return str(packet.get("booking_number") or "").strip() == booking
+
+
 async def _open_down_payment_links(booking: str) -> list:
     """Links on the one open packet for this booking's bond case.
 
@@ -1049,7 +1059,12 @@ async def _open_down_payment_links(booking: str) -> list:
     if not case_id:
         logger.info("[cosigner] paid refused ambiguous case")
         return []
-    query = _scope({"bond_case_id": case_id})
+    # A link issued through the booking fallback stores the resolved case id.
+    # An older link may still have an empty case id and the same booking.
+    query = _scope({"$or": [
+        {"bond_case_id": case_id},
+        {"booking_number": booking, "bond_case_id": {"$in": ["", None]}},
+    ]})
     if query is None:
         return []
     grouped: dict = {}
@@ -1059,8 +1074,7 @@ async def _open_down_payment_links(booking: str) -> list:
         packet = await _find_packet(packet_id)
         if not packet or _packet_closed(packet):
             continue
-        packet_case = str(packet.get("bond_case_id") or "").strip()
-        if packet_case != case_id:
+        if not _packet_on_case(packet, case_id, booking):
             continue
         grouped.setdefault(packet_id, []).append((link, packet))
     if len(grouped) != 1:

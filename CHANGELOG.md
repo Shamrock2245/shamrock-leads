@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-20 (co-signer booking fallback still records the down payment)
+
+### Fixed
+- **A packet with no case id still gets its down payment recorded.** Link issuance stores the bond case id resolved from the unambiguous booking. The payment lookup also finds an older link whose case id is empty when that booking is exactly one case.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_booking_fallback_link_records_the_down_payment`.
+
 ## [Unreleased] — 2026-10-20 (co-signer bearer link expires)
 
 ### Fixed

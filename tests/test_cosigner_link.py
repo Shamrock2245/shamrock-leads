@@ -1245,7 +1245,7 @@ DOWN_CENTS = 50000
 PLAN_BALANCE_CENTS = 100000
 
 
-def _recorder_world(monkeypatch):
+def _recorder_world(monkeypatch, *, drop_packet_case_id=False):
     import copy
     import socket
 
@@ -1253,6 +1253,8 @@ def _recorder_world(monkeypatch):
     from tests.test_payment_plan_pay_dedupe import DB, TxnClient
 
     stores, client = _world(monkeypatch)
+    if drop_packet_case_id:
+        stores["paperwork_packets"].docs[0]["bond_case_id"] = ""
     token = _token(client)
     uploaded = _upload(monkeypatch, client, token, {"full_name": NAME, "dl_state": "FL"})
     assert uploaded.status_code == 200, uploaded.text
@@ -1597,6 +1599,43 @@ def _extra_link(stores, *, packet_id, case_id, token):
         ],
         "id_verified": True,
     })
+
+
+def test_booking_fallback_link_records_the_down_payment(monkeypatch):
+    """A packet with no case id still stores the resolved case and can be paid.
+
+    An older link that kept an empty case id is found by the same booking
+    when that booking is exactly one bond case. Two cases stamp nothing.
+    """
+    stores, client, token, _db = _recorder_world(monkeypatch, drop_packet_case_id=True)
+    packet = stores["paperwork_packets"].docs[0]
+    link = stores["cosigner_links"].docs[0]
+    assert packet["bond_case_id"] == ""
+    assert link["bond_case_id"] == CASE
+    assert link["booking_number"] == BOOKING
+    link["bond_case_id"] = ""
+    paid = _webhook(client, txn="TX-BOOK", amount="500.00")
+    assert paid.status_code == 200, paid.text
+    assert paid.json()["needs_review"] is False
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+    assert link["paid_transaction_id"] == "TX-BOOK"
+    assert len(_audits(stores, "paid")) == 1
+
+    stores, client, token, _db = _recorder_world(monkeypatch, drop_packet_case_id=True)
+    stores["cosigner_links"].docs[0]["bond_case_id"] = ""
+    stores["bond_cases"].docs.append({
+        "bond_case_id": "BC-TEST-OTHER",
+        "booking_number": BOOKING,
+        "status": "active",
+        "indemnitor_name": "Pat Other",
+        "surety_id": "osi",
+        "premium_paid": False,
+        **CONFIRMED,
+    })
+    ambiguous = _webhook(client, txn="TX-BOOK-TWO", amount="500.00")
+    assert ambiguous.status_code == 200, ambiguous.text
+    assert not stores["cosigner_links"].docs[0].get("paid_transaction_id")
+    assert len(_audits(stores, "paid")) == 0
 
 
 def test_down_payment_is_scoped_to_one_packet(monkeypatch):
