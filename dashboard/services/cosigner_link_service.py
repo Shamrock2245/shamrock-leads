@@ -683,14 +683,15 @@ async def note_cosigner_paid(booking_number: str, transaction_id: str, amount: A
 async def note_cosigner_reversed(booking_number: str, transaction_id: str) -> None:
     """Reopen the pay step when the stamped down payment is refunded or fails.
 
-    Only the link stamped with this transaction is cleared. A different
-    transaction leaves the stamp in place. A replay does not audit twice.
+    The link is found by ``paid_transaction_id``, scoped to the tenant. A
+    missing reference or a different booking on the refund does not keep the
+    step paid. A different transaction leaves the stamp in place. A replay
+    does not audit twice.
     """
-    booking = str(booking_number or "").strip()
     txn = str(transaction_id or "").strip()
-    if not booking or not txn:
+    if not txn:
         return
-    query = _scope({"booking_number": booking})
+    query = _scope({"paid_transaction_id": txn})
     if query is None:
         return
     cursor = get_collection(LINKS).find(query)

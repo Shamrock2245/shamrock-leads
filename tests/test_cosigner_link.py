@@ -1119,6 +1119,62 @@ def test_refund_reopens_the_down_payment(monkeypatch):
     assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
 
 
+def test_refund_without_reference_reopens_by_transaction_id(monkeypatch):
+    """A reversal with no reference_id reopens the link stamped with that txn."""
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    uploaded = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    stores["paperwork_packets"].docs[0]["status"] = "completed"
+    _gateway(monkeypatch)
+
+    paid = _payment(client, txn="TX-PAY", amount="500.00", kind="charge")
+    assert paid.status_code == 200, paid.text
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+
+    refunded = client.post("/api/webhooks/payment", json={
+        "event_type": "payment.refunded",
+        "status": "refunded",
+        "transaction_id": "TX-PAY",
+        "amount": "500.00",
+        "custom_fields": {"booking_number": BOOKING},
+    })
+    assert refunded.status_code == 200, refunded.text
+    reopened = client.get(f"/api/cosigner/{token}").json()
+    assert reopened["step"] == "pay"
+    assert reopened["payment"]["amount"] == "500.00"
+    link = stores["cosigner_links"].docs[0]
+    assert link["payment_reversed"] is True
+    assert not link.get("paid_transaction_id")
+    assert len(_audits(stores, "payment_reversed")) == 1
+
+    again = _payment(client, txn="TX-PAY-2", amount="500.00", kind="charge")
+    assert again.status_code == 200, again.text
+    bare = client.post("/api/webhooks/payment", json={
+        "event_type": "payment.failed",
+        "status": "declined",
+        "transaction_id": "TX-OTHER",
+        "amount": "500.00",
+    })
+    assert bare.status_code == 200, bare.text
+    assert stores["cosigner_links"].docs[0]["paid_transaction_id"] == "TX-PAY-2"
+    assert stores["cosigner_links"].docs[0]["payment_reversed"] is False
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+
+    no_booking = client.post("/api/webhooks/payment", json={
+        "event_type": "payment.refunded",
+        "status": "refunded",
+        "transaction_id": "TX-PAY-2",
+        "amount": "500.00",
+    })
+    assert no_booking.status_code == 200, no_booking.text
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+    assert not stores["cosigner_links"].docs[0].get("paid_transaction_id")
+
+
 # ── Payment side with the real fail-closed recorder (#187 / #182) ──────────
 # The recorder runs on the in-memory transaction fake. Its bond row is the
 # same case as the co-signer world, so a clean charge is not needs_review.

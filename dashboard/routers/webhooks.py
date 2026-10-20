@@ -427,17 +427,16 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
         and (recorded.get("committed") or recorded.get("duplicate"))
     )
     if recorded_reversal:
-        reference = str(
-            custom_fields.get("reference_id") or data.get("reference_id") or ""
-        ).strip()
-        booking = str(booking_number or "").strip()
-        if reference and reference == booking and "-I" not in reference:
+        # A refund or failure often carries only the transaction id. The pay
+        # step reopens by paid_transaction_id. The reference is not required.
+        txn = str(recorded.get("transaction_id") or transaction_id or "").strip()
+        if txn:
             try:
                 from dashboard.services.cosigner_link_service import note_cosigner_reversed
 
                 await note_cosigner_reversed(
-                    reference,
-                    str(recorded.get("transaction_id") or transaction_id or ""),
+                    str(booking_number or "").strip(),
+                    txn,
                 )
             except Exception as exc:
                 logger.info(
