@@ -483,6 +483,30 @@ def _audit_state_only(state: dict) -> dict:
     return clean
 
 
+def _bond_field(bond: dict, *keys: str) -> str:
+    if not isinstance(bond, dict):
+        return ""
+    for key in keys:
+        text = str(bond.get(key) or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _bond_issuance_gap(bond: dict) -> str:
+    """A public link needs a validated match, a case number, a surety, and a POA."""
+    status = _bond_field(bond, "match_status", "Match_Status").lower()
+    if status != "validated":
+        return "match_unvalidated"
+    if not _bond_field(bond, "case_number", "Case_Number"):
+        return "case_number_required"
+    if not _bond_field(bond, "surety_id", "Surety_ID"):
+        return "surety_required"
+    if not _bond_field(bond, "poa_number", "POA_Number", "power_number"):
+        return "poa_required"
+    return ""
+
+
 async def create_cosigner_link(*, actor: str, packet_id: str, lang: str = "en") -> dict:
     packet = await _find_packet(packet_id)
     if not packet:
@@ -508,6 +532,9 @@ async def create_cosigner_link(*, actor: str, packet_id: str, lang: str = "en") 
     # A signed packet cannot accept the ID scan this link requires.
     if _signed(packet):
         raise CosignerLinkError("packet_signed", 409)
+    gap = _bond_issuance_gap(bond)
+    if gap:
+        raise CosignerLinkError(gap, 409)
     name, role = packet_name, packet_role
     now = _now()
     token = secrets.token_urlsafe(24)

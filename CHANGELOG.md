@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-20 (co-signer link requires a complete bond)
+
+### Fixed
+- **A public co-signer link is issued only for a complete bonded case.** The bond must have a validated match, a case number, a surety, and a POA. A missing piece is 409 and creates no token and no link.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_incomplete_bond_does_not_get_a_link`.
+
 ## [Unreleased] — 2026-10-20 (co-signer scan attempts are capped)
 
 ### Fixed

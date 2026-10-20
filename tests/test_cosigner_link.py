@@ -308,6 +308,9 @@ def _world(monkeypatch, *, cosigner=""):
         "status": "active",
         "indemnitor_name": indemnitor,
         "surety_id": "osi",
+        "match_status": "validated",
+        "case_number": "2026-TEST-001",
+        "poa_number": "POA-TEST-COS-1",
         "swipesimple_invoice_number": BOOKING,
         "premium_paid": False,
         **CONFIRMED,
@@ -1167,6 +1170,39 @@ def test_link_audits_record_old_and_new_state(monkeypatch):
 
 def _links(stores):
     return stores.get("cosigner_links").docs if stores.get("cosigner_links") else []
+
+
+def test_incomplete_bond_does_not_get_a_link(monkeypatch):
+    """No token until the bond has a validated match, case number, surety, and POA."""
+    stores, client = _world(monkeypatch)
+    created = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["token"]
+    assert len(_links(stores)) == 1
+
+    for field, value, code in (
+        ("match_status", "pending", "match_unvalidated"),
+        ("case_number", "   ", "case_number_required"),
+        ("surety_id", "", "surety_required"),
+        ("poa_number", "", "poa_required"),
+    ):
+        stores, client = _world(monkeypatch)
+        stores["bond_cases"].docs[0][field] = value
+        refused = client.post(
+            "/api/paperwork/cosigner-link",
+            json={"packet_id": PACKET},
+            cookies=_cookie(),
+        )
+        assert refused.status_code == 409, code
+        assert refused.json() == {"error": code}
+        assert "token" not in refused.json()
+        assert _links(stores) == []
+        issued = stores.get("audit_events")
+        assert issued is None or _audits(stores, "link_issued") == []
 
 
 def test_link_requires_a_matching_bond(monkeypatch):
