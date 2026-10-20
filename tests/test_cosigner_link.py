@@ -1399,6 +1399,31 @@ def test_incomplete_bond_does_not_get_a_link(monkeypatch):
         assert issued is None or _audits(stores, "link_issued") == []
 
 
+def test_bearer_request_rechecks_bond_completeness(monkeypatch):
+    """A later request fails closed once the match or POA is no longer on the bond."""
+    for field, value, code in (
+        ("poa_number", "", "poa_required"),
+        ("match_status", "pending", "match_unvalidated"),
+    ):
+        stores, client = _world(monkeypatch)
+        token = _token(client)
+        stores["bond_cases"].docs[0][field] = value
+        calls = {"n": 0}
+        _scanner(monkeypatch, calls)
+        state = client.get(f"/api/cosigner/{token}")
+        assert state.status_code == 409, code
+        assert state.json()["error"] == code
+        assert _sign_hidden(state.text)
+        page = client.get(f"/cosigner/{token}")
+        assert page.status_code == 409
+        assert _sign_hidden(page.text)
+        refused = _post_scan(client, token)
+        assert refused.status_code == 409, code
+        assert refused.json()["error"] == code
+        assert calls["n"] == 0
+        assert "id_ocr" not in stores["paperwork_packets"].docs[0]
+
+
 def test_link_requires_a_matching_bond(monkeypatch):
     stores, client = _world(monkeypatch)
     stores["bond_cases"].docs.clear()

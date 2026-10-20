@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-20 (co-signer bearer rechecks a complete bond)
+
+### Fixed
+- **Every bearer request rechecks the bond completeness required at issuance.** A validated match, a case number, a surety, and a POA must still be on the bond. A missing piece is 409. The DocuSeal URL is not returned, and the scan does not run OCR.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_bearer_request_rechecks_bond_completeness`.
+
 ## [Unreleased] — 2026-10-20 (signed mismatch still shows the invoice)
 
 ### Tests

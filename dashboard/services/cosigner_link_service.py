@@ -742,7 +742,12 @@ def _link_role(link: dict) -> str:
 
 
 async def _require_current_bond(link: dict, packet: dict) -> dict:
-    """The bond must still exist, still be open, and still name this signer."""
+    """The bond must still exist, still be open, and still name this signer.
+
+    The same completeness check used at issuance runs again here. A link
+    that was valid when it was created is refused once the match, case
+    number, surety, or POA is no longer on the bond.
+    """
     bond = await _find_bond(packet)
     if not bond:
         raise CosignerLinkError("bond_required", 409)
@@ -759,6 +764,9 @@ async def _require_current_bond(link: dict, packet: dict) -> dict:
         raise CosignerLinkError("signer_mismatch", 409)
     if _issued_case_drifted(link, packet, bond):
         raise CosignerLinkError("bond_mismatch", 409)
+    gap = _bond_issuance_gap(bond)
+    if gap:
+        raise CosignerLinkError(gap, 409)
     return bond
 
 
