@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-20 (co-signer scan claim is released on failure)
+
+### Fixed
+- **A scan claim that does not finish verification is cleared.** If revoking a sibling, storing the scan, writing the audit, or saving the link fails after the packet claim, `cosigner_verified_token` is released. The same token can be uploaded again.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_failed_verification_releases_the_scan_claim`.
+
 ## [Unreleased] — 2026-10-20 (co-signer link stays on an open bond)
 
 ### Fixed

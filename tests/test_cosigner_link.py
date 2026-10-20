@@ -1916,3 +1916,33 @@ def test_only_an_open_bond_status_keeps_the_link(monkeypatch):
     )
     assert opened.status_code == 200, opened.text
     assert client.get(f"/api/cosigner/{token}").json()["sign_url"] == "https://sign.example/s/abc"
+
+
+def test_failed_verification_releases_the_scan_claim(monkeypatch):
+    """A store failure after the claim does not leave the scan closed."""
+    import dashboard.services.cosigner_link_service as svc
+
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    _scanner(monkeypatch, {"n": 0})
+    original = svc._store_scan
+    calls = {"n": 0}
+
+    async def _fail_once(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("scan store failed")
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(svc, "_store_scan", _fail_once)
+    with pytest.raises(RuntimeError, match="scan store failed"):
+        _post_scan(client, token)
+    assert stores["paperwork_packets"].docs[0].get("cosigner_verified_token") in {None, ""}
+    assert "id_ocr" not in stores["paperwork_packets"].docs[0]
+    assert len(_audits(stores, "id_verified")) == 0
+
+    opened = _post_scan(client, token)
+    assert opened.status_code == 200, opened.text
+    assert "DocuSeal" in opened.text
+    assert stores["paperwork_packets"].docs[0]["cosigner_verified_token"] == token
+    assert len(_audits(stores, "id_verified")) == 1

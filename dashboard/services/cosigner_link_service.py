@@ -570,6 +570,20 @@ async def _claim_verification(packet: dict, token: str) -> bool:
     return False
 
 
+async def _release_verification_claim(packet: dict, token: str) -> None:
+    """Drop a claim that did not finish verification, so the scan can be retried."""
+    token = str(token or "").strip()
+    result = await get_collection("paperwork_packets").update_one(
+        {
+            "packet_id": packet.get("packet_id"),
+            "cosigner_verified_token": token,
+        },
+        {"$set": {"cosigner_verified_token": ""}},
+    )
+    if int(getattr(result, "modified_count", 0) or 0) > 0:
+        packet["cosigner_verified_token"] = ""
+
+
 async def _revoke_sibling_links(packet_id: str, token: str, now: datetime) -> None:
     query = _scope({"packet_id": packet_id})
     if query is None:
@@ -702,18 +716,25 @@ async def submit_cosigner_scan(token: str, body: dict) -> dict:
     bond = await _require_current_bond(link, packet)
     if not await _claim_verification(packet, token):
         raise CosignerLinkError("scan_closed", 409)
-    now = _now()
-    await _revoke_sibling_links(str(packet.get("packet_id") or ""), token, now)
-    await _store_scan(packet, bond, name, state, role)
-    before = _audit_state(link, packet)
-    link["id_verified"] = True
-    link["id_verified_at"] = now.isoformat()
-    if _timeline_push(link, "id_verified", now):
-        await _audit(
-            "id_verified", link, now,
-            old_state=before, new_state=_audit_state(link, packet),
-        )
-    await _save_link(link)
+    try:
+        now = _now()
+        await _revoke_sibling_links(str(packet.get("packet_id") or ""), token, now)
+        await _store_scan(packet, bond, name, state, role)
+        before = _audit_state(link, packet)
+        link["id_verified"] = True
+        link["id_verified_at"] = now.isoformat()
+        if _timeline_push(link, "id_verified", now):
+            await _audit(
+                "id_verified", link, now,
+                old_state=before, new_state=_audit_state(link, packet),
+            )
+        await _save_link(link)
+    except Exception:
+        try:
+            await _release_verification_claim(packet, token)
+        except Exception:
+            logger.info("[cosigner] scan claim release failed")
+        raise
     logger.info("[cosigner] id verified packet_id=%s", link.get("packet_id"))
     return await cosigner_state(token, lang=link.get("lang"))
 
