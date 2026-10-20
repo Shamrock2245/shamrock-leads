@@ -2010,6 +2010,27 @@ def _ready_to_pay(monkeypatch):
     return stores, client, token, pay_db
 
 
+def test_sibling_revocation_writes_an_audit(monkeypatch):
+    """Each sibling closed by the first passing scan gets its own audit."""
+    stores, client = _world(monkeypatch)
+    first = _token(client)
+    second = _token(client)
+    opened = _upload(
+        monkeypatch, client, first,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert opened.status_code == 200, opened.text
+    revoked = _audits(stores, "link_revoked")
+    assert len(revoked) == 1
+    assert revoked[0]["actor"] == "cosigner_link"
+    assert revoked[0]["reason"] == "link_revoked"
+    assert revoked[0]["old_state"]["revoked"] is False
+    assert revoked[0]["new_state"]["revoked"] is True
+    assert revoked[0]["confidence"] == 1.0
+    assert second not in str(revoked)
+    assert first not in str(revoked)
+
+
 def test_stale_link_save_keeps_the_payment_stamp(monkeypatch):
     """A scan-style save does not clear or restore the payment stamp."""
     from dashboard.services.cosigner_link_service import _save_link

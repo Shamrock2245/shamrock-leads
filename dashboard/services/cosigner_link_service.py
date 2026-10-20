@@ -51,6 +51,7 @@ _AUDIT_STATE_KEYS = (
     "signed",
     "paid",
     "payment_reversed",
+    "revoked",
     "timeline",
     "packet_status",
 )
@@ -304,6 +305,7 @@ def _audit_state(link: dict, packet: Optional[dict] = None) -> dict:
         "signed": signed,
         "paid": paid,
         "payment_reversed": reversed_pay,
+        "revoked": link.get("revoked") is True,
         "timeline": timeline,
         "packet_status": str((packet or {}).get("status") or ""),
     }
@@ -407,7 +409,7 @@ def _audit_state_only(state: dict) -> dict:
         value = state[key]
         if key == "timeline":
             clean[key] = [str(step) for step in value] if isinstance(value, list) else []
-        elif key in {"id_verified", "signed", "paid", "payment_reversed"}:
+        elif key in {"id_verified", "signed", "paid", "payment_reversed", "revoked"}:
             clean[key] = bool(value)
         else:
             clean[key] = str(value or "")
@@ -509,6 +511,7 @@ def _blank_audit_state(packet: Optional[dict] = None) -> dict:
         "signed": False,
         "paid": False,
         "payment_reversed": False,
+        "revoked": False,
         "timeline": [],
         "packet_status": str((packet or {}).get("status") or ""),
     }
@@ -595,6 +598,7 @@ async def _revoke_sibling_links(packet_id: str, token: str, now: datetime) -> No
     async for other in _iter(cursor):
         if str(other.get("token") or "") == token or other.get("revoked") is True:
             continue
+        before = _audit_state(other, None)
         other["revoked"] = True
         other["status"] = "revoked"
         other["revoked_at"] = now.isoformat()
@@ -605,6 +609,14 @@ async def _revoke_sibling_links(packet_id: str, token: str, now: datetime) -> No
                 "status": "revoked",
                 "revoked_at": other["revoked_at"],
             }},
+        )
+        await _audit(
+            "link_revoked",
+            other,
+            now,
+            old_state=before,
+            new_state=_audit_state(other, None),
+            actor="cosigner_link",
         )
 
 

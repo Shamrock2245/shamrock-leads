@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-20 (co-signer sibling revocation is audited)
+
+### Fixed
+- **Revoking a sibling link writes a `link_revoked` audit.** The audit stores the actor, the reason, and the old-to-new workflow state, including `revoked`. The bearer token is not stored.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_sibling_revocation_writes_an_audit`.
+
 ## [Unreleased] — 2026-10-20 (co-signer scan save leaves the payment stamp alone)
 
 ### Fixed
