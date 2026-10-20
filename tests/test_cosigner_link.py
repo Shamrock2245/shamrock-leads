@@ -2020,6 +2020,31 @@ def _ready_to_pay(monkeypatch):
     return stores, client, token, pay_db
 
 
+def test_inactive_packet_does_not_get_a_public_link(monkeypatch):
+    """A voided, canceled, or superseded packet is not issued a bearer link."""
+    cases = (
+        {"voided": True, "status": "voided"},
+        {"status": "canceled"},
+        {"status": "cancelled"},
+        {"status": "superseded"},
+        {"superseded": True, "status": "draft"},
+    )
+    for patch in cases:
+        stores, client = _world(monkeypatch)
+        stores["paperwork_packets"].docs[0].update(patch)
+        created = client.post(
+            "/api/paperwork/cosigner-link",
+            json={"packet_id": PACKET},
+            cookies=_cookie(),
+        )
+        assert created.status_code == 409, patch
+        assert created.json()["error"] == "packet_inactive"
+        assert "token" not in created.json()
+        assert _links(stores) == []
+        issued = stores.get("audit_events")
+        assert issued is None or _audits(stores, "link_issued") == []
+
+
 def test_failed_verification_removes_the_stored_scan(monkeypatch):
     """A save failure after the scan does not leave id_ocr or a revoked sibling."""
     import dashboard.services.cosigner_link_service as svc

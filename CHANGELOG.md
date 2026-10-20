@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-20 (co-signer link is not issued for an inactive packet)
+
+### Fixed
+- **Staff cannot issue a public link for a voided, canceled, or superseded packet.** Creation returns 409 `packet_inactive`. No token and no `link_issued` audit are written.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_inactive_packet_does_not_get_a_public_link`.
+
 ## [Unreleased] — 2026-10-20 (co-signer scan rollback removes a partial verification)
 
 ### Fixed

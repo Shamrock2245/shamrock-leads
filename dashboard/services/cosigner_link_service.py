@@ -420,6 +420,8 @@ async def create_cosigner_link(*, actor: str, packet_id: str, lang: str = "en") 
     packet = await _find_packet(packet_id)
     if not packet:
         raise CosignerLinkError("packet_not_found", 404)
+    if _packet_closed(packet):
+        raise CosignerLinkError("packet_inactive", 409)
     bond = await _find_bond(packet)
     if not bond:
         raise CosignerLinkError("bond_required", 409)
