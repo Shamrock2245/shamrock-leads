@@ -759,38 +759,81 @@ def _due_cents(packet: Optional[dict], bond: Optional[dict]) -> Optional[int]:
     return due
 
 
+async def _one_case_id(booking: str) -> str:
+    """Bond case id when this booking is exactly one case. Otherwise empty."""
+    from dashboard.services.payment_log_claims import _case_id, _logical_bond_groups
+
+    found = []
+    for name in ("bond_cases", "active_bonds"):
+        query = _scope({"booking_number": booking})
+        if query is None:
+            return ""
+        cursor = get_collection(name).find(query)
+        async for doc in _iter(cursor):
+            found.append((name, doc))
+    groups = _logical_bond_groups(found)
+    if len(groups) != 1:
+        return ""
+    return _case_id(groups[0][0][1])
+
+
+async def _open_down_payment_links(booking: str) -> list:
+    """Links on the one open packet for this booking's bond case.
+
+    Booking number alone is not the scope. Another open packet on the same
+    case is not stamped. Several links on that one packet are.
+    """
+    case_id = await _one_case_id(booking)
+    if not case_id:
+        logger.info("[cosigner] paid refused ambiguous case")
+        return []
+    query = _scope({"bond_case_id": case_id})
+    if query is None:
+        return []
+    grouped: dict = {}
+    cursor = get_collection(LINKS).find(query)
+    async for link in _iter(cursor):
+        packet_id = str(link.get("packet_id") or "").strip()
+        packet = await _find_packet(packet_id)
+        if not packet or _packet_closed(packet):
+            continue
+        packet_case = str(packet.get("bond_case_id") or "").strip()
+        if packet_case != case_id:
+            continue
+        grouped.setdefault(packet_id, []).append((link, packet))
+    if len(grouped) != 1:
+        if len(grouped) > 1:
+            logger.info("[cosigner] paid refused ambiguous packets")
+        return []
+    return next(iter(grouped.values()))
+
+
 async def note_cosigner_paid(booking_number: str, transaction_id: str, amount: Any = None) -> None:
     """Stamp paid when the charge equals the confirmed down payment. Idempotent.
 
     A smaller charge is not the down payment. Nothing is stamped, and the
     full premium stays unpaid. The write takes ``payment_txn_locks`` and
     updates the link only when it is not already stamped, so one charge
-    writes one paid audit.
+    writes one paid audit. The links are the open packet on this bond case,
+    not every link that shares the booking number.
     """
     booking = str(booking_number or "").strip()
     txn = str(transaction_id or "").strip()
     if not booking or not txn:
         return
     paid_cents = _dollars_to_cents(amount)
-    query = _scope({"booking_number": booking})
-    if query is None:
-        return
 
     async def work(db, session):
         if await _charge_row_blocks_down_payment(db, txn, session):
             logger.info("[cosigner] paid refused review hold")
             return
+        targets = await _open_down_payment_links(booking)
         now = _now()
-        cursor = get_collection(LINKS).find(query)
-        async for link in _iter(cursor):
-            packet = await _find_packet(str(link.get("packet_id") or ""))
+        for link, packet in targets:
             bond = await _find_bond(packet) if packet else None
             due = _due_cents(packet, bond)
             if paid_cents is None or due is None or paid_cents != due:
                 logger.info("[cosigner] paid amount refused packet_id=%s", link.get("packet_id"))
-                continue
-            if packet and _packet_closed(packet):
-                logger.info("[cosigner] paid refused closed packet_id=%s", link.get("packet_id"))
                 continue
             await _cas_mark_paid(link, packet, txn, now, session)
 

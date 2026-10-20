@@ -1434,6 +1434,70 @@ def test_refund_reopens_pay_step_without_moving_plan_balance(monkeypatch):
     assert stores["bond_cases"].docs[0]["premium_paid"] is False
 
 
+def _extra_link(stores, *, packet_id, case_id, token):
+    packet = {
+        "packet_id": packet_id,
+        "booking_number": BOOKING,
+        "bond_case_id": case_id,
+        "status": "completed",
+        "indemnitor_name": NAME,
+        "surety_id": "osi",
+        "docuseal_sign_url": "https://sign.example/s/other",
+        **CONFIRMED,
+    }
+    stores["paperwork_packets"].docs.append(packet)
+    stores["cosigner_links"].docs.append({
+        "token": token,
+        "packet_id": packet_id,
+        "booking_number": BOOKING,
+        "bond_case_id": case_id,
+        "signer_name": NAME,
+        "timeline": [
+            {"step": "id_verified", "at": "2026-10-20T00:00:00+00:00"},
+            {"step": "signed", "at": "2026-10-20T00:00:00+00:00"},
+        ],
+        "id_verified": True,
+    })
+
+
+def test_down_payment_is_scoped_to_one_packet(monkeypatch):
+    """A booking charge stamps the bond's open packet, not every link on the booking."""
+    stores, client, _token, _db = _recorder_world(monkeypatch)
+    _extra_link(stores, packet_id="PKT-TEST-COS-2", case_id="BC-TEST-OTHER", token="other-token")
+    paid = _webhook(client, txn="TX-SCOPE", amount="500.00")
+    assert paid.status_code == 200, paid.text
+    assert paid.json()["needs_review"] is False
+    links = stores["cosigner_links"].docs
+    assert links[0]["bond_case_id"] == CASE
+    assert links[0]["paid_transaction_id"] == "TX-SCOPE"
+    assert links[1]["bond_case_id"] == "BC-TEST-OTHER"
+    assert not links[1].get("paid_transaction_id")
+    assert len(_audits(stores, "paid")) == 1
+
+    stores, client, _token, _db = _recorder_world(monkeypatch)
+    _extra_link(stores, packet_id="PKT-TEST-COS-2", case_id=CASE, token="second-packet")
+    ambiguous = _webhook(client, txn="TX-TWO", amount="500.00")
+    assert ambiguous.status_code == 200, ambiguous.text
+    assert ambiguous.json()["needs_review"] is False
+    assert all(not link.get("paid_transaction_id") for link in stores["cosigner_links"].docs)
+    assert len(_audits(stores, "paid")) == 0
+    stores["paperwork_packets"].docs[1]["status"] = "superseded"
+    stores["paperwork_packets"].docs[1]["superseded"] = True
+    opened = _webhook(client, txn="TX-TWO", amount="500.00")
+    assert opened.status_code == 200, opened.text
+    assert stores["cosigner_links"].docs[0]["paid_transaction_id"] == "TX-TWO"
+    assert not stores["cosigner_links"].docs[1].get("paid_transaction_id")
+    assert len(_audits(stores, "paid")) == 1
+
+    stores, client, _token, _db = _recorder_world(monkeypatch)
+    _extra_link(stores, packet_id=PACKET, case_id=CASE, token="resent-token")
+    resent = _webhook(client, txn="TX-RESEND", amount="500.00")
+    assert resent.status_code == 200, resent.text
+    assert stores["cosigner_links"].docs[0]["paid_transaction_id"] == "TX-RESEND"
+    assert stores["cosigner_links"].docs[1]["paid_transaction_id"] == "TX-RESEND"
+    assert len(_audits(stores, "paid")) == 2
+
+
 def test_charge_refund_race_does_not_leave_step_paid(monkeypatch):
     """Concurrent charge and refund cannot leave the pay step paid.
 
