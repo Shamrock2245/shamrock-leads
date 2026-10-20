@@ -2010,6 +2010,42 @@ def _ready_to_pay(monkeypatch):
     return stores, client, token, pay_db
 
 
+def test_stale_link_save_keeps_the_payment_stamp(monkeypatch):
+    """A scan-style save does not clear or restore the payment stamp."""
+    from dashboard.services.cosigner_link_service import _save_link
+
+    stores, client, token, _db = _ready_to_pay(monkeypatch)
+    link = stores["cosigner_links"].docs[0]
+    link["paid_transaction_id"] = "TX-STALE"
+    link["payment_reversed"] = False
+    stale = {
+        "token": link["token"],
+        "timeline": list(link.get("timeline") or []),
+        "id_verified": True,
+        "lang": "es",
+        "id_verified_at": link.get("id_verified_at") or "",
+        "paid_transaction_id": "",
+        "payment_reversed": True,
+    }
+    asyncio.run(_save_link(stale))
+    saved = stores["cosigner_links"].docs[0]
+    assert saved["paid_transaction_id"] == "TX-STALE"
+    assert saved["payment_reversed"] is False
+    assert saved["lang"] == "es"
+    assert client.get(f"/api/cosigner/{token}").json()["lang"] == "es"
+
+    saved["paid_transaction_id"] = ""
+    saved["payment_reversed"] = True
+    restore = dict(stale)
+    restore["paid_transaction_id"] = "TX-STALE"
+    restore["payment_reversed"] = False
+    restore["lang"] = "en"
+    asyncio.run(_save_link(restore))
+    assert saved["paid_transaction_id"] == ""
+    assert saved["payment_reversed"] is True
+    assert saved["lang"] == "en"
+
+
 def test_unreadable_or_empty_payment_rows_do_not_mark_paid(monkeypatch):
     """No readable charge row means the pay step stays unpaid.
 

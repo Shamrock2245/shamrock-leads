@@ -627,6 +627,12 @@ async def require_cosigner_scan(token: str) -> dict:
 
 
 async def _save_link(link: dict) -> None:
+    """Save scan, language, and timeline fields.
+
+    Payment fields are written only by the compare-and-set inside the
+    payment lock. A stale copy from a scan or a state request must not
+    clear or restore them.
+    """
     await get_collection(LINKS).update_one(
         {"token": link.get("token")},
         {"$set": {
@@ -634,8 +640,6 @@ async def _save_link(link: dict) -> None:
             "id_verified": bool(link.get("id_verified")),
             "lang": link.get("lang") or "en",
             "id_verified_at": link.get("id_verified_at") or "",
-            "paid_transaction_id": link.get("paid_transaction_id") or "",
-            "payment_reversed": link.get("payment_reversed") is True,
         }},
     )
 

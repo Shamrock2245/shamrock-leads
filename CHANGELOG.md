@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-20 (co-signer scan save leaves the payment stamp alone)
+
+### Fixed
+- **A scan, language, or signed-state save does not write payment fields.** `paid_transaction_id` and `payment_reversed` stay on the compare-and-set inside `payment_txn_locks`. A stale link copy cannot clear a payment or undo a reversal.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_stale_link_save_keeps_the_payment_stamp`.
+
 ## [Unreleased] — 2026-10-20 (co-signer pay step fails closed without a payment row)
 
 ### Fixed
