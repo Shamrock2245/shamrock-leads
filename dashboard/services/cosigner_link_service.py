@@ -565,21 +565,16 @@ async def _held_by_other(packet: dict, token: str) -> bool:
 async def _claim_verification(packet: dict, token: str) -> bool:
     """One token owns the packet scan. A second token does not overwrite it."""
     token = str(token or "").strip()
+    # Empty to owned only. A second request for this same token does not
+    # pass because the token is already stored.
     result = await get_collection("paperwork_packets").update_one(
         {
             "packet_id": packet.get("packet_id"),
-            "cosigner_verified_token": {"$in": [None, "", token]},
+            "cosigner_verified_token": {"$in": [None, ""]},
         },
         {"$set": {"cosigner_verified_token": token}},
     )
     if int(getattr(result, "modified_count", 0) or 0) > 0:
-        packet["cosigner_verified_token"] = token
-        return True
-    fresh = await get_collection("paperwork_packets").find_one(
-        {"packet_id": packet.get("packet_id")},
-    )
-    owner = str((fresh or {}).get("cosigner_verified_token") or "").strip()
-    if owner == token:
         packet["cosigner_verified_token"] = token
         return True
     return False
@@ -617,6 +612,8 @@ async def require_cosigner_scan(token: str) -> dict:
     if _scan_locked(link, packet):
         raise CosignerLinkError("scan_closed", 409)
     await _require_current_bond(link, packet)
+    if str(packet.get("cosigner_verified_token") or "").strip():
+        raise CosignerLinkError("scan_closed", 409)
     if await _held_by_other(packet, token):
         raise CosignerLinkError("scan_closed", 409)
     return link
@@ -1081,6 +1078,9 @@ async def cosigner_state(token: str, lang: Optional[str] = None) -> dict:
     verified = bool(link.get("id_verified"))
     signed = _signed(packet)
     paid = _link_paid(link) or _paid(bond)
+    # A confirmed down payment of zero has nothing to collect. A missing
+    # confirmation stays on the pay step.
+    nothing_due = _due_cents(packet, bond) == 0
     now = _now()
     changed = False
     before = _audit_state(link, packet)
@@ -1100,8 +1100,9 @@ async def cosigner_state(token: str, lang: Optional[str] = None) -> dict:
     if changed or lang:
         await _save_link(link)
     # Paid money does not skip the signature. The terminal paid step needs
-    # the scan, the signature, and the down payment.
-    if paid and signed and verified:
+    # the scan, the signature, and either the down payment or a confirmed
+    # zero amount due.
+    if (paid or nothing_due) and signed and verified:
         step = "paid"
     elif signed and verified:
         step = "pay"
@@ -1110,6 +1111,9 @@ async def cosigner_state(token: str, lang: Optional[str] = None) -> dict:
     else:
         step = "scan"
     sign_url = _sign_url(packet, str(link.get("signer_role") or "indemnitor")) if verified else None
+    payment = _payment_view(packet, bond) if step in {"pay", "paid"} else None
+    if nothing_due and isinstance(payment, dict):
+        payment = {**payment, "amount": "0.00", "url": None, "dispatched": False}
     return {
         "lang": language,
         "strings": STRINGS[language],
@@ -1117,7 +1121,7 @@ async def cosigner_state(token: str, lang: Optional[str] = None) -> dict:
         "id_verified": verified,
         "sign_url": sign_url,
         "signing_locked": not verified,
-        "payment": _payment_view(packet, bond) if step in {"pay", "paid"} else None,
+        "payment": payment,
         "timeline": [row.get("step") for row in (link.get("timeline") or []) if isinstance(row, dict)],
     }
 

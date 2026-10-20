@@ -299,17 +299,17 @@ class SwipeSimpleReceiptPoller:
         except PaymentLogError as exc:
             return {"success": False, "committed": False, "error": exc.error}
 
-        await _note_cosigner_down_payment(
-            recorded,
-            booking=str(booking or ""),
-            reference=str(parsed.get("reference_id") or ""),
-            amount=amount,
-        )
         await _notify_clean_charge(recorded)
         await _maybe_send_customer_receipt(
             db,
             recorded,
             phone=str(parsed.get("indemnitor_phone") or ""),
+        )
+        await _note_cosigner_down_payment(
+            recorded,
+            booking=str(booking or ""),
+            reference=str(parsed.get("reference_id") or ""),
+            amount=amount,
         )
 
         return {

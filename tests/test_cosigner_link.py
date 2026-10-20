@@ -1774,3 +1774,116 @@ def test_link_creation_writes_an_issuance_audit(monkeypatch):
     assert closed.json()["error"] == "bond_inactive"
     assert len(_links(stores)) == 1
     assert len(_audits(stores, "link_issued")) == 1
+
+
+def test_foreign_address_state_does_not_unlock_signing(monkeypatch):
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    foreign = _upload(
+        monkeypatch, client, token,
+        {
+            "full_name": NAME,
+            "dl_state": "FL",
+            "state": "FL",
+            "issuing_country": "CAN",
+            "country": "CAN",
+        },
+    )
+    assert foreign.status_code == 400
+    assert _error_text(foreign) == "no_issuing_state"
+    assert "sign.example" not in foreign.text
+    assert "id_ocr" not in stores["paperwork_packets"].docs[0]
+    assert client.get(f"/api/cosigner/{token}").json()["sign_url"] is None
+
+    domestic = _upload(
+        monkeypatch, client, token,
+        {
+            "full_name": NAME,
+            "dl_state": "FL",
+            "state": "FL",
+            "issuing_country": "US",
+        },
+    )
+    assert domestic.status_code == 200, domestic.text
+    assert "DocuSeal" in domestic.text
+    assert client.get(f"/api/cosigner/{token}").json()["sign_url"] == "https://sign.example/s/abc"
+
+
+def test_receipt_poller_marks_the_down_payment(monkeypatch):
+    from dashboard.services.swipesimple_receipt_poller import SwipeSimpleReceiptPoller
+
+    stores, client, token, db = _recorder_world(monkeypatch)
+    poller = SwipeSimpleReceiptPoller(db=db)
+    short = asyncio.run(poller._apply_bond_payment(
+        db,
+        {"amount": "1.00", "booking_number": BOOKING, "transaction_id": "TX-COS-POLL-SHORT"},
+        gmail_message_id="gm-test-cos-short",
+        raw_subject="Payment receipt",
+    ))
+    assert short["success"] is True
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+    assert len(_audits(stores, "paid")) == 0
+
+    polled = asyncio.run(poller._apply_bond_payment(
+        db,
+        {"amount": "500.00", "booking_number": BOOKING, "transaction_id": "TX-COS-POLL"},
+        gmail_message_id="gm-test-cos-poll",
+        raw_subject="Payment receipt",
+    ))
+    assert polled["success"] is True
+    assert polled["committed"] is True
+    state = client.get(f"/api/cosigner/{token}").json()
+    assert state["step"] == "paid"
+    assert stores["cosigner_links"].docs[0]["paid_transaction_id"] == "TX-COS-POLL"
+    assert len(_audits(stores, "paid")) == 1
+    assert stores["bond_cases"].docs[0]["premium_paid"] is False
+    replay = asyncio.run(poller._apply_bond_payment(
+        db,
+        {"amount": "500.00", "booking_number": BOOKING, "transaction_id": "TX-COS-POLL"},
+        gmail_message_id="gm-test-cos-poll-2",
+        raw_subject="Payment receipt",
+    ))
+    assert replay["duplicate"] is True
+    assert len(_audits(stores, "paid")) == 1
+
+
+def test_in_flight_claim_refuses_a_second_scan(monkeypatch):
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    stores["paperwork_packets"].docs[0]["cosigner_verified_token"] = token
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    refused = _post_scan(client, token)
+    assert refused.status_code == 409
+    assert refused.json()["error"] == "scan_closed"
+    assert calls["n"] == 0
+    assert "id_ocr" not in stores["paperwork_packets"].docs[0]
+    assert len(_audits(stores, "id_verified")) == 0
+    assert client.get(f"/api/cosigner/{token}").json()["sign_url"] is None
+
+
+def test_confirmed_zero_down_payment_finishes_after_signing(monkeypatch):
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert opened.status_code == 200, opened.text
+    for row in (stores["paperwork_packets"].docs[0], stores["bond_cases"].docs[0]):
+        row["down_payment_amount"] = "0.00"
+    packet = stores["paperwork_packets"].docs[0]
+    packet["status"] = "completed"
+    packet["invoice_payment_link"] = "https://pay.example/zero"
+    state = client.get(f"/api/cosigner/{token}")
+    assert state.status_code == 200, state.text
+    body = state.json()
+    assert body["step"] == "paid"
+    assert body["sign_url"] == "https://sign.example/s/abc"
+    assert body["payment"]["amount"] == "0.00"
+    assert body["payment"]["url"] is None
+    assert "pay.example/zero" not in state.text
+    page = client.get(f"/cosigner/{token}")
+    assert "pay.example/zero" not in page.text
+    assert stores["bond_cases"].docs[0]["premium_paid"] is False
+    assert len(_audits(stores, "paid")) == 0
