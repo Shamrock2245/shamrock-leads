@@ -1601,6 +1601,77 @@ def _extra_link(stores, *, packet_id, case_id, token):
     })
 
 
+def test_cosigner_scan_keeps_an_existing_indemnitor_scan(monkeypatch):
+    """A co-signer scan does not replace an indemnitor scan already on the bond."""
+    import dashboard.services.cosigner_link_service as svc
+
+    stores, client = _world(monkeypatch, cosigner=NAME)
+    prior = {
+        "success": True,
+        "role": "indemnitor",
+        "extracted": {"full_name": INDEMNITOR, "dl_state": "FL"},
+    }
+    packet = stores["paperwork_packets"].docs[0]
+    bond = stores["bond_cases"].docs[0]
+    packet["docuseal_submitters"] = [
+        {"role": "indemnitor", "sign_url": "https://sign.example/s/indemnitor"},
+        {"role": "coindemnitor", "sign_url": "https://sign.example/s/cosigner"},
+    ]
+    for doc in (packet, bond):
+        doc["id_ocr"] = {
+            "success": True,
+            "role": "indemnitor",
+            "extracted": {"full_name": INDEMNITOR, "dl_state": "FL"},
+        }
+        doc["id_ocr_role"] = "indemnitor"
+    token = _token(client)
+    uploaded = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "issuing_state": "NY"},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    assert packet["id_ocr_role"] == "indemnitor"
+    assert packet["id_ocr"]["extracted"]["full_name"] == INDEMNITOR
+    assert bond["id_ocr"]["extracted"]["full_name"] == INDEMNITOR
+    assert packet["co_indemnitor"]["id_ocr_role"] == "co_indemnitor"
+    assert packet["co_indemnitor"]["id_ocr"]["extracted"]["full_name"] == NAME
+    assert bond["co_indemnitor"]["id_ocr"]["extracted"]["full_name"] == NAME
+    kept = _gate(
+        bond_data=bond,
+        parties=[
+            {"role": "indemnitor", "name": INDEMNITOR},
+            {"role": "co_indemnitor", "name": NAME},
+        ],
+    )
+    assert kept["ok"] is True
+
+    stores, client = _world(monkeypatch, cosigner=NAME)
+    packet = stores["paperwork_packets"].docs[0]
+    bond = stores["bond_cases"].docs[0]
+    for doc in (packet, bond):
+        doc["id_ocr"] = dict(prior)
+        doc["id_ocr_role"] = "indemnitor"
+        doc["id_ocr"]["extracted"] = dict(prior["extracted"])
+    token = _token(client)
+    original = svc._save_link
+
+    async def _fail_verified(link):
+        if link.get("id_verified"):
+            raise RuntimeError("link save failed")
+        return await original(link)
+
+    monkeypatch.setattr(svc, "_save_link", _fail_verified)
+    _scanner(monkeypatch, {"n": 0})
+    with pytest.raises(RuntimeError, match="link save failed"):
+        _post_scan(client, token)
+    assert packet["id_ocr_role"] == "indemnitor"
+    assert packet["id_ocr"]["extracted"]["full_name"] == INDEMNITOR
+    assert bond["id_ocr"]["extracted"]["full_name"] == INDEMNITOR
+    assert "co_indemnitor" not in packet
+    assert "co_indemnitor" not in bond
+    assert packet.get("cosigner_verified_token") in {None, ""}
+
+
 def test_reassigned_packet_does_not_keep_the_issued_link(monkeypatch):
     """A packet moved to another open case does not keep the old bearer link."""
     stores, client = _world(monkeypatch)

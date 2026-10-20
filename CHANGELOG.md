@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-20 (co-signer scan keeps another party's ID)
+
+### Fixed
+- **A co-signer scan does not erase an indemnitor scan already stored.** The new scan is written on that party's record. The top-level `id_ocr` is replaced only when it is empty or already belongs to the same role. A verification that does not finish removes the new scan and restores the previous one.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_cosigner_scan_keeps_an_existing_indemnitor_scan`.
+
 ## [Unreleased] — 2026-10-20 (co-signer link stays on the issued bond)
 
 ### Fixed

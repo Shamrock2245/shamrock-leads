@@ -603,26 +603,109 @@ async def _claim_verification(packet: dict, token: str) -> bool:
     return False
 
 
-async def _clear_stored_scan(packet: dict, bond: Optional[dict]) -> None:
-    """Remove a scan that did not finish verification."""
-    unset = {"id_ocr": "", "id_ocr_role": ""}
-    await get_collection("paperwork_packets").update_one(
-        {"packet_id": packet.get("packet_id")},
-        {"$unset": unset},
-    )
-    packet.pop("id_ocr", None)
-    packet.pop("id_ocr_role", None)
-    if not bond:
-        return
-    filt = {"bond_case_id": bond.get("bond_case_id")} if bond.get("bond_case_id") else {
-        "booking_number": bond.get("booking_number"),
-    }
-    collection = str(bond.get("_collection") or "bond_cases")
-    if collection not in {"bond_cases", "active_bonds"}:
-        collection = "bond_cases"
-    await get_collection(collection).update_one(filt, {"$unset": unset})
-    bond.pop("id_ocr", None)
-    bond.pop("id_ocr_role", None)
+def _party_slot(role: str) -> str:
+    return "co_indemnitor" if role == "co_indemnitor" else "indemnitor"
+
+
+def _scan_owner(doc: Optional[dict]) -> str:
+    """Role that currently owns the top-level scan. Empty when there is none."""
+    if not isinstance(doc, dict):
+        return ""
+    role = str(doc.get("id_ocr_role") or "").strip()
+    ocr = doc.get("id_ocr")
+    if role and isinstance(ocr, dict) and ocr:
+        return role
+    return ""
+
+
+def _with_party_scan(existing: Any, role: str, scan: dict) -> dict:
+    if isinstance(existing, dict):
+        party = dict(existing)
+    elif isinstance(existing, str) and existing.strip():
+        party = {"name": existing.strip()}
+    else:
+        party = {}
+    party["role"] = role
+    party["id_ocr_role"] = role
+    party["id_ocr"] = scan
+    return party
+
+
+async def _write_party_scan(
+    collection: str,
+    filt: dict,
+    doc: dict,
+    role: str,
+    scan: dict,
+    stored: list,
+) -> None:
+    """Store this party's scan without erasing another party's top-level scan."""
+    slot = _party_slot(role)
+    prior_party = doc.get(slot)
+    wrote_top = _scan_owner(doc) in {"", role}
+    party = _with_party_scan(prior_party, role, scan)
+    patch = {slot: party}
+    prior_top = None
+    if wrote_top:
+        prior_top = {
+            "id_ocr": doc.get("id_ocr"),
+            "id_ocr_role": doc.get("id_ocr_role"),
+        }
+        patch["id_ocr"] = scan
+        patch["id_ocr_role"] = role
+    stored.append({
+        "collection": collection,
+        "filter": filt,
+        "doc": doc,
+        "slot": slot,
+        "prior_party": prior_party,
+        "wrote_top": wrote_top,
+        "prior_top": prior_top,
+    })
+    await get_collection(collection).update_one(filt, {"$set": patch})
+    doc[slot] = party
+    if wrote_top:
+        doc["id_ocr"] = scan
+        doc["id_ocr_role"] = role
+
+
+async def _clear_stored_scan(stored: list) -> None:
+    """Undo scans from a verification that did not finish.
+
+    A party scan written beside an existing scan is removed. The other
+    party's top-level ``id_ocr`` is put back.
+    """
+    for snap in reversed(stored):
+        doc = snap.get("doc") if isinstance(snap.get("doc"), dict) else {}
+        update: dict = {}
+        unset: dict = {}
+        slot = snap["slot"]
+        prior = snap.get("prior_party")
+        if prior is None:
+            unset[slot] = ""
+            doc.pop(slot, None)
+        else:
+            update[slot] = prior
+            doc[slot] = prior
+        if snap.get("wrote_top"):
+            prior_top = snap.get("prior_top") or {}
+            if isinstance(prior_top.get("id_ocr"), dict) and prior_top.get("id_ocr"):
+                update["id_ocr"] = prior_top["id_ocr"]
+                update["id_ocr_role"] = prior_top.get("id_ocr_role") or ""
+                doc["id_ocr"] = update["id_ocr"]
+                doc["id_ocr_role"] = update["id_ocr_role"]
+            else:
+                unset["id_ocr"] = ""
+                unset["id_ocr_role"] = ""
+                doc.pop("id_ocr", None)
+                doc.pop("id_ocr_role", None)
+        payload: dict = {}
+        if update:
+            payload["$set"] = update
+        if unset:
+            payload["$unset"] = unset
+        if payload:
+            await get_collection(snap["collection"]).update_one(snap["filter"], payload)
 
 
 async def _restore_sibling_links(priors: list) -> None:
@@ -753,23 +836,32 @@ def _passing_scan(name: str, state: str, role: str) -> dict:
     }
 
 
-async def _store_scan(packet: dict, bond: Optional[dict], name: str, state: str, role: str) -> None:
-    patch = {
-        "id_ocr_role": role,
-        "id_ocr": _passing_scan(name, state, role),
-    }
-    await get_collection("paperwork_packets").update_one(
+async def _store_scan(
+    packet: dict,
+    bond: Optional[dict],
+    name: str,
+    state: str,
+    role: str,
+    stored: list,
+) -> None:
+    scan = _passing_scan(name, state, role)
+    await _write_party_scan(
+        "paperwork_packets",
         {"packet_id": packet.get("packet_id")},
-        {"$set": patch},
+        packet,
+        role,
+        scan,
+        stored,
     )
-    if bond:
-        filt = {"bond_case_id": bond.get("bond_case_id")} if bond.get("bond_case_id") else {
-            "booking_number": bond.get("booking_number"),
-        }
-        collection = str(bond.get("_collection") or "bond_cases")
-        if collection not in {"bond_cases", "active_bonds"}:
-            collection = "bond_cases"
-        await get_collection(collection).update_one(filt, {"$set": patch})
+    if not bond:
+        return
+    filt = {"bond_case_id": bond.get("bond_case_id")} if bond.get("bond_case_id") else {
+        "booking_number": bond.get("booking_number"),
+    }
+    collection = str(bond.get("_collection") or "bond_cases")
+    if collection not in {"bond_cases", "active_bonds"}:
+        collection = "bond_cases"
+    await _write_party_scan(collection, filt, bond, role, scan, stored)
 
 
 async def submit_cosigner_scan(token: str, body: dict) -> dict:
@@ -822,6 +914,7 @@ async def submit_cosigner_scan(token: str, body: dict) -> dict:
     if not await _claim_verification(packet, token):
         raise CosignerLinkError("scan_closed", 409)
     priors: list = []
+    stored: list = []
     started = ""
     verified_local = False
     try:
@@ -830,7 +923,7 @@ async def submit_cosigner_scan(token: str, body: dict) -> dict:
         await _revoke_sibling_links(
             str(packet.get("packet_id") or ""), token, now, priors,
         )
-        await _store_scan(packet, bond, name, state, role)
+        await _store_scan(packet, bond, name, state, role, stored)
         before = _audit_state(link, packet)
         link["id_verified"] = True
         link["id_verified_at"] = now.isoformat()
@@ -850,7 +943,7 @@ async def submit_cosigner_scan(token: str, body: dict) -> dict:
                     row for row in (link.get("timeline") or [])
                     if not (isinstance(row, dict) and row.get("step") == "id_verified")
                 ]
-            await _clear_stored_scan(packet, bond)
+            await _clear_stored_scan(stored)
             await _restore_sibling_links(priors)
             if started:
                 await _drop_partial_audits(str(packet.get("packet_id") or ""), started)
