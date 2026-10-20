@@ -544,7 +544,28 @@ async def _require_current_bond(link: dict, packet: dict) -> dict:
         or not names_match(bond_name, str(link.get("signer_name") or ""))
     ):
         raise CosignerLinkError("signer_mismatch", 409)
+    if _issued_case_drifted(link, packet, bond):
+        raise CosignerLinkError("bond_mismatch", 409)
     return bond
+
+
+def _issued_case_drifted(link: dict, packet: dict, bond: dict) -> bool:
+    """The packet or bond is no longer the case this link was issued for."""
+    stored_case = str(link.get("bond_case_id") or "").strip()
+    stored_booking = str(link.get("booking_number") or "").strip()
+    bond_case = str(bond.get("bond_case_id") or "").strip()
+    bond_booking = str(bond.get("booking_number") or "").strip()
+    packet_case = str(packet.get("bond_case_id") or "").strip()
+    packet_booking = str(packet.get("booking_number") or "").strip()
+    if stored_case and bond_case != stored_case:
+        return True
+    if stored_case and packet_case and packet_case != stored_case:
+        return True
+    if stored_booking and bond_booking != stored_booking:
+        return True
+    if stored_booking and packet_booking and packet_booking != stored_booking:
+        return True
+    return False
 
 
 async def _held_by_other(packet: dict, token: str) -> bool:

@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-20 (co-signer link stays on the issued bond)
+
+### Fixed
+- **A bearer link does not follow a packet onto a different bond.** Revalidation compares the current packet and bond with the case id and booking stored at issuance. A mismatch is 409 `bond_mismatch`. The DocuSeal URL is not returned, and the scan is refused before OCR.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_reassigned_packet_does_not_keep_the_issued_link`.
+
 ## [Unreleased] — 2026-10-20 (co-signer booking fallback still records the down payment)
 
 ### Fixed

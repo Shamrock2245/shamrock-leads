@@ -1601,6 +1601,39 @@ def _extra_link(stores, *, packet_id, case_id, token):
     })
 
 
+def test_reassigned_packet_does_not_keep_the_issued_link(monkeypatch):
+    """A packet moved to another open case does not keep the old bearer link."""
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    stores["bond_cases"].docs.append({
+        "bond_case_id": "BC-TEST-OTHER",
+        "booking_number": BOOKING,
+        "status": "active",
+        "indemnitor_name": NAME,
+        "surety_id": "osi",
+        "premium_paid": False,
+        **CONFIRMED,
+    })
+    packet = stores["paperwork_packets"].docs[0]
+    packet["bond_case_id"] = "BC-TEST-OTHER"
+    packet["docuseal_sign_url"] = "https://sign.example/s/other"
+    state = client.get(f"/api/cosigner/{token}")
+    assert state.status_code == 409
+    assert state.json()["error"] == "bond_mismatch"
+    assert "sign.example" not in state.text
+    page = client.get(f"/cosigner/{token}")
+    assert page.status_code == 409
+    assert "sign.example" not in page.text
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    refused = _post_scan(client, token)
+    assert refused.status_code == 409
+    assert refused.json()["error"] == "bond_mismatch"
+    assert calls["n"] == 0
+    assert "id_ocr" not in packet
+    assert "id_ocr" not in stores["bond_cases"].docs[1]
+
+
 def test_booking_fallback_link_records_the_down_payment(monkeypatch):
     """A packet with no case id still stores the resolved case and can be paid.
 
