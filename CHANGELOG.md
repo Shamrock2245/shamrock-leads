@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-20 (co-signer sign link must name this signer)
+
+### Fixed
+- **A DocuSeal URL is returned only when the submitter is this link's verified signer.** The row name must match with the same name check as the ID scan. A stored role or email that belongs to someone else is 409 `sign_link_mismatch`. Another party's row is not returned.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_sign_url_matches_the_verified_signer`.
+
 ## [Unreleased] — 2026-10-20 (co-signer link requires a complete bond)
 
 ### Fixed

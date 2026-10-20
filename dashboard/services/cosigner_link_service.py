@@ -247,13 +247,83 @@ def _external_id_matches(packet_id: str, role: str, external_id: str) -> bool:
     return external_id.startswith(f"{packet_id}:indemnitor:")
 
 
+def _row_meta(row: dict) -> dict:
+    meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    return meta
+
+
+def _declared_party_role(row: dict) -> str:
+    """A party role stored beside the DocuSeal role. Blank when the row has none."""
+    meta = _row_meta(row)
+    raw = str(row.get("party_role") or meta.get("party_role") or "").strip()
+    if not raw:
+        return ""
+    return _party_role({"role": raw})
+
+
+def _row_signer_name(row: dict) -> str:
+    meta = _row_meta(row)
+    return str(row.get("name") or row.get("full_name") or meta.get("name") or "").strip()
+
+
+def _row_signer_email(row: dict) -> str:
+    meta = _row_meta(row)
+    return str(row.get("email") or meta.get("email") or "").strip().lower()
+
+
+def _submitter_matches_signer(
+    row: dict,
+    role: str,
+    signer_name: str,
+    signer_email: str = "",
+) -> bool:
+    """The row's name, and its role or email when stored, must be this signer."""
+    if _party_role(row) != role:
+        return False
+    declared = _declared_party_role(row)
+    if declared and declared != role:
+        return False
+    if not names_match(_row_signer_name(row), signer_name):
+        return False
+    row_email = _row_signer_email(row)
+    expected = str(signer_email or "").strip().lower()
+    if row_email and expected and row_email != expected:
+        return False
+    return True
+
+
+def _signer_email(packet: dict, bond: Optional[dict], role: str) -> str:
+    """Email stored for this signer. Blank when the case has none."""
+    keys = (
+        ("co_signer_email", "cosigner_email", "co_indemnitor_email")
+        if role == "co_indemnitor"
+        else ("indemnitor_email",)
+    )
+    for doc in (bond, packet):
+        if not isinstance(doc, dict):
+            continue
+        for key in keys:
+            text = str(doc.get(key) or "").strip()
+            if text:
+                return text
+        people = doc.get("indemnitors")
+        if not isinstance(people, list):
+            continue
+        for person in people:
+            if isinstance(person, dict) and _party_role(person) == role:
+                text = str(person.get("email") or "").strip()
+                if text:
+                    return text
+    return ""
+
+
 def _bound_submitter_url(packet: dict, row: dict, role: str) -> str:
     """Return this row's URL only when it is bound to this packet and role."""
     packet_id = str(packet.get("packet_id") or "").strip()
     expected_submission = str(packet.get("docuseal_submission_id") or "").strip()
     if not packet_id or not expected_submission or _party_role(row) != role:
         return ""
-    meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    meta = _row_meta(row)
     if str(meta.get("packet_id") or "").strip() != packet_id:
         return ""
     submission_id = _row_submission_id(row)
@@ -265,20 +335,35 @@ def _bound_submitter_url(packet: dict, row: dict, role: str) -> str:
     return _url_on_configured_docuseal_host(stored)
 
 
-def _sign_url(packet: dict, role: str) -> str:
-    """The bound DocuSeal URL for this signer. An unbound URL is not returned."""
+def _sign_url(
+    packet: dict,
+    role: str,
+    signer_name: str,
+    signer_email: str = "",
+) -> tuple[str, str]:
+    """The bound DocuSeal URL for this signer, or an error code and no URL.
+
+    A row for someone else is ``sign_link_mismatch``. A row that is not bound
+    to this packet is ``sign_link_unbound``.
+    """
     wanted = "co_indemnitor" if role == "co_indemnitor" else "indemnitor"
+    mismatch = False
     for key in ("docuseal_submitters", "parties", "submitters"):
         rows = packet.get(key)
         if not isinstance(rows, list):
             continue
         for row in rows:
-            if not isinstance(row, dict):
+            if not isinstance(row, dict) or _party_role(row) != wanted:
+                continue
+            if not _submitter_matches_signer(row, wanted, signer_name, signer_email):
+                mismatch = True
                 continue
             url = _bound_submitter_url(packet, row, wanted)
             if url:
-                return url
-    return ""
+                return url, ""
+    if mismatch:
+        return "", "sign_link_mismatch"
+    return "", "sign_link_unbound"
 
 
 def _signed(packet: dict) -> bool:
@@ -1498,9 +1583,15 @@ async def cosigner_state(token: str, lang: Optional[str] = None) -> dict:
         step = "scan"
     sign_url = None
     if verified:
-        sign_url = _sign_url(packet, str(link.get("signer_role") or "indemnitor"))
-        if not sign_url:
-            raise CosignerLinkError("sign_link_unbound", 409)
+        sign_url, problem = _sign_url(
+            packet,
+            str(link.get("signer_role") or "indemnitor"),
+            str(link.get("signer_name") or ""),
+            _signer_email(packet, bond, str(link.get("signer_role") or "indemnitor")),
+        )
+        if problem:
+            raise CosignerLinkError(problem, 409)
+        sign_url = sign_url or None
     payment = _payment_view(packet, bond) if step in {"pay", "paid"} else None
     if nothing_due and isinstance(payment, dict):
         payment = {**payment, "amount": "0.00", "url": None, "dispatched": False}

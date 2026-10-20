@@ -123,7 +123,7 @@ def _sign(slug):
     return f"{_configured_docuseal_origin()}/s/{slug}"
 
 
-def _bound_submitter(role, url, *, packet_id=PACKET, submission=SUBMISSION, external=None):
+def _bound_submitter(role, url, *, packet_id=PACKET, submission=SUBMISSION, external=None, name=""):
     party = "co_indemnitor" if role in {
         "coindemnitor", "co_indemnitor", "cosigner", "co_signer",
     } else "indemnitor"
@@ -132,6 +132,7 @@ def _bound_submitter(role, url, *, packet_id=PACKET, submission=SUBMISSION, exte
         external = f"{packet_id}:indemnitor:{suffix}"
     return {
         "role": role,
+        "name": name,
         "sign_url": url,
         "submission_id": submission,
         "external_id": external,
@@ -292,7 +293,11 @@ def _world(monkeypatch, *, cosigner=""):
         "docuseal_submission_id": SUBMISSION,
         "docuseal_sign_url": _sign("indemnitor") if cosigner else _sign("abc"),
         "docuseal_submitters": [
-            _bound_submitter("indemnitor", _sign("indemnitor") if cosigner else _sign("abc")),
+            _bound_submitter(
+                "indemnitor",
+                _sign("indemnitor") if cosigner else _sign("abc"),
+                name=indemnitor,
+            ),
         ],
         "status": "draft",
         "surety_id": "osi",
@@ -300,7 +305,7 @@ def _world(monkeypatch, *, cosigner=""):
     }
     if cosigner:
         packet["docuseal_submitters"].append(
-            _bound_submitter("coindemnitor", _sign("cosigner")),
+            _bound_submitter("coindemnitor", _sign("cosigner"), name=cosigner),
         )
     bond = {
         "bond_case_id": CASE,
@@ -755,8 +760,8 @@ def test_cosigner_different_from_indemnitor(monkeypatch):
     packet["docuseal_submission_id"] = SUBMISSION
     packet["docuseal_sign_url"] = _sign("indemnitor")
     packet["docuseal_submitters"] = [
-        _bound_submitter("indemnitor", _sign("indemnitor")),
-        _bound_submitter("coindemnitor", _sign("cosigner")),
+        _bound_submitter("indemnitor", _sign("indemnitor"), name=INDEMNITOR),
+        _bound_submitter("coindemnitor", _sign("cosigner"), name=NAME),
     ]
     indemnitor_id = _upload(
         monkeypatch, client, token,
@@ -811,8 +816,8 @@ def test_active_bond_scan_and_invoice_link_alias(monkeypatch):
     packet["docuseal_submission_id"] = SUBMISSION
     packet["docuseal_sign_url"] = _sign("indemnitor")
     packet["docuseal_submitters"] = [
-        _bound_submitter("indemnitor", _sign("indemnitor")),
-        _bound_submitter("coindemnitor", _sign("cosigner")),
+        _bound_submitter("indemnitor", _sign("indemnitor"), name=INDEMNITOR),
+        _bound_submitter("coindemnitor", _sign("cosigner"), name=NAME),
     ]
     packet["payment_link"] = "https://shamrockbailbonds.biz/payment?amount=10"
     token = _token(client)
@@ -1065,6 +1070,62 @@ def test_unbound_docuseal_url_is_not_returned(monkeypatch):
     restored = client.get(f"/api/cosigner/{token}")
     assert restored.status_code == 200
     assert restored.json()["sign_url"] == good_url
+
+
+def test_sign_url_matches_the_verified_signer(monkeypatch):
+    """A bound DocuSeal row is returned only for this link's verified signer."""
+    stores, client = _world(monkeypatch, cosigner=NAME)
+    token = _token(client)
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "issuing_state": "NY"},
+    )
+    assert opened.status_code == 200, opened.text
+    ready = client.get(f"/api/cosigner/{token}")
+    assert ready.status_code == 200
+    assert ready.json()["sign_url"] == _sign("cosigner")
+    assert _sign("indemnitor") not in ready.text
+
+    packet = stores["paperwork_packets"].docs[0]
+    row = next(
+        item for item in packet["docuseal_submitters"]
+        if item.get("role") == "coindemnitor"
+    )
+    row["name"] = "Pat Other"
+    mismatched = client.get(f"/api/cosigner/{token}")
+    assert mismatched.status_code == 409
+    assert mismatched.json() == {"error": "sign_link_mismatch"}
+    assert _sign("cosigner") not in mismatched.text
+    assert _sign_hidden(mismatched.text)
+    page = client.get(f"/cosigner/{token}")
+    assert _sign_hidden(page.text)
+
+    packet["docuseal_submitters"] = [
+        _bound_submitter("indemnitor", _sign("indemnitor"), name=INDEMNITOR),
+    ]
+    packet["docuseal_sign_url"] = _sign("indemnitor")
+    stale = client.get(f"/api/cosigner/{token}")
+    assert stale.status_code == 409
+    assert stale.json()["error"] == "sign_link_unbound"
+    assert _sign("indemnitor") not in stale.text
+    assert _sign_hidden(stale.text)
+    assert _sign_hidden(client.get(f"/cosigner/{token}").text)
+
+    packet["docuseal_submitters"] = [
+        _bound_submitter("indemnitor", _sign("indemnitor"), name=INDEMNITOR),
+        _bound_submitter("coindemnitor", _sign("cosigner"), name=NAME),
+    ]
+    restored = client.get(f"/api/cosigner/{token}")
+    assert restored.status_code == 200
+    assert restored.json()["sign_url"] == _sign("cosigner")
+
+    row = packet["docuseal_submitters"][1]
+    row["email"] = "other@example.invalid"
+    stores["bond_cases"].docs[0]["co_signer_email"] = "signer@example.invalid"
+    emailed = client.get(f"/api/cosigner/{token}")
+    assert emailed.status_code == 409
+    assert emailed.json() == {"error": "sign_link_mismatch"}
+    assert _sign("cosigner") not in emailed.text
 
 
 def test_case_id_wins_and_ambiguous_booking_fails_closed(monkeypatch):
@@ -1848,7 +1909,7 @@ def _extra_link(stores, *, packet_id, case_id, token):
         "docuseal_submission_id": SUBMISSION,
         "docuseal_sign_url": _sign("other"),
         "docuseal_submitters": [
-            _bound_submitter("indemnitor", _sign("other"), packet_id=packet_id),
+            _bound_submitter("indemnitor", _sign("other"), packet_id=packet_id, name=NAME),
         ],
         **CONFIRMED,
     }
@@ -1881,8 +1942,8 @@ def test_cosigner_scan_keeps_an_existing_indemnitor_scan(monkeypatch):
     bond = stores["bond_cases"].docs[0]
     packet["docuseal_submission_id"] = SUBMISSION
     packet["docuseal_submitters"] = [
-        _bound_submitter("indemnitor", _sign("indemnitor")),
-        _bound_submitter("coindemnitor", _sign("cosigner")),
+        _bound_submitter("indemnitor", _sign("indemnitor"), name=INDEMNITOR),
+        _bound_submitter("coindemnitor", _sign("cosigner"), name=NAME),
     ]
     for doc in (packet, bond):
         doc["id_ocr"] = {
