@@ -244,7 +244,7 @@ class _Col:
     def __init__(self, docs=None):
         self.docs = list(docs or [])
 
-    async def find_one(self, query=None, projection=None):
+    async def find_one(self, query=None, projection=None, session=None, **kwargs):
         for doc in self.docs:
             if _match(doc, query or {}):
                 return doc
@@ -2909,3 +2909,38 @@ def test_unreadable_or_empty_payment_rows_do_not_mark_paid(monkeypatch):
         amount="500.00",
     ))
     assert calls["n"] == 0
+
+
+def test_paid_audit_reads_the_link_on_the_payment_session(monkeypatch):
+    """The post-CAS read uses the payment transaction, for paid and reversal."""
+    stores, client, token, _db = _recorder_world(monkeypatch)
+    seen = []
+    links = stores["cosigner_links"]
+    original = links.find_one
+
+    async def _find_one(query=None, projection=None, session=None, **kwargs):
+        if isinstance(query, dict) and query.get("token"):
+            seen.append(session)
+        return await original(query, projection)
+
+    links.find_one = _find_one
+
+    paid = _webhook(client, txn="TX-SESSION", amount="500.00")
+    assert paid.status_code == 200, paid.text
+    assert seen and type(seen[-1]).__name__ == "TxnSession"
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+    paid_audit = _audits(stores, "paid")[-1]
+    assert paid_audit["new_state"]["paid"] is True
+    assert paid_audit["old_state"]["paid"] is False
+
+    seen.clear()
+    refunded = _webhook(
+        client, txn="TX-SESSION", amount="500.00",
+        event="payment.refunded", status="refunded",
+    )
+    assert refunded.status_code == 200, refunded.text
+    assert seen and type(seen[-1]).__name__ == "TxnSession"
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+    reversed_audit = _audits(stores, "payment_reversed")[-1]
+    assert reversed_audit["new_state"]["paid"] is False
+    assert reversed_audit["new_state"]["payment_reversed"] is True

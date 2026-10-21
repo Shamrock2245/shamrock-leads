@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-21 (co-signer paid audit reads inside the transaction)
+
+### Fixed
+- **The paid and reversal audits read the link on the payment session.** After the compare-and-set, the follow-up read uses the same transaction session, so the audit's new state is the write that just happened.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_paid_audit_reads_the_link_on_the_payment_session`.
+
 ## [Unreleased] — 2026-10-20 (co-signer bearer rechecks a complete bond)
 
 ### Fixed

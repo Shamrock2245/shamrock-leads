@@ -1353,7 +1353,9 @@ async def _cas_mark_paid(link: dict, packet: Optional[dict], txn: str, now: date
     )
     if not getattr(result, "modified_count", 0):
         return False
-    fresh = await get_collection(LINKS).find_one({"token": token}) or link
+    # The update is uncommitted until this transaction ends. The audit has
+    # to read that write, so the read uses the same session.
+    fresh = await get_collection(LINKS).find_one({"token": token}, session=session) or link
     await _audit(
         "paid", fresh, now,
         old_state=before, new_state=_audit_state(fresh, packet), session=session,
@@ -1387,7 +1389,7 @@ async def _cas_mark_reversed(link: dict, txn: str, now: datetime, session) -> bo
     )
     if not getattr(result, "modified_count", 0):
         return False
-    fresh = await get_collection(LINKS).find_one({"token": token}) or link
+    fresh = await get_collection(LINKS).find_one({"token": token}, session=session) or link
     await _audit(
         "payment_reversed", fresh, now,
         old_state=before, new_state=_audit_state(fresh, packet), session=session,
