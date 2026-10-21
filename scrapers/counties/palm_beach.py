@@ -14,8 +14,10 @@ Failure is visible, never worked around:
   * 401/403/429 or a challenge page (including hCaptcha) -> ``egress_block:``
   * TLS handshake dropped -> ``egress_block: ... connection_reset:``
   * certificate verification failure -> ``tls_cert_invalid:``
-  * search form missing from the page -> ``PalmBeachSourceChanged``
+  * search form missing from the page -> ``PalmBeachSourceChanged`` (a ``ParseDriftError``)
   * a results page with no result cards and no "no matches" notice -> ``PalmBeachSourceChanged``
+  * any other non-200 response -> ``PalmBeachHTTPError`` (carries ``status_code``, so Health
+    classifies it by status: 404/410 url_changed, 5xx network, never parse drift)
 """
 import logging
 import re
@@ -28,7 +30,7 @@ from bs4 import BeautifulSoup
 
 from scrapers import plain_http
 from scrapers.base_scraper import BaseScraper
-from scrapers.scraper_resilience import EgressBlocked
+from scrapers.scraper_resilience import EgressBlocked, ParseDriftError
 from scrapers.pbso_parse import (
     BLOTTER_URL,
     COUNTY,
@@ -49,8 +51,16 @@ _NO_MATCHES_RE = re.compile(r"\b0 matches\b|\bno results\b", re.I)
 _LINK_BOOKING_RE = re.compile(r"^\d{6,}$")
 
 
-class PalmBeachSourceChanged(RuntimeError):
-    """The blotter page no longer matches the published form/result contract."""
+class PalmBeachSourceChanged(ParseDriftError):
+    """The blotter page no longer matches the published form/result contract (parse drift)."""
+
+
+class PalmBeachHTTPError(RuntimeError):
+    """A non-200 response that isn't a block; classified by its HTTP status, not as drift."""
+
+    def __init__(self, status_code: int, url: str):
+        self.status_code = status_code
+        super().__init__(f"Palm Beach: HTTP {status_code} from {url}")
 
 
 class PalmBeachCountyScraper(BaseScraper):
@@ -79,7 +89,7 @@ class PalmBeachCountyScraper(BaseScraper):
         if "hcaptcha" in (resp.text or "")[:200000].lower():
             raise EgressBlocked("egress_block: Palm Beach challenge page (hCaptcha)")
         if resp.status_code != 200:
-            raise PalmBeachSourceChanged(f"Palm Beach: HTTP {resp.status_code} from {url}")
+            raise PalmBeachHTTPError(resp.status_code, url)
         return resp
 
     # ── Search & Collection ────────────────────────────────────────────────

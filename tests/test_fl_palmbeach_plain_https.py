@@ -137,3 +137,28 @@ def test_pagination_pauses_before_each_next_page(monkeypatch):
     assert [c[0] for c in sess.calls] == ["GET", "POST", "GET"]
     assert sess.sleeps == [(2, pb.PAGE_PAUSE_S)] and pb.PAGE_PAUSE_S >= 1  # pause before the page-2 GET
     assert len(recs) == 2
+
+
+# ── Codex review on 738e790 (2026-10-20), issue #265 ────────────────────────
+from scrapers.scraper_resilience import ERROR_NETWORK, ERROR_PARSE_DRIFT, ERROR_URL_CHANGED, ParseDriftError, classify_exception
+
+
+def test_missing_form_is_parse_drift(monkeypatch):
+    with pytest.raises(ParseDriftError) as ei:
+        _scrape_with(monkeypatch, [FakeResp("<html>moved</html>")])
+    assert classify_exception(ei.value).error_class == ERROR_PARSE_DRIFT
+
+
+def test_missing_result_cards_is_parse_drift(monkeypatch):
+    with pytest.raises(ParseDriftError) as ei:
+        _scrape_with(monkeypatch, [FakeResp(FORM), FakeResp("<html><body>new layout</body></html>")])
+    assert classify_exception(ei.value).error_class == ERROR_PARSE_DRIFT
+
+
+@pytest.mark.parametrize("status,expected", [(404, ERROR_URL_CHANGED), (503, ERROR_NETWORK)])
+def test_http_failures_keep_status_classification(monkeypatch, status, expected):
+    with pytest.raises(pb.PalmBeachHTTPError) as ei:
+        _scrape_with(monkeypatch, [FakeResp("err", status=status)])
+    assert not isinstance(ei.value, ParseDriftError)
+    c = classify_exception(ei.value)
+    assert c.error_class == expected and c.http_status == status
