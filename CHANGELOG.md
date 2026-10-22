@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-22 (co-signer ID scans are append-only)
+
+### Fixed
+- **An ID scan is stored as a new row and is not overwritten or deleted.** Each passing scan, for either signer role, is appended to `id_scan_records` on the packet and the bond with the signer, the bond, and a timestamp. The current pointer is that newest row for the role that owns it. Rollback of a verification that does not finish removes only the pointer that attempt added.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_concurrent_scans_both_survive`, `test_newer_scan_keeps_the_older_record`, `test_rollback_removes_only_the_pointer_it_added`.
+
 ## [Unreleased] — 2026-10-22 (co-signer pay link must be this bond's invoice)
 
 ### Fixed
