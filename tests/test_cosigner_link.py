@@ -196,6 +196,17 @@ class _Cursor:
             raise StopAsyncIteration
 
 
+def _lookup(doc, key):
+    if "." not in str(key):
+        return key in doc, doc.get(key)
+    cur = doc
+    for part in str(key).split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return False, None
+        cur = cur[part]
+    return True, cur
+
+
 def _match(doc, query):
     if not query:
         return True
@@ -206,19 +217,19 @@ def _match(doc, query):
         rest = {key: value for key, value in query.items() if key != "$and"}
         return all(_match(doc, clause) for clause in query["$and"]) and _match(doc, rest)
     for key, expected in query.items():
+        present, current = _lookup(doc, key)
         if isinstance(expected, dict):
             if "$in" in expected:
-                if doc.get(key) not in expected["$in"]:
+                if current not in expected["$in"]:
                     return False
             elif "$ne" in expected:
-                if doc.get(key) == expected["$ne"]:
+                if current == expected["$ne"]:
                     return False
             elif "$exists" in expected:
-                if (key in doc) != bool(expected["$exists"]):
+                if present != bool(expected["$exists"]):
                     return False
             elif "$lt" in expected:
-                current = doc.get(key, 0)
-                if current is None:
+                if not present or current is None:
                     current = 0
                 try:
                     if not current < expected["$lt"]:
@@ -226,16 +237,16 @@ def _match(doc, query):
                 except TypeError:
                     return False
             elif "$lte" in expected:
-                if key not in doc or doc.get(key) in (None, ""):
+                if not present or current in (None, ""):
                     return False
                 try:
-                    if not doc.get(key) <= expected["$lte"]:
+                    if not current <= expected["$lte"]:
                         return False
                 except TypeError:
                     return False
             else:
                 return False
-        elif doc.get(key) != expected:
+        elif current != expected:
             return False
     return True
 
@@ -2268,6 +2279,136 @@ def test_cosigner_scan_keeps_an_existing_indemnitor_scan(monkeypatch):
     assert bond["id_ocr"]["extracted"]["full_name"] == INDEMNITOR
     assert "co_indemnitor" not in packet
     assert "co_indemnitor" not in bond
+    assert packet.get("cosigner_verified_token") in {None, ""}
+
+
+def _scan_rows(doc):
+    rows = doc.get("id_scan_records")
+    assert isinstance(rows, list)
+    return rows
+
+
+def test_concurrent_scans_both_survive(monkeypatch):
+    """Two overlapping scans each append a row. Neither row is replaced."""
+    import dashboard.services.cosigner_link_service as svc
+
+    stores, _client = _world(monkeypatch, cosigner=NAME)
+    packet = stores["paperwork_packets"].docs[0]
+    bond = stores["bond_cases"].docs[0]
+    release = asyncio.Event()
+    entered = asyncio.Event()
+    state = {"held": False}
+
+    def _wrap(col):
+        orig = col.update_one
+
+        async def _update(query, update, upsert=False, session=None, **kwargs):
+            pointer = (update or {}).get("$set") or {}
+            if (
+                not state["held"]
+                and pointer.get("id_ocr_role") == "indemnitor"
+                and "id_ocr" in pointer
+            ):
+                state["held"] = True
+                entered.set()
+                await release.wait()
+            return await orig(query, update, upsert=upsert, session=session, **kwargs)
+
+        col.update_one = _update
+
+    _wrap(stores["paperwork_packets"])
+    _wrap(stores["bond_cases"])
+
+    async def _go():
+        first = asyncio.create_task(
+            svc._store_scan(packet, bond, INDEMNITOR, "FL", "indemnitor", []),
+        )
+        await entered.wait()
+        await svc._store_scan(packet, bond, NAME, "NY", "co_indemnitor", [])
+        release.set()
+        await first
+
+    asyncio.run(_go())
+    for doc in (packet, bond):
+        rows = _scan_rows(doc)
+        assert len(rows) == 2
+        by_role = {row["role"]: row for row in rows}
+        assert set(by_role) == {"indemnitor", "co_indemnitor"}
+        assert by_role["indemnitor"]["signer_name"] == INDEMNITOR
+        assert by_role["co_indemnitor"]["signer_name"] == NAME
+        assert by_role["indemnitor"]["scan_id"] != by_role["co_indemnitor"]["scan_id"]
+        assert all(row["bond_case_id"] == CASE for row in rows)
+        assert all(row["booking_number"] == BOOKING for row in rows)
+        assert all(row["packet_id"] == PACKET for row in rows)
+        assert all(row["recorded_at"] for row in rows)
+        assert doc["indemnitor"]["id_ocr"]["scan_id"] == by_role["indemnitor"]["scan_id"]
+        assert doc["co_indemnitor"]["id_ocr"]["scan_id"] == by_role["co_indemnitor"]["scan_id"]
+
+
+def test_newer_scan_keeps_the_older_record(monkeypatch):
+    """A later scan appends. The earlier scan row stays as it was stored."""
+    import dashboard.services.cosigner_link_service as svc
+
+    stores, _client = _world(monkeypatch, cosigner=NAME)
+    packet = stores["paperwork_packets"].docs[0]
+    bond = stores["bond_cases"].docs[0]
+    asyncio.run(svc._store_scan(packet, bond, INDEMNITOR, "FL", "indemnitor", []))
+    older = {
+        doc_name: dict(_scan_rows(doc)[0])
+        for doc_name, doc in (("packet", packet), ("bond", bond))
+    }
+    asyncio.run(svc._store_scan(packet, bond, NAME, "NY", "co_indemnitor", []))
+    for doc_name, doc in (("packet", packet), ("bond", bond)):
+        rows = _scan_rows(doc)
+        first = older[doc_name]
+        assert len(rows) == 2
+        assert rows[0]["scan_id"] == first["scan_id"]
+        assert rows[0]["signer_name"] == INDEMNITOR
+        assert rows[0]["extracted"] == first["extracted"]
+        assert rows[0]["recorded_at"] == first["recorded_at"]
+        assert rows[1]["signer_name"] == NAME
+        assert rows[1]["role"] == "co_indemnitor"
+        assert doc["id_ocr"]["scan_id"] == first["scan_id"]
+        assert doc["co_indemnitor"]["id_ocr"]["scan_id"] == rows[1]["scan_id"]
+
+
+def test_rollback_removes_only_the_pointer_it_added(monkeypatch):
+    """A failed verification drops its pointer and leaves both scan rows."""
+    import dashboard.services.cosigner_link_service as svc
+
+    stores, client = _world(monkeypatch, cosigner=NAME)
+    packet = stores["paperwork_packets"].docs[0]
+    bond = stores["bond_cases"].docs[0]
+    packet["docuseal_submitters"] = [
+        _bound_submitter("indemnitor", _sign("indemnitor"), name=INDEMNITOR),
+        _bound_submitter("coindemnitor", _sign("cosigner"), name=NAME),
+    ]
+    asyncio.run(svc._store_scan(packet, bond, INDEMNITOR, "FL", "indemnitor", []))
+    older_ids = {
+        id(doc): _scan_rows(doc)[0]["scan_id"]
+        for doc in (packet, bond)
+    }
+    token = _token(client)
+    original = svc._save_link
+
+    async def _fail_verified(link):
+        if link.get("id_verified"):
+            raise RuntimeError("link save failed")
+        return await original(link)
+
+    monkeypatch.setattr(svc, "_save_link", _fail_verified)
+    _scanner(monkeypatch, {"n": 0})
+    with pytest.raises(RuntimeError, match="link save failed"):
+        _post_scan(client, token)
+    for doc in (packet, bond):
+        rows = _scan_rows(doc)
+        assert [row["signer_name"] for row in rows] == [INDEMNITOR, NAME]
+        assert rows[0]["scan_id"] == older_ids[id(doc)]
+        assert rows[1]["role"] == "co_indemnitor"
+        assert rows[1]["recorded_at"]
+        assert doc["id_ocr"]["scan_id"] == older_ids[id(doc)]
+        assert doc["id_ocr_role"] == "indemnitor"
+        assert "co_indemnitor" not in doc
     assert packet.get("cosigner_verified_token") in {None, ""}
 
 

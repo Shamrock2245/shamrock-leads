@@ -894,17 +894,6 @@ def _party_slot(role: str) -> str:
     return "co_indemnitor" if role == "co_indemnitor" else "indemnitor"
 
 
-def _scan_owner(doc: Optional[dict]) -> str:
-    """Role that currently owns the top-level scan. Empty when there is none."""
-    if not isinstance(doc, dict):
-        return ""
-    role = str(doc.get("id_ocr_role") or "").strip()
-    ocr = doc.get("id_ocr")
-    if role and isinstance(ocr, dict) and ocr:
-        return role
-    return ""
-
-
 def _with_party_scan(existing: Any, role: str, scan: dict) -> dict:
     if isinstance(existing, dict):
         party = dict(existing)
@@ -918,6 +907,48 @@ def _with_party_scan(existing: Any, role: str, scan: dict) -> dict:
     return party
 
 
+def _scan_record(doc: dict, role: str, scan: dict, packet_id: str) -> dict:
+    """One stored scan. Callers append it and never update it."""
+    extracted = scan.get("extracted") if isinstance(scan.get("extracted"), dict) else {}
+    name = str(extracted.get("full_name") or "").strip()
+    state = str(extracted.get("dl_state") or "").strip()
+    return {
+        "scan_id": secrets.token_hex(8),
+        "role": role,
+        "signer_name": name,
+        "bond_case_id": _bond_field(doc, "bond_case_id", "Bond_Case_ID"),
+        "booking_number": _bond_field(doc, "booking_number", "Booking_Number"),
+        "packet_id": _bond_field(doc, "packet_id") or str(packet_id or "").strip(),
+        "recorded_at": _now().isoformat(),
+        "success": True,
+        "extracted": {"full_name": name, "dl_state": state},
+    }
+
+
+def _scan_pointer(record: dict) -> dict:
+    """The current-scan pointer. The history row stays a separate object."""
+    return {
+        "scan_id": record["scan_id"],
+        "success": True,
+        "role": record["role"],
+        "recorded_at": record["recorded_at"],
+        "extracted": dict(record["extracted"]),
+    }
+
+
+def _top_pointer_filter(filt: dict, role: str) -> dict:
+    """Set the top-level pointer only while this role still owns it."""
+    return {
+        **filt,
+        "$or": [
+            {"id_ocr_role": {"$exists": False}},
+            {"id_ocr_role": ""},
+            {"id_ocr_role": None},
+            {"id_ocr_role": role},
+        ],
+    }
+
+
 async def _write_party_scan(
     collection: str,
     filt: dict,
@@ -925,74 +956,77 @@ async def _write_party_scan(
     role: str,
     scan: dict,
     stored: list,
+    packet_id: str,
 ) -> None:
-    """Store this party's scan without erasing another party's top-level scan."""
+    """Append this scan. A pointer may move. The stored row is not replaced."""
+    record = _scan_record(doc, role, scan, packet_id)
+    pointer = _scan_pointer(record)
     slot = _party_slot(role)
     prior_party = doc.get(slot)
-    wrote_top = _scan_owner(doc) in {"", role}
-    party = _with_party_scan(prior_party, role, scan)
-    patch = {slot: party}
-    prior_top = None
+    await get_collection(collection).update_one(
+        filt, {"$push": {"id_scan_records": record}},
+    )
+    records = doc.get("id_scan_records")
+    if not isinstance(records, list):
+        records = []
+        doc["id_scan_records"] = records
+    if record not in records:
+        records.append(record)
+    party = _with_party_scan(prior_party, role, pointer)
+    await get_collection(collection).update_one(filt, {"$set": {slot: party}})
+    doc[slot] = party
+    top = await get_collection(collection).update_one(
+        _top_pointer_filter(filt, role),
+        {"$set": {"id_ocr": pointer, "id_ocr_role": role}},
+    )
+    wrote_top = int(getattr(top, "modified_count", 0) or 0) > 0
     if wrote_top:
-        prior_top = {
-            "id_ocr": doc.get("id_ocr"),
-            "id_ocr_role": doc.get("id_ocr_role"),
-        }
-        patch["id_ocr"] = scan
-        patch["id_ocr_role"] = role
+        doc["id_ocr"] = pointer
+        doc["id_ocr_role"] = role
     stored.append({
         "collection": collection,
         "filter": filt,
         "doc": doc,
         "slot": slot,
+        "scan_id": record["scan_id"],
         "prior_party": prior_party,
         "wrote_top": wrote_top,
-        "prior_top": prior_top,
     })
-    await get_collection(collection).update_one(filt, {"$set": patch})
-    doc[slot] = party
-    if wrote_top:
-        doc["id_ocr"] = scan
-        doc["id_ocr_role"] = role
 
 
 async def _clear_stored_scan(stored: list) -> None:
-    """Undo scans from a verification that did not finish.
-
-    A party scan written beside an existing scan is removed. The other
-    party's top-level ``id_ocr`` is put back.
-    """
+    """Drop pointers this attempt added. Stored scan rows stay."""
     for snap in reversed(stored):
-        doc = snap.get("doc") if isinstance(snap.get("doc"), dict) else {}
-        update: dict = {}
-        unset: dict = {}
+        scan_id = str(snap.get("scan_id") or "")
+        if not scan_id:
+            continue
         slot = snap["slot"]
-        prior = snap.get("prior_party")
-        if prior is None:
-            unset[slot] = ""
-            doc.pop(slot, None)
+        filt = dict(snap.get("filter") or {})
+        coll = get_collection(snap["collection"])
+        if snap.get("prior_party") is None:
+            await coll.update_one(
+                {**filt, f"{slot}.id_ocr.scan_id": scan_id},
+                {"$unset": {slot: ""}},
+            )
         else:
-            update[slot] = prior
-            doc[slot] = prior
+            doc = snap.get("doc") if isinstance(snap.get("doc"), dict) else {}
+            party = doc.get(slot)
+            if (
+                isinstance(party, dict)
+                and str((party.get("id_ocr") or {}).get("scan_id") or "") == scan_id
+            ):
+                cleaned = dict(party)
+                cleaned.pop("id_ocr", None)
+                cleaned.pop("id_ocr_role", None)
+                await coll.update_one(
+                    {**filt, f"{slot}.id_ocr.scan_id": scan_id},
+                    {"$set": {slot: cleaned}},
+                )
         if snap.get("wrote_top"):
-            prior_top = snap.get("prior_top") or {}
-            if isinstance(prior_top.get("id_ocr"), dict) and prior_top.get("id_ocr"):
-                update["id_ocr"] = prior_top["id_ocr"]
-                update["id_ocr_role"] = prior_top.get("id_ocr_role") or ""
-                doc["id_ocr"] = update["id_ocr"]
-                doc["id_ocr_role"] = update["id_ocr_role"]
-            else:
-                unset["id_ocr"] = ""
-                unset["id_ocr_role"] = ""
-                doc.pop("id_ocr", None)
-                doc.pop("id_ocr_role", None)
-        payload: dict = {}
-        if update:
-            payload["$set"] = update
-        if unset:
-            payload["$unset"] = unset
-        if payload:
-            await get_collection(snap["collection"]).update_one(snap["filter"], payload)
+            await coll.update_one(
+                {**filt, "id_ocr.scan_id": scan_id},
+                {"$unset": {"id_ocr": "", "id_ocr_role": ""}},
+            )
 
 
 async def _restore_sibling_links(priors: list) -> None:
@@ -1184,6 +1218,7 @@ async def _store_scan(
     stored: list,
 ) -> None:
     scan = _passing_scan(name, state, role)
+    packet_id = str(packet.get("packet_id") or "")
     await _write_party_scan(
         "paperwork_packets",
         {"packet_id": packet.get("packet_id")},
@@ -1191,6 +1226,7 @@ async def _store_scan(
         role,
         scan,
         stored,
+        packet_id,
     )
     if not bond:
         return
@@ -1200,7 +1236,7 @@ async def _store_scan(
     collection = str(bond.get("_collection") or "bond_cases")
     if collection not in {"bond_cases", "active_bonds"}:
         collection = "bond_cases"
-    await _write_party_scan(collection, filt, bond, role, scan, stored)
+    await _write_party_scan(collection, filt, bond, role, scan, stored, packet_id)
 
 
 async def submit_cosigner_scan(token: str, body: dict) -> dict:

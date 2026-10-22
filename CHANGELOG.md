@@ -12,6 +12,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_cosigner_link.py`: `test_paid_path_reconciles_a_mirror_that_differs_only_in_case_and_spacing`, `test_mirror_drift_blocks_paid_and_flags_review_once`, `test_ambiguous_mirror_blocks_paid_and_flags_review_once`, `test_two_open_packets_block_paid_and_flag_each_link_once`, `test_mirror_normalization_keeps_real_differences`.
 
+## [Unreleased] — 2026-10-22 (co-signer ID scans are append-only)
+
+### Fixed
+- **An ID scan is stored as a new row and is not overwritten or deleted.** Each passing scan, for either signer role, is appended to `id_scan_records` on the packet and the bond with the signer, the bond, and a timestamp. The current pointer is that newest row for the role that owns it. Rollback of a verification that does not finish removes only the pointer that attempt added.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_concurrent_scans_both_survive`, `test_newer_scan_keeps_the_older_record`, `test_rollback_removes_only_the_pointer_it_added`.
+
 ## [Unreleased] — 2026-10-22 (co-signer pay link must be this bond's invoice)
 
 ### Fixed
