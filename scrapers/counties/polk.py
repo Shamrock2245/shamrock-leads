@@ -2,19 +2,34 @@
 Polk County Arrest Scraper — PCSO Jail Inquiry (Kendo UI JSON API).
 Source: Polk County Sheriff's Office
 URL: https://polksheriff.org/JailInquiry
-Method: Direct HTTP requests POST to SearchJail and GetCharges API endpoints.
+Method: Direct HTTP requests POST to SearchJail and GetCharges API endpoints,
+through ``scrapers.plain_http`` (honest User-Agent, certificate verified).
+
+Failure is visible, never swallowed:
+  * 401/403/429, a challenge page or a reset -> ``egress_block:`` (EgressBlocked)
+  * certificate verification failure -> ``tls_cert_invalid:`` (SourceTLSInvalid)
+  * SearchJail non-200 -> ``PolkHTTPError`` (carries ``status_code``; classified by status)
+  * SearchJail / GetCharges payload that isn't a list of objects -> ``ParseDriftError``
+  * a per-booking detail miss (profile non-200, no anti-forgery token, GetCharges
+    non-200 or non-JSON) leaves charges and bond "" and is counted in one warning
+    per run (no names or ids)
+
+Status is as published: a release date gives "Released" (status_source
+``published_release_date``), a published status field is kept
+(``published_status_field``), else "". SearchJail is a booking-date search that
+returns released bookings too, so presence is not custody.
 """
 import logging
 import re
 import time
 from datetime import datetime, timedelta
-from typing import List
+from typing import List, Optional, Tuple
 from bs4 import BeautifulSoup
 
 from scrapers.base_scraper import BaseScraper
 from scrapers.published_bond import charge_bond_amount, total_published_bond
 from scrapers.plain_http import make_session, request
-from scrapers.scraper_resilience import AntiBotBlocked
+from scrapers.scraper_resilience import ParseDriftError
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
@@ -38,18 +53,44 @@ RACE_MAP = {
 }
 
 _STATUS_KEYS = ("Status", "status", "CustodyStatus", "InmateStatus")
+STATUS_SOURCE_RELEASE_DATE = "published_release_date"
+STATUS_SOURCE_FIELD = "published_status_field"
 
 
-def published_status(b, release_date: str = "") -> str:
-    """Release date -> "Released"; else a published status string; else "" (never invented)."""
+class PolkHTTPError(RuntimeError):
+    """A non-200 SearchJail response that isn't a block; Health classifies it by status, not as drift."""
+
+    def __init__(self, status_code: int, step: str):
+        self.status_code = status_code
+        super().__init__(f"Polk: HTTP {status_code} from {step}")
+
+
+def published_status_fields(b, release_date: str = "") -> Tuple[str, str]:
+    """(Status, status_source): release date -> Released; else a published status; else ("", "")."""
     if release_date:
-        return "Released"
+        return "Released", STATUS_SOURCE_RELEASE_DATE
     if isinstance(b, dict):
         for key in _STATUS_KEYS:
             val = b.get(key)
             if isinstance(val, str) and val.strip():
-                return val.strip()
-    return ""
+                return val.strip(), STATUS_SOURCE_FIELD
+    return "", ""
+
+
+def published_status(b, release_date: str = "") -> str:
+    """Release date -> "Released"; else a published status string; else "" (never invented)."""
+    return published_status_fields(b, release_date)[0]
+
+
+def _json_list(resp, step: str) -> list:
+    """A JSON array of objects, or ParseDriftError (layout/contract drift)."""
+    try:
+        data = resp.json()
+    except ValueError:
+        raise ParseDriftError(f"Polk: {step} did not return JSON") from None
+    if not isinstance(data, list) or any(not isinstance(x, dict) for x in data):
+        raise ParseDriftError(f"Polk: {step} payload is not a list of objects")
+    return data
 
 
 class PolkCountyScraper(BaseScraper):
@@ -62,6 +103,7 @@ class PolkCountyScraper(BaseScraper):
         
         all_records = []
         seen_bookings = set()
+        detail_misses = 0
         
         # Loop for target dates
         for days_ago in range(DAYS_BACK):
@@ -74,42 +116,35 @@ class PolkCountyScraper(BaseScraper):
                 "BookingDate": date_str
             }
             
-            try:
-                # Certificate verification stays on; a bad chain raises SourceTLSInvalid.
-                resp = request(session, "POST", SEARCH_URL, data=payload, timeout=30, county="Polk")
-                if resp.status_code != 200:
-                    logger.warning(f"Polk: SearchJail for {date_str} returned {resp.status_code}")
+            # Certificate verification stays on; a bad chain raises SourceTLSInvalid,
+            # a block raises EgressBlocked. Neither is caught here.
+            resp = request(session, "POST", SEARCH_URL, data=payload, timeout=30, county="Polk")
+            if resp.status_code != 200:
+                raise PolkHTTPError(resp.status_code, "SearchJail")
+            bookings = _json_list(resp, "SearchJail")
+            logger.info(f"Polk: Found {len(bookings)} bookings for {date_str}")
+
+            for b in bookings:
+                booking_num = b.get("BookingNum")
+                if not booking_num or booking_num in seen_bookings:
                     continue
-                
-                bookings = resp.json()
-                logger.info(f"Polk: Found {len(bookings)} bookings for {date_str}")
-                
-                for b in bookings:
-                    booking_num = b.get("BookingNum")
-                    if not booking_num or booking_num in seen_bookings:
-                        continue
-                    seen_bookings.add(booking_num)
-                    
-                    try:
-                        record = self._scrape_booking_details(session, b)
-                        if record:
-                            all_records.append(record)
-                    except AntiBotBlocked:
-                        raise
-                    except Exception as be:
-                        logger.warning(f"Polk: Failed to fetch details for booking {booking_num}: {be}")
-                        
-                    # Polite rate-limiting between detail calls
-                    time.sleep(0.1)
-            except AntiBotBlocked:
-                raise
-            except Exception as e:
-                logger.error(f"Polk: Search error for {date_str}: {e}")
-                
+                seen_bookings.add(booking_num)
+                record, missed = self._booking_record(session, b)
+                all_records.append(record)
+                detail_misses += int(missed)
+                # Polite rate-limiting between detail calls
+                time.sleep(0.1)
+
+        if detail_misses:
+            logger.warning("Polk: %d booking detail(s) unavailable; charges/bond left blank", detail_misses)
         logger.info(f"Polk County Scrape Complete: {len(all_records)} total records")
         return all_records
 
     def _scrape_booking_details(self, session, b) -> ArrestRecord:
+        return self._booking_record(session, b)[0]
+
+    def _booking_record(self, session, b) -> Tuple[ArrestRecord, bool]:
+        """(record, detail_missed). Blocks, TLS and payload drift raise; a miss leaves charges/bond ""."""
         booking_num = str(b.get("BookingNum", "")).strip()
         full_name = str(b.get("FullName", "")).strip()
         rs_code = str(b.get("RS", "")).strip()
@@ -130,7 +165,7 @@ class PolkCountyScraper(BaseScraper):
         # Status only as published: a release date gives "Released", a published
         # status field is kept, else "". SearchJail is a booking-date search that
         # returns released bookings too, so presence is not custody.
-        status = published_status(b, release_date)
+        status, status_source = published_status_fields(b, release_date)
             
         # Determine facility from location code
         facility = FACILITY
@@ -163,21 +198,17 @@ class PolkCountyScraper(BaseScraper):
         
         # Load profile page to extract CSRF token for charges API
         token = ""
-        try:
-            profile_resp = request(session, "GET", detail_url, timeout=20, county="Polk")
-            if profile_resp.status_code == 200:
-                soup = BeautifulSoup(profile_resp.text, "html.parser")
-                token_el = soup.find("input", {"name": "__RequestVerificationToken"})
-                if token_el:
-                    token = token_el["value"]
-        except AntiBotBlocked:
-            raise
-        except Exception as pe:
-            logger.warning(f"Polk: Profile page fetch failed for {booking_num}: {pe}")
-            
+        missed = True
+        profile_resp = request(session, "GET", detail_url, timeout=20, county="Polk")
+        if profile_resp.status_code == 200:
+            soup = BeautifulSoup(profile_resp.text, "html.parser")
+            token_el = soup.find("input", {"name": "__RequestVerificationToken"})
+            if token_el:
+                token = token_el.get("value") or ""
+
         charges_list = []
         charge_bonds = []  # published amounts per charge; None = unknown
-        
+
         # Fetch detailed charges/bonds if token is available
         if token:
             post_headers = {
@@ -191,30 +222,23 @@ class PolkCountyScraper(BaseScraper):
                 "bookingNum": booking_num,
                 "__RequestVerificationToken": token
             }
-            try:
-                charges_resp = request(session, "POST", CHARGES_URL, data=charges_payload, headers=post_headers, timeout=20, county="Polk")
-                if charges_resp.status_code == 200:
-                    content_type = charges_resp.headers.get("Content-Type", "")
-                    if "json" in content_type.lower():
-                        charges_data = charges_resp.json()
-                        for chg in charges_data:
-                            statute = chg.get("Statute", "").strip()
-                            desc = chg.get("ChargeDesc", "").strip()
-                            bond_str = str(chg.get("BondAmountDue") or "").strip()
-                            
-                            item = f"{statute} - {desc}" if statute and desc else statute or desc
-                            if item:
-                                charges_list.append(item)
-                                
-                            # Only a published dollar amount counts (a real 0 included).
-                            charge_bonds.append(charge_bond_amount(bond_str))
-                    else:
-                        logger.debug(f"Polk: GetCharges returned non-JSON/HTML for {booking_num} (likely no charges).")
-            except AntiBotBlocked:
-                raise
-            except Exception as ce:
-                logger.warning(f"Polk: GetCharges call failed for {booking_num}: {ce}")
-                
+            charges_resp = request(session, "POST", CHARGES_URL, data=charges_payload, headers=post_headers, timeout=20, county="Polk")
+            content_type = (charges_resp.headers.get("Content-Type") or "").lower()
+            if charges_resp.status_code == 200 and "json" in content_type:
+                # JSON that isn't a list of charge objects is contract drift and raises.
+                for chg in _json_list(charges_resp, "GetCharges"):
+                    statute = str(chg.get("Statute") or "").strip()
+                    desc = str(chg.get("ChargeDesc") or "").strip()
+                    bond_str = str(chg.get("BondAmountDue") or "").strip()
+
+                    item = f"{statute} - {desc}" if statute and desc else statute or desc
+                    if item:
+                        charges_list.append(item)
+
+                    # Only a published dollar amount counts (a real 0 included).
+                    charge_bonds.append(charge_bond_amount(bond_str))
+                missed = False
+
         charges_str = " | ".join(charges_list)
         
         return ArrestRecord(
@@ -234,8 +258,9 @@ class PolkCountyScraper(BaseScraper):
             Bond_Amount=total_published_bond(charge_bonds),
             Charges=charges_str,
             Detail_URL=detail_url,
-            LastCheckedMode="INITIAL"
-        )
+            LastCheckedMode="INITIAL",
+            extra_data={"status_source": status_source} if status_source else {},
+        ), missed
 
     @staticmethod
     def _parse_name(name):
