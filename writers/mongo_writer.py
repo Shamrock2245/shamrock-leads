@@ -498,13 +498,27 @@ class MongoWriter:
             f"{f', {skipped_invalid} skipped' if skipped_invalid else ''})"
         )
         if new_record_indexes:
+            fresh = [records[i] for i in new_record_indexes if 0 <= i < len(records)]
             try:
                 from dashboard.services.lead_subscriptions import record_lead_fanout
 
-                record_lead_fanout(self.db, [records[i] for i in new_record_indexes])
+                record_lead_fanout(self.db, fresh)
             except Exception as fanout_err:
                 # Type only: a traceback/driver message can embed the pointers.
                 logger.warning("lead fan-out skipped (%s)", type(fanout_err).__name__)
+            # Discovery is best-effort and capped. It must not fail or stall the write.
+            try:
+                from writers.indemnitor_discovery_hook import (
+                    enqueue_lee_indemnitor_discovery,
+                    run_post_write_hook,
+                )
+
+                run_post_write_hook(enqueue_lee_indemnitor_discovery, self.db, fresh)
+            except Exception as hook_err:
+                logger.warning(
+                    "indemnitor discovery hook skipped error_type=%s",
+                    type(hook_err).__name__,
+                )
         return stats
 
     def get_arrests_by_county(

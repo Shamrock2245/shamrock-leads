@@ -681,6 +681,10 @@ window.SLProspective = (function () {
           fact('Case #', caseNumber) +
           fact('Address', address) +
         '</div>' +
+        '<div class="ld-section" id="ldCandidates">' +
+          '<div class="ld-section-label">Possible co-signers</div>' +
+          '<div id="ldCandidateList" class="ld-muted">Loading candidates…</div>' +
+        '</div>' +
         ((indName || indPhone) ? (
           '<div class="ld-section">' +
             '<div class="ld-section-label">Known contact</div>' +
@@ -716,7 +720,60 @@ window.SLProspective = (function () {
       if (mount) mount.innerHTML = renderPipelineWorkspace(bk, bond);
       wireComposer(bk);
     }
+    loadCandidates(booking);
     return;
+  }
+
+  function candidateStatusLine(status, count) {
+    if (count > 0) return '';
+    if (status === 'queued' || status === 'running') return 'Discovery is running. Nothing is sent automatically.';
+    if (status === 'failed') return 'Discovery did not finish. Refresh to try again.';
+    if (status === 'complete') return 'No co-signers found for this booking.';
+    return 'Discovery has not run for this booking yet.';
+  }
+
+  async function loadCandidates(bk) {
+    var seq = _detailSeq;
+    var el = $('ldCandidateList');
+    if (!el || !bk) return;
+    try {
+      var r = await fetch(API + '/api/contacts/' + encodeURIComponent(bk));
+      if (seq !== _detailSeq || String(_currentBk) !== String(bk)) return;
+      if (!r.ok) {
+        el.textContent = 'Candidates are unavailable.';
+        return;
+      }
+      var d = await r.json();
+      var rows = d.discovered_contacts || d.candidates || d.contacts || [];
+      var status = d.discovery_status || d.status || '';
+      if (!rows.length) {
+        el.textContent = candidateStatusLine(status, 0);
+        return;
+      }
+      el.innerHTML = rows.map(function(c) {
+        var anchors = (c.matched_anchors || []).join(', ');
+        var bits = [];
+        if (c.phone) bits.push(esc(c.phone));
+        if (c.email) bits.push(esc(c.email));
+        return '<div class="ld-contact" style="margin-bottom:8px">' +
+          '<div><strong>' + esc(c.name || 'Unknown') + '</strong>' +
+          (c.relationship ? '<span class="ld-muted"> · ' + esc(c.relationship) + '</span>' : '') +
+          '</div>' +
+          (bits.length ? '<div>' + bits.join(' · ') + '</div>' : '') +
+          (c.address ? '<div class="ld-muted">' + esc(c.address) + '</div>' : '') +
+          '<div class="ld-muted">' + esc(c.source || '') +
+          (anchors ? ' · anchors ' + esc(anchors) : '') +
+          (c.confidence != null ? ' · ' + esc(String(c.confidence)) : '') +
+          (c.discovered_at ? ' · ' + esc(String(c.discovered_at)) : '') +
+          '</div></div>';
+      }).join('') +
+        '<div class="ld-muted" style="margin-top:6px">Review only. Discovery does not call, text, or email.</div>' +
+        '<div style="margin-top:8px"><button type="button" class="btn-secondary" style="font-size:12px;padding:6px 12px" id="ldCandidateRefresh">Refresh discovery</button></div>';
+      var refresh = $('ldCandidateRefresh');
+      if (refresh) refresh.addEventListener('click', function() { discoverContacts(bk); });
+    } catch (e) {
+      if (seq === _detailSeq) el.textContent = 'Candidates are unavailable.';
+    }
   }
 
   function wireLeadActions(root, ctx) {
@@ -945,23 +1002,25 @@ window.SLProspective = (function () {
 
   // ── Contact Discovery ──────────────────────────────────────────────────────
   async function discoverContacts(bk) {
-    toast('Running contact discovery...', 'info');
+    toast('Running contact discovery…', 'info');
     try {
+      var bond = _data.find(function(b) { return String(b.booking_number) === String(bk); }) || {};
+      var lead = (window._leadMap && window._leadMap[bk]) || {};
       var r = await fetch(API + '/api/contacts/discover', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ booking_number: bk })
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          booking_number: bk,
+          full_name: bond.defendant_name || lead.full_name || lead.defendant_name || '',
+          county: bond.county || lead.county || '',
+          address: bond.address || lead.address || ''
+        })
       });
       var d = await r.json();
-      if (d.contacts && d.contacts.length) {
-        var best = d.contacts[0];
-        var nameEl = $('indName');
-        var phoneEl = $('indPhone');
-        if (nameEl && !nameEl.value && best.name) nameEl.value = best.name;
-        if (phoneEl && !phoneEl.value && best.phone) phoneEl.value = best.phone;
-        toast('Found ' + d.contacts.length + ' contact(s) — best: ' + (best.name || best.phone), 'success');
-      } else {
-        toast('No contacts found via discovery', 'info');
-      }
-    } catch (e) { toast('Discovery failed: ' + e.message, 'error'); }
+      var count = (d.contacts || d.discovered_contacts || []).length;
+      if (d.error) toast('Discovery failed', 'error');
+      else toast('Discovery finished (' + count + ')', count ? 'success' : 'info');
+      loadCandidates(bk);
+    } catch (e) { toast('Discovery failed', 'error'); }
   }
 
   // ── Schedule Message ───────────────────────────────────────────────────────
