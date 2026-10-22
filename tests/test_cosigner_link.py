@@ -399,6 +399,21 @@ def _audits(stores, event_type):
     ]
 
 
+def test_bond_stored_as_bond_case_id_alias_issues_a_link(monkeypatch):
+    """A bond that only has Bond_Case_ID still gets a co-signer link."""
+    stores, client = _world(monkeypatch)
+    bond = stores["bond_cases"].docs[0]
+    bond.pop("bond_case_id", None)
+    bond["Bond_Case_ID"] = CASE
+    token = _token(client)
+    assert token
+    assert "bond_case_id" not in bond
+    link = stores["cosigner_links"].docs[0]
+    assert link["token"] == token
+    assert link["packet_id"] == PACKET
+    assert link["bond_case_id"] == CASE
+
+
 def test_public_paths_stay_open_and_staff_create_stays_gated():
     assert "/cosigner/" in OPEN_PREFIXES
     assert "/api/cosigner/" in OPEN_PREFIXES

@@ -494,7 +494,10 @@ async def _matching_bonds(query: dict) -> list:
 
 
 async def _case_rows(collection: str, case_id: str) -> list:
-    scoped = _scope({"bond_case_id": case_id})
+    scoped = _scope({"$or": [
+        {"bond_case_id": case_id},
+        {"Bond_Case_ID": case_id},
+    ]})
     if scoped is None:
         raise CosignerLinkError("tenant_required", 403)
     found = []

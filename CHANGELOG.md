@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-22 (co-signer link finds Bond_Case_ID)
+
+### Fixed
+- **A bond stored only as `Bond_Case_ID` can still get a co-signer link.** The case lookup reads that field and `bond_case_id`.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_bond_stored_as_bond_case_id_alias_issues_a_link`.
+
 ## [Unreleased] — 2026-10-22 (co-signer email reads coindemnitor_email)
 
 ### Fixed
