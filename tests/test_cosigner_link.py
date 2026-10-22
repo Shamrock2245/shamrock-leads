@@ -836,6 +836,8 @@ def test_active_bond_scan_and_invoice_link_alias(monkeypatch):
 
     packet["invoice_payment_link"] = "https://pay.example/down"
     packet["swipesimple_invoice_amount_cents"] = 50000
+    packet["swipesimple_invoice_number"] = BOOKING
+    packet["swipesimple_invoice_bond_id"] = CASE
     packet["status"] = "completed"
     paying = client.get(f"/api/cosigner/{token}").json()
     assert paying["step"] == "pay"
@@ -871,6 +873,8 @@ def test_unproven_invoice_amount_hides_the_pay_link(monkeypatch):
     assert ">Pay</a>" not in page.text
 
     packet["swipesimple_invoice_amount_cents"] = 50000
+    packet["swipesimple_invoice_number"] = BOOKING
+    packet["swipesimple_invoice_bond_id"] = CASE
     matched = client.get(f"/api/cosigner/{token}")
     assert matched.status_code == 200, matched.text
     assert matched.json()["payment"]["url"] == "https://pay.example/down"
@@ -884,6 +888,113 @@ def test_unproven_invoice_amount_hides_the_pay_link(monkeypatch):
     assert missing.json()["payment"]["error"] == "invoice_amount_unproven"
     assert "https://pay.example/down" not in missing.text
     assert "https://pay.example/down" not in client.get(f"/cosigner/{token}").text
+
+
+def test_invoice_url_must_belong_to_this_bond(monkeypatch):
+    """A matching amount is not enough. The invoice must be this bond."""
+    foreign = "https://pay.example/other-bond"
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert opened.status_code == 200, opened.text
+    packet = stores["paperwork_packets"].docs[0]
+    packet["status"] = "completed"
+    packet["invoice_payment_link"] = foreign
+    packet["swipesimple_invoice_amount_cents"] = 50000
+    packet["swipesimple_invoice_number"] = "TEST-COS-OTHER"
+    packet["swipesimple_invoice_bond_id"] = "BC-TEST-OTHER"
+
+    def _hidden(body):
+        assert body.status_code == 200, body.text
+        payload = body.json()
+        assert payload["step"] in {"pay", "paid"}
+        assert payload["payment"]["url"] is None
+        assert payload["payment"]["error"] == "invoice_unbound"
+        assert payload["payment"]["amount"] == "500.00"
+        assert foreign not in body.text
+        page = client.get(f"/cosigner/{token}")
+        assert page.status_code == 200
+        assert foreign not in page.text
+        assert ">Pay</a>" not in page.text
+
+    _hidden(client.get(f"/api/cosigner/{token}"))
+
+    packet["swipesimple_invoice_number"] = BOOKING
+    _hidden(client.get(f"/api/cosigner/{token}"))
+
+    packet.pop("swipesimple_invoice_number", None)
+    packet["swipesimple_invoice_bond_id"] = CASE
+    _hidden(client.get(f"/api/cosigner/{token}"))
+
+    packet["swipesimple_invoice_number"] = BOOKING
+    owned = client.get(f"/api/cosigner/{token}")
+    assert owned.status_code == 200, owned.text
+    assert owned.json()["step"] == "pay"
+    assert owned.json()["payment"]["url"] == foreign
+    assert "error" not in owned.json()["payment"]
+    assert foreign in client.get(f"/cosigner/{token}").text
+
+    packet["swipesimple_invoice_amount_cents"] = 30000
+    packet["swipesimple_invoice_bond_id"] = "BC-TEST-OTHER"
+    short = client.get(f"/api/cosigner/{token}")
+    assert short.status_code == 200, short.text
+    assert short.json()["payment"]["url"] is None
+    assert short.json()["payment"]["error"] == "invoice_amount_unproven"
+    assert foreign not in short.text
+
+    packet.pop("invoice_payment_link", None)
+    packet["swipesimple_invoice_amount_cents"] = 50000
+    bond = stores["bond_cases"].docs[0]
+    bond["invoice_payment_link"] = foreign
+    bond["swipesimple_invoice_amount_cents"] = 50000
+    bond["swipesimple_invoice_number"] = BOOKING
+    bond["swipesimple_invoice_bond_id"] = "BC-TEST-OTHER"
+    _hidden(client.get(f"/api/cosigner/{token}"))
+
+    stores, client = _world(monkeypatch, cosigner=NAME)
+    token = _token(client)
+    uploaded = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    packet = stores["paperwork_packets"].docs[0]
+    packet["status"] = "completed"
+    packet["invoice_payment_link"] = foreign
+    packet["swipesimple_invoice_amount_cents"] = 50000
+    packet["swipesimple_invoice_number"] = "TEST-COS-OTHER"
+    packet["swipesimple_invoice_bond_id"] = "BC-TEST-OTHER"
+    cosigned = client.get(f"/api/cosigner/{token}")
+    assert cosigned.status_code == 200, cosigned.text
+    assert cosigned.json()["payment"]["url"] is None
+    assert cosigned.json()["payment"]["error"] == "invoice_unbound"
+    assert foreign not in cosigned.text
+    assert foreign not in client.get(f"/cosigner/{token}").text
+
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert opened.status_code == 200, opened.text
+    packet = stores["paperwork_packets"].docs[0]
+    packet["status"] = "completed"
+    packet["invoice_payment_link"] = foreign
+    packet["swipesimple_invoice_amount_cents"] = 50000
+    packet["swipesimple_invoice_number"] = "TEST-COS-OTHER"
+    packet["swipesimple_invoice_bond_id"] = "BC-TEST-OTHER"
+    stores["bond_cases"].docs[0]["premium_paid"] = True
+    paid = client.get(f"/api/cosigner/{token}")
+    assert paid.status_code == 200, paid.text
+    assert paid.json()["step"] == "paid"
+    assert paid.json()["payment"]["url"] is None
+    assert paid.json()["payment"]["error"] == "invoice_unbound"
+    assert foreign not in paid.text
+    assert foreign not in client.get(f"/cosigner/{token}").text
 
 
 def _scanner(monkeypatch, calls):
@@ -1223,6 +1334,8 @@ def test_signed_signer_mismatch_keeps_the_invoice_link(monkeypatch):
     packet["status"] = "completed"
     packet["invoice_payment_link"] = "https://pay.example/down"
     packet["swipesimple_invoice_amount_cents"] = 50000
+    packet["swipesimple_invoice_number"] = BOOKING
+    packet["swipesimple_invoice_bond_id"] = CASE
     bond = stores["bond_cases"].docs[0]
     row = packet["docuseal_submitters"][0]
 

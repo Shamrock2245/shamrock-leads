@@ -1620,6 +1620,25 @@ def _invoice_source(packet: dict, bond: Optional[dict]) -> tuple[str, Optional[d
     return "", None
 
 
+def _invoice_not_this_case(doc: Optional[dict], packet: dict, bond: Optional[dict]) -> bool:
+    """The stored invoice number and bond id must name this booking and bond.
+
+    A missing number or bond id cannot prove ownership, so the pay URL stays
+    hidden. The fields are read from the document that supplied the URL.
+    """
+    number = str((doc or {}).get("swipesimple_invoice_number") or "").strip()
+    stored_bond = str((doc or {}).get("swipesimple_invoice_bond_id") or "").strip()
+    booking = _bond_field(bond or {}, "booking_number", "Booking_Number")
+    if not booking:
+        booking = str((packet or {}).get("booking_number") or "").strip()
+    case_id = _bond_field(bond or {}, "bond_case_id", "Bond_Case_ID")
+    if not case_id:
+        case_id = str((packet or {}).get("bond_case_id") or "").strip()
+    if not number or not stored_bond or not booking or not case_id:
+        return True
+    return number != booking or stored_bond != case_id
+
+
 def _invoice_amount_unproven(doc: Optional[dict], due_cents: Optional[int]) -> bool:
     """The stored SwipeSimple cents are missing or are not this due amount.
 
@@ -1647,8 +1666,12 @@ def _payment_view(packet: dict, bond: Optional[dict]) -> dict:
     amount = f"{(cents or 0) / 100:.2f}" if cents is not None else ""
     link, source = _invoice_source(packet, bond)
     unproven = bool(link) and _invoice_amount_unproven(source, cents)
+    unbound = False
     if unproven:
         link = ""
+    elif link and _invoice_not_this_case(source, packet, bond):
+        link = ""
+        unbound = True
     dry_run = not dispatch_live_enabled()
     view = {
         "amount": amount,
@@ -1658,6 +1681,8 @@ def _payment_view(packet: dict, bond: Optional[dict]) -> dict:
     }
     if unproven:
         view["error"] = "invoice_amount_unproven"
+    elif unbound:
+        view["error"] = "invoice_unbound"
     return view
 
 

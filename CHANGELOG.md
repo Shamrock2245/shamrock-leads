@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-22 (co-signer pay link must be this bond's invoice)
+
+### Fixed
+- **The pay step does not show a SwipeSimple URL from another bond.** After the stored cents match the amount due, `swipesimple_invoice_number` must equal this booking and `swipesimple_invoice_bond_id` must equal this bond. A missing or different binding hides the URL and returns `invoice_unbound`. A wrong amount still returns `invoice_amount_unproven`.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_invoice_url_must_belong_to_this_bond`.
+
 ## [Unreleased] — 2026-10-22 (bond mirror must match the whole case chain)
 
 ### Fixed
