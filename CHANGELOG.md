@@ -3,6 +3,13 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-21 (Duval: plain honest HTTPS, fail closed on tls_cert_invalid)
+
+### Changed
+- **Duval (FL) no longer drives a DrissionPage browser.** The shared browser options sent a Chrome UA and injected stealth JS, and the module intercepted the SPA's API traffic. `duval.py` now has one fetch path through `scrapers.plain_http` (honest UA, certificate verified). A block raises `egress_block`, a bad certificate raises `tls_cert_invalid`, the ATIMS robot gate raises `captcha_gate` (never clicked), any other non-200 raises `DuvalHTTPError` (classified by status), and a page or payload that doesn't match raises `ParseDriftError`. The swallowed `except Exception` blocks around DOM parsing, API packets and form submission are gone.
+- **Duval is fail closed (CoS decision to reopen).** One honest probe from the agent box (2026-10-21 08:17 EDT) got `tls_cert_invalid`. The host sends only its leaf certificate (Network Solutions RSA OV SSL CA 3 intermediate missing, openssl verify error 21), the same as on 2026-10-15. `SOURCE_CONTRACT_VALIDATED = False`, `SCRAPER_SOURCE_STATES["Duval (FL)"] = "fail_closed"`, and the FL 031 evidence row is updated, with `COUNTY_SOURCE_CONTRACT_MATRIX.md` regenerated. `FL_67_STATUS_2026-10-08.md`, `docs/COUNTY_REGISTRY.md` and `docs/agents/scraper-agent.md` are updated too. Recon: `docs/recon/FL_DUVAL_HONEST.md`.
+- **Duval records are published-only.** Booking keys come only from a published booking-number field: the `id` / `inmateId` / `jacketNumber` fallbacks and the DOM path's "any 4+ digit number" are removed. Bond comes only from a published bond field or a labelled bond value (a published 0 is kept), never the first dollar figure in a row. Status is a published release date (`Released`) or a published status field, otherwise `""`, with `status_source` recorded. Tests: `tests/test_fl_duval_plain_https.py` (new, on the ci.yml list), `tests/test_fl_duval_no_robot_click.py`, `tests/test_fl_duval_honest_status.py`; the FL matrix count in `tests/test_home_county_smoke_evidence.py` moves from 19 recon_only / 24 fail_closed to 18 / 25.
+
 ## [Unreleased] — 2026-10-15 (Palm Beach: plain honest HTTPS, no browser disguise)
 
 ### Changed

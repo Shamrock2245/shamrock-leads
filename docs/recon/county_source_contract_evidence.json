@@ -715,10 +715,10 @@
     {
       "state": "FL",
       "county_fips": "031",
-      "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "passive_recommendation": "fail_closed",
+      "official_source_url": "https://inmatesearch.jaxsheriff.org/",
+      "access_posture": "Fail closed: host omits its intermediate certificate, so an honest verified GET fails tls_cert_invalid; Angular SPA behind an ATIMS robot gate; no verify=False, browser or gate click",
+      "evidence_note": "2026-10-21 (`docs/recon/FL_DUVAL_HONEST.md`): one honest plain_http GET (honest UA, certificate checks on) raised `tls_cert_invalid`; openssl shows only the leaf (CN=inmatesearch.jaxsheriff.org) and the issuer Network Solutions RSA OV SSL CA 3 is not sent (verify error 21). Same as the 2026-10-15 probe. DrissionPage path retired; `SOURCE_CONTRACT_VALIDATED=False` + Health fail_closed until a verified read and a source booking-number contract are proven (CoS decision)."
     },
     {
       "state": "FL",

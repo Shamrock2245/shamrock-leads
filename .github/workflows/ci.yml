@@ -111,6 +111,7 @@ jobs:
             tests/test_fl_orange_honest_status.py \
             tests/test_pbso_parse_status.py \
             tests/test_fl_duval_honest_status.py \
+            tests/test_fl_duval_plain_https.py \
             tests/test_fl_polk_honest_status.py \
             tests/test_fl_hernando_honest_identity.py \
             tests/test_sc_florence_honest.py \

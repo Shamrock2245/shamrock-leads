@@ -92,7 +92,7 @@
 ## Tier 7 — NE FL / First Coast (4 Counties)
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
-| 36 | **Duval** | DrissionPage — API interception (jaxsheriff.org) | `duval.py` | ✅ Active | 90 min | 2026-04-27 |
+| 36 | **Duval** | JSO / ATIMS inmate search, plain HTTPS via `plain_http` (honest UA, TLS verified; DrissionPage retired). Host omits its intermediate cert, so the honest GET fails `tls_cert_invalid`; SPA behind an ATIMS robot gate (never clicked) | `duval.py` | 🔴 Fail closed (2026-10-21, `docs/recon/FL_DUVAL_HONEST.md`; CoS decision to reopen) | 90 min | 2026-10-21 |
 | 37 | **St. Johns** | Stub — `st_johns.py` returns no rows; sjso.org links `/smartwebclient/jail.aspx` but it answers **403** (Cloudflare/nginx) to ordinary access | `st_johns.py` | 🔴 No reachable public roster (hold; no WAF bypass) | 120 min | 2026-10-07 |
 | 38 | **Nassau** | New World InmateInquiry — portal serves an incomplete TLS chain (leaf only, GoDaddy G2 intermediate missing); old module used `verify=False` and keyed every row `History` | `nassau.py` | 🔴 Fail closed (`SOURCE_CONTRACT_VALIDATED=False`; owner hold until the chain is fixed or the intermediate is approved). See `docs/recon/FL_67_STATUS_2026-10-08.md` | 120 min | 2026-10-08 |
 | 39 | **Clay** | Public detention listing has Name/Booking Date only — no source booking ID | `clay.py` | 🔴 Fail closed (no invented name keys) | 120 min | 2026-10-07 |

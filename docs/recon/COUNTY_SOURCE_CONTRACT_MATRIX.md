@@ -23,7 +23,7 @@
 |---|---:|---:|---:|---:|---:|---:|---:|
 | AL | 67 | 16 | 4 | 0 | 0 | 51 | 12 |
 | CT | 12 | 6 | 0 | 0 | 6 | 1 | 5 |
-| FL | 67 | 67 | 4 | 20 | 19 | 0 | 24 |
+| FL | 67 | 67 | 4 | 20 | 18 | 0 | 25 |
 | GA | 159 | 85 | 0 | 0 | 148 | 0 | 11 |
 | LA | 64 | 13 | 3 | 1 | 4 | 46 | 10 |
 | MS | 82 | 9 | 1 | 0 | 4 | 69 | 8 |
@@ -32,7 +32,7 @@
 | TN | 96 | 22 | 9 | 0 | 74 | 0 | 13 |
 | TX | 254 | 34 | 2 | 0 | 0 | 252 | 0 |
 
-**Aggregate matrix counts:** verified public 33; candidate productive 36; recon only 255; unverified 489; fail closed 134.
+**Aggregate matrix counts:** verified public 33; candidate productive 36; recon only 254; unverified 489; fail closed 135.
 
 ## County matrix
 
@@ -131,7 +131,7 @@
 | FL | 023 | Columbia County | OSI + Palmetto | registered | fail_closed | — | Legacy SmartWEB IP returns 503; SO site has no working inmate-search deep link | 2026-10-07 idle-eight recon: http://50.204.15.10/smartwebclient/Jail.aspx → 503; columbiasheriff.org FAQ inmate-search 404; FL DOS directory lists no Columbia inmate-search URL. Hold fail_closed. |
 | FL | 027 | DeSoto County | OSI + Palmetto | registered | fail_closed | https://jail.desotosheriff.org/DCN/inmates | 2026-10-08 ~8:05 AM ET from the agent box: DCN DevExpress roster over plain HTTPS (Cloudflare-fronted, no challenge), honest User-Agent; page 1 server-rendered (100 rows, "Page 1 of 2", 161 items), page 2 via the grid's own DevExpress pager callback (`scrapers/dcn_base.py`). No browser needed for the read; the current `desoto.py` still drives DrissionPage | 2026-10-08 source-contract check (`docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md`): roster lists Full Name / Age / Race / Sex / Admit Date with `inmate-details?id=&bid=` links; `bid` is stable across two fresh sessions (100/100) and unique per row (161/161 through the pager). Detail page shows Admit Date + Admit Time and per-charge Offense Date / Court Type / Court Date / Docket Number / Bond / Bond Type, but no printed booking number. CoS review 2026-10-08: `bid` is the jail site's internal record id, not a source booking number (same kind of id #136 rejects), so DeSoto stays `recon_only` until the source publishes a booking number. Health stays `unverified`. **2026-10-15: CoS chose fail_closed (option 1 on #222, `docs/recon/FL_DESOTO_FAIL_CLOSED_2026-10-15.md`)**; `desoto.py` is `SOURCE_CONTRACT_VALIDATED=False` and fetches nothing; the plain-HTTPS rewrite is kept for when a booking number is proven. One honest probe from the agent box 2026-10-15 got HTTP 403. |
 | FL | 029 | Dixie County | OSI + Palmetto | registered | candidate_productive | https://smartcop.dixiecountysheriff.com/smartwebclient/Jail.aspx | Ordinary public HTTPS SmartWEB JAIL View (TypeSearch omitted on this build) | 2026-10-07 SmartWEB-five recon: Booking No DCSO<YY>JBN<NNNNNN>, booking date/time, charges when published. Plain requests fl_smartweb; TypeSearch optional. 2026-10-07 legacy-paging fix: bare-SearchVals AddMoreResults now pages (30-day read smoke 33 rows, was 20). |
-| FL | 031 | Duval County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
+| FL | 031 | Duval County | OSI + Palmetto | registered | fail_closed | https://inmatesearch.jaxsheriff.org/ | Fail closed: host omits its intermediate certificate, so an honest verified GET fails tls_cert_invalid; Angular SPA behind an ATIMS robot gate; no verify=False, browser or gate click | 2026-10-21 (`docs/recon/FL_DUVAL_HONEST.md`): one honest plain_http GET (honest UA, certificate checks on) raised `tls_cert_invalid`; openssl shows only the leaf (CN=inmatesearch.jaxsheriff.org) and the issuer Network Solutions RSA OV SSL CA 3 is not sent (verify error 21). Same as the 2026-10-15 probe. DrissionPage path retired; `SOURCE_CONTRACT_VALIDATED=False` + Health fail_closed until a verified read and a source booking-number contract are proven (CoS decision). |
 | FL | 033 | Escambia County | OSI + Palmetto | registered | candidate_productive | https://inmatelookup.myescambia.com/smartwebclient/jail.aspx | Ordinary public HTTPS SmartWEB JAIL View | 2026-10-07 SmartWEB-five recon: Booking No ECC<YY>JBN<NNNNNN>, booking date/time, charges, bond. AddMoreResults pages successfully (147 in 7-day window). curl_cffi retired. |
 | FL | 035 | Flagler County | OSI + Palmetto | registered | candidate_productive | https://nwwebcad.fcpsn.org/NewWorld.InmateInquiry/FL0180000 | Ordinary public HTTPS New World InmateInquiry (InCustody=True roster + Inmate/Detail pages) | 2026-10-07 Brevard/New World recon: detail div.Booking h3 Booking YYYY-NNNNNNNN, open booking = empty Release Date; 215/215 unique source bookings. Old parser keyed every row on the Booking History heading (one shared key). Bond = source Total Bond Amount. Shared fl_newworld; curl_cffi retired. |
 | FL | 037 | Franklin County | OSI + Palmetto | registered | recon_only | — | Public landing/source contract not safely verified; no access-control workaround | Official current-roster contract not verified safely; no detail-record probes or person-level retrieval. |
