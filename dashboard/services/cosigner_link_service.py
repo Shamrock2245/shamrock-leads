@@ -943,6 +943,16 @@ async def _write_party_scan(
     pointer = _scan_pointer(record)
     slot = _party_slot(role)
     prior_party = doc.get(slot)
+    snap = {
+        "collection": collection,
+        "filter": filt,
+        "doc": doc,
+        "slot": slot,
+        "scan_id": record["scan_id"],
+        "prior_party": prior_party,
+        "wrote_top": False,
+    }
+    stored.append(snap)
     await get_collection(collection).update_one(
         filt, {"$push": {"id_scan_records": record}},
     )
@@ -955,23 +965,16 @@ async def _write_party_scan(
     party = _with_party_scan(prior_party, role, pointer)
     await get_collection(collection).update_one(filt, {"$set": {slot: party}})
     doc[slot] = party
+    snap["wrote_top"] = True
     top = await get_collection(collection).update_one(
         _top_pointer_filter(filt, role),
         {"$set": {"id_ocr": pointer, "id_ocr_role": role}},
     )
     wrote_top = int(getattr(top, "modified_count", 0) or 0) > 0
+    snap["wrote_top"] = wrote_top
     if wrote_top:
         doc["id_ocr"] = pointer
         doc["id_ocr_role"] = role
-    stored.append({
-        "collection": collection,
-        "filter": filt,
-        "doc": doc,
-        "slot": slot,
-        "scan_id": record["scan_id"],
-        "prior_party": prior_party,
-        "wrote_top": wrote_top,
-    })
 
 
 async def _clear_stored_scan(stored: list) -> None:

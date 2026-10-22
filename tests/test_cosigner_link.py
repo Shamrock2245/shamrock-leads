@@ -2412,6 +2412,43 @@ def test_rollback_removes_only_the_pointer_it_added(monkeypatch):
     assert packet.get("cosigner_verified_token") in {None, ""}
 
 
+def test_failed_pointer_write_rolls_back_the_party_scan(monkeypatch):
+    """A pointer write that fails still drops the party pointer it stored."""
+    stores, client = _world(monkeypatch)
+    packet = stores["paperwork_packets"].docs[0]
+    bond = stores["bond_cases"].docs[0]
+
+    def _wrap(col):
+        orig = col.update_one
+
+        async def _update(query, update, upsert=False, session=None, **kwargs):
+            pointer = (update or {}).get("$set") or {}
+            if "id_ocr" in pointer and "id_ocr_role" in pointer:
+                raise RuntimeError("top pointer failed")
+            return await orig(query, update, upsert=upsert, session=session, **kwargs)
+
+        col.update_one = _update
+
+    _wrap(stores["paperwork_packets"])
+    _wrap(stores["bond_cases"])
+    token = _token(client)
+    _scanner(monkeypatch, {"n": 0})
+    with pytest.raises(RuntimeError, match="top pointer failed"):
+        _post_scan(client, token)
+    rows = _scan_rows(packet)
+    assert len(rows) == 1
+    assert rows[0]["signer_name"] == NAME
+    assert rows[0]["role"] == "indemnitor"
+    assert "id_ocr" not in packet
+    assert "indemnitor" not in packet
+    assert not bond.get("id_scan_records")
+    assert "id_ocr" not in bond
+    from dashboard.services.identity_verification_service import scans_from_document
+
+    assert [row for row in scans_from_document(packet) if row.get("passed") == "1"] == []
+    assert packet.get("cosigner_verified_token") in {None, ""}
+
+
 def test_reassigned_packet_does_not_keep_the_issued_link(monkeypatch):
     """A packet moved to another open case does not keep the old bearer link."""
     stores, client = _world(monkeypatch)

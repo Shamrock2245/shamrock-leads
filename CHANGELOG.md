@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-22 (co-signer scan rollback is registered first)
+
+### Fixed
+- **A scan rollback is recorded before the packet or bond is written.** If a later pointer write fails, the pointer from that attempt is removed. The stored scan row stays.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_failed_pointer_write_rolls_back_the_party_scan`.
+
 ## [Unreleased] — 2026-10-22 (co-signer ID scans are append-only)
 
 ### Fixed
