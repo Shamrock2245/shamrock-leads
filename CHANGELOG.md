@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-22 (co-signer email reads coindemnitor_email)
+
+### Fixed
+- **The signer check reads the kiosk `coindemnitor_email` field.** A DocuSeal row with another email is `sign_link_mismatch` and its URL is not returned.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_coindemnitor_email_blocks_a_different_docuseal_row`.
+
 ## [Unreleased] — 2026-10-22 (failed same-role scan restores the prior pointer)
 
 ### Fixed

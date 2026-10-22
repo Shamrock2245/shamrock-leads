@@ -1323,6 +1323,41 @@ def test_sign_url_matches_the_verified_signer(monkeypatch):
     assert _sign("cosigner") not in emailed.text
 
 
+def test_coindemnitor_email_blocks_a_different_docuseal_row(monkeypatch):
+    """The kiosk coindemnitor_email alias rejects another recipient's URL."""
+    stores, client = _world(monkeypatch, cosigner=NAME)
+    token = _token(client)
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "issuing_state": "NY"},
+    )
+    assert opened.status_code == 200, opened.text
+    packet = stores["paperwork_packets"].docs[0]
+    bond = stores["bond_cases"].docs[0]
+    for doc in (packet, bond):
+        doc.pop("co_signer_email", None)
+        doc.pop("cosigner_email", None)
+        doc.pop("co_indemnitor_email", None)
+        for person in doc.get("indemnitors") or []:
+            if isinstance(person, dict):
+                person.pop("email", None)
+    packet["coindemnitor_email"] = "signer@example.invalid"
+    row = next(
+        item for item in packet["docuseal_submitters"]
+        if item.get("role") == "coindemnitor"
+    )
+    row["email"] = "other@example.invalid"
+    mismatched = client.get(f"/api/cosigner/{token}")
+    assert mismatched.status_code == 409
+    assert mismatched.json() == {"error": "sign_link_mismatch"}
+    assert _sign("cosigner") not in mismatched.text
+    assert _sign_hidden(mismatched.text)
+    row["email"] = "signer@example.invalid"
+    matched = client.get(f"/api/cosigner/{token}")
+    assert matched.status_code == 200, matched.text
+    assert matched.json()["sign_url"] == _sign("cosigner")
+
+
 def test_pay_step_hides_an_unbound_sign_url(monkeypatch):
     """After signing, a bad DocuSeal URL does not block the invoice page."""
     stores, client = _world(monkeypatch)

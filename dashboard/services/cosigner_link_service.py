@@ -299,7 +299,12 @@ def _submitter_matches_signer(
 def _signer_email(packet: dict, bond: Optional[dict], role: str) -> str:
     """Email stored for this signer. Blank when the case has none."""
     keys = (
-        ("co_signer_email", "cosigner_email", "co_indemnitor_email")
+        (
+            "co_signer_email",
+            "cosigner_email",
+            "co_indemnitor_email",
+            "coindemnitor_email",
+        )
         if role == "co_indemnitor"
         else ("indemnitor_email",)
     )
