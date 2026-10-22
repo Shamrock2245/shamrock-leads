@@ -1592,6 +1592,31 @@ _PACKET_AMBIGUOUS = "packet_ambiguous"
 _PAID_BLOCK_REASONS = _PAID_BLOCK_REVIEW_CODES | {_PACKET_AMBIGUOUS}
 
 
+async def _blocked_charge_is_the_down_payment(
+    packet: Optional[dict], paid_cents: Optional[int],
+) -> bool:
+    """The held charge is exactly this packet's down payment.
+
+    The bond rows cannot be trusted on this path, so the packet's own amount
+    due is used. Without one, a single ``bond_cases`` row for the packet's
+    case supplies it. Anything else is not flagged, the same as the amount
+    refusal on the paid path.
+    """
+    if paid_cents is None or not isinstance(packet, dict):
+        return False
+    due = invoice_due_cents(packet)
+    if due is None:
+        case_id = str(packet.get("bond_case_id") or "").strip()
+        if case_id:
+            try:
+                rows = await _case_rows("bond_cases", case_id)
+            except CosignerLinkError:
+                rows = []
+            if len(rows) == 1:
+                due = invoice_due_cents(rows[0])
+    return due is not None and int(due) == int(paid_cents)
+
+
 async def _flag_paid_blocked(
     link: dict,
     packet: Optional[dict],
@@ -1604,22 +1629,31 @@ async def _flag_paid_blocked(
     """Leave a staff-visible review mark when a settled charge cannot stamp.
 
     The payment row is already recorded. The bond rows disagree, or more than
-    one open packet claims the case, so the link stays unpaid. The link gets
-    ``needs_review`` with the reason and the transaction, and one
-    ``paid_blocked`` audit is written. The update is conditional on this
-    transaction, so a replay does not audit again. Nothing is sent anywhere.
+    one open packet claims the case, so the link stays unpaid. Only a charge
+    equal to the packet's down payment is flagged. The link gets
+    ``needs_review`` with the reason, and the transaction is added to
+    ``paid_blocked_transaction_ids``. One ``paid_blocked`` audit is written
+    per transaction: the update is conditional on that transaction not being
+    in the list yet, so a replay, including one that alternates with another
+    blocked transaction, does not audit again. Nothing is sent anywhere.
     """
     token = str(link.get("token") or "").strip()
     if not token or not txn:
         return False
+    if not await _blocked_charge_is_the_down_payment(packet, paid_cents):
+        logger.info("[cosigner] paid hold not flagged amount packet_id=%s", link.get("packet_id"))
+        return False
     result = await get_collection(LINKS).update_one(
-        {"token": token, "paid_blocked_transaction_id": {"$ne": txn}},
-        {"$set": {
-            "needs_review": True,
-            "needs_review_reason": code,
-            "paid_blocked_transaction_id": txn,
-            "paid_blocked_at": now.isoformat(),
-        }},
+        {"token": token, "paid_blocked_transaction_ids": {"$ne": txn}},
+        {
+            "$set": {
+                "needs_review": True,
+                "needs_review_reason": code,
+                "paid_blocked_transaction_id": txn,
+                "paid_blocked_at": now.isoformat(),
+            },
+            "$push": {"paid_blocked_transaction_ids": txn},
+        },
         session=session,
     )
     if not getattr(result, "modified_count", 0):
@@ -1642,23 +1676,43 @@ async def _flag_paid_blocked(
     return True
 
 
-async def _clear_paid_block(link: dict, session) -> None:
+async def _clear_paid_block(
+    link: dict, packet: Optional[dict], txn: str, now: datetime, session,
+) -> bool:
     """A link that was held for review and is now paid is no longer held.
 
-    ``paid_blocked_transaction_id`` and the ``paid_blocked`` audit stay as
-    the record of the hold.
+    The clear is conditional on the hold still being set and writes one
+    ``paid_block_cleared`` audit with the old and new review values, in the
+    same payment transaction. ``paid_blocked_transaction_ids`` and the
+    ``paid_blocked`` audits stay as the record of the hold.
     """
     token = str(link.get("token") or "").strip()
-    if not token:
-        return
-    await get_collection(LINKS).update_one(
-        {
-            "token": token,
-            "needs_review_reason": {"$in": sorted(_PAID_BLOCK_REASONS)},
-        },
-        {"$set": {"needs_review": False, "needs_review_reason": ""}},
+    reason = str(link.get("needs_review_reason") or "")
+    if not token or reason not in _PAID_BLOCK_REASONS:
+        return False
+    result = await get_collection(LINKS).update_one(
+        {"token": token, "needs_review": True, "needs_review_reason": reason},
+        {"$set": {
+            "needs_review": False,
+            "needs_review_reason": "",
+            "paid_block_cleared_at": now.isoformat(),
+        }},
         session=session,
     )
+    if not getattr(result, "modified_count", 0):
+        return False
+    state = _audit_state(link, packet)
+    await _audit(
+        "paid_block_cleared", link, now,
+        old_state=state, new_state=state, session=session,
+        reason=reason,
+        extra={
+            "transaction_id": txn,
+            "review_before": {"needs_review": True, "needs_review_reason": reason},
+            "review_after": {"needs_review": False, "needs_review_reason": ""},
+        },
+    )
+    return True
 
 
 async def note_cosigner_paid(
@@ -1715,7 +1769,7 @@ async def note_cosigner_paid(
                 continue
             marked = await _cas_mark_paid(link, packet, txn, now, session)
             if marked and str(link.get("needs_review_reason") or "") in _PAID_BLOCK_REASONS:
-                await _clear_paid_block(link, session)
+                await _clear_paid_block(link, packet, txn, now, session)
 
     await _with_payment_lock(txn, work)
 

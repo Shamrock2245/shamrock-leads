@@ -223,7 +223,11 @@ def _match(doc, query):
                 if current not in expected["$in"]:
                     return False
             elif "$ne" in expected:
-                if current == expected["$ne"]:
+                # Mongo: $ne on an array field matches when no element equals it.
+                if isinstance(current, list):
+                    if expected["$ne"] in current:
+                        return False
+                elif current == expected["$ne"]:
                     return False
             elif "$exists" in expected:
                 if present != bool(expected["$exists"]):
@@ -3382,6 +3386,18 @@ def test_mirror_drift_blocks_paid_and_flags_review_once(monkeypatch, changes):
     assert len(_audits(stores, "paid")) == 1
     assert stores["cosigner_links"].docs[0]["needs_review"] is False
     assert stores["cosigner_links"].docs[0]["paid_blocked_transaction_id"] == "TX-MIRROR-DRIFT"
+    cleared = _audits(stores, "paid_block_cleared")
+    assert len(cleared) == 1
+    assert cleared[0]["reason"] == "bond_mirror_mismatch"
+    assert cleared[0]["transaction_id"] == "TX-MIRROR-DRIFT"
+    assert cleared[0]["review_before"] == {
+        "needs_review": True, "needs_review_reason": "bond_mirror_mismatch",
+    }
+    assert cleared[0]["review_after"] == {"needs_review": False, "needs_review_reason": ""}
+    again = _webhook(client, txn="TX-MIRROR-DRIFT", amount="500.00")
+    assert again.status_code == 200, again.text
+    assert len(_audits(stores, "paid_block_cleared")) == 1
+    assert len(_audits(stores, "paid")) == 1
     assert len(_audits(stores, "paid_blocked")) == 1
     assert len(_down_rows(db, "TX-MIRROR-DRIFT")) == 1
 
@@ -3453,3 +3469,34 @@ def test_two_open_packets_block_paid_and_flag_each_link_once(monkeypatch):
     assert len(blocked) == 2
     assert {row["packet_id"] for row in blocked} == {PACKET, "PKT-TEST-COS-2"}
     assert {row["reason"] for row in blocked} == {"packet_ambiguous"}
+
+
+def test_alternating_blocked_transactions_audit_once_each(monkeypatch):
+    """Two held charges replayed in turn write one paid_blocked audit each."""
+    stores, client, token, db = _paid_mirror_world(monkeypatch, surety_id="other-surety")
+    for txn in ("TX-HOLD-A", "TX-HOLD-B", "TX-HOLD-A", "TX-HOLD-B", "TX-HOLD-A"):
+        replay = _webhook(client, txn=txn, amount="500.00")
+        assert replay.status_code == 200, replay.text
+    link = stores["cosigner_links"].docs[0]
+    assert link["paid_blocked_transaction_ids"] == ["TX-HOLD-A", "TX-HOLD-B"]
+    blocked = _audits(stores, "paid_blocked")
+    assert sorted(row["transaction_id"] for row in blocked) == ["TX-HOLD-A", "TX-HOLD-B"]
+    assert not link.get("paid_transaction_id")
+
+
+@pytest.mark.parametrize("world", ["mirror", "two_packets"])
+def test_held_charge_that_is_not_the_down_payment_is_not_flagged(monkeypatch, world):
+    """A $100 charge on a held booking is not the $500 down payment."""
+    if world == "mirror":
+        stores, client, token, db = _paid_mirror_world(monkeypatch, surety_id="other-surety")
+    else:
+        stores, client, token, db = _recorder_world(monkeypatch)
+        _extra_link(stores, packet_id="PKT-TEST-COS-2", case_id=CASE, token="second-packet")
+    small = _webhook(client, txn="TX-HOLD-SMALL", amount="100.00")
+    assert small.status_code == 200, small.text
+    _poll_down_payment(db, txn="TX-HOLD-SMALL", amount="100.00")
+    assert len(_down_rows(db, "TX-HOLD-SMALL")) == 1
+    assert _cents(_down_rows(db, "TX-HOLD-SMALL")[0]["amount"]) == 10000
+    assert _audits(stores, "paid_blocked") == []
+    assert _audits(stores, "paid") == []
+    assert all(not link.get("needs_review") for link in stores["cosigner_links"].docs)
