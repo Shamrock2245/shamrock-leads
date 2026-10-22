@@ -3265,8 +3265,18 @@ def test_failed_verification_removes_the_stored_scan(monkeypatch):
     assert packet.get("cosigner_verified_token") in {None, ""}
     other = next(row for row in stores["cosigner_links"].docs if row["token"] == sibling)
     assert other.get("revoked") is not True
-    assert stores.get("audit_events") is None or _audits(stores, "id_verified") == []
-    assert stores.get("audit_events") is None or _audits(stores, "link_revoked") == []
+    verified = _audits(stores, "id_verified")
+    revoked = _audits(stores, "link_revoked")
+    assert len(verified) == 1
+    assert len(revoked) == 1
+    rolled = _audits(stores, "verification_rolled_back")
+    assert len(rolled) == 1
+    assert rolled[0]["restored_links"] == [{
+        "token": sibling,
+        "revoked": False,
+        "status": "",
+    }]
+    assert rolled[0]["new_state"]["restored_links"] == [sibling]
     assert winner in [row["token"] for row in stores["cosigner_links"].docs]
 
     monkeypatch.setattr(svc, "_save_link", original)
@@ -3274,8 +3284,9 @@ def test_failed_verification_removes_the_stored_scan(monkeypatch):
     opened = _post_scan(client, winner)
     assert opened.status_code == 200, opened.text
     assert other.get("revoked") is True
-    assert len(_audits(stores, "id_verified")) == 1
-    assert len(_audits(stores, "link_revoked")) == 1
+    assert len(_audits(stores, "id_verified")) == 2
+    assert len(_audits(stores, "link_revoked")) == 2
+    assert len(_audits(stores, "verification_rolled_back")) == 1
 
 
 def test_sibling_revocation_writes_an_audit(monkeypatch):

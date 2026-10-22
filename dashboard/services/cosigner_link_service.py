@@ -1062,17 +1062,42 @@ async def _restore_sibling_links(priors: list) -> None:
         )
 
 
-async def _drop_partial_audits(packet_id: str, created_at: str) -> None:
-    """Remove audits for a verification that did not finish."""
-    coll = get_collection("audit_events")
-    for event_type in ("id_verified", "link_revoked"):
-        query = {
-            "event_type": event_type,
-            "packet_id": packet_id,
-            "created_at": created_at,
-        }
-        while int(getattr(await coll.delete_one(query), "deleted_count", 0) or 0):
+async def _drop_partial_audits(
+    packet_id: str,
+    created_at: str,
+    restored: Optional[list] = None,
+) -> None:
+    """Keep this attempt's audits and record that the verification rolled back."""
+    siblings = []
+    for prior in restored or []:
+        if not isinstance(prior, dict):
             continue
+        token = str(prior.get("token") or "").strip()
+        if not token:
+            continue
+        siblings.append({
+            "token": token,
+            "revoked": prior.get("revoked") is True,
+            "status": str(prior.get("status") or ""),
+        })
+    now = _now()
+    await get_collection("audit_events").insert_one({
+        "event_type": "verification_rolled_back",
+        "action": "verification_rolled_back",
+        "entity_type": "cosigner_link",
+        "entity_id": packet_id,
+        "actor": "cosigner_link",
+        "agent_name": "cosigner_link",
+        "timestamp": now,
+        "created_at": now.isoformat(),
+        "packet_id": packet_id,
+        "reason": "verification_rolled_back",
+        "attempted_at": created_at,
+        "restored_links": siblings,
+        "old_state": {},
+        "new_state": {"restored_links": [row["token"] for row in siblings]},
+        "confidence": 1.0,
+    })
 
 
 async def _release_verification_claim(packet: dict, token: str) -> None:
@@ -1342,7 +1367,9 @@ async def submit_cosigner_scan(token: str, body: dict) -> dict:
             await _clear_stored_scan(stored)
             await _restore_sibling_links(priors)
             if started:
-                await _drop_partial_audits(str(packet.get("packet_id") or ""), started)
+                await _drop_partial_audits(
+                    str(packet.get("packet_id") or ""), started, priors,
+                )
             await _release_verification_claim(packet, token)
         except Exception:
             logger.info("[cosigner] scan rollback failed")

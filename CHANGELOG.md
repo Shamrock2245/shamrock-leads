@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-22 (co-signer rollback keeps the audit)
+
+### Fixed
+- **A failed verification no longer deletes its audit rows.** The `id_verified` and `link_revoked` events stay. A `verification_rolled_back` event records the sibling links that were restored.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_failed_verification_removes_the_stored_scan`.
+
 ## [Unreleased] — 2026-10-22 (co-signer link finds Bond_Case_ID)
 
 ### Fixed
