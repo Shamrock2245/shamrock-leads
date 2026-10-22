@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-22 (booking fallback reconciles a bond mirror)
+
+### Fixed
+- **A packet with no case id accepts one bond and its agreeing mirror.** Rows in `bond_cases` and `active_bonds` are one case only when their case ids match, and that pair is reconciled. A mirror that does not match is 409 `bond_mirror_mismatch`. Any other pair is 409 `bond_ambiguous`.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_booking_fallback_reconciles_a_bond_mirror`.
+
 ## [Unreleased] — 2026-10-21 (co-signer paid audit reads inside the transaction)
 
 ### Fixed

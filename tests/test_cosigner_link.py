@@ -2228,6 +2228,44 @@ def test_booking_fallback_link_records_the_down_payment(monkeypatch):
     assert len(_audits(stores, "paid")) == 0
 
 
+def test_booking_fallback_reconciles_a_bond_mirror(monkeypatch):
+    """A booking-only packet accepts one agreeing mirror and refuses the rest."""
+    stores, client = _world(monkeypatch)
+    stores["paperwork_packets"].docs[0]["bond_case_id"] = ""
+    _mirror_of(stores)
+    token = _token(client)
+    state = client.get(f"/api/cosigner/{token}")
+    assert state.status_code == 200, state.text
+    assert state.json()["step"] == "scan"
+
+    stores["active_bonds"].docs[0]["status"] = "exonerated"
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    closed = client.get(f"/api/cosigner/{token}")
+    assert closed.status_code == 409
+    assert closed.json()["error"] == "bond_mirror_mismatch"
+    assert _sign_hidden(closed.text)
+    refused = _post_scan(client, token)
+    assert refused.status_code == 409
+    assert refused.json()["error"] == "bond_mirror_mismatch"
+    assert calls["n"] == 0
+
+    stores, client = _world(monkeypatch)
+    stores["paperwork_packets"].docs[0]["bond_case_id"] = ""
+    extra = dict(stores["bond_cases"].docs[0])
+    extra.pop("_id", None)
+    extra["bond_case_id"] = "BC-TEST-OTHER"
+    stores["bond_cases"].docs.append(extra)
+    ambiguous = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert ambiguous.status_code == 409
+    assert ambiguous.json()["error"] == "bond_ambiguous"
+    assert _links(stores) == []
+
+
 def test_down_payment_is_scoped_to_one_packet(monkeypatch):
     """A booking charge stamps the bond's open packet, not every link on the booking."""
     stores, client, _token, _db = _recorder_world(monkeypatch)

@@ -520,10 +520,10 @@ def _mirror_disagrees(case_row: dict, mirror: dict) -> bool:
 async def _find_bond(packet: dict) -> Optional[dict]:
     """The packet's case id wins. Booking is used only when no case id exists.
 
-    Two bond rows that share a booking number are not a guess. That fallback
-    fails closed. A case id with more than one ``bond_cases`` row, or an
-    ``active_bonds`` mirror whose status or signer does not match, also fails
-    closed.
+    Two bond rows that share a booking number are not a guess. A mirror pair
+    with the same case id is reconciled. Any other pair fails closed. A case
+    id with more than one ``bond_cases`` row, or an ``active_bonds`` mirror
+    that does not match, also fails closed.
     """
     booking = str(packet.get("booking_number") or "").strip()
     case_id = str(packet.get("bond_case_id") or "").strip()
@@ -540,9 +540,25 @@ async def _find_bond(packet: dict) -> Optional[dict]:
     if not booking:
         return None
     matches = await _matching_bonds({"booking_number": booking})
-    if len(matches) > 1:
+    if not matches:
+        return None
+    # A case stored in both collections is one case when the case ids agree.
+    # Reconcile that pair the same way the case-id path does. Two logical
+    # cases, or two rows in one collection, are not a guess.
+    from dashboard.services.payment_log_claims import _logical_bond_groups
+
+    groups = _logical_bond_groups([
+        (str(doc.get("_collection") or ""), doc) for doc in matches
+    ])
+    if len(groups) != 1:
         raise CosignerLinkError("bond_ambiguous", 409)
-    return matches[0] if matches else None
+    group = groups[0]
+    if len(group) == 1:
+        return group[0][1]
+    case_row, mirror = group[0][1], group[1][1]
+    if _mirror_disagrees(case_row, mirror):
+        raise CosignerLinkError("bond_mirror_mismatch", 409)
+    return case_row
 
 
 def _timeline_push(link: dict, step: str, now: datetime) -> bool:
