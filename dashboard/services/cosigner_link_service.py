@@ -916,6 +916,17 @@ def _scan_pointer(record: dict) -> dict:
     }
 
 
+def _copy_scan_pointer(blob: Any) -> Optional[dict]:
+    """A pointer snapshot. Later writes must not change this copy."""
+    if not isinstance(blob, dict) or not blob:
+        return None
+    copied = dict(blob)
+    extracted = copied.get("extracted")
+    if isinstance(extracted, dict):
+        copied["extracted"] = dict(extracted)
+    return copied
+
+
 def _top_pointer_filter(filt: dict, role: str) -> dict:
     """Set the top-level pointer only while this role still owns it."""
     return {
@@ -943,13 +954,27 @@ async def _write_party_scan(
     pointer = _scan_pointer(record)
     slot = _party_slot(role)
     prior_party = doc.get(slot)
+    prior_party_pointer = None
+    prior_party_role = ""
+    if isinstance(prior_party, dict):
+        prior_party_pointer = _copy_scan_pointer(prior_party.get("id_ocr"))
+        prior_party_role = str(prior_party.get("id_ocr_role") or "").strip()
+    prior_top = None
+    if str(doc.get("id_ocr_role") or "").strip() == role:
+        prior_top_pointer = _copy_scan_pointer(doc.get("id_ocr"))
+        if prior_top_pointer is not None:
+            prior_top = {"id_ocr": prior_top_pointer, "id_ocr_role": role}
     snap = {
         "collection": collection,
         "filter": filt,
         "doc": doc,
         "slot": slot,
+        "role": role,
         "scan_id": record["scan_id"],
         "prior_party": prior_party,
+        "prior_party_pointer": prior_party_pointer,
+        "prior_party_role": prior_party_role,
+        "prior_top": prior_top,
         "wrote_top": False,
     }
     stored.append(snap)
@@ -978,7 +1003,7 @@ async def _write_party_scan(
 
 
 async def _clear_stored_scan(stored: list) -> None:
-    """Drop pointers this attempt added. Stored scan rows stay."""
+    """Restore or remove pointers this attempt added. Scan rows stay."""
     for snap in reversed(stored):
         scan_id = str(snap.get("scan_id") or "")
         if not scan_id:
@@ -986,30 +1011,35 @@ async def _clear_stored_scan(stored: list) -> None:
         slot = snap["slot"]
         filt = dict(snap.get("filter") or {})
         coll = get_collection(snap["collection"])
+        owned = {**filt, f"{slot}.id_ocr.scan_id": scan_id}
+        prior_pointer = snap.get("prior_party_pointer")
         if snap.get("prior_party") is None:
-            await coll.update_one(
-                {**filt, f"{slot}.id_ocr.scan_id": scan_id},
-                {"$unset": {slot: ""}},
-            )
+            await coll.update_one(owned, {"$unset": {slot: ""}})
+        elif isinstance(prior_pointer, dict):
+            await coll.update_one(owned, {"$set": {
+                f"{slot}.id_ocr": prior_pointer,
+                f"{slot}.id_ocr_role": snap.get("prior_party_role") or snap.get("role") or "",
+            }})
         else:
-            doc = snap.get("doc") if isinstance(snap.get("doc"), dict) else {}
-            party = doc.get(slot)
-            if (
-                isinstance(party, dict)
-                and str((party.get("id_ocr") or {}).get("scan_id") or "") == scan_id
-            ):
-                cleaned = dict(party)
-                cleaned.pop("id_ocr", None)
-                cleaned.pop("id_ocr_role", None)
-                await coll.update_one(
-                    {**filt, f"{slot}.id_ocr.scan_id": scan_id},
-                    {"$set": {slot: cleaned}},
-                )
+            await coll.update_one(owned, {"$unset": {
+                f"{slot}.id_ocr": "",
+                f"{slot}.id_ocr_role": "",
+            }})
         if snap.get("wrote_top"):
-            await coll.update_one(
-                {**filt, "id_ocr.scan_id": scan_id},
-                {"$unset": {"id_ocr": "", "id_ocr_role": ""}},
-            )
+            prior_top = snap.get("prior_top") if isinstance(snap.get("prior_top"), dict) else None
+            if isinstance((prior_top or {}).get("id_ocr"), dict):
+                await coll.update_one(
+                    {**filt, "id_ocr.scan_id": scan_id},
+                    {"$set": {
+                        "id_ocr": prior_top["id_ocr"],
+                        "id_ocr_role": prior_top.get("id_ocr_role") or "",
+                    }},
+                )
+            else:
+                await coll.update_one(
+                    {**filt, "id_ocr.scan_id": scan_id},
+                    {"$unset": {"id_ocr": "", "id_ocr_role": ""}},
+                )
 
 
 async def _restore_sibling_links(priors: list) -> None:

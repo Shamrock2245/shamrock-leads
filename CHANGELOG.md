@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-22 (failed same-role scan restores the prior pointer)
+
+### Fixed
+- **A failed retry by the same signer puts the previous scan pointer back.** The new scan row stays. A first scan that does not finish still drops only the pointer it added.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_failed_same_role_retry_restores_the_previous_pointer`.
+
 ## [Unreleased] — 2026-10-22 (co-signer scan rollback is registered first)
 
 ### Fixed
