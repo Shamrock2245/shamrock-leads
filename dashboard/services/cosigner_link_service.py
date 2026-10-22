@@ -1715,6 +1715,21 @@ async def _iter(cursor):
         return
 
 
+def _swipesimple_host() -> str:
+    """Hostname of the configured SwipeSimple origin. No secret is read."""
+    from dashboard.services.swipesimple_invoice_service import _DEFAULT_BASE_URL
+
+    base = (os.getenv("SWIPESIMPLE_BASE_URL") or _DEFAULT_BASE_URL).strip()
+    return (urlparse(base).hostname or "").lower()
+
+
+def _invoice_host_rejected(link: str) -> bool:
+    """A pay URL is shown only on the configured SwipeSimple host."""
+    host = (urlparse(str(link or "").strip()).hostname or "").lower()
+    expected = _swipesimple_host()
+    return not host or not expected or host != expected
+
+
 def _invoice_source(packet: dict, bond: Optional[dict]) -> tuple[str, Optional[dict]]:
     """The case invoice URL and the document that stored it."""
     for doc in (packet, bond):
@@ -1771,11 +1786,15 @@ def _payment_view(packet: dict, bond: Optional[dict]) -> dict:
     link, source = _invoice_source(packet, bond)
     unproven = bool(link) and _invoice_amount_unproven(source, cents)
     unbound = False
+    off_host = False
     if unproven:
         link = ""
     elif link and _invoice_not_this_case(source, packet, bond):
         link = ""
         unbound = True
+    elif link and _invoice_host_rejected(link):
+        link = ""
+        off_host = True
     dry_run = not dispatch_live_enabled()
     view = {
         "amount": amount,
@@ -1787,6 +1806,8 @@ def _payment_view(packet: dict, bond: Optional[dict]) -> dict:
         view["error"] = "invoice_amount_unproven"
     elif unbound:
         view["error"] = "invoice_unbound"
+    elif off_host:
+        view["error"] = "invoice_origin"
     return view
 
 

@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-22 (co-signer pay URL stays on SwipeSimple)
+
+### Fixed
+- **The co-signer page returns a pay URL only when its host is the configured SwipeSimple origin.** Any other URL, including another https host, is omitted and the payment view reports `invoice_origin`.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_off_site_invoice_url_is_hidden`.
+
 ## [Unreleased] — 2026-10-22 (co-signer rollback keeps the audit)
 
 ### Fixed
