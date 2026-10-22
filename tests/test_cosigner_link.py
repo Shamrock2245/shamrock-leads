@@ -2468,6 +2468,57 @@ def test_bond_mirror_and_duplicate_rows_fail_closed(monkeypatch):
     assert client.get(f"/api/cosigner/{token}").json()["sign_url"] == _sign("abc")
 
 
+def test_mirror_chain_must_match(monkeypatch):
+    """A mirror that diverges on the case chain is not this bond."""
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    _mirror_of(stores)
+    agreed = client.get(f"/api/cosigner/{token}")
+    assert agreed.status_code == 200, agreed.text
+    assert agreed.json()["step"] == "scan"
+
+    divergences = (
+        {"poa_number": ""},
+        {"match_status": "pending"},
+        {"case_number": "2026-TEST-OTHER"},
+        {"surety_id": "palmetto"},
+        {"match_id": "MATCH-OTHER"},
+        {"booking_number": "TEST-COS-OTHER"},
+        {"defendant_name": "Pat Other"},
+    )
+    for changes in divergences:
+        stores, client = _world(monkeypatch)
+        token = _token(client)
+        _mirror_of(stores, **changes)
+        calls = {"n": 0}
+        _scanner(monkeypatch, calls)
+        state = client.get(f"/api/cosigner/{token}")
+        assert state.status_code == 409, changes
+        assert state.json()["error"] == "bond_mirror_mismatch"
+        assert _sign_hidden(state.text)
+        refused = _post_scan(client, token)
+        assert refused.status_code == 409, changes
+        assert refused.json()["error"] == "bond_mirror_mismatch"
+        assert calls["n"] == 0
+        assert "id_ocr" not in stores["paperwork_packets"].docs[0]
+
+    stores, client = _world(monkeypatch)
+    stores["paperwork_packets"].docs[0]["bond_case_id"] = ""
+    _mirror_of(stores)
+    token = _token(client)
+    stores["active_bonds"].docs[0]["case_number"] = "2026-TEST-OTHER"
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    drifted = client.get(f"/api/cosigner/{token}")
+    assert drifted.status_code == 409
+    assert drifted.json()["error"] == "bond_mirror_mismatch"
+    assert _sign_hidden(drifted.text)
+    refused = _post_scan(client, token)
+    assert refused.status_code == 409
+    assert refused.json()["error"] == "bond_mirror_mismatch"
+    assert calls["n"] == 0
+
+
 def test_first_verified_scan_closes_sibling_links(monkeypatch):
     stores, client = _world(monkeypatch)
     first = _token(client)

@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-22 (bond mirror must match the whole case chain)
+
+### Fixed
+- **A bond and its active mirror must carry the same case chain.** Status and signer were already compared. Booking, defendant, match id, match status, case number, surety, and POA are compared too. A cleared or reassigned field is 409 `bond_mirror_mismatch`. The DocuSeal URL is not returned, and the scan does not run OCR.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_mirror_chain_must_match`.
+
 ## [Unreleased] — 2026-10-22 (booking fallback reconciles a bond mirror)
 
 ### Fixed

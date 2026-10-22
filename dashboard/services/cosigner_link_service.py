@@ -504,8 +504,16 @@ def _bond_status(bond: dict) -> str:
     return str((bond or {}).get("status") or "").strip().lower()
 
 
+def _mirror_text(bond: dict, *keys: str) -> str:
+    return _bond_field(bond, *keys)
+
+
 def _mirror_disagrees(case_row: dict, mirror: dict) -> bool:
-    """Status or signer binding differs between a case and its active mirror."""
+    """The case and its active mirror must be the same bonded case.
+
+    Status, signer, booking, defendant, match, case number, surety, and POA
+    are compared. A cleared or reassigned field is a different case.
+    """
     if _bond_status(case_row) != _bond_status(mirror):
         return True
     case_name, case_role = _expected_signer(case_row, None)
@@ -514,6 +522,28 @@ def _mirror_disagrees(case_row: dict, mirror: dict) -> bool:
         return True
     if not case_name or not mirror_name or not names_match(case_name, mirror_name):
         return True
+    for keys in (
+        ("booking_number", "Booking_Number"),
+        ("case_number", "Case_Number"),
+        ("surety_id", "Surety_ID"),
+        ("poa_number", "POA_Number", "power_number"),
+        ("match_id", "Match_ID"),
+    ):
+        if _mirror_text(case_row, *keys) != _mirror_text(mirror, *keys):
+            return True
+    case_match = _mirror_text(case_row, "match_status", "Match_Status").lower()
+    mirror_match = _mirror_text(mirror, "match_status", "Match_Status").lower()
+    if case_match != mirror_match:
+        return True
+    case_defendant = _mirror_text(case_row, "defendant_name", "Defendant_Name", "defendant")
+    mirror_defendant = _mirror_text(mirror, "defendant_name", "Defendant_Name", "defendant")
+    if case_defendant or mirror_defendant:
+        if (
+            not case_defendant
+            or not mirror_defendant
+            or not names_match(case_defendant, mirror_defendant)
+        ):
+            return True
     return False
 
 
