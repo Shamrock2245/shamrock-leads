@@ -3146,3 +3146,169 @@ def test_paid_audit_reads_the_link_on_the_payment_session(monkeypatch):
     reversed_audit = _audits(stores, "payment_reversed")[-1]
     assert reversed_audit["new_state"]["paid"] is False
     assert reversed_audit["new_state"]["payment_reversed"] is True
+
+
+def _paid_mirror_world(monkeypatch, **mirror_changes):
+    """Recorder world plus an ``active_bonds`` mirror on both sides."""
+    import copy
+
+    stores, client, token, db = _recorder_world(monkeypatch)
+    stores["bond_cases"].docs[0]["defendant_name"] = "Robin Q. Sample"
+    _mirror_of(stores, **mirror_changes)
+    db["active_bonds"].docs.append(copy.deepcopy(stores["active_bonds"].docs[0]))
+    return stores, client, token, db
+
+
+def _down_rows(db, txn):
+    return [row for row in db["payments"].docs if row.get("transaction_id") == txn]
+
+
+def test_paid_path_reconciles_a_mirror_that_differs_only_in_case_and_spacing(monkeypatch):
+    """'OSI' and ' osi ' are one surety. The down payment marks paid once."""
+    stores, client, token, db = _paid_mirror_world(
+        monkeypatch,
+        surety_id=" OSI ",
+        status=" ACTIVE",
+        case_number=" 2026-test-001 ",
+        poa_number="poa-test-cos-1",
+        match_status="Validated",
+        defendant_name="  robin   q  sample ",
+    )
+    before = client.get(f"/api/cosigner/{token}")
+    assert before.status_code == 200, before.text
+    assert before.json()["step"] == "pay"
+
+    for _ in range(3):
+        replay = _webhook(client, txn="TX-MIRROR-CASE", amount="500.00")
+        assert replay.status_code == 200, replay.text
+    polled = _poll_down_payment(db, txn="TX-MIRROR-CASE", amount="500.00")
+    assert polled["duplicate"] is True
+
+    rows = _down_rows(db, "TX-MIRROR-CASE")
+    assert len(rows) == 1
+    assert _cents(rows[0]["amount"]) == DOWN_CENTS
+    link = stores["cosigner_links"].docs[0]
+    assert link["paid_transaction_id"] == "TX-MIRROR-CASE"
+    assert not link.get("needs_review")
+    assert len(_audits(stores, "paid")) == 1
+    assert _audits(stores, "paid_blocked") == []
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"surety_id": "other-surety"},
+        {"poa_number": "POA-TEST-OTHER"},
+        {"defendant_name": "Someone Else"},
+    ],
+)
+def test_mirror_drift_blocks_paid_and_flags_review_once(monkeypatch, changes):
+    """A different surety, POA, or defendant stays unpaid with one review mark."""
+    stores, client, token, db = _paid_mirror_world(monkeypatch, **changes)
+    refused = client.get(f"/api/cosigner/{token}")
+    assert refused.status_code == 409
+    assert refused.json()["error"] == "bond_mirror_mismatch"
+
+    for _ in range(2):
+        replay = _webhook(client, txn="TX-MIRROR-DRIFT", amount="500.00")
+        assert replay.status_code == 200, replay.text
+    _poll_down_payment(db, txn="TX-MIRROR-DRIFT", amount="500.00")
+
+    rows = _down_rows(db, "TX-MIRROR-DRIFT")
+    assert len(rows) == 1
+    assert _cents(rows[0]["amount"]) == DOWN_CENTS
+    link = stores["cosigner_links"].docs[0]
+    assert not link.get("paid_transaction_id")
+    assert _audits(stores, "paid") == []
+    assert link["needs_review"] is True
+    assert link["needs_review_reason"] == "bond_mirror_mismatch"
+    assert link["paid_blocked_transaction_id"] == "TX-MIRROR-DRIFT"
+    blocked = _audits(stores, "paid_blocked")
+    assert len(blocked) == 1
+    assert blocked[0]["reason"] == "bond_mirror_mismatch"
+    assert blocked[0]["transaction_id"] == "TX-MIRROR-DRIFT"
+    assert blocked[0]["amount_cents"] == DOWN_CENTS
+    assert blocked[0]["needs_review"] is True
+
+    # Staff correct the mirror. The same charge replays and marks paid once.
+    stores["active_bonds"].docs[0].update(
+        {key: stores["bond_cases"].docs[0].get(key) for key in changes}
+    )
+    fixed = _webhook(client, txn="TX-MIRROR-DRIFT", amount="500.00")
+    assert fixed.status_code == 200, fixed.text
+    assert stores["cosigner_links"].docs[0]["paid_transaction_id"] == "TX-MIRROR-DRIFT"
+    assert len(_audits(stores, "paid")) == 1
+    assert stores["cosigner_links"].docs[0]["needs_review"] is False
+    assert stores["cosigner_links"].docs[0]["paid_blocked_transaction_id"] == "TX-MIRROR-DRIFT"
+    assert len(_audits(stores, "paid_blocked")) == 1
+    assert len(_down_rows(db, "TX-MIRROR-DRIFT")) == 1
+
+
+def test_ambiguous_mirror_blocks_paid_and_flags_review_once(monkeypatch):
+    """Two active_bonds rows for one case id stay unpaid with one review mark."""
+    import copy
+
+    stores, client, token, db = _paid_mirror_world(monkeypatch)
+    # A second active row carries this case id under another booking. The
+    # recorder sees one booking, so only the case-id lookup finds two rows.
+    extra = copy.deepcopy(stores["active_bonds"].docs[0])
+    extra["booking_number"] = "TEST-COS-ELSEWHERE"
+    stores["active_bonds"].docs.append(extra)
+    db["active_bonds"].docs.append(copy.deepcopy(extra))
+
+    for _ in range(2):
+        replay = _webhook(client, txn="TX-MIRROR-AMBIG", amount="500.00")
+        assert replay.status_code == 200, replay.text
+
+    link = stores["cosigner_links"].docs[0]
+    assert not link.get("paid_transaction_id")
+    assert link["needs_review_reason"] == "bond_ambiguous"
+    blocked = _audits(stores, "paid_blocked")
+    assert len(blocked) == 1
+    assert blocked[0]["reason"] == "bond_ambiguous"
+    assert _audits(stores, "paid") == []
+
+
+def test_mirror_normalization_keeps_real_differences():
+    from dashboard.services.cosigner_link_service import _mirror_disagrees
+
+    case = {
+        "status": "active", "booking_number": "TEST-COS-1", "case_number": "2026-TEST-001",
+        "surety_id": "osi", "poa_number": "POA-1", "match_id": "M-1",
+        "match_status": "validated", "indemnitor_name": "Casey Sample",
+        "defendant_name": "Robin Q. Sample",
+    }
+    same = {**case, "status": "Active ", "surety_id": " OSI", "case_number": "2026-test-001",
+            "poa_number": " poa-1 ", "booking_number": "test-cos-1 ",
+            "match_status": "VALIDATED", "defendant_name": "robin  q sample",
+            "indemnitor_name": "CASEY  SAMPLE"}
+    assert _mirror_disagrees(case, same) is False
+    for key, value in (
+        ("surety_id", "osi2"), ("poa_number", "POA-2"), ("case_number", "2026-TEST-002"),
+        ("booking_number", "TEST-COS-2"), ("status", "exonerated"),
+        ("defendant_name", "Robin Other"), ("defendant_name", ""), ("match_id", "M-2"),
+        ("match_id", "m-1"), ("indemnitor_name", "Pat Other"), ("match_status", "pending"),
+    ):
+        assert _mirror_disagrees(case, {**case, key: value}) is True, (key, value)
+
+
+def test_two_open_packets_block_paid_and_flag_each_link_once(monkeypatch):
+    """Two open packets on one case stay unpaid. Each link gets one review mark."""
+    stores, client, token, db = _recorder_world(monkeypatch)
+    _extra_link(stores, packet_id="PKT-TEST-COS-2", case_id=CASE, token="second-packet")
+
+    for _ in range(2):
+        replay = _webhook(client, txn="TX-TWO-PACKETS", amount="500.00")
+        assert replay.status_code == 200, replay.text
+    _poll_down_payment(db, txn="TX-TWO-PACKETS", amount="500.00")
+
+    assert len(_down_rows(db, "TX-TWO-PACKETS")) == 1
+    assert _audits(stores, "paid") == []
+    links = stores["cosigner_links"].docs
+    assert all(not link.get("paid_transaction_id") for link in links)
+    assert {link.get("needs_review_reason") for link in links} == {"packet_ambiguous"}
+    blocked = _audits(stores, "paid_blocked")
+    assert len(blocked) == 2
+    assert {row["packet_id"] for row in blocked} == {PACKET, "PKT-TEST-COS-2"}
+    assert {row["reason"] for row in blocked} == {"packet_ambiguous"}

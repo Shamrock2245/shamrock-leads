@@ -501,18 +501,41 @@ async def _case_rows(collection: str, case_id: str) -> list:
 
 
 def _bond_status(bond: dict) -> str:
-    return str((bond or {}).get("status") or "").strip().lower()
+    return str((bond or {}).get("status") or "").strip().casefold()
 
 
 def _mirror_text(bond: dict, *keys: str) -> str:
     return _bond_field(bond, *keys)
 
 
+def _mirror_key(bond: dict, *keys: str) -> str:
+    """Trimmed and casefolded, so ``OSI`` and `` osi `` are one surety."""
+    return _mirror_text(bond, *keys).casefold()
+
+
+def _mirror_name_key(value: str) -> str:
+    """Casefold, drop punctuation, collapse whitespace."""
+    letters = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in str(value or ""))
+    return " ".join(letters.casefold().split())
+
+
+def _mirror_names_agree(left: str, right: str) -> bool:
+    """Same person on both rows. A blank or a different name is not."""
+    left_key, right_key = _mirror_name_key(left), _mirror_name_key(right)
+    if not left_key or not right_key:
+        return False
+    return left_key == right_key or names_match(left, right)
+
+
 def _mirror_disagrees(case_row: dict, mirror: dict) -> bool:
     """The case and its active mirror must be the same bonded case.
 
     Status, signer, booking, defendant, match, case number, surety, and POA
-    are compared. A cleared or reassigned field is a different case.
+    are compared. A cleared or reassigned field is a different case. Case and
+    surrounding whitespace are not a difference: status, surety, booking,
+    case number, POA, and match status compare trimmed and casefolded, and
+    names compare without case, punctuation, or extra spaces. ``match_id``
+    compares trimmed only.
     """
     if _bond_status(case_row) != _bond_status(mirror):
         return True
@@ -520,29 +543,23 @@ def _mirror_disagrees(case_row: dict, mirror: dict) -> bool:
     mirror_name, mirror_role = _expected_signer(mirror, None)
     if case_role != mirror_role:
         return True
-    if not case_name or not mirror_name or not names_match(case_name, mirror_name):
+    if not _mirror_names_agree(case_name, mirror_name):
         return True
     for keys in (
         ("booking_number", "Booking_Number"),
         ("case_number", "Case_Number"),
         ("surety_id", "Surety_ID"),
         ("poa_number", "POA_Number", "power_number"),
-        ("match_id", "Match_ID"),
+        ("match_status", "Match_Status"),
     ):
-        if _mirror_text(case_row, *keys) != _mirror_text(mirror, *keys):
+        if _mirror_key(case_row, *keys) != _mirror_key(mirror, *keys):
             return True
-    case_match = _mirror_text(case_row, "match_status", "Match_Status").lower()
-    mirror_match = _mirror_text(mirror, "match_status", "Match_Status").lower()
-    if case_match != mirror_match:
+    if _mirror_text(case_row, "match_id", "Match_ID") != _mirror_text(mirror, "match_id", "Match_ID"):
         return True
     case_defendant = _mirror_text(case_row, "defendant_name", "Defendant_Name", "defendant")
     mirror_defendant = _mirror_text(mirror, "defendant_name", "Defendant_Name", "defendant")
     if case_defendant or mirror_defendant:
-        if (
-            not case_defendant
-            or not mirror_defendant
-            or not names_match(case_defendant, mirror_defendant)
-        ):
+        if not _mirror_names_agree(case_defendant, mirror_defendant):
             return True
     return False
 
@@ -611,6 +628,8 @@ async def _audit(
     new_state: dict,
     actor: str = "cosigner_link",
     session=None,
+    reason: str = "",
+    extra: Optional[dict] = None,
 ) -> None:
     kwargs = {"session": session} if session is not None else {}
     await get_collection("audit_events").insert_one({
@@ -624,10 +643,11 @@ async def _audit(
         "created_at": now.isoformat(),
         "booking_number": link.get("booking_number") or "",
         "packet_id": link.get("packet_id") or "",
-        "reason": step,
+        "reason": reason or step,
         "old_state": _audit_state_only(old_state),
         "new_state": _audit_state_only(new_state),
         "confidence": 1.0,
+        **(extra or {}),
     }, **kwargs)
 
 
@@ -1490,10 +1510,21 @@ async def _open_down_payment_links(booking: str) -> list:
     Booking number alone is not the scope. Another open packet on the same
     case is not stamped. Several links on that one packet are.
     """
+    targets, _blocked = await _down_payment_scope(booking)
+    return targets
+
+
+async def _down_payment_scope(booking: str) -> tuple[list, list]:
+    """``(targets, blocked)`` for this booking's down payment.
+
+    ``targets`` is what ``_open_down_payment_links`` returns. ``blocked`` is
+    the candidate links when more than one open packet claims the case, so
+    the refusal can be flagged for review. It is empty otherwise.
+    """
     case_id = await _one_case_id(booking)
     if not case_id:
         logger.info("[cosigner] paid refused ambiguous case")
-        return []
+        return [], []
     # A link issued through the booking fallback stores the resolved case id.
     # An older link may still have an empty case id and the same booking.
     query = _scope({"$or": [
@@ -1501,7 +1532,7 @@ async def _open_down_payment_links(booking: str) -> list:
         {"booking_number": booking, "bond_case_id": {"$in": ["", None]}},
     ]})
     if query is None:
-        return []
+        return [], []
     grouped: dict = {}
     cursor = get_collection(LINKS).find(query)
     async for link in _iter(cursor):
@@ -1515,8 +1546,83 @@ async def _open_down_payment_links(booking: str) -> list:
     if len(grouped) != 1:
         if len(grouped) > 1:
             logger.info("[cosigner] paid refused ambiguous packets")
-        return []
-    return next(iter(grouped.values()))
+            return [], [pair for pairs in grouped.values() for pair in pairs]
+        return [], []
+    return next(iter(grouped.values())), []
+
+
+_PAID_BLOCK_REVIEW_CODES = frozenset({"bond_mirror_mismatch", "bond_ambiguous"})
+_PACKET_AMBIGUOUS = "packet_ambiguous"
+_PAID_BLOCK_REASONS = _PAID_BLOCK_REVIEW_CODES | {_PACKET_AMBIGUOUS}
+
+
+async def _flag_paid_blocked(
+    link: dict,
+    packet: Optional[dict],
+    txn: str,
+    code: str,
+    paid_cents: Optional[int],
+    now: datetime,
+    session,
+) -> bool:
+    """Leave a staff-visible review mark when a settled charge cannot stamp.
+
+    The payment row is already recorded. The bond rows disagree, or more than
+    one open packet claims the case, so the link stays unpaid. The link gets
+    ``needs_review`` with the reason and the transaction, and one
+    ``paid_blocked`` audit is written. The update is conditional on this
+    transaction, so a replay does not audit again. Nothing is sent anywhere.
+    """
+    token = str(link.get("token") or "").strip()
+    if not token or not txn:
+        return False
+    result = await get_collection(LINKS).update_one(
+        {"token": token, "paid_blocked_transaction_id": {"$ne": txn}},
+        {"$set": {
+            "needs_review": True,
+            "needs_review_reason": code,
+            "paid_blocked_transaction_id": txn,
+            "paid_blocked_at": now.isoformat(),
+        }},
+        session=session,
+    )
+    if not getattr(result, "modified_count", 0):
+        return False
+    state = _audit_state(link, packet)
+    await _audit(
+        "paid_blocked", link, now,
+        old_state=state, new_state=state, session=session,
+        reason=code,
+        extra={
+            "needs_review": True,
+            "transaction_id": txn,
+            "amount_cents": paid_cents,
+        },
+    )
+    logger.info(
+        "[cosigner] paid blocked for review packet_id=%s reason=%s",
+        link.get("packet_id"), code,
+    )
+    return True
+
+
+async def _clear_paid_block(link: dict, session) -> None:
+    """A link that was held for review and is now paid is no longer held.
+
+    ``paid_blocked_transaction_id`` and the ``paid_blocked`` audit stay as
+    the record of the hold.
+    """
+    token = str(link.get("token") or "").strip()
+    if not token:
+        return
+    await get_collection(LINKS).update_one(
+        {
+            "token": token,
+            "needs_review_reason": {"$in": sorted(_PAID_BLOCK_REASONS)},
+        },
+        {"$set": {"needs_review": False, "needs_review_reason": ""}},
+        session=session,
+    )
 
 
 async def note_cosigner_paid(
@@ -1550,15 +1656,30 @@ async def note_cosigner_paid(
         if await _charge_row_blocks_down_payment(db, txn, session):
             logger.info("[cosigner] paid refused review hold")
             return
-        targets = await _open_down_payment_links(booking)
+        targets, blocked = await _down_payment_scope(booking)
         now = _now()
+        for link, packet in blocked:
+            if not str(link.get("paid_transaction_id") or "").strip():
+                await _flag_paid_blocked(
+                    link, packet, txn, _PACKET_AMBIGUOUS, paid_cents, now, session,
+                )
         for link, packet in targets:
-            bond = await _find_bond(packet) if packet else None
+            try:
+                bond = await _find_bond(packet) if packet else None
+            except CosignerLinkError as exc:
+                if exc.code not in _PAID_BLOCK_REVIEW_CODES:
+                    raise
+                await _flag_paid_blocked(
+                    link, packet, txn, exc.code, paid_cents, now, session,
+                )
+                continue
             due = _due_cents(packet, bond)
             if paid_cents is None or due is None or paid_cents != due:
                 logger.info("[cosigner] paid amount refused packet_id=%s", link.get("packet_id"))
                 continue
-            await _cas_mark_paid(link, packet, txn, now, session)
+            marked = await _cas_mark_paid(link, packet, txn, now, session)
+            if marked and str(link.get("needs_review_reason") or "") in _PAID_BLOCK_REASONS:
+                await _clear_paid_block(link, session)
 
     await _with_payment_lock(txn, work)
 

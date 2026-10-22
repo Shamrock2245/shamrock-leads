@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-22 (co-signer down payment held by bond mirror drift is flagged)
+
+### Fixed
+- **Case and spacing are not mirror drift.** The `bond_cases` / `active_bonds` mirror check compares status, surety, booking, case number, POA, and match status trimmed and casefolded. Signer and defendant names compare without case, punctuation, or extra spaces (first and last name still decide). `match_id` compares trimmed only. A really different value still fails closed. The co-signer page and the paid path use the same check.
+- **A settled down payment that cannot mark the pay step is visible to staff.** When `note_cosigner_paid` is refused by `bond_mirror_mismatch`, `bond_ambiguous`, or two open packets on the case (`packet_ambiguous`), the link gets `needs_review` with `needs_review_reason` and `paid_blocked_transaction_id`. One `paid_blocked` audit event records the reason, transaction, and cents. A replay of the same transaction does not flag or audit again. A later paid stamp clears `needs_review` and keeps the record. Nothing is sent. The payment row, the lock, and the compare-and-set stamp are unchanged.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_paid_path_reconciles_a_mirror_that_differs_only_in_case_and_spacing`, `test_mirror_drift_blocks_paid_and_flags_review_once`, `test_ambiguous_mirror_blocks_paid_and_flags_review_once`, `test_two_open_packets_block_paid_and_flag_each_link_once`, `test_mirror_normalization_keeps_real_differences`.
+
 ## [Unreleased] — 2026-10-22 (co-signer pay link must be this bond's invoice)
 
 ### Fixed
