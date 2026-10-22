@@ -196,6 +196,35 @@ class _Cursor:
             raise StopAsyncIteration
 
 
+def _assign(doc, key, value):
+    if "." not in str(key):
+        doc[key] = value
+        return
+    cur = doc
+    parts = str(key).split(".")
+    for part in parts[:-1]:
+        nxt = cur.get(part)
+        if not isinstance(nxt, dict):
+            nxt = {}
+            cur[part] = nxt
+        cur = nxt
+    cur[parts[-1]] = value
+
+
+def _remove(doc, key):
+    if "." not in str(key):
+        doc.pop(key, None)
+        return
+    cur = doc
+    parts = str(key).split(".")
+    for part in parts[:-1]:
+        if not isinstance(cur, dict) or part not in cur:
+            return
+        cur = cur[part]
+    if isinstance(cur, dict):
+        cur.pop(parts[-1], None)
+
+
 def _lookup(doc, key):
     if "." not in str(key):
         return key in doc, doc.get(key)
@@ -275,7 +304,7 @@ class _Col:
         for key, value in (update.get("$inc") or {}).items():
             doc[key] = int(doc.get(key) or 0) + int(value)
         for key, value in (update.get("$set") or {}).items():
-            doc[key] = value
+            _assign(doc, key, value)
         for key, value in (update.get("$push") or {}).items():
             bucket = doc.get(key)
             if not isinstance(bucket, list):
@@ -283,7 +312,7 @@ class _Col:
                 doc[key] = bucket
             bucket.append(value)
         for key in (update.get("$unset") or {}):
-            doc.pop(key, None)
+            _remove(doc, key)
         return _Result(1)
 
     async def delete_one(self, query, session=None, **kwargs):
@@ -1296,6 +1325,41 @@ def test_sign_url_matches_the_verified_signer(monkeypatch):
     assert emailed.status_code == 409
     assert emailed.json() == {"error": "sign_link_mismatch"}
     assert _sign("cosigner") not in emailed.text
+
+
+def test_coindemnitor_email_blocks_a_different_docuseal_row(monkeypatch):
+    """The kiosk coindemnitor_email alias rejects another recipient's URL."""
+    stores, client = _world(monkeypatch, cosigner=NAME)
+    token = _token(client)
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "issuing_state": "NY"},
+    )
+    assert opened.status_code == 200, opened.text
+    packet = stores["paperwork_packets"].docs[0]
+    bond = stores["bond_cases"].docs[0]
+    for doc in (packet, bond):
+        doc.pop("co_signer_email", None)
+        doc.pop("cosigner_email", None)
+        doc.pop("co_indemnitor_email", None)
+        for person in doc.get("indemnitors") or []:
+            if isinstance(person, dict):
+                person.pop("email", None)
+    packet["coindemnitor_email"] = "signer@example.invalid"
+    row = next(
+        item for item in packet["docuseal_submitters"]
+        if item.get("role") == "coindemnitor"
+    )
+    row["email"] = "other@example.invalid"
+    mismatched = client.get(f"/api/cosigner/{token}")
+    assert mismatched.status_code == 409
+    assert mismatched.json() == {"error": "sign_link_mismatch"}
+    assert _sign("cosigner") not in mismatched.text
+    assert _sign_hidden(mismatched.text)
+    row["email"] = "signer@example.invalid"
+    matched = client.get(f"/api/cosigner/{token}")
+    assert matched.status_code == 200, matched.text
+    assert matched.json()["sign_url"] == _sign("cosigner")
 
 
 def test_pay_step_hides_an_unbound_sign_url(monkeypatch):
@@ -2413,6 +2477,80 @@ def test_rollback_removes_only_the_pointer_it_added(monkeypatch):
         assert doc["id_ocr"]["scan_id"] == older_ids[id(doc)]
         assert doc["id_ocr_role"] == "indemnitor"
         assert "co_indemnitor" not in doc
+    assert packet.get("cosigner_verified_token") in {None, ""}
+
+
+def test_failed_same_role_retry_restores_the_previous_pointer(monkeypatch):
+    """A failed retry puts the previous same-role pointer back."""
+    import dashboard.services.cosigner_link_service as svc
+
+    stores, client = _world(monkeypatch)
+    packet = stores["paperwork_packets"].docs[0]
+    bond = stores["bond_cases"].docs[0]
+    asyncio.run(svc._store_scan(packet, bond, NAME, "FL", "indemnitor", []))
+    older = {
+        id(doc): _scan_rows(doc)[0]["scan_id"]
+        for doc in (packet, bond)
+    }
+    token = _token(client)
+    original = svc._save_link
+
+    async def _fail_verified(link):
+        if link.get("id_verified"):
+            raise RuntimeError("link save failed")
+        return await original(link)
+
+    monkeypatch.setattr(svc, "_save_link", _fail_verified)
+    _scanner(monkeypatch, {"n": 0})
+    with pytest.raises(RuntimeError, match="link save failed"):
+        _post_scan(client, token)
+    for doc in (packet, bond):
+        rows = _scan_rows(doc)
+        assert len(rows) == 2
+        assert rows[0]["scan_id"] == older[id(doc)]
+        assert rows[1]["scan_id"] != older[id(doc)]
+        assert rows[1]["role"] == "indemnitor"
+        assert doc["id_ocr"]["scan_id"] == older[id(doc)]
+        assert doc["id_ocr_role"] == "indemnitor"
+        assert doc["indemnitor"]["id_ocr"]["scan_id"] == older[id(doc)]
+        assert doc["indemnitor"]["id_ocr_role"] == "indemnitor"
+    assert packet.get("cosigner_verified_token") in {None, ""}
+
+
+def test_failed_pointer_write_rolls_back_the_party_scan(monkeypatch):
+    """A pointer write that fails still drops the party pointer it stored."""
+    stores, client = _world(monkeypatch)
+    packet = stores["paperwork_packets"].docs[0]
+    bond = stores["bond_cases"].docs[0]
+
+    def _wrap(col):
+        orig = col.update_one
+
+        async def _update(query, update, upsert=False, session=None, **kwargs):
+            pointer = (update or {}).get("$set") or {}
+            if "id_ocr" in pointer and "id_ocr_role" in pointer:
+                raise RuntimeError("top pointer failed")
+            return await orig(query, update, upsert=upsert, session=session, **kwargs)
+
+        col.update_one = _update
+
+    _wrap(stores["paperwork_packets"])
+    _wrap(stores["bond_cases"])
+    token = _token(client)
+    _scanner(monkeypatch, {"n": 0})
+    with pytest.raises(RuntimeError, match="top pointer failed"):
+        _post_scan(client, token)
+    rows = _scan_rows(packet)
+    assert len(rows) == 1
+    assert rows[0]["signer_name"] == NAME
+    assert rows[0]["role"] == "indemnitor"
+    assert "id_ocr" not in packet
+    assert "indemnitor" not in packet
+    assert not bond.get("id_scan_records")
+    assert "id_ocr" not in bond
+    from dashboard.services.identity_verification_service import scans_from_document
+
+    assert [row for row in scans_from_document(packet) if row.get("passed") == "1"] == []
     assert packet.get("cosigner_verified_token") in {None, ""}
 
 

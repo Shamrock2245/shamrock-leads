@@ -12,6 +12,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_cosigner_link.py`: `test_paid_path_reconciles_a_mirror_that_differs_only_in_case_and_spacing`, `test_mirror_drift_blocks_paid_and_flags_review_once`, `test_ambiguous_mirror_blocks_paid_and_flags_review_once`, `test_two_open_packets_block_paid_and_flag_each_link_once`, `test_mirror_normalization_keeps_real_differences`, `test_alternating_blocked_transactions_audit_once_each`, `test_held_charge_that_is_not_the_down_payment_is_not_flagged`.
 
+## [Unreleased] — 2026-10-22 (co-signer email reads coindemnitor_email)
+
+### Fixed
+- **The signer check reads the kiosk `coindemnitor_email` field.** A DocuSeal row with another email is `sign_link_mismatch` and its URL is not returned.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_coindemnitor_email_blocks_a_different_docuseal_row`.
+
+## [Unreleased] — 2026-10-22 (failed same-role scan restores the prior pointer)
+
+### Fixed
+- **A failed retry by the same signer puts the previous scan pointer back.** The new scan row stays. A first scan that does not finish still drops only the pointer it added.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_failed_same_role_retry_restores_the_previous_pointer`.
+
+## [Unreleased] — 2026-10-22 (co-signer scan rollback is registered first)
+
+### Fixed
+- **A scan rollback is recorded before the packet or bond is written.** If a later pointer write fails, the pointer from that attempt is removed. The stored scan row stays.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_failed_pointer_write_rolls_back_the_party_scan`.
+
 ## [Unreleased] — 2026-10-22 (co-signer ID scans are append-only)
 
 ### Fixed
