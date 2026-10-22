@@ -1,7 +1,7 @@
 # Contact Finder — "The Finder"
 
 > **Status:** `[IMPLEMENTED]`
-> **Implementation:** `dashboard/services/contact_discovery.py`, `dashboard/api/contacts.py`
+> **Implementation:** `dashboard/services/contact_discovery.py`, `dashboard/routers/contacts.py`
 
 ---
 
@@ -14,14 +14,15 @@ The Finder performs OSINT-style contact discovery on arrestees, identifying pote
 ## How It Works
 
 ```
-Defendant Record
-    → Public records search (name + location)
-    → Identify associated persons
-    → Score relationship confidence
-    → Store discovered contacts
-    → Surface for human review
-    → Approved contacts → Outreach queue
+New Lee (FL) arrest write
+    → capped queue marker (does not block the scraper)
+    → dashboard cron claims the booking
+    → name plus phone, DOB, or address+ZIP
+    → store candidates on contacts
+    → lead drawer for staff review
 ```
+
+A new Lee (FL) upsert sets `indemnitor_discovery.status` to `queued`. The dashboard cron `lee_indemnitor_discovery` claims a few bookings per pass. Lee (GA), Lee (SC), and the other Lee counties are not queued. Discovery reads Shamrock rows already in Mongo (prior indemnitors, intakes, family links, same address). Public HTTP and skip-trace stay off unless env flags are set. Candidates are not placed on an outreach queue.
 
 ---
 
@@ -37,8 +38,8 @@ Defendant Record
 
 ## Constraints
 
-- **Human-in-the-loop required** — discovered contacts must be reviewed before outreach
-- Only public records and publicly available information
-- PII minimized in storage — only name, phone, relationship stored
-- DNB/DNC flags respected across all discovered contacts
-- All discovery attempts logged for compliance
+- **Human-in-the-loop required** — discovery does not call, text, or email a candidate
+- A name alone is never a match. Confidence comes only from phone, DOB, and address+ZIP weights
+- Public HTTP (`INDEMNITOR_DISCOVERY_HTTP`) and skip-trace (`INDEMNITOR_SKIPTRACE_URL` + `INDEMNITOR_SKIPTRACE_API_KEY`) default off
+- Logs store counts and error types, not names, phones, or addresses
+- Unreviewed candidate documents expire after 30 days. Reviewed candidates are kept

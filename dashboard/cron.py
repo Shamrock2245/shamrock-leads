@@ -769,6 +769,40 @@ async def _run_compliance_backfill():
         )
 
 
+async def _run_lee_indemnitor_discovery():
+    """Queue drain for Lee (FL) co-signer candidates. Counts only in the log."""
+    from dashboard.extensions import get_db
+    from dashboard.services.auto_osint_trigger import trigger_lee_indemnitor_discovery
+    from datetime import datetime, timezone
+
+    result = await trigger_lee_indemnitor_discovery(get_db())
+    safe = {
+        "enabled": bool(result.get("enabled")),
+        "claimed": int(result.get("claimed") or 0),
+        "completed": int(result.get("completed") or 0),
+        "failed": int(result.get("failed") or 0),
+        "purged": int(result.get("purged") or 0),
+    }
+    try:
+        await get_db()["automation_run_log"].insert_one({
+            "automation": "lee_indemnitor_discovery",
+            "run_at": datetime.now(timezone.utc),
+            "result": safe,
+        })
+    except Exception as exc:
+        logger.warning(
+            "[IndemnitorDiscovery] run log skipped error_type=%s",
+            type(exc).__name__,
+        )
+    logger.info(
+        "[IndemnitorDiscovery] claimed=%s completed=%s failed=%s purged=%s",
+        safe["claimed"],
+        safe["completed"],
+        safe["failed"],
+        safe["purged"],
+    )
+
+
 async def _run_lee_clerk_watch():
     from dashboard.services.lee_clerk_watch import run_lee_clerk_watch
     from dashboard.services.automation_config import get_automation_config
@@ -855,6 +889,7 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("compliance_backfill","ComplianceFill",    21600, 270, _run_compliance_backfill, default_enabled=True),
     CronDef("matching_backlog",   "MatchingBacklog",    3600, 240, _run_matching_backlog, default_enabled=True),
     CronDef("lee_clerk_watch",    "LeeClerkWatch",      900, 180, _run_lee_clerk_watch, default_enabled=True),
+    CronDef("lee_indemnitor_discovery", "IndemnitorDiscovery", 180, 45, _run_lee_indemnitor_discovery, default_enabled=True),
 ]
 
 
@@ -891,6 +926,17 @@ async def _ensure_all_indexes():
         await _idx("defendants", [("total_arrests", -1)], name="idx_total_arrests", background=True)
         await _idx("defendants", [("active", 1)], name="idx_active", background=True)
         await _idx("arrests", [("defendant_id", 1)], name="idx_defendant_id", background=True, sparse=True)
+        # Co-signer candidates. TTL deletes a contacts doc only while
+        # unreviewed_expire_at is set (every candidate still unreviewed).
+        # Mixed docs are trimmed by purge_unreviewed_candidates instead.
+        await _idx("contacts", [("booking_number", 1)], name="idx_contacts_booking", background=True)
+        await _idx(
+            "contacts",
+            [("unreviewed_expire_at", 1)],
+            name="idx_contacts_unreviewed_ttl",
+            background=True,
+            expireAfterSeconds=0,
+        )
         # Tasks & Ledger
         await _idx("tasks", [("status", 1), ("due_date", 1)], name="idx_tasks_status_due", background=True)
         await _idx("tasks", [("booking_number", 1), ("status", 1)], name="idx_tasks_booking_status", background=True)
