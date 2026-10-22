@@ -70,7 +70,7 @@
 ## Tier 5 — East Coast / Space Coast (3 Counties)
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
-| 28 | **Volusia** | Direct ASP.NET Postback (volusiamug.vcgov.org) | `volusia.py` | ✅ Active | 90 min | 2026-05-24 |
+| 28 | **Volusia** | Direct ASP.NET Postback (volusiamug.vcgov.org), plain HTTPS via `plain_http` (honest UA, TLS verified). Status from the published InCustody column; typed errors, nothing swallowed | `volusia.py` | ✅ Active (unverified until write smoke) | 90 min | 2026-10-22 |
 | 29 | **Brevard** | BCSO Inmate Search (`/?handler=Search` date window → `Booking #` `YYYY-NNNNNNNN`; detail Bonds/Charges for in-custody rows) — plain requests | `brevard.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
 | 30 | **Flagler** | New World InmateInquiry (`InCustody=True` + detail open `Booking` `YYYY-NNNNNNNN`; shared `fl_newworld`) — plain requests | `flagler.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
 

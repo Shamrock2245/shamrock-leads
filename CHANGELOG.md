@@ -3,6 +3,13 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-22 (Volusia: custody only from the published InCustody column)
+
+### Fixed
+- **Volusia (FL) no longer invents "In Custody".** The old rule read every row without a release date and without `InCustody = N` as in custody, including a blank cell. Status now comes from the published `InCustody` column (`Y` gives In Custody, `N` gives Released; `status_source` is `published_in_custody_column`), otherwise from a published Release Date (`published_release_date`), otherwise `""`. An honest agent-box read on 2026-10-22 confirmed the column and its agreement with Release Date (`docs/recon/FL_VOLUSIA_HONEST_2026-10-22.md`).
+- **Volusia failures are visible.** The per-booking `except Exception` that logged and skipped detail-page errors is gone, and so is the outer catch-all. A block raises `egress_block`, a bad certificate raises `tls_cert_invalid`, a non-200 on the list flow raises `VolusiaHTTPError` (classified by status), and missing ViewState, a missing Recent Bookings table or changed columns raise `ParseDriftError` instead of an empty run. Columns are checked against the published header instead of fixed indexes, which also fixes the `IndexError` on 10- or 11-cell rows. The debug line that logged the person's name is gone.
+- Booking keys stay the published `Booking #` (Inmate ID only as Person_ID). Bond stays the per-charge sum only when every charge publishes an amount; a published `$0` is kept, otherwise `""`. The FL 127 evidence row records the read; the matrix was regenerated and Volusia stays unverified (`recon_only`) until a Leads Ops write smoke. `docs/COUNTY_REGISTRY.md` and `docs/agents/scraper-agent.md` no longer describe a DrissionPage or vcso.us source. Tests: `tests/test_fl_volusia_honest_status.py` (new, on the ci.yml list).
+
 ## [Unreleased] — 2026-10-21 (Duval: plain honest HTTPS, fail closed on tls_cert_invalid)
 
 ### Changed
