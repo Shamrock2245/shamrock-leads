@@ -260,17 +260,17 @@ Dashboard updates
 | Interval | 60 min |
 | Notes | BSO's custom arrest search application. High volume. |
 
-#### Duval County ✅
+#### Duval County 🔴 (fail closed)
 | Property | Value |
 |----------|-------|
 | File | `scrapers/counties/duval.py` |
 | Class | `DuvalCountyScraper` |
 | JMS Vendor | Custom (JSO Inmate Search) |
 | Base URL | `https://inmatesearch.jaxsheriff.org/` |
-| Method | DrissionPage browser automation |
+| Method | plain HTTPS via `scrapers.plain_http` (honest UA, TLS verified); DrissionPage retired |
 | Auth | None |
 | Interval | 90 min |
-| Notes | Jacksonville Sheriff's Office custom portal. |
+| Notes | Jacksonville Sheriff's Office ATIMS portal. Fail closed 2026-10-21: the host omits its intermediate certificate (`tls_cert_invalid`) and the SPA sits behind an ATIMS robot gate (never clicked). See `docs/recon/FL_DUVAL_HONEST.md`. |
 
 #### Volusia County ✅
 | Property | Value |

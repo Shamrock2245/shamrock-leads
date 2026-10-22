@@ -84,7 +84,8 @@ def test_home_counties_matrix_state_after_source_checks():
     # recon_only -> fail_closed; Miami-Dade was fail_closed 2026-10-09 (#166) and reopened
     # recon_only the same day (owner exception).
     # 2026-10-14 Hillsborough and Marion recon_only -> fail_closed (rule conflicts).
-    assert "| FL | 67 | 67 | 4 | 20 | 19 | 0 | 24 |" in text
+    # 2026-10-21 Duval recon_only -> fail_closed (tls_cert_invalid; FL_DUVAL_HONEST.md).
+    assert "| FL | 67 | 67 | 4 | 20 | 18 | 0 | 25 |" in text
 
 
 def test_no_home_county_is_promoted_in_health():

@@ -31,7 +31,7 @@ slack-sdk>=3.44.1
 # Scraper dependencies — DrissionPage (legacy), curl_cffi (TLS impersonation), Playwright (Obscura CDP)
 curl-cffi>=0.16.3
 beautifulsoup4>=4.12.0
-DrissionPage>=4.0.0
+DrissionPage>=4.1.1.4
 patchright>=1.50.0  # Charleston SC, stealth_utils (also run: patchright install chromium); not Pinellas (2026-10-08)
 playwright>=1.48.0  # stock Chromium on the Leads Ops relay (Charlotte, Manatee, Pinellas); run: python -m playwright install chromium
 # CAPTCHA OCR stack (see scrapers/captcha_ocr.py)
@@ -62,7 +62,7 @@ cryptography>=43.0.0          # Fernet symmetric encryption (OAuth token storage
 PyJWT>=2.15.1                  # JWT state tokens for OAuth CSRF protection
 aiohttp>=3.9.0                # Async HTTP client for contact discovery OSINT pipeline
 python-multipart>=0.0.9       # Required by FastAPI for form data / file uploads
-itsdangerous>=2.1.2           # Signed-cookie state for dashboard PIN auth
+itsdangerous>=2.2.0           # Signed-cookie state for dashboard PIN auth
 PyYAML>=6.0                   # Blog auto-publisher YAML frontmatter parsing
 
 # Active Bonds PDF generation & date parsing
