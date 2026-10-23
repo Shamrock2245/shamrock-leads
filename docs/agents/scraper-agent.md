@@ -226,10 +226,10 @@ Dashboard updates
 | Class | `PalmBeachCountyScraper` |
 | JMS Vendor | Custom (PBSO Blotter) |
 | Base URL | `https://www3.pbso.org/blotter` |
-| Method | ColdFusion app (`index.cfm`) → HTML parsing with DrissionPage |
+| Method | ColdFusion app (`index.cfm`) → plain HTTPS via `scrapers.plain_http` (honest UA, TLS verified; no browser). Date-form submit, `allresults_` cards only, paced pagination (3 s) |
 | Auth | None |
 | Interval | 120 min |
-| Notes | ColdFusion backend. Relative detail URLs need BASE_URL prefix. |
+| Notes | ColdFusion backend. Relative detail URLs need BASE_URL prefix. Unverified (`recon_only`); layout drift raises `ParseDriftError`. |
 
 ---
 
