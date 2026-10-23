@@ -3941,3 +3941,34 @@ def test_heal_does_not_replay_another_tenants_charge(monkeypatch):
     assert asyncio.run(svc._heal_paid(BOOKING, "TX-SHARED")) is True
     stamped.assert_awaited_once()
 
+
+def test_pending_and_resolved_audits_record_before_and_after(monkeypatch):
+    stores, client, token, db = _recorder_world(monkeypatch)
+    _calls, restore = _fail_lock_work(monkeypatch, "_charge_row_blocks_down_payment", None)
+    assert _webhook(client, txn="TX-COS-AUDIT", amount="500.00").status_code == 200
+
+    (pending,) = _audits(stores, "payment_transition_pending")
+    assert pending["pending_before"] == {
+        "payment_transition_pending": False,
+        "pending_payment_keys": [],
+        "pending_payment_transitions": [],
+    }
+    after = pending["pending_after"]
+    assert after["payment_transition_pending"] is True
+    assert after["pending_payment_keys"] == ["paid:TX-COS-AUDIT"]
+    assert [e["key"] for e in after["pending_payment_transitions"]] == ["paid:TX-COS-AUDIT"]
+    assert after["pending_payment_transitions"][0]["transaction_id"] == "TX-COS-AUDIT"
+
+    restore()
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+    (resolved,) = _audits(stores, "payment_transition_resolved")
+    assert resolved["pending_before"]["payment_transition_pending"] is True
+    assert resolved["pending_before"]["pending_payment_keys"] == ["paid:TX-COS-AUDIT"]
+    assert [e["key"] for e in resolved["pending_before"]["pending_payment_transitions"]] == [
+        "paid:TX-COS-AUDIT",
+    ]
+    assert resolved["pending_after"] == {
+        "payment_transition_pending": False,
+        "pending_payment_keys": [],
+        "pending_payment_transitions": [],
+    }

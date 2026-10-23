@@ -2071,12 +2071,18 @@ async def _record_pending_transition(kind: str, booking: str, txn: str, links: l
             )
             if not getattr(result, "modified_count", 0):
                 continue
-            state = _audit_state_only(_audit_state(link, None))
+            fresh = await get_collection(LINKS).find_one({"token": token}) or link
+            after = _pending_view(fresh)
+            before = _pending_without(after, key)
+            state = _audit_state_only(_audit_state(fresh, None))
             await _audit(
-                "payment_transition_pending", link, now,
+                "payment_transition_pending", fresh, now,
                 old_state=state, new_state=state,
                 reason=kind,
-                extra={"transaction_id": txn, "transition": kind, "pending_key": key},
+                extra={
+                    "transaction_id": txn, "transition": kind, "pending_key": key,
+                    "pending_before": before, "pending_after": after,
+                },
             )
             logger.warning(
                 "[cosigner] payment transition pending packet_id=%s kind=%s",
@@ -2089,11 +2095,61 @@ async def _record_pending_transition(kind: str, booking: str, txn: str, links: l
             )
 
 
-async def _resolve_pending(link: dict, key: str, kind: str, txn: str) -> bool:
+def _pending_view(doc: Optional[dict]) -> dict:
+    """The pending-transition fields an audit records before and after."""
+    doc = doc or {}
+    return {
+        "payment_transition_pending": bool(doc.get("payment_transition_pending")),
+        "pending_payment_keys": [str(k) for k in (doc.get("pending_payment_keys") or [])],
+        "pending_payment_transitions": [
+            dict(entry) for entry in (doc.get("pending_payment_transitions") or [])
+            if isinstance(entry, dict)
+        ],
+    }
+
+
+def _pending_without(after: dict, key: str) -> dict:
+    """The values before ``key`` was pushed: the same document without it.
+
+    The flag is set with every push and cleared only when no key is left,
+    so before the push it was pending exactly when another key was.
+    """
+    keys = [k for k in after["pending_payment_keys"] if k != key]
+    return {
+        "payment_transition_pending": bool(keys),
+        "pending_payment_keys": keys,
+        "pending_payment_transitions": [
+            entry for entry in after["pending_payment_transitions"]
+            if str(entry.get("key") or "") != key
+        ],
+    }
+
+
+def _pending_with(after: dict, key: str, entry: Optional[dict]) -> dict:
+    """The values before ``key`` was pulled: it was pending, with its entry."""
+    transitions = list(after["pending_payment_transitions"])
+    if isinstance(entry, dict):
+        transitions.append(dict(entry))
+    return {
+        "payment_transition_pending": True,
+        "pending_payment_keys": list(after["pending_payment_keys"]) + [key],
+        "pending_payment_transitions": transitions,
+    }
+
+
+async def _resolve_pending(
+    link: dict, key: str, kind: str, txn: str, entry: Optional[dict] = None,
+) -> bool:
     token = str(link.get("token") or "").strip()
     if not token:
         return False
     coll = get_collection(LINKS)
+    if entry is None:
+        entry = next(
+            (e for e in (link.get("pending_payment_transitions") or [])
+             if isinstance(e, dict) and str(e.get("key") or "") == key),
+            None,
+        )
     result = await coll.update_one(
         {"token": token, "pending_payment_keys": {"$in": [key]}},
         {"$pull": {
@@ -2109,12 +2165,17 @@ async def _resolve_pending(link: dict, key: str, kind: str, txn: str) -> bool:
     )
     now = _now()
     fresh = await coll.find_one({"token": token}) or link
+    after = _pending_view(fresh)
+    before = _pending_with(after, key, entry)
     state = _audit_state_only(_audit_state(fresh, None))
     await _audit(
         "payment_transition_resolved", fresh, now,
         old_state=state, new_state=state,
         reason=kind,
-        extra={"transaction_id": txn, "transition": kind, "pending_key": key},
+        extra={
+            "transaction_id": txn, "transition": kind, "pending_key": key,
+            "pending_before": before, "pending_after": after,
+        },
     )
     return True
 
@@ -2177,7 +2238,7 @@ async def _reconcile(link: dict) -> bool:
             )
         else:
             decided = True
-        if decided and await _resolve_pending(link, key, kind, txn):
+        if decided and await _resolve_pending(link, key, kind, txn, entry):
             changed = True
     # A refund row that is stored while the link still shows paid, with no
     # pending record (the marker write failed too): reopen from the rows.
