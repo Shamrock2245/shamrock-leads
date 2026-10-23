@@ -47,6 +47,7 @@ config/google-services.json
 !tests/golden/write_bond_palmetto_t5_full.json
 !tests/fixtures/docuseal_t1_fields.json
 !tests/fixtures/docuseal_t5_fields.json
+!tests/fixtures/docuseal_t7_fields.json
 
 
 # Python

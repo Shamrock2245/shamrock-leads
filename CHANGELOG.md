@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-23 (Palmetto template 7: co-indemnitor and Schedule A)
+
+### Added
+- **Palmetto DocuSeal template 7 can be selected without changing template 5.** Template 7 is the draft clone "Palmetto – Co-Indemnitor + 7 Charges (DRAFT 2026-10-22)". When `DOCUSEAL_TEMPLATE_ID_PALMETTO` is `7`, the paperwork prefill fills the co-indemnitor name, phone, email, and block label, POA slots 1–7, and Schedule A (up to 7 charges, each POA, total bond, premium, amount paid with method and date, and balance due with due date). The co-indemnitor is a submitter, so the FAQ initials, the two new co-indemnitor signatures, and the Schedule A initials stay on that role. A `charges_summary` join longer than 200 characters is replaced with `See Schedule A`. Eight or more charges still fail closed. Signature and initials widgets are not given a default value.
+- **Template 5 is unchanged while the setting stays `5`.** The same case still uses the 200-character `charges_summary` cap, omits Schedule A and POA slots 5–7, and keeps the combined indemnitor header. `.env.example` remains `DOCUSEAL_TEMPLATE_ID_PALMETTO=5`. The switch is that one variable, set to `7` on the leads process. It still wins over a published surety template version.
+
+### Tests
+- `tests/test_palmetto_template_7.py` (on the CI list). Template 5 inventory and a 7-charge rejection, template 7 prefill and finalize for a 7-charge `TEST-` case, a fitting 6-charge join, 8 charges failing closed, and send flags left false. Signer email is `admin@shamrockbailbonds.biz`. No DocuSeal submission is created against the live server.
+
 ## [Unreleased] — 2026-10-21 (Duval: plain honest HTTPS, fail closed on tls_cert_invalid)
 
 ### Changed

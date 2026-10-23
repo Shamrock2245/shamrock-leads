@@ -160,6 +160,43 @@ def _text(*vals: Any) -> str:
     return ""
 
 
+def _field_names_for_packet(surety_id: str, template_id: Any) -> set:
+    """Names on the template this submission will use.
+
+    The live name list wins. The charge-capacity record is the fallback.
+    An unknown id uses the surety's default record, which is template 5
+    for Palmetto.
+    """
+    from dashboard.services.charge_verbatim import capacity_record
+    from dashboard.services.docuseal_signing_ux import field_names_for_template_id
+    from dashboard.services.surety_registry import template_id_for
+
+    tid = template_id
+    if tid in (None, ""):
+        tid = template_id_for(surety_id)
+    live = field_names_for_template_id(tid)
+    if live:
+        return set(live)
+    return set(capacity_record(surety_id, tid).get("field_names") or [])
+
+
+def _schedule_date(*vals: Any) -> str:
+    """A stored date for Schedule A. An ISO timestamp keeps its date."""
+    text = _text(*vals)
+    if len(text) >= 10 and text[4:5] == "-" and text[7:8] == "-" and "T" in text:
+        return text[:10]
+    return text
+
+
+def _schedule_money(*vals: Any) -> str:
+    """First positive amount, in the same dollar form as the bond total."""
+    for val in vals:
+        amount = _safe_money(val)
+        if amount > 0:
+            return f"${amount:,.2f}"
+    return ""
+
+
 def _writing_agent_name(data: Optional[Dict[str, Any]]) -> str:
     """Agent already on the bond. Empty when absent. Never the template sample."""
     from dashboard.bond_pdf_service import writing_agent_name
@@ -915,7 +952,19 @@ class DocuSealService:
                 )
                 if extra_name and extra_name not in coindemnitor_names:
                     coindemnitor_names.append(extra_name)
+        co_party = bond_data.get("coindemnitor") if isinstance(bond_data.get("coindemnitor"), dict) else {}
+        co_from_list = raw_inds[1] if isinstance(raw_inds, list) and len(raw_inds) > 1 and isinstance(raw_inds[1], dict) else {}
         coindemnitor_name = _text(bond_data.get("coindemnitor_name"), *coindemnitor_names)
+        coindemnitor_phone = _text(
+            bond_data.get("coindemnitor_phone"),
+            _person_text(co_party, "phone"),
+            _person_text(co_from_list, "phone"),
+        )
+        coindemnitor_email = _text(
+            bond_data.get("coindemnitor_email"),
+            _person_text(co_party, "email"),
+            _person_text(co_from_list, "email"),
+        )
         if coindemnitor_names and indemnitor_name:
             indemnitor_header = indemnitor_name + " / " + " / ".join(coindemnitor_names)
         else:
@@ -1086,11 +1135,12 @@ class DocuSealService:
         # Offense text is only written for rows the target template prints.
         # Template 5 has no offense grid, so on_form is empty and the join
         # lives on charges_summary. Template 6 prints offense_1..offense_4.
+        # Template 7's information sheet has poa_number_1..poa_number_7.
         # Companion fields such as poa_number_N still come from each charge
         # row, and the payload filter drops any name the target template
         # does not have.
         row_fields = {}
-        for i in range(1, 5):
+        for i in range(1, 8):
             idx = i - 1
             placed = charge_placement.on_form[idx] if idx < len(charge_placement.on_form) else None
             companion = placed if placed is not None else (
@@ -1702,6 +1752,87 @@ class DocuSealService:
                 values[dest] = values[src]
         # A social password is typed by the signer. Never copy one from the case.
         values.pop("defendant_social_media_password", None)
+        # Template 7 has its own co-indemnitor block and Schedule A.
+        # Template 5 does not, so those names are left unset and the
+        # indemnitor header stays the combined name.
+        template_names = _field_names_for_packet(surety_id, template_id)
+        if "coindemnitor_name" in template_names and coindemnitor_name and indemnitor_name:
+            for key in ("indemnitor_name", "IndemnitorName", "IndName"):
+                if values.get(key) == indemnitor_header:
+                    values[key] = indemnitor_name
+            if values.get("FullName") == indemnitor_header:
+                values["FullName"] = indemnitor_name
+        if "coindemnitor_phone" in template_names and coindemnitor_phone:
+            values["coindemnitor_phone"] = coindemnitor_phone
+        if "coindemnitor_email" in template_names and coindemnitor_email:
+            values["coindemnitor_email"] = coindemnitor_email
+        if "coindemnitor_block_label" in template_names and coindemnitor_name:
+            values["coindemnitor_block_label"] = "Co-Indemnitor"
+        if "schedule_a" in template_names and verbatim_rows:
+            schedule_lines: List[str] = []
+            for index, row in enumerate(verbatim_rows, start=1):
+                poa_text = row.poa_number or (poa_list[index - 1] if index - 1 < len(poa_list) else poa)
+                bond_text = _schedule_money(row.bond_amount)
+                parts = [f"{index}. {row.charge}"]
+                if poa_text:
+                    parts.append(f"POA {poa_text}")
+                if bond_text:
+                    parts.append(f"Bond {bond_text}")
+                schedule_lines.append(" — ".join(parts))
+            if bond_formatted_dollar:
+                schedule_lines.append(f"Total bond: {bond_formatted_dollar}")
+            if prem_formatted_dollar:
+                schedule_lines.append(f"Premium: {prem_formatted_dollar}")
+            paid_bits = [
+                bit for bit in (
+                    _schedule_money(
+                        bond_data.get("down_payment_amount"),
+                        bond_data.get("down_payment"),
+                        bond_data.get("amount_paid"),
+                    ),
+                    _text(
+                        bond_data.get("down_payment_method"),
+                        bond_data.get("payment_method"),
+                    ),
+                    _schedule_date(
+                        bond_data.get("down_payment_date"),
+                        bond_data.get("payment_date"),
+                        bond_data.get("paid_at"),
+                        bond_data.get("down_payment_entered_at"),
+                    ),
+                )
+                if bit
+            ]
+            if paid_bits:
+                schedule_lines.append("Amount paid: " + " ".join(paid_bits))
+            balance_text = _schedule_money(
+                bond_data.get("numeric_balance_due"),
+                bond_data.get("balance_due"),
+                bond_data.get("balance_financed_amount"),
+            )
+            due_text = _schedule_date(
+                bond_data.get("balance_due_date"),
+                bond_data.get("next_payment_due"),
+                bond_data.get("first_payment_due_date"),
+            )
+            if balance_text or due_text:
+                balance_line = "Balance due:"
+                if balance_text:
+                    balance_line += f" {balance_text}"
+                if due_text:
+                    balance_line += f" due {due_text}"
+                schedule_lines.append(balance_line)
+            values["schedule_a"] = "\n".join(schedule_lines)
+            if "schedule_a_label_indemnitor" in template_names and indemnitor_name:
+                values["schedule_a_label_indemnitor"] = indemnitor_name
+            if "schedule_a_label_coindemnitor" in template_names and coindemnitor_name:
+                values["schedule_a_label_coindemnitor"] = coindemnitor_name
+            if (
+                "schedule_a_label_defendant" in template_names
+                and defendant_name
+                and defendant_name != "To Be Named"
+            ):
+                values["schedule_a_label_defendant"] = defendant_name
         # Drop empty strings so DocuSeal doesn't overwrite blank required fields with "".
         # Then drop charge names the live template does not have. DocuSeal would
         # ignore those and the charge would never appear on the signed packet.
