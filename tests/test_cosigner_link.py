@@ -423,6 +423,93 @@ def test_bond_stored_as_bond_case_id_alias_issues_a_link(monkeypatch):
     assert link["bond_case_id"] == CASE
 
 
+def test_bond_case_id_alias_revalidates_and_rejects_a_mismatch(monkeypatch):
+    """Either case-id field keeps the link. A bond with neither id does not."""
+    stores, client = _world(monkeypatch)
+    bond = stores["bond_cases"].docs[0]
+    bond.pop("bond_case_id", None)
+    bond["Bond_Case_ID"] = CASE
+    token = _token(client)
+    packet = stores["paperwork_packets"].docs[0]
+    packet.pop("bond_case_id", None)
+    packet["Bond_Case_ID"] = CASE
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    state = client.get(f"/api/cosigner/{token}")
+    assert state.status_code == 200, state.text
+    assert state.json()["step"] == "scan"
+    assert state.json()["sign_url"] is None
+    page = client.get(f"/cosigner/{token}")
+    assert page.status_code == 200
+    assert "Link not found" not in page.text
+    uploaded = _post_scan(client, token)
+    assert uploaded.status_code == 200, uploaded.text
+    assert calls["n"] == 1
+
+    bond["bond_case_id"] = "BC-TEST-OTHER"
+    still = client.get(f"/api/cosigner/{token}")
+    assert still.status_code == 200, still.text
+    assert still.json()["step"] == "sign"
+
+    stores, client = _world(monkeypatch)
+    bond = stores["bond_cases"].docs[0]
+    bond.pop("bond_case_id", None)
+    bond["Bond_Case_ID"] = CASE
+    token = _token(client)
+    packet = stores["paperwork_packets"].docs[0]
+    packet["bond_case_id"] = ""
+    bond["Bond_Case_ID"] = "BC-TEST-OTHER"
+    bond["bond_case_id"] = "BC-TEST-OTHER-2"
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    refused = client.get(f"/api/cosigner/{token}")
+    assert refused.status_code == 409
+    assert refused.json()["error"] == "bond_mismatch"
+    assert _sign_hidden(refused.text)
+    page = client.get(f"/cosigner/{token}")
+    assert page.status_code == 409
+    assert "Link not found" in page.text
+    scan = _post_scan(client, token)
+    assert scan.status_code == 409
+    assert _error_text(scan) == "bond_mismatch"
+    assert calls["n"] == 0
+    packet = stores["paperwork_packets"].docs[0]
+    assert packet["packet_id"] == PACKET
+    assert packet["status"] == "draft"
+    assert "id_ocr" not in packet
+
+
+def test_poa_number_change_keeps_the_cosigner_link(monkeypatch):
+    """A new POA number does not revoke the link or the packet."""
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    packet = stores["paperwork_packets"].docs[0]
+    link = stores["cosigner_links"].docs[0]
+    bond = stores["bond_cases"].docs[0]
+    bond["poa_number"] = "POA-TEST-COS-2"
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    state = client.get(f"/api/cosigner/{token}")
+    assert state.status_code == 200, state.text
+    assert state.json()["step"] == "scan"
+    assert state.json()["signing_locked"] is True
+    assert state.json()["sign_url"] is None
+    page = client.get(f"/cosigner/{token}")
+    assert page.status_code == 200
+    assert "Link not found" not in page.text
+    uploaded = _post_scan(client, token)
+    assert uploaded.status_code == 200, uploaded.text
+    assert calls["n"] == 1
+    assert packet["packet_id"] == PACKET
+    assert packet["status"] == "draft"
+    assert packet["bond_case_id"] == CASE
+    assert packet["docuseal_sign_url"]
+    assert link["token"] == token
+    assert link.get("revoked") is not True
+    assert bond["poa_number"] == "POA-TEST-COS-2"
+    assert bond["status"] == "active"
+
+
 def test_public_paths_stay_open_and_staff_create_stays_gated():
     assert "/cosigner/" in OPEN_PREFIXES
     assert "/api/cosigner/" in OPEN_PREFIXES

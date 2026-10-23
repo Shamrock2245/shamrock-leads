@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-23 (co-signer revalidation reads Bond_Case_ID)
+
+### Fixed
+- **A co-signer link stays valid when the case id is stored as `Bond_Case_ID` or `bond_case_id`.** Revalidation fails closed when neither field is the issued case. A POA number change does not revoke the link or the packet.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_bond_case_id_alias_revalidates_and_rejects_a_mismatch`, `test_poa_number_change_keeps_the_cosigner_link`.
+
 ## [Unreleased] — 2026-10-22 (co-signer pay URL stays on SwipeSimple)
 
 ### Fixed
