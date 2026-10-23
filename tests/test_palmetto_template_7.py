@@ -596,3 +596,131 @@ def test_in_person_locks_coindemnitor_identity_fields():
         assert opened[name]["readonly"] is False
     assert locked["indemnitor_name"]["readonly"] is True
     assert locked["defendant_name"]["readonly"] is True
+
+
+def test_completed_down_payment_receipt_counts_once():
+    """A collected down-payment row is a receipt. The write-time plan is not added again."""
+    booking = "TEST-T7-PAID"
+    payment = {
+        "booking_number": booking,
+        "plan_id": "TEST-PLAN-1",
+        "amount": 40.00,
+        "method": "Cash",
+        "type": "down_payment",
+        "transaction_id": "",
+        "status": "completed",
+        "timestamp": "2026-01-15T18:00:00+00:00",
+        "county": "Lee",
+        "state": "FL",
+        "case_number": "TEST-CASE-1",
+    }
+    placeholder = _ledger_payment(
+        type="down_payment",
+        entry_kind="down_payment",
+        source="write_bond",
+        stripe_swipe_ref=f"write-bond-down:{booking}",
+        amount=-4000,
+    )
+    values = DocuSealService.prefill_values_from_bond(
+        _bond(1, booking_number=booking, payments=[payment], ledger_entries=[placeholder]),
+        template_id=7,
+    )
+    schedule = values["schedule_a"]
+    assert schedule.count("Amount paid:") == 1
+    assert "Amount paid: $40.00 Cash 2026-01-15" in schedule
+    assert "Balance due: $60.00 due 2026-02-01" in schedule
+
+
+def test_other_county_receipt_is_excluded():
+    booking = "TEST-T7-PAID"
+    ours = {
+        "booking_number": booking,
+        "amount": 25.00,
+        "method": "check",
+        "type": "payment",
+        "status": "completed",
+        "timestamp": "2026-01-15T18:00:00+00:00",
+        "county": "Lee",
+        "state": "FL",
+        "case_number": "TEST-CASE-1",
+    }
+    other = {
+        "booking_number": booking,
+        "amount": 40.00,
+        "method": "cash",
+        "type": "payment",
+        "status": "completed",
+        "timestamp": "2026-01-15T18:00:00+00:00",
+        "county": "Collier",
+        "state": "FL",
+        "case_number": "TEST-CASE-OTHER",
+    }
+    values = DocuSealService.prefill_values_from_bond(
+        _bond(1, booking_number=booking, payments=[ours, other]),
+        template_id=7,
+    )
+    schedule = values["schedule_a"]
+    assert "Amount paid: $25.00 check 2026-01-15" in schedule
+    assert "$40.00" not in schedule
+    assert "cash" not in schedule
+    assert "Balance due: $75.00 due 2026-02-01" in schedule
+
+
+def test_unbound_receipt_drops_when_another_case_shares_the_booking():
+    booking = "TEST-T7-PAID"
+    unbound = {
+        "booking_number": booking,
+        "amount": 15.00,
+        "method": "check",
+        "type": "payment",
+        "status": "completed",
+        "timestamp": "2026-01-15T18:00:00+00:00",
+    }
+    other = {
+        "booking_number": booking,
+        "amount": 40.00,
+        "method": "cash",
+        "type": "payment",
+        "status": "completed",
+        "timestamp": "2026-01-15T18:00:00+00:00",
+        "county": "Collier",
+        "state": "FL",
+    }
+    values = DocuSealService.prefill_values_from_bond(
+        _bond(1, booking_number=booking, payments=[unbound, other]),
+        template_id=7,
+    )
+    schedule = values["schedule_a"]
+    assert "Amount paid: $0.00" in schedule
+    assert "$15.00" not in schedule
+    assert "$40.00" not in schedule
+    assert "Balance due: $100.00 due 2026-02-01" in schedule
+
+
+def test_receipt_without_a_case_scope_fails_closed():
+    values = DocuSealService.prefill_values_from_bond(
+        _bond(
+            1,
+            booking_number="TEST-T7-PAID",
+            county="",
+            case_number="",
+            ledger_entries=[_ledger_payment()],
+        ),
+        template_id=7,
+    )
+    schedule = values["schedule_a"]
+    assert "Amount paid: $0.00" in schedule
+    assert "Amount paid: $40.00" not in schedule
+    assert "Balance due: $100.00 due 2026-02-01" in schedule
+
+
+def test_receipt_date_uses_eastern_calendar_day():
+    """01:30 UTC is still the previous evening in the office timezone."""
+    payment = _ledger_payment(timestamp="2026-01-16T04:30:00+00:00")
+    values = DocuSealService.prefill_values_from_bond(
+        _bond(1, booking_number="TEST-T7-PAID", ledger_entries=[payment]),
+        template_id=7,
+    )
+    schedule = values["schedule_a"]
+    assert "Amount paid: $40.00 check 2026-01-15" in schedule
+    assert "2026-01-16" not in schedule.split("Balance due:")[0]

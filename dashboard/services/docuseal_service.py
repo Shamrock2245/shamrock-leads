@@ -181,9 +181,19 @@ def _field_names_for_packet(surety_id: str, template_id: Any) -> set:
 
 
 def _schedule_date(*vals: Any) -> str:
-    """A stored date for Schedule A. An ISO timestamp keeps its date."""
+    """Calendar date for Schedule A in the office timezone (America/New_York).
+
+    A date-only value is kept. An instant is converted before the calendar
+    day is taken, so a payment after midnight UTC still shows the local day.
+    """
     text = _text(*vals)
-    if len(text) >= 10 and text[4:5] == "-" and text[7:8] == "-" and "T" in text:
+    if len(text) >= 10 and text[4:5] == "-" and text[7:8] == "-":
+        if "T" in text:
+            from dashboard.services.ar_math import as_utc, local_datetime
+
+            parsed = as_utc(text)
+            if parsed is not None:
+                return local_datetime(parsed).date().isoformat()
         return text[:10]
     return text
 
@@ -214,22 +224,127 @@ _CONFIRMED_PAYMENT_STATUSES = frozenset({
 })
 
 
-def _payment_row_confirmed(row: Mapping[str, Any]) -> bool:
-    """True when a payments-collection row is a collected receipt."""
+def _row_kind(row: Mapping[str, Any]) -> str:
+    return str(row.get("entry_kind") or row.get("type") or row.get("kind") or "").strip().lower()
+
+
+def _row_ref(row: Mapping[str, Any]) -> str:
+    return str(
+        row.get("stripe_swipe_ref")
+        or row.get("reference")
+        or row.get("reference_id")
+        or ""
+    ).strip()
+
+
+def _is_write_time_down_placeholder(row: Mapping[str, Any]) -> bool:
+    """The Write Bond plan row, not a collected down-payment receipt."""
+    ref = _row_ref(row).lower()
+    if ref.startswith("write-bond-down:"):
+        return True
+    kind = _row_kind(row)
+    source = str(row.get("source") or "").strip().lower()
+    if kind == "down_payment" and source == "write_bond":
+        return True
     status = str(row.get("status") or row.get("payment_status") or "").strip().lower()
-    if status not in _CONFIRMED_PAYMENT_STATUSES:
+    return kind == "down_payment" and status not in _CONFIRMED_PAYMENT_STATUSES
+
+
+def _payment_row_confirmed(row: Mapping[str, Any]) -> bool:
+    """True when a payments or transactions row is a collected receipt.
+
+    A completed ``down_payment`` row is the cash, check, or card receipt
+    recorded with the payment plan. The write-time plan placeholder is not.
+    """
+    if _is_write_time_down_placeholder(row):
         return False
-    kind = str(row.get("type") or row.get("entry_kind") or "").strip().lower()
-    return kind != "down_payment"
+    status = str(row.get("status") or row.get("payment_status") or "").strip().lower()
+    return status in _CONFIRMED_PAYMENT_STATUSES
+
+
+def _case_scope(row: Mapping[str, Any]) -> Dict[str, str]:
+    """Identity fields that tie a receipt to one bonded case."""
+    pairs = (
+        ("bond_case_id", "bond_case_id"),
+        ("Bond_Case_ID", "bond_case_id"),
+        ("case_number", "case_number"),
+        ("Case_Number", "case_number"),
+        ("county", "county"),
+        ("state", "state"),
+    )
+    found: Dict[str, str] = {}
+    for source, dest in pairs:
+        text = _text(row.get(source))
+        if text and dest not in found:
+            found[dest] = text.casefold()
+    return found
+
+
+def _packet_can_scope(packet: Mapping[str, Any]) -> bool:
+    scope = _case_scope(packet)
+    return bool(scope.get("bond_case_id") or scope.get("case_number") or scope.get("county"))
+
+
+def _scope_relation(row: Mapping[str, Any], packet: Mapping[str, Any]) -> str:
+    """``match``, ``conflict``, or ``unbound`` against this packet."""
+    row_scope = _case_scope(row)
+    if not row_scope:
+        return "unbound"
+    packet_scope = _case_scope(packet)
+    overlapped = False
+    for key, value in row_scope.items():
+        if key == "state":
+            continue
+        expected = packet_scope.get(key)
+        if not expected:
+            continue
+        overlapped = True
+        if expected != value:
+            return "conflict"
+    row_state = row_scope.get("state")
+    packet_state = packet_scope.get("state")
+    if row_scope.get("county") and row_state and packet_state and row_state != packet_state:
+        return "conflict"
+    if overlapped:
+        return "match"
+    return "conflict"
+
+
+def _rows_for_this_case(rows: Any, packet: Mapping[str, Any]) -> List[dict]:
+    """Keep receipts for this case. A second case under the same booking drops the rest.
+
+    Rows with no case fields count only when every bound row matches this
+    packet. A row bound to another county, state, case, or bond case is
+    excluded, and unbound rows in that mix are excluded with it.
+    """
+    if not isinstance(rows, list) or not _packet_can_scope(packet):
+        return []
+    classified = []
+    for row in rows:
+        if isinstance(row, dict):
+            classified.append((row, _scope_relation(row, packet)))
+    if any(relation == "conflict" for _row, relation in classified):
+        return [row for row, relation in classified if relation == "match"]
+    return [row for row, relation in classified if relation in ("match", "unbound")]
+
+
+def _receipt_copy(row: Mapping[str, Any]) -> dict:
+    """Collected down-payment receipts are payments for the display total."""
+    copy = dict(row)
+    if _row_kind(copy) == "down_payment":
+        copy["type"] = "payment"
+        copy["entry_kind"] = "payment"
+    return copy
 
 
 def confirmed_paid_for_schedule(bond_data: Mapping[str, Any]) -> Dict[str, Any]:
     """Collected premium for Schedule A.
 
     Reads ledger rows and payment rows already on the packet. The write-time
-    ``down_payment_amount`` is a plan figure and is not a receipt. A ledger
-    row tagged ``down_payment``, or carrying the write-bond down-payment
-    reference, is excluded by the same rules as the receivable math.
+    ``down_payment_amount`` is a plan figure and is not a receipt. A Write Bond
+    ledger placeholder (``write-bond-down:`` or an unconfirmed ``down_payment``
+    row) is excluded. A completed ``down_payment`` receipt is counted.
+    Rows bound to another case that shares the booking number are excluded.
     """
     from dashboard.services.ar_math import later_payments
 
@@ -238,13 +353,15 @@ def confirmed_paid_for_schedule(bond_data: Mapping[str, Any]) -> Dict[str, Any]:
     ledger = data.get("ledger_entries")
     if not isinstance(ledger, list):
         ledger = data.get("financial_ledger") if isinstance(data.get("financial_ledger"), list) else []
+    ledger = _rows_for_this_case(ledger, data)
     transactions = [
-        row for row in (data.get("transactions") or [])
-        if isinstance(row, dict) and _payment_row_confirmed(row)
+        _receipt_copy(row)
+        for row in _rows_for_this_case(data.get("transactions"), data)
+        if _payment_row_confirmed(row)
     ]
-    for row in data.get("payments") or []:
-        if isinstance(row, dict) and _payment_row_confirmed(row):
-            transactions.append(row)
+    for row in _rows_for_this_case(data.get("payments"), data):
+        if _payment_row_confirmed(row):
+            transactions.append(_receipt_copy(row))
     summary = later_payments({"booking_number": booking}, ledger, transactions)
     items = [
         item for item in summary["items"]
