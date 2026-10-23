@@ -255,12 +255,26 @@ def test_watcher_query_uses_fa_watch_counties(monkeypatch):
     assert "Palm Beach (FL)" in values
     assert "Lee" in values
     # fail_closed watch counties are dropped before the query (config.source_guard).
-    for closed in ("Hendry", "Miami-Dade", "Charlotte", "Manatee", "Sarasota"):
-        assert closed not in values and f"{closed} (FL)" not in values
-    assert "DeSoto" in values
-    assert "Broward" in values
+    # Derived from Health rather than a fixed list: the set moves with
+    # documented decisions (Miami-Dade reopened unverified in #168, DeSoto
+    # closed in #222), and a hard-coded list went stale outside the ci.yml list.
+    from config.source_guard import fail_closed_reason
+
+    watch = resolve_fa_watch_counties(env_watch_counties="", stored_targets=None)
+    closed = [c for c in watch if fail_closed_reason(c, unknown_closed=False)]
+    open_ = [c for c in watch if c not in closed]
+    assert closed and open_  # both branches exercised
+    for c in closed:
+        assert c not in values and f"{c} (FL)" not in values, c
+    for c in open_:
+        assert c in values and f"{c} (FL)" in values, c
+    assert not [v for v in values if fail_closed_reason(v, unknown_closed=False)]
+    # Anchors for today's decisions (update with the Health registry).
+    for c in ("Hendry", "Charlotte", "Manatee", "Sarasota", "DeSoto"):
+        assert c in closed, c
+    for c in ("Miami-Dade", "Broward", "St. Lucie"):
+        assert c in open_, c
     assert "Broward (FL)" in values
-    assert "St. Lucie" in values
     assert len(resolve_fa_watch_counties(env_watch_counties="", stored_targets=None)) == len(WRITE_ELIGIBLE_COUNTIES)
 
 
