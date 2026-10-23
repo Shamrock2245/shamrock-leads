@@ -3,6 +3,47 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-23 (co-signer payment rows are tenant-scoped; pending audits show before/after)
+
+### Fixed
+- **The co-signer paid, reopen and heal steps read only this tenant's payment rows.** `_payment_rows` (and the heal step through `_stored_rows`) adds the active `tenant_id` when multi-tenancy is on, so a transaction id reused by another tenant cannot stamp or reopen this tenant's link. Flag on with no tenant: the rows count as unreadable and nothing is stamped. Flag off is unchanged. Closes #287.
+- **`payment_transition_pending` and `payment_transition_resolved` audits record the pending values before and after.** Each carries `pending_before` / `pending_after` with `payment_transition_pending`, `pending_payment_keys` and `pending_payment_transitions`. Closes #288.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_payment_rows_are_scoped_to_the_active_tenant`, `test_heal_does_not_replay_another_tenants_charge`, `test_pending_and_resolved_audits_record_before_and_after`.
+
+## [Unreleased] — 2026-10-23 (co-signer revalidation reads Bond_Case_ID)
+
+### Fixed
+- **A co-signer link stays valid when the case id is stored as `Bond_Case_ID` or `bond_case_id`.** Revalidation fails closed when neither field is the issued case. A POA number change does not revoke the link or the packet.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_bond_case_id_alias_revalidates_and_rejects_a_mismatch`, `test_poa_number_change_keeps_the_cosigner_link`.
+
+## [Unreleased] — 2026-10-22 (co-signer pay URL stays on SwipeSimple)
+
+### Fixed
+- **The co-signer page returns a pay URL only when its host is the configured SwipeSimple origin.** Any other URL, including another https host, is omitted and the payment view reports `invoice_origin`.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_off_site_invoice_url_is_hidden`.
+
+## [Unreleased] — 2026-10-22 (co-signer rollback keeps the audit)
+
+### Fixed
+- **A failed verification no longer deletes its audit rows.** The `id_verified` and `link_revoked` events stay. A `verification_rolled_back` event records the sibling links that were restored.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_failed_verification_removes_the_stored_scan`.
+
+## [Unreleased] — 2026-10-22 (co-signer link finds Bond_Case_ID)
+
+### Fixed
+- **A bond stored only as `Bond_Case_ID` can still get a co-signer link.** The case lookup reads that field and `bond_case_id`.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_bond_stored_as_bond_case_id_alias_issues_a_link`.
+
 ## [Unreleased] — 2026-10-22 (co-signer down payment held by bond mirror drift is flagged)
 
 ### Fixed

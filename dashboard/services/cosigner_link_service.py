@@ -495,7 +495,10 @@ async def _matching_bonds(query: dict) -> list:
 
 
 async def _case_rows(collection: str, case_id: str) -> list:
-    scoped = _scope({"bond_case_id": case_id})
+    scoped = _scope({"$or": [
+        {"bond_case_id": case_id},
+        {"Bond_Case_ID": case_id},
+    ]})
     if scoped is None:
         raise CosignerLinkError("tenant_required", 403)
     found = []
@@ -842,17 +845,33 @@ async def _require_current_bond(link: dict, packet: dict) -> dict:
     return bond
 
 
+def _recorded_case_ids(doc: dict) -> set[str]:
+    """Case ids stored under either bond-case field. Blanks are not ids."""
+    found: set[str] = set()
+    if not isinstance(doc, dict):
+        return found
+    for key in ("bond_case_id", "Bond_Case_ID"):
+        text = str(doc.get(key) or "").strip()
+        if text:
+            found.add(text)
+    return found
+
+
 def _issued_case_drifted(link: dict, packet: dict, bond: dict) -> bool:
-    """The packet or bond is no longer the case this link was issued for."""
-    stored_case = str(link.get("bond_case_id") or "").strip()
+    """The packet or bond is no longer the case this link was issued for.
+
+    A case id matches when it is stored as ``bond_case_id`` or
+    ``Bond_Case_ID``. A POA number is not part of this comparison.
+    """
+    stored_case = _bond_field(link, "bond_case_id", "Bond_Case_ID")
     stored_booking = str(link.get("booking_number") or "").strip()
-    bond_case = str(bond.get("bond_case_id") or "").strip()
+    bond_cases = _recorded_case_ids(bond)
     bond_booking = str(bond.get("booking_number") or "").strip()
-    packet_case = str(packet.get("bond_case_id") or "").strip()
+    packet_cases = _recorded_case_ids(packet)
     packet_booking = str(packet.get("booking_number") or "").strip()
-    if stored_case and bond_case != stored_case:
+    if stored_case and stored_case not in bond_cases:
         return True
-    if stored_case and packet_case and packet_case != stored_case:
+    if stored_case and packet_cases and stored_case not in packet_cases:
         return True
     if stored_booking and bond_booking != stored_booking:
         return True
@@ -1080,17 +1099,42 @@ async def _restore_sibling_links(priors: list) -> None:
         )
 
 
-async def _drop_partial_audits(packet_id: str, created_at: str) -> None:
-    """Remove audits for a verification that did not finish."""
-    coll = get_collection("audit_events")
-    for event_type in ("id_verified", "link_revoked"):
-        query = {
-            "event_type": event_type,
-            "packet_id": packet_id,
-            "created_at": created_at,
-        }
-        while int(getattr(await coll.delete_one(query), "deleted_count", 0) or 0):
+async def _drop_partial_audits(
+    packet_id: str,
+    created_at: str,
+    restored: Optional[list] = None,
+) -> None:
+    """Keep this attempt's audits and record that the verification rolled back."""
+    siblings = []
+    for prior in restored or []:
+        if not isinstance(prior, dict):
             continue
+        token = str(prior.get("token") or "").strip()
+        if not token:
+            continue
+        siblings.append({
+            "token": token,
+            "revoked": prior.get("revoked") is True,
+            "status": str(prior.get("status") or ""),
+        })
+    now = _now()
+    await get_collection("audit_events").insert_one({
+        "event_type": "verification_rolled_back",
+        "action": "verification_rolled_back",
+        "entity_type": "cosigner_link",
+        "entity_id": packet_id,
+        "actor": "cosigner_link",
+        "agent_name": "cosigner_link",
+        "timestamp": now,
+        "created_at": now.isoformat(),
+        "packet_id": packet_id,
+        "reason": "verification_rolled_back",
+        "attempted_at": created_at,
+        "restored_links": siblings,
+        "old_state": {},
+        "new_state": {"restored_links": [row["token"] for row in siblings]},
+        "confidence": 1.0,
+    })
 
 
 async def _release_verification_claim(packet: dict, token: str) -> None:
@@ -1360,7 +1404,9 @@ async def submit_cosigner_scan(token: str, body: dict) -> dict:
             await _clear_stored_scan(stored)
             await _restore_sibling_links(priors)
             if started:
-                await _drop_partial_audits(str(packet.get("packet_id") or ""), started)
+                await _drop_partial_audits(
+                    str(packet.get("packet_id") or ""), started, priors,
+                )
             await _release_verification_claim(packet, token)
         except Exception:
             logger.info("[cosigner] scan rollback failed")
@@ -2302,6 +2348,21 @@ async def _iter(cursor):
         return
 
 
+def _swipesimple_host() -> str:
+    """Hostname of the configured SwipeSimple origin. No secret is read."""
+    from dashboard.services.swipesimple_invoice_service import _DEFAULT_BASE_URL
+
+    base = (os.getenv("SWIPESIMPLE_BASE_URL") or _DEFAULT_BASE_URL).strip()
+    return (urlparse(base).hostname or "").lower()
+
+
+def _invoice_host_rejected(link: str) -> bool:
+    """A pay URL is shown only on the configured SwipeSimple host."""
+    host = (urlparse(str(link or "").strip()).hostname or "").lower()
+    expected = _swipesimple_host()
+    return not host or not expected or host != expected
+
+
 def _invoice_source(packet: dict, bond: Optional[dict]) -> tuple[str, Optional[dict]]:
     """The case invoice URL and the document that stored it."""
     for doc in (packet, bond):
@@ -2358,11 +2419,15 @@ def _payment_view(packet: dict, bond: Optional[dict]) -> dict:
     link, source = _invoice_source(packet, bond)
     unproven = bool(link) and _invoice_amount_unproven(source, cents)
     unbound = False
+    off_host = False
     if unproven:
         link = ""
     elif link and _invoice_not_this_case(source, packet, bond):
         link = ""
         unbound = True
+    elif link and _invoice_host_rejected(link):
+        link = ""
+        off_host = True
     dry_run = not dispatch_live_enabled()
     view = {
         "amount": amount,
@@ -2374,6 +2439,8 @@ def _payment_view(packet: dict, bond: Optional[dict]) -> dict:
         view["error"] = "invoice_amount_unproven"
     elif unbound:
         view["error"] = "invoice_unbound"
+    elif off_host:
+        view["error"] = "invoice_origin"
     return view
 
 
