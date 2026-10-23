@@ -160,6 +160,312 @@ def _text(*vals: Any) -> str:
     return ""
 
 
+def _field_names_for_packet(surety_id: str, template_id: Any) -> set:
+    """Names on the template this submission will use.
+
+    The live name list wins. The charge-capacity record is the fallback.
+    An unknown id uses the surety's default record, which is template 5
+    for Palmetto.
+    """
+    from dashboard.services.charge_verbatim import capacity_record
+    from dashboard.services.docuseal_signing_ux import field_names_for_template_id
+    from dashboard.services.surety_registry import template_id_for
+
+    tid = template_id
+    if tid in (None, ""):
+        tid = template_id_for(surety_id)
+    live = field_names_for_template_id(tid)
+    if live:
+        return set(live)
+    return set(capacity_record(surety_id, tid).get("field_names") or [])
+
+
+def _schedule_date(*vals: Any) -> str:
+    """Calendar date for Schedule A in the office timezone (America/New_York).
+
+    A date-only value is kept. An instant is converted before the calendar
+    day is taken, so a payment after midnight UTC still shows the local day.
+    """
+    text = _text(*vals)
+    if len(text) >= 10 and text[4:5] == "-" and text[7:8] == "-":
+        if "T" in text:
+            from dashboard.services.ar_math import as_utc, local_datetime
+
+            parsed = as_utc(text)
+            if parsed is not None:
+                return local_datetime(parsed).date().isoformat()
+        return text[:10]
+    return text
+
+
+def _schedule_money(*vals: Any) -> str:
+    """First positive amount, in the same dollar form as the bond total."""
+    for val in vals:
+        amount = _safe_money(val)
+        if amount > 0:
+            return f"${amount:,.2f}"
+    return ""
+
+
+# A payments-collection row is confirmed only with one of these statuses.
+# A blank, pending, or declined status is not a receipt.
+_CONFIRMED_PAYMENT_STATUSES = frozenset({
+    "approved",
+    "captured",
+    "collected",
+    "complete",
+    "completed",
+    "ok",
+    "paid",
+    "received",
+    "settled",
+    "success",
+    "successful",
+})
+
+
+def _row_kind(row: Mapping[str, Any]) -> str:
+    return str(row.get("entry_kind") or row.get("type") or row.get("kind") or "").strip().lower()
+
+
+def _row_ref(row: Mapping[str, Any]) -> str:
+    return str(
+        row.get("stripe_swipe_ref")
+        or row.get("reference")
+        or row.get("reference_id")
+        or ""
+    ).strip()
+
+
+def _is_write_time_down_placeholder(row: Mapping[str, Any]) -> bool:
+    """The Write Bond plan row, not a collected down-payment receipt."""
+    ref = _row_ref(row).lower()
+    if ref.startswith("write-bond-down:"):
+        return True
+    kind = _row_kind(row)
+    source = str(row.get("source") or "").strip().lower()
+    if kind == "down_payment" and source == "write_bond":
+        return True
+    status = str(row.get("status") or row.get("payment_status") or "").strip().lower()
+    return kind == "down_payment" and status not in _CONFIRMED_PAYMENT_STATUSES
+
+
+def _payment_row_confirmed(row: Mapping[str, Any]) -> bool:
+    """True when a payments or transactions row is a collected receipt.
+
+    A completed ``down_payment`` row is the cash, check, or card receipt
+    recorded with the payment plan. The write-time plan placeholder is not.
+    """
+    if _is_write_time_down_placeholder(row):
+        return False
+    status = str(row.get("status") or row.get("payment_status") or "").strip().lower()
+    return status in _CONFIRMED_PAYMENT_STATUSES
+
+
+def _case_scope(row: Mapping[str, Any]) -> Dict[str, str]:
+    """Identity fields that tie a receipt to one bonded case."""
+    pairs = (
+        ("bond_case_id", "bond_case_id"),
+        ("Bond_Case_ID", "bond_case_id"),
+        ("case_number", "case_number"),
+        ("Case_Number", "case_number"),
+        ("county", "county"),
+        ("state", "state"),
+    )
+    found: Dict[str, str] = {}
+    for source, dest in pairs:
+        text = _text(row.get(source))
+        if text and dest not in found:
+            found[dest] = text.casefold()
+    return found
+
+
+def _packet_can_scope(packet: Mapping[str, Any]) -> bool:
+    scope = _case_scope(packet)
+    return bool(scope.get("bond_case_id") or scope.get("case_number") or scope.get("county"))
+
+
+def _scope_relation(row: Mapping[str, Any], packet: Mapping[str, Any]) -> str:
+    """``match``, ``conflict``, or ``unbound`` against this packet."""
+    row_scope = _case_scope(row)
+    if not row_scope:
+        return "unbound"
+    packet_scope = _case_scope(packet)
+    overlapped = False
+    for key, value in row_scope.items():
+        if key == "state":
+            continue
+        expected = packet_scope.get(key)
+        if not expected:
+            continue
+        overlapped = True
+        if expected != value:
+            return "conflict"
+    row_state = row_scope.get("state")
+    packet_state = packet_scope.get("state")
+    if row_scope.get("county") and row_state and packet_state and row_state != packet_state:
+        return "conflict"
+    if overlapped:
+        return "match"
+    return "conflict"
+
+
+def _rows_for_this_case(rows: Any, packet: Mapping[str, Any]) -> List[dict]:
+    """Keep receipts for this case. A second case under the same booking drops the rest.
+
+    Rows with no case fields count only when every bound row matches this
+    packet. A row bound to another county, state, case, or bond case is
+    excluded, and unbound rows in that mix are excluded with it.
+    """
+    if not isinstance(rows, list) or not _packet_can_scope(packet):
+        return []
+    classified = []
+    for row in rows:
+        if isinstance(row, dict):
+            classified.append((row, _scope_relation(row, packet)))
+    if any(relation == "conflict" for _row, relation in classified):
+        return [row for row, relation in classified if relation == "match"]
+    return [row for row, relation in classified if relation in ("match", "unbound")]
+
+
+def _receipt_copy(row: Mapping[str, Any]) -> dict:
+    """Collected down-payment receipts are payments for the display total."""
+    copy = dict(row)
+    if _row_kind(copy) == "down_payment":
+        copy["type"] = "payment"
+        copy["entry_kind"] = "payment"
+    return copy
+
+
+def confirmed_paid_for_schedule(bond_data: Mapping[str, Any]) -> Dict[str, Any]:
+    """Collected premium for Schedule A.
+
+    Reads ledger rows and payment rows already on the packet. The write-time
+    ``down_payment_amount`` is a plan figure and is not a receipt. A Write Bond
+    ledger placeholder (``write-bond-down:`` or an unconfirmed ``down_payment``
+    row) is excluded. A completed ``down_payment`` receipt is counted.
+    Rows bound to another case that shares the booking number are excluded.
+    """
+    from dashboard.services.ar_math import later_payments
+
+    data = bond_data if isinstance(bond_data, Mapping) else {}
+    booking = _text(data.get("booking_number"))
+    ledger = data.get("ledger_entries")
+    if not isinstance(ledger, list):
+        ledger = data.get("financial_ledger") if isinstance(data.get("financial_ledger"), list) else []
+    ledger = _rows_for_this_case(ledger, data)
+    transactions = [
+        _receipt_copy(row)
+        for row in _rows_for_this_case(data.get("transactions"), data)
+        if _payment_row_confirmed(row)
+    ]
+    for row in _rows_for_this_case(data.get("payments"), data):
+        if _payment_row_confirmed(row):
+            transactions.append(_receipt_copy(row))
+    summary = later_payments({"booking_number": booking}, ledger, transactions)
+    items = [
+        item for item in summary["items"]
+        if item.get("kind") == "payment" and int(item.get("amount_cents") or 0) > 0
+    ]
+    return {"net_cents": int(summary["cents"]), "items": items}
+
+
+def _schedule_cents(cents: int) -> str:
+    from dashboard.services.ar_math import cents_to_dollars
+
+    text = cents_to_dollars(int(cents))
+    if text.startswith("-"):
+        return f"-${text[1:]}"
+    return f"${text}"
+
+
+def schedule_a_money_lines(bond_data: Mapping[str, Any], premium_amount: Any) -> List[str]:
+    """Amount paid and balance due for Schedule A.
+
+    Amount paid is the confirmed ledger total. With no confirmed payment the
+    line is ``$0.00`` and the balance is the full premium, not the financed
+    remainder that assumes the down payment was collected.
+    """
+    from dashboard.services.ar_math import to_cents
+
+    paid = confirmed_paid_for_schedule(bond_data)
+    lines: List[str] = []
+    items = list(paid["items"])
+    item_cents = sum(int(item.get("amount_cents") or 0) for item in items)
+    # A refund changes the net without sharing one method and date.
+    # Print the net receipt in that case. Otherwise each collected row
+    # keeps its own method and date.
+    if paid["net_cents"] <= 0 or not items:
+        lines.append("Amount paid: $0.00")
+    elif item_cents != int(paid["net_cents"]):
+        lines.append(f"Amount paid: {_schedule_cents(int(paid['net_cents']))}")
+    else:
+        for item in items:
+            bits = [_schedule_cents(int(item.get("amount_cents") or 0))]
+            method = _text(item.get("method"))
+            when = _schedule_date(item.get("timestamp"))
+            if method:
+                bits.append(method)
+            if when:
+                bits.append(when)
+            lines.append("Amount paid: " + " ".join(bits))
+    premium_cents = to_cents(premium_amount)
+    balance_cents = premium_cents - int(paid["net_cents"])
+    due = _schedule_date(
+        bond_data.get("balance_due_date"),
+        bond_data.get("next_payment_due"),
+        bond_data.get("first_payment_due_date"),
+    )
+    balance_line = f"Balance due: {_schedule_cents(balance_cents)}"
+    if due:
+        balance_line += f" due {due}"
+    lines.append(balance_line)
+    return lines
+
+
+async def attach_schedule_payment_sources(bond_data: Dict[str, Any], template_id: Any) -> None:
+    """Copy confirmed ledger and payment rows onto the packet for display.
+
+    Does not write a payment, a ledger row, or a charge. A read failure leaves
+    the lists empty so Schedule A shows nothing collected.
+    """
+    if not isinstance(bond_data, dict):
+        return
+    if "ledger_entries" in bond_data or "financial_ledger" in bond_data:
+        return
+    surety_id = str(bond_data.get("surety_id") or bond_data.get("surety") or "")
+    if "schedule_a" not in _field_names_for_packet(surety_id, template_id):
+        return
+    booking = _text(bond_data.get("booking_number"))
+    ledger: List[Any] = []
+    payments: List[Any] = []
+    transactions: List[Any] = []
+    if booking:
+        try:
+            from dashboard.extensions import get_collection
+            from dashboard.services.ar_math import booking_key
+
+            keys = [booking]
+            upper = booking_key(booking)
+            if upper and upper not in keys:
+                keys.append(upper)
+            query = {"booking_number": {"$in": keys}}
+            ledger = await get_collection("financial_ledger").find(query).to_list(None)
+            payments = await get_collection("payments").find(query).to_list(None)
+            transactions = await get_collection("transactions").find(query).to_list(None)
+        except Exception as exc:
+            logger.warning(
+                "[docuseal] confirmed payment read failed: %s",
+                type(exc).__name__,
+            )
+            ledger, payments, transactions = [], [], []
+    bond_data["ledger_entries"] = list(ledger or [])
+    if not isinstance(bond_data.get("transactions"), list):
+        bond_data["transactions"] = list(transactions or [])
+    if not isinstance(bond_data.get("payments"), list):
+        bond_data["payments"] = list(payments or [])
+
+
 def _writing_agent_name(data: Optional[Dict[str, Any]]) -> str:
     """Agent already on the bond. Empty when absent. Never the template sample."""
     from dashboard.bond_pdf_service import writing_agent_name
@@ -915,7 +1221,19 @@ class DocuSealService:
                 )
                 if extra_name and extra_name not in coindemnitor_names:
                     coindemnitor_names.append(extra_name)
+        co_party = bond_data.get("coindemnitor") if isinstance(bond_data.get("coindemnitor"), dict) else {}
+        co_from_list = raw_inds[1] if isinstance(raw_inds, list) and len(raw_inds) > 1 and isinstance(raw_inds[1], dict) else {}
         coindemnitor_name = _text(bond_data.get("coindemnitor_name"), *coindemnitor_names)
+        coindemnitor_phone = _text(
+            bond_data.get("coindemnitor_phone"),
+            _person_text(co_party, "phone"),
+            _person_text(co_from_list, "phone"),
+        )
+        coindemnitor_email = _text(
+            bond_data.get("coindemnitor_email"),
+            _person_text(co_party, "email"),
+            _person_text(co_from_list, "email"),
+        )
         if coindemnitor_names and indemnitor_name:
             indemnitor_header = indemnitor_name + " / " + " / ".join(coindemnitor_names)
         else:
@@ -1086,11 +1404,12 @@ class DocuSealService:
         # Offense text is only written for rows the target template prints.
         # Template 5 has no offense grid, so on_form is empty and the join
         # lives on charges_summary. Template 6 prints offense_1..offense_4.
+        # Template 7's information sheet has poa_number_1..poa_number_7.
         # Companion fields such as poa_number_N still come from each charge
         # row, and the payload filter drops any name the target template
         # does not have.
         row_fields = {}
-        for i in range(1, 5):
+        for i in range(1, 8):
             idx = i - 1
             placed = charge_placement.on_form[idx] if idx < len(charge_placement.on_form) else None
             companion = placed if placed is not None else (
@@ -1702,6 +2021,52 @@ class DocuSealService:
                 values[dest] = values[src]
         # A social password is typed by the signer. Never copy one from the case.
         values.pop("defendant_social_media_password", None)
+        # Template 7 has its own co-indemnitor block and Schedule A.
+        # Template 5 does not, so those names are left unset and the
+        # indemnitor header stays the combined name.
+        template_names = _field_names_for_packet(surety_id, template_id)
+        if "coindemnitor_name" in template_names and coindemnitor_name and indemnitor_name:
+            for key in ("indemnitor_name", "IndemnitorName", "IndName"):
+                if values.get(key) == indemnitor_header:
+                    values[key] = indemnitor_name
+            if values.get("FullName") == indemnitor_header:
+                values["FullName"] = indemnitor_name
+        if "coindemnitor_phone" in template_names and coindemnitor_phone:
+            values["coindemnitor_phone"] = coindemnitor_phone
+        if "coindemnitor_email" in template_names and coindemnitor_email:
+            values["coindemnitor_email"] = coindemnitor_email
+        if "coindemnitor_block_label" in template_names and coindemnitor_name:
+            values["coindemnitor_block_label"] = "Co-Indemnitor"
+        if "schedule_a" in template_names and verbatim_rows:
+            schedule_lines: List[str] = []
+            for index, row in enumerate(verbatim_rows, start=1):
+                poa_text = row.poa_number or (poa_list[index - 1] if index - 1 < len(poa_list) else poa)
+                bond_text = _schedule_money(row.bond_amount)
+                parts = [f"{index}. {row.charge}"]
+                if poa_text:
+                    parts.append(f"POA {poa_text}")
+                if bond_text:
+                    parts.append(f"Bond {bond_text}")
+                schedule_lines.append(" — ".join(parts))
+            if bond_formatted_dollar:
+                schedule_lines.append(f"Total bond: {bond_formatted_dollar}")
+            if prem_formatted_dollar:
+                schedule_lines.append(f"Premium: {prem_formatted_dollar}")
+            # Amount paid is a confirmed ledger receipt. The write-time down
+            # payment is not printed, and the balance is premium minus that
+            # receipt.
+            schedule_lines.extend(schedule_a_money_lines(bond_data, prem_float))
+            values["schedule_a"] = "\n".join(schedule_lines)
+            if "schedule_a_label_indemnitor" in template_names and indemnitor_name:
+                values["schedule_a_label_indemnitor"] = indemnitor_name
+            if "schedule_a_label_coindemnitor" in template_names and coindemnitor_name:
+                values["schedule_a_label_coindemnitor"] = coindemnitor_name
+            if (
+                "schedule_a_label_defendant" in template_names
+                and defendant_name
+                and defendant_name != "To Be Named"
+            ):
+                values["schedule_a_label_defendant"] = defendant_name
         # Drop empty strings so DocuSeal doesn't overwrite blank required fields with "".
         # Then drop charge names the live template does not have. DocuSeal would
         # ignore those and the charge would never appear on the signed packet.
@@ -1842,6 +2207,7 @@ class DocuSealService:
         bond_data = dict(bond_data or {})
         agent_name, agent_license = resolve_writing_agent(bond_data)
         apply_writing_agent(bond_data, agent_name, agent_license)
+        await attach_schedule_payment_sources(bond_data, template_id)
         raw_values = self.prefill_values_from_bond(bond_data, template_id=template_id)
         # Published "mapped" sureties add their PDF field names. OSI/Palmetto
         # seeds stay on canonical_prefill, so this dict is unchanged for them.

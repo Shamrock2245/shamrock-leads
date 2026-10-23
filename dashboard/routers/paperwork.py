@@ -2499,6 +2499,7 @@ async def hydrate_from_booking(request: Request):
     )
     from dashboard.services.docuseal_service import (
         DocuSealService,
+        attach_schedule_payment_sources,
         build_bond_data_from_dashboard,
         resolve_template_id_for_surety,
     )
@@ -2563,7 +2564,9 @@ async def hydrate_from_booking(request: Request):
         surety_id=surety_id,
         session=user,
     )
-    values = DocuSealService.prefill_values_from_bond(bond_data)
+    template_id = resolve_template_id_for_surety(surety_id)
+    await attach_schedule_payment_sources(bond_data, template_id)
+    values = DocuSealService.prefill_values_from_bond(bond_data, template_id=template_id)
     fields = build_adaptive_field_map(ctx)
     audit = hydration_score(fields)
     poa_locked = bool(ctx.get("poa_locked") or ctx.get("clerk_bond_posted"))
@@ -2582,7 +2585,7 @@ async def hydrate_from_booking(request: Request):
         "booking_number": booking,
         "county": ctx.get("county") or county,
         "surety_id": surety_id,
-        "template_id": resolve_template_id_for_surety(surety_id),
+        "template_id": template_id,
         "context": ctx,
         "prefill": values,
         "prefill_key_count": len(values),
@@ -2663,6 +2666,7 @@ async def docuseal_prefill_preview(request: Request):
     )
     from dashboard.services.docuseal_service import (
         DocuSealService,
+        attach_schedule_payment_sources,
         build_bond_data_from_dashboard,
         resolve_template_id_for_surety,
         readiness_report,
@@ -2748,8 +2752,9 @@ async def docuseal_prefill_preview(request: Request):
         surety_id=surety_id,
         session=user,
     )
-    values = DocuSealService.prefill_values_from_bond(bond_data)
     template_id = resolve_template_id_for_surety(surety_id)
+    await attach_schedule_payment_sources(bond_data, template_id)
+    values = DocuSealService.prefill_values_from_bond(bond_data, template_id=template_id)
 
     # Predicted submitter roles (must match live DocuSeal template names)
     inds = bond_data.get("indemnitors") or []
