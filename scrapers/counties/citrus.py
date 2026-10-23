@@ -8,6 +8,13 @@ Source contract (recon 2026-10-07, docs/recon/FL_IDLE_EIGHT_2026-10-07.md):
   * PDF table columns: Photo / Name / AR # / Date / Arrest Type / Offense / DOB / Bond.
   * Source-issued identifier is ``AR #`` (pattern ``AAYY-NNNNNN``). Rows without AR # are dropped.
   * No DrissionPage / stealth / proxy — ordinary requests + pdfplumber.
+
+Honest access and no invented values (2026-10-15): both requests go through
+``scrapers.plain_http`` (honest User-Agent, certificate verified; 401/403/429 or
+a challenge raises ``egress_block:``, a real certificate failure
+``tls_cert_invalid:``; nothing works around a block). Bond is the published
+amount (a published 0 is kept); blank / NO BOND / HOLD / text is ``""``. This
+is a recent-arrests list that never states custody, so Status is ``""``.
 """
 from __future__ import annotations
 
@@ -18,8 +25,9 @@ from html import unescape
 from typing import List
 from urllib.parse import urljoin
 
-import requests
 from scrapers.base_scraper import BaseScraper
+from scrapers.plain_http import make_session, request
+from scrapers.published_bond import charge_bond_amount
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
@@ -28,12 +36,7 @@ BASE_URL = "https://www.sheriffcitrus.org"
 PAGE_URL = f"{BASE_URL}/public_info/recent_arrest.php"
 FACILITY = "Citrus County Detention Facility"
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    ),
     "Accept": "text/html,application/xhtml+xml,application/pdf,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
     "Referer": PAGE_URL,
 }
 
@@ -59,7 +62,8 @@ class CitrusCountyScraper(BaseScraper):
         except ImportError as exc:
             raise RuntimeError("Citrus: pdfplumber is required to parse the arrest PDF") from exc
 
-        resp = requests.get(PAGE_URL, headers=HEADERS, timeout=45)
+        session = make_session(HEADERS)
+        resp = request(session, "GET", PAGE_URL, county="Citrus", timeout=45)
         resp.raise_for_status()
         pdf_url = self._extract_pdf_url(resp.text)
         if not pdf_url:
@@ -67,7 +71,7 @@ class CitrusCountyScraper(BaseScraper):
             return []
 
         logger.info("Citrus: downloading PDF %s", pdf_url.split("?")[0])
-        pdf_resp = requests.get(pdf_url, headers=HEADERS, timeout=90)
+        pdf_resp = request(session, "GET", pdf_url, county="Citrus", timeout=90)
         pdf_resp.raise_for_status()
         if not pdf_resp.content.startswith(b"%PDF"):
             raise RuntimeError("Citrus: arrest PDF response was not a PDF")
@@ -139,10 +143,10 @@ class CitrusCountyScraper(BaseScraper):
             Last_Name=last,
             DOB=cell("dob"),
             Booking_Date=cell("date"),
-            Status="In Custody",
+            Status="",  # recent-arrests list; the source never states custody
             Facility=FACILITY,
             Charges=cell("offense"),
-            Bond_Amount=str(bond_amount) if bond_amount > 0 else "0",
+            Bond_Amount=bond_amount,
             Detail_URL=detail_url,
             LastCheckedMode="INITIAL",
         )
@@ -167,13 +171,9 @@ class CitrusCountyScraper(BaseScraper):
         return parts[0], " ".join(parts[1:-1]), parts[-1]
 
     @staticmethod
-    def _parse_bond(bond_str: str) -> float:
-        if not bond_str:
-            return 0.0
-        cleaned = re.sub(r"[$,\s]", "", bond_str.strip().upper())
-        if any(t in cleaned for t in ["NOBOND", "NONE", "N/A", "HOLD"]):
-            return 0.0
-        try:
-            return float(cleaned)
-        except (ValueError, TypeError):
-            return 0.0
+    def _parse_bond(bond_str: str) -> str:
+        """Published amount as a string ("1500", "0", "250.5"); unknown is ""."""
+        amount = charge_bond_amount(bond_str)
+        if amount is None:
+            return ""
+        return str(int(amount)) if float(amount).is_integer() else f"{amount:.2f}"

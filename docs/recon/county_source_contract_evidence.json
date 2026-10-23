@@ -667,10 +667,10 @@
     {
       "state": "FL",
       "county_fips": "017",
-      "passive_recommendation": "productive",
+      "passive_recommendation": "recon_only",
       "official_source_url": "https://www.sheriffcitrus.org/public_info/recent_arrest.php",
-      "access_posture": "Ordinary public HTTPS; dated arrest PDF iframe with AR # / charges / bond",
-      "evidence_note": "2026-10-07 idle-eight recon: landing 200; PDF table columns Photo/Name/AR #/Date/Arrest Type/Offense/DOB/Bond; AR # pattern AAYY-NNNNNN. Parser uses plain requests+pdfplumber (no DrissionPage)."
+      "access_posture": "Public HTTPS landing + dated arrest PDF; honest agent-box probe 2026-10-15 got HTTP 403 (egress_block); VPS/Leads Ops validation required",
+      "evidence_note": "2026-10-07 idle-eight recon: landing 200; PDF table columns Photo/Name/AR #/Date/Arrest Type/Offense/DOB/Bond; AR # pattern AAYY-NNNNNN. 2026-10-15 honest plain_http probe from the agent box (honest UA, certificate verified): HTTP 403, so the scraper raises egress_block: Citrus HTTP 403 from that network (#217). Not available until a VPS / Leads Ops run fetches the landing and PDF and a write smoke passes. Parser: plain_http + pdfplumber; unpublished bond is blank, custody never inferred."
     },
     {
       "state": "FL",
