@@ -258,10 +258,18 @@ def _match(doc, query):
         present, current = _lookup(doc, key)
         if isinstance(expected, dict):
             if "$in" in expected:
-                if current not in expected["$in"]:
+                # Mongo: $in on an array field matches when any element is listed.
+                if isinstance(current, list):
+                    if not any(item in expected["$in"] for item in current):
+                        return False
+                elif current not in expected["$in"]:
                     return False
             elif "$ne" in expected:
-                if current == expected["$ne"]:
+                # Mongo: $ne on an array field matches when no element equals it.
+                if isinstance(current, list):
+                    if expected["$ne"] in current:
+                        return False
+                elif current == expected["$ne"]:
                     return False
             elif "$exists" in expected:
                 if present != bool(expected["$exists"]):
@@ -318,6 +326,17 @@ class _Col:
             bucket.append(value)
         for key in (update.get("$unset") or {}):
             _remove(doc, key)
+        for key, cond in (update.get("$pull") or {}).items():
+            bucket = doc.get(key)
+            if not isinstance(bucket, list):
+                continue
+            if isinstance(cond, dict):
+                doc[key] = [
+                    item for item in bucket
+                    if not (isinstance(item, dict) and all(item.get(k) == v for k, v in cond.items()))
+                ]
+            else:
+                doc[key] = [item for item in bucket if item != cond]
         return _Result(1)
 
     async def delete_one(self, query, session=None, **kwargs):
@@ -3584,3 +3603,531 @@ def test_paid_audit_reads_the_link_on_the_payment_session(monkeypatch):
     reversed_audit = _audits(stores, "payment_reversed")[-1]
     assert reversed_audit["new_state"]["paid"] is False
     assert reversed_audit["new_state"]["payment_reversed"] is True
+
+
+def _paid_mirror_world(monkeypatch, **mirror_changes):
+    """Recorder world plus an ``active_bonds`` mirror on both sides."""
+    import copy
+
+    stores, client, token, db = _recorder_world(monkeypatch)
+    stores["bond_cases"].docs[0]["defendant_name"] = "Robin Q. Sample"
+    _mirror_of(stores, **mirror_changes)
+    db["active_bonds"].docs.append(copy.deepcopy(stores["active_bonds"].docs[0]))
+    return stores, client, token, db
+
+
+def _down_rows(db, txn):
+    return [row for row in db["payments"].docs if row.get("transaction_id") == txn]
+
+
+def test_paid_path_reconciles_a_mirror_that_differs_only_in_case_and_spacing(monkeypatch):
+    """'OSI' and ' osi ' are one surety. The down payment marks paid once."""
+    stores, client, token, db = _paid_mirror_world(
+        monkeypatch,
+        surety_id=" OSI ",
+        status=" ACTIVE",
+        case_number=" 2026-test-001 ",
+        poa_number="poa-test-cos-1",
+        match_status="Validated",
+        defendant_name="  robin   q  sample ",
+    )
+    before = client.get(f"/api/cosigner/{token}")
+    assert before.status_code == 200, before.text
+    assert before.json()["step"] == "pay"
+
+    for _ in range(3):
+        replay = _webhook(client, txn="TX-MIRROR-CASE", amount="500.00")
+        assert replay.status_code == 200, replay.text
+    polled = _poll_down_payment(db, txn="TX-MIRROR-CASE", amount="500.00")
+    assert polled["duplicate"] is True
+
+    rows = _down_rows(db, "TX-MIRROR-CASE")
+    assert len(rows) == 1
+    assert _cents(rows[0]["amount"]) == DOWN_CENTS
+    link = stores["cosigner_links"].docs[0]
+    assert link["paid_transaction_id"] == "TX-MIRROR-CASE"
+    assert not link.get("needs_review")
+    assert len(_audits(stores, "paid")) == 1
+    assert _audits(stores, "paid_blocked") == []
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"surety_id": "other-surety"},
+        {"poa_number": "POA-TEST-OTHER"},
+        {"defendant_name": "Someone Else"},
+    ],
+)
+def test_mirror_drift_blocks_paid_and_flags_review_once(monkeypatch, changes):
+    """A different surety, POA, or defendant stays unpaid with one review mark."""
+    stores, client, token, db = _paid_mirror_world(monkeypatch, **changes)
+    refused = client.get(f"/api/cosigner/{token}")
+    assert refused.status_code == 409
+    assert refused.json()["error"] == "bond_mirror_mismatch"
+
+    for _ in range(2):
+        replay = _webhook(client, txn="TX-MIRROR-DRIFT", amount="500.00")
+        assert replay.status_code == 200, replay.text
+    _poll_down_payment(db, txn="TX-MIRROR-DRIFT", amount="500.00")
+
+    rows = _down_rows(db, "TX-MIRROR-DRIFT")
+    assert len(rows) == 1
+    assert _cents(rows[0]["amount"]) == DOWN_CENTS
+    link = stores["cosigner_links"].docs[0]
+    assert not link.get("paid_transaction_id")
+    assert _audits(stores, "paid") == []
+    assert link["needs_review"] is True
+    assert link["needs_review_reason"] == "bond_mirror_mismatch"
+    assert link["paid_blocked_transaction_id"] == "TX-MIRROR-DRIFT"
+    blocked = _audits(stores, "paid_blocked")
+    assert len(blocked) == 1
+    assert blocked[0]["reason"] == "bond_mirror_mismatch"
+    assert blocked[0]["transaction_id"] == "TX-MIRROR-DRIFT"
+    assert blocked[0]["amount_cents"] == DOWN_CENTS
+    assert blocked[0]["needs_review"] is True
+
+    # Staff correct the mirror. The same charge replays and marks paid once.
+    stores["active_bonds"].docs[0].update(
+        {key: stores["bond_cases"].docs[0].get(key) for key in changes}
+    )
+    fixed = _webhook(client, txn="TX-MIRROR-DRIFT", amount="500.00")
+    assert fixed.status_code == 200, fixed.text
+    assert stores["cosigner_links"].docs[0]["paid_transaction_id"] == "TX-MIRROR-DRIFT"
+    assert len(_audits(stores, "paid")) == 1
+    assert stores["cosigner_links"].docs[0]["needs_review"] is False
+    assert stores["cosigner_links"].docs[0]["paid_blocked_transaction_id"] == "TX-MIRROR-DRIFT"
+    cleared = _audits(stores, "paid_block_cleared")
+    assert len(cleared) == 1
+    assert cleared[0]["reason"] == "bond_mirror_mismatch"
+    assert cleared[0]["transaction_id"] == "TX-MIRROR-DRIFT"
+    assert cleared[0]["review_before"] == {
+        "needs_review": True, "needs_review_reason": "bond_mirror_mismatch",
+        "held_transaction_ids": ["TX-MIRROR-DRIFT"],
+    }
+    assert cleared[0]["review_after"] == {
+        "needs_review": False, "needs_review_reason": "", "held_transaction_ids": [],
+    }
+    assert cleared[0]["hold_kept"] is False
+    again = _webhook(client, txn="TX-MIRROR-DRIFT", amount="500.00")
+    assert again.status_code == 200, again.text
+    assert len(_audits(stores, "paid_block_cleared")) == 1
+    assert len(_audits(stores, "paid")) == 1
+    assert len(_audits(stores, "paid_blocked")) == 1
+    assert len(_down_rows(db, "TX-MIRROR-DRIFT")) == 1
+
+
+def test_ambiguous_mirror_blocks_paid_and_flags_review_once(monkeypatch):
+    """Two active_bonds rows for one case id stay unpaid with one review mark."""
+    import copy
+
+    stores, client, token, db = _paid_mirror_world(monkeypatch)
+    # A second active row carries this case id under another booking. The
+    # recorder sees one booking, so only the case-id lookup finds two rows.
+    extra = copy.deepcopy(stores["active_bonds"].docs[0])
+    extra["booking_number"] = "TEST-COS-ELSEWHERE"
+    stores["active_bonds"].docs.append(extra)
+    db["active_bonds"].docs.append(copy.deepcopy(extra))
+
+    for _ in range(2):
+        replay = _webhook(client, txn="TX-MIRROR-AMBIG", amount="500.00")
+        assert replay.status_code == 200, replay.text
+
+    link = stores["cosigner_links"].docs[0]
+    assert not link.get("paid_transaction_id")
+    assert link["needs_review_reason"] == "bond_ambiguous"
+    blocked = _audits(stores, "paid_blocked")
+    assert len(blocked) == 1
+    assert blocked[0]["reason"] == "bond_ambiguous"
+    assert _audits(stores, "paid") == []
+
+
+def test_mirror_normalization_keeps_real_differences():
+    from dashboard.services.cosigner_link_service import _mirror_disagrees
+
+    case = {
+        "status": "active", "booking_number": "TEST-COS-1", "case_number": "2026-TEST-001",
+        "surety_id": "osi", "poa_number": "POA-1", "match_id": "M-1",
+        "match_status": "validated", "indemnitor_name": "Casey Sample",
+        "defendant_name": "Robin Q. Sample",
+    }
+    same = {**case, "status": "Active ", "surety_id": " OSI", "case_number": "2026-test-001",
+            "poa_number": " poa-1 ", "booking_number": "test-cos-1 ",
+            "match_status": "VALIDATED", "defendant_name": "robin  q sample",
+            "indemnitor_name": "CASEY  SAMPLE"}
+    assert _mirror_disagrees(case, same) is False
+    for key, value in (
+        ("surety_id", "osi2"), ("poa_number", "POA-2"), ("case_number", "2026-TEST-002"),
+        ("booking_number", "TEST-COS-2"), ("status", "exonerated"),
+        ("defendant_name", "Robin Other"), ("defendant_name", ""), ("match_id", "M-2"),
+        ("match_id", "m-1"), ("indemnitor_name", "Pat Other"), ("match_status", "pending"),
+    ):
+        assert _mirror_disagrees(case, {**case, key: value}) is True, (key, value)
+
+
+def test_two_open_packets_block_paid_and_flag_each_link_once(monkeypatch):
+    """Two open packets on one case stay unpaid. Each link gets one review mark."""
+    stores, client, token, db = _recorder_world(monkeypatch)
+    _extra_link(stores, packet_id="PKT-TEST-COS-2", case_id=CASE, token="second-packet")
+
+    for _ in range(2):
+        replay = _webhook(client, txn="TX-TWO-PACKETS", amount="500.00")
+        assert replay.status_code == 200, replay.text
+    _poll_down_payment(db, txn="TX-TWO-PACKETS", amount="500.00")
+
+    assert len(_down_rows(db, "TX-TWO-PACKETS")) == 1
+    assert _audits(stores, "paid") == []
+    links = stores["cosigner_links"].docs
+    assert all(not link.get("paid_transaction_id") for link in links)
+    assert {link.get("needs_review_reason") for link in links} == {"packet_ambiguous"}
+    blocked = _audits(stores, "paid_blocked")
+    assert len(blocked) == 2
+    assert {row["packet_id"] for row in blocked} == {PACKET, "PKT-TEST-COS-2"}
+    assert {row["reason"] for row in blocked} == {"packet_ambiguous"}
+
+
+def test_alternating_blocked_transactions_audit_once_each(monkeypatch):
+    """Two held charges replayed in turn write one paid_blocked audit each."""
+    stores, client, token, db = _paid_mirror_world(monkeypatch, surety_id="other-surety")
+    for txn in ("TX-HOLD-A", "TX-HOLD-B", "TX-HOLD-A", "TX-HOLD-B", "TX-HOLD-A"):
+        replay = _webhook(client, txn=txn, amount="500.00")
+        assert replay.status_code == 200, replay.text
+    link = stores["cosigner_links"].docs[0]
+    assert link["paid_blocked_transaction_ids"] == ["TX-HOLD-A", "TX-HOLD-B"]
+    blocked = _audits(stores, "paid_blocked")
+    assert sorted(row["transaction_id"] for row in blocked) == ["TX-HOLD-A", "TX-HOLD-B"]
+    assert not link.get("paid_transaction_id")
+
+
+@pytest.mark.parametrize("world", ["mirror", "two_packets"])
+def test_held_charge_that_is_not_the_down_payment_is_not_flagged(monkeypatch, world):
+    """A $100 charge on a held booking is not the $500 down payment."""
+    if world == "mirror":
+        stores, client, token, db = _paid_mirror_world(monkeypatch, surety_id="other-surety")
+    else:
+        stores, client, token, db = _recorder_world(monkeypatch)
+        _extra_link(stores, packet_id="PKT-TEST-COS-2", case_id=CASE, token="second-packet")
+    small = _webhook(client, txn="TX-HOLD-SMALL", amount="100.00")
+    assert small.status_code == 200, small.text
+    _poll_down_payment(db, txn="TX-HOLD-SMALL", amount="100.00")
+    assert len(_down_rows(db, "TX-HOLD-SMALL")) == 1
+    assert _cents(_down_rows(db, "TX-HOLD-SMALL")[0]["amount"]) == 10000
+    assert _audits(stores, "paid_blocked") == []
+    assert _audits(stores, "paid") == []
+    assert all(not link.get("needs_review") for link in stores["cosigner_links"].docs)
+
+
+def test_paid_keeps_the_hold_while_another_held_charge_remains(monkeypatch):
+    """Two held down payments: stamping one leaves the other under review."""
+    stores, client, token, db = _paid_mirror_world(monkeypatch, surety_id="other-surety")
+    for txn in ("TX-HOLD-A", "TX-HOLD-B"):
+        held = _webhook(client, txn=txn, amount="500.00")
+        assert held.status_code == 200, held.text
+    stores["active_bonds"].docs[0]["surety_id"] = stores["bond_cases"].docs[0].get("surety_id")
+
+    paid = _webhook(client, txn="TX-HOLD-B", amount="500.00")
+    assert paid.status_code == 200, paid.text
+    link = stores["cosigner_links"].docs[0]
+    assert link["paid_transaction_id"] == "TX-HOLD-B"
+    assert link["needs_review"] is True
+    assert link["needs_review_reason"] == "bond_mirror_mismatch"
+    assert link["paid_block_released_transaction_ids"] == ["TX-HOLD-B"]
+    assert _audits(stores, "paid_block_cleared") == []
+    released = _audits(stores, "paid_hold_released")
+    assert len(released) == 1
+    assert released[0]["transaction_id"] == "TX-HOLD-B"
+    assert released[0]["hold_kept"] is True
+    assert released[0]["review_before"] == {
+        "needs_review": True, "needs_review_reason": "bond_mirror_mismatch",
+        "held_transaction_ids": ["TX-HOLD-A", "TX-HOLD-B"],
+    }
+    assert released[0]["review_after"] == {
+        "needs_review": True, "needs_review_reason": "bond_mirror_mismatch",
+        "held_transaction_ids": ["TX-HOLD-A"],
+    }
+    # Replays do not release again, and the other charge still holds review.
+    for txn in ("TX-HOLD-B", "TX-HOLD-A"):
+        assert _webhook(client, txn=txn, amount="500.00").status_code == 200
+    link = stores["cosigner_links"].docs[0]
+    assert link["needs_review"] is True
+    assert link["paid_transaction_id"] == "TX-HOLD-B"
+    assert len(_audits(stores, "paid_hold_released")) == 1
+    assert len(_audits(stores, "paid")) == 1
+
+
+def test_hold_audits_record_review_before_and_after(monkeypatch):
+    """A hold that replaces another keeps both review values in history."""
+    import copy
+
+    stores, client, token, db = _paid_mirror_world(monkeypatch, surety_id="other-surety")
+    assert _webhook(client, txn="TX-HOLD-A", amount="500.00").status_code == 200
+    # The mirror is put right, but a second active row now claims the case.
+    stores["active_bonds"].docs[0]["surety_id"] = stores["bond_cases"].docs[0].get("surety_id")
+    extra = copy.deepcopy(stores["active_bonds"].docs[0])
+    extra["booking_number"] = "TEST-COS-ELSEWHERE"
+    stores["active_bonds"].docs.append(extra)
+    db["active_bonds"].docs.append(copy.deepcopy(extra))
+    assert _webhook(client, txn="TX-HOLD-B", amount="500.00").status_code == 200
+
+    blocked = {row["transaction_id"]: row for row in _audits(stores, "paid_blocked")}
+    assert blocked["TX-HOLD-A"]["review_before"] == {
+        "needs_review": False, "needs_review_reason": "", "held_transaction_ids": [],
+    }
+    assert blocked["TX-HOLD-A"]["review_after"] == {
+        "needs_review": True, "needs_review_reason": "bond_mirror_mismatch",
+        "held_transaction_ids": ["TX-HOLD-A"],
+    }
+    assert blocked["TX-HOLD-B"]["review_before"] == {
+        "needs_review": True, "needs_review_reason": "bond_mirror_mismatch",
+        "held_transaction_ids": ["TX-HOLD-A"],
+    }
+    assert blocked["TX-HOLD-B"]["review_after"] == {
+        "needs_review": True, "needs_review_reason": "bond_ambiguous",
+        "held_transaction_ids": ["TX-HOLD-A", "TX-HOLD-B"],
+    }
+    link = stores["cosigner_links"].docs[0]
+    assert link["needs_review_reason"] == "bond_ambiguous"
+    assert [hold["reason"] for hold in link["paid_blocked_holds"]] == [
+        "bond_mirror_mismatch", "bond_ambiguous",
+    ]
+
+
+def _fail_lock_work(monkeypatch, name, times):
+    """Make a step inside the payment lock raise ``times`` times (None = always)."""
+    import dashboard.services.cosigner_link_service as svc
+
+    original = getattr(svc, name)
+    calls = {"n": 0, "failed": 0}
+
+    def _maybe_fail():
+        calls["n"] += 1
+        if times is None or calls["failed"] < times:
+            calls["failed"] += 1
+            raise ConnectionError("mock transient payment lock failure")
+
+    if asyncio.iscoroutinefunction(original):
+        async def _wrapped(*args, **kwargs):
+            _maybe_fail()
+            return await original(*args, **kwargs)
+    else:
+        def _wrapped(*args, **kwargs):
+            _maybe_fail()
+            return original(*args, **kwargs)
+
+    monkeypatch.setattr(svc, "_LOCK_RETRY_DELAYS", (0,))
+    monkeypatch.setattr(svc, name, _wrapped)
+    return calls, lambda: monkeypatch.setattr(svc, name, original)
+
+
+def _money_snapshot(stores, db):
+    import copy
+
+    return copy.deepcopy({
+        "plan": db["payment_plans"].docs,
+        "bond_cases": stores["bond_cases"].docs,
+        "payments": db["payments"].docs,
+    })
+
+
+def test_transient_paid_lock_failure_is_retried_inside_the_lock(monkeypatch):
+    stores, client, token, db = _recorder_world(monkeypatch)
+    calls, _restore = _fail_lock_work(monkeypatch, "_charge_row_blocks_down_payment", 1)
+
+    paid = _webhook(client, txn="TX-COS-RETRY", amount="500.00")
+    assert paid.status_code == 200, paid.text
+    assert calls["n"] == 2
+    link = stores["cosigner_links"].docs[0]
+    assert link["paid_transaction_id"] == "TX-COS-RETRY"
+    assert not link.get("payment_transition_pending")
+    assert len(_audits(stores, "paid")) == 1
+    assert _audits(stores, "payment_transition_pending") == []
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+
+
+@pytest.mark.parametrize("heal", ["read", "event"])
+def test_persistent_paid_lock_failure_leaves_pending_then_heals_once(monkeypatch, heal):
+    stores, client, token, db = _recorder_world(monkeypatch)
+    calls, restore = _fail_lock_work(monkeypatch, "_charge_row_blocks_down_payment", None)
+
+    for _ in range(2):
+        failed = _webhook(client, txn="TX-COS-STUCK", amount="500.00")
+        assert failed.status_code == 200, failed.text
+    assert calls["n"] == 6  # three attempts per event
+    link = stores["cosigner_links"].docs[0]
+    assert not link.get("paid_transaction_id")
+    assert link["payment_transition_pending"] is True
+    assert link["pending_payment_keys"] == ["paid:TX-COS-STUCK"]
+    pending = _audits(stores, "payment_transition_pending")
+    assert len(pending) == 1
+    assert pending[0]["transaction_id"] == "TX-COS-STUCK"
+    assert pending[0]["transition"] == "paid"
+    assert len(_down_rows(db, "TX-COS-STUCK")) == 1
+    money = _money_snapshot(stores, db)
+
+    restore()
+    if heal == "read":
+        assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+    else:
+        assert _webhook(client, txn="TX-COS-STUCK", amount="500.00").status_code == 200
+    for _ in range(2):
+        assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+        assert _webhook(client, txn="TX-COS-STUCK", amount="500.00").status_code == 200
+
+    link = stores["cosigner_links"].docs[0]
+    assert link["paid_transaction_id"] == "TX-COS-STUCK"
+    assert link["payment_transition_pending"] is False
+    assert link["pending_payment_keys"] == []
+    assert len(_audits(stores, "paid")) == 1
+    assert len(_audits(stores, "payment_transition_resolved")) == 1
+    assert len(_audits(stores, "payment_transition_pending")) == 1
+    assert _money_snapshot(stores, db) == money
+
+
+@pytest.mark.parametrize("heal", ["read", "event", "no_marker"])
+def test_persistent_reversal_lock_failure_leaves_pending_then_reopens_once(monkeypatch, heal):
+    import dashboard.services.cosigner_link_service as svc
+
+    stores, client, token, db = _recorder_world(monkeypatch)
+    assert _webhook(client, txn="TX-COS-REFUND", amount="500.00").status_code == 200
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+    calls, restore = _fail_lock_work(monkeypatch, "_rows_include_reversal", None)
+    if heal == "no_marker":
+        async def _marker_lost(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(svc, "_record_pending_transition", _marker_lost)
+
+    refunded = _webhook(
+        client, txn="TX-COS-REFUND", amount="500.00",
+        event="payment.refunded", status="refunded",
+    )
+    assert refunded.status_code == 200, refunded.text
+    assert calls["n"] >= 3
+    link = stores["cosigner_links"].docs[0]
+    assert link["paid_transaction_id"] == "TX-COS-REFUND"
+    assert not link.get("payment_reversed")
+    if heal == "no_marker":
+        assert not link.get("payment_transition_pending")
+    else:
+        assert link["payment_transition_pending"] is True
+        assert link["pending_payment_keys"] == ["reversed:TX-COS-REFUND"]
+        assert len(_audits(stores, "payment_transition_pending")) == 1
+    money = _money_snapshot(stores, db)
+
+    restore()
+    if heal == "event":
+        replay = _webhook(
+            client, txn="TX-COS-REFUND", amount="500.00",
+            event="payment.refunded", status="refunded",
+        )
+        assert replay.status_code == 200, replay.text
+    for _ in range(2):
+        assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+
+    link = stores["cosigner_links"].docs[0]
+    assert link["payment_reversed"] is True
+    assert not link.get("paid_transaction_id")
+    assert not link.get("payment_transition_pending")
+    assert len(_audits(stores, "payment_reversed")) == 1
+    assert len(_audits(stores, "paid")) == 1
+    expected_resolved = 0 if heal == "no_marker" else 1
+    assert len(_audits(stores, "payment_transition_resolved")) == expected_resolved
+    assert _money_snapshot(stores, db) == money
+
+
+class _RowsColl:
+    def __init__(self, docs):
+        self.docs = docs
+
+    def find(self, flt, **_kwargs):
+        docs = [d for d in self.docs if all(d.get(k) == v for k, v in flt.items())]
+
+        async def _gen():
+            for doc in docs:
+                yield doc
+
+        return _gen()
+
+
+def _tenant_on(monkeypatch, tenant):
+    import dashboard.services.cosigner_link_service as svc
+
+    monkeypatch.setattr(svc, "multi_tenant_enabled", lambda: True)
+    monkeypatch.setattr(svc, "current_tenant_id", lambda: tenant)
+
+
+def _two_tenant_rows():
+    return {"payments": _RowsColl([
+        {"transaction_id": "TX-SHARED", "tenant_id": "tenant-a", "event_kind": "charge",
+         "status": "completed", "amount": "500.00"},
+        {"transaction_id": "TX-SHARED", "tenant_id": "tenant-b", "event_kind": "refund",
+         "status": "refunded", "amount": "500.00"},
+    ])}
+
+
+def test_payment_rows_are_scoped_to_the_active_tenant(monkeypatch):
+    import dashboard.services.cosigner_link_service as svc
+
+    db = _two_tenant_rows()
+    _tenant_on(monkeypatch, "tenant-a")
+    rows = asyncio.run(svc._payment_rows(db, "TX-SHARED", None))
+    assert [row["tenant_id"] for row in rows] == ["tenant-a"]
+    assert not svc._rows_include_reversal(rows)
+    _tenant_on(monkeypatch, "tenant-b")
+    rows = asyncio.run(svc._payment_rows(db, "TX-SHARED", None))
+    assert [row["tenant_id"] for row in rows] == ["tenant-b"]
+    # Flag on with no tenant: unreadable, so nothing is decided from the rows.
+    _tenant_on(monkeypatch, "")
+    assert asyncio.run(svc._payment_rows(db, "TX-SHARED", None)) is None
+
+
+def test_heal_does_not_replay_another_tenants_charge(monkeypatch):
+    import dashboard.services.cosigner_link_service as svc
+
+    db = {"payments": _RowsColl([
+        {"transaction_id": "TX-SHARED", "tenant_id": "tenant-b", "event_kind": "charge",
+         "status": "completed", "amount": "500.00"},
+    ])}
+    monkeypatch.setattr("dashboard.extensions.get_db", lambda: db)
+    stamped = AsyncMock(return_value=True)
+    monkeypatch.setattr(svc, "note_cosigner_paid", stamped)
+    _tenant_on(monkeypatch, "tenant-a")
+    assert asyncio.run(svc._stored_rows("TX-SHARED")) == []
+    assert asyncio.run(svc._heal_paid(BOOKING, "TX-SHARED")) is False
+    stamped.assert_not_called()
+    _tenant_on(monkeypatch, "tenant-b")
+    assert asyncio.run(svc._heal_paid(BOOKING, "TX-SHARED")) is True
+    stamped.assert_awaited_once()
+
+
+def test_pending_and_resolved_audits_record_before_and_after(monkeypatch):
+    stores, client, token, db = _recorder_world(monkeypatch)
+    _calls, restore = _fail_lock_work(monkeypatch, "_charge_row_blocks_down_payment", None)
+    assert _webhook(client, txn="TX-COS-AUDIT", amount="500.00").status_code == 200
+
+    (pending,) = _audits(stores, "payment_transition_pending")
+    assert pending["pending_before"] == {
+        "payment_transition_pending": False,
+        "pending_payment_keys": [],
+        "pending_payment_transitions": [],
+    }
+    after = pending["pending_after"]
+    assert after["payment_transition_pending"] is True
+    assert after["pending_payment_keys"] == ["paid:TX-COS-AUDIT"]
+    assert [e["key"] for e in after["pending_payment_transitions"]] == ["paid:TX-COS-AUDIT"]
+    assert after["pending_payment_transitions"][0]["transaction_id"] == "TX-COS-AUDIT"
+
+    restore()
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+    (resolved,) = _audits(stores, "payment_transition_resolved")
+    assert resolved["pending_before"]["payment_transition_pending"] is True
+    assert resolved["pending_before"]["pending_payment_keys"] == ["paid:TX-COS-AUDIT"]
+    assert [e["key"] for e in resolved["pending_before"]["pending_payment_transitions"]] == [
+        "paid:TX-COS-AUDIT",
+    ]
+    assert resolved["pending_after"] == {
+        "payment_transition_pending": False,
+        "pending_payment_keys": [],
+        "pending_payment_transitions": [],
+    }
