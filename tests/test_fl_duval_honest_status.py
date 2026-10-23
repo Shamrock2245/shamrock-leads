@@ -44,9 +44,8 @@ def test_api_published_status_kept():
 
 
 def test_dom_path_blank_status():
-    class P:
-        html = "<table><tr><td>Doe, John</td><td>2026000001</td><td>$1,500.00</td></tr></table>"
-    recs = _scraper()._parse_dom(P())
+    html = "<table><tr><td>Doe, John</td><td>Booking Number: 2026000001</td><td>Bond: $1,500.00</td></tr></table>"
+    recs = _scraper()._parse_dom(html)
     assert recs and all(r.Status == "" for r in recs)
 
 
