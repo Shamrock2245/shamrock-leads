@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-23 (co-signer claim is released when the audit write fails)
+
+### Fixed
+- **A verification that cannot write its audit still releases the packet claim.** The customer can retry the same link after the audit store fails. The claim is released even when the compensating audit write fails.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_audit_outage_releases_the_verification_claim`.
+
 ## [Unreleased] — 2026-10-23 (co-signer revalidation reads Bond_Case_ID)
 
 ### Fixed

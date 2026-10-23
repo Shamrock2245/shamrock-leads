@@ -3374,6 +3374,34 @@ def test_inactive_packet_does_not_get_a_public_link(monkeypatch):
         assert issued is None or _audits(stores, "link_issued") == []
 
 
+def test_audit_outage_releases_the_verification_claim(monkeypatch):
+    """A failed audit write still clears the claim so the same link can retry."""
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    packet = stores["paperwork_packets"].docs[0]
+    audits = stores["audit_events"]
+    original = audits.insert_one
+
+    async def _down(doc, session=None, **kwargs):
+        raise RuntimeError("audit store unavailable")
+
+    audits.insert_one = _down
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    with pytest.raises(RuntimeError, match="audit store unavailable"):
+        _post_scan(client, token)
+    assert calls["n"] == 1
+    assert packet.get("cosigner_verified_token") in {None, ""}
+
+    audits.insert_one = original
+    _age_scan_cooldown(stores, token)
+    calls["n"] = 0
+    opened = _post_scan(client, token)
+    assert opened.status_code == 200, opened.text
+    assert calls["n"] == 1
+    assert packet.get("cosigner_verified_token") == token
+
+
 def test_failed_verification_removes_the_stored_scan(monkeypatch):
     """A save failure after the scan does not leave id_ocr or a revoked sibling."""
     import dashboard.services.cosigner_link_service as svc

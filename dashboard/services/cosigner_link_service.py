@@ -1386,9 +1386,13 @@ async def submit_cosigner_scan(token: str, body: dict) -> dict:
                 await _drop_partial_audits(
                     str(packet.get("packet_id") or ""), started, priors,
                 )
-            await _release_verification_claim(packet, token)
         except Exception:
             logger.info("[cosigner] scan rollback failed")
+        finally:
+            try:
+                await _release_verification_claim(packet, token)
+            except Exception:
+                logger.info("[cosigner] verification claim release failed")
         raise
     logger.info("[cosigner] id verified packet_id=%s", link.get("packet_id"))
     return await cosigner_state(token, lang=link.get("lang"))
