@@ -120,6 +120,7 @@ Solid arrows are wired. Dotted arrows are gaps.
 | `intake_recovery` | 1 h | Staff follow-up on stalled intakes. Not the recovery desk | OK |
 | `rearrest_detection` | 2 h | New arrests vs active bonds | OK |
 | `lee_clerk_watch` | 15 min | Lee clerk posted-bond watch. Does not change source contracts | OK |
+| `lee_freshness` | 5 min | Lee (FL) heartbeat to #alerts: no successful run in 75 min, 0 rows while the listing shows bookings, 3+ consecutive failures, listing window gap. Read-only | OK |
 
 ## Owner decisions (the gaps)
 

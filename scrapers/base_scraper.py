@@ -1157,6 +1157,20 @@ class BaseScraper(ABC):
             self._resilience_state = new_state
             persisted_status = "auto_disabled" if new_state.auto_disabled else run_status
             extra = new_state.to_fields()
+            # Heartbeat fields: a successful (ok/empty) run, distinct from
+            # last_run which the failure path also stamps.
+            success_at = datetime.now(timezone.utc)
+            if not new_state.auto_disabled:
+                extra["last_success_at"] = success_at
+                if records:
+                    extra["last_records_at"] = success_at
+            extra_hook = getattr(self, "status_extra_fields", None)
+            if callable(extra_hook):
+                try:
+                    extra.update(extra_hook() or {})
+                except Exception as hook_err:
+                    logger.warning("⚠️ %s: status_extra_fields failed (%s)",
+                                   self.county_label, type(hook_err).__name__)
             if reenabled:
                 extra.update({
                     "reenabled_at": datetime.now(timezone.utc),

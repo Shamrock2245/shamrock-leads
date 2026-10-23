@@ -705,6 +705,13 @@ class MongoWriter:
         projection["_id"] = 0
         return self.scraper_status.find_one(filter_q, projection) or {}
 
+    def get_scraper_status_fields(self, county: str, state: str = None, fields=()) -> dict:
+        """Read selected scraper_status fields (e.g. ``source_window``), or ``{}``."""
+        filter_q, _bare, _st, _label = self._scraper_status_identity(county, state)
+        projection = {field: 1 for field in fields}
+        projection["_id"] = 0
+        return self.scraper_status.find_one(filter_q, projection) or {}
+
     def reenable_scraper(self, county: str, state: str = None, by: str = "manual") -> bool:
         """Manual re-enable: clear auto-disable and reset the failure streak."""
         filter_q, _bare, _st, _label = self._scraper_status_identity(county, state)
