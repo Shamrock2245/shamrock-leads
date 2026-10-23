@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-23 (co-signer scan updates the aliased case)
+
+### Fixed
+- **An ID scan is written to the bond named by `bond_case_id` or `Bond_Case_ID`.** A second case that only shares the booking number is not updated.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_scan_writes_the_bond_named_by_bond_case_id`.
+
 ## [Unreleased] — 2026-10-23 (co-signer claim is released when the audit write fails)
 
 ### Fixed

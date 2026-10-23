@@ -479,6 +479,49 @@ def test_bond_case_id_alias_revalidates_and_rejects_a_mismatch(monkeypatch):
     assert "id_ocr" not in packet
 
 
+def test_scan_writes_the_bond_named_by_bond_case_id(monkeypatch):
+    """A Bond_Case_ID bond is updated. A sibling with the same booking is not."""
+    stores, client = _world(monkeypatch)
+    selected = stores["bond_cases"].docs[0]
+    selected.pop("bond_case_id", None)
+    selected["Bond_Case_ID"] = CASE
+    other = {
+        "bond_case_id": "BC-TEST-OTHER",
+        "booking_number": BOOKING,
+        "status": "active",
+        "indemnitor_name": "Pat Other",
+        "surety_id": "osi",
+        "match_status": "validated",
+        "case_number": "2026-TEST-002",
+        "poa_number": "POA-TEST-COS-2",
+        "premium_paid": False,
+        **CONFIRMED,
+    }
+    stores["bond_cases"].docs.insert(0, other)
+    seen = []
+    original = stores["bond_cases"].update_one
+
+    async def _watch(query, update, upsert=False, session=None, **kwargs):
+        seen.append(query)
+        return await original(query, update, upsert=upsert, session=session, **kwargs)
+
+    stores["bond_cases"].update_one = _watch
+    token = _token(client)
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    uploaded = _post_scan(client, token)
+    assert uploaded.status_code == 200, uploaded.text
+    assert calls["n"] == 1
+    assert seen
+    for query in seen:
+        assert "booking_number" not in query
+        assert CASE in str(query)
+        assert "BC-TEST-OTHER" not in str(query)
+    assert selected.get("id_ocr", {}).get("extracted", {}).get("full_name") == NAME
+    assert "id_ocr" not in other
+    assert not other.get("id_scan_records")
+
+
 def test_poa_number_change_keeps_the_cosigner_link(monkeypatch):
     """A new POA number does not revoke the link or the packet."""
     stores, client = _world(monkeypatch)

@@ -1260,6 +1260,21 @@ async def _save_link(link: dict) -> None:
     )
 
 
+def _bond_scan_filter(bond: dict) -> dict:
+    """Update the selected case. Either case-id field is the key.
+
+    Booking is only the filter when the bond has no case id. A shared
+    booking must not choose a different case.
+    """
+    case_id = _bond_field(bond, "bond_case_id", "Bond_Case_ID")
+    if case_id:
+        return {"$and": [{"$or": [
+            {"bond_case_id": case_id},
+            {"Bond_Case_ID": case_id},
+        ]}]}
+    return {"booking_number": bond.get("booking_number")}
+
+
 def _passing_scan(name: str, state: str, role: str) -> dict:
     return {
         "success": True,
@@ -1292,9 +1307,7 @@ async def _store_scan(
     )
     if not bond:
         return
-    filt = {"bond_case_id": bond.get("bond_case_id")} if bond.get("bond_case_id") else {
-        "booking_number": bond.get("booking_number"),
-    }
+    filt = _bond_scan_filter(bond)
     collection = str(bond.get("_collection") or "bond_cases")
     if collection not in {"bond_cases", "active_bonds"}:
         collection = "bond_cases"
