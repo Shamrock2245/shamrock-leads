@@ -1435,9 +1435,19 @@ async def _with_payment_lock(txn_key: str, work) -> str:
 
 
 async def _payment_rows(db, txn_key: str, session) -> Optional[list]:
-    """Payment rows for this transaction, or None when they cannot be read."""
+    """Payment rows for this transaction, or None when they cannot be read.
+
+    Scoped to the active tenant when multi-tenancy is on: payment rows are
+    tenant-tagged and the claims allow the same transaction id in two
+    tenants, so another tenant's charge or refund never decides this link.
+    With the flag on and no tenant, the rows count as unreadable.
+    """
     from dashboard.services.payment_log_claims import _read_rows
 
+    query = _scope({"transaction_id": txn_key})
+    if query is None:
+        logger.info("[cosigner] payment rows need a tenant")
+        return None
     try:
         coll = db["payments"]
     except Exception:
@@ -1445,7 +1455,7 @@ async def _payment_rows(db, txn_key: str, session) -> Optional[list]:
     if not hasattr(coll, "find"):
         return None
     try:
-        return await _read_rows(db, txn_key, session)
+        return await _read_rows(db, txn_key, session, query=query)
     except Exception:
         logger.info("[cosigner] payment rows unreadable")
         return None

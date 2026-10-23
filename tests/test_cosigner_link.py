@@ -3875,3 +3875,69 @@ def test_persistent_reversal_lock_failure_leaves_pending_then_reopens_once(monke
     expected_resolved = 0 if heal == "no_marker" else 1
     assert len(_audits(stores, "payment_transition_resolved")) == expected_resolved
     assert _money_snapshot(stores, db) == money
+
+
+class _RowsColl:
+    def __init__(self, docs):
+        self.docs = docs
+
+    def find(self, flt, **_kwargs):
+        docs = [d for d in self.docs if all(d.get(k) == v for k, v in flt.items())]
+
+        async def _gen():
+            for doc in docs:
+                yield doc
+
+        return _gen()
+
+
+def _tenant_on(monkeypatch, tenant):
+    import dashboard.services.cosigner_link_service as svc
+
+    monkeypatch.setattr(svc, "multi_tenant_enabled", lambda: True)
+    monkeypatch.setattr(svc, "current_tenant_id", lambda: tenant)
+
+
+def _two_tenant_rows():
+    return {"payments": _RowsColl([
+        {"transaction_id": "TX-SHARED", "tenant_id": "tenant-a", "event_kind": "charge",
+         "status": "completed", "amount": "500.00"},
+        {"transaction_id": "TX-SHARED", "tenant_id": "tenant-b", "event_kind": "refund",
+         "status": "refunded", "amount": "500.00"},
+    ])}
+
+
+def test_payment_rows_are_scoped_to_the_active_tenant(monkeypatch):
+    import dashboard.services.cosigner_link_service as svc
+
+    db = _two_tenant_rows()
+    _tenant_on(monkeypatch, "tenant-a")
+    rows = asyncio.run(svc._payment_rows(db, "TX-SHARED", None))
+    assert [row["tenant_id"] for row in rows] == ["tenant-a"]
+    assert not svc._rows_include_reversal(rows)
+    _tenant_on(monkeypatch, "tenant-b")
+    rows = asyncio.run(svc._payment_rows(db, "TX-SHARED", None))
+    assert [row["tenant_id"] for row in rows] == ["tenant-b"]
+    # Flag on with no tenant: unreadable, so nothing is decided from the rows.
+    _tenant_on(monkeypatch, "")
+    assert asyncio.run(svc._payment_rows(db, "TX-SHARED", None)) is None
+
+
+def test_heal_does_not_replay_another_tenants_charge(monkeypatch):
+    import dashboard.services.cosigner_link_service as svc
+
+    db = {"payments": _RowsColl([
+        {"transaction_id": "TX-SHARED", "tenant_id": "tenant-b", "event_kind": "charge",
+         "status": "completed", "amount": "500.00"},
+    ])}
+    monkeypatch.setattr("dashboard.extensions.get_db", lambda: db)
+    stamped = AsyncMock(return_value=True)
+    monkeypatch.setattr(svc, "note_cosigner_paid", stamped)
+    _tenant_on(monkeypatch, "tenant-a")
+    assert asyncio.run(svc._stored_rows("TX-SHARED")) == []
+    assert asyncio.run(svc._heal_paid(BOOKING, "TX-SHARED")) is False
+    stamped.assert_not_called()
+    _tenant_on(monkeypatch, "tenant-b")
+    assert asyncio.run(svc._heal_paid(BOOKING, "TX-SHARED")) is True
+    stamped.assert_awaited_once()
+
