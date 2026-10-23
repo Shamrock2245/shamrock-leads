@@ -94,6 +94,7 @@ KNOWN_APP_COLLECTIONS = frozenset(
         "collateral_items",
         "contacts",
         "conversion_events",
+        "cosigner_links",
         "court_email_log",
         "court_outcomes",
         "court_reminders",

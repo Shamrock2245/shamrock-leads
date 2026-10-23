@@ -3,12 +3,366 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-23 (co-signer rollback audit omits bearer tokens)
+
+### Fixed
+- **A rolled-back verification records a hash of each restored link, not the bearer token.** The sibling link is still restored. The audit row cannot be used as the public link.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_failed_verification_removes_the_stored_scan`.
+
+## [Unreleased] — 2026-10-23 (co-signer scan updates the aliased case)
+
+### Fixed
+- **An ID scan is written to the bond named by `bond_case_id` or `Bond_Case_ID`.** A second case that only shares the booking number is not updated.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_scan_writes_the_bond_named_by_bond_case_id`.
+
+## [Unreleased] — 2026-10-23 (co-signer claim is released when the audit write fails)
+
+### Fixed
+- **A verification that cannot write its audit still releases the packet claim.** The customer can retry the same link after the audit store fails. The claim is released even when the compensating audit write fails.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_audit_outage_releases_the_verification_claim`.
+
+## [Unreleased] — 2026-10-23 (co-signer revalidation reads Bond_Case_ID)
+
+### Fixed
+- **A co-signer link stays valid when the case id is stored as `Bond_Case_ID` or `bond_case_id`.** Revalidation fails closed when neither field is the issued case. A POA number change does not revoke the link or the packet.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_bond_case_id_alias_revalidates_and_rejects_a_mismatch`, `test_poa_number_change_keeps_the_cosigner_link`.
+
+## [Unreleased] — 2026-10-22 (co-signer pay URL stays on SwipeSimple)
+
+### Fixed
+- **The co-signer page returns a pay URL only when its host is the configured SwipeSimple origin.** Any other URL, including another https host, is omitted and the payment view reports `invoice_origin`.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_off_site_invoice_url_is_hidden`.
+
+## [Unreleased] — 2026-10-22 (co-signer rollback keeps the audit)
+
+### Fixed
+- **A failed verification no longer deletes its audit rows.** The `id_verified` and `link_revoked` events stay. A `verification_rolled_back` event records the sibling links that were restored.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_failed_verification_removes_the_stored_scan`.
+
+## [Unreleased] — 2026-10-22 (co-signer link finds Bond_Case_ID)
+
+### Fixed
+- **A bond stored only as `Bond_Case_ID` can still get a co-signer link.** The case lookup reads that field and `bond_case_id`.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_bond_stored_as_bond_case_id_alias_issues_a_link`.
+
+## [Unreleased] — 2026-10-22 (co-signer email reads coindemnitor_email)
+
+### Fixed
+- **The signer check reads the kiosk `coindemnitor_email` field.** A DocuSeal row with another email is `sign_link_mismatch` and its URL is not returned.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_coindemnitor_email_blocks_a_different_docuseal_row`.
+
+## [Unreleased] — 2026-10-22 (failed same-role scan restores the prior pointer)
+
+### Fixed
+- **A failed retry by the same signer puts the previous scan pointer back.** The new scan row stays. A first scan that does not finish still drops only the pointer it added.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_failed_same_role_retry_restores_the_previous_pointer`.
+
+## [Unreleased] — 2026-10-22 (co-signer scan rollback is registered first)
+
+### Fixed
+- **A scan rollback is recorded before the packet or bond is written.** If a later pointer write fails, the pointer from that attempt is removed. The stored scan row stays.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_failed_pointer_write_rolls_back_the_party_scan`.
+
+## [Unreleased] — 2026-10-22 (co-signer ID scans are append-only)
+
+### Fixed
+- **An ID scan is stored as a new row and is not overwritten or deleted.** Each passing scan, for either signer role, is appended to `id_scan_records` on the packet and the bond with the signer, the bond, and a timestamp. The current pointer is that newest row for the role that owns it. Rollback of a verification that does not finish removes only the pointer that attempt added.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_concurrent_scans_both_survive`, `test_newer_scan_keeps_the_older_record`, `test_rollback_removes_only_the_pointer_it_added`.
+
+## [Unreleased] — 2026-10-22 (co-signer pay link must be this bond's invoice)
+
+### Fixed
+- **The pay step does not show a SwipeSimple URL from another bond.** After the stored cents match the amount due, `swipesimple_invoice_number` must equal this booking and `swipesimple_invoice_bond_id` must equal this bond. A missing or different binding hides the URL and returns `invoice_unbound`. A wrong amount still returns `invoice_amount_unproven`.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_invoice_url_must_belong_to_this_bond`.
+
+## [Unreleased] — 2026-10-22 (bond mirror must match the whole case chain)
+
+### Fixed
+- **A bond and its active mirror must carry the same case chain.** Status and signer were already compared. Booking, defendant, match id, match status, case number, surety, and POA are compared too. A cleared or reassigned field is 409 `bond_mirror_mismatch`. The DocuSeal URL is not returned, and the scan does not run OCR.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_mirror_chain_must_match`.
+
+## [Unreleased] — 2026-10-22 (booking fallback reconciles a bond mirror)
+
+### Fixed
+- **A packet with no case id accepts one bond and its agreeing mirror.** Rows in `bond_cases` and `active_bonds` are one case only when their case ids match, and that pair is reconciled. A mirror that does not match is 409 `bond_mirror_mismatch`. Any other pair is 409 `bond_ambiguous`.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_booking_fallback_reconciles_a_bond_mirror`.
+
 ## [Unreleased] — 2026-10-21 (Duval: plain honest HTTPS, fail closed on tls_cert_invalid)
 
 ### Changed
 - **Duval (FL) no longer drives a DrissionPage browser.** The shared browser options sent a Chrome UA and injected stealth JS, and the module intercepted the SPA's API traffic. `duval.py` now has one fetch path through `scrapers.plain_http` (honest UA, certificate verified). A block raises `egress_block`, a bad certificate raises `tls_cert_invalid`, the ATIMS robot gate raises `captcha_gate` (never clicked), any other non-200 raises `DuvalHTTPError` (classified by status), and a page or payload that doesn't match raises `ParseDriftError`. The swallowed `except Exception` blocks around DOM parsing, API packets and form submission are gone.
 - **Duval is fail closed (CoS decision to reopen).** One honest probe from the agent box (2026-10-21 08:17 EDT) got `tls_cert_invalid`. The host sends only its leaf certificate (Network Solutions RSA OV SSL CA 3 intermediate missing, openssl verify error 21), the same as on 2026-10-15. `SOURCE_CONTRACT_VALIDATED = False`, `SCRAPER_SOURCE_STATES["Duval (FL)"] = "fail_closed"`, and the FL 031 evidence row is updated, with `COUNTY_SOURCE_CONTRACT_MATRIX.md` regenerated. `FL_67_STATUS_2026-10-08.md`, `docs/COUNTY_REGISTRY.md` and `docs/agents/scraper-agent.md` are updated too. Recon: `docs/recon/FL_DUVAL_HONEST.md`.
 - **Duval records are published-only.** Booking keys come only from a published booking-number field: the `id` / `inmateId` / `jacketNumber` fallbacks and the DOM path's "any 4+ digit number" are removed. Bond comes only from a published bond field or a labelled bond value (a published 0 is kept), never the first dollar figure in a row. Status is a published release date (`Released`) or a published status field, otherwise `""`, with `status_source` recorded. Tests: `tests/test_fl_duval_plain_https.py` (new, on the ci.yml list), `tests/test_fl_duval_no_robot_click.py`, `tests/test_fl_duval_honest_status.py`; the FL matrix count in `tests/test_home_county_smoke_evidence.py` moves from 19 recon_only / 24 fail_closed to 18 / 25.
+
+## [Unreleased] — 2026-10-21 (co-signer paid audit reads inside the transaction)
+
+### Fixed
+- **The paid and reversal audits read the link on the payment session.** After the compare-and-set, the follow-up read uses the same transaction session, so the audit's new state is the write that just happened.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_paid_audit_reads_the_link_on_the_payment_session`.
+
+## [Unreleased] — 2026-10-20 (co-signer bearer rechecks a complete bond)
+
+### Fixed
+- **Every bearer request rechecks the bond completeness required at issuance.** A validated match, a case number, a surety, and a POA must still be on the bond. A missing piece is 409. The DocuSeal URL is not returned, and the scan does not run OCR.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_bearer_request_rechecks_bond_completeness`.
+
+## [Unreleased] — 2026-10-20 (signed mismatch still shows the invoice)
+
+### Tests
+- **After the packet is signed, a submitter name or email mismatch leaves pay and paid open.** Both return 200 with the proven invoice link and `sign_url` null.
+- `tests/test_cosigner_link.py`: `test_signed_signer_mismatch_keeps_the_invoice_link`.
+
+## [Unreleased] — 2026-10-20 (co-signer bond mirror must agree)
+
+### Fixed
+- **A bearer link fails closed when the bonded case is not a single current row.** More than one `bond_cases` row for the case, or more than one `active_bonds` mirror, is 409 `bond_ambiguous`. A mirror whose status or signer does not match the case row is 409 `bond_mirror_mismatch`. The DocuSeal URL is not returned, and the scan does not run OCR.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_bond_mirror_and_duplicate_rows_fail_closed`.
+
+## [Unreleased] — 2026-10-20 (co-signer pay link must match the amount due)
+
+### Fixed
+- **The pay step does not show a SwipeSimple link whose amount is unproven.** The stored `swipesimple_invoice_amount_cents` must equal `invoice_due_cents`. A missing value, a non-integer, or a different amount hides the URL and returns `invoice_amount_unproven`.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_unproven_invoice_amount_hides_the_pay_link`.
+
+## [Unreleased] — 2026-10-20 (co-signer pay step stays open without a sign link)
+
+### Fixed
+- **A missing DocuSeal URL does not block the pay step after the packet is signed.** While the step is still `sign`, an unbound or mismatched URL is 409 and is not shown. On `pay` or `paid`, the page returns with `sign_url` null.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_pay_step_hides_an_unbound_sign_url`.
+
+## [Unreleased] — 2026-10-20 (co-signer sign link must name this signer)
+
+### Fixed
+- **A DocuSeal URL is returned only when the submitter is this link's verified signer.** The row name must match with the same name check as the ID scan. A stored role or email that belongs to someone else is 409 `sign_link_mismatch`. Another party's row is not returned.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_sign_url_matches_the_verified_signer`.
+
+## [Unreleased] — 2026-10-20 (co-signer link requires a complete bond)
+
+### Fixed
+- **A public co-signer link is issued only for a complete bonded case.** The bond must have a validated match, a case number, a surety, and a POA. A missing piece is 409 and creates no token and no link.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_incomplete_bond_does_not_get_a_link`.
+
+## [Unreleased] — 2026-10-20 (co-signer scan attempts are capped)
+
+### Fixed
+- **A bearer token cannot run paid OCR without a limit.** Each upload increments `scan_attempts` on the link before the scanner runs. Failed scans count. The next attempt waits 30 seconds. After 5 attempts the route returns 429 `scan_attempt_cap`, writes an audit row, and does not call OCR.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_scan_attempts_stop_before_another_ocr_charge`.
+
+## [Unreleased] — 2026-10-20 (co-signer sign link must be bound to DocuSeal)
+
+### Fixed
+- **A stored DocuSeal URL is returned only when it belongs to this packet.** The host must be the configured DocuSeal host. The submitter's packet id, submission id, and external id must match. A wrong host, a wrong submission, or a wrong external id is 409 `sign_link_unbound`. The stored URL is not returned.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_unbound_docuseal_url_is_not_returned`.
+
+## [Unreleased] — 2026-10-20 (co-signer scan keeps another party's ID)
+
+### Fixed
+- **A co-signer scan does not erase an indemnitor scan already stored.** The new scan is written on that party's record. The top-level `id_ocr` is replaced only when it is empty or already belongs to the same role. A verification that does not finish removes the new scan and restores the previous one.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_cosigner_scan_keeps_an_existing_indemnitor_scan`.
+
+## [Unreleased] — 2026-10-20 (co-signer link stays on the issued bond)
+
+### Fixed
+- **A bearer link does not follow a packet onto a different bond.** Revalidation compares the current packet and bond with the case id and booking stored at issuance. A mismatch is 409 `bond_mismatch`. The DocuSeal URL is not returned, and the scan is refused before OCR.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_reassigned_packet_does_not_keep_the_issued_link`.
+
+## [Unreleased] — 2026-10-20 (co-signer booking fallback still records the down payment)
+
+### Fixed
+- **A packet with no case id still gets its down payment recorded.** Link issuance stores the bond case id resolved from the unambiguous booking. The payment lookup also finds an older link whose case id is empty when that booking is exactly one case.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_booking_fallback_link_records_the_down_payment`.
+
+## [Unreleased] — 2026-10-20 (co-signer bearer link expires)
+
+### Fixed
+- **Every issued co-signer link expires after 7 days.** `expires_at` is set at creation. After that time the bearer is `link_expired` and is not an OCR endpoint.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_issued_link_expires_in_seven_days`.
+
+## [Unreleased] — 2026-10-20 (co-signer link is not issued for an inactive packet)
+
+### Fixed
+- **Staff cannot issue a public link for a voided, canceled, or superseded packet.** Creation returns 409 `packet_inactive`. No token and no `link_issued` audit are written.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_inactive_packet_does_not_get_a_public_link`.
+
+## [Unreleased] — 2026-10-20 (co-signer scan rollback removes a partial verification)
+
+### Fixed
+- **A verification that does not finish removes its partial writes.** If the scan store, the audit, or the link save fails after the claim, the stored `id_ocr` is removed, sibling revocations are restored, partial audits from that attempt are removed, and the claim is released.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_failed_verification_removes_the_stored_scan`.
+
+## [Unreleased] — 2026-10-20 (co-signer sibling revocation is audited)
+
+### Fixed
+- **Revoking a sibling link writes a `link_revoked` audit.** The audit stores the actor, the reason, and the old-to-new workflow state, including `revoked`. The bearer token is not stored.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_sibling_revocation_writes_an_audit`.
+
+## [Unreleased] — 2026-10-20 (co-signer scan save leaves the payment stamp alone)
+
+### Fixed
+- **A scan, language, or signed-state save does not write payment fields.** `paid_transaction_id` and `payment_reversed` stay on the compare-and-set inside `payment_txn_locks`. A stale link copy cannot clear a payment or undo a reversal.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_stale_link_save_keeps_the_payment_stamp`.
+
+## [Unreleased] — 2026-10-20 (co-signer pay step fails closed without a payment row)
+
+### Fixed
+- **A down payment is stamped only when the charge row can be read.** Inside `payment_txn_locks`, a read error, a missing row, or an empty row set does not mark the pay step and writes no paid audit.
+- **The Gmail receipt poller skips a `needs_review` charge.** That matches the payment webhook. A review hold is not passed to `note_cosigner_paid`.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_unreadable_or_empty_payment_rows_do_not_mark_paid`.
+
+## [Unreleased] — 2026-10-20 (co-signer link is not issued after signing)
+
+### Fixed
+- **Staff cannot issue a public link for a packet that is already signed.** A packet status of `signed`, `completed`, or `complete` returns 409 `packet_signed`. No token and no `link_issued` audit are written.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_signed_packet_does_not_get_a_public_link`.
+
+## [Unreleased] — 2026-10-20 (co-signer scan claim is released on failure)
+
+### Fixed
+- **A scan claim that does not finish verification is cleared.** If revoking a sibling, storing the scan, writing the audit, or saving the link fails after the packet claim, `cosigner_verified_token` is released. The same token can be uploaded again.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_failed_verification_releases_the_scan_claim`.
+
+## [Unreleased] — 2026-10-20 (co-signer link stays on an open bond)
+
+### Fixed
+- **A public link stays open only for a canonical open bond.** The status must be `active`, `monitoring`, `alert`, or `reinstated`. A missing, unknown, or `inactive` status is `bond_inactive`. The page does not include a DocuSeal URL, and the scan is refused before the upload is read.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_only_an_open_bond_status_keeps_the_link`.
+
+## [Unreleased] — 2026-10-20 (co-signer down payment follows the payment row)
+
+### Fixed
+- **A charge stored with `needs_review` does not mark the co-signer pay step.** That includes a refund that arrived before the charge, and a booking that is not one bond. `note_cosigner_paid` re-reads `payments` and refuses the stamp when that charge is `needs_review` or the transaction has a refund or failure row.
+- **A refund or failure with no `reference_id` reopens the pay step.** The link is found by `paid_transaction_id`. A different transaction id does not clear the stamp.
+- **The co-signer pay stamp is taken inside `payment_txn_locks`.** The link update is conditional, so one charge writes one paid audit. A charge and its refund cannot leave the step paid.
+- **A down payment is scoped to the bond case's one open packet.** A link on another packet that only shares the booking number is not stamped. Two open packets on the same case stamp nothing. Two links on that one packet are stamped together.
+- **The pay step uses the recorder's settled and reversal sets.** `SETTLED_CHARGE_STATUSES` decides a charge, including `paid`, `captured`, and `succeeded`. `REVERSAL_KINDS` decides a refund or failure.
+- **The Gmail receipt poller marks the co-signer pay step through the same note as the webhook.** A receipt whose amount is the confirmed down payment, whose status is settled, and whose row is not `needs_review` stamps the bond case's one open packet inside `payment_txn_locks`. A review hold, a wrong amount, and a reversed transaction do not.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_refund_before_charge_does_not_mark_paid`, `test_refund_without_reference_reopens_by_transaction_id`, `test_charge_refund_race_does_not_leave_step_paid`, `test_down_payment_is_scoped_to_one_packet`, `test_settled_charge_status_marks_the_pay_step`, `test_poller_down_payment_marks_paid_once`, `test_poller_review_hold_wrong_amount_and_reversal_do_not_mark_paid`.
+
+## [Unreleased] — 2026-10-20 (co-signer issuer, poller, claim, and zero down payment)
+
+### Fixed
+- **A US address state copied into `dl_state` does not unlock a foreign ID.** When the scanner copies the address state because no issuer was read, and the country is not the United States, the co-signer route drops that value before the jurisdiction check. A US issuer is unchanged.
+- **The Gmail receipt poller notes the co-signer down payment.** A clean charge for the booking marks the link paid once. A review hold, an installment, and a wrong amount do not. No receipt is added by this note.
+- **The packet scan claim is empty-to-owned.** A second upload for the same token, including one that overlaps before `id_verified` is saved, is `scan_closed` before the scanner runs and does not write another `id_ocr` or verification audit.
+- **A confirmed down payment of `$0.00` finishes the signed link.** The page moves to the paid step and does not offer an invoice link. A missing confirmation stays on the pay step.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_foreign_address_state_does_not_unlock_signing`, `test_receipt_poller_marks_the_down_payment`, `test_in_flight_claim_refuses_a_second_scan`, `test_confirmed_zero_down_payment_finishes_after_signing`.
+
+## [Unreleased] — 2026-10-20 (co-signer link rechecks the bond and records issuance)
+
+### Fixed
+- **Every scan and state request rechecks the bonded case.** A deleted bond is `bond_required`. An exonerated, forfeited, surrendered, or otherwise closed bond is `bond_inactive`. A signer or role that no longer matches the packet and the link is `signer_mismatch`. Those responses do not include a DocuSeal URL, and the scan is refused before the upload is read.
+- **The first successful scan claims the packet and revokes sibling links.** A second token cannot run OCR, overwrite `id_ocr`, or write another verification audit. A token that does not own `cosigner_verified_token` is `scan_closed` before the scanner runs.
+- **Issuing a public link writes a `link_issued` audit.** The audit stores the staff actor, confidence, and the old-to-new workflow state. The bearer token is not stored. A refused link writes neither a token nor an audit.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_scan_and_state_recheck_the_current_bond`, `test_first_verified_scan_closes_sibling_links`, `test_link_creation_writes_an_issuance_audit`.
+
+## [Unreleased] — 2026-10-19 (co-signer link requires the bond, the signature, and the down payment)
+
+### Fixed
+- **A co-signer link is issued only for a bonded case whose signer matches the packet.** No bond row is `bond_required`. A packet signer that disagrees with the bond signer on name or role is `signer_mismatch`. Neither writes a token.
+- **An approved charge is not the down payment.** `premium_paid` is the only bond flag that counts. `last_payment_status` / `payment_status` do not move the page to paid and do not write a paid audit.
+- **The signer stays on the sign step until the packet is signed.** A down payment already collected still shows the DocuSeal URL after the ID scan. The paid step requires the scan, the signature, and the payment.
+- **A second ID upload is refused once the link is verified or the packet is signed.** The refusal is `scan_closed` and it runs before the upload is scanned. The state and pay pages stay open for a signed packet.
+- **A refund or failure of the stamped down payment reopens the pay step.** The link records `payment_reversed`, clears that transaction, and keeps the amount due. A replay does not audit twice. A different transaction id does not clear the stamp. The full premium flag is not changed and no receipt is sent.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_link_requires_a_matching_bond`, `test_approved_charge_is_not_the_down_payment`, `test_paid_bond_still_requires_a_signature`, `test_verified_or_signed_packet_refuses_another_scan`, `test_refund_reopens_the_down_payment`.
+
+## [Unreleased] — 2026-10-19 (co-signer link fails closed on OCR, void, and bond identity)
+
+### Fixed
+- **The public scan route checks the bearer link before it reads or scans an upload.** An unknown, revoked, or expired token returns an error and does not call the ID scanner.
+- **A voided, canceled, or superseded packet fails closed on every state and scan request.** The response has no DocuSeal URL, and the scan is refused.
+- **Bond lookup uses the packet's `bond_case_id` first** (`bond_cases`, then `active_bonds`). Booking number is used only when the packet has no case id. More than one booking match fails closed.
+- **`id_verified`, `signed`, and `paid` audits store `old_state` and `new_state`.** The snapshot is the workflow step and timeline. Full ID numbers are not stored.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_unknown_token_does_not_run_ocr`, `test_voided_packet_hides_the_sign_url_and_refuses_scan`, `test_case_id_wins_and_ambiguous_booking_fails_closed`, `test_link_audits_record_old_and_new_state`.
+
+## [Unreleased] — 2026-10-19 (co-signer link: US-state ID, then DocuSeal, then down payment)
+
+### Added
+- **One co-signer link.** Staff `POST /api/paperwork/cosigner-link` returns `/cosigner/{token}`. The public page is open in English and Spanish. The public scan route accepts only an uploaded ID photo; a JSON extract is `scan_image_required` and the server runs the in-house scanner. Signing stays locked until a verified ID scan matches the co-signer and the issuer is a US state, DC, or territory. No scan, a failed scan, a wrong name (O'Neill does not match O'Neal), and a country-only scan (US/USA) do not write `id_ocr` and do not reveal a DocuSeal URL. When the co-signer is a different person from the indemnitor, only the co-signer's scan unlocks the link, the stored scan role is `co_indemnitor`, and the page reveals that party's DocuSeal URL from `docuseal_submitters`. A case that exists only on `active_bonds` is read and updated there. After the packet is signed, the page shows the confirmed down payment and the case invoice link (`invoice_payment_link`, `share_invoice_link`, or `payment_link`, not the website estimate). `SWIPESIMPLE_DISPATCH_LIVE` off leaves that amount undispatched.
+- **A down-payment webhook notes the co-signer timeline only when the charge equals the confirmed down payment.** `POST /api/webhooks/payment` still records the charge through the fail-closed provider recorder. When `reference_id` is the booking number and not an installment, and the amount matches `invoice_due_cents`, the co-signer link is marked paid once. A smaller charge, including $1 against a $500 down payment, does not mark the timeline paid and does not set `premium_paid`. A replay of the matching charge does not write a second paid audit.
+- **`cosigner_links` is tenant-owned.** It is in `dashboard/tenancy/constants.py`. The known-collection count is 125.
+
+### Tests
+- `tests/test_cosigner_link.py`.
 
 ## [Unreleased] — 2026-10-19 (PyMuPDF 2.x keeps Palmetto widget names)
 

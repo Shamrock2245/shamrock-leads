@@ -305,6 +305,12 @@ class SwipeSimpleReceiptPoller:
             recorded,
             phone=str(parsed.get("indemnitor_phone") or ""),
         )
+        await _note_cosigner_down_payment(
+            recorded,
+            booking=str(booking or ""),
+            reference=str(parsed.get("reference_id") or ""),
+            amount=amount,
+        )
 
         return {
             "success": True,
@@ -315,6 +321,48 @@ class SwipeSimpleReceiptPoller:
             "booking_number": recorded.get("booking_number") or "",
             "transaction_id": recorded.get("transaction_id"),
         }
+
+
+async def _note_cosigner_down_payment(
+    recorded: Dict[str, Any],
+    *,
+    booking: str,
+    reference: str,
+    amount: Any,
+) -> None:
+    """The same pay-step note the payment webhook uses.
+
+    A Gmail receipt has a booking and no invoice reference. An installment
+    reference (``-I``) is not the down payment. A ``needs_review`` charge is
+    not the down payment. Amount, settled status, reversals, packet scope,
+    and the payment lock all live in ``note_cosigner_paid``.
+    """
+    if recorded.get("event_kind") != "charge":
+        return
+    if recorded.get("needs_review"):
+        return
+    if not (recorded.get("committed") or recorded.get("duplicate")):
+        return
+    reference = str(reference or "").strip()
+    if "-I" in reference:
+        return
+    booking = str(booking or recorded.get("booking_number") or "").strip()
+    if not booking:
+        return
+    try:
+        from dashboard.services.cosigner_link_service import note_cosigner_paid
+
+        await note_cosigner_paid(
+            booking,
+            str(recorded.get("transaction_id") or ""),
+            amount=recorded.get("amount") if recorded.get("amount") is not None else amount,
+            status=recorded.get("status") or "approved",
+        )
+    except Exception as exc:
+        logger.info(
+            "[SwipeSimplePoll] cosigner paid note skipped code=%s",
+            type(exc).__name__,
+        )
 
 
 async def _notify_clean_charge(recorded: Dict[str, Any]) -> None:
