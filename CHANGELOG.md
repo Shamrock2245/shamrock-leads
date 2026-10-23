@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-22 (Polk: typed errors, no catch-all handlers)
+
+### Fixed
+- **Polk (FL) no longer swallows failures.** The four `except Exception` handlers in `polk.py` are gone: per booking, the profile page, GetCharges, and the per-date search loop, which turned any search error into an empty day. Blocks (`egress_block`) and bad certificates (`tls_cert_invalid`) were already re-raised and still are. A non-200 SearchJail now raises the new `PolkHTTPError`, which carries `status_code` and is classified by status (404 `url_changed`, 5xx `network`) instead of being logged and skipped. A SearchJail or GetCharges payload that isn't a JSON list of objects raises `ParseDriftError`. Network errors such as timeouts propagate instead of being logged.
+- **Polk network errors carry no booking numbers (Codex P2 on f6f6acd).** A non-block network failure on SearchJail, the profile page or GetCharges (a refused connection, a timeout) is re-raised as `PolkNetworkError`, whose message names only the step and the exception type (`Polk: network error on inmate-profile (ConnectionError)`). requests/urllib3 messages embed the URL (`/inmate-profile/<booking>`), and `BaseScraper` logs and alerts `str(e)`. The original exception stays on `__cause__`. `PolkNetworkError` subclasses `requests.exceptions.ConnectionError`, so Health still classifies it as `network` (retryable). Blocks and TLS failures are not re-wrapped. Tests: `tests/test_fl_polk_typed_errors.py`.
+- **Per-booking detail misses are counted, not itemised.** A profile page that isn't 200, a missing anti-forgery token, or a GetCharges response that isn't 200 JSON leaves that record's charges and bond `""`. All misses in a run go into one warning with no names or booking numbers. The per-booking warnings that logged booking numbers and exception text are gone.
+- Status and transport are unchanged: a published ReleaseDate gives Released, otherwise `""`, and it now records `status_source` (`published_release_date` / `published_status_field`). Bond is still the per-charge sum only when every charge publishes `BondAmountDue` (a published 0 is kept). The FL 105 evidence row records the 2026-10-22 honest read (`docs/recon/FL_POLK_TYPED_ERRORS_2026-10-22.md`); the matrix was regenerated and Polk stays unverified (`recon_only`). `docs/COUNTY_REGISTRY.md` and `docs/agents/scraper-agent.md` no longer describe DrissionPage. Tests: `tests/test_fl_polk_typed_errors.py` (new, on the ci.yml list).
+
 ## [Unreleased] — 2026-10-21 (Duval: plain honest HTTPS, fail closed on tls_cert_invalid)
 
 ### Changed
