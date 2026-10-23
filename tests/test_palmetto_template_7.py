@@ -19,7 +19,14 @@ from dashboard.services.charge_verbatim import (
     template_record,
 )
 from dashboard.services.charge_verbatim import VerbatimCharge
-from dashboard.services.docuseal_service import DocuSealService
+from dashboard.services.docuseal_service import (
+    DocuSealService,
+    attach_schedule_payment_sources,
+)
+from dashboard.services.docuseal_signing_ux import (
+    IDENTITY_READONLY_FIELD_NAMES,
+    submission_fields_from_values,
+)
 from dashboard.services.staff_test_case import DEFAULT_SIGNER_EMAIL
 from tests.test_verbatim_bond_charges import (
     CHARGE_TEXT,
@@ -235,8 +242,12 @@ def test_template_7_prefill_fills_block_poas_and_schedule_a():
     assert "PLAIN STRING" not in values["schedule_a"]
     assert "Total bond: $7,000.00" in values["schedule_a"]
     assert "Premium: $100.00" in values["schedule_a"]
-    assert "Amount paid: $40.00 check 2026-01-15" in values["schedule_a"]
-    assert "Balance due: $60.00 due 2026-02-01" in values["schedule_a"]
+    assert "Amount paid: $0.00" in values["schedule_a"]
+    assert "Amount paid: $40.00" not in values["schedule_a"]
+    assert "check" not in values["schedule_a"]
+    assert "2026-01-15" not in values["schedule_a"]
+    assert "Balance due: $100.00 due 2026-02-01" in values["schedule_a"]
+    assert "Balance due: $60.00" not in values["schedule_a"]
     for name in _SIGNER_ACTS:
         assert name not in values
 
@@ -328,6 +339,10 @@ def test_finalize_template_7_stages_seven_charges_without_sending(monkeypatch):
         assert f"POA TEST-POA-{index}" in fields["schedule_a"]
     assert "Total bond: $7,000.00" in fields["schedule_a"]
     assert "PLAIN STRING" not in fields["schedule_a"]
+    assert "Amount paid: $0.00" in fields["schedule_a"]
+    assert "Amount paid: $40.00" not in fields["schedule_a"]
+    assert "Premium: $700.00" in fields["schedule_a"]
+    assert "Balance due: $700.00" in fields["schedule_a"]
     for name in _SIGNER_ACTS:
         assert name not in fields
     assert "offense_1" not in fields
@@ -348,3 +363,236 @@ def test_finalize_template_7_rejects_eight_charges(monkeypatch):
     assert body["charge_count"] == 8
     assert captured == []
     assert stores.get("paperwork_packets") is None or stores["paperwork_packets"].inserts == []
+
+
+def _ledger_payment(**extra):
+    row = {
+        "booking_number": "TEST-T7-PAID",
+        "type": "payment",
+        "entry_kind": "payment",
+        "amount": -4000,
+        "amount_is_cents": True,
+        "method": "check",
+        "timestamp": "2026-01-15T18:00:00+00:00",
+        "category": "premium",
+        "source": "financial_ledger",
+    }
+    row.update(extra)
+    return row
+
+
+def test_schedule_a_ignores_write_time_down_payment():
+    """A planned down payment is not a receipt, and the balance stays the premium."""
+    values = DocuSealService.prefill_values_from_bond(
+        _bond(
+            1,
+            booking_number="TEST-T7-PLAN",
+            amount_paid="40.00",
+            payment_method="check",
+            paid_at="2026-01-15T18:00:00+00:00",
+            numeric_balance_due="60.00",
+            balance_due="60.00",
+        ),
+        template_id=7,
+    )
+    schedule = values["schedule_a"]
+    assert "Amount paid: $0.00" in schedule
+    assert "Amount paid: $40.00" not in schedule
+    assert "check" not in schedule
+    assert "2026-01-15" not in schedule
+    assert "Balance due: $100.00 due 2026-02-01" in schedule
+    assert "$60.00" not in schedule
+
+
+def test_schedule_a_prints_confirmed_ledger_payment():
+    bond = _bond(
+        7,
+        booking_number="TEST-T7-PAID",
+        ledger_entries=[_ledger_payment()],
+    )
+    values = DocuSealService.prefill_values_from_bond(bond, template_id=7)
+    schedule = values["schedule_a"]
+    assert "Amount paid: $40.00 check 2026-01-15" in schedule
+    assert "Balance due: $60.00 due 2026-02-01" in schedule
+    assert "down_payment" not in schedule
+
+
+def test_schedule_a_prints_each_confirmed_payment():
+    entries = [
+        _ledger_payment(amount=-2500, method="cash", timestamp="2026-01-10T12:00:00+00:00"),
+        _ledger_payment(amount=-1500, method="check", timestamp="2026-01-15T18:00:00+00:00"),
+    ]
+    values = DocuSealService.prefill_values_from_bond(
+        _bond(1, booking_number="TEST-T7-PAID", ledger_entries=entries),
+        template_id=7,
+    )
+    schedule = values["schedule_a"]
+    assert "Amount paid: $25.00 cash 2026-01-10" in schedule
+    assert "Amount paid: $15.00 check 2026-01-15" in schedule
+    assert schedule.index("2026-01-10") < schedule.index("2026-01-15")
+    assert "Balance due: $60.00 due 2026-02-01" in schedule
+
+
+def test_schedule_a_skips_unconfirmed_and_write_bond_down_rows():
+    booking = "TEST-T7-PAID"
+    entries = [
+        _ledger_payment(
+            type="down_payment",
+            entry_kind="down_payment",
+            stripe_swipe_ref=f"write-bond-down:{booking}",
+        ),
+        _ledger_payment(
+            type="payment",
+            entry_kind="payment",
+            stripe_swipe_ref=f"write-bond-down:{booking}",
+            amount=-4000,
+        ),
+    ]
+    payments = [
+        {
+            "booking_number": booking,
+            "amount": 40.00,
+            "method": "check",
+            "status": "pending",
+            "type": "payment",
+            "timestamp": "2026-01-15T18:00:00+00:00",
+        },
+        {
+            "booking_number": booking,
+            "amount": 40.00,
+            "method": "cash",
+            "status": "declined",
+            "type": "payment",
+            "timestamp": "2026-01-16T18:00:00+00:00",
+        },
+    ]
+    transactions = [
+        {
+            "booking_number": booking,
+            "amount": 40.00,
+            "method": "card",
+            "status": "",
+            "type": "premium",
+            "timestamp": "2026-01-17T18:00:00+00:00",
+        },
+    ]
+    values = DocuSealService.prefill_values_from_bond(
+        _bond(
+            1,
+            booking_number=booking,
+            ledger_entries=entries,
+            payments=payments,
+            transactions=transactions,
+        ),
+        template_id=7,
+    )
+    schedule = values["schedule_a"]
+    assert "Amount paid: $0.00" in schedule
+    assert "check" not in schedule
+    assert "cash" not in schedule
+    assert "card" not in schedule
+    assert "Balance due: $100.00 due 2026-02-01" in schedule
+
+
+def test_schedule_a_prints_a_completed_payment_row():
+    payment = {
+        "booking_number": "TEST-T7-PAID",
+        "amount": 40.00,
+        "method": "check",
+        "status": "completed",
+        "type": "payment",
+        "timestamp": "2026-01-15T18:00:00+00:00",
+        "transaction_id": "TEST-TXN-1",
+    }
+    values = DocuSealService.prefill_values_from_bond(
+        _bond(1, booking_number="TEST-T7-PAID", payments=[payment]),
+        template_id=7,
+    )
+    schedule = values["schedule_a"]
+    assert "Amount paid: $40.00 check 2026-01-15" in schedule
+    assert "Balance due: $60.00 due 2026-02-01" in schedule
+
+
+class _Rows:
+    def __init__(self, docs):
+        self.docs = list(docs)
+        self.queries = []
+
+    def find(self, query):
+        self.queries.append(query)
+        return self
+
+    async def to_list(self, length=None):
+        return list(self.docs)
+
+
+@pytest.mark.asyncio
+async def test_packet_path_reads_the_ledger_and_not_the_plan(monkeypatch):
+    """The paperwork display read uses the ledger. A failed read stays at $0."""
+    ledger = _Rows([_ledger_payment()])
+    payments = _Rows([])
+    transactions = _Rows([])
+    monkeypatch.setattr(
+        "dashboard.extensions.get_collection",
+        lambda name: {
+            "financial_ledger": ledger,
+            "payments": payments,
+            "transactions": transactions,
+        }[name],
+    )
+    bond = _bond(7, booking_number="TEST-T7-PAID")
+    await attach_schedule_payment_sources(bond, 7)
+    values = DocuSealService.prefill_values_from_bond(bond, template_id=7)
+    assert ledger.queries and "TEST-T7-PAID" in ledger.queries[0]["booking_number"]["$in"]
+    assert "Amount paid: $40.00 check 2026-01-15" in values["schedule_a"]
+    assert "Balance due: $60.00 due 2026-02-01" in values["schedule_a"]
+
+    def _boom(name):
+        raise RuntimeError("ledger unavailable")
+
+    monkeypatch.setattr("dashboard.extensions.get_collection", _boom)
+    unpaid = _bond(7, booking_number="TEST-T7-PAID")
+    await attach_schedule_payment_sources(unpaid, 7)
+    missed = DocuSealService.prefill_values_from_bond(unpaid, template_id=7)
+    assert "Amount paid: $0.00" in missed["schedule_a"]
+    assert "Amount paid: $40.00" not in missed["schedule_a"]
+    assert "Balance due: $100.00 due 2026-02-01" in missed["schedule_a"]
+
+
+@pytest.mark.asyncio
+async def test_template_5_does_not_read_the_ledger(monkeypatch):
+    def _boom(name):
+        raise AssertionError(name)
+
+    monkeypatch.setattr("dashboard.extensions.get_collection", _boom)
+    bond = _bond(1, booking_number="TEST-T7-PAID")
+    await attach_schedule_payment_sources(bond, 5)
+    assert "ledger_entries" not in bond
+
+
+def test_in_person_locks_coindemnitor_identity_fields():
+    for name in ("coindemnitor_name", "coindemnitor_phone", "coindemnitor_email"):
+        assert name in IDENTITY_READONLY_FIELD_NAMES
+    values = {
+        "coindemnitor_name": "TEST COINDEMNITOR",
+        "coindemnitor_phone": "555-0100",
+        "coindemnitor_email": DEFAULT_SIGNER_EMAIL,
+        "indemnitor_name": "TEST INDEMNITOR",
+        "defendant_name": "TEST DEFENDANT",
+    }
+    locked = {
+        field["name"]: field
+        for field in submission_fields_from_values(
+            values, extra_readonly=IDENTITY_READONLY_FIELD_NAMES,
+        )
+    }
+    opened = {
+        field["name"]: field
+        for field in submission_fields_from_values(values)
+    }
+    for name in ("coindemnitor_name", "coindemnitor_phone", "coindemnitor_email"):
+        assert locked[name]["readonly"] is True
+        assert locked[name]["default_value"] == values[name]
+        assert opened[name]["readonly"] is False
+    assert locked["indemnitor_name"]["readonly"] is True
+    assert locked["defendant_name"]["readonly"] is True

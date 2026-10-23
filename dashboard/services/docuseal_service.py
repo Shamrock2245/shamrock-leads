@@ -197,6 +197,158 @@ def _schedule_money(*vals: Any) -> str:
     return ""
 
 
+# A payments-collection row is confirmed only with one of these statuses.
+# A blank, pending, or declined status is not a receipt.
+_CONFIRMED_PAYMENT_STATUSES = frozenset({
+    "approved",
+    "captured",
+    "collected",
+    "complete",
+    "completed",
+    "ok",
+    "paid",
+    "received",
+    "settled",
+    "success",
+    "successful",
+})
+
+
+def _payment_row_confirmed(row: Mapping[str, Any]) -> bool:
+    """True when a payments-collection row is a collected receipt."""
+    status = str(row.get("status") or row.get("payment_status") or "").strip().lower()
+    if status not in _CONFIRMED_PAYMENT_STATUSES:
+        return False
+    kind = str(row.get("type") or row.get("entry_kind") or "").strip().lower()
+    return kind != "down_payment"
+
+
+def confirmed_paid_for_schedule(bond_data: Mapping[str, Any]) -> Dict[str, Any]:
+    """Collected premium for Schedule A.
+
+    Reads ledger rows and payment rows already on the packet. The write-time
+    ``down_payment_amount`` is a plan figure and is not a receipt. A ledger
+    row tagged ``down_payment``, or carrying the write-bond down-payment
+    reference, is excluded by the same rules as the receivable math.
+    """
+    from dashboard.services.ar_math import later_payments
+
+    data = bond_data if isinstance(bond_data, Mapping) else {}
+    booking = _text(data.get("booking_number"))
+    ledger = data.get("ledger_entries")
+    if not isinstance(ledger, list):
+        ledger = data.get("financial_ledger") if isinstance(data.get("financial_ledger"), list) else []
+    transactions = [
+        row for row in (data.get("transactions") or [])
+        if isinstance(row, dict) and _payment_row_confirmed(row)
+    ]
+    for row in data.get("payments") or []:
+        if isinstance(row, dict) and _payment_row_confirmed(row):
+            transactions.append(row)
+    summary = later_payments({"booking_number": booking}, ledger, transactions)
+    items = [
+        item for item in summary["items"]
+        if item.get("kind") == "payment" and int(item.get("amount_cents") or 0) > 0
+    ]
+    return {"net_cents": int(summary["cents"]), "items": items}
+
+
+def _schedule_cents(cents: int) -> str:
+    from dashboard.services.ar_math import cents_to_dollars
+
+    text = cents_to_dollars(int(cents))
+    if text.startswith("-"):
+        return f"-${text[1:]}"
+    return f"${text}"
+
+
+def schedule_a_money_lines(bond_data: Mapping[str, Any], premium_amount: Any) -> List[str]:
+    """Amount paid and balance due for Schedule A.
+
+    Amount paid is the confirmed ledger total. With no confirmed payment the
+    line is ``$0.00`` and the balance is the full premium, not the financed
+    remainder that assumes the down payment was collected.
+    """
+    from dashboard.services.ar_math import to_cents
+
+    paid = confirmed_paid_for_schedule(bond_data)
+    lines: List[str] = []
+    items = list(paid["items"])
+    item_cents = sum(int(item.get("amount_cents") or 0) for item in items)
+    # A refund changes the net without sharing one method and date.
+    # Print the net receipt in that case. Otherwise each collected row
+    # keeps its own method and date.
+    if paid["net_cents"] <= 0 or not items:
+        lines.append("Amount paid: $0.00")
+    elif item_cents != int(paid["net_cents"]):
+        lines.append(f"Amount paid: {_schedule_cents(int(paid['net_cents']))}")
+    else:
+        for item in items:
+            bits = [_schedule_cents(int(item.get("amount_cents") or 0))]
+            method = _text(item.get("method"))
+            when = _schedule_date(item.get("timestamp"))
+            if method:
+                bits.append(method)
+            if when:
+                bits.append(when)
+            lines.append("Amount paid: " + " ".join(bits))
+    premium_cents = to_cents(premium_amount)
+    balance_cents = premium_cents - int(paid["net_cents"])
+    due = _schedule_date(
+        bond_data.get("balance_due_date"),
+        bond_data.get("next_payment_due"),
+        bond_data.get("first_payment_due_date"),
+    )
+    balance_line = f"Balance due: {_schedule_cents(balance_cents)}"
+    if due:
+        balance_line += f" due {due}"
+    lines.append(balance_line)
+    return lines
+
+
+async def attach_schedule_payment_sources(bond_data: Dict[str, Any], template_id: Any) -> None:
+    """Copy confirmed ledger and payment rows onto the packet for display.
+
+    Does not write a payment, a ledger row, or a charge. A read failure leaves
+    the lists empty so Schedule A shows nothing collected.
+    """
+    if not isinstance(bond_data, dict):
+        return
+    if "ledger_entries" in bond_data or "financial_ledger" in bond_data:
+        return
+    surety_id = str(bond_data.get("surety_id") or bond_data.get("surety") or "")
+    if "schedule_a" not in _field_names_for_packet(surety_id, template_id):
+        return
+    booking = _text(bond_data.get("booking_number"))
+    ledger: List[Any] = []
+    payments: List[Any] = []
+    transactions: List[Any] = []
+    if booking:
+        try:
+            from dashboard.extensions import get_collection
+            from dashboard.services.ar_math import booking_key
+
+            keys = [booking]
+            upper = booking_key(booking)
+            if upper and upper not in keys:
+                keys.append(upper)
+            query = {"booking_number": {"$in": keys}}
+            ledger = await get_collection("financial_ledger").find(query).to_list(None)
+            payments = await get_collection("payments").find(query).to_list(None)
+            transactions = await get_collection("transactions").find(query).to_list(None)
+        except Exception as exc:
+            logger.warning(
+                "[docuseal] confirmed payment read failed: %s",
+                type(exc).__name__,
+            )
+            ledger, payments, transactions = [], [], []
+    bond_data["ledger_entries"] = list(ledger or [])
+    if not isinstance(bond_data.get("transactions"), list):
+        bond_data["transactions"] = list(transactions or [])
+    if not isinstance(bond_data.get("payments"), list):
+        bond_data["payments"] = list(payments or [])
+
+
 def _writing_agent_name(data: Optional[Dict[str, Any]]) -> str:
     """Agent already on the bond. Empty when absent. Never the template sample."""
     from dashboard.bond_pdf_service import writing_agent_name
@@ -1783,45 +1935,10 @@ class DocuSealService:
                 schedule_lines.append(f"Total bond: {bond_formatted_dollar}")
             if prem_formatted_dollar:
                 schedule_lines.append(f"Premium: {prem_formatted_dollar}")
-            paid_bits = [
-                bit for bit in (
-                    _schedule_money(
-                        bond_data.get("down_payment_amount"),
-                        bond_data.get("down_payment"),
-                        bond_data.get("amount_paid"),
-                    ),
-                    _text(
-                        bond_data.get("down_payment_method"),
-                        bond_data.get("payment_method"),
-                    ),
-                    _schedule_date(
-                        bond_data.get("down_payment_date"),
-                        bond_data.get("payment_date"),
-                        bond_data.get("paid_at"),
-                        bond_data.get("down_payment_entered_at"),
-                    ),
-                )
-                if bit
-            ]
-            if paid_bits:
-                schedule_lines.append("Amount paid: " + " ".join(paid_bits))
-            balance_text = _schedule_money(
-                bond_data.get("numeric_balance_due"),
-                bond_data.get("balance_due"),
-                bond_data.get("balance_financed_amount"),
-            )
-            due_text = _schedule_date(
-                bond_data.get("balance_due_date"),
-                bond_data.get("next_payment_due"),
-                bond_data.get("first_payment_due_date"),
-            )
-            if balance_text or due_text:
-                balance_line = "Balance due:"
-                if balance_text:
-                    balance_line += f" {balance_text}"
-                if due_text:
-                    balance_line += f" due {due_text}"
-                schedule_lines.append(balance_line)
+            # Amount paid is a confirmed ledger receipt. The write-time down
+            # payment is not printed, and the balance is premium minus that
+            # receipt.
+            schedule_lines.extend(schedule_a_money_lines(bond_data, prem_float))
             values["schedule_a"] = "\n".join(schedule_lines)
             if "schedule_a_label_indemnitor" in template_names and indemnitor_name:
                 values["schedule_a_label_indemnitor"] = indemnitor_name
@@ -1973,6 +2090,7 @@ class DocuSealService:
         bond_data = dict(bond_data or {})
         agent_name, agent_license = resolve_writing_agent(bond_data)
         apply_writing_agent(bond_data, agent_name, agent_license)
+        await attach_schedule_payment_sources(bond_data, template_id)
         raw_values = self.prefill_values_from_bond(bond_data, template_id=template_id)
         # Published "mapped" sureties add their PDF field names. OSI/Palmetto
         # seeds stay on canonical_prefill, so this dict is unchanged for them.

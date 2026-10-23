@@ -147,6 +147,7 @@ IDENTITY_READONLY_FIELD_NAMES = frozenset({
     "defendant_race", "DefHeight", "DefWeight", "DefRace", "DefHair", "DefEyes",
     "DefDOB", "DefDL", "DefDLState", "DefAddress", "DefCity", "DefState", "DefZip",
     "DefPhone", "DefSex",
+    "coindemnitor_name", "coindemnitor_phone", "coindemnitor_email",
 })
 
 
