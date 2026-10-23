@@ -8,6 +8,9 @@ through ``scrapers.plain_http`` (honest User-Agent, certificate verified).
 Failure is visible, never swallowed:
   * 401/403/429, a challenge page or a reset -> ``egress_block:`` (EgressBlocked)
   * certificate verification failure -> ``tls_cert_invalid:`` (SourceTLSInvalid)
+  * any other network failure (refused connection, timeout, ...) -> ``PolkNetworkError``
+    with a scrubbed message (no URL, booking number or person data); the original
+    exception stays on ``__cause__``
   * SearchJail non-200 -> ``PolkHTTPError`` (carries ``status_code``; classified by status)
   * SearchJail / GetCharges payload that isn't a list of objects -> ``ParseDriftError``
   * a per-booking detail miss (profile non-200, no anti-forgery token, GetCharges
@@ -25,6 +28,7 @@ import time
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
 from bs4 import BeautifulSoup
+import requests
 
 from scrapers.base_scraper import BaseScraper
 from scrapers.published_bond import charge_bond_amount, total_published_bond
@@ -63,6 +67,23 @@ class PolkHTTPError(RuntimeError):
     def __init__(self, status_code: int, step: str):
         self.status_code = status_code
         super().__init__(f"Polk: HTTP {status_code} from {step}")
+
+
+class PolkNetworkError(requests.exceptions.ConnectionError):
+    """A non-block network failure. The message names only the step and exception type:
+    requests/urllib3 messages often embed the URL (``/inmate-profile/<booking>``), and
+    BaseScraper logs and alerts ``str(e)``. Health still classifies it as network (retryable)."""
+
+    def __init__(self, step: str, cause: BaseException):
+        super().__init__(f"Polk: network error on {step} ({type(cause).__name__})")
+
+
+def _call(session, method: str, url: str, step: str, **kw):
+    """plain_http.request; blocks / TLS raise as-is, other network errors are re-raised scrubbed."""
+    try:
+        return request(session, method, url, county="Polk", **kw)
+    except requests.exceptions.RequestException as exc:
+        raise PolkNetworkError(step, exc) from exc
 
 
 def published_status_fields(b, release_date: str = "") -> Tuple[str, str]:
@@ -118,7 +139,7 @@ class PolkCountyScraper(BaseScraper):
             
             # Certificate verification stays on; a bad chain raises SourceTLSInvalid,
             # a block raises EgressBlocked. Neither is caught here.
-            resp = request(session, "POST", SEARCH_URL, data=payload, timeout=30, county="Polk")
+            resp = _call(session, "POST", SEARCH_URL, "SearchJail", data=payload, timeout=30)
             if resp.status_code != 200:
                 raise PolkHTTPError(resp.status_code, "SearchJail")
             bookings = _json_list(resp, "SearchJail")
@@ -199,7 +220,7 @@ class PolkCountyScraper(BaseScraper):
         # Load profile page to extract CSRF token for charges API
         token = ""
         missed = True
-        profile_resp = request(session, "GET", detail_url, timeout=20, county="Polk")
+        profile_resp = _call(session, "GET", detail_url, "inmate-profile", timeout=20)
         if profile_resp.status_code == 200:
             soup = BeautifulSoup(profile_resp.text, "html.parser")
             token_el = soup.find("input", {"name": "__RequestVerificationToken"})
@@ -222,7 +243,7 @@ class PolkCountyScraper(BaseScraper):
                 "bookingNum": booking_num,
                 "__RequestVerificationToken": token
             }
-            charges_resp = request(session, "POST", CHARGES_URL, data=charges_payload, headers=post_headers, timeout=20, county="Polk")
+            charges_resp = _call(session, "POST", CHARGES_URL, "GetCharges", data=charges_payload, headers=post_headers, timeout=20)
             content_type = (charges_resp.headers.get("Content-Type") or "").lower()
             if charges_resp.status_code == 200 and "json" in content_type:
                 # JSON that isn't a list of charge objects is contract drift and raises.

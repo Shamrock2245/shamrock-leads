@@ -107,8 +107,37 @@ def test_charges_payload_drift_raises(http):
 
 def test_network_error_is_not_swallowed(http):
     http(charges=lambda: requests.exceptions.ReadTimeout("read timed out"))
-    with pytest.raises(requests.exceptions.Timeout):
+    with pytest.raises(polk.PolkNetworkError) as ei:
         PolkCountyScraper().scrape()
+    assert isinstance(ei.value.__cause__, requests.exceptions.ReadTimeout)
+
+
+# ── Codex P2 on f6f6acd: no booking ids in propagated network errors ───────────
+_LEAKY = ("HTTPSConnectionPool(host='www.polksheriff.org', port=443): Max retries exceeded with url: "
+          "/inmate-profile/2610001 (Caused by NewConnectionError('Failed to establish a new connection: "
+          "[Errno 111] Connection refused'))")
+
+
+@pytest.mark.parametrize("step,name", [("profile", "inmate-profile"), ("charges", "GetCharges"), ("search", "SearchJail")])
+def test_network_error_message_is_scrubbed_and_cause_kept(http, step, name):
+    cause = requests.exceptions.ConnectionError(_LEAKY)
+    http(**{step: lambda: cause})
+    with pytest.raises(polk.PolkNetworkError) as ei:
+        PolkCountyScraper().scrape()
+    msg = str(ei.value)
+    assert msg == f"Polk: network error on {name} (ConnectionError)"
+    for leak in ("2610001", "inmate-profile/", "THETIC", "polksheriff.org", "url:"):
+        assert leak not in msg
+    assert ei.value.__cause__ is cause  # cause chain kept for debugging
+    v = classify_exception(ei.value)
+    assert v.error_class == ERROR_NETWORK and v.retryable
+
+
+def test_blocks_and_tls_are_not_rewrapped(http):
+    http(profile=lambda: _resp(403, "denied"))
+    with pytest.raises(EgressBlocked) as ei:
+        PolkCountyScraper().scrape()
+    assert not isinstance(ei.value, polk.PolkNetworkError)
 
 
 @pytest.mark.parametrize("kw", [
