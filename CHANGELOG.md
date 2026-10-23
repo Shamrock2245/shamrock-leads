@@ -10,8 +10,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Custody is no longer invented.** `Status` was hard-coded `"In Custody"`. The source is a recent-arrests PDF that never states custody, so it is now `""`.
 - **Chrome disguise removed.** The Chrome `User-Agent` is gone, and the landing and PDF requests go through `scrapers.plain_http` (honest UA, certificate verified). A block raises `egress_block:` and a real certificate failure raises `tls_cert_invalid:`, with no workaround. There was no `verify=False` to remove. The one honest probe from the agent box (2026-10-15) got **HTTP 403**, so it now fails visibly as `egress_block: Citrus HTTP 403` from that network.
 
+- **Registries record the blocked Citrus source (Codex P1 on 98811b3).** `docs/COUNTY_REGISTRY.md` no longer shows Citrus as ✅ Active (2026-10-07). It now records the 2026-10-15 honest probe (HTTP 403, `egress_block`) and says VPS / Leads Ops validation plus a write smoke are needed before it is treated as available. The FL 017 evidence row moves from `candidate_productive` to `recon_only` with the 403 result, the matrix was regenerated (FL candidate 20→19, recon only 18→19), and `FL_67_STATUS_2026-10-08.md` row 32 matches. Health stays `unverified`. No stored rows change.
+
 ### Tests
 - `tests/test_fl_citrus_bond_custody_defaults.py` (added to the `ci.yml` list).
+- `test_registries_record_the_403_probe_not_available`; `tests/test_home_county_smoke_evidence.py` FL matrix counts updated.
 
 ## [Unreleased] — 2026-10-21 (Duval: plain honest HTTPS, fail closed on tls_cert_invalid)
 

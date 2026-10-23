@@ -76,3 +76,20 @@ def test_bad_certificate_fails_visibly(monkeypatch):
     _install(monkeypatch, exc=requests.exceptions.SSLError("certificate verify failed"))
     with pytest.raises(SourceTLSInvalid, match=r"^tls_cert_invalid: Citrus"):
         citrus.CitrusCountyScraper().scrape()
+
+
+# ── Codex P1 on 98811b3: registries record the blocked source ─────────────────
+def test_registries_record_the_403_probe_not_available():
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    row = next(r for r in json.loads((root / "docs/recon/county_source_contract_evidence.json").read_text())["records"]
+               if r["state"] == "FL" and r["county_fips"] == "017")
+    assert row["passive_recommendation"] == "recon_only"
+    assert "HTTP 403" in row["evidence_note"] and "Leads Ops" in row["evidence_note"]
+    matrix = next(l for l in (root / "docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md").read_text().splitlines()
+                  if l.startswith("| FL | 017 |"))
+    assert "| recon_only |" in matrix and "candidate_productive" not in matrix and "HTTP 403" in matrix
+    reg = next(l for l in (root / "docs/COUNTY_REGISTRY.md").read_text().splitlines() if "**Citrus**" in l)
+    assert "403" in reg and "Leads Ops" in reg and "✅ Active" not in reg
