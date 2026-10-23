@@ -6,6 +6,7 @@ O'Neill does not match O'Neal. A full ID number is rejected.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 from unittest.mock import AsyncMock
 
@@ -3475,12 +3476,15 @@ def test_failed_verification_removes_the_stored_scan(monkeypatch):
     assert len(revoked) == 1
     rolled = _audits(stores, "verification_rolled_back")
     assert len(rolled) == 1
+    link_ref = hashlib.sha256(sibling.encode("utf-8")).hexdigest()
     assert rolled[0]["restored_links"] == [{
-        "token": sibling,
+        "link_ref": link_ref,
         "revoked": False,
         "status": "",
     }]
-    assert rolled[0]["new_state"]["restored_links"] == [sibling]
+    assert rolled[0]["new_state"]["restored_links"] == [link_ref]
+    assert sibling not in str(rolled)
+    assert winner not in str(rolled)
     assert winner in [row["token"] for row in stores["cosigner_links"].docs]
 
     monkeypatch.setattr(svc, "_save_link", original)

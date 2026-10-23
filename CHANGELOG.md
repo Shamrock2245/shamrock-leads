@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-23 (co-signer rollback audit omits bearer tokens)
+
+### Fixed
+- **A rolled-back verification records a hash of each restored link, not the bearer token.** The sibling link is still restored. The audit row cannot be used as the public link.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_failed_verification_removes_the_stored_scan`.
+
 ## [Unreleased] — 2026-10-23 (co-signer scan updates the aliased case)
 
 ### Fixed

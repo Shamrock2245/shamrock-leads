@@ -14,6 +14,7 @@ Customer texting stays on BlueBubbles behind ``SWIPESIMPLE_DISPATCH_LIVE``.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import secrets
@@ -1078,6 +1079,11 @@ async def _restore_sibling_links(priors: list) -> None:
         )
 
 
+def _bearer_ref(token: str) -> str:
+    """A reference for a bearer token. The token itself is not stored."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 async def _drop_partial_audits(
     packet_id: str,
     created_at: str,
@@ -1092,7 +1098,7 @@ async def _drop_partial_audits(
         if not token:
             continue
         siblings.append({
-            "token": token,
+            "link_ref": _bearer_ref(token),
             "revoked": prior.get("revoked") is True,
             "status": str(prior.get("status") or ""),
         })
@@ -1111,7 +1117,7 @@ async def _drop_partial_audits(
         "attempted_at": created_at,
         "restored_links": siblings,
         "old_state": {},
-        "new_state": {"restored_links": [row["token"] for row in siblings]},
+        "new_state": {"restored_links": [row["link_ref"] for row in siblings]},
         "confidence": 1.0,
     })
 
