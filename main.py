@@ -469,7 +469,13 @@ def register_scrapers(sched):
 
     # ── SWFL Core (KEY — must stay registered; Lee + Sarasota are non-negotiable) ─
     # Intervals kept aggressive for bond-desk coverage. Do not comment these out.
-    sched.register_scraper(LeeCountyScraper(), interval_minutes=30)
+    # Lee: a skipped run is a missed-lead risk. 25-min misfire grace (vs the
+    # 300s default) so a saturated worker pool delays the run instead of
+    # dropping it, and an #alerts post if APScheduler still skips it.
+    sched.register_scraper(
+        LeeCountyScraper(), interval_minutes=30,
+        misfire_grace_time=25 * 60, alert_on_miss=True,
+    )
     sched.register_scraper(SarasotaCountyScraper(), interval_minutes=60)
     sched.register_scraper(CollierCountyScraper(), interval_minutes=75)
     # Charlotte + Manatee are relay-only (config/relay_only.py): registered so

@@ -50,7 +50,7 @@ def registered_scrapers():
             def __init__(self):
                 self.items = []
 
-            def register_scraper(self, scraper, interval_minutes=None):
+            def register_scraper(self, scraper, interval_minutes=None, **_kwargs):
                 self.items.append(scraper)
 
         sched = _Collect()

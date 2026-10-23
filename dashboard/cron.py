@@ -791,6 +791,19 @@ async def _run_lee_clerk_watch():
         )
 
 
+async def _run_lee_freshness():
+    """Lee (FL) heartbeat: stale / 0-rows-while-site-lists / repeated errors / window gap."""
+    from core.lee_freshness import run_lee_freshness_check
+    from dashboard.extensions import get_db
+    result = await run_lee_freshness_check(get_db())
+    if result.get("findings") or result.get("recovered"):
+        logger.warning(
+            "[LeeFreshness] findings=%s sent=%s recovered=%s site_rows=%s",
+            result.get("findings"), result.get("sent"),
+            result.get("recovered"), result.get("site_rows"),
+        )
+
+
 async def _run_matching_backlog():
     from dashboard.services.lifecycle_automations import LifecycleAutomations
     from dashboard.services.automation_config import get_automation_config
@@ -855,6 +868,8 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("compliance_backfill","ComplianceFill",    21600, 270, _run_compliance_backfill, default_enabled=True),
     CronDef("matching_backlog",   "MatchingBacklog",    3600, 240, _run_matching_backlog, default_enabled=True),
     CronDef("lee_clerk_watch",    "LeeClerkWatch",      900, 180, _run_lee_clerk_watch, default_enabled=True),
+    # Lee (FL) must never miss a lead: heartbeat every 5 min, alerts via #alerts.
+    CronDef("lee_freshness",      "LeeFreshness",       300, 240, _run_lee_freshness, default_enabled=True),
 ]
 
 

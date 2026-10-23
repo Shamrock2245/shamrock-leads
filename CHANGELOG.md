@@ -3,6 +3,29 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-23 (Lee: single-point-of-failure hardening + freshness heartbeat)
+
+### Fixed
+- **Lee (FL) no longer turns a wrong-shaped response into a quiet 0-row run.** `LeeCountyScraper._extract_records` raises `LeeParseDriftError` (a `ParseDriftError`, classified `parse_drift`, alerted to #scraper-errors and not retried) when a 200 JSON page is not a list or a known wrapper, or its rows are not objects. Listing rows that all lack a published `bookingNumber` raise the same error; a partial loss raises a `partial` drift alert and keeps the keyed rows.
+- **Lee keys only on the published `bookingNumber`.** `_normalize_record`, the cross-variant dedupe in `_fetch_arrests` and the enrichment sort no longer fall back to `id` (14-digit internal row id), `booking_id` or `bookingNo`. Rows without a booking number are not merged by some other id; they reach the drift check instead.
+- **Lee pagination failures are typed and bounded.** Each listing page gets one retry with backoff (`LEE_PAGE_RETRIES`=1, `LEE_PAGE_RETRY_BACKOFF_S`=5) on no response, 5xx or bad JSON; never on 429 or during the cooldown, and never on 4xx. When no listing variant pages through cleanly, `_scrape_once` raises `LeeFetchIncomplete` so the existing outer retry runs; on the last attempt it keeps the rows it has and posts an #alerts warning instead of storing a silent partial run.
+- **Lee pagination guards.** A page that only repeats booking numbers already seen (offset ignored) stops paging. A full last page at `LEE_MAX_PAGES` is flagged and alerted (`page_cap`) instead of truncating silently.
+- **Listing window overlap guard.** Each successful Lee run stores `source_window` (row count and booking-number range) on its `scraper_status` doc. If the oldest booking number listed now is more than one past the newest seen on the previous run, the run alerts #alerts (`window_gap`) with the unseen range and stores `source_window_gap`. Counts and booking-number ranges only, no names or DOBs.
+
+### Added
+- **Lee freshness heartbeat** (`core/lee_freshness.py`, dashboard cron `lee_freshness`, every 5 min, enabled by default). It reads Lee's `scraper_status` doc and posts through `SlackNotifier.notify_alert` (#alerts) when there has been no successful run in N = 75 min (`LEE_FRESHNESS_MAX_AGE_MIN`), the last run stored 0 rows while one plain GET of the public listing (honest UA, `trust_env=False`, skipped during the cooldown) shows bookings, there are 3+ consecutive failures (`LEE_FRESHNESS_MAX_FAILURES`), or a window gap was recorded. Alerts are de-duplicated (re-alert every 60 min) and a recovery notice is sent when they clear. Registered in Service Control and `DEFAULT_CONFIG`.
+- **`last_success_at` / `last_records_at` on `scraper_status`.** `BaseScraper.run` stamps them on every ok/empty run (not on failures or an auto-disabled canary), and merges an optional per-scraper `status_extra_fields()` hook. `MongoWriter.get_scraper_status_fields` reads selected fields back.
+- **Scheduler misfire grace + missed-run alert.** `register_scraper` accepts `misfire_grace_time` and `alert_on_miss`; an `EVENT_JOB_MISSED` listener posts to #alerts (throttled to 30 min per job). Lee registers with a 25-minute grace instead of the 300s default, so a saturated 8-thread pool delays its run rather than dropping it.
+
+### Docs
+- **Miami-Dade key note** in `docs/COUNTY_REGISTRY.md`: the source publishes no booking number and the ArcGIS GlobalID / ObjectId change on every republish, so they are not keys. The internal `md_dedupe` key (sha256 of defendant + DOB + BookDate; charges added as a flagged `md_key_fallback` when DOB is missing) is live by owner decision, `Booking_Number` stays blank, and draft #173 was dropped. Docs only, no code change.
+
+### Not changed
+- No fallback Lee source is wired: none was verified (see the PR). The fetch transport, bond default and single-booking path are left to #147 / #157 / #158. No deploy workflow, compose or secret changes.
+
+### Tests
+- `tests/test_lee_harden_spof.py` (new, on the ci.yml list). The fake schedulers in `tests/test_fl_gap_queue.py` and `tests/test_source_state_drift.py` accept the new `register_scraper` keyword arguments.
+
 ## [Unreleased] — 2026-10-21 (Duval: plain honest HTTPS, fail closed on tls_cert_invalid)
 
 ### Changed
