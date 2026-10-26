@@ -188,12 +188,12 @@ Dashboard updates
 |----------|-------|
 | File | `scrapers/counties/polk.py` |
 | Class | `PolkCountyScraper` |
-| JMS Vendor | Odyssey |
-| Base URL | `https://polksheriff.org` |
-| Method | GET `/detention/jail-inquiry` → HTML parsing with DrissionPage |
+| JMS Vendor | PCSO Jail Inquiry (Kendo UI JSON API) |
+| Base URL | `https://www.polksheriff.org` |
+| Method | plain HTTPS via `scrapers.plain_http` (honest UA, TLS verified): POST `SearchJail` by booking date, GET `inmate-profile` for the anti-forgery token, POST `GetCharges` |
 | Auth | None |
 | Interval | 120 min |
-| Notes | Jail inquiry page. Relative detail URLs need BASE_URL prefix. |
+| Notes | Status only from a published ReleaseDate (`status_source`). Blocks, TLS, HTTP status and payload drift raise typed errors. Unverified until a Leads Ops write smoke; see `docs/recon/FL_POLK_TYPED_ERRORS_2026-10-22.md`. |
 
 #### Osceola County ✅
 | Property | Value |
