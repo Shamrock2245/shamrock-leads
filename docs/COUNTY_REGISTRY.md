@@ -39,7 +39,7 @@
 | 12 | **Pasco** | DrissionPage — Cloudflare bypass | `pasco.py` | ✅ Active | 90 min | 2026-04-27 |
 | 13 | **Lake** | requests POST `recent_data` + Turnstile token (SolveCaptcha, owner-approved; shared `scrapers/solvecaptcha.py`) | `lake.py` | ✅ `verified_public` (Mac write smoke 17 new; needs SOLVECAPTCHA_KEY) | 90 min | 2026-09-25 |
 | 14 | **Hernando** | Custom HTML | `hernando.py` | ✅ Active | 90 min | 2026-04-27 |
-| 15 | **Citrus** | Public recent-arrest PDF (source `AR #`) — plain requests + pdfplumber | `citrus.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
+| 15 | **Citrus** | Public recent-arrest PDF (source `AR #`) — plain_http + pdfplumber | `citrus.py` | ⚠️ Blocked from the agent box: honest probe HTTP 403 (`egress_block`) on 2026-10-15; needs VPS / Leads Ops validation + write smoke before treating as available (unverified, `recon_only`) | 120 min | 2026-10-15 |
 
 ---
 
@@ -198,7 +198,7 @@ Approach:   Query the anonymous FeatureServer directly with `ObjectId,BookDate,D
 ### JailTracker (Black Creek ISC)
 - **Pattern**: Paginated HTML tables or JSON API
 - **Auth**: None; occasional CAPTCHA / rate limiting
-- **Active Counties**: Highlands, Glades. Citrus is the sheriff PDF roster, not JailTracker (2026-10-07). Baker/Calhoun/Gulf/Holmes/Levy/Wakulla/Washington stay fail_closed.
+- **Active Counties**: Highlands, Glades. Citrus is the sheriff PDF roster, not JailTracker (2026-10-07); an honest probe got HTTP 403 on 2026-10-15, so it is not available until VPS / Leads Ops validation (see the Citrus row). Baker/Calhoun/Gulf/Holmes/Levy/Wakulla/Washington stay fail_closed.
 
 ### New World / InmateInquiry (Tyler Technologies)
 - **Pattern**: Server-rendered HTML listing + detail pages (GET)
