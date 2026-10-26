@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-26 (unsigned co-signer gets no pay link)
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_unsigned_packet_hides_the_pay_link`. A verified signer stays on the sign step, and a stored SwipeSimple URL is not returned, until the packet is signed.
+
 ## [Unreleased] — 2026-10-23 (FA watcher query test: stale county list, now on the ci.yml list)
 
 ### Fixed

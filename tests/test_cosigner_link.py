@@ -1851,6 +1851,40 @@ def test_approved_charge_is_not_the_down_payment(monkeypatch):
     assert not stores["cosigner_links"].docs[0].get("paid_transaction_id")
 
 
+def test_unsigned_packet_hides_the_pay_link(monkeypatch):
+    """A verified signer who has not signed does not get a pay URL."""
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert opened.status_code == 200, opened.text
+    packet = stores["paperwork_packets"].docs[0]
+    pay = _swipe_link("down")
+    packet["invoice_payment_link"] = pay
+    packet["swipesimple_invoice_amount_cents"] = 50000
+    packet["swipesimple_invoice_number"] = BOOKING
+    packet["swipesimple_invoice_bond_id"] = CASE
+    assert packet["status"] == "draft"
+    signing = client.get(f"/api/cosigner/{token}")
+    assert signing.status_code == 200, signing.text
+    assert signing.json()["step"] == "sign"
+    assert signing.json()["sign_url"] == _sign("abc")
+    assert signing.json()["payment"] is None
+    assert pay not in signing.text
+    page = client.get(f"/cosigner/{token}")
+    assert page.status_code == 200
+    assert pay not in page.text
+    assert ">Pay</a>" not in page.text
+
+    packet["status"] = "completed"
+    paying = client.get(f"/api/cosigner/{token}")
+    assert paying.status_code == 200, paying.text
+    assert paying.json()["step"] == "pay"
+    assert paying.json()["payment"]["url"] == pay
+
+
 def test_paid_bond_still_requires_a_signature(monkeypatch):
     stores, client = _world(monkeypatch)
     stores["bond_cases"].docs[0]["premium_paid"] = True
