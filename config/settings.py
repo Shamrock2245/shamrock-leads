@@ -75,6 +75,15 @@ class Settings:
     ENABLE_SLACK_ALERTS: bool = os.getenv("ENABLE_SLACK_ALERTS", "true").lower() == "true"
     ENABLE_LEAD_SCORING: bool = os.getenv("ENABLE_LEAD_SCORING", "true").lower() == "true"
 
+    # Scoped clear of stored, unsourced "In Custody" when a scrape publishes a
+    # blank status (writers/mongo_writer.py). Comma-separated "ST/County"
+    # entries, e.g. "FL/Volusia". EMPTY BY DEFAULT = OFF everywhere. Enabling a
+    # county changes stored prod rows: it needs a Leads Ops count of affected
+    # rows plus the owner's OK first (tracked in #264).
+    CLEAR_UNPUBLISHED_STATUS: frozenset = frozenset(
+        e.strip().upper() for e in os.getenv("CLEAR_UNPUBLISHED_STATUS", "").split(",") if e.strip()
+    )
+
     # --- County-Specific Credentials ---
     HCSO_EMAIL: str = os.getenv("HCSO_EMAIL", "")
     HCSO_PASSWORD: str = os.getenv("HCSO_PASSWORD", "")

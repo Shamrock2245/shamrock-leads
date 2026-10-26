@@ -46,7 +46,7 @@
 ## Tier 3 — Central FL / Heartland (6 Counties)
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
-| 16 | **Polk** | Direct Kendo UI REST API | `polk.py` | ✅ Active | 120 min | 2026-05-24 |
+| 16 | **Polk** | Direct Kendo UI JSON API (SearchJail + GetCharges), plain HTTPS via `plain_http` (honest UA, TLS verified); typed errors, nothing swallowed | `polk.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-22 |
 | 17 | **Osceola** | Corrections Daily Arrest Report CSV, plain HTTPS (honest UA, TLS verified, no impersonation). The download redirects to legacy-apps.osceola.org, which omits its intermediate certificate, so runs fail loud as `tls_cert_invalid` until the county fixes the chain | `osceola.py` | ✅ Active (unverified; TLS chain hold) | 120 min | 2026-10-15 |
 | 18 | **Sumter** | SmartWEB JAIL View (`SCSO<YY>JBN######`, modern AddMoreResults) — plain requests | `sumter.py` | ✅ Active (unverified until write smoke) | 180 min | 2026-10-07 |
 | 19 | **Highlands** | Direct OCV JSON API | `highlands.py` | ✅ Active | 120 min | 2026-05-24 |
@@ -70,7 +70,7 @@
 ## Tier 5 — East Coast / Space Coast (3 Counties)
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
-| 28 | **Volusia** | Direct ASP.NET Postback (volusiamug.vcgov.org) | `volusia.py` | ✅ Active | 90 min | 2026-05-24 |
+| 28 | **Volusia** | Direct ASP.NET Postback (volusiamug.vcgov.org), plain HTTPS via `plain_http` (honest UA, TLS verified). Status from the published InCustody column; typed errors, nothing swallowed | `volusia.py` | ✅ Active (unverified until write smoke) | 90 min | 2026-10-22 |
 | 29 | **Brevard** | BCSO Inmate Search (`/?handler=Search` date window → `Booking #` `YYYY-NNNNNNNN`; detail Bonds/Charges for in-custody rows) — plain requests | `brevard.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
 | 30 | **Flagler** | New World InmateInquiry (`InCustody=True` + detail open `Booking` `YYYY-NNNNNNNN`; shared `fl_newworld`) — plain requests | `flagler.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
 

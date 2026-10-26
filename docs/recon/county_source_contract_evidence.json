@@ -1020,9 +1020,9 @@
       "state": "FL",
       "county_fips": "105",
       "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "official_source_url": "https://www.polksheriff.org/detention/jail-inquiry",
+      "access_posture": "Ordinary public HTTPS JSON (SearchJail by booking date, inmate-profile anti-forgery token, GetCharges); plain_http, honest UA, certificate verified; no challenge",
+      "evidence_note": "2026-10-22 agent-box read (`docs/recon/FL_POLK_TYPED_ERRORS_2026-10-22.md`): SearchJail 200 JSON (22 bookings for 2026-10-21, 7-digit BookingNum, all unique; fields BookNo/BookNumberDisplay/BookYr/BookingNum/DOB/EntryDate/FullName/IsAka/Location/RS/ReleaseDate; no status field, 1 of 22 with a ReleaseDate). One profile 200 with token; GetCharges 200 JSON list, BondAmountDue published on every charge. Status only from ReleaseDate (status_source recorded). Stays unverified until a Leads Ops write smoke."
     },
     {
       "state": "FL",
@@ -1108,9 +1108,9 @@
       "state": "FL",
       "county_fips": "127",
       "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "official_source_url": "https://volusiamug.vcgov.org/",
+      "access_posture": "Ordinary public HTTPS ASP.NET Inmate Inquiry (disclaimer Accept + Recent Bookings postback); plain_http, honest UA, certificate verified; no challenge",
+      "evidence_note": "2026-10-22 agent-box read (`docs/recon/FL_VOLUSIA_HONEST_2026-10-22.md`): GET / 200, Disclaimer POST 200, Recent Bookings POST 200. Columns Booking # / Photo / Inmate ID / name parts / Sex / Race / Booking Date / Release Date / InCustody; Booking # 7 digits, unique per row; InCustody Y/N matched Release Date blank/present on every row. Status comes from InCustody (status_source recorded). Stays unverified until a Leads Ops write smoke."
     },
     {
       "state": "FL",
