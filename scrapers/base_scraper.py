@@ -294,6 +294,7 @@ class BaseScraper(ABC):
     #   await pw.stop()
 
     OBSCURA_CDP_URL = os.getenv("OBSCURA_CDP_URL", "ws://obscura:9222")
+    OBSCURA_CDP_TOKEN = os.getenv("OBSCURA_CDP_TOKEN", "shamrock_obscura_secret_cdp_token_2026_production_key")
 
     # Obscura routing policy (see scrapers/scraper_resilience.py):
     #   * always refused for fail_closed scopes and the hold/403 list — Obscura
@@ -351,8 +352,9 @@ class BaseScraper(ABC):
             )
 
         pw = await async_playwright().__aenter__()
+        headers = {"Authorization": f"Bearer {self.OBSCURA_CDP_TOKEN}"} if self.OBSCURA_CDP_TOKEN else None
         try:
-            browser = await pw.chromium.connect_over_cdp(self.OBSCURA_CDP_URL)
+            browser = await pw.chromium.connect_over_cdp(self.OBSCURA_CDP_URL, headers=headers)
             logger.info("✅ Connected to Obscura CDP for %s", self.county_label)
             return pw, browser
         except Exception as e:
@@ -378,8 +380,9 @@ class BaseScraper(ABC):
             )
 
         pw = sync_playwright().start()
+        headers = {"Authorization": f"Bearer {self.OBSCURA_CDP_TOKEN}"} if self.OBSCURA_CDP_TOKEN else None
         try:
-            browser = pw.chromium.connect_over_cdp(self.OBSCURA_CDP_URL)
+            browser = pw.chromium.connect_over_cdp(self.OBSCURA_CDP_URL, headers=headers)
             logger.info("✅ Connected to Obscura CDP for %s", self.county_label)
             return pw, browser
         except Exception as e:

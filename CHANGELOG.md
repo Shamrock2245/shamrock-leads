@@ -14,6 +14,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_palmetto_template_7.py` (on the CI list). Template 5 inventory and a 7-charge rejection, template 7 prefill and finalize for a 7-charge `TEST-` case, a fitting 6-charge join, 8 charges failing closed, and send flags left false. Schedule A prints a confirmed ledger or completed payment row, including a completed down-payment receipt, and leaves amount paid at `$0.00` with the full premium still due when the only figure is the write-time down payment. Another county's receipt under the same booking number is excluded. An evening UTC timestamp prints the Eastern calendar day. In-person packets lock the co-indemnitor name, phone, and email. Signer email is `admin@shamrockbailbonds.biz`. No DocuSeal submission is created against the live server.
 
+## [Unreleased] — 2026-10-23 (FA watcher query test: stale county list, now on the ci.yml list)
+
+### Fixed
+- **`test_watcher_query_uses_fa_watch_counties` was stale, not flaky.** It failed on main (f1d0042) both alone and in a full run, in a clean checkout, so this is not order dependence or leaked state. The test hard-coded which watch counties are fail_closed. Two documented Health decisions had since moved: Miami-Dade (FL) was reopened unverified on the owner-approved internal key (#168), and DeSoto (FL) went fail_closed (#222). The watcher was right both times: it drops exactly the Health fail_closed counties. Nobody saw the drift because the file was not on the ci.yml pytest list. The test now derives the expected in/out sets from `config.source_guard` and asserts both branches. It keeps explicit anchors for today's decisions (closed: Hendry, Charlotte, Manatee, Sarasota, DeSoto; open: Miami-Dade, Broward, St. Lucie). `tests/test_write_counties_fa_union.py` is now on the ci.yml list, so the next Health change has to update it in the same PR. No runtime code changed.
+
 ## [Unreleased] — 2026-10-21 (Duval: plain honest HTTPS, fail closed on tls_cert_invalid)
 
 ### Changed
