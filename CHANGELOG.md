@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-22 (Volusia: custody only from the published InCustody column)
+
+### Fixed
+- **Volusia (FL) no longer invents "In Custody".** The old rule read every row without a release date and without `InCustody = N` as in custody, including a blank cell. Status now comes from the published `InCustody` column (`Y` gives In Custody, `N` gives Released; `status_source` is `published_in_custody_column`), otherwise from a published Release Date (`published_release_date`), otherwise `""`. An honest agent-box read on 2026-10-22 confirmed the column and its agreement with Release Date (`docs/recon/FL_VOLUSIA_HONEST_2026-10-22.md`).
+- **Volusia failures are visible.** The per-booking `except Exception` that logged and skipped detail-page errors is gone, and so is the outer catch-all. A block raises `egress_block`, a bad certificate raises `tls_cert_invalid`, a non-200 on the list flow raises `VolusiaHTTPError` (classified by status), and missing ViewState, a missing Recent Bookings table or changed columns raise `ParseDriftError` instead of an empty run. Columns are checked against the published header instead of fixed indexes, which also fixes the `IndexError` on 10- or 11-cell rows. The debug line that logged the person's name is gone.
+- **Stored invented custody can be cleared, but the switch is off (Codex P1).** `MongoWriter` still leaves a blank scraped status out of `$set`, so rows saved by the old fallback keep their stored "In Custody". The new `CLEAR_UNPUBLISHED_STATUS` setting (`config/settings.py`) takes comma-separated `ST/County` entries and is **empty by default and enabled nowhere** (not in deploy, compose or `.env.example`). For a listed county, a scrape that publishes a blank status sets the stored status to `""` only where it is `"In Custody"` with no recorded `extra.status_source`. That runs in a separate pre-bulk update with `upsert=False`. A sourced status, a stored "Released" and other states are untouched. Turning it on changes stored prod rows and needs a Leads Ops count plus the owner's OK (tracked in #264). Tests: `tests/test_mongo_clear_unpublished_status.py` (flag off, flag on, scoping, default empty; on the ci.yml list).
+- Booking keys stay the published `Booking #` (Inmate ID only as Person_ID). Bond stays the per-charge sum only when every charge publishes an amount; a published `$0` is kept, otherwise `""`. The FL 127 evidence row records the read; the matrix was regenerated and Volusia stays unverified (`recon_only`) until a Leads Ops write smoke. `docs/COUNTY_REGISTRY.md` and `docs/agents/scraper-agent.md` no longer describe a DrissionPage or vcso.us source. Tests: `tests/test_fl_volusia_honest_status.py` (new, on the ci.yml list).
+
 ## [Unreleased] — 2026-10-22 (Polk: typed errors, no catch-all handlers)
 
 ### Fixed
