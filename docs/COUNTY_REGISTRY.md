@@ -58,7 +58,7 @@
 ## Tier 4 — Southeast / Treasure Coast (6 Counties)
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
-| 22 | **Palm Beach** | DrissionPage — PBSO ColdFusion blotter | `palm_beach.py` | ✅ Active (fixed page.html 2026-07-10) | 120 min | 2026-07-10 |
+| 22 | **Palm Beach** | PBSO ColdFusion blotter, plain HTTPS (honest UA, TLS verified, no browser or impersonation): submits the page's own date form, parses `allresults_` cards only, follows its own pagination with a 3 s pause. Layout drift raises `ParseDriftError`; blocks raise `egress_block`. Honest box probe 2026-10-15: `connection_reset` | `palm_beach.py` | ✅ Active (unverified; `recon_only`) | 120 min | 2026-10-15 |
 | 23 | **Broward** | Official BSO arrest search | `broward.py` | ✅ Live — Turnstile Arrest Search name-prefix + paged grid; Mac smoke 2026-09-23 (30 new / status=ok; action=arrest_search); needs `SOLVECAPTCHA_KEY` | 60 min | Writes enabled after contract validation |
 | 24 | **Martin** | Direct Tyler Technologies REST API, plain HTTPS (honest UA, TLS verified, no impersonation) | `martin.py` | ✅ Active (unverified) | 120 min | 2026-10-15 |
 | 25 | **St. Lucie** | plain HTTPS POST — PHP inmate list (honest UA, TLS verified, no impersonation; source Inmate Id as key, not yet proven to be a booking number) | `st_lucie.py` | ✅ Active (unverified) | 90 min | 2026-10-15 |
