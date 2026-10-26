@@ -16,6 +16,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `tests/test_fl_citrus_bond_custody_defaults.py` (added to the `ci.yml` list).
 - `test_registries_record_the_403_probe_not_available`; `tests/test_home_county_smoke_evidence.py` FL matrix counts updated.
 
+## [Unreleased] — 2026-10-23 (FA watcher query test: stale county list, now on the ci.yml list)
+
+### Fixed
+- **`test_watcher_query_uses_fa_watch_counties` was stale, not flaky.** It failed on main (f1d0042) both alone and in a full run, in a clean checkout, so this is not order dependence or leaked state. The test hard-coded which watch counties are fail_closed. Two documented Health decisions had since moved: Miami-Dade (FL) was reopened unverified on the owner-approved internal key (#168), and DeSoto (FL) went fail_closed (#222). The watcher was right both times: it drops exactly the Health fail_closed counties. Nobody saw the drift because the file was not on the ci.yml pytest list. The test now derives the expected in/out sets from `config.source_guard` and asserts both branches. It keeps explicit anchors for today's decisions (closed: Hendry, Charlotte, Manatee, Sarasota, DeSoto; open: Miami-Dade, Broward, St. Lucie). `tests/test_write_counties_fa_union.py` is now on the ci.yml list, so the next Health change has to update it in the same PR. No runtime code changed.
+
 ## [Unreleased] — 2026-10-21 (Duval: plain honest HTTPS, fail closed on tls_cert_invalid)
 
 ### Changed
