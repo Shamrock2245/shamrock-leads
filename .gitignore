@@ -18,6 +18,7 @@ data/surety_onboarding/
 
 # Credentials
 creds/
+.system_generated/
 config/firebase*.json
 config/google-services.json
 *.json

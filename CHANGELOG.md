@@ -11,6 +11,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Per-booking detail misses are counted, not itemised.** A profile page that isn't 200, a missing anti-forgery token, or a GetCharges response that isn't 200 JSON leaves that record's charges and bond `""`. All misses in a run go into one warning with no names or booking numbers. The per-booking warnings that logged booking numbers and exception text are gone.
 - Status and transport are unchanged: a published ReleaseDate gives Released, otherwise `""`, and it now records `status_source` (`published_release_date` / `published_status_field`). Bond is still the per-charge sum only when every charge publishes `BondAmountDue` (a published 0 is kept). The FL 105 evidence row records the 2026-10-22 honest read (`docs/recon/FL_POLK_TYPED_ERRORS_2026-10-22.md`); the matrix was regenerated and Polk stays unverified (`recon_only`). `docs/COUNTY_REGISTRY.md` and `docs/agents/scraper-agent.md` no longer describe DrissionPage. Tests: `tests/test_fl_polk_typed_errors.py` (new, on the ci.yml list).
 
+## [Unreleased] — 2026-10-23 (FA watcher query test: stale county list, now on the ci.yml list)
+
+### Fixed
+- **`test_watcher_query_uses_fa_watch_counties` was stale, not flaky.** It failed on main (f1d0042) both alone and in a full run, in a clean checkout, so this is not order dependence or leaked state. The test hard-coded which watch counties are fail_closed. Two documented Health decisions had since moved: Miami-Dade (FL) was reopened unverified on the owner-approved internal key (#168), and DeSoto (FL) went fail_closed (#222). The watcher was right both times: it drops exactly the Health fail_closed counties. Nobody saw the drift because the file was not on the ci.yml pytest list. The test now derives the expected in/out sets from `config.source_guard` and asserts both branches. It keeps explicit anchors for today's decisions (closed: Hendry, Charlotte, Manatee, Sarasota, DeSoto; open: Miami-Dade, Broward, St. Lucie). `tests/test_write_counties_fa_union.py` is now on the ci.yml list, so the next Health change has to update it in the same PR. No runtime code changed.
+
 ## [Unreleased] — 2026-10-21 (Duval: plain honest HTTPS, fail closed on tls_cert_invalid)
 
 ### Changed

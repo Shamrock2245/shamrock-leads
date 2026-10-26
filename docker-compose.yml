@@ -35,6 +35,8 @@ services:
     container_name: shamrock-obscura
     hostname: obscura
     restart: unless-stopped
+    environment:
+      - OBSCURA_CDP_TOKEN=${OBSCURA_CDP_TOKEN:-shamrock_obscura_secret_cdp_token_2026_production_key}
     # Routes through iMac office residential IP via Tailscale SOCKS proxy (port 1080)
     # Primary: Tailscale mesh → shamrocksimac:1080 (via host tailscaled or ts-proxy sidecar)
     # Legacy:  SSH -R reverse tunnel (iMac LaunchAgent → VPS:1080)
