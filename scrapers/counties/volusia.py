@@ -2,25 +2,160 @@
 Volusia County Arrest Scraper — Direct ASP.NET Postback Search.
 Source: Volusia County Division of Corrections Inmate Inquiry
 URL: https://volusiamug.vcgov.org/
-Method: Browserless ASP.NET session postback + details parse
+Method: plain HTTPS via ``scrapers.plain_http`` (honest User-Agent, certificate
+verified): GET the disclaimer, POST its Accept, POST ``Recent Bookings``, then
+GET each booking's ``Details.aspx`` page.
+
+Failure is visible, never swallowed:
+  * 401/403/429 or a challenge page -> ``egress_block:`` (EgressBlocked)
+  * certificate verification failure -> ``tls_cert_invalid:`` (SourceTLSInvalid)
+  * any other non-200 on the list flow -> ``VolusiaHTTPError`` (classified by status)
+  * missing ViewState, missing Recent Bookings table or changed columns ->
+    ``ParseDriftError``
+
+Records are published-only (docs/recon/FL_VOLUSIA_HONEST_2026-10-22.md):
+  * Booking_Number is the list's ``Booking #`` column; a row without one is skipped.
+    ``Inmate ID`` is kept as Person_ID only, never as a key.
+  * Status comes from the published ``InCustody`` column (Y -> In Custody,
+    N -> Released, status_source ``published_in_custody_column``), else a published
+    Release Date (Released, ``published_release_date``), else "". A blank cell is
+    never read as custody.
+  * Charges and per-charge bonds come from the detail ``Charge #`` grid. Bond is
+    the sum only when every charge row publishes an amount (a published $0 is
+    kept), else "". A detail page that isn't HTTP 200 leaves charges and bond "".
 """
-import logging
 import datetime
+import logging
 import re
-from typing import List
+from typing import Dict, List, Optional, Tuple
+
 from bs4 import BeautifulSoup
 
-from scrapers.base_scraper import BaseScraper
-from scrapers.published_bond import charge_bond_amount, total_published_bond
-from scrapers.plain_http import make_session, request
-from scrapers.scraper_resilience import AntiBotBlocked
 from core.models import ArrestRecord
+from scrapers.base_scraper import BaseScraper
+from scrapers.plain_http import make_session, request
+from scrapers.published_bond import charge_bond_amount, total_published_bond
+from scrapers.scraper_resilience import ParseDriftError
 
 logger = logging.getLogger(__name__)
 
 FACILITY = "Volusia County Branch Jail"
 COUNTY = "Volusia"
 BASE_URL = "https://volusiamug.vcgov.org/"
+DISCLAIMER_URL = "https://volusiamug.vcgov.org/Disclaimer.aspx"
+SEARCH_URL = "https://volusiamug.vcgov.org/Default.aspx"
+
+STATUS_SOURCE_COLUMN = "published_in_custody_column"
+STATUS_SOURCE_RELEASE_DATE = "published_release_date"
+
+# Recent Bookings columns as published (agent-box read 2026-10-22).
+LIST_COLUMNS = ("booking #", "photo", "inmate id", "last name", "first name", "middle", "suffix",
+                "sex", "race", "booking date", "release date", "incustody")
+
+
+class VolusiaHTTPError(RuntimeError):
+    """A non-200 list-flow response that isn't a block; classified by its status, not as drift."""
+
+    def __init__(self, status_code: int, step: str):
+        self.status_code = status_code
+        super().__init__(f"Volusia: HTTP {status_code} on {step}")
+
+
+def status_fields(in_custody: str, release_date: str) -> Tuple[str, str]:
+    """(Status, status_source) from the published InCustody / Release Date cells only."""
+    v = (in_custody or "").strip().upper()
+    if v == "Y":
+        return "In Custody", STATUS_SOURCE_COLUMN
+    if v == "N":
+        return "Released", STATUS_SOURCE_COLUMN
+    if (release_date or "").strip():
+        return "Released", STATUS_SOURCE_RELEASE_DATE
+    return "", ""
+
+
+def _hidden(soup, name: str) -> str:
+    el = soup.find("input", {"name": name})
+    return (el.get("value") or "") if el else ""
+
+
+def _form_state(html: str, step: str) -> Dict[str, str]:
+    soup = BeautifulSoup(html or "", "html.parser")
+    if not soup.find("input", {"name": "__VIEWSTATE"}):
+        raise ParseDriftError(f"Volusia: missing ViewState on {step}")
+    return {n: _hidden(soup, n) for n in ("__VIEWSTATE", "__VIEWSTATEGENERATOR", "__EVENTVALIDATION")}
+
+
+def _split_dt(raw: str) -> Tuple[str, str]:
+    raw = (raw or "").strip()
+    return tuple(raw.split(" ", 1)) if " " in raw else (raw, "")  # type: ignore[return-value]
+
+
+def parse_recent_bookings(html: str) -> List[Dict[str, str]]:
+    """Recent Bookings table -> raw row dicts. Missing table or changed columns -> ParseDriftError."""
+    soup = BeautifulSoup(html or "", "html.parser")
+    table = soup.find("table")
+    if table is None or not table.find("tr"):
+        raise ParseDriftError("Volusia: Recent Bookings table not found")
+    rows = table.find_all("tr")
+    header = tuple(c.get_text(strip=True).lower() for c in rows[0].find_all(["th", "td"]))
+    if header[: len(LIST_COLUMNS)] != LIST_COLUMNS:
+        raise ParseDriftError("Volusia: Recent Bookings columns changed")
+    out = []
+    for r in rows[1:]:
+        cells = r.find_all("td")
+        if len(cells) < len(LIST_COLUMNS):
+            continue  # pager / spacer row
+        val = {name: cells[i].get_text(strip=True) for i, name in enumerate(LIST_COLUMNS)}
+        booking = val["booking #"]
+        link = r.find("a", href=True)
+        rid_m = re.search(r"InmateRID=(\d+)", link["href"]) if link else None
+        if not booking or not rid_m:
+            continue
+        val["inmate_rid"] = rid_m.group(1)
+        out.append(val)
+    return out
+
+
+def parse_detail(html: str) -> Dict[str, object]:
+    """Details.aspx -> demographics, charges, per-charge bonds (None = unpublished), bond types, case #."""
+    soup = BeautifulSoup(html or "", "html.parser")
+
+    def _val(el_id: str) -> str:
+        el = soup.find("input", {"id": el_id})
+        return (el.get("value") or "").strip() if el else ""
+
+    charges: List[str] = []
+    bonds: List[Optional[float]] = []
+    bond_types: List[str] = []
+    case_number = ""
+    for dt in soup.find_all("table"):
+        d_rows = dt.find_all("tr")
+        if not d_rows:
+            continue
+        header = [hc.get_text(strip=True).lower() for hc in d_rows[0].find_all(["td", "th"])]
+        if "charge #" not in header or "statute description" not in header:
+            continue
+        # Columns: Charge#, Statute, Statute Description, Bond Type, Bond Amount, ..., Court Case # (col 7)
+        for dr in d_rows[1:]:
+            c = dr.find_all("td")
+            if len(c) < 5:
+                continue
+            statute, desc = c[1].get_text(strip=True), c[2].get_text(strip=True)
+            bond_type, bond_amount = c[3].get_text(strip=True), c[4].get_text(strip=True)
+            if len(c) >= 8 and not case_number:
+                case_number = c[7].get_text(strip=True)
+            charge = f"{statute} - {desc}" if statute and desc else statute or desc
+            if charge:
+                charges.append(charge)
+            if bond_type and bond_type not in bond_types:
+                bond_types.append(bond_type)
+            bonds.append(charge_bond_amount(bond_amount))
+    return {
+        "zip": _val("txtZipCode"), "city": _val("txtCity"), "state": _val("txtState") or "FL",
+        "age": _val("txtDOB"),  # labelled Age on the page; the id is txtDOB
+        "charges": charges, "bonds": bonds, "bond_types": bond_types, "case_number": case_number,
+    }
+
 
 class VolusiaCountyScraper(BaseScraper):
     @property
@@ -28,251 +163,80 @@ class VolusiaCountyScraper(BaseScraper):
         return "Volusia"
 
     def scrape(self) -> List[ArrestRecord]:
-        logger.info("Volusia: Querying inmate search...")
-        
         session = make_session()
-        
-        try:
-            # Step 1: GET disclaimer page
-            resp = request(session, "GET", BASE_URL, timeout=20, county="Volusia")
+
+        def _post_or_get(method: str, url: str, step: str, **kw):
+            resp = request(session, method, url, timeout=20, county="Volusia", **kw)
             if resp.status_code != 200:
-                raise Exception(f"Failed to fetch Volusia homepage: HTTP {resp.status_code}")
-                
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            viewstate_el = soup.find('input', {'name': '__VIEWSTATE'})
-            generator_el = soup.find('input', {'name': '__VIEWSTATEGENERATOR'})
-            validation_el = soup.find('input', {'name': '__EVENTVALIDATION'})
-            
-            if not viewstate_el:
-                raise Exception("Missing ViewState on homepage")
-                
-            viewstate = viewstate_el.get('value')
-            generator = generator_el.get('value') if generator_el else ""
-            validation = validation_el.get('value') if validation_el else ""
-            
-            # Step 2: POST disclaimer accept
-            payload = {
-                "__VIEWSTATE": viewstate,
-                "__VIEWSTATEGENERATOR": generator,
-                "__EVENTVALIDATION": validation,
-                "ButtonAccept": "Accept"
-            }
-            
-            post_url = "https://volusiamug.vcgov.org/Disclaimer.aspx"
-            post_resp = request(session, "POST", post_url, data=payload, timeout=20, county="Volusia")
-            if post_resp.status_code != 200:
-                raise Exception(f"Failed to submit disclaimer accept: HTTP {post_resp.status_code}")
-                
-            # Step 3: POST to Default.aspx to request Recent Bookings
-            search_soup = BeautifulSoup(post_resp.text, 'html.parser')
-            s_viewstate_el = search_soup.find('input', {'name': '__VIEWSTATE'})
-            if not s_viewstate_el:
-                raise Exception("Missing ViewState on search page")
-                
-            s_viewstate = s_viewstate_el.get('value')
-            s_generator = search_soup.find('input', {'name': '__VIEWSTATEGENERATOR'}).get('value') if search_soup.find('input', {'name': '__VIEWSTATEGENERATOR'}) else ""
-            s_validation = search_soup.find('input', {'name': '__EVENTVALIDATION'}).get('value') if search_soup.find('input', {'name': '__EVENTVALIDATION'}) else ""
-            
-            recent_payload = {
-                "__VIEWSTATE": s_viewstate,
-                "__VIEWSTATEGENERATOR": s_generator,
-                "__EVENTVALIDATION": s_validation,
-                "txtBookingNo": "",
-                "txtLname": "",
-                "txtFName": "",
-                "btnRecentBookings": "Recent"
-            }
-            
-            recent_url = "https://volusiamug.vcgov.org/Default.aspx"
-            recent_resp = request(session, "POST", recent_url, data=recent_payload, timeout=20, county="Volusia")
-            if recent_resp.status_code != 200:
-                raise Exception(f"Failed to fetch recent bookings list: HTTP {recent_resp.status_code}")
-                
-            recent_soup = BeautifulSoup(recent_resp.text, 'html.parser')
-            table = recent_soup.find('table')
-            if not table:
-                logger.warning("Volusia: No bookings table found on recent list page")
-                return []
-                
-            rows = table.find_all('tr')
-            logger.info(f"Volusia: Found {len(rows)-1} total bookings listed in table")
-            
-            records = []
-            
-            # Iterate through bookings rows
-            for r in rows[1:]:
-                cells = r.find_all('td')
-                if len(cells) < 10:
-                    continue
-                    
-                booking_no = cells[0].get_text(strip=True)
-                inmate_id = cells[2].get_text(strip=True)
-                last_name = cells[3].get_text(strip=True)
-                first_name = cells[4].get_text(strip=True)
-                middle_name = cells[5].get_text(strip=True)
-                suffix = cells[6].get_text(strip=True)
-                sex = cells[7].get_text(strip=True)
-                race = cells[8].get_text(strip=True)
-                booking_date_raw = cells[9].get_text(strip=True)
-                release_date_raw = cells[10].get_text(strip=True)
-                in_custody = cells[11].get_text(strip=True)
-                
-                # Check for details link
-                link = r.find('a', href=True)
-                if not link:
-                    continue
-                    
-                href = link['href']
-                inmate_rid_m = re.search(r"InmateRID=(\d+)", href)
-                if not inmate_rid_m:
-                    continue
-                    
-                inmate_rid = inmate_rid_m.group(1)
-                detail_url = f"https://volusiamug.vcgov.org/Details.aspx?InmateRID={inmate_rid}"
-                
-                # Setup names
-                full_name = f"{last_name}, {first_name}"
-                if middle_name:
-                    full_name += f" {middle_name}"
-                if suffix:
-                    full_name += f" {suffix}"
-                
-                # Release status
-                status = "Released" if release_date_raw or in_custody == 'N' else "In Custody"
-                
-                # We have booking date/time, e.g. "05/24/2026 14:32"
-                booking_date = ""
-                booking_time = ""
-                if " " in booking_date_raw:
-                    booking_date, booking_time = booking_date_raw.split(" ", 1)
-                else:
-                    booking_date = booking_date_raw
-                    
-                release_date = ""
-                if " " in release_date_raw:
-                    release_date, _ = release_date_raw.split(" ", 1)
-                else:
-                    release_date = release_date_raw
-                
-                # Demographics from list (we can supplement or override with details page)
-                age = ""
-                zip_code = ""
-                city = ""
-                state = "FL"
-                charges_list = []
-                charge_bonds = []  # published amounts per charge; None = unknown
-                bond_types = []
-                case_number = ""
-                mugshot_url = f"https://volusiamug.vcgov.org/FullsizeMugshotHandler.ashx?InmateRID={inmate_rid}"
-                
-                # Fetch details page
-                try:
-                    logger.debug(f"Volusia: Fetching details for {full_name} ({inmate_rid})")
-                    d_resp = request(session, "GET", detail_url, timeout=15, county="Volusia")
-                    if d_resp.status_code == 200:
-                        d_soup = BeautifulSoup(d_resp.text, 'html.parser')
-                        
-                        # Extract ZipCode, City, State, Age
-                        zip_el = d_soup.find('input', {'id': 'txtZipCode'})
-                        city_el = d_soup.find('input', {'id': 'txtCity'})
-                        state_el = d_soup.find('input', {'id': 'txtState'})
-                        age_el = d_soup.find('input', {'id': 'txtDOB'}) # Labeled Age but ID=txtDOB
-                        
-                        if zip_el:
-                            zip_code = zip_el.get('value', '').strip()
-                        if city_el:
-                            city = city_el.get('value', '').strip()
-                        if state_el:
-                            state = state_el.get('value', 'FL').strip()
-                        if age_el:
-                            age = age_el.get('value', '').strip()
-                            
-                        # Parse Charges grid table
-                        d_tables = d_soup.find_all('table')
-                        for dt in d_tables:
-                            d_rows = dt.find_all('tr')
-                            if not d_rows:
-                                continue
-                            header_cells = d_rows[0].find_all(['td', 'th'])
-                            header_texts = [hc.get_text(strip=True).lower() for hc in header_cells]
-                            
-                            # Identify charges table by headers
-                            if 'charge #' in header_texts and 'statute description' in header_texts:
-                                # This is the charges table
-                                for dr in d_rows[1:]:
-                                    d_cells = dr.find_all('td')
-                                    if len(d_cells) < 5:
-                                        continue
-                                    # Columns: Charge#, Statute, Statute Description, Bond Type, Bond Amount
-                                    c_statute = d_cells[1].get_text(strip=True)
-                                    c_desc = d_cells[2].get_text(strip=True)
-                                    c_bond_type = d_cells[3].get_text(strip=True)
-                                    c_bond_amount = d_cells[4].get_text(strip=True)
-                                    
-                                    # Collect case number if present (Court Case # is column 7)
-                                    if len(d_cells) >= 8:
-                                        c_case = d_cells[7].get_text(strip=True)
-                                        if c_case and not case_number:
-                                            case_number = c_case
-                                            
-                                    charge_str = f"{c_statute} - {c_desc}" if c_statute and c_desc else c_statute or c_desc
-                                    if charge_str:
-                                        charges_list.append(charge_str)
-                                        
-                                    if c_bond_type and c_bond_type not in bond_types:
-                                        bond_types.append(c_bond_type)
-                                        
-                                    # Parse bond amount
-                                    charge_bonds.append(charge_bond_amount(c_bond_amount))
-                except AntiBotBlocked:
-                    raise
-                except Exception as dex:
-                    logger.warning(f"Volusia: Failed to parse details for inmate_rid {inmate_rid}: {dex}")
-                
-                charges_str = " | ".join(charges_list)
-                bond_amount_str = total_published_bond(charge_bonds)
-                bond_type_str = ", ".join(bond_types)
-                
-                records.append(ArrestRecord(
-                    Scrape_Timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                    County=self.county,
-                    Booking_Number=booking_no,
-                    Person_ID=inmate_id,
-                    Full_Name=full_name.upper(),
-                    First_Name=first_name.upper(),
-                    Middle_Name=middle_name.upper(),
-                    Last_Name=last_name.upper(),
-                    DOB="", # Birthdate not published, we could compute from age if needed
-                    Arrest_Date=booking_date,
-                    Arrest_Time=booking_time,
-                    Booking_Date=booking_date,
-                    Booking_Time=booking_time,
-                    Status=status,
-                    Release_Date=release_date,
-                    Facility=FACILITY,
-                    Race=race,
-                    Sex=sex,
-                    Age_At_Arrest=age,
-                    City=city.upper(),
-                    State=state.upper(),
-                    ZIP=zip_code,
-                    Mugshot_URL=mugshot_url,
-                    Charges=charges_str,
-                    Bond_Amount=bond_amount_str,
-                    Bond_Type=bond_type_str,
-                    Case_Number=case_number,
-                    Detail_URL=detail_url,
-                    LastCheckedMode="INITIAL"
-                ))
-                
-            logger.info(f"Volusia: parsed {len(records)} records")
-            return records
-        except AntiBotBlocked:
-            raise
-        except Exception as e:
-            logger.error(f"Volusia roster fetch failed: {e}")
-            raise
-            
+                raise VolusiaHTTPError(resp.status_code, step)
+            return resp
+
+        home = _post_or_get("GET", BASE_URL, "disclaimer page")
+        accepted = _post_or_get("POST", DISCLAIMER_URL, "disclaimer accept",
+                                data={**_form_state(home.text, "disclaimer page"), "ButtonAccept": "Accept"})
+        recent = _post_or_get("POST", SEARCH_URL, "recent bookings",
+                              data={**_form_state(accepted.text, "search page"),
+                                    "txtBookingNo": "", "txtLname": "", "txtFName": "",
+                                    "btnRecentBookings": "Recent"})
+        rows = parse_recent_bookings(recent.text)
+        logger.info("Volusia: %d bookings listed", len(rows))
+
+        records = []
+        detail_misses = 0
+        for row in rows:
+            detail_url = f"https://volusiamug.vcgov.org/Details.aspx?InmateRID={row['inmate_rid']}"
+            d_resp = request(session, "GET", detail_url, timeout=15, county="Volusia")
+            if d_resp.status_code == 200:
+                detail = parse_detail(d_resp.text)
+            else:
+                detail_misses += 1
+                detail = parse_detail("")
+            records.append(self.build_record(row, detail, detail_url))
+        if detail_misses:
+            logger.warning("Volusia: %d detail page(s) not HTTP 200; charges/bond left blank", detail_misses)
+        logger.info("Volusia: parsed %d records", len(records))
+        return records
+
+    def build_record(self, row: Dict[str, str], detail: Dict[str, object], detail_url: str) -> ArrestRecord:
+        last, first = row["last name"], row["first name"]
+        middle, suffix = row["middle"], row["suffix"]
+        full_name = f"{last}, {first}" + (f" {middle}" if middle else "") + (f" {suffix}" if suffix else "")
+        booking_date, booking_time = _split_dt(row["booking date"])
+        release_date, _ = _split_dt(row["release date"])
+        status, status_source = status_fields(row["incustody"], release_date)
+        return ArrestRecord(
+            Scrape_Timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            County=self.county,
+            Booking_Number=row["booking #"],
+            Person_ID=row["inmate id"],
+            Full_Name=full_name.upper(),
+            First_Name=first.upper(),
+            Middle_Name=middle.upper(),
+            Last_Name=last.upper(),
+            DOB="",  # not published
+            Arrest_Date=booking_date,
+            Arrest_Time=booking_time,
+            Booking_Date=booking_date,
+            Booking_Time=booking_time,
+            Status=status,
+            Release_Date=release_date,
+            Facility=FACILITY,
+            Race=row["race"],
+            Sex=row["sex"],
+            Age_At_Arrest=str(detail["age"]),
+            City=str(detail["city"]).upper(),
+            State=str(detail["state"]).upper(),
+            ZIP=str(detail["zip"]),
+            Mugshot_URL=f"https://volusiamug.vcgov.org/FullsizeMugshotHandler.ashx?InmateRID={row['inmate_rid']}",
+            Charges=" | ".join(detail["charges"]),  # type: ignore[arg-type]
+            Bond_Amount=total_published_bond(detail["bonds"]),  # type: ignore[arg-type]
+            Bond_Type=", ".join(detail["bond_types"]),  # type: ignore[arg-type]
+            Case_Number=str(detail["case_number"]),
+            Detail_URL=detail_url,
+            LastCheckedMode="INITIAL",
+            extra_data={"status_source": status_source} if status_source else {},
+        )
+
     @staticmethod
     def _parse_bond_val(bond_str: str):
         """Published amount (a real 0 included) or None when not published."""
