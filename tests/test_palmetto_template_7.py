@@ -724,3 +724,68 @@ def test_receipt_date_uses_eastern_calendar_day():
     schedule = values["schedule_a"]
     assert "Amount paid: $40.00 check 2026-01-15" in schedule
     assert "2026-01-16" not in schedule.split("Balance due:")[0]
+
+
+def test_poa_change_does_not_change_cosigner_identity(monkeypatch):
+    """The co-indemnitor submitter key is the packet id, not the POA number."""
+    import asyncio
+
+    import httpx
+
+    captured = []
+    svc = DocuSealService(base_url="https://sign.example.invalid", api_key="test-not-a-real-key")
+
+    async def _create(self, **kwargs):
+        captured.append(kwargs)
+        return {"id": 1, "submitters": []}
+
+    async def _blocked(self, method, url, *args, **kwargs):
+        raise AssertionError("live DocuSeal request")
+
+    svc.create_submission = _create.__get__(svc, DocuSealService)
+    monkeypatch.setattr(httpx.AsyncClient, "request", _blocked)
+
+    base = {
+        "surety_id": "palmetto",
+        "booking_number": "TEST-BK-POA",
+        "defendant_name": "TEST DEFENDANT",
+        "indemnitor_name": "TEST INDEMNITOR",
+        "county": "Lee",
+        "state": "FL",
+        "case_number": "TEST-CASE-1",
+        "bond_case_id": "TEST-BOND-1",
+        "match_id": "TEST-MATCH-1",
+        "match_status": "validated",
+        "defendant_id": "TEST-DEF-1",
+        "indemnitor_id": "TEST-IND-1",
+        "bond_amount": 1000,
+        "premium_amount": 100,
+        "indemnitors": [
+            {"name": "TEST INDEMNITOR", "email": DEFAULT_SIGNER_EMAIL},
+            {"name": "TEST COINDEMNITOR", "email": DEFAULT_SIGNER_EMAIL, "role": "co_indemnitor"},
+        ],
+    }
+
+    async def _once(poa):
+        data = dict(base, poa_number=poa)
+        await svc.create_submission_for_packet(
+            template_id=7,
+            packet_id="PKT-TEST-POA1",
+            bond_data=data,
+            indemnitors=data["indemnitors"],
+            defendant={"name": "TEST DEFENDANT", "email": DEFAULT_SIGNER_EMAIL},
+            staff_test_case=True,
+            send_email=True,
+        )
+
+    asyncio.run(_once("TEST-POA-AAAA"))
+    asyncio.run(_once("TEST-POA-BBBB"))
+    ids = []
+    for payload in captured:
+        assert payload["send_email"] is False
+        assert payload["send_sms"] is False
+        co = next(item for item in payload["submitters"] if item["role"] == "coindemnitor")
+        assert co["send_email"] is False
+        assert "TEST-POA-" not in co["external_id"]
+        ids.append(co["external_id"])
+    assert ids == ["PKT-TEST-POA1:indemnitor:1", "PKT-TEST-POA1:indemnitor:1"]

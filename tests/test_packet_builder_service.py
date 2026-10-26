@@ -262,6 +262,56 @@ async def test_resolve_case_context_fail_closed_on_ambiguous_booking():
     assert not (ctx.get("defendant") or {}).get("name")
 
 
+@pytest.mark.asyncio
+async def test_resolve_case_context_keeps_bonded_coindemnitor():
+    """active_bonds.indemnitors reaches the packet context, primary first."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from dashboard.services.docuseal_service import build_bond_data_from_dashboard
+    from dashboard.services.packet_builder_service import resolve_case_context
+
+    bond = {
+        "bond_case_id": "BC-T7",
+        "booking_number": "TEST-BK-CO",
+        "surety_id": "palmetto",
+        "poa_number": "TEST-POA-1",
+        "defendant_name": "TEST DEFENDANT",
+        "indemnitor_name": "TEST INDEMNITOR",
+        "indemnitor": {"name": "TEST INDEMNITOR", "email": "admin@shamrockbailbonds.biz"},
+        "indemnitors": [
+            {"name": "TEST COINDEMNITOR", "email": "admin@shamrockbailbonds.biz", "role": "co_indemnitor"},
+        ],
+        "county": "Lee",
+        "state": "FL",
+        "case_number": "TEST-CASE-1",
+        "Bond_Amount": 1000,
+    }
+
+    class _Cursor:
+        async def to_list(self, length=3):
+            return []
+
+    bonds = MagicMock()
+    bonds.find_one = AsyncMock(return_value=bond)
+    empty = MagicMock()
+    empty.find_one = AsyncMock(return_value=None)
+    empty.find = MagicMock(return_value=_Cursor())
+
+    def _get(name):
+        if name in ("active_bonds", "bond_cases"):
+            return bonds
+        return empty
+
+    with patch("dashboard.extensions.get_collection", side_effect=_get):
+        ctx = await resolve_case_context(bond_case_id="BC-T7")
+
+    names = [row.get("name") for row in ctx["indemnitors"]]
+    assert names[0] == "TEST INDEMNITOR"
+    assert "TEST COINDEMNITOR" in names
+    built = build_bond_data_from_dashboard(ctx=ctx, surety_id="palmetto")
+    assert [row.get("name") for row in built["indemnitors"]] == names
+
+
 def test_adaptive_map_includes_dl_and_offense_rows():
     from dashboard.services.packet_builder_service import build_adaptive_field_map
     fields = build_adaptive_field_map({

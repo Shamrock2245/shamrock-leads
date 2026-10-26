@@ -3209,7 +3209,12 @@ async def paperwork_docuseal_resend(packet_id: str, request: Request):
             if email_change:
                 kwargs["email"] = str(new_email).strip()
             raw = await svc.update_submitter(sid, **kwargs)
-            norm = svc.normalize_submitter_record(raw if isinstance(raw, dict) else s)
+            from dashboard.services.paperwork_signers import retain_signer_link
+
+            norm = retain_signer_link(
+                s,
+                svc.normalize_submitter_record(raw if isinstance(raw, dict) else s),
+            )
             updated.append(norm)
         except Exception as exc:
             errors.append({"submitter_id": sid, "error": str(exc)[:200]})

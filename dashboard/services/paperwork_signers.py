@@ -137,6 +137,17 @@ def party_signers_from_packet(packet: Optional[Dict[str, Any]]) -> List[Dict[str
     return []
 
 
+def retain_signer_link(previous: Optional[Dict[str, Any]], updated: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Keep a co-signer's URL when a field update (including a POA edit) omits the slug."""
+    out = dict(updated or {})
+    prior = previous if isinstance(previous, dict) else {}
+    if not out.get("sign_url") and prior.get("sign_url"):
+        out["sign_url"] = prior["sign_url"]
+    if not out.get("slug") and prior.get("slug"):
+        out["slug"] = prior["slug"]
+    return out
+
+
 def pick_party(
     parties: Iterable[Dict[str, Any]],
     role: Optional[str] = None,

@@ -330,6 +330,52 @@ def charge_details_from_sources(
     return rows
 
 
+def _bonded_indemnitor_rows(
+    bond: Dict[str, Any],
+    primary: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Indemnitor rows stored on the bonded case, primary first.
+
+    ``active_bonds.indemnitors`` is the co-indemnitor list the Super CRM
+    finalize path must hydrate. A list of only the co-indemnitor still keeps
+    the resolved primary at index 0 so template 7 gets a coindemnitor submitter.
+    """
+    if not isinstance(bond, dict):
+        return []
+    rows: List[Dict[str, Any]] = []
+    raw = bond.get("indemnitors")
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or item.get("party_role") or "").strip().lower()
+            if role == "defendant":
+                continue
+            rows.append(dict(item))
+    for key in ("coindemnitor", "co_indemnitor"):
+        extra = bond.get(key)
+        if isinstance(extra, dict) and extra:
+            rows.append(dict(extra))
+    if not rows:
+        return []
+
+    def _row_name(row: Dict[str, Any]) -> str:
+        named = str(row.get("name") or row.get("full_name") or "").strip()
+        if named:
+            return named.casefold()
+        return " ".join(
+            part for part in (
+                str(row.get("first_name") or row.get("firstName") or "").strip(),
+                str(row.get("last_name") or row.get("lastName") or "").strip(),
+            ) if part
+        ).casefold()
+
+    primary_name = str((primary or {}).get("name") or "").strip().casefold()
+    if primary_name and all(_row_name(row) != primary_name for row in rows):
+        rows.insert(0, dict(primary))
+    return rows
+
+
 def verify_self_indemnitor_pin(pin: str) -> bool:
     """Brendan discretion PIN for defendant-as-indemnitor on small bonds."""
     return (pin or "").strip() == SELF_INDEMNITOR_PIN
@@ -735,6 +781,10 @@ async def resolve_case_context(
                 context["surety_suggested_from"] = "out_of_state"
     except Exception:
         logger.debug("prior-bond hydrate skipped", exc_info=True)
+
+    bonded_rows = _bonded_indemnitor_rows(bond, context.get("indemnitor") or {})
+    if bonded_rows:
+        context["indemnitors"] = bonded_rows
 
     return context
 
