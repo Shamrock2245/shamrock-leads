@@ -226,10 +226,10 @@ Dashboard updates
 | Class | `PalmBeachCountyScraper` |
 | JMS Vendor | Custom (PBSO Blotter) |
 | Base URL | `https://www3.pbso.org/blotter` |
-| Method | ColdFusion app (`index.cfm`) → HTML parsing with DrissionPage |
+| Method | ColdFusion app (`index.cfm`) → plain HTTPS via `scrapers.plain_http` (honest UA, TLS verified; no browser). Date-form submit, `allresults_` cards only, paced pagination (3 s) |
 | Auth | None |
 | Interval | 120 min |
-| Notes | ColdFusion backend. Relative detail URLs need BASE_URL prefix. |
+| Notes | ColdFusion backend. Relative detail URLs need BASE_URL prefix. Unverified (`recon_only`); layout drift raises `ParseDriftError`. |
 
 ---
 
@@ -277,12 +277,12 @@ Dashboard updates
 |----------|-------|
 | File | `scrapers/counties/volusia.py` |
 | Class | `VolusiaCountyScraper` |
-| JMS Vendor | Custom (VCSO) |
-| Base URL | `https://vcso.us/jail-info/inmate-search/` |
-| Method | DrissionPage browser automation |
+| JMS Vendor | Volusia County Division of Corrections Inmate Inquiry (ASP.NET) |
+| Base URL | `https://volusiamug.vcgov.org/` |
+| Method | plain HTTPS via `scrapers.plain_http` (honest UA, TLS verified): disclaimer Accept, Recent Bookings postback, Details.aspx |
 | Auth | None |
 | Interval | 90 min |
-| Notes | Volusia County Sheriff's Office WordPress-based. |
+| Notes | Status from the published InCustody column (`status_source`); unverified until a Leads Ops write smoke. See `docs/recon/FL_VOLUSIA_HONEST_2026-10-22.md`. |
 
 #### Brevard County ✅
 | Property | Value |

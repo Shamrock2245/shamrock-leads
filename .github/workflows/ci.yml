@@ -101,6 +101,7 @@ jobs:
             tests/test_fl_bay_bond_custody_defaults.py \
             tests/test_fl_citrus_bond_custody_defaults.py \
             tests/test_fl_duval_palmbeach_bond_defaults.py \
+            tests/test_fl_palmbeach_plain_https.py \
             tests/test_status_fallback_writers.py \
             tests/test_url_ingest_incustody_unknown.py \
             tests/test_lee_scraper_incustody_unknown.py \
@@ -140,6 +141,8 @@ jobs:
             tests/test_fl_duval_no_robot_click.py \
             tests/test_fl_collier_plain_custody.py \
             tests/test_fl_plain_https_polk_volusia_pasco.py \
+            tests/test_fl_volusia_honest_status.py \
+            tests/test_mongo_clear_unpublished_status.py \
             tests/test_fl_pvp_bond_unknown.py \
             tests/test_fl_idle_eight.py \
             tests/test_fl_bond_charges_hydrate.py \
