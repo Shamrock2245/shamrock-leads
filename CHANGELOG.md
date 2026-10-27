@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-27 (zero down payment writes a paid audit)
+
+### Fixed
+- **A confirmed zero down payment still writes the paid timeline step and a paid audit.** The audit stores `old_state` and `new_state` and does not store the bearer token. No charge is recorded and the amount due stays zero.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_zero_down_payment_audits_paid_without_a_charge`.
+
 ## [Unreleased] — 2026-10-27 (co-signer must have their own indemnitor)
 
 ### Fixed

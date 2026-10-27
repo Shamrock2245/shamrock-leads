@@ -3712,7 +3712,45 @@ def test_confirmed_zero_down_payment_finishes_after_signing(monkeypatch):
     page = client.get(f"/cosigner/{token}")
     assert "pay.example/zero" not in page.text
     assert stores["bond_cases"].docs[0]["premium_paid"] is False
-    assert len(_audits(stores, "paid")) == 0
+    assert len(_audits(stores, "paid")) == 1
+
+
+def test_zero_down_payment_audits_paid_without_a_charge(monkeypatch):
+    """A confirmed zero down payment writes paid, and does not store the token."""
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert opened.status_code == 200, opened.text
+    for row in (stores["paperwork_packets"].docs[0], stores["bond_cases"].docs[0]):
+        row["down_payment_amount"] = "0.00"
+    packet = stores["paperwork_packets"].docs[0]
+    packet["status"] = "completed"
+    state = client.get(f"/api/cosigner/{token}")
+    assert state.status_code == 200, state.text
+    body = state.json()
+    assert body["step"] == "paid"
+    assert body["sign_url"] is None
+    assert body["payment"]["amount"] == "0.00"
+    assert body["payment"]["url"] is None
+    assert stores["bond_cases"].docs[0]["premium_paid"] is False
+    assert stores["bond_cases"].docs[0]["down_payment_amount"] == "0.00"
+    link = stores["cosigner_links"].docs[0]
+    assert [row.get("step") for row in link["timeline"]][-1] == "paid"
+    assert "paid_transaction_id" not in link
+    paid = _audits(stores, "paid")
+    assert len(paid) == 1
+    assert paid[0]["old_state"]["paid"] is False
+    assert paid[0]["old_state"]["signed"] is True
+    assert paid[0]["new_state"]["paid"] is True
+    assert paid[0]["new_state"]["step"] == "paid"
+    assert token not in str(paid)
+    assert "token" not in paid[0]
+    again = client.get(f"/api/cosigner/{token}")
+    assert again.status_code == 200
+    assert len(_audits(stores, "paid")) == 1
 
 
 def test_only_an_open_bond_status_keeps_the_link(monkeypatch):

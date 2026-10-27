@@ -2084,6 +2084,19 @@ async def cosigner_state(token: str, lang: Optional[str] = None) -> dict:
             old_state=before, new_state=_audit_state(link, packet),
         )
         changed = True
+    elif (
+        nothing_due
+        and signed
+        and verified
+        and _timeline_push(link, "paid", now)
+    ):
+        # Nothing to collect. The terminal step is still audited. This does
+        # not record a charge or change the amount due.
+        await _audit(
+            "paid", link, now,
+            old_state=before, new_state=_audit_state(link, packet),
+        )
+        changed = True
     if changed or lang:
         await _save_link(link)
     # Paid money does not skip the signature. The terminal paid step needs
