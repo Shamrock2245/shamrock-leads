@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-27 (co-signer paid: Booking_Number bonds, unreadable locked read, owed pending audits)
+
+### Fixed
+- **The paid step finds a bond stored with `Booking_Number` (#291).** `_one_case_id` matches `booking_number` or `Booking_Number`, and the link's drift check reads the bond's booking under either field. A booking that maps to more than one case under either field still returns no case, so nothing is stamped.
+- **A heal keeps its pending paid transition when the locked payment-row read fails (Codex P1).** An unreadable read inside `payment_txn_locks` now raises `PaymentRowsUnreadable` instead of counting as a refusal. The lock reports `LOCK_FAILED`, `note_cosigner_paid` returns False, and the pending key stays for the next read. An empty, readable row set is still a refusal.
+- **Pending state and its audit are no longer split (Codex P1).** `_record_pending_transition` and `_resolve_pending` push an owed-audit marker (`pending_payment_audits_owed`, `payment_audit_owed`) in the same document update as the pending-key change. The audit is then written with a stable `audit_key` and the marker is pulled. If the audit write fails, the marker stays and the next page read, heal or record writes it once. A retry that finds the `audit_key` already written only pulls the marker. No new index and no transaction are added.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_paid_finds_a_bond_stored_with_booking_number_alias`, `test_paid_fails_closed_when_the_alias_booking_is_two_cases`, `test_heal_keeps_pending_when_the_locked_row_read_fails`, `test_pending_state_and_its_audit_are_not_split`, `test_resolved_state_and_its_audit_are_not_split`, `test_owed_audit_is_not_written_twice_when_the_marker_pull_fails`.
+
 ## [Unreleased] — 2026-10-27 (co-signer scan is not the indemnitor scan)
 
 ### Fixed
