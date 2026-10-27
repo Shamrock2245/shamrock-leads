@@ -20,6 +20,7 @@ from dashboard.services.charge_verbatim import (
 )
 from dashboard.services.charge_verbatim import VerbatimCharge
 from dashboard.services.docuseal_service import (
+    DocuSealPacketValidationError,
     DocuSealService,
     attach_schedule_payment_sources,
 )
@@ -789,3 +790,157 @@ def test_poa_change_does_not_change_cosigner_identity(monkeypatch):
         assert "TEST-POA-" not in co["external_id"]
         ids.append(co["external_id"])
     assert ids == ["PKT-TEST-POA1:indemnitor:1", "PKT-TEST-POA1:indemnitor:1"]
+
+
+def test_third_indemnitor_fails_closed_on_template_7():
+    """One co-indemnitor block. A third person must not be collapsed onto that role."""
+    people = [
+        {"name": "TEST INDEMNITOR", "email": DEFAULT_SIGNER_EMAIL},
+        {"name": "TEST COINDEMNITOR", "email": DEFAULT_SIGNER_EMAIL},
+        {"name": "TEST COINDEMNITOR TWO", "email": DEFAULT_SIGNER_EMAIL},
+    ]
+    bond = _bond(1, indemnitors=people, booking_number="TEST-T7-THREE")
+    with pytest.raises(DocuSealPacketValidationError, match="one co-indemnitor"):
+        DocuSealService.prefill_values_from_bond(bond, template_id=7)
+    values = DocuSealService.prefill_values_from_bond(bond, template_id=5)
+    assert "schedule_a" not in values
+    assert "TEST COINDEMNITOR TWO" in values["indemnitor_name"]
+
+
+def test_third_indemnitor_does_not_create_a_submission(monkeypatch):
+    import asyncio
+
+    import httpx
+
+    called = []
+    svc = DocuSealService(base_url="https://sign.example.invalid", api_key="test-not-a-real-key")
+
+    async def _create(self, **kwargs):
+        called.append(kwargs)
+        return {"id": 1, "submitters": []}
+
+    async def _blocked(self, method, url, *args, **kwargs):
+        raise AssertionError("live DocuSeal request")
+
+    svc.create_submission = _create.__get__(svc, DocuSealService)
+    monkeypatch.setattr(httpx.AsyncClient, "request", _blocked)
+    people = [
+        {"name": "TEST INDEMNITOR", "email": DEFAULT_SIGNER_EMAIL},
+        {"name": "TEST COINDEMNITOR", "email": DEFAULT_SIGNER_EMAIL},
+        {"name": "TEST COINDEMNITOR TWO", "email": DEFAULT_SIGNER_EMAIL},
+    ]
+    bond = _bond(
+        1,
+        indemnitors=people,
+        booking_number="TEST-T7-THREE",
+        defendant_name="TEST DEFENDANT",
+        bond_case_id="TEST-BOND-1",
+        defendant_id="TEST-DEF-1",
+        indemnitor_id="TEST-IND-1",
+        match_id="TEST-MATCH-1",
+        match_status="validated",
+        poa_number="TEST-POA-1",
+        case_number="TEST-CASE-1",
+        county="Lee",
+        state="FL",
+    )
+
+    async def _run():
+        await svc.create_submission_for_packet(
+            template_id=7,
+            packet_id="PKT-TEST-THREE",
+            bond_data=bond,
+            indemnitors=people,
+            defendant={"name": "TEST DEFENDANT", "email": DEFAULT_SIGNER_EMAIL},
+            staff_test_case=True,
+            send_email=True,
+        )
+
+    with pytest.raises(DocuSealPacketValidationError, match="one co-indemnitor"):
+        asyncio.run(_run())
+    assert called == []
+
+
+def test_schedule_a_prints_completed_installment():
+    """A collected installment is amount paid. A pending installment is not."""
+    paid = {
+        "booking_number": "TEST-T7-PAID",
+        "plan_id": "TEST-PLAN-1",
+        "amount": 30.00,
+        "method": "Cash",
+        "type": "installment",
+        "status": "completed",
+        "timestamp": "2026-01-20T15:00:00+00:00",
+        "transaction_id": "TEST-TXN-INST-1",
+        "county": "Lee",
+        "state": "FL",
+        "case_number": "TEST-CASE-1",
+    }
+    pending = dict(paid, status="pending", amount=99.00, transaction_id="TEST-TXN-INST-2")
+    values = DocuSealService.prefill_values_from_bond(
+        _bond(1, booking_number="TEST-T7-PAID", payments=[paid, pending]),
+        template_id=7,
+    )
+    schedule = values["schedule_a"]
+    assert "Amount paid: $30.00 Cash 2026-01-20" in schedule
+    assert "$99.00" not in schedule
+    assert "Balance due: $70.00 due 2026-02-01" in schedule
+
+
+def test_schedule_a_includes_packet_bound_cash_receipt():
+    """Paperwork Hub cash is stored with packet_id and no booking number."""
+    cash = {
+        "packet_id": "PKT-TEST-CASH",
+        "receipt_id": "CASH-TEST0001",
+        "amount": 50.00,
+        "payment_method": "cash",
+        "status": "completed",
+        "created_at": "2026-01-15T18:00:00+00:00",
+    }
+    other = {
+        "packet_id": "PKT-TEST-OTHER",
+        "receipt_id": "CASH-TEST0002",
+        "amount": 80.00,
+        "payment_method": "cash",
+        "status": "completed",
+        "created_at": "2026-01-15T18:00:00+00:00",
+    }
+    values = DocuSealService.prefill_values_from_bond(
+        _bond(
+            1,
+            booking_number="TEST-T7-PAID",
+            packet_id="PKT-TEST-CASH",
+            payments=[cash, other],
+        ),
+        template_id=7,
+    )
+    schedule = values["schedule_a"]
+    assert "Amount paid: $50.00 cash 2026-01-15" in schedule
+    assert "$80.00" not in schedule
+    assert "Balance due: $50.00 due 2026-02-01" in schedule
+
+
+@pytest.mark.asyncio
+async def test_packet_cash_receipt_is_loaded_by_packet_id(monkeypatch):
+    cash = {
+        "packet_id": "PKT-TEST-CASH",
+        "receipt_id": "CASH-TEST0001",
+        "amount": 50.00,
+        "payment_method": "cash",
+        "status": "completed",
+        "created_at": "2026-01-15T18:00:00+00:00",
+    }
+    payments = _Rows([cash])
+    empty = _Rows([])
+    monkeypatch.setattr(
+        "dashboard.extensions.get_collection",
+        lambda name: {"financial_ledger": empty, "payments": payments, "transactions": empty}[name],
+    )
+    bond = _bond(1, booking_number="TEST-T7-PAID", packet_id="PKT-TEST-CASH")
+    await attach_schedule_payment_sources(bond, 7)
+    query = payments.queries[0]
+    assert {"packet_id": "PKT-TEST-CASH"} in query["$or"]
+    assert {"Packet_ID": "PKT-TEST-CASH"} in query["$or"]
+    values = DocuSealService.prefill_values_from_bond(bond, template_id=7)
+    assert "Amount paid: $50.00 cash 2026-01-15" in values["schedule_a"]
+    assert "Balance due: $50.00 due 2026-02-01" in values["schedule_a"]

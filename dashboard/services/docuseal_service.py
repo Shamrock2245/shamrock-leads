@@ -271,6 +271,8 @@ def _case_scope(row: Mapping[str, Any]) -> Dict[str, str]:
         ("Case_Number", "case_number"),
         ("county", "county"),
         ("state", "state"),
+        ("packet_id", "packet_id"),
+        ("Packet_ID", "packet_id"),
     )
     found: Dict[str, str] = {}
     for source, dest in pairs:
@@ -328,12 +330,39 @@ def _rows_for_this_case(rows: Any, packet: Mapping[str, Any]) -> List[dict]:
     return [row for row, relation in classified if relation in ("match", "unbound")]
 
 
+# Kinds a collected payments row uses that later_payments does not treat as a receipt.
+# The display copy is a payment. The stored row is not rewritten.
+_DISPLAY_RECEIPT_KINDS = frozenset({"down_payment", "installment"})
+
+
 def _receipt_copy(row: Mapping[str, Any]) -> dict:
-    """Collected down-payment receipts are payments for the display total."""
+    """Collected down-payment and installment receipts count as payments for display."""
     copy = dict(row)
-    if _row_kind(copy) == "down_payment":
+    if _row_kind(copy) in _DISPLAY_RECEIPT_KINDS:
         copy["type"] = "payment"
         copy["entry_kind"] = "payment"
+    return copy
+
+
+def _packet_id_of(row: Mapping[str, Any]) -> str:
+    return _text(row.get("packet_id"), row.get("Packet_ID"))
+
+
+def _receipt_for_schedule(row: Mapping[str, Any], packet: Mapping[str, Any]) -> dict:
+    """Display copy. A packet-bound cash receipt with no booking number uses the packet's."""
+    copy = _receipt_copy(row)
+    row_packet = _packet_id_of(copy).casefold()
+    packet_packet = _packet_id_of(packet).casefold()
+    if not row_packet or row_packet != packet_packet:
+        return copy
+    if not _text(copy.get("booking_number"), copy.get("Booking_Number")):
+        booking = _text(packet.get("booking_number"), packet.get("Booking_Number"))
+        if booking:
+            copy["booking_number"] = booking
+    if not _text(copy.get("method")):
+        method = _text(copy.get("payment_method"), copy.get("Payment_Method"))
+        if method:
+            copy["method"] = method
     return copy
 
 
@@ -343,8 +372,9 @@ def confirmed_paid_for_schedule(bond_data: Mapping[str, Any]) -> Dict[str, Any]:
     Reads ledger rows and payment rows already on the packet. The write-time
     ``down_payment_amount`` is a plan figure and is not a receipt. A Write Bond
     ledger placeholder (``write-bond-down:`` or an unconfirmed ``down_payment``
-    row) is excluded. A completed ``down_payment`` receipt is counted.
-    Rows bound to another case that shares the booking number are excluded.
+    row) is excluded.     A completed ``down_payment`` or ``installment`` receipt is counted.
+    A completed cash receipt stored on this ``packet_id`` with no booking number
+    is counted. Rows bound to another case or packet are excluded.
     """
     from dashboard.services.ar_math import later_payments
 
@@ -355,13 +385,13 @@ def confirmed_paid_for_schedule(bond_data: Mapping[str, Any]) -> Dict[str, Any]:
         ledger = data.get("financial_ledger") if isinstance(data.get("financial_ledger"), list) else []
     ledger = _rows_for_this_case(ledger, data)
     transactions = [
-        _receipt_copy(row)
+        _receipt_for_schedule(row, data)
         for row in _rows_for_this_case(data.get("transactions"), data)
         if _payment_row_confirmed(row)
     ]
     for row in _rows_for_this_case(data.get("payments"), data):
         if _payment_row_confirmed(row):
-            transactions.append(_receipt_copy(row))
+            transactions.append(_receipt_for_schedule(row, data))
     summary = later_payments({"booking_number": booking}, ledger, transactions)
     items = [
         item for item in summary["items"]
@@ -437,19 +467,27 @@ async def attach_schedule_payment_sources(bond_data: Dict[str, Any], template_id
     if "schedule_a" not in _field_names_for_packet(surety_id, template_id):
         return
     booking = _text(bond_data.get("booking_number"))
+    packet_id = _text(bond_data.get("packet_id"), bond_data.get("Packet_ID"))
     ledger: List[Any] = []
     payments: List[Any] = []
     transactions: List[Any] = []
+    clauses: List[dict] = []
     if booking:
+        from dashboard.services.ar_math import booking_key
+
+        keys = [booking]
+        upper = booking_key(booking)
+        if upper and upper not in keys:
+            keys.append(upper)
+        clauses.append({"booking_number": {"$in": keys}})
+    if packet_id:
+        clauses.append({"packet_id": packet_id})
+        clauses.append({"Packet_ID": packet_id})
+    if clauses:
         try:
             from dashboard.extensions import get_collection
-            from dashboard.services.ar_math import booking_key
 
-            keys = [booking]
-            upper = booking_key(booking)
-            if upper and upper not in keys:
-                keys.append(upper)
-            query = {"booking_number": {"$in": keys}}
+            query = clauses[0] if len(clauses) == 1 else {"$or": clauses}
             ledger = await get_collection("financial_ledger").find(query).to_list(None)
             payments = await get_collection("payments").find(query).to_list(None)
             transactions = await get_collection("transactions").find(query).to_list(None)
@@ -506,6 +544,38 @@ def _split_full_name(name: str) -> tuple[str, str, str]:
 
 class DocuSealPacketValidationError(ValueError):
     """Raised when a packet would violate Shamrock's required e-sign chain."""
+
+
+# Template 7 has one co-indemnitor signature block. A third indemnitor would
+# be mapped onto that same role (ROLE_INDEMNITOR_N is "coindemnitor").
+_MAX_INDEMNITORS_WITH_ONE_CO_ROLE = 2
+
+
+def assert_single_coindemnitor_capacity(
+    indemnitors: Any,
+    *,
+    template_id: Any = None,
+    surety_id: str = "",
+    template_field_names: Any = None,
+) -> None:
+    """Fail closed when this template has one co-indemnitor and the case has more than two."""
+    if _indemnitor_party_count(indemnitors) <= _MAX_INDEMNITORS_WITH_ONE_CO_ROLE:
+        return
+    names = template_field_names
+    if names is None:
+        names = _field_names_for_packet(surety_id, template_id)
+    if "coindemnitor_name" not in set(names or []):
+        return
+    raise DocuSealPacketValidationError(
+        "DocuSeal packet blocked: this template has one co-indemnitor. "
+        "More than two indemnitors cannot receive distinct signature blocks."
+    )
+
+
+def _indemnitor_party_count(indemnitors: Any) -> int:
+    if not isinstance(indemnitors, list):
+        return 0
+    return sum(1 for item in indemnitors if _nonempty_party(item))
 
 
 def _required_text(data: Dict[str, Any], key: str) -> str:
@@ -2025,6 +2095,12 @@ class DocuSealService:
         # Template 5 does not, so those names are left unset and the
         # indemnitor header stays the combined name.
         template_names = _field_names_for_packet(surety_id, template_id)
+        assert_single_coindemnitor_capacity(
+            bond_data.get("indemnitors"),
+            template_id=template_id,
+            surety_id=surety_id,
+            template_field_names=template_names,
+        )
         if "coindemnitor_name" in template_names and coindemnitor_name and indemnitor_name:
             for key in ("indemnitor_name", "IndemnitorName", "IndName"):
                 if values.get(key) == indemnitor_header:
@@ -2278,6 +2354,12 @@ class DocuSealService:
             }
             if _nonempty_party(primary):
                 inds = [primary]
+        assert_single_coindemnitor_capacity(
+            inds,
+            template_id=template_id,
+            surety_id=str(bond_data.get("surety_id") or bond_data.get("surety") or ""),
+            template_field_names=explicit_names,
+        )
 
         submitters: List[Dict[str, Any]] = []
         from dashboard.services.docuseal_signing_ux import (
