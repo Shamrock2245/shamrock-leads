@@ -1872,6 +1872,78 @@ def test_cosigner_record_must_name_the_selected_signer(monkeypatch):
     assert _swipe_link("down") not in refused.text
 
 
+def test_conflicting_signer_emails_get_no_sign_link(monkeypatch):
+    """A bond email and a different packet email do not choose the bond."""
+    stores, client = _world(monkeypatch)
+    packet = stores["paperwork_packets"].docs[0]
+    bond = stores["bond_cases"].docs[0]
+    packet["indemnitor_email"] = "packet@example.invalid"
+    bond["indemnitor_email"] = "bond@example.invalid"
+    refused = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert refused.status_code == 409
+    assert refused.json() == {"error": "signer_email_mismatch"}
+    assert "token" not in refused.json()
+    assert _links(stores) == []
+    assert _sign("abc") not in refused.text
+    assert _swipe_link("down") not in refused.text
+
+    packet.pop("indemnitor_email")
+    bond.pop("indemnitor_email")
+    token = _token(client)
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert opened.status_code == 200, opened.text
+    packet["indemnitor_email"] = "packet@example.invalid"
+    bond["indemnitor_email"] = "bond@example.invalid"
+    blocked = client.get(f"/api/cosigner/{token}")
+    assert blocked.status_code == 409
+    assert blocked.json() == {"error": "signer_email_mismatch"}
+    assert _sign("abc") not in blocked.text
+    assert _sign_hidden(blocked.text)
+    assert _swipe_link("down") not in blocked.text
+    page = client.get(f"/cosigner/{token}")
+    assert _sign_hidden(page.text)
+    assert _swipe_link("down") not in page.text
+
+
+def test_matching_or_one_sided_signer_email_still_signs(monkeypatch):
+    """The same email, or an email on only one side, still opens the sign step."""
+    stores, client = _world(monkeypatch)
+    packet = stores["paperwork_packets"].docs[0]
+    bond = stores["bond_cases"].docs[0]
+    packet["indemnitor_email"] = "  Signer@Example.invalid "
+    bond["indemnitor_email"] = "signer@example.invalid"
+    token = _token(client)
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert opened.status_code == 200, opened.text
+    matched = client.get(f"/api/cosigner/{token}")
+    assert matched.status_code == 200, matched.text
+    assert matched.json()["step"] == "sign"
+    assert matched.json()["sign_url"] == _sign("abc")
+    assert matched.json()["payment"] is None
+
+    packet.pop("indemnitor_email")
+    bond_only = client.get(f"/api/cosigner/{token}")
+    assert bond_only.status_code == 200, bond_only.text
+    assert bond_only.json()["sign_url"] == _sign("abc")
+
+    bond.pop("indemnitor_email")
+    packet["indemnitor_email"] = "signer@example.invalid"
+    packet_only = client.get(f"/api/cosigner/{token}")
+    assert packet_only.status_code == 200, packet_only.text
+    assert packet_only.json()["sign_url"] == _sign("abc")
+    assert packet_only.json()["payment"] is None
+
+
 def test_link_requires_bound_party_records(monkeypatch):
     """No public link until the packet and bond name the same stored parties."""
     stores, client = _world(monkeypatch)

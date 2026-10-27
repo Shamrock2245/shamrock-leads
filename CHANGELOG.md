@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-27 (signer emails must agree)
+
+### Fixed
+- **A bond email and a different packet email for the same signer are refused.** Comparison trims and lowercases. Matching emails, and an email stored on only one side, still open the sign step. No DocuSeal URL or pay link is returned for a conflict.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_conflicting_signer_emails_get_no_sign_link`, `test_matching_or_one_sided_signer_email_still_signs`.
+
 ## [Unreleased] — 2026-10-27 (co-signer record must name that signer)
 
 ### Fixed

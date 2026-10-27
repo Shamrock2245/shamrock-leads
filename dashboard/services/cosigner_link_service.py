@@ -298,34 +298,62 @@ def _submitter_matches_signer(
     return True
 
 
-def _signer_email(packet: dict, bond: Optional[dict], role: str) -> str:
-    """Email stored for this signer. Blank when the case has none."""
-    keys = (
-        (
+def _email_key(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _signer_email_keys(role: str) -> tuple[str, ...]:
+    if role == "co_indemnitor":
+        return (
             "co_signer_email",
             "cosigner_email",
             "co_indemnitor_email",
             "coindemnitor_email",
         )
-        if role == "co_indemnitor"
-        else ("indemnitor_email",)
-    )
-    for doc in (bond, packet):
-        if not isinstance(doc, dict):
-            continue
-        for key in keys:
-            text = str(doc.get(key) or "").strip()
-            if text:
-                return text
-        people = doc.get("indemnitors")
-        if not isinstance(people, list):
-            continue
+    return ("indemnitor_email",)
+
+
+def _doc_signer_emails(doc: dict, role: str) -> list[str]:
+    """Non-empty emails this document stores for the signer, compared folded."""
+    if not isinstance(doc, dict):
+        return []
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: Any) -> None:
+        text = _email_key(value)
+        if not text or text in seen:
+            return
+        seen.add(text)
+        found.append(text)
+
+    for key in _signer_email_keys(role):
+        add(doc.get(key))
+    people = doc.get("indemnitors")
+    if isinstance(people, list):
         for person in people:
             if isinstance(person, dict) and _party_role(person) == role:
-                text = str(person.get("email") or "").strip()
-                if text:
-                    return text
-    return ""
+                add(person.get("email"))
+    return found
+
+
+def _signer_email(packet: dict, bond: Optional[dict], role: str) -> str:
+    """Email stored for this signer. Blank when the case has none.
+
+    The bond does not win when the packet has a different email. Two
+    non-empty values that differ after trimming and lowercasing are a conflict.
+    """
+    found: list[str] = []
+    seen: set[str] = set()
+    for doc in (bond, packet):
+        for text in _doc_signer_emails(doc if isinstance(doc, dict) else {}, role):
+            if text in seen:
+                continue
+            seen.add(text)
+            found.append(text)
+    if len(found) > 1:
+        raise CosignerLinkError("signer_email_mismatch", 409)
+    return found[0] if found else ""
 
 
 def _bound_submitter_url(packet: dict, row: dict, role: str) -> str:
@@ -918,6 +946,9 @@ async def create_cosigner_link(*, actor: str, packet_id: str, lang: str = "en") 
     if gap:
         raise CosignerLinkError(gap, 409)
     await _require_party_binding(packet, bond, role=packet_role)
+    # A packet email and a bond email for this signer have to agree before
+    # a bearer exists. The bond does not silently win.
+    _signer_email(packet, bond, packet_role)
     await _replace_stale_verification_claim(packet)
     name, role = packet_name, packet_role
     now = _now()
