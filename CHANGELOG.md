@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-27 (co-signer scan is not the indemnitor scan)
+
+### Fixed
+- **A co-signer ID scan stored on the bond is not treated as the primary indemnitor's scan.** The bond's indemnitor id stays on the bond. The indemnitor still needs their own scan.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_cosigner_different_from_indemnitor` still expects `no_scan` for the indemnitor. `test_confirmed_zero_down_payment_finishes_after_signing` expects no DocuSeal URL once the step is paid.
+
 ## [Unreleased] — 2026-10-27 (co-signer pay URL is escaped)
 
 ### Fixed

@@ -3504,7 +3504,8 @@ def test_confirmed_zero_down_payment_finishes_after_signing(monkeypatch):
     assert state.status_code == 200, state.text
     body = state.json()
     assert body["step"] == "paid"
-    assert body["sign_url"] == _sign("abc")
+    assert body["sign_url"] is None
+    assert _sign("abc") not in state.text
     assert body["payment"]["amount"] == "0.00"
     assert body["payment"]["url"] is None
     assert "pay.example/zero" not in state.text
