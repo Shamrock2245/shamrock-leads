@@ -4476,3 +4476,42 @@ def test_paid_fails_closed_when_the_alias_booking_is_two_cases(monkeypatch):
     assert not link.get("paid_transaction_id")
     assert _audits(stores, "paid") == []
     assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+
+
+def test_heal_keeps_pending_when_the_locked_row_read_fails(monkeypatch):
+    """A heal whose in-lock payment read fails keeps the paid transition pending."""
+    import dashboard.services.cosigner_link_service as svc
+
+    stores, client, token, db = _recorder_world(monkeypatch)
+    _calls, restore = _fail_lock_work(monkeypatch, "_charge_row_blocks_down_payment", None)
+    assert _webhook(client, txn="TX-COS-HEALREAD", amount="500.00").status_code == 200
+    restore()
+    link = stores["cosigner_links"].docs[0]
+    assert link["pending_payment_keys"] == ["paid:TX-COS-HEALREAD"]
+
+    original = svc._payment_rows
+    locked_reads = {"n": 0}
+
+    async def _locked_read_fails(db_, txn_key, session):
+        if session is not None:
+            locked_reads["n"] += 1
+            return None
+        return await original(db_, txn_key, session)
+
+    monkeypatch.setattr(svc, "_payment_rows", _locked_read_fails)
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+    assert locked_reads["n"] >= 1
+    link = stores["cosigner_links"].docs[0]
+    assert link["pending_payment_keys"] == ["paid:TX-COS-HEALREAD"]
+    assert link["payment_transition_pending"] is True
+    assert not link.get("paid_transaction_id")
+    assert _audits(stores, "payment_transition_resolved") == []
+    assert len(_audits(stores, "payment_transition_pending")) == 1
+
+    monkeypatch.setattr(svc, "_payment_rows", original)
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+    link = stores["cosigner_links"].docs[0]
+    assert link["pending_payment_keys"] == []
+    assert link["paid_transaction_id"] == "TX-COS-HEALREAD"
+    assert len(_audits(stores, "paid")) == 1
+    assert len(_audits(stores, "payment_transition_resolved")) == 1

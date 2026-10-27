@@ -1594,6 +1594,10 @@ async def _with_payment_lock(txn_key: str, work) -> str:
     return LOCK_FAILED
 
 
+class PaymentRowsUnreadable(Exception):
+    """The payment rows could not be read inside the lock. Not a refusal."""
+
+
 async def _payment_rows(db, txn_key: str, session) -> Optional[list]:
     """Payment rows for this transaction, or None when they cannot be read.
 
@@ -1629,6 +1633,10 @@ async def _charge_row_blocks_down_payment(db, transaction_id: str, session) -> b
     same transaction blocks the stamp too. A read error, a missing row, or
     an empty row set blocks it as well: the charge was just recorded under
     this lock, so no readable charge row is not a pass.
+
+    A read error is not a refusal: it raises ``PaymentRowsUnreadable`` so
+    the lock reports ``LOCK_FAILED`` and a pending paid transition is kept
+    (a heal does not drop its marker on a read it could not make).
     """
     from dashboard.services.payment_log_claims import (
         SETTLED_CHARGE_STATUSES,
@@ -1637,8 +1645,13 @@ async def _charge_row_blocks_down_payment(db, transaction_id: str, session) -> b
     )
 
     rows = await _payment_rows(db, str(transaction_id or "").strip(), session)
+    if rows is None:
+        # Not a decision. Raising makes the locked write fail, so the paid
+        # transition stays pending and is replayed once the rows read.
+        logger.info("[cosigner] paid deferred unreadable payment rows")
+        raise PaymentRowsUnreadable("payment rows unreadable")
     if not rows:
-        logger.info("[cosigner] paid refused unreadable payment rows")
+        logger.info("[cosigner] paid refused empty payment rows")
         return True
     if has_reversal_sibling(rows):
         return True
