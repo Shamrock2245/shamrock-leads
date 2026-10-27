@@ -2054,6 +2054,32 @@ def test_completed_packet_hides_the_sign_url(monkeypatch):
     assert sign_url not in done.text
 
 
+def test_payment_url_is_escaped_on_the_page(monkeypatch):
+    """A quote in a stored pay URL cannot break out of the href."""
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert opened.status_code == 200, opened.text
+    packet = stores["paperwork_packets"].docs[0]
+    pay = _swipe_link("down") + "' onclick='alert(1)"
+    packet["status"] = "completed"
+    packet["invoice_payment_link"] = pay
+    packet["swipesimple_invoice_amount_cents"] = 50000
+    packet["swipesimple_invoice_number"] = BOOKING
+    packet["swipesimple_invoice_bond_id"] = CASE
+    page = client.get(f"/cosigner/{token}")
+    assert page.status_code == 200, page.text
+    assert "' onclick='" not in page.text
+    assert "&#x27; onclick=&#x27;" in page.text
+    assert ">Pay</a>" in page.text
+    paying = client.get(f"/api/cosigner/{token}")
+    assert paying.status_code == 200, paying.text
+    assert paying.json()["payment"]["url"] == pay
+
+
 def test_paid_bond_still_requires_a_signature(monkeypatch):
     stores, client = _world(monkeypatch)
     stores["bond_cases"].docs[0]["premium_paid"] = True

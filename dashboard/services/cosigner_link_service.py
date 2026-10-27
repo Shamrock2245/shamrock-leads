@@ -2013,6 +2013,11 @@ async def cosigner_state(token: str, lang: Optional[str] = None) -> dict:
     }
 
 
+def _html_attr(value: str) -> str:
+    """Escape a value placed in a single-quoted HTML attribute."""
+    return html.escape(str(value or ""), quote=True)
+
+
 def render_cosigner_page(state: dict, token: str) -> str:
     """One page. The language toggle reloads the same token in English or Spanish."""
     strings = state.get("strings") or STRINGS["en"]
@@ -2036,14 +2041,14 @@ def render_cosigner_page(state: dict, token: str) -> str:
     elif step == "sign" and sign_url:
         body = (
             f"<h1>{strings['sign_title']}</h1>"
-            f"<p><a href='{sign_url}'>DocuSeal</a></p>"
+            f"<p><a href='{_html_attr(sign_url)}'>DocuSeal</a></p>"
         )
     elif step == "sign":
         body = f"<h1>{strings['sign_title']}</h1><p>{strings['locked']}</p>"
     elif step == "pay":
         note = strings["pay_dry_run"] if payment.get("dry_run") else strings["pay_title"]
         url = payment.get("url") or ""
-        pay_link = f"<p><a href='{url}'>Pay</a></p>" if url else ""
+        pay_link = f"<p><a href='{_html_attr(url)}'>Pay</a></p>" if url else ""
         body = (
             f"<h1>{strings['pay_title']}</h1>"
             f"<p>{note} {payment.get('amount') or ''}</p>"

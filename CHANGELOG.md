@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-27 (co-signer pay URL is escaped)
+
+### Fixed
+- **The public co-signer page escapes the pay URL before placing it in the link.** A quote in a stored invoice path cannot become an HTML attribute. The sign link is escaped the same way.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_payment_url_is_escaped_on_the_page`.
+
 ## [Unreleased] — 2026-10-27 (completed co-signer hides the sign URL)
 
 ### Fixed
