@@ -523,9 +523,9 @@ def test_scheduler_miss_alert_retries_when_notify_fails(monkeypatch, failure):
     _patch_notifier(monkeypatch, notifier)
     event = MagicMock(job_id=job_id)
     sched._on_job_missed(event)
-    assert job_id not in sched._miss_alerted_at
+    assert (job_id, "misfire") not in sched._miss_alerted_at
     sched._on_job_missed(event)  # retried, delivered
-    assert job_id in sched._miss_alerted_at
+    assert (job_id, "misfire") in sched._miss_alerted_at
     sched._on_job_missed(event)  # now throttled
     assert notifier.notify_alert.call_count == 2
 
@@ -597,3 +597,81 @@ def test_freshness_cron_does_not_block_event_loop():
     assert out["sent"] == ["stale"]  # delivered only because the loop kept ticking
     assert threads and all(tid != loop_thread for tid in threads)
     assert ticks >= 5
+
+
+# ── scheduler: max-instances skip (previous Lee run still going) ──
+
+def _lee_sched(monkeypatch):
+    from core.scheduler import ScraperScheduler
+    sched = ScraperScheduler(max_workers=1)
+    added = {}
+    monkeypatch.setattr(sched.scheduler, "add_job", lambda *a, **k: added.update(k))
+    sched.register_scraper(LeeCountyScraper(), interval_minutes=30,
+                           misfire_grace_time=1500, alert_on_miss=True)
+    return sched, added["id"]
+
+
+def _max_instances_event(job_id):
+    from apscheduler.events import EVENT_JOB_MAX_INSTANCES
+    return MagicMock(job_id=job_id, code=EVENT_JOB_MAX_INSTANCES)
+
+
+def test_missed_listener_subscribed_to_max_instances():
+    from apscheduler.events import EVENT_JOB_MAX_INSTANCES, EVENT_JOB_MISSED
+    from core.scheduler import ScraperScheduler
+    sched = ScraperScheduler(max_workers=1)
+    masks = [mask for cb, mask in sched.scheduler._listeners if cb == sched._on_job_missed]
+    assert masks and masks[0] & EVENT_JOB_MAX_INSTANCES and masks[0] & EVENT_JOB_MISSED
+
+
+def test_max_instances_skip_fires_lee_alert(monkeypatch):
+    sched, job_id = _lee_sched(monkeypatch)
+    notifier = MagicMock()
+    notifier.notify_alert.return_value = True
+    _patch_notifier(monkeypatch, notifier)
+    sched._on_job_missed(_max_instances_event(job_id))
+    assert notifier.notify_alert.call_count == 1
+    kw = notifier.notify_alert.call_args.kwargs
+    assert "Lee (FL)" in kw["title"] and "previous run still running" in kw["title"]
+    assert kw["details"] == {"job_id": job_id, "reason": "max_instances"}
+    sched._on_job_missed(_max_instances_event(job_id))  # throttled
+    assert notifier.notify_alert.call_count == 1
+    # A misfire is a different reason: not hidden by the max-instances throttle.
+    sched._on_job_missed(MagicMock(job_id=job_id))
+    assert notifier.notify_alert.call_count == 2
+    assert notifier.notify_alert.call_args.kwargs["details"]["reason"] == "misfire"
+
+
+def test_max_instances_skip_fires_through_real_scheduler(monkeypatch):
+    """APScheduler itself emits EVENT_JOB_MAX_INSTANCES and our listener alerts."""
+    from apscheduler.events import JobSubmissionEvent, EVENT_JOB_MAX_INSTANCES
+    sched, job_id = _lee_sched(monkeypatch)
+    notifier = MagicMock()
+    notifier.notify_alert.return_value = True
+    _patch_notifier(monkeypatch, notifier)
+    sched.scheduler._dispatch_event(
+        JobSubmissionEvent(EVENT_JOB_MAX_INSTANCES, job_id, None, [NOW]))
+    assert notifier.notify_alert.call_args.kwargs["details"]["reason"] == "max_instances"
+
+
+@pytest.mark.parametrize("failure", [False, RuntimeError("slack down")])
+def test_max_instances_alert_not_throttled_when_notify_fails(monkeypatch, failure):
+    sched, job_id = _lee_sched(monkeypatch)
+    notifier = MagicMock()
+    notifier.notify_alert.side_effect = [failure if isinstance(failure, Exception) else False, True]
+    _patch_notifier(monkeypatch, notifier)
+    sched._on_job_missed(_max_instances_event(job_id))
+    assert (job_id, "max_instances") not in sched._miss_alerted_at
+    sched._on_job_missed(_max_instances_event(job_id))  # retried, delivered
+    assert (job_id, "max_instances") in sched._miss_alerted_at
+    sched._on_job_missed(_max_instances_event(job_id))  # now throttled
+    assert notifier.notify_alert.call_count == 2
+
+
+def test_max_instances_skip_ignored_for_non_lee_jobs(monkeypatch):
+    sched, _job_id = _lee_sched(monkeypatch)
+    notifier = MagicMock()
+    _patch_notifier(monkeypatch, notifier)
+    sched._on_job_missed(_max_instances_event("scraper_other"))
+    assert notifier.notify_alert.call_count == 0
+    assert sched._miss_alerted_at == {}
