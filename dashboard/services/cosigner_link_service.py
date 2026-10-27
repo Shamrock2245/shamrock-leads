@@ -2224,6 +2224,12 @@ async def _record_pending_transition(kind: str, booking: str, txn: str, links: l
     audit per link and transition: the push is conditional on the key not
     being pending yet. The payment row itself is already recorded and is the
     source of truth the reconcile step reads.
+
+    The pending key and an owed-audit marker are pushed in one document
+    update, so the state change never lands without a record that its
+    audit is due. The audit is then written and the marker pulled. If the
+    audit write fails, the marker stays and the next record, reconcile or
+    heal on this link writes it (``_flush_owed_audits``).
     """
     key = _pending_key(kind, txn)
     now = _now()
@@ -2232,49 +2238,143 @@ async def _record_pending_transition(kind: str, booking: str, txn: str, links: l
         if not token:
             continue
         try:
+            entry = {
+                "key": key,
+                "kind": kind,
+                "transaction_id": txn,
+                "booking_number": booking,
+                "at": now.isoformat(),
+            }
             result = await get_collection(LINKS).update_one(
                 {"token": token, "pending_payment_keys": {"$ne": key}},
                 {
                     "$set": {
                         "payment_transition_pending": True,
                         "payment_transition_pending_at": now.isoformat(),
+                        "payment_audit_owed": True,
                     },
                     "$push": {
                         "pending_payment_keys": key,
-                        "pending_payment_transitions": {
-                            "key": key,
-                            "kind": kind,
-                            "transaction_id": txn,
-                            "booking_number": booking,
-                            "at": now.isoformat(),
-                        },
+                        "pending_payment_transitions": entry,
+                        "pending_payment_audits_owed": _owed_audit(
+                            "payment_transition_pending", token, entry, now,
+                        ),
                     },
                 },
             )
-            if not getattr(result, "modified_count", 0):
-                continue
-            fresh = await get_collection(LINKS).find_one({"token": token}) or link
-            after = _pending_view(fresh)
-            before = _pending_without(after, key)
-            state = _audit_state_only(_audit_state(fresh, None))
-            await _audit(
-                "payment_transition_pending", fresh, now,
-                old_state=state, new_state=state,
-                reason=kind,
-                extra={
-                    "transaction_id": txn, "transition": kind, "pending_key": key,
-                    "pending_before": before, "pending_after": after,
-                },
-            )
-            logger.warning(
-                "[cosigner] payment transition pending packet_id=%s kind=%s",
-                link.get("packet_id"), kind,
-            )
+            if getattr(result, "modified_count", 0):
+                logger.warning(
+                    "[cosigner] payment transition pending packet_id=%s kind=%s",
+                    link.get("packet_id"), kind,
+                )
         except Exception:
             logger.error(
                 "[cosigner] pending transition not recorded packet_id=%s kind=%s",
                 link.get("packet_id"), kind,
             )
+            continue
+        await _flush_owed_audits(token)
+
+
+def _owed_audit(step: str, token: str, entry: dict, now: datetime) -> dict:
+    """An audit that is due for a pending-state change on this link.
+
+    ``audit_key`` is the same on every retry, so a flush that wrote the
+    audit but could not pull the marker does not write it twice.
+    """
+    key = str(entry.get("key") or "")
+    at = str(entry.get("at") or "")
+    digest = hashlib.sha256(f"{step}|{token}|{key}|{at}".encode()).hexdigest()[:32]
+    return {
+        "audit_key": f"cosigner-pending:{digest}",
+        "step": step,
+        "pending_key": key,
+        "entry": dict(entry),
+        "at": now.isoformat(),
+    }
+
+
+async def _flush_owed_audits(token: str) -> bool:
+    """Write the owed pending/resolved audits on this link. Never raises.
+
+    True when nothing is owed afterwards. Each audit's before/after pending
+    values are derived from the link with this key present (pending) or
+    absent (resolved), so a retry records the transition it owes.
+    """
+    token = str(token or "").strip()
+    if not token:
+        return True
+    coll = get_collection(LINKS)
+    try:
+        doc = await coll.find_one({"token": token})
+    except Exception:
+        logger.warning("[cosigner] owed audit lookup failed")
+        return False
+    if not isinstance(doc, dict):
+        return True
+    owed = [o for o in (doc.get("pending_payment_audits_owed") or []) if isinstance(o, dict)]
+    clean = True
+    audits = get_collection("audit_events")
+    for item in owed:
+        audit_key = str(item.get("audit_key") or "")
+        step = str(item.get("step") or "")
+        key = str(item.get("pending_key") or "")
+        entry = item.get("entry") if isinstance(item.get("entry"), dict) else {}
+        kind = str(entry.get("kind") or "")
+        txn = str(entry.get("transaction_id") or "")
+        try:
+            if not audit_key or not step or not key:
+                raise ValueError("malformed owed audit")
+            if not await audits.find_one({"audit_key": audit_key}):
+                view = _pending_view(doc)
+                if step == "payment_transition_pending":
+                    base = _pending_without(view, key)
+                    after = {
+                        "payment_transition_pending": True,
+                        "pending_payment_keys": base["pending_payment_keys"] + [key],
+                        "pending_payment_transitions": (
+                            base["pending_payment_transitions"] + [dict(entry)]
+                        ),
+                    }
+                    before = base
+                else:
+                    after = _pending_without(view, key)
+                    before = _pending_with(after, key, entry)
+                state = _audit_state_only(_audit_state(doc, None))
+                at = item.get("at")
+                try:
+                    when = datetime.fromisoformat(str(at))
+                except (TypeError, ValueError):
+                    when = _now()
+                await _audit(
+                    step, doc, when,
+                    old_state=state, new_state=state,
+                    reason=kind,
+                    extra={
+                        "audit_key": audit_key,
+                        "transaction_id": txn, "transition": kind, "pending_key": key,
+                        "pending_before": before, "pending_after": after,
+                    },
+                )
+            await coll.update_one(
+                {"token": token},
+                {"$pull": {"pending_payment_audits_owed": {"audit_key": audit_key}}},
+            )
+        except Exception:
+            clean = False
+            logger.error(
+                "[cosigner] pending audit not written packet_id=%s step=%s",
+                doc.get("packet_id"), step,
+            )
+    if clean:
+        try:
+            await coll.update_one(
+                {"token": token, "pending_payment_audits_owed": []},
+                {"$set": {"payment_audit_owed": False}},
+            )
+        except Exception:
+            return False
+    return clean
 
 
 def _pending_view(doc: Optional[dict]) -> dict:
@@ -2322,6 +2422,11 @@ def _pending_with(after: dict, key: str, entry: Optional[dict]) -> dict:
 async def _resolve_pending(
     link: dict, key: str, kind: str, txn: str, entry: Optional[dict] = None,
 ) -> bool:
+    """Pull a decided pending key, with its owed resolved audit, in one update.
+
+    The audit is written afterwards by ``_flush_owed_audits``; if that write
+    fails the marker stays on the link and is retried on the next read.
+    """
     token = str(link.get("token") or "").strip()
     if not token:
         return False
@@ -2332,12 +2437,28 @@ async def _resolve_pending(
              if isinstance(e, dict) and str(e.get("key") or "") == key),
             None,
         )
+    entry = dict(entry) if isinstance(entry, dict) else {
+        "key": key, "kind": kind, "transaction_id": txn,
+    }
+    entry.setdefault("key", key)
+    entry.setdefault("kind", kind)
+    entry.setdefault("transaction_id", txn)
+    now = _now()
     result = await coll.update_one(
         {"token": token, "pending_payment_keys": {"$in": [key]}},
-        {"$pull": {
-            "pending_payment_keys": key,
-            "pending_payment_transitions": {"key": key},
-        }},
+        {
+            "$pull": {
+                "pending_payment_keys": key,
+                "pending_payment_transitions": {"key": key},
+            },
+            "$push": {
+                "pending_payment_audits_owed": _owed_audit(
+                    "payment_transition_resolved", token,
+                    entry, now,
+                ),
+            },
+            "$set": {"payment_audit_owed": True},
+        },
     )
     if not getattr(result, "modified_count", 0):
         return False
@@ -2345,20 +2466,7 @@ async def _resolve_pending(
         {"token": token, "pending_payment_keys": []},
         {"$set": {"payment_transition_pending": False}},
     )
-    now = _now()
-    fresh = await coll.find_one({"token": token}) or link
-    after = _pending_view(fresh)
-    before = _pending_with(after, key, entry)
-    state = _audit_state_only(_audit_state(fresh, None))
-    await _audit(
-        "payment_transition_resolved", fresh, now,
-        old_state=state, new_state=state,
-        reason=kind,
-        extra={
-            "transaction_id": txn, "transition": kind, "pending_key": key,
-            "pending_before": before, "pending_after": after,
-        },
-    )
+    await _flush_owed_audits(token)
     return True
 
 
@@ -2399,6 +2507,8 @@ async def _heal_paid(booking: str, txn: str) -> bool:
 
 
 async def _reconcile(link: dict) -> bool:
+    if link.get("payment_audit_owed") or link.get("pending_payment_audits_owed"):
+        await _flush_owed_audits(link.get("token"))
     booking = str(link.get("booking_number") or "").strip()
     keys = [str(k) for k in (link.get("pending_payment_keys") or [])]
     changed = False
@@ -2453,7 +2563,10 @@ async def reconcile_cosigner_payment_state(link: Optional[dict]) -> bool:
 
 async def _heal_booking(booking: str) -> None:
     """Reconcile links on this booking that still carry a pending transition."""
-    query = _scope({"booking_number": booking, "payment_transition_pending": True})
+    query = _scope({"booking_number": booking, "$or": [
+        {"payment_transition_pending": True},
+        {"payment_audit_owed": True},
+    ]})
     if query is None:
         return
     try:

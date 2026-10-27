@@ -4515,3 +4515,108 @@ def test_heal_keeps_pending_when_the_locked_row_read_fails(monkeypatch):
     assert link["paid_transaction_id"] == "TX-COS-HEALREAD"
     assert len(_audits(stores, "paid")) == 1
     assert len(_audits(stores, "payment_transition_resolved")) == 1
+
+
+def _fail_audit_step(stores, step, times):
+    """Make the audit insert for ``step`` raise ``times`` times."""
+    coll = stores["audit_events"]
+    original = coll.insert_one
+    calls = {"failed": 0}
+
+    async def _insert(doc, session=None, **kwargs):
+        if doc.get("event_type") == step and calls["failed"] < times:
+            calls["failed"] += 1
+            raise ConnectionError("mock audit store outage")
+        return await original(doc, session=session, **kwargs)
+
+    coll.insert_one = _insert
+    return calls
+
+
+def test_pending_state_and_its_audit_are_not_split(monkeypatch):
+    """A pending key whose audit write fails keeps an owed marker; it is written once later."""
+    stores, client, token, db = _recorder_world(monkeypatch)
+    failed = _fail_audit_step(stores, "payment_transition_pending", 1)
+    _calls, restore = _fail_lock_work(monkeypatch, "_charge_row_blocks_down_payment", None)
+    assert _webhook(client, txn="TX-COS-OWED", amount="500.00").status_code == 200
+    assert failed["failed"] == 1
+    link = stores["cosigner_links"].docs[0]
+    assert link["pending_payment_keys"] == ["paid:TX-COS-OWED"]
+    assert _audits(stores, "payment_transition_pending") == []
+    (owed,) = link["pending_payment_audits_owed"]
+    assert owed["step"] == "payment_transition_pending"
+    assert owed["pending_key"] == "paid:TX-COS-OWED"
+    assert link["payment_audit_owed"] is True
+
+    # Still failing the lock: the page read writes the owed audit, once.
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+    (pending,) = _audits(stores, "payment_transition_pending")
+    assert pending["pending_key"] == "paid:TX-COS-OWED"
+    assert pending["audit_key"] == owed["audit_key"]
+    assert pending["pending_before"]["pending_payment_keys"] == []
+    assert pending["pending_after"]["pending_payment_keys"] == ["paid:TX-COS-OWED"]
+    link = stores["cosigner_links"].docs[0]
+    assert link["pending_payment_audits_owed"] == []
+    assert link["payment_audit_owed"] is False
+
+    restore()
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+    assert len(_audits(stores, "payment_transition_resolved")) == 1
+    assert len(_audits(stores, "payment_transition_pending")) == 1
+
+
+def test_resolved_state_and_its_audit_are_not_split(monkeypatch):
+    """A resolved key whose audit write fails is audited on the next read, once."""
+    stores, client, token, db = _recorder_world(monkeypatch)
+    _calls, restore = _fail_lock_work(monkeypatch, "_charge_row_blocks_down_payment", None)
+    assert _webhook(client, txn="TX-COS-OWED2", amount="500.00").status_code == 200
+    restore()
+    failed = _fail_audit_step(stores, "payment_transition_resolved", 1)
+
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+    assert failed["failed"] == 1
+    link = stores["cosigner_links"].docs[0]
+    assert link["pending_payment_keys"] == []
+    assert link["payment_transition_pending"] is False
+    assert _audits(stores, "payment_transition_resolved") == []
+    (owed,) = link["pending_payment_audits_owed"]
+    assert owed["step"] == "payment_transition_resolved"
+
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+    (resolved,) = _audits(stores, "payment_transition_resolved")
+    assert resolved["audit_key"] == owed["audit_key"]
+    assert resolved["pending_before"]["pending_payment_keys"] == ["paid:TX-COS-OWED2"]
+    assert resolved["pending_after"]["pending_payment_keys"] == []
+    link = stores["cosigner_links"].docs[0]
+    assert link["pending_payment_audits_owed"] == []
+    assert len(_audits(stores, "paid")) == 1
+
+
+def test_owed_audit_is_not_written_twice_when_the_marker_pull_fails(monkeypatch):
+    """The audit landed but the marker stayed: the retry sees the audit_key and only pulls."""
+    import dashboard.services.cosigner_link_service as svc
+
+    stores, client, token, db = _recorder_world(monkeypatch)
+    links = stores["cosigner_links"]
+    original = links.update_one
+    state = {"failed": 0}
+
+    async def _update(query, update, upsert=False, session=None, **kwargs):
+        pull = (update.get("$pull") or {})
+        if "pending_payment_audits_owed" in pull and "pending_payment_keys" not in pull and not state["failed"]:
+            state["failed"] += 1
+            raise ConnectionError("mock marker pull failure")
+        return await original(query, update, upsert=upsert, session=session, **kwargs)
+
+    links.update_one = _update
+    _calls, restore = _fail_lock_work(monkeypatch, "_charge_row_blocks_down_payment", None)
+    assert _webhook(client, txn="TX-COS-OWED3", amount="500.00").status_code == 200
+    assert state["failed"] == 1
+    assert len(_audits(stores, "payment_transition_pending")) == 1
+    assert len(links.docs[0]["pending_payment_audits_owed"]) == 1
+    asyncio.run(svc._flush_owed_audits(token))
+    assert len(_audits(stores, "payment_transition_pending")) == 1
+    assert links.docs[0]["pending_payment_audits_owed"] == []
+    restore()
