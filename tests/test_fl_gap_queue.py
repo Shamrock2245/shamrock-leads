@@ -275,7 +275,7 @@ def _registered_intervals():
         def __init__(self):
             self.intervals = {}
 
-        def register_scraper(self, scraper, interval_minutes=None):
+        def register_scraper(self, scraper, interval_minutes=None, **_kwargs):
             self.intervals[f"{scraper.county} ({scraper.state})"] = interval_minutes
 
     logging.disable(logging.CRITICAL)

@@ -541,12 +541,14 @@ def _mirror_names_agree(left: str, right: str) -> bool:
 def _mirror_disagrees(case_row: dict, mirror: dict) -> bool:
     """The case and its active mirror must be the same bonded case.
 
-    Status, signer, booking, defendant, match, case number, surety, and POA
-    are compared. A cleared or reassigned field is a different case. Case and
-    surrounding whitespace are not a difference: status, surety, booking,
-    case number, POA, and match status compare trimmed and casefolded, and
-    names compare without case, punctuation, or extra spaces. ``match_id``
-    compares trimmed only.
+    Status, signer, booking, defendant, match, case number, surety, POA,
+    and the defendant and indemnitor ids are compared. A cleared or
+    reassigned field is a different case. Case and surrounding whitespace
+    are not a difference: status, surety, booking, case number, POA, and
+    match status compare trimmed and casefolded, and names compare without
+    case, punctuation, or extra spaces. ``match_id`` and the party ids
+    compare trimmed only. A POA number on the selected bond is not, by
+    itself, a mirror disagreement.
     """
     if _bond_status(case_row) != _bond_status(mirror):
         return True
@@ -565,8 +567,13 @@ def _mirror_disagrees(case_row: dict, mirror: dict) -> bool:
     ):
         if _mirror_key(case_row, *keys) != _mirror_key(mirror, *keys):
             return True
-    if _mirror_text(case_row, "match_id", "Match_ID") != _mirror_text(mirror, "match_id", "Match_ID"):
-        return True
+    for keys in (
+        ("match_id", "Match_ID"),
+        ("defendant_id", "Defendant_ID"),
+        ("indemnitor_id", "Indemnitor_ID"),
+    ):
+        if _mirror_text(case_row, *keys) != _mirror_text(mirror, *keys):
+            return True
     case_defendant = _mirror_text(case_row, "defendant_name", "Defendant_Name", "defendant")
     mirror_defendant = _mirror_text(mirror, "defendant_name", "Defendant_Name", "defendant")
     if case_defendant or mirror_defendant:
@@ -839,14 +846,18 @@ async def create_cosigner_link(*, actor: str, packet_id: str, lang: str = "en") 
     if multi_tenant_enabled():
         doc["tenant_id"] = current_tenant_id()
     await get_collection(LINKS).insert_one(doc)
-    await _audit(
-        "link_issued",
-        doc,
-        now,
-        old_state=_blank_audit_state(packet),
-        new_state=_audit_state(doc, packet),
-        actor=actor,
-    )
+    try:
+        await _audit(
+            "link_issued",
+            doc,
+            now,
+            old_state=_blank_audit_state(packet),
+            new_state=_audit_state(doc, packet),
+            actor=actor,
+        )
+    except Exception:
+        await _drop_unaudited_link(doc, now)
+        raise
     logger.info("[cosigner] link created packet_id=%s", packet_id)
     return {
         "token": token,
@@ -1194,6 +1205,54 @@ async def _restore_sibling_links(priors: list) -> None:
 def _bearer_ref(token: str) -> str:
     """A reference for a bearer token. The token itself is not stored."""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+async def _drop_unaudited_link(doc: dict, now: datetime) -> None:
+    """A link whose issuance audit did not commit is not a bearer.
+
+    The link row is removed. If that delete fails, the row is revoked so
+    the token cannot be used. The rollback audit stores a hash, not the token.
+    """
+    token = str(doc.get("token") or "")
+    removed = False
+    try:
+        result = await get_collection(LINKS).delete_one({"token": token})
+        removed = int(getattr(result, "deleted_count", 0) or 0) > 0
+    except Exception:
+        logger.info("[cosigner] unaudited link delete failed")
+    if not removed and token:
+        try:
+            revoked_at = now.isoformat()
+            await get_collection(LINKS).update_one(
+                {"token": token},
+                {"$set": {
+                    "revoked": True,
+                    "status": "revoked",
+                    "revoked_at": revoked_at,
+                }},
+            )
+        except Exception:
+            logger.info("[cosigner] unaudited link revoke failed")
+    try:
+        await get_collection("audit_events").insert_one({
+            "event_type": "link_issuance_rolled_back",
+            "action": "link_issuance_rolled_back",
+            "entity_type": "cosigner_link",
+            "entity_id": doc.get("packet_id") or "",
+            "actor": "cosigner_link",
+            "agent_name": "cosigner_link",
+            "timestamp": now,
+            "created_at": now.isoformat(),
+            "booking_number": doc.get("booking_number") or "",
+            "packet_id": doc.get("packet_id") or "",
+            "reason": "link_issuance_rolled_back",
+            "link_ref": _bearer_ref(token) if token else "",
+            "old_state": _blank_audit_state(None),
+            "new_state": _blank_audit_state(None),
+            "confidence": 1.0,
+        })
+    except Exception:
+        logger.info("[cosigner] issuance rollback audit failed")
 
 
 async def _drop_partial_audits(
