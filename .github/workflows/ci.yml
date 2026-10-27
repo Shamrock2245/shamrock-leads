@@ -202,6 +202,7 @@ jobs:
             tests/test_powers_pack_history_banner.py \
             tests/test_poa_reassign_release_audit.py \
             tests/test_lee_rate_limit.py \
+            tests/test_lee_harden_spof.py \
             tests/test_swipesimple_invoice_service.py \
             tests/test_swipesimple_locked_amount_e2e.py \
             tests/test_writebond_to_paid_e2e.py \
