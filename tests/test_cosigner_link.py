@@ -3335,6 +3335,59 @@ def test_mirror_party_ids_must_match(monkeypatch):
     assert calls["n"] == 0
 
 
+def test_failed_issuance_audit_leaves_no_link(monkeypatch):
+    """A failed issuance audit removes the link and does not store the token."""
+    stores, client = _world(monkeypatch)
+    links = _Col()
+    audits = _Col()
+    stores["cosigner_links"] = links
+    stores["audit_events"] = audits
+    seen = []
+    original_link_insert = links.insert_one
+    original_audit_insert = audits.insert_one
+
+    async def _watch_link(doc, session=None, **kwargs):
+        seen.append(str(doc.get("token") or ""))
+        return await original_link_insert(doc, session=session, **kwargs)
+
+    async def _fail_issued(doc, session=None, **kwargs):
+        if doc.get("event_type") == "link_issued":
+            raise RuntimeError("audit store unavailable")
+        return await original_audit_insert(doc, session=session, **kwargs)
+
+    links.insert_one = _watch_link
+    audits.insert_one = _fail_issued
+    with pytest.raises(RuntimeError, match="audit store unavailable"):
+        client.post(
+            "/api/paperwork/cosigner-link",
+            json={"packet_id": PACKET},
+            cookies=_cookie(),
+        )
+    assert seen
+    token = seen[0]
+    assert links.docs == []
+    assert token not in str(audits.docs)
+    assert token not in str(links.docs)
+    rolled = [row for row in audits.docs if row.get("event_type") == "link_issuance_rolled_back"]
+    assert len(rolled) == 1
+    assert rolled[0]["link_ref"] == hashlib.sha256(token.encode("utf-8")).hexdigest()
+    assert "token" not in rolled[0]
+    missing = client.get(f"/api/cosigner/{token}")
+    assert missing.status_code == 404
+    assert missing.json()["error"] == "link_not_found"
+
+    audits.insert_one = original_audit_insert
+    created = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["token"] != token
+    assert token not in str(audits.docs)
+    assert token not in str(links.docs)
+
+
 def test_mirror_chain_must_match(monkeypatch):
     """A mirror that diverges on the case chain is not this bond."""
     stores, client = _world(monkeypatch)

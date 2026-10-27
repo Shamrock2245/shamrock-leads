@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-27 (failed co-signer issuance audit leaves no link)
+
+### Fixed
+- **A co-signer link is removed when its issuance audit cannot be written.** A delete failure revokes the row instead. The rollback audit stores a hash of the bearer, not the bearer itself. The failed token cannot be opened.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_failed_issuance_audit_leaves_no_link`.
+
 ## [Unreleased] — 2026-10-27 (co-signer mirror must share party ids)
 
 ### Fixed
