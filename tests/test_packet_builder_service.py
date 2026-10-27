@@ -202,6 +202,7 @@ async def test_resolve_case_context_reads_snake_case_arrest_from_bookmarklet():
     arrests.find = MagicMock(return_value=_Cursor([arrest_doc]))
     empty = MagicMock()
     empty.find_one = AsyncMock(return_value=None)
+    empty.find = MagicMock(return_value=_Cursor([]))
 
     def _get(name):
         if name == "arrests":
@@ -250,6 +251,7 @@ async def test_resolve_case_context_fail_closed_on_ambiguous_booking():
     arrests.find = MagicMock(return_value=_Cursor(hits))
     empty = MagicMock()
     empty.find_one = AsyncMock(return_value=None)
+    empty.find = MagicMock(return_value=_Cursor([]))
 
     def _get(name):
         return arrests if name == "arrests" else empty
@@ -288,14 +290,18 @@ async def test_resolve_case_context_keeps_bonded_coindemnitor():
     }
 
     class _Cursor:
+        def __init__(self, rows):
+            self._rows = rows
+
         async def to_list(self, length=3):
-            return []
+            return list(self._rows)[:length]
 
     bonds = MagicMock()
     bonds.find_one = AsyncMock(return_value=bond)
+    bonds.find = MagicMock(return_value=_Cursor([bond]))
     empty = MagicMock()
     empty.find_one = AsyncMock(return_value=None)
-    empty.find = MagicMock(return_value=_Cursor())
+    empty.find = MagicMock(return_value=_Cursor([]))
 
     def _get(name):
         if name in ("active_bonds", "bond_cases"):
@@ -310,6 +316,145 @@ async def test_resolve_case_context_keeps_bonded_coindemnitor():
     assert "TEST COINDEMNITOR" in names
     built = build_bond_data_from_dashboard(ctx=ctx, surety_id="palmetto")
     assert [row.get("name") for row in built["indemnitors"]] == names
+
+
+def _bond_cursor(docs):
+    class _Cursor:
+        def __init__(self, rows):
+            self._rows = rows
+
+        async def to_list(self, length=3):
+            return list(self._rows)[:length]
+
+    return _Cursor(docs)
+
+
+@pytest.mark.asyncio
+async def test_coindemnitor_comes_only_from_this_bonded_case():
+    """Another county's bond with the same booking number is not a co-indemnitor."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from dashboard.services.packet_builder_service import resolve_case_context
+
+    lee = {
+        "bond_case_id": "BC-LEE",
+        "booking_number": "TEST-BK-SAME",
+        "county": "Lee",
+        "state": "FL",
+        "indemnitor_name": "TEST INDEMNITOR",
+        "indemnitors": [
+            {"name": "TEST COINDEMNITOR", "email": "admin@shamrockbailbonds.biz", "role": "co_indemnitor"},
+        ],
+        "defendant_name": "TEST DEFENDANT",
+    }
+    collier = {
+        "bond_case_id": "BC-COLLIER",
+        "booking_number": "TEST-BK-SAME",
+        "county": "Collier",
+        "state": "FL",
+        "indemnitor_name": "TEST OTHER INDEMNITOR",
+        "indemnitors": [
+            {"name": "TEST OTHER COINDEMNITOR", "email": "admin@shamrockbailbonds.biz", "role": "co_indemnitor"},
+        ],
+        "defendant_name": "TEST DEFENDANT",
+    }
+    bonds = MagicMock()
+    bonds.find = MagicMock(return_value=_bond_cursor([collier, lee]))
+    empty = MagicMock()
+    empty.find_one = AsyncMock(return_value=None)
+    empty.find = MagicMock(return_value=_bond_cursor([]))
+
+    def _get(name):
+        return bonds if name == "active_bonds" else empty
+
+    with patch("dashboard.extensions.get_collection", side_effect=_get):
+        ctx = await resolve_case_context(
+            booking_number="TEST-BK-SAME", county="Lee", state="FL",
+        )
+
+    names = [row.get("name") for row in ctx.get("indemnitors") or []]
+    assert "TEST COINDEMNITOR" in names
+    assert "TEST OTHER COINDEMNITOR" not in names
+    assert "bond_ambiguous" not in ctx["sources"]
+
+
+@pytest.mark.asyncio
+async def test_coindemnitor_fails_closed_when_two_cases_share_the_booking():
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from dashboard.services.packet_builder_service import resolve_case_context
+
+    first = {
+        "bond_case_id": "BC-ONE",
+        "booking_number": "TEST-BK-SAME",
+        "county": "Lee",
+        "state": "FL",
+        "indemnitors": [{"name": "TEST COINDEMNITOR ONE", "role": "co_indemnitor"}],
+    }
+    second = {
+        "bond_case_id": "BC-TWO",
+        "booking_number": "TEST-BK-SAME",
+        "county": "Lee",
+        "state": "FL",
+        "indemnitors": [{"name": "TEST COINDEMNITOR TWO", "role": "co_indemnitor"}],
+    }
+    bonds = MagicMock()
+    bonds.find = MagicMock(return_value=_bond_cursor([first, second]))
+    empty = MagicMock()
+    empty.find_one = AsyncMock(return_value=None)
+    empty.find = MagicMock(return_value=_bond_cursor([]))
+
+    def _get(name):
+        return bonds if name == "active_bonds" else empty
+
+    with patch("dashboard.extensions.get_collection", side_effect=_get):
+        ctx = await resolve_case_context(
+            booking_number="TEST-BK-SAME", county="Lee", state="FL",
+        )
+
+    assert ctx.get("indemnitors") in (None, [])
+    assert "bond_ambiguous" in ctx["sources"]
+    assert "bond" not in ctx["sources"]
+
+
+@pytest.mark.asyncio
+async def test_coindemnitor_not_taken_from_another_booking():
+    """A bond for a different booking, even the same defendant, is not this case."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from dashboard.services.packet_builder_service import resolve_case_context
+
+    other_booking = {
+        "bond_case_id": "BC-OTHER",
+        "booking_number": "TEST-BK-OTHER",
+        "county": "Lee",
+        "state": "FL",
+        "defendant_name": "TEST DEFENDANT",
+        "indemnitors": [
+            {"name": "TEST OTHER COINDEMNITOR", "role": "co_indemnitor"},
+        ],
+    }
+    bonds = MagicMock()
+    bonds.find = MagicMock(return_value=_bond_cursor([other_booking]))
+    empty = MagicMock()
+    empty.find_one = AsyncMock(return_value=None)
+    empty.find = MagicMock(return_value=_bond_cursor([]))
+
+    def _get(name):
+        return bonds if name == "active_bonds" else empty
+
+    with patch("dashboard.extensions.get_collection", side_effect=_get):
+        ctx = await resolve_case_context(
+            bond_case_id="BC-THIS",
+            booking_number="TEST-BK-THIS",
+            county="Lee",
+            state="FL",
+        )
+
+    assert "TEST OTHER COINDEMNITOR" not in [
+        row.get("name") for row in ctx.get("indemnitors") or []
+    ]
+    assert "bond" not in ctx["sources"]
 
 
 def test_adaptive_map_includes_dl_and_offense_rows():
