@@ -3,6 +3,25 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-27 (Scheduler: Lee alerts on max-instances skips too)
+
+### Fixed
+- **Lee now alerts when a run is skipped because the previous one is still going.** With `max_instances=1`, APScheduler rejects an overlapping tick with `EVENT_JOB_MAX_INSTANCES`, not `EVENT_JOB_MISSED`, so the Lee missed-run alert from #292 never fired for it.
+  - **Listener:** `ScraperScheduler` now subscribes `_on_job_missed` to `EVENT_JOB_MISSED | EVENT_JOB_MAX_INSTANCES`.
+  - **Distinct reason:** the alert carries a reason, `misfire` or `max_instances`. The title says "previous run still running" for a max-instances skip, and `details.reason` names the reason.
+  - **Throttle:** still 30 min, now per `(job_id, reason)`, so one kind of skip doesn't hide the other. It advances only when `notify_alert` returns truthy; False or a raise is retried on the next skip.
+  - Only `alert_on_miss` jobs (Lee) alert. Other jobs only log.
+
+### Tests
+- `tests/test_lee_harden_spof.py` (on the ci.yml list):
+  - `test_missed_listener_subscribed_to_max_instances`
+  - `test_max_instances_skip_fires_lee_alert`
+  - `test_max_instances_skip_fires_through_real_scheduler`
+  - `test_max_instances_alert_not_throttled_when_notify_fails` (False and raise)
+  - `test_max_instances_skip_ignored_for_non_lee_jobs`
+
+  `test_scheduler_miss_alert_retries_when_notify_fails` now checks the `(job_id, "misfire")` throttle key.
+
 ## [Unreleased] — 2026-10-27 (Lee: #292 review follow-ups — heartbeat gated on the Mongo write, alerts off the event loop, throttle after delivery)
 
 ### Fixed
