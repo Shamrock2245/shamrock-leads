@@ -949,12 +949,14 @@ def _issued_case_drifted(link: dict, packet: dict, bond: dict) -> bool:
     """The packet or bond is no longer the case this link was issued for.
 
     A case id matches when it is stored as ``bond_case_id`` or
-    ``Bond_Case_ID``. A POA number is not part of this comparison.
+    ``Bond_Case_ID``, and the bond's booking when it is stored as
+    ``booking_number`` or ``Booking_Number``. A POA number is not part of
+    this comparison.
     """
     stored_case = _bond_field(link, "bond_case_id", "Bond_Case_ID")
     stored_booking = str(link.get("booking_number") or "").strip()
     bond_cases = _recorded_case_ids(bond)
-    bond_booking = str(bond.get("booking_number") or "").strip()
+    bond_booking = _bond_field(bond, "booking_number", "Booking_Number")
     packet_cases = _recorded_case_ids(packet)
     packet_booking = str(packet.get("booking_number") or "").strip()
     if stored_case and stored_case not in bond_cases:
@@ -1749,12 +1751,21 @@ def _due_cents(packet: Optional[dict], bond: Optional[dict]) -> Optional[int]:
 
 
 async def _one_case_id(booking: str) -> str:
-    """Bond case id when this booking is exactly one case. Otherwise empty."""
+    """Bond case id when this booking is exactly one case. Otherwise empty.
+
+    A bond stored with ``Booking_Number`` and no ``booking_number`` is found
+    too (a co-signer link can be issued for it through its case id). More
+    than one case under either field is not one case, so nothing is
+    returned and the paid stamp fails closed.
+    """
     from dashboard.services.payment_log_claims import _case_id, _logical_bond_groups
 
     found = []
     for name in ("bond_cases", "active_bonds"):
-        query = _scope({"booking_number": booking})
+        query = _scope({"$or": [
+            {"booking_number": booking},
+            {"Booking_Number": booking},
+        ]})
         if query is None:
             return ""
         cursor = get_collection(name).find(query)

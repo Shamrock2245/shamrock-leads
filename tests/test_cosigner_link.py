@@ -4436,3 +4436,43 @@ def test_pending_and_resolved_audits_record_before_and_after(monkeypatch):
         "pending_payment_keys": [],
         "pending_payment_transitions": [],
     }
+
+
+def _legacy_booking_field(doc):
+    doc.pop("booking_number", None)
+    doc["Booking_Number"] = BOOKING
+
+
+def test_paid_finds_a_bond_stored_with_booking_number_alias(monkeypatch):
+    """#291: a bond with only Booking_Number still advances to paid."""
+    stores, client, token, db = _recorder_world(monkeypatch)
+    _legacy_booking_field(stores["bond_cases"].docs[0])
+    before = client.get(f"/api/cosigner/{token}")
+    assert before.status_code == 200, before.text
+    assert before.json()["step"] == "pay"
+
+    paid = _webhook(client, txn="TX-COS-LEGACY", amount="500.00")
+    assert paid.status_code == 200, paid.text
+    link = stores["cosigner_links"].docs[0]
+    assert link["paid_transaction_id"] == "TX-COS-LEGACY"
+    assert len(_audits(stores, "paid")) == 1
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+
+
+def test_paid_fails_closed_when_the_alias_booking_is_two_cases(monkeypatch):
+    """#291: Booking_Number on a second case makes the booking ambiguous."""
+    import copy
+
+    stores, client, token, db = _recorder_world(monkeypatch)
+    other = copy.deepcopy(stores["bond_cases"].docs[0])
+    other.pop("_id", None)
+    other["bond_case_id"] = "BC-TEST-COS-OTHER"
+    _legacy_booking_field(other)
+    stores["bond_cases"].docs.append(other)
+
+    paid = _webhook(client, txn="TX-COS-TWO", amount="500.00")
+    assert paid.status_code == 200, paid.text
+    link = stores["cosigner_links"].docs[0]
+    assert not link.get("paid_transaction_id")
+    assert _audits(stores, "paid") == []
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
