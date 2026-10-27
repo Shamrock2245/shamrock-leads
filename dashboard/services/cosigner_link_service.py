@@ -737,6 +737,34 @@ async def _require_party_binding(packet: dict, bond: dict) -> None:
         raise CosignerLinkError(missing, 409)
 
 
+async def _replace_stale_verification_claim(packet: dict) -> None:
+    """A live claim blocks a second link. A dead claim is cleared.
+
+    The clear touches only ``cosigner_verified_token``. Stored ID scans stay.
+    A claim whose link is still open is left in place, and no new link is
+    inserted. A missing, expired, or revoked claim can be replaced.
+    """
+    claim = str(packet.get("cosigner_verified_token") or "").strip()
+    if not claim:
+        return
+    query = _scope({"token": claim})
+    if query is None:
+        raise CosignerLinkError("tenant_required", 403)
+    prior = await get_collection(LINKS).find_one(query)
+    if prior and not _link_block(prior):
+        raise CosignerLinkError("verification_open", 409)
+    result = await get_collection("paperwork_packets").update_one(
+        {
+            "packet_id": packet.get("packet_id"),
+            "cosigner_verified_token": claim,
+        },
+        {"$set": {"cosigner_verified_token": ""}},
+    )
+    if int(getattr(result, "modified_count", 0) or 0) <= 0:
+        raise CosignerLinkError("verification_open", 409)
+    packet["cosigner_verified_token"] = ""
+
+
 async def create_cosigner_link(*, actor: str, packet_id: str, lang: str = "en") -> dict:
     packet = await _find_packet(packet_id)
     if not packet:
@@ -766,6 +794,7 @@ async def create_cosigner_link(*, actor: str, packet_id: str, lang: str = "en") 
     if gap:
         raise CosignerLinkError(gap, 409)
     await _require_party_binding(packet, bond)
+    await _replace_stale_verification_claim(packet)
     name, role = packet_name, packet_role
     now = _now()
     token = secrets.token_urlsafe(24)
@@ -930,7 +959,9 @@ async def _held_by_other(packet: dict, token: str) -> bool:
     async for other in _iter(cursor):
         if str(other.get("token") or "") == str(token or ""):
             continue
-        if other.get("id_verified"):
+        # An expired or revoked link no longer holds the scan. A live
+        # verified link still does.
+        if other.get("id_verified") and not _link_block(other):
             return True
     return False
 

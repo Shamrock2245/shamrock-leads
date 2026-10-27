@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-27 (expired co-signer claim can be replaced)
+
+### Fixed
+- **A second co-signer link is refused while the verification claim still belongs to an open link.** An expired, revoked, or missing claim is cleared, and the stored ID scans are left in place. The replacement link can be scanned.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_expired_verification_claim_can_be_replaced`.
+
 ## [Unreleased] — 2026-10-27 (co-signer link requires stored parties)
 
 ### Fixed

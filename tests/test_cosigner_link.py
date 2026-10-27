@@ -1828,6 +1828,52 @@ def test_link_requires_bound_party_records(monkeypatch):
     assert "id_ocr" not in stores["paperwork_packets"].docs[0]
 
 
+def test_expired_verification_claim_can_be_replaced(monkeypatch):
+    """A live claim is not replaced. An expired claim is, and the scan stays."""
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    uploaded = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    packet = stores["paperwork_packets"].docs[0]
+    assert packet["cosigner_verified_token"] == token
+    first_scans = [dict(row) for row in packet["id_scan_records"]]
+    assert first_scans
+    blocked = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert blocked.status_code == 409
+    assert blocked.json() == {"error": "verification_open"}
+    assert len(_links(stores)) == 1
+    assert packet["cosigner_verified_token"] == token
+    assert packet["id_scan_records"] == first_scans
+
+    stores["cosigner_links"].docs[0]["expires_at"] = "2020-01-01T00:00:00+00:00"
+    replaced = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert replaced.status_code == 200, replaced.text
+    new_token = replaced.json()["token"]
+    assert new_token != token
+    assert packet.get("cosigner_verified_token") in {None, ""}
+    assert packet["id_scan_records"] == first_scans
+    assert len(_links(stores)) == 2
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    scanned = _post_scan(client, new_token)
+    assert scanned.status_code == 200, scanned.text
+    assert calls["n"] == 1
+    assert packet["id_scan_records"][0]["scan_id"] == first_scans[0]["scan_id"]
+    assert len(packet["id_scan_records"]) == 2
+    assert packet["cosigner_verified_token"] == new_token
+
+
 def test_incomplete_bond_does_not_get_a_link(monkeypatch):
     """No token until the bond has a validated match, case number, surety, and POA."""
     stores, client = _world(monkeypatch)
