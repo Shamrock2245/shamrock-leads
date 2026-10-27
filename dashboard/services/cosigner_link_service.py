@@ -712,26 +712,75 @@ def _party_id_gap(packet: dict, bond: dict) -> str:
     return ""
 
 
+def _co_indemnitor_ids(doc: dict) -> list[str]:
+    """Ids on co-indemnitor rows. The primary indemnitor id is not one of these."""
+    if not isinstance(doc, dict):
+        return []
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: str) -> None:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            return
+        seen.add(text)
+        found.append(text)
+
+    for person in _listed_people(doc):
+        role = str(person.get("role") or person.get("party_role") or "").strip().lower()
+        role = role.replace("-", "_")
+        if role not in _COSIGNER_ROLES and role != "co_indemnitor":
+            continue
+        add(_bond_field(person, "indemnitor_id", "Indemnitor_ID", "id"))
+    for key in ("coindemnitor", "co_indemnitor", "cosigner", "co_signer"):
+        nested = doc.get(key)
+        if isinstance(nested, dict):
+            add(_bond_field(nested, "indemnitor_id", "Indemnitor_ID", "id"))
+    add(_bond_field(doc, "co_indemnitor_id", "coindemnitor_id", "Co_Indemnitor_ID"))
+    return found
+
+
+def _co_indemnitor_gap(packet: dict, bond: dict) -> str:
+    """The co-signer needs one id of their own, the same on the packet and the bond."""
+    packet_ids = _co_indemnitor_ids(packet)
+    bond_ids = _co_indemnitor_ids(bond)
+    if len(packet_ids) > 1 or len(bond_ids) > 1:
+        return "co_indemnitor_ambiguous"
+    if len(packet_ids) != 1 or len(bond_ids) != 1:
+        return "co_indemnitor_required"
+    if packet_ids[0] != bond_ids[0]:
+        return "co_indemnitor_mismatch"
+    primary_packet, primary_bond = _party_ids(packet)[1], _party_ids(bond)[1]
+    if packet_ids[0] in {primary_packet, primary_bond}:
+        return "co_indemnitor_mismatch"
+    return ""
+
+
+async def _indemnitor_missing(indemnitor_id: str) -> bool:
+    query = _scope({"$or": [
+        {"indemnitor_id": indemnitor_id},
+        {"Indemnitor_ID": indemnitor_id},
+    ]})
+    if query is None:
+        raise CosignerLinkError("tenant_required", 403)
+    return not await get_collection("indemnitors").find_one(query)
+
+
 async def _parties_unresolved(defendant_id: str, indemnitor_id: str) -> str:
     """Both party rows must already exist. This does not create them."""
     defendant_query = _scope({"$or": [
         {"defendant_id": defendant_id},
         {"Defendant_ID": defendant_id},
     ]})
-    indemnitor_query = _scope({"$or": [
-        {"indemnitor_id": indemnitor_id},
-        {"Indemnitor_ID": indemnitor_id},
-    ]})
-    if defendant_query is None or indemnitor_query is None:
+    if defendant_query is None:
         raise CosignerLinkError("tenant_required", 403)
     defendant = await get_collection("defendants").find_one(defendant_query)
-    indemnitor = await get_collection("indemnitors").find_one(indemnitor_query)
-    if not defendant or not indemnitor:
+    if not defendant or await _indemnitor_missing(indemnitor_id):
         return "party_unresolved"
     return ""
 
 
-async def _require_party_binding(packet: dict, bond: dict) -> None:
+async def _require_party_binding(packet: dict, bond: dict, *, role: str) -> None:
     gap = _party_id_gap(packet, bond)
     if gap:
         raise CosignerLinkError(gap, 409)
@@ -739,6 +788,13 @@ async def _require_party_binding(packet: dict, bond: dict) -> None:
     missing = await _parties_unresolved(defendant_id, indemnitor_id)
     if missing:
         raise CosignerLinkError(missing, 409)
+    if role != "co_indemnitor":
+        return
+    co_gap = _co_indemnitor_gap(packet, bond)
+    if co_gap:
+        raise CosignerLinkError(co_gap, 409)
+    if await _indemnitor_missing(_co_indemnitor_ids(bond)[0]):
+        raise CosignerLinkError("co_indemnitor_unresolved", 409)
 
 
 async def _replace_stale_verification_claim(packet: dict) -> None:
@@ -797,7 +853,7 @@ async def create_cosigner_link(*, actor: str, packet_id: str, lang: str = "en") 
     gap = _bond_issuance_gap(bond)
     if gap:
         raise CosignerLinkError(gap, 409)
-    await _require_party_binding(packet, bond)
+    await _require_party_binding(packet, bond, role=packet_role)
     await _replace_stale_verification_claim(packet)
     name, role = packet_name, packet_role
     now = _now()
@@ -916,7 +972,7 @@ async def _require_current_bond(link: dict, packet: dict) -> dict:
     gap = _bond_issuance_gap(bond)
     if gap:
         raise CosignerLinkError(gap, 409)
-    await _require_party_binding(packet, bond)
+    await _require_party_binding(packet, bond, role=_link_role(link))
     return bond
 
 

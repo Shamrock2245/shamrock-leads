@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-27 (co-signer must have their own indemnitor)
+
+### Fixed
+- **A co-signer link is issued only when the packet and the bond name that co-signer's own indemnitor id, and that row already exists.** A missing id, more than one id, an id that does not match, or the primary indemnitor's id is refused. A name match is not enough. No DocuSeal URL or pay link is returned.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_cosigner_bound_to_their_own_indemnitor_record`, `test_cosigner_without_their_own_record_gets_no_link`, `test_cosigner_record_of_the_primary_indemnitor_gets_no_link`.
+
 ## [Unreleased] — 2026-10-27 (failed co-signer issuance audit leaves no link)
 
 ### Fixed

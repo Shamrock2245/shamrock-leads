@@ -29,6 +29,7 @@ PACKET = "PKT-TEST-COS-1"
 CASE = "BC-TEST-COS-1"
 DEFENDANT_ID = "TEST-DEF-COS-1"
 INDEMNITOR_ID = "TEST-IND-COS-1"
+CO_INDEMNITOR_ID = "TEST-COIND-COS-1"
 ACTOR = "office@example.invalid"
 
 
@@ -380,16 +381,22 @@ def _world(monkeypatch, *, cosigner=""):
         packet["cosigner_name"] = cosigner
         bond["co_signer_name"] = cosigner
         people = [
-            {"role": "indemnitor", "name": indemnitor},
-            {"role": "co_indemnitor", "name": cosigner},
+            {"role": "indemnitor", "name": indemnitor, "indemnitor_id": INDEMNITOR_ID},
+            {"role": "co_indemnitor", "name": cosigner, "indemnitor_id": CO_INDEMNITOR_ID},
         ]
         packet["indemnitors"] = people
         bond["indemnitors"] = people
+    indemnitor_rows = [{"indemnitor_id": INDEMNITOR_ID, "Indemnitor_ID": INDEMNITOR_ID}]
+    if cosigner:
+        indemnitor_rows.append({
+            "indemnitor_id": CO_INDEMNITOR_ID,
+            "Indemnitor_ID": CO_INDEMNITOR_ID,
+        })
     stores = {
         "paperwork_packets": _Col([packet]),
         "bond_cases": _Col([bond]),
         "defendants": _Col([{"defendant_id": DEFENDANT_ID, "Defendant_ID": DEFENDANT_ID}]),
-        "indemnitors": _Col([{"indemnitor_id": INDEMNITOR_ID, "Indemnitor_ID": INDEMNITOR_ID}]),
+        "indemnitors": _Col(indemnitor_rows),
     }
 
     def get(name):
@@ -1757,6 +1764,92 @@ def _links(stores):
 def _drop_party_ids(doc, *keys):
     for key in keys:
         doc.pop(key, None)
+
+
+def _clear_co_indemnitor_ids(doc):
+    for person in doc.get("indemnitors") or []:
+        if str(person.get("role") or "").replace("-", "_") in {
+            "co_indemnitor", "coindemnitor", "cosigner", "co_signer",
+        }:
+            person.pop("indemnitor_id", None)
+            person.pop("Indemnitor_ID", None)
+            person.pop("id", None)
+    for key in ("co_indemnitor_id", "coindemnitor_id", "Co_Indemnitor_ID"):
+        doc.pop(key, None)
+
+
+def test_cosigner_bound_to_their_own_indemnitor_record(monkeypatch):
+    """A co-signer with their own indemnitor row can sign. The pay link stays hidden."""
+    stores, client = _world(monkeypatch, cosigner=NAME)
+    token = _token(client)
+    assert stores["cosigner_links"].docs[0]["signer_role"] == "co_indemnitor"
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert opened.status_code == 200, opened.text
+    signing = client.get(f"/api/cosigner/{token}")
+    assert signing.status_code == 200, signing.text
+    assert signing.json()["step"] == "sign"
+    assert signing.json()["sign_url"] == _sign("cosigner")
+    assert signing.json()["payment"] is None
+    assert _swipe_link("down") not in signing.text
+
+    for person in stores["bond_cases"].docs[0]["indemnitors"]:
+        if person.get("role") == "co_indemnitor":
+            person["indemnitor_id"] = INDEMNITOR_ID
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    refused = client.get(f"/api/cosigner/{token}")
+    assert refused.status_code == 409
+    assert refused.json()["error"] == "co_indemnitor_mismatch"
+    assert _sign_hidden(refused.text)
+    assert _swipe_link("down") not in refused.text
+    scan = _post_scan(client, token)
+    assert scan.status_code == 409
+    assert calls["n"] == 0
+
+
+def test_cosigner_without_their_own_record_gets_no_link(monkeypatch):
+    """A co-signer named on the bond, with no id of their own, gets no link."""
+    stores, client = _world(monkeypatch, cosigner=NAME)
+    packet = stores["paperwork_packets"].docs[0]
+    bond = stores["bond_cases"].docs[0]
+    _clear_co_indemnitor_ids(packet)
+    _clear_co_indemnitor_ids(bond)
+    stores["indemnitors"].docs = [
+        row for row in stores["indemnitors"].docs
+        if row.get("indemnitor_id") != CO_INDEMNITOR_ID
+    ]
+    refused = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert refused.status_code == 409
+    assert refused.json() == {"error": "co_indemnitor_required"}
+    assert "token" not in refused.json()
+    assert _links(stores) == []
+    assert _sign("cosigner") not in refused.text
+
+
+def test_cosigner_record_of_the_primary_indemnitor_gets_no_link(monkeypatch):
+    """The primary indemnitor id is not the co-signer's record."""
+    stores, client = _world(monkeypatch, cosigner=NAME)
+    for person in stores["bond_cases"].docs[0]["indemnitors"]:
+        if person.get("role") == "co_indemnitor":
+            person["indemnitor_id"] = INDEMNITOR_ID
+    refused = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert refused.status_code == 409
+    assert refused.json() == {"error": "co_indemnitor_mismatch"}
+    assert "token" not in refused.json()
+    assert _links(stores) == []
+    assert _sign("cosigner") not in refused.text
+    assert _swipe_link("down") not in refused.text
 
 
 def test_link_requires_bound_party_records(monkeypatch):
