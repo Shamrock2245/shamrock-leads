@@ -39,14 +39,14 @@
 | 12 | **Pasco** | DrissionPage — Cloudflare bypass | `pasco.py` | ✅ Active | 90 min | 2026-04-27 |
 | 13 | **Lake** | requests POST `recent_data` + Turnstile token (SolveCaptcha, owner-approved; shared `scrapers/solvecaptcha.py`) | `lake.py` | ✅ `verified_public` (Mac write smoke 17 new; needs SOLVECAPTCHA_KEY) | 90 min | 2026-09-25 |
 | 14 | **Hernando** | Custom HTML | `hernando.py` | ✅ Active | 90 min | 2026-04-27 |
-| 15 | **Citrus** | Public recent-arrest PDF (source `AR #`) — plain requests + pdfplumber | `citrus.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
+| 15 | **Citrus** | Public recent-arrest PDF (source `AR #`) — plain_http + pdfplumber | `citrus.py` | ⚠️ Blocked from the agent box: honest probe HTTP 403 (`egress_block`) on 2026-10-15; needs VPS / Leads Ops validation + write smoke before treating as available (unverified, `recon_only`) | 120 min | 2026-10-15 |
 
 ---
 
 ## Tier 3 — Central FL / Heartland (6 Counties)
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
-| 16 | **Polk** | Direct Kendo UI REST API | `polk.py` | ✅ Active | 120 min | 2026-05-24 |
+| 16 | **Polk** | Direct Kendo UI JSON API (SearchJail + GetCharges), plain HTTPS via `plain_http` (honest UA, TLS verified); typed errors, nothing swallowed | `polk.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-22 |
 | 17 | **Osceola** | Corrections Daily Arrest Report CSV, plain HTTPS (honest UA, TLS verified, no impersonation). The download redirects to legacy-apps.osceola.org, which omits its intermediate certificate, so runs fail loud as `tls_cert_invalid` until the county fixes the chain | `osceola.py` | ✅ Active (unverified; TLS chain hold) | 120 min | 2026-10-15 |
 | 18 | **Sumter** | SmartWEB JAIL View (`SCSO<YY>JBN######`, modern AddMoreResults) — plain requests | `sumter.py` | ✅ Active (unverified until write smoke) | 180 min | 2026-10-07 |
 | 19 | **Highlands** | Direct OCV JSON API | `highlands.py` | ✅ Active | 120 min | 2026-05-24 |
@@ -58,7 +58,7 @@
 ## Tier 4 — Southeast / Treasure Coast (6 Counties)
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
-| 22 | **Palm Beach** | DrissionPage — PBSO ColdFusion blotter | `palm_beach.py` | ✅ Active (fixed page.html 2026-07-10) | 120 min | 2026-07-10 |
+| 22 | **Palm Beach** | PBSO ColdFusion blotter, plain HTTPS (honest UA, TLS verified, no browser or impersonation): submits the page's own date form, parses `allresults_` cards only, follows its own pagination with a 3 s pause. Layout drift raises `ParseDriftError`; blocks raise `egress_block`. Honest box probe 2026-10-15: `connection_reset` | `palm_beach.py` | ✅ Active (unverified; `recon_only`) | 120 min | 2026-10-15 |
 | 23 | **Broward** | Official BSO arrest search | `broward.py` | ✅ Live — Turnstile Arrest Search name-prefix + paged grid; Mac smoke 2026-09-23 (30 new / status=ok; action=arrest_search); needs `SOLVECAPTCHA_KEY` | 60 min | Writes enabled after contract validation |
 | 24 | **Martin** | Direct Tyler Technologies REST API, plain HTTPS (honest UA, TLS verified, no impersonation) | `martin.py` | ✅ Active (unverified) | 120 min | 2026-10-15 |
 | 25 | **St. Lucie** | plain HTTPS POST — PHP inmate list (honest UA, TLS verified, no impersonation; source Inmate Id as key, not yet proven to be a booking number) | `st_lucie.py` | ✅ Active (unverified) | 90 min | 2026-10-15 |
@@ -70,7 +70,7 @@
 ## Tier 5 — East Coast / Space Coast (3 Counties)
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
-| 28 | **Volusia** | Direct ASP.NET Postback (volusiamug.vcgov.org) | `volusia.py` | ✅ Active | 90 min | 2026-05-24 |
+| 28 | **Volusia** | Direct ASP.NET Postback (volusiamug.vcgov.org), plain HTTPS via `plain_http` (honest UA, TLS verified). Status from the published InCustody column; typed errors, nothing swallowed | `volusia.py` | ✅ Active (unverified until write smoke) | 90 min | 2026-10-22 |
 | 29 | **Brevard** | BCSO Inmate Search (`/?handler=Search` date window → `Booking #` `YYYY-NNNNNNNN`; detail Bonds/Charges for in-custody rows) — plain requests | `brevard.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
 | 30 | **Flagler** | New World InmateInquiry (`InCustody=True` + detail open `Booking` `YYYY-NNNNNNNN`; shared `fl_newworld`) — plain requests | `flagler.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
 
@@ -198,7 +198,7 @@ Approach:   Query the anonymous FeatureServer directly with `ObjectId,BookDate,D
 ### JailTracker (Black Creek ISC)
 - **Pattern**: Paginated HTML tables or JSON API
 - **Auth**: None; occasional CAPTCHA / rate limiting
-- **Active Counties**: Highlands, Glades. Citrus is the sheriff PDF roster, not JailTracker (2026-10-07). Baker/Calhoun/Gulf/Holmes/Levy/Wakulla/Washington stay fail_closed.
+- **Active Counties**: Highlands, Glades. Citrus is the sheriff PDF roster, not JailTracker (2026-10-07); an honest probe got HTTP 403 on 2026-10-15, so it is not available until VPS / Leads Ops validation (see the Citrus row). Baker/Calhoun/Gulf/Holmes/Levy/Wakulla/Washington stay fail_closed.
 
 ### New World / InmateInquiry (Tyler Technologies)
 - **Pattern**: Server-rendered HTML listing + detail pages (GET)

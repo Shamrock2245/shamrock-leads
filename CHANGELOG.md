@@ -3,6 +3,109 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-27 (co-signer scan is not the indemnitor scan)
+
+### Fixed
+- **A co-signer ID scan stored on the bond is not treated as the primary indemnitor's scan.** The bond's indemnitor id stays on the bond. The indemnitor still needs their own scan.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_cosigner_different_from_indemnitor` still expects `no_scan` for the indemnitor. `test_confirmed_zero_down_payment_finishes_after_signing` expects no DocuSeal URL once the step is paid.
+
+## [Unreleased] — 2026-10-27 (co-signer pay URL is escaped)
+
+### Fixed
+- **The public co-signer page escapes the pay URL before placing it in the link.** A quote in a stored invoice path cannot become an HTML attribute. The sign link is escaped the same way.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_payment_url_is_escaped_on_the_page`.
+
+## [Unreleased] — 2026-10-27 (completed co-signer hides the sign URL)
+
+### Fixed
+- **The public co-signer status returns the DocuSeal URL only on the sign step.** Pay and paid keep the payment view and do not include the signing URL.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_completed_packet_hides_the_sign_url`.
+
+## [Unreleased] — 2026-10-27 (expired co-signer claim can be replaced)
+
+### Fixed
+- **A second co-signer link is refused while the verification claim still belongs to an open link.** An expired, revoked, or missing claim is cleared, and the stored ID scans are left in place. The replacement link can be scanned.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_expired_verification_claim_can_be_replaced`.
+
+## [Unreleased] — 2026-10-27 (co-signer link requires stored parties)
+
+### Fixed
+- **A co-signer link is issued only when the packet and the bond name the same defendant and indemnitor, and both rows already exist.** Missing ids, disagreeing ids, and ids that do not resolve are refused. A later request fails closed the same way. No party row is created.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_link_requires_bound_party_records`.
+
+## [Unreleased] — 2026-10-26 (unsigned co-signer gets no pay link)
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_unsigned_packet_hides_the_pay_link`. A verified signer stays on the sign step, and a stored SwipeSimple URL is not returned, until the packet is signed.
+
+## [Unreleased] — 2026-10-15 (Citrus: unpublished bond is "", published 0 kept; no invented custody; honest HTTPS)
+
+### Fixed
+- **Citrus (FL) no longer invents a `$0` bond.** `_parse_bond` returned `0.0` for blank, NO BOND, HOLD, N/A or text bonds, and the record stored `"0"`. A positive amount was stored as `"1000.0"`. It now uses `published_bond.charge_bond_amount`: a published amount is stored as `"1000"` / `"250.50"`, a published `0` stays `"0"`, and anything unpublished is `""`.
+- **Custody is no longer invented.** `Status` was hard-coded `"In Custody"`. The source is a recent-arrests PDF that never states custody, so it is now `""`.
+- **Chrome disguise removed.** The Chrome `User-Agent` is gone, and the landing and PDF requests go through `scrapers.plain_http` (honest UA, certificate verified). A block raises `egress_block:` and a real certificate failure raises `tls_cert_invalid:`, with no workaround. There was no `verify=False` to remove. The one honest probe from the agent box (2026-10-15) got **HTTP 403**, so it now fails visibly as `egress_block: Citrus HTTP 403` from that network.
+
+- **Registries record the blocked Citrus source (Codex P1 on 98811b3).** `docs/COUNTY_REGISTRY.md` no longer shows Citrus as ✅ Active (2026-10-07). It now records the 2026-10-15 honest probe (HTTP 403, `egress_block`) and says VPS / Leads Ops validation plus a write smoke are needed before it is treated as available. The FL 017 evidence row moves from `candidate_productive` to `recon_only` with the 403 result, the matrix was regenerated (FL candidate 20→19, recon only 18→19), and `FL_67_STATUS_2026-10-08.md` row 32 matches. Health stays `unverified`. No stored rows change.
+
+### Tests
+- `tests/test_fl_citrus_bond_custody_defaults.py` (added to the `ci.yml` list).
+- `test_registries_record_the_403_probe_not_available`; `tests/test_home_county_smoke_evidence.py` FL matrix counts updated.
+
+## [Unreleased] — 2026-10-22 (Volusia: custody only from the published InCustody column)
+
+### Fixed
+- **Volusia (FL) no longer invents "In Custody".** The old rule read every row without a release date and without `InCustody = N` as in custody, including a blank cell. Status now comes from the published `InCustody` column (`Y` gives In Custody, `N` gives Released; `status_source` is `published_in_custody_column`), otherwise from a published Release Date (`published_release_date`), otherwise `""`. An honest agent-box read on 2026-10-22 confirmed the column and its agreement with Release Date (`docs/recon/FL_VOLUSIA_HONEST_2026-10-22.md`).
+- **Volusia failures are visible.** The per-booking `except Exception` that logged and skipped detail-page errors is gone, and so is the outer catch-all. A block raises `egress_block`, a bad certificate raises `tls_cert_invalid`, a non-200 on the list flow raises `VolusiaHTTPError` (classified by status), and missing ViewState, a missing Recent Bookings table or changed columns raise `ParseDriftError` instead of an empty run. Columns are checked against the published header instead of fixed indexes, which also fixes the `IndexError` on 10- or 11-cell rows. The debug line that logged the person's name is gone.
+- **Stored invented custody can be cleared, but the switch is off (Codex P1).** `MongoWriter` still leaves a blank scraped status out of `$set`, so rows saved by the old fallback keep their stored "In Custody". The new `CLEAR_UNPUBLISHED_STATUS` setting (`config/settings.py`) takes comma-separated `ST/County` entries and is **empty by default and enabled nowhere** (not in deploy, compose or `.env.example`). For a listed county, a scrape that publishes a blank status sets the stored status to `""` only where it is `"In Custody"` with no recorded `extra.status_source`. That runs in a separate pre-bulk update with `upsert=False`. A sourced status, a stored "Released" and other states are untouched. Turning it on changes stored prod rows and needs a Leads Ops count plus the owner's OK (tracked in #264). Tests: `tests/test_mongo_clear_unpublished_status.py` (flag off, flag on, scoping, default empty; on the ci.yml list).
+- Booking keys stay the published `Booking #` (Inmate ID only as Person_ID). Bond stays the per-charge sum only when every charge publishes an amount; a published `$0` is kept, otherwise `""`. The FL 127 evidence row records the read; the matrix was regenerated and Volusia stays unverified (`recon_only`) until a Leads Ops write smoke. `docs/COUNTY_REGISTRY.md` and `docs/agents/scraper-agent.md` no longer describe a DrissionPage or vcso.us source. Tests: `tests/test_fl_volusia_honest_status.py` (new, on the ci.yml list).
+
+## [Unreleased] — 2026-10-22 (Polk: typed errors, no catch-all handlers)
+
+### Fixed
+- **Polk (FL) no longer swallows failures.** The four `except Exception` handlers in `polk.py` are gone: per booking, the profile page, GetCharges, and the per-date search loop, which turned any search error into an empty day. Blocks (`egress_block`) and bad certificates (`tls_cert_invalid`) were already re-raised and still are. A non-200 SearchJail now raises the new `PolkHTTPError`, which carries `status_code` and is classified by status (404 `url_changed`, 5xx `network`) instead of being logged and skipped. A SearchJail or GetCharges payload that isn't a JSON list of objects raises `ParseDriftError`. Network errors such as timeouts propagate instead of being logged.
+- **Polk network errors carry no booking numbers (Codex P2 on f6f6acd).** A non-block network failure on SearchJail, the profile page or GetCharges (a refused connection, a timeout) is re-raised as `PolkNetworkError`, whose message names only the step and the exception type (`Polk: network error on inmate-profile (ConnectionError)`). requests/urllib3 messages embed the URL (`/inmate-profile/<booking>`), and `BaseScraper` logs and alerts `str(e)`. The original exception stays on `__cause__`. `PolkNetworkError` subclasses `requests.exceptions.ConnectionError`, so Health still classifies it as `network` (retryable). Blocks and TLS failures are not re-wrapped. Tests: `tests/test_fl_polk_typed_errors.py`.
+- **Per-booking detail misses are counted, not itemised.** A profile page that isn't 200, a missing anti-forgery token, or a GetCharges response that isn't 200 JSON leaves that record's charges and bond `""`. All misses in a run go into one warning with no names or booking numbers. The per-booking warnings that logged booking numbers and exception text are gone.
+- Status and transport are unchanged: a published ReleaseDate gives Released, otherwise `""`, and it now records `status_source` (`published_release_date` / `published_status_field`). Bond is still the per-charge sum only when every charge publishes `BondAmountDue` (a published 0 is kept). The FL 105 evidence row records the 2026-10-22 honest read (`docs/recon/FL_POLK_TYPED_ERRORS_2026-10-22.md`); the matrix was regenerated and Polk stays unverified (`recon_only`). `docs/COUNTY_REGISTRY.md` and `docs/agents/scraper-agent.md` no longer describe DrissionPage. Tests: `tests/test_fl_polk_typed_errors.py` (new, on the ci.yml list).
+
+## [Unreleased] — 2026-10-23 (FA watcher query test: stale county list, now on the ci.yml list)
+
+### Fixed
+- **`test_watcher_query_uses_fa_watch_counties` was stale, not flaky.** It failed on main (f1d0042) both alone and in a full run, in a clean checkout, so this is not order dependence or leaked state. The test hard-coded which watch counties are fail_closed. Two documented Health decisions had since moved: Miami-Dade (FL) was reopened unverified on the owner-approved internal key (#168), and DeSoto (FL) went fail_closed (#222). The watcher was right both times: it drops exactly the Health fail_closed counties. Nobody saw the drift because the file was not on the ci.yml pytest list. The test now derives the expected in/out sets from `config.source_guard` and asserts both branches. It keeps explicit anchors for today's decisions (closed: Hendry, Charlotte, Manatee, Sarasota, DeSoto; open: Miami-Dade, Broward, St. Lucie). `tests/test_write_counties_fa_union.py` is now on the ci.yml list, so the next Health change has to update it in the same PR. No runtime code changed.
+
+## [Unreleased] — 2026-10-23 (co-signer rollback audit omits bearer tokens)
+
+### Fixed
+- **A rolled-back verification records a hash of each restored link, not the bearer token.** The sibling link is still restored. The audit row cannot be used as the public link.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_failed_verification_removes_the_stored_scan`.
+
+## [Unreleased] — 2026-10-23 (co-signer scan updates the aliased case)
+
+### Fixed
+- **An ID scan is written to the bond named by `bond_case_id` or `Bond_Case_ID`.** A second case that only shares the booking number is not updated.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_scan_writes_the_bond_named_by_bond_case_id`.
+
+## [Unreleased] — 2026-10-23 (co-signer claim is released when the audit write fails)
+
+### Fixed
+- **A verification that cannot write its audit still releases the packet claim.** The customer can retry the same link after the audit store fails. The claim is released even when the compensating audit write fails.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_audit_outage_releases_the_verification_claim`.
+
 ## [Unreleased] — 2026-10-23 (co-signer payment rows are tenant-scoped; pending audits show before/after)
 
 ### Fixed
@@ -360,6 +463,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_cosigner_link.py`.
 
+## [Unreleased] — 2026-10-15 (Palm Beach: plain honest HTTPS, no browser disguise)
+
+### Changed
+- **Palm Beach (FL) no longer drives a Chrome browser or sends a Chrome User-Agent.** `palm_beach.py` reads the PBSO blotter with `scrapers.plain_http` (honest UA, certificate verified). It submits the page's own date-search form, parses cards with `parse_pbso_html`, and follows the page's own pagination links. The hCaptcha wait loop is gone: a challenge page (including hCaptcha) or 401/403/429 raises `egress_block:`, a dropped handshake raises `egress_block: ... connection_reset:`, a certificate failure raises `tls_cert_invalid:`, and a missing search form raises `PalmBeachSourceChanged`. `_fetch_single_booking` uses the same honest session, and a block now raises instead of reading as "not found". The one honest probe from the agent box (2026-10-15) got **connection_reset**. Tests: `tests/test_fl_palmbeach_plain_https.py`.
+- **Palm Beach review fixes (Codex review on fdc6a77).** Roster pages are parsed only from `div[id^=allresults_]` cards; a page with no cards and no "0 matches"/"no results" notice raises `PalmBeachSourceChanged` instead of being read as one card that could merge several people's charges and bonds. A card whose booking number is published only as its numeric link text keeps that number (as the old card parser did). Pagination pauses `PAGE_PAUSE_S` (3 s) before each next-page GET. The FL 099 evidence row (`docs/recon/county_source_contract_evidence.json`, regenerated into `COUNTY_SOURCE_CONTRACT_MATRIX.md`) now records the blotter URL, the plain-HTTPS implementation and the failed honest probe; the state stays `recon_only`/unverified. Tests: `tests/test_fl_palmbeach_plain_https.py`.
+- **Palm Beach layout drift is classified as parse drift (Codex review on 738e790, #265).** `PalmBeachSourceChanged` now subclasses `ParseDriftError`, so a missing date-search form or a results page with no `allresults_` cards and no "no matches" notice reaches `BaseScraper`'s parse-drift alert path and shows as `parse_drift` in Health, not `unknown`. A non-200 response that isn't a block raises the new `PalmBeachHTTPError`, which carries `status_code` and is classified by status (404/410 `url_changed`, 5xx `network`), never as drift. `docs/COUNTY_REGISTRY.md` (row 22) and `docs/agents/scraper-agent.md` no longer describe the old DrissionPage contract. Tests: `tests/test_fl_palmbeach_plain_https.py`.
+- **Palm Beach records never default status to "In Custody".** `_row_to_arrest_record` uses `row.get("status") or ""`, so an unknown status is `""` and a published one (e.g. `Released` from a card release date via `pbso_parse`) is kept. The blotter isn't custody-only (#233).
 ## [Unreleased] — 2026-10-19 (PyMuPDF 2.x keeps Palmetto widget names)
 
 ### Fixed
@@ -942,6 +1052,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Byte-identical pass-through of every redact helper on non-Miami-Dade values.
   - Native form submit on a Miami-Dade record posts the real key (node simulation); a blank booking from a form never overwrites a stored key (server tests); checkbox, radio and hidden behaviour from P1.
   - Guards on Slack/Telegram `json=`, message entry points, Sheets/notification text, middleware registration, guard-first page loading and recovery portal labels.
+
 ## [Unreleased] — 2026-10-14 (Duval: never click the ATIMS robot gate)
 
 ### Fixed

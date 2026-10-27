@@ -6,6 +6,7 @@ O'Neill does not match O'Neal. A full ID number is rejected.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 from unittest.mock import AsyncMock
 
@@ -26,6 +27,8 @@ BOOKING = "TEST-COS-1"
 INDEMNITOR = "Casey Sample"
 PACKET = "PKT-TEST-COS-1"
 CASE = "BC-TEST-COS-1"
+DEFENDANT_ID = "TEST-DEF-COS-1"
+INDEMNITOR_ID = "TEST-IND-COS-1"
 ACTOR = "office@example.invalid"
 
 
@@ -369,6 +372,8 @@ def _world(monkeypatch, *, cosigner=""):
         ],
         "status": "draft",
         "surety_id": "osi",
+        "defendant_id": DEFENDANT_ID,
+        "indemnitor_id": INDEMNITOR_ID,
         **CONFIRMED,
     }
     if cosigner:
@@ -384,6 +389,8 @@ def _world(monkeypatch, *, cosigner=""):
         "match_status": "validated",
         "case_number": "2026-TEST-001",
         "poa_number": "POA-TEST-COS-1",
+        "defendant_id": DEFENDANT_ID,
+        "indemnitor_id": INDEMNITOR_ID,
         "swipesimple_invoice_number": BOOKING,
         "premium_paid": False,
         **CONFIRMED,
@@ -400,6 +407,8 @@ def _world(monkeypatch, *, cosigner=""):
     stores = {
         "paperwork_packets": _Col([packet]),
         "bond_cases": _Col([bond]),
+        "defendants": _Col([{"defendant_id": DEFENDANT_ID, "Defendant_ID": DEFENDANT_ID}]),
+        "indemnitors": _Col([{"indemnitor_id": INDEMNITOR_ID, "Indemnitor_ID": INDEMNITOR_ID}]),
     }
 
     def get(name):
@@ -496,6 +505,49 @@ def test_bond_case_id_alias_revalidates_and_rejects_a_mismatch(monkeypatch):
     assert packet["packet_id"] == PACKET
     assert packet["status"] == "draft"
     assert "id_ocr" not in packet
+
+
+def test_scan_writes_the_bond_named_by_bond_case_id(monkeypatch):
+    """A Bond_Case_ID bond is updated. A sibling with the same booking is not."""
+    stores, client = _world(monkeypatch)
+    selected = stores["bond_cases"].docs[0]
+    selected.pop("bond_case_id", None)
+    selected["Bond_Case_ID"] = CASE
+    other = {
+        "bond_case_id": "BC-TEST-OTHER",
+        "booking_number": BOOKING,
+        "status": "active",
+        "indemnitor_name": "Pat Other",
+        "surety_id": "osi",
+        "match_status": "validated",
+        "case_number": "2026-TEST-002",
+        "poa_number": "POA-TEST-COS-2",
+        "premium_paid": False,
+        **CONFIRMED,
+    }
+    stores["bond_cases"].docs.insert(0, other)
+    seen = []
+    original = stores["bond_cases"].update_one
+
+    async def _watch(query, update, upsert=False, session=None, **kwargs):
+        seen.append(query)
+        return await original(query, update, upsert=upsert, session=session, **kwargs)
+
+    stores["bond_cases"].update_one = _watch
+    token = _token(client)
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    uploaded = _post_scan(client, token)
+    assert uploaded.status_code == 200, uploaded.text
+    assert calls["n"] == 1
+    assert seen
+    for query in seen:
+        assert "booking_number" not in query
+        assert CASE in str(query)
+        assert "BC-TEST-OTHER" not in str(query)
+    assert selected.get("id_ocr", {}).get("extracted", {}).get("full_name") == NAME
+    assert "id_ocr" not in other
+    assert not other.get("id_scan_records")
 
 
 def test_poa_number_change_keeps_the_cosigner_link(monkeypatch):
@@ -1721,6 +1773,126 @@ def _links(stores):
     return stores.get("cosigner_links").docs if stores.get("cosigner_links") else []
 
 
+def _drop_party_ids(doc, *keys):
+    for key in keys:
+        doc.pop(key, None)
+
+
+def test_link_requires_bound_party_records(monkeypatch):
+    """No public link until the packet and bond name the same stored parties."""
+    stores, client = _world(monkeypatch)
+    created = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert created.status_code == 200, created.text
+
+    stores, client = _world(monkeypatch)
+    _drop_party_ids(stores["paperwork_packets"].docs[0], "defendant_id", "Defendant_ID")
+    missing = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert missing.status_code == 409
+    assert missing.json() == {"error": "defendant_required"}
+    assert _links(stores) == []
+
+    stores, client = _world(monkeypatch)
+    packet = stores["paperwork_packets"].docs[0]
+    bond = stores["bond_cases"].docs[0]
+    _drop_party_ids(packet, "defendant_id", "Defendant_ID")
+    _drop_party_ids(bond, "defendant_id", "Defendant_ID")
+    packet["Defendant_ID"] = DEFENDANT_ID
+    bond["defendant_id"] = DEFENDANT_ID
+    packet["indemnitor_id"] = "TEST-IND-OTHER"
+    aliased = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert aliased.status_code == 409
+    assert aliased.json() == {"error": "party_mismatch"}
+    assert _links(stores) == []
+
+    stores, client = _world(monkeypatch)
+    packet = stores["paperwork_packets"].docs[0]
+    bond = stores["bond_cases"].docs[0]
+    _drop_party_ids(packet, "defendant_id", "Defendant_ID", "indemnitor_id", "Indemnitor_ID")
+    _drop_party_ids(bond, "defendant_id", "Defendant_ID", "indemnitor_id", "Indemnitor_ID")
+    packet["Defendant_ID"] = DEFENDANT_ID
+    bond["defendant_id"] = DEFENDANT_ID
+    packet["Indemnitor_ID"] = INDEMNITOR_ID
+    bond["indemnitor_id"] = INDEMNITOR_ID
+    issued = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert issued.status_code == 200, issued.text
+    token = issued.json()["token"]
+
+    stores["indemnitors"].docs.clear()
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    refused = client.get(f"/api/cosigner/{token}")
+    assert refused.status_code == 409
+    assert refused.json()["error"] == "party_unresolved"
+    assert _sign_hidden(refused.text)
+    scan = _post_scan(client, token)
+    assert scan.status_code == 409
+    assert scan.json()["error"] == "party_unresolved"
+    assert calls["n"] == 0
+    assert "id_ocr" not in stores["paperwork_packets"].docs[0]
+
+
+def test_expired_verification_claim_can_be_replaced(monkeypatch):
+    """A live claim is not replaced. An expired claim is, and the scan stays."""
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    uploaded = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    packet = stores["paperwork_packets"].docs[0]
+    assert packet["cosigner_verified_token"] == token
+    first_scans = [dict(row) for row in packet["id_scan_records"]]
+    assert first_scans
+    blocked = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert blocked.status_code == 409
+    assert blocked.json() == {"error": "verification_open"}
+    assert len(_links(stores)) == 1
+    assert packet["cosigner_verified_token"] == token
+    assert packet["id_scan_records"] == first_scans
+
+    stores["cosigner_links"].docs[0]["expires_at"] = "2020-01-01T00:00:00+00:00"
+    replaced = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert replaced.status_code == 200, replaced.text
+    new_token = replaced.json()["token"]
+    assert new_token != token
+    assert packet.get("cosigner_verified_token") in {None, ""}
+    assert packet["id_scan_records"] == first_scans
+    assert len(_links(stores)) == 2
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    scanned = _post_scan(client, new_token)
+    assert scanned.status_code == 200, scanned.text
+    assert calls["n"] == 1
+    assert packet["id_scan_records"][0]["scan_id"] == first_scans[0]["scan_id"]
+    assert len(packet["id_scan_records"]) == 2
+    assert packet["cosigner_verified_token"] == new_token
+
+
 def test_incomplete_bond_does_not_get_a_link(monkeypatch):
     """No token until the bond has a validated match, case number, surety, and POA."""
     stores, client = _world(monkeypatch)
@@ -1826,6 +1998,107 @@ def test_approved_charge_is_not_the_down_payment(monkeypatch):
     assert not stores["cosigner_links"].docs[0].get("paid_transaction_id")
 
 
+def test_unsigned_packet_hides_the_pay_link(monkeypatch):
+    """A verified signer who has not signed does not get a pay URL."""
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert opened.status_code == 200, opened.text
+    packet = stores["paperwork_packets"].docs[0]
+    pay = _swipe_link("down")
+    packet["invoice_payment_link"] = pay
+    packet["swipesimple_invoice_amount_cents"] = 50000
+    packet["swipesimple_invoice_number"] = BOOKING
+    packet["swipesimple_invoice_bond_id"] = CASE
+    assert packet["status"] == "draft"
+    signing = client.get(f"/api/cosigner/{token}")
+    assert signing.status_code == 200, signing.text
+    assert signing.json()["step"] == "sign"
+    assert signing.json()["sign_url"] == _sign("abc")
+    assert signing.json()["payment"] is None
+    assert pay not in signing.text
+    page = client.get(f"/cosigner/{token}")
+    assert page.status_code == 200
+    assert pay not in page.text
+    assert ">Pay</a>" not in page.text
+
+    packet["status"] = "completed"
+    paying = client.get(f"/api/cosigner/{token}")
+    assert paying.status_code == 200, paying.text
+    assert paying.json()["step"] == "pay"
+    assert paying.json()["payment"]["url"] == pay
+
+
+def test_completed_packet_hides_the_sign_url(monkeypatch):
+    """Pay and paid do not return the DocuSeal URL, even when it is valid."""
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert opened.status_code == 200, opened.text
+    signing = client.get(f"/api/cosigner/{token}")
+    assert signing.status_code == 200, signing.text
+    assert signing.json()["step"] == "sign"
+    assert signing.json()["sign_url"] == _sign("abc")
+    sign_url = _sign("abc")
+
+    packet = stores["paperwork_packets"].docs[0]
+    packet["status"] = "completed"
+    packet["invoice_payment_link"] = _swipe_link("down")
+    packet["swipesimple_invoice_amount_cents"] = 50000
+    packet["swipesimple_invoice_number"] = BOOKING
+    packet["swipesimple_invoice_bond_id"] = CASE
+    paying = client.get(f"/api/cosigner/{token}")
+    assert paying.status_code == 200, paying.text
+    assert paying.json()["step"] == "pay"
+    assert paying.json()["sign_url"] is None
+    assert sign_url not in paying.text
+    page = client.get(f"/cosigner/{token}")
+    assert page.status_code == 200
+    assert sign_url not in page.text
+
+    stores["bond_cases"].docs[0]["premium_paid"] = True
+    paid = client.get(f"/api/cosigner/{token}")
+    assert paid.status_code == 200, paid.text
+    assert paid.json()["step"] == "paid"
+    assert paid.json()["sign_url"] is None
+    assert sign_url not in paid.text
+    done = client.get(f"/cosigner/{token}")
+    assert done.status_code == 200
+    assert sign_url not in done.text
+
+
+def test_payment_url_is_escaped_on_the_page(monkeypatch):
+    """A quote in a stored pay URL cannot break out of the href."""
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert opened.status_code == 200, opened.text
+    packet = stores["paperwork_packets"].docs[0]
+    pay = _swipe_link("down") + "' onclick='alert(1)"
+    packet["status"] = "completed"
+    packet["invoice_payment_link"] = pay
+    packet["swipesimple_invoice_amount_cents"] = 50000
+    packet["swipesimple_invoice_number"] = BOOKING
+    packet["swipesimple_invoice_bond_id"] = CASE
+    page = client.get(f"/cosigner/{token}")
+    assert page.status_code == 200, page.text
+    assert "' onclick='" not in page.text
+    assert "&#x27; onclick=&#x27;" in page.text
+    assert ">Pay</a>" in page.text
+    paying = client.get(f"/api/cosigner/{token}")
+    assert paying.status_code == 200, paying.text
+    assert paying.json()["payment"]["url"] == pay
+
+
 def test_paid_bond_still_requires_a_signature(monkeypatch):
     stores, client = _world(monkeypatch)
     stores["bond_cases"].docs[0]["premium_paid"] = True
@@ -1841,7 +2114,7 @@ def test_paid_bond_still_requires_a_signature(monkeypatch):
     stores["paperwork_packets"].docs[0]["status"] = "completed"
     paid = client.get(f"/api/cosigner/{token}").json()
     assert paid["step"] == "paid"
-    assert paid["sign_url"] == _sign("abc")
+    assert paid["sign_url"] is None
 
 
 def test_verified_or_signed_packet_refuses_another_scan(monkeypatch):
@@ -3250,7 +3523,8 @@ def test_confirmed_zero_down_payment_finishes_after_signing(monkeypatch):
     assert state.status_code == 200, state.text
     body = state.json()
     assert body["step"] == "paid"
-    assert body["sign_url"] == _sign("abc")
+    assert body["sign_url"] is None
+    assert _sign("abc") not in state.text
     assert body["payment"]["amount"] == "0.00"
     assert body["payment"]["url"] is None
     assert "pay.example/zero" not in state.text
@@ -3393,6 +3667,34 @@ def test_inactive_packet_does_not_get_a_public_link(monkeypatch):
         assert issued is None or _audits(stores, "link_issued") == []
 
 
+def test_audit_outage_releases_the_verification_claim(monkeypatch):
+    """A failed audit write still clears the claim so the same link can retry."""
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    packet = stores["paperwork_packets"].docs[0]
+    audits = stores["audit_events"]
+    original = audits.insert_one
+
+    async def _down(doc, session=None, **kwargs):
+        raise RuntimeError("audit store unavailable")
+
+    audits.insert_one = _down
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    with pytest.raises(RuntimeError, match="audit store unavailable"):
+        _post_scan(client, token)
+    assert calls["n"] == 1
+    assert packet.get("cosigner_verified_token") in {None, ""}
+
+    audits.insert_one = original
+    _age_scan_cooldown(stores, token)
+    calls["n"] = 0
+    opened = _post_scan(client, token)
+    assert opened.status_code == 200, opened.text
+    assert calls["n"] == 1
+    assert packet.get("cosigner_verified_token") == token
+
+
 def test_failed_verification_removes_the_stored_scan(monkeypatch):
     """A save failure after the scan does not leave id_ocr or a revoked sibling."""
     import dashboard.services.cosigner_link_service as svc
@@ -3423,12 +3725,15 @@ def test_failed_verification_removes_the_stored_scan(monkeypatch):
     assert len(revoked) == 1
     rolled = _audits(stores, "verification_rolled_back")
     assert len(rolled) == 1
+    link_ref = hashlib.sha256(sibling.encode("utf-8")).hexdigest()
     assert rolled[0]["restored_links"] == [{
-        "token": sibling,
+        "link_ref": link_ref,
         "revoked": False,
         "status": "",
     }]
-    assert rolled[0]["new_state"]["restored_links"] == [sibling]
+    assert rolled[0]["new_state"]["restored_links"] == [link_ref]
+    assert sibling not in str(rolled)
+    assert winner not in str(rolled)
     assert winner in [row["token"] for row in stores["cosigner_links"].docs]
 
     monkeypatch.setattr(svc, "_save_link", original)
