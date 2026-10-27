@@ -262,6 +262,20 @@ def _payment_row_confirmed(row: Mapping[str, Any]) -> bool:
     return status in _CONFIRMED_PAYMENT_STATUSES
 
 
+def _county_scope_key(value: str) -> str:
+    """One key for Lee, Lee County, and Lee Co.
+
+    Case-fold, collapse whitespace, and drop a trailing County or Co.
+    A different county name stays different.
+    """
+    from dashboard.services.place_identity import parse_place
+
+    name, _state = parse_place(value)
+    name = re.sub(r"\s+", " ", str(name or "")).strip()
+    name = re.sub(r"\s+co\.?$", "", name, flags=re.IGNORECASE).strip()
+    return name.casefold()
+
+
 def _case_scope(row: Mapping[str, Any]) -> Dict[str, str]:
     """Identity fields that tie a receipt to one bonded case."""
     pairs = (
@@ -277,7 +291,13 @@ def _case_scope(row: Mapping[str, Any]) -> Dict[str, str]:
     found: Dict[str, str] = {}
     for source, dest in pairs:
         text = _text(row.get(source))
-        if text and dest not in found:
+        if not text or dest in found:
+            continue
+        if dest == "county":
+            key = _county_scope_key(text)
+            if key:
+                found[dest] = key
+        else:
             found[dest] = text.casefold()
     return found
 
@@ -456,8 +476,9 @@ def schedule_a_money_lines(bond_data: Mapping[str, Any], premium_amount: Any) ->
 async def attach_schedule_payment_sources(bond_data: Dict[str, Any], template_id: Any) -> None:
     """Copy confirmed ledger and payment rows onto the packet for display.
 
-    Does not write a payment, a ledger row, or a charge. A read failure leaves
-    the lists empty so Schedule A shows nothing collected.
+    Does not write a payment, a ledger row, or a charge. A read that fails or
+    times out raises ``DocuSealPacketValidationError`` so the packet is not
+    generated with Amount paid $0.00. An empty successful read is unpaid.
     """
     if not isinstance(bond_data, dict):
         return
@@ -496,7 +517,10 @@ async def attach_schedule_payment_sources(bond_data: Dict[str, Any], template_id
                 "[docuseal] confirmed payment read failed: %s",
                 type(exc).__name__,
             )
-            ledger, payments, transactions = [], [], []
+            raise DocuSealPacketValidationError(
+                "DocuSeal packet blocked: confirmed payments could not be read. "
+                "Schedule A is not printed as $0.00 paid."
+            ) from None
     bond_data["ledger_entries"] = list(ledger or [])
     if not isinstance(bond_data.get("transactions"), list):
         bond_data["transactions"] = list(transactions or [])

@@ -553,11 +553,9 @@ async def test_packet_path_reads_the_ledger_and_not_the_plan(monkeypatch):
 
     monkeypatch.setattr("dashboard.extensions.get_collection", _boom)
     unpaid = _bond(7, booking_number="TEST-T7-PAID")
-    await attach_schedule_payment_sources(unpaid, 7)
-    missed = DocuSealService.prefill_values_from_bond(unpaid, template_id=7)
-    assert "Amount paid: $0.00" in missed["schedule_a"]
-    assert "Amount paid: $40.00" not in missed["schedule_a"]
-    assert "Balance due: $100.00 due 2026-02-01" in missed["schedule_a"]
+    with pytest.raises(DocuSealPacketValidationError, match="could not be read"):
+        await attach_schedule_payment_sources(unpaid, 7)
+    assert "ledger_entries" not in unpaid
 
 
 @pytest.mark.asyncio
@@ -727,11 +725,22 @@ def test_receipt_date_uses_eastern_calendar_day():
     assert "2026-01-16" not in schedule.split("Balance due:")[0]
 
 
+def _allow_empty_payment_read(monkeypatch):
+    """A successful read of no receipts. A missing database is not $0.00 paid."""
+    empty = _Rows([])
+    monkeypatch.setattr(
+        "dashboard.extensions.get_collection",
+        lambda name: {"financial_ledger": empty, "payments": empty, "transactions": empty}[name],
+    )
+
+
 def test_poa_change_does_not_change_cosigner_identity(monkeypatch):
     """The co-indemnitor submitter key is the packet id, not the POA number."""
     import asyncio
 
     import httpx
+
+    _allow_empty_payment_read(monkeypatch)
 
     captured = []
     svc = DocuSealService(base_url="https://sign.example.invalid", api_key="test-not-a-real-key")
@@ -814,6 +823,7 @@ def test_third_indemnitor_does_not_create_a_submission(monkeypatch):
 
     called = []
     svc = DocuSealService(base_url="https://sign.example.invalid", api_key="test-not-a-real-key")
+    _allow_empty_payment_read(monkeypatch)
 
     async def _create(self, **kwargs):
         called.append(kwargs)
@@ -944,3 +954,139 @@ async def test_packet_cash_receipt_is_loaded_by_packet_id(monkeypatch):
     values = DocuSealService.prefill_values_from_bond(bond, template_id=7)
     assert "Amount paid: $50.00 cash 2026-01-15" in values["schedule_a"]
     assert "Balance due: $50.00 due 2026-02-01" in values["schedule_a"]
+
+
+def _payment_packet_bond():
+    return _bond(
+        1,
+        booking_number="TEST-T7-PAID",
+        packet_id="PKT-TEST-PAID",
+        defendant_name="TEST DEFENDANT",
+        bond_case_id="TEST-BOND-1",
+        defendant_id="TEST-DEF-1",
+        indemnitor_id="TEST-IND-1",
+        match_id="TEST-MATCH-1",
+        match_status="validated",
+        poa_number="TEST-POA-1",
+        case_number="TEST-CASE-1",
+        county="Lee",
+        state="FL",
+    )
+
+
+def _stub_submission(monkeypatch):
+    import httpx
+
+    called = []
+    svc = DocuSealService(base_url="https://sign.example.invalid", api_key="test-not-a-real-key")
+
+    async def _create(self, **kwargs):
+        called.append(kwargs)
+        return {"id": 1, "submitters": []}
+
+    async def _blocked(self, method, url, *args, **kwargs):
+        raise AssertionError("live DocuSeal request")
+
+    svc.create_submission = _create.__get__(svc, DocuSealService)
+    monkeypatch.setattr(httpx.AsyncClient, "request", _blocked)
+    return svc, called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_type", [TimeoutError, RuntimeError])
+async def test_payment_read_failure_does_not_create_a_packet(monkeypatch, error_type):
+    """A timed-out or failed payment read is not $0.00 paid and creates no submission."""
+    svc, called = _stub_submission(monkeypatch)
+
+    def _fail(name):
+        raise error_type("payment read failed")
+
+    monkeypatch.setattr("dashboard.extensions.get_collection", _fail)
+
+    with pytest.raises(DocuSealPacketValidationError, match="could not be read"):
+        await svc.create_submission_for_packet(
+            template_id=7,
+            packet_id="PKT-TEST-PAID",
+            bond_data=_payment_packet_bond(),
+            indemnitors=[{"name": "TEST INDEMNITOR", "email": DEFAULT_SIGNER_EMAIL}],
+            defendant={"name": "TEST DEFENDANT", "email": DEFAULT_SIGNER_EMAIL},
+            staff_test_case=True,
+            send_email=True,
+        )
+    assert called == []
+
+
+@pytest.mark.asyncio
+async def test_empty_payment_read_still_creates_a_packet(monkeypatch):
+    """A successful read of no receipts still generates the packet at $0.00 paid."""
+    svc, called = _stub_submission(monkeypatch)
+    empty = _Rows([])
+    monkeypatch.setattr(
+        "dashboard.extensions.get_collection",
+        lambda name: {"financial_ledger": empty, "payments": empty, "transactions": empty}[name],
+    )
+    bond = _payment_packet_bond()
+    await svc.create_submission_for_packet(
+        template_id=7,
+        packet_id="PKT-TEST-PAID",
+        bond_data=bond,
+        indemnitors=[{"name": "TEST INDEMNITOR", "email": DEFAULT_SIGNER_EMAIL}],
+        defendant={"name": "TEST DEFENDANT", "email": DEFAULT_SIGNER_EMAIL},
+        staff_test_case=True,
+        send_email=True,
+    )
+    assert len(called) == 1
+    assert called[0]["send_email"] is False
+    assert called[0]["send_sms"] is False
+    values = DocuSealService.prefill_values_from_bond(bond, template_id=7)
+    assert "Amount paid: $0.00" in values["schedule_a"]
+
+
+def test_schedule_a_matches_county_name_spellings():
+    """Lee, Lee County, and a spaced spelling are one county. Collier is not."""
+    def _receipt(amount, county, txn):
+        return {
+            "booking_number": "TEST-T7-PAID",
+            "amount": amount,
+            "method": "Cash",
+            "type": "payment",
+            "status": "completed",
+            "timestamp": "2026-01-15T18:00:00+00:00",
+            "transaction_id": txn,
+            "county": county,
+            "state": "FL",
+            "case_number": "TEST-CASE-1",
+        }
+
+    same = DocuSealService.prefill_values_from_bond(
+        _bond(
+            1,
+            booking_number="TEST-T7-PAID",
+            county="Lee",
+            payments=[
+                _receipt(25.00, "Lee County", "TEST-TXN-LEE-1"),
+                _receipt(15.00, " lee  county ", "TEST-TXN-LEE-2"),
+                _receipt(10.00, "Lee Co.", "TEST-TXN-LEE-3"),
+            ],
+        ),
+        template_id=7,
+    )
+    assert "Amount paid: $25.00 Cash 2026-01-15" in same["schedule_a"]
+    assert "Amount paid: $15.00 Cash 2026-01-15" in same["schedule_a"]
+    assert "Amount paid: $10.00 Cash 2026-01-15" in same["schedule_a"]
+    assert "Balance due: $50.00 due 2026-02-01" in same["schedule_a"]
+
+    other = DocuSealService.prefill_values_from_bond(
+        _bond(
+            1,
+            booking_number="TEST-T7-PAID",
+            county="Lee",
+            payments=[
+                _receipt(25.00, "Lee", "TEST-TXN-LEE-1"),
+                _receipt(40.00, "Collier", "TEST-TXN-COLLIER"),
+            ],
+        ),
+        template_id=7,
+    )
+    assert "Amount paid: $25.00" in other["schedule_a"]
+    assert "$40.00" not in other["schedule_a"]
