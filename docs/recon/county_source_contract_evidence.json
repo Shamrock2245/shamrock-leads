@@ -667,10 +667,10 @@
     {
       "state": "FL",
       "county_fips": "017",
-      "passive_recommendation": "productive",
+      "passive_recommendation": "recon_only",
       "official_source_url": "https://www.sheriffcitrus.org/public_info/recent_arrest.php",
-      "access_posture": "Ordinary public HTTPS; dated arrest PDF iframe with AR # / charges / bond",
-      "evidence_note": "2026-10-07 idle-eight recon: landing 200; PDF table columns Photo/Name/AR #/Date/Arrest Type/Offense/DOB/Bond; AR # pattern AAYY-NNNNNN. Parser uses plain requests+pdfplumber (no DrissionPage)."
+      "access_posture": "Public HTTPS landing + dated arrest PDF; honest agent-box probe 2026-10-15 got HTTP 403 (egress_block); VPS/Leads Ops validation required",
+      "evidence_note": "2026-10-07 idle-eight recon: landing 200; PDF table columns Photo/Name/AR #/Date/Arrest Type/Offense/DOB/Bond; AR # pattern AAYY-NNNNNN. 2026-10-15 honest plain_http probe from the agent box (honest UA, certificate verified): HTTP 403, so the scraper raises egress_block: Citrus HTTP 403 from that network (#217). Not available until a VPS / Leads Ops run fetches the landing and PDF and a write smoke passes. Parser: plain_http + pdfplumber; unpublished bond is blank, custody never inferred."
     },
     {
       "state": "FL",
@@ -996,9 +996,9 @@
       "state": "FL",
       "county_fips": "099",
       "passive_recommendation": "recon_only",
-      "official_source_url": "Not verified",
-      "access_posture": "Public landing/source contract not safely verified; no access-control workaround",
-      "evidence_note": "Official current-roster contract not verified safely; no detail-record probes or person-level retrieval."
+      "official_source_url": "https://www3.pbso.org/blotter/index.cfm",
+      "access_posture": "2026-10-15 (#224): plain HTTPS via scrapers.plain_http (honest UA, certificate verified; no browser, Chrome UA, stealth or hCaptcha handling); submits the page's own start_date/end_date form, parses only div[id^=allresults_] result cards, follows the page's pagination with a 3 s pause; blocks raise egress_block / tls_cert_invalid. The one honest probe from the agent box (2026-10-15) got egress_block connection_reset.",
+      "evidence_note": "Source contract still unverified: no successful honest read yet; needs a Leads Ops read before any state change. A results page with no cards and no '0 matches'/'no results' notice raises PalmBeachSourceChanged. Booking_Number is the card Booking Number (or its numeric card link); status only from a published release date/status line; bond only from published card amounts."
     },
     {
       "state": "FL",

@@ -99,7 +99,9 @@ jobs:
             tests/test_fl_highlands_monroe_plain_https.py \
             tests/test_monroe_scraper.py \
             tests/test_fl_bay_bond_custody_defaults.py \
+            tests/test_fl_citrus_bond_custody_defaults.py \
             tests/test_fl_duval_palmbeach_bond_defaults.py \
+            tests/test_fl_palmbeach_plain_https.py \
             tests/test_status_fallback_writers.py \
             tests/test_url_ingest_incustody_unknown.py \
             tests/test_lee_scraper_incustody_unknown.py \
