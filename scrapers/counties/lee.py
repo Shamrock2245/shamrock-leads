@@ -547,31 +547,45 @@ class LeeCountyScraper(BaseScraper):
     def status_extra_fields(self) -> Dict[str, Any]:
         """Extra scraper_status fields persisted by BaseScraper on success.
 
-        Only a successful run advances the remembered window, so rows from a
-        run that later failed are compared again next time.
+        Pure: the remembered window advances only in ``on_status_persisted``.
         """
         fields: Dict[str, Any] = {"source_window_gap": self._window_gap}
         if self._source_window is not None:
             fields["source_window"] = self._source_window
-            if self._source_window.get("max_bn") is not None:
-                self._prev_window = self._source_window
         return fields
+
+    def on_status_persisted(self) -> None:
+        """BaseScraper calls this only after the rows and the status doc were written.
+
+        A run whose system-of-record write failed keeps the previous window,
+        so its rows are compared again next time.
+        """
+        if self._source_window is not None and self._source_window.get("max_bn") is not None:
+            self._prev_window = self._source_window
 
     def _ops_alert(self, code: str, title: str, message: str, *, level: str = "warning",
                    details: Optional[Dict[str, Any]] = None) -> None:
-        """Throttled #alerts post (counts and booking-number ranges only)."""
+        """Throttled #alerts post (counts and booking-number ranges only).
+
+        The throttle starts only once Slack accepted the post; a failed or
+        unconfigured delivery is retried on the next occurrence.
+        """
         logger.warning("[Lee] %s: %s", code, message)
         now = time.time()
         if now - self._ops_alerted.get(code, 0.0) < OPS_ALERT_THROTTLE_S:
             return
-        self._ops_alerted[code] = now
         try:
             from writers.slack_notifier import SlackNotifier
-            SlackNotifier().notify_alert(
+            delivered = SlackNotifier().notify_alert(
                 title=title, message=message, level=level, details=details, source="lee_scraper",
             )
         except Exception as exc:
-            logger.warning("[Lee] ops alert failed (%s)", type(exc).__name__)
+            logger.warning("[Lee] ops alert %s failed (%s); not throttled", code, type(exc).__name__)
+            return
+        if delivered:
+            self._ops_alerted[code] = now
+        else:
+            logger.warning("[Lee] ops alert %s not delivered; not throttled", code)
 
     # ── Charges Enrichment ──
 

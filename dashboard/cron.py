@@ -798,8 +798,8 @@ async def _run_lee_freshness():
     result = await run_lee_freshness_check(get_db())
     if result.get("findings") or result.get("recovered"):
         logger.warning(
-            "[LeeFreshness] findings=%s sent=%s recovered=%s site_rows=%s",
-            result.get("findings"), result.get("sent"),
+            "[LeeFreshness] findings=%s sent=%s failed=%s recovered=%s site_rows=%s",
+            result.get("findings"), result.get("sent"), result.get("failed"),
             result.get("recovered"), result.get("site_rows"),
         )
 

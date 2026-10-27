@@ -38,6 +38,9 @@ class _Resp:
         return self._payload
 
 
+_REAL_OPS_ALERT = LeeCountyScraper._ops_alert
+
+
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch):
     rl.reset_for_tests(state_path="")
@@ -201,6 +204,10 @@ def test_scraper_alerts_and_persists_window_gap(monkeypatch):
     extra = s.status_extra_fields()
     assert extra["source_window_gap"]["unseen_numbers"] == 39
     assert extra["source_window"]["max_bn"] == 1034514
+    # The window is committed only after BaseScraper persisted the run.
+    assert s._prev_window["max_bn"] == 1034450
+    s.on_status_persisted()
+    assert s._prev_window["max_bn"] == 1034514
     # Next run overlaps: gap clears.
     s2_rows = [_Resp([_row(1034510), _row(1034520)])] * 2
     queue = list(s2_rows)
@@ -417,3 +424,176 @@ def test_failed_run_does_not_advance_window(monkeypatch):
     with pytest.raises(LeeParseDriftError):
         s.scrape()
     assert s._prev_window["max_bn"] == 1034450
+
+
+# ── Codex review follow-ups (PR #292) ──
+
+def _status_run(monkeypatch, *, write_raises=False, upsert_raises=False):
+    s = _scraper_with([_Resp([_row(1034500)])] * 2, monkeypatch)
+    s._prev_window = {"min_bn": 1034400, "max_bn": 1034450}
+    writer = MagicMock()
+    if write_raises:
+        writer.write_records.side_effect = RuntimeError("bulk write failed")
+    else:
+        writer.write_records.return_value = {"new_records": 1, "duplicates_skipped": 0}
+    if upsert_raises:
+        writer.upsert_scraper_status.side_effect = RuntimeError("upsert failed")
+    writer.get_scraper_resilience.return_value = {}
+    writer.get_scraper_status_fields.return_value = {}
+    import scrapers.base_scraper as bs
+    monkeypatch.setattr(bs, "_slack", MagicMock())
+    s.run(writers=[writer])
+    return s, writer
+
+
+def test_failed_status_write_does_not_advance_heartbeat(monkeypatch):
+    s, writer = _status_run(monkeypatch, write_raises=True)
+    extra = writer.upsert_scraper_status.call_args.kwargs["extra_fields"]
+    assert "last_success_at" not in extra
+    assert "last_records_at" not in extra
+    assert isinstance(extra["records_write_failed_at"], datetime)
+    assert "source_window" not in extra
+    assert s._prev_window["max_bn"] == 1034450
+
+
+def test_failed_status_upsert_does_not_commit_window(monkeypatch):
+    s, writer = _status_run(monkeypatch, upsert_raises=True)
+    assert writer.upsert_scraper_status.called
+    assert s._prev_window["max_bn"] == 1034450
+
+
+def test_persisted_run_commits_window(monkeypatch):
+    s, writer = _status_run(monkeypatch)
+    extra = writer.upsert_scraper_status.call_args.kwargs["extra_fields"]
+    assert isinstance(extra["last_success_at"], datetime)
+    assert "records_write_failed_at" not in extra
+    assert s._prev_window["max_bn"] == 1034500
+
+
+def test_freshness_flags_records_write_failure():
+    doc = {"status": "ok", "records": 5, "last_run": NOW - timedelta(minutes=2),
+           "last_success_at": NOW - timedelta(minutes=32),
+           "records_write_failed_at": NOW - timedelta(minutes=2)}
+    assert [f.code for f in lf.evaluate_freshness(doc, NOW)] == ["records_write_failed"]
+    # A later success clears it.
+    doc["last_success_at"] = NOW - timedelta(minutes=1)
+    assert lf.evaluate_freshness(doc, NOW) == []
+
+
+def test_write_failure_disables_legacy_last_run_fallback():
+    doc = {"status": "ok", "records": 5, "last_run": NOW - timedelta(minutes=2),
+           "records_write_failed_at": NOW - timedelta(minutes=2)}
+    codes = [f.code for f in lf.evaluate_freshness(doc, NOW)]
+    assert "stale" in codes and "records_write_failed" in codes
+
+
+def _patch_notifier(monkeypatch, notifier):
+    import writers.slack_notifier as sn
+    monkeypatch.setattr(sn, "SlackNotifier", lambda: notifier)
+
+
+@pytest.mark.parametrize("failure", [False, RuntimeError("slack down")])
+def test_ops_alert_not_throttled_when_notify_fails(monkeypatch, failure):
+    notifier = MagicMock()
+    if isinstance(failure, Exception):
+        notifier.notify_alert.side_effect = [failure, True]
+    else:
+        notifier.notify_alert.side_effect = [False, True]
+    _patch_notifier(monkeypatch, notifier)
+    s = LeeCountyScraper()
+    _REAL_OPS_ALERT(s, "page_cap", "Lee (FL) listing hit LEE_MAX_PAGES", "6 x 50 full")
+    assert "page_cap" not in s._ops_alerted
+    _REAL_OPS_ALERT(s, "page_cap", "Lee (FL) listing hit LEE_MAX_PAGES", "6 x 50 full")
+    assert "page_cap" in s._ops_alerted
+    _REAL_OPS_ALERT(s, "page_cap", "Lee (FL) listing hit LEE_MAX_PAGES", "6 x 50 full")
+    assert notifier.notify_alert.call_count == 2  # third call throttled
+
+
+@pytest.mark.parametrize("failure", [False, RuntimeError("slack down")])
+def test_scheduler_miss_alert_retries_when_notify_fails(monkeypatch, failure):
+    from core.scheduler import ScraperScheduler
+    sched = ScraperScheduler(max_workers=1)
+    added = {}
+    monkeypatch.setattr(sched.scheduler, "add_job", lambda *a, **k: added.update(k))
+    sched.register_scraper(LeeCountyScraper(), interval_minutes=30,
+                           misfire_grace_time=1500, alert_on_miss=True)
+    job_id = added["id"]
+    notifier = MagicMock()
+    notifier.notify_alert.side_effect = [failure if isinstance(failure, Exception) else False, True]
+    _patch_notifier(monkeypatch, notifier)
+    event = MagicMock(job_id=job_id)
+    sched._on_job_missed(event)
+    assert job_id not in sched._miss_alerted_at
+    sched._on_job_missed(event)  # retried, delivered
+    assert job_id in sched._miss_alerted_at
+    sched._on_job_missed(event)  # now throttled
+    assert notifier.notify_alert.call_count == 2
+
+
+@pytest.mark.parametrize("failure", [False, RuntimeError("slack down")])
+def test_freshness_alerter_retries_when_notify_fails(failure):
+    notifier = MagicMock()
+    notifier.notify_alert.side_effect = [failure if isinstance(failure, Exception) else False, True]
+    alerter = lf.LeeFreshnessAlerter(notifier=notifier, realert_min=60)
+    stale = [lf.Finding("stale", "critical", "Lee (FL): no successful run")]
+    out = alerter.process(stale, NOW)
+    assert out["sent"] == [] and out["failed"] == ["stale"]
+    out = alerter.process(stale, NOW + timedelta(minutes=5))  # next tick retries
+    assert out["sent"] == ["stale"]
+    assert alerter.process(stale, NOW + timedelta(minutes=10))["sent"] == []
+    assert notifier.notify_alert.call_count == 2
+
+
+def test_freshness_recovery_retried_when_notify_fails():
+    notifier = MagicMock()
+    notifier.notify_alert.side_effect = [True, False, True]
+    alerter = lf.LeeFreshnessAlerter(notifier=notifier, realert_min=60)
+    alerter.process([lf.Finding("stale", "critical", "x")], NOW)
+    assert alerter.process([], NOW + timedelta(minutes=5))["recovered"] == []
+    assert alerter.process([], NOW + timedelta(minutes=10))["recovered"] == ["stale"]
+    assert notifier.notify_alert.call_count == 3
+
+
+def test_freshness_cron_does_not_block_event_loop():
+    """Slack delivery blocks until the event loop has ticked: proves it ran off-loop.
+
+    (The autouse fixture no-ops time.sleep, so this waits on an Event instead.)
+    """
+    import threading
+
+    threads = []
+    loop_ticked = threading.Event()
+
+    def blocking_notify(**_kwargs):
+        threads.append(threading.get_ident())
+        # On the loop thread this would deadlock until the timeout.
+        return loop_ticked.wait(timeout=3)
+
+    notifier = MagicMock()
+    notifier.notify_alert.side_effect = blocking_notify
+    coll = _Coll({"status": "error", "records": 0, "last_success_at": NOW - timedelta(minutes=120)})
+
+    async def main():
+        ticks = 0
+        done = asyncio.Event()
+
+        async def ticker():
+            nonlocal ticks
+            while not done.is_set():
+                ticks += 1
+                if ticks >= 5:
+                    loop_ticked.set()
+                await asyncio.sleep(0.005)
+
+        t = asyncio.create_task(ticker())
+        out = await lf.run_lee_freshness_check(
+            {"scraper_status": coll}, now=NOW,
+            alerter=lf.LeeFreshnessAlerter(notifier=notifier))
+        done.set()
+        await t
+        return out, ticks, threading.get_ident()
+
+    out, ticks, loop_thread = asyncio.run(main())
+    assert out["sent"] == ["stale"]  # delivered only because the loop kept ticking
+    assert threads and all(tid != loop_thread for tid in threads)
+    assert ticks >= 5

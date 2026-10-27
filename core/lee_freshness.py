@@ -14,9 +14,12 @@ This module is pure logic plus one small runner used by the dashboard cron
   runs, keyed only on the published 7-digit ``bookingNumber``.
 * ``evaluate_freshness`` — findings from the persisted ``scraper_status`` doc:
   no successful run in N minutes, 0 rows while the site lists bookings,
-  repeated errors, and a reported window gap.
+  repeated errors, a reported window gap, and a failed Mongo write of the
+  last run's rows (``records_write_failed_at``).
 * ``LeeFreshnessAlerter`` — alert de-duplication and recovery notices; posts
-  through the existing ``SlackNotifier.notify_alert`` path (#alerts).
+  through the existing ``SlackNotifier.notify_alert`` path (#alerts). A
+  finding is throttled only after a delivered post; ``process`` is blocking
+  and the runner calls it via ``asyncio.to_thread``.
 
 Nothing here logs or posts names, DOBs or other person fields: findings carry
 counts, timestamps, error classes and booking-number ranges only.
@@ -26,6 +29,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Iterable, List, Optional
@@ -159,8 +163,10 @@ def evaluate_freshness(
 
     last_success = _aware(doc.get("last_success_at"))
     last_run = _aware(doc.get("last_run"))
+    write_failed = _aware(doc.get("records_write_failed_at"))
     reference = last_success
-    if reference is None and str(doc.get("status") or "") in {"ok", "empty"}:
+    if (reference is None and write_failed is None
+            and str(doc.get("status") or "") in {"ok", "empty"}):
         # Docs written before last_success_at existed: last_run on an ok/empty
         # status is the last success.
         reference = last_run
@@ -180,6 +186,20 @@ def evaluate_freshness(
                 "last_run": last_run.isoformat() if last_run else None,
                 "status": doc.get("status"),
                 "error_class": doc.get("error_class") or doc.get("last_error_class"),
+            },
+        ))
+
+    if write_failed is not None and (last_success is None or write_failed > last_success):
+        findings.append(Finding(
+            "records_write_failed",
+            "critical",
+            (
+                f"{LEE_LABEL}: the last run fetched bookings but the Mongo write of its "
+                "rows failed; the heartbeat was not advanced."
+            ),
+            {
+                "records_write_failed_at": write_failed.isoformat(),
+                "last_success_at": last_success.isoformat() if last_success else None,
             },
         ))
 
@@ -264,6 +284,8 @@ class LeeFreshnessAlerter:
         self._notifier = notifier
         self._realert = timedelta(minutes=realert_min or realert_minutes())
         self._active: Dict[str, datetime] = {}
+        # process() runs in a worker thread (see run_lee_freshness_check).
+        self._lock = threading.Lock()
 
     def _get_notifier(self):
         if self._notifier is None:
@@ -271,42 +293,55 @@ class LeeFreshnessAlerter:
             self._notifier = SlackNotifier()
         return self._notifier
 
+    def _post(self, **kwargs: Any) -> bool:
+        """True only when Slack accepted the post (notify_alert returns a bool)."""
+        try:
+            return bool(self._get_notifier().notify_alert(source="lee_freshness", **kwargs))
+        except Exception as exc:
+            logger.warning("[LeeFreshness] Slack alert failed (%s)", type(exc).__name__)
+            return False
+
     def process(self, findings: List[Finding], now: datetime) -> Dict[str, List[str]]:
-        sent: List[str] = []
-        recovered: List[str] = []
-        current = {f.code for f in findings}
-        for finding in findings:
-            last = self._active.get(finding.code)
-            if last is not None and now - last < self._realert:
-                continue
-            try:
-                self._get_notifier().notify_alert(
+        """Post new/due findings and recoveries.
+
+        Blocking (Slack HTTP): call it off the event loop. A finding is only
+        marked active (and so throttled for the re-alert interval) once its
+        post was delivered; an undelivered one is retried on the next tick.
+        A recovery is only cleared once the recovery post was delivered.
+        """
+        with self._lock:
+            sent: List[str] = []
+            failed: List[str] = []
+            recovered: List[str] = []
+            current = {f.code for f in findings}
+            for finding in findings:
+                last = self._active.get(finding.code)
+                if last is not None and now - last < self._realert:
+                    continue
+                if self._post(
                     title=f"Lee (FL) freshness: {finding.code}",
                     message=finding.message,
                     level=finding.level,
                     details=finding.details,
-                    source="lee_freshness",
-                )
-            except Exception as exc:
-                logger.warning("[LeeFreshness] Slack alert failed (%s)", type(exc).__name__)
-                continue
-            self._active[finding.code] = now
-            sent.append(finding.code)
-        for code in list(self._active):
-            if code not in current:
-                del self._active[code]
-                recovered.append(code)
-        if recovered:
-            try:
-                self._get_notifier().notify_alert(
+                ):
+                    self._active[finding.code] = now
+                    sent.append(finding.code)
+                else:
+                    failed.append(finding.code)
+                    logger.warning("[LeeFreshness] %s not delivered; retry next tick", finding.code)
+            cleared = sorted(code for code in self._active if code not in current)
+            if cleared:
+                if self._post(
                     title="Lee (FL) freshness recovered",
-                    message=f"{LEE_LABEL}: cleared {', '.join(sorted(recovered))}.",
+                    message=f"{LEE_LABEL}: cleared {', '.join(cleared)}.",
                     level="success",
-                    source="lee_freshness",
-                )
-            except Exception as exc:
-                logger.warning("[LeeFreshness] recovery alert failed (%s)", type(exc).__name__)
-        return {"sent": sent, "recovered": recovered}
+                ):
+                    for code in cleared:
+                        del self._active[code]
+                    recovered = cleared
+                else:
+                    logger.warning("[LeeFreshness] recovery not delivered; retry next tick")
+            return {"sent": sent, "failed": failed, "recovered": recovered}
 
 
 _ALERTER: Optional[LeeFreshnessAlerter] = None
@@ -348,7 +383,9 @@ async def run_lee_freshness_check(
         probe = probe or probe_listing_count
         site_rows = await asyncio.to_thread(probe)
     findings = evaluate_freshness(doc, now, site_rows=site_rows)
-    result = (alerter or _alerter()).process(findings, now)
+    # Slack delivery is blocking HTTP (and notify_alert calls back into this
+    # dashboard): keep it off the event loop.
+    result = await asyncio.to_thread((alerter or _alerter()).process, findings, now)
     return {
         "findings": [f.code for f in findings],
         "site_rows": site_rows,

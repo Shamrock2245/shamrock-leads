@@ -196,12 +196,11 @@ class ScraperScheduler:
         last = self._miss_alerted_at.get(job_id)
         if last is not None and now - last < timedelta(minutes=30):
             return
-        self._miss_alerted_at[job_id] = now
         scraper = self._scrapers.get(job_id)
         label = getattr(scraper, "county_label", None) or job_id
         try:
             from writers.slack_notifier import SlackNotifier
-            SlackNotifier().notify_alert(
+            delivered = SlackNotifier().notify_alert(
                 title=f"{label} scheduled run skipped",
                 message=(
                     f"{label}: APScheduler skipped a scheduled run because no worker "
@@ -213,7 +212,15 @@ class ScraperScheduler:
                 source="scheduler",
             )
         except Exception as exc:
-            logger.warning("Missed-run alert failed for %s (%s)", job_id, type(exc).__name__)
+            logger.warning("Missed-run alert failed for %s (%s); not throttled",
+                           job_id, type(exc).__name__)
+            return
+        # Throttle only after Slack accepted the post, so a failed delivery
+        # is retried on the next missed run.
+        if delivered:
+            self._miss_alerted_at[job_id] = now
+        else:
+            logger.warning("Missed-run alert for %s not delivered; not throttled", job_id)
 
     def _on_job_error(self, event):
         logger.error(

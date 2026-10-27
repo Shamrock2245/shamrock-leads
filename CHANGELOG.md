@@ -3,6 +3,44 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-27 (Lee: #292 review follow-ups — heartbeat gated on the Mongo write, alerts off the event loop, throttle after delivery)
+
+### Fixed
+- **The Lee heartbeat no longer advances when a run's rows did not reach Mongo.** `BaseScraper.run` stamps `last_success_at` / `last_records_at` and merges `status_extra_fields()` only when the system-of-record writer (the one that owns `scraper_status`) wrote the run's rows without raising. Otherwise it stamps `records_write_failed_at` and logs the error class only. `_persist_status` now returns whether the `scraper_status` upsert succeeded, and a new optional `on_status_persisted()` hook runs only after both writes succeeded. Lee uses it to advance its remembered listing window, so `status_extra_fields()` no longer changes state. `evaluate_freshness` raises a critical `records_write_failed` finding when `records_write_failed_at` is newer than `last_success_at`. A doc carrying that stamp no longer falls back to `last_run` as the last success.
+- **The Lee freshness cron no longer blocks the dashboard event loop.** `run_lee_freshness_check` runs `LeeFreshnessAlerter.process`, which makes the blocking `SlackNotifier.notify_alert` call, through `asyncio.to_thread`, just as the listing probe already ran. A lock serialises `process`. The Slack path itself is unchanged.
+- **Undelivered alerts are not throttled.** `notify_alert` returns `False` instead of raising when Slack is unset, times out or returns non-200. The throttle timestamp now advances only after a delivered post, so the next tick retries. This covers three throttles:
+  - the Lee ops alerts (`_ops_alerted`, 1 h);
+  - the scheduler missed-run alert (`_miss_alerted_at`, 30 min);
+  - the freshness alerter (`_active`, 60 min re-alert).
+
+  A recovery notice clears its findings only after it is delivered. The alerter result gains a `failed` list, which the cron logs.
+
+### Docs
+- **`docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md` FL 071 (Lee)** now records the 2026-10-23 hardening. It was regenerated from `county_source_contract_evidence.json` with `scripts/build_recon_matrix.py`, and `--check` passes. The recorded changes:
+  - an unknown listing shape → `ParseDriftError`;
+  - partial paging is not success;
+  - a failed listing is not swallowed;
+  - the key is the published `bookingNumber` only;
+  - the `page_cap` alert at `LEE_MAX_PAGES`;
+  - the `window_gap` alert;
+  - the `lee_freshness` cron (N=75 min, `LEE_FRESHNESS_MAX_AGE_MIN`);
+  - the 25-min misfire grace window.
+
+  Health stays `unverified`.
+
+### Tests
+- `tests/test_lee_harden_spof.py` (already on the ci.yml list) gains these tests:
+  - `test_failed_status_write_does_not_advance_heartbeat`
+  - `test_failed_status_upsert_does_not_commit_window`
+  - `test_persisted_run_commits_window`
+  - `test_freshness_flags_records_write_failure`
+  - `test_write_failure_disables_legacy_last_run_fallback`
+  - `test_ops_alert_not_throttled_when_notify_fails` (False and raise)
+  - `test_scheduler_miss_alert_retries_when_notify_fails` (False and raise)
+  - `test_freshness_alerter_retries_when_notify_fails` (False and raise)
+  - `test_freshness_recovery_retried_when_notify_fails`
+  - `test_freshness_cron_does_not_block_event_loop`
+
 ## [Unreleased] — 2026-10-23 (Lee: single-point-of-failure hardening + freshness heartbeat)
 
 ### Fixed

@@ -784,9 +784,10 @@ class BaseScraper(ABC):
                 )
         return getattr(self, "_resilience_state", None) or ResilienceState()
 
-    def _persist_status(self, status_writer, *, extra_fields: Optional[dict] = None, **kwargs) -> None:
+    def _persist_status(self, status_writer, *, extra_fields: Optional[dict] = None, **kwargs) -> bool:
+        """Upsert scraper_status; True only when the write returned without raising."""
         if status_writer is None:
-            return
+            return False
         try:
             status_writer.upsert_scraper_status(
                 county=self.county,
@@ -797,6 +798,8 @@ class BaseScraper(ABC):
             )
         except Exception as exc:
             logger.warning(f"⚠️ {self.county}: scraper_status upsert failed: {exc}")
+            return False
+        return True
 
     def _alert_parse_drift(self, detail: str, severity: str) -> None:
         """Fail loudly: schema drift goes to #scraper-errors immediately."""
@@ -1158,14 +1161,26 @@ class BaseScraper(ABC):
             persisted_status = "auto_disabled" if new_state.auto_disabled else run_status
             extra = new_state.to_fields()
             # Heartbeat fields: a successful (ok/empty) run, distinct from
-            # last_run which the failure path also stamps.
+            # last_run which the failure path also stamps. A run whose rows
+            # did not reach the system-of-record writer is not a success:
+            # the heartbeat stays put (so freshness goes stale and alerts)
+            # and the failure is stamped instead.
             success_at = datetime.now(timezone.utc)
-            if not new_state.auto_disabled:
+            # No status writer (dry/CLI run): nothing is persisted either way.
+            records_persisted = (not records) or status_writer is None or status_writer_ok
+            if not records_persisted:
+                extra["records_write_failed_at"] = success_at
+                logger.error(
+                    "❌ %s: %d rows did not reach the system-of-record writer; "
+                    "heartbeat not advanced",
+                    self.county_label, len(records),
+                )
+            elif not new_state.auto_disabled:
                 extra["last_success_at"] = success_at
                 if records:
                     extra["last_records_at"] = success_at
             extra_hook = getattr(self, "status_extra_fields", None)
-            if callable(extra_hook):
+            if records_persisted and callable(extra_hook):
                 try:
                     extra.update(extra_hook() or {})
                 except Exception as hook_err:
@@ -1176,7 +1191,7 @@ class BaseScraper(ABC):
                     "reenabled_at": datetime.now(timezone.utc),
                     "reenabled_by": "canary",
                 })
-            self._persist_status(
+            status_persisted = self._persist_status(
                 status_writer,
                 records=len(records),
                 hot=hot_count,
@@ -1191,6 +1206,16 @@ class BaseScraper(ABC):
                 ),
                 extra_fields=extra,
             )
+            # In-memory state a scraper derives from this run (e.g. Lee's
+            # listing window) advances only once both the rows and the
+            # status doc carrying it were written.
+            commit_hook = getattr(self, "on_status_persisted", None)
+            if status_persisted and records_persisted and callable(commit_hook):
+                try:
+                    commit_hook()
+                except Exception as hook_err:
+                    logger.warning("⚠️ %s: on_status_persisted failed (%s)",
+                                   self.county_label, type(hook_err).__name__)
             if reenabled:
                 logger.info("✅ %s: canary succeeded — auto-disable cleared", self.county_label)
                 try:
