@@ -45,7 +45,7 @@ PyYAML>=6.0
 # PDFs + XLSX
 reportlab>=4.0.0
 fpdf2>=2.8.9
-python-dateutil>=2.8.0
+python-dateutil>=3.0.0
 PyMuPDF>=1.24.0,<3.0
 openpyxl>=3.1.5
 
