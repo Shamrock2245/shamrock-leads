@@ -27,6 +27,8 @@
 | 6 | **DeSoto** | DevExpress grid (DrissionPage) — **not** JailTracker | `desoto.py` | ✅ Active | 60 min | 2026-07-16 |
 | 7 | **Hendry** | Official OCV S3 `inmates.json`; only id is `inmateID` = `HCSO<YY>MNI<NNNNNN>`, a person (MNI) id, not a booking number | `hendry.py` | 🔴 Fail closed (`SOURCE_CONTRACT_VALIDATED=False`; no person-id keys). See `docs/recon/FL_HENDRY_FAIL_CLOSED_2026-10-08.md` | 120 min | 2026-10-08 |
 
+> **Lee missed-run alert (2026-10-27, PR #293).** The scheduler alerts when a Lee run is skipped for either of two reasons: `misfire`, when no worker was free within the 25-min grace window, or `max_instances`, when the previous run is still going. The 30-min throttle is per reason and only advances after Slack delivery. Health stays `unverified` (matrix `candidate_productive`).
+
 ---
 
 ## Tier 2 — Tampa Bay / I-4 Corridor (8 Counties)

@@ -22,6 +22,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
   `test_scheduler_miss_alert_retries_when_notify_fails` now checks the `(job_id, "misfire")` throttle key.
 
+### Docs (AGENTS.md "Document Everything"; Codex P1 on #293)
+- `STATUS.md`: new section on the Lee (FL) missed-run alert covering max-instances skips.
+- `docs/recon/county_source_contract_evidence.json`: the Lee (FL 071) `evidence_note` now describes the `max_instances` reason ("previous run still running") and the delivered-only, per-job/per-reason throttle.
+- `docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md`: regenerated with `scripts/build_recon_matrix.py`; `--check` passes. Lee stays `candidate_productive` / Health `unverified`.
+- `docs/COUNTY_REGISTRY.md`: note under the Tier 1 table.
+
 ## [Unreleased] — 2026-10-27 (Lee: #292 review follow-ups — heartbeat gated on the Mongo write, alerts off the event loop, throttle after delivery)
 
 ### Fixed
