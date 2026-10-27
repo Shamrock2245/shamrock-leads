@@ -19,6 +19,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `tests/test_packet_builder_service.py`: `test_coindemnitor_comes_only_from_this_bonded_case`, `test_coindemnitor_fails_closed_when_two_cases_share_the_booking`, `test_coindemnitor_not_taken_from_another_booking`.
 - `tests/test_palmetto_template_7.py` (on the CI list). Template 5 inventory and a 7-charge rejection, template 7 prefill and finalize for a 7-charge `TEST-` case, a fitting 6-charge join, 8 charges failing closed, and send flags left false. Schedule A prints a confirmed ledger or completed payment row, including a completed down-payment receipt and a completed installment, and leaves amount paid at `$0.00` with the full premium still due when the only figure is the write-time down payment. A cash receipt with `packet_id` and no booking number is included; another packet's cash is not. Another county's receipt under the same booking number is excluded. An evening UTC timestamp prints the Eastern calendar day. A third indemnitor fails closed on template 7 and stays in template 5's combined header. In-person packets lock the co-indemnitor name, phone, and email. Signer email is `admin@shamrockbailbonds.biz`. No DocuSeal submission is created against the live server.
 
+## [Unreleased] — 2026-10-27 (Scheduler: Lee alerts on max-instances skips too)
+
+### Fixed
+- **Lee now alerts when a run is skipped because the previous one is still going.** With `max_instances=1`, APScheduler rejects an overlapping tick with `EVENT_JOB_MAX_INSTANCES`, not `EVENT_JOB_MISSED`, so the Lee missed-run alert from #292 never fired for it.
+  - **Listener:** `ScraperScheduler` now subscribes `_on_job_missed` to `EVENT_JOB_MISSED | EVENT_JOB_MAX_INSTANCES`.
+  - **Distinct reason:** the alert carries a reason, `misfire` or `max_instances`. The title says "previous run still running" for a max-instances skip, and `details.reason` names the reason.
+  - **Throttle:** still 30 min, now per `(job_id, reason)`, so one kind of skip doesn't hide the other. It advances only when `notify_alert` returns truthy; False or a raise is retried on the next skip.
+  - Only `alert_on_miss` jobs (Lee) alert. Other jobs only log.
+
+### Tests
+- `tests/test_lee_harden_spof.py` (on the ci.yml list):
+  - `test_missed_listener_subscribed_to_max_instances`
+  - `test_max_instances_skip_fires_lee_alert`
+  - `test_max_instances_skip_fires_through_real_scheduler`
+  - `test_max_instances_alert_not_throttled_when_notify_fails` (False and raise)
+  - `test_max_instances_skip_ignored_for_non_lee_jobs`
+
+  `test_scheduler_miss_alert_retries_when_notify_fails` now checks the `(job_id, "misfire")` throttle key.
+
+### Docs (AGENTS.md "Document Everything"; Codex P1 on #293)
+- `STATUS.md`: new section on the Lee (FL) missed-run alert covering max-instances skips.
+- `docs/recon/county_source_contract_evidence.json`: the Lee (FL 071) `evidence_note` now describes the `max_instances` reason ("previous run still running") and the delivered-only, per-job/per-reason throttle.
+- `docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md`: regenerated with `scripts/build_recon_matrix.py`; `--check` passes. Lee stays `candidate_productive` / Health `unverified`.
+- `docs/COUNTY_REGISTRY.md`: note under the Tier 1 table.
+
 ## [Unreleased] — 2026-10-27 (Lee: #292 review follow-ups — heartbeat gated on the Mongo write, alerts off the event loop, throttle after delivery)
 
 ### Fixed
