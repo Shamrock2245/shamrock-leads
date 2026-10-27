@@ -183,6 +183,12 @@ DEFAULT_CONFIG = {
         "limit": 25,
     },
 
+    # ── Lee (FL) freshness heartbeat (never miss a Lee lead) ──
+    "lee_freshness": {
+        "enabled": True,
+        "interval_seconds": 300,        # 5 minutes; N via LEE_FRESHNESS_MAX_AGE_MIN (75)
+    },
+
     # ── Auto-Reply AI (BlueBubbles inbound message handler) ──
     "auto_reply": {
         "enabled": False,

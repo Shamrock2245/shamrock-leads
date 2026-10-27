@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 try:
     from apscheduler.schedulers.background import BackgroundScheduler
     from apscheduler.triggers.interval import IntervalTrigger
-    from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
+    from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED, EVENT_JOB_MISSED
 except ImportError:  # pragma: no cover
     class BackgroundScheduler:  # type: ignore[no-redef]
         def __init__(self, *args, **kwargs):
@@ -34,6 +34,7 @@ except ImportError:  # pragma: no cover
         def __init__(self, *args, **kwargs): pass
     EVENT_JOB_ERROR = 1  # type: ignore[assignment]
     EVENT_JOB_EXECUTED = 2  # type: ignore[assignment]
+    EVENT_JOB_MISSED = 4  # type: ignore[assignment]
 
 from datetime import timedelta
 
@@ -78,6 +79,9 @@ class ScraperScheduler:
         self._writers: list = []
         self._job_history: List[Dict] = []
         self._registration_count: int = 0
+        # Jobs whose skipped (misfired) runs must alert, e.g. Lee (FL).
+        self._alert_on_miss: set = set()
+        self._miss_alerted_at: Dict[str, datetime] = {}
 
         self.scheduler.add_listener(
             self._on_job_executed, EVENT_JOB_EXECUTED
@@ -85,16 +89,26 @@ class ScraperScheduler:
         self.scheduler.add_listener(
             self._on_job_error, EVENT_JOB_ERROR
         )
+        self.scheduler.add_listener(
+            self._on_job_missed, EVENT_JOB_MISSED
+        )
 
     def register_scraper(
         self,
         scraper: BaseScraper,
         interval_minutes: int = None,
+        misfire_grace_time: Optional[int] = None,
+        alert_on_miss: bool = False,
     ):
         """Register a county scraper with its schedule.
 
         Jobs fire immediately on startup (staggered by STAGGER_SECONDS per county)
         then repeat every interval_minutes thereafter.
+
+        ``misfire_grace_time`` overrides the 300s default: with 8 worker threads
+        and hundreds of jobs a run can wait longer than 5 minutes for a thread,
+        and APScheduler then drops it silently. ``alert_on_miss`` posts to
+        #alerts when that still happens.
         """
         interval = interval_minutes or settings.DEFAULT_INTERVAL_MINUTES
         job_id = scraper.scraper_id
@@ -118,6 +132,12 @@ class ScraperScheduler:
         first_run = datetime.now(timezone.utc) + timedelta(seconds=stagger_offset)
         self._registration_count += 1
 
+        job_kwargs = {}
+        if misfire_grace_time:
+            job_kwargs["misfire_grace_time"] = int(misfire_grace_time)
+        if alert_on_miss:
+            self._alert_on_miss.add(job_id)
+
         self.scheduler.add_job(
             self._run_scraper,
             trigger=IntervalTrigger(minutes=interval),
@@ -126,6 +146,7 @@ class ScraperScheduler:
             args=[job_id],
             replace_existing=True,
             next_run_time=first_run,
+            **job_kwargs,
         )
 
         logger.info(
@@ -165,6 +186,41 @@ class ScraperScheduler:
 
     def _on_job_executed(self, event):
         logger.debug(f"✅ Job {event.job_id} executed successfully")
+
+    def _on_job_missed(self, event):
+        job_id = getattr(event, "job_id", "")
+        logger.warning("⏭️ Job %s missed its run time (no free worker within grace)", job_id)
+        if job_id not in self._alert_on_miss:
+            return
+        now = datetime.now(timezone.utc)
+        last = self._miss_alerted_at.get(job_id)
+        if last is not None and now - last < timedelta(minutes=30):
+            return
+        scraper = self._scrapers.get(job_id)
+        label = getattr(scraper, "county_label", None) or job_id
+        try:
+            from writers.slack_notifier import SlackNotifier
+            delivered = SlackNotifier().notify_alert(
+                title=f"{label} scheduled run skipped",
+                message=(
+                    f"{label}: APScheduler skipped a scheduled run because no worker "
+                    f"thread was free within the misfire grace window "
+                    f"(SCRAPER_MAX_CONCURRENT={self.max_workers})."
+                ),
+                level="error",
+                details={"job_id": job_id},
+                source="scheduler",
+            )
+        except Exception as exc:
+            logger.warning("Missed-run alert failed for %s (%s); not throttled",
+                           job_id, type(exc).__name__)
+            return
+        # Throttle only after Slack accepted the post, so a failed delivery
+        # is retried on the next missed run.
+        if delivered:
+            self._miss_alerted_at[job_id] = now
+        else:
+            logger.warning("Missed-run alert for %s not delivered; not throttled", job_id)
 
     def _on_job_error(self, event):
         logger.error(
