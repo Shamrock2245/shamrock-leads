@@ -521,8 +521,10 @@ def _mirror_text(bond: dict, *keys: str) -> str:
 def _mirror_disagrees(case_row: dict, mirror: dict) -> bool:
     """The case and its active mirror must be the same bonded case.
 
-    Status, signer, booking, defendant, match, case number, surety, and POA
-    are compared. A cleared or reassigned field is a different case.
+    Status, signer, booking, defendant, match, case number, surety, POA,
+    and the defendant and indemnitor ids are compared. A cleared or
+    reassigned field is a different case. A POA number on the selected
+    bond is not, by itself, a mirror disagreement.
     """
     if _bond_status(case_row) != _bond_status(mirror):
         return True
@@ -538,6 +540,8 @@ def _mirror_disagrees(case_row: dict, mirror: dict) -> bool:
         ("surety_id", "Surety_ID"),
         ("poa_number", "POA_Number", "power_number"),
         ("match_id", "Match_ID"),
+        ("defendant_id", "Defendant_ID"),
+        ("indemnitor_id", "Indemnitor_ID"),
     ):
         if _mirror_text(case_row, *keys) != _mirror_text(mirror, *keys):
             return True

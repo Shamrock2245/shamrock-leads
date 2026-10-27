@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-27 (co-signer mirror must share party ids)
+
+### Fixed
+- **A bond and its active mirror must name the same defendant and indemnitor.** The ids are read from either field spelling. A different id is `bond_mirror_mismatch`. The DocuSeal URL is not returned, and the scan does not run OCR.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_mirror_party_ids_must_match`.
+
 ## [Unreleased] — 2026-10-27 (co-signer scan is not the indemnitor scan)
 
 ### Fixed

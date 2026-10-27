@@ -3281,6 +3281,60 @@ def test_bond_mirror_and_duplicate_rows_fail_closed(monkeypatch):
     assert client.get(f"/api/cosigner/{token}").json()["sign_url"] == _sign("abc")
 
 
+def test_mirror_party_ids_must_match(monkeypatch):
+    """A mirror with a different defendant or indemnitor id is not this bond."""
+    stores, client = _world(monkeypatch)
+    bond = stores["bond_cases"].docs[0]
+    bond.pop("defendant_id", None)
+    bond["Defendant_ID"] = DEFENDANT_ID
+    _mirror_of(stores)
+    mirror = stores["active_bonds"].docs[0]
+    mirror.pop("Defendant_ID", None)
+    mirror.pop("defendant_id", None)
+    mirror["defendant_id"] = DEFENDANT_ID
+    token = _token(client)
+    agreed = client.get(f"/api/cosigner/{token}")
+    assert agreed.status_code == 200, agreed.text
+    assert agreed.json()["step"] == "scan"
+    assert agreed.json()["sign_url"] is None
+
+    for field, value in (
+        ("defendant_id", "TEST-DEF-OTHER"),
+        ("indemnitor_id", "TEST-IND-OTHER"),
+    ):
+        stores, client = _world(monkeypatch)
+        _mirror_of(stores, **{field: value})
+        calls = {"n": 0}
+        _scanner(monkeypatch, calls)
+        refused = client.post(
+            "/api/paperwork/cosigner-link",
+            json={"packet_id": PACKET},
+            cookies=_cookie(),
+        )
+        assert refused.status_code == 409, field
+        assert refused.json()["error"] == "bond_mirror_mismatch"
+        assert "token" not in refused.json()
+        assert _links(stores) == []
+        assert calls["n"] == 0
+
+    stores, client = _world(monkeypatch)
+    stores["paperwork_packets"].docs[0]["bond_case_id"] = ""
+    _mirror_of(stores, Defendant_ID="TEST-DEF-OTHER")
+    stores["active_bonds"].docs[0].pop("defendant_id", None)
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    drifted = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert drifted.status_code == 409
+    assert drifted.json()["error"] == "bond_mirror_mismatch"
+    scan = _post_scan(client, "TEST-MISSING-TOKEN")
+    assert scan.status_code == 404
+    assert calls["n"] == 0
+
+
 def test_mirror_chain_must_match(monkeypatch):
     """A mirror that diverges on the case chain is not this bond."""
     stores, client = _world(monkeypatch)
