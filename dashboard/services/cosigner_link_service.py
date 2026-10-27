@@ -1986,16 +1986,16 @@ async def cosigner_state(token: str, lang: Optional[str] = None) -> dict:
     else:
         step = "scan"
     sign_url = None
-    if verified:
+    if step == "sign":
         found, problem = _sign_url(
             packet,
             str(link.get("signer_role") or "indemnitor"),
             str(link.get("signer_name") or ""),
             _signer_email(packet, bond, str(link.get("signer_role") or "indemnitor")),
         )
-        # Signing is still ahead. A bad URL must not be shown. Once the
-        # packet is signed, the pay step stays open with no sign link.
-        if problem and step == "sign":
+        # Signing is still ahead. A bad URL must not be shown. Pay and
+        # paid do not receive the signing URL.
+        if problem:
             raise CosignerLinkError(problem, 409)
         sign_url = found or None
     payment = _payment_view(packet, bond) if step in {"pay", "paid"} else None

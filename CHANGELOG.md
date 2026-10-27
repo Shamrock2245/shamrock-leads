@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-27 (completed co-signer hides the sign URL)
+
+### Fixed
+- **The public co-signer status returns the DocuSeal URL only on the sign step.** Pay and paid keep the payment view and do not include the signing URL.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_completed_packet_hides_the_sign_url`.
+
 ## [Unreleased] — 2026-10-27 (expired co-signer claim can be replaced)
 
 ### Fixed

@@ -2013,6 +2013,47 @@ def test_unsigned_packet_hides_the_pay_link(monkeypatch):
     assert paying.json()["payment"]["url"] == pay
 
 
+def test_completed_packet_hides_the_sign_url(monkeypatch):
+    """Pay and paid do not return the DocuSeal URL, even when it is valid."""
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert opened.status_code == 200, opened.text
+    signing = client.get(f"/api/cosigner/{token}")
+    assert signing.status_code == 200, signing.text
+    assert signing.json()["step"] == "sign"
+    assert signing.json()["sign_url"] == _sign("abc")
+    sign_url = _sign("abc")
+
+    packet = stores["paperwork_packets"].docs[0]
+    packet["status"] = "completed"
+    packet["invoice_payment_link"] = _swipe_link("down")
+    packet["swipesimple_invoice_amount_cents"] = 50000
+    packet["swipesimple_invoice_number"] = BOOKING
+    packet["swipesimple_invoice_bond_id"] = CASE
+    paying = client.get(f"/api/cosigner/{token}")
+    assert paying.status_code == 200, paying.text
+    assert paying.json()["step"] == "pay"
+    assert paying.json()["sign_url"] is None
+    assert sign_url not in paying.text
+    page = client.get(f"/cosigner/{token}")
+    assert page.status_code == 200
+    assert sign_url not in page.text
+
+    stores["bond_cases"].docs[0]["premium_paid"] = True
+    paid = client.get(f"/api/cosigner/{token}")
+    assert paid.status_code == 200, paid.text
+    assert paid.json()["step"] == "paid"
+    assert paid.json()["sign_url"] is None
+    assert sign_url not in paid.text
+    done = client.get(f"/cosigner/{token}")
+    assert done.status_code == 200
+    assert sign_url not in done.text
+
+
 def test_paid_bond_still_requires_a_signature(monkeypatch):
     stores, client = _world(monkeypatch)
     stores["bond_cases"].docs[0]["premium_paid"] = True
@@ -2028,7 +2069,7 @@ def test_paid_bond_still_requires_a_signature(monkeypatch):
     stores["paperwork_packets"].docs[0]["status"] = "completed"
     paid = client.get(f"/api/cosigner/{token}").json()
     assert paid["step"] == "paid"
-    assert paid["sign_url"] == _sign("abc")
+    assert paid["sign_url"] is None
 
 
 def test_verified_or_signed_packet_refuses_another_scan(monkeypatch):
