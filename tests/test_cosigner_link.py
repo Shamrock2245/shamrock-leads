@@ -27,6 +27,8 @@ BOOKING = "TEST-COS-1"
 INDEMNITOR = "Casey Sample"
 PACKET = "PKT-TEST-COS-1"
 CASE = "BC-TEST-COS-1"
+DEFENDANT_ID = "TEST-DEF-COS-1"
+INDEMNITOR_ID = "TEST-IND-COS-1"
 ACTOR = "office@example.invalid"
 
 
@@ -351,6 +353,8 @@ def _world(monkeypatch, *, cosigner=""):
         ],
         "status": "draft",
         "surety_id": "osi",
+        "defendant_id": DEFENDANT_ID,
+        "indemnitor_id": INDEMNITOR_ID,
         **CONFIRMED,
     }
     if cosigner:
@@ -366,6 +370,8 @@ def _world(monkeypatch, *, cosigner=""):
         "match_status": "validated",
         "case_number": "2026-TEST-001",
         "poa_number": "POA-TEST-COS-1",
+        "defendant_id": DEFENDANT_ID,
+        "indemnitor_id": INDEMNITOR_ID,
         "swipesimple_invoice_number": BOOKING,
         "premium_paid": False,
         **CONFIRMED,
@@ -382,6 +388,8 @@ def _world(monkeypatch, *, cosigner=""):
     stores = {
         "paperwork_packets": _Col([packet]),
         "bond_cases": _Col([bond]),
+        "defendants": _Col([{"defendant_id": DEFENDANT_ID, "Defendant_ID": DEFENDANT_ID}]),
+        "indemnitors": _Col([{"indemnitor_id": INDEMNITOR_ID, "Indemnitor_ID": INDEMNITOR_ID}]),
     }
 
     def get(name):
@@ -1744,6 +1752,80 @@ def test_link_audits_record_old_and_new_state(monkeypatch):
 
 def _links(stores):
     return stores.get("cosigner_links").docs if stores.get("cosigner_links") else []
+
+
+def _drop_party_ids(doc, *keys):
+    for key in keys:
+        doc.pop(key, None)
+
+
+def test_link_requires_bound_party_records(monkeypatch):
+    """No public link until the packet and bond name the same stored parties."""
+    stores, client = _world(monkeypatch)
+    created = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert created.status_code == 200, created.text
+
+    stores, client = _world(monkeypatch)
+    _drop_party_ids(stores["paperwork_packets"].docs[0], "defendant_id", "Defendant_ID")
+    missing = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert missing.status_code == 409
+    assert missing.json() == {"error": "defendant_required"}
+    assert _links(stores) == []
+
+    stores, client = _world(monkeypatch)
+    packet = stores["paperwork_packets"].docs[0]
+    bond = stores["bond_cases"].docs[0]
+    _drop_party_ids(packet, "defendant_id", "Defendant_ID")
+    _drop_party_ids(bond, "defendant_id", "Defendant_ID")
+    packet["Defendant_ID"] = DEFENDANT_ID
+    bond["defendant_id"] = DEFENDANT_ID
+    packet["indemnitor_id"] = "TEST-IND-OTHER"
+    aliased = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert aliased.status_code == 409
+    assert aliased.json() == {"error": "party_mismatch"}
+    assert _links(stores) == []
+
+    stores, client = _world(monkeypatch)
+    packet = stores["paperwork_packets"].docs[0]
+    bond = stores["bond_cases"].docs[0]
+    _drop_party_ids(packet, "defendant_id", "Defendant_ID", "indemnitor_id", "Indemnitor_ID")
+    _drop_party_ids(bond, "defendant_id", "Defendant_ID", "indemnitor_id", "Indemnitor_ID")
+    packet["Defendant_ID"] = DEFENDANT_ID
+    bond["defendant_id"] = DEFENDANT_ID
+    packet["Indemnitor_ID"] = INDEMNITOR_ID
+    bond["indemnitor_id"] = INDEMNITOR_ID
+    issued = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert issued.status_code == 200, issued.text
+    token = issued.json()["token"]
+
+    stores["indemnitors"].docs.clear()
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    refused = client.get(f"/api/cosigner/{token}")
+    assert refused.status_code == 409
+    assert refused.json()["error"] == "party_unresolved"
+    assert _sign_hidden(refused.text)
+    scan = _post_scan(client, token)
+    assert scan.status_code == 409
+    assert scan.json()["error"] == "party_unresolved"
+    assert calls["n"] == 0
+    assert "id_ocr" not in stores["paperwork_packets"].docs[0]
 
 
 def test_incomplete_bond_does_not_get_a_link(monkeypatch):

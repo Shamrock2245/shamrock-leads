@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-27 (co-signer link requires stored parties)
+
+### Fixed
+- **A co-signer link is issued only when the packet and the bond name the same defendant and indemnitor, and both rows already exist.** Missing ids, disagreeing ids, and ids that do not resolve are refused. A later request fails closed the same way. No party row is created.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_link_requires_bound_party_records`.
+
 ## [Unreleased] — 2026-10-26 (unsigned co-signer gets no pay link)
 
 ### Tests

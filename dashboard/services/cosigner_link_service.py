@@ -15,6 +15,7 @@ Customer texting stays on BlueBubbles behind ``SWIPESIMPLE_DISPATCH_LIVE``.
 from __future__ import annotations
 
 import hashlib
+import html
 import logging
 import os
 import secrets
@@ -682,6 +683,60 @@ def _bond_issuance_gap(bond: dict) -> str:
     return ""
 
 
+def _party_ids(doc: dict) -> tuple[str, str]:
+    """Defendant and indemnitor ids, under either field spelling."""
+    if not isinstance(doc, dict):
+        return "", ""
+    return (
+        _bond_field(doc, "defendant_id", "Defendant_ID"),
+        _bond_field(doc, "indemnitor_id", "Indemnitor_ID"),
+    )
+
+
+def _party_id_gap(packet: dict, bond: dict) -> str:
+    """The packet and the bond must name the same defendant and indemnitor."""
+    packet_defendant, packet_indemnitor = _party_ids(packet)
+    bond_defendant, bond_indemnitor = _party_ids(bond)
+    if not packet_defendant or not bond_defendant:
+        return "defendant_required"
+    if packet_defendant != bond_defendant:
+        return "party_mismatch"
+    if not packet_indemnitor or not bond_indemnitor:
+        return "indemnitor_required"
+    if packet_indemnitor != bond_indemnitor:
+        return "party_mismatch"
+    return ""
+
+
+async def _parties_unresolved(defendant_id: str, indemnitor_id: str) -> str:
+    """Both party rows must already exist. This does not create them."""
+    defendant_query = _scope({"$or": [
+        {"defendant_id": defendant_id},
+        {"Defendant_ID": defendant_id},
+    ]})
+    indemnitor_query = _scope({"$or": [
+        {"indemnitor_id": indemnitor_id},
+        {"Indemnitor_ID": indemnitor_id},
+    ]})
+    if defendant_query is None or indemnitor_query is None:
+        raise CosignerLinkError("tenant_required", 403)
+    defendant = await get_collection("defendants").find_one(defendant_query)
+    indemnitor = await get_collection("indemnitors").find_one(indemnitor_query)
+    if not defendant or not indemnitor:
+        return "party_unresolved"
+    return ""
+
+
+async def _require_party_binding(packet: dict, bond: dict) -> None:
+    gap = _party_id_gap(packet, bond)
+    if gap:
+        raise CosignerLinkError(gap, 409)
+    defendant_id, indemnitor_id = _party_ids(bond)
+    missing = await _parties_unresolved(defendant_id, indemnitor_id)
+    if missing:
+        raise CosignerLinkError(missing, 409)
+
+
 async def create_cosigner_link(*, actor: str, packet_id: str, lang: str = "en") -> dict:
     packet = await _find_packet(packet_id)
     if not packet:
@@ -710,6 +765,7 @@ async def create_cosigner_link(*, actor: str, packet_id: str, lang: str = "en") 
     gap = _bond_issuance_gap(bond)
     if gap:
         raise CosignerLinkError(gap, 409)
+    await _require_party_binding(packet, bond)
     name, role = packet_name, packet_role
     now = _now()
     token = secrets.token_urlsafe(24)
@@ -801,7 +857,8 @@ async def _require_current_bond(link: dict, packet: dict) -> dict:
 
     The same completeness check used at issuance runs again here. A link
     that was valid when it was created is refused once the match, case
-    number, surety, or POA is no longer on the bond.
+    number, surety, or POA is no longer on the bond. The defendant and
+    indemnitor ids must still agree and still resolve to stored rows.
     """
     bond = await _find_bond(packet)
     if not bond:
@@ -822,6 +879,7 @@ async def _require_current_bond(link: dict, packet: dict) -> dict:
     gap = _bond_issuance_gap(bond)
     if gap:
         raise CosignerLinkError(gap, 409)
+    await _require_party_binding(packet, bond)
     return bond
 
 
