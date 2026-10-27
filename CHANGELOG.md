@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-27 (co-signer record must name that signer)
+
+### Fixed
+- **A co-signer's indemnitor record has to be that signer.** After the co-indemnitor id resolves, its full name must equal the expected signer, case-insensitively, with whitespace collapsed. A different person's record gets no link, no DocuSeal URL, and no pay link.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_cosigner_record_must_name_the_selected_signer`.
+
 ## [Unreleased] — 2026-10-27 (zero down payment writes a paid audit)
 
 ### Fixed

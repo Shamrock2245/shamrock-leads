@@ -740,6 +740,28 @@ def _co_indemnitor_ids(doc: dict) -> list[str]:
     return found
 
 
+def _collapsed_name(value: Any) -> str:
+    """Case-insensitive full name with the whitespace collapsed."""
+    return " ".join(str(value or "").split()).casefold()
+
+
+def _indemnitor_record_name(doc: dict) -> str:
+    if not isinstance(doc, dict):
+        return ""
+    for key in (
+        "name",
+        "full_name",
+        "fullName",
+        "Full_Name",
+        "indemnitor_name",
+        "Indemnitor_Name",
+    ):
+        text = str(doc.get(key) or "").strip()
+        if text:
+            return text
+    return ""
+
+
 def _co_indemnitor_gap(packet: dict, bond: dict) -> str:
     """The co-signer needs one id of their own, the same on the packet and the bond."""
     packet_ids = _co_indemnitor_ids(packet)
@@ -756,14 +778,46 @@ def _co_indemnitor_gap(packet: dict, bond: dict) -> str:
     return ""
 
 
-async def _indemnitor_missing(indemnitor_id: str) -> bool:
+def _co_row_name_gap(doc: dict, co_id: str, expected: str) -> str:
+    """A row that carries this id must name the selected signer."""
+    wanted = _collapsed_name(expected)
+    if not wanted:
+        return "co_indemnitor_mismatch"
+    people: list[dict] = list(_listed_people(doc))
+    for key in ("coindemnitor", "co_indemnitor", "cosigner", "co_signer"):
+        nested = doc.get(key)
+        if isinstance(nested, dict):
+            people.append(nested)
+    for person in people:
+        role = str(person.get("role") or person.get("party_role") or "").strip().lower()
+        role = role.replace("-", "_")
+        named_nested = person in (
+            doc.get(key) for key in ("coindemnitor", "co_indemnitor", "cosigner", "co_signer")
+            if isinstance(doc.get(key), dict)
+        )
+        if role not in _COSIGNER_ROLES and role != "co_indemnitor" and not named_nested:
+            continue
+        if _bond_field(person, "indemnitor_id", "Indemnitor_ID", "id") != co_id:
+            continue
+        row_name = _person_name(person)
+        if row_name and _collapsed_name(row_name) != wanted:
+            return "co_indemnitor_mismatch"
+    return ""
+
+
+async def _load_indemnitor(indemnitor_id: str) -> Optional[dict]:
     query = _scope({"$or": [
         {"indemnitor_id": indemnitor_id},
         {"Indemnitor_ID": indemnitor_id},
     ]})
     if query is None:
         raise CosignerLinkError("tenant_required", 403)
-    return not await get_collection("indemnitors").find_one(query)
+    found = await get_collection("indemnitors").find_one(query)
+    return found if isinstance(found, dict) else None
+
+
+async def _indemnitor_missing(indemnitor_id: str) -> bool:
+    return not await _load_indemnitor(indemnitor_id)
 
 
 async def _parties_unresolved(defendant_id: str, indemnitor_id: str) -> str:
@@ -793,8 +847,18 @@ async def _require_party_binding(packet: dict, bond: dict, *, role: str) -> None
     co_gap = _co_indemnitor_gap(packet, bond)
     if co_gap:
         raise CosignerLinkError(co_gap, 409)
-    if await _indemnitor_missing(_co_indemnitor_ids(bond)[0]):
+    co_id = _co_indemnitor_ids(bond)[0]
+    expected = _cosigner_name(packet, bond)
+    for doc in (packet, bond):
+        row_gap = _co_row_name_gap(doc, co_id, expected)
+        if row_gap:
+            raise CosignerLinkError(row_gap, 409)
+    record = await _load_indemnitor(co_id)
+    if not record:
         raise CosignerLinkError("co_indemnitor_unresolved", 409)
+    # The id has to be this signer. A different person's record is not a match.
+    if _collapsed_name(_indemnitor_record_name(record)) != _collapsed_name(expected):
+        raise CosignerLinkError("co_indemnitor_mismatch", 409)
 
 
 async def _replace_stale_verification_claim(packet: dict) -> None:

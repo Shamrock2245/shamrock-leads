@@ -391,6 +391,7 @@ def _world(monkeypatch, *, cosigner=""):
         indemnitor_rows.append({
             "indemnitor_id": CO_INDEMNITOR_ID,
             "Indemnitor_ID": CO_INDEMNITOR_ID,
+            "name": cosigner,
         })
     stores = {
         "paperwork_packets": _Col([packet]),
@@ -1839,6 +1840,25 @@ def test_cosigner_record_of_the_primary_indemnitor_gets_no_link(monkeypatch):
     for person in stores["bond_cases"].docs[0]["indemnitors"]:
         if person.get("role") == "co_indemnitor":
             person["indemnitor_id"] = INDEMNITOR_ID
+    refused = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert refused.status_code == 409
+    assert refused.json() == {"error": "co_indemnitor_mismatch"}
+    assert "token" not in refused.json()
+    assert _links(stores) == []
+    assert _sign("cosigner") not in refused.text
+    assert _swipe_link("down") not in refused.text
+
+
+def test_cosigner_record_must_name_the_selected_signer(monkeypatch):
+    """The packet and the bond say Alice Sample. Another record gets no link."""
+    stores, client = _world(monkeypatch, cosigner="Alice Sample")
+    for row in stores["indemnitors"].docs:
+        if row.get("indemnitor_id") == CO_INDEMNITOR_ID:
+            row["name"] = "Bob Other"
     refused = client.post(
         "/api/paperwork/cosigner-link",
         json={"packet_id": PACKET},
