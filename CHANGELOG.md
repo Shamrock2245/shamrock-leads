@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-28 (Lee co-signer discovery: atomic purge and guarded refresh, Codex on #280)
+
+### Fixed
+- **The purge no longer rewrites the candidate array.** `purge_unreviewed_candidates` removes expired rows with one atomic `$pull` per contacts doc (`review_status` exactly `unreviewed` and `discovered_at` at or before the 30-day cutoff, as an ISO-date string or a BSON date). Candidates a refresh adds or reviews between the purge's read and its write are kept. Reviewed and approved rows never match the condition. A blank or garbled string stamp is never purged. The pull bumps the doc's `discovery_rev`; the TTL date and arrest candidate count are then recomputed from the doc as it is after the pull, and the TTL write is skipped if the doc has moved on again.
+- **A discovery refresh no longer overwrites a concurrent change.** The refresh merge-and-write is a compare-and-swap on `discovery_rev`: if the doc changed after the run read it (another refresh, a purge, or a doc that appeared since), nothing is written, the doc is re-read, and the merge is redone on top of it, up to 3 attempts. If it is still contended, nothing is written and the run is `failed` with `discovery_error = contacts_write_conflict`, which the batch retries. A purge can no longer be undone by a refresh that read before it.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`: a refresh that adds rows between the purge read and write keeps them; only expired unreviewed rows are removed (ISO and BSON-date stamps; fresh, blank, garbled and status-less rows stay); reviewed and approved rows are never removed; the purge never `$set`s the array; the purge TTL write does not overwrite a newer refresh; a refresh re-merges when the doc changed after its read; a refresh does not put back rows a purge removed; a refresh that keeps losing writes nothing and goes to `retry`; a guarded insert refuses a doc that appeared after the read. The more-than-200 and paging purge tests and the Lee arrest-write queue tests are unchanged and green.
+
 ## [Unreleased] — 2026-10-28 (Lee co-signer discovery: Codex round 3 on #280)
 
 ### Fixed

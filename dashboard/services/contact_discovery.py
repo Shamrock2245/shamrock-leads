@@ -125,6 +125,23 @@ class ContactsLegacyAmbiguous(Exception):
         super().__init__(self.code)
 
 
+class ContactsWriteConflict(Exception):
+    """The contacts doc changed after this run read it (or appeared after the
+    run found none). Nothing was written; the caller re-reads and re-merges."""
+
+    code = "contacts_write_conflict"
+
+    def __init__(self) -> None:
+        super().__init__(self.code)
+
+
+# Every write that changes ``discovered_contacts`` bumps this counter, so a
+# writer that merged from an earlier read can tell the array has moved.
+CONTACTS_REV_FIELD = "discovery_rev"
+CONTACTS_WRITE_ATTEMPTS = 3
+_UNGUARDED: Any = object()
+
+
 class PriorReadFailed(Exception):
     """A Mongo read inside a provider failed. The run must not count as done."""
 
@@ -256,12 +273,25 @@ async def find_contact_doc(
     return legacy[0]
 
 
+def _rev_clause(doc: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Filter clause that matches only the revision ``doc`` was read at."""
+    rev = doc.get(CONTACTS_REV_FIELD) if isinstance(doc, dict) else None
+    return {CONTACTS_REV_FIELD: rev} if rev is not None else {CONTACTS_REV_FIELD: {"$exists": False}}
+
+
+def _with_rev_bump(update: Dict[str, Any]) -> Dict[str, Any]:
+    bumped = dict(update)
+    bumped["$inc"] = {**(update.get("$inc") or {}), CONTACTS_REV_FIELD: 1}
+    return bumped
+
+
 async def upsert_contact_doc(
     contacts: Any,
     identity: Dict[str, str],
     update: Dict[str, Any],
     *,
     arrests: Any = None,
+    expected: Any = _UNGUARDED,
 ) -> str:
     """Idempotent contacts upsert on state + county + booking_number.
 
@@ -274,25 +304,47 @@ async def upsert_contact_doc(
     3. Otherwise a new doc gets the deterministic ``_id`` (``"upserted"``). If
        a concurrent writer inserted it first, the unique ``_id`` index rejects
        the second insert, and that write is applied as a plain update.
+
+    Every write bumps ``discovery_rev``. With ``expected`` (the doc the caller
+    merged from, or ``None`` when it found none) the write is a
+    compare-and-swap: it lands only if the doc is still at that revision, and
+    otherwise raises :class:`ContactsWriteConflict` with nothing written.
     """
-    plain = {key: value for key, value in update.items() if key != "$setOnInsert"}
+    guarded = expected is not _UNGUARDED
+    plain = _with_rev_bump({key: value for key, value in update.items() if key != "$setOnInsert"})
     target = await find_contact_doc(contacts, identity, arrests=arrests)
+    if guarded:
+        if (expected is None) != (target is None):
+            raise ContactsWriteConflict()
+        if target is not None and target.get("_id") != expected.get("_id"):
+            raise ContactsWriteConflict()
     if target is not None and all(target.get(key) == value for key, value in identity.items()):
-        await contacts.update_one(identity, plain, upsert=False)
+        filt = {**identity, **_rev_clause(expected)} if guarded else identity
+        result = await contacts.update_one(filt, plain, upsert=False)
+        if guarded and not getattr(result, "matched_count", 1):
+            raise ContactsWriteConflict()
         return "updated"
     if target is not None:
         in_place = dict(plain)
         in_place["$set"] = {**(plain.get("$set") or {}), **identity}
-        await contacts.update_one({"_id": target.get("_id")}, in_place, upsert=False)
+        filt = {"_id": target.get("_id"), **(_rev_clause(expected) if guarded else {})}
+        result = await contacts.update_one(filt, in_place, upsert=False)
+        if guarded and not getattr(result, "matched_count", 1):
+            raise ContactsWriteConflict()
         return "legacy_updated"
-    first = dict(update)
+    first = _with_rev_bump(update)
     first["$setOnInsert"] = {**(update.get("$setOnInsert") or {}), "_id": contact_doc_id(identity)}
+    # Guarded: only insert. A doc that appeared since the read already has a
+    # revision, so this filter misses it and the insert hits the unique _id.
+    filt = {**identity, CONTACTS_REV_FIELD: {"$exists": False}} if guarded else identity
     try:
-        await contacts.update_one(identity, first, upsert=True)
+        await contacts.update_one(filt, first, upsert=True)
         return "upserted"
     except Exception as exc:
         if not _is_duplicate_key(exc):
             raise
+        if guarded:
+            raise ContactsWriteConflict() from exc
     await contacts.update_one(identity, plain, upsert=False)
     return "updated"
 
@@ -1402,20 +1454,11 @@ async def run_discovery(
         candidates.extend(result.get("candidates") or [])
         providers_run.append(_public_summary(result))
 
-    try:
-        # A legacy booking-only doc is merged too, so its reviewed rows survive.
-        previous = await find_contact_doc(contacts, identity, arrests=db["arrests"])
-    except ContactsLegacyAmbiguous as exc:
-        return {"cached": False, "contacts": [], "discovery_status": exc.code, "providers_run": providers_run}
-    merged_existing: List[Dict[str, Any]] = []
-    if isinstance(previous, dict):
-        merged_existing = list(previous.get("discovered_contacts") or [])
     # Sources whose provider did not finish this run keep their prior rows.
     unfinished = [
         str(row.get("provider") or "") for row in providers_run
         if row.get("status") not in {"ok", "skipped", "skipped_unparsed"}
     ]
-    merged = _merge_candidates(merged_existing, candidates, keep_sources=unfinished)
     hard_failures = [
         row for row in providers_run
         if row.get("status") not in {"ok", "skipped", "skipped_disabled", "skipped_unparsed"}
@@ -1433,30 +1476,61 @@ async def run_discovery(
         error_code = "providers_failed"
     else:
         status = "complete"
+    # Merge-and-write is a compare-and-swap on the doc's revision. If a
+    # refresh, purge or review lands between the read and the write, nothing
+    # is written; the doc is re-read and the merge is redone on top of it, so
+    # the other writer's rows (or removals) are never overwritten.
+    merged: List[Dict[str, Any]] = []
     now = datetime.now(timezone.utc)
-    expire = unreviewed_expire_at(merged, now)
-    payload = {
-        **identity,
-        "defendant_name": _first(stored, "full_name", "defendant_name"),
-        "discovery_status": status,
-        "discovery_error": error_code,
-        "discovered_at": now,
-        "providers_run": providers_run,
-        "discovered_contacts": merged,
-    }
-    update: Dict[str, Any] = {"$set": payload}
-    if expire:
-        update["$set"]["unreviewed_expire_at"] = expire
-    else:
-        update["$unset"] = {"unreviewed_expire_at": ""}
-    try:
-        await upsert_contact_doc(contacts, identity, update, arrests=db["arrests"])
-    except ContactsLegacyAmbiguous as exc:
-        # Nothing written to contacts; the caller decides what to do with the arrest.
+    written = False
+    for _attempt in range(CONTACTS_WRITE_ATTEMPTS):
+        try:
+            # A legacy booking-only doc is merged too, so its reviewed rows survive.
+            previous = await find_contact_doc(contacts, identity, arrests=db["arrests"])
+        except ContactsLegacyAmbiguous as exc:
+            return {"cached": False, "contacts": [], "discovery_status": exc.code, "providers_run": providers_run}
+        merged_existing: List[Dict[str, Any]] = []
+        if isinstance(previous, dict):
+            merged_existing = list(previous.get("discovered_contacts") or [])
+        merged = _merge_candidates(merged_existing, candidates, keep_sources=unfinished)
+        now = datetime.now(timezone.utc)
+        expire = unreviewed_expire_at(merged, now)
+        payload = {
+            **identity,
+            "defendant_name": _first(stored, "full_name", "defendant_name"),
+            "discovery_status": status,
+            "discovery_error": error_code,
+            "discovered_at": now,
+            "providers_run": providers_run,
+            "discovered_contacts": merged,
+        }
+        update: Dict[str, Any] = {"$set": payload}
+        if expire:
+            update["$set"]["unreviewed_expire_at"] = expire
+        else:
+            update["$unset"] = {"unreviewed_expire_at": ""}
+        try:
+            await upsert_contact_doc(contacts, identity, update, arrests=db["arrests"], expected=previous)
+        except ContactsWriteConflict:
+            continue
+        except ContactsLegacyAmbiguous as exc:
+            # Nothing written to contacts; the caller decides what to do with the arrest.
+            return {
+                "cached": False,
+                "contacts": [],
+                "discovery_status": exc.code,
+                "providers_run": providers_run,
+            }
+        written = True
+        break
+    if not written:
+        # Still contended after every attempt: nothing written, the batch retries.
+        log.warning("[indemnitor_discovery] contacts write skipped code=%s", ContactsWriteConflict.code)
         return {
             "cached": False,
             "contacts": [],
-            "discovery_status": exc.code,
+            "discovery_status": "failed",
+            "discovery_error": ContactsWriteConflict.code,
             "providers_run": providers_run,
         }
     marker: Dict[str, Any] = {
@@ -1683,16 +1757,40 @@ async def run_lee_discovery_batch(db: Any, *, limit: int = DISCOVERY_BATCH_LIMIT
     return summary
 
 
-def _expired_unreviewed_query(cutoff: datetime) -> Dict[str, Any]:
-    """Contacts docs holding at least one unreviewed row discovered at or before
+# A string stamp only counts when it starts like an ISO date, so a blank or
+# garbled value (which would sort before the cutoff) is never purged.
+_ISO_DATE_PREFIX = r"^[0-9]{4}-[0-9]{2}-[0-9]{2}"
+
+
+def _expired_row_conditions(cutoff: datetime) -> List[Dict[str, Any]]:
+    """Per-row conditions for an unreviewed candidate discovered at or before
     ``cutoff``. ``discovered_at`` is a UTC ISO string (make_candidate); legacy
-    rows may hold a BSON date, so both forms are matched."""
-    def _row(stamp: Any) -> Dict[str, Any]:
-        return {"discovered_contacts": {"$elemMatch": {
-            "review_status": "unreviewed",
-            "discovered_at": {"$lte": stamp},
-        }}}
-    return {"$or": [_row(cutoff.isoformat()), _row(cutoff)]}
+    rows may hold a BSON date, so both forms are matched. Reviewed rows never
+    match: ``review_status`` must be exactly ``unreviewed``."""
+    return [
+        {"review_status": "unreviewed", "discovered_at": {"$regex": _ISO_DATE_PREFIX, "$lte": cutoff.isoformat()}},
+        {"review_status": "unreviewed", "discovered_at": {"$lte": cutoff}},
+    ]
+
+
+def _expired_unreviewed_query(cutoff: datetime) -> Dict[str, Any]:
+    """Contacts docs holding at least one expired unreviewed row."""
+    return {"$or": [
+        {"discovered_contacts": {"$elemMatch": cond}} for cond in _expired_row_conditions(cutoff)
+    ]}
+
+
+def _row_is_expired(row: Any, cutoff: datetime) -> bool:
+    """Python mirror of :func:`_expired_row_conditions` (for counting only)."""
+    if not isinstance(row, dict) or row.get("review_status") != "unreviewed":
+        return False
+    stamp = row.get("discovered_at")
+    if isinstance(stamp, str):
+        return bool(re.match(_ISO_DATE_PREFIX, stamp)) and stamp <= cutoff.isoformat()
+    if isinstance(stamp, datetime):
+        aware = stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
+        return aware <= cutoff
+    return False
 
 
 async def purge_unreviewed_candidates(
@@ -1743,43 +1841,58 @@ async def purge_unreviewed_candidates(
 async def _purge_docs(
     db: Any, contacts: Any, stored: Sequence[Any], cutoff: datetime, now: datetime
 ) -> tuple:
+    """Remove expired unreviewed rows with one atomic ``$pull`` per doc.
+
+    The array is never rewritten from the page read, so a refresh that adds
+    or reviews candidates between the read and this write keeps its rows.
+    The pull bumps ``discovery_rev`` so a refresh that merged from an earlier
+    read sees the change and re-merges instead of putting rows back.
+    """
+    conditions = _expired_row_conditions(cutoff)
     purged = 0
     docs = 0
     for doc in stored:
         if not isinstance(doc, dict):
             continue
-        kept: List[Dict[str, Any]] = []
-        dropped = 0
-        for row in doc.get("discovered_contacts") or []:
-            if not isinstance(row, dict):
-                continue
-            stamp = _parse_time(row.get("discovered_at"))
-            if row.get("review_status") == "unreviewed" and stamp and stamp <= cutoff:
-                dropped += 1
-                continue
-            kept.append(row)
+        dropped = sum(1 for row in doc.get("discovered_contacts") or [] if _row_is_expired(row, cutoff))
         if not dropped:
             continue
-        expire = unreviewed_expire_at(kept, now)
-        update: Dict[str, Any] = {"$set": {"discovered_contacts": kept}}
-        if expire:
-            update["$set"]["unreviewed_expire_at"] = expire
-        else:
-            update["$unset"] = {"unreviewed_expire_at": ""}
+        doc_id = doc.get("_id")
         try:
-            await contacts.update_one({"_id": doc.get("_id")}, update)
-            identity = contact_identity(doc.get("state"), doc.get("county"), doc.get("booking_number"))
+            result = await contacts.update_one(
+                {"$and": [{"_id": doc_id}, _expired_unreviewed_query(cutoff)]},
+                {
+                    "$pull": {"discovered_contacts": {"$or": conditions}},
+                    "$inc": {CONTACTS_REV_FIELD: 1},
+                },
+            )
+        except Exception as exc:
+            log.warning("[indemnitor_discovery] purge write failed error_type=%s", type(exc).__name__)
+            continue
+        if not getattr(result, "modified_count", 1):
+            continue  # another writer already removed them
+        purged += dropped
+        docs += 1
+        try:
+            # TTL date and candidate count follow the array as it is now. The
+            # TTL write is guarded on the revision just read, so it never
+            # overwrites a date a newer refresh computed from its own rows.
+            after = await contacts.find_one({"_id": doc_id})
+            if not isinstance(after, dict):
+                continue
+            rows = list(after.get("discovered_contacts") or [])
+            expire = unreviewed_expire_at(rows, now)
+            ttl: Dict[str, Any] = {"$set": {"unreviewed_expire_at": expire}} if expire else {"$unset": {"unreviewed_expire_at": ""}}
+            await contacts.update_one({"_id": doc_id, **_rev_clause(after)}, ttl)
+            identity = contact_identity(after.get("state"), after.get("county"), after.get("booking_number"))
             if identity:
                 await db["arrests"].update_one(
                     identity,
                     {"$set": {
-                        "indemnitor_discovery.candidate_count": len(kept),
+                        "indemnitor_discovery.candidate_count": len(rows),
                         "indemnitor_discovery.updated_at": now,
                     }},
                 )
         except Exception as exc:
-            log.warning("[indemnitor_discovery] purge write failed error_type=%s", type(exc).__name__)
-            continue
-        purged += dropped
-        docs += 1
+            log.warning("[indemnitor_discovery] purge follow-up failed error_type=%s", type(exc).__name__)
     return purged, docs

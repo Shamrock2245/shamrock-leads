@@ -200,6 +200,11 @@ class AsyncCollection:
             _set_path(doc, key, value)
         for key in (update.get("$unset") or {}):
             _unset_path(doc, key)
+        for key, amount in (update.get("$inc") or {}).items():
+            doc[key] = (doc.get(key) or 0) + amount
+        for key, cond in (update.get("$pull") or {}).items():
+            if isinstance(doc.get(key), list):
+                doc[key] = [item for item in doc[key] if not (isinstance(item, dict) and _match(item, cond))]
 
 
 class AsyncDB:
@@ -894,7 +899,8 @@ class RacyContacts(AsyncCollection):
             # Insert without re-checking, like two concurrent upserts.
             doc = {"_id": f"id{len(self.docs)}"}
             for key, value in (filt or {}).items():
-                _set_path(doc, key, value)
+                if not isinstance(value, dict):
+                    _set_path(doc, key, value)
             for key, value in (update.get("$setOnInsert") or {}).items():
                 _set_path(doc, key, value)
             if any(other.get("_id") == doc["_id"] for other in self.docs):
@@ -1594,3 +1600,254 @@ async def test_legacy_scan_that_hits_its_cap_fails_closed():
     result = await run_discovery(db, booking_number="B-100", county="Lee", state="FL", force=True)
     assert result["discovery_status"] == ContactsLegacyAmbiguous.code
     assert db["contacts"].docs == before
+
+
+# --- Codex P2 on #280 at da199a7: atomic purge, revision-guarded refresh ---
+
+def _row(name, status, stamp, source="same_address"):
+    return {"name": name, "source": source, "review_status": status, "discovered_at": stamp}
+
+
+class _RefreshBeforePurgeWrite(AsyncCollection):
+    """A refresh lands after the purge read its page, before the purge writes."""
+
+    def __init__(self, added):
+        super().__init__()
+        self.added = added
+        self.fired = False
+
+    async def update_one(self, filt, update, upsert=False):
+        if "$pull" in update and not self.fired:
+            self.fired = True
+            doc = self.docs[0]
+            doc["discovered_contacts"] = list(doc["discovered_contacts"]) + list(self.added)
+            doc["discovery_rev"] = (doc.get("discovery_rev") or 0) + 1
+        return await super().update_one(filt, update, upsert=upsert)
+
+
+@pytest.mark.asyncio
+async def test_purge_keeps_candidates_a_refresh_adds_between_read_and_write():
+    db = AsyncDB()
+    old = (NOW - timedelta(days=31)).isoformat()
+    added = [_row("Refresh New", "unreviewed", NOW.isoformat()), _row("Refresh Reviewed", "reviewed", old)]
+    col = _RefreshBeforePurgeWrite(added)
+    db._cols["contacts"] = col
+    col.docs.append({"_id": "c1", "state": "FL", "county": "Lee", "booking_number": "B-100",
+                     "discovered_contacts": [_row("Expired", "unreviewed", old)]})
+    result = await purge_unreviewed_candidates(db, now=NOW)
+    assert col.fired
+    assert result == {"purged_candidates": 1, "docs": 1}
+    names = [row["name"] for row in col.docs[0]["discovered_contacts"]]
+    assert names == ["Refresh New", "Refresh Reviewed"]
+    assert col.docs[0]["discovery_rev"] == 2   # the refresh's bump plus the purge's
+    # The TTL follows the array as it is now: a reviewed row keeps the doc.
+    assert "unreviewed_expire_at" not in col.docs[0]
+
+
+@pytest.mark.asyncio
+async def test_purge_removes_only_expired_unreviewed_rows():
+    db = AsyncDB()
+    old = NOW - timedelta(days=31)
+    cutoff = NOW - timedelta(days=30)
+    db["contacts"].docs.append({"_id": "c1", "discovered_contacts": [
+        _row("Expired String", "unreviewed", old.isoformat()),
+        _row("Expired Date", "unreviewed", old),
+        _row("At Cutoff", "unreviewed", cutoff.isoformat()),
+        _row("Fresh String", "unreviewed", NOW.isoformat()),
+        _row("Fresh Date", "unreviewed", NOW - timedelta(days=29)),
+        _row("Blank Stamp", "unreviewed", ""),
+        _row("Garbled Stamp", "unreviewed", "unknown"),
+        _row("No Status", None, old.isoformat()),
+    ]})
+    result = await purge_unreviewed_candidates(db, now=NOW)
+    assert result == {"purged_candidates": 3, "docs": 1}
+    names = [row["name"] for row in db["contacts"].docs[0]["discovered_contacts"]]
+    assert names == ["Fresh String", "Fresh Date", "Blank Stamp", "Garbled Stamp", "No Status"]
+    # The update is a $pull on the row condition, never a rewrite of the array.
+    pull = contact_discovery_module()._expired_row_conditions(cutoff)
+    assert all(cond["review_status"] == "unreviewed" for cond in pull)
+
+
+def contact_discovery_module():
+    import dashboard.services.contact_discovery as module
+
+    return module
+
+
+@pytest.mark.asyncio
+async def test_purge_never_removes_reviewed_rows():
+    db = AsyncDB()
+    ancient = NOW - timedelta(days=400)
+    rows = []
+    for status in sorted(contact_discovery_module().REVIEWED_STATUSES):
+        rows.append(_row(f"{status} string", status, ancient.isoformat()))
+        rows.append(_row(f"{status} date", status, ancient))
+    db["contacts"].docs.append({"_id": "c1", "discovered_contacts": rows})
+    db["contacts"].docs.append({"_id": "c2", "discovered_contacts": rows + [_row("Expired", "unreviewed", ancient)]})
+    result = await purge_unreviewed_candidates(db, now=NOW)
+    assert result == {"purged_candidates": 1, "docs": 1}
+    assert db["contacts"].docs[0]["discovered_contacts"] == rows
+    assert db["contacts"].docs[1]["discovered_contacts"] == rows
+
+
+class _UpdateUseRecorder(AsyncCollection):
+    def __init__(self):
+        super().__init__()
+        self.updates = []
+
+    async def update_one(self, filt, update, upsert=False):
+        self.updates.append(update)
+        return await super().update_one(filt, update, upsert=upsert)
+
+
+@pytest.mark.asyncio
+async def test_purge_never_sets_the_candidate_array():
+    db = AsyncDB()
+    col = _UpdateUseRecorder()
+    db._cols["contacts"] = col
+    col.docs.append({"_id": "c1", "discovered_contacts": [
+        _row("Expired", "unreviewed", (NOW - timedelta(days=31)).isoformat()),
+        _row("Fresh", "unreviewed", NOW.isoformat()),
+    ]})
+    await purge_unreviewed_candidates(db, now=NOW)
+    assert col.updates, "the purge wrote nothing"
+    assert all("discovered_contacts" not in (update.get("$set") or {}) for update in col.updates)
+    assert any("discovered_contacts" in (update.get("$pull") or {}) for update in col.updates)
+    # One unreviewed row left: the TTL follows the newest remaining stamp.
+    assert col.docs[0]["unreviewed_expire_at"] == NOW + timedelta(days=30)
+
+
+class _RefreshAfterPurgeReread(AsyncCollection):
+    """A refresh writes its own TTL after the purge re-read the doc."""
+
+    async def find_one(self, query, projection=None):
+        doc = await super().find_one(query, projection)
+        if doc is not None and query == {"_id": "c1"}:
+            snapshot = dict(doc)
+            doc["unreviewed_expire_at"] = "refresh-ttl"
+            doc["discovery_rev"] = doc.get("discovery_rev", 0) + 1
+            return snapshot
+        return doc
+
+
+@pytest.mark.asyncio
+async def test_purge_ttl_write_does_not_overwrite_a_newer_refresh():
+    db = AsyncDB()
+    col = _RefreshAfterPurgeReread()
+    db._cols["contacts"] = col
+    col.docs.append({"_id": "c1", "discovered_contacts": [
+        _row("Expired", "unreviewed", (NOW - timedelta(days=31)).isoformat()),
+        _row("Fresh", "unreviewed", NOW.isoformat()),
+    ]})
+    await purge_unreviewed_candidates(db, now=NOW)
+    assert [row["name"] for row in col.docs[0]["discovered_contacts"]] == ["Fresh"]
+    assert col.docs[0]["unreviewed_expire_at"] == "refresh-ttl"
+
+
+class _WriterBetweenReadAndWrite(AsyncCollection):
+    """Before each of the first ``times`` guarded refresh writes, another
+    writer changes the doc (adds a reviewed row, bumps the revision)."""
+
+    def __init__(self, times):
+        super().__init__()
+        self.times = times
+        self.fired = 0
+
+    async def update_one(self, filt, update, upsert=False):
+        guarded = "discovery_rev" in (filt or {}) and "$pull" not in update
+        if guarded and self.fired < self.times and self.docs:
+            self.fired += 1
+            doc = self.docs[0]
+            doc["discovered_contacts"] = list(doc["discovered_contacts"]) + [
+                {"name": f"Concurrent {self.fired}", "source": "skiptrace", "review_status": "reviewed",
+                 "candidate_id": f"cc-{self.fired}", "discovered_at": NOW.isoformat()},
+            ]
+            doc["discovery_rev"] = (doc.get("discovery_rev") or 0) + 1
+        return await super().update_one(filt, update, upsert=upsert)
+
+
+def _lee_contacts_doc():
+    return {"_id": "c1", "state": "FL", "county": "Lee", "booking_number": "B-100",
+            "discovered_contacts": [
+                {"name": "Prior Reviewed", "source": "skiptrace", "review_status": "reviewed",
+                 "candidate_id": "c-1", "discovered_at": NOW.isoformat()},
+            ]}
+
+
+@pytest.mark.asyncio
+async def test_refresh_remerges_when_the_doc_changed_after_its_read():
+    db = AsyncDB()
+    col = _WriterBetweenReadAndWrite(times=1)
+    db._cols["contacts"] = col
+    col.docs.append(_lee_contacts_doc())
+    result = await run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True)
+    assert col.fired == 1
+    assert result["discovery_status"] != "failed"
+    names = {row["name"] for row in col.docs[0]["discovered_contacts"]}
+    assert {"Prior Reviewed", "Concurrent 1"} <= names
+    assert col.docs[0]["discovery_rev"] == 2   # the other writer's bump plus ours
+
+
+@pytest.mark.asyncio
+async def test_refresh_does_not_put_back_rows_a_purge_removed_after_its_read():
+    db = AsyncDB()
+    old = (NOW - timedelta(days=31)).isoformat()
+
+    class PurgeBetween(AsyncCollection):
+        fired = False
+
+        async def update_one(self, filt, update, upsert=False):
+            if "discovery_rev" in (filt or {}) and "$pull" not in update and not self.fired:
+                self.fired = True
+                await purge_unreviewed_candidates(holder, now=NOW)
+            return await super().update_one(filt, update, upsert=upsert)
+
+    holder = db
+    col = PurgeBetween()
+    db._cols["contacts"] = col
+    doc = _lee_contacts_doc()
+    doc["discovered_contacts"].append(
+        {"name": "Expired Row", "source": "prior_shamrock", "review_status": "unreviewed",
+         "discovered_at": old, "candidate_id": "c-old"})
+    col.docs.append(doc)
+    # The prior provider fails this run, so a merge from the stale read would
+    # keep its prior_shamrock row and write it back over the purge.
+    db._cols["family_graph"] = _BrokenCollection()
+    await run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True)
+    assert col.fired
+    names = [row["name"] for row in col.docs[0]["discovered_contacts"]]
+    assert "Expired Row" not in names
+    assert "Prior Reviewed" in names
+
+
+@pytest.mark.asyncio
+async def test_refresh_that_keeps_losing_the_race_writes_nothing_and_retries(monkeypatch):
+    db = AsyncDB()
+    db["arrests"].docs.append(_booking())
+    col = _WriterBetweenReadAndWrite(times=99)
+    db._cols["contacts"] = col
+    col.docs.append(_lee_contacts_doc())
+    _lee_claim(monkeypatch)
+    summary = await run_lee_discovery_batch(db, limit=5, now=NOW)
+    attempts = contact_discovery_module().CONTACTS_WRITE_ATTEMPTS
+    assert col.fired == attempts
+    assert summary["retry"] == 1 and summary["completed"] == 0
+    marker = db["arrests"].docs[0]["indemnitor_discovery"]
+    assert (marker["status"], marker["error"]) == ("retry", "contacts_write_conflict")
+    # Only the other writer's rows are there: the run wrote nothing.
+    assert col.docs[0]["discovery_rev"] == attempts
+    assert "discovery_status" not in col.docs[0]
+
+
+@pytest.mark.asyncio
+async def test_guarded_upsert_refuses_a_doc_that_appeared_after_the_read():
+    from dashboard.services.contact_discovery import ContactsWriteConflict
+
+    db = AsyncDB()
+    identity = _lee_identity()
+    db["contacts"].docs.append({"_id": contact_doc_id(identity), **identity, "discovery_rev": 1,
+                                "discovered_contacts": [{"name": "Other Writer"}]})
+    with pytest.raises(ContactsWriteConflict):
+        await upsert_contact_doc(db["contacts"], identity, {"$set": {"discovered_contacts": []}},
+                                 arrests=db["arrests"], expected=None)
+    assert db["contacts"].docs[0]["discovered_contacts"] == [{"name": "Other Writer"}]
