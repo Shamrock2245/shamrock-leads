@@ -5041,3 +5041,86 @@ def test_owed_audit_is_not_written_twice_when_the_marker_pull_fails(monkeypatch)
     assert len(_audits(stores, "payment_transition_pending")) == 1
     assert links.docs[0]["pending_payment_audits_owed"] == []
     restore()
+
+
+def _pending_link(monkeypatch, txn):
+    """A recorder world with one paid transition left pending, lock healthy again."""
+    stores, client, token, db = _recorder_world(monkeypatch)
+    _calls, restore = _fail_lock_work(monkeypatch, "_charge_row_blocks_down_payment", None)
+    assert _webhook(client, txn=txn, amount="500.00").status_code == 200
+    restore()
+    link = stores["cosigner_links"].docs[0]
+    assert link["pending_payment_keys"] == [f"paid:{txn}"]
+    assert link["payment_transition_pending"] is True
+    return stores, client, token, db
+
+
+def test_resolution_clears_the_flag_even_when_the_next_step_fails(monkeypatch):
+    """Codex r4400621658: a failure after the resolution update leaves the flag false."""
+    import dashboard.services.cosigner_link_service as svc
+
+    stores, client, token, db = _pending_link(monkeypatch, "TX-COS-FLAG")
+    links = stores["cosigner_links"]
+    original = links.update_one
+    state = {"failed": 0}
+
+    async def _update(query, update, upsert=False, session=None, **kwargs):
+        result = await original(query, update, upsert=upsert, session=session, **kwargs)
+        # Every later write on the link fails once the key is resolved.
+        if "payment_transition_resolved" in str(update.get("$push") or {}):
+            links.update_one = _broken
+        return result
+
+    async def _broken(query, update, upsert=False, session=None, **kwargs):
+        state["failed"] += 1
+        raise ConnectionError("mock link store outage after resolution")
+
+    async def _flush_fails(token_):
+        raise ConnectionError("mock flush outage")
+
+    links.update_one = _update
+    monkeypatch.setattr(svc, "_flush_owed_audits", _flush_fails)
+    link = links.docs[0]
+    with pytest.raises(ConnectionError):
+        asyncio.run(svc._resolve_pending(link, "paid:TX-COS-FLAG", "paid", "TX-COS-FLAG"))
+    link = links.docs[0]
+    assert link["pending_payment_keys"] == []
+    assert link["pending_payment_transitions"] == []
+    assert link["payment_transition_pending"] is False
+    (owed,) = link["pending_payment_audits_owed"]
+    assert owed["step"] == "payment_transition_resolved"
+    assert link["payment_audit_owed"] is True
+
+
+def test_resolution_update_failure_keeps_the_key_and_the_flag(monkeypatch):
+    """Codex r4400621658: a failure before the resolution update changes nothing."""
+    import dashboard.services.cosigner_link_service as svc
+
+    stores, client, token, db = _pending_link(monkeypatch, "TX-COS-FLAG2")
+    links = stores["cosigner_links"]
+    original = links.update_one
+
+    async def _update(query, update, upsert=False, session=None, **kwargs):
+        if "payment_transition_resolved" in str(update.get("$push") or {}):
+            raise ConnectionError("mock resolution update failure")
+        return await original(query, update, upsert=upsert, session=session, **kwargs)
+
+    links.update_one = _update
+    link = links.docs[0]
+    with pytest.raises(ConnectionError):
+        asyncio.run(svc._resolve_pending(link, "paid:TX-COS-FLAG2", "paid", "TX-COS-FLAG2"))
+    link = links.docs[0]
+    assert link["pending_payment_keys"] == ["paid:TX-COS-FLAG2"]
+    assert link["payment_transition_pending"] is True
+    assert _audits(stores, "payment_transition_resolved") == []
+    assert not any(
+        o.get("step") == "payment_transition_resolved"
+        for o in link.get("pending_payment_audits_owed") or []
+    )
+
+    links.update_one = original
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+    link = links.docs[0]
+    assert link["pending_payment_keys"] == []
+    assert link["payment_transition_pending"] is False
+    assert len(_audits(stores, "payment_transition_resolved")) == 1

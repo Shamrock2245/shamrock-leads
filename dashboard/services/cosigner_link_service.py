@@ -2485,6 +2485,21 @@ async def _record_pending_transition(kind: str, booking: str, txn: str, links: l
         await _flush_owed_audits(token)
 
 
+_PENDING_CAS_ATTEMPTS = 5
+
+
+def _pending_keys_match(doc: dict) -> dict:
+    """Filter that matches only while the pending keys are what was read.
+
+    Keys and transitions are always written together, so an exact match on
+    the keys is a compare-and-set for the whole pending state.
+    """
+    keys = doc.get("pending_payment_keys")
+    if isinstance(keys, list):
+        return {"pending_payment_keys": list(keys)}
+    return {"pending_payment_keys": None}
+
+
 def _owed_audit(step: str, token: str, entry: dict, now: datetime) -> dict:
     """An audit that is due for a pending-state change on this link.
 
@@ -2633,7 +2648,9 @@ async def _resolve_pending(
 ) -> bool:
     """Pull a decided pending key, with its owed resolved audit, in one update.
 
-    The audit is written afterwards by ``_flush_owed_audits``; if that write
+    The same update sets ``payment_transition_pending`` from the keys that
+    are left (a compare-and-set on the keys read), so no later step can
+    leave the flag true with nothing pending. The audit is written afterwards by ``_flush_owed_audits``; if that write
     fails the marker stays on the link and is retried on the next read.
     """
     token = str(link.get("token") or "").strip()
@@ -2652,29 +2669,40 @@ async def _resolve_pending(
     entry.setdefault("key", key)
     entry.setdefault("kind", kind)
     entry.setdefault("transaction_id", txn)
-    now = _now()
-    result = await coll.update_one(
-        {"token": token, "pending_payment_keys": {"$in": [key]}},
-        {
-            "$pull": {
-                "pending_payment_keys": key,
-                "pending_payment_transitions": {"key": key},
+    resolved = False
+    for _attempt in range(_PENDING_CAS_ATTEMPTS):
+        doc = await coll.find_one({"token": token})
+        if not isinstance(doc, dict):
+            return False
+        before = _pending_view(doc)
+        if key not in before["pending_payment_keys"]:
+            return False
+        after = _pending_without(before, key)
+        now = _now()
+        # One update pulls the key, sets the flag from what is left and
+        # records the owed audit, so the flag can never be left stale.
+        result = await coll.update_one(
+            {"token": token, **_pending_keys_match(doc)},
+            {
+                "$set": {
+                    "pending_payment_keys": after["pending_payment_keys"],
+                    "pending_payment_transitions": after["pending_payment_transitions"],
+                    "payment_transition_pending": after["payment_transition_pending"],
+                    "payment_audit_owed": True,
+                },
+                "$push": {
+                    "pending_payment_audits_owed": _owed_audit(
+                        "payment_transition_resolved", token,
+                        entry, now,
+                    ),
+                },
             },
-            "$push": {
-                "pending_payment_audits_owed": _owed_audit(
-                    "payment_transition_resolved", token,
-                    entry, now,
-                ),
-            },
-            "$set": {"payment_audit_owed": True},
-        },
-    )
-    if not getattr(result, "modified_count", 0):
+        )
+        if getattr(result, "modified_count", 0):
+            resolved = True
+            break
+    if not resolved:
         return False
-    await coll.update_one(
-        {"token": token, "pending_payment_keys": []},
-        {"$set": {"payment_transition_pending": False}},
-    )
     await _flush_owed_audits(token)
     return True
 
