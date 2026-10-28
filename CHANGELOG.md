@@ -3,6 +3,20 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-28 (Lee co-signer discovery: staff review action and pinned approvals, Codex round 5 on #280)
+
+### Added
+- **Staff approve/reject for discovered candidates.** `POST /api/contacts/{booking}/candidates/{candidate_id}/review` with `{county, state, decision: approve|reject, rev}`. It is behind the existing dashboard auth (not in `OPEN_PREFIXES`/`OPEN_PATHS`) and needs a staff cookie session with role `god_admin`, `admin` or `staff`; machine auth and no-session calls get 401, `sub_agent`/`recovery` get 403. The write is the same compare-and-swap on `discovery_rev` as the refresh: a stale `rev` gets 409 `stale_revision` and nothing is written. Approving or rejecting pins the reviewed phone, email, address and anchors as per-field SHA-256 digests (`review_pin`), never the values. Each decision is `$push`ed atomically into the doc's `review_log` (pseudonymous staff session id, time, old and new status, revisions; no PII) and mirrored best-effort to `audit_events`. The lead drawer shows each candidate's review status with Approve/Reject buttons that send the drawer's county, state and `discovery_rev`, and shows 409s and other errors to staff.
+
+### Fixed
+- **A refresh only carries a review forward when the contact data is unchanged.** A reviewed, approved or rejected row keeps its status only if its phone, email, address and anchors, compared after normalizing, equal the pinned values. If any of them changed, the row goes back to `unreviewed` with `review_reset = {reason: contact_changed, fields, previous_status, at}`; the log line has the field names and previous status only. Outreach (`_resolve_phone`) also requires the pin to match the row, so a changed number is never texted, even in `full_auto`, and a legacy `approved` row without a pin is not used until staff approve it again.
+- **Rejected candidates are never outreach targets** and expire on the same 30-day TTL and purge as unreviewed rows, so family contact data is not kept indefinitely.
+- **`GET /api/contacts/{booking}` with county and state reads a legacy booking-only doc** through the same `find_contact_doc` fallback as discovery (one legacy doc and one arrest with that booking). If it is ambiguous it returns 409 `legacy_contacts_ambiguous` and writes nothing. The response now carries `discovery_rev` and hides `review_log`.
+- **Add Lead discovery always sends a state.** It uses the form's state if there is one, else `FL` only when the county is one of the 67 FL registry counties; otherwise discovery is not run and staff see why. A 409 or other error is shown to staff instead of being dropped.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`: pin normalization; an unchanged approval survives a refresh and stays a target; a changed phone or email resets the review, records the reason, and logs no PII; a changed number in `full_auto` is never texted; the review action writes the audit entry without PII; a stale revision is rejected and writes nothing; reject excludes the candidate from outreach and survives an unchanged refresh; old rejected rows are purged; the review route requires a staff session (open lists, 401/403, success, stale 409); bad input writes nothing; GET reads a unique legacy doc and returns 409 for ambiguous legacy docs without writing; the Add Lead state rule and error toasts via `tests/js/add_lead_discover_sim.js`, with FL list parity against the county registry.
+
 ## [Unreleased] — 2026-10-28 (Lee co-signer discovery: atomic purge and guarded refresh, Codex on #280)
 
 ### Fixed

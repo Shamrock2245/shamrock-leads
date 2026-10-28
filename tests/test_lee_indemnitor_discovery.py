@@ -161,6 +161,16 @@ class _Cursor:
             return list(self._rows)
         return list(self._rows[:length])
 
+    def __aiter__(self):
+        self._iter = iter(list(self._rows))
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._iter)
+        except StopIteration:
+            raise StopAsyncIteration
+
 
 class AsyncCollection:
     def __init__(self):
@@ -174,6 +184,10 @@ class AsyncCollection:
             if _match(doc, query or {}):
                 return doc
         return None
+
+    async def insert_one(self, doc):
+        self.docs.append(dict(doc))
+        return MagicMock(inserted_id=doc.get("_id"))
 
     async def update_one(self, filt, update, upsert=False):
         for doc in self.docs:
@@ -202,6 +216,9 @@ class AsyncCollection:
             _unset_path(doc, key)
         for key, amount in (update.get("$inc") or {}).items():
             doc[key] = (doc.get(key) or 0) + amount
+        for key, value in (update.get("$push") or {}).items():
+            doc.setdefault(key, [])
+            doc[key].append(value)
         for key, cond in (update.get("$pull") or {}).items():
             if isinstance(doc.get(key), list):
                 doc[key] = [item for item in doc[key] if not (isinstance(item, dict) and _match(item, cond))]
@@ -619,7 +636,14 @@ async def test_unreviewed_candidate_is_never_an_outreach_target():
     arrest = {"state": "FL", "county": "Lee", "booking_number": "B-100", "full_name": ""}
     assert await seq._resolve_phone(arrest) == ("", "none")
 
+    # Approved with no review pin (not approved through the review action):
+    # still not a target.
     db["contacts"].docs[0]["discovered_contacts"][0]["review_status"] = "approved"
+    assert await seq._resolve_phone(arrest) == ("", "none")
+    from dashboard.services.contact_discovery import review_pin
+
+    row = db["contacts"].docs[0]["discovered_contacts"][0]
+    row["review_pin"] = review_pin(row)
     assert await seq._resolve_phone(arrest) == ("5550100100", "contact_discovery")
     # A legacy candidate with no review state is not usable either.
     db["contacts"].docs[0]["discovered_contacts"][0].pop("review_status")
@@ -1665,7 +1689,8 @@ async def test_purge_removes_only_expired_unreviewed_rows():
     assert names == ["Fresh String", "Fresh Date", "Blank Stamp", "Garbled Stamp", "No Status"]
     # The update is a $pull on the row condition, never a rewrite of the array.
     pull = contact_discovery_module()._expired_row_conditions(cutoff)
-    assert all(cond["review_status"] == "unreviewed" for cond in pull)
+    # Only unreviewed and rejected rows can match; reviewed/approved never.
+    assert all(cond["review_status"] == {"$in": ["rejected", "unreviewed"]} for cond in pull)
 
 
 def contact_discovery_module():
@@ -1851,3 +1876,371 @@ async def test_guarded_upsert_refuses_a_doc_that_appeared_after_the_read():
         await upsert_contact_doc(db["contacts"], identity, {"$set": {"discovered_contacts": []}},
                                  arrests=db["arrests"], expected=None)
     assert db["contacts"].docs[0]["discovered_contacts"] == [{"name": "Other Writer"}]
+
+
+# ── Codex round 5 on #280: review pin, review action, GET legacy ───────────
+
+from dashboard.services.contact_discovery import (  # noqa: E402
+    CandidateReviewError,
+    review_candidate,
+    review_pin,
+    review_pin_matches,
+)
+
+_PII = ("Casey", "Jordan", "Sample", "5550100100", "5550100999", "100 Test St", "B-100")
+
+
+def _lee_db_with_indemnitor(phone="5550100100"):
+    db = AsyncDB()
+    db["arrests"].docs.append({
+        **_booking(), "lead_score": 90, "shamrock_status": "new",
+        "scraped_at": datetime.now(timezone.utc),
+    })
+    db["indemnitors"].docs.append({
+        "booking_number": "B-100", "defendant_county": "Lee", "defendant_state": "FL",
+        "indemnitor_name": "Jordan Sample", "indemnitor_phone": phone,
+        # Phone + DOB anchors -> confidence 0.8, above the outreach floor.
+        "defendant_name": "Sample, Casey", "defendant_dob": "01/02/1990",
+    })
+    return db
+
+
+async def _discover(db):
+    return await run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True)
+
+
+async def _approve_only_candidate(db, decision="approve"):
+    doc = db["contacts"].docs[0]
+    cid = doc["discovered_contacts"][0]["candidate_id"]
+    return await review_candidate(
+        db, identity=_lee_identity(), candidate_id=cid, decision=decision,
+        expected_rev=int(doc.get("discovery_rev") or 0), actor="staff:test", actor_role="admin",
+    )
+
+
+def test_review_pin_normalizes_before_comparing():
+    row = {"phone": "(555) 010-0100", "email": " A@Example.COM ", "address": "100  Test St,  Fort Myers",
+           "matched_anchors": ["phone", "dob"]}
+    same = {"phone": "555-010-0100", "email": "a@example.com", "address": "100 test st fort myers",
+            "matched_anchors": ["dob", "phone", "phone"]}
+    assert review_pin(row) == review_pin(same)
+    assert review_pin(row) != review_pin({**same, "phone": "5550100999"})
+    # Digests only: no contact value is stored in the pin.
+    assert not any(v in str(review_pin(row)) for v in ("5550100100", "example.com", "Test St"))
+
+
+@pytest.mark.asyncio
+async def test_unchanged_approval_survives_refresh_and_stays_a_target():
+    from dashboard.services.outreach_sequencer import OutreachSequencer
+
+    db = _lee_db_with_indemnitor()
+    await _discover(db)
+    await _approve_only_candidate(db)
+    await _discover(db)
+    row = db["contacts"].docs[0]["discovered_contacts"][0]
+    assert row["review_status"] == "approved"
+    assert "review_reset" not in row
+    assert review_pin_matches(row)
+    seq = OutreachSequencer(db)
+    assert await seq._resolve_phone(db["arrests"].docs[0]) == ("5550100100", "contact_discovery")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field,value,expected", [
+    ("indemnitor_phone", "5550100999", ["phone"]),
+    ("indemnitor_email", "other@example.invalid", ["email"]),
+])
+async def test_changed_contact_data_resets_review_and_logs_no_pii(caplog, field, value, expected):
+    db = _lee_db_with_indemnitor()
+    await _discover(db)
+    await _approve_only_candidate(db)
+    cid = db["contacts"].docs[0]["discovered_contacts"][0]["candidate_id"]
+    db["indemnitors"].docs[0][field] = value
+    with caplog.at_level(logging.INFO, logger="shamrock.contact_discovery"):
+        await _discover(db)
+    row = db["contacts"].docs[0]["discovered_contacts"][0]
+    assert row["review_status"] == "unreviewed"
+    assert row["candidate_id"] == cid
+    assert row["review_reset"]["reason"] == "contact_changed"
+    assert row["review_reset"]["previous_status"] == "approved"
+    assert set(expected) <= set(row["review_reset"]["fields"])
+    assert "review reset reason=contact_changed" in caplog.text
+    for secret in _PII + (value, cid):
+        assert secret not in caplog.text
+    # A reset row expires like any unreviewed row.
+    assert "unreviewed_expire_at" in db["contacts"].docs[0]
+
+
+@pytest.mark.asyncio
+async def test_changed_number_in_full_auto_is_never_texted(monkeypatch):
+    """P1: staff approved one number; the source now has another. full_auto
+    must not text the new number (or fall back to the old one)."""
+    from dashboard.services.outreach_sequencer import OutreachSequencer
+
+    db = _lee_db_with_indemnitor()
+    await _discover(db)
+    await _approve_only_candidate(db)
+    db["indemnitors"].docs[0]["indemnitor_phone"] = "5550100999"
+    await _discover(db)
+
+    started = []
+
+    async def _no_send(arrest):
+        started.append(arrest.get("phone"))
+        return {"success": True}
+
+    seq = OutreachSequencer(db)
+    monkeypatch.setattr(seq, "start_sequence", _no_send)
+    result = await seq.batch_start_new_arrests(mode="full_auto")
+    assert started == []
+    assert result["started"] == 0 and result["no_phone"] == 1
+    # Even if the row's status were forced back to approved, the pin does not
+    # match the new number, so it is still not a target.
+    row = db["contacts"].docs[0]["discovered_contacts"][0]
+    row["review_status"] = "approved"
+    assert await seq._resolve_phone(db["arrests"].docs[0]) == ("", "none")
+    # Staff approve the new number: now (and only now) it is a target.
+    row["review_status"] = "unreviewed"
+    await _approve_only_candidate(db)
+    result = await seq.batch_start_new_arrests(mode="full_auto")
+    assert started == ["5550100999"]
+
+
+@pytest.mark.asyncio
+async def test_review_action_writes_audit_entry_without_pii():
+    db = _lee_db_with_indemnitor()
+    await _discover(db)
+    rev_before = db["contacts"].docs[0]["discovery_rev"]
+    out = await _approve_only_candidate(db)
+    doc = db["contacts"].docs[0]
+    row = doc["discovered_contacts"][0]
+    assert out["review_status"] == "approved" and out["previous_status"] == "unreviewed"
+    assert out["discovery_rev"] == rev_before + 1 == doc["discovery_rev"]
+    assert row["reviewed_by"] == "staff:test" and row["review_pin"] == review_pin(row)
+    assert "unreviewed_expire_at" not in doc
+    (entry,) = doc["review_log"]
+    assert entry["actor"] == "staff:test"
+    assert (entry["old_status"], entry["new_status"]) == ("unreviewed", "approved")
+    assert isinstance(entry["at"], datetime)
+    (audit,) = db["audit_events"].docs
+    assert audit["event_type"] == "contact_candidate_reviewed"
+    assert audit["actor"] == "staff:test"
+    assert (audit["details"]["old_status"], audit["details"]["new_status"]) == ("unreviewed", "approved")
+    for secret in _PII:
+        assert secret not in str(entry) and secret not in str(audit)
+
+
+@pytest.mark.asyncio
+async def test_stale_revision_is_rejected_and_writes_nothing():
+    db = _lee_db_with_indemnitor()
+    await _discover(db)
+    doc = db["contacts"].docs[0]
+    cid = doc["discovered_contacts"][0]["candidate_id"]
+    before = copy.deepcopy(db["contacts"].docs)
+    with pytest.raises(CandidateReviewError) as err:
+        await review_candidate(db, identity=_lee_identity(), candidate_id=cid, decision="approve",
+                               expected_rev=doc["discovery_rev"] - 1, actor="staff:test")
+    assert (err.value.code, err.value.http_status) == ("stale_revision", 409)
+    assert db["contacts"].docs == before
+    assert db["audit_events"].docs == []
+
+
+@pytest.mark.asyncio
+async def test_reject_excludes_candidate_from_outreach_and_survives_unchanged_refresh():
+    from dashboard.services.outreach_sequencer import OutreachSequencer
+
+    db = _lee_db_with_indemnitor()
+    await _discover(db)
+    await _approve_only_candidate(db)
+    await _approve_only_candidate(db, decision="reject")
+    seq = OutreachSequencer(db)
+    assert await seq._resolve_phone(db["arrests"].docs[0]) == ("", "none")
+    await _discover(db)
+    doc = db["contacts"].docs[0]
+    assert doc["discovered_contacts"][0]["review_status"] == "rejected"
+    assert [(e["old_status"], e["new_status"]) for e in doc["review_log"]] == [
+        ("unreviewed", "approved"), ("approved", "rejected")]
+    # Rejected family PII expires like unreviewed rows.
+    assert "unreviewed_expire_at" in doc
+    assert await seq._resolve_phone(db["arrests"].docs[0]) == ("", "none")
+
+
+@pytest.mark.asyncio
+async def test_purge_drops_old_rejected_rows():
+    db = AsyncDB()
+    old = (NOW - timedelta(days=40)).isoformat()
+    db["contacts"].docs.append({
+        "_id": "c1", "state": "FL", "county": "Lee", "booking_number": "B-100",
+        "discovered_contacts": [_row("Rejected Old", "rejected", old), _row("Approved Old", "approved", old)],
+    })
+    result = await purge_unreviewed_candidates(db, now=NOW)
+    assert result["purged_candidates"] == 1
+    assert [r["review_status"] for r in db["contacts"].docs[0]["discovered_contacts"]] == ["approved"]
+
+
+def _review_client(monkeypatch, db, session):
+    from fastapi import FastAPI, Request
+    from fastapi.testclient import TestClient
+    from dashboard.routers import contacts as contacts_router
+
+    monkeypatch.setattr(contacts_router, "get_db", lambda: db)
+    monkeypatch.setattr(contacts_router, "get_collection", lambda name: db[name])
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def _session(request: Request, call_next):
+        if session is not None:
+            request.state.sl_session = session
+        return await call_next(request)
+
+    app.include_router(contacts_router.contacts_bp)
+    return TestClient(app)
+
+
+_STAFF = {"auth": True, "email": "desk@example.invalid", "role": "staff"}
+
+
+def _review_url(cid):
+    return f"/api/contacts/B-100/candidates/{cid}/review"
+
+
+@pytest.mark.asyncio
+async def test_review_route_requires_a_staff_session(monkeypatch):
+    from dashboard.auth.pin_middleware import OPEN_PATHS, OPEN_PREFIXES
+
+    path = _review_url("x")
+    assert path not in OPEN_PATHS and not any(path.startswith(p) for p in OPEN_PREFIXES)
+    db = _lee_db_with_indemnitor()
+    await _discover(db)
+    cid = db["contacts"].docs[0]["discovered_contacts"][0]["candidate_id"]
+    body = {"county": "Lee", "state": "FL", "decision": "approve", "rev": db["contacts"].docs[0]["discovery_rev"]}
+    before = copy.deepcopy(db["contacts"].docs)
+    for session, status in ((None, 401), ({"auth": True, "email": "a@example.invalid", "role": "sub_agent"}, 403),
+                            ({"auth": True, "email": "a@example.invalid", "role": "recovery"}, 403),
+                            ({"email": "a@example.invalid", "role": "admin"}, 401)):
+        resp = _review_client(monkeypatch, db, session).post(_review_url(cid), json=body)
+        assert resp.status_code == status
+    assert db["contacts"].docs == before
+    assert db["audit_events"].docs == []
+
+    resp = _review_client(monkeypatch, db, _STAFF).post(_review_url(cid), json=body)
+    assert resp.status_code == 200 and resp.json()["review_status"] == "approved"
+    entry = db["contacts"].docs[0]["review_log"][0]
+    assert entry["actor"].startswith("staff:") and "desk@" not in entry["actor"]
+    assert entry["actor"] == db["audit_events"].docs[0]["actor"]
+
+    # The same request again is now stale (the revision moved).
+    again = _review_client(monkeypatch, db, _STAFF).post(_review_url(cid), json={**body, "decision": "reject"})
+    assert again.status_code == 409 and again.json()["error"] == "stale_revision"
+    assert db["contacts"].docs[0]["discovered_contacts"][0]["review_status"] == "approved"
+
+    # GET exposes the revision the drawer sends back, never the review log.
+    got = _review_client(monkeypatch, db, _STAFF).get("/api/contacts/B-100?county=Lee&state=FL").json()
+    assert got["discovery_rev"] == db["contacts"].docs[0]["discovery_rev"]
+    assert "review_log" not in got
+
+
+@pytest.mark.asyncio
+async def test_review_route_rejects_bad_input_without_writing(monkeypatch):
+    db = _lee_db_with_indemnitor()
+    await _discover(db)
+    cid = db["contacts"].docs[0]["discovered_contacts"][0]["candidate_id"]
+    rev = db["contacts"].docs[0]["discovery_rev"]
+    before = copy.deepcopy(db["contacts"].docs)
+    client = _review_client(monkeypatch, db, _STAFF)
+    cases = [
+        ({"county": "Lee", "decision": "approve", "rev": rev}, 400),
+        ({"county": "Lee", "state": "FL", "decision": "approve"}, 400),
+        ({"county": "Lee", "state": "FL", "decision": "maybe", "rev": rev}, 400),
+        ({"county": "Lee", "state": "FL", "decision": "approve", "rev": True}, 400),
+    ]
+    for body, status in cases:
+        assert client.post(_review_url(cid), json=body).status_code == status
+    assert client.post(_review_url("missing"), json={"county": "Lee", "state": "FL", "decision": "approve", "rev": rev}).status_code == 404
+    assert db["contacts"].docs == before
+
+
+def test_get_route_reads_a_unique_legacy_doc(monkeypatch):
+    db = AsyncDB()
+    db["arrests"].docs.append(_booking())
+    db["contacts"].docs.append({
+        "_id": ObjectId(), "booking_number": "B-100",
+        "discovered_contacts": [{"name": "Jordan Sample", "review_status": "unreviewed"}],
+        "discovery_status": "complete",
+    })
+    before = copy.deepcopy(db["contacts"].docs)
+    resp = _review_client(monkeypatch, db, _STAFF).get("/api/contacts/B-100?county=Lee&state=FL")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [row["name"] for row in body["contacts"]] == ["Jordan Sample"]
+    assert "_id" not in body and body["discovery_rev"] == 0
+    assert db["contacts"].docs == before
+
+
+@pytest.mark.parametrize("setup", ["two_legacy_docs", "booking_on_two_arrests"])
+def test_get_route_returns_409_for_ambiguous_legacy_and_writes_nothing(monkeypatch, setup):
+    db = AsyncDB()
+    db["arrests"].docs.append(_booking())
+    db["contacts"].docs.append({"_id": "legacy-a", "booking_number": "B-100", "discovered_contacts": [{"name": "Jordan Sample"}]})
+    if setup == "two_legacy_docs":
+        db["contacts"].docs.append({"_id": "legacy-b", "booking_number": "B-100", "discovered_contacts": []})
+    else:
+        db["arrests"].docs.append({**_booking(), "_id": "arrest-2", "county": "Collier"})
+    before = copy.deepcopy(db["contacts"].docs)
+    resp = _review_client(monkeypatch, db, _STAFF).get("/api/contacts/B-100?county=Lee&state=FL")
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["error"] == "legacy_contacts_ambiguous"
+    assert body["contacts"] == []
+    assert db["contacts"].docs == before
+
+
+def test_add_lead_discovery_sends_a_state_and_surfaces_errors():
+    import json as _json
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    from dashboard.extensions import REGISTERED_COUNTIES, parse_registered_county
+
+    root = Path(__file__).resolve().parents[1]
+    js = root / "dashboard" / "sl-prospective.js"
+    src = js.read_text(encoding="utf-8")
+    assert "state: (payload.state || '')" not in src
+    assert "catch (e) { /* non-fatal */ }\n        }\n        closeAddModal();" not in src
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    r = subprocess.run([node, str(root / "tests/js/add_lead_discover_sim.js"), str(js)],
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr[:300]
+    out = _json.loads(r.stdout.strip().splitlines()[-1])
+
+    def _errors(case):
+        return [t["m"] for t in out[case]["toasts"] if t["t"] == "error"]
+
+    assert out["fl_county"]["discover"] == [{"booking_number": "B-100", "county": "Lee", "state": "FL"}]
+    assert out["fl_county_suffix"]["discover"][0]["state"] == "FL"
+    assert _errors("fl_county") == []
+    # The form's state wins over the Florida default.
+    assert out["form_state"]["discover"] == [{"booking_number": "B-100", "county": "Fulton", "state": "GA"}]
+    # Not a registered Florida county and no state: no discovery, staff told why.
+    for case in ("non_fl_county", "no_county"):
+        assert out[case]["discover"] == []
+        assert len(_errors(case)) == 1 and "not run" in _errors(case)[0]
+    # 409s and other errors are surfaced, not swallowed.
+    assert "more than one arrest" in _errors("conflict")[0]
+    assert "manual review" in _errors("legacy")[0]
+    assert "HTTP 500" in _errors("server_error")[0]
+    # Review action: posts county, state and rev; a stale revision is surfaced.
+    (post,) = out["review_stale"]["posts"]
+    assert post["url"] == "/api/contacts/B-100/candidates/cand-1/review"
+    assert post["body"] == {"county": "Lee", "state": "FL", "decision": "approve", "rev": 3}
+    assert "changed since they were loaded" in out["review_stale"]["toasts"][0]["m"]
+    # The JS Florida list is the registry's Florida counties.
+    registry_fl = {
+        name for name, st in (parse_registered_county(label) for label in REGISTERED_COUNTIES)
+        if st == "FL" and name != "Manatee Clerk"
+    }
+    assert set(out["fl_registry"]) == registry_fl and len(out["fl_registry"]) == 67

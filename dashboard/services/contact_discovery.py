@@ -91,6 +91,16 @@ _http_gap_lock: Optional[asyncio.Lock] = None
 
 # Only these review states are usable outside the review drawer (outreach).
 REVIEWED_STATUSES = frozenset({"reviewed", "approved"})
+REJECTED_STATUS = "rejected"
+# Statuses a refresh carries forward when the contact data is unchanged.
+CARRIED_STATUSES = REVIEWED_STATUSES | {REJECTED_STATUS}
+# Rows in these statuses expire after UNREVIEWED_TTL_DAYS: a rejected
+# candidate's family PII is not kept any longer than an unreviewed one.
+EXPIRING_STATUSES = frozenset({"unreviewed", REJECTED_STATUS})
+# Staff decision -> stored review_status.
+REVIEW_DECISIONS = {"approve": "approved", "reject": REJECTED_STATUS}
+# Contact data a review covers. Any change resets the row to unreviewed.
+REVIEW_PIN_FIELDS = ("phone", "email", "address", "anchors")
 # Provider statuses that mean "try again later", not "nothing found".
 DEFERRABLE_STATUSES = frozenset({"lee_rate_limited", "discovery_http_gap"})
 
@@ -353,6 +363,55 @@ def is_reviewed(candidate: Any) -> bool:
     return isinstance(candidate, dict) and candidate.get("review_status") in REVIEWED_STATUSES
 
 
+def _review_values(row: Dict[str, Any]) -> Dict[str, str]:
+    """Normalized contact data a review covers (phone, email, address, anchors)."""
+    anchors = row.get("matched_anchors")
+    anchor_list = [str(a).strip().lower() for a in anchors] if isinstance(anchors, (list, tuple)) else []
+    return {
+        "phone": normalize_phone(row.get("phone")),
+        "email": str(row.get("email") or "").strip().lower(),
+        "address": " ".join(str(row.get("address") or "").lower().replace(",", " ").split()),
+        "anchors": ",".join(sorted({a for a in anchor_list if a})),
+    }
+
+
+def review_pin(row: Dict[str, Any]) -> Dict[str, str]:
+    """Per-field digests of the reviewed contact data.
+
+    Stored on the row when staff approve or reject it, so a later refresh can
+    tell which field changed without keeping a second copy of the values.
+    """
+    return {
+        field: hashlib.sha256(f"{field}\x1f{value}".encode("utf-8")).hexdigest()[:24]
+        for field, value in _review_values(row).items()
+    }
+
+
+def _stored_pin(row: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    pin = row.get("review_pin")
+    if isinstance(pin, dict) and all(isinstance(pin.get(f), str) and pin.get(f) for f in REVIEW_PIN_FIELDS):
+        return pin
+    return None
+
+
+def review_changed_fields(previous: Dict[str, Any], fresh: Dict[str, Any]) -> List[str]:
+    """Pinned fields whose normalized value differs between a reviewed row and
+    a refreshed one. Without a pin the previous row's own values are compared."""
+    base = _stored_pin(previous) or review_pin(previous)
+    now = review_pin(fresh)
+    return [field for field in REVIEW_PIN_FIELDS if base.get(field) != now[field]]
+
+
+def review_pin_matches(row: Any) -> bool:
+    """True only when the row carries a review pin and its current contact data
+    still matches it. A row with no pin was never approved through the review
+    action and is never an outreach target."""
+    if not isinstance(row, dict):
+        return False
+    pin = _stored_pin(row)
+    return pin is not None and pin == review_pin(row)
+
+
 def discovery_enabled() -> bool:
     raw = os.getenv("INDEMNITOR_DISCOVERY_ENABLED", "1").strip().lower()
     return raw not in _FALSY
@@ -600,10 +659,14 @@ def _merge_candidates(
 ) -> List[Dict[str, Any]]:
     """Merge a refresh into the stored list.
 
-    A reviewed/approved prior row keeps its review state and id, and it is
-    kept even when this run did not return it. A prior unreviewed row from a
-    provider that did not complete this run (``keep_sources``) is kept too;
-    the 30-day purge still applies to it.
+    A reviewed/approved/rejected prior row keeps its review state and id
+    only when the refreshed row's phone, email, address and anchors are
+    unchanged after normalizing. Any change resets the row to ``unreviewed``
+    and records which fields changed (names only, never values) under
+    ``review_reset``. A reviewed/approved prior row is kept even when this
+    run did not return it. A prior unreviewed row from a provider that did
+    not complete this run (``keep_sources``) is kept too; the 30-day purge
+    still applies to it.
     """
     def _key(row: Dict[str, Any]):
         return (name_key(str(row.get("name") or "")), str(row.get("source") or ""))
@@ -617,12 +680,35 @@ def _merge_candidates(
             continue
         seen.add(key)
         previous = prior.get(key)
-        if is_reviewed(previous):
+        if isinstance(previous, dict) and previous.get("review_status") in CARRIED_STATUSES:
             row = dict(row)
-            row["review_status"] = previous["review_status"]
-            for field in ("candidate_id", "reviewed_at", "reviewed_by"):
-                if previous.get(field):
-                    row[field] = previous[field]
+            changed = review_changed_fields(previous, row)
+            if previous.get("candidate_id"):
+                row["candidate_id"] = previous["candidate_id"]
+            if not changed:
+                row["review_status"] = previous["review_status"]
+                for field in ("reviewed_at", "reviewed_by", "review_pin"):
+                    if previous.get(field):
+                        row[field] = previous[field]
+            else:
+                # Staff reviewed other contact data. Fail closed: the new
+                # data needs its own review before it can be used.
+                row["review_status"] = "unreviewed"
+                row["review_reset"] = {
+                    "reason": "contact_changed",
+                    "fields": changed,
+                    "previous_status": previous["review_status"],
+                    "at": datetime.now(timezone.utc).isoformat(),
+                }
+                log.info(
+                    "[indemnitor_discovery] review reset reason=contact_changed fields=%s previous_status=%s",
+                    ",".join(changed),
+                    previous["review_status"],
+                )
+        elif isinstance(previous, dict) and isinstance(previous.get("review_reset"), dict):
+            # Keep the reason visible until staff review the row.
+            row = dict(row)
+            row["review_reset"] = previous["review_reset"]
         merged.append(row)
     keep = set(keep_sources or ())
     for key, row in prior.items():
@@ -651,14 +737,14 @@ def _parse_time(value: Any) -> Optional[datetime]:
 
 
 def unreviewed_expire_at(candidates: Sequence[Dict[str, Any]], now: datetime) -> Optional[datetime]:
-    """TTL date for a doc whose candidates are all still unreviewed.
+    """TTL date for a doc whose candidates are all unreviewed or rejected.
 
     A reviewed candidate keeps the document. The purge job removes expired
     unreviewed rows inside a mixed document. Mongo TTL cannot expire a subdocument.
     """
     if not candidates:
         return None
-    if any(row.get("review_status") != "unreviewed" for row in candidates):
+    if any(row.get("review_status") not in EXPIRING_STATUSES for row in candidates):
         return None
     # Mongo TTL deletes the whole document, so it may only expire once the
     # newest candidate has aged out. The oldest row would drop fresh rows.
@@ -1766,10 +1852,11 @@ def _expired_row_conditions(cutoff: datetime) -> List[Dict[str, Any]]:
     """Per-row conditions for an unreviewed candidate discovered at or before
     ``cutoff``. ``discovered_at`` is a UTC ISO string (make_candidate); legacy
     rows may hold a BSON date, so both forms are matched. Reviewed rows never
-    match: ``review_status`` must be exactly ``unreviewed``."""
+    match: ``review_status`` must be ``unreviewed`` or ``rejected``."""
+    statuses = {"$in": sorted(EXPIRING_STATUSES)}
     return [
-        {"review_status": "unreviewed", "discovered_at": {"$regex": _ISO_DATE_PREFIX, "$lte": cutoff.isoformat()}},
-        {"review_status": "unreviewed", "discovered_at": {"$lte": cutoff}},
+        {"review_status": statuses, "discovered_at": {"$regex": _ISO_DATE_PREFIX, "$lte": cutoff.isoformat()}},
+        {"review_status": statuses, "discovered_at": {"$lte": cutoff}},
     ]
 
 
@@ -1782,7 +1869,7 @@ def _expired_unreviewed_query(cutoff: datetime) -> Dict[str, Any]:
 
 def _row_is_expired(row: Any, cutoff: datetime) -> bool:
     """Python mirror of :func:`_expired_row_conditions` (for counting only)."""
-    if not isinstance(row, dict) or row.get("review_status") != "unreviewed":
+    if not isinstance(row, dict) or row.get("review_status") not in EXPIRING_STATUSES:
         return False
     stamp = row.get("discovered_at")
     if isinstance(stamp, str):
@@ -1796,7 +1883,8 @@ def _row_is_expired(row: Any, cutoff: datetime) -> bool:
 async def purge_unreviewed_candidates(
     db: Any, *, now: Optional[datetime] = None, limit: int = 200, max_pages: int = 50
 ) -> Dict[str, int]:
-    """Drop unreviewed candidates older than 30 days. Reviewed rows stay.
+    """Drop unreviewed and rejected candidates older than 30 days. Reviewed
+    and approved rows stay.
 
     The query selects only docs with an expired unreviewed row, a page of
     ``limit`` at a time. A purged doc stops matching, and every doc already
@@ -1896,3 +1984,118 @@ async def _purge_docs(
         except Exception as exc:
             log.warning("[indemnitor_discovery] purge follow-up failed error_type=%s", type(exc).__name__)
     return purged, docs
+
+
+class CandidateReviewError(Exception):
+    """A review decision was not applied. ``code`` is safe to return and log."""
+
+    def __init__(self, code: str, http_status: int):
+        self.code = code
+        self.http_status = http_status
+        super().__init__(code)
+
+
+async def review_candidate(
+    db: Any,
+    *,
+    identity: Dict[str, str],
+    candidate_id: str,
+    decision: str,
+    expected_rev: int,
+    actor: str,
+    actor_role: str = "",
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Approve or reject one candidate. Staff action; sends nothing.
+
+    The write is the same compare-and-swap as a refresh: it lands only when
+    the doc is still at ``expected_rev`` (the revision staff saw), else
+    ``stale_revision`` and nothing is written. Approving or rejecting pins the
+    reviewed contact data (:func:`review_pin`); a later refresh that changes
+    it resets the row. The audit entry (who, when, old and new status; no
+    contact values) is pushed in the same update, and copied to
+    ``audit_events``.
+    """
+    new_status = REVIEW_DECISIONS.get(str(decision or "").strip().lower())
+    if not new_status:
+        raise CandidateReviewError("decision_invalid", 400)
+    if not actor:
+        raise CandidateReviewError("staff_session_required", 401)
+    now = now or datetime.now(timezone.utc)
+    contacts = db["contacts"]
+    try:
+        doc = await find_contact_doc(contacts, identity, arrests=db["arrests"])
+    except ContactsLegacyAmbiguous:
+        raise CandidateReviewError("legacy_contacts_ambiguous", 409)
+    if not isinstance(doc, dict):
+        raise CandidateReviewError("not_found", 404)
+    current_rev = int(doc.get(CONTACTS_REV_FIELD) or 0)
+    if int(expected_rev) != current_rev:
+        raise CandidateReviewError("stale_revision", 409)
+    rows = [dict(row) if isinstance(row, dict) else row for row in doc.get("discovered_contacts") or []]
+    index = next(
+        (i for i, row in enumerate(rows)
+         if isinstance(row, dict) and str(row.get("candidate_id") or "") == str(candidate_id or "")),
+        None,
+    )
+    if index is None or not candidate_id:
+        raise CandidateReviewError("candidate_not_found", 404)
+    old_row = rows[index]
+    old_status = str(old_row.get("review_status") or "unreviewed")
+    new_row = dict(old_row)
+    new_row.pop("review_reset", None)
+    new_row["review_status"] = new_status
+    new_row["reviewed_at"] = now.isoformat()
+    new_row["reviewed_by"] = actor
+    new_row["review_pin"] = review_pin(old_row)
+    rows[index] = new_row
+    entry = {
+        "candidate_id": str(candidate_id),
+        "actor": actor,
+        "actor_role": actor_role or "",
+        "at": now,
+        "old_status": old_status,
+        "new_status": new_status,
+        "rev_before": current_rev,
+        "rev_after": current_rev + 1,
+    }
+    update: Dict[str, Any] = {"$set": {"discovered_contacts": rows}, "$push": {"review_log": entry}}
+    expire = unreviewed_expire_at(rows, now)
+    if expire:
+        update["$set"]["unreviewed_expire_at"] = expire
+    else:
+        update["$unset"] = {"unreviewed_expire_at": ""}
+    try:
+        await upsert_contact_doc(contacts, identity, update, arrests=db["arrests"], expected=doc)
+    except ContactsWriteConflict:
+        raise CandidateReviewError("stale_revision", 409)
+    except ContactsLegacyAmbiguous:
+        raise CandidateReviewError("legacy_contacts_ambiguous", 409)
+    audit_mirrored = True
+    try:
+        await db["audit_events"].insert_one({
+            "event_type": "contact_candidate_reviewed",
+            "entity_type": "contacts",
+            "entity_id": str(doc.get("_id") or contact_doc_id(identity)),
+            "timestamp": now,
+            "actor": actor,
+            "source": "contact_discovery_review",
+            "details": {k: v for k, v in entry.items() if k not in {"actor", "at"}},
+        })
+    except Exception as exc:
+        # The entry on the contacts doc was written with the change itself.
+        audit_mirrored = False
+        log.warning("[indemnitor_discovery] review audit copy failed error_type=%s", type(exc).__name__)
+    log.info(
+        "[indemnitor_discovery] candidate reviewed old_status=%s new_status=%s",
+        old_status,
+        new_status,
+    )
+    return {
+        "success": True,
+        "candidate_id": str(candidate_id),
+        "review_status": new_status,
+        "previous_status": old_status,
+        "discovery_rev": current_rev + 1,
+        "audit_mirrored": audit_mirrored,
+    }
