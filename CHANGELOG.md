@@ -19,6 +19,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_cosigner_link.py`: `test_cosigner_record_must_name_the_selected_signer`.
 
+## [Unreleased] — 2026-10-28 (zero down payment is not a stored paid stamp)
+
+### Fixed
+- **A confirmed zero down payment is finished only while the confirmed amount is still zero.** The link is paid only when it has a real `paid_transaction_id`. The zero-down audit stays as history and does not keep the pay link hidden after the amount is reconfirmed above zero.
+- **A pay URL on the configured SwipeSimple host with a different port is hidden.** An omitted port and port 443 are the same origin.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_zero_down_reconfirm_shows_the_pay_link`, `test_invoice_url_on_another_port_is_hidden`. `test_zero_down_payment_audits_paid_without_a_charge` now expects no stored paid stamp.
+
 ## [Unreleased] — 2026-10-27 (zero down payment writes a paid audit)
 
 ### Fixed

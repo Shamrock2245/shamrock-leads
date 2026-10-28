@@ -3830,19 +3830,110 @@ def test_zero_down_payment_audits_paid_without_a_charge(monkeypatch):
     assert stores["bond_cases"].docs[0]["premium_paid"] is False
     assert stores["bond_cases"].docs[0]["down_payment_amount"] == "0.00"
     link = stores["cosigner_links"].docs[0]
-    assert [row.get("step") for row in link["timeline"]][-1] == "paid"
+    assert "paid" not in [row.get("step") for row in link["timeline"]]
+    assert "nothing_due" in [row.get("step") for row in link["timeline"]]
     assert "paid_transaction_id" not in link
     paid = _audits(stores, "paid")
     assert len(paid) == 1
     assert paid[0]["old_state"]["paid"] is False
     assert paid[0]["old_state"]["signed"] is True
-    assert paid[0]["new_state"]["paid"] is True
-    assert paid[0]["new_state"]["step"] == "paid"
+    assert paid[0]["new_state"]["paid"] is False
     assert token not in str(paid)
     assert "token" not in paid[0]
     again = client.get(f"/api/cosigner/{token}")
     assert again.status_code == 200
     assert len(_audits(stores, "paid")) == 1
+
+
+def test_zero_down_reconfirm_shows_the_pay_link(monkeypatch):
+    """A $0 finish is live. A later amount above zero is not stored as paid."""
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert opened.status_code == 200, opened.text
+    packet = stores["paperwork_packets"].docs[0]
+    bond = stores["bond_cases"].docs[0]
+    for row in (packet, bond):
+        row["down_payment_amount"] = "0.00"
+    packet["status"] = "completed"
+    done = client.get(f"/api/cosigner/{token}")
+    assert done.status_code == 200, done.text
+    assert done.json()["step"] == "paid"
+    assert done.json()["payment"]["amount"] == "0.00"
+    assert done.json()["payment"]["url"] is None
+    assert "paid_transaction_id" not in stores["cosigner_links"].docs[0]
+    assert len(_audits(stores, "paid")) == 1
+
+    pay = _swipe_link("down")
+    for row in (packet, bond):
+        row["down_payment_amount"] = "500.00"
+    packet["invoice_payment_link"] = pay
+    packet["swipesimple_invoice_amount_cents"] = 50000
+    packet["swipesimple_invoice_number"] = BOOKING
+    packet["swipesimple_invoice_bond_id"] = CASE
+    reconfirmed = client.get(f"/api/cosigner/{token}")
+    assert reconfirmed.status_code == 200, reconfirmed.text
+    body = reconfirmed.json()
+    assert body["step"] == "pay"
+    assert body["payment"]["url"] == pay
+    assert body["payment"]["amount"] == "500.00"
+    assert pay in reconfirmed.text
+    link = stores["cosigner_links"].docs[0]
+    assert "paid_transaction_id" not in link
+    assert "paid" not in [row.get("step") for row in link["timeline"]]
+    assert bond["premium_paid"] is False
+    assert len(_audits(stores, "paid")) == 1
+    page = client.get(f"/cosigner/{token}")
+    assert pay in page.text
+
+    link["paid_transaction_id"] = "TX-TEST-COS-1"
+    stamped = client.get(f"/api/cosigner/{token}")
+    assert stamped.status_code == 200, stamped.text
+    assert stamped.json()["step"] == "paid"
+    assert link["paid_transaction_id"] == "TX-TEST-COS-1"
+    assert bond["premium_paid"] is False
+
+
+def test_invoice_url_on_another_port_is_hidden(monkeypatch):
+    """The pay host allowlist includes the port. 443 still matches."""
+    from urllib.parse import urlparse
+
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    opened = _upload(
+        monkeypatch, client, token,
+        {"full_name": NAME, "dl_state": "FL"},
+    )
+    assert opened.status_code == 200, opened.text
+    packet = stores["paperwork_packets"].docs[0]
+    packet["status"] = "completed"
+    owned = _swipe_link("down")
+    parsed = urlparse(owned)
+    other_port = f"https://{parsed.hostname}:8443{parsed.path}"
+    packet["invoice_payment_link"] = other_port
+    packet["swipesimple_invoice_amount_cents"] = 50000
+    packet["swipesimple_invoice_number"] = BOOKING
+    packet["swipesimple_invoice_bond_id"] = CASE
+    hidden = client.get(f"/api/cosigner/{token}")
+    assert hidden.status_code == 200, hidden.text
+    assert hidden.json()["step"] == "pay"
+    assert hidden.json()["payment"]["url"] is None
+    assert hidden.json()["payment"]["error"] == "invoice_origin"
+    assert "8443" not in hidden.text
+    assert ">Pay</a>" not in client.get(f"/cosigner/{token}").text
+
+    explicit = f"https://{parsed.hostname}:443{parsed.path}"
+    packet["invoice_payment_link"] = explicit
+    same_port = client.get(f"/api/cosigner/{token}")
+    assert same_port.status_code == 200, same_port.text
+    assert same_port.json()["payment"]["url"] == explicit
+
+    packet["invoice_payment_link"] = owned
+    shown = client.get(f"/api/cosigner/{token}")
+    assert shown.json()["payment"]["url"] == owned
 
 
 def test_only_an_open_bond_status_keeps_the_link(monkeypatch):
