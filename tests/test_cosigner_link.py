@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import re
 from unittest.mock import AsyncMock
 
 import pytest
@@ -285,6 +286,9 @@ def _match(doc, query):
                     if not current <= expected["$lte"]:
                         return False
                 except TypeError:
+                    return False
+            elif "$regex" in expected:
+                if not isinstance(current, str) or re.search(expected["$regex"], current) is None:
                     return False
             else:
                 return False
@@ -2724,7 +2728,7 @@ DOWN_CENTS = 50000
 PLAN_BALANCE_CENTS = 100000
 
 
-def _recorder_world(monkeypatch, *, drop_packet_case_id=False):
+def _recorder_world(monkeypatch, *, drop_packet_case_id=False, prepare=None):
     import copy
     import socket
 
@@ -2734,6 +2738,8 @@ def _recorder_world(monkeypatch, *, drop_packet_case_id=False):
     stores, client = _world(monkeypatch)
     if drop_packet_case_id:
         stores["paperwork_packets"].docs[0]["bond_case_id"] = ""
+    if prepare is not None:
+        prepare(stores)
     token = _token(client)
     uploaded = _upload(monkeypatch, client, token, {"full_name": NAME, "dl_state": "FL"})
     assert uploaded.status_code == 200, uploaded.text
@@ -3061,6 +3067,174 @@ def test_stale_legacy_booking_does_not_mark_paid(monkeypatch, path):
     assert len(_audits(stores, "paid")) == 0
     assert db["bond_cases"].docs[0].get("last_transaction_id") != "TX-LEG-STALE"
     _assert_legacy_bond_untouched_spelling(db, canonical="TEST-COS-MOVED")
+
+
+PADDED = f"  {BOOKING} "
+
+
+def _padded_legacy_only(bond):
+    """Store the bond's booking only as a whitespace-padded ``Booking_Number``."""
+    bond.pop("booking_number", None)
+    bond["Booking_Number"] = PADDED
+    return bond
+
+
+def _padded_recorder_world(monkeypatch):
+    """A padded-only legacy bond, no case id on the packet, link issued on it."""
+    return _recorder_world(
+        monkeypatch,
+        drop_packet_case_id=True,
+        prepare=lambda stores: _padded_legacy_only(stores["bond_cases"].docs[0]),
+    )
+
+
+def test_recorder_finds_a_padded_only_legacy_bond():
+    """Main's recorder (#301) finds Booking_Number ' BK-1 ' for booking 'BK-1'."""
+    from dashboard.services.payment_log_claims import _bond_filter, _matching_bonds
+    from tests.test_payment_plan_pay_dedupe import DB
+
+    db = DB()
+    db["bond_cases"].docs.append({"_id": "bc-pad", "Booking_Number": " BK-1 "})
+    found = asyncio.run(_matching_bonds(db, "BK-1", None))
+    assert [(name, doc["_id"]) for name, doc in found] == [("bond_cases", "bc-pad")]
+    assert _bond_filter("BK-1", found[0][1]) == {"Booking_Number": " BK-1 ", "_id": "bc-pad"}
+
+
+def test_padded_only_legacy_bond_without_case_id_gets_a_link(monkeypatch):
+    """A link is issued for a bond whose only booking is a padded Booking_Number."""
+    from dashboard.services import cosigner_link_service as svc
+
+    stores, client = _world(monkeypatch)
+    _padded_legacy_only(stores["bond_cases"].docs[0])
+    stores["paperwork_packets"].docs[0]["bond_case_id"] = ""
+    token = _token(client)
+    link = stores["cosigner_links"].docs[0]
+    assert link["token"] == token
+    assert link["booking_number"] == BOOKING
+    assert client.get(f"/api/cosigner/{token}").status_code == 200
+    assert asyncio.run(svc._one_case_id(BOOKING)) == CASE
+    bond = stores["bond_cases"].docs[0]
+    assert bond["Booking_Number"] == PADDED
+    assert "booking_number" not in bond
+
+
+def test_padded_only_legacy_bond_webhook_marks_link_paid_once(monkeypatch):
+    stores, client, token, db = _padded_recorder_world(monkeypatch)
+    first = _webhook(client, txn="TX-PAD-WH", amount="500.00")
+    assert first.status_code == 200, first.text
+    assert first.json()["needs_review"] is False
+    for _ in range(2):
+        replay = _webhook(client, txn="TX-PAD-WH", amount="500.00")
+        assert replay.status_code == 200 and replay.json()["duplicate"] is True
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+    assert stores["cosigner_links"].docs[0]["paid_transaction_id"] == "TX-PAD-WH"
+    assert len(_audits(stores, "paid")) == 1
+    bond = db["bond_cases"].docs[0]
+    assert bond["last_transaction_id"] == "TX-PAD-WH"
+    assert bond["Booking_Number"] == PADDED
+    assert "booking_number" not in bond
+
+
+def test_padded_only_legacy_bond_poller_marks_link_paid_once(monkeypatch):
+    stores, client, token, db = _padded_recorder_world(monkeypatch)
+    polled = _poll_down_payment(db, txn="TX-PAD-POLL", amount="500.00")
+    assert polled["success"] is True and polled["committed"] is True
+    assert polled.get("needs_review") is not True
+    assert _poll_down_payment(db, txn="TX-PAD-POLL", amount="500.00")["duplicate"] is True
+    replay = _webhook(client, txn="TX-PAD-POLL", amount="500.00")
+    assert replay.status_code == 200 and replay.json()["duplicate"] is True
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+    assert stores["cosigner_links"].docs[0]["paid_transaction_id"] == "TX-PAD-POLL"
+    assert len(_audits(stores, "paid")) == 1
+    paid_steps = [
+        row for row in stores["cosigner_links"].docs[0]["timeline"]
+        if row.get("step") == "paid"
+    ]
+    assert len(paid_steps) == 1
+    assert db["bond_cases"].docs[0]["Booking_Number"] == PADDED
+
+
+def test_padded_booking_shared_with_another_bond_fails_closed(monkeypatch):
+    """A padded legacy bond and another padded bond on one booking are two cases."""
+    from dashboard.services import cosigner_link_service as svc
+
+    stores, client = _world(monkeypatch)
+    _padded_legacy_only(stores["bond_cases"].docs[0])
+    stores["bond_cases"].docs.append({
+        "bond_case_id": "BC-TEST-COS-PAD2",
+        "booking_number": f"{BOOKING}  ",
+        "status": "active",
+        "premium_paid": False,
+    })
+    stores["paperwork_packets"].docs[0]["bond_case_id"] = ""
+    created = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert created.status_code == 409, created.text
+    assert _error_text(created) == "bond_ambiguous"
+    assert not _links(stores)
+    assert asyncio.run(svc._one_case_id(BOOKING)) == ""
+
+
+@pytest.mark.parametrize("path", ["webhook", "poller"])
+def test_padded_booking_shared_after_issue_does_not_mark_paid(monkeypatch, path):
+    """A second padded bond on the booking after issue blocks the paid stamp."""
+    stores, client, token, db = _padded_recorder_world(monkeypatch)
+    other = {
+        "bond_case_id": "BC-TEST-COS-PAD2",
+        "Booking_Number": f" {BOOKING}",
+        "status": "active",
+        "premium_paid": False,
+    }
+    stores["bond_cases"].docs.append(dict(other))
+    db["bond_cases"].docs.append(dict(other))
+    if path == "webhook":
+        response = _webhook(client, txn="TX-PAD-AMB", amount="500.00")
+        assert response.status_code == 200, response.text
+        assert response.json()["needs_review"] is True
+    else:
+        assert _poll_down_payment(db, txn="TX-PAD-AMB", amount="500.00").get("needs_review") is True
+    assert not stores["cosigner_links"].docs[0].get("paid_transaction_id")
+    assert len(_audits(stores, "paid")) == 0
+    for bond in db["bond_cases"].docs:
+        assert bond.get("last_transaction_id") != "TX-PAD-AMB"
+
+
+def test_booking_regex_is_escaped(monkeypatch):
+    """``BK.1`` is a literal booking: it does not match ``BKX1`` in either store."""
+    from dashboard.services import cosigner_link_service as svc
+
+    from dashboard.services.payment_log_claims import _matching_bonds
+    from tests.test_payment_plan_pay_dedupe import DB
+
+    query = svc._booking_query("BK.1")
+    assert not _match({"booking_number": "BKX1"}, query)
+    assert not _match({"Booking_Number": " BKX1 "}, query)
+    assert _match({"Booking_Number": " BK.1 "}, query)
+
+    stores, _client = _world(monkeypatch)
+    stores["bond_cases"].docs[:] = [
+        {"_id": "x", "bond_case_id": "BC-X", "Booking_Number": "BKX1"},
+        {"_id": "y", "bond_case_id": "BC-Y", "booking_number": " BKX1"},
+    ]
+    assert asyncio.run(svc._bonds_for_booking("BK.1")) == []
+    assert asyncio.run(svc._one_case_id("BK.1")) == ""
+
+    db = DB()
+    db["bond_cases"].docs.append({"_id": "x", "Booking_Number": "BKX1"})
+    assert asyncio.run(_matching_bonds(db, "BK.1", None)) == []
+
+
+def test_blank_booking_matches_no_bond(monkeypatch):
+    """The padded regex would match a blank value. A blank booking finds nothing."""
+    from dashboard.services import cosigner_link_service as svc
+
+    stores, _client = _world(monkeypatch)
+    stores["bond_cases"].docs.append({"_id": "blank", "booking_number": "  "})
+    assert asyncio.run(svc._bonds_for_booking("")) == []
+    assert asyncio.run(svc._bonds_for_booking("   ")) == []
 
 
 def _poll_down_payment(db, *, txn, amount, reference=""):

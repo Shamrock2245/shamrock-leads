@@ -18,6 +18,7 @@ import hashlib
 import html
 import logging
 import os
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -523,8 +524,20 @@ async def _matching_bonds(query: dict) -> list:
 
 
 def _booking_query(booking: str) -> dict:
-    """Either booking spelling. ``_canonical_booking`` decides the match."""
-    return {"$or": [{"booking_number": booking}, {"Booking_Number": booking}]}
+    """Either booking spelling, exact or whitespace-padded.
+
+    The exact branches use any existing index. The anchored, escaped regex
+    finds a padded stored value such as ``" BK-1 "``, the same way the
+    payment recorder does. ``_canonical_booking`` then decides the match on
+    trimmed values.
+    """
+    padded = {"$regex": r"^\s*" + re.escape(booking) + r"\s*$"}
+    return {"$or": [
+        {"booking_number": booking},
+        {"Booking_Number": booking},
+        {"booking_number": padded},
+        {"Booking_Number": padded},
+    ]}
 
 
 def _canonical_booking(doc: dict) -> str:
@@ -554,7 +567,13 @@ def _booking_matches(booking: str, rows: list) -> list:
 
 
 async def _bonds_for_booking(booking: str) -> list:
-    """Tenant-scoped bonds on this booking under either spelling."""
+    """Tenant-scoped bonds on this booking under either spelling.
+
+    A blank booking matches nothing: the padded regex would match blanks.
+    """
+    booking = str(booking or "").strip()
+    if not booking:
+        return []
     return _booking_matches(booking, await _matching_bonds(_booking_query(booking)))
 
 
