@@ -68,7 +68,7 @@ PyYAML>=6.0                   # Blog auto-publisher YAML frontmatter parsing
 # Active Bonds PDF generation & date parsing
 reportlab>=4.0.0
 fpdf2>=2.8.9                  # OSINT PDF export (dashboard/services/osint_pdf_export.py)
-python-dateutil>=2.8.0
+python-dateutil>=3.0.0
 PyMuPDF>=1.24.0,<3.0
 
 # Official OSI / Palmetto bond & discharge reports (XLSX)
