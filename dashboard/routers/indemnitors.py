@@ -18,11 +18,13 @@ Provides all endpoints needed by sl-indemnitor.js:
   PATCH /api/prospective-bonds/{booking_number}/indemnitor — update single indemnitor
 """
 
+import copy
 import logging
 import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Mapping
 
 from fastapi import APIRouter, File, Form, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
@@ -689,7 +691,81 @@ async def api_indemnitor_search_existing(q: str = ""):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-async def _save_unlinked_indemnitor(profile, *, phone, now, message, pending_booking_number=""):
+def _scan_present(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(item not in (None, "", [], {}) for item in value.values())
+    if isinstance(value, str):
+        return bool(value.strip())
+    return False
+
+
+def _copy_scan(value: Any) -> Any:
+    if isinstance(value, dict):
+        return copy.deepcopy(value)
+    if isinstance(value, str):
+        return value.strip()
+    return value
+
+
+def _keep_stored_id_scan(profile: dict, body: Mapping[str, Any] | None, existing: Mapping[str, Any] | None) -> None:
+    """Keep a stored ID scan when the body omits one.
+
+    A supplied scan becomes the current scan. The previous scan is appended
+    to ``id_scan_history`` and stays on the record.
+    """
+    profile.pop("id_scan", None)
+    profile.pop("id_scan_history", None)
+    profile.pop("portrait_jpeg_b64", None)
+    stored = existing if isinstance(existing, Mapping) else {}
+    prior = stored.get("id_scan")
+    prior_ok = _scan_present(prior)
+    prior_portrait = stored.get("portrait_jpeg_b64")
+    if not isinstance(prior_portrait, str) or not prior_portrait.strip():
+        prior_portrait = ""
+    else:
+        prior_portrait = prior_portrait.strip()
+    history = []
+    for item in stored.get("id_scan_history") or []:
+        if isinstance(item, dict) and _scan_present(item.get("id_scan")):
+            history.append(_copy_scan(item))
+    incoming = None
+    if isinstance(body, Mapping) and "id_scan" in body and _scan_present(body.get("id_scan")):
+        incoming = _copy_scan(body.get("id_scan"))
+    incoming_portrait = None
+    if isinstance(body, Mapping) and "portrait_jpeg_b64" in body:
+        raw_portrait = body.get("portrait_jpeg_b64")
+        if isinstance(raw_portrait, str) and raw_portrait.strip():
+            incoming_portrait = raw_portrait.strip()
+    if incoming is None and incoming_portrait is None:
+        if prior_ok:
+            profile["id_scan"] = _copy_scan(prior)
+        if prior_portrait:
+            profile["portrait_jpeg_b64"] = prior_portrait
+        if history:
+            profile["id_scan_history"] = history
+        return
+    archived: dict[str, Any] = {}
+    if prior_ok and incoming is not None and prior != incoming:
+        archived["id_scan"] = _copy_scan(prior)
+        if prior_portrait:
+            archived["portrait_jpeg_b64"] = prior_portrait
+    elif prior_portrait and incoming_portrait and prior_portrait != incoming_portrait:
+        archived["portrait_jpeg_b64"] = prior_portrait
+    if archived:
+        history.append(archived)
+    if incoming is not None:
+        profile["id_scan"] = incoming
+    elif prior_ok:
+        profile["id_scan"] = _copy_scan(prior)
+    if incoming_portrait is not None:
+        profile["portrait_jpeg_b64"] = incoming_portrait
+    elif prior_portrait:
+        profile["portrait_jpeg_b64"] = prior_portrait
+    if history:
+        profile["id_scan_history"] = history
+
+
+async def _save_unlinked_indemnitor(profile, *, phone, now, message, pending_booking_number="", body=None):
     """Persist a standalone indemnitor. Never invents a prospective bond card."""
     indemnitors_coll = get_collection("indemnitors")
     profile["created_at"] = now.isoformat()
@@ -700,6 +776,7 @@ async def _save_unlinked_indemnitor(profile, *, phone, now, message, pending_boo
     if phone:
         existing = await indemnitors_coll.find_one({"phone": phone, "status": "unlinked"})
         if existing:
+            _keep_stored_id_scan(profile, body, existing)
             await indemnitors_coll.update_one(
                 {"_id": existing["_id"]},
                 {"$set": {**profile, "updated_at": now.isoformat()}},
@@ -714,6 +791,7 @@ async def _save_unlinked_indemnitor(profile, *, phone, now, message, pending_boo
                 "message": message,
             }
     profile["Indemnitor_ID"] = str(uuid.uuid4())
+    _keep_stored_id_scan(profile, body, None)
     await indemnitors_coll.insert_one(profile)
     ind_id = profile["Indemnitor_ID"]
     return {
@@ -778,8 +856,6 @@ async def api_indemnitor_create(request: Request):
             "id_type": data.get("id_type", ""),
             "issuing_country": data.get("issuing_country", ""),
             "nationality": data.get("nationality", ""),
-            "id_scan": data.get("id_scan") or {},
-            "portrait_jpeg_b64": data.get("portrait_jpeg_b64") or "",
             "prior_defendant_id": data.get("prior_defendant_id", ""),
             "prior_role": data.get("prior_role", ""),
             "role": data.get("role", "primary"),
@@ -803,6 +879,7 @@ async def api_indemnitor_create(request: Request):
                 profile,
                 phone=phone,
                 now=now,
+                body=data,
                 message="Indemnitor saved. Open the card and enter a Booking # to link.",
             )
 
@@ -825,6 +902,7 @@ async def api_indemnitor_create(request: Request):
                     profile,
                     phone=phone,
                     now=now,
+                    body=data,
                     pending_booking_number=booking_number,
                     message=(
                         "Indemnitor saved unlinked. That booking # matches more "
@@ -864,6 +942,7 @@ async def api_indemnitor_create(request: Request):
                     profile,
                     phone=phone,
                     now=now,
+                    body=data,
                     pending_booking_number=booking_number,
                     message=(
                         "Indemnitor saved unlinked. That booking # is not "
@@ -886,6 +965,7 @@ async def api_indemnitor_create(request: Request):
         if phone:
             for existing in existing_indemnitors:
                 if existing.get("phone") == phone:
+                    _keep_stored_id_scan(profile, data, existing)
                     existing.update(profile)
                     await collection.update_one(
                         {"booking_number": booking_number},
@@ -913,6 +993,7 @@ async def api_indemnitor_create(request: Request):
             else:
                 profile["role"] = "primary"
 
+        _keep_stored_id_scan(profile, data, None)
         existing_indemnitors.append(profile)
         primary = existing_indemnitors[0]
 
