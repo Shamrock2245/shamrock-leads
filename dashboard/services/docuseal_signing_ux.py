@@ -100,6 +100,10 @@ STAFF_READONLY_FIELD_NAMES = frozenset({
     "case_number", "case_number_1", "case_number_2", "case_number_3", "case_number_4",
     "case_1", "case_2", "case_3", "case_4", "CaseNum",
     "poa_number", "poa_number_1", "poa_number_2", "poa_number_3", "poa_number_4",
+    "poa_number_5", "poa_number_6", "poa_number_7",
+    "schedule_a",
+    "schedule_a_label_indemnitor", "schedule_a_label_coindemnitor", "schedule_a_label_defendant",
+    "coindemnitor_block_label",
     "poa_1", "poa_2", "poa_3", "poa_4", "PowerNum",
     "all_poa_numbers", "poa_numbers", "bond_numbers", "BondNumbers",
     "bond_amount", "bond_amount_1", "bond_amount_2", "bond_amount_3", "bond_amount_4",
@@ -143,6 +147,7 @@ IDENTITY_READONLY_FIELD_NAMES = frozenset({
     "defendant_race", "DefHeight", "DefWeight", "DefRace", "DefHair", "DefEyes",
     "DefDOB", "DefDL", "DefDLState", "DefAddress", "DefCity", "DefState", "DefZip",
     "DefPhone", "DefSex",
+    "coindemnitor_name", "coindemnitor_phone", "coindemnitor_email",
 })
 
 

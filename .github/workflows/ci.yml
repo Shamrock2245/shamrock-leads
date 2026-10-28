@@ -255,6 +255,7 @@ jobs:
             tests/test_palmetto_application_header_placement.py \
             tests/test_palmetto_header_offense_rows.py \
             tests/test_palmetto_t6_offense_capacity.py \
+            tests/test_palmetto_template_7.py \
             tests/test_paperwork_template_paths.py \
             tests/test_verbatim_bond_charges.py \
             tests/test_bond_packet_start.py \
@@ -270,4 +271,5 @@ jobs:
             tests/test_collier_glades_bad_bond_count.py \
             tests/test_workflow_endpoints.py \
             tests/test_kiosk_privacy_and_confirm.py \
+            tests/test_indemnitor_id_scan.py \
             --tb=short

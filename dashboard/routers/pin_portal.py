@@ -72,6 +72,28 @@ def _extract_signing_link_from_packet(doc: Optional[dict], role: Optional[str] =
     return ""
 
 
+_VOID_PACKET_STATUSES = frozenset({"voided", "cancelled", "canceled"})
+_DEAD_SIGNER_STATUSES = frozenset({
+    "voided", "cancelled", "canceled", "declined", "unverified",
+})
+
+
+def _packet_voided(doc: Optional[Dict[str, Any]]) -> bool:
+    """A voided or cancelled packet must not yield a DocuSeal URL."""
+    if not isinstance(doc, dict):
+        return False
+    if doc.get("voided") is True:
+        return True
+    return str(doc.get("status") or "").strip().lower() in _VOID_PACKET_STATUSES
+
+
+def _signer_url_blocked(party: Optional[Dict[str, Any]]) -> bool:
+    """Voided, declined, or unverified submitters do not get a signing URL."""
+    if not isinstance(party, dict):
+        return False
+    return str(party.get("status") or "").strip().lower() in _DEAD_SIGNER_STATUSES
+
+
 async def _resolve_packet_for_client(
     phone_str: str,
     booking: str = "",
@@ -135,13 +157,9 @@ async def _resolve_packet_for_client(
         )
     except Exception:
         doc = None
-    if not doc:
-        try:
-            doc = await packets.find_one(base_or, sort=[("created_at", -1)])
-        except Exception:
-            doc = None
-
-    if not doc:
+    # A failed filter or a voided-only match yields no URL. Do not fall back
+    # to the newest row: that row is the voided packet.
+    if not doc or _packet_voided(doc):
         return {
             "signing_link": "",
             "has_packet": False,
@@ -158,7 +176,9 @@ async def _resolve_packet_for_client(
 
     parties = party_signers_from_packet(doc)
     chosen = pick_party(parties, phone=phone)
-    link = (chosen or {}).get("sign_url") or _extract_signing_link_from_packet(doc)
+    link = ""
+    if not _signer_url_blocked(chosen):
+        link = (chosen or {}).get("sign_url") or _extract_signing_link_from_packet(doc)
     defendant = str(doc.get("defendant_name") or doc.get("Defendant_Name") or "")
     packet_id = str(doc.get("packet_id") or doc.get("_id") or "")
     status = str(doc.get("status") or "pending")
@@ -1771,12 +1791,7 @@ async def _redirect_to_party_sign(
         )
     except Exception:
         doc = None
-    if not doc:
-        try:
-            doc = await packets.find_one({"packet_id": packet_id})
-        except Exception:
-            doc = None
-    if not doc:
+    if not doc or _packet_voided(doc):
         return HTMLResponse(
             "<!DOCTYPE html><html><body style='font-family:sans-serif;background:#0b0f19;color:#f8fafc;"
             "padding:32px;text-align:center'><h1>Link not found</h1>"
@@ -1785,7 +1800,9 @@ async def _redirect_to_party_sign(
         )
     parties = party_signers_from_packet(doc)
     chosen = pick_party(parties, role=role)
-    url = (chosen or {}).get("sign_url") or _extract_signing_link_from_packet(doc, role=role)
+    url = ""
+    if not _signer_url_blocked(chosen):
+        url = (chosen or {}).get("sign_url") or _extract_signing_link_from_packet(doc, role=role)
     if not url:
         return HTMLResponse(
             "<!DOCTYPE html><html><body style='font-family:sans-serif;background:#0b0f19;color:#f8fafc;"
