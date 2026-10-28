@@ -88,6 +88,13 @@ def _unset_path(doc, key):
     cur.pop(parts[-1], None)
 
 
+def _cmp(value, bound, sign):
+    """Mongo-style bracketed compare: different BSON types never match."""
+    if value is None or type(value) is not type(bound):
+        return False
+    return value >= bound if sign > 0 else value <= bound
+
+
 def _match(doc, query):
     if not query:
         return True
@@ -101,6 +108,13 @@ def _match(doc, query):
         values = _values(doc, key)
         present = bool(values)
         if isinstance(expected, dict):
+            if "$elemMatch" in expected:
+                items = [item for value in values if isinstance(value, list) for item in value]
+                if not any(isinstance(item, dict) and _match(item, expected["$elemMatch"]) for item in items):
+                    return False
+                continue
+            if "$nin" in expected and any(value in expected["$nin"] for value in values):
+                return False
             if "$in" in expected:
                 allowed = expected["$in"]
                 hit = False
@@ -115,9 +129,9 @@ def _match(doc, query):
                 return False
             if "$exists" in expected and bool(expected["$exists"]) != present:
                 return False
-            if "$gte" in expected and not any(value is not None and value >= expected["$gte"] for value in values):
+            if "$gte" in expected and not any(_cmp(value, expected["$gte"], 1) for value in values):
                 return False
-            if "$lte" in expected and not any(value is not None and value <= expected["$lte"] for value in values):
+            if "$lte" in expected and not any(_cmp(value, expected["$lte"], -1) for value in values):
                 return False
             if "$regex" in expected:
                 import re
@@ -620,8 +634,8 @@ async def test_outreach_reads_contacts_on_the_full_arrest_identity():
 async def test_same_booking_in_two_counties_keeps_separate_contacts():
     db = AsyncDB()
     db["indemnitors"].docs.extend([
-        {"booking_number": "B-100", "county": "Lee", "indemnitor_name": "Jordan Sample", "indemnitor_phone": "5550100100"},
-        {"booking_number": "B-100", "county": "Collier", "indemnitor_name": "Pat Other", "indemnitor_phone": "5550100300"},
+        {"booking_number": "B-100", "defendant_county": "Lee", "indemnitor_name": "Jordan Sample", "indemnitor_phone": "5550100100"},
+        {"booking_number": "B-100", "defendant_county": "Collier", "indemnitor_name": "Pat Other", "indemnitor_phone": "5550100300"},
     ])
     lee = await run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True)
     col = await run_discovery(db, booking_number="B-100", full_name="Drew Other", county="Collier", state="FL", force=True)
@@ -1040,3 +1054,198 @@ async def test_failed_provider_old_row_does_not_expire_a_fresh_row():
     # not 1 day after the 29-day-old row.
     assert expire >= datetime.now(timezone.utc) + timedelta(days=UNREVIEWED_TTL_DAYS - 1)
     assert expire > old + timedelta(days=UNREVIEWED_TTL_DAYS)
+
+
+# ── Codex round 2 on #280 ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_out_of_state_resident_indemnitor_on_lee_fl_booking_is_kept():
+    """The bare ``state`` on an indemnitor row is the co-signer's home state."""
+    db = AsyncDB()
+    db["indemnitors"].docs.extend([
+        {   # Lives in GA, co-signed the Lee FL booking: kept.
+            "booking_number": "B-100", "state": "GA", "city": "Test City",
+            "indemnitor_name": "Georgia Resident", "indemnitor_phone": "5550100401",
+        },
+        {   # Same booking number, but the arrest itself is in Lee GA: excluded.
+            "booking_number": "B-100", "defendant_county": "Lee", "defendant_state": "GA",
+            "indemnitor_name": "Lee Georgia Case", "indemnitor_phone": "5550100402",
+        },
+    ])
+    result = await run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True)
+    rows = [(row["name"], row["source"]) for row in result["contacts"]]
+    assert rows == [("Georgia Resident", "prior_shamrock")]
+
+
+def _raising_discovery(calls):
+    async def _run(db, **kwargs):
+        calls.append(kwargs.get("booking_number"))
+        raise RuntimeError("transient")
+    return _run
+
+
+@pytest.mark.asyncio
+async def test_transient_error_leaves_the_booking_retryable_and_it_is_reclaimed(monkeypatch):
+    from dashboard.services import contact_discovery as cd
+
+    db = AsyncDB()
+    db["arrests"].docs.append(_booking())
+    calls = []
+    monkeypatch.setattr(cd, "run_discovery", _raising_discovery(calls))
+    first = await run_lee_discovery_batch(db, limit=5, now=NOW)
+    assert first["claimed"] == 1 and first["retry"] == 1 and first["failed"] == 0
+    marker = db["arrests"].docs[0]["indemnitor_discovery"]
+    assert marker["status"] == "retry"
+    assert marker["attempts"] == 1
+    assert marker["retry_after"] == NOW + timedelta(minutes=cd.RETRY_BASE_MINUTES)
+
+    # Backoff not over: the real claim query does not pick it up.
+    early = await run_lee_discovery_batch(db, limit=5, now=NOW + timedelta(minutes=5))
+    assert early["claimed"] == 0 and calls == ["B-100"]
+
+    # After the backoff the same booking is claimed again and completes.
+    monkeypatch.setattr(cd, "run_discovery", run_discovery)
+    later = await run_lee_discovery_batch(db, limit=5, now=NOW + timedelta(minutes=16))
+    assert later["claimed"] == 1 and later["completed"] == 1
+    assert db["arrests"].docs[0]["indemnitor_discovery"]["status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_retry_cap_makes_the_booking_terminal_failed_and_logs(monkeypatch, caplog):
+    from dashboard.services import contact_discovery as cd
+
+    db = AsyncDB()
+    db["arrests"].docs.append(_booking())
+    calls = []
+    monkeypatch.setattr(cd, "run_discovery", _raising_discovery(calls))
+    when = NOW
+    with caplog.at_level("WARNING", logger="shamrock.contact_discovery"):
+        for _ in range(cd.MAX_DISCOVERY_ATTEMPTS + 2):
+            await run_lee_discovery_batch(db, limit=5, now=when)
+            when = when + timedelta(days=1)
+    assert len(calls) == cd.MAX_DISCOVERY_ATTEMPTS
+    marker = db["arrests"].docs[0]["indemnitor_discovery"]
+    assert marker["status"] == "failed"
+    assert marker["attempts"] == cd.MAX_DISCOVERY_ATTEMPTS
+    assert marker["error"] == "RuntimeError"
+    assert "retry limit reached" in caplog.text
+    assert "B-100" not in caplog.text
+
+
+def test_retry_backoff_doubles():
+    from dashboard.services.contact_discovery import RETRY_BASE_MINUTES, retry_backoff
+
+    assert [retry_backoff(n) for n in (1, 2, 3)] == [
+        timedelta(minutes=RETRY_BASE_MINUTES * m) for m in (1, 2, 4)
+    ]
+
+
+def _contact_doc(idx, stamp):
+    return {
+        "_id": f"c{idx:04d}",
+        "discovered_contacts": [
+            {"name": f"Person {idx}", "source": "prior_shamrock", "review_status": "unreviewed", "discovered_at": stamp},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_purge_reaches_expired_docs_past_the_first_200():
+    db = AsyncDB()
+    old = (NOW - timedelta(days=31)).isoformat()
+    fresh = NOW.isoformat()
+    docs = db["contacts"].docs
+    docs.extend(_contact_doc(i, fresh) for i in range(250))      # positions 0-249: nothing expired
+    docs.extend(_contact_doc(i, old) for i in range(250, 290))   # positions 250-289: expired
+    result = await purge_unreviewed_candidates(db, now=NOW)
+    assert result == {"purged_candidates": 40, "docs": 40}
+    assert all(not doc["discovered_contacts"] for doc in docs[250:])
+    assert all(len(doc["discovered_contacts"]) == 1 for doc in docs[:250])
+
+
+@pytest.mark.asyncio
+async def test_purge_pages_through_more_than_one_limit_of_expired_docs():
+    db = AsyncDB()
+    old = (NOW - timedelta(days=40)).isoformat()
+    legacy = NOW - timedelta(days=40)   # a BSON-date stamp from an older writer
+    docs = db["contacts"].docs
+    docs.extend(_contact_doc(i, old) for i in range(430))
+    docs.extend(_contact_doc(i, legacy) for i in range(430, 450))
+    result = await purge_unreviewed_candidates(db, now=NOW, limit=200)
+    assert result == {"purged_candidates": 450, "docs": 450}
+    assert all(not doc["discovered_contacts"] for doc in docs)
+
+
+@pytest.mark.asyncio
+async def test_purge_does_not_loop_on_a_doc_it_cannot_parse():
+    db = AsyncDB()
+    db["contacts"].docs.append(_contact_doc(1, ""))   # "" sorts before the cutoff string
+    result = await purge_unreviewed_candidates(db, now=NOW, limit=1, max_pages=5)
+    assert result == {"purged_candidates": 0, "docs": 0}
+    assert len(db["contacts"].docs[0]["discovered_contacts"]) == 1
+
+
+def _contacts_client(monkeypatch, db):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from dashboard.routers import contacts as contacts_router
+
+    monkeypatch.setattr(contacts_router, "get_db", lambda: db)
+    app = FastAPI()
+    app.include_router(contacts_router.contacts_bp)
+    return TestClient(app)
+
+
+def test_discover_route_with_county_and_state_resolves_a_shared_booking(monkeypatch):
+    db = AsyncDB()
+    lee = _booking()
+    collier = {**_booking(), "_id": "arrest-2", "county": "Collier", "full_name": "Drew Other", "address": "200 Other St"}
+    db["arrests"].docs.extend([lee, collier])
+    db["indemnitors"].docs.extend([
+        {"booking_number": "B-100", "defendant_county": "Lee", "indemnitor_name": "Jordan Sample", "indemnitor_phone": "5550100100"},
+        {"booking_number": "B-100", "defendant_county": "Collier", "indemnitor_name": "Pat Other", "indemnitor_phone": "5550100300"},
+    ])
+    client = _contacts_client(monkeypatch, db)
+
+    # What the tracking drawer used to send: booking + name only -> 409.
+    bare = client.post("/api/contacts/discover", json={"booking_number": "B-100", "full_name": "Casey Sample"})
+    assert bare.status_code == 409
+    assert bare.json()["error"] == "county_and_state_required"
+    assert db["contacts"].docs == []
+
+    # With the record's county and state the shared booking resolves.
+    resp = client.post("/api/contacts/discover", json={
+        "booking_number": "B-100", "full_name": "Casey Sample", "county": "Lee", "state": "FL",
+    })
+    assert resp.status_code == 200
+    assert [row["name"] for row in resp.json()["contacts"]] == ["Jordan Sample"]
+    keys = [(d["state"], d["county"], d["booking_number"]) for d in db["contacts"].docs]
+    assert keys == [("FL", "Lee", "B-100")]
+
+
+def test_tracking_discover_button_sends_county_and_state():
+    import json as _json
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    js = root / "dashboard" / "sl-tracking.js"
+    src = js.read_text(encoding="utf-8")
+    # The drawer button passes the record's county and state to the action.
+    assert "SLTracking.discoverContacts(\\'' + bkSafe + '\\',\\'' + nameSafe + '\\',\\'' + countySafe + '\\',\\'' + stateSafe + '\\')" in src
+    assert "body: JSON.stringify(_discoverBody(bookingNumber, defName, county, state))" in src
+    # The history endpoint the drawer reads returns the state.
+    tracking_py = (root / "dashboard" / "routers" / "tracking.py").read_text(encoding="utf-8")
+    assert '"state": bond.get("state")' in tracking_py
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    r = subprocess.run([node, str(root / "tests/js/tracking_discover_sim.js"), str(js)],
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr[:300]
+    out = _json.loads(r.stdout.strip().splitlines()[-1])
+    assert out["explicit"] == {"booking_number": "B-100", "full_name": "Casey Sample", "county": "Lee", "state": "FL"}
+    assert out["blank"]["county"] == "" and out["blank"]["state"] == ""

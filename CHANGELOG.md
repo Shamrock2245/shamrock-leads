@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-28 (Lee co-signer discovery: Codex round 2 on #280)
+
+### Fixed
+- **An out-of-state co-signer is no longer dropped from a Lee (FL) booking.** Prior-Shamrock `indemnitors`/`intakes` rows are place-checked only on arrest-scoped fields (`defendant_*`, `matched_*`, `bond_*`, `booking_*` county/state). The bare `state`/`county` on an indemnitor row is the co-signer's home address and is no longer compared.
+- **A transient failure leaves the booking retryable.** When a discovery run raises (or every provider fails), the arrest is set to `indemnitor_discovery.status = retry` with `attempts` and a `retry_after` backoff of 15, 30, 60 … minutes. The claim query picks up due `retry` rows. After `MAX_DISCOVERY_ATTEMPTS` (3) runs the booking becomes terminal `failed` and a `retry limit reached` warning is logged (counts and error type only).
+- **The purge reaches every expired unreviewed candidate.** The purge query now selects only contacts docs with an unreviewed row at or before the 30-day cutoff (ISO-string or BSON-date stamp), pages through them `limit` docs at a time, and skips docs it has already read. Expired rows past the first 200 docs are removed.
+- **Discover Contacts in the tracking drawer sends county and state.** `sl-tracking.js` passes the record's county and state (as the prospective drawer does), and the tracking `history`/`map-data` responses now include `state`, so a booking number shared by two counties no longer always returns 409.
+
 ## [Unreleased] — 2026-10-28 (Lee co-signer discovery: state match, idempotent contacts, TTL)
 
 ### Fixed

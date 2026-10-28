@@ -80,6 +80,11 @@ RECENT_MISSING_HOURS = 24
 STALE_RUNNING_MINUTES = 15
 DEFER_MINUTES = 15
 MAX_DEFERRALS = 4
+# A run that raised (e.g. a transient Mongo error) is retried with backoff
+# RETRY_BASE_MINUTES * 2**(attempt-1), up to MAX_DISCOVERY_ATTEMPTS runs in
+# total. After that the booking is terminal ``failed`` and logged.
+MAX_DISCOVERY_ATTEMPTS = 3
+RETRY_BASE_MINUTES = 15
 _HTTP_GAP_S = 2.0
 _last_http_monotonic = 0.0
 _http_gap_lock: Optional[asyncio.Lock] = None
@@ -516,6 +521,12 @@ def _same_place(booking: Dict[str, Any], county: Any, state: Any = "") -> bool:
     return True
 
 
+# Fields on indemnitors / intakes rows that describe the arrest, never the
+# co-signer's own address.
+_ARREST_COUNTY_FIELDS = ("defendant_county", "matched_county", "bond_county", "booking_county")
+_ARREST_STATE_FIELDS = ("defendant_state", "matched_state", "bond_state", "booking_state")
+
+
 def _slug(name: str) -> str:
     """Same slug FamilyTreeService uses for person_id."""
     text = re.sub(r"[^a-z0-9]+", "_", (name or "").strip().lower()).strip("_")
@@ -530,10 +541,16 @@ def _generic_prior_rows(rows: Sequence[Any], booking: Dict[str, Any]) -> List[Di
     for row in rows:
         if not isinstance(row, dict):
             continue
+        # Only arrest-scoped place fields count. The bare ``state`` / ``county``
+        # on an indemnitor row is the co-signer's home address, not the arrest.
         same_case = (
             bool(booking_number)
             and _row_booking(row) == booking_number
-            and _same_place(booking, _first(row, "county", "defendant_county", "matched_county"), _first(row, "state"))
+            and _same_place(
+                booking,
+                _first(row, *_ARREST_COUNTY_FIELDS),
+                _first(row, *_ARREST_STATE_FIELDS),
+            )
         )
         defendant_names = _as_names(row.get("defendant_name")) + _as_names(row.get("defendants_bonded"))
         name_hit = any(names_equal(defendant, item) for item in defendant_names)
@@ -1301,6 +1318,11 @@ def _lee_claim_query(now: datetime) -> Dict[str, Any]:
                     "indemnitor_discovery.retry_after": {"$lte": now},
                 },
                 {
+                    # Transient failure last time: retry after the backoff.
+                    "indemnitor_discovery.status": "retry",
+                    "indemnitor_discovery.retry_after": {"$lte": now},
+                },
+                {
                     "indemnitor_discovery.status": "running",
                     "indemnitor_discovery.updated_at": {"$lte": stale},
                 },
@@ -1313,6 +1335,42 @@ def _lee_claim_query(now: datetime) -> Dict[str, Any]:
     }
 
 
+def retry_backoff(attempt: int) -> timedelta:
+    """Wait before retry number ``attempt`` (1-based): 15, 30, 60 ... minutes."""
+    return timedelta(minutes=RETRY_BASE_MINUTES * (2 ** max(0, attempt - 1)))
+
+
+async def _mark_retry_or_failed(
+    arrests: Any, arrest: Dict[str, Any], marker: Dict[str, Any], error: str, now: datetime
+) -> bool:
+    """Leave the booking retryable after a transient failure, or terminal
+    ``failed`` once MAX_DISCOVERY_ATTEMPTS runs have failed. True = will retry."""
+    attempts = int(marker.get("attempts") or 0) + 1
+    retrying = attempts < MAX_DISCOVERY_ATTEMPTS
+    fields: Dict[str, Any] = {
+        "indemnitor_discovery.status": "retry" if retrying else "failed",
+        "indemnitor_discovery.attempts": attempts,
+        "indemnitor_discovery.updated_at": datetime.now(timezone.utc),
+        "indemnitor_discovery.error": error,
+    }
+    if retrying:
+        fields["indemnitor_discovery.retry_after"] = now + retry_backoff(attempts)
+    else:
+        log.warning(
+            "[indemnitor_discovery] retry limit reached attempts=%s error_type=%s",
+            attempts,
+            error,
+        )
+    try:
+        await arrests.update_one({"_id": arrest["_id"]}, {"$set": fields})
+    except Exception as write_exc:
+        log.warning(
+            "[indemnitor_discovery] failure mark skipped error_type=%s",
+            type(write_exc).__name__,
+        )
+    return retrying
+
+
 async def run_lee_discovery_batch(db: Any, *, limit: int = DISCOVERY_BATCH_LIMIT, now: Optional[datetime] = None) -> Dict[str, Any]:
     """Claim a few Lee bookings, run discovery, then purge expired unreviewed candidates."""
     now = now or datetime.now(timezone.utc)
@@ -1322,6 +1380,7 @@ async def run_lee_discovery_batch(db: Any, *, limit: int = DISCOVERY_BATCH_LIMIT
         "claimed": 0,
         "completed": 0,
         "deferred": 0,
+        "retry": 0,
         "failed": 0,
         "purged": purged.get("purged_candidates", 0),
     }
@@ -1353,7 +1412,7 @@ async def run_lee_discovery_batch(db: Any, *, limit: int = DISCOVERY_BATCH_LIMIT
         marker = arrest.get("indemnitor_discovery") or {}
         status = marker.get("status")
         deferrals = int(marker.get("deferrals") or 0)
-        if status in {"queued", "running", "deferred"}:
+        if status in {"queued", "running", "deferred", "retry"}:
             claim_filter: Dict[str, Any] = {
                 "_id": arrest["_id"],
                 "indemnitor_discovery.status": status,
@@ -1400,58 +1459,91 @@ async def run_lee_discovery_batch(db: Any, *, limit: int = DISCOVERY_BATCH_LIMIT
                 outcome = "complete"
             if outcome == "deferred":
                 summary["deferred"] += 1
-            elif outcome in {"failed", "identity_ambiguous"}:
+            elif outcome == "failed":
+                # Every provider failed: treat it like a transient error.
+                retrying = await _mark_retry_or_failed(arrests, arrest, marker, "providers_failed", now)
+                summary["retry" if retrying else "failed"] += 1
+            elif outcome == "identity_ambiguous":
                 summary["failed"] += 1
             else:
                 summary["completed"] += 1
         except Exception as exc:
             log.warning("[indemnitor_discovery] run failed error_type=%s", type(exc).__name__)
-            summary["failed"] += 1
-            try:
-                await arrests.update_one(
-                    {"_id": arrest["_id"]},
-                    {"$set": {
-                        "indemnitor_discovery.status": "failed",
-                        "indemnitor_discovery.updated_at": datetime.now(timezone.utc),
-                        "indemnitor_discovery.error": type(exc).__name__,
-                    }},
-                )
-            except Exception as write_exc:
-                log.warning(
-                    "[indemnitor_discovery] failure mark skipped error_type=%s",
-                    type(write_exc).__name__,
-                )
+            retrying = await _mark_retry_or_failed(arrests, arrest, marker, type(exc).__name__, now)
+            summary["retry" if retrying else "failed"] += 1
     log.info(
-        "[indemnitor_discovery] claimed=%s completed=%s failed=%s purged=%s",
+        "[indemnitor_discovery] claimed=%s completed=%s retry=%s failed=%s purged=%s",
         summary["claimed"],
         summary["completed"],
+        summary["retry"],
         summary["failed"],
         summary["purged"],
     )
     return summary
 
 
-async def purge_unreviewed_candidates(db: Any, *, now: Optional[datetime] = None, limit: int = 200) -> Dict[str, int]:
-    """Drop unreviewed candidates older than 30 days. Reviewed rows stay."""
+def _expired_unreviewed_query(cutoff: datetime) -> Dict[str, Any]:
+    """Contacts docs holding at least one unreviewed row discovered at or before
+    ``cutoff``. ``discovered_at`` is a UTC ISO string (make_candidate); legacy
+    rows may hold a BSON date, so both forms are matched."""
+    def _row(stamp: Any) -> Dict[str, Any]:
+        return {"discovered_contacts": {"$elemMatch": {
+            "review_status": "unreviewed",
+            "discovered_at": {"$lte": stamp},
+        }}}
+    return {"$or": [_row(cutoff.isoformat()), _row(cutoff)]}
+
+
+async def purge_unreviewed_candidates(
+    db: Any, *, now: Optional[datetime] = None, limit: int = 200, max_pages: int = 50
+) -> Dict[str, int]:
+    """Drop unreviewed candidates older than 30 days. Reviewed rows stay.
+
+    The query selects only docs with an expired unreviewed row, a page of
+    ``limit`` at a time. A purged doc stops matching, and every doc already
+    read is excluded, so each page is new. Pages repeat until one comes back
+    short (or ``max_pages``; the rest is picked up on the next cron run).
+    """
     now = now or datetime.now(timezone.utc)
     cutoff = now - timedelta(days=UNREVIEWED_TTL_DAYS)
     contacts = db["contacts"]
     purged = 0
     docs = 0
-    try:
-        cursor = contacts.find({"discovered_contacts.review_status": "unreviewed"})
-        if hasattr(cursor, "limit"):
-            cursor = cursor.limit(limit)
-        if hasattr(cursor, "to_list"):
-            rows = cursor.to_list(length=limit)
-            if asyncio.iscoroutine(rows):
-                rows = await rows
-            stored = list(rows or [])
-        else:
-            stored = []
-    except Exception as exc:
-        log.warning("[indemnitor_discovery] purge read failed error_type=%s", type(exc).__name__)
-        return {"purged_candidates": 0, "docs": 0}
+    seen: List[Any] = []
+    for _page in range(max(1, max_pages)):
+        query = _expired_unreviewed_query(cutoff)
+        if seen:
+            query = {"$and": [query, {"_id": {"$nin": list(seen)}}]}
+        try:
+            cursor = contacts.find(query)
+            if hasattr(cursor, "limit"):
+                cursor = cursor.limit(limit)
+            if hasattr(cursor, "to_list"):
+                rows = cursor.to_list(length=limit)
+                if asyncio.iscoroutine(rows):
+                    rows = await rows
+                stored = list(rows or [])
+            else:
+                stored = []
+        except Exception as exc:
+            log.warning("[indemnitor_discovery] purge read failed error_type=%s", type(exc).__name__)
+            break
+        seen.extend(doc.get("_id") for doc in stored if isinstance(doc, dict))
+        page_purged, page_docs = await _purge_docs(db, contacts, stored, cutoff, now)
+        purged += page_purged
+        docs += page_docs
+        if len(stored) < limit:
+            break
+    if purged:
+        log.info("[indemnitor_discovery] purged_candidates=%s docs=%s", purged, docs)
+    return {"purged_candidates": purged, "docs": docs}
+
+
+async def _purge_docs(
+    db: Any, contacts: Any, stored: Sequence[Any], cutoff: datetime, now: datetime
+) -> tuple:
+    purged = 0
+    docs = 0
     for doc in stored:
         if not isinstance(doc, dict):
             continue
@@ -1489,6 +1581,4 @@ async def purge_unreviewed_candidates(db: Any, *, now: Optional[datetime] = None
             continue
         purged += dropped
         docs += 1
-    if purged:
-        log.info("[indemnitor_discovery] purged_candidates=%s docs=%s", purged, docs)
-    return {"purged_candidates": purged, "docs": docs}
+    return purged, docs
