@@ -2817,12 +2817,197 @@ async def _reconcile(link: dict) -> bool:
     # A refund row that is stored while the link still shows paid, with no
     # pending record (the marker write failed too): reopen from the rows.
     paid_txn = str(link.get("paid_transaction_id") or "").strip()
+    # The mirror case for a charge: every locked paid attempt and the
+    # pending-marker write failed, so only the saved charge row remains.
+    if not paid_txn and not changed and await _replay_unmarked_charge(link, booking, keys):
+        changed = True
     if paid_txn and not link.get("payment_reversed") and _pending_key("reversed", paid_txn) not in keys:
         rows = await _stored_rows(paid_txn)
         if rows and _rows_include_reversal(rows):
             await note_cosigner_reversed(booking, paid_txn, _heal=False)
             changed = True
     return changed
+
+
+_RECOVERED_STEP = "payment_transition_recovered"
+
+
+def _row_booking(row: dict) -> str:
+    return str(row.get("booking_number") or row.get("Booking_Number") or "").strip()
+
+
+def _row_reference(row: dict) -> str:
+    for blob in (row.get("custom_fields"), row.get("raw_payload"), row):
+        if not isinstance(blob, dict):
+            continue
+        ref = str(blob.get("reference_id") or "").strip()
+        if not ref and isinstance(blob.get("custom_fields"), dict):
+            ref = str(blob["custom_fields"].get("reference_id") or "").strip()
+        if ref:
+            return ref
+    return ""
+
+
+def _row_was_a_down_payment_event(row: dict, booking: str) -> bool:
+    """The saved row passes the same event rule the paid note had.
+
+    The webhook notes a charge only when its reference is the booking (not
+    an ``-I`` installment). The Gmail poller notes one with no reference or
+    the booking, never an installment or a plan payment. Other sources never
+    note the pay step, so they are not replayed.
+    """
+    source = str(row.get("source") or "").strip()
+    reference = _row_reference(row)
+    if "-I" in reference:
+        return False
+    if source == "swipesimple_webhook":
+        return reference == booking
+    if source == "swipesimple_gmail_poll":
+        if row.get("plan_id") or row.get("installment_n") is not None:
+            return False
+        return reference in ("", booking)
+    return False
+
+
+async def _unmarked_charge_candidates(link: dict, booking: str, keys: list) -> list:
+    """``(txn, charge_row)`` saved for this booking that could be the down payment.
+
+    Tenant-scoped, ``booking_number`` or ``Booking_Number``. A transaction is
+    a candidate only when its rows (re-read by transaction id, tenant-scoped)
+    hold exactly one settled charge, not ``needs_review``, on this booking,
+    with no refund or failure row, no pending paid key or paid hold on the
+    link, not already the paid charge of another link, saved after this link
+    was issued, from an event the paid note would have taken (webhook
+    reference equal to the booking, or a non-plan Gmail receipt), and an
+    amount equal to this link's confirmed down payment. Anything unreadable
+    gives no candidates.
+    """
+    from dashboard.extensions import get_db
+    from dashboard.services.payment_log_claims import (
+        SETTLED_CHARGE_STATUSES,
+        _docs,
+        has_reversal_sibling,
+        row_kind,
+    )
+
+    query = _scope({"$or": [{"booking_number": booking}, {"Booking_Number": booking}]})
+    if query is None:
+        return []
+    try:
+        db = get_db()
+        if db is None:
+            return []
+        rows = await _docs(db["payments"], query, None)
+    except Exception:
+        logger.info("[cosigner] unmarked charge lookup failed")
+        return []
+    txns = []
+    for row in rows:
+        txn = str(row.get("transaction_id") or "").strip()
+        if txn and txn not in txns and row_kind(row) == "charge":
+            txns.append(txn)
+    if not txns:
+        return []
+    packet = await _find_packet(str(link.get("packet_id") or ""))
+    if not packet or _packet_closed(packet):
+        return []
+    try:
+        bond = await _find_bond(packet)
+    except CosignerLinkError:
+        return []
+    due = _due_cents(packet, bond)
+    issued = _as_utc(link.get("created_at"))
+    if due is None or issued is None:
+        return []
+    held = set(str(t) for t in (link.get("paid_blocked_transaction_ids") or []))
+    found = []
+    for txn in txns:
+        if _pending_key("paid", txn) in keys or txn in held:
+            continue
+        # A charge another link already carries was that link's down payment.
+        used = _scope({"paid_transaction_id": txn})
+        if used is None or await get_collection(LINKS).find_one(used):
+            continue
+        try:
+            txn_rows = await _payment_rows(db, txn, None)
+        except Exception:
+            txn_rows = None
+        if not txn_rows or has_reversal_sibling(txn_rows):
+            continue
+        charges = [row for row in txn_rows if row_kind(row) == "charge"]
+        if len(charges) != 1:
+            continue
+        charge = charges[0]
+        if _row_booking(charge) != booking or charge.get("needs_review"):
+            continue
+        # The paid note only reaches links that exist when the charge lands.
+        landed = _as_utc(charge.get("created_at"))
+        if landed is None or landed < issued:
+            continue
+        if not _row_was_a_down_payment_event(charge, booking):
+            continue
+        if str(charge.get("status") or "").strip().lower() not in SETTLED_CHARGE_STATUSES:
+            continue
+        if _dollars_to_cents(charge.get("amount")) != due:
+            continue
+        found.append((txn, charge))
+    return found
+
+
+async def _replay_unmarked_charge(link: dict, booking: str, keys: list) -> bool:
+    """Stamp paid from a saved charge that left no pending marker. Fail-closed.
+
+    Exactly one candidate charge is replayed through ``note_cosigner_paid``
+    (same lock, re-read rows, case and packet scope, amount, ``_cas_mark_paid``),
+    so a replay after the stamp is a no-op. More than one candidate is
+    ambiguous and nothing is stamped. When this link ends up paid by that
+    charge, a ``payment_transition_recovered`` audit is owed on the link and
+    written insert-only with ``_id`` = ``audit_key`` (one per link and charge).
+    """
+    token = str(link.get("token") or "").strip()
+    if not token or not booking:
+        return False
+    candidates = await _unmarked_charge_candidates(link, booking, keys)
+    if len(candidates) != 1:
+        if len(candidates) > 1:
+            logger.info("[cosigner] unmarked charge replay refused ambiguous")
+        return False
+    txn, charge = candidates[0]
+    await note_cosigner_paid(
+        booking, txn, charge.get("amount"), status=charge.get("status"), _heal=False,
+    )
+    coll = get_collection(LINKS)
+    fresh = await coll.find_one({"token": token})
+    if not isinstance(fresh, dict) or str(fresh.get("paid_transaction_id") or "") != txn:
+        return False
+    entry = {
+        "key": _pending_key("paid", txn),
+        "kind": "paid",
+        "transaction_id": txn,
+        "booking_number": booking,
+        "at": "",  # fixed, so the audit_key is one per link and charge
+    }
+    view = _pending_view(fresh)
+    owed = _owed_audit(_RECOVERED_STEP, token, entry, _now(), before=view, after=view)
+    already = any(
+        isinstance(item, dict) and item.get("audit_key") == owed["audit_key"]
+        for item in (fresh.get("pending_payment_audits_owed") or [])
+    )
+    try:
+        if not already and not await get_collection("audit_events").find_one(
+            {"audit_key": owed["audit_key"]},
+        ):
+            await coll.update_one(
+                {"token": token},
+                {"$set": {"payment_audit_owed": True},
+                 "$push": {"pending_payment_audits_owed": owed}},
+            )
+    except Exception:
+        logger.error("[cosigner] recovered paid audit not owed packet_id=%s", link.get("packet_id"))
+        return True
+    await _flush_owed_audits(token)
+    logger.warning("[cosigner] paid recovered without marker packet_id=%s", link.get("packet_id"))
+    return True
 
 
 async def reconcile_cosigner_payment_state(link: Optional[dict]) -> bool:

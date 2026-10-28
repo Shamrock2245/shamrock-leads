@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-28 (co-signer paid recovered without a pending marker)
+
+### Fixed
+- A co-signer down payment is no longer lost when every locked paid attempt fails **and** the out-of-transaction pending-marker write also raises (Codex review on #283, r4401127178). `_reconcile` (page read and booking heal) now has a no-marker charge fallback, matching the existing no-marker reversal fallback: for a link that is not paid, it reads the saved, tenant-scoped `payments` rows for the link's booking (`booking_number` or `Booking_Number`) and replays exactly one candidate charge through `note_cosigner_paid` (same lock, re-read rows, case/packet scope, exact down-payment amount, `_cas_mark_paid`).
+- A candidate is one settled charge on this booking with no refund or failure row, not `needs_review`, no pending paid key or paid hold on the link, not already another link's paid charge, saved after the link was issued, from an event the paid note would have taken (webhook reference equal to the booking, or a non-plan Gmail receipt), and an amount equal to the link's confirmed down payment. Anything else fails closed: amount mismatch, refund/failure, review hold, unsettled status, installment or missing reference, plan receipt, another source, a charge older than the link, another booking, another tenant, no tenant with the flag on, or more than one candidate charge.
+- A recovered stamp writes the normal `paid` audit once (the CAS) plus one `payment_transition_recovered` audit, owed on the link and inserted with `_id` = `audit_key` (one per link and charge), so a replay or a racing reconcile does not write it twice. No index or schema change; no audit history is removed.
+
+### Tests
+- Outage: three failed locked attempts plus a failed marker write leave the link unpaid with no marker; the next reconcile stamps it paid with one `paid` and one recovered audit, and a second reconcile/page read is a no-op. Also: two racing reconciles from a stale link, a legacy `Booking_Number` payment row, a recovered Gmail-receipt charge, fail-closed cases (low/high amount, refund, failure, review hold, unsettled, other booking, two charges, installment, no reference, plan receipt, other source, charge before the link, charge already on another link), and tenant isolation (own tenant pays, other tenant's row does not, no tenant does nothing).
+
 ## [Unreleased] — 2026-10-28 (payment recorder finds `Booking_Number` bonds)
 
 ### Fixed

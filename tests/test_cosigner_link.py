@@ -5327,3 +5327,198 @@ def test_owed_audits_keep_each_transitions_own_snapshot(monkeypatch):
     ]
     assert resolved["pending_after"]["pending_payment_keys"] == ["reversed:TX-COS-B"]
     assert resolved["pending_after"]["payment_transition_pending"] is True
+
+
+# --- Codex r4401127178: no-marker charge fallback in _reconcile ---------------
+
+
+def _fail_pending_marker_write(monkeypatch, stores):
+    """The out-of-transaction pending-marker push raises (the link store is down)."""
+    links = stores["cosigner_links"]
+    original = links.update_one
+    calls = {"n": 0}
+
+    async def _update_one(query, update, *args, **kwargs):
+        if "pending_payment_keys" in (update.get("$set") or {}):
+            calls["n"] += 1
+            raise ConnectionError("mock pending marker write failure")
+        return await original(query, update, *args, **kwargs)
+
+    monkeypatch.setattr(links, "update_one", _update_one)
+    return calls, lambda: monkeypatch.setattr(links, "update_one", original)
+
+
+def _saved_charge(db, txn, amount="500.00", **extra):
+    from datetime import datetime, timezone
+
+    row = {
+        "transaction_id": txn, "booking_number": BOOKING, "event_kind": "charge",
+        "status": "approved", "amount": amount, "source": "swipesimple_webhook",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "custom_fields": {"booking_number": BOOKING, "reference_id": BOOKING},
+        **extra,
+    }
+    db["payments"].docs.append(row)
+    return row
+
+
+def _reconcile_now(stores):
+    import dashboard.services.cosigner_link_service as svc
+
+    link = stores["cosigner_links"].docs[0]
+    return asyncio.run(svc.reconcile_cosigner_payment_state(dict(link)))
+
+
+def test_paid_lost_with_marker_write_is_recovered_once_from_the_saved_charge(monkeypatch):
+    stores, client, token, db = _recorder_world(monkeypatch)
+    lock_calls, restore_lock = _fail_lock_work(
+        monkeypatch, "_charge_row_blocks_down_payment", None,
+    )
+    marker_calls, restore_marker = _fail_pending_marker_write(monkeypatch, stores)
+
+    lost = _webhook(client, txn="TX-COS-LOST", amount="500.00")
+    assert lost.status_code == 200, lost.text
+    assert lock_calls["n"] == 3
+    assert marker_calls["n"] >= 1
+    link = stores["cosigner_links"].docs[0]
+    assert not link.get("paid_transaction_id")
+    assert not link.get("pending_payment_keys")
+    assert _audits(stores, "payment_transition_pending") == []
+    assert len(_down_rows(db, "TX-COS-LOST")) == 1
+
+    restore_lock()
+    restore_marker()
+    assert _reconcile_now(stores) is True
+    link = stores["cosigner_links"].docs[0]
+    assert link["paid_transaction_id"] == "TX-COS-LOST"
+    assert len([r for r in link["timeline"] if r.get("step") == "paid"]) == 1
+    assert len(_audits(stores, "paid")) == 1
+    (recovered,) = _audits(stores, "payment_transition_recovered")
+    assert recovered["_id"] == recovered["audit_key"]
+    assert recovered["transaction_id"] == "TX-COS-LOST"
+    assert not link.get("pending_payment_audits_owed")
+    assert link.get("payment_audit_owed") is False
+
+    # A second reconcile (and a page read) is a no-op.
+    audits_before = len(stores["audit_events"].docs)
+    assert _reconcile_now(stores) is False
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+    assert len(_audits(stores, "paid")) == 1
+    assert len(_audits(stores, "payment_transition_recovered")) == 1
+    assert len(stores["audit_events"].docs) == audits_before
+    assert len(_down_rows(db, "TX-COS-LOST")) == 1
+
+
+def test_unmarked_charge_replay_twice_writes_one_recovered_audit(monkeypatch):
+    """Two reconciles racing the same unmarked charge: one stamp, one audit."""
+    import dashboard.services.cosigner_link_service as svc
+
+    stores, client, token, db = _recorder_world(monkeypatch)
+    _saved_charge(db, "TX-COS-SAVED")
+    stale = dict(stores["cosigner_links"].docs[0])
+    assert asyncio.run(svc.reconcile_cosigner_payment_state(dict(stale))) is True
+    # The second one read the link before the first stamped it.
+    asyncio.run(svc.reconcile_cosigner_payment_state(dict(stale)))
+    assert stores["cosigner_links"].docs[0]["paid_transaction_id"] == "TX-COS-SAVED"
+    assert len(_audits(stores, "paid")) == 1
+    assert len(_audits(stores, "payment_transition_recovered")) == 1
+
+
+@pytest.mark.parametrize("case", [
+    "amount_low", "amount_high", "refunded", "failed", "needs_review",
+    "unsettled", "other_booking", "two_charges", "installment", "no_reference",
+    "plan_receipt", "other_source", "before_link", "other_link_paid",
+])
+def test_unmarked_charge_replay_fails_closed(monkeypatch, case):
+    stores, client, token, db = _recorder_world(monkeypatch)
+    if case == "amount_low":
+        _saved_charge(db, "TX-COS-X", amount="499.99")
+    elif case == "amount_high":
+        _saved_charge(db, "TX-COS-X", amount="500.01")
+    elif case in ("refunded", "failed"):
+        _saved_charge(db, "TX-COS-X")
+        db["payments"].docs.append({
+            "transaction_id": "TX-COS-X", "event_kind": "refund" if case == "refunded" else "failure",
+            "status": "refunded" if case == "refunded" else "failed", "amount": "500.00",
+        })
+    elif case == "needs_review":
+        _saved_charge(db, "TX-COS-X", needs_review=True, needs_review_reason="booking_not_unique")
+    elif case == "unsettled":
+        _saved_charge(db, "TX-COS-X", status="pending")
+    elif case == "other_booking":
+        _saved_charge(db, "TX-COS-X", booking_number="BK-SOMEONE-ELSE")
+    elif case == "two_charges":
+        _saved_charge(db, "TX-COS-X")
+        _saved_charge(db, "TX-COS-Y")
+    elif case == "installment":
+        _saved_charge(db, "TX-COS-X", custom_fields={
+            "booking_number": BOOKING, "reference_id": f"{BOOKING}-I1"})
+    elif case == "no_reference":
+        _saved_charge(db, "TX-COS-X", custom_fields={"booking_number": BOOKING})
+    elif case == "plan_receipt":
+        _saved_charge(db, "TX-COS-X", source="swipesimple_gmail_poll", custom_fields=None,
+                      plan_id="PLAN-TEST-COS-1")
+    elif case == "other_source":
+        _saved_charge(db, "TX-COS-X", source="manual_entry")
+    elif case == "before_link":
+        _saved_charge(db, "TX-COS-X", created_at="2020-01-01T00:00:00+00:00")
+    elif case == "other_link_paid":
+        import copy
+
+        _saved_charge(db, "TX-COS-X")
+        other = copy.deepcopy(stores["cosigner_links"].docs[0])
+        other.update(token="tok-other-link", paid_transaction_id="TX-COS-X")
+        stores["cosigner_links"].docs.append(other)
+
+    assert _reconcile_now(stores) is False
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+    link = stores["cosigner_links"].docs[0]
+    assert not link.get("paid_transaction_id")
+    assert _audits(stores, "paid") == []
+    assert _audits(stores, "payment_transition_recovered") == []
+
+
+def test_unmarked_charge_replay_finds_a_legacy_booking_field_row(monkeypatch):
+    stores, client, token, db = _recorder_world(monkeypatch)
+    row = _saved_charge(db, "TX-COS-LEGACY-ROW")
+    row.pop("booking_number")
+    row["Booking_Number"] = BOOKING
+    assert _reconcile_now(stores) is True
+    assert stores["cosigner_links"].docs[0]["paid_transaction_id"] == "TX-COS-LEGACY-ROW"
+
+
+@pytest.mark.parametrize("row_tenant", ["tenant-a", "tenant-b"])
+def test_unmarked_charge_replay_is_tenant_scoped(monkeypatch, row_tenant):
+    stores, client, token, db = _recorder_world(monkeypatch)
+    for coll in list(stores.values()) + [db["bond_cases"], db["payment_plans"]]:
+        for doc in getattr(coll, "docs", []):
+            if isinstance(doc, dict):
+                doc["tenant_id"] = "tenant-a"
+    _saved_charge(db, "TX-COS-TENANT", tenant_id=row_tenant)
+    _tenant_on(monkeypatch, "tenant-a")
+
+    _reconcile_now(stores)
+    link = stores["cosigner_links"].docs[0]
+    if row_tenant == "tenant-a":
+        assert link["paid_transaction_id"] == "TX-COS-TENANT"
+        assert len(_audits(stores, "paid")) == 1
+    else:
+        assert not link.get("paid_transaction_id")
+        assert _audits(stores, "paid") == []
+        assert _audits(stores, "payment_transition_recovered") == []
+
+
+def test_unmarked_charge_replay_needs_a_tenant_when_the_flag_is_on(monkeypatch):
+    stores, client, token, db = _recorder_world(monkeypatch)
+    _saved_charge(db, "TX-COS-NOTENANT")
+    _tenant_on(monkeypatch, None)
+    assert _reconcile_now(stores) is False
+    assert not stores["cosigner_links"].docs[0].get("paid_transaction_id")
+
+
+def test_unmarked_gmail_receipt_charge_is_recovered(monkeypatch):
+    stores, client, token, db = _recorder_world(monkeypatch)
+    _saved_charge(db, "TX-COS-GMAIL", source="swipesimple_gmail_poll", custom_fields=None)
+    assert _reconcile_now(stores) is True
+    assert stores["cosigner_links"].docs[0]["paid_transaction_id"] == "TX-COS-GMAIL"
+    assert len(_audits(stores, "paid")) == 1
