@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-28 (payment recorder finds `Booking_Number` bonds)
+
+### Fixed
+- `payment_log_claims._matching_bonds` now matches a bond by `booking_number` **or** the legacy `Booking_Number` (one `$or` query per bond collection, deduped by `_id` so a bond carrying both fields counts once). A production bond stored only with `Booking_Number` is no longer `booking_not_unique` / `needs_review`, so the SwipeSimple webhook and the Gmail receipt poller reach `note_cosigner_paid` and the co-signer link is marked paid (Codex review on #283, r4400899959).
+- The bond stamp (`_stamp_bonds`) and review flag (`_flag_bond`) updates use the same `booking_number`/`Booking_Number` filter, so a legacy-only bond is actually stamped or flagged.
+- Still fail-closed: two distinct bonds under either spelling are not one case and the charge goes to `needs_review`. Tenant scope is unchanged (the tenant-scoped DB wrapper adds `tenant_id` to the `$or` query). No schema, index or payments-collection change.
+
+### Tests
+- The #291 alias tests now make the payment DB's bond legacy-only too (the setup used to copy the lowercase bond) and run through both the webhook and the poller to a paid link; the two-case test covers the second bond under either spelling; new tests for counting a bond with both fields once and for tenant scoping of the alias lookup and stamp.
+
 ## [Unreleased] — 2026-10-28 (co-signer pending audits: atomic flag, one audit per key, own snapshots)
 
 ### Fixed

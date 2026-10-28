@@ -444,14 +444,29 @@ async def _read_rows(
 
 
 async def _matching_bonds(db, booking: str, session) -> list:
-    """``(collection, doc)`` for an explicit booking. Empty when the booking is blank."""
+    """``(collection, doc)`` for an explicit booking. Empty when the booking is blank.
+
+    Matches ``booking_number`` or the legacy ``Booking_Number``. A document
+    carrying both is counted once (by ``_id``). Tenant scope comes from ``db``.
+    """
     if not booking:
         return []
     found = []
     for name in _BOND_COLLECTIONS:
-        for doc in await _docs(db[name], {"booking_number": booking}, session):
+        seen = set()
+        for doc in await _docs(db[name], _booking_filter(booking), session):
+            doc_id = doc.get("_id")
+            if doc_id is not None:
+                if doc_id in seen:
+                    continue
+                seen.add(doc_id)
             found.append((name, doc))
     return found
+
+
+def _booking_filter(booking: str) -> dict:
+    """``booking_number`` or the legacy ``Booking_Number`` spelling."""
+    return {"$or": [{"booking_number": booking}, {"Booking_Number": booking}]}
 
 
 def _sibling_bookings(rows: list) -> list:
@@ -544,7 +559,7 @@ async def _flag_bond(db, booking: str, flag: dict, session) -> list:
     reviews = []
     for name, current in groups[0]:
         await db[name].update_one(
-            {"booking_number": booking, **({"_id": current["_id"]} if current.get("_id") is not None else {})},
+            {**_booking_filter(booking), **({"_id": current["_id"]} if current.get("_id") is not None else {})},
             {"$set": flag},
             **_sess(session),
         )
@@ -583,7 +598,7 @@ async def _stamp_bonds(db, booking: str, group: list, payment_update: dict, sess
     """Stamp every document in one logical case. Returns one audit per document."""
     audits = []
     for coll_name, current in group:
-        filt = {"booking_number": booking}
+        filt = _booking_filter(booking)
         if current.get("_id") is not None:
             filt["_id"] = current["_id"]
         await db[coll_name].update_one(filt, {"$set": payment_update}, **_sess(session))

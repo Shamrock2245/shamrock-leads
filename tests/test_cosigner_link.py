@@ -4868,39 +4868,128 @@ def _legacy_booking_field(doc):
     doc["Booking_Number"] = BOOKING
 
 
-def test_paid_finds_a_bond_stored_with_booking_number_alias(monkeypatch):
-    """#291: a bond with only Booking_Number still advances to paid."""
-    stores, client, token, db = _recorder_world(monkeypatch)
+def _legacy_only_bond(stores, db):
+    """Both the co-signer store and the payment DB hold only ``Booking_Number``."""
     _legacy_booking_field(stores["bond_cases"].docs[0])
+    (payment_bond,) = db["bond_cases"].docs
+    _legacy_booking_field(payment_bond)
+    assert "booking_number" not in payment_bond
+    return payment_bond
+
+
+def _charge_row(db, txn):
+    (row,) = [
+        r for r in db["payments"].docs
+        if r.get("transaction_id") == txn and r.get("event_kind") == "charge"
+    ]
+    return row
+
+
+@pytest.mark.parametrize("source", ["webhook", "poller"])
+def test_paid_finds_a_bond_stored_with_booking_number_alias(monkeypatch, source):
+    """#291 / Codex r4400899959: a legacy-only bond is one bond to the recorder too."""
+    stores, client, token, db = _recorder_world(monkeypatch)
+    payment_bond = _legacy_only_bond(stores, db)
     before = client.get(f"/api/cosigner/{token}")
     assert before.status_code == 200, before.text
     assert before.json()["step"] == "pay"
 
-    paid = _webhook(client, txn="TX-COS-LEGACY", amount="500.00")
-    assert paid.status_code == 200, paid.text
+    if source == "webhook":
+        paid = _webhook(client, txn="TX-COS-LEGACY", amount="500.00")
+        assert paid.status_code == 200, paid.text
+        assert not paid.json().get("needs_review")
+    else:
+        polled = _poll_down_payment(db, txn="TX-COS-LEGACY", amount="500.00")
+        assert polled["success"] is True and polled["committed"] is True
+        assert polled["needs_review"] is False
+    row = _charge_row(db, "TX-COS-LEGACY")
+    assert not row.get("needs_review")
+    assert payment_bond["last_transaction_id"] == "TX-COS-LEGACY"
+    assert not payment_bond.get("needs_review")
     link = stores["cosigner_links"].docs[0]
     assert link["paid_transaction_id"] == "TX-COS-LEGACY"
     assert len(_audits(stores, "paid")) == 1
     assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
 
 
-def test_paid_fails_closed_when_the_alias_booking_is_two_cases(monkeypatch):
-    """#291: Booking_Number on a second case makes the booking ambiguous."""
+@pytest.mark.parametrize("second_field", ["booking_number", "Booking_Number"])
+def test_paid_fails_closed_when_the_alias_booking_is_two_cases(monkeypatch, second_field):
+    """#291 / Codex r4400899959: two bonds across the spellings are not one case."""
     import copy
 
     stores, client, token, db = _recorder_world(monkeypatch)
-    other = copy.deepcopy(stores["bond_cases"].docs[0])
-    other.pop("_id", None)
+    payment_bond = _legacy_only_bond(stores, db)
+    payment_bond["_id"] = "bond-legacy-1"
+    other = copy.deepcopy(payment_bond)
+    other["_id"] = "bond-other-2"
     other["bond_case_id"] = "BC-TEST-COS-OTHER"
-    _legacy_booking_field(other)
-    stores["bond_cases"].docs.append(other)
+    other.pop("Booking_Number", None)
+    other[second_field] = BOOKING
+    db["bond_cases"].docs.append(other)
+    cos_other = copy.deepcopy(other)
+    cos_other.pop("_id", None)
+    stores["bond_cases"].docs.append(cos_other)
 
     paid = _webhook(client, txn="TX-COS-TWO", amount="500.00")
     assert paid.status_code == 200, paid.text
+    row = _charge_row(db, "TX-COS-TWO")
+    assert row["needs_review"] is True
+    assert row["needs_review_reason"] == "booking_not_unique"
+    assert not any(b.get("last_transaction_id") for b in db["bond_cases"].docs)
     link = stores["cosigner_links"].docs[0]
     assert not link.get("paid_transaction_id")
     assert _audits(stores, "paid") == []
     assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+
+
+def test_recorder_bond_lookup_counts_a_bond_with_both_spellings_once():
+    import dashboard.services.payment_log_claims as payment_log
+    from tests.test_payment_plan_pay_dedupe import DB
+
+    db = DB()
+    db["bond_cases"].docs.append({
+        "_id": "bond-both", "booking_number": BOOKING, "Booking_Number": BOOKING,
+        "bond_case_id": CASE,
+    })
+    bonds = asyncio.run(payment_log._matching_bonds(db, BOOKING, None))
+    assert [doc["_id"] for _name, doc in bonds] == ["bond-both"]
+    assert payment_log._charge_block_reason(BOOKING, bonds, []) == ""
+
+
+def test_recorder_bond_lookup_is_tenant_scoped(monkeypatch):
+    """The alias lookup goes through the tenant-scoped DB: another tenant's bond is not seen."""
+    import dashboard.services.payment_log_claims as payment_log
+    import dashboard.tenancy.scope as scope
+    from dashboard.tenancy.context import bind_job_tenant
+    from dashboard.tenancy.scope import TenantScopedDatabase
+    from tests.test_payment_plan_pay_dedupe import DB
+
+    import dashboard.tenancy.context as tenant_context
+
+    monkeypatch.setattr(scope, "multi_tenant_enabled", lambda: True)
+    monkeypatch.setattr(tenant_context, "multi_tenant_enabled", lambda: True)
+    raw = DB()
+    raw["bond_cases"].docs.extend([
+        {"_id": "bond-a", "tenant_id": "tenant_a", "Booking_Number": BOOKING,
+         "bond_case_id": "BC-A"},
+        {"_id": "bond-b", "tenant_id": "tenant_b", "booking_number": BOOKING,
+         "bond_case_id": "BC-B"},
+    ])
+    db = TenantScopedDatabase(raw)
+    with bind_job_tenant("tenant_a", "test"):
+        bonds = asyncio.run(payment_log._matching_bonds(db, BOOKING, None))
+        assert [doc["_id"] for _name, doc in bonds] == ["bond-a"]
+        assert payment_log._charge_block_reason(BOOKING, bonds, []) == ""
+        asyncio.run(payment_log._stamp_bonds(
+            db, BOOKING, payment_log._logical_bond_groups(bonds)[0],
+            {"last_transaction_id": "TX-TENANT"}, None,
+        ))
+    with bind_job_tenant("tenant_b", "test"):
+        bonds = asyncio.run(payment_log._matching_bonds(db, BOOKING, None))
+        assert [doc["_id"] for _name, doc in bonds] == ["bond-b"]
+    a, b = raw["bond_cases"].docs
+    assert a["last_transaction_id"] == "TX-TENANT"
+    assert "last_transaction_id" not in b
 
 
 def test_heal_keeps_pending_when_the_locked_row_read_fails(monkeypatch):
