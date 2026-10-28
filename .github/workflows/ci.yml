@@ -270,4 +270,5 @@ jobs:
             tests/test_collier_glades_bad_bond_count.py \
             tests/test_workflow_endpoints.py \
             tests/test_kiosk_privacy_and_confirm.py \
+            tests/test_indemnitor_id_scan.py \
             --tb=short

@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-28 (Indemnitor ID scan is kept)
+
+### Fixed
+- **Saving an indemnitor no longer replaces a stored ID scan with an empty one.** `POST /api/indemnitors/create` keeps the existing `id_scan` when the body omits it or sends an empty object. A new scan becomes the current scan, and the previous scan is appended to `id_scan_history`. A portrait-only history row is kept. Replacing a scan or portrait writes an `audit_events` row with the time, actor, agent, record id, old and new presence, confidence, and reason. The audit row does not store the scan or the portrait. The same rule applies when the phone matches an unlinked indemnitor. No DocuSeal send and no payment.
+
+### Tests
+- `tests/test_indemnitor_id_scan.py` (on the CI list): `test_bond_update_keeps_id_scan_when_the_body_omits_it`, `test_bond_update_archives_the_prior_id_scan`, `test_unlinked_update_keeps_id_scan_when_the_body_omits_it`, `test_portrait_only_history_survives_a_later_save`.
+
 ## [Unreleased] — 2026-10-23 (Palmetto template 7: co-indemnitor and Schedule A)
 
 ### Added
