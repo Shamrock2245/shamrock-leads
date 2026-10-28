@@ -45,7 +45,8 @@ def _packet(**kw):
     # packet_builder_service writes an estimated premium_amount (10% of bond)
     d = {"_id": "oid-cs-1", "packet_id": PACKET_ID, "booking_number": BOOKING,
          "premium_amount": 500.0, "numeric_premium_dollar": "$500.00",
-         "indemnitor_phone": PHONE, "defendant_name": DEFENDANT}
+         "indemnitor_phone": PHONE, "defendant_name": DEFENDANT,
+         "status": "signed", "docuseal_status": "completed"}
     d.update(kw)
     return d
 
