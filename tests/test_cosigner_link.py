@@ -1708,6 +1708,210 @@ def test_case_id_wins_and_ambiguous_booking_fails_closed(monkeypatch):
     assert "id_ocr" not in fresh["bond_cases"].docs[0]
 
 
+def _legacy_booking_only(bond):
+    """Store the bond's booking only under the legacy ``Booking_Number``."""
+    bond.pop("booking_number", None)
+    bond["Booking_Number"] = BOOKING
+    return bond
+
+
+def test_legacy_booking_bond_without_packet_case_id_gets_a_link(monkeypatch):
+    """A packet with no case id finds a bond stored only as ``Booking_Number``."""
+    stores, client = _world(monkeypatch)
+    bond = _legacy_booking_only(stores["bond_cases"].docs[0])
+    stores["paperwork_packets"].docs[0]["bond_case_id"] = ""
+    token = _token(client)
+    link = stores["cosigner_links"].docs[0]
+    assert link["token"] == token
+    assert link["booking_number"] == BOOKING
+    assert link["bond_case_id"] == CASE
+    assert "booking_number" not in bond
+    state = client.get(f"/api/cosigner/{token}")
+    assert state.status_code == 200, state.text
+    assert state.json()["step"] == "scan"
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    uploaded = _post_scan(client, token)
+    assert uploaded.status_code == 200, uploaded.text
+    assert calls["n"] == 1
+    assert bond["id_ocr"]["extracted"]["full_name"] == NAME
+    assert "booking_number" not in bond
+    assert bond["Booking_Number"] == BOOKING
+
+
+def test_legacy_booking_bond_without_any_case_id_scans_onto_that_bond(monkeypatch):
+    """The scan write filters on the legacy booking and ``_id``, not a missing field."""
+    stores, client = _world(monkeypatch)
+    bond = _legacy_booking_only(stores["bond_cases"].docs[0])
+    bond.pop("bond_case_id", None)
+    bond["_id"] = "BOND-LEGACY"
+    decoy = {
+        "_id": "BOND-DECOY",
+        "Booking_Number": "TEST-COS-DECOY",
+        "status": "active",
+        "indemnitor_name": "Pat Other",
+    }
+    stores["bond_cases"].docs.insert(0, decoy)
+    stores["paperwork_packets"].docs[0]["bond_case_id"] = ""
+    token = _token(client)
+    link = stores["cosigner_links"].docs[0]
+    assert link["booking_number"] == BOOKING
+    assert link["bond_case_id"] == ""
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    uploaded = _post_scan(client, token)
+    assert uploaded.status_code == 200, uploaded.text
+    assert bond["id_ocr"]["extracted"]["full_name"] == NAME
+    assert "id_ocr" not in decoy
+    assert "id_scan_records" not in decoy
+    assert "booking_number" not in bond
+
+
+def test_booking_shared_across_both_spellings_fails_closed(monkeypatch):
+    """A lowercase bond and a legacy bond on one booking are two cases."""
+    stores, client = _world(monkeypatch)
+    other = _legacy_booking_only({
+        "bond_case_id": "BC-TEST-OTHER",
+        "status": "active",
+        "indemnitor_name": NAME,
+        "surety_id": "osi",
+        "premium_paid": False,
+        **CONFIRMED,
+    })
+    stores["bond_cases"].docs.append(other)
+    stores["paperwork_packets"].docs[0]["bond_case_id"] = ""
+    created = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert created.status_code == 409, created.text
+    assert _error_text(created) == "bond_ambiguous"
+    assert not _links(stores)
+
+    stores, client = _world(monkeypatch)
+    _legacy_booking_only(stores["bond_cases"].docs[0])
+    stores["active_bonds"] = _Col([{
+        "bond_case_id": "BC-TEST-OTHER",
+        "booking_number": BOOKING,
+        "status": "active",
+        "indemnitor_name": NAME,
+    }])
+    stores["paperwork_packets"].docs[0]["bond_case_id"] = ""
+    created = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert created.status_code == 409, created.text
+    assert _error_text(created) == "bond_ambiguous"
+    assert not _links(stores)
+
+
+def test_bond_with_both_booking_spellings_counts_once(monkeypatch):
+    """One document under both fields is one bond, even if a find returns it twice."""
+    from dashboard.services import cosigner_link_service as svc
+
+    stores, client = _world(monkeypatch)
+    bond = stores["bond_cases"].docs[0]
+    bond["_id"] = "BOND-BOTH"
+    bond["Booking_Number"] = BOOKING
+    stores["paperwork_packets"].docs[0]["bond_case_id"] = ""
+    token = _token(client)
+    assert stores["cosigner_links"].docs[0]["token"] == token
+    assert stores["cosigner_links"].docs[0]["bond_case_id"] == CASE
+
+    class _Twice(_Col):
+        def find(self, query=None, projection=None):
+            rows = [doc for doc in self.docs if _match(doc, query or {})]
+            return _Cursor(rows + rows)
+
+    twice = {"bond_cases": _Twice([bond]), "active_bonds": _Col()}
+    monkeypatch.setattr(svc, "get_collection", lambda name: twice.get(name) or _Col())
+    found = asyncio.run(svc._bonds_for_booking(BOOKING))
+    assert [doc["_id"] for doc in found] == ["BOND-BOTH"]
+    assert asyncio.run(svc._one_case_id(BOOKING)) == CASE
+
+
+def test_stale_legacy_booking_does_not_match_a_reassigned_bond(monkeypatch):
+    """``booking_number`` is canonical. A stale ``Booking_Number`` is ignored."""
+    from dashboard.services import cosigner_link_service as svc
+
+    stores, client = _world(monkeypatch)
+    stale = {
+        "bond_case_id": "BC-TEST-STALE",
+        "booking_number": "TEST-COS-REASSIGNED",
+        "Booking_Number": BOOKING,
+        "status": "active",
+        "indemnitor_name": NAME,
+    }
+    stores["bond_cases"].docs.insert(0, stale)
+    stores["paperwork_packets"].docs[0]["bond_case_id"] = ""
+    token = _token(client)
+    link = stores["cosigner_links"].docs[0]
+    assert link["token"] == token
+    assert link["bond_case_id"] == CASE
+    assert asyncio.run(svc._one_case_id(BOOKING)) == CASE
+
+    stores, client = _world(monkeypatch)
+    bond = stores["bond_cases"].docs[0]
+    bond["Booking_Number"] = BOOKING
+    bond["booking_number"] = "TEST-COS-REASSIGNED"
+    stores["paperwork_packets"].docs[0]["bond_case_id"] = ""
+    created = client.post(
+        "/api/paperwork/cosigner-link",
+        json={"packet_id": PACKET},
+        cookies=_cookie(),
+    )
+    assert created.status_code == 409, created.text
+    assert _error_text(created) == "bond_required"
+    assert not _links(stores)
+    assert asyncio.run(svc._one_case_id(BOOKING)) == ""
+
+
+def test_lowercase_booking_bond_without_packet_case_id_is_unchanged(monkeypatch):
+    """The lowercase booking fallback still issues the link and resolves the case."""
+    from dashboard.services import cosigner_link_service as svc
+
+    stores, client = _world(monkeypatch)
+    bond = stores["bond_cases"].docs[0]
+    stores["paperwork_packets"].docs[0]["bond_case_id"] = ""
+    token = _token(client)
+    link = stores["cosigner_links"].docs[0]
+    assert link["token"] == token
+    assert link["booking_number"] == BOOKING
+    assert link["bond_case_id"] == CASE
+    assert "Booking_Number" not in bond
+    assert client.get(f"/api/cosigner/{token}").status_code == 200
+    assert asyncio.run(svc._one_case_id(BOOKING)) == CASE
+
+
+def test_legacy_booking_bond_link_is_stamped_paid(monkeypatch):
+    """The paid stamp resolves a legacy-booking bond's case and marks its link."""
+    from dashboard.services.cosigner_link_service import note_cosigner_paid
+
+    stores, client = _world(monkeypatch)
+    _legacy_booking_only(stores["bond_cases"].docs[0])
+    stores["paperwork_packets"].docs[0]["bond_case_id"] = ""
+    token = _token(client)
+    calls = {"n": 0}
+    _scanner(monkeypatch, calls)
+    assert _post_scan(client, token).status_code == 200
+    stores["paperwork_packets"].docs[0]["status"] = "completed"
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+    pay_db = _install_payment_lock(monkeypatch)
+    _remember_payment_row(
+        pay_db,
+        transaction_id="TX-LEGACY",
+        amount="500.00",
+        status="approved",
+    )
+    asyncio.run(note_cosigner_paid(BOOKING, "TX-LEGACY", "500.00"))
+    assert stores["cosigner_links"].docs[0]["paid_transaction_id"] == "TX-LEGACY"
+    assert len(_audits(stores, "paid")) == 1
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+
+
 def test_link_audits_record_old_and_new_state(monkeypatch):
     stores, client = _world(monkeypatch)
     token = _token(client)

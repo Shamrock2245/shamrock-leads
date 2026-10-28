@@ -522,6 +522,42 @@ async def _matching_bonds(query: dict) -> list:
     return found
 
 
+def _booking_query(booking: str) -> dict:
+    """Either booking spelling. ``_canonical_booking`` decides the match."""
+    return {"$or": [{"booking_number": booking}, {"Booking_Number": booking}]}
+
+
+def _canonical_booking(doc: dict) -> str:
+    """The bond's booking. ``booking_number`` wins over ``Booking_Number``.
+
+    The legacy ``Booking_Number`` counts only when ``booking_number`` is
+    blank, so a stale legacy value on a reassigned bond never matches.
+    """
+    return _bond_field(doc, "booking_number", "Booking_Number")
+
+
+def _booking_matches(booking: str, rows: list) -> list:
+    """Rows whose canonical booking is ``booking``. One row per ``_id``."""
+    found = []
+    seen = set()
+    for doc in rows:
+        if _canonical_booking(doc) != booking:
+            continue
+        doc_id = doc.get("_id")
+        if doc_id is not None:
+            key = (str(doc.get("_collection") or ""), repr(doc_id))
+            if key in seen:
+                continue
+            seen.add(key)
+        found.append(doc)
+    return found
+
+
+async def _bonds_for_booking(booking: str) -> list:
+    """Tenant-scoped bonds on this booking under either spelling."""
+    return _booking_matches(booking, await _matching_bonds(_booking_query(booking)))
+
+
 async def _case_rows(collection: str, case_id: str) -> list:
     scoped = _scope({"$or": [
         {"bond_case_id": case_id},
@@ -610,7 +646,7 @@ async def _find_bond(packet: dict) -> Optional[dict]:
         return mirrors[0] if mirrors else None
     if not booking:
         return None
-    matches = await _matching_bonds({"booking_number": booking})
+    matches = await _bonds_for_booking(booking)
     if not matches:
         return None
     # A case stored in both collections is one case when the case ids agree.
@@ -957,7 +993,7 @@ async def create_cosigner_link(*, actor: str, packet_id: str, lang: str = "en") 
     doc = {
         "token": token,
         "packet_id": packet_id,
-        "booking_number": str(bond.get("booking_number") or packet.get("booking_number") or ""),
+        "booking_number": _canonical_booking(bond) or str(packet.get("booking_number") or ""),
         "bond_case_id": str(bond.get("bond_case_id") or packet.get("bond_case_id") or ""),
         "indemnitor_name": _indemnitor_name(packet, bond) or name,
         "signer_name": name,
@@ -1086,12 +1122,14 @@ def _issued_case_drifted(link: dict, packet: dict, bond: dict) -> bool:
     """The packet or bond is no longer the case this link was issued for.
 
     A case id matches when it is stored as ``bond_case_id`` or
-    ``Bond_Case_ID``. A POA number is not part of this comparison.
+    ``Bond_Case_ID``, and the bond's booking when it is stored as
+    ``booking_number`` or ``Booking_Number``. A POA number is not part of
+    this comparison.
     """
     stored_case = _bond_field(link, "bond_case_id", "Bond_Case_ID")
     stored_booking = str(link.get("booking_number") or "").strip()
     bond_cases = _recorded_case_ids(bond)
-    bond_booking = str(bond.get("booking_number") or "").strip()
+    bond_booking = _bond_field(bond, "booking_number", "Booking_Number")
     packet_cases = _recorded_case_ids(packet)
     packet_booking = str(packet.get("booking_number") or "").strip()
     if stored_case and stored_case not in bond_cases:
@@ -1565,7 +1603,10 @@ def _bond_scan_filter(bond: dict) -> dict:
     """Update the selected case. Either case-id field is the key.
 
     Booking is only the filter when the bond has no case id. A shared
-    booking must not choose a different case.
+    booking must not choose a different case. The booking filter uses the
+    field the bond carries it under (``booking_number``, else the legacy
+    ``Booking_Number``) and the bond's ``_id``, so a bond without a
+    lowercase booking never filters on a missing field.
     """
     case_id = _bond_field(bond, "bond_case_id", "Bond_Case_ID")
     if case_id:
@@ -1573,7 +1614,11 @@ def _bond_scan_filter(bond: dict) -> dict:
             {"bond_case_id": case_id},
             {"Bond_Case_ID": case_id},
         ]}]}
-    return {"booking_number": bond.get("booking_number")}
+    field = "booking_number" if _bond_field(bond, "booking_number") else "Booking_Number"
+    filt = {field: bond.get(field)}
+    if bond.get("_id") is not None:
+        filt["_id"] = bond["_id"]
+    return filt
 
 
 def _passing_scan(name: str, state: str, role: str) -> dict:
@@ -1897,17 +1942,20 @@ def _due_cents(packet: Optional[dict], bond: Optional[dict]) -> Optional[int]:
 
 
 async def _one_case_id(booking: str) -> str:
-    """Bond case id when this booking is exactly one case. Otherwise empty."""
+    """Bond case id when this booking is exactly one case. Otherwise empty.
+
+    A bond stored with ``Booking_Number`` and no ``booking_number`` is found
+    too. A stale ``Booking_Number`` on a bond whose ``booking_number`` is
+    different is not. More than one case under either field is not one
+    case, so nothing is returned and the paid stamp fails closed.
+    """
     from dashboard.services.payment_log_claims import _case_id, _logical_bond_groups
 
-    found = []
-    for name in ("bond_cases", "active_bonds"):
-        query = _scope({"booking_number": booking})
-        if query is None:
-            return ""
-        cursor = get_collection(name).find(query)
-        async for doc in _iter(cursor):
-            found.append((name, doc))
+    try:
+        bonds = await _bonds_for_booking(booking)
+    except CosignerLinkError:
+        return ""
+    found = [(str(doc.get("_collection") or ""), doc) for doc in bonds]
     groups = _logical_bond_groups(found)
     if len(groups) != 1:
         return ""

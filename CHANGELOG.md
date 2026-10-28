@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-28 (Co-signer links find legacy Booking_Number bonds)
+
+### Fixed
+- **A co-signer link can be issued for a bond stored only under the legacy `Booking_Number` field.** When a paperwork packet has no case id, `cosigner_link_service._find_bond()` looked the bond up by `booking_number` only, so a bond in `bond_cases` or `active_bonds` that carries only `Booking_Number` was never found and the link failed closed with `bond_required`. The booking lookup now matches `booking_number` or `Booking_Number`, tenant-scoped as before. A document that carries both counts once (deduped by `_id`). `booking_number` stays canonical: a stale `Booking_Number` on a bond whose `booking_number` is different does not match. Two distinct cases across the two spellings still fail closed (`bond_ambiguous`).
+- The same gap is closed on the rest of the link path for such a bond: `_issued_case_drifted()` reads the bond's booking under either field (so a link issued on a legacy bond is not refused as `bond_mismatch`), `_one_case_id()` resolves the case for the down-payment stamp under either field with the same canonical rule, the issued link stores the bond's canonical booking, and `_bond_scan_filter()` for a bond with no case id filters on the field the booking is actually stored under plus the bond's `_id` (it no longer filters on a missing `booking_number`, which could match a different bond). `Booking_Number` is only read, never written. No index, schema, or migration change. DocuSeal paperwork generation is unchanged.
+
+### Tests
+- `tests/test_cosigner_link.py` (on the CI list): `test_legacy_booking_bond_without_packet_case_id_gets_a_link`, `test_legacy_booking_bond_without_any_case_id_scans_onto_that_bond`, `test_booking_shared_across_both_spellings_fails_closed`, `test_bond_with_both_booking_spellings_counts_once`, `test_stale_legacy_booking_does_not_match_a_reassigned_bond`, `test_lowercase_booking_bond_without_packet_case_id_is_unchanged`, `test_legacy_booking_bond_link_is_stamped_paid`. All mocked: no SwipeSimple, DocuSeal, Gmail, BlueBubbles, or Slack call.
+
 ## [Unreleased] — 2026-10-28 (Indemnitor ID scan is kept)
 
 ### Fixed
