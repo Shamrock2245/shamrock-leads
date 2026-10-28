@@ -5190,3 +5190,51 @@ def test_legacy_owed_audit_with_auto_id_is_not_rewritten(monkeypatch):
     assert asyncio.run(svc._flush_owed_audits(token)) is True
     assert _audits(stores, "payment_transition_pending") == [legacy]
     assert stores["cosigner_links"].docs[0]["pending_payment_audits_owed"] == []
+
+
+def test_owed_audits_keep_each_transitions_own_snapshot(monkeypatch):
+    """Codex r4400621675: A and B owed together each audit their own before/after."""
+    import dashboard.services.cosigner_link_service as svc
+
+    stores, client, token, db = _recorder_world(monkeypatch)
+    _fail_audit_step(stores, "payment_transition_pending", 3)
+    link = dict(stores["cosigner_links"].docs[0])
+    asyncio.run(svc._record_pending_transition("paid", BOOKING, "TX-COS-A", [link]))
+    asyncio.run(svc._record_pending_transition("reversed", BOOKING, "TX-COS-B", [link]))
+    doc = stores["cosigner_links"].docs[0]
+    assert doc["pending_payment_keys"] == ["paid:TX-COS-A", "reversed:TX-COS-B"]
+    assert [o["pending_key"] for o in doc["pending_payment_audits_owed"]] == [
+        "paid:TX-COS-A", "reversed:TX-COS-B",
+    ]
+    assert _audits(stores, "payment_transition_pending") == []
+
+    assert asyncio.run(svc._flush_owed_audits(token)) is True
+    audits = {a["pending_key"]: a for a in _audits(stores, "payment_transition_pending")}
+    assert set(audits) == {"paid:TX-COS-A", "reversed:TX-COS-B"}
+    a, b = audits["paid:TX-COS-A"], audits["reversed:TX-COS-B"]
+    assert a["pending_before"]["pending_payment_keys"] == []
+    assert a["pending_before"]["payment_transition_pending"] is False
+    assert a["pending_after"]["pending_payment_keys"] == ["paid:TX-COS-A"]
+    assert [e["key"] for e in a["pending_after"]["pending_payment_transitions"]] == [
+        "paid:TX-COS-A",
+    ]
+    assert b["pending_before"]["pending_payment_keys"] == ["paid:TX-COS-A"]
+    assert b["pending_before"]["payment_transition_pending"] is True
+    assert b["pending_after"]["pending_payment_keys"] == ["paid:TX-COS-A", "reversed:TX-COS-B"]
+    assert a["pending_after"] == b["pending_before"]
+
+    # Resolving A while B is still pending: the flag stays true and the
+    # resolved audit records the state at that moment.
+    _fail_audit_step(stores, "payment_transition_resolved", 1)
+    current = stores["cosigner_links"].docs[0]
+    assert asyncio.run(svc._resolve_pending(current, "paid:TX-COS-A", "paid", "TX-COS-A")) is True
+    current = stores["cosigner_links"].docs[0]
+    assert current["payment_transition_pending"] is True
+    assert current["pending_payment_keys"] == ["reversed:TX-COS-B"]
+    assert asyncio.run(svc._flush_owed_audits(token)) is True
+    (resolved,) = _audits(stores, "payment_transition_resolved")
+    assert resolved["pending_before"]["pending_payment_keys"] == [
+        "paid:TX-COS-A", "reversed:TX-COS-B",
+    ]
+    assert resolved["pending_after"]["pending_payment_keys"] == ["reversed:TX-COS-B"]
+    assert resolved["pending_after"]["payment_transition_pending"] is True

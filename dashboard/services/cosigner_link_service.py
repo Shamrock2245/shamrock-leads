@@ -2456,24 +2456,45 @@ async def _record_pending_transition(kind: str, booking: str, txn: str, links: l
                 "booking_number": booking,
                 "at": now.isoformat(),
             }
-            result = await get_collection(LINKS).update_one(
-                {"token": token, "pending_payment_keys": {"$ne": key}},
-                {
-                    "$set": {
-                        "payment_transition_pending": True,
-                        "payment_transition_pending_at": now.isoformat(),
-                        "payment_audit_owed": True,
+            coll = get_collection(LINKS)
+            result = None
+            for _attempt in range(_PENDING_CAS_ATTEMPTS):
+                doc = await coll.find_one({"token": token})
+                if not isinstance(doc, dict):
+                    break
+                before = _pending_view(doc)
+                if key in before["pending_payment_keys"]:
+                    break
+                after = {
+                    "payment_transition_pending": True,
+                    "pending_payment_keys": before["pending_payment_keys"] + [key],
+                    "pending_payment_transitions": (
+                        before["pending_payment_transitions"] + [dict(entry)]
+                    ),
+                }
+                # Compare-and-set on the keys read: the snapshot stored in
+                # the owed marker is exactly this transition's before/after.
+                result = await coll.update_one(
+                    {"token": token, **_pending_keys_match(doc)},
+                    {
+                        "$set": {
+                            "pending_payment_keys": after["pending_payment_keys"],
+                            "pending_payment_transitions": after["pending_payment_transitions"],
+                            "payment_transition_pending": True,
+                            "payment_transition_pending_at": now.isoformat(),
+                            "payment_audit_owed": True,
+                        },
+                        "$push": {
+                            "pending_payment_audits_owed": _owed_audit(
+                                "payment_transition_pending", token, entry, now,
+                                before=before, after=after,
+                            ),
+                        },
                     },
-                    "$push": {
-                        "pending_payment_keys": key,
-                        "pending_payment_transitions": entry,
-                        "pending_payment_audits_owed": _owed_audit(
-                            "payment_transition_pending", token, entry, now,
-                        ),
-                    },
-                },
-            )
-            if getattr(result, "modified_count", 0):
+                )
+                if getattr(result, "modified_count", 0):
+                    break
+            if result is not None and getattr(result, "modified_count", 0):
                 logger.warning(
                     "[cosigner] payment transition pending packet_id=%s kind=%s",
                     link.get("packet_id"), kind,
@@ -2502,11 +2523,17 @@ def _pending_keys_match(doc: dict) -> dict:
     return {"pending_payment_keys": None}
 
 
-def _owed_audit(step: str, token: str, entry: dict, now: datetime) -> dict:
+def _owed_audit(
+    step: str, token: str, entry: dict, now: datetime,
+    *, before: Optional[dict] = None, after: Optional[dict] = None,
+) -> dict:
     """An audit that is due for a pending-state change on this link.
 
     ``audit_key`` is the same on every retry, so a flush that wrote the
     audit but could not pull the marker does not write it twice.
+    ``pending_before``/``pending_after`` are this transition's own
+    snapshot, taken by the update that made it, so a later flush does not
+    rebuild them from a document other transitions have since changed.
     """
     key = str(entry.get("key") or "")
     at = str(entry.get("at") or "")
@@ -2517,15 +2544,18 @@ def _owed_audit(step: str, token: str, entry: dict, now: datetime) -> dict:
         "pending_key": key,
         "entry": dict(entry),
         "at": now.isoformat(),
+        **({"pending_before": dict(before), "pending_after": dict(after)}
+           if isinstance(before, dict) and isinstance(after, dict) else {}),
     }
 
 
 async def _flush_owed_audits(token: str) -> bool:
     """Write the owed pending/resolved audits on this link. Never raises.
 
-    True when nothing is owed afterwards. Each audit's before/after pending
-    values are derived from the link with this key present (pending) or
-    absent (resolved), so a retry records the transition it owes.
+    True when nothing is owed afterwards. Each audit records the
+    before/after pending snapshot stored on its marker. Older markers
+    without one fall back to the link with this key present (pending) or
+    absent (resolved).
     """
     token = str(token or "").strip()
     if not token:
@@ -2555,7 +2585,12 @@ async def _flush_owed_audits(token: str) -> bool:
             # field; those are found here and left as they are.
             if not await audits.find_one({"audit_key": audit_key}):
                 view = _pending_view(doc)
-                if step == "payment_transition_pending":
+                stored_before = item.get("pending_before")
+                stored_after = item.get("pending_after")
+                if isinstance(stored_before, dict) and isinstance(stored_after, dict):
+                    before, after = dict(stored_before), dict(stored_after)
+                elif step == "payment_transition_pending":
+                    # Markers written before snapshots were stored.
                     base = _pending_without(view, key)
                     after = {
                         "payment_transition_pending": True,
@@ -2703,7 +2738,7 @@ async def _resolve_pending(
                 "$push": {
                     "pending_payment_audits_owed": _owed_audit(
                         "payment_transition_resolved", token,
-                        entry, now,
+                        entry, now, before=before, after=after,
                     ),
                 },
             },
