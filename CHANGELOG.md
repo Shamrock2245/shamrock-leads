@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-28 (co-signer pending audits: atomic flag, one audit per key, own snapshots)
+
+### Fixed
+- **Resolving the last pending payment transition clears `payment_transition_pending` in the same update.** The update that removes a pending key also sets the flag from the keys that are left, as a compare-and-set on the keys it read. A failure after that update can no longer leave the flag true with nothing pending. A failure before it keeps the key and the flag.
+- **Concurrent owed-audit flushes write one audit.** The owed `payment_transition_pending` / `payment_transition_resolved` audit is inserted with `_id` set to its `audit_key`. A duplicate-key error means the audit is already written, so the flush counts it as written and pulls the marker. No new index is added. Audits written earlier with an auto `_id` are still found by their `audit_key` field and are not changed or removed.
+- **Each owed audit records its own transition's before/after.** The pending and resolved updates store that transition's `pending_before` and `pending_after` on the owed marker when it is created. The flush writes those values, so two transitions owed at once no longer contradict each other. Markers without a stored snapshot keep the previous derivation. No payment, plan balance, or SwipeSimple call is involved.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_resolution_clears_the_flag_even_when_the_next_step_fails`, `test_resolution_update_failure_keeps_the_key_and_the_flag`, `test_concurrent_owed_audit_flushes_write_one_audit`, `test_legacy_owed_audit_with_auto_id_is_not_rewritten`, `test_owed_audits_keep_each_transitions_own_snapshot`. The test store now rejects a duplicate `_id` like MongoDB does.
+
 ## [Unreleased] — 2026-10-28 (Indemnitor ID scan is kept)
 
 ### Fixed
