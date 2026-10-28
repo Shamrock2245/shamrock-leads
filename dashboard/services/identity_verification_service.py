@@ -511,6 +511,10 @@ def _normalize_scan(blob: Mapping[str, Any], parent: Mapping[str, Any], role: st
     nested_id = _text(blob, "indemnitor_id", "Indemnitor_ID")
     if nested_id:
         links["indemnitor_id"] = nested_id
+    elif _role_family(scan_role) == "co_indemnitor":
+        # The bond's indemnitor id is the primary indemnitor. A co-signer
+        # scan stored on that bond is not that person's scan.
+        links["indemnitor_id"] = ""
     return {
         "name": name,
         "passed": "1" if outcome == "passed" else "0",
