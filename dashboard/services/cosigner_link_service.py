@@ -412,13 +412,14 @@ def _signed(packet: dict) -> bool:
 
 
 def _link_paid(link: dict) -> bool:
-    """The down-payment stamp. A reversal reopens the pay step."""
+    """A real down-payment transaction. A reversal reopens the pay step.
+
+    A confirmed zero amount is not this stamp. The page reads that amount
+    again on each load.
+    """
     if link.get("payment_reversed") is True:
         return False
-    if str(link.get("paid_transaction_id") or "").strip():
-        return True
-    rows = link.get("timeline") or []
-    return any(isinstance(row, dict) and row.get("step") == "paid" for row in rows)
+    return bool(str(link.get("paid_transaction_id") or "").strip())
 
 
 def _paid(bond: Optional[dict]) -> bool:
@@ -480,9 +481,7 @@ def _audit_state(link: dict, packet: Optional[dict] = None) -> dict:
     verified = bool(link.get("id_verified"))
     signed = "signed" in timeline
     reversed_pay = link.get("payment_reversed") is True
-    paid = not reversed_pay and (
-        "paid" in timeline or bool(str(link.get("paid_transaction_id") or "").strip())
-    )
+    paid = not reversed_pay and bool(str(link.get("paid_transaction_id") or "").strip())
     if paid and signed:
         step = "paid"
     elif signed:
@@ -2807,19 +2806,28 @@ async def _iter(cursor):
         return
 
 
-def _swipesimple_host() -> str:
-    """Hostname of the configured SwipeSimple origin. No secret is read."""
-    from dashboard.services.swipesimple_invoice_service import _DEFAULT_BASE_URL
-
-    base = (os.getenv("SWIPESIMPLE_BASE_URL") or _DEFAULT_BASE_URL).strip()
-    return (urlparse(base).hostname or "").lower()
+def _swipe_origin(url: str) -> tuple[str, str, int]:
+    """Scheme, hostname, and port. A missing port on https is 443."""
+    parsed = urlparse(str(url or "").strip())
+    scheme = (parsed.scheme or "").lower()
+    host = (parsed.hostname or "").lower()
+    if parsed.port is not None:
+        port = int(parsed.port)
+    else:
+        port = 443
+    return scheme, host, port
 
 
 def _invoice_host_rejected(link: str) -> bool:
-    """A pay URL is shown only on the configured SwipeSimple host."""
-    host = (urlparse(str(link or "").strip()).hostname or "").lower()
-    expected = _swipesimple_host()
-    return not host or not expected or host != expected
+    """A pay URL must match the configured SwipeSimple origin, including port."""
+    from dashboard.services.swipesimple_invoice_service import _DEFAULT_BASE_URL
+
+    base = (os.getenv("SWIPESIMPLE_BASE_URL") or _DEFAULT_BASE_URL).strip()
+    expected = _swipe_origin(base)
+    got = _swipe_origin(link)
+    if not got[1] or not expected[1]:
+        return True
+    return got != expected
 
 
 def _invoice_source(packet: dict, bond: Optional[dict]) -> tuple[str, Optional[dict]]:
@@ -2942,10 +2950,10 @@ async def cosigner_state(token: str, lang: Optional[str] = None) -> dict:
         nothing_due
         and signed
         and verified
-        and _timeline_push(link, "paid", now)
+        and _timeline_push(link, "nothing_due", now)
     ):
-        # Nothing to collect. The terminal step is still audited. This does
-        # not record a charge or change the amount due.
+        # The audit is history. The link is not stored as paid, so a later
+        # confirmed amount above zero can still show the pay link.
         await _audit(
             "paid", link, now,
             old_state=before, new_state=_audit_state(link, packet),
