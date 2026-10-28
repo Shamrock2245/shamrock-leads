@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-28 (Lee County HQ API needs a staff session)
+
+### Security
+- **`/api/lee-county/` is no longer on the no-PIN allowlist.** It was added to `OPEN_PREFIXES` in `8ee4491` (2026-09-14), which left the whole Lee County HQ router open without a session: overview, leads, defendant family contacts, `POST /outreach/send`, autopilot config read/write, and `POST /autopilot/sweep`. Every route now needs a staff session (or `GAS_API_KEY` / `LEADS_INTERNAL_TOKEN`) and answers `401 {"error": "Authentication required"}` without one, like other protected `/api` routes.
+- **The calculator is not kept public.** Nothing public calls `/api/lee-county/calculator`: no page in this repo outside the staff Lee County HQ script, and no caller in `shamrock-bail-portal-site` (its bail calculator runs in Wix and GAS).
+
+### Tests
+- `tests/test_lee_county_hq_auth.py` (added to the CI list): every route on the router returns 401 with no session and with a bad cookie and 200 with a staff session, with sends, sweeps, and Mongo mocked; the calculator is not public; no open path or prefix may cover any `/api/lee-county` route.
+
 ## [Unreleased] — 2026-10-23 (Palmetto template 7: co-indemnitor and Schedule A)
 
 ### Added
