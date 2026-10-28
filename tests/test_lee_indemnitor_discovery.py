@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pymongo.errors import DuplicateKeyError
 
 from core.models import ArrestRecord
 from dashboard.services.contact_discovery import (
@@ -170,6 +171,10 @@ class AsyncCollection:
         for key, value in (filt or {}).items():
             if not str(key).startswith("$") and not isinstance(value, dict):
                 _set_path(doc, key, value)
+        for key, value in (update.get("$setOnInsert") or {}).items():
+            _set_path(doc, key, value)
+        if any(other.get("_id") == doc["_id"] for other in self.docs):
+            raise DuplicateKeyError("E11000 duplicate key error collection: contacts index: _id_")
         self._apply(doc, update)
         self.docs.append(doc)
         return _Result(1)
@@ -827,3 +832,211 @@ def test_discovery_cron_is_controllable_from_service_control():
 
     assert "lee_indemnitor_discovery" in ALL_SERVICE_KEYS
     assert "lee_indemnitor_discovery" in SERVICE_META
+
+
+# --- Codex P2 follow-ups on #280: intake state, idempotent upsert, newest-row TTL ---
+
+from bson import ObjectId  # noqa: E402
+
+from dashboard.services.contact_discovery import (  # noqa: E402
+    UNREVIEWED_TTL_DAYS,
+    contact_doc_id,
+    contact_identity,
+    unreviewed_expire_at,
+    upsert_contact_doc,
+)
+
+
+class RacyContacts(AsyncCollection):
+    """Every upsert checks for a match, then waits until all writers have
+    checked before inserting. This is the window two real Mongo upserts race in."""
+
+    def __init__(self, writers):
+        super().__init__()
+        self.writers = writers
+        self.arrived = 0
+
+    async def update_one(self, filt, update, upsert=False):
+        import asyncio
+
+        hit = any(_match(doc, filt or {}) for doc in self.docs)
+        if upsert and not hit:
+            self.arrived += 1
+            for _ in range(1000):
+                if self.arrived >= self.writers:
+                    break
+                await asyncio.sleep(0)
+            # Insert without re-checking, like two concurrent upserts.
+            doc = {"_id": f"id{len(self.docs)}"}
+            for key, value in (filt or {}).items():
+                _set_path(doc, key, value)
+            for key, value in (update.get("$setOnInsert") or {}).items():
+                _set_path(doc, key, value)
+            if any(other.get("_id") == doc["_id"] for other in self.docs):
+                raise DuplicateKeyError("E11000 duplicate key error collection: contacts index: _id_")
+            self._apply(doc, update)
+            self.docs.append(doc)
+            return _Result(1)
+        return await super().update_one(filt, update, upsert=upsert)
+
+
+class RacyDB(AsyncDB):
+    def __init__(self, writers=2):
+        super().__init__()
+        self._cols["contacts"] = RacyContacts(writers)
+
+
+def _lee_identity():
+    return contact_identity("FL", "Lee", "B-100")
+
+
+@pytest.mark.asyncio
+async def test_intake_from_same_name_county_in_another_state_is_excluded():
+    db = AsyncDB()
+    db["intake_queue"].docs.extend([
+        {   # Lee, GA via the defendant fields: excluded.
+            "defendant_booking_number": "B-100", "defendant_county": "Lee", "defendant_state": "GA",
+            "indemnitor_name": "Georgia Defendant Branch", "indemnitor_phone": "5550100201",
+            "indemnitor": {}, "defendant": {},
+        },
+        {   # Lee, Georgia via the nested defendant block: excluded.
+            "defendant_booking_number": "B-100", "defendant_county": "Lee",
+            "indemnitor_name": "Georgia Nested Branch", "indemnitor_phone": "5550100202",
+            "indemnitor": {}, "defendant": {"state": "Georgia"},
+        },
+        {   # Lee, GA via the matched fields: excluded.
+            "matched_booking_number": "B-100", "matched_county": "Lee", "matched_state": "GA",
+            "indemnitor_name": "Georgia Matched Branch", "indemnitor_phone": "5550100203",
+            "indemnitor": {}, "defendant": {},
+        },
+        {   # Lee, FL via the matched fields: kept.
+            "matched_booking_number": "B-100", "matched_county": "Lee", "matched_state": "FL",
+            "indemnitor_name": "Florida Matched Branch", "indemnitor_phone": "5550100204",
+            "indemnitor": {}, "defendant": {},
+        },
+    ])
+    result = await run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True)
+    assert [row["name"] for row in result["contacts"]] == ["Florida Matched Branch"]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_upserts_of_one_arrest_create_one_doc():
+    import asyncio
+
+    db = RacyDB(writers=2)
+    await asyncio.gather(
+        run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True),
+        run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True),
+    )
+    docs = db["contacts"].docs
+    assert len(docs) == 1
+    assert docs[0]["_id"] == contact_doc_id(_lee_identity())
+    assert (docs[0]["state"], docs[0]["county"], docs[0]["booking_number"]) == ("FL", "Lee", "B-100")
+
+
+@pytest.mark.asyncio
+async def test_repeated_upserts_of_one_arrest_create_one_doc():
+    db = AsyncDB()
+    for _ in range(3):
+        await run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True)
+    assert len(db["contacts"].docs) == 1
+    assert db["contacts"].docs[0]["_id"] == contact_doc_id(_lee_identity())
+
+
+@pytest.mark.asyncio
+async def test_legacy_objectid_doc_is_updated_not_duplicated():
+    import asyncio
+
+    legacy_id = ObjectId()
+    db = RacyDB(writers=2)
+    db["contacts"].docs.append({
+        "_id": legacy_id, "state": "FL", "county": "Lee", "booking_number": "B-100",
+        "discovery_status": "complete", "discovered_contacts": [],
+    })
+    await asyncio.gather(
+        run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True),
+        run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True),
+    )
+    await run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True)
+    docs = db["contacts"].docs
+    assert len(docs) == 1
+    assert docs[0]["_id"] == legacy_id  # kept, not migrated
+    cached = await run_discovery(db, booking_number="B-100", county="Lee", state="FL", force=False)
+    assert cached["cached"] is True
+
+
+@pytest.mark.asyncio
+async def test_duplicate_key_on_insert_is_applied_as_an_update():
+    db = AsyncDB()
+    identity = _lee_identity()
+    db["contacts"].docs.append({"_id": contact_doc_id(identity), "state": "FL", "county": "Lee", "booking_number": "B-100"})
+
+    class LateInsert(AsyncCollection):
+        """The upsert misses the doc (it lands just after the check), then
+        the insert hits the unique _id."""
+
+        def __init__(self, docs):
+            super().__init__()
+            self.docs = docs
+            self.calls = []
+
+        async def update_one(self, filt, update, upsert=False):
+            self.calls.append(upsert)
+            if upsert:
+                raise DuplicateKeyError("E11000 duplicate key error collection: contacts index: _id_")
+            return await super().update_one(filt, update, upsert=False)
+
+    col = LateInsert(db["contacts"].docs)
+    await upsert_contact_doc(col, identity, {"$set": {**identity, "discovery_status": "complete"}})
+    assert col.calls == [True, False]
+    assert len(col.docs) == 1
+    assert col.docs[0]["discovery_status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_contacts_doc_id_is_scoped_to_the_full_identity():
+    lee_fl = contact_doc_id(contact_identity("FL", "Lee", "B-100"))
+    assert lee_fl == contact_doc_id(contact_identity("fl", "Lee", "B-100"))
+    assert lee_fl != contact_doc_id(contact_identity("GA", "Lee", "B-100"))
+    assert lee_fl != contact_doc_id(contact_identity("FL", "Collier", "B-100"))
+    assert lee_fl != contact_doc_id(contact_identity("FL", "Lee", "B-101"))
+
+
+def test_unreviewed_ttl_comes_from_the_newest_candidate():
+    old = NOW - timedelta(days=29)
+    newest = NOW - timedelta(days=1)
+    rows = [
+        {"review_status": "unreviewed", "discovered_at": old.isoformat()},
+        {"review_status": "unreviewed", "discovered_at": newest.isoformat()},
+        {"review_status": "unreviewed", "discovered_at": (NOW - timedelta(days=10)).isoformat()},
+    ]
+    assert unreviewed_expire_at(rows, NOW) == newest + timedelta(days=UNREVIEWED_TTL_DAYS)
+
+
+@pytest.mark.asyncio
+async def test_failed_provider_old_row_does_not_expire_a_fresh_row():
+    db = AsyncDB()
+    old = NOW - timedelta(days=29)
+    db["contacts"].docs.append({
+        "state": "FL", "county": "Lee", "booking_number": "B-100",
+        "discovered_contacts": [
+            {"name": "Prior Row", "source": "same_address", "review_status": "unreviewed",
+             "discovered_at": old.isoformat()},
+        ],
+    })
+    db["indemnitors"].docs.append(
+        {"booking_number": "B-100", "county": "Lee", "state": "FL",
+         "indemnitor_name": "Fresh Row", "indemnitor_phone": "5550100100"},
+    )
+
+    async def _boom(db, booking):
+        raise RuntimeError("backend")
+
+    with patch("dashboard.services.contact_discovery._provider_same_address", _boom):
+        result = await run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True)
+    assert {row["name"] for row in result["contacts"]} == {"Prior Row", "Fresh Row"}
+    expire = db["contacts"].docs[0]["unreviewed_expire_at"]
+    # Fresh Row was discovered during this run, so expiry is ~30 days from now,
+    # not 1 day after the 29-day-old row.
+    assert expire >= datetime.now(timezone.utc) + timedelta(days=UNREVIEWED_TTL_DAYS - 1)
+    assert expire > old + timedelta(days=UNREVIEWED_TTL_DAYS)

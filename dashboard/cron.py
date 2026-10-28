@@ -944,6 +944,10 @@ async def _ensure_all_indexes():
         # Co-signer candidates. TTL deletes a contacts doc only while
         # unreviewed_expire_at is set (every candidate still unreviewed).
         # Mixed docs are trimmed by purge_unreviewed_candidates instead.
+        # Not unique on purpose: new docs get a deterministic _id from
+        # state + county + booking_number (contact_doc_id), so Mongo's built-in
+        # unique _id index already stops concurrent duplicates. Legacy ObjectId
+        # docs are matched on those fields and updated, not migrated.
         await _idx("contacts", [("booking_number", 1)], name="idx_contacts_booking", background=True)
         await _idx(
             "contacts",

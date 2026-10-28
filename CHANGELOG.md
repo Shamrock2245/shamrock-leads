@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-28 (Lee co-signer discovery: state match, idempotent contacts, TTL)
+
+### Fixed
+- **Intake rows must match the booking's state as well as its county.** `intake_queue` rows compare `defendant_state` (or the nested defendant state) and `matched_state` against the arrest. A Lee, GA intake can no longer add a candidate to a Lee, FL arrest. State names and two-letter codes compare equal ("Georgia" = GA).
+- **Concurrent or repeated contacts upserts make one document.** A new contacts doc gets a deterministic `_id` from state + county + booking (`contact_doc_id`). Mongo's built-in unique `_id` index rejects a second concurrent insert, and that write is retried as an update. No new index. Legacy ObjectId docs are still found by their identity fields and updated in place; they are not migrated or duplicated.
+- **An all-unreviewed contacts doc expires 30 days after its newest candidate**, not its oldest, so a fresh row is never deleted with an old one.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`: another-state intake excluded; concurrent, repeated, and legacy-ObjectId upserts each leave one doc; duplicate-key insert applied as an update; doc id scoped to the full identity; TTL from the newest candidate. Lee arrest-write queue tests unchanged and green.
+
 ## [Unreleased] — 2026-10-28 (Lee co-signer discovery: review fixes)
 
 ### Fixed

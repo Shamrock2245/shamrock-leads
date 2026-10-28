@@ -8,6 +8,7 @@ normalized address + ZIP. Nothing in this module calls, texts, or emails.
 """
 
 import asyncio
+import hashlib
 import logging
 import os
 import re
@@ -119,6 +120,42 @@ def contact_identity(state: Any, county: Any, booking_number: Any) -> Optional[D
     if not (st and co and bk):
         return None
     return {"state": st, "county": co, "booking_number": bk}
+
+
+def contact_doc_id(identity: Dict[str, str]) -> str:
+    """Deterministic ``_id`` for a new contacts doc, built from its full identity.
+
+    Mongo's ``_id`` index is always unique, so two concurrent upserts of the
+    same arrest cannot both insert. No extra index is needed. Legacy docs keep
+    their ObjectId; they are still found by the identity fields, so a doc
+    that already exists is updated, never inserted again.
+    """
+    raw = "\x1f".join((identity["state"], identity["county"], identity["booking_number"]))
+    return "contacts:v1:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:40]
+
+
+def _is_duplicate_key(exc: BaseException) -> bool:
+    return getattr(exc, "code", None) == 11000 or type(exc).__name__ == "DuplicateKeyError"
+
+
+async def upsert_contact_doc(contacts: Any, identity: Dict[str, str], update: Dict[str, Any]) -> None:
+    """Idempotent contacts upsert on state + county + booking_number.
+
+    The filter is the identity fields, so a legacy ObjectId doc is matched and
+    updated in place. A new doc gets the deterministic ``_id``. If a concurrent
+    writer inserted it first, the unique ``_id`` index rejects the second
+    insert, and that write is applied as a plain update of the winner's doc.
+    """
+    first = dict(update)
+    first["$setOnInsert"] = {**(update.get("$setOnInsert") or {}), "_id": contact_doc_id(identity)}
+    try:
+        await contacts.update_one(identity, first, upsert=True)
+        return
+    except Exception as exc:
+        if not _is_duplicate_key(exc):
+            raise
+    retry = {key: value for key, value in update.items() if key != "$setOnInsert"}
+    await contacts.update_one(identity, retry, upsert=False)
 
 
 def is_reviewed(candidate: Any) -> bool:
@@ -432,8 +469,10 @@ def unreviewed_expire_at(candidates: Sequence[Dict[str, Any]], now: datetime) ->
         return None
     if any(row.get("review_status") != "unreviewed" for row in candidates):
         return None
+    # Mongo TTL deletes the whole document, so it may only expire once the
+    # newest candidate has aged out. The oldest row would drop fresh rows.
     stamps = [_parse_time(row.get("discovered_at")) or now for row in candidates]
-    return min(stamps) + timedelta(days=UNREVIEWED_TTL_DAYS)
+    return max(stamps) + timedelta(days=UNREVIEWED_TTL_DAYS)
 
 
 def _norm_county(value: Any) -> str:
@@ -441,14 +480,38 @@ def _norm_county(value: Any) -> str:
     return text[:-7].strip() if text.endswith(" county") else text
 
 
+_US_STATE_CODES = {
+    "ALABAMA": "AL", "ALASKA": "AK", "ARIZONA": "AZ", "ARKANSAS": "AR", "CALIFORNIA": "CA",
+    "COLORADO": "CO", "CONNECTICUT": "CT", "DELAWARE": "DE", "DISTRICT OF COLUMBIA": "DC",
+    "FLORIDA": "FL", "GEORGIA": "GA", "HAWAII": "HI", "IDAHO": "ID", "ILLINOIS": "IL",
+    "INDIANA": "IN", "IOWA": "IA", "KANSAS": "KS", "KENTUCKY": "KY", "LOUISIANA": "LA",
+    "MAINE": "ME", "MARYLAND": "MD", "MASSACHUSETTS": "MA", "MICHIGAN": "MI", "MINNESOTA": "MN",
+    "MISSISSIPPI": "MS", "MISSOURI": "MO", "MONTANA": "MT", "NEBRASKA": "NE", "NEVADA": "NV",
+    "NEW HAMPSHIRE": "NH", "NEW JERSEY": "NJ", "NEW MEXICO": "NM", "NEW YORK": "NY",
+    "NORTH CAROLINA": "NC", "NORTH DAKOTA": "ND", "OHIO": "OH", "OKLAHOMA": "OK", "OREGON": "OR",
+    "PENNSYLVANIA": "PA", "RHODE ISLAND": "RI", "SOUTH CAROLINA": "SC", "SOUTH DAKOTA": "SD",
+    "TENNESSEE": "TN", "TEXAS": "TX", "UTAH": "UT", "VERMONT": "VT", "VIRGINIA": "VA",
+    "WASHINGTON": "WA", "WEST VIRGINIA": "WV", "WISCONSIN": "WI", "WYOMING": "WY",
+    "FLA": "FL",
+}
+
+
+def _norm_state(value: Any) -> str:
+    text = " ".join(str(value or "").strip().upper().replace(".", "").split())
+    return _US_STATE_CODES.get(text, text)
+
+
 def _same_place(booking: Dict[str, Any], county: Any, state: Any = "") -> bool:
-    """False only when the row names a different county or state than the booking."""
+    """False only when the row names a different county or state than the booking.
+
+    Both two-letter codes and full state names are compared ("Georgia" is GA),
+    so a same-name county in another state never counts as the same place.
+    """
     b_county, r_county = _norm_county(booking.get("county")), _norm_county(county)
     if b_county and r_county and b_county != r_county:
         return False
-    b_state = str(booking.get("state") or "").strip().upper()
-    r_state = str(state or "").strip().upper()
-    if b_state and r_state and len(r_state) == 2 and b_state != r_state:
+    b_state, r_state = _norm_state(booking.get("state")), _norm_state(state)
+    if b_state and r_state and b_state != r_state:
         return False
     return True
 
@@ -507,11 +570,19 @@ def _intake_queue_rows(rows: Sequence[Any], booking: Dict[str, Any]) -> List[Dic
         same_case = bool(booking_number) and (
             (
                 _first(row, "defendant_booking_number") == booking_number
-                and _same_place(booking, _first(row, "defendant_county") or _first(dfd, "county"))
+                and _same_place(
+                    booking,
+                    _first(row, "defendant_county") or _first(dfd, "county"),
+                    _first(row, "defendant_state") or _first(dfd, "state") or _first(row, "state"),
+                )
             )
             or (
                 _first(row, "matched_booking_number") == booking_number
-                and _same_place(booking, _first(row, "matched_county"))
+                and _same_place(
+                    booking,
+                    _first(row, "matched_county"),
+                    _first(row, "matched_state") or _first(row, "state"),
+                )
             )
         )
         name = _first(row, "indemnitor_name") or " ".join(
@@ -1187,7 +1258,7 @@ async def run_discovery(
         update["$set"]["unreviewed_expire_at"] = expire
     else:
         update["$unset"] = {"unreviewed_expire_at": ""}
-    await contacts.update_one(identity, update, upsert=True)
+    await upsert_contact_doc(contacts, identity, update)
     marker: Dict[str, Any] = {
         "indemnitor_discovery.status": status,
         "indemnitor_discovery.candidate_count": len(merged),
