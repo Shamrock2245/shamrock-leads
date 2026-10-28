@@ -117,7 +117,8 @@ def _match(doc, query):
                 return False
             if "$in" in expected:
                 allowed = expected["$in"]
-                hit = False
+                # Mongo: a null in $in also matches a missing field.
+                hit = None in allowed and not present
                 for value in values:
                     if isinstance(value, list) and any(item in allowed for item in value):
                         hit = True
@@ -281,6 +282,8 @@ async def test_name_alone_is_dropped_and_anchors_are_stored():
         {
             "_id": "same-case",
             "booking_number": "B-100",
+            "defendant_county": "Lee",
+            "defendant_state": "FL",
             "indemnitor_name": "Jordan Sample",
             "indemnitor_phone": "5550100100",
             "relationship": "sibling",
@@ -319,6 +322,8 @@ async def test_second_run_is_cached_and_review_survives_refresh():
     db = AsyncDB()
     db["indemnitors"].docs.append({
         "booking_number": "B-100",
+        "defendant_county": "Lee",
+        "defendant_state": "FL",
         "indemnitor_name": "Jordan Sample",
         "indemnitor_phone": "5550100100",
     })
@@ -479,6 +484,8 @@ async def test_batch_claims_a_queued_lee_booking(monkeypatch):
     db["arrests"].docs.append(_booking())
     db["indemnitors"].docs.append({
         "booking_number": "B-100",
+        "defendant_county": "Lee",
+        "defendant_state": "FL",
         "indemnitor_name": "Jordan Sample",
         "indemnitor_phone": "5550100100",
     })
@@ -634,8 +641,8 @@ async def test_outreach_reads_contacts_on_the_full_arrest_identity():
 async def test_same_booking_in_two_counties_keeps_separate_contacts():
     db = AsyncDB()
     db["indemnitors"].docs.extend([
-        {"booking_number": "B-100", "defendant_county": "Lee", "indemnitor_name": "Jordan Sample", "indemnitor_phone": "5550100100"},
-        {"booking_number": "B-100", "defendant_county": "Collier", "indemnitor_name": "Pat Other", "indemnitor_phone": "5550100300"},
+        {"booking_number": "B-100", "defendant_county": "Lee", "defendant_state": "FL", "indemnitor_name": "Jordan Sample", "indemnitor_phone": "5550100100"},
+        {"booking_number": "B-100", "defendant_county": "Collier", "defendant_state": "FL", "indemnitor_name": "Pat Other", "indemnitor_phone": "5550100300"},
     ])
     lee = await run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True)
     col = await run_discovery(db, booking_number="B-100", full_name="Drew Other", county="Collier", state="FL", force=True)
@@ -705,7 +712,7 @@ async def test_intake_queue_rows_are_read_on_their_booking_fields():
     db = AsyncDB()
     db["intake_queue"].docs.extend([
         {
-            "defendant_booking_number": "B-100", "defendant_county": "Lee",
+            "defendant_booking_number": "B-100", "defendant_county": "Lee", "defendant_state": "FL",
             "indemnitor_name": "Jordan Sample", "indemnitor_phone": "5550100100",
             "indemnitor": {"firstName": "Jordan", "lastName": "Sample", "dob": "1980-05-06", "relationship": "sibling"},
             "defendant": {"name": ""},
@@ -727,14 +734,18 @@ async def test_intake_queue_rows_are_read_on_their_booking_fields():
 async def test_family_records_are_parsed_with_their_schemas():
     db = AsyncDB()
     db["family_graph"].docs.append(
-        {"defendant_name": "Casey Sample", "relative_name": "Morgan Sample", "relative_phone": "5550100200", "relationship": "parent"},
+        {"booking_number": "B-100", "defendant_county": "Lee", "defendant_state": "FL",
+         "defendant_name": "Casey Sample", "relative_name": "Morgan Sample", "relative_phone": "5550100200", "relationship": "parent"},
     )
     db["family_relationships"].docs.extend([
-        {"person_id": "casey_sample", "person_name": "casey_sample", "relative_name": "Taylor Sample",
+        {"booking_number": "B-100", "defendant_county": "Lee County", "defendant_state": "Florida",
+         "person_id": "casey_sample", "person_name": "casey_sample", "relative_name": "Taylor Sample",
          "relation_type": "sibling", "phone": "5550100201", "status": "active"},
-        {"person_id": "casey_sample", "person_name": "Casey Sample", "relative_name": "Gone Sample",
+        {"booking_number": "B-100", "defendant_county": "Lee", "defendant_state": "FL",
+         "person_id": "casey_sample", "person_name": "Casey Sample", "relative_name": "Gone Sample",
          "relation_type": "sibling", "phone": "5550100202", "status": "soft_deleted"},
-        {"person_id": "casey_sample", "person_name": "Casey Sample", "relative_name": "No Anchor",
+        {"booking_number": "B-100", "defendant_county": "Lee", "defendant_state": "FL",
+         "person_id": "casey_sample", "person_name": "Casey Sample", "relative_name": "No Anchor",
          "relation_type": "sibling", "status": "active"},
     ])
     result = await run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True)
@@ -994,6 +1005,9 @@ async def test_duplicate_key_on_insert_is_applied_as_an_update():
             self.docs = docs
             self.calls = []
 
+        async def find_one(self, query, projection=None):
+            return None  # the winner's insert lands just after this check
+
         async def update_one(self, filt, update, upsert=False):
             self.calls.append(upsert)
             if upsert:
@@ -1039,7 +1053,7 @@ async def test_failed_provider_old_row_does_not_expire_a_fresh_row():
         ],
     })
     db["indemnitors"].docs.append(
-        {"booking_number": "B-100", "county": "Lee", "state": "FL",
+        {"booking_number": "B-100", "defendant_county": "Lee", "defendant_state": "FL",
          "indemnitor_name": "Fresh Row", "indemnitor_phone": "5550100100"},
     )
 
@@ -1066,6 +1080,7 @@ async def test_out_of_state_resident_indemnitor_on_lee_fl_booking_is_kept():
     db["indemnitors"].docs.extend([
         {   # Lives in GA, co-signed the Lee FL booking: kept.
             "booking_number": "B-100", "state": "GA", "city": "Test City",
+            "defendant_county": "Lee", "defendant_state": "FL",
             "indemnitor_name": "Georgia Resident", "indemnitor_phone": "5550100401",
         },
         {   # Same booking number, but the arrest itself is in Lee GA: excluded.
@@ -1203,8 +1218,8 @@ def test_discover_route_with_county_and_state_resolves_a_shared_booking(monkeypa
     collier = {**_booking(), "_id": "arrest-2", "county": "Collier", "full_name": "Drew Other", "address": "200 Other St"}
     db["arrests"].docs.extend([lee, collier])
     db["indemnitors"].docs.extend([
-        {"booking_number": "B-100", "defendant_county": "Lee", "indemnitor_name": "Jordan Sample", "indemnitor_phone": "5550100100"},
-        {"booking_number": "B-100", "defendant_county": "Collier", "indemnitor_name": "Pat Other", "indemnitor_phone": "5550100300"},
+        {"booking_number": "B-100", "defendant_county": "Lee", "defendant_state": "FL", "indemnitor_name": "Jordan Sample", "indemnitor_phone": "5550100100"},
+        {"booking_number": "B-100", "defendant_county": "Collier", "defendant_state": "FL", "indemnitor_name": "Pat Other", "indemnitor_phone": "5550100300"},
     ])
     client = _contacts_client(monkeypatch, db)
 
@@ -1249,3 +1264,333 @@ def test_tracking_discover_button_sends_county_and_state():
     out = _json.loads(r.stdout.strip().splitlines()[-1])
     assert out["explicit"] == {"booking_number": "B-100", "full_name": "Casey Sample", "county": "Lee", "state": "FL"}
     assert out["blank"]["county"] == "" and out["blank"]["state"] == ""
+
+
+# ── Codex round 3 on #280 ────────────────────────────────────────────────────
+
+import copy  # noqa: E402
+import hashlib  # noqa: E402
+import logging  # noqa: E402
+
+from dashboard.services.contact_discovery import (  # noqa: E402
+    ContactsLegacyAmbiguous,
+    canonical_place,
+)
+
+
+def _lee_claim(monkeypatch):
+    monkeypatch.setattr(
+        "dashboard.services.contact_discovery._lee_claim_query",
+        lambda now: {"booking_number": "B-100"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_booking_only_prior_rows_without_arrest_county_or_state_do_not_match():
+    """P1 :553 — a booking number alone never links a prior row to the arrest."""
+    db = AsyncDB()
+    db["indemnitors"].docs.extend([
+        {"booking_number": "B-100", "indemnitor_name": "No Place", "indemnitor_phone": "5550100501"},
+        {"booking_number": "B-100", "defendant_county": "Lee",
+         "indemnitor_name": "No State", "indemnitor_phone": "5550100502"},
+        {"booking_number": "B-100", "defendant_state": "FL",
+         "indemnitor_name": "No County", "indemnitor_phone": "5550100503"},
+        # Bare county/state on an indemnitor row is the co-signer's address.
+        {"booking_number": "B-100", "county": "Lee", "state": "FL",
+         "indemnitor_name": "Home Address Only", "indemnitor_phone": "5550100504"},
+        {"booking_number": "B-100", "defendant_county": "Lee", "defendant_state": "FL",
+         "indemnitor_name": "Scoped Row", "indemnitor_phone": "5550100505"},
+    ])
+    db["intake_queue"].docs.extend([
+        {"defendant_booking_number": "B-100", "indemnitor_name": "Intake No Place",
+         "indemnitor_phone": "5550100506", "indemnitor": {}, "defendant": {}},
+        {"defendant_booking_number": "B-100", "defendant_state": "FL",
+         "indemnitor_name": "Intake No County", "indemnitor_phone": "5550100507",
+         "indemnitor": {}, "defendant": {}},
+    ])
+    result = await run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True)
+    assert [row["name"] for row in result["contacts"]] == ["Scoped Row"]
+
+
+@pytest.mark.asyncio
+async def test_name_only_family_rows_are_rejected():
+    """P1 :663 — family rows count only on booking + county + state."""
+    db = AsyncDB()
+    db["family_graph"].docs.extend([
+        {"defendant_name": "Casey Sample", "relative_name": "Name Only",
+         "relative_phone": "5550100601", "relationship": "parent"},
+        {"booking_number": "B-100", "defendant_name": "Casey Sample", "relative_name": "Booking Only",
+         "relative_phone": "5550100602", "relationship": "parent"},
+        {"booking_number": "B-100", "defendant_county": "Collier", "defendant_state": "FL",
+         "relative_name": "Other County", "relative_phone": "5550100603", "relationship": "parent"},
+    ])
+    db["family_relationships"].docs.extend([
+        {"person_id": "casey_sample", "person_name": "Casey Sample", "relative_name": "Slug Only",
+         "relation_type": "sibling", "phone": "5550100604", "status": "active"},
+        {"booking_number": "B-100", "defendant_county": "Lee", "person_name": "Casey Sample",
+         "relative_name": "No State", "relation_type": "sibling", "phone": "5550100605", "status": "active"},
+    ])
+    result = await run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True)
+    assert result["contacts"] == []
+
+
+@pytest.mark.asyncio
+async def test_one_booking_only_legacy_contacts_doc_is_updated_in_place():
+    """P2 :157 — the single legacy doc gets the identity fields; no second doc."""
+    db = AsyncDB()
+    db["arrests"].docs.append(_booking())
+    legacy_id = ObjectId()
+    db["contacts"].docs.append({
+        "_id": legacy_id, "booking_number": "B-100",
+        "discovered_contacts": [
+            {"name": "Kept Reviewed", "phone": "5550100701", "review_status": "reviewed", "source": "manual"},
+        ],
+    })
+    db["indemnitors"].docs.append(
+        {"booking_number": "B-100", "defendant_county": "Lee", "defendant_state": "FL",
+         "indemnitor_name": "Jordan Sample", "indemnitor_phone": "5550100100"},
+    )
+    result = await run_discovery(db, booking_number="B-100", county="Lee", state="FL", force=True)
+    assert result["discovery_status"] == "complete"
+    docs = db["contacts"].docs
+    assert len(docs) == 1
+    assert docs[0]["_id"] == legacy_id
+    assert (docs[0]["state"], docs[0]["county"], docs[0]["booking_number"]) == ("FL", "Lee", "B-100")
+    assert {row["name"] for row in docs[0]["discovered_contacts"]} == {"Kept Reviewed", "Jordan Sample"}
+    # The next read finds it on the full identity.
+    cached = await run_discovery(db, booking_number="B-100", county="Lee", state="FL", force=False)
+    assert cached["cached"] is True
+
+
+@pytest.mark.asyncio
+async def test_legacy_doc_scoped_to_another_county_is_not_reused():
+    db = AsyncDB()
+    db["arrests"].docs.append(_booking())
+    db["contacts"].docs.append({"_id": "collier-legacy", "booking_number": "B-100", "county": "Collier"})
+    await run_discovery(db, booking_number="B-100", county="Lee", state="FL", force=True)
+    assert len(db["contacts"].docs) == 2
+    assert db["contacts"].docs[0] == {"_id": "collier-legacy", "booking_number": "B-100", "county": "Collier"}
+    assert db["contacts"].docs[1]["_id"] == contact_doc_id(_lee_identity())
+
+
+@pytest.mark.asyncio
+async def test_two_legacy_docs_write_nothing_and_log_only_the_code(caplog):
+    """P2 :157 — ambiguous legacy docs: no write, no guess, code only in logs."""
+    db = AsyncDB()
+    db["arrests"].docs.append(_booking())
+    db["contacts"].docs.extend([
+        {"_id": "legacy-a", "booking_number": "B-100", "discovered_contacts": []},
+        {"_id": "legacy-b", "booking_number": "B-100", "state": "FL", "discovered_contacts": []},
+    ])
+    db["indemnitors"].docs.append(
+        {"booking_number": "B-100", "defendant_county": "Lee", "defendant_state": "FL",
+         "indemnitor_name": "Jordan Sample", "indemnitor_phone": "5550100100"},
+    )
+    before = copy.deepcopy(db["contacts"].docs)
+    arrest_before = copy.deepcopy(db["arrests"].docs)
+    with caplog.at_level(logging.INFO, logger="shamrock.contact_discovery"):
+        result = await run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True)
+    assert result["discovery_status"] == ContactsLegacyAmbiguous.code
+    assert db["contacts"].docs == before
+    assert db["arrests"].docs == arrest_before
+    assert "code=contacts_legacy_ambiguous" in caplog.text
+    for secret in ("B-100", "Casey", "Jordan", "Sample", "5550100100"):
+        assert secret not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_legacy_doc_whose_booking_is_on_two_arrests_writes_nothing():
+    db = AsyncDB()
+    db["arrests"].docs.extend([
+        _booking(),
+        {**_booking(), "_id": "arrest-2", "county": "Collier", "address": "200 Other St"},
+    ])
+    db["contacts"].docs.append({"_id": "legacy-a", "booking_number": "B-100", "discovered_contacts": []})
+    before = copy.deepcopy(db["contacts"].docs)
+    with pytest.raises(ContactsLegacyAmbiguous):
+        await upsert_contact_doc(
+            db["contacts"], _lee_identity(), {"$set": {"discovery_status": "complete"}},
+            arrests=db["arrests"],
+        )
+    assert db["contacts"].docs == before
+    # Without the arrests collection uniqueness is unknown: also fail closed.
+    with pytest.raises(ContactsLegacyAmbiguous):
+        await upsert_contact_doc(db["contacts"], _lee_identity(), {"$set": {"discovery_status": "complete"}})
+    assert db["contacts"].docs == before
+
+
+@pytest.mark.asyncio
+async def test_batch_marks_an_ambiguous_legacy_booking_terminal(monkeypatch):
+    db = AsyncDB()
+    db["arrests"].docs.append(_booking())
+    db["contacts"].docs.extend([
+        {"_id": "legacy-a", "booking_number": "B-100"},
+        {"_id": "legacy-b", "booking_number": "B-100"},
+    ])
+    _lee_claim(monkeypatch)
+    summary = await run_lee_discovery_batch(db, limit=5, now=NOW)
+    assert summary["failed"] == 1 and summary["completed"] == 0
+    marker = db["arrests"].docs[0]["indemnitor_discovery"]
+    assert marker["status"] == "failed"
+    assert marker["error"] == "contacts_legacy_ambiguous"
+    assert len(db["contacts"].docs) == 2
+
+
+@pytest.mark.parametrize("county,state", [
+    ("Lee", "FL"), ("lee", "fl"), ("LEE", "Florida"), ("Lee County", "FL"),
+    ("lee county", "florida"), (" Lee ", " FL "), ("Lee County, FL", ""), ("Lee (FL)", ""),
+    ("Lee", "Fla"),
+])
+def test_place_spellings_give_the_same_identity_and_id(county, state):
+    """P2 :124 — county/state are canonical before the identity and the _id."""
+    identity = contact_identity(state, county, "B-100")
+    assert identity == {"state": "FL", "county": "Lee", "booking_number": "B-100"}
+    # Same id as the 098b666 formula on the canonical "FL"/"Lee" spelling.
+    raw = "\x1f".join(("FL", "Lee", "B-100"))
+    v1 = "contacts:v1:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:40]
+    assert contact_doc_id(identity) == v1
+
+
+def test_canonical_place_handles_multiword_counties_and_rejects_unknown_states():
+    assert canonical_place("st. lucie county", "florida") == ("St. Lucie", "FL")
+    assert canonical_place("MIAMI-DADE", "Fl") == ("Miami-Dade", "FL")
+    assert canonical_place("Lee", "Narnia")[1] == ""
+    assert contact_identity("Narnia", "Lee", "B-100") is None
+
+
+@pytest.mark.asyncio
+async def test_variant_spellings_reuse_one_contacts_doc():
+    db = AsyncDB()
+    await run_discovery(db, booking_number="B-100", county="lee", state="Florida", force=True)
+    await run_discovery(db, booking_number="B-100", county="Lee County", state="FL", force=True)
+    assert len(db["contacts"].docs) == 1
+    assert db["contacts"].docs[0]["_id"] == contact_doc_id(_lee_identity())
+    assert (db["contacts"].docs[0]["county"], db["contacts"].docs[0]["state"]) == ("Lee", "FL")
+
+
+class _BrokenCollection(AsyncCollection):
+    def find(self, query=None, projection=None):
+        raise RuntimeError("partial read")
+
+    async def find_one(self, query, projection=None):
+        raise RuntimeError("partial read")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("broken", ["family_graph", "intake_queue", "indemnitors"])
+async def test_partial_prior_read_failure_marks_the_run_failed(broken):
+    """P2 :726 — one prior collection failing is not a silent pass."""
+    db = AsyncDB()
+    db._cols[broken] = _BrokenCollection()
+    for name in ("indemnitors", "family_graph"):
+        if name != broken:
+            db[name].docs.append(
+                {"booking_number": "B-100", "defendant_county": "Lee", "defendant_state": "FL",
+                 "indemnitor_name": "Still Read", "relative_name": "Still Read",
+                 "indemnitor_phone": "5550100801", "relative_phone": "5550100801"},
+            )
+    result = await run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True)
+    assert result["discovery_status"] == "failed"
+    assert result["discovery_error"] == "prior_read_failed"
+    # The whole prior provider is dropped for this run (no partial result is
+    # treated as complete); rows from earlier runs are kept, see the batch test.
+    assert result["contacts"] == []
+    prior = [row for row in result["providers_run"] if row["provider"] == "prior_shamrock"]
+    assert prior[0]["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_partial_prior_read_failure_sends_the_booking_to_retry(monkeypatch):
+    db = AsyncDB()
+    db["arrests"].docs.append(_booking())
+    db._cols["family_relationships"] = _BrokenCollection()
+    db["contacts"].docs.append({
+        "state": "FL", "county": "Lee", "booking_number": "B-100",
+        "discovered_contacts": [
+            {"name": "Prior Row", "phone": "5550100901", "source": "prior_shamrock",
+             "review_status": "unreviewed", "discovered_at": NOW.isoformat()},
+        ],
+    })
+    _lee_claim(monkeypatch)
+    summary = await run_lee_discovery_batch(db, limit=5, now=NOW)
+    assert summary["retry"] == 1 and summary["completed"] == 0
+    marker = db["arrests"].docs[0]["indemnitor_discovery"]
+    assert marker["status"] == "retry"
+    assert marker["error"] == "prior_read_failed"
+    assert marker["retry_after"] > NOW
+    names = [row["name"] for row in db["contacts"].docs[0]["discovered_contacts"]]
+    assert "Prior Row" in names
+
+
+@pytest.mark.asyncio
+async def test_batch_marks_an_unresolvable_identity_terminal(monkeypatch):
+    db = AsyncDB()
+    db["arrests"].docs.append({**_booking(), "state": "", "county": ""})
+    _lee_claim(monkeypatch)
+    summary = await run_lee_discovery_batch(db, limit=5, now=NOW)
+    assert summary["failed"] == 1
+    marker = db["arrests"].docs[0]["indemnitor_discovery"]
+    assert (marker["status"], marker["error"]) == ("failed", "identity_ambiguous")
+    assert db["contacts"].docs == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_arrest_accepts_a_county_suffix_and_state_name():
+    db = AsyncDB()
+    db["arrests"].docs.append(_booking())
+    db["indemnitors"].docs.append(
+        {"booking_number": "B-100", "defendant_county": "Lee", "defendant_state": "FL",
+         "indemnitor_name": "Jordan Sample", "indemnitor_phone": "5550100100"},
+    )
+    result = await run_discovery(db, booking_number="B-100", county="Lee County", state="Florida", force=True)
+    assert result["discovery_status"] == "complete"
+    assert db["arrests"].docs[0]["indemnitor_discovery"]["status"] == "complete"
+
+
+def test_discover_route_returns_409_for_ambiguous_legacy_contacts(monkeypatch):
+    db = AsyncDB()
+    db["arrests"].docs.append(_booking())
+    db["contacts"].docs.extend([
+        {"_id": "legacy-a", "booking_number": "B-100"},
+        {"_id": "legacy-b", "booking_number": "B-100"},
+    ])
+    before = copy.deepcopy(db["contacts"].docs)
+    client = _contacts_client(monkeypatch, db)
+    resp = client.post("/api/contacts/discover", json={
+        "booking_number": "B-100", "full_name": "Casey Sample", "county": "Lee County", "state": "Florida",
+    })
+    assert resp.status_code == 409
+    assert resp.json()["error"] == "legacy_contacts_ambiguous"
+    assert db["contacts"].docs == before
+
+
+def test_get_route_canonicalizes_the_place(monkeypatch):
+    db = AsyncDB()
+    db["contacts"].docs.append({
+        "_id": "x", "state": "FL", "county": "Lee", "booking_number": "B-100",
+        "discovered_contacts": [{"name": "Jordan Sample"}], "discovery_status": "complete",
+    })
+    client = _contacts_client(monkeypatch, db)
+    from dashboard.routers import contacts as contacts_router
+
+    monkeypatch.setattr(contacts_router, "get_collection", lambda name: db[name])
+    for county, state in (("lee", "fl"), ("Lee County", "Florida")):
+        resp = client.get(f"/api/contacts/B-100?county={county}&state={state}")
+        assert resp.status_code == 200
+        assert [row["name"] for row in resp.json()["contacts"]] == ["Jordan Sample"]
+
+
+@pytest.mark.asyncio
+async def test_legacy_scan_that_hits_its_cap_fails_closed():
+    from dashboard.services import contact_discovery as cd
+
+    db = AsyncDB()
+    db["arrests"].docs.append(_booking())
+    db["contacts"].docs.extend(
+        {"_id": f"other-{i}", "booking_number": "B-100", "county": "Collier"} for i in range(cd._LEGACY_SCAN_LIMIT)
+    )
+    db["contacts"].docs.append({"_id": "legacy-lee", "booking_number": "B-100"})
+    before = copy.deepcopy(db["contacts"].docs)
+    result = await run_discovery(db, booking_number="B-100", county="Lee", state="FL", force=True)
+    assert result["discovery_status"] == ContactsLegacyAmbiguous.code
+    assert db["contacts"].docs == before

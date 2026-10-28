@@ -113,14 +113,57 @@ class DiscoveryRateLimited(DiscoveryHttpError):
         super().__init__(code)
 
 
+class ContactsLegacyAmbiguous(Exception):
+    """A booking-only legacy contacts doc cannot be tied to one arrest.
+
+    Nothing is written. ``code`` is safe to store and log.
+    """
+
+    code = "contacts_legacy_ambiguous"
+
+    def __init__(self) -> None:
+        super().__init__(self.code)
+
+
+class PriorReadFailed(Exception):
+    """A Mongo read inside a provider failed. The run must not count as done."""
+
+    def __init__(self, collection: str, error_type: str):
+        self.collection = collection
+        self.error_type = error_type
+        super().__init__(f"{collection}:{error_type}")
+
+
+def canonical_place(county: Any, state: Any) -> tuple:
+    """(County, ST) in one canonical spelling, or ("", "") parts when unknown.
+
+    ``lee``, ``LEE``, ``Lee County`` and ``Lee (FL)`` all give ``Lee``;
+    ``Florida``, ``fla`` and ``fl`` give ``FL``. A state that is not a known
+    name or a two-letter code gives "" so the caller fails closed. Already
+    canonical input (``Lee`` / ``FL``) is returned unchanged, so contacts ids
+    built from canonical values are the same as before.
+    """
+    from dashboard.services.place_identity import parse_place
+
+    st = _norm_state(state)
+    name, parsed_st = parse_place(county, st if re.fullmatch(r"[A-Z]{2}", st or "") else "")
+    st = st or _norm_state(parsed_st)
+    if not re.fullmatch(r"[A-Z]{2}", st or ""):
+        st = ""
+    name = re.sub(r"[A-Za-z]+", lambda m: m.group(0).capitalize(), " ".join(name.split()))
+    return name, st
+
+
 def contact_identity(state: Any, county: Any, booking_number: Any) -> Optional[Dict[str, str]]:
     """Full arrest identity for a ``contacts`` doc, or None when any part is blank.
 
     The same booking number can exist in two counties, so a contacts doc is
-    always keyed and read on state + county + booking_number.
+    always keyed and read on state + county + booking_number. County and state
+    are canonicalized first (see :func:`canonical_place`), so ``lee`` /
+    ``Lee County`` / ``Florida`` give the same identity and ``_id`` as
+    ``Lee`` / ``FL``.
     """
-    st = str(state or "").strip().upper()
-    co = str(county or "").strip()
+    co, st = canonical_place(county, state)
     bk = str(booking_number or "").strip()
     if not (st and co and bk):
         return None
@@ -143,24 +186,115 @@ def _is_duplicate_key(exc: BaseException) -> bool:
     return getattr(exc, "code", None) == 11000 or type(exc).__name__ == "DuplicateKeyError"
 
 
-async def upsert_contact_doc(contacts: Any, identity: Dict[str, str], update: Dict[str, Any]) -> None:
+def _blank(value: Any) -> bool:
+    return value is None or str(value).strip() == ""
+
+
+_LEGACY_SCAN_LIMIT = 25
+
+
+async def _legacy_booking_only_docs(contacts: Any, identity: Dict[str, str]) -> List[Dict[str, Any]]:
+    """Contacts docs for this booking number that lack county or state.
+
+    A doc whose present county or state names another place is not this
+    arrest's and is ignored. Read errors propagate (the caller fails closed).
+    """
+    query = {
+        "booking_number": identity["booking_number"],
+        "$or": [{"state": {"$in": [None, ""]}}, {"county": {"$in": [None, ""]}}],
+    }
+    rows = await _find_list(contacts, query, limit=_LEGACY_SCAN_LIMIT)
+    if len(rows) >= _LEGACY_SCAN_LIMIT:
+        # Too many to see them all: one we did not read could be this arrest's.
+        log.warning("[indemnitor_discovery] contacts write skipped code=%s", ContactsLegacyAmbiguous.code)
+        raise ContactsLegacyAmbiguous()
+    found: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        r_county, r_state = canonical_place(row.get("county"), row.get("state"))
+        if not _blank(row.get("county")) and r_county.lower() != identity["county"].lower():
+            continue
+        if not _blank(row.get("state")) and r_state != identity["state"]:
+            continue
+        found.append(row)
+    return found
+
+
+async def _booking_is_unique(arrests: Any, booking_number: str) -> bool:
+    """True only when exactly one arrest has this booking number. Unknown = False."""
+    if arrests is None:
+        return False
+    try:
+        rows = await _find_list(arrests, {"booking_number": booking_number}, limit=2)
+    except Exception:
+        return False
+    return len([row for row in rows if isinstance(row, dict)]) == 1
+
+
+async def find_contact_doc(
+    contacts: Any,
+    identity: Dict[str, str],
+    *,
+    arrests: Any = None,
+) -> Optional[Dict[str, Any]]:
+    """The contacts doc this arrest's writes go to, or None for a new one.
+
+    The doc on the full identity wins. Otherwise the one legacy doc keyed by
+    booking only, when exactly one exists and exactly one arrest has the
+    booking number. Any doubt raises :class:`ContactsLegacyAmbiguous`.
+    """
+    current = await contacts.find_one(identity)
+    if current is not None:
+        return current
+    legacy = await _legacy_booking_only_docs(contacts, identity)
+    if not legacy:
+        return None
+    if len(legacy) != 1 or not await _booking_is_unique(arrests, identity["booking_number"]):
+        log.warning("[indemnitor_discovery] contacts write skipped code=%s", ContactsLegacyAmbiguous.code)
+        raise ContactsLegacyAmbiguous()
+    return legacy[0]
+
+
+async def upsert_contact_doc(
+    contacts: Any,
+    identity: Dict[str, str],
+    update: Dict[str, Any],
+    *,
+    arrests: Any = None,
+) -> str:
     """Idempotent contacts upsert on state + county + booking_number.
 
-    The filter is the identity fields, so a legacy ObjectId doc is matched and
-    updated in place. A new doc gets the deterministic ``_id``. If a concurrent
-    writer inserted it first, the unique ``_id`` index rejects the second
-    insert, and that write is applied as a plain update of the winner's doc.
+    1. A doc already on the full identity is updated (``"updated"``).
+    2. Otherwise a legacy doc keyed by booking only (no county or state) is
+       updated in place and given the identity fields (``"legacy_updated"``).
+       That happens only when there is exactly one such doc and exactly one
+       arrest has the booking number. Any doubt raises
+       :class:`ContactsLegacyAmbiguous` and nothing is written.
+    3. Otherwise a new doc gets the deterministic ``_id`` (``"upserted"``). If
+       a concurrent writer inserted it first, the unique ``_id`` index rejects
+       the second insert, and that write is applied as a plain update.
     """
+    plain = {key: value for key, value in update.items() if key != "$setOnInsert"}
+    target = await find_contact_doc(contacts, identity, arrests=arrests)
+    if target is not None and all(target.get(key) == value for key, value in identity.items()):
+        await contacts.update_one(identity, plain, upsert=False)
+        return "updated"
+    if target is not None:
+        in_place = dict(plain)
+        in_place["$set"] = {**(plain.get("$set") or {}), **identity}
+        await contacts.update_one({"_id": target.get("_id")}, in_place, upsert=False)
+        return "legacy_updated"
     first = dict(update)
     first["$setOnInsert"] = {**(update.get("$setOnInsert") or {}), "_id": contact_doc_id(identity)}
     try:
         await contacts.update_one(identity, first, upsert=True)
-        return
+        return "upserted"
     except Exception as exc:
         if not _is_duplicate_key(exc):
             raise
-    retry = {key: value for key, value in update.items() if key != "$setOnInsert"}
-    await contacts.update_one(identity, retry, upsert=False)
+    await contacts.update_one(identity, plain, upsert=False)
+    return "updated"
 
 
 def is_reviewed(candidate: Any) -> bool:
@@ -521,16 +655,25 @@ def _same_place(booking: Dict[str, Any], county: Any, state: Any = "") -> bool:
     return True
 
 
-# Fields on indemnitors / intakes rows that describe the arrest, never the
-# co-signer's own address.
+def _arrest_scope_matches(booking: Dict[str, Any], county: Any, state: Any) -> bool:
+    """True only when the row names this arrest's county AND state.
+
+    Booking numbers are not unique across counties, so a row matched on the
+    booking number counts only when it carries both place fields and they
+    equal the arrest's (after canonicalization). A missing value on either
+    side is doubt, and doubt does not match.
+    """
+    b_county, b_state = canonical_place(booking.get("county"), booking.get("state"))
+    r_county, r_state = canonical_place(county, state)
+    if not (b_county and b_state and r_county and r_state):
+        return False
+    return b_county.lower() == r_county.lower() and b_state == r_state
+
+
+# Fields on indemnitors / intakes / family rows that describe the arrest, never
+# the co-signer's or relative's own address.
 _ARREST_COUNTY_FIELDS = ("defendant_county", "matched_county", "bond_county", "booking_county")
 _ARREST_STATE_FIELDS = ("defendant_state", "matched_state", "bond_state", "booking_state")
-
-
-def _slug(name: str) -> str:
-    """Same slug FamilyTreeService uses for person_id."""
-    text = re.sub(r"[^a-z0-9]+", "_", (name or "").strip().lower()).strip("_")
-    return text
 
 
 def _generic_prior_rows(rows: Sequence[Any], booking: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -543,10 +686,11 @@ def _generic_prior_rows(rows: Sequence[Any], booking: Dict[str, Any]) -> List[Di
             continue
         # Only arrest-scoped place fields count. The bare ``state`` / ``county``
         # on an indemnitor row is the co-signer's home address, not the arrest.
+        # Both must be present: a legacy row without them does not match.
         same_case = (
             bool(booking_number)
             and _row_booking(row) == booking_number
-            and _same_place(
+            and _arrest_scope_matches(
                 booking,
                 _first(row, *_ARREST_COUNTY_FIELDS),
                 _first(row, *_ARREST_STATE_FIELDS),
@@ -587,7 +731,7 @@ def _intake_queue_rows(rows: Sequence[Any], booking: Dict[str, Any]) -> List[Dic
         same_case = bool(booking_number) and (
             (
                 _first(row, "defendant_booking_number") == booking_number
-                and _same_place(
+                and _arrest_scope_matches(
                     booking,
                     _first(row, "defendant_county") or _first(dfd, "county"),
                     _first(row, "defendant_state") or _first(dfd, "state") or _first(row, "state"),
@@ -595,7 +739,7 @@ def _intake_queue_rows(rows: Sequence[Any], booking: Dict[str, Any]) -> List[Dic
             )
             or (
                 _first(row, "matched_booking_number") == booking_number
-                and _same_place(
+                and _arrest_scope_matches(
                     booking,
                     _first(row, "matched_county"),
                     _first(row, "matched_state") or _first(row, "state"),
@@ -645,24 +789,28 @@ def _family_rows(rows: Sequence[Any], booking: Dict[str, Any], collection_name: 
     """family_graph (defendant_name -> relative_name/relative_phone) and
     family_relationships from FamilyTreeService (person_name/person_id ->
     relative_name, relation_type, phone). The candidate is the linked relative;
-    its anchors are the relative's own phone / DOB / address+ZIP."""
+    its anchors are the relative's own phone / DOB / address+ZIP.
+
+    A row is linked to this arrest only by its full arrest identity: the same
+    booking number plus arrest-scoped county AND state. A matching defendant
+    name or name slug never links a row on its own, because two defendants
+    can share a name. Rows without that scope (FamilyTreeService rows carry
+    only a person name/id today) are skipped."""
     defendant = _first(booking, "full_name", "defendant_name")
     booking_number = _first(booking, "booking_number")
-    slug = _slug(defendant)
     found: List[Dict[str, Any]] = []
+    if not booking_number:
+        return found
     for row in rows:
         if not isinstance(row, dict):
             continue
         if str(row.get("status") or "").lower() in {"soft_deleted", "deleted"}:
             continue
-        if collection_name == "family_relationships":
-            linked = names_equal(defendant, _first(row, "person_name")) or (
-                bool(slug) and _first(row, "person_id") == slug
-            )
-        else:
-            linked = names_equal(defendant, _first(row, "defendant_name", "person_name"))
-        if not linked and booking_number and _row_booking(row) == booking_number:
-            linked = _same_place(booking, _first(row, "county", "defendant_county"), _first(row, "state"))
+        linked = _row_booking(row) == booking_number and _arrest_scope_matches(
+            booking,
+            _first(row, *_ARREST_COUNTY_FIELDS),
+            _first(row, *_ARREST_STATE_FIELDS),
+        )
         if not linked:
             continue
         phone = _first(row, "relative_phone", "phone")
@@ -706,11 +854,10 @@ async def _provider_prior(db: Any, booking: Dict[str, Any]) -> List[Dict[str, An
         [{"defendant_booking_number": booking_number}, {"matched_booking_number": booking_number}]
         if booking_number else []
     ) + ([{"defendant_name": {"$in": variants}}] if variants else [])))
-    queries.append(("family_graph", by_booking + ([{"defendant_name": {"$in": variants}}] if variants else [])))
-    slug = _slug(defendant)
-    queries.append(("family_relationships", (
-        [{"person_name": {"$in": variants}}] if variants else []
-    ) + ([{"person_id": slug}] if slug else [])))
+    # Family rows are linked only by booking + arrest place (see _family_rows),
+    # so they are read by booking number only; name-only rows are not fetched.
+    queries.append(("family_graph", by_booking))
+    queries.append(("family_relationships", by_booking))
     found: List[Dict[str, Any]] = []
     for collection_name, clauses in queries:
         if not clauses:
@@ -718,12 +865,14 @@ async def _provider_prior(db: Any, booking: Dict[str, Any]) -> List[Dict[str, An
         try:
             rows = await _find_list(db[collection_name], {"$or": clauses}, limit=25)
         except Exception as exc:
+            # A partial read must not look like "nothing found": the provider
+            # fails, its prior rows are kept, and the booking is retried.
             log.warning(
                 "[indemnitor_discovery] prior read failed collection=%s error_type=%s",
                 collection_name,
                 type(exc).__name__,
             )
-            continue
+            raise PriorReadFailed(collection_name, type(exc).__name__) from exc
         if collection_name == "intake_queue":
             found.extend(_intake_queue_rows(rows, booking))
         elif collection_name in {"family_graph", "family_relationships"}:
@@ -754,7 +903,7 @@ async def _provider_same_address(db: Any, booking: Dict[str, Any]) -> List[Dict[
                 collection_name,
                 type(exc).__name__,
             )
-            continue
+            raise PriorReadFailed(collection_name, type(exc).__name__) from exc
         for row in rows:
             if not isinstance(row, dict):
                 continue
@@ -1117,11 +1266,15 @@ async def _resolve_arrest(
 ) -> Optional[Dict[str, Any]]:
     """The one arrest for this booking. None when it is missing or ambiguous
     (the same booking number in two counties and no county/state to pick)."""
+    from dashboard.services.place_identity import mongo_place_clause, mongo_state_clause
+
     query: Dict[str, Any] = {"booking_number": booking_number}
+    c_county, c_state = canonical_place(county, state)
     if county:
-        query["county"] = county
-    if state:
-        query["state"] = state.upper()
+        # Matches "Lee", "lee", "Lee County" in the stored arrest.
+        query = {"$and": [query, mongo_place_clause(c_county or county, c_state)]}
+    elif state:
+        query = {"$and": [query, mongo_state_clause(c_state or state)]}
     try:
         rows = await _find_list(db["arrests"], query, limit=2)
     except Exception as exc:
@@ -1194,6 +1347,13 @@ async def run_discovery(
             "providers_run": [],
         }
 
+    try:
+        # Resolve the target doc before any provider runs: an ambiguous legacy
+        # doc means nothing is read for, or written to, this booking.
+        await find_contact_doc(contacts, identity, arrests=db["arrests"])
+    except ContactsLegacyAmbiguous as exc:
+        return {"cached": False, "contacts": [], "discovery_status": exc.code, "providers_run": []}
+
     if not force:
         existing = await contacts.find_one(identity)
         if existing and existing.get("discovery_status") == "complete":
@@ -1206,11 +1366,15 @@ async def run_discovery(
 
     candidates: List[Dict[str, Any]] = []
     providers_run: List[Dict[str, Any]] = []
+    # Mongo-backed providers. A read failure in any of their collections means
+    # the run is incomplete: the booking goes to retry, never to complete.
+    read_failed = False
     try:
         prior = await _provider_prior(db, stored)
         candidates.extend(prior)
         providers_run.append({"provider": "prior_shamrock", "status": "ok", "count": len(prior)})
     except Exception as exc:
+        read_failed = True
         log.warning("[indemnitor_discovery] prior provider failed error_type=%s", type(exc).__name__)
         providers_run.append({"provider": "prior_shamrock", "status": "failed", "count": 0, "error_type": type(exc).__name__})
     try:
@@ -1218,6 +1382,7 @@ async def run_discovery(
         candidates.extend(household)
         providers_run.append({"provider": "same_address", "status": "ok", "count": len(household)})
     except Exception as exc:
+        read_failed = True
         log.warning("[indemnitor_discovery] address provider failed error_type=%s", type(exc).__name__)
         providers_run.append({"provider": "same_address", "status": "failed", "count": 0, "error_type": type(exc).__name__})
     try:
@@ -1237,7 +1402,11 @@ async def run_discovery(
         candidates.extend(result.get("candidates") or [])
         providers_run.append(_public_summary(result))
 
-    previous = await contacts.find_one(identity)
+    try:
+        # A legacy booking-only doc is merged too, so its reviewed rows survive.
+        previous = await find_contact_doc(contacts, identity, arrests=db["arrests"])
+    except ContactsLegacyAmbiguous as exc:
+        return {"cached": False, "contacts": [], "discovery_status": exc.code, "providers_run": providers_run}
     merged_existing: List[Dict[str, Any]] = []
     if isinstance(previous, dict):
         merged_existing = list(previous.get("discovered_contacts") or [])
@@ -1253,10 +1422,15 @@ async def run_discovery(
     ]
     attempted = [row for row in providers_run if row.get("status") != "skipped_disabled"]
     deferred = [row for row in providers_run if row.get("status") in DEFERRABLE_STATUSES]
-    if deferred:
+    error_code: Optional[str] = None
+    if read_failed:
+        status = "failed"
+        error_code = "prior_read_failed"
+    elif deferred:
         status = "deferred"
     elif attempted and hard_failures and all(row.get("status") not in {"ok", "skipped", "skipped_unparsed"} for row in attempted):
         status = "failed"
+        error_code = "providers_failed"
     else:
         status = "complete"
     now = datetime.now(timezone.utc)
@@ -1265,7 +1439,7 @@ async def run_discovery(
         **identity,
         "defendant_name": _first(stored, "full_name", "defendant_name"),
         "discovery_status": status,
-        "discovery_error": None,
+        "discovery_error": error_code,
         "discovered_at": now,
         "providers_run": providers_run,
         "discovered_contacts": merged,
@@ -1275,17 +1449,27 @@ async def run_discovery(
         update["$set"]["unreviewed_expire_at"] = expire
     else:
         update["$unset"] = {"unreviewed_expire_at": ""}
-    await upsert_contact_doc(contacts, identity, update)
+    try:
+        await upsert_contact_doc(contacts, identity, update, arrests=db["arrests"])
+    except ContactsLegacyAmbiguous as exc:
+        # Nothing written to contacts; the caller decides what to do with the arrest.
+        return {
+            "cached": False,
+            "contacts": [],
+            "discovery_status": exc.code,
+            "providers_run": providers_run,
+        }
     marker: Dict[str, Any] = {
         "indemnitor_discovery.status": status,
         "indemnitor_discovery.candidate_count": len(merged),
         "indemnitor_discovery.updated_at": now,
-        "indemnitor_discovery.error": None,
+        "indemnitor_discovery.error": error_code,
     }
     if status == "deferred":
         marker["indemnitor_discovery.retry_after"] = now + timedelta(minutes=DEFER_MINUTES)
+    arrest_filter = {"_id": stored["_id"]} if stored.get("_id") is not None else identity
     try:
-        await db["arrests"].update_one(identity, {"$set": marker})
+        await db["arrests"].update_one(arrest_filter, {"$set": marker})
     except Exception as exc:
         log.warning("[indemnitor_discovery] status write failed error_type=%s", type(exc).__name__)
     log.info(
@@ -1298,6 +1482,7 @@ async def run_discovery(
         "cached": False,
         "contacts": merged,
         "discovery_status": status,
+        "discovery_error": error_code,
         "providers_run": providers_run,
     }
 
@@ -1369,6 +1554,18 @@ async def _mark_retry_or_failed(
             type(write_exc).__name__,
         )
     return retrying
+
+
+async def _mark_terminal(arrests: Any, arrest: Dict[str, Any], code: str) -> None:
+    log.warning("[indemnitor_discovery] booking not resolvable code=%s", code)
+    try:
+        await arrests.update_one({"_id": arrest["_id"]}, {"$set": {
+            "indemnitor_discovery.status": "failed",
+            "indemnitor_discovery.error": code,
+            "indemnitor_discovery.updated_at": datetime.now(timezone.utc),
+        }})
+    except Exception as exc:
+        log.warning("[indemnitor_discovery] failure mark skipped error_type=%s", type(exc).__name__)
 
 
 async def run_lee_discovery_batch(db: Any, *, limit: int = DISCOVERY_BATCH_LIMIT, now: Optional[datetime] = None) -> Dict[str, Any]:
@@ -1460,10 +1657,14 @@ async def run_lee_discovery_batch(db: Any, *, limit: int = DISCOVERY_BATCH_LIMIT
             if outcome == "deferred":
                 summary["deferred"] += 1
             elif outcome == "failed":
-                # Every provider failed: treat it like a transient error.
-                retrying = await _mark_retry_or_failed(arrests, arrest, marker, "providers_failed", now)
+                # A Mongo read failed or every provider failed: transient, retry.
+                error = str(result.get("discovery_error") or "providers_failed")
+                retrying = await _mark_retry_or_failed(arrests, arrest, marker, error, now)
                 summary["retry" if retrying else "failed"] += 1
-            elif outcome == "identity_ambiguous":
+            elif outcome in {"identity_ambiguous", ContactsLegacyAmbiguous.code}:
+                # Cannot be resolved by retrying. Terminal, so a "running"
+                # marker is not re-claimed forever. Code only, no booking.
+                await _mark_terminal(arrests, arrest, str(outcome))
                 summary["failed"] += 1
             else:
                 summary["completed"] += 1

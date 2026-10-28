@@ -9,7 +9,12 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from dashboard.extensions import get_collection, get_db
-from dashboard.services.contact_discovery import ContactDiscoveryService, contact_identity
+from dashboard.services.contact_discovery import (
+    ContactDiscoveryService,
+    ContactsLegacyAmbiguous,
+    canonical_place,
+    contact_identity,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +51,13 @@ async def discover_contacts(request: Request):
                 {"error": "county_and_state_required", "discovery_status": "identity_ambiguous"},
                 status_code=409,
             )
+        if result.get("discovery_status") == ContactsLegacyAmbiguous.code:
+            # Several legacy booking-only docs could be this arrest's: nothing
+            # was written. Needs a human; retrying will not resolve it.
+            return JSONResponse(
+                {"error": "legacy_contacts_ambiguous", "discovery_status": ContactsLegacyAmbiguous.code},
+                status_code=409,
+            )
         return result
     except Exception as exc:
         logger.warning("contact discover failed error_type=%s", type(exc).__name__)
@@ -73,10 +85,11 @@ async def get_contacts(booking_number: str, county: Optional[str] = None, state:
             doc = await contacts_col.find_one(identity, {"_id": 0})
         else:
             query = {"booking_number": booking_number}
+            c_county, c_state = canonical_place(county, state)
             if county:
-                query["county"] = county
+                query["county"] = c_county or str(county)
             if state:
-                query["state"] = str(state).strip().upper()
+                query["state"] = c_state or str(state).strip().upper()
             rows = await contacts_col.find(query, {"_id": 0}).to_list(length=2)
             if len(rows) > 1:
                 return JSONResponse(

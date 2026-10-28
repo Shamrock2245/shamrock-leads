@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-28 (Lee co-signer discovery: Codex round 3 on #280)
+
+### Fixed
+- **A booking number alone never links a prior row to an arrest.** `indemnitors`/`intakes` and `intake_queue` rows matched on the booking number now need arrest-scoped county AND state equal to the arrest's. A legacy row missing either one no longer matches. The co-signer's own home `state` is still never compared.
+- **Family rows need the full arrest identity.** `family_graph` and `family_relationships` rows are read by booking number only and linked only when they carry the arrest's county and state. A matching defendant name or `person_id` slug no longer links a row. FamilyTreeService rows (person name/id only) are therefore skipped.
+- **Legacy booking-only contacts docs are updated in place.** Before a new scoped doc is created, a contacts doc keyed by booking only (no county or state, which is how every pre-#280 doc was written) is updated in place and given state + county; its reviewed rows are kept. This happens only when there is exactly one such doc and exactly one arrest with that booking number. Otherwise nothing is read or written, `contacts_legacy_ambiguous` is logged (code only), the batch marks the booking terminal `failed`, and the discover route returns 409 `legacy_contacts_ambiguous`. No migration, no data change outside the normal discovery write.
+- **County and state are canonical before the identity and `_id`.** `lee` / `LEE` / `Lee County` / `Lee (FL)` give `Lee`; `fl` / `Florida` / `Fla` give `FL`; an unknown state gives no identity. Canonical input (`Lee`/`FL`) gives the same `contacts:v1:` id as before. `_resolve_arrest` and `GET /api/contacts/{booking}` accept the same spellings.
+- **A partial read failure is a failed run, not "nothing found".** If any prior-Shamrock or same-address collection read raises, the run is `failed` with `discovery_error = prior_read_failed`, earlier rows are kept, and the batch sets the booking to `retry`. A booking whose identity cannot be resolved (`identity_ambiguous`) is marked terminal `failed` instead of being re-claimed.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`: booking-only rows without arrest county or state do not match; name-only, booking-only, other-county and no-state family rows are rejected and scoped ones accepted; one legacy doc updated in place keeping reviewed rows; a legacy doc for another county is not reused; two legacy docs, a booking on two arrests, or a capped scan write nothing and log only the code; batch and route handling of the ambiguous case; nine county/state spellings give the same identity and the v1 id; partial read failure gives `failed`/`prior_read_failed` and a batch `retry`; unresolvable identity is terminal; `_resolve_arrest` and the GET route accept `Lee County`/`Florida`. Lee arrest-write queue tests unchanged and green.
+
 ## [Unreleased] — 2026-10-28 (Lee co-signer discovery: Codex round 2 on #280)
 
 ### Fixed
