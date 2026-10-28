@@ -15,14 +15,14 @@ The Finder performs OSINT-style contact discovery on arrestees, identifying pote
 
 ```
 New Lee (FL) arrest write
-    → capped queue marker (does not block the scraper)
+    → queue marker in the same upsert (does not block the scraper)
     → dashboard cron claims the booking
     → name plus phone, DOB, or address+ZIP
     → store candidates on contacts
     → lead drawer for staff review
 ```
 
-A new Lee (FL) upsert sets `indemnitor_discovery.status` to `queued`. The dashboard cron `lee_indemnitor_discovery` claims a few bookings per pass. Lee (GA), Lee (SC), and the other Lee counties are not queued. Discovery reads Shamrock rows already in Mongo (prior indemnitors, intakes, family links, same address). Public HTTP and skip-trace stay off unless env flags are set. Candidates are not placed on an outreach queue.
+A new Lee (FL) upsert sets `indemnitor_discovery.status` to `queued`. The dashboard cron `lee_indemnitor_discovery` claims a few bookings per pass. Lee (GA), Lee (SC), and the other Lee counties are not queued. Discovery reads Shamrock rows already in Mongo (prior indemnitors, intakes, family links, same address). Public HTTP and skip-trace stay off unless env flags are set. Candidates are keyed on state + county + booking. They are not placed on an outreach queue, and outreach uses a discovery candidate only after staff mark it `reviewed` or `approved`.
 
 ---
 
@@ -31,7 +31,7 @@ A new Lee (FL) upsert sets `indemnitor_discovery.status` to `queued`. The dashbo
 | File | Purpose |
 |------|---------|
 | `dashboard/services/contact_discovery.py` | OSINT discovery engine |
-| `dashboard/api/contacts.py` | Contact API endpoints |
+| `dashboard/routers/contacts.py` | Contact API endpoints |
 | `dashboard/sl-prospective.js` | Contact display in pipeline |
 
 ---

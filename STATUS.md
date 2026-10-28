@@ -16,6 +16,16 @@
 
 ---
 
+## Lee (FL) co-signer discovery queue (2026-10-28)
+
+PR #280. A new Lee (FL) booking is queued for co-signer discovery by an `indemnitor_discovery: queued` field in the arrest upsert's own `$setOnInsert`. There is no second write, thread, or wait, so the Lee write is never blocked or delayed. If building the marker fails, the error type is logged and the arrest is still written. Lee (GA/SC) and other counties are not queued.
+
+The dashboard cron `lee_indemnitor_discovery` (Service Control toggle) claims queued or due-deferred rows a few at a time. Discovery reads prior indemnitors, intakes, `intake_queue`, `family_graph`, `family_relationships`, and same-address rows. Public HTTP and skip-trace stay off unless their env flags are set; when on, HTTP runs off the event loop and a rate limit defers the booking (`retry_after`, max 4 deferrals) instead of finishing it empty.
+
+Contacts are keyed on state + county + booking. `GET /api/contacts/{booking}` returns 409 when the booking exists in more than one county and no county/state is given. Outreach (`OutreachSequencer._resolve_phone`) uses only `reviewed`/`approved` candidates on the full arrest identity; a refresh keeps reviewed rows. There is no staff review action yet, so discovery candidates do not feed automatic outreach until one exists.
+
+Lee stays `candidate_productive` in the matrix and `unverified` in Health. Tests: `tests/test_lee_indemnitor_discovery.py` (on `.github/workflows/ci.yml`).
+
 ## Lee (FL) missed-run alert covers max-instances skips (2026-10-27)
 
 PR #293 (follow-up to #292, deployed in Hetzner run 40502451546). The Lee job runs with `max_instances=1`. When a tick fires while the previous run is still going, APScheduler emits `EVENT_JOB_MAX_INSTANCES` instead of `EVENT_JOB_MISSED`, so the #292 missed-run alert never fired for that kind of skip.

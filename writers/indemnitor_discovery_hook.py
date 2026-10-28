@@ -1,20 +1,26 @@
-"""Queue Lee (FL) indemnitor discovery after a scraper write.
+"""Queue Lee (FL) indemnitor discovery as part of the arrest write.
 
-The scraper calls :func:`run_post_write_hook`. That wrapper starts the
-enqueue on a daemon thread and joins it for at most ``HOOK_JOIN_SECONDS``.
-A raise or a hang inside the hook cannot fail or stall ``write_records``.
+The queue marker rides inside the arrest upsert itself (``$setOnInsert``),
+so it is durable the moment the bulk write returns. There is no thread and
+no second round trip, so a one-shot run that exits right after the write
+cannot lose the enqueue, and the write is never delayed by it.
+
+:func:`discovery_insert_marker` is fail-open: any error is logged by type
+and the arrest is written without a marker. The dashboard cron still picks
+up recent Lee (FL) rows that have no marker.
 """
 from __future__ import annotations
 
 import logging
-import threading
 from datetime import datetime, timezone
-from typing import Any, Callable, Sequence
+from typing import Any, Dict, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
-# Fast path usually finishes inside this window. A hung hook is abandoned.
-HOOK_JOIN_SECONDS = 0.25
+# Top-level arrest field the marker lives under. The scraped ``$set`` never
+# carries it; if it ever does, the marker is skipped (Mongo rejects a path in
+# both $set and $setOnInsert).
+MARKER_FIELD = "indemnitor_discovery"
 
 
 def _is_lee_florida(county: Any, state: Any) -> bool:
@@ -23,10 +29,46 @@ def _is_lee_florida(county: Any, state: Any) -> bool:
     return is_lee_florida(county, state)
 
 
-def enqueue_lee_indemnitor_discovery(db: Any, records: Sequence[Any]) -> int:
-    """Mark new Lee (FL) bookings queued. May raise or block. Callers must guard it.
+def queued_marker(now: Optional[datetime] = None) -> Dict[str, Any]:
+    now = now or datetime.now(timezone.utc)
+    return {"status": "queued", "queued_at": now, "updated_at": now}
 
-    Logs a count only. Booking numbers and names are not logged.
+
+def discovery_insert_marker(
+    state: Any,
+    county: Any,
+    booking: Any,
+    set_doc: Optional[Dict[str, Any]] = None,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """``$setOnInsert`` fields that queue discovery for a new Lee (FL) booking.
+
+    Returns ``{}`` for any other county, a blank key, a ``$set`` that already
+    carries the field, or any error. Never raises. Logs the error type only.
+    """
+    try:
+        if not str(booking or "").strip() or not str(county or "").strip():
+            return {}
+        if set_doc and any(
+            key == MARKER_FIELD or str(key).startswith(MARKER_FIELD + ".") for key in set_doc
+        ):
+            return {}
+        if not _is_lee_florida(county, state or "FL"):
+            return {}
+        return {MARKER_FIELD: queued_marker(now)}
+    except Exception as exc:  # isolation: the arrest write must go ahead
+        logger.warning(
+            "indemnitor discovery marker skipped error_type=%s",
+            type(exc).__name__,
+        )
+        return {}
+
+
+def enqueue_lee_indemnitor_discovery(db: Any, records: Sequence[Any]) -> int:
+    """Backfill helper: mark existing Lee (FL) bookings queued.
+
+    Not called on the scraper write path (the marker is in the upsert). May
+    raise; callers must guard it. Logs a count only.
     """
     if db is None or not records:
         return 0
@@ -51,29 +93,3 @@ def enqueue_lee_indemnitor_discovery(db: Any, records: Sequence[Any]) -> int:
     if queued:
         logger.info("indemnitor discovery queued count=%s", queued)
     return queued
-
-
-def run_post_write_hook(hook: Callable[..., Any], *args: Any, join_seconds: float | None = None) -> None:
-    """Run ``hook`` without letting it fail or stall the caller.
-
-    Exceptions stay on the daemon thread. ``join`` returns when the hook
-    finishes or when ``join_seconds`` elapses, whichever comes first.
-    """
-    limit = HOOK_JOIN_SECONDS if join_seconds is None else join_seconds
-
-    def _target() -> None:
-        try:
-            hook(*args)
-        except Exception as exc:
-            logger.warning(
-                "indemnitor discovery hook failed error_type=%s",
-                type(exc).__name__,
-            )
-
-    thread = threading.Thread(
-        target=_target,
-        name="indemnitor-discovery-hook",
-        daemon=True,
-    )
-    thread.start()
-    thread.join(limit)

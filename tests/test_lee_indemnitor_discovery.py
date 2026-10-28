@@ -487,39 +487,343 @@ def test_enqueue_is_lee_florida_only():
     assert updates[0][1]["$set"]["indemnitor_discovery.status"] == "queued"
 
 
-def test_raising_hook_leaves_the_write_successful(monkeypatch):
-    def _boom(db, records):
-        raise RuntimeError("hook")
+def _ops_for(writer):
+    call = writer.arrests.bulk_write.call_args_list[-1]
+    return call.args[0]
 
-    monkeypatch.setattr(
-        "writers.indemnitor_discovery_hook.enqueue_lee_indemnitor_discovery",
-        _boom,
+
+def test_queue_marker_rides_in_the_arrest_upsert_for_lee_fl_only():
+    writer = _make_writer(_bulk_result([0]))
+    writer.write_records(
+        [ArrestRecord(County="Lee", State="FL", Booking_Number="B-100", Full_Name="Casey Sample")],
+        "Lee",
     )
+    op = _ops_for(writer)[0]
+    marker = op._doc["$setOnInsert"]["indemnitor_discovery"]
+    assert marker["status"] == "queued"
+    assert "created_at" in op._doc["$setOnInsert"]
+    # Durable with the write itself: no second arrests round trip, no thread.
+    writer.arrests.update_one.assert_not_called()
+
+    other = _make_writer(_bulk_result([0]))
+    other.write_records(
+        [ArrestRecord(County="Lee", State="GA", Booking_Number="B-100", Full_Name="Casey Sample")],
+        "Lee",
+    )
+    assert "indemnitor_discovery" not in _ops_for(other)[0]._doc["$setOnInsert"]
+
+
+def test_queue_exception_still_writes_the_arrests(monkeypatch, caplog):
+    def _boom(*args, **kwargs):
+        raise RuntimeError("queue down")
+
+    monkeypatch.setattr("writers.indemnitor_discovery_hook._is_lee_florida", _boom)
+    writer = _make_writer(_bulk_result([0, 1]))
+    with caplog.at_level("WARNING"):
+        stats = writer.write_records(
+            [
+                ArrestRecord(County="Lee", State="FL", Booking_Number="B-100", Full_Name="Casey Sample"),
+                ArrestRecord(County="Lee", State="FL", Booking_Number="B-101", Full_Name="Casey Sample"),
+            ],
+            "Lee",
+        )
+    assert stats["new_records"] == 2
+    assert stats["new_record_indexes"] == [0, 1]
+    ops = _ops_for(writer)
+    assert len(ops) == 2
+    for op in ops:
+        assert "indemnitor_discovery" not in op._doc["$setOnInsert"]
+        assert "created_at" in op._doc["$setOnInsert"]
+    text = caplog.text
+    assert "error_type=RuntimeError" in text
+    assert "B-100" not in text and "Casey" not in text
+
+
+def test_marker_import_failure_still_writes_the_arrests(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _no_hook(name, *args, **kwargs):
+        if name == "writers.indemnitor_discovery_hook":
+            raise ImportError("hook missing")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _no_hook)
     writer = _make_writer(_bulk_result([0]))
     stats = writer.write_records(
         [ArrestRecord(County="Lee", State="FL", Booking_Number="B-100", Full_Name="Casey Sample")],
         "Lee",
     )
     assert stats["new_records"] == 1
-    assert stats["new_record_indexes"] == [0]
 
 
-def test_slow_hook_leaves_the_write_on_time(monkeypatch):
-    monkeypatch.setattr("writers.indemnitor_discovery_hook.HOOK_JOIN_SECONDS", 0.05)
+def test_write_path_starts_no_thread_and_waits_on_nothing(monkeypatch):
+    import threading
 
-    def _slow(db, records):
-        time.sleep(2)
-
-    monkeypatch.setattr(
-        "writers.indemnitor_discovery_hook.enqueue_lee_indemnitor_discovery",
-        _slow,
-    )
+    started = []
+    monkeypatch.setattr(threading.Thread, "start", lambda self: started.append(self.name))
     writer = _make_writer(_bulk_result([0]))
-    started = time.perf_counter()
-    stats = writer.write_records(
+    t0 = time.perf_counter()
+    writer.write_records(
         [ArrestRecord(County="Lee", State="FL", Booking_Number="B-100", Full_Name="Casey Sample")],
         "Lee",
     )
-    elapsed = time.perf_counter() - started
-    assert stats["new_records"] == 1
-    assert elapsed < 1.0
+    assert time.perf_counter() - t0 < 1.0
+    assert not [name for name in started if "indemnitor" in name]
+
+
+@pytest.mark.asyncio
+async def test_unreviewed_candidate_is_never_an_outreach_target():
+    from dashboard.services.outreach_sequencer import OutreachSequencer
+
+    db = AsyncDB()
+    db["contacts"].docs.append({
+        "state": "FL", "county": "Lee", "booking_number": "B-100",
+        "discovered_contacts": [
+            {"name": "Jordan Sample", "phone": "5550100100", "confidence": 0.9, "review_status": "unreviewed"},
+        ],
+    })
+    seq = OutreachSequencer(db)
+    arrest = {"state": "FL", "county": "Lee", "booking_number": "B-100", "full_name": ""}
+    assert await seq._resolve_phone(arrest) == ("", "none")
+
+    db["contacts"].docs[0]["discovered_contacts"][0]["review_status"] = "approved"
+    assert await seq._resolve_phone(arrest) == ("5550100100", "contact_discovery")
+    # A legacy candidate with no review state is not usable either.
+    db["contacts"].docs[0]["discovered_contacts"][0].pop("review_status")
+    assert await seq._resolve_phone(arrest) == ("", "none")
+
+
+@pytest.mark.asyncio
+async def test_outreach_reads_contacts_on_the_full_arrest_identity():
+    from dashboard.services.outreach_sequencer import OutreachSequencer
+
+    db = AsyncDB()
+    db["contacts"].docs.append({
+        "state": "FL", "county": "Collier", "booking_number": "B-100",
+        "discovered_contacts": [
+            {"name": "Other Person", "phone": "5550100999", "confidence": 0.99, "review_status": "reviewed"},
+        ],
+    })
+    seq = OutreachSequencer(db)
+    lee = {"state": "FL", "county": "Lee", "booking_number": "B-100", "full_name": ""}
+    assert await seq._resolve_phone(lee) == ("", "none")
+
+
+@pytest.mark.asyncio
+async def test_same_booking_in_two_counties_keeps_separate_contacts():
+    db = AsyncDB()
+    db["indemnitors"].docs.extend([
+        {"booking_number": "B-100", "county": "Lee", "indemnitor_name": "Jordan Sample", "indemnitor_phone": "5550100100"},
+        {"booking_number": "B-100", "county": "Collier", "indemnitor_name": "Pat Other", "indemnitor_phone": "5550100300"},
+    ])
+    lee = await run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True)
+    col = await run_discovery(db, booking_number="B-100", full_name="Drew Other", county="Collier", state="FL", force=True)
+    assert [row["name"] for row in lee["contacts"]] == ["Jordan Sample"]
+    assert [row["name"] for row in col["contacts"]] == ["Pat Other"]
+    keys = sorted((d["state"], d["county"], d["booking_number"]) for d in db["contacts"].docs)
+    assert keys == [("FL", "Collier", "B-100"), ("FL", "Lee", "B-100")]
+    # A cached read for Lee does not return Collier's doc.
+    again = await run_discovery(db, booking_number="B-100", county="Lee", state="FL", force=False)
+    assert again["cached"] is True
+    assert [row["name"] for row in again["contacts"]] == ["Jordan Sample"]
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_booking_without_county_writes_nothing():
+    db = AsyncDB()
+    db["arrests"].docs.extend([
+        {"_id": "a1", "booking_number": "B-100", "county": "Lee", "state": "FL"},
+        {"_id": "a2", "booking_number": "B-100", "county": "Collier", "state": "FL"},
+    ])
+    result = await run_discovery(db, booking_number="B-100", full_name="Casey Sample", force=True)
+    assert result["discovery_status"] == "identity_ambiguous"
+    assert db["contacts"].docs == []
+
+
+@pytest.mark.asyncio
+async def test_refresh_keeps_reviewed_rows_the_run_did_not_return():
+    db = AsyncDB()
+    db["contacts"].docs.append({
+        "state": "FL", "county": "Lee", "booking_number": "B-100",
+        "discovered_contacts": [
+            {"name": "Kept Reviewed", "source": "skiptrace", "review_status": "reviewed",
+             "candidate_id": "c-1", "discovered_at": NOW.isoformat()},
+            {"name": "Dropped Unreviewed", "source": "same_address", "review_status": "unreviewed",
+             "discovered_at": NOW.isoformat()},
+        ],
+    })
+    result = await run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True)
+    names = {row["name"]: row for row in result["contacts"]}
+    assert names["Kept Reviewed"]["review_status"] == "reviewed"
+    assert names["Kept Reviewed"]["candidate_id"] == "c-1"
+    assert "Dropped Unreviewed" not in names
+    assert "unreviewed_expire_at" not in db["contacts"].docs[0]
+
+
+@pytest.mark.asyncio
+async def test_refresh_keeps_prior_rows_of_a_provider_that_failed():
+    db = AsyncDB()
+    db["contacts"].docs.append({
+        "state": "FL", "county": "Lee", "booking_number": "B-100",
+        "discovered_contacts": [
+            {"name": "Prior Row", "source": "same_address", "review_status": "unreviewed",
+             "discovered_at": NOW.isoformat()},
+        ],
+    })
+
+    async def _boom(db, booking):
+        raise RuntimeError("backend")
+
+    with patch("dashboard.services.contact_discovery._provider_same_address", _boom):
+        result = await run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True)
+    assert [row["name"] for row in result["contacts"]] == ["Prior Row"]
+
+
+@pytest.mark.asyncio
+async def test_intake_queue_rows_are_read_on_their_booking_fields():
+    db = AsyncDB()
+    db["intake_queue"].docs.extend([
+        {
+            "defendant_booking_number": "B-100", "defendant_county": "Lee",
+            "indemnitor_name": "Jordan Sample", "indemnitor_phone": "5550100100",
+            "indemnitor": {"firstName": "Jordan", "lastName": "Sample", "dob": "1980-05-06", "relationship": "sibling"},
+            "defendant": {"name": ""},
+        },
+        {
+            "matched_booking_number": "B-100", "matched_county": "Collier",
+            "indemnitor_name": "Pat Other", "indemnitor_phone": "5550100300",
+            "indemnitor": {}, "defendant": {},
+        },
+    ])
+    result = await run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True)
+    by_name = {row["name"]: row for row in result["contacts"]}
+    assert set(by_name) == {"Jordan Sample"}
+    assert by_name["Jordan Sample"]["matched_anchors"] == ["phone", "dob"]
+    assert by_name["Jordan Sample"]["relationship"] == "sibling"
+
+
+@pytest.mark.asyncio
+async def test_family_records_are_parsed_with_their_schemas():
+    db = AsyncDB()
+    db["family_graph"].docs.append(
+        {"defendant_name": "Casey Sample", "relative_name": "Morgan Sample", "relative_phone": "5550100200", "relationship": "parent"},
+    )
+    db["family_relationships"].docs.extend([
+        {"person_id": "casey_sample", "person_name": "casey_sample", "relative_name": "Taylor Sample",
+         "relation_type": "sibling", "phone": "5550100201", "status": "active"},
+        {"person_id": "casey_sample", "person_name": "Casey Sample", "relative_name": "Gone Sample",
+         "relation_type": "sibling", "phone": "5550100202", "status": "soft_deleted"},
+        {"person_id": "casey_sample", "person_name": "Casey Sample", "relative_name": "No Anchor",
+         "relation_type": "sibling", "status": "active"},
+    ])
+    result = await run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True)
+    by_name = {row["name"]: row for row in result["contacts"]}
+    assert set(by_name) == {"Morgan Sample", "Taylor Sample"}
+    assert by_name["Morgan Sample"]["matched_anchors"] == ["phone"]
+    assert by_name["Morgan Sample"]["relationship"] == "parent"
+    assert by_name["Taylor Sample"]["relationship"] == "sibling"
+
+
+@pytest.mark.asyncio
+async def test_public_requests_run_off_the_event_loop_and_sleep_out_the_gap(monkeypatch):
+    import threading
+    from dashboard.services import contact_discovery as cd
+
+    monkeypatch.setenv("INDEMNITOR_DISCOVERY_HTTP_GAP_S", "0.2")
+    monkeypatch.setattr(cd, "_last_http_monotonic", 0.0)
+    monkeypatch.setattr(cd, "_http_gap_lock", None)
+    threads = []
+
+    def _fake(method, url):
+        threads.append(threading.current_thread() is threading.main_thread())
+        return "ok"
+
+    monkeypatch.setattr(cd, "public_request", _fake)
+    t0 = time.perf_counter()
+    assert await cd.public_request_async("GET", "https://example.test/a") == "ok"
+    assert await cd.public_request_async("GET", "https://example.test/b") == "ok"
+    assert time.perf_counter() - t0 >= 0.15  # waited, did not skip
+    assert threads == [False, False]
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_provider_defers_the_booking(monkeypatch):
+    from dashboard.services import contact_discovery as cd
+
+    monkeypatch.setenv("INDEMNITOR_DISCOVERY_HTTP", "1")
+    monkeypatch.setenv("INDEMNITOR_DISCOVERY_HTTP_GAP_S", "0")
+    monkeypatch.delenv("INDEMNITOR_SKIPTRACE_URL", raising=False)
+
+    def _limited(method, url):
+        raise _RateLimited("lee_rate_limited")
+
+    monkeypatch.setattr(cd, "public_request", _limited)
+    db = AsyncDB()
+    db["arrests"].docs.append(_booking())
+    monkeypatch.setattr(cd, "_lee_claim_query", lambda now: {"booking_number": "B-100"})
+    summary = await run_lee_discovery_batch(db, limit=5, now=NOW)
+    assert summary["deferred"] == 1 and summary["completed"] == 0
+    marker = db["arrests"].docs[0]["indemnitor_discovery"]
+    assert marker["status"] == "deferred"
+    assert marker["retry_after"] > NOW
+    assert marker.get("deferrals", 0) == 0
+
+    # The next claim after retry_after re-picks it and counts the deferral.
+    db["arrests"].docs[0]["indemnitor_discovery"]["retry_after"] = NOW - timedelta(minutes=1)
+    summary = await run_lee_discovery_batch(db, limit=5, now=NOW)
+    assert summary["deferred"] == 1
+    assert db["arrests"].docs[0]["indemnitor_discovery"]["deferrals"] == 1
+
+
+def test_claim_query_picks_deferred_rows_after_retry_after():
+    from dashboard.services.contact_discovery import _lee_claim_query
+
+    clauses = _lee_claim_query(NOW)["$and"][1]["$or"]
+    assert {"indemnitor_discovery.status": "deferred", "indemnitor_discovery.retry_after": {"$lte": NOW}} in clauses
+
+
+def test_skiptrace_anchors_are_recomputed_from_returned_fields():
+    from dashboard.services.contact_discovery import skiptrace_anchors
+
+    assert skiptrace_anchors({"phone": "5550100100", "matched_anchors": ["phone", "dob"]}) == ["phone"]
+    assert skiptrace_anchors({"phone": "12", "matched_anchors": ["phone"]}) == []
+    assert skiptrace_anchors({"dob": "1980-05-06", "matched_anchors": []}) == []
+    assert skiptrace_anchors({
+        "address": "100 Test St", "zip": "00000", "dob": "05/06/1980",
+        "matched_anchors": ["address_zip", "dob"],
+    }) == ["dob", "address_zip"]
+
+
+@pytest.mark.asyncio
+async def test_skiptrace_vendor_claims_cannot_inflate_confidence(monkeypatch):
+    monkeypatch.setenv("INDEMNITOR_SKIPTRACE_URL", "https://skiptrace.example.test/v1")
+    monkeypatch.setenv("INDEMNITOR_SKIPTRACE_API_KEY", "test-key")
+    monkeypatch.setenv("INDEMNITOR_DISCOVERY_HTTP_GAP_S", "0")
+    monkeypatch.delenv("INDEMNITOR_DISCOVERY_HTTP", raising=False)
+
+    class _Resp:
+        content = b"{}"
+
+        @staticmethod
+        def json():
+            return {"candidates": [
+                {"name": "Jordan Sample", "phone": "5550100100", "matched_anchors": ["phone", "dob"]},
+                {"name": "Claim Only", "matched_anchors": ["phone", "dob", "address_zip"]},
+            ]}
+
+    monkeypatch.setattr("scrapers.plain_http.make_session", lambda *a, **k: object())
+    monkeypatch.setattr("scrapers.plain_http.request", lambda *a, **k: _Resp())
+    db = AsyncDB()
+    result = await run_discovery(db, booking_number="B-100", full_name="Casey Sample", county="Lee", state="FL", force=True)
+    by_name = {row["name"]: row for row in result["contacts"]}
+    assert set(by_name) == {"Jordan Sample"}
+    assert by_name["Jordan Sample"]["confidence"] == ANCHOR_WEIGHTS["phone"]
+
+
+def test_discovery_cron_is_controllable_from_service_control():
+    from dashboard.routers.automation_control import ALL_SERVICE_KEYS, SERVICE_META
+
+    assert "lee_indemnitor_discovery" in ALL_SERVICE_KEYS
+    assert "lee_indemnitor_discovery" in SERVICE_META

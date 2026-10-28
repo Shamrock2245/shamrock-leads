@@ -37,7 +37,7 @@ class ContactDiscoveryService:
         self.db = db
 
     async def discover(self, booking_number: str, full_name: str, county: str = None,
-                       address: str = None, dob: str = None):
+                       address: str = None, dob: str = None, state: str = None):
         """Refresh co-signer candidates for one booking. Staff-initiated, so force=True.
 
         A name by itself is never stored. HTTP and skip-trace stay off unless
@@ -50,6 +50,7 @@ class ContactDiscoveryService:
             county=county or "",
             address=address or "",
             dob=dob or "",
+            state=state or "",
             force=True,
         )
         return {
@@ -76,8 +77,16 @@ UNREVIEWED_TTL_DAYS = 30
 DISCOVERY_BATCH_LIMIT = 5
 RECENT_MISSING_HOURS = 24
 STALE_RUNNING_MINUTES = 15
+DEFER_MINUTES = 15
+MAX_DEFERRALS = 4
 _HTTP_GAP_S = 2.0
 _last_http_monotonic = 0.0
+_http_gap_lock: Optional[asyncio.Lock] = None
+
+# Only these review states are usable outside the review drawer (outreach).
+REVIEWED_STATUSES = frozenset({"reviewed", "approved"})
+# Provider statuses that mean "try again later", not "nothing found".
+DEFERRABLE_STATUSES = frozenset({"lee_rate_limited", "discovery_http_gap"})
 
 _TRUTHY = {"1", "true", "yes", "on"}
 _FALSY = {"0", "false", "no", "off"}
@@ -96,6 +105,24 @@ class DiscoveryHttpError(Exception):
 class DiscoveryRateLimited(DiscoveryHttpError):
     def __init__(self, code: str = "lee_rate_limited"):
         super().__init__(code)
+
+
+def contact_identity(state: Any, county: Any, booking_number: Any) -> Optional[Dict[str, str]]:
+    """Full arrest identity for a ``contacts`` doc, or None when any part is blank.
+
+    The same booking number can exist in two counties, so a contacts doc is
+    always keyed and read on state + county + booking_number.
+    """
+    st = str(state or "").strip().upper()
+    co = str(county or "").strip()
+    bk = str(booking_number or "").strip()
+    if not (st and co and bk):
+        return None
+    return {"state": st, "county": co, "booking_number": bk}
+
+
+def is_reviewed(candidate: Any) -> bool:
+    return isinstance(candidate, dict) and candidate.get("review_status") in REVIEWED_STATUSES
 
 
 def discovery_enabled() -> bool:
@@ -338,25 +365,44 @@ async def _find_list(collection: Any, query: Dict[str, Any], limit: int = 25) ->
     return []
 
 
-def _merge_candidates(existing: Sequence[Dict[str, Any]], fresh: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    prior = {
-        (name_key(str(row.get("name") or "")), str(row.get("source") or "")): row
-        for row in existing
-    }
+def _merge_candidates(
+    existing: Sequence[Dict[str, Any]],
+    fresh: Sequence[Dict[str, Any]],
+    keep_sources: Sequence[str] = (),
+) -> List[Dict[str, Any]]:
+    """Merge a refresh into the stored list.
+
+    A reviewed/approved prior row keeps its review state and id, and it is
+    kept even when this run did not return it. A prior unreviewed row from a
+    provider that did not complete this run (``keep_sources``) is kept too;
+    the 30-day purge still applies to it.
+    """
+    def _key(row: Dict[str, Any]):
+        return (name_key(str(row.get("name") or "")), str(row.get("source") or ""))
+
+    prior = {_key(row): row for row in existing if isinstance(row, dict)}
     merged: List[Dict[str, Any]] = []
     seen = set()
     for row in fresh:
-        key = (name_key(str(row.get("name") or "")), str(row.get("source") or ""))
+        key = _key(row)
         if not key[0] or key in seen:
             continue
         seen.add(key)
         previous = prior.get(key)
-        if previous and previous.get("review_status") == "reviewed":
+        if is_reviewed(previous):
             row = dict(row)
-            row["review_status"] = "reviewed"
-            if previous.get("candidate_id"):
-                row["candidate_id"] = previous["candidate_id"]
+            row["review_status"] = previous["review_status"]
+            for field in ("candidate_id", "reviewed_at", "reviewed_by"):
+                if previous.get(field):
+                    row[field] = previous[field]
         merged.append(row)
+    keep = set(keep_sources or ())
+    for key, row in prior.items():
+        if key in seen or not key[0]:
+            continue
+        if is_reviewed(row) or str(row.get("source") or "") in keep:
+            seen.add(key)
+            merged.append(row)
     return merged
 
 
@@ -390,25 +436,199 @@ def unreviewed_expire_at(candidates: Sequence[Dict[str, Any]], now: datetime) ->
     return min(stamps) + timedelta(days=UNREVIEWED_TTL_DAYS)
 
 
+def _norm_county(value: Any) -> str:
+    text = " ".join(str(value or "").lower().split())
+    return text[:-7].strip() if text.endswith(" county") else text
+
+
+def _same_place(booking: Dict[str, Any], county: Any, state: Any = "") -> bool:
+    """False only when the row names a different county or state than the booking."""
+    b_county, r_county = _norm_county(booking.get("county")), _norm_county(county)
+    if b_county and r_county and b_county != r_county:
+        return False
+    b_state = str(booking.get("state") or "").strip().upper()
+    r_state = str(state or "").strip().upper()
+    if b_state and r_state and len(r_state) == 2 and b_state != r_state:
+        return False
+    return True
+
+
+def _slug(name: str) -> str:
+    """Same slug FamilyTreeService uses for person_id."""
+    text = re.sub(r"[^a-z0-9]+", "_", (name or "").strip().lower()).strip("_")
+    return text
+
+
+def _generic_prior_rows(rows: Sequence[Any], booking: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """indemnitors / intakes rows (flat indemnitor_* or name/phone fields)."""
+    defendant = _first(booking, "full_name", "defendant_name")
+    booking_number = _first(booking, "booking_number")
+    found: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        same_case = (
+            bool(booking_number)
+            and _row_booking(row) == booking_number
+            and _same_place(booking, _first(row, "county", "defendant_county", "matched_county"), _first(row, "state"))
+        )
+        defendant_names = _as_names(row.get("defendant_name")) + _as_names(row.get("defendants_bonded"))
+        name_hit = any(names_equal(defendant, item) for item in defendant_names)
+        anchors: List[str] = []
+        if same_case:
+            anchors.extend(_contact_anchors(row))
+        if name_hit:
+            anchors.extend(shared_defendant_anchors(booking, row))
+        candidate = make_candidate(
+            booking_number=booking_number,
+            name=_candidate_name(row),
+            anchors=anchors,
+            source="prior_shamrock",
+            relationship=_relationship(row, "prior_indemnitor"),
+            defendant_name=defendant,
+            **_contact_fields(row),
+        )
+        if candidate:
+            found.append(candidate)
+    return found
+
+
+def _intake_queue_rows(rows: Sequence[Any], booking: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """intake_queue: booking is defendant_booking_number / matched_booking_number;
+    the co-signer is the nested ``indemnitor`` block (flat indemnitor_* mirror)."""
+    defendant = _first(booking, "full_name", "defendant_name")
+    booking_number = _first(booking, "booking_number")
+    found: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        ind = row.get("indemnitor") if isinstance(row.get("indemnitor"), dict) else {}
+        dfd = row.get("defendant") if isinstance(row.get("defendant"), dict) else {}
+        same_case = bool(booking_number) and (
+            (
+                _first(row, "defendant_booking_number") == booking_number
+                and _same_place(booking, _first(row, "defendant_county") or _first(dfd, "county"))
+            )
+            or (
+                _first(row, "matched_booking_number") == booking_number
+                and _same_place(booking, _first(row, "matched_county"))
+            )
+        )
+        name = _first(row, "indemnitor_name") or " ".join(
+            part for part in (_first(ind, "firstName"), _first(ind, "lastName")) if part
+        )
+        phone = _first(row, "indemnitor_phone") or _first(ind, "phone")
+        email = _first(row, "indemnitor_email") or _first(ind, "email")
+        address = _first(ind, "address")
+        zip_code = _first(ind, "zip")
+        anchors: List[str] = []
+        if same_case:
+            if normalize_phone(phone):
+                anchors.append("phone")
+            if normalize_dob(_first(ind, "dob")):
+                anchors.append("dob")
+            if address_key(address, zip_code):
+                anchors.append("address_zip")
+        defendant_names = _as_names(row.get("defendant_name")) + _as_names(_first(dfd, "name"))
+        if any(names_equal(defendant, item) for item in defendant_names):
+            anchors.extend(shared_defendant_anchors(booking, {
+                "defendant_dob": _first(dfd, "dob"),
+                "defendant_phone": _first(dfd, "phone"),
+                "defendant_address": _first(dfd, "address"),
+                "defendant_zip": _first(dfd, "zip"),
+            }))
+        candidate = make_candidate(
+            booking_number=booking_number,
+            name=name,
+            anchors=anchors,
+            source="prior_shamrock",
+            relationship=_first(ind, "relationship") or "intake_indemnitor",
+            phone=phone,
+            email=email,
+            address=" ".join(part for part in (address, zip_code) if part),
+            defendant_name=defendant,
+        )
+        if candidate:
+            found.append(candidate)
+    return found
+
+
+def _family_rows(rows: Sequence[Any], booking: Dict[str, Any], collection_name: str) -> List[Dict[str, Any]]:
+    """family_graph (defendant_name -> relative_name/relative_phone) and
+    family_relationships from FamilyTreeService (person_name/person_id ->
+    relative_name, relation_type, phone). The candidate is the linked relative;
+    its anchors are the relative's own phone / DOB / address+ZIP."""
+    defendant = _first(booking, "full_name", "defendant_name")
+    booking_number = _first(booking, "booking_number")
+    slug = _slug(defendant)
+    found: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("status") or "").lower() in {"soft_deleted", "deleted"}:
+            continue
+        if collection_name == "family_relationships":
+            linked = names_equal(defendant, _first(row, "person_name")) or (
+                bool(slug) and _first(row, "person_id") == slug
+            )
+        else:
+            linked = names_equal(defendant, _first(row, "defendant_name", "person_name"))
+        if not linked and booking_number and _row_booking(row) == booking_number:
+            linked = _same_place(booking, _first(row, "county", "defendant_county"), _first(row, "state"))
+        if not linked:
+            continue
+        phone = _first(row, "relative_phone", "phone")
+        dob = _first(row, "relative_dob", "dob")
+        address = _first(row, "relative_address", "address")
+        zip_code = _first(row, "relative_zip", "zip")
+        anchors: List[str] = []
+        if normalize_phone(phone):
+            anchors.append("phone")
+        if normalize_dob(dob):
+            anchors.append("dob")
+        if address_key(address, zip_code):
+            anchors.append("address_zip")
+        candidate = make_candidate(
+            booking_number=booking_number,
+            name=_first(row, "relative_name"),
+            anchors=anchors,
+            source="prior_shamrock",
+            relationship=_first(row, "relation_type", "relationship") or "relative",
+            phone=phone,
+            email=_first(row, "relative_email", "email"),
+            address=" ".join(part for part in (address, zip_code) if part),
+            defendant_name=defendant,
+        )
+        if candidate:
+            found.append(candidate)
+    return found
+
+
 async def _provider_prior(db: Any, booking: Dict[str, Any]) -> List[Dict[str, Any]]:
     defendant = _first(booking, "full_name", "defendant_name")
     booking_number = _first(booking, "booking_number")
     variants = exact_name_variants(defendant)
-    name_clause: List[Dict[str, Any]] = []
-    if variants:
-        name_clause = [
-            {"defendant_name": {"$in": variants}},
-            {"defendants_bonded": {"$in": variants}},
-            {"person_name": {"$in": variants}},
-        ]
-    booking_clause = [{"booking_number": booking_number}] if booking_number else []
-    query: Dict[str, Any] = {"$or": booking_clause + name_clause} if (booking_clause or name_clause) else {}
-    if not query:
-        return []
+    by_booking = [{"booking_number": booking_number}] if booking_number else []
+    queries: List[tuple] = []
+    queries.append(("indemnitors", by_booking + (
+        [{"defendant_name": {"$in": variants}}, {"defendants_bonded": {"$in": variants}}] if variants else []
+    )))
+    queries.append(("intakes", by_booking + ([{"defendant_name": {"$in": variants}}] if variants else [])))
+    queries.append(("intake_queue", (
+        [{"defendant_booking_number": booking_number}, {"matched_booking_number": booking_number}]
+        if booking_number else []
+    ) + ([{"defendant_name": {"$in": variants}}] if variants else [])))
+    queries.append(("family_graph", by_booking + ([{"defendant_name": {"$in": variants}}] if variants else [])))
+    slug = _slug(defendant)
+    queries.append(("family_relationships", (
+        [{"person_name": {"$in": variants}}] if variants else []
+    ) + ([{"person_id": slug}] if slug else [])))
     found: List[Dict[str, Any]] = []
-    for collection_name in ("indemnitors", "intakes", "family_graph", "family_relationships"):
+    for collection_name, clauses in queries:
+        if not clauses:
+            continue
         try:
-            rows = await _find_list(db[collection_name], query, limit=25)
+            rows = await _find_list(db[collection_name], {"$or": clauses}, limit=25)
         except Exception as exc:
             log.warning(
                 "[indemnitor_discovery] prior read failed collection=%s error_type=%s",
@@ -416,29 +636,12 @@ async def _provider_prior(db: Any, booking: Dict[str, Any]) -> List[Dict[str, An
                 type(exc).__name__,
             )
             continue
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            same_case = bool(booking_number) and _row_booking(row) == booking_number
-            defendant_names = _as_names(row.get("defendant_name")) + _as_names(row.get("defendants_bonded"))
-            defendant_names += _as_names(row.get("person_name"))
-            name_hit = any(names_equal(defendant, item) for item in defendant_names)
-            anchors: List[str] = []
-            if same_case:
-                anchors.extend(_contact_anchors(row))
-            if name_hit:
-                anchors.extend(shared_defendant_anchors(booking, row))
-            candidate = make_candidate(
-                booking_number=booking_number,
-                name=_candidate_name(row),
-                anchors=anchors,
-                source="prior_shamrock",
-                relationship=_relationship(row, "prior_indemnitor"),
-                defendant_name=defendant,
-                **_contact_fields(row),
-            )
-            if candidate:
-                found.append(candidate)
+        if collection_name == "intake_queue":
+            found.extend(_intake_queue_rows(rows, booking))
+        elif collection_name in {"family_graph", "family_relationships"}:
+            found.extend(_family_rows(rows, booking, collection_name))
+        else:
+            found.extend(_generic_prior_rows(rows, booking))
     return found
 
 
@@ -449,7 +652,7 @@ async def _provider_same_address(db: Any, booking: Dict[str, Any]) -> List[Dict[
     zip5 = normalize_zip(booking.get("zip"))
     if not key or not zip5:
         return []
-    query = {"zip": {"$in": [zip5, booking.get("zip")]}, "booking_number": {"$ne": booking_number}}
+    query = {"zip": {"$in": [zip5, booking.get("zip")]}}
     found: List[Dict[str, Any]] = []
     for collection_name, name_fields in (
         ("arrests", ("full_name", "defendant_name")),
@@ -469,6 +672,12 @@ async def _provider_same_address(db: Any, booking: Dict[str, Any]) -> List[Dict[
                 continue
             if address_key(row.get("address"), row.get("zip")) != key:
                 continue
+            if (
+                booking_number
+                and _row_booking(row) == booking_number
+                and _same_place(booking, row.get("county"), row.get("state"))
+            ):
+                continue  # the defendant's own row
             other = _first(row, *name_fields)
             anchors = ["address_zip"]
             if normalize_phone(_first(row, "phone", "defendant_phone")) and normalize_phone(
@@ -550,20 +759,36 @@ def _provider_booking_fields(booking: Dict[str, Any]) -> List[Dict[str, Any]]:
     return found
 
 
-def _respect_http_gap() -> None:
-    global _last_http_monotonic
-    gap = float(os.getenv("INDEMNITOR_DISCOVERY_HTTP_GAP_S", str(_HTTP_GAP_S)))
-    now = time.monotonic()
-    if gap > 0 and _last_http_monotonic and (now - _last_http_monotonic) < gap:
-        raise DiscoveryRateLimited("discovery_http_gap")
-    _last_http_monotonic = now
+def _gap_seconds() -> float:
+    try:
+        return max(0.0, float(os.getenv("INDEMNITOR_DISCOVERY_HTTP_GAP_S", str(_HTTP_GAP_S))))
+    except ValueError:
+        return _HTTP_GAP_S
+
+
+async def _await_http_gap() -> None:
+    """Sleep out the gap between public calls (asyncio.sleep, never time.sleep).
+
+    The call is delayed, not skipped, so a booking is never completed early
+    just because two providers ran back to back.
+    """
+    global _last_http_monotonic, _http_gap_lock
+    if _http_gap_lock is None:
+        _http_gap_lock = asyncio.Lock()
+    async with _http_gap_lock:
+        gap = _gap_seconds()
+        if gap > 0 and _last_http_monotonic:
+            wait = gap - (time.monotonic() - _last_http_monotonic)
+            if wait > 0:
+                await asyncio.sleep(wait)
+        _last_http_monotonic = time.monotonic()
 
 
 def public_request(method: str, url: str):
-    """One plain HTTPS call. Sheriff hosts stop while the Lee cooldown is active.
+    """One plain HTTPS call (blocking). Sheriff hosts stop while the Lee cooldown is active.
 
     Raises DiscoveryRateLimited, EgressBlocked, or SourceTLSInvalid. The response
-    body is not logged.
+    body is not logged. Async callers use :func:`public_request_async`.
     """
     parsed = urlparse(url)
     if parsed.scheme != "https":
@@ -575,7 +800,6 @@ def public_request(method: str, url: str):
 
     if "sheriffleefl.org" in host and is_cooled_down():
         raise DiscoveryRateLimited("lee_rate_limited")
-    _respect_http_gap()
     session = make_session()
     try:
         response = request(session, method, url, county="Lee", timeout=10)
@@ -585,6 +809,12 @@ def public_request(method: str, url: str):
             raise DiscoveryRateLimited("lee_rate_limited") from exc
         raise
     return response
+
+
+async def public_request_async(method: str, url: str):
+    """Gap, then run the blocking request on a worker thread (off the event loop)."""
+    await _await_http_gap()
+    return await asyncio.to_thread(public_request, method, url)
 
 
 def _people_from_html(html: str, defendant: str) -> List[Dict[str, str]]:
@@ -654,7 +884,7 @@ async def _provider_property(booking: Dict[str, Any]) -> Dict[str, Any]:
     search_name = variants[0]
     url = f"{base}?{urlencode({'mode': 'owner', 'OwnerName': search_name})}"
     try:
-        response = public_request("GET", url)
+        response = await public_request_async("GET", url)
         html = response.text or ""
     except DiscoveryHttpError as exc:
         return {"provider": "lee_property_appraiser", "status": exc.code, "count": 0}
@@ -683,7 +913,7 @@ async def _provider_clerk(booking: Dict[str, Any]) -> Dict[str, Any]:
         return {"provider": "lee_clerk_parties", "status": "skipped", "count": 0}
     url = f"https://matrix.leeclerk.org/Home/Search?query={quote(case_number)}"
     try:
-        response = public_request("GET", url)
+        response = await public_request_async("GET", url)
         html = response.text or ""
     except DiscoveryHttpError as exc:
         return {"provider": "lee_clerk_parties", "status": exc.code, "count": 0}
@@ -707,6 +937,21 @@ async def _provider_clerk(booking: Dict[str, Any]) -> Dict[str, Any]:
     return {"provider": "lee_clerk_parties", "status": status, "count": len(candidates), "candidates": candidates}
 
 
+def skiptrace_anchors(row: Dict[str, Any]) -> List[str]:
+    """Anchors recomputed from the returned fields. A vendor claim counts only
+    when the matching field is present and valid; a field counts only when the
+    vendor also claims it matched."""
+    claimed = set(row.get("matched_anchors") or []) if isinstance(row.get("matched_anchors"), list) else set()
+    anchors: List[str] = []
+    if "phone" in claimed and normalize_phone(row.get("phone")):
+        anchors.append("phone")
+    if "dob" in claimed and normalize_dob(row.get("dob")):
+        anchors.append("dob")
+    if "address_zip" in claimed and address_key(row.get("address"), row.get("zip") or row.get("address")):
+        anchors.append("address_zip")
+    return anchors
+
+
 async def _provider_skiptrace(booking: Dict[str, Any]) -> Dict[str, Any]:
     url = os.getenv("INDEMNITOR_SKIPTRACE_URL", "").strip()
     key = os.getenv("INDEMNITOR_SKIPTRACE_API_KEY", "").strip()
@@ -722,13 +967,16 @@ async def _provider_skiptrace(booking: Dict[str, Any]) -> Dict[str, Any]:
         "address": str(booking.get("address") or ""),
         "zip": normalize_zip(booking.get("zip")),
     }
-    try:
+    def _call() -> Any:
         from scrapers.plain_http import make_session, request
 
-        _respect_http_gap()
         session = make_session({"Authorization": f"Bearer {key}", "Accept": "application/json"})
         response = request(session, "POST", url, county="Lee", timeout=10, json=payload)
-        body = response.json() if response.content else {}
+        return response.json() if response.content else {}
+
+    try:
+        await _await_http_gap()
+        body = await asyncio.to_thread(_call)
     except DiscoveryHttpError as exc:
         return {"provider": "skiptrace", "status": exc.code, "count": 0}
     except Exception as exc:
@@ -752,7 +1000,7 @@ async def _provider_skiptrace(booking: Dict[str, Any]) -> Dict[str, Any]:
         candidate = make_candidate(
             booking_number=_first(booking, "booking_number"),
             name=str(row.get("name") or ""),
-            anchors=row.get("matched_anchors") or [],
+            anchors=skiptrace_anchors(row),
             source="skiptrace",
             relationship=str(row.get("relationship") or "skiptrace"),
             phone=str(row.get("phone") or ""),
@@ -776,6 +1024,25 @@ def _public_summary(result: Dict[str, Any]) -> Dict[str, Any]:
     return summary
 
 
+async def _resolve_arrest(
+    db: Any, booking_number: str, county: str, state: str
+) -> Optional[Dict[str, Any]]:
+    """The one arrest for this booking. None when it is missing or ambiguous
+    (the same booking number in two counties and no county/state to pick)."""
+    query: Dict[str, Any] = {"booking_number": booking_number}
+    if county:
+        query["county"] = county
+    if state:
+        query["state"] = state.upper()
+    try:
+        rows = await _find_list(db["arrests"], query, limit=2)
+    except Exception as exc:
+        log.warning("[indemnitor_discovery] arrest read failed error_type=%s", type(exc).__name__)
+        return None
+    rows = [row for row in rows if isinstance(row, dict)]
+    return rows[0] if len(rows) == 1 else None
+
+
 async def run_discovery(
     db: Any,
     *,
@@ -791,30 +1058,32 @@ async def run_discovery(
 ) -> Dict[str, Any]:
     """Find co-signer candidates for one booking and store them on ``contacts``.
 
+    The contacts doc is keyed on state + county + booking_number. When the
+    caller does not give all three and the arrests collection does not pin
+    exactly one row, nothing is read or written (``identity_ambiguous``).
+
     Completed runs are reused unless ``force`` is set. Provider failures are
-    recorded as status codes. This function does not raise for a provider error.
+    recorded as status codes. A rate-limited provider makes the run
+    ``deferred`` so the booking is retried. Never raises for a provider error.
     """
     booking_number = str(booking_number or "").strip()
     contacts = db["contacts"]
-    if not force and booking_number:
-        existing = await contacts.find_one({"booking_number": booking_number})
-        if existing and existing.get("discovery_status") == "complete":
-            return {
-                "cached": True,
-                "contacts": list(existing.get("discovered_contacts") or []),
-                "discovery_status": "complete",
-                "providers_run": list(existing.get("providers_run") or []),
-            }
 
     stored = dict(arrest or {})
-    if not stored and booking_number:
-        try:
-            found = await db["arrests"].find_one({"booking_number": booking_number})
-        except Exception as exc:
-            log.warning("[indemnitor_discovery] arrest read failed error_type=%s", type(exc).__name__)
-            found = None
+    if not stored and booking_number and not (state and county):
+        found = await _resolve_arrest(db, booking_number, county, state)
+        if found is None:
+            return {
+                "cached": False,
+                "contacts": [],
+                "discovery_status": "identity_ambiguous",
+                "providers_run": [],
+            }
+        stored = dict(found)
+    elif not stored and booking_number:
+        found = await _resolve_arrest(db, booking_number, county, state)
         if isinstance(found, dict):
-            stored = found
+            stored = dict(found)
     if full_name:
         stored["full_name"] = full_name
     if county:
@@ -828,6 +1097,24 @@ async def run_discovery(
     if state:
         stored["state"] = state
     stored["booking_number"] = booking_number or stored.get("booking_number") or ""
+    identity = contact_identity(stored.get("state"), stored.get("county"), stored["booking_number"])
+    if identity is None:
+        return {
+            "cached": False,
+            "contacts": [],
+            "discovery_status": "identity_ambiguous",
+            "providers_run": [],
+        }
+
+    if not force:
+        existing = await contacts.find_one(identity)
+        if existing and existing.get("discovery_status") == "complete":
+            return {
+                "cached": True,
+                "contacts": list(existing.get("discovered_contacts") or []),
+                "discovery_status": "complete",
+                "providers_run": list(existing.get("providers_run") or []),
+            }
 
     candidates: List[Dict[str, Any]] = []
     providers_run: List[Dict[str, Any]] = []
@@ -862,27 +1149,32 @@ async def run_discovery(
         candidates.extend(result.get("candidates") or [])
         providers_run.append(_public_summary(result))
 
+    previous = await contacts.find_one(identity)
     merged_existing: List[Dict[str, Any]] = []
-    if booking_number:
-        previous = await contacts.find_one({"booking_number": booking_number})
-        if isinstance(previous, dict):
-            merged_existing = list(previous.get("discovered_contacts") or [])
-    merged = _merge_candidates(merged_existing, candidates)
+    if isinstance(previous, dict):
+        merged_existing = list(previous.get("discovered_contacts") or [])
+    # Sources whose provider did not finish this run keep their prior rows.
+    unfinished = [
+        str(row.get("provider") or "") for row in providers_run
+        if row.get("status") not in {"ok", "skipped", "skipped_unparsed"}
+    ]
+    merged = _merge_candidates(merged_existing, candidates, keep_sources=unfinished)
     hard_failures = [
         row for row in providers_run
         if row.get("status") not in {"ok", "skipped", "skipped_disabled", "skipped_unparsed"}
     ]
     attempted = [row for row in providers_run if row.get("status") != "skipped_disabled"]
-    if attempted and hard_failures and all(row.get("status") not in {"ok", "skipped", "skipped_unparsed"} for row in attempted):
+    deferred = [row for row in providers_run if row.get("status") in DEFERRABLE_STATUSES]
+    if deferred:
+        status = "deferred"
+    elif attempted and hard_failures and all(row.get("status") not in {"ok", "skipped", "skipped_unparsed"} for row in attempted):
         status = "failed"
     else:
         status = "complete"
     now = datetime.now(timezone.utc)
     expire = unreviewed_expire_at(merged, now)
     payload = {
-        "booking_number": booking_number,
-        "county": stored.get("county") or "",
-        "state": stored.get("state") or "",
+        **identity,
         "defendant_name": _first(stored, "full_name", "defendant_name"),
         "discovery_status": status,
         "discovery_error": None,
@@ -893,30 +1185,21 @@ async def run_discovery(
     update: Dict[str, Any] = {"$set": payload}
     if expire:
         update["$set"]["unreviewed_expire_at"] = expire
-        update["$unset"] = {}
     else:
         update["$unset"] = {"unreviewed_expire_at": ""}
-    if not update["$unset"]:
-        update.pop("$unset", None)
-    if booking_number:
-        await contacts.update_one({"booking_number": booking_number}, update, upsert=True)
-        arrest_filter: Dict[str, Any] = {"booking_number": booking_number}
-        if stored.get("state"):
-            arrest_filter["state"] = stored.get("state")
-        if stored.get("county"):
-            arrest_filter["county"] = stored.get("county")
-        try:
-            await db["arrests"].update_one(
-                arrest_filter,
-                {"$set": {
-                    "indemnitor_discovery.status": status,
-                    "indemnitor_discovery.candidate_count": len(merged),
-                    "indemnitor_discovery.updated_at": now,
-                    "indemnitor_discovery.error": None,
-                }},
-            )
-        except Exception as exc:
-            log.warning("[indemnitor_discovery] status write failed error_type=%s", type(exc).__name__)
+    await contacts.update_one(identity, update, upsert=True)
+    marker: Dict[str, Any] = {
+        "indemnitor_discovery.status": status,
+        "indemnitor_discovery.candidate_count": len(merged),
+        "indemnitor_discovery.updated_at": now,
+        "indemnitor_discovery.error": None,
+    }
+    if status == "deferred":
+        marker["indemnitor_discovery.retry_after"] = now + timedelta(minutes=DEFER_MINUTES)
+    try:
+        await db["arrests"].update_one(identity, {"$set": marker})
+    except Exception as exc:
+        log.warning("[indemnitor_discovery] status write failed error_type=%s", type(exc).__name__)
     log.info(
         "[indemnitor_discovery] status=%s candidates=%s providers=%s",
         status,
@@ -942,6 +1225,11 @@ def _lee_claim_query(now: datetime) -> Dict[str, Any]:
             {"$or": [
                 {"indemnitor_discovery.status": "queued"},
                 {
+                    # Rate-limited last time: retry after the cooldown.
+                    "indemnitor_discovery.status": "deferred",
+                    "indemnitor_discovery.retry_after": {"$lte": now},
+                },
+                {
                     "indemnitor_discovery.status": "running",
                     "indemnitor_discovery.updated_at": {"$lte": stale},
                 },
@@ -962,6 +1250,7 @@ async def run_lee_discovery_batch(db: Any, *, limit: int = DISCOVERY_BATCH_LIMIT
         "enabled": discovery_enabled(),
         "claimed": 0,
         "completed": 0,
+        "deferred": 0,
         "failed": 0,
         "purged": purged.get("purged_candidates", 0),
     }
@@ -990,8 +1279,10 @@ async def run_lee_discovery_batch(db: Any, *, limit: int = DISCOVERY_BATCH_LIMIT
     for arrest in pending:
         if not isinstance(arrest, dict) or not arrest.get("_id"):
             continue
-        status = ((arrest.get("indemnitor_discovery") or {}).get("status"))
-        if status in {"queued", "running"}:
+        marker = arrest.get("indemnitor_discovery") or {}
+        status = marker.get("status")
+        deferrals = int(marker.get("deferrals") or 0)
+        if status in {"queued", "running", "deferred"}:
             claim_filter: Dict[str, Any] = {
                 "_id": arrest["_id"],
                 "indemnitor_discovery.status": status,
@@ -1007,6 +1298,7 @@ async def run_lee_discovery_batch(db: Any, *, limit: int = DISCOVERY_BATCH_LIMIT
                 {"$set": {
                     "indemnitor_discovery.status": "running",
                     "indemnitor_discovery.updated_at": now,
+                    "indemnitor_discovery.deferrals": deferrals + (1 if status == "deferred" else 0),
                 }},
             )
         except Exception as exc:
@@ -1024,7 +1316,20 @@ async def run_lee_discovery_batch(db: Any, *, limit: int = DISCOVERY_BATCH_LIMIT
                 force=True,
                 arrest=arrest,
             )
-            if result.get("discovery_status") == "failed":
+            outcome = result.get("discovery_status")
+            if outcome == "deferred" and deferrals + 1 >= MAX_DEFERRALS:
+                # Stop retrying a booking the source keeps rate-limiting.
+                await arrests.update_one(
+                    {"_id": arrest["_id"]},
+                    {"$set": {
+                        "indemnitor_discovery.status": "complete",
+                        "indemnitor_discovery.error": "deferred_limit",
+                    }},
+                )
+                outcome = "complete"
+            if outcome == "deferred":
+                summary["deferred"] += 1
+            elif outcome in {"failed", "identity_ambiguous"}:
                 summary["failed"] += 1
             else:
                 summary["completed"] += 1
@@ -1098,10 +1403,11 @@ async def purge_unreviewed_candidates(db: Any, *, now: Optional[datetime] = None
         else:
             update["$unset"] = {"unreviewed_expire_at": ""}
         try:
-            await contacts.update_one({"_id": doc.get("_id"), "booking_number": doc.get("booking_number")}, update)
-            if doc.get("booking_number"):
+            await contacts.update_one({"_id": doc.get("_id")}, update)
+            identity = contact_identity(doc.get("state"), doc.get("county"), doc.get("booking_number"))
+            if identity:
                 await db["arrests"].update_one(
-                    {"booking_number": doc.get("booking_number")},
+                    identity,
                     {"$set": {
                         "indemnitor_discovery.candidate_count": len(kept),
                         "indemnitor_discovery.updated_at": now,

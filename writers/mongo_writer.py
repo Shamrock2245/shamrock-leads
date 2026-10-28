@@ -145,6 +145,19 @@ def keep_stored_source_values(collection, pending) -> int:
     return kept
 
 
+
+def _discovery_insert_marker(state, county, booking, doc, now):
+    """Queue marker for a new Lee (FL) booking. Never raises; {} on any error."""
+    try:
+        from writers.indemnitor_discovery_hook import discovery_insert_marker
+
+        marker = discovery_insert_marker(state, county, booking, doc, now)
+        return dict(marker) if isinstance(marker, dict) else {}
+    except Exception as exc:
+        logger.warning("indemnitor discovery marker skipped error_type=%s", type(exc).__name__)
+        return {}
+
+
 class MongoWriter:
     """
     Writes ArrestRecord instances to MongoDB Atlas.
@@ -467,6 +480,14 @@ class MongoWriter:
                 doc, prov = protect_scraped_update(doc, existing, record=record, now=now)
                 protected += int(prov.any)
             state, county_name, booking = key
+            on_insert = {
+                "created_at": now,
+                "first_seen_at": now,
+            }
+            # Lee (FL) co-signer discovery queue marker. It rides in this same
+            # upsert, so it is durable when bulk_write returns (no thread, no
+            # extra round trip). Fail-open: an error yields {} and is logged.
+            on_insert.update(_discovery_insert_marker(state, county_name, booking, doc, now))
             operations.append(
                 UpdateOne(
                     {
@@ -477,10 +498,7 @@ class MongoWriter:
                     },
                     {
                         "$set": doc,
-                        "$setOnInsert": {
-                            "created_at": now,
-                            "first_seen_at": now,
-                        },
+                        "$setOnInsert": on_insert,
                     },
                     upsert=True,
                 )
@@ -541,19 +559,6 @@ class MongoWriter:
             except Exception as fanout_err:
                 # Type only: a traceback/driver message can embed the pointers.
                 logger.warning("lead fan-out skipped (%s)", type(fanout_err).__name__)
-            # Discovery is best-effort and capped. It must not fail or stall the write.
-            try:
-                from writers.indemnitor_discovery_hook import (
-                    enqueue_lee_indemnitor_discovery,
-                    run_post_write_hook,
-                )
-
-                run_post_write_hook(enqueue_lee_indemnitor_discovery, self.db, fresh)
-            except Exception as hook_err:
-                logger.warning(
-                    "indemnitor discovery hook skipped error_type=%s",
-                    type(hook_err).__name__,
-                )
         return stats
 
     def get_arrests_by_county(

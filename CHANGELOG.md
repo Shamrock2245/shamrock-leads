@@ -3,10 +3,26 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-28 (Lee co-signer discovery: review fixes)
+
+### Fixed
+- **The queue marker is durable and cannot block or fail the Lee write.** The post-write daemon thread is gone. A new Lee (FL) upsert carries `indemnitor_discovery: queued` in its own `$setOnInsert`, so the marker is stored with the arrest before a one-shot run exits. A marker error is logged by type and the arrest is still written.
+- **Unreviewed candidates never reach automatic outreach.** `OutreachSequencer._resolve_phone` uses only `reviewed` / `approved` discovery candidates, read on state + county + booking.
+- **Contacts are scoped to the full arrest identity.** Discovery, the cache, the arrest marker, and `GET /api/contacts/{booking}` use state + county + booking. A booking that exists in two counties without a county returns `identity_ambiguous` (409) and writes nothing. The lead drawer passes county and state.
+- **A refresh keeps reviewed candidates** (and their review fields) even when the run did not return them, and keeps prior rows from a provider that did not finish.
+- **`intake_queue` rows are matched** on `defendant_booking_number` + `defendant_county` or `matched_booking_number` + `matched_county`, reading the nested indemnitor block.
+- **Public HTTP and skip-trace run off the event loop** (`asyncio.to_thread`). The request gap is slept out, not skipped. A rate-limited or gapped provider defers the booking with `retry_after` (up to 4 times) instead of finishing it empty.
+- **`family_graph` and `family_relationships` use their real schemas** (relative name, phone, relation type; soft-deleted rows skipped).
+- **Skip-trace anchors are recomputed** from the fields the vendor returned; a vendor `matched_anchors` claim alone adds no confidence.
+- `lee_indemnitor_discovery` is listed in Service Control.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py` (on the CI list): marker in the Lee FL upsert only, a marker exception still writes the arrests, no thread/wait on the write path, outreach review gate and identity scope, two-county booking, ambiguous identity, reviewed rows kept, intake_queue and family schemas, off-loop HTTP with a slept gap, deferral and re-claim, skip-trace anchor recompute.
+
 ## [Unreleased] — 2026-10-21 (Lee co-signer discovery)
 
 ### Added
-- **New Lee (FL) bookings queue co-signer discovery after the arrest write.** The hook is capped and cannot fail or stall the scraper write. Candidates are stored on the existing `contacts` collection and shown on the lead drawer for staff review. Nothing is texted, called, or emailed.
+- **New Lee (FL) bookings queue co-signer discovery with the arrest write.** The queue marker rides in the upsert and cannot fail or stall the scraper write. Candidates are stored on the existing `contacts` collection and shown on the lead drawer for staff review. Nothing is texted, called, or emailed.
 - **A candidate requires a name plus at least one anchor** (phone, DOB, or normalized address + ZIP). `matched_anchors` is stored. Confidence is the sum of fixed anchor weights. A display name alone is dropped.
 - **Public HTTP and the optional skip-trace provider stay off** unless `INDEMNITOR_DISCOVERY_HTTP` or both `INDEMNITOR_SKIPTRACE_URL` and `INDEMNITOR_SKIPTRACE_API_KEY` are set. HTTP uses plain verified HTTPS. Sheriff hosts honor the existing Lee cooldown.
 - **Unreviewed candidate documents expire after 30 days** via `contacts.unreviewed_expire_at`. A purge pass drops expired unreviewed rows and keeps reviewed ones.

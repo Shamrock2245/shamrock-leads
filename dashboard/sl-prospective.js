@@ -737,7 +737,14 @@ window.SLProspective = (function () {
     var el = $('ldCandidateList');
     if (!el || !bk) return;
     try {
-      var r = await fetch(API + '/api/contacts/' + encodeURIComponent(bk));
+      var cbond = (_data || []).find(function(b) { return String(b.booking_number) === String(bk); }) || {};
+      var clead = (window._leadMap && window._leadMap[bk]) || {};
+      var cq = new URLSearchParams();
+      var ccounty = cbond.county || clead.county || '';
+      var cstate = cbond.state || clead.state || '';
+      if (ccounty) cq.set('county', ccounty);
+      if (cstate) cq.set('state', cstate);
+      var r = await fetch(API + '/api/contacts/' + encodeURIComponent(bk) + (cq.toString() ? '?' + cq.toString() : ''));
       if (seq !== _detailSeq || String(_currentBk) !== String(bk)) return;
       if (!r.ok) {
         el.textContent = 'Candidates are unavailable.';
@@ -1012,6 +1019,7 @@ window.SLProspective = (function () {
           booking_number: bk,
           full_name: bond.defendant_name || lead.full_name || lead.defendant_name || '',
           county: bond.county || lead.county || '',
+          state: bond.state || lead.state || '',
           address: bond.address || lead.address || ''
         })
       });
@@ -1476,7 +1484,7 @@ window.SLProspective = (function () {
           try { await fetch(API + '/api/outreach/start/' + encodeURIComponent(bk) + '/' + encodeURIComponent(county), { method: 'POST' }); } catch (e) { /* non-fatal */ }
         }
         if ($('alContactDiscover') && $('alContactDiscover').checked) {
-          try { await fetch(API + '/api/contacts/discover', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ booking_number: bk }) }); } catch (e) { /* non-fatal */ }
+          try { await fetch(API + '/api/contacts/discover', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ booking_number: bk, county: county || '', state: (payload.state || '') }) }); } catch (e) { /* non-fatal */ }
         }
         closeAddModal();
         load();
