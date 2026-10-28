@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-28 (Payment recorder matches legacy Booking_Number bonds)
+
+### Fixed
+- **A card payment now stamps a bond stored only under the legacy `Booking_Number` field.** `record_provider_payment` (the `POST /api/webhooks/payment` webhook and the SwipeSimple receipt poller) looked up bonds by `booking_number` only. A bond in `bond_cases` or `active_bonds` that carries only `Booking_Number` never matched, so the charge was stored with `needs_review` / `booking_not_unique` and `last_payment_*` was never stamped. The lookup now matches `booking_number` or `Booking_Number`. A document that carries both counts once. `booking_number` stays canonical: a stale `Booking_Number` on a bond whose `booking_number` is different does not match. The stamp, the review flag, and the later-booking enrichment write to the matched document by `_id` and its existing booking field. No field is added, renamed, or migrated, and no index or schema change is made. Two distinct bonds that share a booking across the two spellings still fail closed (`booking_not_unique`, no stamp). The old behavior never marked a bond paid by mistake; it only left the charge for staff review. Split out of #283 (Codex P1 r4400899959) to ship first.
+
+### Tests
+- `tests/test_payment_log_claims.py` (on the CI list): `test_recorder_stamps_a_bond_under_either_booking_spelling` (lowercase and legacy), `test_payment_webhook_stamps_a_legacy_booking_bond`, `test_receipt_poller_stamps_a_legacy_booking_bond`, `test_bond_with_both_booking_spellings_counts_once`, `test_two_bonds_sharing_a_booking_across_spellings_fail_closed`, `test_legacy_mirror_pair_with_matching_case_ids_is_one_case`, `test_stale_legacy_booking_does_not_match_a_reassigned_bond`, `test_later_booking_enriches_blank_charge_on_a_legacy_bond`. All mocked: no SwipeSimple, Gmail, BlueBubbles, or Slack call.
+
 ## [Unreleased] — 2026-10-28 (Indemnitor ID scan is kept)
 
 ### Fixed
