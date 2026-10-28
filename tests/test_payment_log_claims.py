@@ -17,7 +17,7 @@ from dashboard.services import payment_log_claims as plc
 from dashboard.services.swipesimple_receipt_poller import SwipeSimpleReceiptPoller
 
 _real_notify = plc._notify_staff_review
-from tests.test_payment_plan_pay_dedupe import PLAN_ID, Coll, DB, _plan
+from tests.test_payment_plan_pay_dedupe import PLAN_ID, Coll, DB, _UpdateResult, _plan
 
 TXN = "TX-REV-1"
 BOOKING = "BK-1"
@@ -1595,3 +1595,114 @@ def test_later_booking_enriches_blank_charge_on_a_legacy_bond(db, slack_alerts):
     bond = db["bond_cases"].docs[0]
     assert bond["last_transaction_id"] == TXN
     assert "booking_number" not in bond
+
+
+# --- Bond writes must match their document (Codex P2 r4401071985 on #301) ---
+
+
+class _MissColl(Coll):
+    """Bond collection whose ``last_payment_*`` / review writes match nothing."""
+
+    def __init__(self, docs, miss_set_keys=("last_transaction_id",)):
+        super().__init__()
+        self.docs = docs
+        self.miss_set_keys = miss_set_keys
+        self.missed = 0
+
+    async def update_one(self, flt, update, upsert=False, session=None, **kwargs):
+        if any(key in (update.get("$set") or {}) for key in self.miss_set_keys):
+            self.missed += 1
+            return _UpdateResult(0)
+        return await super().update_one(flt, update, upsert=upsert, session=session)
+
+
+def test_dual_spelling_bond_with_padded_lowercase_value_stamps(db, slack_alerts):
+    """booking_number ' BK-1 ' plus Booking_Number 'BK-1' is found and stamped."""
+    db["bond_cases"].docs.append({
+        "_id": "bc-pad", "booking_number": f" {BOOKING} ", "Booking_Number": BOOKING,
+        "last_transaction_id": "OLD",
+    })
+    recorded = _run(_record(db, kind="charge"))
+    assert recorded["stamped"] is True
+    assert recorded.get("needs_review") is not True
+    bond = db["bond_cases"].docs[0]
+    assert bond["last_transaction_id"] == TXN
+    assert bond["last_payment_amount"] == 100.0
+    # Stored values are left exactly as they were.
+    assert bond["booking_number"] == f" {BOOKING} "
+    assert bond["Booking_Number"] == BOOKING
+    assert "needs_review" not in _rows(db, "charge")[0]
+    assert _audit(db, "charge")["stamped"] is True
+
+    _run(_record(db, kind="refund"))
+    bond = db["bond_cases"].docs[0]
+    assert bond["needs_review"] is True
+    assert "write_missed" not in _audit(db, "refund")["bond_review"]
+
+
+def test_bond_stamp_that_matches_nothing_goes_to_review_not_stamped(db, slack_alerts):
+    """A 0-match stamp is not reported stamped. The charge is held for review."""
+    db["bond_cases"] = _MissColl([_bond(_id="bc-1", last_transaction_id="KEEP")])
+    recorded = _run(_record(db, kind="charge"))
+    assert recorded["committed"] is True
+    assert recorded["stamped"] is False
+    assert recorded["needs_review"] is True
+    assert db["bond_cases"].missed == 1
+    row = _rows(db, "charge")[0]
+    assert row["needs_review"] is True
+    assert row["needs_review_reason"] == "bond_write_missed"
+    assert db["bond_cases"].docs[0]["last_transaction_id"] == "KEEP"
+    audit = _audit(db, "charge")
+    assert audit["stamped"] is False
+    assert "old_last_payment" not in audit
+    assert audit["payment_review"]["new_needs_review_reason"] == "bond_write_missed"
+    assert len(slack_alerts) == 1
+    assert slack_alerts[0]["reason"] == "bond_write_missed"
+    assert slack_alerts[0]["txn_key"] == TXN
+
+
+def test_mirror_stamp_miss_restores_the_first_document(db, slack_alerts):
+    """If the mirror write misses, the case copy is put back and nothing is stamped."""
+    db["bond_cases"].docs.append(_bond(
+        _id="bc-1", bond_case_id="case-1", last_payment_amount=5, last_transaction_id="OLD",
+    ))
+    db["active_bonds"] = _MissColl([_bond(_id="ab-1", bond_case_id="case-1")])
+    recorded = _run(_record(db, kind="charge"))
+    assert recorded["stamped"] is False
+    case_copy = db["bond_cases"].docs[0]
+    assert case_copy["last_transaction_id"] == "OLD"
+    assert case_copy["last_payment_amount"] == 5
+    for field in ("last_payment_at", "last_payment_status", "last_payment_source"):
+        assert field not in case_copy
+    assert db["active_bonds"].docs[0].get("last_transaction_id") is None
+    row = _rows(db, "charge")[0]
+    assert row["needs_review_reason"] == "bond_write_missed"
+    assert _audit(db, "charge")["stamped"] is False
+
+
+def test_enrichment_stamp_miss_writes_nothing(db, slack_alerts):
+    """A later booking whose bond write misses is a 409. The blank charge stays held."""
+    db["bond_cases"] = _MissColl([_bond(_id="bc-1")])
+    _run(_record(db, kind="charge", booking=""))
+    with pytest.raises(plc.PaymentLogError) as raised:
+        _run(_record(db, kind="charge", booking=BOOKING))
+    assert raised.value.status_code == 409
+    assert "bond_write_missed" in raised.value.message
+    row = _rows(db, "charge")[0]
+    assert row["booking_number"] == ""
+    assert row["needs_review_reason"] == "booking_not_provided"
+    assert db["bond_cases"].docs[0].get("last_transaction_id") is None
+    assert not [doc for doc in db["audit_events"].docs if doc.get("reason") == "provider booking enriched"]
+
+
+def test_review_flag_that_matches_nothing_is_not_claimed_in_the_audit(db, slack_alerts):
+    db["bond_cases"].docs.append(_bond(_id="bc-1"))
+    _run(_record(db, kind="charge"))
+    db["bond_cases"] = _MissColl(db["bond_cases"].docs, miss_set_keys=("needs_review",))
+    _run(_record(db, kind="refund"))
+    assert db["bond_cases"].missed == 1
+    review = _audit(db, "refund")["bond_review"]
+    assert review["write_missed"] is True
+    assert review["new_needs_review"] is None
+    assert db["bond_cases"].docs[0].get("needs_review") is None
+    assert _rows(db, "refund")[0]["needs_review"] is True
