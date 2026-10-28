@@ -87,6 +87,10 @@ class World:
         return self.colls["paperwork_packets"].docs[0]
 
 
+def _signed_packet(**kw):
+    return _packet(status="signed", docuseal_status="completed", **kw)
+
+
 def _send(**kw):
     kw.setdefault("packet_id", PACKET_ID)
     kw.setdefault("source", "docuseal_submission_completed")
@@ -96,7 +100,7 @@ def _send(**kw):
 # ── send-once ────────────────────────────────────────────────────────────────
 
 def test_concurrent_redeliveries_send_exactly_once():
-    w = World()
+    w = World(_signed_packet())
     with w.patched():
         async def go():
             return await asyncio.gather(*[_send() for _ in range(5)])
@@ -110,7 +114,7 @@ def test_concurrent_redeliveries_send_exactly_once():
 
 
 def test_repeat_after_25_hours_does_not_resend():
-    w = World()
+    w = World(_signed_packet())
     with w.patched():
         first = asyncio.run(_send())
         assert first["delivered"] is True
@@ -124,7 +128,7 @@ def test_repeat_after_25_hours_does_not_resend():
 
 
 def test_finalize_then_completion_days_later_sends_once():
-    w = World()
+    w = World(_signed_packet())
     with w.patched():
         asyncio.run(_send(source="packet_finalize"))
         w.packet()["last_payment_link_sent_at"] = (
@@ -135,7 +139,7 @@ def test_finalize_then_completion_days_later_sends_once():
 
 
 def test_stale_claim_fails_closed_no_auto_retry():
-    w = World(_packet(**{pls.SEND_ONCE_FIELD: {"state": "claimed", "claimed_at": "2026-09-01T00:00:00+00:00"}}))
+    w = World(_signed_packet(**{pls.SEND_ONCE_FIELD: {"state": "claimed", "claimed_at": "2026-09-01T00:00:00+00:00"}}))
     with w.patched():
         r = asyncio.run(_send())
     assert w.sent == []
@@ -143,7 +147,7 @@ def test_stale_claim_fails_closed_no_auto_retry():
 
 
 def test_claim_error_fails_closed():
-    w = World()
+    w = World(_signed_packet())
     with w.patched():
         w.colls["paperwork_packets"].find_one_and_update = AsyncMock(side_effect=RuntimeError("mongo down"))
         r = asyncio.run(_send())
@@ -151,7 +155,7 @@ def test_claim_error_fails_closed():
 
 
 def test_send_exception_marks_manual_review_and_never_retries():
-    w = World()
+    w = World(_signed_packet())
     with w.patched(), patch.object(pls, "send_swipesimple_payment_link",
                                    new=AsyncMock(side_effect=RuntimeError("boom"))) as send:
         r1 = asyncio.run(_send())
@@ -162,7 +166,7 @@ def test_send_exception_marks_manual_review_and_never_retries():
 
 
 def test_undelivered_send_is_not_retried():
-    w = World()
+    w = World(_signed_packet())
     with w.patched(), patch.object(pls, "send_swipesimple_payment_link",
                                    new=AsyncMock(return_value={"success": True, "delivered": False})) as send:
         asyncio.run(_send())
@@ -171,9 +175,20 @@ def test_undelivered_send_is_not_retried():
     assert w.packet()[pls.SEND_ONCE_FIELD]["state"] == "not_delivered_manual_review"
 
 
+def test_unsigned_packet_does_not_get_a_pay_link():
+    pkt = _packet(status="pending_signature", docuseal_status="sent")
+    w = World(pkt)
+    with w.patched():
+        r = asyncio.run(_send(packet_doc=pkt, source="packet_finalize"))
+    assert r["skipped"] is True and r["reason"] == "packet_unsigned"
+    assert w.sent == []
+    assert pls.SEND_ONCE_FIELD not in w.packet()
+
+
 def test_intake_promote_without_packet_claims_on_bond_booking():
     bond = {"booking_number": BOOKING, "premium": 300.0, "indemnitor_phone": PHONE,
-            "payment_status": "pending", **CONFIRMED, pls.PREMIUM_CONFIRMED_AMOUNT_FIELD: 300.0}
+            "payment_status": "pending", "Signature_Status": "signed",
+            **CONFIRMED, pls.PREMIUM_CONFIRMED_AMOUNT_FIELD: 300.0}
     w = World(bond=bond)
     with w.patched():
         for _ in range(2):
@@ -188,7 +203,7 @@ def test_no_key_fails_closed():
     w = World()
     with w.patched():
         r = asyncio.run(pls.maybe_send_packet_payment_link(
-            amount=100.0, phone=PHONE, bond_doc={"indemnitor_phone": PHONE, **CONFIRMED},
+            amount=100.0, phone=PHONE, bond_doc={"indemnitor_phone": PHONE, "Signature_Status": "signed", **CONFIRMED},
             source="intake_promote"))
     assert w.sent == [] and r["reason"] == "send_once_no_key"
 
@@ -214,7 +229,7 @@ def test_switch_off_no_send_no_lookup(value):
 
 @pytest.mark.parametrize("value", ["1", "true", "yes", "on", "enabled", "webhook", "all", "both"])
 def test_any_enabled_value_enables_service_level_send(value):
-    w = World()
+    w = World(_signed_packet())
     with w.patched(switch=value):
         r = asyncio.run(_send(source="packet_finalize"))
     assert r.get("delivered") is True and len(w.sent) == 1
@@ -250,6 +265,7 @@ def test_partial_confirmation_is_unconfirmed(missing):
 def test_confirmed_premium_on_bond_counts_and_caller_amount_ignored():
     pkt = _packet(**UNCONFIRMED)
     bond = {"booking_number": BOOKING, "indemnitor_phone": PHONE, "premium": 500.0,
+            "Signature_Status": "signed",
             **CONFIRMED, pls.PREMIUM_CONFIRMED_AMOUNT_FIELD: 612.5}
     w = World(pkt, bond=bond)
     with w.patched():

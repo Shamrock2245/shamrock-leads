@@ -194,6 +194,9 @@ def _assert_refused(response, captured, stores):
     body = response.json()
     assert body["error"] == "indemnitor_identity_unverified"
     assert "no scan and no attestation" in body["message"]
+    assert "sign_url" not in body
+    assert "signing_link" not in body
+    assert "sign_links" not in body
     assert "kwargs" not in captured
     assert _poa_touched(stores) is False
 

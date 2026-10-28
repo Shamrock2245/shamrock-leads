@@ -180,6 +180,7 @@ jobs:
             tests/test_payment_log_claims.py \
             tests/test_premium_confirmation.py \
             tests/test_installment_invoices.py \
+            tests/test_cosigner_link.py \
             tests/test_auth_no_pin_fail_closed.py \
             tests/test_agent_analytics_payment_agent.py tests/test_payment_plan_create_down_payment_claim.py \
             tests/test_pinellas_relay_only.py \
@@ -253,6 +254,7 @@ jobs:
             tests/test_palmetto_application_header_placement.py \
             tests/test_palmetto_header_offense_rows.py \
             tests/test_palmetto_t6_offense_capacity.py \
+            tests/test_palmetto_template_7.py \
             tests/test_paperwork_template_paths.py \
             tests/test_verbatim_bond_charges.py \
             tests/test_bond_packet_start.py \

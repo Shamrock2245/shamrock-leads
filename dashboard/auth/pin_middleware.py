@@ -82,6 +82,8 @@ OPEN_PREFIXES = (
     "/g/",
     "/c/",
     "/sign/",
+    "/cosigner/",
+    "/api/cosigner/",
     "/api/portal",
     "/done",
     "/paperwork",
