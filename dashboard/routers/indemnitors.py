@@ -707,11 +707,78 @@ def _copy_scan(value: Any) -> Any:
     return value
 
 
-def _keep_stored_id_scan(profile: dict, body: Mapping[str, Any] | None, existing: Mapping[str, Any] | None) -> None:
+def _history_item_kept(item: Any) -> bool:
+    """A history row stays if it has a scan or a portrait. Either is enough."""
+    if not isinstance(item, dict):
+        return False
+    if _scan_present(item.get("id_scan")):
+        return True
+    portrait = item.get("portrait_jpeg_b64")
+    return isinstance(portrait, str) and bool(portrait.strip())
+
+
+def _request_actor(request: Request | None) -> str:
+    if request is None:
+        return "dashboard"
+    try:
+        session = request.session
+    except Exception:
+        session = None
+    if isinstance(session, Mapping):
+        for key in ("user", "username", "agent_name", "staff_user", "name"):
+            value = session.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()[:80]
+    return "dashboard"
+
+
+def _replacement_audit(
+    *,
+    now: datetime,
+    actor: str,
+    record_id: str,
+    booking_number: str,
+    reason: str,
+    had_scan: bool,
+    had_portrait: bool,
+    has_scan: bool,
+    has_portrait: bool,
+) -> dict[str, Any]:
+    """Identity replacement facts. The scan image and portrait bytes stay off this row."""
+    stamp = now.isoformat()
+    return {
+        "event_id": str(uuid.uuid4()),
+        "event_type": "id_scan_replaced",
+        "action": "id_scan_replaced",
+        "entity_type": "indemnitor",
+        "entity_id": record_id,
+        "actor": actor or "dashboard",
+        "agent_name": "indemnitor_create",
+        "timestamp": stamp,
+        "booking_number": booking_number,
+        "record_id": record_id,
+        "reason": reason,
+        "confidence": 1.0,
+        "old_state": {"id_scan_present": had_scan, "portrait_present": had_portrait},
+        "new_state": {"id_scan_present": has_scan, "portrait_present": has_portrait},
+    }
+
+
+def _keep_stored_id_scan(
+    profile: dict,
+    body: Mapping[str, Any] | None,
+    existing: Mapping[str, Any] | None,
+    *,
+    now: datetime | None = None,
+    actor: str = "dashboard",
+    record_id: str = "",
+    booking_number: str = "",
+) -> list[dict[str, Any]]:
     """Keep a stored ID scan when the body omits one.
 
     A supplied scan becomes the current scan. The previous scan is appended
-    to ``id_scan_history`` and stays on the record.
+    to ``id_scan_history`` and stays on the record. A portrait-only history
+    row is kept. Replacing a scan or portrait returns an audit row.
     """
     profile.pop("id_scan", None)
     profile.pop("id_scan_history", None)
@@ -726,7 +793,7 @@ def _keep_stored_id_scan(profile: dict, body: Mapping[str, Any] | None, existing
         prior_portrait = prior_portrait.strip()
     history = []
     for item in stored.get("id_scan_history") or []:
-        if isinstance(item, dict) and _scan_present(item.get("id_scan")):
+        if _history_item_kept(item):
             history.append(_copy_scan(item))
     incoming = None
     if isinstance(body, Mapping) and "id_scan" in body and _scan_present(body.get("id_scan")):
@@ -743,16 +810,48 @@ def _keep_stored_id_scan(profile: dict, body: Mapping[str, Any] | None, existing
             profile["portrait_jpeg_b64"] = prior_portrait
         if history:
             profile["id_scan_history"] = history
-        return
+        return []
     archived: dict[str, Any] = {}
+    reason = ""
     if prior_ok and incoming is not None and prior != incoming:
         archived["id_scan"] = _copy_scan(prior)
         if prior_portrait:
             archived["portrait_jpeg_b64"] = prior_portrait
+        reason = "id_scan_replaced"
     elif prior_portrait and incoming_portrait and prior_portrait != incoming_portrait:
         archived["portrait_jpeg_b64"] = prior_portrait
+        if prior_ok:
+            archived["id_scan"] = _copy_scan(prior)
+        reason = "portrait_replaced"
+    audits: list[dict[str, Any]] = []
     if archived:
+        stamp = now or datetime.now(timezone.utc)
+        archived["replaced_at"] = stamp.isoformat()
+        archived["actor"] = actor or "dashboard"
+        archived["agent_name"] = "indemnitor_create"
+        archived["record_id"] = record_id
+        archived["reason"] = reason
+        archived["confidence"] = 1.0
+        archived["old_state"] = {
+            "id_scan_present": prior_ok,
+            "portrait_present": bool(prior_portrait),
+        }
+        archived["new_state"] = {
+            "id_scan_present": incoming is not None or (prior_ok and incoming is None),
+            "portrait_present": incoming_portrait is not None or bool(prior_portrait and incoming_portrait is None),
+        }
         history.append(archived)
+        audits.append(_replacement_audit(
+            now=stamp,
+            actor=actor,
+            record_id=record_id,
+            booking_number=booking_number,
+            reason=reason,
+            had_scan=prior_ok,
+            had_portrait=bool(prior_portrait),
+            has_scan=bool(archived["new_state"]["id_scan_present"]),
+            has_portrait=bool(archived["new_state"]["portrait_present"]),
+        ))
     if incoming is not None:
         profile["id_scan"] = incoming
     elif prior_ok:
@@ -763,9 +862,18 @@ def _keep_stored_id_scan(profile: dict, body: Mapping[str, Any] | None, existing
         profile["portrait_jpeg_b64"] = prior_portrait
     if history:
         profile["id_scan_history"] = history
+    return audits
 
 
-async def _save_unlinked_indemnitor(profile, *, phone, now, message, pending_booking_number="", body=None):
+async def _write_scan_audits(audits: list[dict[str, Any]]) -> None:
+    if not audits:
+        return
+    col = get_collection("audit_events")
+    for doc in audits:
+        await col.insert_one(doc)
+
+
+async def _save_unlinked_indemnitor(profile, *, phone, now, message, pending_booking_number="", body=None, actor="dashboard"):
     """Persist a standalone indemnitor. Never invents a prospective bond card."""
     indemnitors_coll = get_collection("indemnitors")
     profile["created_at"] = now.isoformat()
@@ -776,7 +884,17 @@ async def _save_unlinked_indemnitor(profile, *, phone, now, message, pending_boo
     if phone:
         existing = await indemnitors_coll.find_one({"phone": phone, "status": "unlinked"})
         if existing:
-            _keep_stored_id_scan(profile, body, existing)
+            record_id = str(existing.get("Indemnitor_ID") or existing.get("indemnitor_id") or existing.get("_id") or "")
+            audits = _keep_stored_id_scan(
+                profile,
+                body,
+                existing,
+                now=now,
+                actor=actor,
+                record_id=record_id,
+                booking_number=str(pending_booking_number or ""),
+            )
+            await _write_scan_audits(audits)
             await indemnitors_coll.update_one(
                 {"_id": existing["_id"]},
                 {"$set": {**profile, "updated_at": now.isoformat()}},
@@ -880,6 +998,7 @@ async def api_indemnitor_create(request: Request):
                 phone=phone,
                 now=now,
                 body=data,
+                actor=_request_actor(request),
                 message="Indemnitor saved. Open the card and enter a Booking # to link.",
             )
 
@@ -903,6 +1022,7 @@ async def api_indemnitor_create(request: Request):
                     phone=phone,
                     now=now,
                     body=data,
+                    actor=_request_actor(request),
                     pending_booking_number=booking_number,
                     message=(
                         "Indemnitor saved unlinked. That booking # matches more "
@@ -943,6 +1063,7 @@ async def api_indemnitor_create(request: Request):
                     phone=phone,
                     now=now,
                     body=data,
+                    actor=_request_actor(request),
                     pending_booking_number=booking_number,
                     message=(
                         "Indemnitor saved unlinked. That booking # is not "
@@ -965,8 +1086,22 @@ async def api_indemnitor_create(request: Request):
         if phone:
             for existing in existing_indemnitors:
                 if existing.get("phone") == phone:
-                    _keep_stored_id_scan(profile, data, existing)
+                    record_id = str(
+                        existing.get("Indemnitor_ID")
+                        or existing.get("indemnitor_id")
+                        or booking_number
+                    )
+                    audits = _keep_stored_id_scan(
+                        profile,
+                        data,
+                        existing,
+                        now=now,
+                        actor=_request_actor(request),
+                        record_id=record_id,
+                        booking_number=booking_number,
+                    )
                     existing.update(profile)
+                    await _write_scan_audits(audits)
                     await collection.update_one(
                         {"booking_number": booking_number},
                         {"$set": {
