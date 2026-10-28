@@ -351,6 +351,10 @@ class _Col:
         return _Result(0)
 
     async def insert_one(self, doc, session=None, **kwargs):
+        if "_id" in doc and any(d.get("_id") == doc["_id"] for d in self.docs):
+            from pymongo.errors import DuplicateKeyError
+
+            raise DuplicateKeyError("E11000 duplicate key error (mock)")
         self.docs.append(doc)
         return None
 
@@ -5124,3 +5128,65 @@ def test_resolution_update_failure_keeps_the_key_and_the_flag(monkeypatch):
     assert link["pending_payment_keys"] == []
     assert link["payment_transition_pending"] is False
     assert len(_audits(stores, "payment_transition_resolved")) == 1
+
+
+def test_concurrent_owed_audit_flushes_write_one_audit(monkeypatch):
+    """Codex r4400621666: a webhook and a page read flushing together write one audit."""
+    import dashboard.services.cosigner_link_service as svc
+
+    stores, client, token, db = _recorder_world(monkeypatch)
+    _fail_audit_step(stores, "payment_transition_pending", 1)
+    _calls, restore = _fail_lock_work(monkeypatch, "_charge_row_blocks_down_payment", None)
+    assert _webhook(client, txn="TX-COS-RACE", amount="500.00").status_code == 200
+    restore()
+    links = stores["cosigner_links"]
+    (owed,) = links.docs[0]["pending_payment_audits_owed"]
+
+    # Both flushes pass the existence check before either inserts.
+    audits = stores["audit_events"]
+    original_find = audits.find_one
+    gate = {"waiting": 0}
+
+    async def _find_one(query=None, projection=None, session=None, **kwargs):
+        found = await original_find(query, projection, session=session, **kwargs)
+        if isinstance(query, dict) and "audit_key" in query:
+            gate["waiting"] += 1
+            while gate["waiting"] < 2:
+                await asyncio.sleep(0)
+        return found
+
+    audits.find_one = _find_one
+
+    async def _both():
+        return await asyncio.gather(
+            svc._flush_owed_audits(token),  # webhook reconcile
+            svc._flush_owed_audits(token),  # co-signer page read
+        )
+
+    assert asyncio.run(_both()) == [True, True]
+    (pending,) = _audits(stores, "payment_transition_pending")
+    assert pending["_id"] == owed["audit_key"]
+    assert pending["audit_key"] == owed["audit_key"]
+    link = links.docs[0]
+    assert link["pending_payment_audits_owed"] == []
+    assert link["payment_audit_owed"] is False
+
+
+def test_legacy_owed_audit_with_auto_id_is_not_rewritten(monkeypatch):
+    """An audit written before audit_key was the _id is found by its field and kept."""
+    import dashboard.services.cosigner_link_service as svc
+
+    stores, client, token, db = _recorder_world(monkeypatch)
+    _fail_audit_step(stores, "payment_transition_pending", 1)
+    _calls, restore = _fail_lock_work(monkeypatch, "_charge_row_blocks_down_payment", None)
+    assert _webhook(client, txn="TX-COS-LEGACYID", amount="500.00").status_code == 200
+    restore()
+    (owed,) = stores["cosigner_links"].docs[0]["pending_payment_audits_owed"]
+    legacy = {
+        "_id": "auto-object-id", "event_type": "payment_transition_pending",
+        "audit_key": owed["audit_key"], "pending_key": owed["pending_key"],
+    }
+    stores["audit_events"].docs.append(dict(legacy))
+    assert asyncio.run(svc._flush_owed_audits(token)) is True
+    assert _audits(stores, "payment_transition_pending") == [legacy]
+    assert stores["cosigner_links"].docs[0]["pending_payment_audits_owed"] == []

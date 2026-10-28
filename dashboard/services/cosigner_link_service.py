@@ -25,6 +25,8 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Optional
 from urllib.parse import urlparse
 
+from pymongo.errors import DuplicateKeyError
+
 from dashboard.extensions import get_collection
 from dashboard.services.docuseal_service import DEFAULT_DOCUSEAL_URL
 from dashboard.services.identity_verification_service import (
@@ -2549,6 +2551,8 @@ async def _flush_owed_audits(token: str) -> bool:
         try:
             if not audit_key or not step or not key:
                 raise ValueError("malformed owed audit")
+            # Audits written before audit_key became the _id carry it as a
+            # field; those are found here and left as they are.
             if not await audits.find_one({"audit_key": audit_key}):
                 view = _pending_view(doc)
                 if step == "payment_transition_pending":
@@ -2570,16 +2574,22 @@ async def _flush_owed_audits(token: str) -> bool:
                     when = datetime.fromisoformat(str(at))
                 except (TypeError, ValueError):
                     when = _now()
-                await _audit(
-                    step, doc, when,
-                    old_state=state, new_state=state,
-                    reason=kind,
-                    extra={
-                        "audit_key": audit_key,
-                        "transaction_id": txn, "transition": kind, "pending_key": key,
-                        "pending_before": before, "pending_after": after,
-                    },
-                )
+                try:
+                    # audit_key is the document _id: insert-only, so two
+                    # flushes of the same marker cannot both write it.
+                    await _audit(
+                        step, doc, when,
+                        old_state=state, new_state=state,
+                        reason=kind,
+                        extra={
+                            "_id": audit_key,
+                            "audit_key": audit_key,
+                            "transaction_id": txn, "transition": kind, "pending_key": key,
+                            "pending_before": before, "pending_after": after,
+                        },
+                    )
+                except DuplicateKeyError:
+                    pass  # already written by a concurrent flush
             await coll.update_one(
                 {"token": token},
                 {"$pull": {"pending_payment_audits_owed": {"audit_key": audit_key}}},
