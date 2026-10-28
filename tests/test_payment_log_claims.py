@@ -1706,3 +1706,57 @@ def test_review_flag_that_matches_nothing_is_not_claimed_in_the_audit(db, slack_
     assert review["new_needs_review"] is None
     assert db["bond_cases"].docs[0].get("needs_review") is None
     assert _rows(db, "refund")[0]["needs_review"] is True
+
+
+# --- Padded stored booking values match once trimmed (Codex P2 r4401319252) ---
+
+
+@pytest.mark.parametrize("field", ["Booking_Number", "booking_number"])
+def test_padded_single_spelling_bond_matches_and_stamps(db, slack_alerts, field):
+    """A stored ' BK-1 ' (legacy-only or lowercase-only) is found and stamped."""
+    db["bond_cases"].docs.append({"_id": "bc-pad", field: f"  {BOOKING}\t"})
+    recorded = _run(_record(db, kind="charge"))
+    assert recorded["stamped"] is True
+    assert recorded.get("needs_review") is not True
+    bond = db["bond_cases"].docs[0]
+    assert bond["last_transaction_id"] == TXN
+    # The stored value is not rewritten, and no other spelling is added.
+    assert bond[field] == f"  {BOOKING}\t"
+    other = "booking_number" if field == "Booking_Number" else "Booking_Number"
+    assert other not in bond
+    assert "needs_review" not in _rows(db, "charge")[0]
+    assert _audit(db, "charge")["stamped"] is True
+
+    _run(_record(db, kind="refund"))
+    assert db["bond_cases"].docs[0]["needs_review"] is True
+    assert "write_missed" not in _audit(db, "refund")["bond_review"]
+
+
+def test_padded_legacy_bond_and_a_lowercase_bond_fail_closed(db, slack_alerts):
+    """Two distinct bonds that share a booking once trimmed are still ambiguous."""
+    db["bond_cases"].docs.append({"_id": "bc-legacy", "Booking_Number": f" {BOOKING} "})
+    db["bond_cases"].docs.append(_bond(_id="bc-new"))
+    recorded = _run(_record(db, kind="charge"))
+    assert recorded["stamped"] is False
+    assert _rows(db, "charge")[0]["needs_review_reason"] == "booking_not_unique"
+    for doc in db["bond_cases"].docs:
+        assert doc.get("last_transaction_id") is None
+
+
+def test_padded_canonical_value_still_wins_over_a_stale_legacy_value(db, slack_alerts):
+    """booking_number ' OTHER ' is canonical, so a legacy 'BK-1' on it does not match."""
+    db["bond_cases"].docs.append({
+        "_id": "bc-reassigned", "booking_number": " BK-OTHER ", "Booking_Number": f" {BOOKING} ",
+    })
+    recorded = _run(_record(db, kind="charge"))
+    assert recorded["stamped"] is False
+    assert _rows(db, "charge")[0]["needs_review_reason"] == "booking_not_unique"
+    assert db["bond_cases"].docs[0].get("last_transaction_id") is None
+
+
+def test_booking_regex_is_escaped(db, slack_alerts):
+    """A booking with regex metacharacters matches only itself."""
+    db["bond_cases"].docs.append({"_id": "bc-x", "Booking_Number": "BKX1"})
+    recorded = _run(_record(db, kind="charge", booking="BK.1"))
+    assert recorded["stamped"] is False
+    assert db["bond_cases"].docs[0].get("last_transaction_id") is None

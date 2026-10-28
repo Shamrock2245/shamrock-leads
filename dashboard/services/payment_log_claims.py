@@ -33,6 +33,7 @@ If the server cannot run a transaction, the caller gets 503
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
@@ -484,13 +485,23 @@ def _write_matched(result) -> bool:
 async def _matching_bonds(db, booking: str, session) -> list:
     """``(collection, doc)`` for an explicit booking. Empty when the booking is blank.
 
-    Matches ``booking_number`` or the legacy ``Booking_Number``. A document
-    that carries both counts once. Two distinct documents still both count,
-    so a booking shared across the two spellings fails closed.
+    Matches ``booking_number`` or the legacy ``Booking_Number`` when the
+    stored value equals the booking once surrounding whitespace is trimmed.
+    The exact branches use any existing index; the anchored, escaped regex
+    finds a padded stored value such as ``" BK-1 "``. ``_bond_booking_field``
+    then applies the canonical rule. A document that carries both counts
+    once. Two distinct documents still both count, so a booking shared
+    across the two spellings fails closed.
     """
     if not booking:
         return []
-    query = {"$or": [{"booking_number": booking}, {"Booking_Number": booking}]}
+    padded = {"$regex": r"^\s*" + re.escape(booking) + r"\s*$"}
+    query = {"$or": [
+        {"booking_number": booking},
+        {"Booking_Number": booking},
+        {"booking_number": padded},
+        {"Booking_Number": padded},
+    ]}
     found = []
     for name in _BOND_COLLECTIONS:
         seen = []
