@@ -2937,6 +2937,132 @@ def test_down_payment_replays_mark_once_and_write_one_row(monkeypatch):
     assert stores["bond_cases"].docs[0]["premium_paid"] is False
 
 
+def _legacy_recorder_world(monkeypatch, booking_value=BOOKING, canonical=None):
+    """Recorder world whose bond is stored only under ``Booking_Number``.
+
+    Both the link store and the recorder store get the same bond shape.
+    ``canonical`` sets ``booking_number`` too (a stale or padded alias case).
+    """
+    stores, client, token, db = _recorder_world(monkeypatch)
+    for bond in (stores["bond_cases"].docs[0], db["bond_cases"].docs[0]):
+        bond.pop("booking_number", None)
+        bond["Booking_Number"] = booking_value
+        if canonical is not None:
+            bond["booking_number"] = canonical
+    return stores, client, token, db
+
+
+def _assert_legacy_bond_untouched_spelling(db, booking_value=BOOKING, canonical=None):
+    bond = db["bond_cases"].docs[0]
+    assert bond["Booking_Number"] == booking_value
+    if canonical is None:
+        assert "booking_number" not in bond
+    else:
+        assert bond["booking_number"] == canonical
+
+
+def test_legacy_booking_bond_webhook_marks_link_paid_once(monkeypatch):
+    """POST /api/webhooks/payment on a Booking_Number-only bond marks the link once."""
+    stores, client, token, db = _legacy_recorder_world(monkeypatch)
+    first = _webhook(client, txn="TX-LEG-WH", amount="500.00")
+    assert first.status_code == 200, first.text
+    assert first.json()["needs_review"] is False
+    for _ in range(2):
+        replay = _webhook(client, txn="TX-LEG-WH", amount="500.00")
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["duplicate"] is True
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+    assert stores["cosigner_links"].docs[0]["paid_transaction_id"] == "TX-LEG-WH"
+    assert len(_audits(stores, "paid")) == 1
+    rows = [r for r in db["payments"].docs if r.get("transaction_id") == "TX-LEG-WH"]
+    assert len(rows) == 1 and not rows[0].get("needs_review")
+    assert db["bond_cases"].docs[0]["last_transaction_id"] == "TX-LEG-WH"
+    _assert_legacy_bond_untouched_spelling(db)
+
+
+def test_legacy_booking_bond_poller_marks_link_paid_once(monkeypatch):
+    """The Gmail receipt poller marks a Booking_Number-only bond's link once."""
+    stores, client, token, db = _legacy_recorder_world(monkeypatch)
+    polled = _poll_down_payment(db, txn="TX-LEG-POLL", amount="500.00")
+    assert polled["success"] is True and polled["committed"] is True
+    assert polled.get("needs_review") is not True
+    again = _poll_down_payment(db, txn="TX-LEG-POLL", amount="500.00")
+    assert again["duplicate"] is True
+    replay = _webhook(client, txn="TX-LEG-POLL", amount="500.00")
+    assert replay.status_code == 200 and replay.json()["duplicate"] is True
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "paid"
+    assert stores["cosigner_links"].docs[0]["paid_transaction_id"] == "TX-LEG-POLL"
+    assert len(_audits(stores, "paid")) == 1
+    paid_steps = [
+        row for row in stores["cosigner_links"].docs[0]["timeline"]
+        if row.get("step") == "paid"
+    ]
+    assert len(paid_steps) == 1
+    assert db["bond_cases"].docs[0]["last_transaction_id"] == "TX-LEG-POLL"
+    _assert_legacy_bond_untouched_spelling(db)
+
+
+def test_padded_canonical_booking_with_legacy_alias_marks_paid(monkeypatch):
+    """booking_number ' BK ' plus Booking_Number 'BK' matches after trimming."""
+    padded = f"  {BOOKING} "
+    stores, client, token, db = _legacy_recorder_world(monkeypatch, canonical=padded)
+    response = _webhook(client, txn="TX-LEG-PAD", amount="500.00")
+    assert response.status_code == 200, response.text
+    assert response.json()["needs_review"] is False
+    assert stores["cosigner_links"].docs[0]["paid_transaction_id"] == "TX-LEG-PAD"
+    assert len(_audits(stores, "paid")) == 1
+    # The write filter used the stored padded value, so the stamp landed.
+    assert db["bond_cases"].docs[0]["last_transaction_id"] == "TX-LEG-PAD"
+    _assert_legacy_bond_untouched_spelling(db, canonical=padded)
+
+
+@pytest.mark.parametrize("path", ["webhook", "poller"])
+def test_booking_shared_across_spellings_does_not_mark_paid(monkeypatch, path):
+    """A legacy bond and a distinct lowercase bond on one booking fail closed."""
+    stores, client, token, db = _legacy_recorder_world(monkeypatch)
+    other = {
+        "bond_case_id": "BC-TEST-COS-OTHER",
+        "booking_number": BOOKING,
+        "status": "active",
+        "premium_paid": False,
+    }
+    stores["bond_cases"].docs.append(dict(other))
+    db["bond_cases"].docs.append(dict(other))
+    if path == "webhook":
+        response = _webhook(client, txn="TX-LEG-AMB", amount="500.00")
+        assert response.status_code == 200, response.text
+        assert response.json()["needs_review"] is True
+    else:
+        polled = _poll_down_payment(db, txn="TX-LEG-AMB", amount="500.00")
+        assert polled.get("needs_review") is True
+    assert client.get(f"/api/cosigner/{token}").json()["step"] == "pay"
+    assert not stores["cosigner_links"].docs[0].get("paid_transaction_id")
+    assert len(_audits(stores, "paid")) == 0
+    for bond in db["bond_cases"].docs:
+        assert bond.get("last_transaction_id") != "TX-LEG-AMB"
+
+
+@pytest.mark.parametrize("path", ["webhook", "poller"])
+def test_stale_legacy_booking_does_not_mark_paid(monkeypatch, path):
+    """A reassigned bond's stale Booking_Number is not this booking."""
+    stores, client, token, db = _legacy_recorder_world(
+        monkeypatch, canonical="TEST-COS-MOVED",
+    )
+    if path == "webhook":
+        response = _webhook(client, txn="TX-LEG-STALE", amount="500.00")
+        assert response.status_code == 200, response.text
+        assert response.json()["needs_review"] is True
+    else:
+        polled = _poll_down_payment(db, txn="TX-LEG-STALE", amount="500.00")
+        assert polled.get("needs_review") is True
+    # The reassigned bond no longer backs this link, so the page fails closed too.
+    assert client.get(f"/api/cosigner/{token}").json().get("step") != "paid"
+    assert not stores["cosigner_links"].docs[0].get("paid_transaction_id")
+    assert len(_audits(stores, "paid")) == 0
+    assert db["bond_cases"].docs[0].get("last_transaction_id") != "TX-LEG-STALE"
+    _assert_legacy_bond_untouched_spelling(db, canonical="TEST-COS-MOVED")
+
+
 def _poll_down_payment(db, *, txn, amount, reference=""):
     from dashboard.services.swipesimple_receipt_poller import SwipeSimpleReceiptPoller
 

@@ -438,13 +438,55 @@ async def _read_rows(db, txn_key: str, session=None, kind: Optional[str] = None)
     return [row for row in rows if row_kind(row) == kind]
 
 
+def _bond_booking_field(doc: dict, booking: str) -> str:
+    """The field that carries ``booking`` on this bond, or empty for none.
+
+    ``booking_number`` is the canonical field. The legacy ``Booking_Number``
+    counts only when ``booking_number`` is blank, so a stale legacy value
+    never matches a bond whose canonical booking is different.
+    """
+    canonical = _booking(doc.get("booking_number"))
+    if canonical:
+        return "booking_number" if canonical == booking else ""
+    if _booking(doc.get("Booking_Number")) == booking:
+        return "Booking_Number"
+    return ""
+
+
+def _bond_filter(booking: str, doc: dict) -> dict:
+    """Write filter for one matched bond: ``_id`` plus the stored booking value.
+
+    The value is the raw one stored in the field the bond matched on, so a
+    stored ``" BK-1 "`` is filtered as ``" BK-1 "``, not the trimmed booking.
+    """
+    field = _bond_booking_field(doc, booking) or "booking_number"
+    filt = {field: doc.get(field, booking)}
+    if doc.get("_id") is not None:
+        filt["_id"] = doc["_id"]
+    return filt
+
+
 async def _matching_bonds(db, booking: str, session) -> list:
-    """``(collection, doc)`` for an explicit booking. Empty when the booking is blank."""
+    """``(collection, doc)`` for an explicit booking. Empty when the booking is blank.
+
+    Matches ``booking_number`` or the legacy ``Booking_Number``. A document
+    that carries both counts once. Two distinct documents still both count,
+    so a booking shared across the two spellings fails closed.
+    """
     if not booking:
         return []
+    query = {"$or": [{"booking_number": booking}, {"Booking_Number": booking}]}
     found = []
     for name in _BOND_COLLECTIONS:
-        for doc in await _docs(db[name], {"booking_number": booking}, session):
+        seen = []
+        for doc in await _docs(db[name], query, session):
+            if not _bond_booking_field(doc, booking):
+                continue
+            doc_id = doc.get("_id")
+            if doc_id is not None:
+                if doc_id in seen:
+                    continue
+                seen.append(doc_id)
             found.append((name, doc))
     return found
 
@@ -539,7 +581,7 @@ async def _flag_bond(db, booking: str, flag: dict, session) -> list:
     reviews = []
     for name, current in groups[0]:
         await db[name].update_one(
-            {"booking_number": booking, **({"_id": current["_id"]} if current.get("_id") is not None else {})},
+            _bond_filter(booking, current),
             {"$set": flag},
             **_sess(session),
         )
@@ -578,10 +620,9 @@ async def _stamp_bonds(db, booking: str, group: list, payment_update: dict, sess
     """Stamp every document in one logical case. Returns one audit per document."""
     audits = []
     for coll_name, current in group:
-        filt = {"booking_number": booking}
-        if current.get("_id") is not None:
-            filt["_id"] = current["_id"]
-        await db[coll_name].update_one(filt, {"$set": payment_update}, **_sess(session))
+        await db[coll_name].update_one(
+            _bond_filter(booking, current), {"$set": payment_update}, **_sess(session),
+        )
         audits.append({
             "collection": coll_name,
             "record_id": "" if current.get("_id") is None else str(current["_id"]),
