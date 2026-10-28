@@ -299,34 +299,62 @@ def _submitter_matches_signer(
     return True
 
 
-def _signer_email(packet: dict, bond: Optional[dict], role: str) -> str:
-    """Email stored for this signer. Blank when the case has none."""
-    keys = (
-        (
+def _email_key(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _signer_email_keys(role: str) -> tuple[str, ...]:
+    if role == "co_indemnitor":
+        return (
             "co_signer_email",
             "cosigner_email",
             "co_indemnitor_email",
             "coindemnitor_email",
         )
-        if role == "co_indemnitor"
-        else ("indemnitor_email",)
-    )
-    for doc in (bond, packet):
-        if not isinstance(doc, dict):
-            continue
-        for key in keys:
-            text = str(doc.get(key) or "").strip()
-            if text:
-                return text
-        people = doc.get("indemnitors")
-        if not isinstance(people, list):
-            continue
+    return ("indemnitor_email",)
+
+
+def _doc_signer_emails(doc: dict, role: str) -> list[str]:
+    """Non-empty emails this document stores for the signer, compared folded."""
+    if not isinstance(doc, dict):
+        return []
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: Any) -> None:
+        text = _email_key(value)
+        if not text or text in seen:
+            return
+        seen.add(text)
+        found.append(text)
+
+    for key in _signer_email_keys(role):
+        add(doc.get(key))
+    people = doc.get("indemnitors")
+    if isinstance(people, list):
         for person in people:
             if isinstance(person, dict) and _party_role(person) == role:
-                text = str(person.get("email") or "").strip()
-                if text:
-                    return text
-    return ""
+                add(person.get("email"))
+    return found
+
+
+def _signer_email(packet: dict, bond: Optional[dict], role: str) -> str:
+    """Email stored for this signer. Blank when the case has none.
+
+    The bond does not win when the packet has a different email. Two
+    non-empty values that differ after trimming and lowercasing are a conflict.
+    """
+    found: list[str] = []
+    seen: set[str] = set()
+    for doc in (bond, packet):
+        for text in _doc_signer_emails(doc if isinstance(doc, dict) else {}, role):
+            if text in seen:
+                continue
+            seen.add(text)
+            found.append(text)
+    if len(found) > 1:
+        raise CosignerLinkError("signer_email_mismatch", 409)
+    return found[0] if found else ""
 
 
 def _bound_submitter_url(packet: dict, row: dict, role: str) -> str:
@@ -736,26 +764,129 @@ def _party_id_gap(packet: dict, bond: dict) -> str:
     return ""
 
 
+def _co_indemnitor_ids(doc: dict) -> list[str]:
+    """Ids on co-indemnitor rows. The primary indemnitor id is not one of these."""
+    if not isinstance(doc, dict):
+        return []
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: str) -> None:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            return
+        seen.add(text)
+        found.append(text)
+
+    for person in _listed_people(doc):
+        role = str(person.get("role") or person.get("party_role") or "").strip().lower()
+        role = role.replace("-", "_")
+        if role not in _COSIGNER_ROLES and role != "co_indemnitor":
+            continue
+        add(_bond_field(person, "indemnitor_id", "Indemnitor_ID", "id"))
+    for key in ("coindemnitor", "co_indemnitor", "cosigner", "co_signer"):
+        nested = doc.get(key)
+        if isinstance(nested, dict):
+            add(_bond_field(nested, "indemnitor_id", "Indemnitor_ID", "id"))
+    add(_bond_field(doc, "co_indemnitor_id", "coindemnitor_id", "Co_Indemnitor_ID"))
+    return found
+
+
+def _collapsed_name(value: Any) -> str:
+    """Case-insensitive full name with the whitespace collapsed."""
+    return " ".join(str(value or "").split()).casefold()
+
+
+def _indemnitor_record_name(doc: dict) -> str:
+    if not isinstance(doc, dict):
+        return ""
+    for key in (
+        "name",
+        "full_name",
+        "fullName",
+        "Full_Name",
+        "indemnitor_name",
+        "Indemnitor_Name",
+    ):
+        text = str(doc.get(key) or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _co_indemnitor_gap(packet: dict, bond: dict) -> str:
+    """The co-signer needs one id of their own, the same on the packet and the bond."""
+    packet_ids = _co_indemnitor_ids(packet)
+    bond_ids = _co_indemnitor_ids(bond)
+    if len(packet_ids) > 1 or len(bond_ids) > 1:
+        return "co_indemnitor_ambiguous"
+    if len(packet_ids) != 1 or len(bond_ids) != 1:
+        return "co_indemnitor_required"
+    if packet_ids[0] != bond_ids[0]:
+        return "co_indemnitor_mismatch"
+    primary_packet, primary_bond = _party_ids(packet)[1], _party_ids(bond)[1]
+    if packet_ids[0] in {primary_packet, primary_bond}:
+        return "co_indemnitor_mismatch"
+    return ""
+
+
+def _co_row_name_gap(doc: dict, co_id: str, expected: str) -> str:
+    """A row that carries this id must name the selected signer."""
+    wanted = _collapsed_name(expected)
+    if not wanted:
+        return "co_indemnitor_mismatch"
+    people: list[dict] = list(_listed_people(doc))
+    for key in ("coindemnitor", "co_indemnitor", "cosigner", "co_signer"):
+        nested = doc.get(key)
+        if isinstance(nested, dict):
+            people.append(nested)
+    for person in people:
+        role = str(person.get("role") or person.get("party_role") or "").strip().lower()
+        role = role.replace("-", "_")
+        named_nested = person in (
+            doc.get(key) for key in ("coindemnitor", "co_indemnitor", "cosigner", "co_signer")
+            if isinstance(doc.get(key), dict)
+        )
+        if role not in _COSIGNER_ROLES and role != "co_indemnitor" and not named_nested:
+            continue
+        if _bond_field(person, "indemnitor_id", "Indemnitor_ID", "id") != co_id:
+            continue
+        row_name = _person_name(person)
+        if row_name and _collapsed_name(row_name) != wanted:
+            return "co_indemnitor_mismatch"
+    return ""
+
+
+async def _load_indemnitor(indemnitor_id: str) -> Optional[dict]:
+    query = _scope({"$or": [
+        {"indemnitor_id": indemnitor_id},
+        {"Indemnitor_ID": indemnitor_id},
+    ]})
+    if query is None:
+        raise CosignerLinkError("tenant_required", 403)
+    found = await get_collection("indemnitors").find_one(query)
+    return found if isinstance(found, dict) else None
+
+
+async def _indemnitor_missing(indemnitor_id: str) -> bool:
+    return not await _load_indemnitor(indemnitor_id)
+
+
 async def _parties_unresolved(defendant_id: str, indemnitor_id: str) -> str:
     """Both party rows must already exist. This does not create them."""
     defendant_query = _scope({"$or": [
         {"defendant_id": defendant_id},
         {"Defendant_ID": defendant_id},
     ]})
-    indemnitor_query = _scope({"$or": [
-        {"indemnitor_id": indemnitor_id},
-        {"Indemnitor_ID": indemnitor_id},
-    ]})
-    if defendant_query is None or indemnitor_query is None:
+    if defendant_query is None:
         raise CosignerLinkError("tenant_required", 403)
     defendant = await get_collection("defendants").find_one(defendant_query)
-    indemnitor = await get_collection("indemnitors").find_one(indemnitor_query)
-    if not defendant or not indemnitor:
+    if not defendant or await _indemnitor_missing(indemnitor_id):
         return "party_unresolved"
     return ""
 
 
-async def _require_party_binding(packet: dict, bond: dict) -> None:
+async def _require_party_binding(packet: dict, bond: dict, *, role: str) -> None:
     gap = _party_id_gap(packet, bond)
     if gap:
         raise CosignerLinkError(gap, 409)
@@ -763,6 +894,23 @@ async def _require_party_binding(packet: dict, bond: dict) -> None:
     missing = await _parties_unresolved(defendant_id, indemnitor_id)
     if missing:
         raise CosignerLinkError(missing, 409)
+    if role != "co_indemnitor":
+        return
+    co_gap = _co_indemnitor_gap(packet, bond)
+    if co_gap:
+        raise CosignerLinkError(co_gap, 409)
+    co_id = _co_indemnitor_ids(bond)[0]
+    expected = _cosigner_name(packet, bond)
+    for doc in (packet, bond):
+        row_gap = _co_row_name_gap(doc, co_id, expected)
+        if row_gap:
+            raise CosignerLinkError(row_gap, 409)
+    record = await _load_indemnitor(co_id)
+    if not record:
+        raise CosignerLinkError("co_indemnitor_unresolved", 409)
+    # The id has to be this signer. A different person's record is not a match.
+    if _collapsed_name(_indemnitor_record_name(record)) != _collapsed_name(expected):
+        raise CosignerLinkError("co_indemnitor_mismatch", 409)
 
 
 async def _replace_stale_verification_claim(packet: dict) -> None:
@@ -821,7 +969,10 @@ async def create_cosigner_link(*, actor: str, packet_id: str, lang: str = "en") 
     gap = _bond_issuance_gap(bond)
     if gap:
         raise CosignerLinkError(gap, 409)
-    await _require_party_binding(packet, bond)
+    await _require_party_binding(packet, bond, role=packet_role)
+    # A packet email and a bond email for this signer have to agree before
+    # a bearer exists. The bond does not silently win.
+    _signer_email(packet, bond, packet_role)
     await _replace_stale_verification_claim(packet)
     name, role = packet_name, packet_role
     now = _now()
@@ -940,7 +1091,7 @@ async def _require_current_bond(link: dict, packet: dict) -> dict:
     gap = _bond_issuance_gap(bond)
     if gap:
         raise CosignerLinkError(gap, 409)
-    await _require_party_binding(packet, bond)
+    await _require_party_binding(packet, bond, role=_link_role(link))
     return bond
 
 
@@ -2782,6 +2933,19 @@ async def cosigner_state(token: str, lang: Optional[str] = None) -> dict:
         before = _audit_state(link, packet)
         changed = True
     if paid and _timeline_push(link, "paid", now):
+        await _audit(
+            "paid", link, now,
+            old_state=before, new_state=_audit_state(link, packet),
+        )
+        changed = True
+    elif (
+        nothing_due
+        and signed
+        and verified
+        and _timeline_push(link, "paid", now)
+    ):
+        # Nothing to collect. The terminal step is still audited. This does
+        # not record a charge or change the amount due.
         await _audit(
             "paid", link, now,
             old_state=before, new_state=_audit_state(link, packet),

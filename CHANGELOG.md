@@ -13,6 +13,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_cosigner_link.py`: `test_paid_finds_a_bond_stored_with_booking_number_alias`, `test_paid_fails_closed_when_the_alias_booking_is_two_cases`, `test_heal_keeps_pending_when_the_locked_row_read_fails`, `test_pending_state_and_its_audit_are_not_split`, `test_resolved_state_and_its_audit_are_not_split`, `test_owed_audit_is_not_written_twice_when_the_marker_pull_fails`.
 
+## [Unreleased] — 2026-10-27 (signer emails must agree)
+
+### Fixed
+- **A bond email and a different packet email for the same signer are refused.** Comparison trims and lowercases. Matching emails, and an email stored on only one side, still open the sign step. No DocuSeal URL or pay link is returned for a conflict.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_conflicting_signer_emails_get_no_sign_link`, `test_matching_or_one_sided_signer_email_still_signs`.
+
+## [Unreleased] — 2026-10-27 (co-signer record must name that signer)
+
+### Fixed
+- **A co-signer's indemnitor record has to be that signer.** After the co-indemnitor id resolves, its full name must equal the expected signer, case-insensitively, with whitespace collapsed. A different person's record gets no link, no DocuSeal URL, and no pay link.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_cosigner_record_must_name_the_selected_signer`.
+
+## [Unreleased] — 2026-10-27 (zero down payment writes a paid audit)
+
+### Fixed
+- **A confirmed zero down payment still writes the paid timeline step and a paid audit.** The audit stores `old_state` and `new_state` and does not store the bearer token. No charge is recorded and the amount due stays zero.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_zero_down_payment_audits_paid_without_a_charge`.
+
+## [Unreleased] — 2026-10-27 (co-signer must have their own indemnitor)
+
+### Fixed
+- **A co-signer link is issued only when the packet and the bond name that co-signer's own indemnitor id, and that row already exists.** A missing id, more than one id, an id that does not match, or the primary indemnitor's id is refused. A name match is not enough. No DocuSeal URL or pay link is returned.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_cosigner_bound_to_their_own_indemnitor_record`, `test_cosigner_without_their_own_record_gets_no_link`, `test_cosigner_record_of_the_primary_indemnitor_gets_no_link`.
+
 ## [Unreleased] — 2026-10-27 (failed co-signer issuance audit leaves no link)
 
 ### Fixed
@@ -73,6 +105,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `tests/test_cosigner_link.py`: `test_unsigned_packet_hides_the_pay_link`. A verified signer stays on the sign step, and a stored SwipeSimple URL is not returned, until the packet is signed.
+
+## [Unreleased] — 2026-10-27 (Scheduler: Lee alerts on max-instances skips too)
+
+### Fixed
+- **Lee now alerts when a run is skipped because the previous one is still going.** With `max_instances=1`, APScheduler rejects an overlapping tick with `EVENT_JOB_MAX_INSTANCES`, not `EVENT_JOB_MISSED`, so the Lee missed-run alert from #292 never fired for it.
+  - **Listener:** `ScraperScheduler` now subscribes `_on_job_missed` to `EVENT_JOB_MISSED | EVENT_JOB_MAX_INSTANCES`.
+  - **Distinct reason:** the alert carries a reason, `misfire` or `max_instances`. The title says "previous run still running" for a max-instances skip, and `details.reason` names the reason.
+  - **Throttle:** still 30 min, now per `(job_id, reason)`, so one kind of skip doesn't hide the other. It advances only when `notify_alert` returns truthy; False or a raise is retried on the next skip.
+  - Only `alert_on_miss` jobs (Lee) alert. Other jobs only log.
+
+### Tests
+- `tests/test_lee_harden_spof.py` (on the ci.yml list):
+  - `test_missed_listener_subscribed_to_max_instances`
+  - `test_max_instances_skip_fires_lee_alert`
+  - `test_max_instances_skip_fires_through_real_scheduler`
+  - `test_max_instances_alert_not_throttled_when_notify_fails` (False and raise)
+  - `test_max_instances_skip_ignored_for_non_lee_jobs`
+
+  `test_scheduler_miss_alert_retries_when_notify_fails` now checks the `(job_id, "misfire")` throttle key.
+
+### Docs (AGENTS.md "Document Everything"; Codex P1 on #293)
+- `STATUS.md`: new section on the Lee (FL) missed-run alert covering max-instances skips.
+- `docs/recon/county_source_contract_evidence.json`: the Lee (FL 071) `evidence_note` now describes the `max_instances` reason ("previous run still running") and the delivered-only, per-job/per-reason throttle.
+- `docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md`: regenerated with `scripts/build_recon_matrix.py`; `--check` passes. Lee stays `candidate_productive` / Health `unverified`.
+- `docs/COUNTY_REGISTRY.md`: note under the Tier 1 table.
+
 ## [Unreleased] — 2026-10-27 (Lee: #292 review follow-ups — heartbeat gated on the Mongo write, alerts off the event loop, throttle after delivery)
 
 ### Fixed
