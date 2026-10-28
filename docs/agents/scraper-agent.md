@@ -188,12 +188,12 @@ Dashboard updates
 |----------|-------|
 | File | `scrapers/counties/polk.py` |
 | Class | `PolkCountyScraper` |
-| JMS Vendor | Odyssey |
-| Base URL | `https://polksheriff.org` |
-| Method | GET `/detention/jail-inquiry` → HTML parsing with DrissionPage |
+| JMS Vendor | PCSO Jail Inquiry (Kendo UI JSON API) |
+| Base URL | `https://www.polksheriff.org` |
+| Method | plain HTTPS via `scrapers.plain_http` (honest UA, TLS verified): POST `SearchJail` by booking date, GET `inmate-profile` for the anti-forgery token, POST `GetCharges` |
 | Auth | None |
 | Interval | 120 min |
-| Notes | Jail inquiry page. Relative detail URLs need BASE_URL prefix. |
+| Notes | Status only from a published ReleaseDate (`status_source`). Blocks, TLS, HTTP status and payload drift raise typed errors. Unverified until a Leads Ops write smoke; see `docs/recon/FL_POLK_TYPED_ERRORS_2026-10-22.md`. |
 
 #### Osceola County ✅
 | Property | Value |
@@ -226,10 +226,10 @@ Dashboard updates
 | Class | `PalmBeachCountyScraper` |
 | JMS Vendor | Custom (PBSO Blotter) |
 | Base URL | `https://www3.pbso.org/blotter` |
-| Method | ColdFusion app (`index.cfm`) → HTML parsing with DrissionPage |
+| Method | ColdFusion app (`index.cfm`) → plain HTTPS via `scrapers.plain_http` (honest UA, TLS verified; no browser). Date-form submit, `allresults_` cards only, paced pagination (3 s) |
 | Auth | None |
 | Interval | 120 min |
-| Notes | ColdFusion backend. Relative detail URLs need BASE_URL prefix. |
+| Notes | ColdFusion backend. Relative detail URLs need BASE_URL prefix. Unverified (`recon_only`); layout drift raises `ParseDriftError`. |
 
 ---
 
@@ -260,29 +260,29 @@ Dashboard updates
 | Interval | 60 min |
 | Notes | BSO's custom arrest search application. High volume. |
 
-#### Duval County ✅
+#### Duval County 🔴 (fail closed)
 | Property | Value |
 |----------|-------|
 | File | `scrapers/counties/duval.py` |
 | Class | `DuvalCountyScraper` |
 | JMS Vendor | Custom (JSO Inmate Search) |
 | Base URL | `https://inmatesearch.jaxsheriff.org/` |
-| Method | DrissionPage browser automation |
+| Method | plain HTTPS via `scrapers.plain_http` (honest UA, TLS verified); DrissionPage retired |
 | Auth | None |
 | Interval | 90 min |
-| Notes | Jacksonville Sheriff's Office custom portal. |
+| Notes | Jacksonville Sheriff's Office ATIMS portal. Fail closed 2026-10-21: the host omits its intermediate certificate (`tls_cert_invalid`) and the SPA sits behind an ATIMS robot gate (never clicked). See `docs/recon/FL_DUVAL_HONEST.md`. |
 
 #### Volusia County ✅
 | Property | Value |
 |----------|-------|
 | File | `scrapers/counties/volusia.py` |
 | Class | `VolusiaCountyScraper` |
-| JMS Vendor | Custom (VCSO) |
-| Base URL | `https://vcso.us/jail-info/inmate-search/` |
-| Method | DrissionPage browser automation |
+| JMS Vendor | Volusia County Division of Corrections Inmate Inquiry (ASP.NET) |
+| Base URL | `https://volusiamug.vcgov.org/` |
+| Method | plain HTTPS via `scrapers.plain_http` (honest UA, TLS verified): disclaimer Accept, Recent Bookings postback, Details.aspx |
 | Auth | None |
 | Interval | 90 min |
-| Notes | Volusia County Sheriff's Office WordPress-based. |
+| Notes | Status from the published InCustody column (`status_source`); unverified until a Leads Ops write smoke. See `docs/recon/FL_VOLUSIA_HONEST_2026-10-22.md`. |
 
 #### Brevard County ✅
 | Property | Value |

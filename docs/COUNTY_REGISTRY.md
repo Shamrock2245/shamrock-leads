@@ -27,6 +27,8 @@
 | 6 | **DeSoto** | DevExpress grid (DrissionPage) — **not** JailTracker | `desoto.py` | ✅ Active | 60 min | 2026-07-16 |
 | 7 | **Hendry** | Official OCV S3 `inmates.json`; only id is `inmateID` = `HCSO<YY>MNI<NNNNNN>`, a person (MNI) id, not a booking number | `hendry.py` | 🔴 Fail closed (`SOURCE_CONTRACT_VALIDATED=False`; no person-id keys). See `docs/recon/FL_HENDRY_FAIL_CLOSED_2026-10-08.md` | 120 min | 2026-10-08 |
 
+> **Lee missed-run alert (2026-10-27, PR #293).** The scheduler alerts when a Lee run is skipped for either of two reasons: `misfire`, when no worker was free within the 25-min grace window, or `max_instances`, when the previous run is still going. The 30-min throttle is per reason and only advances after Slack delivery. Health stays `unverified` (matrix `candidate_productive`).
+
 ---
 
 ## Tier 2 — Tampa Bay / I-4 Corridor (8 Counties)
@@ -39,14 +41,14 @@
 | 12 | **Pasco** | DrissionPage — Cloudflare bypass | `pasco.py` | ✅ Active | 90 min | 2026-04-27 |
 | 13 | **Lake** | requests POST `recent_data` + Turnstile token (SolveCaptcha, owner-approved; shared `scrapers/solvecaptcha.py`) | `lake.py` | ✅ `verified_public` (Mac write smoke 17 new; needs SOLVECAPTCHA_KEY) | 90 min | 2026-09-25 |
 | 14 | **Hernando** | Custom HTML | `hernando.py` | ✅ Active | 90 min | 2026-04-27 |
-| 15 | **Citrus** | Public recent-arrest PDF (source `AR #`) — plain requests + pdfplumber | `citrus.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
+| 15 | **Citrus** | Public recent-arrest PDF (source `AR #`) — plain_http + pdfplumber | `citrus.py` | ⚠️ Blocked from the agent box: honest probe HTTP 403 (`egress_block`) on 2026-10-15; needs VPS / Leads Ops validation + write smoke before treating as available (unverified, `recon_only`) | 120 min | 2026-10-15 |
 
 ---
 
 ## Tier 3 — Central FL / Heartland (6 Counties)
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
-| 16 | **Polk** | Direct Kendo UI REST API | `polk.py` | ✅ Active | 120 min | 2026-05-24 |
+| 16 | **Polk** | Direct Kendo UI JSON API (SearchJail + GetCharges), plain HTTPS via `plain_http` (honest UA, TLS verified); typed errors, nothing swallowed | `polk.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-22 |
 | 17 | **Osceola** | Corrections Daily Arrest Report CSV, plain HTTPS (honest UA, TLS verified, no impersonation). The download redirects to legacy-apps.osceola.org, which omits its intermediate certificate, so runs fail loud as `tls_cert_invalid` until the county fixes the chain | `osceola.py` | ✅ Active (unverified; TLS chain hold) | 120 min | 2026-10-15 |
 | 18 | **Sumter** | SmartWEB JAIL View (`SCSO<YY>JBN######`, modern AddMoreResults) — plain requests | `sumter.py` | ✅ Active (unverified until write smoke) | 180 min | 2026-10-07 |
 | 19 | **Highlands** | Direct OCV JSON API | `highlands.py` | ✅ Active | 120 min | 2026-05-24 |
@@ -58,7 +60,7 @@
 ## Tier 4 — Southeast / Treasure Coast (6 Counties)
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
-| 22 | **Palm Beach** | DrissionPage — PBSO ColdFusion blotter | `palm_beach.py` | ✅ Active (fixed page.html 2026-07-10) | 120 min | 2026-07-10 |
+| 22 | **Palm Beach** | PBSO ColdFusion blotter, plain HTTPS (honest UA, TLS verified, no browser or impersonation): submits the page's own date form, parses `allresults_` cards only, follows its own pagination with a 3 s pause. Layout drift raises `ParseDriftError`; blocks raise `egress_block`. Honest box probe 2026-10-15: `connection_reset` | `palm_beach.py` | ✅ Active (unverified; `recon_only`) | 120 min | 2026-10-15 |
 | 23 | **Broward** | Official BSO arrest search | `broward.py` | ✅ Live — Turnstile Arrest Search name-prefix + paged grid; Mac smoke 2026-09-23 (30 new / status=ok; action=arrest_search); needs `SOLVECAPTCHA_KEY` | 60 min | Writes enabled after contract validation |
 | 24 | **Martin** | Direct Tyler Technologies REST API, plain HTTPS (honest UA, TLS verified, no impersonation) | `martin.py` | ✅ Active (unverified) | 120 min | 2026-10-15 |
 | 25 | **St. Lucie** | plain HTTPS POST — PHP inmate list (honest UA, TLS verified, no impersonation; source Inmate Id as key, not yet proven to be a booking number) | `st_lucie.py` | ✅ Active (unverified) | 90 min | 2026-10-15 |
@@ -70,7 +72,7 @@
 ## Tier 5 — East Coast / Space Coast (3 Counties)
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
-| 28 | **Volusia** | Direct ASP.NET Postback (volusiamug.vcgov.org) | `volusia.py` | ✅ Active | 90 min | 2026-05-24 |
+| 28 | **Volusia** | Direct ASP.NET Postback (volusiamug.vcgov.org), plain HTTPS via `plain_http` (honest UA, TLS verified). Status from the published InCustody column; typed errors, nothing swallowed | `volusia.py` | ✅ Active (unverified until write smoke) | 90 min | 2026-10-22 |
 | 29 | **Brevard** | BCSO Inmate Search (`/?handler=Search` date window → `Booking #` `YYYY-NNNNNNNN`; detail Bonds/Charges for in-custody rows) — plain requests | `brevard.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
 | 30 | **Flagler** | New World InmateInquiry (`InCustody=True` + detail open `Booking` `YYYY-NNNNNNNN`; shared `fl_newworld`) — plain requests | `flagler.py` | ✅ Active (unverified until write smoke) | 120 min | 2026-10-07 |
 
@@ -92,7 +94,7 @@
 ## Tier 7 — NE FL / First Coast (4 Counties)
 | # | County | JMS / Method | Scraper File | Status | Interval | Last Verified |
 |---|--------|-------------|--------------|--------|----------|---------------|
-| 36 | **Duval** | DrissionPage — API interception (jaxsheriff.org) | `duval.py` | ✅ Active | 90 min | 2026-04-27 |
+| 36 | **Duval** | JSO / ATIMS inmate search, plain HTTPS via `plain_http` (honest UA, TLS verified; DrissionPage retired). Host omits its intermediate cert, so the honest GET fails `tls_cert_invalid`; SPA behind an ATIMS robot gate (never clicked) | `duval.py` | 🔴 Fail closed (2026-10-21, `docs/recon/FL_DUVAL_HONEST.md`; CoS decision to reopen) | 90 min | 2026-10-21 |
 | 37 | **St. Johns** | Stub — `st_johns.py` returns no rows; sjso.org links `/smartwebclient/jail.aspx` but it answers **403** (Cloudflare/nginx) to ordinary access | `st_johns.py` | 🔴 No reachable public roster (hold; no WAF bypass) | 120 min | 2026-10-07 |
 | 38 | **Nassau** | New World InmateInquiry — portal serves an incomplete TLS chain (leaf only, GoDaddy G2 intermediate missing); old module used `verify=False` and keyed every row `History` | `nassau.py` | 🔴 Fail closed (`SOURCE_CONTRACT_VALIDATED=False`; owner hold until the chain is fixed or the intermediate is approved). See `docs/recon/FL_67_STATUS_2026-10-08.md` | 120 min | 2026-10-08 |
 | 39 | **Clay** | Public detention listing has Name/Booking Date only — no source booking ID | `clay.py` | 🔴 Fail closed (no invented name keys) | 120 min | 2026-10-07 |
@@ -130,6 +132,8 @@
 | County | Module | Runtime state | Source posture |
 |---|---|---|---|
 | **Miami-Dade** | `miami_dade.py` | Registered, **unverified** (Health `unverified`; matrix `recon_only`; owner exception, Brendan 2026-10-09 9:32 AM ET) | ArcGIS FeatureServer table `miamidade_jail_data` (plain `requests`, every 60 min). It publishes no booking, jail or case number, and its ObjectId/GlobalID are reissued on republish (2026-10-09 08:03 ET: 840 of 841 snapshot rows got a new GlobalID). `Booking_Number` stays blank. Rows are keyed on the approved internal natural key `md_dedupe_v2` = sha256 of normalised defendant + DOB + BookDate (charges excluded, so an amended charge updates in place; without a DOB: defendant + BookDate + full verbatim charges, flagged `md_key_fallback`). `MongoWriter` upserts on it through a narrow allow-listed path (`core/booking_identity.py`); every other county keeps the blank-booking guard. The key is the stored record id only and is printed blank in hydrate, PDF/DocuSeal and the dashboard. No bond field, so bond is `""`, never `$0`. Stored GlobalID duplicates are counted read-only by `scripts/miami_dade_dedupe_report.py`; cleanup is Leads Ops, backed up. |
+
+> **Miami-Dade key (2026-10-23).** The source publishes no booking number, and the ArcGIS GlobalID and ObjectId change on every republish, so neither can be a key. The workaround is the internal `md_dedupe` key: sha256 of defendant + DOB + BookDate, with the full verbatim charges added as a flagged fallback (`md_key_fallback`) when DOB is missing. `Booking_Number` stays blank. The workaround is live by owner decision; draft #173 was dropped.
 
 ### Rural source-recon queue — scaffolded and registered
 
@@ -198,7 +202,7 @@ Approach:   Query the anonymous FeatureServer directly with `ObjectId,BookDate,D
 ### JailTracker (Black Creek ISC)
 - **Pattern**: Paginated HTML tables or JSON API
 - **Auth**: None; occasional CAPTCHA / rate limiting
-- **Active Counties**: Highlands, Glades. Citrus is the sheriff PDF roster, not JailTracker (2026-10-07). Baker/Calhoun/Gulf/Holmes/Levy/Wakulla/Washington stay fail_closed.
+- **Active Counties**: Highlands, Glades. Citrus is the sheriff PDF roster, not JailTracker (2026-10-07); an honest probe got HTTP 403 on 2026-10-15, so it is not available until VPS / Leads Ops validation (see the Citrus row). Baker/Calhoun/Gulf/Holmes/Levy/Wakulla/Washington stay fail_closed.
 
 ### New World / InmateInquiry (Tyler Technologies)
 - **Pattern**: Server-rendered HTML listing + detail pages (GET)

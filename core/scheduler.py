@@ -6,13 +6,18 @@ Each county runs on its own configurable interval.
 """
 
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 
 try:
     from apscheduler.schedulers.background import BackgroundScheduler
     from apscheduler.triggers.interval import IntervalTrigger
-    from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
+    from apscheduler.events import (
+        EVENT_JOB_ERROR,
+        EVENT_JOB_EXECUTED,
+        EVENT_JOB_MAX_INSTANCES,
+        EVENT_JOB_MISSED,
+    )
 except ImportError:  # pragma: no cover
     class BackgroundScheduler:  # type: ignore[no-redef]
         def __init__(self, *args, **kwargs):
@@ -34,6 +39,8 @@ except ImportError:  # pragma: no cover
         def __init__(self, *args, **kwargs): pass
     EVENT_JOB_ERROR = 1  # type: ignore[assignment]
     EVENT_JOB_EXECUTED = 2  # type: ignore[assignment]
+    EVENT_JOB_MISSED = 4  # type: ignore[assignment]
+    EVENT_JOB_MAX_INSTANCES = 65536  # type: ignore[assignment]
 
 from datetime import timedelta
 
@@ -78,6 +85,11 @@ class ScraperScheduler:
         self._writers: list = []
         self._job_history: List[Dict] = []
         self._registration_count: int = 0
+        # Jobs whose skipped runs must alert, e.g. Lee (FL): a misfire (no
+        # free worker within grace) or a max-instances skip (the previous
+        # run is still going). Throttled per (job_id, reason).
+        self._alert_on_miss: set = set()
+        self._miss_alerted_at: Dict[Tuple[str, str], datetime] = {}
 
         self.scheduler.add_listener(
             self._on_job_executed, EVENT_JOB_EXECUTED
@@ -85,16 +97,26 @@ class ScraperScheduler:
         self.scheduler.add_listener(
             self._on_job_error, EVENT_JOB_ERROR
         )
+        self.scheduler.add_listener(
+            self._on_job_missed, EVENT_JOB_MISSED | EVENT_JOB_MAX_INSTANCES
+        )
 
     def register_scraper(
         self,
         scraper: BaseScraper,
         interval_minutes: int = None,
+        misfire_grace_time: Optional[int] = None,
+        alert_on_miss: bool = False,
     ):
         """Register a county scraper with its schedule.
 
         Jobs fire immediately on startup (staggered by STAGGER_SECONDS per county)
         then repeat every interval_minutes thereafter.
+
+        ``misfire_grace_time`` overrides the 300s default: with 8 worker threads
+        and hundreds of jobs a run can wait longer than 5 minutes for a thread,
+        and APScheduler then drops it silently. ``alert_on_miss`` posts to
+        #alerts when that still happens.
         """
         interval = interval_minutes or settings.DEFAULT_INTERVAL_MINUTES
         job_id = scraper.scraper_id
@@ -118,6 +140,12 @@ class ScraperScheduler:
         first_run = datetime.now(timezone.utc) + timedelta(seconds=stagger_offset)
         self._registration_count += 1
 
+        job_kwargs = {}
+        if misfire_grace_time:
+            job_kwargs["misfire_grace_time"] = int(misfire_grace_time)
+        if alert_on_miss:
+            self._alert_on_miss.add(job_id)
+
         self.scheduler.add_job(
             self._run_scraper,
             trigger=IntervalTrigger(minutes=interval),
@@ -126,6 +154,7 @@ class ScraperScheduler:
             args=[job_id],
             replace_existing=True,
             next_run_time=first_run,
+            **job_kwargs,
         )
 
         logger.info(
@@ -165,6 +194,64 @@ class ScraperScheduler:
 
     def _on_job_executed(self, event):
         logger.debug(f"✅ Job {event.job_id} executed successfully")
+
+    _SKIP_REASONS = {
+        "misfire": (
+            "no worker thread was free within the misfire grace window "
+            "(SCRAPER_MAX_CONCURRENT={workers})"
+        ),
+        "max_instances": (
+            "the previous run was still running (max_instances=1), "
+            "so this tick was not started"
+        ),
+    }
+
+    def _on_job_missed(self, event):
+        """EVENT_JOB_MISSED or EVENT_JOB_MAX_INSTANCES: a scheduled run did not start.
+
+        For ``alert_on_miss`` jobs this posts to #alerts, throttled to 30 min
+        per (job, reason). The throttle advances only when ``notify_alert``
+        returned truthy; False or a raise is retried on the next skip.
+        """
+        job_id = getattr(event, "job_id", "")
+        reason = "max_instances" if getattr(event, "code", None) == EVENT_JOB_MAX_INSTANCES else "misfire"
+        if reason == "max_instances":
+            logger.warning("⏭️ Job %s skipped: previous run still running (max_instances)", job_id)
+        else:
+            logger.warning("⏭️ Job %s missed its run time (no free worker within grace)", job_id)
+        if job_id not in self._alert_on_miss:
+            return
+        now = datetime.now(timezone.utc)
+        key = (job_id, reason)
+        last = self._miss_alerted_at.get(key)
+        if last is not None and now - last < timedelta(minutes=30):
+            return
+        scraper = self._scrapers.get(job_id)
+        label = getattr(scraper, "county_label", None) or job_id
+        why = self._SKIP_REASONS[reason].format(workers=self.max_workers)
+        try:
+            from writers.slack_notifier import SlackNotifier
+            delivered = SlackNotifier().notify_alert(
+                title=(
+                    f"{label} scheduled run skipped (previous run still running)"
+                    if reason == "max_instances" else f"{label} scheduled run skipped"
+                ),
+                message=f"{label}: APScheduler skipped a scheduled run because {why}.",
+                level="error",
+                details={"job_id": job_id, "reason": reason},
+                source="scheduler",
+            )
+        except Exception as exc:
+            logger.warning("Missed-run alert (%s) failed for %s (%s); not throttled",
+                           reason, job_id, type(exc).__name__)
+            return
+        # Throttle only after Slack accepted the post, so a failed delivery
+        # is retried on the next skip.
+        if delivered:
+            self._miss_alerted_at[key] = now
+        else:
+            logger.warning("Missed-run alert (%s) for %s not delivered; not throttled",
+                           reason, job_id)
 
     def _on_job_error(self, event):
         logger.error(

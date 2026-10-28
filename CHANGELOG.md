@@ -14,6 +14,140 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_lee_indemnitor_discovery.py` (on the CI list).
 
+## [Unreleased] — 2026-10-27 (Scheduler: Lee alerts on max-instances skips too)
+
+### Fixed
+- **Lee now alerts when a run is skipped because the previous one is still going.** With `max_instances=1`, APScheduler rejects an overlapping tick with `EVENT_JOB_MAX_INSTANCES`, not `EVENT_JOB_MISSED`, so the Lee missed-run alert from #292 never fired for it.
+  - **Listener:** `ScraperScheduler` now subscribes `_on_job_missed` to `EVENT_JOB_MISSED | EVENT_JOB_MAX_INSTANCES`.
+  - **Distinct reason:** the alert carries a reason, `misfire` or `max_instances`. The title says "previous run still running" for a max-instances skip, and `details.reason` names the reason.
+  - **Throttle:** still 30 min, now per `(job_id, reason)`, so one kind of skip doesn't hide the other. It advances only when `notify_alert` returns truthy; False or a raise is retried on the next skip.
+  - Only `alert_on_miss` jobs (Lee) alert. Other jobs only log.
+
+### Tests
+- `tests/test_lee_harden_spof.py` (on the ci.yml list):
+  - `test_missed_listener_subscribed_to_max_instances`
+  - `test_max_instances_skip_fires_lee_alert`
+  - `test_max_instances_skip_fires_through_real_scheduler`
+  - `test_max_instances_alert_not_throttled_when_notify_fails` (False and raise)
+  - `test_max_instances_skip_ignored_for_non_lee_jobs`
+
+  `test_scheduler_miss_alert_retries_when_notify_fails` now checks the `(job_id, "misfire")` throttle key.
+
+### Docs (AGENTS.md "Document Everything"; Codex P1 on #293)
+- `STATUS.md`: new section on the Lee (FL) missed-run alert covering max-instances skips.
+- `docs/recon/county_source_contract_evidence.json`: the Lee (FL 071) `evidence_note` now describes the `max_instances` reason ("previous run still running") and the delivered-only, per-job/per-reason throttle.
+- `docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md`: regenerated with `scripts/build_recon_matrix.py`; `--check` passes. Lee stays `candidate_productive` / Health `unverified`.
+- `docs/COUNTY_REGISTRY.md`: note under the Tier 1 table.
+
+## [Unreleased] — 2026-10-27 (Lee: #292 review follow-ups — heartbeat gated on the Mongo write, alerts off the event loop, throttle after delivery)
+
+### Fixed
+- **The Lee heartbeat no longer advances when a run's rows did not reach Mongo.** `BaseScraper.run` stamps `last_success_at` / `last_records_at` and merges `status_extra_fields()` only when the system-of-record writer (the one that owns `scraper_status`) wrote the run's rows without raising. Otherwise it stamps `records_write_failed_at` and logs the error class only. `_persist_status` now returns whether the `scraper_status` upsert succeeded, and a new optional `on_status_persisted()` hook runs only after both writes succeeded. Lee uses it to advance its remembered listing window, so `status_extra_fields()` no longer changes state. `evaluate_freshness` raises a critical `records_write_failed` finding when `records_write_failed_at` is newer than `last_success_at`. A doc carrying that stamp no longer falls back to `last_run` as the last success.
+- **The Lee freshness cron no longer blocks the dashboard event loop.** `run_lee_freshness_check` runs `LeeFreshnessAlerter.process`, which makes the blocking `SlackNotifier.notify_alert` call, through `asyncio.to_thread`, just as the listing probe already ran. A lock serialises `process`. The Slack path itself is unchanged.
+- **Undelivered alerts are not throttled.** `notify_alert` returns `False` instead of raising when Slack is unset, times out or returns non-200. The throttle timestamp now advances only after a delivered post, so the next tick retries. This covers three throttles:
+  - the Lee ops alerts (`_ops_alerted`, 1 h);
+  - the scheduler missed-run alert (`_miss_alerted_at`, 30 min);
+  - the freshness alerter (`_active`, 60 min re-alert).
+
+  A recovery notice clears its findings only after it is delivered. The alerter result gains a `failed` list, which the cron logs.
+
+### Docs
+- **`docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md` FL 071 (Lee)** now records the 2026-10-23 hardening. It was regenerated from `county_source_contract_evidence.json` with `scripts/build_recon_matrix.py`, and `--check` passes. The recorded changes:
+  - an unknown listing shape → `ParseDriftError`;
+  - partial paging is not success;
+  - a failed listing is not swallowed;
+  - the key is the published `bookingNumber` only;
+  - the `page_cap` alert at `LEE_MAX_PAGES`;
+  - the `window_gap` alert;
+  - the `lee_freshness` cron (N=75 min, `LEE_FRESHNESS_MAX_AGE_MIN`);
+  - the 25-min misfire grace window.
+
+  Health stays `unverified`.
+
+### Tests
+- `tests/test_lee_harden_spof.py` (already on the ci.yml list) gains these tests:
+  - `test_failed_status_write_does_not_advance_heartbeat`
+  - `test_failed_status_upsert_does_not_commit_window`
+  - `test_persisted_run_commits_window`
+  - `test_freshness_flags_records_write_failure`
+  - `test_write_failure_disables_legacy_last_run_fallback`
+  - `test_ops_alert_not_throttled_when_notify_fails` (False and raise)
+  - `test_scheduler_miss_alert_retries_when_notify_fails` (False and raise)
+  - `test_freshness_alerter_retries_when_notify_fails` (False and raise)
+  - `test_freshness_recovery_retried_when_notify_fails`
+  - `test_freshness_cron_does_not_block_event_loop`
+
+## [Unreleased] — 2026-10-23 (Lee: single-point-of-failure hardening + freshness heartbeat)
+
+### Fixed
+- **Lee (FL) no longer turns a wrong-shaped response into a quiet 0-row run.** `LeeCountyScraper._extract_records` raises `LeeParseDriftError` (a `ParseDriftError`, classified `parse_drift`, alerted to #scraper-errors and not retried) when a 200 JSON page is not a list or a known wrapper, or its rows are not objects. Listing rows that all lack a published `bookingNumber` raise the same error; a partial loss raises a `partial` drift alert and keeps the keyed rows.
+- **Lee keys only on the published `bookingNumber`.** `_normalize_record`, the cross-variant dedupe in `_fetch_arrests` and the enrichment sort no longer fall back to `id` (14-digit internal row id), `booking_id` or `bookingNo`. Rows without a booking number are not merged by some other id; they reach the drift check instead.
+- **Lee pagination failures are typed and bounded.** Each listing page gets one retry with backoff (`LEE_PAGE_RETRIES`=1, `LEE_PAGE_RETRY_BACKOFF_S`=5) on no response, 5xx or bad JSON; never on 429 or during the cooldown, and never on 4xx. When no listing variant pages through cleanly, `_scrape_once` raises `LeeFetchIncomplete` so the existing outer retry runs; on the last attempt it keeps the rows it has and posts an #alerts warning instead of storing a silent partial run.
+- **Lee pagination guards.** A page that only repeats booking numbers already seen (offset ignored) stops paging. A full last page at `LEE_MAX_PAGES` is flagged and alerted (`page_cap`) instead of truncating silently.
+- **Listing window overlap guard.** Each successful Lee run stores `source_window` (row count and booking-number range) on its `scraper_status` doc. If the oldest booking number listed now is more than one past the newest seen on the previous run, the run alerts #alerts (`window_gap`) with the unseen range and stores `source_window_gap`. Counts and booking-number ranges only, no names or DOBs.
+
+### Added
+- **Lee freshness heartbeat** (`core/lee_freshness.py`, dashboard cron `lee_freshness`, every 5 min, enabled by default). It reads Lee's `scraper_status` doc and posts through `SlackNotifier.notify_alert` (#alerts) when there has been no successful run in N = 75 min (`LEE_FRESHNESS_MAX_AGE_MIN`), the last run stored 0 rows while one plain GET of the public listing (honest UA, `trust_env=False`, skipped during the cooldown) shows bookings, there are 3+ consecutive failures (`LEE_FRESHNESS_MAX_FAILURES`), or a window gap was recorded. Alerts are de-duplicated (re-alert every 60 min) and a recovery notice is sent when they clear. Registered in Service Control and `DEFAULT_CONFIG`.
+- **`last_success_at` / `last_records_at` on `scraper_status`.** `BaseScraper.run` stamps them on every ok/empty run (not on failures or an auto-disabled canary), and merges an optional per-scraper `status_extra_fields()` hook. `MongoWriter.get_scraper_status_fields` reads selected fields back.
+- **Scheduler misfire grace + missed-run alert.** `register_scraper` accepts `misfire_grace_time` and `alert_on_miss`; an `EVENT_JOB_MISSED` listener posts to #alerts (throttled to 30 min per job). Lee registers with a 25-minute grace instead of the 300s default, so a saturated 8-thread pool delays its run rather than dropping it.
+
+### Docs
+- **Miami-Dade key note** in `docs/COUNTY_REGISTRY.md`: the source publishes no booking number and the ArcGIS GlobalID / ObjectId change on every republish, so they are not keys. The internal `md_dedupe` key (sha256 of defendant + DOB + BookDate; charges added as a flagged `md_key_fallback` when DOB is missing) is live by owner decision, `Booking_Number` stays blank, and draft #173 was dropped. Docs only, no code change.
+
+### Not changed
+- No fallback Lee source is wired: none was verified (see the PR). The fetch transport, bond default and single-booking path are left to #147 / #157 / #158. No deploy workflow, compose or secret changes.
+
+### Tests
+- `tests/test_lee_harden_spof.py` (new, on the ci.yml list). The fake schedulers in `tests/test_fl_gap_queue.py` and `tests/test_source_state_drift.py` accept the new `register_scraper` keyword arguments.
+
+## [Unreleased] — 2026-10-15 (Citrus: unpublished bond is "", published 0 kept; no invented custody; honest HTTPS)
+
+### Fixed
+- **Citrus (FL) no longer invents a `$0` bond.** `_parse_bond` returned `0.0` for blank, NO BOND, HOLD, N/A or text bonds, and the record stored `"0"`. A positive amount was stored as `"1000.0"`. It now uses `published_bond.charge_bond_amount`: a published amount is stored as `"1000"` / `"250.50"`, a published `0` stays `"0"`, and anything unpublished is `""`.
+- **Custody is no longer invented.** `Status` was hard-coded `"In Custody"`. The source is a recent-arrests PDF that never states custody, so it is now `""`.
+- **Chrome disguise removed.** The Chrome `User-Agent` is gone, and the landing and PDF requests go through `scrapers.plain_http` (honest UA, certificate verified). A block raises `egress_block:` and a real certificate failure raises `tls_cert_invalid:`, with no workaround. There was no `verify=False` to remove. The one honest probe from the agent box (2026-10-15) got **HTTP 403**, so it now fails visibly as `egress_block: Citrus HTTP 403` from that network.
+
+- **Registries record the blocked Citrus source (Codex P1 on 98811b3).** `docs/COUNTY_REGISTRY.md` no longer shows Citrus as ✅ Active (2026-10-07). It now records the 2026-10-15 honest probe (HTTP 403, `egress_block`) and says VPS / Leads Ops validation plus a write smoke are needed before it is treated as available. The FL 017 evidence row moves from `candidate_productive` to `recon_only` with the 403 result, the matrix was regenerated (FL candidate 20→19, recon only 18→19), and `FL_67_STATUS_2026-10-08.md` row 32 matches. Health stays `unverified`. No stored rows change.
+
+### Tests
+- `tests/test_fl_citrus_bond_custody_defaults.py` (added to the `ci.yml` list).
+- `test_registries_record_the_403_probe_not_available`; `tests/test_home_county_smoke_evidence.py` FL matrix counts updated.
+
+## [Unreleased] — 2026-10-22 (Volusia: custody only from the published InCustody column)
+
+### Fixed
+- **Volusia (FL) no longer invents "In Custody".** The old rule read every row without a release date and without `InCustody = N` as in custody, including a blank cell. Status now comes from the published `InCustody` column (`Y` gives In Custody, `N` gives Released; `status_source` is `published_in_custody_column`), otherwise from a published Release Date (`published_release_date`), otherwise `""`. An honest agent-box read on 2026-10-22 confirmed the column and its agreement with Release Date (`docs/recon/FL_VOLUSIA_HONEST_2026-10-22.md`).
+- **Volusia failures are visible.** The per-booking `except Exception` that logged and skipped detail-page errors is gone, and so is the outer catch-all. A block raises `egress_block`, a bad certificate raises `tls_cert_invalid`, a non-200 on the list flow raises `VolusiaHTTPError` (classified by status), and missing ViewState, a missing Recent Bookings table or changed columns raise `ParseDriftError` instead of an empty run. Columns are checked against the published header instead of fixed indexes, which also fixes the `IndexError` on 10- or 11-cell rows. The debug line that logged the person's name is gone.
+- **Stored invented custody can be cleared, but the switch is off (Codex P1).** `MongoWriter` still leaves a blank scraped status out of `$set`, so rows saved by the old fallback keep their stored "In Custody". The new `CLEAR_UNPUBLISHED_STATUS` setting (`config/settings.py`) takes comma-separated `ST/County` entries and is **empty by default and enabled nowhere** (not in deploy, compose or `.env.example`). For a listed county, a scrape that publishes a blank status sets the stored status to `""` only where it is `"In Custody"` with no recorded `extra.status_source`. That runs in a separate pre-bulk update with `upsert=False`. A sourced status, a stored "Released" and other states are untouched. Turning it on changes stored prod rows and needs a Leads Ops count plus the owner's OK (tracked in #264). Tests: `tests/test_mongo_clear_unpublished_status.py` (flag off, flag on, scoping, default empty; on the ci.yml list).
+- Booking keys stay the published `Booking #` (Inmate ID only as Person_ID). Bond stays the per-charge sum only when every charge publishes an amount; a published `$0` is kept, otherwise `""`. The FL 127 evidence row records the read; the matrix was regenerated and Volusia stays unverified (`recon_only`) until a Leads Ops write smoke. `docs/COUNTY_REGISTRY.md` and `docs/agents/scraper-agent.md` no longer describe a DrissionPage or vcso.us source. Tests: `tests/test_fl_volusia_honest_status.py` (new, on the ci.yml list).
+
+## [Unreleased] — 2026-10-22 (Polk: typed errors, no catch-all handlers)
+
+### Fixed
+- **Polk (FL) no longer swallows failures.** The four `except Exception` handlers in `polk.py` are gone: per booking, the profile page, GetCharges, and the per-date search loop, which turned any search error into an empty day. Blocks (`egress_block`) and bad certificates (`tls_cert_invalid`) were already re-raised and still are. A non-200 SearchJail now raises the new `PolkHTTPError`, which carries `status_code` and is classified by status (404 `url_changed`, 5xx `network`) instead of being logged and skipped. A SearchJail or GetCharges payload that isn't a JSON list of objects raises `ParseDriftError`. Network errors such as timeouts propagate instead of being logged.
+- **Polk network errors carry no booking numbers (Codex P2 on f6f6acd).** A non-block network failure on SearchJail, the profile page or GetCharges (a refused connection, a timeout) is re-raised as `PolkNetworkError`, whose message names only the step and the exception type (`Polk: network error on inmate-profile (ConnectionError)`). requests/urllib3 messages embed the URL (`/inmate-profile/<booking>`), and `BaseScraper` logs and alerts `str(e)`. The original exception stays on `__cause__`. `PolkNetworkError` subclasses `requests.exceptions.ConnectionError`, so Health still classifies it as `network` (retryable). Blocks and TLS failures are not re-wrapped. Tests: `tests/test_fl_polk_typed_errors.py`.
+- **Per-booking detail misses are counted, not itemised.** A profile page that isn't 200, a missing anti-forgery token, or a GetCharges response that isn't 200 JSON leaves that record's charges and bond `""`. All misses in a run go into one warning with no names or booking numbers. The per-booking warnings that logged booking numbers and exception text are gone.
+- Status and transport are unchanged: a published ReleaseDate gives Released, otherwise `""`, and it now records `status_source` (`published_release_date` / `published_status_field`). Bond is still the per-charge sum only when every charge publishes `BondAmountDue` (a published 0 is kept). The FL 105 evidence row records the 2026-10-22 honest read (`docs/recon/FL_POLK_TYPED_ERRORS_2026-10-22.md`); the matrix was regenerated and Polk stays unverified (`recon_only`). `docs/COUNTY_REGISTRY.md` and `docs/agents/scraper-agent.md` no longer describe DrissionPage. Tests: `tests/test_fl_polk_typed_errors.py` (new, on the ci.yml list).
+
+## [Unreleased] — 2026-10-23 (FA watcher query test: stale county list, now on the ci.yml list)
+
+### Fixed
+- **`test_watcher_query_uses_fa_watch_counties` was stale, not flaky.** It failed on main (f1d0042) both alone and in a full run, in a clean checkout, so this is not order dependence or leaked state. The test hard-coded which watch counties are fail_closed. Two documented Health decisions had since moved: Miami-Dade (FL) was reopened unverified on the owner-approved internal key (#168), and DeSoto (FL) went fail_closed (#222). The watcher was right both times: it drops exactly the Health fail_closed counties. Nobody saw the drift because the file was not on the ci.yml pytest list. The test now derives the expected in/out sets from `config.source_guard` and asserts both branches. It keeps explicit anchors for today's decisions (closed: Hendry, Charlotte, Manatee, Sarasota, DeSoto; open: Miami-Dade, Broward, St. Lucie). `tests/test_write_counties_fa_union.py` is now on the ci.yml list, so the next Health change has to update it in the same PR. No runtime code changed.
+
+## [Unreleased] — 2026-10-21 (Duval: plain honest HTTPS, fail closed on tls_cert_invalid)
+
+### Changed
+- **Duval (FL) no longer drives a DrissionPage browser.** The shared browser options sent a Chrome UA and injected stealth JS, and the module intercepted the SPA's API traffic. `duval.py` now has one fetch path through `scrapers.plain_http` (honest UA, certificate verified). A block raises `egress_block`, a bad certificate raises `tls_cert_invalid`, the ATIMS robot gate raises `captcha_gate` (never clicked), any other non-200 raises `DuvalHTTPError` (classified by status), and a page or payload that doesn't match raises `ParseDriftError`. The swallowed `except Exception` blocks around DOM parsing, API packets and form submission are gone.
+- **Duval is fail closed (CoS decision to reopen).** One honest probe from the agent box (2026-10-21 08:17 EDT) got `tls_cert_invalid`. The host sends only its leaf certificate (Network Solutions RSA OV SSL CA 3 intermediate missing, openssl verify error 21), the same as on 2026-10-15. `SOURCE_CONTRACT_VALIDATED = False`, `SCRAPER_SOURCE_STATES["Duval (FL)"] = "fail_closed"`, and the FL 031 evidence row is updated, with `COUNTY_SOURCE_CONTRACT_MATRIX.md` regenerated. `FL_67_STATUS_2026-10-08.md`, `docs/COUNTY_REGISTRY.md` and `docs/agents/scraper-agent.md` are updated too. Recon: `docs/recon/FL_DUVAL_HONEST.md`.
+- **Duval records are published-only.** Booking keys come only from a published booking-number field: the `id` / `inmateId` / `jacketNumber` fallbacks and the DOM path's "any 4+ digit number" are removed. Bond comes only from a published bond field or a labelled bond value (a published 0 is kept), never the first dollar figure in a row. Status is a published release date (`Released`) or a published status field, otherwise `""`, with `status_source` recorded. Tests: `tests/test_fl_duval_plain_https.py` (new, on the ci.yml list), `tests/test_fl_duval_no_robot_click.py`, `tests/test_fl_duval_honest_status.py`; the FL matrix count in `tests/test_home_county_smoke_evidence.py` moves from 19 recon_only / 24 fail_closed to 18 / 25.
+
+## [Unreleased] — 2026-10-15 (Palm Beach: plain honest HTTPS, no browser disguise)
+
+### Changed
+- **Palm Beach (FL) no longer drives a Chrome browser or sends a Chrome User-Agent.** `palm_beach.py` reads the PBSO blotter with `scrapers.plain_http` (honest UA, certificate verified). It submits the page's own date-search form, parses cards with `parse_pbso_html`, and follows the page's own pagination links. The hCaptcha wait loop is gone: a challenge page (including hCaptcha) or 401/403/429 raises `egress_block:`, a dropped handshake raises `egress_block: ... connection_reset:`, a certificate failure raises `tls_cert_invalid:`, and a missing search form raises `PalmBeachSourceChanged`. `_fetch_single_booking` uses the same honest session, and a block now raises instead of reading as "not found". The one honest probe from the agent box (2026-10-15) got **connection_reset**. Tests: `tests/test_fl_palmbeach_plain_https.py`.
+- **Palm Beach review fixes (Codex review on fdc6a77).** Roster pages are parsed only from `div[id^=allresults_]` cards; a page with no cards and no "0 matches"/"no results" notice raises `PalmBeachSourceChanged` instead of being read as one card that could merge several people's charges and bonds. A card whose booking number is published only as its numeric link text keeps that number (as the old card parser did). Pagination pauses `PAGE_PAUSE_S` (3 s) before each next-page GET. The FL 099 evidence row (`docs/recon/county_source_contract_evidence.json`, regenerated into `COUNTY_SOURCE_CONTRACT_MATRIX.md`) now records the blotter URL, the plain-HTTPS implementation and the failed honest probe; the state stays `recon_only`/unverified. Tests: `tests/test_fl_palmbeach_plain_https.py`.
+- **Palm Beach layout drift is classified as parse drift (Codex review on 738e790, #265).** `PalmBeachSourceChanged` now subclasses `ParseDriftError`, so a missing date-search form or a results page with no `allresults_` cards and no "no matches" notice reaches `BaseScraper`'s parse-drift alert path and shows as `parse_drift` in Health, not `unknown`. A non-200 response that isn't a block raises the new `PalmBeachHTTPError`, which carries `status_code` and is classified by status (404/410 `url_changed`, 5xx `network`), never as drift. `docs/COUNTY_REGISTRY.md` (row 22) and `docs/agents/scraper-agent.md` no longer describe the old DrissionPage contract. Tests: `tests/test_fl_palmbeach_plain_https.py`.
+- **Palm Beach records never default status to "In Custody".** `_row_to_arrest_record` uses `row.get("status") or ""`, so an unknown status is `""` and a published one (e.g. `Released` from a card release date via `pbso_parse`) is kept. The blotter isn't custody-only (#233).
 ## [Unreleased] — 2026-10-19 (PyMuPDF 2.x keeps Palmetto widget names)
 
 ### Fixed
@@ -596,6 +730,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - Byte-identical pass-through of every redact helper on non-Miami-Dade values.
   - Native form submit on a Miami-Dade record posts the real key (node simulation); a blank booking from a form never overwrites a stored key (server tests); checkbox, radio and hidden behaviour from P1.
   - Guards on Slack/Telegram `json=`, message entry points, Sheets/notification text, middleware registration, guard-first page loading and recovery portal labels.
+
 ## [Unreleased] — 2026-10-14 (Duval: never click the ATIMS robot gate)
 
 ### Fixed

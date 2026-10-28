@@ -16,6 +16,18 @@
 
 ---
 
+## Lee (FL) missed-run alert covers max-instances skips (2026-10-27)
+
+PR #293 (follow-up to #292, deployed in Hetzner run 40502451546). The Lee job runs with `max_instances=1`. When a tick fires while the previous run is still going, APScheduler emits `EVENT_JOB_MAX_INSTANCES` instead of `EVENT_JOB_MISSED`, so the #292 missed-run alert never fired for that kind of skip.
+
+`ScraperScheduler._on_job_missed` now listens for both events:
+- A max-instances skip alerts with reason `max_instances` and the title "Lee (FL) scheduled run skipped (previous run still running)".
+- A misfire skip alerts with reason `misfire`.
+
+The 30-min throttle is per job and per reason, so one kind of skip doesn't hide the other. It advances only when `notify_alert` reports delivery; False or a raise is retried on the next skip. Non-Lee jobs only log. Alerts carry only the job id and reason (no PII).
+
+Lee stays `candidate_productive` in the matrix and `unverified` in Health. No access-posture change. Tests: `tests/test_lee_harden_spof.py` (on `.github/workflows/ci.yml`).
+
 ## Add surety — data-driven surety templates (2026-10-07)
 
 Staff can add a carrier from Super CRM → Paperwork Config → Surety Templates without a code change per surety. They upload AcroForm or flat PDFs, confirm canonical mappings (flat PDFs get staff-placed boxes), set POA prefixes and a per-charge repeat form, preview a local PDF filled with fake sample data, and publish an immutable version. Write Bond / DocuSeal reads the active published version. Prior versions stay for audit.

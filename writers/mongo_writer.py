@@ -34,6 +34,31 @@ CHARGE_FIELDS = ("charges", "charge_details")
 BOND_FIELDS = ("bond_amount", "bond_amount_raw", "bond_type")
 
 
+def clear_unpublished_status_enabled(state: str, county: str) -> bool:
+    """True only when ``settings.CLEAR_UNPUBLISHED_STATUS`` lists "ST/County" (empty by default)."""
+    scopes = getattr(settings, "CLEAR_UNPUBLISHED_STATUS", None) or ()
+    return f"{(state or '').strip().upper()}/{(county or '').strip().upper()}" in scopes
+
+
+def unpublished_status_clear_op(state: str, county: str, booking: str) -> UpdateOne:
+    """Blank a stored "In Custody" that has no recorded ``extra.status_source``.
+
+    A sourced status, a "Released" (e.g. from a recheck) and a missing row are
+    left alone; this never upserts.
+    """
+    return UpdateOne(
+        {
+            "state": state,
+            "county": county,
+            "booking_number": booking,
+            "status": "In Custody",
+            "extra.status_source": {"$exists": False},
+        },
+        {"$set": {"status": ""}},
+        upsert=False,
+    )
+
+
 def _blank(value) -> bool:
     return value is None or (isinstance(value, str) and not value.strip()) or value == []
 
@@ -335,6 +360,7 @@ class MongoWriter:
         pending: list = []
 
         internal_keyed = 0
+        status_clears: list = []
         for idx, record in enumerate(records):
             booking = (record.Booking_Number or "").strip()
             if is_internal_booking_key(booking):
@@ -371,6 +397,10 @@ class MongoWriter:
             # never $set it over a stored status (e.g. a recheck's Released).
             if not str(doc.get("status") or "").strip():
                 doc.pop("status", None)
+                # Off by default (settings.CLEAR_UNPUBLISHED_STATUS is empty):
+                # only a listed county clears a stored, unsourced "In Custody".
+                if clear_unpublished_status_enabled(state, county_name):
+                    status_clears.append(unpublished_status_clear_op(state, county_name, identity))
             doc["state"] = state
             doc["county"] = county_name
             doc["booking_number"] = identity
@@ -468,6 +498,11 @@ class MongoWriter:
                 "sheet_name": county,
             }
 
+        if status_clears:
+            # Before the main bulk (unordered): the filter must see the stored
+            # extra.status_source, which the main $set replaces.
+            cleared = self.arrests.bulk_write(status_clears, ordered=False).modified_count
+            logger.info("%s: cleared %d stored unsourced In Custody status(es) (CLEAR_UNPUBLISHED_STATUS)", county, cleared)
         result = self.arrests.bulk_write(operations, ordered=False)
 
         # Which input records were genuinely NEW (upserted, not just refreshed)?
@@ -716,6 +751,13 @@ class MongoWriter:
         """Read persisted consecutive-failure / auto-disable state (or ``{}``)."""
         filter_q, _bare, _st, _label = self._scraper_status_identity(county, state)
         projection = {field: 1 for field in self._RESILIENCE_FIELDS}
+        projection["_id"] = 0
+        return self.scraper_status.find_one(filter_q, projection) or {}
+
+    def get_scraper_status_fields(self, county: str, state: str = None, fields=()) -> dict:
+        """Read selected scraper_status fields (e.g. ``source_window``), or ``{}``."""
+        filter_q, _bare, _st, _label = self._scraper_status_identity(county, state)
+        projection = {field: 1 for field in fields}
         projection["_id"] = 0
         return self.scraper_status.find_one(filter_q, projection) or {}
 
