@@ -74,6 +74,15 @@ inventories are unchanged, so a template 5 payload still omits
 More charges than rows fails closed. The text is never shortened.
 Template 5's 200-character ``charges_summary`` cap is unchanged.
 
+Palmetto template 7 (id 7, the co-indemnitor draft) is template 5 plus
+Schedule A on master-waiver page 4. Schedule A lists at most 7 charges.
+Eight or more fail closed. ``charges_summary`` keeps the 200-character
+cap. A join that fits is written there unchanged. A longer join is
+replaced by the pointer ``See Schedule A``, and the full listing is
+written to ``schedule_a``. Template 5's record does not have Schedule A,
+so a template 5 submission still fails closed when the join exceeds 200
+characters.
+
 There is no addendum delivery. ``DocuSealService.create_submission``
 posts ``template_id`` and ``submitters`` only. ``create_template_from_pdf``
 creates a different template. ``get_submission_documents`` downloads a
@@ -97,6 +106,9 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 # OSI template 1 offense_1..offense_4. Palmetto template 5 has no offense rows.
 DOCUSEAL_CHARGE_ROW_CAPACITY = 4
+
+# Printed in charges_summary when template 7's join exceeds that box.
+SCHEDULE_A_POINTER = "See Schedule A"
 
 # One charge widget per appearance-bond form. The next charge is another form.
 APPEARANCE_CHARGE_ROW_CAPACITY = 1
@@ -550,6 +562,20 @@ def _layout_notes(
     return notes
 
 
+def _schedule_a_spec(record: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """Template 7 Schedule A. Absent on template 5 and template 1."""
+    raw = record.get("schedule_a")
+    if not isinstance(raw, dict):
+        return None
+    try:
+        max_charges = int(raw.get("max_charges") or 0)
+    except (TypeError, ValueError):
+        return None
+    if max_charges < 1:
+        return None
+    return raw
+
+
 def _offense_row_character_cap(record: Mapping[str, Any]) -> Optional[int]:
     raw = record.get("offense_row_character_capacity")
     if isinstance(raw, dict) and raw.get("cap") is not None:
@@ -569,13 +595,60 @@ def fit_charges_for_template(
     OSI template 1 uses ``offense_1``..``offense_4``. Palmetto template 5
     uses ``charges_summary`` only, and only while that text is within the
     render-proven character cap. Palmetto template 6 uses the four
-    paperwork-header rows, each capped at 209 characters. There is no
-    DocuSeal addendum on the signed packet.
+    paperwork-header rows, each capped at 209 characters. Palmetto
+    template 7 lists up to 7 charges on Schedule A. A join longer than
+    the 200-character charges box becomes ``See Schedule A``. There is
+    no DocuSeal addendum on the signed packet.
     """
     rows = list(rows)
     summary = join_charge_summary(rows)
     surety = template_key(surety_id)
     record = capacity_record(surety_id, template_id)
+    schedule = _schedule_a_spec(record)
+    if schedule is not None:
+        max_charges = int(schedule["max_charges"])
+        if len(rows) > max_charges:
+            raise ChargeCapacityError(
+                len(rows), max_charges, surety, template, unit="rows"
+            )
+        try:
+            char_cap = int(schedule.get("charges_summary_cap") or 0)
+        except (TypeError, ValueError):
+            char_cap = 0
+        pointer = str(schedule.get("pointer") or SCHEDULE_A_POINTER).strip() or SCHEDULE_A_POINTER
+        printed = summary
+        notes: List[str] = []
+        if rows and char_cap > 0 and len(summary) > char_cap:
+            if len(pointer) > char_cap:
+                raise ChargeCapacityError(
+                    len(rows),
+                    char_cap,
+                    surety,
+                    template,
+                    unit="characters",
+                    summary_characters=len(pointer),
+                )
+            printed = pointer
+            notes.append(
+                f"charges_summary is a pointer to Schedule A "
+                f"({len(summary)} characters). Schedule A lists all "
+                f"{len(rows)} charges. The charge text is not shortened."
+            )
+        elif rows:
+            notes.append(
+                f"Schedule A lists all {len(rows)} charges. "
+                f"charges_summary contains every charge."
+            )
+        return ChargePlacement(
+            on_form=[],
+            overflow=[],
+            summary=printed,
+            extra_fields={},
+            layout_notes=notes,
+            addendum_pdf=b"",
+            capacity=max_charges,
+            addendum=False,
+        )
     row_names = list(record.get("offense_rows") or [])
     row_capacity = len(row_names)
     if row_capacity < 1:

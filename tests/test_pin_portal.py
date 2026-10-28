@@ -35,6 +35,51 @@ def test_public_sign_redirect_prefers_role():
     assert raw.headers["location"].endswith("/s/def-bbb")
 
 
+def test_voided_or_unverified_signer_gets_no_docuseal_url():
+    """A voided packet, or an unverified co-signer, must not render a /s/ URL."""
+    voided = MagicMock()
+    voided.find_one = AsyncMock(return_value={
+        "packet_id": "PKT-VOID",
+        "voided": True,
+        "status": "voided",
+        "defendant_name": "TEST DEFENDANT",
+        "docuseal_submitters": [
+            {
+                "role": "coindemnitor",
+                "slug": "co-voided",
+                "status": "pending",
+                "sign_url": "https://sign.shamrockbailbonds.biz/s/co-voided",
+            },
+        ],
+    })
+    with patch("dashboard.routers.pin_portal.get_collection", return_value=voided):
+        response = client.get("/sign/PKT-VOID/coindemnitor", follow_redirects=False)
+    assert response.status_code == 404
+    assert "co-voided" not in response.text
+    assert "/s/" not in response.text
+
+    unverified = MagicMock()
+    unverified.find_one = AsyncMock(return_value={
+        "packet_id": "PKT-UNVER",
+        "voided": False,
+        "status": "pending_signature",
+        "defendant_name": "TEST DEFENDANT",
+        "docuseal_submitters": [
+            {
+                "role": "coindemnitor",
+                "slug": "co-unverified",
+                "status": "unverified",
+                "sign_url": "https://sign.shamrockbailbonds.biz/s/co-unverified",
+            },
+        ],
+    })
+    with patch("dashboard.routers.pin_portal.get_collection", return_value=unverified):
+        response = client.get("/sign/PKT-UNVER/coindemnitor", follow_redirects=False)
+    assert response.status_code == 404
+    assert "co-unverified" not in response.text
+    assert "/s/" not in response.text
+
+
 def test_extract_signing_link_prefers_indemnitor():
     from dashboard.routers.pin_portal import _extract_signing_link_from_packet
     link = _extract_signing_link_from_packet({
