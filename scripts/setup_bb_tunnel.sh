@@ -207,6 +207,30 @@ PLIST
 launchctl unload "$PLIST_PATH" 2>/dev/null || true
 launchctl load "$PLIST_PATH"
 
+# Provision restricted env file for com.shamrock.bb-url-sync LaunchAgent while preserving existing values
+SYNC_ENV_FILE="$HOME/.shamrock-bb-sync.env"
+if [ -r "$SYNC_ENV_FILE" ]; then
+    _CUR_PW="${BB_PASSWORD:-${BLUEBUBBLES_PASSWORD:-}}"
+    _CUR_KEY="${BB_CONFIG_API_KEY:-}"
+    # shellcheck disable=SC1090
+    . "$SYNC_ENV_FILE"
+    [ -n "$_CUR_PW" ] && BB_PASSWORD="$_CUR_PW"
+    [ -n "$_CUR_KEY" ] && BB_CONFIG_API_KEY="$_CUR_KEY"
+fi
+if [ -n "${BB_CONFIG_API_KEY:-}" ] && [ -n "${BB_PASSWORD:-${BLUEBUBBLES_PASSWORD:-}}" ]; then
+    SYNC_TMP="${SYNC_ENV_FILE}.tmp.$$"
+    (
+        umask 077
+        printf 'BB_PASSWORD=%q\n' "${BB_PASSWORD:-${BLUEBUBBLES_PASSWORD:-}}" > "$SYNC_TMP"
+        printf 'BB_CONFIG_API_KEY=%q\n' "$BB_CONFIG_API_KEY" >> "$SYNC_TMP"
+    )
+    chmod 600 "$SYNC_TMP"
+    mv "$SYNC_TMP" "$SYNC_ENV_FILE"
+    echo "   ✅ Provisioned LaunchAgent secret file at $SYNC_ENV_FILE (0600)"
+else
+    echo "   ℹ️  Set BB_CONFIG_API_KEY in $SYNC_ENV_FILE (0600) so com.shamrock.bb-url-sync can authenticate."
+fi
+
 echo "   ✅ LaunchAgent installed and loaded"
 echo "   The tunnel will now auto-start on every login."
 echo "   Logs: /tmp/cloudflared-bb.log"
@@ -231,7 +255,7 @@ echo ""
 echo "  Or hot-swap immediately (no rebuild needed):"
 echo "  curl -X PATCH https://leads.shamrockbailbonds.biz/api/bb-health/update-url \\"
 echo "    -H 'Content-Type: application/json' \\"
-echo "    -d '{\"suffix\":\"0178\",\"url\":\"https://$HOSTNAME\",\"api_key\":\"shamrock-bb-sync-2245\"}'"
+echo "    -d '{\"suffix\":\"0178\",\"url\":\"https://$HOSTNAME\",\"api_key\":\"'\"\$BB_CONFIG_API_KEY\"'\"}'"
 echo ""
 echo "  🎉 No more URL rotation. No more manual hot-swaps."
 echo "════════════════════════════════════════"

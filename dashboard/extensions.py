@@ -87,8 +87,8 @@ _BB_PHONES = [
     ("0314", "(239) 955-0314", "admin@shamrockbailbonds.biz"),
 ]
 
-# Shared API key for iMac → VPS config updates
-BB_CONFIG_API_KEY = os.getenv("BB_CONFIG_API_KEY", "shamrock-bb-sync-2245")
+# Shared API key for iMac → VPS config updates (no hardcoded fallback; fail closed when unset)
+BB_CONFIG_API_KEY = (os.getenv("BB_CONFIG_API_KEY") or "").strip()
 
 
 def init_bluebubbles():
