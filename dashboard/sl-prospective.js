@@ -739,26 +739,32 @@ window.SLProspective = (function () {
   ];
   const _FL_COUNTY_KEYS = new Set(FL_REGISTRY_COUNTIES.map(function(c) { return c.toLowerCase(); }));
 
-  // Add Lead discovery body. The form's state wins; without one the state is
-  // FL only when the county is a registered Florida county. Anything else is
-  // not sent: {ok:false, reason} and the caller tells staff why.
-  function addLeadDiscoverBody(bk, county, formState) {
+  // Add Lead discovery body. It carries the defendant name from the form: a
+  // new lead (often a MANUAL-* booking) has no arrest record the server could
+  // read the name from, and the name-based providers need it. The form's state
+  // wins; without one the state is FL only when the county is a registered
+  // Florida county. Anything else is not sent: {ok:false, reason} and the
+  // caller tells staff why. The name goes only in the request body.
+  function addLeadDiscoverBody(bk, county, formState, defName) {
     var c = String(county || '').trim();
     var st = String(formState || '').trim().toUpperCase();
+    var name = String(defName || '').replace(/\s+/g, ' ').trim();
     if (!bk) return { ok: false, reason: 'booking_required' };
+    if (!name) return { ok: false, reason: 'name_required' };
     if (!c) return { ok: false, reason: 'county_required' };
     if (st) {
       if (!/^[A-Z]{2}$/.test(st)) return { ok: false, reason: 'state_invalid' };
-      return { ok: true, body: { booking_number: bk, county: c, state: st } };
+      return { ok: true, body: { booking_number: bk, full_name: name, county: c, state: st } };
     }
     var key = c.replace(/\s+county$/i, '').trim().toLowerCase();
-    if (_FL_COUNTY_KEYS.has(key)) return { ok: true, body: { booking_number: bk, county: c, state: 'FL' } };
+    if (_FL_COUNTY_KEYS.has(key)) return { ok: true, body: { booking_number: bk, full_name: name, county: c, state: 'FL' } };
     return { ok: false, reason: 'state_unknown' };
   }
 
   function addLeadDiscoverSkipMessage(reason) {
     if (reason === 'county_required') return 'Contact discovery not run: pick the county. Use Refresh discovery in the lead drawer once it is set.';
     if (reason === 'state_invalid') return 'Contact discovery not run: the state must be a two-letter code.';
+    if (reason === 'name_required') return 'Contact discovery not run: the defendant name is missing.';
     if (reason === 'state_unknown') return 'Contact discovery not run: the state for this county is unknown. Use Refresh discovery in the lead drawer once the state is set.';
     return 'Contact discovery not run: the booking number is missing.';
   }
@@ -767,6 +773,7 @@ window.SLProspective = (function () {
     if (code === 'county_and_state_required') return action + ' not done: more than one arrest has this booking number, so the county and state are required.';
     if (code === 'legacy_contacts_ambiguous') return action + ' not done: more than one stored contact record matches this booking. It needs manual review; nothing was saved.';
     if (code === 'stale_revision') return action + ' not done: the candidates changed since they were loaded. The list was reloaded; check it and try again.';
+    if (code === 'audit_unavailable' || code === 'audit_failed') return action + ' not done: the audit record could not be saved, so the review was not applied. Try again shortly.';
     if (code === 'staff_session_required') return action + ' not done: sign in as staff first.';
     if (code === 'role_not_allowed') return action + ' not done: your role cannot review co-signer candidates.';
     if (status === 409) return action + ' not done: conflict (409). Nothing was saved.';
@@ -1584,7 +1591,7 @@ window.SLProspective = (function () {
         }
         if ($('alContactDiscover') && $('alContactDiscover').checked) {
           var formState = ($('alState') && $('alState').value) || '';
-          var plan = addLeadDiscoverBody(bk, county, formState);
+          var plan = addLeadDiscoverBody(bk, county, formState, defName);
           if (!plan.ok) {
             toast(addLeadDiscoverSkipMessage(plan.reason), 'error');
           } else {

@@ -53,14 +53,27 @@ function makeEnv(fields, routes) {
 
 const ADD_OK = ['/api/prospective-bonds', { status: 200, json: { success: true } }];
 
-async function addLead(county, state, discoverResp) {
+async function addLead(county, state, discoverResp, opts) {
+  opts = opts || {};
   const fields = { alDefName: 'Casey Sample', alBooking: 'B-100', alCounty: county, alContactDiscover: true };
+  if (opts.manual) fields.alBooking = '';
   if (state !== undefined) fields.alState = state;
-  const routes = [['/api/contacts/discover', discoverResp || { status: 200, json: { contacts: [] } }], ADD_OK];
+  const add = opts.manual
+    ? ['/api/prospective-bonds', { status: 200, json: { success: true, prospective_bond: { booking_number: 'MANUAL-1' } } }]
+    : ADD_OK;
+  const routes = [['/api/contacts/discover', discoverResp || { status: 200, json: { contacts: [] } }], add];
   const env = makeEnv(fields, routes);
   await env.P.submitAddLead();
   const discover = env.calls.filter((c) => c.url === '/api/contacts/discover');
   return { discover: discover.map((c) => c.body), toasts: env.toasts };
+}
+
+function env_body_only() {
+  const env = makeEnv({}, []);
+  return {
+    no_name: env.P._addLeadDiscoverBody('B-100', 'Lee', '', '  '),
+    spaced: env.P._addLeadDiscoverBody('B-100', 'Lee', '', '  Casey   Sample '),
+  };
 }
 
 (async () => {
@@ -73,6 +86,8 @@ async function addLead(county, state, discoverResp) {
   out.conflict = await addLead('Lee', undefined, { status: 409, json: { error: 'county_and_state_required' } });
   out.legacy = await addLead('Lee', undefined, { status: 409, json: { error: 'legacy_contacts_ambiguous' } });
   out.server_error = await addLead('Lee', undefined, { status: 500, json: { error: 'discovery_failed' } });
+  out.manual_booking = await addLead('Lee', undefined, undefined, { manual: true });
+  out.name_body = env_body_only();
 
   const env = makeEnv({}, [['/api/contacts/B-100/candidates/', { status: 409, json: { error: 'stale_revision' } }]]);
   await env.P.reviewCandidate('B-100', 'cand-1', 'approve', 'Lee', 'FL', 3);
@@ -80,6 +95,9 @@ async function addLead(county, state, discoverResp) {
     posts: env.calls.filter((c) => c.method === 'POST').map((c) => ({ url: c.url, body: c.body })),
     toasts: env.toasts,
   };
+  const envA = makeEnv({}, [['/api/contacts/B-100/candidates/', { status: 503, json: { error: 'audit_unavailable' } }]]);
+  await envA.P.reviewCandidate('B-100', 'cand-1', 'approve', 'Lee', 'FL', 3);
+  out.review_audit_unavailable = { toasts: envA.toasts };
   out.fl_registry = Array.from(env.P._flRegistryCounties);
   console.log(JSON.stringify(out));
 })().catch((e) => { console.error(String(e && e.stack || e)); process.exit(1); });

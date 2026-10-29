@@ -179,17 +179,19 @@ class AsyncCollection:
     def find(self, query=None, projection=None):
         return _Cursor([doc for doc in self.docs if _match(doc, query or {})])
 
-    async def find_one(self, query, projection=None):
+    async def find_one(self, query, projection=None, session=None):
         for doc in self.docs:
             if _match(doc, query or {}):
                 return doc
         return None
 
-    async def insert_one(self, doc):
+    async def insert_one(self, doc, session=None):
+        if "_id" in doc and any(other.get("_id") == doc["_id"] for other in self.docs):
+            raise DuplicateKeyError("E11000 duplicate key error index: _id_")
         self.docs.append(dict(doc))
         return MagicMock(inserted_id=doc.get("_id"))
 
-    async def update_one(self, filt, update, upsert=False):
+    async def update_one(self, filt, update, upsert=False, session=None):
         for doc in self.docs:
             if _match(doc, filt or {}):
                 self._apply(doc, update)
@@ -224,9 +226,48 @@ class AsyncCollection:
                 doc[key] = [item for item in doc[key] if not (isinstance(item, dict) and _match(item, cond))]
 
 
+class _FakeAdmin:
+    async def command(self, name):
+        return {"setName": "rs-test"}
+
+
+class _FakeSession:
+    def __init__(self, db):
+        self._db = db
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def with_transaction(self, work):
+        """All-or-nothing like a Mongo transaction: any error restores every
+        collection to its state before ``work`` ran."""
+        snapshot = {name: copy.deepcopy(col.docs) for name, col in self._db._cols.items()}
+        try:
+            return await work(self)
+        except BaseException:
+            for name in list(self._db._cols):
+                self._db._cols[name].docs = snapshot.get(name, [])
+            raise
+
+
+class _FakeTxnClient:
+    """Replica-set client stand-in: ``hello`` reports a set name."""
+
+    def __init__(self, db):
+        self._db = db
+        self.admin = _FakeAdmin()
+
+    def start_session(self):
+        return _FakeSession(self._db)
+
+
 class AsyncDB:
     def __init__(self):
         self._cols = {}
+        self.client = _FakeTxnClient(self)
 
     def __getitem__(self, name):
         self._cols.setdefault(name, AsyncCollection())
@@ -2046,6 +2087,143 @@ async def test_stale_revision_is_rejected_and_writes_nothing():
 
 
 @pytest.mark.asyncio
+async def test_review_audit_failure_rolls_back_the_status_change(caplog):
+    """Codex P2 (round 6): no approval without its immutable audit event. If
+    the audit insert fails, the transaction aborts: the candidate stays
+    unreviewed, is not an outreach target, and the call reports 503."""
+    from dashboard.services.outreach_sequencer import OutreachSequencer
+
+    db = _lee_db_with_indemnitor()
+    await _discover(db)
+    before = copy.deepcopy(db["contacts"].docs)
+
+    async def _broken_insert(doc, session=None):
+        raise RuntimeError("audit write failed")
+
+    db["audit_events"].insert_one = _broken_insert
+    with caplog.at_level(logging.INFO, logger="shamrock.contact_discovery"):
+        with pytest.raises(CandidateReviewError) as err:
+            await _approve_only_candidate(db)
+    assert (err.value.code, err.value.http_status) == ("audit_failed", 503)
+    assert db["contacts"].docs == before
+    doc = db["contacts"].docs[0]
+    assert doc["discovered_contacts"][0]["review_status"] == "unreviewed"
+    assert "review_log" not in doc
+    assert db["audit_events"].docs == []
+    assert await OutreachSequencer(db)._resolve_phone(db["arrests"].docs[0]) == ("", "none")
+    assert "error_type=RuntimeError" in caplog.text
+    for secret in _PII:
+        assert secret not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_review_fails_closed_without_transactions(monkeypatch):
+    """Standalone Mongo (no replica set): refuse with 503 and write nothing,
+    rather than change the status without a guaranteed audit record."""
+    from dashboard.routers import payment_plans
+
+    async def _standalone(client):
+        return False
+
+    monkeypatch.setattr(payment_plans, "_supports_transactions", _standalone)
+    db = _lee_db_with_indemnitor()
+    await _discover(db)
+    before = copy.deepcopy(db["contacts"].docs)
+    with pytest.raises(CandidateReviewError) as err:
+        await _approve_only_candidate(db)
+    assert (err.value.code, err.value.http_status) == ("audit_unavailable", 503)
+    assert db["contacts"].docs == before and db["audit_events"].docs == []
+
+    db.client = None  # no client at all: same answer
+    with pytest.raises(CandidateReviewError) as err:
+        await _approve_only_candidate(db)
+    assert err.value.code == "audit_unavailable"
+    assert db["contacts"].docs == before and db["audit_events"].docs == []
+
+
+@pytest.mark.asyncio
+async def test_review_and_audit_commit_together_with_a_linked_id():
+    db = _lee_db_with_indemnitor()
+    await _discover(db)
+    rev = db["contacts"].docs[0]["discovery_rev"]
+    out = await _approve_only_candidate(db)
+    doc = db["contacts"].docs[0]
+    (audit,) = db["audit_events"].docs
+    row = doc["discovered_contacts"][0]
+    assert out["audit_id"] == audit["_id"] == row["review_audit_id"] == doc["review_log"][0]["audit_id"]
+    assert audit["details"]["rev_before"] == rev and audit["details"]["rev_after"] == rev + 1
+    # The link to the audit survives an unchanged refresh.
+    await _discover(db)
+    assert db["contacts"].docs[0]["discovered_contacts"][0]["review_audit_id"] == audit["_id"]
+
+
+@pytest.mark.asyncio
+async def test_review_rechecks_the_revision_inside_the_transaction(monkeypatch):
+    """A write that lands between the first read and the transaction is
+    caught by the in-transaction re-read: 409, no status change, no audit."""
+    from dashboard.services import contact_discovery as cd
+
+    db = _lee_db_with_indemnitor()
+    await _discover(db)
+    real = cd._run_review_transaction
+
+    async def _racing(client, work):
+        db["contacts"].docs[0]["discovery_rev"] += 1  # concurrent refresh
+        return await real(client, work)
+
+    monkeypatch.setattr(cd, "_run_review_transaction", _racing)
+    with pytest.raises(CandidateReviewError) as err:
+        await _approve_only_candidate(db)
+    assert (err.value.code, err.value.http_status) == ("stale_revision", 409)
+    assert db["contacts"].docs[0]["discovered_contacts"][0]["review_status"] == "unreviewed"
+    assert db["audit_events"].docs == []
+
+
+@pytest.mark.asyncio
+async def test_review_route_returns_503_when_the_audit_cannot_be_saved(monkeypatch, caplog):
+    db = _lee_db_with_indemnitor()
+    await _discover(db)
+    cid = db["contacts"].docs[0]["discovered_contacts"][0]["candidate_id"]
+    body = {"county": "Lee", "state": "FL", "decision": "approve", "rev": db["contacts"].docs[0]["discovery_rev"]}
+
+    async def _broken_insert(doc, session=None):
+        raise RuntimeError("audit write failed")
+
+    db["audit_events"].insert_one = _broken_insert
+    with caplog.at_level(logging.INFO):
+        resp = _review_client(monkeypatch, db, _STAFF).post(_review_url(cid), json=body)
+    assert resp.status_code == 503 and resp.json()["error"] == "audit_failed"
+    assert db["contacts"].docs[0]["discovered_contacts"][0]["review_status"] == "unreviewed"
+    app_logs = " ".join(r.getMessage() for r in caplog.records if not r.name.startswith("httpx"))
+    for secret in _PII:
+        assert secret not in app_logs
+
+
+def test_discover_route_passes_the_name_for_a_manual_booking_without_logging_it(monkeypatch, caplog):
+    """Codex P2 (round 6): Add Lead sends the defendant name, so a MANUAL-*
+    booking (no arrest record) still has a name to search on. The route hands
+    it to discovery and never logs it."""
+    from dashboard.services import contact_discovery as cd
+
+    seen = {}
+
+    async def _fake_run(db, **kwargs):
+        seen.update(kwargs)
+        return {"success": True, "contacts": [], "discovered": 0}
+
+    monkeypatch.setattr(cd, "run_discovery", _fake_run)
+    db = AsyncDB()
+    with caplog.at_level(logging.DEBUG):
+        resp = _review_client(monkeypatch, db, _STAFF).post("/api/contacts/discover", json={
+            "booking_number": "MANUAL-1", "full_name": "Casey Sample", "county": "Lee", "state": "FL",
+        })
+    assert resp.status_code == 200, resp.text
+    assert seen["full_name"] == "Casey Sample" and seen["booking_number"] == "MANUAL-1"
+    app_logs = " ".join(r.getMessage() for r in caplog.records if not r.name.startswith("httpx"))
+    assert "Casey" not in app_logs and "Sample" not in app_logs
+
+
+@pytest.mark.asyncio
 async def test_reject_excludes_candidate_from_outreach_and_survives_unchanged_refresh():
     from dashboard.services.outreach_sequencer import OutreachSequencer
 
@@ -2220,11 +2398,22 @@ def test_add_lead_discovery_sends_a_state_and_surfaces_errors():
     def _errors(case):
         return [t["m"] for t in out[case]["toasts"] if t["t"] == "error"]
 
-    assert out["fl_county"]["discover"] == [{"booking_number": "B-100", "county": "Lee", "state": "FL"}]
+    assert out["fl_county"]["discover"] == [
+        {"booking_number": "B-100", "full_name": "Casey Sample", "county": "Lee", "state": "FL"}
+    ]
     assert out["fl_county_suffix"]["discover"][0]["state"] == "FL"
     assert _errors("fl_county") == []
     # The form's state wins over the Florida default.
-    assert out["form_state"]["discover"] == [{"booking_number": "B-100", "county": "Fulton", "state": "GA"}]
+    assert out["form_state"]["discover"] == [
+        {"booking_number": "B-100", "full_name": "Casey Sample", "county": "Fulton", "state": "GA"}
+    ]
+    # A MANUAL-* lead has no arrest record, so the name must ride in the body.
+    assert out["manual_booking"]["discover"] == [
+        {"booking_number": "MANUAL-1", "full_name": "Casey Sample", "county": "Lee", "state": "FL"}
+    ]
+    assert _errors("manual_booking") == []
+    assert out["name_body"]["no_name"] == {"ok": False, "reason": "name_required"}
+    assert out["name_body"]["spaced"]["body"]["full_name"] == "Casey Sample"
     # Not a registered Florida county and no state: no discovery, staff told why.
     for case in ("non_fl_county", "no_county"):
         assert out[case]["discover"] == []
@@ -2238,6 +2427,7 @@ def test_add_lead_discovery_sends_a_state_and_surfaces_errors():
     assert post["url"] == "/api/contacts/B-100/candidates/cand-1/review"
     assert post["body"] == {"county": "Lee", "state": "FL", "decision": "approve", "rev": 3}
     assert "changed since they were loaded" in out["review_stale"]["toasts"][0]["m"]
+    assert "audit record could not be saved" in out["review_audit_unavailable"]["toasts"][0]["m"]
     # The JS Florida list is the registry's Florida counties.
     registry_fl = {
         name for name, st in (parse_registered_county(label) for label in REGISTERED_COUNTIES)

@@ -687,7 +687,7 @@ def _merge_candidates(
                 row["candidate_id"] = previous["candidate_id"]
             if not changed:
                 row["review_status"] = previous["review_status"]
-                for field in ("reviewed_at", "reviewed_by", "review_pin"):
+                for field in ("reviewed_at", "reviewed_by", "review_pin", "review_audit_id"):
                     if previous.get(field):
                         row[field] = previous[field]
             else:
@@ -1995,6 +1995,32 @@ class CandidateReviewError(Exception):
         super().__init__(code)
 
 
+REVIEW_AUDIT_EVENT = "contact_candidate_reviewed"
+
+
+async def _review_transaction_client(db: Any) -> Any:
+    """The client behind ``db`` when it can run a multi-document transaction
+    (replica set or Atlas), else ``None``. Never raises."""
+    client = getattr(db, "client", None)
+    if client is None or not hasattr(client, "start_session"):
+        return None
+    try:
+        from dashboard.routers.payment_plans import _supports_transactions
+
+        return client if await _supports_transactions(client) else None
+    except Exception as exc:
+        log.warning("[indemnitor_discovery] transaction check failed error_type=%s", type(exc).__name__)
+        return None
+
+
+async def _run_review_transaction(client: Any, work: Any) -> Any:
+    started = client.start_session()
+    if hasattr(started, "__await__"):
+        started = await started
+    async with started as session:
+        return await session.with_transaction(work)
+
+
 async def review_candidate(
     db: Any,
     *,
@@ -2008,13 +2034,21 @@ async def review_candidate(
 ) -> Dict[str, Any]:
     """Approve or reject one candidate. Staff action; sends nothing.
 
-    The write is the same compare-and-swap as a refresh: it lands only when
-    the doc is still at ``expected_rev`` (the revision staff saw), else
-    ``stale_revision`` and nothing is written. Approving or rejecting pins the
-    reviewed contact data (:func:`review_pin`); a later refresh that changes
-    it resets the row. The audit entry (who, when, old and new status; no
-    contact values) is pushed in the same update, and copied to
-    ``audit_events``.
+    The status change and its immutable ``audit_events`` record are written in
+    one multi-document transaction, so neither exists without the other:
+
+    * No replica set / Atlas: ``audit_unavailable`` (503), nothing written.
+    * The audit insert fails: the transaction aborts, the status is unchanged,
+      ``audit_failed`` (503).
+    * The doc is no longer at ``expected_rev`` (the revision staff saw), read
+      inside the transaction: ``stale_revision`` (409), nothing written. The
+      contacts update is also guarded on that revision, the same
+      compare-and-swap as a refresh.
+
+    Approving or rejecting pins the reviewed contact data (:func:`review_pin`);
+    a later refresh that changes it resets the row. The entry (who, when, old
+    and new status, revisions; no contact values) is also pushed to the doc's
+    ``review_log`` in the same update.
     """
     new_status = REVIEW_DECISIONS.get(str(decision or "").strip().lower())
     if not new_status:
@@ -2029,73 +2063,102 @@ async def review_candidate(
         raise CandidateReviewError("legacy_contacts_ambiguous", 409)
     if not isinstance(doc, dict):
         raise CandidateReviewError("not_found", 404)
-    current_rev = int(doc.get(CONTACTS_REV_FIELD) or 0)
-    if int(expected_rev) != current_rev:
+    if int(expected_rev) != int(doc.get(CONTACTS_REV_FIELD) or 0):
         raise CandidateReviewError("stale_revision", 409)
-    rows = [dict(row) if isinstance(row, dict) else row for row in doc.get("discovered_contacts") or []]
-    index = next(
-        (i for i, row in enumerate(rows)
-         if isinstance(row, dict) and str(row.get("candidate_id") or "") == str(candidate_id or "")),
-        None,
-    )
-    if index is None or not candidate_id:
-        raise CandidateReviewError("candidate_not_found", 404)
-    old_row = rows[index]
-    old_status = str(old_row.get("review_status") or "unreviewed")
-    new_row = dict(old_row)
-    new_row.pop("review_reset", None)
-    new_row["review_status"] = new_status
-    new_row["reviewed_at"] = now.isoformat()
-    new_row["reviewed_by"] = actor
-    new_row["review_pin"] = review_pin(old_row)
-    rows[index] = new_row
-    entry = {
-        "candidate_id": str(candidate_id),
-        "actor": actor,
-        "actor_role": actor_role or "",
-        "at": now,
-        "old_status": old_status,
-        "new_status": new_status,
-        "rev_before": current_rev,
-        "rev_after": current_rev + 1,
-    }
-    update: Dict[str, Any] = {"$set": {"discovered_contacts": rows}, "$push": {"review_log": entry}}
-    expire = unreviewed_expire_at(rows, now)
-    if expire:
-        update["$set"]["unreviewed_expire_at"] = expire
-    else:
-        update["$unset"] = {"unreviewed_expire_at": ""}
-    try:
-        await upsert_contact_doc(contacts, identity, update, arrests=db["arrests"], expected=doc)
-    except ContactsWriteConflict:
-        raise CandidateReviewError("stale_revision", 409)
-    except ContactsLegacyAmbiguous:
-        raise CandidateReviewError("legacy_contacts_ambiguous", 409)
-    audit_mirrored = True
-    try:
-        await db["audit_events"].insert_one({
-            "event_type": "contact_candidate_reviewed",
-            "entity_type": "contacts",
-            "entity_id": str(doc.get("_id") or contact_doc_id(identity)),
-            "timestamp": now,
+    doc_id = doc.get("_id")
+    client = await _review_transaction_client(db)
+    if client is None:
+        # Fail closed: without a transaction the status change could land
+        # without its audit record.
+        log.warning("[indemnitor_discovery] review refused code=audit_unavailable")
+        raise CandidateReviewError("audit_unavailable", 503)
+
+    async def work(session: Any) -> Dict[str, Any]:
+        fresh = await contacts.find_one({"_id": doc_id}, session=session)
+        if not isinstance(fresh, dict):
+            raise CandidateReviewError("not_found", 404)
+        current_rev = int(fresh.get(CONTACTS_REV_FIELD) or 0)
+        if int(expected_rev) != current_rev:
+            raise CandidateReviewError("stale_revision", 409)
+        rows = [dict(row) if isinstance(row, dict) else row for row in fresh.get("discovered_contacts") or []]
+        index = next(
+            (i for i, row in enumerate(rows)
+             if isinstance(row, dict) and str(row.get("candidate_id") or "") == str(candidate_id or "")),
+            None,
+        )
+        if index is None or not candidate_id:
+            raise CandidateReviewError("candidate_not_found", 404)
+        old_row = rows[index]
+        old_status = str(old_row.get("review_status") or "unreviewed")
+        audit_id = f"contact-review:{doc_id}:{candidate_id}:{current_rev}"
+        new_row = dict(old_row)
+        new_row.pop("review_reset", None)
+        new_row["review_status"] = new_status
+        new_row["reviewed_at"] = now.isoformat()
+        new_row["reviewed_by"] = actor
+        new_row["review_pin"] = review_pin(old_row)
+        new_row["review_audit_id"] = audit_id
+        rows[index] = new_row
+        entry = {
+            "audit_id": audit_id,
+            "candidate_id": str(candidate_id),
             "actor": actor,
-            "source": "contact_discovery_review",
-            "details": {k: v for k, v in entry.items() if k not in {"actor", "at"}},
-        })
+            "actor_role": actor_role or "",
+            "at": now,
+            "old_status": old_status,
+            "new_status": new_status,
+            "rev_before": current_rev,
+            "rev_after": current_rev + 1,
+        }
+        update: Dict[str, Any] = _with_rev_bump(
+            {"$set": {"discovered_contacts": rows}, "$push": {"review_log": entry}}
+        )
+        expire = unreviewed_expire_at(rows, now)
+        if expire:
+            update["$set"]["unreviewed_expire_at"] = expire
+        else:
+            update["$unset"] = {"unreviewed_expire_at": ""}
+        result = await contacts.update_one(
+            {"_id": doc_id, **_rev_clause(fresh)}, update, session=session,
+        )
+        if not getattr(result, "matched_count", 0):
+            raise CandidateReviewError("stale_revision", 409)
+        try:
+            await db["audit_events"].insert_one({
+                "_id": audit_id,
+                "event_type": REVIEW_AUDIT_EVENT,
+                "entity_type": "contacts",
+                "entity_id": str(doc_id or contact_doc_id(identity)),
+                "timestamp": now,
+                "actor": actor,
+                "source": "contact_discovery_review",
+                "details": {k: v for k, v in entry.items() if k not in {"actor", "at", "audit_id"}},
+            }, session=session)
+        except Exception as exc:
+            # Aborts the transaction: the status change is rolled back.
+            log.warning("[indemnitor_discovery] review audit insert failed error_type=%s", type(exc).__name__)
+            raise CandidateReviewError("audit_failed", 503) from exc
+        return {"old_status": old_status, "rev": current_rev + 1, "audit_id": audit_id}
+
+    try:
+        applied = await _run_review_transaction(client, work)
+    except CandidateReviewError:
+        raise
     except Exception as exc:
-        # The entry on the contacts doc was written with the change itself.
-        audit_mirrored = False
-        log.warning("[indemnitor_discovery] review audit copy failed error_type=%s", type(exc).__name__)
+        # Commit or session failure: the driver gives no guarantee beyond
+        # "not acknowledged", so report the review as not applied.
+        log.warning("[indemnitor_discovery] review transaction failed error_type=%s", type(exc).__name__)
+        raise CandidateReviewError("audit_failed", 503) from exc
     log.info(
         "[indemnitor_discovery] candidate reviewed old_status=%s new_status=%s",
-        old_status,
+        applied["old_status"],
         new_status,
     )
     return {
         "success": True,
         "candidate_id": str(candidate_id),
         "review_status": new_status,
-        "previous_status": old_status,
-        "discovery_rev": current_rev + 1,
-        "audit_mirrored": audit_mirrored,
+        "previous_status": applied["old_status"],
+        "discovery_rev": applied["rev"],
+        "audit_id": applied["audit_id"],
     }

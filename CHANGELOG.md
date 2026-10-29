@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-29 (Lee co-signer discovery: durable review audit and Add Lead name, Codex round 6 on #280)
+
+### Fixed
+- **A candidate review never lands without its immutable audit record.** `review_candidate` writes the contacts update (status, `review_pin`, `review_log` entry, `discovery_rev` bump) and the `audit_events` record (`contact_candidate_reviewed`, deterministic `_id` `contact-review:<doc>:<candidate>:<rev>`, linked from the row as `review_audit_id`) in one multi-document transaction, re-reading the doc and re-checking `discovery_rev` inside it. If the audit insert or the commit fails, the transaction aborts, the status is unchanged and the route returns 503 `audit_failed`. Without a replica set or Atlas the route returns 503 `audit_unavailable` and writes nothing (fail closed). The best-effort audit copy and `audit_mirrored` are gone. Logs carry only codes and error types.
+- **Add Lead discovery sends the defendant name.** `addLeadDiscoverBody` now sends `full_name` with the booking, county and state, so a `MANUAL-*` booking (no arrest record) can still be searched by name. With no name it does not run and staff see why. The name is sent in the body only and is never logged. The drawer shows a clear message for the new 503 codes.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`: an audit insert failure rolls the status back (no `review_log`, no audit, not an outreach target, 503, no PII in logs); no transactions or no client fails closed with nothing written; the review and audit commit together with a linked id that survives a refresh; a revision change before the transaction gives 409 with nothing written; the route returns 503 `audit_failed`; the discover route passes the name for a `MANUAL-*` booking and never logs it; Add Lead (JS sim) sends `full_name` for FL, form-state and `MANUAL-*` leads, refuses with `name_required` when blank, and shows the audit error message. The fake DB now has a transaction client that rolls back on error.
+
 ## [Unreleased] — 2026-10-28 (Lee co-signer discovery: staff review action and pinned approvals, Codex round 5 on #280)
 
 ### Added
