@@ -801,6 +801,50 @@ class BaseScraper(ABC):
             return False
         return True
 
+    def _log_ingestion_run(
+        self,
+        status_writer,
+        *,
+        count: int,
+        duration: float,
+        status: str,
+        stats: Optional[dict] = None,
+        error: Optional[str] = None,
+        error_class: Optional[str] = None,
+    ) -> bool:
+        """Append a per-run entry to ingestion_log via the status writer."""
+        if status_writer is None:
+            return False
+        log_fn = getattr(status_writer, "log_ingestion", None)
+        if not callable(log_fn):
+            return False
+        st = getattr(self, "state", None) or "FL"
+        scraper_id = getattr(self, "scraper_id", None)
+        source = scraper_id or self.county_label
+        try:
+            log_fn(
+                self.county,
+                stats or {},
+                error=error,
+                state=st,
+                source=source,
+                count=count,
+                error_class=error_class,
+                duration=duration,
+                status=status,
+                scraper_id=scraper_id,
+            )
+        except TypeError:
+            try:
+                log_fn(self.county, stats or {}, error=error, state=st)
+            except Exception as exc:
+                logger.warning("⚠️ %s: ingestion_log write failed (%s)", self.county, type(exc).__name__)
+                return False
+        except Exception as exc:
+            logger.warning("⚠️ %s: ingestion_log write failed (%s)", self.county, type(exc).__name__)
+            return False
+        return True
+
     def _alert_parse_drift(self, detail: str, severity: str) -> None:
         """Fail loudly: schema drift goes to #scraper-errors immediately."""
         logger.error("🧬 %s: parse/schema drift (%s): %s", self.county_label, severity, detail[:300])
@@ -1206,6 +1250,26 @@ class BaseScraper(ABC):
                 ),
                 extra_fields=extra,
             )
+            self._log_ingestion_run(
+                status_writer,
+                count=len(records) if records_persisted else 0,
+                duration=elapsed,
+                status=persisted_status if records_persisted else "error",
+                stats=combined_stats,
+                error=(
+                    "records_write_failed"
+                    if not records_persisted
+                    else (
+                        "auto-disabled: canary ran but returned 0 records"
+                        if new_state.auto_disabled else None
+                    )
+                ),
+                error_class=(
+                    "write_failed"
+                    if not records_persisted
+                    else (new_state.last_error_class if new_state.auto_disabled else None)
+                ),
+            )
             # In-memory state a scraper derives from this run (e.g. Lee's
             # listing window) advances only once both the rows and the
             # status doc carrying it were written.
@@ -1357,6 +1421,15 @@ class BaseScraper(ABC):
                 records=0, hot=0, warm=0,
                 duration=elapsed, status=persisted_status, error=str(e),
                 extra_fields=extra,
+            )
+            self._log_ingestion_run(
+                status_writer,
+                count=0,
+                duration=elapsed,
+                status=persisted_status,
+                stats=None,
+                error=str(e)[:500],
+                error_class=verdict.error_class,
             )
 
             return {

@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-29 (Wire BaseScraper.run() into MongoWriter.log_ingestion)
+
+### Fixed
+- **Every scraper run now records an entry in `ingestion_log` (`scrapers/base_scraper.py`, `writers/mongo_writer.py`).** Previously `MongoWriter.log_ingestion` was defined on `writers/mongo_writer.py` (line 591) but never called from `BaseScraper.run()`, leaving `ingestion_log` at 0 documents in production. `BaseScraper.run()` now invokes `_log_ingestion_run` after persisting `scraper_status` on both normal completions (`ok`/`empty`/`write_failed`) and classified failures (`error`/`auto_disabled`), recording `source` (`scraper_id` or `County (ST)`), `count`, `error_class`, `duration`, `status`, `county`, `county_label`, and `state`. `SOURCE_CONTRACT_VALIDATED = False` fail-closed preflight runs remain untouched and do not write to `ingestion_log`.
+
+### Tests
+- Added `tests/test_ingestion_log_wiring.py` (wired into `.github/workflows/ci.yml`) covering `MongoWriter.log_ingestion`, `BaseScraper.run()` on `ok`, `empty`, and classified error runs (`parse_drift`), and verifying `fail_closed` scrapers do not write to `ingestion_log`.
+
 ## [Unreleased] — 2026-10-28 (Lee County HQ API needs a staff session)
 
 ### Security

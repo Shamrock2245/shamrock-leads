@@ -589,17 +589,52 @@ class MongoWriter:
         return list(self.arrests.aggregate(pipeline))
 
     def log_ingestion(
-        self, county: str, stats: Dict[str, Any], error: str = None, state: str = None
+        self,
+        county: str,
+        stats: Dict[str, Any] = None,
+        error: str = None,
+        state: str = None,
+        *,
+        source: str = None,
+        count: int = None,
+        error_class: str = None,
+        duration: float = None,
+        status: str = None,
+        scraper_id: str = None,
     ):
-        """Log a scraper run (include state for multi-state ops)."""
+        """Log a scraper run (include source, count, error_class, duration, and state)."""
+        stats = stats or {}
+        _filter_q, bare, st, label = self._scraper_status_identity(county, state)
+        total_records = (
+            int(count)
+            if count is not None
+            else int(stats.get("total_records", stats.get("records_scraped", 0)) or 0)
+        )
+        duration_seconds = round(
+            float(
+                duration
+                if duration is not None
+                else stats.get("elapsed_seconds", 0.0) or 0.0
+            ),
+            1,
+        )
+        resolved_source = source or scraper_id or label
+        resolved_status = status or ("ERROR" if error else "SUCCESS")
         self.ingestion_log.insert_one({
             "timestamp": datetime.now(timezone.utc),
-            "county": county,
-            "state": (state or "FL").upper(),
-            "total_records": stats.get("total_records", 0),
-            "new_records": stats.get("new_records", 0),
-            "updated_records": stats.get("updated_records", 0),
-            "status": "ERROR" if error else "SUCCESS",
+            "source": resolved_source,
+            "county": bare or county,
+            "county_label": label,
+            "state": st,
+            "scraper_id": scraper_id,
+            "count": total_records,
+            "total_records": total_records,
+            "new_records": int(stats.get("new_records", 0) or 0),
+            "updated_records": int(stats.get("updated_records", 0) or 0),
+            "duration": duration_seconds,
+            "duration_seconds": duration_seconds,
+            "status": resolved_status,
+            "error_class": error_class,
             "error": error,
         })
 
