@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-29 (Remove hardcoded BB_CONFIG_API_KEY fallback and fail closed)
+
+### Security
+- **Removed hardcoded `BB_CONFIG_API_KEY` fallback (`dashboard/extensions.py`, `dashboard/routers/legacy.py`, `dashboard/routers/bb_health_monitor.py`, `dashboard/sl-imessage.js`).** `POST /api/config/bluebubbles-url` and `PATCH /api/bb-health/update-url` now require either an authenticated admin session, valid machine auth (`GAS_API_KEY` / `LEADS_INTERNAL_TOKEN`), or an explicitly configured `BB_CONFIG_API_KEY` compared with `secrets.compare_digest`. When `BB_CONFIG_API_KEY` is unset and no admin/machine session is present, key-based requests fail closed (`503`). Removed the hardcoded key from `dashboard/sl-imessage.js`, `.env.example`, `scripts/bb-url-sync.sh`, `scripts/setup_bb_tunnel.sh`, and `docs/runbooks/bluebubbles-tunnel.md`.
+
+### Tests
+- Added `tests/test_bb_config_key_fail_closed.py` (wired into `.github/workflows/ci.yml`).
+
 ## [Unreleased] — 2026-10-28 (Lee County HQ API needs a staff session)
 
 ### Security
