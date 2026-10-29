@@ -963,6 +963,15 @@ class BaseScraper(ABC):
                 _slack.notify_scraper_error(self.county, msg)
             except Exception:
                 pass
+            self._log_ingestion_run(
+                status_writer,
+                count=0,
+                duration=(datetime.now(timezone.utc) - start).total_seconds(),
+                status="error",
+                stats=None,
+                error=msg,
+                error_class="disk_full",
+            )
             return {
                 "county": self.county,
                 "records_scraped": 0,
@@ -1255,7 +1264,7 @@ class BaseScraper(ABC):
                 count=len(records) if records_persisted else 0,
                 duration=elapsed,
                 status=persisted_status if records_persisted else "error",
-                stats=combined_stats,
+                stats=combined_stats if records_persisted else None,
                 error=(
                     "records_write_failed"
                     if not records_persisted

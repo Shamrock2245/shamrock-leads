@@ -180,3 +180,45 @@ def test_fail_closed_scraper_does_not_touch_ingestion_log():
     res = guarded.run(writers=[writer])
     assert res["source_contract_state"] == "fail_closed"
     assert writer.ingestion_log.docs == []
+
+
+def test_write_failure_zeros_success_counters_in_ingestion_log():
+    writer = _make_mongo_writer_with_fakes()
+    writer.write_records = MagicMock(side_effect=RuntimeError("Mongo timeout"))
+    with patch("scrapers.base_scraper._slack"), \
+         patch.object(BaseScraper, "_check_disk_space", return_value={"ok": True}):
+        scraper = _SuccessScraper()
+        scraper.run(writers=[writer])
+
+    assert len(writer.ingestion_log.docs) == 1
+    doc = writer.ingestion_log.docs[0]
+    assert doc["status"] == "error"
+    assert doc["error_class"] == "write_failed"
+    assert doc["error"] == "records_write_failed"
+    assert doc["count"] == 0
+    assert doc["total_records"] == 0
+    assert doc["new_records"] == 0
+    assert doc["updated_records"] == 0
+
+
+def test_disk_full_guard_logs_error_run_to_ingestion_log():
+    writer = _make_mongo_writer_with_fakes()
+    with patch("scrapers.base_scraper._slack"), \
+         patch.object(
+             BaseScraper,
+             "_check_disk_space",
+             return_value={"ok": False, "percent_used": 98.5, "free_gb": 0.4},
+         ):
+        scraper = _SuccessScraper()
+        res = scraper.run(writers=[writer])
+
+    assert "Disk full" in res["error"]
+    assert len(writer.ingestion_log.docs) == 1
+    doc = writer.ingestion_log.docs[0]
+    assert doc["source"] == "scraper_lee"
+    assert doc["status"] == "error"
+    assert doc["error_class"] == "disk_full"
+    assert doc["count"] == 0
+    assert doc["new_records"] == 0
+    assert "Disk full" in (doc["error"] or "")
+
