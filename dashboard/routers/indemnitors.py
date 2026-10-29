@@ -1036,7 +1036,12 @@ async def api_indemnitor_create(request: Request):
                 doc = {
                     "booking_number": booking_number,
                     "county": arrest.get("county", ""),
-                    "defendant_name": arrest.get("full_name", ""),
+                    "state": arrest.get("state", ""),
+                    "defendant_name": arrest.get("full_name", "") or arrest.get("defendant_name", ""),
+                    "defendant_dob": arrest.get("dob", "") or arrest.get("defendant_dob", ""),
+                    "defendant_phone": arrest.get("phone", "") or arrest.get("defendant_phone", ""),
+                    "defendant_address": arrest.get("address", "") or arrest.get("defendant_address", ""),
+                    "defendant_zip": arrest.get("zip", "") or arrest.get("defendant_zip", ""),
                     "bond_amount": arrest.get("total_bond_amount") or arrest.get("bond_amount", 0),
                     "charges": arrest.get("charges", []),
                     "status": "active",

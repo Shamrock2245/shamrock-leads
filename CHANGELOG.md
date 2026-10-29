@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-29 (Lee co-signer discovery: read prospective_bonds & active_bonds, Codex round 7 on #280)
+
+### Fixed
+- **Prior-Shamrock discovery now reads `prospective_bonds` and `active_bonds` in `_provider_prior`.** Co-signers attached to a booking via `POST /api/indemnitors/create` or stored directly on bond rows (`indemnitors[]`, nested `indemnitor`, and top-level `indemnitor_*` fields) are parsed by `_bond_prior_rows` and returned as `prior_shamrock` candidates on both same-booking refreshes (when the bond carries the arrest's county and state) and subsequent re-arrests (when the defendant name and a shared defendant anchor match). `POST /api/indemnitors/create` also persists the arrest's `state` and defendant anchor fields (`defendant_dob`, `defendant_phone`, `defendant_address`, `defendant_zip`) when starting a new `prospective_bonds` record from an arrest lead.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`: `test_prospective_and_active_bonds_cosigners_surface_on_refresh_and_rearrest`, `test_indemnitor_create_endpoint_persists_bond_cosigner_visible_to_discovery`, and `prospective_bonds`/`active_bonds` coverage in `test_partial_prior_read_failure_marks_the_run_failed`.
+
 ## [Unreleased] — 2026-10-29 (Lee co-signer discovery: durable review audit and Add Lead name, Codex round 6 on #280)
 
 ### Fixed
@@ -91,6 +99,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `tests/test_lee_indemnitor_discovery.py` (on the CI list).
+
+## [Unreleased] — 2026-10-28 (Lee County HQ API needs a staff session)
+
+### Security
+- **`/api/lee-county/` is no longer on the no-PIN allowlist.** It was added to `OPEN_PREFIXES` in `8ee4491` (2026-09-14), which left the whole Lee County HQ router open without a session: overview, leads, defendant family contacts, `POST /outreach/send`, autopilot config read/write, and `POST /autopilot/sweep`. Every route now needs a staff session (or `GAS_API_KEY` / `LEADS_INTERNAL_TOKEN`) and answers `401 {"error": "Authentication required"}` without one, like other protected `/api` routes.
+- **The calculator is not kept public.** Nothing public calls `/api/lee-county/calculator`: no page in this repo outside the staff Lee County HQ script, and no caller in `shamrock-bail-portal-site` (its bail calculator runs in Wix and GAS).
+
+### Tests
+- `tests/test_lee_county_hq_auth.py` (added to the CI list): every route on the router returns 401 with no session and with a bad cookie and 200 with a staff session, with sends, sweeps, and Mongo mocked; the calculator is not public; no open path or prefix may cover any `/api/lee-county` route.
+
 ## [Unreleased] — 2026-10-28 (Co-signer links find legacy Booking_Number bonds)
 
 ### Fixed

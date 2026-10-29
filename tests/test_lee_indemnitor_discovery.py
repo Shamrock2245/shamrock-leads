@@ -335,6 +335,7 @@ def test_confidence_is_the_anchor_weight_sum():
 @pytest.mark.asyncio
 async def test_name_alone_is_dropped_and_anchors_are_stored():
     db = AsyncDB()
+    db.arrests = db["arrests"]
     db["arrests"].docs.append(_booking())
     db["indemnitors"].docs.extend([
         {
@@ -544,6 +545,7 @@ async def test_purge_drops_old_unreviewed_and_keeps_reviewed():
 @pytest.mark.asyncio
 async def test_batch_claims_a_queued_lee_booking(monkeypatch):
     db = AsyncDB()
+    db.arrests = db["arrests"]
     db["arrests"].docs.append(_booking())
     db["indemnitors"].docs.append({
         "booking_number": "B-100",
@@ -861,6 +863,7 @@ async def test_rate_limited_provider_defers_the_booking(monkeypatch):
 
     monkeypatch.setattr(cd, "public_request", _limited)
     db = AsyncDB()
+    db.arrests = db["arrests"]
     db["arrests"].docs.append(_booking())
     monkeypatch.setattr(cd, "_lee_claim_query", lambda now: {"booking_number": "B-100"})
     summary = await run_lee_discovery_batch(db, limit=5, now=NOW)
@@ -1176,6 +1179,7 @@ async def test_transient_error_leaves_the_booking_retryable_and_it_is_reclaimed(
     from dashboard.services import contact_discovery as cd
 
     db = AsyncDB()
+    db.arrests = db["arrests"]
     db["arrests"].docs.append(_booking())
     calls = []
     monkeypatch.setattr(cd, "run_discovery", _raising_discovery(calls))
@@ -1202,6 +1206,7 @@ async def test_retry_cap_makes_the_booking_terminal_failed_and_logs(monkeypatch,
     from dashboard.services import contact_discovery as cd
 
     db = AsyncDB()
+    db.arrests = db["arrests"]
     db["arrests"].docs.append(_booking())
     calls = []
     monkeypatch.setattr(cd, "run_discovery", _raising_discovery(calls))
@@ -1409,6 +1414,7 @@ async def test_name_only_family_rows_are_rejected():
 async def test_one_booking_only_legacy_contacts_doc_is_updated_in_place():
     """P2 :157 — the single legacy doc gets the identity fields; no second doc."""
     db = AsyncDB()
+    db.arrests = db["arrests"]
     db["arrests"].docs.append(_booking())
     legacy_id = ObjectId()
     db["contacts"].docs.append({
@@ -1436,6 +1442,7 @@ async def test_one_booking_only_legacy_contacts_doc_is_updated_in_place():
 @pytest.mark.asyncio
 async def test_legacy_doc_scoped_to_another_county_is_not_reused():
     db = AsyncDB()
+    db.arrests = db["arrests"]
     db["arrests"].docs.append(_booking())
     db["contacts"].docs.append({"_id": "collier-legacy", "booking_number": "B-100", "county": "Collier"})
     await run_discovery(db, booking_number="B-100", county="Lee", state="FL", force=True)
@@ -1448,6 +1455,7 @@ async def test_legacy_doc_scoped_to_another_county_is_not_reused():
 async def test_two_legacy_docs_write_nothing_and_log_only_the_code(caplog):
     """P2 :157 — ambiguous legacy docs: no write, no guess, code only in logs."""
     db = AsyncDB()
+    db.arrests = db["arrests"]
     db["arrests"].docs.append(_booking())
     db["contacts"].docs.extend([
         {"_id": "legacy-a", "booking_number": "B-100", "discovered_contacts": []},
@@ -1493,6 +1501,7 @@ async def test_legacy_doc_whose_booking_is_on_two_arrests_writes_nothing():
 @pytest.mark.asyncio
 async def test_batch_marks_an_ambiguous_legacy_booking_terminal(monkeypatch):
     db = AsyncDB()
+    db.arrests = db["arrests"]
     db["arrests"].docs.append(_booking())
     db["contacts"].docs.extend([
         {"_id": "legacy-a", "booking_number": "B-100"},
@@ -1548,7 +1557,7 @@ class _BrokenCollection(AsyncCollection):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("broken", ["family_graph", "intake_queue", "indemnitors"])
+@pytest.mark.parametrize("broken", ["family_graph", "intake_queue", "indemnitors", "prospective_bonds", "active_bonds"])
 async def test_partial_prior_read_failure_marks_the_run_failed(broken):
     """P2 :726 — one prior collection failing is not a silent pass."""
     db = AsyncDB()
@@ -1573,6 +1582,7 @@ async def test_partial_prior_read_failure_marks_the_run_failed(broken):
 @pytest.mark.asyncio
 async def test_partial_prior_read_failure_sends_the_booking_to_retry(monkeypatch):
     db = AsyncDB()
+    db.arrests = db["arrests"]
     db["arrests"].docs.append(_booking())
     db._cols["family_relationships"] = _BrokenCollection()
     db["contacts"].docs.append({
@@ -1608,6 +1618,7 @@ async def test_batch_marks_an_unresolvable_identity_terminal(monkeypatch):
 @pytest.mark.asyncio
 async def test_resolve_arrest_accepts_a_county_suffix_and_state_name():
     db = AsyncDB()
+    db.arrests = db["arrests"]
     db["arrests"].docs.append(_booking())
     db["indemnitors"].docs.append(
         {"booking_number": "B-100", "defendant_county": "Lee", "defendant_state": "FL",
@@ -1620,6 +1631,7 @@ async def test_resolve_arrest_accepts_a_county_suffix_and_state_name():
 
 def test_discover_route_returns_409_for_ambiguous_legacy_contacts(monkeypatch):
     db = AsyncDB()
+    db.arrests = db["arrests"]
     db["arrests"].docs.append(_booking())
     db["contacts"].docs.extend([
         {"_id": "legacy-a", "booking_number": "B-100"},
@@ -1656,6 +1668,7 @@ async def test_legacy_scan_that_hits_its_cap_fails_closed():
     from dashboard.services import contact_discovery as cd
 
     db = AsyncDB()
+    db.arrests = db["arrests"]
     db["arrests"].docs.append(_booking())
     db["contacts"].docs.extend(
         {"_id": f"other-{i}", "booking_number": "B-100", "county": "Collier"} for i in range(cd._LEGACY_SCAN_LIMIT)
@@ -1889,6 +1902,7 @@ async def test_refresh_does_not_put_back_rows_a_purge_removed_after_its_read():
 @pytest.mark.asyncio
 async def test_refresh_that_keeps_losing_the_race_writes_nothing_and_retries(monkeypatch):
     db = AsyncDB()
+    db.arrests = db["arrests"]
     db["arrests"].docs.append(_booking())
     col = _WriterBetweenReadAndWrite(times=99)
     db._cols["contacts"] = col
@@ -2340,6 +2354,7 @@ async def test_review_route_rejects_bad_input_without_writing(monkeypatch):
 
 def test_get_route_reads_a_unique_legacy_doc(monkeypatch):
     db = AsyncDB()
+    db.arrests = db["arrests"]
     db["arrests"].docs.append(_booking())
     db["contacts"].docs.append({
         "_id": ObjectId(), "booking_number": "B-100",
@@ -2358,6 +2373,7 @@ def test_get_route_reads_a_unique_legacy_doc(monkeypatch):
 @pytest.mark.parametrize("setup", ["two_legacy_docs", "booking_on_two_arrests"])
 def test_get_route_returns_409_for_ambiguous_legacy_and_writes_nothing(monkeypatch, setup):
     db = AsyncDB()
+    db.arrests = db["arrests"]
     db["arrests"].docs.append(_booking())
     db["contacts"].docs.append({"_id": "legacy-a", "booking_number": "B-100", "discovered_contacts": [{"name": "Jordan Sample"}]})
     if setup == "two_legacy_docs":
@@ -2434,3 +2450,120 @@ def test_add_lead_discovery_sends_a_state_and_surfaces_errors():
         if st == "FL" and name != "Manatee Clerk"
     }
     assert set(out["fl_registry"]) == registry_fl and len(out["fl_registry"]) == 67
+
+
+@pytest.mark.asyncio
+async def test_prospective_and_active_bonds_cosigners_surface_on_refresh_and_rearrest():
+    """Codex P2 on #280: co-signers stored on prospective_bonds / active_bonds
+    (indemnitors[], indemnitor{}, and flat indemnitor_*) are read by _provider_prior."""
+    db = AsyncDB()
+    db["prospective_bonds"].docs.extend([
+        {
+            "booking_number": "B-100",
+            "county": "Lee",
+            "state": "FL",
+            "defendant_name": "Casey Sample",
+            "indemnitors": [
+                {"name": "Jordan Sample", "phone": "5550100100", "relationship": "sibling"},
+                {"firstName": "Taylor", "lastName": "Sample", "phone": "5550100102", "dob": "1985-03-04", "relationship": "parent"},
+            ],
+            "indemnitor": {"name": "Jordan Sample", "phone": "5550100100", "relationship": "sibling"},
+            "indemnitor_name": "Jordan Sample",
+            "indemnitor_phone": "5550100100",
+        },
+        # Wrong county / missing state on same booking number must not match same_case.
+        {
+            "booking_number": "B-100",
+            "county": "Collier",
+            "state": "FL",
+            "defendant_name": "Someone Else",
+            "indemnitors": [{"name": "Wrong County", "phone": "5550100991"}],
+        },
+        {
+            "booking_number": "B-100",
+            "county": "Lee",
+            "defendant_name": "Someone Else",
+            "indemnitors": [{"name": "Missing State", "phone": "5550100992"}],
+        },
+    ])
+    db["active_bonds"].docs.append({
+        "booking_number": "B-050",
+        "county": "Lee",
+        "state": "FL",
+        "defendant_name": "Sample, Casey",
+        "defendant_dob": "01/02/1990",
+        "indemnitor_name": "Morgan Active",
+        "indemnitor_phone": "5550100300",
+        "indemnitor_relationship": "spouse",
+    })
+
+    # 1. Refresh on B-100 surfaces co-signers from B-100 prospective_bonds AND
+    #    re-arrest match from B-050 active_bonds (via shared defendant DOB).
+    result = await run_discovery(
+        db,
+        booking_number="B-100",
+        full_name="Casey Sample",
+        county="Lee",
+        state="FL",
+        dob="1990-01-02",
+        force=True,
+    )
+    by_name = {row["name"]: row for row in result["contacts"]}
+    assert set(by_name) == {"Jordan Sample", "Taylor Sample", "Morgan Active"}
+    assert by_name["Jordan Sample"]["matched_anchors"] == ["phone"]
+    assert by_name["Taylor Sample"]["matched_anchors"] == ["phone", "dob"]
+    assert by_name["Taylor Sample"]["relationship"] == "parent"
+    assert by_name["Morgan Active"]["matched_anchors"] == ["dob"]
+    assert by_name["Morgan Active"]["phone"] == "5550100300"
+    assert by_name["Morgan Active"]["relationship"] == "spouse"
+
+
+@pytest.mark.asyncio
+async def test_indemnitor_create_endpoint_persists_bond_cosigner_visible_to_discovery():
+    """End-to-end: POST /api/indemnitors/create attaches a co-signer to a booking
+    and _provider_prior finds that co-signer on both refresh and re-arrest."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from dashboard.routers.indemnitors import router as indemnitors_router
+
+    db = AsyncDB()
+    db.arrests = db["arrests"]
+    db["arrests"].docs.append(_booking())
+
+    # AsyncCollection needs update_many for the unlinked-indemnitors link step.
+    async def _noop_update_many(filt, update):
+        return _Result(0)
+
+    db["indemnitors"].update_many = _noop_update_many
+
+    app = FastAPI()
+    app.include_router(indemnitors_router)
+    client = TestClient(app)
+
+    with patch("dashboard.routers.indemnitors.get_db", return_value=db), \
+         patch("dashboard.routers.indemnitors.get_collection", side_effect=lambda name: db[name]):
+        resp = client.post(
+            "/api/indemnitors/create",
+            json={
+                "firstName": "Jordan",
+                "lastName": "Sample",
+                "phone": "555-010-0100",
+                "relationship": "sibling",
+                "booking_number": "B-100",
+            },
+        )
+    assert resp.status_code == 200
+    assert resp.json()["action"] == "created"
+
+    # Refresh on B-100 finds Jordan Sample.
+    refresh = await run_discovery(db, booking_number="B-100", arrest=_booking(), force=True)
+    assert [row["name"] for row in refresh["contacts"]] == ["Jordan Sample"]
+
+    # Re-arrest of Casey Sample on B-200 also finds Jordan Sample via shared defendant anchors.
+    rearrest = {**_booking(), "_id": "arrest-200", "booking_number": "B-200"}
+    db["arrests"].docs.append(rearrest)
+    later = await run_discovery(db, booking_number="B-200", arrest=rearrest, force=True)
+    by_name = {row["name"]: row for row in later["contacts"]}
+    assert "Jordan Sample" in by_name
+    assert by_name["Jordan Sample"]["phone"] == "5550100100"
+    assert set(by_name["Jordan Sample"]["matched_anchors"]) >= {"dob", "address_zip"}
