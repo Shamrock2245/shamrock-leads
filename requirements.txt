@@ -31,8 +31,8 @@ slack-sdk>=3.44.1
 # Scraper dependencies — DrissionPage (legacy), curl_cffi (TLS impersonation), Playwright (Obscura CDP)
 curl-cffi>=0.16.3
 beautifulsoup4>=4.12.0
-DrissionPage>=4.0.0
-patchright>=1.50.0  # Charleston SC, stealth_utils (also run: patchright install chromium); not Pinellas (2026-10-08)
+DrissionPage>=4.1.1.4
+patchright>=1.64.2  # Charleston SC, stealth_utils (also run: patchright install chromium); not Pinellas (2026-10-08)
 playwright>=1.48.0  # stock Chromium on the Leads Ops relay (Charlotte, Manatee, Pinellas); run: python -m playwright install chromium
 # CAPTCHA OCR stack (see scrapers/captcha_ocr.py)
 # Core (light, always install):
@@ -59,17 +59,17 @@ sse-starlette>=2.1.0,<2.2      # Cap <2.2 — 2.2+ needs starlette>=0.41.3; 3.0.
 motor>=3.3.0                  # Async MongoDB driver
 httpx[socks]>=0.28.1            # Async HTTP client + SOCKS proxy (Hillsborough scraper)
 cryptography>=43.0.0          # Fernet symmetric encryption (OAuth token storage)
-PyJWT>=2.8.0                  # JWT state tokens for OAuth CSRF protection
-aiohttp>=3.9.0                # Async HTTP client for contact discovery OSINT pipeline
+PyJWT>=2.15.1                  # JWT state tokens for OAuth CSRF protection
+aiohttp>=3.14.5                # Async HTTP client for contact discovery OSINT pipeline
 python-multipart>=0.0.9       # Required by FastAPI for form data / file uploads
-itsdangerous>=2.1.2           # Signed-cookie state for dashboard PIN auth
+itsdangerous>=2.2.0           # Signed-cookie state for dashboard PIN auth
 PyYAML>=6.0                   # Blog auto-publisher YAML frontmatter parsing
 
 # Active Bonds PDF generation & date parsing
 reportlab>=4.0.0
-fpdf2>=2.7.0                  # OSINT PDF export (dashboard/services/osint_pdf_export.py)
-python-dateutil>=2.8.0
-PyMuPDF>=1.24.0
+fpdf2>=2.8.9                  # OSINT PDF export (dashboard/services/osint_pdf_export.py)
+python-dateutil>=3.0.0
+PyMuPDF>=1.24.0,<3.0
 
 # Official OSI / Palmetto bond & discharge reports (XLSX)
 openpyxl>=3.1.5
@@ -89,7 +89,7 @@ SpeechRecognition>=3.17.0  # Google Speech Recognition (free, no API key)
 
 # Development
 pytest>=8.0.0
-pytest-asyncio>=0.23.0
+pytest-asyncio>=0.26.0
 nodriver>=0.38  # Seminole, Lake — JS-rendered jail portals (headless Chrome via CDP)
 
 # Adobe PDF Services (official SDK — fill/combine/compress)

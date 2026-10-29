@@ -20,6 +20,19 @@ Fixed 2026-09-25: discovery ignored the ``usrfiles.com`` link (the current
 report) and fell back to hard-coded stale PDFs, and the row regex expected the
 booking number glued to a race letter, so every run parsed 0 rows. Plain
 HTTPS with TLS verification; no proxy or stealth.
+
+2026-10-15: honest identity and published-only fields. Every request goes
+through scrapers.plain_http (honest User-Agent, certificate verified); a
+401/403/429, challenge page, dropped handshake or bad certificate raises
+(egress_block: / tls_cert_invalid:) and is never swallowed by the PDF loop.
+Charges are "" when none are printed. Bond_Amount is the sum of the printed
+per-charge ``$`` amounts only when every charge line prints one (a printed $0
+is kept); any charge without an amount (blank or NOBD) makes it "" (unknown).
+Status is "In Custody" only when the report carries the source's own
+current-only title ("Daily In Custody Report" / "Detainees In Confinement
+Report"), linked from the "Current Detainees" page; status_source is
+"published_in_custody_report_label". Without that title Status is "".
+See docs/recon/NC_ORANGE_ROSTER_SCOPE_2026-10-15.md.
 """
 from __future__ import annotations
 
@@ -35,7 +48,12 @@ import requests
 
 from core.models import ArrestRecord
 from scrapers.base_scraper import BaseScraper
-from scrapers.scraper_resilience import ParseDriftError, SourceUrlChanged
+from scrapers.plain_http import HONEST_USER_AGENT, SourceTLSInvalid
+from scrapers.plain_http import request as plain_request
+from scrapers.published_bond import charge_bond_amount, total_published_bond
+from scrapers.scraper_resilience import EgressBlocked, ParseDriftError, SourceUrlChanged
+
+_BLOCKS = (EgressBlocked, SourceTLSInvalid)
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +75,33 @@ HEADER_PREFIXES = (
     "days in", "name a/j", "orange county", "page ",
 )
 MAX_REPORT_AGE = timedelta(hours=48)
+CUSTODY_LABEL_RE = re.compile(r"^\s*(?:Daily\s+In\s+Custody|Detainees\s+In\s+Confinement)\s+Report\b", re.I | re.M)
+STATUS_SOURCE_REPORT_LABEL = "published_in_custody_report_label"
+
+
+class _HonestSession(requests.Session):
+    """requests.Session whose every call goes through plain_http (honest UA, verify on, typed blocks)."""
+
+    def __init__(self):
+        super().__init__()
+        self.headers.update({"User-Agent": HONEST_USER_AGENT})
+        self.verify = True
+
+    def request(self, method, url, **kwargs):  # noqa: D401
+        sess = self
+
+        class _Raw:
+            def request(self, m, u, **kw):
+                return requests.Session.request(sess, m, u, **kw)
+
+        return plain_request(_Raw(), method, url, county="Orange", **kwargs)
+
+
+def status_fields(report_text: str):
+    """(Status, status_source): In Custody only under the source's current-only report title."""
+    if CUSTODY_LABEL_RE.search(report_text or ""):
+        return "In Custody", STATUS_SOURCE_REPORT_LABEL
+    return "", ""
 
 
 def discover_pdf_urls(html: str) -> List[str]:
@@ -81,11 +126,11 @@ def _add_charge_bits(cur: dict, text: str) -> None:
     charge = text.split(" / ")[0].strip()
     if charge and not re.match(r"^\d{1,2}/\d{1,2}/\d{2,4}", charge) and charge not in cur["charges"]:
         cur["charges"].append(charge[:120])
-    for b in BOND_RE.findall(text):
-        try:
-            cur["bond"] += float(b.replace(",", ""))
-        except ValueError:
-            pass
+    amounts = BOND_RE.findall(text)
+    if not amounts:
+        cur["bonds"].append(None)  # this charge prints no amount (blank / NOBD)
+    for b in amounts:
+        cur["bonds"].append(charge_bond_amount(b))
     for d in DOCKET_RE.findall(text):
         if d not in cur["dockets"]:
             cur["dockets"].append(d)
@@ -125,7 +170,7 @@ def parse_report_text(text: str) -> List[dict]:
                 "booking_time": f"{btime[:2]}:{btime[2:]}" if btime else "",
                 "days_in": days,
                 "charges": [],
-                "bond": 0.0,
+                "bonds": [],
                 "dockets": [],
             }
             out.append(cur)
@@ -134,6 +179,8 @@ def parse_report_text(text: str) -> List[dict]:
             continue
         if cur is not None and " / " in ln:
             _add_charge_bits(cur, ln)
+    for r in out:
+        r["bond"] = total_published_bond(r.pop("bonds"))
     return out
 
 
@@ -154,13 +201,7 @@ class OrangeScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         start = time.time()
-        session = requests.Session()
-        session.headers.update({
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-            ),
-        })
+        session = _HonestSession()
         page = session.get(PORTAL_URL, timeout=40)
         page.raise_for_status()
         urls = discover_pdf_urls(page.text)
@@ -177,13 +218,14 @@ class OrangeScraper(BaseScraper):
             raise ParseDriftError("Orange NC: report layout changed (no 'Bk #' column)")
 
         rows = parse_report_text(text)
+        status = status_fields(text)
         seen: set = set()
         records: List[ArrestRecord] = []
         for r in rows:
             if r["booking"] in seen:
                 continue
             seen.add(r["booking"])
-            records.append(self._to_record(r, pdf_url))
+            records.append(self._to_record(r, pdf_url, status))
         if not records:
             raise ParseDriftError("Orange NC: report parsed to 0 detainee rows")
         logger.info("Orange NC: %d detainees from report %s in %.1fs", len(records), ts, time.time() - start)
@@ -197,6 +239,8 @@ class OrangeScraper(BaseScraper):
                 if resp.status_code != 200 or not resp.content.startswith(b"%PDF"):
                     continue
                 text = self._extract_text(resp.content)
+            except _BLOCKS:
+                raise
             except Exception as exc:
                 logger.debug("Orange NC PDF fetch failed (%s)", type(exc).__name__)
                 continue
@@ -214,8 +258,8 @@ class OrangeScraper(BaseScraper):
         with pdfplumber.open(io.BytesIO(content)) as pdf:
             return "\n".join((p.extract_text() or "") for p in pdf.pages)
 
-    def _to_record(self, r: dict, pdf_url: Optional[str]) -> ArrestRecord:
-        return ArrestRecord(
+    def _to_record(self, r: dict, pdf_url: Optional[str], status: Tuple[str, str] = ("", "")) -> ArrestRecord:
+        rec = ArrestRecord(
             County=self.county,
             State="NC",
             Full_Name=r["name"],
@@ -228,10 +272,15 @@ class OrangeScraper(BaseScraper):
             Race=r["race"],
             Sex=r["sex"],
             Case_Number=" | ".join(r["dockets"][:5]),
-            Charges=" | ".join(r["charges"]) if r["charges"] else "Unknown",
-            Bond_Amount=f"{r['bond']:.2f}" if r["bond"] else "0",
-            Status="In Custody",
+            Charges=" | ".join(r["charges"]),
+            Bond_Amount=r["bond"],
+            Status=status[0],
             Facility="Orange County Detention Center",
             Agency="Orange County Sheriff's Office",
             Detail_URL=pdf_url or PORTAL_URL,
         )
+        if status[1]:
+            extra = dict(getattr(rec, "extra_data", None) or {})
+            extra["status_source"] = status[1]
+            rec.extra_data = extra
+        return rec

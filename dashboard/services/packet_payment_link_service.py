@@ -41,9 +41,9 @@ SEND_ONCE_FIELD = "payment_link_send_once"
 # used for auto sends: they are often the 10%-of-bond estimate written by
 # intake promote (intake.py), packet_builder_service, or the DocuSeal prefill,
 # and are indistinguishable from staff-entered values.
-# NOTHING in the codebase sets these fields yet (no staff confirmation UI) — so
-# automatic sends stay skipped with reason=premium_unconfirmed until one exists.
-# Never auto-set / backfill them.
+# Staff set these with POST /api/paperwork/confirm-premium (session user).
+# Automatic sends stay skipped with reason=premium_unconfirmed until then.
+# Never auto-set / backfill them from the 10% estimate.
 PREMIUM_CONFIRMED_AMOUNT_FIELD = "premium_confirmed_amount"
 PREMIUM_CONFIRMED_AT_FIELD = "premium_confirmed_at"
 PREMIUM_CONFIRMED_BY_FIELD = "premium_confirmed_by"
@@ -670,6 +670,25 @@ async def _finish_send_once(claim: Dict[str, Any], state: str) -> None:
         logger.warning("[payment_link] send-once finish stamp failed err_type=%s", type(exc).__name__)
 
 
+_SIGNED_STATUSES = frozenset({"signed", "completed", "complete"})
+
+
+def _signature_recorded(packet_doc: Optional[dict], bond_doc: Optional[dict]) -> bool:
+    """Auto pay links wait for a recorded signature. Staff send is a different function."""
+    for doc in (packet_doc, bond_doc):
+        if not isinstance(doc, dict):
+            continue
+        if str(doc.get("status") or "").strip().lower() in _SIGNED_STATUSES:
+            return True
+        if str(doc.get("docuseal_status") or "").strip().lower() in _SIGNED_STATUSES:
+            return True
+        if str(doc.get("Signature_Status") or doc.get("signature_status") or "").strip().lower() == "signed":
+            return True
+        if str(doc.get("Packet_Status") or doc.get("packet_status") or "").strip().lower() == "signed":
+            return True
+    return False
+
+
 async def maybe_send_packet_payment_link(
     *,
     packet_id: str = "",
@@ -693,9 +712,10 @@ async def maybe_send_packet_payment_link(
       * ``premium_unconfirmed``   no staff-confirmed premium (confirmed_premium);
                                   stored/estimated premiums never count and the
                                   caller's ``amount`` is ignored for auto sends.
+      * ``packet_unsigned``       neither the packet nor the bond records a signature
       * ``no_contact``
       * send-once claim not won   (already sent / claimed / stale → manual review)
-    ``force`` does NOT bypass the switch or the premium_unconfirmed rule.
+    ``force`` does NOT bypass the switch, the premium_unconfirmed rule, or packet_unsigned.
     """
     from dashboard.services.legacy_payment_link_switch import (
         legacy_payment_link_enabled,
@@ -764,6 +784,17 @@ async def maybe_send_packet_payment_link(
                 "success": True,
                 "skipped": True,
                 "reason": "premium_unconfirmed",
+                "packet_id": packet_id,
+                "booking_number": booking_number,
+                "source": source,
+            }
+
+        if not _signature_recorded(packet_doc, bond_doc):
+            logger.info("[payment_link] skip %s reason=packet_unsigned", source)
+            return {
+                "success": True,
+                "skipped": True,
+                "reason": "packet_unsigned",
                 "packet_id": packet_id,
                 "booking_number": booking_number,
                 "source": source,

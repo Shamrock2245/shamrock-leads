@@ -134,12 +134,12 @@ ALL_SERVICE_KEYS = {
     # Lifecycle suite
     "forfeiture_scan", "docuseal_poller", "swipesimple_gmail_poll",
     "swipesimple_session_keepalive",
-    "compliance_backfill", "matching_backlog", "lee_clerk_watch", "overdue_tasks",
+    "compliance_backfill", "matching_backlog", "lee_clerk_watch", "lee_freshness", "overdue_tasks",
     # Intelligence Pipeline
     "alpha_engine", "docket_monitor", "court_intel", "nlp_enrichment",
     # Monitoring & Compliance
     "court_reminders", "rearrest_detection", "delinquency_scanner",
-    "fta_alert", "missed_payment", "court_email", "bb_health", "data_retention",
+    "fta_alert", "missed_payment", "installment_invoices", "court_email", "bb_health", "data_retention",
     "bounty_hunter", "watchdog",
     # Geo Intelligence
     "geo_intelligence", "findmy_geofence",
@@ -172,6 +172,7 @@ SERVICE_META = {
     "compliance_backfill": {"name": "Compliance Backfill", "icon": "✅", "category": "lifecycle", "desc": "Create missing check-in/court tasks"},
     "matching_backlog":    {"name": "Matching Backlog",    "icon": "🔗", "category": "lifecycle", "desc": "Batch-match intakes; human on ambiguity"},
     "lee_clerk_watch":     {"name": "Lee Clerk Watch",     "icon": "🏛️", "category": "lifecycle", "desc": "Wait ~1 day for Lee Clerk catch-up, then apply jail/clerk updates immediately"},
+    "lee_freshness":       {"name": "Lee Freshness",       "icon": "🫀", "category": "monitor",  "desc": "Lee (FL) heartbeat: alert #alerts on no success in N min, 0 rows while site lists bookings, repeated errors, window gap"},
     "overdue_tasks":       {"name": "Overdue Tasks",       "icon": "⏰", "category": "lifecycle", "desc": "Flag overdue staff tasks / SLA breaches"},
     "auto_reply":          {"name": "AI Auto-Reply",       "icon": "🤖", "category": "revenue",  "desc": "AI responds to inbound iMessages (Shannon)"},
     "alpha_engine":        {"name": "Alpha Engine",        "icon": "🧬", "category": "intel",    "desc": "Deep enrichment / ranking pass on hot inventory"},
@@ -183,6 +184,7 @@ SERVICE_META = {
     "delinquency_scanner": {"name": "Delinquency Scanner", "icon": "💳", "category": "monitor",  "desc": "Flag overdue payment plans (>30 days)"},
     "fta_alert":           {"name": "FTA Alert Engine",    "icon": "🚨", "category": "monitor",  "desc": "Multi-level FTA escalation (staff → BB → surrender)"},
     "missed_payment":      {"name": "Missed Payment Alert","icon": "💸", "category": "monitor",  "desc": "Alert staff on missed premium installments"},
+    "installment_invoices": {"name": "Installment Invoices", "icon": "🧾", "category": "revenue", "desc": "Stage one SwipeSimple invoice per due financed installment (dry-run unless LIVE)"},
     "court_email":         {"name": "Court Email Scanner",  "icon": "📧", "category": "monitor",  "desc": "Gmail discharge/exoneration pipeline"},
     "bb_health":           {"name": "iMessage Health",     "icon": "📱", "category": "monitor",  "desc": "BlueBubbles bridge connectivity monitor"},
     "data_retention":      {"name": "Data Retention",      "icon": "🗑️", "category": "monitor",  "desc": "Weekly purge of old low-value records"},

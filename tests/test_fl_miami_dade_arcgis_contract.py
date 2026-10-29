@@ -21,7 +21,7 @@ BOOK_MS = int(datetime(2026, 10, 7, 4, tzinfo=timezone.utc).timestamp() * 1000)
 
 def _attrs(oid, **over):
     a = {"ObjectId": oid, "GlobalID": f"gid-{oid}", "BookDate": BOOK_MS, "Defendant": f"DOE, JANE{oid}",
-         "Charge1": "BATTERY", "Code2": None, "Charge3": None}
+         "DOB": None, "Charge1": "BATTERY", "Code2": None, "Charge3": None}
     a.update(over)
     return a
 
@@ -29,6 +29,8 @@ def _attrs(oid, **over):
 class _Resp:
     def __init__(self, data, status=200):
         self._data, self.status_code = data, status
+        self.headers = {"content-type": "application/json"}
+        self.text = ""
 
     def raise_for_status(self):
         if self.status_code != 200:
@@ -45,6 +47,9 @@ def _install(monkeypatch, count, pages, calls=None):
     class _S:
         def __init__(self):
             self.headers = {}
+
+        def request(self, method, url, params=None, timeout=None, **_kw):
+            return self.get(url, params=params, timeout=timeout)
 
         def get(self, url, params=None, timeout=None):
             assert url == miami_dade.QUERY_ENDPOINT
@@ -89,9 +94,9 @@ def test_scrape_pages_to_the_server_count(monkeypatch):
     monkeypatch.setattr(miami_dade, "PAGE_SIZE", 2)
     recs = MiamiDadeCountyScraper().scrape()
     assert [r.Booking_Number for r in recs] == ["", "", ""]  # no source booking number
-    assert len(recs) == 3 and all(r.extra_data["md_dedupe"].startswith("md_dedupe_v1:") for r in recs)
+    assert len(recs) == 3 and all(r.extra_data["md_dedupe"].startswith("md_dedupe_v2:") for r in recs)
     assert calls[0]["returnCountOnly"] == "true"
-    assert all("outFields" in c and "Address" not in c["outFields"] and "DOB" not in c["outFields"] for c in calls[1:])
+    assert all("outFields" in c and "Address" not in c["outFields"] and "DOB" in c["outFields"] for c in calls[1:])
 
 
 @pytest.mark.parametrize(

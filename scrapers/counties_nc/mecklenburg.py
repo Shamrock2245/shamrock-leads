@@ -25,6 +25,10 @@ from urllib.parse import urljoin
 import requests
 
 from scrapers.base_scraper import BaseScraper
+from scrapers.plain_http import (
+    HONEST_USER_AGENT, EgressBlocked, SourceTLSInvalid, make_session, request as plain_request,
+)
+from scrapers.scraper_resilience import ParseDriftError
 from core.models import ArrestRecord
 
 logger = logging.getLogger(__name__)
@@ -40,12 +44,10 @@ PAGE_SIZE = 50
 MAX_PAGES = 80  # hard cap (~4000 inmates)
 MAX_DETAILS = 2500
 REQUEST_PAUSE_S = 0.15
+_BLOCKS = (EgressBlocked, SourceTLSInvalid)
 
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": HONEST_USER_AGENT,
     "Accept": "application/json, text/javascript, */*; q=0.01",
     "Accept-Language": "en-US,en;q=0.9",
     "X-Requested-With": "XMLHttpRequest",
@@ -76,19 +78,14 @@ class MecklenburgScraper(BaseScraper):
 
     def scrape(self) -> List[ArrestRecord]:
         start = time.time()
-        session = requests.Session()
-        session.headers.update(HEADERS)
+        session = make_session(HEADERS)
 
-        try:
-            # Warm HTML landing (sets cookies; Cloudflare-friendly edge).
-            session.headers["Accept"] = (
-                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-            )
-            session.get(PORTAL_URL, timeout=30).raise_for_status()
-            session.headers["Accept"] = HEADERS["Accept"]
-        except Exception as exc:
-            logger.error("Mecklenburg landing failed: %s", exc)
-            return []
+        # Landing page (sets cookies). Blocks and HTTP errors propagate as typed errors.
+        resp = plain_request(
+            session, "GET", PORTAL_URL, county=self.county, timeout=30,
+            headers={"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+        )
+        resp.raise_for_status()
 
         listings = self._fetch_active_roster(session)
         if not listings:
@@ -113,8 +110,8 @@ class MecklenburgScraper(BaseScraper):
             detail_path = item.get("DetailsUrl") or ""
             detail_url = urljoin(ORIGIN, detail_path) if detail_path else PORTAL_URL
 
-            charges = "Unknown"
-            bond = "0"
+            charges = ""
+            bond = ""
             booking_date = ""
             first = (item.get("FirstName") or "").strip()
             last = (item.get("LastName") or "").strip()
@@ -165,7 +162,7 @@ class MecklenburgScraper(BaseScraper):
                     Race=str(item.get("Race") or "").strip(),
                     Charges=charges,
                     Bond_Amount=bond,
-                    Status="In Custody",
+                    Status="",  # activeOnly scope not proven custody-only; no published custody field
                     Detail_URL=detail_url,
                     Facility=FACILITY,
                 )
@@ -196,6 +193,7 @@ class MecklenburgScraper(BaseScraper):
                     "max": str(PAGE_SIZE),
                     "page": str(page),
                 },
+                strict=True,
             )
             time.sleep(REQUEST_PAUSE_S)
             if not isinstance(data, list) or not data:
@@ -222,18 +220,30 @@ class MecklenburgScraper(BaseScraper):
         session: requests.Session,
         path: str,
         params: Dict[str, str],
+        strict: bool = False,
     ) -> Any:
+        """GET JSON through plain_http. Blocks always raise.
+
+        strict (roster pages): HTTP/network/JSON failures raise too, so a broken
+        roster never looks like an empty one. Non-strict (per-booking detail):
+        those are logged by type only and the booking keeps "" fields.
+        """
         url = urljoin(ORIGIN, path)
         try:
-            resp = session.get(url, params=params, timeout=35)
-            if resp.status_code != 200:
-                logger.debug(
-                    "Mecklenburg %s HTTP %s", path, resp.status_code
-                )
-                return None
+            resp = plain_request(session, "GET", url, county=self.county, params=params, timeout=35)
+            resp.raise_for_status()
             return resp.json()
-        except Exception as exc:
-            logger.debug("Mecklenburg %s error: %s", path, exc)
+        except _BLOCKS:
+            raise
+        except ValueError as exc:
+            if strict:
+                raise ParseDriftError(f"Mecklenburg {path}: non-JSON response") from exc
+            logger.debug("Mecklenburg %s non-JSON (%s)", path, type(exc).__name__)
+            return None
+        except requests.RequestException as exc:
+            if strict:
+                raise
+            logger.debug("Mecklenburg %s failed (%s)", path, type(exc).__name__)
             return None
 
     @staticmethod
@@ -254,39 +264,41 @@ class MecklenburgScraper(BaseScraper):
     def _parse_charges(rows: Any) -> Optional[tuple[str, str]]:
         """Return (charges_text, bond_amount) from source charge rows.
 
-        Bond_Amount is the sum of numeric ActualBailAmount cells only.
-        Non-numeric / missing bail is skipped (never invented).
+        Bond_Amount is the sum of ActualBailAmount only when every charge row
+        publishes a numeric amount; otherwise "" (never invented). A published
+        0 is kept. Charges are "" when no description is published.
         """
         if not isinstance(rows, list) or not rows:
             return None
         descriptions: List[str] = []
         total = Decimal("0")
         saw_money = False
+        missing = False
         for row in rows:
             if not isinstance(row, dict):
                 continue
             desc = str(row.get("Description") or "").strip()
             if desc:
                 descriptions.append(desc)
-            raw = str(row.get("ActualBailAmount") or "").strip()
-            if not raw:
-                continue
+            raw = row.get("ActualBailAmount")
+            raw = "" if raw is None else str(raw).strip()
             cleaned = raw.replace("$", "").replace(",", "").strip()
             try:
                 amt = Decimal(cleaned)
             except (InvalidOperation, ValueError):
+                missing = True
                 continue
             total += amt
             saw_money = True
-        charges = " | ".join(descriptions) if descriptions else "Unknown"
-        if saw_money:
+        charges = " | ".join(descriptions)
+        if saw_money and not missing:
             # Normalize: drop trailing .00 when whole dollars.
             if total == total.to_integral_value():
                 bond = str(int(total))
             else:
                 bond = format(total, "f")
         else:
-            bond = "0"
+            bond = ""
         return charges, bond
 
     # --- test helpers (pure, no network) ---
@@ -318,9 +330,9 @@ class MecklenburgScraper(BaseScraper):
                     DOB=str(item.get("DobFormatted") or "").strip(),
                     Sex=str(item.get("Sex") or "").strip(),
                     Race=str(item.get("Race") or "").strip(),
-                    Charges="Unknown",
-                    Bond_Amount="0",
-                    Status="In Custody",
+                    Charges="",
+                    Bond_Amount="",
+                    Status="",  # activeOnly scope not proven custody-only; no published custody field
                     Detail_URL=urljoin(ORIGIN, item.get("DetailsUrl") or "")
                     or PORTAL_URL,
                     Facility=FACILITY,
@@ -340,7 +352,7 @@ class MecklenburgScraper(BaseScraper):
         if not jid or not name:
             return None
         parsed = self._parse_charges(charges)
-        charges_text, bond = parsed if parsed else ("Unknown", "0")
+        charges_text, bond = parsed if parsed else ("", "")
         return ArrestRecord(
             County=self.county,
             State="NC",
@@ -362,7 +374,7 @@ class MecklenburgScraper(BaseScraper):
             Race=str(listing.get("Race") or summary.get("Race") or "").strip(),
             Charges=charges_text,
             Bond_Amount=bond,
-            Status="In Custody",
+            Status="",  # activeOnly scope not proven custody-only; no published custody field
             Detail_URL=urljoin(ORIGIN, listing.get("DetailsUrl") or "")
             or PORTAL_URL,
             Facility=FACILITY,

@@ -26,6 +26,7 @@ import os
 from typing import Optional
 
 import httpx
+from core.booking_identity import redact_internal_keys
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ class TelegramService:
 
         try:
             async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.post(url, json=payload)
+                resp = await client.post(url, json=redact_internal_keys(payload))
                 data = resp.json()
                 if data.get("ok"):
                     msg_id = data.get("result", {}).get("message_id")

@@ -120,6 +120,7 @@ async def test_maybe_send_dispatches_when_eligible(switch_on, send_once_ok):
         "indemnitor_phone": "2395550199",
         "payment_status": "pending",
         "defendant_name": "Test Def",
+        "Signature_Status": "signed",
         **_confirmed(250.0),
     }
     with patch(
@@ -280,6 +281,7 @@ async def test_promote_hook_calls_helpers(switch_on, send_once_ok):
         "indemnitor_email": "ind@example.com",
         "defendant_name": "Promote Def",
         "payment_status": "pending",
+        "Signature_Status": "signed",
         "court_date": "2026-12-01",
         "court_time": "10:00 AM",
         "case_number": "26-CF-9",

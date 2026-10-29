@@ -45,7 +45,8 @@ def _packet(**kw):
     # packet_builder_service writes an estimated premium_amount (10% of bond)
     d = {"_id": "oid-cs-1", "packet_id": PACKET_ID, "booking_number": BOOKING,
          "premium_amount": 500.0, "numeric_premium_dollar": "$500.00",
-         "indemnitor_phone": PHONE, "defendant_name": DEFENDANT}
+         "indemnitor_phone": PHONE, "defendant_name": DEFENDANT,
+         "status": "signed", "docuseal_status": "completed"}
     d.update(kw)
     return d
 
@@ -208,14 +209,16 @@ def test_endpoints_route_through_gated_helpers():
     assert "legacy_payment_link_enabled" not in staff
 
 
-def test_nothing_in_app_code_sets_premium_confirmed_fields():
-    """No setter exists yet (no staff confirmation UI): nothing may auto-mark a
-    premium as confirmed. App code may only READ the field names via the
-    service constants. If a staff-authenticated setter is added later, update
-    this test deliberately."""
+def test_only_staff_confirm_premium_writes_premium_confirmed_fields():
+    """The staff endpoint is the only writer. Readers use the service constants.
+    A body field must never be copied onto premium_confirmed_by."""
     import re
 
     field_re = re.compile(r"^premium_confirmed_\w+$")
+    writers = {
+        "dashboard/services/packet_payment_link_service.py",
+        "dashboard/services/premium_confirmation_service.py",
+    }
     offenders = []
     for base in ("dashboard", "api", "core", "services", "scripts"):
         for f in (ROOT / base).rglob("*.py"):
@@ -223,16 +226,20 @@ def test_nothing_in_app_code_sets_premium_confirmed_fields():
             rel = str(f.relative_to(ROOT))
             for node in ast.walk(tree):
                 if isinstance(node, ast.Constant) and isinstance(node.value, str) and field_re.match(node.value):
-                    # only the constant definitions in the service may spell the names
-                    if rel != "dashboard/services/packet_payment_link_service.py":
+                    if rel not in writers:
                         offenders.append(f"{rel}: literal {node.value}")
                 if isinstance(node, ast.Dict):
                     for k in node.keys:
                         if isinstance(k, ast.Name) and k.id.startswith("PREMIUM_CONFIRMED"):
-                            offenders.append(f"{rel}: dict key {k.id}")
+                            if rel not in writers:
+                                offenders.append(f"{rel}: dict key {k.id}")
                         if isinstance(k, ast.Constant) and isinstance(k.value, str) and "premium_confirmed" in k.value:
-                            offenders.append(f"{rel}: dict key {k.value}")
+                            if rel not in writers:
+                                offenders.append(f"{rel}: dict key {k.value}")
     assert offenders == []
+    route = (ROOT / "dashboard/routers/paperwork.py").read_text()
+    assert "/paperwork/confirm-premium" in route
+    assert "PREMIUM_CONFIRMED_BY_FIELD" in route  # stripped from the body before confirm
     for name in ("premium_confirmed_amount", "premium_confirmed_at", "premium_confirmed_by"):
         assert name in {pls.PREMIUM_CONFIRMED_AMOUNT_FIELD, pls.PREMIUM_CONFIRMED_AT_FIELD,
                         pls.PREMIUM_CONFIRMED_BY_FIELD}

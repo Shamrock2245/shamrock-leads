@@ -4,8 +4,8 @@ Orange County (FL) Arrest Scraper — OCFL BestJail public inmate JSON.
 Source contract (recon 2026-10-08, docs/recon/FL_ORANGE_BESTJAIL_2026-10-08.md):
   * Portal: https://netapps.ocfl.net/BestJail/Home/Inmates — the county's public
     inmate search. Its own page script calls three JSON endpoints, used here
-    with plain ``requests`` and TLS verification on (curl_cffi impersonation
-    retired):
+    with ``scrapers.plain_http`` (honest User-Agent, TLS verification on;
+    curl_cffi impersonation retired):
       - ``getInmates/<letter>``: current inmates whose name starts with the
         letter → ``[{bookingNumber, inmateName}]``. All 26 letters are walked;
         any non-200 / non-list reply raises (no silent partial roster).
@@ -32,7 +32,12 @@ Source contract (recon 2026-10-08, docs/recon/FL_ORANGE_BESTJAIL_2026-10-08.md):
     (or no charges, or a failed charges fetch) → ``Bond_Amount=""`` (unknown),
     never ``$0.00``. A published ``0.00`` stays ``0.00``.
   * ``BIRTH`` is an age, so it goes to ``Age_At_Arrest``; DOB stays empty.
-  * Everyone on the roster is in custody (``Status="In Custody"``).
+  * Status: a published custody field wins (``published_status``). Otherwise
+    roster presence means in custody: the county labels the roster "Current
+    Inmate Database ... people currently in jail" and states "When a person is
+    released from jail, they will no longer appear in these listings." Records
+    are only built for bookings on that roster, so they get ``ROSTER_STATUS``.
+    See docs/recon/FL_ORANGE_ROSTER_SCOPE_2026-10-15.md.
   * Health stays ``unverified`` until a Leads Ops write smoke.
 """
 from __future__ import annotations
@@ -44,10 +49,10 @@ import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-import requests
-
 from core.models import ArrestRecord
+from scrapers import plain_http
 from scrapers.base_scraper import BaseScraper
+from scrapers.scraper_resilience import EgressBlocked
 
 logger = logging.getLogger(__name__)
 
@@ -70,10 +75,6 @@ BOOKING_RE = re.compile(r"^\d{8}$")
 _AMOUNT_RE = re.compile(r"^\$?\s*([\d,]+(?:\.\d{1,2})?)$")
 
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    ),
     "Accept": "application/json, text/javascript, */*; q=0.01",
     "X-Requested-With": "XMLHttpRequest",
     "Referer": ROSTER_URL,
@@ -209,6 +210,25 @@ def _split_name(name: str) -> Tuple[str, str, str]:
     return parts[0], " ".join(parts[1:-1]), parts[-1]
 
 
+def published_status(detail: Dict[str, Any]) -> str:
+    """Custody status only as BestJail published it; unknown is ""."""
+    if not isinstance(detail, dict):
+        return ""
+    for key in ("STATUS", "Status", "status", "CUSTODY", "CUSTODYSTATUS", "INCUSTODY"):
+        val = detail.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return ""
+
+
+ROSTER_STATUS = "In Custody"  # roster is custody-only per the county's own notice
+
+
+def roster_status(detail: Dict[str, Any]) -> str:
+    """Published status if any; else roster presence (custody-only roster)."""
+    return published_status(detail) or ROSTER_STATUS
+
+
 def build_record(booking: str, name: str, detail: Dict[str, Any], charges: Dict[str, Any]) -> Optional[ArrestRecord]:
     booked_at = parse_booked_at(detail)
     if booked_at is None:
@@ -246,12 +266,13 @@ def build_record(booking: str, name: str, detail: Dict[str, Any], charges: Dict[
         Bond_Amount=charges["bond"],
         Case_Number=" | ".join(charges["case_numbers"]),
         Agency=charges["agency"],
-        Status="In Custody",
+        Status=roster_status(detail),
         Detail_URL=ROSTER_URL,
         LastCheckedMode="INITIAL",
         extra_data={
             "charge_details": charges["details"],
             "booking_date_origin": "BestJail DATEBOOKED/TIMEBOOKED",
+            "status_origin": "published" if published_status(detail) else "roster_presence",
         },
     )
 
@@ -273,15 +294,18 @@ class OrangeCountyScraper(BaseScraper):
     def roster_url(self) -> str:
         return ROSTER_URL
 
-    def _get_json(self, session: requests.Session, url: str) -> Any:
-        resp = session.get(url, timeout=REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        return resp.json()
+    def _get_json(self, session, url: str) -> Any:
+        resp = plain_http.request(session, "GET", url, county="Orange", timeout=REQUEST_TIMEOUT)
+        if resp.status_code != 200:
+            raise OrangeContractError(f"Orange: HTTP {resp.status_code} from {url}")
+        try:
+            return resp.json()
+        except ValueError as exc:
+            raise OrangeContractError(f"Orange: non-JSON from {url}") from exc
 
     def scrape(self, lookback_days: Optional[int] = None) -> List[ArrestRecord]:
         days = lookback_days or LOOKBACK_DAYS
-        session = requests.Session()
-        session.headers.update(HEADERS)
+        session = plain_http.make_session(HEADERS)
 
         pages: Dict[str, Any] = {}
         for i, letter in enumerate(string.ascii_lowercase):
@@ -289,7 +313,9 @@ class OrangeCountyScraper(BaseScraper):
                 time.sleep(ROSTER_PAUSE_S)
             try:
                 pages[letter] = self._get_json(session, f"{INMATES_URL}/{letter}")
-            except (requests.RequestException, ValueError) as exc:
+            except EgressBlocked:
+                raise
+            except (OrangeContractError, ValueError) as exc:
                 raise OrangeContractError(f"Orange: getInmates/{letter} failed: {exc}") from exc
         roster = parse_roster(pages)
         if not roster:
@@ -306,8 +332,10 @@ class OrangeCountyScraper(BaseScraper):
             time.sleep(REQUEST_PAUSE_S)
             try:
                 detail = parse_detail(self._get_json(session, f"{DETAILS_URL}/{booking}"), booking)
-            except (requests.RequestException, ValueError) as exc:
-                logger.debug("Orange detail failed (%s): %s", booking, exc)
+            except EgressBlocked:
+                raise
+            except (OrangeContractError, ValueError) as exc:
+                logger.debug("Orange detail failed (%s): %s", booking, type(exc).__name__)
                 detail = None
             if detail is None:
                 detail_failures += 1
@@ -324,10 +352,12 @@ class OrangeCountyScraper(BaseScraper):
             charge_attempts += 1
             try:
                 charge_data = self._get_json(session, f"{CHARGES_URL}/{booking}")
-            except (requests.RequestException, ValueError) as exc:
+            except EgressBlocked:
+                raise
+            except (OrangeContractError, ValueError) as exc:
                 # Skip the booking: emitting it would $set blank charges/bond
                 # over the values already stored for it.
-                logger.debug("Orange charges failed (%s): %s", booking, exc)
+                logger.debug("Orange charges failed (%s): %s", booking, type(exc).__name__)
                 charge_failures += 1
                 continue
             rec = build_record(booking, name, detail, parse_charges(charge_data))

@@ -18,6 +18,7 @@ from pymongo.collection import Collection
 from pymongo.errors import OperationFailure
 
 from core.models import ArrestRecord
+from core.booking_identity import MC_KEY_PREFIX, internal_natural_key, is_internal_booking_key
 from core.staff_edits import fetch_provenance_docs, protect_scraped_update
 from config.settings import settings
 
@@ -31,6 +32,31 @@ STORED_SOURCE_PROJECTION = {
 # Fields written together as one charges/bond pair.
 CHARGE_FIELDS = ("charges", "charge_details")
 BOND_FIELDS = ("bond_amount", "bond_amount_raw", "bond_type")
+
+
+def clear_unpublished_status_enabled(state: str, county: str) -> bool:
+    """True only when ``settings.CLEAR_UNPUBLISHED_STATUS`` lists "ST/County" (empty by default)."""
+    scopes = getattr(settings, "CLEAR_UNPUBLISHED_STATUS", None) or ()
+    return f"{(state or '').strip().upper()}/{(county or '').strip().upper()}" in scopes
+
+
+def unpublished_status_clear_op(state: str, county: str, booking: str) -> UpdateOne:
+    """Blank a stored "In Custody" that has no recorded ``extra.status_source``.
+
+    A sourced status, a "Released" (e.g. from a recheck) and a missing row are
+    left alone; this never upserts.
+    """
+    return UpdateOne(
+        {
+            "state": state,
+            "county": county,
+            "booking_number": booking,
+            "status": "In Custody",
+            "extra.status_source": {"$exists": False},
+        },
+        {"$set": {"status": ""}},
+        upsert=False,
+    )
 
 
 def _blank(value) -> bool:
@@ -333,27 +359,63 @@ class MongoWriter:
         op_to_record_idx: list[int] = []
         pending: list = []
 
+        internal_keyed = 0
+        status_clears: list = []
         for idx, record in enumerate(records):
             booking = (record.Booking_Number or "").strip()
+            if is_internal_booking_key(booking):
+                # Re-entry: a record this writer already keyed carries its
+                # internal key; recompute it so the scope fields stay set.
+                booking = ""
             county_name = (record.County or county or "").strip()
             state = (record.State or "FL").strip().upper() or "FL"
-            if not booking or not county_name:
+            # Narrow owner exception (core/booking_identity.py): an allow-listed
+            # scope with no source booking number (FL/Miami-Dade, FL/Manatee Clerk) is keyed on
+            # its exact-pattern internal natural key. Any other blank booking is
+            # still skipped below, unchanged.
+            internal_key = "" if booking or not county_name else internal_natural_key(record, county_name, state)
+            if (not booking and not internal_key) or not county_name:
                 skipped_invalid += 1
                 logger.debug(
-                    "Skip invalid record (missing booking/county): name=%r county=%r",
-                    getattr(record, "Full_Name", ""),
+                    "Skip invalid record (missing booking/county): county=%r",
                     county_name,
                 )
                 continue
-            # Normalize identity onto the record so writers/downstream agree
-            record.Booking_Number = booking
+            # Normalize identity onto the record so writers/downstream agree.
+            # With no source booking number the internal key is kept on the
+            # record as its routing identity (RearrestChecker, lead fan-out
+            # pointers, SheetsWriter dedupe all read Booking_Number). It is
+            # never a display value: every display/export path goes through
+            # public_booking_number / redact_internal_keys, which blank it.
+            identity = booking or internal_key
+            record.Booking_Number = identity
             record.County = county_name
             record.State = state
 
             doc = record.to_mongo_doc()
+            # A blank custody status means "not published", not "cleared":
+            # never $set it over a stored status (e.g. a recheck's Released).
+            if not str(doc.get("status") or "").strip():
+                doc.pop("status", None)
+                # Off by default (settings.CLEAR_UNPUBLISHED_STATUS is empty):
+                # only a listed county clears a stored, unsourced "In Custody".
+                if clear_unpublished_status_enabled(state, county_name):
+                    status_clears.append(unpublished_status_clear_op(state, county_name, identity))
             doc["state"] = state
             doc["county"] = county_name
-            doc["booking_number"] = booking
+            doc["booking_number"] = identity
+            if internal_key:
+                # Stored identity only (unique index + dashboard addressing).
+                # Displays print it blank (public_booking_number / serialize_doc).
+                internal_keyed += 1
+                doc["booking_key_internal"] = True
+                if internal_key.startswith(MC_KEY_PREFIX):
+                    # Manatee Clerk (court filing): the case number and OBTS
+                    # live in case_number / obts_number, never booking_number.
+                    doc["mc_case_key"] = internal_key
+                else:
+                    doc["md_dedupe"] = internal_key
+                    doc["md_key_fallback"] = bool((record.extra_data or {}).get("md_key_fallback"))
             doc["updated_at"] = now  # Track when record was last refreshed (retention signal)
             doc["last_seen_at"] = now
             # Refresh scraped_at on every write so live activity KPIs stay honest;
@@ -364,6 +426,13 @@ class MongoWriter:
             extra = record.extra_data or {}
             if extra.get("charge_details"):
                 doc["charge_details"] = extra["charge_details"]
+            # Court-filing sources (Manatee Clerk): their own labelled fields.
+            # Set only when present, so a later scrape that publishes a value
+            # (e.g. an OBTS number added after filing) updates it, and a later
+            # blank never wipes a stored one (the field is left out of $set).
+            for fld in ("obts_number", "filing_date", "case_status", "source_label"):
+                if extra.get(fld):
+                    doc[fld] = extra[fld]
             if extra.get("fta_risk_score") is not None:
                 doc["fta_risk_score"] = extra["fta_risk_score"]
                 doc["fta_risk_level"] = extra.get("fta_risk_level")
@@ -375,8 +444,10 @@ class MongoWriter:
             # Ensure created_at / first_seen_at are NEVER overwritten in $set
             doc.pop("created_at", None)
             doc.pop("first_seen_at", None)
-            pending.append((idx, record, (state, county_name, booking), doc))
+            pending.append((idx, record, (state, county_name, identity), doc))
 
+        if internal_keyed:
+            logger.info("%s: %d record(s) keyed on the internal natural key (no source booking number)", county, internal_keyed)
         # ── Staff edits survive rescrapes (core/staff_edits.py) ──
         # One read per (state, county) for docs that may carry staff bond or
         # charge edits; their $set is rewritten so scraped values land in
@@ -427,6 +498,11 @@ class MongoWriter:
                 "sheet_name": county,
             }
 
+        if status_clears:
+            # Before the main bulk (unordered): the filter must see the stored
+            # extra.status_source, which the main $set replaces.
+            cleared = self.arrests.bulk_write(status_clears, ordered=False).modified_count
+            logger.info("%s: cleared %d stored unsourced In Custody status(es) (CLEAR_UNPUBLISHED_STATUS)", county, cleared)
         result = self.arrests.bulk_write(operations, ordered=False)
 
         # Which input records were genuinely NEW (upserted, not just refreshed)?
@@ -461,8 +537,9 @@ class MongoWriter:
                 from dashboard.services.lead_subscriptions import record_lead_fanout
 
                 record_lead_fanout(self.db, [records[i] for i in new_record_indexes])
-            except Exception:
-                logger.exception("lead fan-out skipped")
+            except Exception as fanout_err:
+                # Type only: a traceback/driver message can embed the pointers.
+                logger.warning("lead fan-out skipped (%s)", type(fanout_err).__name__)
         return stats
 
     def get_arrests_by_county(
@@ -627,10 +704,46 @@ class MongoWriter:
         "egress_blocked_failures",
     )
 
+    def get_scraper_cursor(self, county: str, state: str = None, name: str = "detail_queue") -> dict:
+        """Durable per-scraper cursor/backlog state (``scraper_status.cursors.<name>``), or ``{}``.
+
+        Same doc and identity as the resilience state, so it survives restarts
+        and redeploys. Holds counts and internal case keys only (no person data).
+        """
+        filter_q, _bare, _st, _label = self._scraper_status_identity(county, state)
+        doc = self.scraper_status.find_one(filter_q, {f"cursors.{name}": 1, "_id": 0}) or {}
+        return dict((doc.get("cursors") or {}).get(name) or {})
+
+    def set_scraper_cursor(self, county: str, state: str = None, name: str = "detail_queue", value: dict = None) -> None:
+        """Persist the cursor/backlog state written by :meth:`get_scraper_cursor`."""
+        filter_q, bare, st, label = self._scraper_status_identity(county, state)
+        now = datetime.now(timezone.utc)
+        self.scraper_status.update_one(
+            filter_q,
+            {
+                "$set": {
+                    f"cursors.{name}": dict(value or {}),
+                    "county": bare or county,
+                    "county_label": label,
+                    "state": st,
+                    "updated_at": now,
+                },
+                "$setOnInsert": {"created_at": now},
+            },
+            upsert=True,
+        )
+
     def get_scraper_resilience(self, county: str, state: str = None) -> dict:
         """Read persisted consecutive-failure / auto-disable state (or ``{}``)."""
         filter_q, _bare, _st, _label = self._scraper_status_identity(county, state)
         projection = {field: 1 for field in self._RESILIENCE_FIELDS}
+        projection["_id"] = 0
+        return self.scraper_status.find_one(filter_q, projection) or {}
+
+    def get_scraper_status_fields(self, county: str, state: str = None, fields=()) -> dict:
+        """Read selected scraper_status fields (e.g. ``source_window``), or ``{}``."""
+        filter_q, _bare, _st, _label = self._scraper_status_identity(county, state)
+        projection = {field: 1 for field in fields}
         projection["_id"] = 0
         return self.scraper_status.find_one(filter_q, projection) or {}
 

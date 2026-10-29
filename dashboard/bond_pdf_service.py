@@ -24,6 +24,8 @@ from datetime import datetime, date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from core.booking_identity import public_booking_number, scrub_internal_keys
+
 import fitz  # PyMuPDF
 
 logger = logging.getLogger(__name__)
@@ -706,6 +708,93 @@ def _pdf_literal(text: str) -> str:
     return f"({escaped})"
 
 
+# Keys PyMuPDF 2.0 moves from the widget annotation onto a parent field.
+# See Page._adjust_widget / NON_WIDGET_KEYS. /T and /V are the ones readers
+# such as pdfplumber need on the annotation itself.
+_PARENT_FIELD_KEYS = (
+    "AA",
+    "FT",
+    "Ff",
+    "DA",
+    "Opt",
+    "TU",
+    "I",
+    "TM",
+    "DV",
+    "MaxLen",
+    "Q",
+    "DS",
+    "DR",
+    "TI",
+    "RV",
+    "T",
+    "V",
+)
+
+
+def restore_classic_widget_field(doc, xref: int) -> bool:
+    """Put /T and /V back on a widget annotation after ``page.add_widget``.
+
+    PyMuPDF 2.0 always runs ``Page._adjust_widget`` (the "no dot in the
+    name" guard in ``add_widget`` is commented out). That builds a one-kid
+    field parent and moves the field name and value off the page annotation.
+    ``widget.field_name`` still resolves through the parent, but pdfplumber
+    reads the annotation ``/T`` only, so a re-stamped Palmetto field such as
+    ``app_defendant_name`` disappears.
+
+    PyMuPDF 1.28 leaves ``/T`` and ``/V`` on the annotation and has no
+    parent, so this is a no-op there. A real hierarchy (a dotted name, or
+    more than one kid) is left alone.
+    """
+    if not xref:
+        return False
+    parent = doc.xref_get_key(xref, "Parent")
+    if not parent or parent[0] != "xref":
+        return False
+    return _flatten_one_kid_field(doc, int(xref))
+
+
+def _flatten_one_kid_field(doc, xref: int) -> bool:
+    import pymupdf
+    from pymupdf import mupdf
+
+    pdf = pymupdf._as_pdf_document(doc)
+    annot = mupdf.pdf_new_indirect(pdf, xref, 0)
+    parent_ref = annot.pdf_dict_get(mupdf.pdf_new_name("Parent"))
+    if parent_ref.pdf_is_null():
+        return False
+    parent = mupdf.pdf_resolve_indirect(parent_ref)
+    # A dotted name is a chain of parents. Keep that hierarchy.
+    if not parent.pdf_dict_get(mupdf.pdf_new_name("Parent")).pdf_is_null():
+        return False
+    kids = parent.pdf_dict_get(mupdf.pdf_new_name("Kids"))
+    if not kids.pdf_is_array() or kids.pdf_array_len() != 1:
+        return False
+    for key in _PARENT_FIELD_KEYS:
+        name = mupdf.pdf_new_name(key)
+        if annot.pdf_dict_get(name).pdf_is_null():
+            item = parent.pdf_dict_get(name)
+            if not item.pdf_is_null():
+                annot.pdf_dict_put(name, item)
+    parent_num = parent_ref.pdf_to_num()
+    annot.pdf_dict_del(mupdf.pdf_new_name("Parent"))
+    trailer = mupdf.pdf_trailer(pdf)
+    root = trailer.pdf_dict_get(mupdf.pdf_new_name("Root"))
+    acro = root.pdf_dict_get(mupdf.pdf_new_name("AcroForm"))
+    fields = acro.pdf_dict_get(mupdf.pdf_new_name("Fields")) if not acro.pdf_is_null() else None
+    if fields is not None and fields.pdf_is_array():
+        removed = False
+        for index in range(fields.pdf_array_len()):
+            if fields.pdf_array_get(index).pdf_to_num() == parent_num:
+                fields.pdf_array_delete(index)
+                removed = True
+                break
+        if removed:
+            fields.pdf_array_push(annot)
+    parent.pdf_dict_del(mupdf.pdf_new_name("Kids"))
+    return True
+
+
 def _write_widget_v(widget, literal: str) -> None:
     """Store /V on the widget xref.
 
@@ -805,6 +894,8 @@ def _set_widget_value_with_scaling(widget, val, default_font_size=10):
 def _apply_field_values(page, field_values: dict, font_sizes: Optional[dict] = None) -> None:
     """Write values to form widgets; match base field names (handles [n] suffixes)."""
     font_sizes = font_sizes or {}
+    # Internal natural keys (core/booking_identity.py) are never printed.
+    field_values = scrub_internal_keys(dict(field_values))
     for widget in page.widgets() or []:
         raw_name = widget.field_name or ""
         base = _widget_base_name(raw_name)
@@ -844,9 +935,9 @@ def build_osi_field_values(data: dict) -> tuple[dict, dict]:
         last_name=data.get("last_name") or "",
     )
             
-    booking_number = str(
+    booking_number = str(public_booking_number(
         data.get("booking_number") or data.get("defendant_booking_number") or ""
-    ).strip()
+    )).strip()
     county = data.get("county") or data.get("defendant_county") or ""
     address = data.get("address") or data.get("defendant_address") or ""
 
@@ -957,9 +1048,9 @@ def build_palmetto_field_values(data: dict) -> tuple[dict, dict]:
     charge_line1, charge_line2 = str(charge_raw or "").strip(), ""
 
     full_name = data.get("name") or data.get("defendant_name") or ""
-    booking_number = str(
+    booking_number = str(public_booking_number(
         data.get("booking_number") or data.get("defendant_booking_number") or ""
-    ).strip()
+    )).strip()
     county = data.get("county") or data.get("defendant_county") or ""
     address = data.get("address") or data.get("defendant_address") or ""
 
@@ -1232,12 +1323,12 @@ def store_appearance_bond_pdfs(
     """
     surety = (surety or "osi").lower().strip()
     rows = normalize_charge_rows(bond_data)
-    booking = (
+    booking = public_booking_number(
         booking_number
         or bond_data.get("booking_number")
         or bond_data.get("defendant_booking_number")
         or "unknown"
-    )
+    ) or "unknown"
     booking_safe = re.sub(r"[^A-Za-z0-9_-]+", "_", str(booking))[:40]
     pkt = packet_id or f"BOND-{datetime.now().strftime('%Y%m%d%H%M%S')}"
     pkt_safe = re.sub(r"[^A-Za-z0-9_-]+", "_", str(pkt))[:40]

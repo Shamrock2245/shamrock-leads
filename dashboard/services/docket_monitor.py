@@ -15,6 +15,7 @@ import logging, asyncio, re, os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 import httpx
+from core.booking_identity import redact_internal_keys
 
 log = logging.getLogger("shamrock.docket_monitor")
 
@@ -285,7 +286,7 @@ class DocketMonitor:
                    f"Court: {event.get('court_name','')} | {event.get('description','')}")
             try:
                 async with httpx.AsyncClient(timeout=10) as c:
-                    await c.post(webhook, json={"text": msg})
+                    await c.post(webhook, json=redact_internal_keys({"text": msg}))
             except Exception:
                 pass
         try:

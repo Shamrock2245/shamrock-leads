@@ -22,6 +22,7 @@ from abc import ABC, abstractmethod
 from typing import List, Optional
 from datetime import datetime, timezone
 
+from core.booking_identity import public_booking_number
 from core.models import ArrestRecord
 from scoring.lead_scorer import LeadScorer
 from config.relay_only import is_relay_only
@@ -135,6 +136,11 @@ class BaseScraper(ABC):
     # ``run`` then returns before any network, score, writer, broadcast, or alert
     # behavior can occur.
     SOURCE_CONTRACT_VALIDATED = True
+    # Narrow owner exception for sources with no booking number at all
+    # (Miami-Dade, 2026-10-09). Only a scraper that sets this AND whose records
+    # pass core.booking_identity.internal_natural_key (allow-listed state/county,
+    # exact key pattern) keeps rows with a blank Booking_Number. Default off.
+    ALLOWS_INTERNAL_NATURAL_KEY = False
     SOURCE_CONTRACT_REASON = ""
 
     # ── Self-healing (scrapers/scraper_resilience.py) ──
@@ -288,6 +294,7 @@ class BaseScraper(ABC):
     #   await pw.stop()
 
     OBSCURA_CDP_URL = os.getenv("OBSCURA_CDP_URL", "ws://obscura:9222")
+    OBSCURA_CDP_TOKEN = os.getenv("OBSCURA_CDP_TOKEN", "shamrock_obscura_secret_cdp_token_2026_production_key")
 
     # Obscura routing policy (see scrapers/scraper_resilience.py):
     #   * always refused for fail_closed scopes and the hold/403 list — Obscura
@@ -345,8 +352,9 @@ class BaseScraper(ABC):
             )
 
         pw = await async_playwright().__aenter__()
+        headers = {"Authorization": f"Bearer {self.OBSCURA_CDP_TOKEN}"} if self.OBSCURA_CDP_TOKEN else None
         try:
-            browser = await pw.chromium.connect_over_cdp(self.OBSCURA_CDP_URL)
+            browser = await pw.chromium.connect_over_cdp(self.OBSCURA_CDP_URL, headers=headers)
             logger.info("✅ Connected to Obscura CDP for %s", self.county_label)
             return pw, browser
         except Exception as e:
@@ -372,8 +380,9 @@ class BaseScraper(ABC):
             )
 
         pw = sync_playwright().start()
+        headers = {"Authorization": f"Bearer {self.OBSCURA_CDP_TOKEN}"} if self.OBSCURA_CDP_TOKEN else None
         try:
-            browser = pw.chromium.connect_over_cdp(self.OBSCURA_CDP_URL)
+            browser = pw.chromium.connect_over_cdp(self.OBSCURA_CDP_URL, headers=headers)
             logger.info("✅ Connected to Obscura CDP for %s", self.county_label)
             return pw, browser
         except Exception as e:
@@ -672,9 +681,17 @@ class BaseScraper(ABC):
     @classmethod
     def _filter_records_without_source_booking(cls, records: List[ArrestRecord]) -> List[ArrestRecord]:
         """Fail closed on missing or known synthetic booking identifiers."""
+        if not cls.ALLOWS_INTERNAL_NATURAL_KEY:
+            return [
+                record for record in records
+                if cls._has_source_booking_identifier(getattr(record, "Booking_Number", ""))
+            ]
+        from core.booking_identity import internal_natural_key
+
         return [
             record for record in records
             if cls._has_source_booking_identifier(getattr(record, "Booking_Number", ""))
+            or internal_natural_key(record)
         ]
 
     @property
@@ -767,9 +784,10 @@ class BaseScraper(ABC):
                 )
         return getattr(self, "_resilience_state", None) or ResilienceState()
 
-    def _persist_status(self, status_writer, *, extra_fields: Optional[dict] = None, **kwargs) -> None:
+    def _persist_status(self, status_writer, *, extra_fields: Optional[dict] = None, **kwargs) -> bool:
+        """Upsert scraper_status; True only when the write returned without raising."""
         if status_writer is None:
-            return
+            return False
         try:
             status_writer.upsert_scraper_status(
                 county=self.county,
@@ -780,6 +798,8 @@ class BaseScraper(ABC):
             )
         except Exception as exc:
             logger.warning(f"⚠️ {self.county}: scraper_status upsert failed: {exc}")
+            return False
+        return True
 
     def _alert_parse_drift(self, detail: str, severity: str) -> None:
         """Fail loudly: schema drift goes to #scraper-errors immediately."""
@@ -859,6 +879,9 @@ class BaseScraper(ABC):
 
         # ── Preflight: auto-disable gate ──
         status_writer = self._status_writer(writers)
+        # Scrapers with a durable cursor (scraper_status.cursors) read it via
+        # this writer during scrape() and commit it in after_records_written().
+        self._run_status_writer = status_writer
         res_state = self._load_resilience_state(status_writer)
         gate = gate_decision(res_state, start, force=force_canary) if auto_disable_enabled() else "run"
         if gate == GATE_SKIP:
@@ -972,7 +995,7 @@ class BaseScraper(ABC):
                         if fta_level in ("high", "critical"):
                             fta_high_count += 1
                     except Exception as hybrid_err:
-                        logger.debug(f"⚠️ Hybrid score failed for {record.Booking_Number}: {hybrid_err}")
+                        logger.debug("⚠️ %s: hybrid score failed (%s)", self.county, type(hybrid_err).__name__)
 
                 # Recount after potential ML upgrades
                 hot_count = sum(1 for r in records if r.Lead_Status == "Hot")
@@ -1017,11 +1040,14 @@ class BaseScraper(ABC):
                 if not (r.County or "").strip():
                     r.County = self.county
 
+            status_writer_ok = False
             if writers and records:
                 for writer in writers:
                     try:
                         result = writer.write_records(records, self.county)
                         combined_stats["writer_results"].append(result)
+                        if writer is status_writer:
+                            status_writer_ok = True
 
                         # Use first writer's dedup stats for Slack
                         if "new_records" not in combined_stats:
@@ -1031,10 +1057,23 @@ class BaseScraper(ABC):
                             combined_stats["total_records"] = result.get("total_records", len(records))
 
                     except Exception as write_err:
+                        # Type only: a driver error (e.g. BulkWriteError,
+                        # DuplicateKeyError) embeds the failing documents,
+                        # i.e. names, DOBs and booking/internal keys.
                         logger.error(
-                            f"❌ {self.county}: writer {type(writer).__name__} "
-                            f"failed: {write_err}"
+                            "❌ %s: writer %s failed: %s",
+                            self.county, type(writer).__name__, type(write_err).__name__,
                         )
+
+            # Durable cursor commit: only after the system-of-record writer
+            # (the one that owns scraper_status) wrote without raising.
+            hook = getattr(self, "after_records_written", None)
+            if callable(hook):
+                try:
+                    hook(status_writer, records, ok=status_writer_ok or not records)
+                except Exception as hook_err:
+                    logger.error("❌ %s: cursor commit failed (%s); cases stay queued",
+                                 self.county_label, type(hook_err).__name__)
 
             # Fill defaults if no writer provided stats
             if "new_records" not in combined_stats:
@@ -1064,7 +1103,7 @@ class BaseScraper(ABC):
                 if new_records:
                     self._broadcast_scraper_events(new_records)
             except Exception as broadcast_err:
-                logger.debug(f"⚠️ {self.county}: SSE broadcast skipped: {broadcast_err}")
+                logger.debug("⚠️ %s: SSE broadcast skipped (%s)", self.county, type(broadcast_err).__name__)
 
             # ── Step 3b: Check for repeat offenders ──
             try:
@@ -1079,7 +1118,7 @@ class BaseScraper(ABC):
                     combined_stats["rearrest_matches"] = rearrest_results["matches_found"]
                 _rearrest.close()
             except Exception as rearrest_err:
-                logger.debug(f"⚠️ Rearrest check skipped: {rearrest_err}")
+                logger.debug("⚠️ %s: rearrest check skipped (%s)", self.county, type(rearrest_err).__name__)
 
             # ── Step 4: Slack alerts ──
             try:
@@ -1090,7 +1129,7 @@ class BaseScraper(ABC):
                     if record.Lead_Status == "Hot" and record._parse_bond_numeric() >= 2500:
                         _slack.notify_hot_lead(record)
             except Exception as slack_err:
-                logger.warning(f"⚠️ Slack notification failed: {slack_err}")
+                logger.warning("⚠️ %s: Slack notification failed (%s)", self.county, type(slack_err).__name__)
 
 
             # ── Step 5: Update dashboard (in-memory Flask, legacy) ──
@@ -1121,12 +1160,38 @@ class BaseScraper(ABC):
             self._resilience_state = new_state
             persisted_status = "auto_disabled" if new_state.auto_disabled else run_status
             extra = new_state.to_fields()
+            # Heartbeat fields: a successful (ok/empty) run, distinct from
+            # last_run which the failure path also stamps. A run whose rows
+            # did not reach the system-of-record writer is not a success:
+            # the heartbeat stays put (so freshness goes stale and alerts)
+            # and the failure is stamped instead.
+            success_at = datetime.now(timezone.utc)
+            # No status writer (dry/CLI run): nothing is persisted either way.
+            records_persisted = (not records) or status_writer is None or status_writer_ok
+            if not records_persisted:
+                extra["records_write_failed_at"] = success_at
+                logger.error(
+                    "❌ %s: %d rows did not reach the system-of-record writer; "
+                    "heartbeat not advanced",
+                    self.county_label, len(records),
+                )
+            elif not new_state.auto_disabled:
+                extra["last_success_at"] = success_at
+                if records:
+                    extra["last_records_at"] = success_at
+            extra_hook = getattr(self, "status_extra_fields", None)
+            if records_persisted and callable(extra_hook):
+                try:
+                    extra.update(extra_hook() or {})
+                except Exception as hook_err:
+                    logger.warning("⚠️ %s: status_extra_fields failed (%s)",
+                                   self.county_label, type(hook_err).__name__)
             if reenabled:
                 extra.update({
                     "reenabled_at": datetime.now(timezone.utc),
                     "reenabled_by": "canary",
                 })
-            self._persist_status(
+            status_persisted = self._persist_status(
                 status_writer,
                 records=len(records),
                 hot=hot_count,
@@ -1141,6 +1206,16 @@ class BaseScraper(ABC):
                 ),
                 extra_fields=extra,
             )
+            # In-memory state a scraper derives from this run (e.g. Lee's
+            # listing window) advances only once both the rows and the
+            # status doc carrying it were written.
+            commit_hook = getattr(self, "on_status_persisted", None)
+            if status_persisted and records_persisted and callable(commit_hook):
+                try:
+                    commit_hook()
+                except Exception as hook_err:
+                    logger.warning("⚠️ %s: on_status_persisted failed (%s)",
+                                   self.county_label, type(hook_err).__name__)
             if reenabled:
                 logger.info("✅ %s: canary succeeded — auto-disable cleared", self.county_label)
                 try:
@@ -1337,7 +1412,7 @@ class BaseScraper(ABC):
                 "state": st,
                 "county_label": f"{self.county} ({st})",
                 "full_name": record.Full_Name,
-                "booking_number": record.Booking_Number,
+                "booking_number": public_booking_number(record.Booking_Number),
                 "charges": record.Charges,
                 "bond_amount": record.Bond_Amount,
                 "mugshot_url": record.Mugshot_URL,
@@ -1352,7 +1427,7 @@ class BaseScraper(ABC):
                 "state": st,
                 "county_label": f"{self.county} ({st})",
                 "full_name": record.Full_Name,
-                "booking_number": record.Booking_Number,
+                "booking_number": public_booking_number(record.Booking_Number),
                 "charges": record.Charges,
                 "bond_amount": record.Bond_Amount,
                 "lead_score": record.Lead_Score,

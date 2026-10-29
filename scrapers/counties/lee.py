@@ -25,7 +25,7 @@ import urllib.parse
 import os
 
 from scrapers.base_scraper import BaseScraper
-from scrapers.scraper_resilience import SourceCooldownActive
+from scrapers.scraper_resilience import ParseDriftError, SourceCooldownActive
 from scrapers.lee_origin import (
     LEE_BASE_URL,
     invalidate_lee_origin_cache,
@@ -39,6 +39,11 @@ from scrapers.lee_rate_limit import (
     cooldown_status,
 )
 from core.models import ArrestRecord
+from core.lee_freshness import (
+    booking_window,
+    published_booking_number,
+    window_gap,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +79,21 @@ LEE_ALLOW_DIRECT = os.getenv("LEE_ALLOW_DIRECT", "true").strip().lower() in {
     "1", "true", "yes", "on",
 }
 
+# Per-page bounded retry (no_response / 5xx / bad JSON; never on 429 or
+# during a cooldown). Outer scrape() retries stay at RETRY_LIMIT.
+PAGE_RETRY_LIMIT = int(os.getenv("LEE_PAGE_RETRIES", "1"))
+PAGE_RETRY_BACKOFF_S = float(os.getenv("LEE_PAGE_RETRY_BACKOFF_S", "5.0"))
+OPS_ALERT_THROTTLE_S = 3600
+
+
+class LeeParseDriftError(ParseDriftError):
+    """Lee answered 200 + JSON, but not in a shape the parser knows."""
+
+
+class LeeFetchIncomplete(RuntimeError):
+    """No listing variant paged through cleanly (partial rows only)."""
+
+
 # Site-specific only — TLSFingerprinter / StealthSession owns User-Agent
 SITE_HEADERS = {
     "Accept": "application/json, text/html, */*;q=0.8",
@@ -108,6 +128,15 @@ class LeeCountyScraper(BaseScraper):
         self._fetch_ok_pages = 0
         self._fetch_errors: List[str] = []
         self._fetch_rate_limited = False
+        self._fetch_truncated = False
+        self._variant_complete: List[bool] = []
+        self._last_variant_complete = False
+        self._final_attempt = True
+        # Overlap guard between runs (published booking numbers only).
+        self._prev_window: Optional[Dict[str, Any]] = None
+        self._source_window: Optional[Dict[str, Any]] = None
+        self._window_gap: Optional[Dict[str, Any]] = None
+        self._ops_alerted: Dict[str, float] = {}
 
     @property
     def county(self) -> str:
@@ -127,8 +156,12 @@ class LeeCountyScraper(BaseScraper):
         last_exc: Optional[BaseException] = None
         attempts = RETRY_LIMIT + 1
         for attempt in range(attempts):
+            self._final_attempt = attempt >= attempts - 1
             try:
                 return self._scrape_once()
+            except ParseDriftError:
+                # Wrong shape is not transient: alert now, do not burn quota.
+                raise
             except RuntimeError as exc:
                 last_exc = exc
                 msg = str(exc).lower()
@@ -159,6 +192,10 @@ class LeeCountyScraper(BaseScraper):
         self._fetch_ok_pages = 0
         self._fetch_errors = []
         self._fetch_rate_limited = False
+        self._fetch_truncated = False
+        self._variant_complete = []
+        self._source_window = None
+        self._window_gap = None
 
         try:
             # Hard stop if Lee public-api /32 throttle is already tripped.
@@ -193,6 +230,30 @@ class LeeCountyScraper(BaseScraper):
             raw_arrests = self._fetch_arrests(start_date, end_date)
             logger.info(f"📥 Total fetched: {len(raw_arrests)}")
 
+            # Partial pagination is never silent: retry the whole run first,
+            # and on the last attempt keep the rows we have and alert.
+            if raw_arrests and self._variant_complete and not any(self._variant_complete):
+                detail = "; ".join(self._fetch_errors[:5]) or "pagination stopped early"
+                if not self._final_attempt and not is_cooled_down():
+                    raise LeeFetchIncomplete(
+                        f"Lee listing incomplete ({len(raw_arrests)} rows, no variant finished): {detail}"
+                    )
+                self._ops_alert(
+                    "fetch_incomplete",
+                    "Lee (FL) listing fetch incomplete",
+                    f"Lee (FL): kept {len(raw_arrests)} rows but no listing variant paged "
+                    f"through cleanly after retries ({detail}). Some bookings may be missing.",
+                    level="error",
+                )
+            if self._fetch_truncated:
+                self._ops_alert(
+                    "page_cap",
+                    "Lee (FL) listing hit LEE_MAX_PAGES",
+                    f"Lee (FL): the last allowed page ({MAX_PAGES} x {PAGE_SIZE}) was full; "
+                    "older bookings in the listing were not read this run.",
+                    level="warning",
+                )
+
             if not raw_arrests:
                 # Honest empty: only when at least one 200 OK page landed.
                 # Fetch-all-failed / mid-run cooldown / 429 → status=error.
@@ -215,20 +276,14 @@ class LeeCountyScraper(BaseScraper):
                 )
                 return []
 
-            # Prefer highest booking numbers first (newest) for enrichment budget
+            # Overlap guard: this run's listing must overlap the last one.
+            self._check_window(raw_arrests)
+
+            # Prefer highest booking numbers first (newest) for enrichment budget.
+            # Published bookingNumber only — never the internal ``id``.
             def _bn_key(r: Dict[str, Any]) -> int:
-                try:
-                    return int(
-                        str(
-                            r.get("bookingNumber")
-                            or r.get("booking_number")
-                            or r.get("id")
-                            or "0"
-                        ).lstrip("0")
-                        or "0"
-                    )
-                except (TypeError, ValueError):
-                    return 0
+                bn = published_booking_number(r)
+                return int(bn) if bn else 0
 
             raw_arrests.sort(key=_bn_key, reverse=True)
 
@@ -240,6 +295,17 @@ class LeeCountyScraper(BaseScraper):
                     normalized.append(norm)
 
             logger.info(f"🔄 Normalized: {len(normalized)} records")
+            dropped = len(raw_arrests) - len(normalized)
+            if raw_arrests and not normalized:
+                raise LeeParseDriftError(
+                    f"Lee listing returned {len(raw_arrests)} rows but none carried a "
+                    "published bookingNumber"
+                )
+            if dropped:
+                self._alert_parse_drift(
+                    f"{dropped}/{len(raw_arrests)} Lee rows had no published bookingNumber",
+                    "partial",
+                )
 
             # Enrich with charges API (bond/court/case data) — newest first
             elapsed = time.time() - start_time
@@ -287,26 +353,32 @@ class LeeCountyScraper(BaseScraper):
         ]
 
         by_id: Dict[str, Dict[str, Any]] = {}
+        unkeyed: List[Dict[str, Any]] = []
+        self._variant_complete = []
         for i, params in enumerate(variants):
             if i > 0:
                 logger.info(f"⏳ Waiting {VARIANT_DELAY_S}s before next variant...")
                 time.sleep(VARIANT_DELAY_S)
             logger.info(f"🔄 Trying API variant {i + 1}/{len(variants)}: {params}")
             results = self._fetch_with_pagination(params)
+            self._variant_complete.append(self._last_variant_complete)
             if results:
                 logger.info(f"✅ Found {len(results)} results with variant {i + 1}")
                 for r in results:
-                    bn = str(
-                        r.get("bookingNumber")
-                        or r.get("booking_number")
-                        or r.get("id")
-                        or ""
-                    )
-                    if bn and bn not in by_id:
+                    # Dedupe on the published bookingNumber only. Rows without
+                    # one are kept (not merged) so the drift check sees them.
+                    bn = published_booking_number(r)
+                    if not bn:
+                        unkeyed.append(r)
+                    elif bn not in by_id:
                         by_id[bn] = r
 
-        combined = list(by_id.values())
-        logger.info(f"📥 Total unique bookings across variants: {len(combined)}")
+        combined = list(by_id.values()) + unkeyed
+        logger.info(
+            "📥 Total unique bookings across variants: %s (unkeyed rows: %s)",
+            len(by_id),
+            len(unkeyed),
+        )
         return combined
 
     def _fetch_with_pagination(
@@ -318,7 +390,9 @@ class LeeCountyScraper(BaseScraper):
         so ``_scrape_once`` can tell true empty roster from a failed scrape.
         """
         all_records: List[Dict[str, Any]] = []
+        seen: Set[str] = set()
         offset = 0
+        self._last_variant_complete = False
 
         for page in range(MAX_PAGES):
             if is_cooled_down():
@@ -328,7 +402,7 @@ class LeeCountyScraper(BaseScraper):
                     "(%.0fs left)",
                     seconds_remaining(),
                 )
-                break
+                return all_records
 
             query = {**params, "limit": PAGE_SIZE, "offset": offset}
             url = f"{BASE_URL}{BOOKINGS_API}"
@@ -338,59 +412,180 @@ class LeeCountyScraper(BaseScraper):
             elif page % 5 == 0:
                 logger.info(f"📄 Page {page + 1} (offset: {offset})")
 
-            resp = self._http_fetch(url, params=query)
-            if resp is None:
-                self._fetch_errors.append(f"page{page + 1}:no_response")
-                logger.warning("⚠️ API returned no response")
-                break
-            if note_response(resp):
-                self._fetch_rate_limited = True
-                self._fetch_errors.append(f"page{page + 1}:HTTP_429")
-                logger.error("[Lee] HTTP 429 — stopping pagination to protect quota")
-                break
-            if resp.status_code != 200:
-                code = resp.status_code
-                self._fetch_errors.append(f"page{page + 1}:HTTP_{code}")
-                logger.warning(f"⚠️ API returned status {code}")
-                break
-
-            try:
-                data = resp.json()
-            except ValueError:
-                self._fetch_errors.append(f"page{page + 1}:bad_json")
-                logger.warning("⚠️ Failed to parse JSON (likely HTML error page)")
-                break
+            data, failure = self._fetch_page(url, query, page)
+            if failure is not None:
+                # Typed stop: recorded in _fetch_errors; the variant is
+                # incomplete and _scrape_once decides retry vs. alert.
+                return all_records
 
             # Successful HTTP+JSON page (even if the roster slice is empty).
             self._fetch_ok_pages += 1
             records = self._extract_records(data)
             if not records:
                 logger.info(f"ℹ️ No more records at page {page + 1}")
-                break
+                self._last_variant_complete = True
+                return all_records
 
+            keys = {published_booking_number(r) for r in records} - {""}
+            if page > 0 and keys and keys <= seen:
+                # The API ignored offset and served the same rows again.
+                logger.info("ℹ️ Page %s repeats earlier bookings — offset ignored, stopping", page + 1)
+                self._last_variant_complete = True
+                return all_records
+            seen |= keys
             all_records.extend(records)
 
             if len(records) < PAGE_SIZE:
                 logger.info(
                     f"ℹ️ Last page (partial with {len(records)} records)"
                 )
-                break
+                self._last_variant_complete = True
+                return all_records
 
             offset += PAGE_SIZE
-            time.sleep(PAGE_DELAY_S)
+            if page < MAX_PAGES - 1:
+                time.sleep(PAGE_DELAY_S)
 
+        # Every allowed page was full: the listing may hold more rows.
+        self._fetch_truncated = True
+        self._last_variant_complete = True
+        logger.warning("[Lee] Stopped at LEE_MAX_PAGES=%s with a full last page", MAX_PAGES)
         return all_records
+
+    def _fetch_page(self, url: str, query: Dict[str, Any], page: int):
+        """One listing page with a bounded retry. Returns ``(data, failure)``."""
+        failure: Optional[str] = None
+        for attempt in range(PAGE_RETRY_LIMIT + 1):
+            if attempt:
+                if is_cooled_down():
+                    self._fetch_rate_limited = True
+                    return None, failure
+                delay = PAGE_RETRY_BACKOFF_S * (2 ** (attempt - 1))
+                logger.warning("[Lee] page %s %s — retry %s in %.0fs", page + 1, failure, attempt, delay)
+                time.sleep(delay)
+            resp = self._http_fetch(url, params=query)
+            if resp is None:
+                failure = "no_response"
+            elif note_response(resp):
+                self._fetch_rate_limited = True
+                self._fetch_errors.append(f"page{page + 1}:HTTP_429")
+                logger.error("[Lee] HTTP 429 — stopping pagination to protect quota")
+                return None, "HTTP_429"
+            elif resp.status_code != 200:
+                failure = f"HTTP_{resp.status_code}"
+                if resp.status_code < 500:
+                    break  # 4xx is not transient
+            else:
+                try:
+                    return resp.json(), None
+                except ValueError:
+                    failure = "bad_json"
+        self._fetch_errors.append(f"page{page + 1}:{failure}")
+        logger.warning("⚠️ Lee listing page %s failed: %s", page + 1, failure)
+        return None, failure
 
     @staticmethod
     def _extract_records(data: Any) -> List[Dict[str, Any]]:
-        """Extract the record array from various API response shapes."""
+        """Extract the record array from the known API response shapes.
+
+        An unknown shape raises ``LeeParseDriftError`` instead of returning
+        ``[]`` — a silent empty list would be stored as a quiet "empty" run.
+        """
+        rows: Any = None
         if isinstance(data, list):
-            return data
-        if isinstance(data, dict):
+            rows = data
+        elif isinstance(data, dict):
             for key in ("results", "data", "bookings", "records"):
                 if isinstance(data.get(key), list):
-                    return data[key]
-        return []
+                    rows = data[key]
+                    break
+        if rows is None:
+            shape = sorted(data.keys())[:8] if isinstance(data, dict) else type(data).__name__
+            raise LeeParseDriftError(f"Lee listing JSON has an unknown shape: {shape}")
+        if any(not isinstance(r, dict) for r in rows):
+            raise LeeParseDriftError("Lee listing JSON rows are not objects")
+        return rows
+
+    # ── Window overlap guard / ops alerts ──
+
+    def _load_prev_window(self) -> Optional[Dict[str, Any]]:
+        if self._prev_window is not None:
+            return self._prev_window
+        writer = getattr(self, "_run_status_writer", None)
+        getter = getattr(writer, "get_scraper_status_fields", None) if writer else None
+        if callable(getter):
+            try:
+                doc = getter(county=self.county, state=self.state, fields=("source_window",)) or {}
+                window = doc.get("source_window")
+                if isinstance(window, dict):
+                    self._prev_window = window
+            except Exception as exc:
+                logger.warning("[Lee] could not load previous listing window (%s)", type(exc).__name__)
+        return self._prev_window
+
+    def _check_window(self, raw_arrests: List[Dict[str, Any]]) -> None:
+        current = booking_window(raw_arrests)
+        previous = self._load_prev_window()
+        gap = window_gap(previous, current)
+        self._source_window = current
+        self._window_gap = gap
+        if gap:
+            logger.error(
+                "[Lee] listing window gap: newest seen last run %s, oldest now %s (%s numbers unseen)",
+                gap["prev_max_bn"], gap["cur_min_bn"], gap["unseen_numbers"],
+            )
+            self._ops_alert(
+                "window_gap",
+                "Lee (FL) listing window gap",
+                f"Lee (FL): this run's oldest listed booking number ({gap['cur_min_bn']}) is past "
+                f"the newest one seen last run ({gap['prev_max_bn']}); {gap['unseen_numbers']} "
+                "booking numbers in between were never observed and may have rolled off.",
+                level="error",
+                details=dict(gap),
+            )
+
+    def status_extra_fields(self) -> Dict[str, Any]:
+        """Extra scraper_status fields persisted by BaseScraper on success.
+
+        Pure: the remembered window advances only in ``on_status_persisted``.
+        """
+        fields: Dict[str, Any] = {"source_window_gap": self._window_gap}
+        if self._source_window is not None:
+            fields["source_window"] = self._source_window
+        return fields
+
+    def on_status_persisted(self) -> None:
+        """BaseScraper calls this only after the rows and the status doc were written.
+
+        A run whose system-of-record write failed keeps the previous window,
+        so its rows are compared again next time.
+        """
+        if self._source_window is not None and self._source_window.get("max_bn") is not None:
+            self._prev_window = self._source_window
+
+    def _ops_alert(self, code: str, title: str, message: str, *, level: str = "warning",
+                   details: Optional[Dict[str, Any]] = None) -> None:
+        """Throttled #alerts post (counts and booking-number ranges only).
+
+        The throttle starts only once Slack accepted the post; a failed or
+        unconfigured delivery is retried on the next occurrence.
+        """
+        logger.warning("[Lee] %s: %s", code, message)
+        now = time.time()
+        if now - self._ops_alerted.get(code, 0.0) < OPS_ALERT_THROTTLE_S:
+            return
+        try:
+            from writers.slack_notifier import SlackNotifier
+            delivered = SlackNotifier().notify_alert(
+                title=title, message=message, level=level, details=details, source="lee_scraper",
+            )
+        except Exception as exc:
+            logger.warning("[Lee] ops alert %s failed (%s); not throttled", code, type(exc).__name__)
+            return
+        if delivered:
+            self._ops_alerted[code] = now
+        else:
+            logger.warning("[Lee] ops alert %s not delivered; not throttled", code)
 
     # ── Charges Enrichment ──
 
@@ -622,10 +817,9 @@ class LeeCountyScraper(BaseScraper):
         middle = self._safe(raw.get("middleName") or raw.get("middle_name") or raw.get("mname"))
         suffix = self._safe(raw.get("suffix") or raw.get("nameSuffix"))
 
-        booking_number = self._safe(
-            raw.get("bookingNumber") or raw.get("booking_number")
-            or raw.get("booking_id") or raw.get("bookingNo") or raw.get("id")
-        )
+        # Published bookingNumber only: ``id`` (internal row id), ``permId``
+        # (person) and other ids are never booking keys.
+        booking_number = published_booking_number(raw)
         if not booking_number:
             return None
 
@@ -642,7 +836,13 @@ class LeeCountyScraper(BaseScraper):
         zip_code = self._safe(raw.get("zip") or raw.get("zipcode") or raw.get("postalCode"))
 
         # Determine status and release date
-        status = "In Custody"
+        # Status only as the source published it. The roster merges an
+        # inCustody=true query with a booking-date range that also lists
+        # released / bonded rows, so a row with no custody flag, release date
+        # or status is unknown (""), never an invented "In Custody".
+        status = ""
+        if raw.get("inCustody") is True or raw.get("in_custody") is True:
+            status = "In Custody"
         release_date = ""
         release_raw = raw.get("releaseDate") or raw.get("release_date") or ""
         if release_raw:
@@ -1091,7 +1291,7 @@ class LeeCountyScraper(BaseScraper):
             b_resp = self._http_fetch(b_url)
             b_data = b_resp.json() if b_resp and b_resp.status_code == 200 and isinstance(b_resp.json(), dict) else {}
 
-            from dashboard.services.url_ingest_service import _title_case_name
+            from dashboard.services.url_ingest_service import _title_case_name, published_custody_status
             first = _title_case_name(str(b_data.get("givenName") or b_data.get("firstName") or ""))
             middle = _title_case_name(str(b_data.get("middleName") or ""))
             last = _title_case_name(str(b_data.get("surName") or b_data.get("lastName") or ""))
@@ -1119,7 +1319,7 @@ class LeeCountyScraper(BaseScraper):
                 "court_location": parsed.get("court_location", ""),
                 "full_name": full_name, "first_name": first, "middle_name": middle, "last_name": last,
                 "dob": d_date, "booking_date": b_date, "booking_time": b_time,
-                "status": "In Custody" if b_data.get("inCustody", True) else "Released",
+                "status": published_custody_status(b_data),  # missing flag is "", never "In Custody"
                 "release_date": "", "facility": self._safe(b_data.get("housing") or "Lee County Jail"),
                 "race": self._safe(b_data.get("race")), "sex": self._safe(b_data.get("sex")),
                 "height": self._safe(b_data.get("height")), "weight": self._safe(b_data.get("weight")),

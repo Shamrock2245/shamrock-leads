@@ -45,6 +45,19 @@ AGENTS = (
 
 
 @pytest.fixture(autouse=True)
+def _assume_verified_indemnitor(monkeypatch):
+    """These tests cover the writing-agent pair. Identity is a separate gate."""
+
+    async def _ok(*_args, **_kwargs):
+        return {"ok": True, "exempt": "test_fixture", "issues": [], "methods": ["scan"]}
+
+    monkeypatch.setattr(
+        "dashboard.services.identity_verification_service.require_verified_indemnitors",
+        _ok,
+    )
+
+
+@pytest.fixture(autouse=True)
 def _clear_house_env(monkeypatch):
     monkeypatch.delenv("BOND_AGENT_NAME", raising=False)
     monkeypatch.delenv("BOND_AGENT_LICENSE", raising=False)

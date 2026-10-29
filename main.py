@@ -36,6 +36,7 @@ from scrapers.counties.charlotte import CharlotteCountyScraper
 from scrapers.counties.hendry import HendryCountyScraper
 from scrapers.counties.desoto import DeSotoCountyScraper
 from scrapers.counties.manatee import ManateeCountyScraper
+from scrapers.counties.manatee_clerk import ManateeClerkScraper
 from scrapers.counties.sarasota import SarasotaCountyScraper
 
 # ── Wave 1 — Tampa Bay / Central FL ─────────────────────────────────────────
@@ -468,7 +469,13 @@ def register_scrapers(sched):
 
     # ── SWFL Core (KEY — must stay registered; Lee + Sarasota are non-negotiable) ─
     # Intervals kept aggressive for bond-desk coverage. Do not comment these out.
-    sched.register_scraper(LeeCountyScraper(), interval_minutes=30)
+    # Lee: a skipped run is a missed-lead risk. 25-min misfire grace (vs the
+    # 300s default) so a saturated worker pool delays the run instead of
+    # dropping it, and an #alerts post if APScheduler still skips it.
+    sched.register_scraper(
+        LeeCountyScraper(), interval_minutes=30,
+        misfire_grace_time=25 * 60, alert_on_miss=True,
+    )
     sched.register_scraper(SarasotaCountyScraper(), interval_minutes=60)
     sched.register_scraper(CollierCountyScraper(), interval_minutes=75)
     # Charlotte + Manatee are relay-only (config/relay_only.py): registered so
@@ -476,6 +483,10 @@ def register_scrapers(sched):
     # interval job. Leads Ops runs them from the home relay.
     sched.register_scraper(CharlotteCountyScraper())
     sched.register_scraper(ManateeCountyScraper())
+    # Manatee Clerk (FL): court filings from records.manateeclerk.com, plain
+    # HTTPS. Owner exception (Brendan 2026-10-10); separate from the
+    # fail_closed Manatee jail scraper above. No booking number (internal key).
+    sched.register_scraper(ManateeClerkScraper(), interval_minutes=120)
     sched.register_scraper(DeSotoCountyScraper(), interval_minutes=180)
     sched.register_scraper(HendryCountyScraper(), interval_minutes=120)
 

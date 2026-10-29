@@ -16,6 +16,22 @@
 
 ---
 
+## Lee County HQ API requires a staff session (2026-10-28)
+
+`/api/lee-county/` was on the PIN middleware's open-prefix list from 2026-09-14 (`8ee4491`), so the Lee County HQ router answered without a session. It is removed. Overview, leads, defendant family, `POST /outreach/send`, autopilot config (GET/POST), `POST /autopilot/sweep`, and the calculator now return `401` without a staff session or machine key. The only caller is the staff dashboard (`dashboard/sl-lee-county.js`), which already sends the session cookie. Tests: `tests/test_lee_county_hq_auth.py` (on `.github/workflows/ci.yml`).
+
+## Lee (FL) missed-run alert covers max-instances skips (2026-10-27)
+
+PR #293 (follow-up to #292, deployed in Hetzner run 40502451546). The Lee job runs with `max_instances=1`. When a tick fires while the previous run is still going, APScheduler emits `EVENT_JOB_MAX_INSTANCES` instead of `EVENT_JOB_MISSED`, so the #292 missed-run alert never fired for that kind of skip.
+
+`ScraperScheduler._on_job_missed` now listens for both events:
+- A max-instances skip alerts with reason `max_instances` and the title "Lee (FL) scheduled run skipped (previous run still running)".
+- A misfire skip alerts with reason `misfire`.
+
+The 30-min throttle is per job and per reason, so one kind of skip doesn't hide the other. It advances only when `notify_alert` reports delivery; False or a raise is retried on the next skip. Non-Lee jobs only log. Alerts carry only the job id and reason (no PII).
+
+Lee stays `candidate_productive` in the matrix and `unverified` in Health. No access-posture change. Tests: `tests/test_lee_harden_spof.py` (on `.github/workflows/ci.yml`).
+
 ## Add surety — data-driven surety templates (2026-10-07)
 
 Staff can add a carrier from Super CRM → Paperwork Config → Surety Templates without a code change per surety. They upload AcroForm or flat PDFs, confirm canonical mappings (flat PDFs get staff-placed boxes), set POA prefixes and a per-charge repeat form, preview a local PDF filled with fake sample data, and publish an immutable version. Write Bond / DocuSeal reads the active published version. Prior versions stay for audit.
@@ -188,7 +204,7 @@ The required strict local secrets check remains unavailable in this clean checko
 
 ## August 14–16 source-safety wave review (2026-08-16)
 
-The 2026-08-14 through 2026-08-16 Shamrock2245 commit wave (fail-close campaign, recon matrix, and verified-public parsers) does **not** need a wholesale rollback. Keepers: Bossier, Tangipahoa, St. Mary, Lee/Marshall/Etowah/St. Clair AL, Rankin. York’s parser is kept but remains `fail_closed` until ordinary access is revalidated. Lincoln NC still emits and stays `unverified` until its source-state row is promoted on purpose. Miami-Dade is `fail_closed` since 2026-10-09 (no source booking number; ArcGIS row ids are reissued on republish), so it no longer emits; see the FL/086 matrix row. Charlotte (FL) and Manatee (FL) are `fail_closed` since 2026-10-09: their Revize rosters answer a Cloudflare challenge from every exit tried (box, T-Mobile, Comcast) and no other official source publishes a booking roster with a source booking number. The relay skips them; see the FL/015 and FL/081 matrix rows.
+The 2026-08-14 through 2026-08-16 Shamrock2245 commit wave (fail-close campaign, recon matrix, and verified-public parsers) does **not** need a wholesale rollback. Keepers: Bossier, Tangipahoa, St. Mary, Lee/Marshall/Etowah/St. Clair AL, Rankin. York’s parser is kept but remains `fail_closed` until ordinary access is revalidated. Lincoln NC still emits and stays `unverified` until its source-state row is promoted on purpose. Miami-Dade was `fail_closed` on 2026-10-09 (no source booking number; ArcGIS row ids are reissued on republish) and reopened the same day as `unverified` under an owner exception (Brendan 2026-10-09 9:32 AM ET): rows are keyed on an internal natural key (defendant + DOB + BookDate), Booking_Number stays blank; see the FL/086 matrix row. Charlotte (FL) and Manatee (FL) are `fail_closed` since 2026-10-09: their Revize rosters answer a Cloudflare challenge from every exit tried (box, T-Mobile, Comcast) and no other official source publishes a booking roster with a source booking number. The relay skips them; see the FL/015 and FL/081 matrix rows. Manatee Clerk (FL) is a separate, registered scope since 2026-10-10 (owner exception, Brendan 2026-10-10): court filings from records.manateeclerk.com over plain HTTPS, keyed on an internal key (`mc_case_v1`, sha256 of the normalised case number) with Booking_Number blank and the case number / OBTS in their own fields. Health `unverified` until a Leads Ops write smoke; the Manatee (FL) jail scraper stays `fail_closed`.
 
 Leftover Louisiana jobs from that window that were still scheduled without a contract gate are now fail-closed:
 
@@ -281,7 +297,7 @@ Phone / arrest lead → outreach sequences → intake → match (human on ambigu
 | State | Registered scrapers | Code path | Notes |
 |-------|--------------------:|-----------|-------|
 | **GA** | **85** | `scrapers/counties_ga/` | Gwinnett and Fulton fail-closed guards are deployed; six audited legacy P2C paths also fail closed under `0de5f79`. Five JailTracker wrappers are deployed fail closed under `0a75169`; see `docs/LEGACY_P2C_SOURCE_SAFETY.md` and `docs/JAILTRACKER_SOURCE_SAFETY.md`. |
-| **FL** | **67** | `scrapers/counties/` | Miami-Dade ArcGIS repair, Broward guard, and Sarasota’s third-party/proxy/CAPTCHA source-safety override are deployed 2026-08-14. Sarasota run `31843789326` succeeded; its public leads `/health`, sign, school, paperwork, and social `/auth` probes were healthy. Seven inherited JailTracker wrappers are deployed fail closed under `0a75169`; see `docs/JAILTRACKER_SOURCE_SAFETY.md`. Per-source persistence and alert telemetry remain pending. Miami-Dade moved to `fail_closed` 2026-10-09 (no source booking number). |
+| **FL** | **67** | `scrapers/counties/` | Miami-Dade ArcGIS repair, Broward guard, and Sarasota’s third-party/proxy/CAPTCHA source-safety override are deployed 2026-08-14. Sarasota run `31843789326` succeeded; its public leads `/health`, sign, school, paperwork, and social `/auth` probes were healthy. Seven inherited JailTracker wrappers are deployed fail closed under `0a75169`; see `docs/JAILTRACKER_SOURCE_SAFETY.md`. Per-source persistence and alert telemetry remain pending. Miami-Dade: no source booking number; `fail_closed` 2026-10-09, then reopened `unverified` on an approved internal natural key (owner exception, Brendan 2026-10-09 9:32 AM ET). Manatee Clerk (FL): court-filing scraper added 2026-10-10 (owner exception), `unverified`, internal key `mc_case_v1`. |
 | **NC** | **60** | `scrapers/counties_nc/` | Durham fail-closed guard and Lincoln’s official OCV repair are deployed; seven audited legacy P2C paths also fail closed under `0de5f79`. Production persistence and alert telemetry remain pending. |
 | **SC** | **46** | `scrapers/counties_sc/` | York source-faithful parser repair is deployed; Lee and Lexington legacy P2C paths fail closed under `0de5f79`. Anderson, Cherokee, Colleton, Kershaw, and Laurens Zuercher guards are deployed in `7718bf8`; Chester and Greenwood JailTracker wrappers are deployed fail closed under `0a75169`. See `docs/SC_ZUERCHER_SOURCE_SAFETY.md` and `docs/JAILTRACKER_SOURCE_SAFETY.md`. Per-county persistence and alert telemetry remain pending. |
 | **TX** | **34** | `scrapers/counties_tx/` | Randall is source-validated; Bell, Ellis, Guadalupe, and Jefferson fail-closed guards deployed 2026-08-14 with public hosts healthy. |
@@ -407,7 +423,7 @@ Track live cutover in **`docs/ECOSYSTEM_PROD_CHECKLIST.md`** (P0/P1). Summary:
 | `ENV=production` + strong `SECRET_KEY` + `DASHBOARD_PIN` on VPS | ✅ |
 | Atlas M0 512MB cap — oldest-first retention + hygiene tools | ✅ code 2026-08-04 · monitor growth |
 | Gmail discharge / GCal / Drive OAuth | Env-gated (tokens present; exercise live paths) |
-| FL error scrapers (upstream / WAF / captcha) | ⏳ Bay/Gadsden/Gilchrist/Okeechobee/Suwannee blocked; Marion WAF; Lake captcha-service. Miami-Dade is `fail_closed` (2026-10-09): the ArcGIS layer has no booking number and reissues row ids, so no write telemetry to request; reopening needs an owner decision on `md_dedupe` keying plus a backed-up cleanup (`scripts/miami_dade_dedupe_report.py` counts the duplicates, read only). |
+| FL error scrapers (upstream / WAF / captcha) | ⏳ Bay/Gadsden/Gilchrist/Okeechobee/Suwannee blocked; Marion WAF; Lake captcha-service. Miami-Dade reopened `unverified` 2026-10-09 on an approved internal natural key (owner exception; no source booking number); write telemetry after the Leads Ops backed-up cleanup of the GlobalID duplicates (`scripts/miami_dade_dedupe_report.py`, read only). |
 | Defendants collection backfill | ⏳ ongoing normalize/batch |
 | Local PDF stitcher full blank packet | ✅ folders: `surety-agnostic-shamrock/` + `osi/` + `palmetto/` · DocuSeal primary |
 | Auto-CRM “phone only → fully autopilot” with explicit human gates | Product next (Phase 21) |

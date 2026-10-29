@@ -6,6 +6,7 @@ from dashboard.services.paperwork_signers import (
     party_signers_from_packet,
     party_signers_from_submitters,
     pick_party,
+    retain_signer_link,
 )
 
 
@@ -13,6 +14,19 @@ def test_normalize_role_aliases():
     assert normalize_role("Defendant") == "defendant"
     assert normalize_role("Co-Indemnitor") == "coindemnitor"
     assert normalize_role("ind") == "indemnitor"
+
+
+def test_poa_field_update_keeps_cosigner_link():
+    previous = {
+        "id": 9,
+        "role": "coindemnitor",
+        "slug": "co-keep",
+        "sign_url": "https://sign.shamrockbailbonds.biz/s/co-keep",
+    }
+    updated = retain_signer_link(previous, {"id": 9, "role": "coindemnitor", "values": {"poa_number": "TEST-POA-2"}})
+    assert updated["sign_url"].endswith("/s/co-keep")
+    assert updated["slug"] == "co-keep"
+    assert "TEST-POA-2" not in updated["sign_url"]
 
 
 def test_branded_urls():

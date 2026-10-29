@@ -141,10 +141,10 @@ class TestPinellasChargeReportParse(unittest.TestCase):
 
 
 class TestMarionDetailChargeParse(unittest.TestCase):
-    def test_empty_charge_section_stays_blank_and_zero(self):
+    def test_empty_charge_section_stays_blank_and_unknown(self):
         parsed = MarionCountyScraper.parse_detail_charges(MARION_EMPTY_DETAIL)
         self.assertEqual(parsed["charges"], "")
-        self.assertEqual(parsed["bond_amount"], "0")
+        self.assertEqual(parsed["bond_amount"], "")
 
     def test_table_charges_and_bond_sum(self):
         parsed = MarionCountyScraper.parse_detail_charges(MARION_CHARGED_DETAIL)
@@ -190,7 +190,10 @@ class TestMiamiDadeNoBondLayer(unittest.TestCase):
         self.assertIn("Charge1", OUT_FIELDS)
         self.assertIn("Charge3", OUT_FIELDS)
         self.assertNotIn("Address", OUT_FIELDS)
-        self.assertNotIn("DOB", OUT_FIELDS)
+        self.assertNotIn("Zip", OUT_FIELDS)
+        # DOB is fetched since 2026-10-09: it is part of the owner-approved
+        # internal natural key (defendant + DOB + BookDate).
+        self.assertIn("DOB", OUT_FIELDS)
 
     def test_parse_leaves_bond_unknown_and_reads_code2(self):
         from datetime import datetime, timezone

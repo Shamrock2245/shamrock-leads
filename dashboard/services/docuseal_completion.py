@@ -29,7 +29,10 @@ Design
      bond_cases     Packet_Status / Signature_Status = signed
      sse_event      publish_event("docuseal_submission_completed")
      legacy_payment_link   (behind the switch below; never retried)
-     share_invoice  stage-only SwipeSimple Share Invoice (dispatch=False, PR #56)
+     share_invoice  SwipeSimple Share Invoice for the confirmed down payment.
+                    Skipped (premium_unconfirmed) until staff confirm.
+                    Customer dispatch only when SWIPESIMPLE_DISPATCH_LIVE=1;
+                    otherwise the invoice is staged and dispatch is a dry-run.
      court_sync     seed_court_calendar_for_bond
      slack          non-PII Slack post
 
@@ -51,8 +54,8 @@ Even when enabled, the service sends ONLY when a STAFF-CONFIRMED premium is
 present (``premium_confirmed_amount`` + ``premium_confirmed_at`` +
 ``premium_confirmed_by``); otherwise the step is stamped
 ``skipped: premium_unconfirmed``. Stored ``premium`` values (often the 10%
-estimate) never count. Nothing sets the confirmed fields yet, so in practice
-enabling the switch still sends nothing until a staff confirmation UI exists.
+estimate) never count. Staff set the trio with
+``POST /api/paperwork/confirm-premium`` (session user, never the body).
 
 Reversible with the env flag (or the one-line ``LEGACY_PAYMENT_LINK_DEFAULT``
 constant in ``legacy_payment_link_switch``). When enabled, sends are send-once
@@ -70,6 +73,8 @@ import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
+
+from core.booking_identity import redact_internal_keys
 
 logger = logging.getLogger(__name__)
 
@@ -758,20 +763,54 @@ class _Run:
                         self.pfx, share_skip, self.packet_id)
             await self.stamp(STEP_SHARE, "skipped", reason=share_skip)
             return
+        from dashboard.services.premium_confirmation_service import (
+            confirmation_complete,
+            confirmed_case_doc,
+        )
         from dashboard.services import swipesimple_invoice_service as _ss
 
+        confirmed_doc = self.doc if confirmation_complete(self.doc) else await confirmed_case_doc(self.doc)
+        if not confirmation_complete(confirmed_doc):
+            logger.info("%s share_invoice skipped reason=premium_unconfirmed packet=%s",
+                        self.pfx, self.packet_id)
+            await self.stamp(STEP_SHARE, "skipped", reason="premium_unconfirmed")
+            return
+
+        # Completion never sends or charges. Staging stays dispatch=False even
+        # when SWIPESIMPLE_DISPATCH_LIVE is on. A result that claims a send
+        # is refused.
         try:
-            # Stage only: ALWAYS pass dispatch=False explicitly — never rely on
-            # the function's default. No customer message from this path.
             share_result = await _ss.maybe_issue_share_invoice_for_bond(
                 share_bond_id,
                 channel="imessage",
                 dispatch=False,
                 source=_share_source(self.source),
             )
+        except _ss.SwipeSimpleLiveDisabled:
+            # Flags off: record the confirmed amount and do not call SwipeSimple.
+            from dashboard.services.premium_confirmation_service import (
+                cents_to_amount,
+                invoice_due_cents,
+            )
+
+            due = invoice_due_cents(confirmed_doc)
+            logger.info(
+                "%s share_invoice dry-run SWIPESIMPLE_LIVE off bond_id=%s amount_cents=%s",
+                self.pfx, share_bond_id, due,
+            )
+            await self.stamp(
+                STEP_SHARE, "done", ok=True, dry_run=True, dispatched=False,
+                bond_id=share_bond_id,
+                amount=cents_to_amount(due) if due else "",
+            )
+            return
         except (_ss.SwipeSimpleInvoiceError, _ss.SwipeSimpleInvoiceNotWired) as exc:
             # Fail-closed business rule (missing premium, mismatch, unresolved
             # create…). Retrying could create a second vendor draft → terminal.
+            code = str(exc).split("—", 1)[0].strip().split(" ", 1)[0]
+            if code in {"down_payment_zero", "premium_estimate_unconfirmed", "premium_unconfirmed"}:
+                await self.stamp(STEP_SHARE, "skipped", reason=code, bond_id=share_bond_id)
+                return
             logger.warning(
                 "%s share_invoice stage failed (non-fatal) bond_id=%s err_type=%s",
                 self.pfx, share_bond_id, type(exc).__name__,
@@ -787,13 +826,26 @@ class _Run:
             await self.fail(STEP_SHARE, error_type=type(exc).__name__)
             return
         share_result = share_result or {}
+        dispatch_result = share_result.get("dispatch")
+        if isinstance(dispatch_result, dict) and dispatch_result.get("sent"):
+            logger.warning(
+                "%s share_invoice refused a live dispatch bond_id=%s",
+                self.pfx, share_bond_id,
+            )
+            await self.stamp(
+                STEP_SHARE, "done", ok=False, dispatched=False,
+                bond_id=share_bond_id, reason="live_dispatch_refused",
+            )
+            return
         idempotent = (share_result.get("create") or {}).get("idempotent")
         logger.info(
             "%s share_invoice staged bond_id=%s ok=%s idempotent=%s",
             self.pfx, share_bond_id, share_result.get("ok"), idempotent,
         )
-        await self.stamp(STEP_SHARE, "done", ok=bool(share_result.get("ok")),
-                         bond_id=share_bond_id, idempotent=idempotent)
+        await self.stamp(
+            STEP_SHARE, "done", ok=bool(share_result.get("ok")),
+            bond_id=share_bond_id, idempotent=idempotent, dispatched=False,
+        )
 
     # ── (c) court-date sync ────────────────────────────────────────────────
     async def step_court(self) -> None:
@@ -832,13 +884,13 @@ class _Run:
             async with httpx.AsyncClient(timeout=8) as client:
                 await client.post(
                     slack,
-                    json={
+                    json=redact_internal_keys({
                         "text": (
                             f":white_check_mark: *DocuSeal packet signed* — "
                             f"`{self.packet_id}` | {self.defendant_name}"
                             f"{' | Drive filed' if self.drive_url() else ' | Drive pending'}"
                         )
-                    },
+                    }),
                 )
         except Exception as exc:
             await self.fail(STEP_SLACK, error_type=type(exc).__name__)

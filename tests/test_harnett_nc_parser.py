@@ -44,7 +44,7 @@ class TestHarnettNcParser(unittest.TestCase):
         self.assertEqual(rec.Booking_Number, "4242")
         self.assertNotEqual(rec.Booking_Number, "9999")
         self.assertEqual(rec.Booking_Date, "10/01/2026")
-        self.assertEqual(rec.Bond_Amount, "5000.00")
+        self.assertEqual(rec.Bond_Amount, "5000")
         self.assertIn("MISDEMEANOR LARCENY", rec.Charges)
         self.assertEqual(
             rec.extra_data["booking_key_origin"],

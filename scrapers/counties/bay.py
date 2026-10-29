@@ -14,6 +14,13 @@ Source contract (re-verified 2026-09-25, docs/recon/FL_GAP_QUEUE_2026-09-25.md):
     Booking_Number is copied verbatim from the source; rows without a source
     booking number are dropped — keys are never synthesized.
 
+Honest access and no invented values (2026-10-15): requests go through
+``scrapers.plain_http`` (honest User-Agent, certificate verified; a block raises
+``egress_block:``, a real certificate failure ``tls_cert_invalid:``). A charge's
+bond counts only when the source shows a dollar amount (a published 0 is kept);
+a charge with no or a non-numeric bond makes the booking bond ``""``. The source
+never states custody, so Status is ``""``.
+
 Why it was silent before: the old code POSTed the Search click with a
 hard-coded ``_seq_=3`` and no form fields, so uniGUI answered HTTP 401 (bad
 request sequence) / an empty grid, and the fallback parsed the empty shell page.
@@ -33,6 +40,8 @@ import requests
 
 from core.models import ArrestRecord
 from scrapers.base_scraper import BaseScraper
+from scrapers.plain_http import make_session, request
+from scrapers.published_bond import charge_bond_amount, total_published_bond
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +60,6 @@ GRID = "O25"             # UniDBGrid1 (JSON store endpoint)
 
 PAGE_LIMIT = 200
 REQUEST_DELAY_S = 0.15
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-)
 
 BOOKING_RE = re.compile(r"Booking\s*#\s*:\s*([0-9]{4}-[0-9]{3,8})", re.I)
 DATE_IN_RE = re.compile(r"Date\s*In\s*:\s*(\d{1,2}/\d{1,2}/\d{4})(?:\s+(\d{1,2}:\d{2}(?::\d{2})?\s*[AP]M))?", re.I)
@@ -110,18 +115,16 @@ def parse_store_row(row: Dict) -> Optional[Dict[str, str]]:
     sex = SEX_RE.search(inmate_blob)
 
     charges: List[str] = []
-    total_bond = 0.0
+    bonds: List[Optional[float]] = []  # one slot per charge; None = unpublished
     for line in charge_lines:
         cm = re.match(r"Charge\s*\d+\s*:\s*(.+)", line, re.I)
         if cm:
             charges.append(cm.group(1).strip())
+            bonds.append(None)
             continue
-        bm = re.match(r"Bond\s*:\s*\$?\s*([\d,]+(?:\.\d+)?)", line, re.I)
-        if bm:
-            try:
-                total_bond += float(bm.group(1).replace(",", ""))
-            except ValueError:
-                pass
+        bm = re.match(r"Bond\s*:\s*(.*)", line, re.I)
+        if bm and bonds and bonds[-1] is None:
+            bonds[-1] = charge_bond_amount(bm.group(1))
 
     return {
         "booking_number": booking_number,
@@ -134,7 +137,7 @@ def parse_store_row(row: Dict) -> Optional[Dict[str, str]]:
         "race": race.group(1).upper() if race else "",
         "sex": sex.group(1).upper() if sex else "",
         "charges": " | ".join(charges),
-        "bond": str(int(total_bond)) if float(total_bond).is_integer() else f"{total_bond:.2f}",
+        "bond": total_published_bond(bonds),
     }
 
 
@@ -142,8 +145,7 @@ class BayUniGuiSession:
     """One uniGUI session against the official Bay inmate search."""
 
     def __init__(self, http: Optional[requests.Session] = None, timeout: int = 30):
-        self.http = http or requests.Session()
-        self.http.headers.update({"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9"})
+        self.http = http or make_session()
         self.timeout = timeout
         self.sid = ""
         self.seq = 0
@@ -154,7 +156,7 @@ class BayUniGuiSession:
         }
 
     def open(self) -> None:
-        resp = self.http.get(f"{BASE_URL}/", timeout=self.timeout)
+        resp = request(self.http, "GET", f"{BASE_URL}/", county="Bay", timeout=self.timeout)
         resp.raise_for_status()
         html = resp.text
         m = re.search(r"_S_ID=([A-Za-z0-9]+)", html)
@@ -172,7 +174,7 @@ class BayUniGuiSession:
     def _event(self, params: str) -> str:
         body = f"Ajax=1&IsEvent=1&{params}&_S_ID={self.sid}&_seq_={self.seq:x}&_uo_={FORM_OBJ}"
         self.seq += 1
-        resp = self.http.post(HANDLE_URL, data=body, headers=self._xhr, timeout=self.timeout)
+        resp = request(self.http, "POST", HANDLE_URL, county="Bay", data=body, headers=self._xhr, timeout=self.timeout)
         resp.raise_for_status()
         return resp.text
 
@@ -186,8 +188,8 @@ class BayUniGuiSession:
         rows: List[Dict] = []
         start, page = 0, 1
         while start < expected:
-            resp = self.http.get(
-                HANDLE_URL,
+            resp = request(
+                self.http, "GET", HANDLE_URL, county="Bay",
                 params={"IsEvent": "1", "Obj": GRID, "Evt": "data", "_S_ID": self.sid,
                         "page": str(page), "start": str(start), "limit": str(PAGE_LIMIT)},
                 headers={k: v for k, v in self._xhr.items() if k != "Content-Type"},
@@ -254,7 +256,7 @@ class BayCountyScraper(BaseScraper):
                     Charges=parsed["charges"][:1000],
                     Bond_Amount=parsed["bond"],
                     Facility=FACILITY,
-                    Status="In Custody",
+                    Status="",  # the source never states custody
                     Detail_URL=f"{BASE_URL}/",
                     LastChecked=now,
                     LastCheckedMode="INITIAL",

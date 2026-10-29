@@ -5,7 +5,7 @@
 [![Docker](https://img.shields.io/badge/Docker-Containerized-blue)](Dockerfile)
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12+-green)](https://python.org)
 [![MongoDB Atlas](https://img.shields.io/badge/Database-MongoDB%20Atlas-brightgreen)](https://mongodb.com)
-[![Counties](https://img.shields.io/badge/Registered%20Scrapers-361-orange)](#county-coverage)
+[![Counties](https://img.shields.io/badge/Registered%20Scrapers-362-orange)](#county-coverage)
 [![States](https://img.shields.io/badge/States-11%20(includes%20guarded%20OH)-blue)](#county-coverage)
 [![Dashboard](https://img.shields.io/badge/Dashboard-Super%20CRM-blueviolet)](#intelligence-dashboard)
 [![License](https://img.shields.io/badge/License-Proprietary-red)](#license)
@@ -24,7 +24,7 @@ ShamrockLeads is the **bond Auto-CRM and arrest intelligence engine** for [Shamr
 
 ### What It Does
 
-1. **Scrapes** real-time booking data from **361 registered scraper scopes** across 10 established states plus an Ohio guarded pilot (GA 85 · FL 67 · NC 60 · SC 46 · TX 34 · TN 22 · AL 16 · LA 13 · MS 9 · CT 6 · OH 3 fail-closed) on scheduled intervals
+1. **Scrapes** real-time booking data from **362 registered scraper scopes** (361 county-level scopes plus the Manatee Clerk court-filing scope) across 10 established states plus an Ohio guarded pilot (GA 85 · FL 67 · NC 60 · SC 46 · TX 34 · TN 22 · AL 16 · LA 13 · MS 9 · CT 6 · OH 3 fail-closed) on scheduled intervals
 2. **Normalizes** every record into a standardized 39-column `ArrestRecord` schema (includes `State`)
 3. **Deduplicates** using `booking_number + county` composite keys (in-memory + MongoDB)
 4. **Scores** each arrest with rule-based lead qualification (0–100: Hot / Warm / Cold / Disqualified)
@@ -60,7 +60,7 @@ ShamrockLeads is the **bond Auto-CRM and arrest intelligence engine** for [Shamr
 ┌──────────────────────────────────────────────────────────────────────┐
 │                        SCRAPER ENGINE                                │
 │                                                                      │
-│  361 Scraper Scopes: 10 States + 3 Guarded OH Pilots (Python 3.12)   │
+│  362 Scraper Scopes: 10 States + 3 Guarded OH Pilots (Python 3.12)   │
 │  ┌────────────┐  ┌────────────┐  ┌──────────────┐  ┌────────────┐  │
 │  │DrissionPage│  │ curl_cffi  │  │ requests +   │  │ Patchright │  │
 │  │ (Chromium) │  │(TLS spoof) │  │BeautifulSoup │  │ (Stealth)  │  │
@@ -163,7 +163,7 @@ A premium **24-tab operations center** with ~25,700 lines of frontend JS and ~10
 | ⚡ **Bond Intelligence** | `sl-bond-intelligence.js` | Multi-state bond portfolio analytics, risk tiering, regional performance |
 | 👤 **Defendants** | `defendants.js`, `sl-defendant-lifecycle.js` | Card grid with lifecycle notes, contact log, DNB/DNC, bond finalize |
 | 📱 **Outreach** | `sl-prospective.js` | Kanban pipeline (Contacted → Negotiating → Paperwork → Ready), iMessage bridge |
-| 🏥 **Scraper Health** | `sl-health.js` | Fleet status across 361 registered scopes, source-contract posture, error drill-down, guarded-run suppression, and auto-recovery |
+| 🏥 **Scraper Health** | `sl-health.js` | Fleet status across 362 registered scopes, source-contract posture, error drill-down, guarded-run suppression, and auto-recovery |
 | 🔒 **Active Bonds** | `sl-active-bonds.js` | 7-status Kanban (Active → Monitoring → Alert → Exonerated/Forfeited/Surrendered → Reinstated) |
 | 📍 **Tracking** | `sl-tracking.js`, `sl-geo-intelligence.js` | GPS/check-in tracking, geofencing, Traccar integration |
 | 📥 **Intake Queue** | `sl-intake.js` | Wix/Telegram intake processing, defendant matching |
@@ -186,7 +186,7 @@ A premium **24-tab operations center** with ~25,700 lines of frontend JS and ~10
 
 ## County Coverage
 
-**361 registered scraper scopes** (dashboard `REGISTERED_COUNTIES` in `dashboard/extensions.py`) across **10 established states plus three Ohio fail-closed pilot guards**, utilizing shared platform bases. Registry coverage is not proof that a county source is currently record-emitting. The evidence-bound ten-state matrix remains [`docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md`](./docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md) with 947 scopes (942 Census county-equivalents plus five registered non-county scopes); Ohio guard requirements are in [`docs/recon/OHIO_PILOT_SOURCE_CONTRACTS.md`](./docs/recon/OHIO_PILOT_SOURCE_CONTRACTS.md):
+**362 registered scraper scopes** (dashboard `REGISTERED_COUNTIES` in `dashboard/extensions.py`: 361 county-level scopes plus the Manatee Clerk (FL) court-filing scope, `NON_COUNTY_SOURCE_SCOPES`) across **10 established states plus three Ohio fail-closed pilot guards**, utilizing shared platform bases. Registry coverage is not proof that a county source is currently record-emitting. The evidence-bound ten-state matrix remains [`docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md`](./docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md) with 947 scopes (942 Census county-equivalents plus five registered non-county scopes); Ohio guard requirements are in [`docs/recon/OHIO_PILOT_SOURCE_CONTRACTS.md`](./docs/recon/OHIO_PILOT_SOURCE_CONTRACTS.md):
 
 | State | Registered | Path | Job ID form | CLI command |
 |-------|----------:|------|-------------|-------------|
@@ -201,7 +201,8 @@ A premium **24-tab operations center** with ~25,700 lines of frontend JS and ~10
 | **Connecticut** | 6 | `scrapers/counties_ct/` | `scraper_ct_*` | `python main.py ct_doc` |
 | **Mississippi** | 9 | `scrapers/counties_ms/` | `scraper_ms_<county>` | `python main.py ms_hinds` |
 | **Ohio (guarded pilot)** | 3 | `scrapers/counties_oh/` | `scraper_oh_<county>` | `python main.py oh_clermont` *(emits no records)* |
-| **Total** | **361** | `dashboard/extensions.py` | Labels: `County (ST)` | |
+| **Manatee Clerk (FL)** (court filings; second Manatee source) | 1 | `scrapers/counties/manatee_clerk.py` | `scraper_manatee_clerk` | `python main.py "Manatee Clerk"` |
+| **Total** | **362** | `dashboard/extensions.py` | Labels: `County (ST)` | |
 
 ### Shared Base Classes
 

@@ -28,6 +28,17 @@ DEFAULT_MIN_SCORE = 70
 DEFAULT_MIN_BOND = 500
 COOLDOWN_HOURS = 24
 
+# Source statuses that mean "in custody" for outreach. A missing, blank or
+# unrecognised status is UNKNOWN: it is never counted, shown or contacted as
+# in custody (2026-10-15).
+IN_CUSTODY_STATUSES = ("In Custody", "in_custody", "active", "In Jail")
+IN_CUSTODY_FILTER: Dict[str, Any] = {"status": {"$in": list(IN_CUSTODY_STATUSES)}}
+
+
+def is_in_custody_status(status: Any) -> bool:
+    """True only for a recognised in-custody status; missing/unknown is False."""
+    return str(status or "").strip() in IN_CUSTODY_STATUSES
+
 def normalize_phone_e164(raw: str) -> str:
     """Normalize phone number to E.164 string (+1XXXXXXXXXX)."""
     if not raw:
@@ -141,10 +152,7 @@ async def get_lee_county_overview(db) -> Dict[str, Any]:
     in_custody_count = await arrests_col.count_documents({
         "$and": [
             lee_filter,
-            {"$or": [
-                {"status": {"$in": ["In Custody", "in_custody", "active", "In Jail"]}},
-                {"status": {"$exists": False}},
-            ]}
+            IN_CUSTODY_FILTER,
         ]
     })
 
@@ -308,7 +316,8 @@ async def get_lee_county_leads(
             "booking_time": doc.get("booking_time") or "",
             "total_bond": total_bond,
             "lead_score": lead_score,
-            "status": doc.get("status") or "In Custody",
+            "status": doc.get("status") or "",  # unknown stays unknown
+            "in_custody": is_in_custody_status(doc.get("status")),
             "charges": charges,
             "terms": terms,
             "outreach": outreach_info,
@@ -557,6 +566,7 @@ async def run_lee_county_autopilot_sweep(db) -> Dict[str, Any]:
             {"total_bond": {"$gte": min_bond}},
             {"lead_score": {"$gte": min_score}},
             {"lee_outreach.status": {"$ne": "sent"}},
+            IN_CUSTODY_FILTER,  # in-custody outreach only; unknown status is excluded
         ]
     }
 
@@ -568,6 +578,8 @@ async def run_lee_county_autopilot_sweep(db) -> Dict[str, Any]:
     errors = []
 
     for c in candidates:
+        if not is_in_custody_status(c.get("status")):
+            continue  # defensive: never auto-contact on an unknown status
         processed += 1
         booking_no = c.get("booking_number") or c.get("booking_no") or ""
         def_name = f"{c.get('first_name', '')} {c.get('last_name', '')}".strip()

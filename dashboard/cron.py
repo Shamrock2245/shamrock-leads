@@ -179,6 +179,21 @@ async def _run_fta_alert():
     else:
         logger.info("[FTAAlert] scanned=%d — no new FTAs", result.get("scanned", 0))
 
+async def _run_installment_invoices():
+    """Hourly: stage one SwipeSimple invoice per financed installment that is due."""
+    from dashboard.services.installment_invoice_service import stage_due_installments
+
+    result = await stage_due_installments()
+    logger.info(
+        "[InstallmentInvoice] staged=%s skipped=%s failed=%s blocked=%s dry_run=%s",
+        result.get("staged"),
+        result.get("skipped"),
+        result.get("failed"),
+        result.get("blocked"),
+        result.get("dry_run"),
+    )
+
+
 async def _run_missed_payment():
     """Every 12h: scan payment plans for overdue installments, fire BB alert + geo link."""
     from dashboard.services.missed_payment_alert_service import MissedPaymentAlertService
@@ -776,6 +791,19 @@ async def _run_lee_clerk_watch():
         )
 
 
+async def _run_lee_freshness():
+    """Lee (FL) heartbeat: stale / 0-rows-while-site-lists / repeated errors / window gap."""
+    from core.lee_freshness import run_lee_freshness_check
+    from dashboard.extensions import get_db
+    result = await run_lee_freshness_check(get_db())
+    if result.get("findings") or result.get("recovered"):
+        logger.warning(
+            "[LeeFreshness] findings=%s sent=%s failed=%s recovered=%s site_rows=%s",
+            result.get("findings"), result.get("sent"), result.get("failed"),
+            result.get("recovered"), result.get("site_rows"),
+        )
+
+
 async def _run_matching_backlog():
     from dashboard.services.lifecycle_automations import LifecycleAutomations
     from dashboard.services.automation_config import get_automation_config
@@ -813,6 +841,7 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("rearrest_detection", "ReArrest",           7200, 180, _run_rearrest),
     CronDef("fta_alert",          "FTAAlert",          14400, 120, _run_fta_alert),
     CronDef("missed_payment",     "MissedPayment",     43200, 240, _run_missed_payment),
+    CronDef("installment_invoices", "InstallmentInvoice", 3600, 180, _run_installment_invoices),
     CronDef("data_retention",     "DataRetention",     86400, 300, _run_retention),
     CronDef("court_email",        "CourtEmail",          900,  90, _run_court_email),
     CronDef("blog_publisher",     "Blog",              21600, 300, _run_blog),
@@ -839,6 +868,8 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("compliance_backfill","ComplianceFill",    21600, 270, _run_compliance_backfill, default_enabled=True),
     CronDef("matching_backlog",   "MatchingBacklog",    3600, 240, _run_matching_backlog, default_enabled=True),
     CronDef("lee_clerk_watch",    "LeeClerkWatch",      900, 180, _run_lee_clerk_watch, default_enabled=True),
+    # Lee (FL) must never miss a lead: heartbeat every 5 min, alerts via #alerts.
+    CronDef("lee_freshness",      "LeeFreshness",       300, 240, _run_lee_freshness, default_enabled=True),
 ]
 
 

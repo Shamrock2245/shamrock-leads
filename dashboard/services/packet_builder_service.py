@@ -27,6 +27,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from core.booking_identity import public_booking_number, scrub_internal_keys
+
 logger = logging.getLogger(__name__)
 
 # Catalog key (UI drag-drop) → DocuSeal/blank-PDF template slug
@@ -329,6 +331,171 @@ def charge_details_from_sources(
     return rows
 
 
+def _county_key(value: Any) -> str:
+    return str(value or "").strip().casefold().removesuffix(" county").strip()
+
+
+def _state_key(value: Any) -> str:
+    return str(value or "").strip().casefold()
+
+
+def _bond_relation(
+    row: Dict[str, Any],
+    *,
+    bond_case_id: str,
+    booking_number: str,
+    county: str,
+    state: str,
+) -> str:
+    """``match``, ``conflict``, or ``unbound`` against the requested bonded case."""
+    overlapped = False
+    row_case = str(row.get("Bond_Case_ID") or row.get("bond_case_id") or "").strip()
+    if bond_case_id and row_case:
+        if row_case != bond_case_id:
+            return "conflict"
+        overlapped = True
+    row_booking = str(row.get("Booking_Number") or row.get("booking_number") or "").strip().upper()
+    if booking_number and row_booking:
+        if row_booking != booking_number.strip().upper():
+            return "conflict"
+        overlapped = True
+    row_county = _county_key(row.get("county") or row.get("County"))
+    req_county = _county_key(county)
+    if req_county and row_county:
+        if req_county != row_county:
+            return "conflict"
+        overlapped = True
+    row_state = _state_key(row.get("state") or row.get("State"))
+    req_state = _state_key(state)
+    if req_state and row_state and row_county:
+        if req_state != row_state:
+            return "conflict"
+        overlapped = True
+    if overlapped:
+        return "match"
+    return "unbound"
+
+
+def _one_bonded_case(
+    hits: List[Any],
+    *,
+    bond_case_id: str,
+    booking_number: str,
+    county: str,
+    state: str,
+) -> Optional[Dict[str, Any]]:
+    """The one bond for this case, ``{}`` when none, or ``None`` when ambiguous.
+
+    A second case or booking is not a co-indemnitor source. Rows with no
+    case fields count only when every bound row matches this request.
+    """
+    classified = []
+    for row in hits:
+        if isinstance(row, dict):
+            classified.append((
+                row,
+                _bond_relation(
+                    row,
+                    bond_case_id=bond_case_id,
+                    booking_number=booking_number,
+                    county=county,
+                    state=state,
+                ),
+            ))
+    if any(relation == "conflict" for _row, relation in classified):
+        chosen = [row for row, relation in classified if relation == "match"]
+    else:
+        chosen = [row for row, relation in classified if relation in ("match", "unbound")]
+    if len(chosen) > 1:
+        return None
+    if len(chosen) == 1:
+        return chosen[0]
+    return {}
+
+
+async def _load_bonded_case(
+    *,
+    bond_case_id: str,
+    booking_number: str,
+    county: str,
+    state: str,
+) -> Tuple[Dict[str, Any], bool]:
+    """Load one active bond for this case. The second value is True when ambiguous."""
+    from dashboard.extensions import get_collection
+
+    if bond_case_id:
+        query: Dict[str, Any] = {"$or": [
+            {"Bond_Case_ID": bond_case_id},
+            {"bond_case_id": bond_case_id},
+        ]}
+    elif booking_number:
+        query = {"$or": [
+            {"Booking_Number": booking_number},
+            {"booking_number": booking_number},
+        ]}
+    else:
+        return {}, False
+    hits = await get_collection("active_bonds").find(query, {"_id": 0}).to_list(length=3)
+    if not hits:
+        hits = await get_collection("bond_cases").find(query, {"_id": 0}).to_list(length=3)
+    chosen = _one_bonded_case(
+        hits,
+        bond_case_id=bond_case_id,
+        booking_number=booking_number,
+        county=county,
+        state=state,
+    )
+    if chosen is None:
+        return {}, True
+    return chosen, False
+
+
+def _bonded_indemnitor_rows(
+    bond: Dict[str, Any],
+    primary: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Indemnitor rows stored on the bonded case, primary first.
+
+    ``active_bonds.indemnitors`` is the co-indemnitor list the Super CRM
+    finalize path must hydrate. A list of only the co-indemnitor still keeps
+    the resolved primary at index 0 so template 7 gets a coindemnitor submitter.
+    """
+    if not isinstance(bond, dict):
+        return []
+    rows: List[Dict[str, Any]] = []
+    raw = bond.get("indemnitors")
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or item.get("party_role") or "").strip().lower()
+            if role == "defendant":
+                continue
+            rows.append(dict(item))
+    for key in ("coindemnitor", "co_indemnitor"):
+        extra = bond.get(key)
+        if isinstance(extra, dict) and extra:
+            rows.append(dict(extra))
+    if not rows:
+        return []
+
+    def _row_name(row: Dict[str, Any]) -> str:
+        named = str(row.get("name") or row.get("full_name") or "").strip()
+        if named:
+            return named.casefold()
+        return " ".join(
+            part for part in (
+                str(row.get("first_name") or row.get("firstName") or "").strip(),
+                str(row.get("last_name") or row.get("lastName") or "").strip(),
+            ) if part
+        ).casefold()
+
+    primary_name = str((primary or {}).get("name") or "").strip().casefold()
+    if primary_name and all(_row_name(row) != primary_name for row in rows):
+        rows.insert(0, dict(primary))
+    return rows
+
+
 def verify_self_indemnitor_pin(pin: str) -> bool:
     """True only when SELF_INDEMNITOR_PIN is configured and matches. Fails closed
     (False) when it is unset; there is no built-in default PIN."""
@@ -449,22 +616,17 @@ async def resolve_case_context(
         else:
             arrest = {}
 
+    bond_ambiguous = False
     if bond_case_id or booking_number:
-        bq: Dict[str, Any] = {}
-        if bond_case_id:
-            bq["$or"] = [
-                {"Bond_Case_ID": bond_case_id},
-                {"bond_case_id": bond_case_id},
-            ]
-        elif booking_number:
-            bq["$or"] = [
-                {"Booking_Number": booking_number},
-                {"booking_number": booking_number},
-            ]
-        bond = await get_collection("active_bonds").find_one(bq, {"_id": 0}) or {}
-        if not bond:
-            bond = await get_collection("bond_cases").find_one(bq, {"_id": 0}) or {}
-        if bond:
+        bond, bond_ambiguous = await _load_bonded_case(
+            bond_case_id=str(bond_case_id or "").strip(),
+            booking_number=str(booking_number or "").strip(),
+            county=str(county or "").strip(),
+            state=str(state or "").strip(),
+        )
+        if bond_ambiguous:
+            sources.append("bond_ambiguous")
+        elif bond:
             sources.append("bond")
 
     # Nested intake parties
@@ -742,6 +904,13 @@ async def resolve_case_context(
     except Exception:
         logger.debug("prior-bond hydrate skipped", exc_info=True)
 
+    # Co-indemnitors come only from this bonded case. An ambiguous booking
+    # match, or a bond for another case or booking, contributes none.
+    if bond and not bond_ambiguous:
+        bonded_rows = _bonded_indemnitor_rows(bond, context.get("indemnitor") or {})
+        if bonded_rows:
+            context["indemnitors"] = bonded_rows
+
     return context
 
 
@@ -787,7 +956,8 @@ def build_adaptive_field_map(context: Dict[str, Any]) -> Dict[str, Any]:
     bond_str = f"${bond_amount:,.2f}" if bond_amount else ""
     prem_str = f"${premium:,.2f}" if premium else ""
     county = context.get("county") or ""
-    booking = context.get("booking_number") or ""
+    # Internal natural keys (core/booking_identity.py) are never printed as a booking number.
+    booking = public_booking_number(context.get("booking_number") or "")
     case_no = context.get("case_number") or ""
     poa = context.get("poa_number") or ""
     ind_csz = ", ".join(filter(None, [ind.get("city"), ind.get("state")]))
@@ -968,6 +1138,7 @@ def build_adaptive_field_map(context: Dict[str, Any]) -> Dict[str, Any]:
             fields["Charges"] = placement.summary or summary
 
     # Drop empty values for cleaner audit
+    fields = scrub_internal_keys(fields)
     return {k: v for k, v in fields.items() if v not in (None, "")}
 
 

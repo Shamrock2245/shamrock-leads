@@ -80,7 +80,8 @@ def _texts_to(client, last10):
 
 def _pkt(phone, **kw):
     d = {"_id": "oid-gate-1", "packet_id": "pkt-gate-1", "booking_number": "GATE-BK-1",
-         "premium_amount": 500.0, "indemnitor_phone": phone, "defendant_name": "Gale Gate"}
+         "premium_amount": 500.0, "indemnitor_phone": phone, "defendant_name": "Gale Gate",
+         "status": "signed", "docuseal_status": "completed"}
     d.update(CONFIRMED)
     d.update(kw)
     return d

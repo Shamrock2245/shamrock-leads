@@ -90,6 +90,12 @@ DEFAULT_CONFIG = {
         "slack_digest": True,
     },
 
+    # ── Financed installment invoices (SwipeSimple; dry-run unless LIVE) ──
+    "installment_invoices": {
+        "enabled": True,
+        "interval_seconds": 3600,
+    },
+
     # ── Abandoned Intake Recovery ──
     "intake_recovery": {
         "enabled": True,
@@ -175,6 +181,12 @@ DEFAULT_CONFIG = {
         "interval_seconds": 900,        # 15 minutes
         "first_check_hours": 20,        # clerk matrix lags ~1 day
         "limit": 25,
+    },
+
+    # ── Lee (FL) freshness heartbeat (never miss a Lee lead) ──
+    "lee_freshness": {
+        "enabled": True,
+        "interval_seconds": 300,        # 5 minutes; N via LEE_FRESHNESS_MAX_AGE_MIN (75)
     },
 
     # ── Auto-Reply AI (BlueBubbles inbound message handler) ──

@@ -292,6 +292,7 @@ def test_payment_webhook_rejects_empty_and_invalid_payload():
     # ENV=development + no secret: payload validation still applies (dev path).
     # Any other ENV without a secret is 503 (see test_auth_harden_followups).
     with patch.dict(os.environ, {"ENV": "development", "ENVIRONMENT": "", "SWIPESIMPLE_WEBHOOK_SECRET": ""}, clear=False):
+        os.environ.pop("REQUIRE_DASHBOARD_PIN", None)
         resp = client.post("/api/webhooks/payment", json={})
         assert resp.status_code == 400
         assert "payload" in resp.json().get("error", "").lower()

@@ -89,6 +89,10 @@ def _packet(**overrides) -> dict:
         "docuseal_submission_id": SUBMISSION_ID,
         # already archived → poller skips Drive
         "signed_pdf_drive_url": "https://drive.example.invalid/f/1",
+        # Completion invoices only after staff confirm the premium.
+        "premium_confirmed_amount": PREMIUM,
+        "premium_confirmed_at": "2026-09-24T15:00:00+00:00",
+        "premium_confirmed_by": "staff-test",
     }
     pkt.update(overrides)
     return pkt
@@ -146,13 +150,14 @@ class InvoiceStore:
             "status_code": 302,
         }
 
-    async def persist(self, _bond, *, bond_id, booking_number, payment_link, invoice_id=""):
+    async def persist(self, _bond, *, bond_id, booking_number, payment_link, invoice_id="", amount_cents=None):
         self.bond.update(
             {
                 "swipesimple_payment_link": payment_link,
                 "swipesimple_invoice_id": invoice_id,
                 "swipesimple_invoice_number": booking_number,
                 "swipesimple_invoice_bond_id": bond_id,
+                "swipesimple_invoice_amount_cents": amount_cents,
             }
         )
 

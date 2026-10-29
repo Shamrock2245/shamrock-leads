@@ -119,7 +119,7 @@ class LancasterScParserTests(unittest.TestCase):
     def test_parse_detail_booking_charges_bond(self):
         info = LancasterScraper.parse_detail_html(DETAIL_HTML)
         self.assertEqual(info["booking"], "2026-00001234")
-        self.assertEqual(info["bond"], "1500.00")
+        self.assertEqual(info["bond"], "1500")
         self.assertIn("SIMPLE ASSAULT", info["charges"])
         self.assertIn("PUBLIC DISORDERLY CONDUCT", info["charges"])
         # Per-charge Bond cell is a reference id — must not become Bond_Amount.
@@ -129,7 +129,7 @@ class LancasterScParserTests(unittest.TestCase):
     def test_zero_bond_stays_published_zero(self):
         info = LancasterScraper.parse_detail_html(ZERO_BOND_DETAIL_HTML)
         self.assertEqual(info["booking"], "2025-00000001")
-        self.assertEqual(info["bond"], "0.00")
+        self.assertEqual(info["bond"], "0")
         self.assertIn("BENCH WARRANT", info["charges"])
 
     def test_record_requires_source_booking(self):
@@ -148,7 +148,7 @@ class LancasterScParserTests(unittest.TestCase):
         self.assertIsNotNone(rec)
         self.assertEqual(rec.Booking_Number, "2026-00001234")
         self.assertFalse(rec.Booking_Number.startswith("NW_"))
-        self.assertEqual(rec.Bond_Amount, "1500.00")
+        self.assertEqual(rec.Bond_Amount, "1500")
         self.assertEqual(rec.County, "Lancaster")
         self.assertEqual(rec.State, "SC")
         self.assertEqual(rec.Booking_Date, "10/01/2026")
