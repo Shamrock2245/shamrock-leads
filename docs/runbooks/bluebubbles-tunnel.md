@@ -138,7 +138,7 @@ launchctl load ~/Library/LaunchAgents/com.ngrok.bluebubbles.plist
 # Hot-swap (no rebuild needed)
 curl -X PATCH https://leads.shamrockbailbonds.biz/api/bb-health/update-url \
   -H 'Content-Type: application/json' \
-  -d '{"suffix":"0178","url":"https://pseudospherical-etta-untactually.ngrok-free.dev","api_key":"shamrock-bb-sync-2245"}'
+  -d "{\"suffix\":\"0178\",\"url\":\"https://pseudospherical-etta-untactually.ngrok-free.dev\",\"api_key\":\"${BB_CONFIG_API_KEY}\"}"
 
 # Or rebuild for persistence
 docker compose build --no-cache dashboard && docker compose up -d dashboard

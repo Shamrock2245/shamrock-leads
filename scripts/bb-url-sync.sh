@@ -11,7 +11,8 @@ BB_LOCAL="http://localhost:1234"
 BB_PASSWORD="${BB_PASSWORD:-${BLUEBUBBLES_PASSWORD:-}}"
 if [ -z "$BB_PASSWORD" ]; then echo "Set BB_PASSWORD"; exit 1; fi
 VPS_DASHBOARD="http://178.156.179.237:8088"
-API_KEY="shamrock-bb-sync-2245"
+API_KEY="${BB_CONFIG_API_KEY:-}"
+if [ -z "$API_KEY" ]; then echo "Set BB_CONFIG_API_KEY"; exit 1; fi
 SUFFIX="0178"
 
 LOG="/tmp/bb-url-sync.log"
