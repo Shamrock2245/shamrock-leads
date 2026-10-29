@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-29 (Upgrade FastAPI, Starlette 1.x, and sse-starlette 3.x)
+
+### Changed
+- **Upgraded `fastapi`, `starlette`, and `sse-starlette` across `requirements.txt` and `requirements-dashboard.txt`.** Because `dashboard/main.py` already uses `@asynccontextmanager def lifespan(app)` instead of the removed `on_startup` hook, the legacy `<0.120.0`, `<0.41.0`, and `<2.2` caps are lifted to `fastapi>=0.136.0`, `starlette>=1.0.0`, and `sse-starlette>=3.0.0` so current security and compatibility releases install cleanly.
+
+### Tests
+- Added `tests/test_fastapi_starlette_upgrade.py` (wired into `.github/workflows/ci.yml`) verifying both requirement manifests lift the legacy upper caps and `dashboard/main.py` uses `lifespan=lifespan` without `on_startup`/`on_shutdown`/`.on_event()`.
+
 ## [Unreleased] — 2026-10-28 (Lee County HQ API needs a staff session)
 
 ### Security
