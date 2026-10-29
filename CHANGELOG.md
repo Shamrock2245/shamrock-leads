@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-29 (Dependabot ignores scoped to incompatible ranges)
+
+### Changed
+- **Scoped Dependabot pip ignores for `starlette` and `sse-starlette` to incompatible release ranges.** `.github/dependabot.yml` now ignores `starlette >= 0.41.0` and `sse-starlette >= 2.2.0` (matching the `<0.41.0` and `<2.2` caps required by the `fastapi>=0.115.0,<0.120.0` pin in `requirements.txt` and `requirements-dashboard.txt`) so compatible patch and security releases within `<0.41.0` and `<2.2.0` remain eligible for Dependabot updates.
+
+### Tests
+- `tests/test_dependabot_config.py` (added to the CI list): verifies `.github/dependabot.yml` parses as valid YAML and scopes `starlette` (`>= 0.41.0`) and `sse-starlette` (`>= 2.2.0`) ignore rules by version range rather than blocking all versions.
+
 ## [Unreleased] — 2026-10-28 (Co-signer links find legacy Booking_Number bonds)
 
 ### Fixed
