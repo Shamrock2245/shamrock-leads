@@ -135,6 +135,10 @@ launchctl load ~/Library/LaunchAgents/com.ngrok.bluebubbles.plist
 
 ### VPS still using old URL
 ```bash
+# Ensure LaunchAgent env file exists on the office iMac (0600 permissions)
+install -m 600 /dev/null ~/.shamrock-bb-sync.env
+# Populate BB_PASSWORD and BB_CONFIG_API_KEY in ~/.shamrock-bb-sync.env
+
 # Hot-swap (no rebuild needed)
 curl -X PATCH https://leads.shamrockbailbonds.biz/api/bb-health/update-url \
   -H 'Content-Type: application/json' \

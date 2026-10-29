@@ -7,12 +7,23 @@
 # and pushes it to the VPS dashboard so outreach works immediately.
 # ═══════════════════════════════════════════════════════════════════
 
+# Load LaunchAgent secrets when invoked by launchd (which does not source shell rc files).
+for _env_file in "${BB_SYNC_ENV_FILE:-}" "${HOME:-/Users/shamrock}/.shamrock-bb-sync.env" "/etc/shamrock/bb-url-sync.env"; do
+    if [ -n "$_env_file" ] && [ -r "$_env_file" ]; then
+        set -a
+        # shellcheck disable=SC1090
+        . "$_env_file"
+        set +a
+        break
+    fi
+done
+
 BB_LOCAL="http://localhost:1234"
 BB_PASSWORD="${BB_PASSWORD:-${BLUEBUBBLES_PASSWORD:-}}"
-if [ -z "$BB_PASSWORD" ]; then echo "Set BB_PASSWORD"; exit 1; fi
+if [ -z "$BB_PASSWORD" ]; then echo "Set BB_PASSWORD (or configure ~/.shamrock-bb-sync.env)"; exit 1; fi
 VPS_DASHBOARD="http://178.156.179.237:8088"
 API_KEY="${BB_CONFIG_API_KEY:-}"
-if [ -z "$API_KEY" ]; then echo "Set BB_CONFIG_API_KEY"; exit 1; fi
+if [ -z "$API_KEY" ]; then echo "Set BB_CONFIG_API_KEY (or configure ~/.shamrock-bb-sync.env)"; exit 1; fi
 SUFFIX="0178"
 
 LOG="/tmp/bb-url-sync.log"

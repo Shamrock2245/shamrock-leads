@@ -207,6 +207,19 @@ PLIST
 launchctl unload "$PLIST_PATH" 2>/dev/null || true
 launchctl load "$PLIST_PATH"
 
+# Provision restricted env file for com.shamrock.bb-url-sync LaunchAgent if secrets are present in operator shell
+SYNC_ENV_FILE="$HOME/.shamrock-bb-sync.env"
+if [ -n "${BB_CONFIG_API_KEY:-}" ] || [ -n "${BB_PASSWORD:-${BLUEBUBBLES_PASSWORD:-}}" ]; then
+    (
+        umask 077
+        : > "$SYNC_ENV_FILE"
+        [ -n "${BB_PASSWORD:-${BLUEBUBBLES_PASSWORD:-}}" ] && printf 'BB_PASSWORD=%q\n' "${BB_PASSWORD:-${BLUEBUBBLES_PASSWORD:-}}" >> "$SYNC_ENV_FILE"
+        [ -n "${BB_CONFIG_API_KEY:-}" ] && printf 'BB_CONFIG_API_KEY=%q\n' "$BB_CONFIG_API_KEY" >> "$SYNC_ENV_FILE"
+    )
+    chmod 600 "$SYNC_ENV_FILE"
+    echo "   ✅ Provisioned LaunchAgent secret file at $SYNC_ENV_FILE (0600)"
+fi
+
 echo "   ✅ LaunchAgent installed and loaded"
 echo "   The tunnel will now auto-start on every login."
 echo "   Logs: /tmp/cloudflared-bb.log"

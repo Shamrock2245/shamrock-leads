@@ -101,3 +101,11 @@ def test_bb_health_update_url_allows_admin_session_without_frontend_api_key(monk
 def test_frontend_js_does_not_embed_bb_config_key():
     src = (REPO_ROOT / "dashboard" / "sl-imessage.js").read_text(encoding="utf-8")
     assert "shamrock-bb-sync" not in src
+
+
+def test_bb_url_sync_script_sources_launchagent_env_file():
+    script = (REPO_ROOT / "scripts" / "bb-url-sync.sh").read_text(encoding="utf-8")
+    assert ".shamrock-bb-sync.env" in script
+    assert "BB_CONFIG_API_KEY" in script
+    assert "shamrock-bb-sync-" not in script
+
