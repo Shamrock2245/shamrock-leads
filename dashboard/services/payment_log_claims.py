@@ -33,6 +33,7 @@ If the server cannot run a transaction, the caller gets 503
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
@@ -443,30 +444,82 @@ async def _read_rows(
     return [row for row in rows if row_kind(row) == kind]
 
 
+def _bond_booking_field(doc: dict, booking: str) -> str:
+    """The field that carries ``booking`` on this bond, or empty for none.
+
+    ``booking_number`` is the canonical field. The legacy ``Booking_Number``
+    counts only when ``booking_number`` is blank, so a stale legacy value
+    never matches a bond whose canonical booking is different.
+    """
+    canonical = _booking(doc.get("booking_number"))
+    if canonical:
+        return "booking_number" if canonical == booking else ""
+    if _booking(doc.get("Booking_Number")) == booking:
+        return "Booking_Number"
+    return ""
+
+
+def _bond_filter(booking: str, doc: dict) -> dict:
+    """Write filter for one matched bond: ``_id`` plus the stored booking value.
+
+    The value is the raw one stored in the field the bond matched on, so a
+    stored ``" BK-1 "`` is filtered as ``" BK-1 "``, not the trimmed booking.
+    """
+    field = _bond_booking_field(doc, booking) or "booking_number"
+    filt = {field: doc.get(field, booking)}
+    if doc.get("_id") is not None:
+        filt["_id"] = doc["_id"]
+    return filt
+
+
+BOND_WRITE_MISSED = "bond_write_missed"
+
+
+class _BondWriteMissed(Exception):
+    """A matched bond's write matched no document. Nothing is reported stamped."""
+
+
+def _write_matched(result) -> bool:
+    """True only when the driver reports the filter matched a document."""
+    try:
+        return int(getattr(result, "matched_count", 0) or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 async def _matching_bonds(db, booking: str, session) -> list:
     """``(collection, doc)`` for an explicit booking. Empty when the booking is blank.
 
-    Matches ``booking_number`` or the legacy ``Booking_Number``. A document
-    carrying both is counted once (by ``_id``). Tenant scope comes from ``db``.
+    Matches ``booking_number`` or the legacy ``Booking_Number`` when the
+    stored value equals the booking once surrounding whitespace is trimmed.
+    The exact branches use any existing index; the anchored, escaped regex
+    finds a padded stored value such as ``" BK-1 "``. ``_bond_booking_field``
+    then applies the canonical rule. A document that carries both counts
+    once. Two distinct documents still both count, so a booking shared
+    across the two spellings fails closed.
     """
     if not booking:
         return []
+    padded = {"$regex": r"^\s*" + re.escape(booking) + r"\s*$"}
+    query = {"$or": [
+        {"booking_number": booking},
+        {"Booking_Number": booking},
+        {"booking_number": padded},
+        {"Booking_Number": padded},
+    ]}
     found = []
     for name in _BOND_COLLECTIONS:
-        seen = set()
-        for doc in await _docs(db[name], _booking_filter(booking), session):
+        seen = []
+        for doc in await _docs(db[name], query, session):
+            if not _bond_booking_field(doc, booking):
+                continue
             doc_id = doc.get("_id")
             if doc_id is not None:
                 if doc_id in seen:
                     continue
-                seen.add(doc_id)
+                seen.append(doc_id)
             found.append((name, doc))
     return found
-
-
-def _booking_filter(booking: str) -> dict:
-    """``booking_number`` or the legacy ``Booking_Number`` spelling."""
-    return {"$or": [{"booking_number": booking}, {"Booking_Number": booking}]}
 
 
 def _sibling_bookings(rows: list) -> list:
@@ -558,12 +611,12 @@ async def _flag_bond(db, booking: str, flag: dict, session) -> list:
         return []
     reviews = []
     for name, current in groups[0]:
-        await db[name].update_one(
-            {**_booking_filter(booking), **({"_id": current["_id"]} if current.get("_id") is not None else {})},
+        result = await db[name].update_one(
+            _bond_filter(booking, current),
             {"$set": flag},
             **_sess(session),
         )
-        reviews.append({
+        entry = {
             "collection": name,
             "record_id": "" if current.get("_id") is None else str(current["_id"]),
             "booking_number": booking,
@@ -571,7 +624,14 @@ async def _flag_bond(db, booking: str, flag: dict, session) -> list:
             "new_needs_review": True,
             "old_needs_review_reason": current.get("needs_review_reason"),
             "new_needs_review_reason": flag.get("needs_review_reason"),
-        })
+        }
+        if not _write_matched(result):
+            # The audit must not claim a flag that was not written.
+            logger.warning("[payment_log] bond review flag matched no document collection=%s", name)
+            entry["new_needs_review"] = current.get("needs_review")
+            entry["new_needs_review_reason"] = current.get("needs_review_reason")
+            entry["write_missed"] = True
+        reviews.append(entry)
     return reviews
 
 
@@ -594,14 +654,37 @@ async def _flag_plan(db, plan_id: str, flag: dict, session) -> Optional[dict]:
     }
 
 
+async def _restore_stamp(db, booking: str, coll_name: str, current: dict, session) -> None:
+    """Put back the ``last_payment_*`` fields a stamp in this attempt replaced."""
+    old = _stamp_view(current)
+    restore: dict = {"$set": {k: v for k, v in old.items() if k in current}}
+    unset = {k: "" for k in _STAMP_FIELDS if k not in current}
+    if unset:
+        restore["$unset"] = unset
+    if not restore["$set"]:
+        restore.pop("$set")
+    await db[coll_name].update_one(_bond_filter(booking, current), restore, **_sess(session))
+
+
 async def _stamp_bonds(db, booking: str, group: list, payment_update: dict, session) -> list:
-    """Stamp every document in one logical case. Returns one audit per document."""
+    """Stamp every document in one logical case. Returns one audit per document.
+
+    Every write must match its document. If one matches nothing, the stamps
+    already made in this group are put back and ``_BondWriteMissed`` is
+    raised, so a case is never reported stamped when a document was missed.
+    """
     audits = []
+    done = []
     for coll_name, current in group:
-        filt = _booking_filter(booking)
-        if current.get("_id") is not None:
-            filt["_id"] = current["_id"]
-        await db[coll_name].update_one(filt, {"$set": payment_update}, **_sess(session))
+        result = await db[coll_name].update_one(
+            _bond_filter(booking, current), {"$set": payment_update}, **_sess(session),
+        )
+        if not _write_matched(result):
+            logger.warning("[payment_log] bond stamp matched no document collection=%s", coll_name)
+            for done_name, done_doc in done:
+                await _restore_stamp(db, booking, done_name, done_doc, session)
+            raise _BondWriteMissed()
+        done.append((coll_name, current))
         audits.append({
             "collection": coll_name,
             "record_id": "" if current.get("_id") is None else str(current["_id"]),
@@ -641,9 +724,17 @@ async def _enrich_blank_charge(
         "last_transaction_id": txn_key,
         "last_payment_source": source,
     }
-    stamp_audits = await _stamp_bonds(
-        db, booking, _logical_bond_groups(bonds)[0], payment_update, session,
-    )
+    try:
+        stamp_audits = await _stamp_bonds(
+            db, booking, _logical_bond_groups(bonds)[0], payment_update, session,
+        )
+    except _BondWriteMissed:
+        raise PaymentLogError(
+            "payment_conflict",
+            409,
+            "This charge was recorded without a booking, and the booking on this "
+            f"event cannot be applied ({BOND_WRITE_MISSED}). Nothing was written.",
+        ) from None
     filt = {"transaction_id": txn_key, "event_kind": "charge"}
     if row.get("_id") is not None:
         filt = {"_id": row["_id"]}
@@ -791,11 +882,17 @@ async def _apply(
                 "last_transaction_id": txn_key,
                 "last_payment_source": source,
             }
-            stamp_all = await _stamp_bonds(
-                db, booking, _logical_bond_groups(bonds)[0], payment_update, session,
-            )
-            stamped = True
-            stamp_audit = stamp_all[0]
+            try:
+                stamp_all = await _stamp_bonds(
+                    db, booking, _logical_bond_groups(bonds)[0], payment_update, session,
+                )
+            except _BondWriteMissed:
+                # Fail closed: the charge is held for review, not reported stamped.
+                review_note = BOND_WRITE_MISSED
+                stamp_all = None
+            else:
+                stamped = True
+                stamp_audit = stamp_all[0]
 
     doc = {
         "transaction_id": txn_key,
