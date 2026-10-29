@@ -2306,7 +2306,7 @@ async def review_candidate(
             "rev_after": current_rev + 1,
         }
         update: Dict[str, Any] = _with_rev_bump(
-            {"$set": {"discovered_contacts": rows}, "$push": {"review_log": entry}}
+            {"$set": {**identity, "discovered_contacts": rows}, "$push": {"review_log": entry}}
         )
         expire = unreviewed_expire_at(rows, now)
         if expire:

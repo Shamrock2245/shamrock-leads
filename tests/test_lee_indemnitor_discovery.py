@@ -2571,3 +2571,49 @@ async def test_indemnitor_create_endpoint_persists_bond_cosigner_visible_to_disc
     assert "Jordan Sample" in by_name
     assert by_name["Jordan Sample"]["phone"] == "5550100100"
     assert set(by_name["Jordan Sample"]["matched_anchors"]) >= {"dob", "address_zip"}
+
+
+@pytest.mark.asyncio
+async def test_review_candidate_scopes_legacy_booking_only_contacts_doc_for_outreach():
+    """Approving a candidate on a legacy booking-only contacts document writes
+    the full arrest identity (state, county, booking_number) so OutreachSequencer
+    can immediately resolve the approved phone without a separate forced refresh."""
+    from dashboard.services.outreach_sequencer import OutreachSequencer
+
+    db = AsyncDB()
+    db["arrests"].docs.append(_booking())
+    cand = make_candidate(
+        booking_number="B-100",
+        name="Jordan Sample",
+        phone="5550100100",
+        source="prior_shamrock",
+        relationship="sibling",
+        anchors=["phone", "dob"],
+    )
+    # Legacy booking-only contacts document (missing state and county).
+    db["contacts"].docs.append({
+        "_id": "legacy-b-100",
+        "booking_number": "B-100",
+        "discovery_rev": 1,
+        "discovered_contacts": [cand],
+    })
+
+    res = await review_candidate(
+        db,
+        identity=_lee_identity(),
+        candidate_id=cand["candidate_id"],
+        decision="approve",
+        expected_rev=1,
+        actor="staff:test",
+        actor_role="admin",
+    )
+    assert res["success"] is True
+    assert db["contacts"].docs[0]["state"] == "FL"
+    assert db["contacts"].docs[0]["county"] == "Lee"
+    assert db["contacts"].docs[0]["booking_number"] == "B-100"
+
+    seq = OutreachSequencer(db)
+    phone, source = await seq._resolve_phone(_booking())
+    assert phone == "5550100100"
+    assert source == "contact_discovery"
+
