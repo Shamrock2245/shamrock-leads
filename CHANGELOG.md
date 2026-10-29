@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-29 (Co-signer payment holds preserve unrelated review warnings)
+
+### Fixed
+- **Adding and clearing a payment hold on a co-signer link preserves any unrelated staff review warning.** When a link already has `needs_review` set for a non-payment reason before `_flag_paid_blocked` adds a payment hold (`bond_mirror_mismatch`, `bond_ambiguous`, or `packet_ambiguous`), the prior non-payment review flag and reason are saved in `paid_block_prior_needs_review` and `paid_block_prior_review_reason`. When the final payment hold is released in `_clear_paid_block`, that prior review state is restored instead of clearing `needs_review` completely.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_paid_hold_preserves_and_restores_preexisting_unrelated_review_flag`.
+
 ## [Unreleased] — 2026-10-28 (Co-signer links find legacy Booking_Number bonds)
 
 ### Fixed

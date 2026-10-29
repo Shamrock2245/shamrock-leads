@@ -6026,3 +6026,65 @@ def test_unmarked_gmail_receipt_charge_is_recovered(monkeypatch):
     assert _reconcile_now(stores) is True
     assert stores["cosigner_links"].docs[0]["paid_transaction_id"] == "TX-COS-GMAIL"
     assert len(_audits(stores, "paid")) == 1
+
+
+def test_paid_hold_preserves_and_restores_preexisting_unrelated_review_flag(monkeypatch):
+    """Adding and clearing a payment hold preserves an unrelated review warning on the link."""
+    stores, client, token, db = _paid_mirror_world(monkeypatch, surety_id="other-surety")
+    link = stores["cosigner_links"].docs[0]
+    link["needs_review"] = True
+    link["needs_review_reason"] = "staff_manual_warning"
+
+    held_a = _webhook(client, txn="TX-HOLD-PRIOR-A", amount="500.00")
+    assert held_a.status_code == 200, held_a.text
+    held_b = _webhook(client, txn="TX-HOLD-PRIOR-B", amount="500.00")
+    assert held_b.status_code == 200, held_b.text
+
+    assert link["needs_review"] is True
+    assert link["needs_review_reason"] == "bond_mirror_mismatch"
+    assert link["paid_block_prior_needs_review"] is True
+    assert link["paid_block_prior_review_reason"] == "staff_manual_warning"
+    blocked = {row["transaction_id"]: row for row in _audits(stores, "paid_blocked")}
+    assert blocked["TX-HOLD-PRIOR-A"]["review_before"] == {
+        "needs_review": True,
+        "needs_review_reason": "staff_manual_warning",
+        "held_transaction_ids": [],
+    }
+    assert blocked["TX-HOLD-PRIOR-A"]["review_after"] == {
+        "needs_review": True,
+        "needs_review_reason": "bond_mirror_mismatch",
+        "held_transaction_ids": ["TX-HOLD-PRIOR-A"],
+    }
+
+    # Fix mirror drift and replay first held transaction: second hold remains, then clear second hold.
+    stores["active_bonds"].docs[0]["surety_id"] = stores["bond_cases"].docs[0].get("surety_id")
+    # Single held transaction case: test clearing all holds restores the prior staff warning.
+    stores2, client2, token2, db2 = _paid_mirror_world(monkeypatch, surety_id="other-surety")
+    link2 = stores2["cosigner_links"].docs[0]
+    link2["needs_review"] = True
+    link2["needs_review_reason"] = "staff_manual_warning"
+    assert _webhook(client2, txn="TX-HOLD-SINGLE", amount="500.00").status_code == 200
+    assert link2["needs_review"] is True
+    assert link2["needs_review_reason"] == "bond_mirror_mismatch"
+
+    stores2["active_bonds"].docs[0]["surety_id"] = stores2["bond_cases"].docs[0].get("surety_id")
+    fixed = _webhook(client2, txn="TX-HOLD-SINGLE", amount="500.00")
+    assert fixed.status_code == 200, fixed.text
+    assert link2["paid_transaction_id"] == "TX-HOLD-SINGLE"
+    assert link2["needs_review"] is True
+    assert link2["needs_review_reason"] == "staff_manual_warning"
+    assert link2["paid_block_prior_needs_review"] is False
+    assert link2["paid_block_prior_review_reason"] == ""
+    cleared = _audits(stores2, "paid_block_cleared")
+    assert len(cleared) == 1
+    assert cleared[0]["review_before"] == {
+        "needs_review": True,
+        "needs_review_reason": "bond_mirror_mismatch",
+        "held_transaction_ids": ["TX-HOLD-SINGLE"],
+    }
+    assert cleared[0]["review_after"] == {
+        "needs_review": True,
+        "needs_review_reason": "staff_manual_warning",
+        "held_transaction_ids": [],
+    }
+

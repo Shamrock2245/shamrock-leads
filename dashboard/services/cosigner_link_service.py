@@ -2164,6 +2164,22 @@ def _hold_reason(doc: dict, txn: str, default: str = "") -> str:
     return default
 
 
+def _prior_non_hold_review(doc: Optional[dict]) -> Optional[tuple[bool, str]]:
+    """Prior non-payment review state to restore once all payment holds clear."""
+    doc = doc or {}
+    if "paid_block_prior_needs_review" in doc or "paid_block_prior_review_reason" in doc:
+        prior_flag = bool(doc.get("paid_block_prior_needs_review"))
+        prior_reason = str(doc.get("paid_block_prior_review_reason") or "")
+        if prior_flag and prior_reason not in _PAID_BLOCK_REASONS:
+            return prior_flag, prior_reason
+        return False, ""
+    curr_flag = bool(doc.get("needs_review"))
+    curr_reason = str(doc.get("needs_review_reason") or "")
+    if curr_flag and curr_reason not in _PAID_BLOCK_REASONS:
+        return True, curr_reason
+    return None
+
+
 def _review_view(doc: Optional[dict]) -> dict:
     """The review values an audit records before and after a hold change."""
     doc = doc or {}
@@ -2193,10 +2209,12 @@ async def _flag_paid_blocked(
     equal to the packet's down payment is flagged. The link gets
     ``needs_review`` with the reason, the transaction is added to
     ``paid_blocked_transaction_ids`` and a ``paid_blocked_holds`` entry keeps
-    its own reason. One ``paid_blocked`` audit is written per transaction,
-    with the review values before and after, so a hold that replaces
-    another one leaves both in the history. The update is conditional on
-    the transaction not being in the list and on ``paid_block_version``, so
+    its own reason. If the link already carried an unrelated ``needs_review``
+    flag, that prior review state is preserved so clearing the payment hold
+    restores the original staff warning. One ``paid_blocked`` audit is written
+    per transaction, with the review values before and after, so a hold that
+    replaces another one leaves both in the history. The update is conditional
+    on the transaction not being in the list and on ``paid_block_version``, so
     a replay does not audit again and a concurrent hold is not lost.
     Nothing is sent anywhere.
     """
@@ -2215,6 +2233,25 @@ async def _flag_paid_blocked(
             return False
         version = int(fresh.get("paid_block_version") or 0)
         before = _review_view(fresh)
+        set_fields = {
+            "needs_review": True,
+            "needs_review_reason": code,
+            "paid_blocked_transaction_id": txn,
+            "paid_blocked_at": now.isoformat(),
+            "paid_block_version": version + 1,
+        }
+        curr_flag = bool(fresh.get("needs_review"))
+        curr_reason = str(fresh.get("needs_review_reason") or "")
+        if not _active_holds(fresh):
+            if curr_flag and curr_reason not in _PAID_BLOCK_REASONS:
+                set_fields["paid_block_prior_needs_review"] = True
+                set_fields["paid_block_prior_review_reason"] = curr_reason
+            else:
+                set_fields["paid_block_prior_needs_review"] = False
+                set_fields["paid_block_prior_review_reason"] = ""
+        elif curr_flag and curr_reason not in _PAID_BLOCK_REASONS:
+            set_fields["paid_block_prior_needs_review"] = True
+            set_fields["paid_block_prior_review_reason"] = curr_reason
         result = await coll.update_one(
             {
                 "token": token,
@@ -2222,13 +2259,7 @@ async def _flag_paid_blocked(
                 "paid_block_version": _version_match(version),
             },
             {
-                "$set": {
-                    "needs_review": True,
-                    "needs_review_reason": code,
-                    "paid_blocked_transaction_id": txn,
-                    "paid_blocked_at": now.isoformat(),
-                    "paid_block_version": version + 1,
-                },
+                "$set": set_fields,
                 "$push": {
                     "paid_blocked_transaction_ids": txn,
                     "paid_blocked_holds": {
@@ -2277,7 +2308,8 @@ async def _clear_paid_block(
     Only ``txn`` is released (``paid_block_released_transaction_ids``). When
     another held charge is still recorded on the link, ``needs_review`` stays
     set and the reason becomes that charge's reason: staff still have to look
-    at a second down payment. When none is left and the reason is a paid
+    at a second down payment. When none is left, any preserved non-payment
+    review flag and reason are restored; otherwise, if the reason is a paid
     hold, the review mark is cleared. A reason staff set for something else
     is left alone. One audit (``paid_block_cleared``, or ``paid_hold_released``
     when the hold is kept) records the review values before and after, in
@@ -2302,12 +2334,20 @@ async def _clear_paid_block(
             "paid_block_cleared_at": now.isoformat(),
             "paid_block_version": version + 1,
         }
+        prior = _prior_non_hold_review(fresh)
         if remaining:
             fields["needs_review"] = True
             fields["needs_review_reason"] = _hold_reason(fresh, remaining[-1], reason)
+        elif prior is not None and prior[0]:
+            fields["needs_review"] = True
+            fields["needs_review_reason"] = prior[1]
+            fields["paid_block_prior_needs_review"] = False
+            fields["paid_block_prior_review_reason"] = ""
         elif reason in _PAID_BLOCK_REASONS:
             fields["needs_review"] = False
             fields["needs_review_reason"] = ""
+            fields["paid_block_prior_needs_review"] = False
+            fields["paid_block_prior_review_reason"] = ""
         result = await coll.update_one(
             {"token": token, "paid_block_version": _version_match(version)},
             {
