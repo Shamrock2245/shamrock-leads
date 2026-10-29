@@ -96,7 +96,8 @@ OPEN_PREFIXES = (
     "/api/imessage/wix/",
     "/api/paperwork/shannon/",
     "/paperwork/shannon/",
-    "/api/lee-county/",
+    # /api/lee-county/ is NOT open (removed 2026-10-28): every Lee County HQ
+    # route, including the calculator, needs a staff session or machine key.
 )
 
 # Management endpoints that live under /api/webhooks/ but are NOT inbound
