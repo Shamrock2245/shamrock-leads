@@ -16,6 +16,10 @@
 
 ---
 
+## Lee County HQ API requires a staff session (2026-10-28)
+
+`/api/lee-county/` was on the PIN middleware's open-prefix list from 2026-09-14 (`8ee4491`), so the Lee County HQ router answered without a session. It is removed. Overview, leads, defendant family, `POST /outreach/send`, autopilot config (GET/POST), `POST /autopilot/sweep`, and the calculator now return `401` without a staff session or machine key. The only caller is the staff dashboard (`dashboard/sl-lee-county.js`), which already sends the session cookie. Tests: `tests/test_lee_county_hq_auth.py` (on `.github/workflows/ci.yml`).
+
 ## Lee (FL) missed-run alert covers max-instances skips (2026-10-27)
 
 PR #293 (follow-up to #292, deployed in Hetzner run 40502451546). The Lee job runs with `max_instances=1`. When a tick fires while the previous run is still going, APScheduler emits `EVENT_JOB_MAX_INSTANCES` instead of `EVENT_JOB_MISSED`, so the #292 missed-run alert never fired for that kind of skip.
