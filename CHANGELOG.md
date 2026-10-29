@@ -7,7 +7,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Security
 - **Merge precondition (`SECRET_KEY` presence verification):** prod must have `SECRET_KEY` set before merging. Confirm by name and presence only (never print the value):
-  1. `GET /api/crm/health` (with staff session or `X-API-Key: $GAS_API_KEY`) → verify `integrations.secret_key` is `true` and `security.strong_secret_key` is `true`.
+  1. `GET /api/crm/health` (with staff session or `X-API-Key: $GAS_API_KEY`) → verify `integrations.secret_key` is `true`.
   2. Container env check (boolean presence + length threshold only): `docker exec shamrock-dashboard python3 -c 'import os; v = os.getenv("SECRET_KEY", "").strip(); print({"SECRET_KEY_present": bool(v), "len_ge_32": len(v) >= 32})'`.
   3. Repo secrets auditor: `python3 scripts/check_ecosystem_secrets.py` → checks `SECRET_KEY` presence in `.env` without outputting secret values.
   Without `SECRET_KEY`, every protected route and the login POST return 503 after this change.
