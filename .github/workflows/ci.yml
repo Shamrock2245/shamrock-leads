@@ -272,4 +272,5 @@ jobs:
             tests/test_workflow_endpoints.py \
             tests/test_kiosk_privacy_and_confirm.py \
             tests/test_indemnitor_id_scan.py \
+            tests/test_dependabot_config.py \
             --tb=short

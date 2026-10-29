@@ -7,6 +7,13 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - dependencies
+    ignore:
+      - dependency-name: "starlette"
+        versions:
+          - ">= 0.41.0"
+      - dependency-name: "sse-starlette"
+        versions:
+          - ">= 2.2.0"
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
