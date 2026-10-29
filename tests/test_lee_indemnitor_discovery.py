@@ -2617,3 +2617,38 @@ async def test_review_candidate_scopes_legacy_booking_only_contacts_doc_for_outr
     assert phone == "5550100100"
     assert source == "contact_discovery"
 
+
+def test_same_name_provider_records_with_distinct_contacts_stay_separate():
+    """Two distinct people with the same normalized name from the same provider
+    must never combine their phone, address, or anchors into a synthetic candidate."""
+    from dashboard.services.contact_discovery import _merge_candidates
+
+    first = make_candidate(
+        booking_number="B-100",
+        name="John Smith",
+        phone="5550100111",
+        source="prior_shamrock",
+        relationship="prior_indemnitor",
+        anchors=["phone"],
+    )
+    second = make_candidate(
+        booking_number="B-100",
+        name="John Smith",
+        address="200 Oak St, Fort Myers, FL 33901",
+        source="prior_shamrock",
+        relationship="prior_indemnitor",
+        anchors=["address_zip"],
+    )
+    merged = _merge_candidates([], [first, second])
+    assert len(merged) == 2
+    assert merged[0]["candidate_id"] != merged[1]["candidate_id"]
+    assert merged[0]["phone"] == "5550100111"
+    assert merged[0]["address"] is None
+    assert merged[0]["matched_anchors"] == ["phone"]
+    assert merged[0]["confidence"] == 0.45
+    assert merged[1]["phone"] is None
+    assert merged[1]["address"] == "200 Oak St, Fort Myers, FL 33901"
+    assert merged[1]["matched_anchors"] == ["address_zip"]
+    assert merged[1]["confidence"] == 0.30
+
+

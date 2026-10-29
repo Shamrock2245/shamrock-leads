@@ -677,46 +677,81 @@ def _merge_candidates(
     not complete this run (``keep_sources``) is kept too; the 30-day purge
     still applies to it.
     """
-    def _key(row: Dict[str, Any]):
+    def _base_key(row: Dict[str, Any]) -> tuple:
         return (name_key(str(row.get("name") or "")), str(row.get("source") or ""))
 
+    def _contact_tuple(row: Dict[str, Any]) -> tuple:
+        vals = _review_values(row)
+        return (vals["phone"], vals["email"], vals["address"])
+
     deduped_fresh: List[Dict[str, Any]] = []
-    by_fresh_key: Dict[tuple, Dict[str, Any]] = {}
+    by_exact_key: Dict[tuple, Dict[str, Any]] = {}
     for raw_row in fresh:
         if not isinstance(raw_row, dict):
             continue
-        key = _key(raw_row)
-        if not key[0]:
+        bkey = _base_key(raw_row)
+        if not bkey[0]:
             continue
-        if key not in by_fresh_key:
+        ct = _contact_tuple(raw_row)
+        # Only merge two fresh rows when they share the same (name, source) AND
+        # the exact same non-empty normalized (phone, email, address) tuple.
+        # Two same-name people with different or disjoint contact fields never
+        # combine their phones, addresses, or anchors into a synthetic person.
+        exact_key = (*bkey, ct) if any(ct) else (*bkey, ("__unanchored__", len(deduped_fresh)))
+        if exact_key not in by_exact_key:
             copied = dict(raw_row)
-            by_fresh_key[key] = copied
+            by_exact_key[exact_key] = copied
             deduped_fresh.append(copied)
             continue
-        acc = by_fresh_key[key]
+        acc = by_exact_key[exact_key]
         combined_anchors = _anchors_from(
             list(acc.get("matched_anchors") or []) + list(raw_row.get("matched_anchors") or [])
         )
         if combined_anchors:
             acc["matched_anchors"] = combined_anchors
             acc["confidence"] = confidence_for(combined_anchors)
-        for field in ("phone", "email", "address"):
-            if not acc.get(field) and raw_row.get(field):
-                acc[field] = raw_row[field]
         if acc.get("relationship") in (None, "", "prior_indemnitor", "possible_indemnitor") and raw_row.get("relationship"):
             acc["relationship"] = raw_row["relationship"]
 
-    prior = {_key(row): row for row in existing if isinstance(row, dict)}
-    merged: List[Dict[str, Any]] = []
-    seen = set()
+    fresh_counts: Dict[tuple, int] = {}
     for row in deduped_fresh:
-        key = _key(row)
-        if not key[0] or key in seen:
+        bkey = _base_key(row)
+        fresh_counts[bkey] = fresh_counts.get(bkey, 0) + 1
+
+    prior_by_base: Dict[tuple, List[Dict[str, Any]]] = {}
+    for row in existing:
+        if isinstance(row, dict) and _base_key(row)[0]:
+            prior_by_base.setdefault(_base_key(row), []).append(row)
+
+    merged: List[Dict[str, Any]] = []
+    matched_prior_ids: set = set()
+    seen_row_keys: set = set()
+    for idx, row in enumerate(deduped_fresh):
+        bkey = _base_key(row)
+        ct = _contact_tuple(row)
+        ambiguous_name = fresh_counts.get(bkey, 0) > 1 or len(prior_by_base.get(bkey, ())) > 1
+        row_key = (*bkey, ct, idx) if ambiguous_name else bkey
+        if not bkey[0] or row_key in seen_row_keys:
             continue
-        seen.add(key)
-        previous = prior.get(key)
+        seen_row_keys.add(row_key)
+        row = dict(row)
+        if ambiguous_name:
+            row["candidate_id"] = str(uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"{row.get('candidate_id') or ''}|{ct[0]}|{ct[1]}|{ct[2]}|{idx}",
+            ))
+        prior_candidates = prior_by_base.get(bkey, [])
+        previous: Optional[Dict[str, Any]] = None
+        if not ambiguous_name and len(prior_candidates) == 1:
+            previous = prior_candidates[0]
+        elif ambiguous_name:
+            for cand in prior_candidates:
+                if id(cand) not in matched_prior_ids and any(ct) and _contact_tuple(cand) == ct:
+                    previous = cand
+                    break
+        if isinstance(previous, dict):
+            matched_prior_ids.add(id(previous))
         if isinstance(previous, dict) and previous.get("review_status") in CARRIED_STATUSES:
-            row = dict(row)
             changed = review_changed_fields(previous, row)
             if previous.get("candidate_id"):
                 row["candidate_id"] = previous["candidate_id"]
@@ -742,16 +777,18 @@ def _merge_candidates(
                 )
         elif isinstance(previous, dict) and isinstance(previous.get("review_reset"), dict):
             # Keep the reason visible until staff review the row.
-            row = dict(row)
             row["review_reset"] = previous["review_reset"]
         merged.append(row)
     keep = set(keep_sources or ())
-    for key, row in prior.items():
-        if key in seen or not key[0]:
+    for bkey, rows in prior_by_base.items():
+        if not bkey[0]:
             continue
-        if is_reviewed(row) or str(row.get("source") or "") in keep:
-            seen.add(key)
-            merged.append(row)
+        for row in rows:
+            if id(row) in matched_prior_ids:
+                continue
+            if is_reviewed(row) or str(row.get("source") or "") in keep:
+                matched_prior_ids.add(id(row))
+                merged.append(row)
     return merged
 
 
