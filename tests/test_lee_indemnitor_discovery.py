@@ -2423,10 +2423,14 @@ def test_add_lead_discovery_sends_a_state_and_surfaces_errors():
     assert out["form_state"]["discover"] == [
         {"booking_number": "B-100", "full_name": "Casey Sample", "county": "Fulton", "state": "GA"}
     ]
-    # A MANUAL-* lead has no arrest record, so the name must ride in the body.
+    # A MANUAL-* lead has no arrest record, so the name and derived state must ride in both initial and refresh bodies.
+    assert out["manual_booking"]["pb_state"] == "FL"
     assert out["manual_booking"]["discover"] == [
-        {"booking_number": "MANUAL-1", "full_name": "Casey Sample", "county": "Lee", "state": "FL"}
+        {"booking_number": "MANUAL-1", "full_name": "Casey Sample", "county": "Lee", "state": "FL"},
+        {"booking_number": "MANUAL-1", "full_name": "Casey Sample", "county": "Lee", "state": "FL", "address": ""},
     ]
+    assert out["manual_ga_refresh"]["pb_state"] == "GA"
+    assert out["manual_ga_refresh"]["discover"][-1]["state"] == "GA"
     assert _errors("manual_booking") == []
     assert out["name_body"]["no_name"] == {"ok": False, "reason": "name_required"}
     assert out["name_body"]["spaced"]["body"]["full_name"] == "Casey Sample"

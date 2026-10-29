@@ -738,6 +738,16 @@ window.SLProspective = (function () {
     'Washington'
   ];
   const _FL_COUNTY_KEYS = new Set(FL_REGISTRY_COUNTIES.map(function(c) { return c.toLowerCase(); }));
+  let _candidateScope = {};
+
+  function resolveLeadState(county, formState) {
+    var st = String(formState || '').trim().toUpperCase();
+    if (/^[A-Z]{2}$/.test(st)) return st;
+    var c = String(county || '').trim();
+    var key = c.replace(/\s+county$/i, '').trim().toLowerCase();
+    if (key && _FL_COUNTY_KEYS.has(key)) return 'FL';
+    return '';
+  }
 
   // Add Lead discovery body. It carries the defendant name from the form: a
   // new lead (often a MANUAL-* booking) has no arrest record the server could
@@ -756,8 +766,8 @@ window.SLProspective = (function () {
       if (!/^[A-Z]{2}$/.test(st)) return { ok: false, reason: 'state_invalid' };
       return { ok: true, body: { booking_number: bk, full_name: name, county: c, state: st } };
     }
-    var key = c.replace(/\s+county$/i, '').trim().toLowerCase();
-    if (_FL_COUNTY_KEYS.has(key)) return { ok: true, body: { booking_number: bk, full_name: name, county: c, state: 'FL' } };
+    var derived = resolveLeadState(c, '');
+    if (derived) return { ok: true, body: { booking_number: bk, full_name: name, county: c, state: derived } };
     return { ok: false, reason: 'state_unknown' };
   }
 
@@ -823,11 +833,12 @@ window.SLProspective = (function () {
     var el = $('ldCandidateList');
     if (!el || !bk) return;
     try {
-      var cbond = (_data || []).find(function(b) { return String(b.booking_number) === String(bk); }) || {};
+      var cbond = (_data || []).find(function(b) { return String(b.booking_number) === String(bk); });
       var clead = (window._leadMap && window._leadMap[bk]) || {};
+      var cached = _candidateScope[String(bk)] || {};
       var cq = new URLSearchParams();
-      var ccounty = cbond.county || clead.county || '';
-      var cstate = cbond.state || clead.state || '';
+      var ccounty = (cbond && cbond.county) || clead.county || cached.county || '';
+      var cstate = resolveLeadState(ccounty, (cbond && cbond.state) || clead.state || cached.state || '');
       if (ccounty) cq.set('county', ccounty);
       if (cstate) cq.set('state', cstate);
       var r = await fetch(API + '/api/contacts/' + encodeURIComponent(bk) + (cq.toString() ? '?' + cq.toString() : ''));
@@ -837,14 +848,22 @@ window.SLProspective = (function () {
         return;
       }
       var d = await r.json();
+      var rcounty = d.county || ccounty;
+      var rstate = resolveLeadState(rcounty, d.state || cstate);
+      var rname = (cbond && cbond.defendant_name) || clead.full_name || clead.defendant_name || cached.full_name || '';
+      if (rcounty || rstate || rname) {
+        _candidateScope[String(bk)] = { county: rcounty, state: rstate, full_name: rname };
+        if (cbond) {
+          if (rcounty && !cbond.county) cbond.county = rcounty;
+          if (rstate && !cbond.state) cbond.state = rstate;
+        }
+      }
       var rows = d.discovered_contacts || d.candidates || d.contacts || [];
       var status = d.discovery_status || d.status || '';
       if (!rows.length) {
         el.textContent = candidateStatusLine(status, 0);
         return;
       }
-      var rcounty = d.county || ccounty;
-      var rstate = d.state || cstate;
       var rev = typeof d.discovery_rev === 'number' ? d.discovery_rev : 0;
       var canReview = !!(rcounty && rstate);
       el.innerHTML = rows.map(function(c) {
@@ -1117,19 +1136,33 @@ window.SLProspective = (function () {
   async function discoverContacts(bk) {
     toast('Running contact discovery…', 'info');
     try {
-      var bond = _data.find(function(b) { return String(b.booking_number) === String(bk); }) || {};
+      var bondObj = _data.find(function(b) { return String(b.booking_number) === String(bk); });
+      var bond = bondObj || {};
       var lead = (window._leadMap && window._leadMap[bk]) || {};
+      var cached = _candidateScope[String(bk)] || {};
+      var county = bond.county || lead.county || cached.county || '';
+      var state = resolveLeadState(county, bond.state || lead.state || cached.state || '');
+      var fullName = bond.defendant_name || lead.full_name || lead.defendant_name || cached.full_name || '';
       var r = await fetch(API + '/api/contacts/discover', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           booking_number: bk,
-          full_name: bond.defendant_name || lead.full_name || lead.defendant_name || '',
-          county: bond.county || lead.county || '',
-          state: bond.state || lead.state || '',
+          full_name: fullName,
+          county: county,
+          state: state,
           address: bond.address || lead.address || ''
         })
       });
       var d = await r.json();
+      var rcounty = (d && d.county) || county;
+      var rstate = resolveLeadState(rcounty, (d && d.state) || state);
+      if (rcounty || rstate || fullName) {
+        _candidateScope[String(bk)] = { county: rcounty, state: rstate, full_name: fullName };
+        if (bondObj) {
+          if (rcounty && !bondObj.county) bondObj.county = rcounty;
+          if (rstate && !bondObj.state) bondObj.state = rstate;
+        }
+      }
       var count = (d.contacts || d.discovered_contacts || []).length;
       if (d.error) toast('Discovery failed', 'error');
       else toast('Discovery finished (' + count + ')', count ? 'success' : 'info');
@@ -1563,10 +1596,13 @@ window.SLProspective = (function () {
     var btn = $('alSubmitBtn');
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Adding...'; }
     try {
+      var formState = ($('alState') && $('alState').value) || '';
+      var resolvedState = resolveLeadState(county, formState);
       var payload = {
         defendant_name: defName,
         booking_number: ($('alBooking') && $('alBooking').value.trim()) || ('MANUAL-' + Date.now()),
         county: county,
+        state: resolvedState,
         bond_amount: parseFloat($('alBondAmount') ? $('alBondAmount').value : '0') || 0,
         charges: ($('alCharges') && $('alCharges').value.trim()) || '',
         stage: ($('alStage') && $('alStage').value) || 'contacted',
@@ -1586,11 +1622,13 @@ window.SLProspective = (function () {
       if (d.success !== false) {
         toast(defName + ' added to pipeline ✓', 'success');
         var bk = (d.prospective_bond && d.prospective_bond.booking_number) || payload.booking_number;
+        if (county || resolvedState || defName) {
+          _candidateScope[String(bk)] = { county: county, state: resolvedState, full_name: defName };
+        }
         if ($('alAutoSequence') && $('alAutoSequence').checked && payload.indemnitor.phone) {
           try { await fetch(API + '/api/outreach/start/' + encodeURIComponent(bk) + '/' + encodeURIComponent(county), { method: 'POST' }); } catch (e) { /* non-fatal */ }
         }
         if ($('alContactDiscover') && $('alContactDiscover').checked) {
-          var formState = ($('alState') && $('alState').value) || '';
           var plan = addLeadDiscoverBody(bk, county, formState, defName);
           if (!plan.ok) {
             toast(addLeadDiscoverSkipMessage(plan.reason), 'error');
