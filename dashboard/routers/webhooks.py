@@ -32,9 +32,16 @@ GMAIL_PUBSUB_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
 
 
 def _env_is_production() -> bool:
-    """True when ENV or ENVIRONMENT is production/prod (repo convention)."""
-    env = (os.getenv("ENV") or os.getenv("ENVIRONMENT") or "").lower()
-    return env in ("production", "prod")
+    """True unless a missing webhook secret may be tolerated.
+
+    Fail closed: only ENV/ENVIRONMENT exactly ``development`` (with
+    REQUIRE_DASHBOARD_PIN unset) tolerates a missing secret. ENV unset,
+    staging, test, ``dev`` and production all reject (503). The name is kept
+    for the existing call sites.
+    """
+    from dashboard.auth.dev_mode import unconfigured_secret_allowed
+
+    return not unconfigured_secret_allowed()
 
 
 def _payment_secret_unset_allowed() -> bool:
@@ -177,7 +184,7 @@ async def twilio_webhook(request: Request):
                 status_code=503,
             )
         logger.warning(
-            "[twilio_webhook] TWILIO_AUTH_TOKEN unset — allowing in non-production only"
+            "[twilio_webhook] TWILIO_AUTH_TOKEN unset — allowing in ENV=development only"
         )
 
     # Twilio sends application/x-www-form-urlencoded
@@ -841,8 +848,10 @@ def _verify_adobe_pdf_webhook(request: Request) -> bool:
         or ""
     ).strip()
     if not secret:
-        if os.getenv("DEBUG", "false").lower() == "true":
-            logger.warning("[adobe_pdf_webhook] ADOBE_PDF_WEBHOOK_SECRET unset — allowing in DEBUG")
+        from dashboard.auth.dev_mode import unconfigured_secret_allowed
+
+        if os.getenv("DEBUG", "false").lower() == "true" and unconfigured_secret_allowed():
+            logger.warning("[adobe_pdf_webhook] ADOBE_PDF_WEBHOOK_SECRET unset — allowing in DEBUG + ENV=development")
             return True
         logger.error("[adobe_pdf_webhook] ADOBE_PDF_WEBHOOK_SECRET unset — rejecting")
         return False
@@ -960,10 +969,10 @@ def verify_docuseal_signature(payload: bytes, signature: str) -> bool:
 
     secret = os.getenv("DOCUSEAL_WEBHOOK_SECRET", "").strip()
     debug = os.getenv("DEBUG", "false").lower() in ("1", "true", "yes")
-    env = (os.getenv("ENV") or os.getenv("ENVIRONMENT") or "").lower()
-    is_prod = env in ("production", "prod") or os.getenv("REQUIRE_DOCUSEAL_WEBHOOK_SECRET", "").lower() in (
-        "1", "true", "yes",
-    )
+    from dashboard.auth.dev_mode import unconfigured_secret_allowed
+
+    # Fail closed unless explicit ENV=development (and no REQUIRE_* flag).
+    is_prod = not unconfigured_secret_allowed("REQUIRE_DOCUSEAL_WEBHOOK_SECRET")
 
     if not secret:
         if debug and not is_prod:

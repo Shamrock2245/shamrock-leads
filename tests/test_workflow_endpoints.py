@@ -373,7 +373,8 @@ def test_twilio_sms_webhook_does_not_open_a_bond_lead():
     from dashboard.routers.webhooks import webhooks_bp
 
     db = FakeDB()
-    with patch.dict(os.environ, {"ENV": "test", "TWILIO_AUTH_TOKEN": ""}), \
+    # Explicit dev: unsigned Twilio posts are only accepted when ENV=development.
+    with patch.dict(os.environ, {"ENV": "development", "ENVIRONMENT": "", "TWILIO_AUTH_TOKEN": ""}), \
          patch("dashboard.routers.webhooks.get_collection", side_effect=db.get_collection):
         app = FastAPI()
         app.include_router(webhooks_bp)

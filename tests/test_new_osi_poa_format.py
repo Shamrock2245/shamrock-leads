@@ -209,7 +209,7 @@ def test_full_osi_receipt_stays_at_50():
 
 
 def test_bare_hyphen_phone_not_a_range():
-    assert parse_poa_receipt_text("Call 239-224-5454") == []
+    assert parse_poa_receipt_text("Call 239-555-0104") == []
     assert parse_poa_receipt_text("428 South Congress FL 33401") == []
 
 

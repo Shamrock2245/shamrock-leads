@@ -19,6 +19,7 @@ phone, which payment copy already forbids.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import sys
 from dataclasses import dataclass
@@ -28,9 +29,26 @@ ROOT = Path(__file__).resolve().parent.parent
 
 CANONICAL_PHONES = frozenset({"2393322245", "7272952245", "2399550178"})
 BRAND_LINE_ENDINGS = frozenset({"2245", "0178"})
-# Dashboard PIN 224545 pasted into a client SMS as a phone. Split so this
-# source file does not contain the contiguous digit string.
-PIN_AS_PHONE = "239" + "224" + "5454"
+# A retired dashboard PIN pasted into a client SMS as a 239 phone number.
+# Only a SHA-256 digest of that 10-digit string is kept, so the retired PIN
+# itself is not in the tree (it stays rotated; see SECURITY.md).
+PIN_AS_PHONE_SHA256 = "8667a341e2a6efc79ae3e139ad8cbcffad4be3fbd2da9e3af6f0528aba8e234f"
+
+
+RETIRED_PIN_SHA256 = "1bd87afda561f3049e3b33dcb26d6f418f159b36bfad6dee9cac335e1646a653"
+
+
+def contains_retired_pin(text: str) -> bool:
+    """True when any 6-digit window of a digit run in ``text`` is the retired PIN."""
+    for run in re.findall(r"\d{6,}", text or ""):
+        for i in range(len(run) - 5):
+            if hashlib.sha256(run[i:i + 6].encode()).hexdigest() == RETIRED_PIN_SHA256:
+                return True
+    return False
+
+
+def is_pin_shaped_phone(digits: str) -> bool:
+    return len(digits) == 10 and hashlib.sha256(digits.encode()).hexdigest() == PIN_AS_PHONE_SHA256
 
 # Hostnames split so this file is not a finding of its own rules.
 _COM = "com"
@@ -98,7 +116,7 @@ def shamrock_shaped_phone(digits: str) -> str | None:
         return None
     if digits[3:6] == "555":
         return None
-    if digits == PIN_AS_PHONE:
+    if is_pin_shaped_phone(digits):
         return "pin-shaped callback"
     if digits[:3] not in {"239", "727"}:
         return None
