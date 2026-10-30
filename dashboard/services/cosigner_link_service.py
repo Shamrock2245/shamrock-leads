@@ -14,6 +14,7 @@ Customer texting stays on BlueBubbles behind ``SWIPESIMPLE_DISPATCH_LIVE``.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import html
 import logging
@@ -24,6 +25,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Optional
 from urllib.parse import urlparse
+
+from pymongo.errors import DuplicateKeyError
 
 from dashboard.extensions import get_collection
 from dashboard.services.docuseal_service import DEFAULT_DOCUSEAL_URL
@@ -593,11 +596,30 @@ async def _case_rows(collection: str, case_id: str) -> list:
 
 
 def _bond_status(bond: dict) -> str:
-    return str((bond or {}).get("status") or "").strip().lower()
+    return str((bond or {}).get("status") or "").strip().casefold()
 
 
 def _mirror_text(bond: dict, *keys: str) -> str:
     return _bond_field(bond, *keys)
+
+
+def _mirror_key(bond: dict, *keys: str) -> str:
+    """Trimmed and casefolded, so ``OSI`` and `` osi `` are one surety."""
+    return _mirror_text(bond, *keys).casefold()
+
+
+def _mirror_name_key(value: str) -> str:
+    """Casefold, drop punctuation, collapse whitespace."""
+    letters = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in str(value or ""))
+    return " ".join(letters.casefold().split())
+
+
+def _mirror_names_agree(left: str, right: str) -> bool:
+    """Same person on both rows. A blank or a different name is not."""
+    left_key, right_key = _mirror_name_key(left), _mirror_name_key(right)
+    if not left_key or not right_key:
+        return False
+    return left_key == right_key or names_match(left, right)
 
 
 def _mirror_disagrees(case_row: dict, mirror: dict) -> bool:
@@ -605,8 +627,12 @@ def _mirror_disagrees(case_row: dict, mirror: dict) -> bool:
 
     Status, signer, booking, defendant, match, case number, surety, POA,
     and the defendant and indemnitor ids are compared. A cleared or
-    reassigned field is a different case. A POA number on the selected
-    bond is not, by itself, a mirror disagreement.
+    reassigned field is a different case. Case and surrounding whitespace
+    are not a difference: status, surety, booking, case number, POA, and
+    match status compare trimmed and casefolded, and names compare without
+    case, punctuation, or extra spaces. ``match_id`` and the party ids
+    compare trimmed only. A POA number on the selected bond is not, by
+    itself, a mirror disagreement.
     """
     if _bond_status(case_row) != _bond_status(mirror):
         return True
@@ -614,31 +640,28 @@ def _mirror_disagrees(case_row: dict, mirror: dict) -> bool:
     mirror_name, mirror_role = _expected_signer(mirror, None)
     if case_role != mirror_role:
         return True
-    if not case_name or not mirror_name or not names_match(case_name, mirror_name):
+    if not _mirror_names_agree(case_name, mirror_name):
         return True
     for keys in (
         ("booking_number", "Booking_Number"),
         ("case_number", "Case_Number"),
         ("surety_id", "Surety_ID"),
         ("poa_number", "POA_Number", "power_number"),
+        ("match_status", "Match_Status"),
+    ):
+        if _mirror_key(case_row, *keys) != _mirror_key(mirror, *keys):
+            return True
+    for keys in (
         ("match_id", "Match_ID"),
         ("defendant_id", "Defendant_ID"),
         ("indemnitor_id", "Indemnitor_ID"),
     ):
         if _mirror_text(case_row, *keys) != _mirror_text(mirror, *keys):
             return True
-    case_match = _mirror_text(case_row, "match_status", "Match_Status").lower()
-    mirror_match = _mirror_text(mirror, "match_status", "Match_Status").lower()
-    if case_match != mirror_match:
-        return True
     case_defendant = _mirror_text(case_row, "defendant_name", "Defendant_Name", "defendant")
     mirror_defendant = _mirror_text(mirror, "defendant_name", "Defendant_Name", "defendant")
     if case_defendant or mirror_defendant:
-        if (
-            not case_defendant
-            or not mirror_defendant
-            or not names_match(case_defendant, mirror_defendant)
-        ):
+        if not _mirror_names_agree(case_defendant, mirror_defendant):
             return True
     return False
 
@@ -707,6 +730,8 @@ async def _audit(
     new_state: dict,
     actor: str = "cosigner_link",
     session=None,
+    reason: str = "",
+    extra: Optional[dict] = None,
 ) -> None:
     kwargs = {"session": session} if session is not None else {}
     await get_collection("audit_events").insert_one({
@@ -720,10 +745,11 @@ async def _audit(
         "created_at": now.isoformat(),
         "booking_number": link.get("booking_number") or "",
         "packet_id": link.get("packet_id") or "",
-        "reason": step,
+        "reason": reason or step,
         "old_state": _audit_state_only(old_state),
         "new_state": _audit_state_only(new_state),
         "confidence": 1.0,
+        **(extra or {}),
     }, **kwargs)
 
 
@@ -1776,48 +1802,89 @@ async def submit_cosigner_scan(token: str, body: dict) -> dict:
     return await cosigner_state(token, lang=link.get("lang"))
 
 
-async def _with_payment_lock(txn_key: str, work) -> None:
+# Outcomes of one locked link write.
+LOCK_OK = "ok"  # the transaction committed
+LOCK_REFUSED = "refused"  # the work raised a co-signer refusal; retrying will not change it
+LOCK_UNAVAILABLE = "unavailable"  # no transaction support: nothing is ever written
+LOCK_FAILED = "failed"  # every attempt raised; the caller records a pending transition
+
+# Bounded retry inside the lock for errors that are not refusals. The
+# driver's ``with_transaction`` already retries TransientTransactionError;
+# this covers a dropped connection or a failed commit that it gives up on.
+_LOCK_ATTEMPTS = 3
+_LOCK_RETRY_DELAYS = (0.05, 0.2)
+
+
+async def _with_payment_lock(txn_key: str, work) -> str:
     """Run ``work`` inside ``payment_txn_locks`` for this transaction.
 
     The provider recorder takes the same lock. The link write waits for it,
     re-reads the payment rows, then does a conditional update. No client
-    means nothing is written.
+    means nothing is written. A failed attempt rolls back and is retried, up
+    to ``_LOCK_ATTEMPTS`` times; ``work`` is conditional, so a retry after a
+    commit that did land does not write twice. Returns one of the ``LOCK_*``
+    outcomes.
     """
     from dashboard.extensions import get_db
     from dashboard.services import payment_log_claims as payment_log
 
     txn_key = str(txn_key or "").strip()
     if not txn_key:
-        return
+        return LOCK_UNAVAILABLE
     try:
         db = get_db()
         client = await payment_log._transaction_client()
     except Exception:
         logger.info("[cosigner] payment lock unavailable")
-        return
+        return LOCK_FAILED
     if client is None or db is None:
         logger.info("[cosigner] payment lock unavailable")
-        return
-    try:
-        await payment_log.ensure_txn_lock_index(db[payment_log.LOCKS_COLLECTION])
-    except Exception:
-        logger.info("[cosigner] payment lock index unavailable")
-        return
+        return LOCK_UNAVAILABLE
 
     async def wrapped(session):
         await payment_log.acquire_txn_lock(db[payment_log.LOCKS_COLLECTION], txn_key, session)
         await work(db, session)
 
-    try:
-        await payment_log._run_apply(client, wrapped)
-    except Exception:
-        logger.info("[cosigner] payment lock write skipped txn=%s", txn_key)
+    for attempt in range(_LOCK_ATTEMPTS):
+        try:
+            await payment_log.ensure_txn_lock_index(db[payment_log.LOCKS_COLLECTION])
+            await payment_log._run_apply(client, wrapped)
+            return LOCK_OK
+        except payment_log.TransactionsUnavailable:
+            logger.info("[cosigner] payment lock unavailable")
+            return LOCK_UNAVAILABLE
+        except CosignerLinkError as exc:
+            logger.info("[cosigner] payment lock write refused txn=%s code=%s", txn_key, exc.code)
+            return LOCK_REFUSED
+        except Exception as exc:
+            logger.warning(
+                "[cosigner] payment lock write failed txn=%s attempt=%d/%d error=%s",
+                txn_key, attempt + 1, _LOCK_ATTEMPTS, type(exc).__name__,
+            )
+            if attempt + 1 < _LOCK_ATTEMPTS:
+                delays = _LOCK_RETRY_DELAYS or (0,)
+                await asyncio.sleep(delays[min(attempt, len(delays) - 1)])
+    return LOCK_FAILED
+
+
+class PaymentRowsUnreadable(Exception):
+    """The payment rows could not be read inside the lock. Not a refusal."""
 
 
 async def _payment_rows(db, txn_key: str, session) -> Optional[list]:
-    """Payment rows for this transaction, or None when they cannot be read."""
+    """Payment rows for this transaction, or None when they cannot be read.
+
+    Scoped to the active tenant when multi-tenancy is on: payment rows are
+    tenant-tagged and the claims allow the same transaction id in two
+    tenants, so another tenant's charge or refund never decides this link.
+    With the flag on and no tenant, the rows count as unreadable.
+    """
     from dashboard.services.payment_log_claims import _read_rows
 
+    query = _scope({"transaction_id": txn_key})
+    if query is None:
+        logger.info("[cosigner] payment rows need a tenant")
+        return None
     try:
         coll = db["payments"]
     except Exception:
@@ -1825,7 +1892,7 @@ async def _payment_rows(db, txn_key: str, session) -> Optional[list]:
     if not hasattr(coll, "find"):
         return None
     try:
-        return await _read_rows(db, txn_key, session)
+        return await _read_rows(db, txn_key, session, query=query)
     except Exception:
         logger.info("[cosigner] payment rows unreadable")
         return None
@@ -1839,6 +1906,10 @@ async def _charge_row_blocks_down_payment(db, transaction_id: str, session) -> b
     same transaction blocks the stamp too. A read error, a missing row, or
     an empty row set blocks it as well: the charge was just recorded under
     this lock, so no readable charge row is not a pass.
+
+    A read error is not a refusal: it raises ``PaymentRowsUnreadable`` so
+    the lock reports ``LOCK_FAILED`` and a pending paid transition is kept
+    (a heal does not drop its marker on a read it could not make).
     """
     from dashboard.services.payment_log_claims import (
         SETTLED_CHARGE_STATUSES,
@@ -1847,8 +1918,13 @@ async def _charge_row_blocks_down_payment(db, transaction_id: str, session) -> b
     )
 
     rows = await _payment_rows(db, str(transaction_id or "").strip(), session)
+    if rows is None:
+        # Not a decision. Raising makes the locked write fail, so the paid
+        # transition stays pending and is replayed once the rows read.
+        logger.info("[cosigner] paid deferred unreadable payment rows")
+        raise PaymentRowsUnreadable("payment rows unreadable")
     if not rows:
-        logger.info("[cosigner] paid refused unreadable payment rows")
+        logger.info("[cosigner] paid refused empty payment rows")
         return True
     if has_reversal_sibling(rows):
         return True
@@ -1995,10 +2071,21 @@ async def _open_down_payment_links(booking: str) -> list:
     Booking number alone is not the scope. Another open packet on the same
     case is not stamped. Several links on that one packet are.
     """
+    targets, _blocked = await _down_payment_scope(booking)
+    return targets
+
+
+async def _down_payment_scope(booking: str) -> tuple[list, list]:
+    """``(targets, blocked)`` for this booking's down payment.
+
+    ``targets`` is what ``_open_down_payment_links`` returns. ``blocked`` is
+    the candidate links when more than one open packet claims the case, so
+    the refusal can be flagged for review. It is empty otherwise.
+    """
     case_id = await _one_case_id(booking)
     if not case_id:
         logger.info("[cosigner] paid refused ambiguous case")
-        return []
+        return [], []
     # A link issued through the booking fallback stores the resolved case id.
     # An older link may still have an empty case id and the same booking.
     query = _scope({"$or": [
@@ -2006,7 +2093,7 @@ async def _open_down_payment_links(booking: str) -> list:
         {"booking_number": booking, "bond_case_id": {"$in": ["", None]}},
     ]})
     if query is None:
-        return []
+        return [], []
     grouped: dict = {}
     cursor = get_collection(LINKS).find(query)
     async for link in _iter(cursor):
@@ -2020,8 +2107,278 @@ async def _open_down_payment_links(booking: str) -> list:
     if len(grouped) != 1:
         if len(grouped) > 1:
             logger.info("[cosigner] paid refused ambiguous packets")
-        return []
-    return next(iter(grouped.values()))
+            return [], [pair for pairs in grouped.values() for pair in pairs]
+        return [], []
+    return next(iter(grouped.values())), []
+
+
+_PAID_BLOCK_REVIEW_CODES = frozenset({"bond_mirror_mismatch", "bond_ambiguous"})
+_PACKET_AMBIGUOUS = "packet_ambiguous"
+_PAID_BLOCK_REASONS = _PAID_BLOCK_REVIEW_CODES | {_PACKET_AMBIGUOUS}
+
+
+async def _blocked_charge_is_the_down_payment(
+    packet: Optional[dict], paid_cents: Optional[int],
+) -> bool:
+    """The held charge is exactly this packet's down payment.
+
+    The bond rows cannot be trusted on this path, so the packet's own amount
+    due is used. Without one, a single ``bond_cases`` row for the packet's
+    case supplies it. Anything else is not flagged, the same as the amount
+    refusal on the paid path.
+    """
+    if paid_cents is None or not isinstance(packet, dict):
+        return False
+    due = invoice_due_cents(packet)
+    if due is None:
+        case_id = str(packet.get("bond_case_id") or "").strip()
+        if case_id:
+            try:
+                rows = await _case_rows("bond_cases", case_id)
+            except CosignerLinkError:
+                rows = []
+            if len(rows) == 1:
+                due = invoice_due_cents(rows[0])
+    return due is not None and int(due) == int(paid_cents)
+
+
+def _version_match(version: int):
+    """Filter value for ``paid_block_version``. A link never held has no field."""
+    return {"$in": [0, None]} if not version else version
+
+
+def _active_holds(doc: Optional[dict]) -> list:
+    """Held charges on this link that no paid stamp has released yet."""
+    doc = doc or {}
+    released = set(doc.get("paid_block_released_transaction_ids") or [])
+    return [
+        str(txn) for txn in (doc.get("paid_blocked_transaction_ids") or [])
+        if str(txn) not in released
+    ]
+
+
+def _hold_reason(doc: dict, txn: str, default: str = "") -> str:
+    for hold in reversed(doc.get("paid_blocked_holds") or []):
+        if isinstance(hold, dict) and str(hold.get("transaction_id") or "") == txn:
+            return str(hold.get("reason") or default)
+    return default
+
+
+def _prior_non_hold_review(doc: Optional[dict]) -> Optional[tuple[bool, str]]:
+    """Prior non-payment review state to restore once all payment holds clear."""
+    doc = doc or {}
+    if "paid_block_prior_needs_review" in doc or "paid_block_prior_review_reason" in doc:
+        prior_flag = bool(doc.get("paid_block_prior_needs_review"))
+        prior_reason = str(doc.get("paid_block_prior_review_reason") or "")
+        if prior_flag and prior_reason not in _PAID_BLOCK_REASONS:
+            return prior_flag, prior_reason
+        return False, ""
+    curr_flag = bool(doc.get("needs_review"))
+    curr_reason = str(doc.get("needs_review_reason") or "")
+    if curr_flag and curr_reason not in _PAID_BLOCK_REASONS:
+        return True, curr_reason
+    return None
+
+
+def _review_view(doc: Optional[dict]) -> dict:
+    """The review values an audit records before and after a hold change."""
+    doc = doc or {}
+    return {
+        "needs_review": bool(doc.get("needs_review")),
+        "needs_review_reason": str(doc.get("needs_review_reason") or ""),
+        "held_transaction_ids": _active_holds(doc),
+    }
+
+
+_HOLD_WRITE_ATTEMPTS = 3
+
+
+async def _flag_paid_blocked(
+    link: dict,
+    packet: Optional[dict],
+    txn: str,
+    code: str,
+    paid_cents: Optional[int],
+    now: datetime,
+    session,
+) -> bool:
+    """Leave a staff-visible review mark when a settled charge cannot stamp.
+
+    The payment row is already recorded. The bond rows disagree, or more than
+    one open packet claims the case, so the link stays unpaid. Only a charge
+    equal to the packet's down payment is flagged. The link gets
+    ``needs_review`` with the reason, the transaction is added to
+    ``paid_blocked_transaction_ids`` and a ``paid_blocked_holds`` entry keeps
+    its own reason. If the link already carried an unrelated ``needs_review``
+    flag, that prior review state is preserved so clearing the payment hold
+    restores the original staff warning. One ``paid_blocked`` audit is written
+    per transaction, with the review values before and after, so a hold that
+    replaces another one leaves both in the history. The update is conditional
+    on the transaction not being in the list and on ``paid_block_version``, so
+    a replay does not audit again and a concurrent hold is not lost.
+    Nothing is sent anywhere.
+    """
+    token = str(link.get("token") or "").strip()
+    if not token or not txn:
+        return False
+    if not await _blocked_charge_is_the_down_payment(packet, paid_cents):
+        logger.info("[cosigner] paid hold not flagged amount packet_id=%s", link.get("packet_id"))
+        return False
+    coll = get_collection(LINKS)
+    for _ in range(_HOLD_WRITE_ATTEMPTS):
+        fresh = await coll.find_one({"token": token}, session=session)
+        if not fresh:
+            return False
+        if txn in [str(t) for t in (fresh.get("paid_blocked_transaction_ids") or [])]:
+            return False
+        version = int(fresh.get("paid_block_version") or 0)
+        before = _review_view(fresh)
+        set_fields = {
+            "needs_review": True,
+            "needs_review_reason": code,
+            "paid_blocked_transaction_id": txn,
+            "paid_blocked_at": now.isoformat(),
+            "paid_block_version": version + 1,
+        }
+        curr_flag = bool(fresh.get("needs_review"))
+        curr_reason = str(fresh.get("needs_review_reason") or "")
+        if not _active_holds(fresh):
+            if curr_flag and curr_reason not in _PAID_BLOCK_REASONS:
+                set_fields["paid_block_prior_needs_review"] = True
+                set_fields["paid_block_prior_review_reason"] = curr_reason
+            else:
+                set_fields["paid_block_prior_needs_review"] = False
+                set_fields["paid_block_prior_review_reason"] = ""
+        elif curr_flag and curr_reason not in _PAID_BLOCK_REASONS:
+            set_fields["paid_block_prior_needs_review"] = True
+            set_fields["paid_block_prior_review_reason"] = curr_reason
+        result = await coll.update_one(
+            {
+                "token": token,
+                "paid_blocked_transaction_ids": {"$ne": txn},
+                "paid_block_version": _version_match(version),
+            },
+            {
+                "$set": set_fields,
+                "$push": {
+                    "paid_blocked_transaction_ids": txn,
+                    "paid_blocked_holds": {
+                        "transaction_id": txn,
+                        "reason": code,
+                        "at": now.isoformat(),
+                    },
+                },
+            },
+            session=session,
+        )
+        if not getattr(result, "modified_count", 0):
+            continue
+        after = {
+            "needs_review": True,
+            "needs_review_reason": code,
+            "held_transaction_ids": before["held_transaction_ids"] + [txn],
+        }
+        state = _audit_state(fresh, packet)
+        await _audit(
+            "paid_blocked", fresh, now,
+            old_state=state, new_state=state, session=session,
+            reason=code,
+            extra={
+                "needs_review": True,
+                "transaction_id": txn,
+                "amount_cents": paid_cents,
+                "review_before": before,
+                "review_after": after,
+            },
+        )
+        logger.info(
+            "[cosigner] paid blocked for review packet_id=%s reason=%s",
+            link.get("packet_id"), code,
+        )
+        return True
+    logger.info("[cosigner] paid hold write lost the race packet_id=%s", link.get("packet_id"))
+    return False
+
+
+async def _clear_paid_block(
+    link: dict, packet: Optional[dict], txn: str, now: datetime, session,
+) -> bool:
+    """Release this charge's hold now that it stamped paid.
+
+    Only ``txn`` is released (``paid_block_released_transaction_ids``). When
+    another held charge is still recorded on the link, ``needs_review`` stays
+    set and the reason becomes that charge's reason: staff still have to look
+    at a second down payment. When none is left, any preserved non-payment
+    review flag and reason are restored; otherwise, if the reason is a paid
+    hold, the review mark is cleared. A reason staff set for something else
+    is left alone. One audit (``paid_block_cleared``, or ``paid_hold_released``
+    when the hold is kept) records the review values before and after, in
+    the same payment transaction.
+    """
+    token = str(link.get("token") or "").strip()
+    if not token or not txn:
+        return False
+    coll = get_collection(LINKS)
+    for _ in range(_HOLD_WRITE_ATTEMPTS):
+        fresh = await coll.find_one({"token": token}, session=session)
+        if not fresh:
+            return False
+        held = _active_holds(fresh)
+        if txn not in held:
+            return False
+        remaining = [t for t in held if t != txn]
+        reason = str(fresh.get("needs_review_reason") or "")
+        before = _review_view(fresh)
+        version = int(fresh.get("paid_block_version") or 0)
+        fields = {
+            "paid_block_cleared_at": now.isoformat(),
+            "paid_block_version": version + 1,
+        }
+        prior = _prior_non_hold_review(fresh)
+        if remaining:
+            fields["needs_review"] = True
+            fields["needs_review_reason"] = _hold_reason(fresh, remaining[-1], reason)
+        elif prior is not None and prior[0]:
+            fields["needs_review"] = True
+            fields["needs_review_reason"] = prior[1]
+            fields["paid_block_prior_needs_review"] = False
+            fields["paid_block_prior_review_reason"] = ""
+        elif reason in _PAID_BLOCK_REASONS:
+            fields["needs_review"] = False
+            fields["needs_review_reason"] = ""
+            fields["paid_block_prior_needs_review"] = False
+            fields["paid_block_prior_review_reason"] = ""
+        result = await coll.update_one(
+            {"token": token, "paid_block_version": _version_match(version)},
+            {
+                "$set": fields,
+                "$push": {"paid_block_released_transaction_ids": txn},
+            },
+            session=session,
+        )
+        if not getattr(result, "modified_count", 0):
+            continue
+        after = {
+            "needs_review": bool(fields.get("needs_review", before["needs_review"])),
+            "needs_review_reason": str(fields.get("needs_review_reason", before["needs_review_reason"])),
+            "held_transaction_ids": remaining,
+        }
+        state = _audit_state(fresh, packet)
+        await _audit(
+            "paid_hold_released" if remaining else "paid_block_cleared",
+            fresh, now,
+            old_state=state, new_state=state, session=session,
+            reason=_hold_reason(fresh, txn, reason),
+            extra={
+                "transaction_id": txn,
+                "hold_kept": bool(remaining),
+                "review_before": before,
+                "review_after": after,
+            },
+        )
+        return True
+    logger.info("[cosigner] paid hold release lost the race packet_id=%s", link.get("packet_id"))
+    return False
 
 
 async def note_cosigner_paid(
@@ -2030,7 +2387,8 @@ async def note_cosigner_paid(
     amount: Any = None,
     *,
     status: Any = None,
-) -> None:
+    _heal: bool = True,
+) -> bool:
     """Stamp paid when the charge equals the confirmed down payment. Idempotent.
 
     A smaller charge is not the down payment. Nothing is stamped, and the
@@ -2038,50 +2396,88 @@ async def note_cosigner_paid(
     updates the link only when it is not already stamped, so one charge
     writes one paid audit. The links are the open packet on this bond case,
     not every link that shares the booking number.
+
+    Returns True when the decision was made (stamped, refused by a rule, or
+    a no-op replay). When every locked attempt fails, the unpaid links on
+    the case get a durable pending transition and False is returned; the
+    next event on the booking or the next page read reconciles it from the
+    payment rows (``reconcile_cosigner_payment_state``).
     """
     booking = str(booking_number or "").strip()
     txn = str(transaction_id or "").strip()
     if not booking or not txn:
-        return
+        return False
     if status is not None:
         from dashboard.services.payment_log_claims import SETTLED_CHARGE_STATUSES
 
         if str(status).strip().lower() not in SETTLED_CHARGE_STATUSES:
             logger.info("[cosigner] paid refused unsettled status")
-            return
+            return True
     paid_cents = _dollars_to_cents(amount)
 
     async def work(db, session):
         if await _charge_row_blocks_down_payment(db, txn, session):
             logger.info("[cosigner] paid refused review hold")
             return
-        targets = await _open_down_payment_links(booking)
+        targets, blocked = await _down_payment_scope(booking)
         now = _now()
+        for link, packet in blocked:
+            if not str(link.get("paid_transaction_id") or "").strip():
+                await _flag_paid_blocked(
+                    link, packet, txn, _PACKET_AMBIGUOUS, paid_cents, now, session,
+                )
         for link, packet in targets:
-            bond = await _find_bond(packet) if packet else None
+            try:
+                bond = await _find_bond(packet) if packet else None
+            except CosignerLinkError as exc:
+                if exc.code not in _PAID_BLOCK_REVIEW_CODES:
+                    raise
+                await _flag_paid_blocked(
+                    link, packet, txn, exc.code, paid_cents, now, session,
+                )
+                continue
             due = _due_cents(packet, bond)
             if paid_cents is None or due is None or paid_cents != due:
                 logger.info("[cosigner] paid amount refused packet_id=%s", link.get("packet_id"))
                 continue
-            await _cas_mark_paid(link, packet, txn, now, session)
+            marked = await _cas_mark_paid(link, packet, txn, now, session)
+            if marked and (
+                _active_holds(link)
+                or str(link.get("needs_review_reason") or "") in _PAID_BLOCK_REASONS
+            ):
+                await _clear_paid_block(link, packet, txn, now, session)
 
-    await _with_payment_lock(txn, work)
+    outcome = await _with_payment_lock(txn, work)
+    if outcome == LOCK_FAILED:
+        await _record_pending_transition(
+            "paid", booking, txn, await _paid_pending_links(booking),
+        )
+        return False
+    if outcome == LOCK_OK and _heal:
+        await _heal_booking(booking)
+    return outcome in (LOCK_OK, LOCK_REFUSED)
 
 
-async def note_cosigner_reversed(booking_number: str, transaction_id: str) -> None:
+async def note_cosigner_reversed(
+    booking_number: str, transaction_id: str, *, _heal: bool = True,
+) -> bool:
     """Reopen the pay step when the stamped down payment is refunded or fails.
 
     The link is found by ``paid_transaction_id``, scoped to the tenant, inside
     ``payment_txn_locks``. A missing reference or a different booking on the
     refund does not keep the step paid. A different transaction leaves the
     stamp in place. A replay does not audit twice.
+
+    Returns True when the decision was made. When every locked attempt
+    fails, the links still stamped with this transaction get a durable
+    pending transition and False is returned.
     """
     txn = str(transaction_id or "").strip()
     if not txn:
-        return
+        return False
     query = _scope({"paid_transaction_id": txn})
     if query is None:
-        return
+        return False
 
     async def work(db, session):
         rows = await _payment_rows(db, txn, session)
@@ -2094,7 +2490,655 @@ async def note_cosigner_reversed(booking_number: str, transaction_id: str) -> No
                 continue
             await _cas_mark_reversed(link, txn, now, session)
 
-    await _with_payment_lock(txn, work)
+    outcome = await _with_payment_lock(txn, work)
+    booking = str(booking_number or "").strip()
+    if outcome == LOCK_FAILED:
+        links = []
+        try:
+            async for link in _iter(get_collection(LINKS).find(query)):
+                if str(link.get("paid_transaction_id") or "").strip() == txn:
+                    links.append(link)
+        except Exception:
+            logger.warning("[cosigner] pending reversal lookup failed txn=%s", txn)
+        await _record_pending_transition("reversed", booking, txn, links)
+        return False
+    if outcome == LOCK_OK and _heal and booking:
+        await _heal_booking(booking)
+    return outcome in (LOCK_OK, LOCK_REFUSED)
+
+
+def _pending_key(kind: str, txn: str) -> str:
+    return f"{kind}:{txn}"
+
+
+async def _paid_pending_links(booking: str) -> list:
+    """Unpaid links a failed paid write could have stamped or flagged."""
+    try:
+        targets, blocked = await _down_payment_scope(booking)
+    except Exception:
+        logger.warning("[cosigner] pending paid lookup failed")
+        return []
+    return [
+        link for link, _packet in list(targets) + list(blocked)
+        if not str(link.get("paid_transaction_id") or "").strip()
+    ]
+
+
+async def _record_pending_transition(kind: str, booking: str, txn: str, links: list) -> None:
+    """Durable marker for a paid or reopen write that failed every attempt.
+
+    Written outside the failed transaction. One ``payment_transition_pending``
+    audit per link and transition: the push is conditional on the key not
+    being pending yet. The payment row itself is already recorded and is the
+    source of truth the reconcile step reads.
+
+    The pending key and an owed-audit marker are pushed in one document
+    update, so the state change never lands without a record that its
+    audit is due. The audit is then written and the marker pulled. If the
+    audit write fails, the marker stays and the next record, reconcile or
+    heal on this link writes it (``_flush_owed_audits``).
+    """
+    key = _pending_key(kind, txn)
+    now = _now()
+    for link in links:
+        token = str(link.get("token") or "").strip()
+        if not token:
+            continue
+        try:
+            entry = {
+                "key": key,
+                "kind": kind,
+                "transaction_id": txn,
+                "booking_number": booking,
+                "at": now.isoformat(),
+            }
+            coll = get_collection(LINKS)
+            result = None
+            for _attempt in range(_PENDING_CAS_ATTEMPTS):
+                doc = await coll.find_one({"token": token})
+                if not isinstance(doc, dict):
+                    break
+                before = _pending_view(doc)
+                if key in before["pending_payment_keys"]:
+                    break
+                after = {
+                    "payment_transition_pending": True,
+                    "pending_payment_keys": before["pending_payment_keys"] + [key],
+                    "pending_payment_transitions": (
+                        before["pending_payment_transitions"] + [dict(entry)]
+                    ),
+                }
+                # Compare-and-set on the keys read: the snapshot stored in
+                # the owed marker is exactly this transition's before/after.
+                result = await coll.update_one(
+                    {"token": token, **_pending_keys_match(doc)},
+                    {
+                        "$set": {
+                            "pending_payment_keys": after["pending_payment_keys"],
+                            "pending_payment_transitions": after["pending_payment_transitions"],
+                            "payment_transition_pending": True,
+                            "payment_transition_pending_at": now.isoformat(),
+                            "payment_audit_owed": True,
+                        },
+                        "$push": {
+                            "pending_payment_audits_owed": _owed_audit(
+                                "payment_transition_pending", token, entry, now,
+                                before=before, after=after,
+                            ),
+                        },
+                    },
+                )
+                if getattr(result, "modified_count", 0):
+                    break
+            if result is not None and getattr(result, "modified_count", 0):
+                logger.warning(
+                    "[cosigner] payment transition pending packet_id=%s kind=%s",
+                    link.get("packet_id"), kind,
+                )
+        except Exception:
+            logger.error(
+                "[cosigner] pending transition not recorded packet_id=%s kind=%s",
+                link.get("packet_id"), kind,
+            )
+            continue
+        await _flush_owed_audits(token)
+
+
+_PENDING_CAS_ATTEMPTS = 5
+
+
+def _pending_keys_match(doc: dict) -> dict:
+    """Filter that matches only while the pending keys are what was read.
+
+    Keys and transitions are always written together, so an exact match on
+    the keys is a compare-and-set for the whole pending state.
+    """
+    keys = doc.get("pending_payment_keys")
+    if isinstance(keys, list):
+        return {"pending_payment_keys": list(keys)}
+    return {"pending_payment_keys": None}
+
+
+def _owed_audit(
+    step: str, token: str, entry: dict, now: datetime,
+    *, before: Optional[dict] = None, after: Optional[dict] = None,
+) -> dict:
+    """An audit that is due for a pending-state change on this link.
+
+    ``audit_key`` is the same on every retry, so a flush that wrote the
+    audit but could not pull the marker does not write it twice.
+    ``pending_before``/``pending_after`` are this transition's own
+    snapshot, taken by the update that made it, so a later flush does not
+    rebuild them from a document other transitions have since changed.
+    """
+    key = str(entry.get("key") or "")
+    at = str(entry.get("at") or "")
+    digest = hashlib.sha256(f"{step}|{token}|{key}|{at}".encode()).hexdigest()[:32]
+    return {
+        "audit_key": f"cosigner-pending:{digest}",
+        "step": step,
+        "pending_key": key,
+        "entry": dict(entry),
+        "at": now.isoformat(),
+        **({"pending_before": dict(before), "pending_after": dict(after)}
+           if isinstance(before, dict) and isinstance(after, dict) else {}),
+    }
+
+
+async def _flush_owed_audits(token: str) -> bool:
+    """Write the owed pending/resolved audits on this link. Never raises.
+
+    True when nothing is owed afterwards. Each audit records the
+    before/after pending snapshot stored on its marker. Older markers
+    without one fall back to the link with this key present (pending) or
+    absent (resolved).
+    """
+    token = str(token or "").strip()
+    if not token:
+        return True
+    coll = get_collection(LINKS)
+    try:
+        doc = await coll.find_one({"token": token})
+    except Exception:
+        logger.warning("[cosigner] owed audit lookup failed")
+        return False
+    if not isinstance(doc, dict):
+        return True
+    owed = [o for o in (doc.get("pending_payment_audits_owed") or []) if isinstance(o, dict)]
+    clean = True
+    audits = get_collection("audit_events")
+    for item in owed:
+        audit_key = str(item.get("audit_key") or "")
+        step = str(item.get("step") or "")
+        key = str(item.get("pending_key") or "")
+        entry = item.get("entry") if isinstance(item.get("entry"), dict) else {}
+        kind = str(entry.get("kind") or "")
+        txn = str(entry.get("transaction_id") or "")
+        try:
+            if not audit_key or not step or not key:
+                raise ValueError("malformed owed audit")
+            # Audits written before audit_key became the _id carry it as a
+            # field; those are found here and left as they are.
+            if not await audits.find_one({"audit_key": audit_key}):
+                view = _pending_view(doc)
+                stored_before = item.get("pending_before")
+                stored_after = item.get("pending_after")
+                if isinstance(stored_before, dict) and isinstance(stored_after, dict):
+                    before, after = dict(stored_before), dict(stored_after)
+                elif step == "payment_transition_pending":
+                    # Markers written before snapshots were stored.
+                    base = _pending_without(view, key)
+                    after = {
+                        "payment_transition_pending": True,
+                        "pending_payment_keys": base["pending_payment_keys"] + [key],
+                        "pending_payment_transitions": (
+                            base["pending_payment_transitions"] + [dict(entry)]
+                        ),
+                    }
+                    before = base
+                else:
+                    after = _pending_without(view, key)
+                    before = _pending_with(after, key, entry)
+                state = _audit_state_only(_audit_state(doc, None))
+                at = item.get("at")
+                try:
+                    when = datetime.fromisoformat(str(at))
+                except (TypeError, ValueError):
+                    when = _now()
+                try:
+                    # audit_key is the document _id: insert-only, so two
+                    # flushes of the same marker cannot both write it.
+                    await _audit(
+                        step, doc, when,
+                        old_state=state, new_state=state,
+                        reason=kind,
+                        extra={
+                            "_id": audit_key,
+                            "audit_key": audit_key,
+                            "transaction_id": txn, "transition": kind, "pending_key": key,
+                            "pending_before": before, "pending_after": after,
+                        },
+                    )
+                except DuplicateKeyError:
+                    pass  # already written by a concurrent flush
+            await coll.update_one(
+                {"token": token},
+                {"$pull": {"pending_payment_audits_owed": {"audit_key": audit_key}}},
+            )
+        except Exception:
+            clean = False
+            logger.error(
+                "[cosigner] pending audit not written packet_id=%s step=%s",
+                doc.get("packet_id"), step,
+            )
+    if clean:
+        try:
+            await coll.update_one(
+                {"token": token, "pending_payment_audits_owed": []},
+                {"$set": {"payment_audit_owed": False}},
+            )
+        except Exception:
+            return False
+    return clean
+
+
+def _pending_view(doc: Optional[dict]) -> dict:
+    """The pending-transition fields an audit records before and after."""
+    doc = doc or {}
+    return {
+        "payment_transition_pending": bool(doc.get("payment_transition_pending")),
+        "pending_payment_keys": [str(k) for k in (doc.get("pending_payment_keys") or [])],
+        "pending_payment_transitions": [
+            dict(entry) for entry in (doc.get("pending_payment_transitions") or [])
+            if isinstance(entry, dict)
+        ],
+    }
+
+
+def _pending_without(after: dict, key: str) -> dict:
+    """The values before ``key`` was pushed: the same document without it.
+
+    The flag is set with every push and cleared only when no key is left,
+    so before the push it was pending exactly when another key was.
+    """
+    keys = [k for k in after["pending_payment_keys"] if k != key]
+    return {
+        "payment_transition_pending": bool(keys),
+        "pending_payment_keys": keys,
+        "pending_payment_transitions": [
+            entry for entry in after["pending_payment_transitions"]
+            if str(entry.get("key") or "") != key
+        ],
+    }
+
+
+def _pending_with(after: dict, key: str, entry: Optional[dict]) -> dict:
+    """The values before ``key`` was pulled: it was pending, with its entry."""
+    transitions = list(after["pending_payment_transitions"])
+    if isinstance(entry, dict):
+        transitions.append(dict(entry))
+    return {
+        "payment_transition_pending": True,
+        "pending_payment_keys": list(after["pending_payment_keys"]) + [key],
+        "pending_payment_transitions": transitions,
+    }
+
+
+async def _resolve_pending(
+    link: dict, key: str, kind: str, txn: str, entry: Optional[dict] = None,
+) -> bool:
+    """Pull a decided pending key, with its owed resolved audit, in one update.
+
+    The same update sets ``payment_transition_pending`` from the keys that
+    are left (a compare-and-set on the keys read), so no later step can
+    leave the flag true with nothing pending. The audit is written afterwards by ``_flush_owed_audits``; if that write
+    fails the marker stays on the link and is retried on the next read.
+    """
+    token = str(link.get("token") or "").strip()
+    if not token:
+        return False
+    coll = get_collection(LINKS)
+    if entry is None:
+        entry = next(
+            (e for e in (link.get("pending_payment_transitions") or [])
+             if isinstance(e, dict) and str(e.get("key") or "") == key),
+            None,
+        )
+    entry = dict(entry) if isinstance(entry, dict) else {
+        "key": key, "kind": kind, "transaction_id": txn,
+    }
+    entry.setdefault("key", key)
+    entry.setdefault("kind", kind)
+    entry.setdefault("transaction_id", txn)
+    resolved = False
+    for _attempt in range(_PENDING_CAS_ATTEMPTS):
+        doc = await coll.find_one({"token": token})
+        if not isinstance(doc, dict):
+            return False
+        before = _pending_view(doc)
+        if key not in before["pending_payment_keys"]:
+            return False
+        after = _pending_without(before, key)
+        now = _now()
+        # One update pulls the key, sets the flag from what is left and
+        # records the owed audit, so the flag can never be left stale.
+        result = await coll.update_one(
+            {"token": token, **_pending_keys_match(doc)},
+            {
+                "$set": {
+                    "pending_payment_keys": after["pending_payment_keys"],
+                    "pending_payment_transitions": after["pending_payment_transitions"],
+                    "payment_transition_pending": after["payment_transition_pending"],
+                    "payment_audit_owed": True,
+                },
+                "$push": {
+                    "pending_payment_audits_owed": _owed_audit(
+                        "payment_transition_resolved", token,
+                        entry, now, before=before, after=after,
+                    ),
+                },
+            },
+        )
+        if getattr(result, "modified_count", 0):
+            resolved = True
+            break
+    if not resolved:
+        return False
+    await _flush_owed_audits(token)
+    return True
+
+
+async def _stored_rows(txn: str) -> Optional[list]:
+    from dashboard.extensions import get_db
+
+    try:
+        db = get_db()
+    except Exception:
+        return None
+    if db is None:
+        return None
+    return await _payment_rows(db, txn, None)
+
+
+async def _heal_paid(booking: str, txn: str) -> bool:
+    """Replay a pending paid write from the stored charge row.
+
+    The amount and status come from the payment row, and
+    ``note_cosigner_paid`` re-reads the rows under the lock, so the same
+    rules apply: settled status, no reversal row, not ``needs_review``, the
+    exact ``invoice_due_cents``, the same CAS. Unreadable or missing rows
+    keep the transition pending.
+    """
+    from dashboard.services.payment_log_claims import row_kind
+
+    rows = await _stored_rows(txn)
+    if not rows:
+        return False
+    charges = [row for row in rows if row_kind(row) == "charge"]
+    if not charges:
+        return True
+    charge = charges[0]
+    return await note_cosigner_paid(
+        booking, txn, charge.get("amount"),
+        status=charge.get("status"), _heal=False,
+    )
+
+
+async def _reconcile(link: dict) -> bool:
+    if link.get("payment_audit_owed") or link.get("pending_payment_audits_owed"):
+        await _flush_owed_audits(link.get("token"))
+    booking = str(link.get("booking_number") or "").strip()
+    keys = [str(k) for k in (link.get("pending_payment_keys") or [])]
+    changed = False
+    for entry in list(link.get("pending_payment_transitions") or []):
+        if not isinstance(entry, dict):
+            continue
+        key = str(entry.get("key") or "")
+        kind = str(entry.get("kind") or "")
+        txn = str(entry.get("transaction_id") or "").strip()
+        if key not in keys or not txn:
+            continue
+        entry_booking = str(entry.get("booking_number") or "").strip() or booking
+        if kind == "paid":
+            decided = await _heal_paid(entry_booking, txn)
+        elif kind == "reversed":
+            rows = await _stored_rows(txn)
+            decided = bool(rows) and await note_cosigner_reversed(
+                entry_booking, txn, _heal=False,
+            )
+        else:
+            decided = True
+        if decided and await _resolve_pending(link, key, kind, txn, entry):
+            changed = True
+    # A refund row that is stored while the link still shows paid, with no
+    # pending record (the marker write failed too): reopen from the rows.
+    paid_txn = str(link.get("paid_transaction_id") or "").strip()
+    # The mirror case for a charge: every locked paid attempt and the
+    # pending-marker write failed, so only the saved charge row remains.
+    if not paid_txn and not changed and await _replay_unmarked_charge(link, booking, keys):
+        changed = True
+    if paid_txn and not link.get("payment_reversed") and _pending_key("reversed", paid_txn) not in keys:
+        rows = await _stored_rows(paid_txn)
+        if rows and _rows_include_reversal(rows):
+            await note_cosigner_reversed(booking, paid_txn, _heal=False)
+            changed = True
+    return changed
+
+
+_RECOVERED_STEP = "payment_transition_recovered"
+
+
+def _row_booking(row: dict) -> str:
+    return str(row.get("booking_number") or row.get("Booking_Number") or "").strip()
+
+
+def _row_reference(row: dict) -> str:
+    for blob in (row.get("custom_fields"), row.get("raw_payload"), row):
+        if not isinstance(blob, dict):
+            continue
+        ref = str(blob.get("reference_id") or "").strip()
+        if not ref and isinstance(blob.get("custom_fields"), dict):
+            ref = str(blob["custom_fields"].get("reference_id") or "").strip()
+        if ref:
+            return ref
+    return ""
+
+
+def _row_was_a_down_payment_event(row: dict, booking: str) -> bool:
+    """The saved row passes the same event rule the paid note had.
+
+    The webhook notes a charge only when its reference is the booking (not
+    an ``-I`` installment). The Gmail poller notes one with no reference or
+    the booking, never an installment or a plan payment. Other sources never
+    note the pay step, so they are not replayed.
+    """
+    source = str(row.get("source") or "").strip()
+    reference = _row_reference(row)
+    if "-I" in reference:
+        return False
+    if source == "swipesimple_webhook":
+        return reference == booking
+    if source == "swipesimple_gmail_poll":
+        if row.get("plan_id") or row.get("installment_n") is not None:
+            return False
+        return reference in ("", booking)
+    return False
+
+
+async def _unmarked_charge_candidates(link: dict, booking: str, keys: list) -> list:
+    """``(txn, charge_row)`` saved for this booking that could be the down payment.
+
+    Tenant-scoped, ``booking_number`` or ``Booking_Number``. A transaction is
+    a candidate only when its rows (re-read by transaction id, tenant-scoped)
+    hold exactly one settled charge, not ``needs_review``, on this booking,
+    with no refund or failure row, no pending paid key or paid hold on the
+    link, not already the paid charge of another link, saved after this link
+    was issued, from an event the paid note would have taken (webhook
+    reference equal to the booking, or a non-plan Gmail receipt), and an
+    amount equal to this link's confirmed down payment. Anything unreadable
+    gives no candidates.
+    """
+    from dashboard.extensions import get_db
+    from dashboard.services.payment_log_claims import (
+        SETTLED_CHARGE_STATUSES,
+        _docs,
+        has_reversal_sibling,
+        row_kind,
+    )
+
+    query = _scope({"$or": [{"booking_number": booking}, {"Booking_Number": booking}]})
+    if query is None:
+        return []
+    try:
+        db = get_db()
+        if db is None:
+            return []
+        rows = await _docs(db["payments"], query, None)
+    except Exception:
+        logger.info("[cosigner] unmarked charge lookup failed")
+        return []
+    txns = []
+    for row in rows:
+        txn = str(row.get("transaction_id") or "").strip()
+        if txn and txn not in txns and row_kind(row) == "charge":
+            txns.append(txn)
+    if not txns:
+        return []
+    packet = await _find_packet(str(link.get("packet_id") or ""))
+    if not packet or _packet_closed(packet):
+        return []
+    try:
+        bond = await _find_bond(packet)
+    except CosignerLinkError:
+        return []
+    due = _due_cents(packet, bond)
+    issued = _as_utc(link.get("created_at"))
+    if due is None or issued is None:
+        return []
+    held = set(str(t) for t in (link.get("paid_blocked_transaction_ids") or []))
+    found = []
+    for txn in txns:
+        if _pending_key("paid", txn) in keys or txn in held:
+            continue
+        # A charge another link already carries was that link's down payment.
+        used = _scope({"paid_transaction_id": txn})
+        if used is None or await get_collection(LINKS).find_one(used):
+            continue
+        try:
+            txn_rows = await _payment_rows(db, txn, None)
+        except Exception:
+            txn_rows = None
+        if not txn_rows or has_reversal_sibling(txn_rows):
+            continue
+        charges = [row for row in txn_rows if row_kind(row) == "charge"]
+        if len(charges) != 1:
+            continue
+        charge = charges[0]
+        if _row_booking(charge) != booking or charge.get("needs_review"):
+            continue
+        # The paid note only reaches links that exist when the charge lands.
+        landed = _as_utc(charge.get("created_at"))
+        if landed is None or landed < issued:
+            continue
+        if not _row_was_a_down_payment_event(charge, booking):
+            continue
+        if str(charge.get("status") or "").strip().lower() not in SETTLED_CHARGE_STATUSES:
+            continue
+        if _dollars_to_cents(charge.get("amount")) != due:
+            continue
+        found.append((txn, charge))
+    return found
+
+
+async def _replay_unmarked_charge(link: dict, booking: str, keys: list) -> bool:
+    """Stamp paid from a saved charge that left no pending marker. Fail-closed.
+
+    Exactly one candidate charge is replayed through ``note_cosigner_paid``
+    (same lock, re-read rows, case and packet scope, amount, ``_cas_mark_paid``),
+    so a replay after the stamp is a no-op. More than one candidate is
+    ambiguous and nothing is stamped. When this link ends up paid by that
+    charge, a ``payment_transition_recovered`` audit is owed on the link and
+    written insert-only with ``_id`` = ``audit_key`` (one per link and charge).
+    """
+    token = str(link.get("token") or "").strip()
+    if not token or not booking:
+        return False
+    candidates = await _unmarked_charge_candidates(link, booking, keys)
+    if len(candidates) != 1:
+        if len(candidates) > 1:
+            logger.info("[cosigner] unmarked charge replay refused ambiguous")
+        return False
+    txn, charge = candidates[0]
+    await note_cosigner_paid(
+        booking, txn, charge.get("amount"), status=charge.get("status"), _heal=False,
+    )
+    coll = get_collection(LINKS)
+    fresh = await coll.find_one({"token": token})
+    if not isinstance(fresh, dict) or str(fresh.get("paid_transaction_id") or "") != txn:
+        return False
+    entry = {
+        "key": _pending_key("paid", txn),
+        "kind": "paid",
+        "transaction_id": txn,
+        "booking_number": booking,
+        "at": "",  # fixed, so the audit_key is one per link and charge
+    }
+    view = _pending_view(fresh)
+    owed = _owed_audit(_RECOVERED_STEP, token, entry, _now(), before=view, after=view)
+    already = any(
+        isinstance(item, dict) and item.get("audit_key") == owed["audit_key"]
+        for item in (fresh.get("pending_payment_audits_owed") or [])
+    )
+    try:
+        if not already and not await get_collection("audit_events").find_one(
+            {"audit_key": owed["audit_key"]},
+        ):
+            await coll.update_one(
+                {"token": token},
+                {"$set": {"payment_audit_owed": True},
+                 "$push": {"pending_payment_audits_owed": owed}},
+            )
+    except Exception:
+        logger.error("[cosigner] recovered paid audit not owed packet_id=%s", link.get("packet_id"))
+        return True
+    await _flush_owed_audits(token)
+    logger.warning("[cosigner] paid recovered without marker packet_id=%s", link.get("packet_id"))
+    return True
+
+
+async def reconcile_cosigner_payment_state(link: Optional[dict]) -> bool:
+    """Bring a link's pay step in line with the stored payment rows.
+
+    Runs on the co-signer page read and after each paid or refund event on
+    the booking. It replays pending transitions through ``note_cosigner_paid``
+    and ``note_cosigner_reversed`` (same lock, same rules, same CAS), so a
+    link is stamped once and audited once, and no plan balance or
+    ``last_payment`` is touched. Never raises. True when something changed.
+    """
+    if not isinstance(link, dict):
+        return False
+    try:
+        return await _reconcile(link)
+    except Exception:
+        logger.warning("[cosigner] payment reconcile failed packet_id=%s", link.get("packet_id"))
+        return False
+
+
+async def _heal_booking(booking: str) -> None:
+    """Reconcile links on this booking that still carry a pending transition."""
+    query = _scope({"booking_number": booking, "$or": [
+        {"payment_transition_pending": True},
+        {"payment_audit_owed": True},
+    ]})
+    if query is None:
+        return
+    try:
+        links = [link async for link in _iter(get_collection(LINKS).find(query))]
+    except Exception:
+        logger.warning("[cosigner] pending transition lookup failed")
+        return
+    for link in links[:20]:
+        await reconcile_cosigner_payment_state(link)
 
 
 def _rows_include_reversal(rows: list) -> bool:
@@ -2223,6 +3267,8 @@ def _payment_view(packet: dict, bond: Optional[dict]) -> dict:
 
 async def cosigner_state(token: str, lang: Optional[str] = None) -> dict:
     link = await _link_by_token(token)
+    if await reconcile_cosigner_payment_state(link):
+        link = await _link_by_token(token)
     if lang:
         link["lang"] = _lang(lang)
     packet = await _find_packet(str(link.get("packet_id") or ""))

@@ -11,6 +11,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - Added `tests/test_ingestion_log_wiring.py` (wired into `.github/workflows/ci.yml`) covering `MongoWriter.log_ingestion`, `BaseScraper.run()` on `ok`, `empty`, and classified error runs (`parse_drift`), and verifying `fail_closed` scrapers do not write to `ingestion_log`.
 
+## [Unreleased] — 2026-10-29 (Co-signer payment holds preserve unrelated review warnings)
+
+### Fixed
+- **Adding and clearing a payment hold on a co-signer link preserves any unrelated staff review warning.** When a link already has `needs_review` set for a non-payment reason before `_flag_paid_blocked` adds a payment hold (`bond_mirror_mismatch`, `bond_ambiguous`, or `packet_ambiguous`), the prior non-payment review flag and reason are saved in `paid_block_prior_needs_review` and `paid_block_prior_review_reason`. When the final payment hold is released in `_clear_paid_block`, that prior review state is restored instead of clearing `needs_review` completely.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_paid_hold_preserves_and_restores_preexisting_unrelated_review_flag`.
+
 ## [Unreleased] — 2026-10-28 (Lee County HQ API needs a staff session)
 
 ### Security
@@ -41,6 +49,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_payment_log_claims.py` (on the CI list): `test_recorder_stamps_a_bond_under_either_booking_spelling` (lowercase and legacy), `test_payment_webhook_stamps_a_legacy_booking_bond`, `test_receipt_poller_stamps_a_legacy_booking_bond`, `test_bond_with_both_booking_spellings_counts_once`, `test_two_bonds_sharing_a_booking_across_spellings_fail_closed`, `test_legacy_mirror_pair_with_matching_case_ids_is_one_case`, `test_stale_legacy_booking_does_not_match_a_reassigned_bond`, `test_later_booking_enriches_blank_charge_on_a_legacy_bond`, `test_dual_spelling_bond_with_padded_lowercase_value_stamps`, `test_bond_stamp_that_matches_nothing_goes_to_review_not_stamped`, `test_mirror_stamp_miss_restores_the_first_document`, `test_enrichment_stamp_miss_writes_nothing`, `test_review_flag_that_matches_nothing_is_not_claimed_in_the_audit`, `test_padded_single_spelling_bond_matches_and_stamps` (legacy and lowercase), `test_padded_legacy_bond_and_a_lowercase_bond_fail_closed`, `test_padded_canonical_value_still_wins_over_a_stale_legacy_value`, `test_booking_regex_is_escaped`. All mocked: no SwipeSimple, Gmail, BlueBubbles, or Slack call.
 
+## [Unreleased] — 2026-10-28 (co-signer paid recovered without a pending marker)
+
+### Fixed
+- A co-signer down payment is no longer lost when every locked paid attempt fails **and** the out-of-transaction pending-marker write also raises (Codex review on #283, r4401127178). `_reconcile` (page read and booking heal) now has a no-marker charge fallback, matching the existing no-marker reversal fallback: for a link that is not paid, it reads the saved, tenant-scoped `payments` rows for the link's booking (`booking_number` or `Booking_Number`) and replays exactly one candidate charge through `note_cosigner_paid` (same lock, re-read rows, case/packet scope, exact down-payment amount, `_cas_mark_paid`).
+- A candidate is one settled charge on this booking with no refund or failure row, not `needs_review`, no pending paid key or paid hold on the link, not already another link's paid charge, saved after the link was issued, from an event the paid note would have taken (webhook reference equal to the booking, or a non-plan Gmail receipt), and an amount equal to the link's confirmed down payment. Anything else fails closed: amount mismatch, refund/failure, review hold, unsettled status, installment or missing reference, plan receipt, another source, a charge older than the link, another booking, another tenant, no tenant with the flag on, or more than one candidate charge.
+- A recovered stamp writes the normal `paid` audit once (the CAS) plus one `payment_transition_recovered` audit, owed on the link and inserted with `_id` = `audit_key` (one per link and charge), so a replay or a racing reconcile does not write it twice. No index or schema change; no audit history is removed.
+
+### Tests
+- Outage: three failed locked attempts plus a failed marker write leave the link unpaid with no marker; the next reconcile stamps it paid with one `paid` and one recovered audit, and a second reconcile/page read is a no-op. Also: two racing reconciles from a stale link, a legacy `Booking_Number` payment row, a recovered Gmail-receipt charge, fail-closed cases (low/high amount, refund, failure, review hold, unsettled, other booking, two charges, installment, no reference, plan receipt, other source, charge before the link, charge already on another link), and tenant isolation (own tenant pays, other tenant's row does not, no tenant does nothing).
+
+## [Unreleased] — 2026-10-28 (co-signer pending audits: atomic flag, one audit per key, own snapshots)
+
+### Fixed
+- **Resolving the last pending payment transition clears `payment_transition_pending` in the same update.** The update that removes a pending key also sets the flag from the keys that are left, as a compare-and-set on the keys it read. A failure after that update can no longer leave the flag true with nothing pending. A failure before it keeps the key and the flag.
+- **Concurrent owed-audit flushes write one audit.** The owed `payment_transition_pending` / `payment_transition_resolved` audit is inserted with `_id` set to its `audit_key`. A duplicate-key error means the audit is already written, so the flush counts it as written and pulls the marker. No new index is added. Audits written earlier with an auto `_id` are still found by their `audit_key` field and are not changed or removed.
+- **Each owed audit records its own transition's before/after.** The pending and resolved updates store that transition's `pending_before` and `pending_after` on the owed marker when it is created. The flush writes those values, so two transitions owed at once no longer contradict each other. Markers without a stored snapshot keep the previous derivation. No payment, plan balance, or SwipeSimple call is involved.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_resolution_clears_the_flag_even_when_the_next_step_fails`, `test_resolution_update_failure_keeps_the_key_and_the_flag`, `test_concurrent_owed_audit_flushes_write_one_audit`, `test_legacy_owed_audit_with_auto_id_is_not_rewritten`, `test_owed_audits_keep_each_transitions_own_snapshot`. The test store now rejects a duplicate `_id` like MongoDB does.
+
 ## [Unreleased] — 2026-10-28 (Indemnitor ID scan is kept)
 
 ### Fixed
@@ -65,6 +93,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `tests/test_packet_builder_service.py`: `test_coindemnitor_comes_only_from_this_bonded_case`, `test_coindemnitor_fails_closed_when_two_cases_share_the_booking`, `test_coindemnitor_not_taken_from_another_booking`.
 - `tests/test_palmetto_template_7.py` (on the CI list). Template 5 inventory and a 7-charge rejection, template 7 prefill and finalize for a 7-charge `TEST-` case, a fitting 6-charge join, 8 charges failing closed, and send flags left false. Schedule A prints a confirmed ledger or completed payment row, including a completed down-payment receipt and a completed installment, and leaves amount paid at `$0.00` with the full premium still due when the only figure is the write-time down payment. A cash receipt with `packet_id` and no booking number is included; another packet's cash is not. Another county's receipt under the same booking number is excluded. An evening UTC timestamp prints the Eastern calendar day. A third indemnitor fails closed on template 7 and stays in template 5's combined header. In-person packets lock the co-indemnitor name, phone, and email. Signer email is `admin@shamrockbailbonds.biz`. No DocuSeal submission is created against the live server.
 - A payment-source read that times out or raises stops packet generation (`DocuSealPacketValidationError`) and creates no DocuSeal submission. A successful read with no receipts still generates the packet at `$0.00` paid. County matching case-folds, collapses whitespace, and strips a trailing County or Co., so `Lee`, `Lee County`, and ` lee  county ` are the same county. `Lee` and `Collier` still conflict. `test_payment_read_failure_does_not_create_a_packet`, `test_empty_payment_read_still_creates_a_packet`, `test_schedule_a_matches_county_name_spellings`.
+
+## [Unreleased] — 2026-10-27 (co-signer paid: Booking_Number bonds, unreadable locked read, owed pending audits)
+
+### Fixed
+- **The paid step finds a bond stored with `Booking_Number` (#291).** `_one_case_id` matches `booking_number` or `Booking_Number`, and the link's drift check reads the bond's booking under either field. A booking that maps to more than one case under either field still returns no case, so nothing is stamped.
+- **A heal keeps its pending paid transition when the locked payment-row read fails (Codex P1).** An unreadable read inside `payment_txn_locks` now raises `PaymentRowsUnreadable` instead of counting as a refusal. The lock reports `LOCK_FAILED`, `note_cosigner_paid` returns False, and the pending key stays for the next read. An empty, readable row set is still a refusal.
+- **Pending state and its audit are no longer split (Codex P1).** `_record_pending_transition` and `_resolve_pending` push an owed-audit marker (`pending_payment_audits_owed`, `payment_audit_owed`) in the same document update as the pending-key change. The audit is then written with a stable `audit_key` and the marker is pulled. If the audit write fails, the marker stays and the next page read, heal or record writes it once. A retry that finds the `audit_key` already written only pulls the marker. No new index and no transaction are added.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_paid_finds_a_bond_stored_with_booking_number_alias`, `test_paid_fails_closed_when_the_alias_booking_is_two_cases`, `test_heal_keeps_pending_when_the_locked_row_read_fails`, `test_pending_state_and_its_audit_are_not_split`, `test_resolved_state_and_its_audit_are_not_split`, `test_owed_audit_is_not_written_twice_when_the_marker_pull_fails`.
 
 ## [Unreleased] — 2026-10-27 (signer emails must agree)
 
@@ -312,13 +350,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_cosigner_link.py`: `test_audit_outage_releases_the_verification_claim`.
 
+## [Unreleased] — 2026-10-23 (co-signer payment rows are tenant-scoped; pending audits show before/after)
+
+### Fixed
+- **The co-signer paid, reopen and heal steps read only this tenant's payment rows.** `_payment_rows` (and the heal step through `_stored_rows`) adds the active `tenant_id` when multi-tenancy is on, so a transaction id reused by another tenant cannot stamp or reopen this tenant's link. Flag on with no tenant: the rows count as unreadable and nothing is stamped. Flag off is unchanged. Closes #287.
+- **`payment_transition_pending` and `payment_transition_resolved` audits record the pending values before and after.** Each carries `pending_before` / `pending_after` with `payment_transition_pending`, `pending_payment_keys` and `pending_payment_transitions`. Closes #288.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_payment_rows_are_scoped_to_the_active_tenant`, `test_heal_does_not_replay_another_tenants_charge`, `test_pending_and_resolved_audits_record_before_and_after`.
+
 ## [Unreleased] — 2026-10-23 (co-signer revalidation reads Bond_Case_ID)
 
 ### Fixed
 - **A co-signer link stays valid when the case id is stored as `Bond_Case_ID` or `bond_case_id`.** Revalidation fails closed when neither field is the issued case. A POA number change does not revoke the link or the packet.
 
 ### Tests
-- `tests/test_cosigner_link.py`: `test_bond_case_id_alias_revalidates_and_rejects_a_mismatch`, `test_poa_number_change_keeps_the_cosigner_link`.
+- `tests/test_cosigner_link.py`: `test_bond_case_id_alias_revalidates_and_rejects_a_mismatch`, `test_poa_number_change_keeps_the_cosigner_link`, `test_poa_number_change_keeps_the_link_and_docuseal_packet`.
 
 ## [Unreleased] — 2026-10-22 (co-signer pay URL stays on SwipeSimple)
 
@@ -343,6 +390,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `tests/test_cosigner_link.py`: `test_bond_stored_as_bond_case_id_alias_issues_a_link`.
+
+## [Unreleased] — 2026-10-22 (co-signer down payment held by bond mirror drift is flagged)
+
+### Fixed
+- **Case and spacing are not mirror drift.** The `bond_cases` / `active_bonds` mirror check compares status, surety, booking, case number, POA, and match status trimmed and casefolded. Signer and defendant names compare without case, punctuation, or extra spaces (first and last name still decide). `match_id` compares trimmed only. A really different value still fails closed. The co-signer page and the paid path use the same check.
+- **A settled down payment that cannot mark the pay step is visible to staff.** When `note_cosigner_paid` is refused by `bond_mirror_mismatch`, `bond_ambiguous`, or two open packets on the case (`packet_ambiguous`), and the charge equals the packet's down payment, the link gets `needs_review` with `needs_review_reason`. The transaction is added to `paid_blocked_transaction_ids`. One `paid_blocked` audit event records the reason, transaction, and cents. A replay of the same transaction does not flag or audit again, even when it alternates with another held charge. A charge that is not the down payment is not flagged. Each hold is also kept in `paid_blocked_holds` with its own reason, and the `paid_blocked` audit records `review_before` and `review_after` (`needs_review`, `needs_review_reason`, held transactions), so a hold that replaces another one keeps both in history. Writes are conditional on `paid_block_version`, so concurrent holds are not lost. Nothing is sent. The payment row, the lock, and the compare-and-set stamp are unchanged.
+- **A paid stamp releases only its own hold.** When charge B marks paid, B is added to `paid_block_released_transaction_ids`. If another held charge (A) is still recorded on the link, `needs_review` stays set with A's reason and one `paid_hold_released` audit records the before/after review values with `hold_kept: true`. Only when no held charge is left is `needs_review` cleared, with one `paid_block_cleared` audit. A review reason that is not a paid hold is left alone.
+- **A failed co-signer paid or reopen write is retried and then healed from the payment rows.** `_with_payment_lock` retries a failed transaction up to three times inside the lock (not a co-signer refusal and not a server without transactions). If every attempt fails, the affected links get `payment_transition_pending`, `pending_payment_keys` and `pending_payment_transitions` (`paid:<txn>` or `reversed:<txn>`) with one `payment_transition_pending` audit, written outside the failed transaction. `reconcile_cosigner_payment_state` replays the pending transition through `note_cosigner_paid` / `note_cosigner_reversed` with the amount and status from the stored payment row, so the same rules apply (`SETTLED_CHARGE_STATUSES`, `REVERSAL_KINDS`, exact `invoice_due_cents`, `needs_review` rows excluded) with the same lock and compare-and-set. It runs on the next paid or refund event for the booking and on the co-signer page read. A paid link whose stored rows include a refund or failure is reopened on page read even when the pending marker could not be written. The heal marks once, audits once, writes one `payment_transition_resolved` audit, and does not touch plan balances, `last_payment` fields or payment rows. `webhooks.py`, the receipt poller and `payment_log_claims` are unchanged.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_blocked_down_payment_is_flagged_without_a_pay_link_or_outbound_charge`, `test_paid_path_reconciles_a_mirror_that_differs_only_in_case_and_spacing`, `test_mirror_drift_blocks_paid_and_flags_review_once`, `test_ambiguous_mirror_blocks_paid_and_flags_review_once`, `test_two_open_packets_block_paid_and_flag_each_link_once`, `test_mirror_normalization_keeps_real_differences`, `test_alternating_blocked_transactions_audit_once_each`, `test_held_charge_that_is_not_the_down_payment_is_not_flagged`, `test_paid_keeps_the_hold_while_another_held_charge_remains`, `test_hold_audits_record_review_before_and_after`, `test_transient_paid_lock_failure_is_retried_inside_the_lock`, `test_persistent_paid_lock_failure_leaves_pending_then_heals_once`, `test_persistent_reversal_lock_failure_leaves_pending_then_reopens_once`.
 
 ## [Unreleased] — 2026-10-22 (co-signer email reads coindemnitor_email)
 
