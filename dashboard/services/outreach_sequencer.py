@@ -495,14 +495,30 @@ class OutreachSequencer:
         except Exception:
             pass
 
-        # 3. Contact discovery cache
+        # 3. Contact discovery cache — staff-reviewed/approved candidates only,
+        #    on the full arrest identity (state + county + booking). An
+        #    unreviewed discovery candidate is never a send target, whatever
+        #    its confidence. The row's phone, email, address and anchors must
+        #    still match what staff approved (review_pin); a row with no pin
+        #    or with changed contact data is skipped.
         try:
-            contact_doc = await self.db["contacts"].find_one(
-                {"booking_number": bk},
-                {"discovered_contacts": 1},
+            from dashboard.services.contact_discovery import (
+                contact_identity,
+                is_reviewed,
+                review_pin_matches,
             )
+
+            identity = contact_identity(arrest_doc.get("state"), county, bk)
+            contact_doc = None
+            if identity:
+                contact_doc = await self.db["contacts"].find_one(
+                    identity,
+                    {"discovered_contacts": 1},
+                )
             if contact_doc:
                 for c in contact_doc.get("discovered_contacts", []):
+                    if not is_reviewed(c) or not review_pin_matches(c):
+                        continue
                     p = c.get("phone", "")
                     if p and c.get("confidence", 0) >= 0.7:
                         return p, "contact_discovery"

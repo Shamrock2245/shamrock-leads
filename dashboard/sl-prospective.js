@@ -681,6 +681,10 @@ window.SLProspective = (function () {
           fact('Case #', caseNumber) +
           fact('Address', address) +
         '</div>' +
+        '<div class="ld-section" id="ldCandidates">' +
+          '<div class="ld-section-label">Possible co-signers</div>' +
+          '<div id="ldCandidateList" class="ld-muted">Loading candidates…</div>' +
+        '</div>' +
         ((indName || indPhone) ? (
           '<div class="ld-section">' +
             '<div class="ld-section-label">Known contact</div>' +
@@ -716,7 +720,192 @@ window.SLProspective = (function () {
       if (mount) mount.innerHTML = renderPipelineWorkspace(bk, bond);
       wireComposer(bk);
     }
+    loadCandidates(booking);
     return;
+  }
+
+  // Florida's 67 counties, as registered in dashboard/extensions.py
+  // REGISTERED_COUNTIES ("<County> (FL)"). A Python test keeps them equal.
+  const FL_REGISTRY_COUNTIES = [
+    'Alachua', 'Baker', 'Bay', 'Bradford', 'Brevard', 'Broward', 'Calhoun', 'Charlotte', 'Citrus',
+    'Clay', 'Collier', 'Columbia', 'DeSoto', 'Dixie', 'Duval', 'Escambia', 'Flagler', 'Franklin',
+    'Gadsden', 'Gilchrist', 'Glades', 'Gulf', 'Hamilton', 'Hardee', 'Hendry', 'Hernando',
+    'Highlands', 'Hillsborough', 'Holmes', 'Indian River', 'Jackson', 'Jefferson', 'Lafayette',
+    'Lake', 'Lee', 'Leon', 'Levy', 'Liberty', 'Madison', 'Manatee', 'Marion', 'Martin',
+    'Miami-Dade', 'Monroe', 'Nassau', 'Okaloosa', 'Okeechobee', 'Orange', 'Osceola', 'Palm Beach',
+    'Pasco', 'Pinellas', 'Polk', 'Putnam', 'Santa Rosa', 'Sarasota', 'Seminole', 'St. Johns',
+    'St. Lucie', 'Sumter', 'Suwannee', 'Taylor', 'Union', 'Volusia', 'Wakulla', 'Walton',
+    'Washington'
+  ];
+  const _FL_COUNTY_KEYS = new Set(FL_REGISTRY_COUNTIES.map(function(c) { return c.toLowerCase(); }));
+  let _candidateScope = {};
+
+  function resolveLeadState(county, formState) {
+    var st = String(formState || '').trim().toUpperCase();
+    if (/^[A-Z]{2}$/.test(st)) return st;
+    var c = String(county || '').trim();
+    var key = c.replace(/\s+county$/i, '').trim().toLowerCase();
+    if (key && _FL_COUNTY_KEYS.has(key)) return 'FL';
+    return '';
+  }
+
+  // Add Lead discovery body. It carries the defendant name from the form: a
+  // new lead (often a MANUAL-* booking) has no arrest record the server could
+  // read the name from, and the name-based providers need it. The form's state
+  // wins; without one the state is FL only when the county is a registered
+  // Florida county. Anything else is not sent: {ok:false, reason} and the
+  // caller tells staff why. The name goes only in the request body.
+  function addLeadDiscoverBody(bk, county, formState, defName) {
+    var c = String(county || '').trim();
+    var st = String(formState || '').trim().toUpperCase();
+    var name = String(defName || '').replace(/\s+/g, ' ').trim();
+    if (!bk) return { ok: false, reason: 'booking_required' };
+    if (!name) return { ok: false, reason: 'name_required' };
+    if (!c) return { ok: false, reason: 'county_required' };
+    if (st) {
+      if (!/^[A-Z]{2}$/.test(st)) return { ok: false, reason: 'state_invalid' };
+      return { ok: true, body: { booking_number: bk, full_name: name, county: c, state: st } };
+    }
+    var derived = resolveLeadState(c, '');
+    if (derived) return { ok: true, body: { booking_number: bk, full_name: name, county: c, state: derived } };
+    return { ok: false, reason: 'state_unknown' };
+  }
+
+  function addLeadDiscoverSkipMessage(reason) {
+    if (reason === 'county_required') return 'Contact discovery not run: pick the county. Use Refresh discovery in the lead drawer once it is set.';
+    if (reason === 'state_invalid') return 'Contact discovery not run: the state must be a two-letter code.';
+    if (reason === 'name_required') return 'Contact discovery not run: the defendant name is missing.';
+    if (reason === 'state_unknown') return 'Contact discovery not run: the state for this county is unknown. Use Refresh discovery in the lead drawer once the state is set.';
+    return 'Contact discovery not run: the booking number is missing.';
+  }
+
+  function contactsErrorMessage(action, status, code) {
+    if (code === 'county_and_state_required') return action + ' not done: more than one arrest has this booking number, so the county and state are required.';
+    if (code === 'legacy_contacts_ambiguous') return action + ' not done: more than one stored contact record matches this booking. It needs manual review; nothing was saved.';
+    if (code === 'stale_revision') return action + ' not done: the candidates changed since they were loaded. The list was reloaded; check it and try again.';
+    if (code === 'audit_unavailable' || code === 'audit_failed') return action + ' not done: the audit record could not be saved, so the review was not applied. Try again shortly.';
+    if (code === 'staff_session_required') return action + ' not done: sign in as staff first.';
+    if (code === 'role_not_allowed') return action + ' not done: your role cannot review co-signer candidates.';
+    if (status === 409) return action + ' not done: conflict (409). Nothing was saved.';
+    return action + ' failed (HTTP ' + status + ').';
+  }
+
+  function candidateReviewLine(c) {
+    var st = c.review_status || 'unreviewed';
+    var line = 'Status: ' + st;
+    var reset = c.review_reset;
+    if (st === 'unreviewed' && reset && reset.reason === 'contact_changed') {
+      var fields = (reset.fields || []).map(function(f) { return String(f); }).join(', ');
+      line += ' (contact data changed since it was ' + String(reset.previous_status || 'reviewed') +
+        (fields ? ': ' + fields : '') + '; review it again)';
+    }
+    return line;
+  }
+
+  async function reviewCandidate(bk, candidateId, decision, county, state, rev) {
+    var action = decision === 'reject' ? 'Reject' : 'Approve';
+    try {
+      var r = await fetch(API + '/api/contacts/' + encodeURIComponent(bk) + '/candidates/' +
+        encodeURIComponent(candidateId) + '/review', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ county: county, state: state, decision: decision, rev: rev })
+      });
+      var d = {};
+      try { d = await r.json(); } catch (e) { d = {}; }
+      if (r.ok && d && d.success) toast((decision === 'reject' ? 'Rejected' : 'Approved') + '. Nothing is sent from this screen.', 'success');
+      else toast(contactsErrorMessage(action, r.status, d && d.error), 'error');
+    } catch (e) {
+      toast(action + ' failed: network error.', 'error');
+    }
+    return loadCandidates(bk);
+  }
+
+  function candidateStatusLine(status, count) {
+    if (count > 0) return '';
+    if (status === 'queued' || status === 'running') return 'Discovery is running. Nothing is sent automatically.';
+    if (status === 'failed') return 'Discovery did not finish. Refresh to try again.';
+    if (status === 'complete') return 'No co-signers found for this booking.';
+    return 'Discovery has not run for this booking yet.';
+  }
+
+  async function loadCandidates(bk) {
+    var seq = _detailSeq;
+    var el = $('ldCandidateList');
+    if (!el || !bk) return;
+    try {
+      var cbond = (_data || []).find(function(b) { return String(b.booking_number) === String(bk); });
+      var clead = (window._leadMap && window._leadMap[bk]) || {};
+      var cached = _candidateScope[String(bk)] || {};
+      var cq = new URLSearchParams();
+      var ccounty = (cbond && cbond.county) || clead.county || cached.county || '';
+      var cstate = resolveLeadState(ccounty, (cbond && cbond.state) || clead.state || cached.state || '');
+      if (ccounty) cq.set('county', ccounty);
+      if (cstate) cq.set('state', cstate);
+      var r = await fetch(API + '/api/contacts/' + encodeURIComponent(bk) + (cq.toString() ? '?' + cq.toString() : ''));
+      if (seq !== _detailSeq || String(_currentBk) !== String(bk)) return;
+      if (!r.ok) {
+        el.textContent = 'Candidates are unavailable.';
+        return;
+      }
+      var d = await r.json();
+      var rcounty = d.county || ccounty;
+      var rstate = resolveLeadState(rcounty, d.state || cstate);
+      var rname = (cbond && cbond.defendant_name) || clead.full_name || clead.defendant_name || cached.full_name || '';
+      if (rcounty || rstate || rname) {
+        _candidateScope[String(bk)] = { county: rcounty, state: rstate, full_name: rname };
+        if (cbond) {
+          if (rcounty && !cbond.county) cbond.county = rcounty;
+          if (rstate && !cbond.state) cbond.state = rstate;
+        }
+      }
+      var rows = d.discovered_contacts || d.candidates || d.contacts || [];
+      var status = d.discovery_status || d.status || '';
+      if (!rows.length) {
+        el.textContent = candidateStatusLine(status, 0);
+        return;
+      }
+      var rev = typeof d.discovery_rev === 'number' ? d.discovery_rev : 0;
+      var canReview = !!(rcounty && rstate);
+      el.innerHTML = rows.map(function(c) {
+        var st = c.review_status || 'unreviewed';
+        var buttons = '';
+        if (canReview && c.candidate_id) {
+          if (st !== 'approved') buttons += '<button type="button" class="btn-secondary" style="font-size:11px;padding:4px 10px;margin-right:6px" data-cand-review="approve" data-cand-id="' + escAttr(c.candidate_id) + '">Approve</button>';
+          if (st !== 'rejected') buttons += '<button type="button" class="btn-secondary" style="font-size:11px;padding:4px 10px" data-cand-review="reject" data-cand-id="' + escAttr(c.candidate_id) + '">Reject</button>';
+        }
+        var anchors = (c.matched_anchors || []).join(', ');
+        var bits = [];
+        if (c.phone) bits.push(esc(c.phone));
+        if (c.email) bits.push(esc(c.email));
+        return '<div class="ld-contact" style="margin-bottom:8px">' +
+          '<div><strong>' + esc(c.name || 'Unknown') + '</strong>' +
+          (c.relationship ? '<span class="ld-muted"> · ' + esc(c.relationship) + '</span>' : '') +
+          '</div>' +
+          (bits.length ? '<div>' + bits.join(' · ') + '</div>' : '') +
+          (c.address ? '<div class="ld-muted">' + esc(c.address) + '</div>' : '') +
+          '<div class="ld-muted">' + esc(c.source || '') +
+          (anchors ? ' · anchors ' + esc(anchors) : '') +
+          (c.confidence != null ? ' · ' + esc(String(c.confidence)) : '') +
+          (c.discovered_at ? ' · ' + esc(String(c.discovered_at)) : '') +
+          '</div>' +
+          '<div class="ld-muted">' + esc(candidateReviewLine(c)) + '</div>' +
+          (buttons ? '<div style="margin-top:4px">' + buttons + '</div>' : '') +
+          '</div>';
+      }).join('') +
+        (canReview ? '' : '<div class="ld-muted" style="margin-top:6px">Approve and reject need the arrest county and state.</div>') +
+        '<div class="ld-muted" style="margin-top:6px">Review only. Discovery does not call, text, or email. Only approved candidates whose contact data is unchanged can be used for outreach.</div>' +
+        '<div style="margin-top:8px"><button type="button" class="btn-secondary" style="font-size:12px;padding:6px 12px" id="ldCandidateRefresh">Refresh discovery</button></div>';
+      var refresh = $('ldCandidateRefresh');
+      if (refresh) refresh.addEventListener('click', function() { discoverContacts(bk); });
+      el.querySelectorAll('[data-cand-review]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          btn.disabled = true;
+          reviewCandidate(bk, btn.getAttribute('data-cand-id'), btn.getAttribute('data-cand-review'), rcounty, rstate, rev);
+        });
+      });
+    } catch (e) {
+      if (seq === _detailSeq) el.textContent = 'Candidates are unavailable.';
+    }
   }
 
   function wireLeadActions(root, ctx) {
@@ -945,23 +1134,40 @@ window.SLProspective = (function () {
 
   // ── Contact Discovery ──────────────────────────────────────────────────────
   async function discoverContacts(bk) {
-    toast('Running contact discovery...', 'info');
+    toast('Running contact discovery…', 'info');
     try {
+      var bondObj = _data.find(function(b) { return String(b.booking_number) === String(bk); });
+      var bond = bondObj || {};
+      var lead = (window._leadMap && window._leadMap[bk]) || {};
+      var cached = _candidateScope[String(bk)] || {};
+      var county = bond.county || lead.county || cached.county || '';
+      var state = resolveLeadState(county, bond.state || lead.state || cached.state || '');
+      var fullName = bond.defendant_name || lead.full_name || lead.defendant_name || cached.full_name || '';
       var r = await fetch(API + '/api/contacts/discover', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ booking_number: bk })
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          booking_number: bk,
+          full_name: fullName,
+          county: county,
+          state: state,
+          address: bond.address || lead.address || ''
+        })
       });
       var d = await r.json();
-      if (d.contacts && d.contacts.length) {
-        var best = d.contacts[0];
-        var nameEl = $('indName');
-        var phoneEl = $('indPhone');
-        if (nameEl && !nameEl.value && best.name) nameEl.value = best.name;
-        if (phoneEl && !phoneEl.value && best.phone) phoneEl.value = best.phone;
-        toast('Found ' + d.contacts.length + ' contact(s) — best: ' + (best.name || best.phone), 'success');
-      } else {
-        toast('No contacts found via discovery', 'info');
+      var rcounty = (d && d.county) || county;
+      var rstate = resolveLeadState(rcounty, (d && d.state) || state);
+      if (rcounty || rstate || fullName) {
+        _candidateScope[String(bk)] = { county: rcounty, state: rstate, full_name: fullName };
+        if (bondObj) {
+          if (rcounty && !bondObj.county) bondObj.county = rcounty;
+          if (rstate && !bondObj.state) bondObj.state = rstate;
+        }
       }
-    } catch (e) { toast('Discovery failed: ' + e.message, 'error'); }
+      var count = (d.contacts || d.discovered_contacts || []).length;
+      if (d.error) toast('Discovery failed', 'error');
+      else toast('Discovery finished (' + count + ')', count ? 'success' : 'info');
+      loadCandidates(bk);
+    } catch (e) { toast('Discovery failed', 'error'); }
   }
 
   // ── Schedule Message ───────────────────────────────────────────────────────
@@ -1390,10 +1596,13 @@ window.SLProspective = (function () {
     var btn = $('alSubmitBtn');
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Adding...'; }
     try {
+      var formState = ($('alState') && $('alState').value) || '';
+      var resolvedState = resolveLeadState(county, formState);
       var payload = {
         defendant_name: defName,
         booking_number: ($('alBooking') && $('alBooking').value.trim()) || ('MANUAL-' + Date.now()),
         county: county,
+        state: resolvedState,
         bond_amount: parseFloat($('alBondAmount') ? $('alBondAmount').value : '0') || 0,
         charges: ($('alCharges') && $('alCharges').value.trim()) || '',
         stage: ($('alStage') && $('alStage').value) || 'contacted',
@@ -1413,11 +1622,28 @@ window.SLProspective = (function () {
       if (d.success !== false) {
         toast(defName + ' added to pipeline ✓', 'success');
         var bk = (d.prospective_bond && d.prospective_bond.booking_number) || payload.booking_number;
+        if (county || resolvedState || defName) {
+          _candidateScope[String(bk)] = { county: county, state: resolvedState, full_name: defName };
+        }
         if ($('alAutoSequence') && $('alAutoSequence').checked && payload.indemnitor.phone) {
           try { await fetch(API + '/api/outreach/start/' + encodeURIComponent(bk) + '/' + encodeURIComponent(county), { method: 'POST' }); } catch (e) { /* non-fatal */ }
         }
         if ($('alContactDiscover') && $('alContactDiscover').checked) {
-          try { await fetch(API + '/api/contacts/discover', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ booking_number: bk }) }); } catch (e) { /* non-fatal */ }
+          var plan = addLeadDiscoverBody(bk, county, formState, defName);
+          if (!plan.ok) {
+            toast(addLeadDiscoverSkipMessage(plan.reason), 'error');
+          } else {
+            try {
+              var dr = await fetch(API + '/api/contacts/discover', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(plan.body) });
+              if (!dr.ok) {
+                var de = {};
+                try { de = await dr.json(); } catch (e2) { de = {}; }
+                toast(contactsErrorMessage('Contact discovery', dr.status, de && de.error), 'error');
+              }
+            } catch (e) {
+              toast('Contact discovery failed: network error. Use Refresh discovery in the lead drawer.', 'error');
+            }
+          }
         }
         closeAddModal();
         load();
@@ -1844,6 +2070,9 @@ window.SLProspective = (function () {
     // Review Queue (The Closer)
     loadReviewQueue: loadReviewQueue, approveReview: approveReview, rejectReview: rejectReview, bulkApproveReview: bulkApproveReview,
     trackLead: trackLead,
+    // Exposed for tests/js/add_lead_discover_sim.js.
+    _addLeadDiscoverBody: addLeadDiscoverBody, _flRegistryCounties: FL_REGISTRY_COUNTIES,
+    reviewCandidate: reviewCandidate,
     viewInDefendants: function(bk) {
       // Switch to Defendants tab and pre-filter to this booking number
       var tabBtn = document.querySelector('[data-tab="tabDefendants"]');

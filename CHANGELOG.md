@@ -3,6 +3,117 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-30 (Lee co-signer discovery: merge main 2833a40 and prove Lee writes never stall on the queue, #280)
+
+### Changed
+- **Merged `origin/main` at `2833a40` (#305 ingestion-log wiring, #300 Lee County HQ staff auth).** The #305 `log_ingestion` call in `BaseScraper.run()` and the co-signer marker in `MongoWriter.write_records` touch different code, and both run on every Lee scrape. The marker rides in the arrest upsert's `$setOnInsert`. The ingestion-log entry is written after the writers return. A queue failure leaves the run `ok`, with the row counted in `ingestion_log`. No runtime code changed: the write path already fails open and has no await, thread, sleep, socket or extra Mongo call to time out.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py` runs a whole Lee `BaseScraper.run()` through the real `MongoWriter.write_records` and `log_ingestion`:
+  - `test_lee_run_queues_cosigner_marker_and_logs_ingestion`: a normal run carries the marker and logs one `ok` ingestion entry with count 1.
+  - `test_arrest_write_survives_cosigner_queue_failure`: the hook raises, the place check raises, the hook import fails, or the hook returns a non-dict. The row is still upserted with no marker. The run is `ok`, with 1 scraped and 1 new, and is logged with count 1. Logs carry no booking or name.
+  - `test_arrest_write_survives_cosigner_queue_mongo_error`: the marker path or a queue collection raises `ServerSelectionTimeoutError`, `AutoReconnect` or `OperationFailure`. The row is still written and the run counted. The cron's own claim on a Mongo error returns `failed=1` without raising.
+  - `test_arrest_write_does_not_stall_on_cosigner_queue`: the hook runs with socket connect, `Thread.start`, `time.sleep` and event-loop entry made to fail. The hook module has no `async`, `await`, sleep, thread, socket or Mongo client.
+  - Mutation check: with the `try/except` guards removed, the failure and Mongo-error cases fail. With a `time.sleep` in the hook, the stall test fails.
+
+## [Unreleased] — 2026-10-29 (Lee co-signer discovery: read prospective_bonds & active_bonds, Codex round 7 on #280)
+
+### Fixed
+- **Prior-Shamrock discovery now reads `prospective_bonds` and `active_bonds` in `_provider_prior`.** Co-signers attached to a booking via `POST /api/indemnitors/create` or stored directly on bond rows (`indemnitors[]`, nested `indemnitor`, and top-level `indemnitor_*` fields) are parsed by `_bond_prior_rows` and returned as `prior_shamrock` candidates on both same-booking refreshes (when the bond carries the arrest's county and state) and subsequent re-arrests (when the defendant name and a shared defendant anchor match). `POST /api/indemnitors/create` also persists the arrest's `state` and defendant anchor fields (`defendant_dob`, `defendant_phone`, `defendant_address`, `defendant_zip`) when starting a new `prospective_bonds` record from an arrest lead.
+- **Manual discovery retains state across Add Lead, candidate loading, and Refresh discovery (`dashboard/sl-prospective.js`, `dashboard/routers/prospective_bonds.py`).** `submitAddLead` sends the resolved state (`FL` for registered Florida counties or explicit `alState`) to `POST /api/prospective-bonds`, which persists `state` on the prospective bond document; `loadCandidates` and `discoverContacts` cache and reuse the county/state/name scope so subsequent **Refresh discovery** clicks on `MANUAL-*` bookings never omit `state`.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`: `test_prospective_and_active_bonds_cosigners_surface_on_refresh_and_rearrest`, `test_indemnitor_create_endpoint_persists_bond_cosigner_visible_to_discovery`, and `prospective_bonds`/`active_bonds` coverage in `test_partial_prior_read_failure_marks_the_run_failed`.
+
+## [Unreleased] — 2026-10-29 (Lee co-signer discovery: durable review audit and Add Lead name, Codex round 6 on #280)
+
+### Fixed
+- **A candidate review never lands without its immutable audit record.** `review_candidate` writes the contacts update (status, `review_pin`, `review_log` entry, `discovery_rev` bump) and the `audit_events` record (`contact_candidate_reviewed`, deterministic `_id` `contact-review:<doc>:<candidate>:<rev>`, linked from the row as `review_audit_id`) in one multi-document transaction, re-reading the doc and re-checking `discovery_rev` inside it. If the audit insert or the commit fails, the transaction aborts, the status is unchanged and the route returns 503 `audit_failed`. Without a replica set or Atlas the route returns 503 `audit_unavailable` and writes nothing (fail closed). The best-effort audit copy and `audit_mirrored` are gone. Logs carry only codes and error types.
+- **Add Lead discovery sends the defendant name.** `addLeadDiscoverBody` now sends `full_name` with the booking, county and state, so a `MANUAL-*` booking (no arrest record) can still be searched by name. With no name it does not run and staff see why. The name is sent in the body only and is never logged. The drawer shows a clear message for the new 503 codes.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`: an audit insert failure rolls the status back (no `review_log`, no audit, not an outreach target, 503, no PII in logs); no transactions or no client fails closed with nothing written; the review and audit commit together with a linked id that survives a refresh; a revision change before the transaction gives 409 with nothing written; the route returns 503 `audit_failed`; the discover route passes the name for a `MANUAL-*` booking and never logs it; Add Lead (JS sim) sends `full_name` for FL, form-state and `MANUAL-*` leads, refuses with `name_required` when blank, and shows the audit error message. The fake DB now has a transaction client that rolls back on error.
+
+## [Unreleased] — 2026-10-28 (Lee co-signer discovery: staff review action and pinned approvals, Codex round 5 on #280)
+
+### Added
+- **Staff approve/reject for discovered candidates.** `POST /api/contacts/{booking}/candidates/{candidate_id}/review` with `{county, state, decision: approve|reject, rev}`. It is behind the existing dashboard auth (not in `OPEN_PREFIXES`/`OPEN_PATHS`) and needs a staff cookie session with role `god_admin`, `admin` or `staff`; machine auth and no-session calls get 401, `sub_agent`/`recovery` get 403. The write is the same compare-and-swap on `discovery_rev` as the refresh: a stale `rev` gets 409 `stale_revision` and nothing is written. Approving or rejecting pins the reviewed phone, email, address and anchors as per-field SHA-256 digests (`review_pin`), never the values. Each decision is `$push`ed atomically into the doc's `review_log` (pseudonymous staff session id, time, old and new status, revisions; no PII) and mirrored best-effort to `audit_events`. The lead drawer shows each candidate's review status with Approve/Reject buttons that send the drawer's county, state and `discovery_rev`, and shows 409s and other errors to staff.
+
+### Fixed
+- **A refresh only carries a review forward when the contact data is unchanged.** A reviewed, approved or rejected row keeps its status only if its phone, email, address and anchors, compared after normalizing, equal the pinned values. If any of them changed, the row goes back to `unreviewed` with `review_reset = {reason: contact_changed, fields, previous_status, at}`; the log line has the field names and previous status only. Outreach (`_resolve_phone`) also requires the pin to match the row, so a changed number is never texted, even in `full_auto`, and a legacy `approved` row without a pin is not used until staff approve it again.
+- **Rejected candidates are never outreach targets** and expire on the same 30-day TTL and purge as unreviewed rows, so family contact data is not kept indefinitely.
+- **`GET /api/contacts/{booking}` with county and state reads a legacy booking-only doc** through the same `find_contact_doc` fallback as discovery (one legacy doc and one arrest with that booking). If it is ambiguous it returns 409 `legacy_contacts_ambiguous` and writes nothing. The response now carries `discovery_rev` and hides `review_log`.
+- **Add Lead discovery always sends a state.** It uses the form's state if there is one, else `FL` only when the county is one of the 67 FL registry counties; otherwise discovery is not run and staff see why. A 409 or other error is shown to staff instead of being dropped.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`: pin normalization; an unchanged approval survives a refresh and stays a target; a changed phone or email resets the review, records the reason, and logs no PII; a changed number in `full_auto` is never texted; the review action writes the audit entry without PII; a stale revision is rejected and writes nothing; reject excludes the candidate from outreach and survives an unchanged refresh; old rejected rows are purged; the review route requires a staff session (open lists, 401/403, success, stale 409); bad input writes nothing; GET reads a unique legacy doc and returns 409 for ambiguous legacy docs without writing; the Add Lead state rule and error toasts via `tests/js/add_lead_discover_sim.js`, with FL list parity against the county registry.
+
+## [Unreleased] — 2026-10-28 (Lee co-signer discovery: atomic purge and guarded refresh, Codex on #280)
+
+### Fixed
+- **The purge no longer rewrites the candidate array.** `purge_unreviewed_candidates` removes expired rows with one atomic `$pull` per contacts doc (`review_status` exactly `unreviewed` and `discovered_at` at or before the 30-day cutoff, as an ISO-date string or a BSON date). Candidates a refresh adds or reviews between the purge's read and its write are kept. Reviewed and approved rows never match the condition. A blank or garbled string stamp is never purged. The pull bumps the doc's `discovery_rev`; the TTL date and arrest candidate count are then recomputed from the doc as it is after the pull, and the TTL write is skipped if the doc has moved on again.
+- **A discovery refresh no longer overwrites a concurrent change.** The refresh merge-and-write is a compare-and-swap on `discovery_rev`: if the doc changed after the run read it (another refresh, a purge, or a doc that appeared since), nothing is written, the doc is re-read, and the merge is redone on top of it, up to 3 attempts. If it is still contended, nothing is written and the run is `failed` with `discovery_error = contacts_write_conflict`, which the batch retries. A purge can no longer be undone by a refresh that read before it.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`: a refresh that adds rows between the purge read and write keeps them; only expired unreviewed rows are removed (ISO and BSON-date stamps; fresh, blank, garbled and status-less rows stay); reviewed and approved rows are never removed; the purge never `$set`s the array; the purge TTL write does not overwrite a newer refresh; a refresh re-merges when the doc changed after its read; a refresh does not put back rows a purge removed; a refresh that keeps losing writes nothing and goes to `retry`; a guarded insert refuses a doc that appeared after the read. The more-than-200 and paging purge tests and the Lee arrest-write queue tests are unchanged and green.
+
+## [Unreleased] — 2026-10-28 (Lee co-signer discovery: Codex round 3 on #280)
+
+### Fixed
+- **A booking number alone never links a prior row to an arrest.** `indemnitors`/`intakes` and `intake_queue` rows matched on the booking number now need arrest-scoped county AND state equal to the arrest's. A legacy row missing either one no longer matches. The co-signer's own home `state` is still never compared.
+- **Family rows need the full arrest identity.** `family_graph` and `family_relationships` rows are read by booking number only and linked only when they carry the arrest's county and state. A matching defendant name or `person_id` slug no longer links a row. FamilyTreeService rows (person name/id only) are therefore skipped.
+- **Legacy booking-only contacts docs are updated in place.** Before a new scoped doc is created, a contacts doc keyed by booking only (no county or state, which is how every pre-#280 doc was written) is updated in place and given state + county; its reviewed rows are kept. This happens only when there is exactly one such doc and exactly one arrest with that booking number. Otherwise nothing is read or written, `contacts_legacy_ambiguous` is logged (code only), the batch marks the booking terminal `failed`, and the discover route returns 409 `legacy_contacts_ambiguous`. No migration, no data change outside the normal discovery write.
+- **County and state are canonical before the identity and `_id`.** `lee` / `LEE` / `Lee County` / `Lee (FL)` give `Lee`; `fl` / `Florida` / `Fla` give `FL`; an unknown state gives no identity. Canonical input (`Lee`/`FL`) gives the same `contacts:v1:` id as before. `_resolve_arrest` and `GET /api/contacts/{booking}` accept the same spellings.
+- **A partial read failure is a failed run, not "nothing found".** If any prior-Shamrock or same-address collection read raises, the run is `failed` with `discovery_error = prior_read_failed`, earlier rows are kept, and the batch sets the booking to `retry`. A booking whose identity cannot be resolved (`identity_ambiguous`) is marked terminal `failed` instead of being re-claimed.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`: booking-only rows without arrest county or state do not match; name-only, booking-only, other-county and no-state family rows are rejected and scoped ones accepted; one legacy doc updated in place keeping reviewed rows; a legacy doc for another county is not reused; two legacy docs, a booking on two arrests, or a capped scan write nothing and log only the code; batch and route handling of the ambiguous case; nine county/state spellings give the same identity and the v1 id; partial read failure gives `failed`/`prior_read_failed` and a batch `retry`; unresolvable identity is terminal; `_resolve_arrest` and the GET route accept `Lee County`/`Florida`. Lee arrest-write queue tests unchanged and green.
+
+## [Unreleased] — 2026-10-28 (Lee co-signer discovery: Codex round 2 on #280)
+
+### Fixed
+- **An out-of-state co-signer is no longer dropped from a Lee (FL) booking.** Prior-Shamrock `indemnitors`/`intakes` rows are place-checked only on arrest-scoped fields (`defendant_*`, `matched_*`, `bond_*`, `booking_*` county/state). The bare `state`/`county` on an indemnitor row is the co-signer's home address and is no longer compared.
+- **A transient failure leaves the booking retryable.** When a discovery run raises (or every provider fails), the arrest is set to `indemnitor_discovery.status = retry` with `attempts` and a `retry_after` backoff of 15, 30, 60 … minutes. The claim query picks up due `retry` rows. After `MAX_DISCOVERY_ATTEMPTS` (3) runs the booking becomes terminal `failed` and a `retry limit reached` warning is logged (counts and error type only).
+- **The purge reaches every expired unreviewed candidate.** The purge query now selects only contacts docs with an unreviewed row at or before the 30-day cutoff (ISO-string or BSON-date stamp), pages through them `limit` docs at a time, and skips docs it has already read. Expired rows past the first 200 docs are removed.
+- **Discover Contacts in the tracking drawer sends county and state.** `sl-tracking.js` passes the record's county and state (as the prospective drawer does), and the tracking `history`/`map-data` responses now include `state`, so a booking number shared by two counties no longer always returns 409.
+
+## [Unreleased] — 2026-10-28 (Lee co-signer discovery: state match, idempotent contacts, TTL)
+
+### Fixed
+- **Intake rows must match the booking's state as well as its county.** `intake_queue` rows compare `defendant_state` (or the nested defendant state) and `matched_state` against the arrest. A Lee, GA intake can no longer add a candidate to a Lee, FL arrest. State names and two-letter codes compare equal ("Georgia" = GA).
+- **Concurrent or repeated contacts upserts make one document.** A new contacts doc gets a deterministic `_id` from state + county + booking (`contact_doc_id`). Mongo's built-in unique `_id` index rejects a second concurrent insert, and that write is retried as an update. No new index. Legacy ObjectId docs are still found by their identity fields and updated in place; they are not migrated or duplicated.
+- **An all-unreviewed contacts doc expires 30 days after its newest candidate**, not its oldest, so a fresh row is never deleted with an old one.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`: another-state intake excluded; concurrent, repeated, and legacy-ObjectId upserts each leave one doc; duplicate-key insert applied as an update; doc id scoped to the full identity; TTL from the newest candidate. Lee arrest-write queue tests unchanged and green.
+
+## [Unreleased] — 2026-10-28 (Lee co-signer discovery: review fixes)
+
+### Fixed
+- **The queue marker is durable and cannot block or fail the Lee write.** The post-write daemon thread is gone. A new Lee (FL) upsert carries `indemnitor_discovery: queued` in its own `$setOnInsert`, so the marker is stored with the arrest before a one-shot run exits. A marker error is logged by type and the arrest is still written.
+- **Unreviewed candidates never reach automatic outreach.** `OutreachSequencer._resolve_phone` uses only `reviewed` / `approved` discovery candidates, read on state + county + booking.
+- **Contacts are scoped to the full arrest identity.** Discovery, the cache, the arrest marker, and `GET /api/contacts/{booking}` use state + county + booking. A booking that exists in two counties without a county returns `identity_ambiguous` (409) and writes nothing. The lead drawer passes county and state.
+- **A refresh keeps reviewed candidates** (and their review fields) even when the run did not return them, and keeps prior rows from a provider that did not finish.
+- **`intake_queue` rows are matched** on `defendant_booking_number` + `defendant_county` or `matched_booking_number` + `matched_county`, reading the nested indemnitor block.
+- **Public HTTP and skip-trace run off the event loop** (`asyncio.to_thread`). The request gap is slept out, not skipped. A rate-limited or gapped provider defers the booking with `retry_after` (up to 4 times) instead of finishing it empty.
+- **`family_graph` and `family_relationships` use their real schemas** (relative name, phone, relation type; soft-deleted rows skipped).
+- **Skip-trace anchors are recomputed** from the fields the vendor returned; a vendor `matched_anchors` claim alone adds no confidence.
+- `lee_indemnitor_discovery` is listed in Service Control.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py` (on the CI list): marker in the Lee FL upsert only, a marker exception still writes the arrests, no thread/wait on the write path, outreach review gate and identity scope, two-county booking, ambiguous identity, reviewed rows kept, intake_queue and family schemas, off-loop HTTP with a slept gap, deferral and re-claim, skip-trace anchor recompute.
+
+## [Unreleased] — 2026-10-21 (Lee co-signer discovery)
+
+### Added
+- **New Lee (FL) bookings queue co-signer discovery with the arrest write.** The queue marker rides in the upsert and cannot fail or stall the scraper write. Candidates are stored on the existing `contacts` collection and shown on the lead drawer for staff review. Nothing is texted, called, or emailed.
+- **A candidate requires a name plus at least one anchor** (phone, DOB, or normalized address + ZIP). `matched_anchors` is stored. Confidence is the sum of fixed anchor weights. A display name alone is dropped.
+- **Public HTTP and the optional skip-trace provider stay off** unless `INDEMNITOR_DISCOVERY_HTTP` or both `INDEMNITOR_SKIPTRACE_URL` and `INDEMNITOR_SKIPTRACE_API_KEY` are set. HTTP uses plain verified HTTPS. Sheriff hosts honor the existing Lee cooldown.
+- **Unreviewed candidate documents expire after 30 days** via `contacts.unreviewed_expire_at`. A purge pass drops expired unreviewed rows and keeps reviewed ones.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py` (on the CI list).
+
 ## [Unreleased] — 2026-10-29 (Wire BaseScraper.run() into MongoWriter.log_ingestion)
 
 ### Fixed
@@ -1163,7 +1274,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_fl_pvp_bond_unknown.py` (added to the `ci.yml` list).
 
-
 ## [Unreleased] — 2026-10-14 (Collier: plain verified HTTPS, custody unknown)
 
 ### Changed
@@ -1192,7 +1302,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `tests/test_fl_plain_https_polk_volusia_pasco.py` (added to the `ci.yml` list).
-
 
 ## [Unreleased] — 2026-10-14 (powers pack saved to generated reports)
 

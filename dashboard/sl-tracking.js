@@ -345,6 +345,10 @@ const SLTracking = (() => {
       const isExonerated = data.status === 'exonerated' || !!data.exonerated_at;
       const bkSafe   = esc(bookingNumber);
       const nameSafe = esc(data.defendant_name || '');
+      // The booking number alone is ambiguous across counties (409), so the
+      // Discover Contacts action sends the record's county and state too.
+      const countySafe = esc(data.county || '');
+      const stateSafe  = esc(data.state || '');
       const risk     = data.risk_score || 0;
       const locs     = data.location_history || [];
       const alerts   = data.alerts || [];
@@ -483,7 +487,7 @@ const SLTracking = (() => {
               '<div class="panel-title" style="margin-bottom:12px">⚡ Actions</div>' +
               '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
                 '<button class="btn-primary" onclick="SLTracking.sendGeoLink(\'' + bkSafe + '\',\'' + nameSafe + '\')">📍 Send GPS Link</button>' +
-                '<button class="btn-export" onclick="SLTracking.discoverContacts(\'' + bkSafe + '\',\'' + nameSafe + '\')">🔍 Discover Contacts</button>' +
+                '<button class="btn-export" onclick="SLTracking.discoverContacts(\'' + bkSafe + '\',\'' + nameSafe + '\',\'' + countySafe + '\',\'' + stateSafe + '\')">🔍 Discover Contacts</button>' +
                 '<button class="btn-export" style="background:#3b82f6;color:#fff;border:none" onclick="SLTracking._openInActiveBonds(\'' + bkSafe + '\')">🔒 View in Active Bonds</button>' +
                 '<button class="btn-danger" onclick="SLTracking.confirmExonerate(\'' + bkSafe + '\',\'' + nameSafe + '\')">✅ Exonerate Bond</button>' +
               '</div>' +
@@ -654,14 +658,24 @@ const SLTracking = (() => {
   }
 
   // ── Contact Discovery ─────────────────────────────────────────────────────
-  async function discoverContacts(bookingNumber, defName) {
+  function _discoverBody(bookingNumber, defName, county, state) {
+    const rec = _data.find(d => String(d.booking_number) === String(bookingNumber)) || {};
+    return {
+      booking_number: bookingNumber,
+      full_name: defName || rec.defendant_name || '',
+      county: county || rec.county || '',
+      state: state || rec.state || '',
+    };
+  }
+
+  async function discoverContacts(bookingNumber, defName, county, state) {
     const resultEl = document.getElementById('trkContactResult_' + bookingNumber);
     if (resultEl) resultEl.innerHTML = '<div style="color:var(--muted);font-size:13px">🔍 Running contact discovery for ' + escH(defName || bookingNumber) + '…</div>';
     try {
       const resp = await fetch(API + '/api/contacts/discover', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ booking_number: bookingNumber, full_name: defName }),
+        body: JSON.stringify(_discoverBody(bookingNumber, defName, county, state)),
       });
       const data = await resp.json();
       if (data.error) throw new Error(data.error);
@@ -792,6 +806,7 @@ const SLTracking = (() => {
     _scheduleRemindersFromDrawer,
     _openInActiveBonds,
     discoverContacts,
+    _discoverBody,
     onBondWritten,
     onBondExonerated,
     focusDevice,
