@@ -662,6 +662,208 @@ def test_write_path_starts_no_thread_and_waits_on_nothing(monkeypatch):
     assert not [name for name in started if "indemnitor" in name]
 
 
+# ── Lee arrest writes never stall or fail on the co-signer queue ──────────
+# The only co-signer queue code on the scraper write path is the in-process
+# ``$setOnInsert`` marker (writers/indemnitor_discovery_hook). These run the
+# whole BaseScraper.run() -> MongoWriter.write_records -> log_ingestion (#305)
+# path with a Lee (FL) record and break the queue part in every way it can
+# break: the row must still be upserted and the run completed and counted.
+
+
+class _IngestionLogFake:
+    def __init__(self):
+        self.docs = []
+
+    def insert_one(self, doc):
+        self.docs.append(dict(doc))
+
+    def update_one(self, filt, update, upsert=False):
+        return MagicMock(matched_count=1)
+
+    def find_one(self, filt=None, proj=None):
+        return {}
+
+
+def _lee_scraper_cls():
+    from scrapers.base_scraper import BaseScraper
+
+    class _LeeRunScraper(BaseScraper):
+        county = "Lee"
+        state = "FL"
+        scraper_id = "scraper_lee"
+        SOURCE_CONTRACT_VALIDATED = True
+
+        def scrape(self):
+            return [ArrestRecord(County="Lee", State="FL", Booking_Number="B-100",
+                                 Full_Name="Casey Sample", Charges="TRESPASS",
+                                 Bond_Amount="1000", Status="IN CUSTODY")]
+
+    return _LeeRunScraper
+
+
+def _run_lee_scrape(writer):
+    from scrapers.base_scraper import BaseScraper
+
+    writer.ingestion_log = _IngestionLogFake()
+    writer.scraper_status = _IngestionLogFake()
+    with patch("scrapers.base_scraper._slack"), \
+         patch.object(BaseScraper, "_check_disk_space", return_value={"ok": True}):
+        return _lee_scraper_cls()().run(writers=[writer])
+
+
+def _assert_lee_row_written_and_run_counted(writer, result, *, marker):
+    ops = _ops_for(writer)
+    assert len(ops) == 1
+    op = ops[0]
+    assert op._filter["booking_number"] == "B-100" and op._filter["county"] == "Lee"
+    assert "created_at" in op._doc["$setOnInsert"] and op._doc["$set"]["booking_number"] == "B-100"
+    assert ("indemnitor_discovery" in op._doc["$setOnInsert"]) is marker
+    assert result["status"] == "ok"
+    assert result["records_scraped"] == 1 and result["new_records"] == 1
+    (entry,) = writer.ingestion_log.docs
+    assert (entry["status"], entry["count"], entry["new_records"], entry["error_class"]) == ("ok", 1, 1, None)
+
+
+def test_lee_run_queues_cosigner_marker_and_logs_ingestion():
+    """#305 + #280 together: one Lee run upserts the row with the queue
+    marker in its $setOnInsert and appends one ingestion_log entry."""
+    writer = _make_writer(_bulk_result([0]))
+    result = _run_lee_scrape(writer)
+    _assert_lee_row_written_and_run_counted(writer, result, marker=True)
+    assert writer.arrests.bulk_write.call_count == 1
+    writer.arrests.update_one.assert_not_called()
+
+
+def _hook_raises(monkeypatch):
+    def _boom(*args, **kwargs):
+        raise RuntimeError("queue down")
+    monkeypatch.setattr("writers.indemnitor_discovery_hook.discovery_insert_marker", _boom)
+
+
+def _place_lookup_raises(monkeypatch):
+    def _boom(*args, **kwargs):
+        raise ValueError("bad place")
+    monkeypatch.setattr("writers.indemnitor_discovery_hook._is_lee_florida", _boom)
+
+
+def _hook_import_fails(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _no_hook(name, *args, **kwargs):
+        if name == "writers.indemnitor_discovery_hook":
+            raise ImportError("hook missing")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _no_hook)
+
+
+def _hook_returns_garbage(monkeypatch):
+    monkeypatch.setattr("writers.indemnitor_discovery_hook.discovery_insert_marker",
+                        lambda *a, **k: ["not", "a", "dict"])
+
+
+@pytest.mark.parametrize("break_queue", [
+    _hook_raises, _place_lookup_raises, _hook_import_fails, _hook_returns_garbage,
+], ids=["hook_raises", "marker_raises", "hook_import_fails", "hook_returns_garbage"])
+def test_arrest_write_survives_cosigner_queue_failure(monkeypatch, caplog, break_queue):
+    break_queue(monkeypatch)
+    writer = _make_writer(_bulk_result([0]))
+    with caplog.at_level(logging.WARNING):
+        result = _run_lee_scrape(writer)
+    _assert_lee_row_written_and_run_counted(writer, result, marker=False)
+    for secret in ("B-100", "Casey", "Sample"):
+        assert secret not in caplog.text
+
+
+@pytest.mark.parametrize("error_cls", ["ServerSelectionTimeoutError", "AutoReconnect", "OperationFailure"])
+def test_arrest_write_survives_cosigner_queue_mongo_error(monkeypatch, error_cls):
+    """A Mongo error anywhere on the queue side never fails the Lee write:
+    raised from the marker path, or from any queue/contacts collection the
+    writer's db might be asked for. The cron claim on its own Mongo error
+    returns a failed summary without raising and writes no arrest."""
+    import pymongo.errors as perr
+
+    exc = getattr(perr, error_cls)("mongo down")
+
+    def _mongo_down(*args, **kwargs):
+        raise exc
+
+    monkeypatch.setattr("writers.indemnitor_discovery_hook._is_lee_florida", _mongo_down)
+    writer = _make_writer(_bulk_result([0]))
+    queue_cols = {"contacts", "indemnitors", "intakes", "intake_queue", "family_graph",
+                  "family_relationships", "audit_events"}
+    real_getitem = writer.db.__getitem__
+
+    def _getitem(name):
+        if name in queue_cols:
+            raise exc
+        return real_getitem(name)
+
+    writer.db.__getitem__ = MagicMock(side_effect=_getitem)
+    result = _run_lee_scrape(writer)
+    _assert_lee_row_written_and_run_counted(writer, result, marker=False)
+    assert not [c for c in writer.db.__getitem__.call_args_list if c.args and c.args[0] in queue_cols]
+
+    # The dashboard cron's claim against Mongo fails on its own side only.
+    class _DownArrests:
+        def find(self, *a, **k):
+            raise exc
+
+    async def _no_purge(db, now=None):
+        return {"purged_candidates": 0}
+
+    monkeypatch.setattr("dashboard.services.contact_discovery.discovery_enabled", lambda: True)
+    monkeypatch.setattr("dashboard.services.contact_discovery.purge_unreviewed_candidates", _no_purge)
+    import asyncio
+
+    summary = asyncio.run(run_lee_discovery_batch({"arrests": _DownArrests()}))
+    assert summary["failed"] == 1 and summary["claimed"] == 0
+
+
+def test_arrest_write_does_not_stall_on_cosigner_queue(monkeypatch):
+    """No await, thread, sleep, socket or extra Mongo round trip sits between
+    a Lee arrest and its upsert, so the queue cannot hang the write. Any of
+    them being reached during the run fails this test."""
+    import socket
+    import threading
+
+    def _forbidden(what):
+        def _raise(*args, **kwargs):
+            raise AssertionError(f"co-signer queue reached {what} on the write path")
+        return _raise
+
+    hook_calls = []
+    import writers.indemnitor_discovery_hook as hook
+
+    real_marker = hook.discovery_insert_marker
+
+    def _spy(*args, **kwargs):
+        hook_calls.append(1)
+        with patch.object(socket.socket, "connect", _forbidden("a socket")), \
+             patch.object(threading.Thread, "start", _forbidden("a thread")), \
+             patch("time.sleep", _forbidden("a sleep")), \
+             patch("asyncio.run", _forbidden("an event loop")), \
+             patch("asyncio.get_event_loop", _forbidden("an event loop")):
+            return real_marker(*args, **kwargs)
+
+    monkeypatch.setattr(hook, "discovery_insert_marker", _spy)
+    writer = _make_writer(_bulk_result([0]))
+    t0 = time.perf_counter()
+    result = _run_lee_scrape(writer)
+    assert time.perf_counter() - t0 < 5.0
+    assert hook_calls == [1]
+    _assert_lee_row_written_and_run_counted(writer, result, marker=True)
+    assert writer.arrests.bulk_write.call_count == 1
+    # The hook module has no coroutine or blocking primitive at all.
+    import inspect
+
+    source = inspect.getsource(hook)
+    for token in ("async def", "await ", "time.sleep", "threading", "requests", "socket", "MongoClient"):
+        assert token not in source, token
+
+
 @pytest.mark.asyncio
 async def test_unreviewed_candidate_is_never_an_outreach_target():
     from dashboard.services.outreach_sequencer import OutreachSequencer

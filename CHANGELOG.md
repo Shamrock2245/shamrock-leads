@@ -3,6 +3,19 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-30 (Lee co-signer discovery: merge main 2833a40 and prove Lee writes never stall on the queue, #280)
+
+### Changed
+- **Merged `origin/main` at `2833a40` (#305 ingestion-log wiring, #300 Lee County HQ staff auth).** The #305 `log_ingestion` call in `BaseScraper.run()` and the co-signer marker in `MongoWriter.write_records` touch different code, and both run on every Lee scrape. The marker rides in the arrest upsert's `$setOnInsert`. The ingestion-log entry is written after the writers return. A queue failure leaves the run `ok`, with the row counted in `ingestion_log`. No runtime code changed: the write path already fails open and has no await, thread, sleep, socket or extra Mongo call to time out.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py` runs a whole Lee `BaseScraper.run()` through the real `MongoWriter.write_records` and `log_ingestion`:
+  - `test_lee_run_queues_cosigner_marker_and_logs_ingestion`: a normal run carries the marker and logs one `ok` ingestion entry with count 1.
+  - `test_arrest_write_survives_cosigner_queue_failure`: the hook raises, the place check raises, the hook import fails, or the hook returns a non-dict. The row is still upserted with no marker. The run is `ok`, with 1 scraped and 1 new, and is logged with count 1. Logs carry no booking or name.
+  - `test_arrest_write_survives_cosigner_queue_mongo_error`: the marker path or a queue collection raises `ServerSelectionTimeoutError`, `AutoReconnect` or `OperationFailure`. The row is still written and the run counted. The cron's own claim on a Mongo error returns `failed=1` without raising.
+  - `test_arrest_write_does_not_stall_on_cosigner_queue`: the hook runs with socket connect, `Thread.start`, `time.sleep` and event-loop entry made to fail. The hook module has no `async`, `await`, sleep, thread, socket or Mongo client.
+  - Mutation check: with the `try/except` guards removed, the failure and Mongo-error cases fail. With a `time.sleep` in the hook, the stall test fails.
+
 ## [Unreleased] — 2026-10-29 (Lee co-signer discovery: durable review audit and Add Lead name, Codex round 6 on #280)
 
 ### Fixed
