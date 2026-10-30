@@ -64,8 +64,12 @@ async function addLead(county, state, discoverResp, opts) {
   const routes = [['/api/contacts/discover', discoverResp || { status: 200, json: { contacts: [] } }], add];
   const env = makeEnv(fields, routes);
   await env.P.submitAddLead();
+  if (opts.refreshAfter) {
+    await env.P.discoverContacts(opts.refreshAfter);
+  }
   const discover = env.calls.filter((c) => c.url === '/api/contacts/discover');
-  return { discover: discover.map((c) => c.body), toasts: env.toasts };
+  const pbPost = env.calls.find((c) => c.url === '/api/prospective-bonds' && c.method === 'POST');
+  return { discover: discover.map((c) => c.body), pb_state: pbPost && pbPost.body ? pbPost.body.state : null, toasts: env.toasts };
 }
 
 function env_body_only() {
@@ -86,7 +90,8 @@ function env_body_only() {
   out.conflict = await addLead('Lee', undefined, { status: 409, json: { error: 'county_and_state_required' } });
   out.legacy = await addLead('Lee', undefined, { status: 409, json: { error: 'legacy_contacts_ambiguous' } });
   out.server_error = await addLead('Lee', undefined, { status: 500, json: { error: 'discovery_failed' } });
-  out.manual_booking = await addLead('Lee', undefined, undefined, { manual: true });
+  out.manual_booking = await addLead('Lee', undefined, undefined, { manual: true, refreshAfter: 'MANUAL-1' });
+  out.manual_ga_refresh = await addLead('Fulton', 'ga', undefined, { manual: true, refreshAfter: 'MANUAL-1' });
   out.name_body = env_body_only();
 
   const env = makeEnv({}, [['/api/contacts/B-100/candidates/', { status: 409, json: { error: 'stale_revision' } }]]);

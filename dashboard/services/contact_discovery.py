@@ -579,6 +579,15 @@ def _row_booking(row: Dict[str, Any]) -> str:
     return _first(row, "booking_number", "Booking_Number", "matched_booking_number")
 
 
+def _row_matches_booking(row: Dict[str, Any], booking_number: str) -> bool:
+    if not booking_number:
+        return False
+    if _row_booking(row) == booking_number:
+        return True
+    linked = row.get("linked_bonds")
+    return isinstance(linked, list) and any(str(item or "").strip() == booking_number for item in linked)
+
+
 def _contact_anchors(row: Dict[str, Any]) -> List[str]:
     """Anchors present on the co-signer fields of one stored row."""
     anchors: List[str] = []
@@ -668,20 +677,81 @@ def _merge_candidates(
     not complete this run (``keep_sources``) is kept too; the 30-day purge
     still applies to it.
     """
-    def _key(row: Dict[str, Any]):
+    def _base_key(row: Dict[str, Any]) -> tuple:
         return (name_key(str(row.get("name") or "")), str(row.get("source") or ""))
 
-    prior = {_key(row): row for row in existing if isinstance(row, dict)}
-    merged: List[Dict[str, Any]] = []
-    seen = set()
-    for row in fresh:
-        key = _key(row)
-        if not key[0] or key in seen:
+    def _contact_tuple(row: Dict[str, Any]) -> tuple:
+        vals = _review_values(row)
+        return (vals["phone"], vals["email"], vals["address"])
+
+    deduped_fresh: List[Dict[str, Any]] = []
+    by_exact_key: Dict[tuple, Dict[str, Any]] = {}
+    for raw_row in fresh:
+        if not isinstance(raw_row, dict):
             continue
-        seen.add(key)
-        previous = prior.get(key)
+        bkey = _base_key(raw_row)
+        if not bkey[0]:
+            continue
+        ct = _contact_tuple(raw_row)
+        # Only merge two fresh rows when they share the same (name, source) AND
+        # the exact same non-empty normalized (phone, email, address) tuple.
+        # Two same-name people with different or disjoint contact fields never
+        # combine their phones, addresses, or anchors into a synthetic person.
+        exact_key = (*bkey, ct) if any(ct) else (*bkey, ("__unanchored__", len(deduped_fresh)))
+        if exact_key not in by_exact_key:
+            copied = dict(raw_row)
+            by_exact_key[exact_key] = copied
+            deduped_fresh.append(copied)
+            continue
+        acc = by_exact_key[exact_key]
+        combined_anchors = _anchors_from(
+            list(acc.get("matched_anchors") or []) + list(raw_row.get("matched_anchors") or [])
+        )
+        if combined_anchors:
+            acc["matched_anchors"] = combined_anchors
+            acc["confidence"] = confidence_for(combined_anchors)
+        if acc.get("relationship") in (None, "", "prior_indemnitor", "possible_indemnitor") and raw_row.get("relationship"):
+            acc["relationship"] = raw_row["relationship"]
+
+    fresh_counts: Dict[tuple, int] = {}
+    for row in deduped_fresh:
+        bkey = _base_key(row)
+        fresh_counts[bkey] = fresh_counts.get(bkey, 0) + 1
+
+    prior_by_base: Dict[tuple, List[Dict[str, Any]]] = {}
+    for row in existing:
+        if isinstance(row, dict) and _base_key(row)[0]:
+            prior_by_base.setdefault(_base_key(row), []).append(row)
+
+    merged: List[Dict[str, Any]] = []
+    matched_prior_ids: set = set()
+    seen_row_keys: set = set()
+    for idx, row in enumerate(deduped_fresh):
+        bkey = _base_key(row)
+        ct = _contact_tuple(row)
+        ambiguous_name = fresh_counts.get(bkey, 0) > 1 or len(prior_by_base.get(bkey, ())) > 1
+        row_key = (*bkey, ct, idx) if ambiguous_name else bkey
+        if not bkey[0] or row_key in seen_row_keys:
+            continue
+        seen_row_keys.add(row_key)
+        row = dict(row)
+        if ambiguous_name:
+            row["candidate_id"] = str(uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"{row.get('candidate_id') or ''}|{ct[0]}|{ct[1]}|{ct[2]}|{idx}",
+            ))
+        prior_candidates = prior_by_base.get(bkey, [])
+        previous: Optional[Dict[str, Any]] = None
+        if not ambiguous_name and len(prior_candidates) == 1:
+            previous = prior_candidates[0]
+        elif ambiguous_name:
+            for cand in prior_candidates:
+                if id(cand) not in matched_prior_ids and any(ct) and _contact_tuple(cand) == ct:
+                    previous = cand
+                    break
+        if isinstance(previous, dict):
+            matched_prior_ids.add(id(previous))
         if isinstance(previous, dict) and previous.get("review_status") in CARRIED_STATUSES:
-            row = dict(row)
             changed = review_changed_fields(previous, row)
             if previous.get("candidate_id"):
                 row["candidate_id"] = previous["candidate_id"]
@@ -707,16 +777,18 @@ def _merge_candidates(
                 )
         elif isinstance(previous, dict) and isinstance(previous.get("review_reset"), dict):
             # Keep the reason visible until staff review the row.
-            row = dict(row)
             row["review_reset"] = previous["review_reset"]
         merged.append(row)
     keep = set(keep_sources or ())
-    for key, row in prior.items():
-        if key in seen or not key[0]:
+    for bkey, rows in prior_by_base.items():
+        if not bkey[0]:
             continue
-        if is_reviewed(row) or str(row.get("source") or "") in keep:
-            seen.add(key)
-            merged.append(row)
+        for row in rows:
+            if id(row) in matched_prior_ids:
+                continue
+            if is_reviewed(row) or str(row.get("source") or "") in keep:
+                matched_prior_ids.add(id(row))
+                merged.append(row)
     return merged
 
 
@@ -827,7 +899,7 @@ def _generic_prior_rows(rows: Sequence[Any], booking: Dict[str, Any]) -> List[Di
         # Both must be present: a legacy row without them does not match.
         same_case = (
             bool(booking_number)
-            and _row_booking(row) == booking_number
+            and _row_matches_booking(row, booking_number)
             and _arrest_scope_matches(
                 booking,
                 _first(row, *_ARREST_COUNTY_FIELDS),
@@ -978,13 +1050,169 @@ def _family_rows(rows: Sequence[Any], booking: Dict[str, Any], collection_name: 
     return found
 
 
+def _bond_prior_rows(rows: Sequence[Any], booking: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """prospective_bonds / active_bonds: co-signers live in ``indemnitors[]``,
+    nested ``indemnitor``, and flat ``indemnitor_*`` fields on the bond doc."""
+    defendant = _first(booking, "full_name", "defendant_name")
+    booking_number = _first(booking, "booking_number")
+    found: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        snap = row.get("defendant_snapshot") if isinstance(row.get("defendant_snapshot"), dict) else {}
+        dfd = row.get("defendant") if isinstance(row.get("defendant"), dict) else {}
+        row_county = (
+            _first(row, "county", "County", *_ARREST_COUNTY_FIELDS)
+            or _first(snap, "county", "County", *_ARREST_COUNTY_FIELDS)
+            or _first(dfd, "county", "County")
+        )
+        row_state = (
+            _first(row, "state", "State", *_ARREST_STATE_FIELDS)
+            or _first(snap, "state", "State", *_ARREST_STATE_FIELDS)
+            or _first(dfd, "state", "State")
+        )
+        same_case = (
+            bool(booking_number)
+            and _row_booking(row) == booking_number
+            and _arrest_scope_matches(booking, row_county, row_state)
+        )
+        defendant_names = (
+            _as_names(row.get("defendant_name"))
+            + _as_names(row.get("full_name"))
+            + _as_names(_first(snap, "full_name", "defendant_name"))
+            + _as_names(_first(dfd, "name", "full_name", "defendant_name"))
+        )
+        name_hit = any(names_equal(defendant, item) for item in defendant_names)
+        def_anchors = (
+            shared_defendant_anchors(
+                booking,
+                {
+                    "defendant_dob": (
+                        _first(row, "defendant_dob", "dob")
+                        or _first(snap, "dob", "defendant_dob")
+                        or _first(dfd, "dob", "defendant_dob")
+                    ),
+                    "defendant_phone": (
+                        _first(row, "defendant_phone", "phone")
+                        or _first(snap, "phone", "defendant_phone")
+                        or _first(dfd, "phone", "defendant_phone")
+                    ),
+                    "defendant_address": (
+                        _first(row, "defendant_address", "address")
+                        or _first(snap, "address", "defendant_address")
+                        or _first(dfd, "address", "defendant_address")
+                    ),
+                    "defendant_zip": (
+                        _first(row, "defendant_zip", "defendant_zip_code", "zip")
+                        or _first(snap, "zip", "defendant_zip", "defendant_zip_code")
+                        or _first(dfd, "zip", "defendant_zip", "defendant_zip_code")
+                    ),
+                },
+            )
+            if name_hit
+            else []
+        )
+        blocks: List[Dict[str, Any]] = []
+        raw_list = row.get("indemnitors")
+        if isinstance(raw_list, list):
+            for item in raw_list:
+                if isinstance(item, dict):
+                    blocks.append(dict(item))
+        single = row.get("indemnitor") if isinstance(row.get("indemnitor"), dict) else {}
+        flat = {
+            "name": _first(row, "indemnitor_name"),
+            "phone": _first(row, "indemnitor_phone"),
+            "email": _first(row, "indemnitor_email"),
+            "address": _first(row, "indemnitor_address"),
+            "zip": _first(row, "indemnitor_zip"),
+            "dob": _first(row, "indemnitor_dob"),
+            "relationship": _first(row, "indemnitor_relationship"),
+        }
+        if single or any(flat.values()):
+            merged_top = dict(single)
+            for key, val in flat.items():
+                if val and not _first(merged_top, key, f"indemnitor_{key}"):
+                    merged_top[key] = val
+            top_name = _first(merged_top, "indemnitor_name", "name") or " ".join(
+                part for part in (_first(merged_top, "firstName", "first_name"), _first(merged_top, "lastName", "last_name")) if part
+            )
+            matched_block = None
+            if top_name:
+                for blk in blocks:
+                    blk_name = _first(blk, "indemnitor_name", "name") or " ".join(
+                        part for part in (_first(blk, "firstName", "first_name"), _first(blk, "lastName", "last_name")) if part
+                    )
+                    if blk_name and names_equal(top_name, blk_name):
+                        matched_block = blk
+                        break
+            if matched_block is not None:
+                for key, val in merged_top.items():
+                    if val and not matched_block.get(key):
+                        matched_block[key] = val
+            else:
+                blocks.append(merged_top)
+        for block in blocks:
+            name = _first(block, "indemnitor_name", "name") or " ".join(
+                part for part in (_first(block, "firstName", "first_name"), _first(block, "lastName", "last_name")) if part
+            )
+            phone = _first(block, "indemnitor_phone", "phone", "callback_phone")
+            email = _first(block, "indemnitor_email", "email")
+            address = _first(block, "indemnitor_address", "address")
+            zip_code = _first(block, "indemnitor_zip", "zip")
+            dob = _first(block, "indemnitor_dob", "dob")
+            anchors: List[str] = []
+            if same_case:
+                if normalize_phone(phone):
+                    anchors.append("phone")
+                if normalize_dob(dob):
+                    anchors.append("dob")
+                if address_key(address, zip_code):
+                    anchors.append("address_zip")
+            if def_anchors:
+                anchors.extend(def_anchors)
+            full_addr = (
+                " ".join(part for part in (address, zip_code) if part)
+                if zip_code and zip_code not in str(address or "")
+                else str(address or "")
+            )
+            candidate = make_candidate(
+                booking_number=booking_number,
+                name=name,
+                anchors=anchors,
+                source="prior_shamrock",
+                relationship=_first(block, "relationship", "indemnitor_relationship", "relation") or "prior_indemnitor",
+                phone=phone,
+                email=email,
+                address=full_addr,
+                defendant_name=defendant,
+            )
+            if candidate:
+                found.append(candidate)
+    return found
+
+
 async def _provider_prior(db: Any, booking: Dict[str, Any]) -> List[Dict[str, Any]]:
     defendant = _first(booking, "full_name", "defendant_name")
     booking_number = _first(booking, "booking_number")
     variants = exact_name_variants(defendant)
     by_booking = [{"booking_number": booking_number}] if booking_number else []
+    bond_clauses = (
+        [{"booking_number": booking_number}, {"Booking_Number": booking_number}]
+        if booking_number else []
+    ) + (
+        [
+            {"defendant_name": {"$in": variants}},
+            {"full_name": {"$in": variants}},
+            {"defendant_snapshot.full_name": {"$in": variants}},
+            {"defendant_snapshot.defendant_name": {"$in": variants}},
+        ]
+        if variants else []
+    )
     queries: List[tuple] = []
-    queries.append(("indemnitors", by_booking + (
+    queries.append(("indemnitors", (
+        [{"booking_number": booking_number}, {"linked_bonds": booking_number}]
+        if booking_number else []
+    ) + (
         [{"defendant_name": {"$in": variants}}, {"defendants_bonded": {"$in": variants}}] if variants else []
     )))
     queries.append(("intakes", by_booking + ([{"defendant_name": {"$in": variants}}] if variants else [])))
@@ -992,6 +1220,8 @@ async def _provider_prior(db: Any, booking: Dict[str, Any]) -> List[Dict[str, An
         [{"defendant_booking_number": booking_number}, {"matched_booking_number": booking_number}]
         if booking_number else []
     ) + ([{"defendant_name": {"$in": variants}}] if variants else [])))
+    queries.append(("prospective_bonds", bond_clauses))
+    queries.append(("active_bonds", bond_clauses))
     # Family rows are linked only by booking + arrest place (see _family_rows),
     # so they are read by booking number only; name-only rows are not fetched.
     queries.append(("family_graph", by_booking))
@@ -1013,6 +1243,8 @@ async def _provider_prior(db: Any, booking: Dict[str, Any]) -> List[Dict[str, An
             raise PriorReadFailed(collection_name, type(exc).__name__) from exc
         if collection_name == "intake_queue":
             found.extend(_intake_queue_rows(rows, booking))
+        elif collection_name in {"prospective_bonds", "active_bonds"}:
+            found.extend(_bond_prior_rows(rows, booking))
         elif collection_name in {"family_graph", "family_relationships"}:
             found.extend(_family_rows(rows, booking, collection_name))
         else:
@@ -2111,7 +2343,7 @@ async def review_candidate(
             "rev_after": current_rev + 1,
         }
         update: Dict[str, Any] = _with_rev_bump(
-            {"$set": {"discovered_contacts": rows}, "$push": {"review_log": entry}}
+            {"$set": {**identity, "discovered_contacts": rows}, "$push": {"review_log": entry}}
         )
         expire = unreviewed_expire_at(rows, now)
         if expire:

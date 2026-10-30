@@ -16,6 +16,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `test_arrest_write_does_not_stall_on_cosigner_queue`: the hook runs with socket connect, `Thread.start`, `time.sleep` and event-loop entry made to fail. The hook module has no `async`, `await`, sleep, thread, socket or Mongo client.
   - Mutation check: with the `try/except` guards removed, the failure and Mongo-error cases fail. With a `time.sleep` in the hook, the stall test fails.
 
+## [Unreleased] — 2026-10-29 (Lee co-signer discovery: read prospective_bonds & active_bonds, Codex round 7 on #280)
+
+### Fixed
+- **Prior-Shamrock discovery now reads `prospective_bonds` and `active_bonds` in `_provider_prior`.** Co-signers attached to a booking via `POST /api/indemnitors/create` or stored directly on bond rows (`indemnitors[]`, nested `indemnitor`, and top-level `indemnitor_*` fields) are parsed by `_bond_prior_rows` and returned as `prior_shamrock` candidates on both same-booking refreshes (when the bond carries the arrest's county and state) and subsequent re-arrests (when the defendant name and a shared defendant anchor match). `POST /api/indemnitors/create` also persists the arrest's `state` and defendant anchor fields (`defendant_dob`, `defendant_phone`, `defendant_address`, `defendant_zip`) when starting a new `prospective_bonds` record from an arrest lead.
+- **Manual discovery retains state across Add Lead, candidate loading, and Refresh discovery (`dashboard/sl-prospective.js`, `dashboard/routers/prospective_bonds.py`).** `submitAddLead` sends the resolved state (`FL` for registered Florida counties or explicit `alState`) to `POST /api/prospective-bonds`, which persists `state` on the prospective bond document; `loadCandidates` and `discoverContacts` cache and reuse the county/state/name scope so subsequent **Refresh discovery** clicks on `MANUAL-*` bookings never omit `state`.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`: `test_prospective_and_active_bonds_cosigners_surface_on_refresh_and_rearrest`, `test_indemnitor_create_endpoint_persists_bond_cosigner_visible_to_discovery`, and `prospective_bonds`/`active_bonds` coverage in `test_partial_prior_read_failure_marks_the_run_failed`.
+
 ## [Unreleased] — 2026-10-29 (Lee co-signer discovery: durable review audit and Add Lead name, Codex round 6 on #280)
 
 ### Fixed
