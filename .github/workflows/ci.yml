@@ -175,6 +175,7 @@ jobs:
             tests/test_hendry_dedup.py \
             tests/test_new_osi_poa_format.py \
             tests/test_prod_auth_allowlist.py \
+            tests/test_lee_county_hq_auth.py \
             tests/test_payment_webhook.py \
             tests/test_payment_plan_pay_dedupe.py \
             tests/test_payment_plan_link_core.py \
@@ -272,4 +273,5 @@ jobs:
             tests/test_workflow_endpoints.py \
             tests/test_kiosk_privacy_and_confirm.py \
             tests/test_indemnitor_id_scan.py \
+            tests/test_ingestion_log_wiring.py \
             --tb=short

@@ -91,6 +91,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `tests/test_lee_indemnitor_discovery.py` (on the CI list).
+
+## [Unreleased] — 2026-10-29 (Wire BaseScraper.run() into MongoWriter.log_ingestion)
+
+### Fixed
+- **Every scraper run now records an entry in `ingestion_log` (`scrapers/base_scraper.py`, `writers/mongo_writer.py`).** Previously `MongoWriter.log_ingestion` was defined on `writers/mongo_writer.py` (line 591) but never called from `BaseScraper.run()`, leaving `ingestion_log` at 0 documents in production. `BaseScraper.run()` now invokes `_log_ingestion_run` after persisting `scraper_status` on both normal completions (`ok`/`empty`/`write_failed`) and classified failures (`error`/`auto_disabled`), recording `source` (`scraper_id` or `County (ST)`), `count`, `error_class`, `duration`, `status`, `county`, `county_label`, and `state`. `SOURCE_CONTRACT_VALIDATED = False` fail-closed preflight runs remain untouched and do not write to `ingestion_log`.
+
+### Tests
+- Added `tests/test_ingestion_log_wiring.py` (wired into `.github/workflows/ci.yml`) covering `MongoWriter.log_ingestion`, `BaseScraper.run()` on `ok`, `empty`, and classified error runs (`parse_drift`), and verifying `fail_closed` scrapers do not write to `ingestion_log`.
+
+## [Unreleased] — 2026-10-28 (Lee County HQ API needs a staff session)
+
+### Security
+- **`/api/lee-county/` is no longer on the no-PIN allowlist.** It was added to `OPEN_PREFIXES` in `8ee4491` (2026-09-14), which left the whole Lee County HQ router open without a session: overview, leads, defendant family contacts, `POST /outreach/send`, autopilot config read/write, and `POST /autopilot/sweep`. Every route now needs a staff session (or `GAS_API_KEY` / `LEADS_INTERNAL_TOKEN`) and answers `401 {"error": "Authentication required"}` without one, like other protected `/api` routes.
+- **The calculator is not kept public.** Nothing public calls `/api/lee-county/calculator`: no page in this repo outside the staff Lee County HQ script, and no caller in `shamrock-bail-portal-site` (its bail calculator runs in Wix and GAS).
+
+### Tests
+- `tests/test_lee_county_hq_auth.py` (added to the CI list): every route on the router returns 401 with no session and with a bad cookie and 200 with a staff session, with sends, sweeps, and Mongo mocked; the calculator is not public; no open path or prefix may cover any `/api/lee-county` route.
+
 ## [Unreleased] — 2026-10-28 (Co-signer links find legacy Booking_Number bonds)
 
 ### Fixed
