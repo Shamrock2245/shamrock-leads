@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-29 (Wire BaseScraper.run() into MongoWriter.log_ingestion)
+
+### Fixed
+- **Every scraper run now records an entry in `ingestion_log` (`scrapers/base_scraper.py`, `writers/mongo_writer.py`).** Previously `MongoWriter.log_ingestion` was defined on `writers/mongo_writer.py` (line 591) but never called from `BaseScraper.run()`, leaving `ingestion_log` at 0 documents in production. `BaseScraper.run()` now invokes `_log_ingestion_run` after persisting `scraper_status` on both normal completions (`ok`/`empty`/`write_failed`) and classified failures (`error`/`auto_disabled`), recording `source` (`scraper_id` or `County (ST)`), `count`, `error_class`, `duration`, `status`, `county`, `county_label`, and `state`. `SOURCE_CONTRACT_VALIDATED = False` fail-closed preflight runs remain untouched and do not write to `ingestion_log`.
+
+### Tests
+- Added `tests/test_ingestion_log_wiring.py` (wired into `.github/workflows/ci.yml`) covering `MongoWriter.log_ingestion`, `BaseScraper.run()` on `ok`, `empty`, and classified error runs (`parse_drift`), and verifying `fail_closed` scrapers do not write to `ingestion_log`.
+
 ## [Unreleased] — 2026-10-29 (Co-signer payment holds preserve unrelated review warnings)
 
 ### Fixed
@@ -357,7 +365,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **A co-signer link stays valid when the case id is stored as `Bond_Case_ID` or `bond_case_id`.** Revalidation fails closed when neither field is the issued case. A POA number change does not revoke the link or the packet.
 
 ### Tests
-- `tests/test_cosigner_link.py`: `test_bond_case_id_alias_revalidates_and_rejects_a_mismatch`, `test_poa_number_change_keeps_the_cosigner_link`.
+- `tests/test_cosigner_link.py`: `test_bond_case_id_alias_revalidates_and_rejects_a_mismatch`, `test_poa_number_change_keeps_the_cosigner_link`, `test_poa_number_change_keeps_the_link_and_docuseal_packet`.
 
 ## [Unreleased] — 2026-10-22 (co-signer pay URL stays on SwipeSimple)
 
@@ -392,7 +400,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **A failed co-signer paid or reopen write is retried and then healed from the payment rows.** `_with_payment_lock` retries a failed transaction up to three times inside the lock (not a co-signer refusal and not a server without transactions). If every attempt fails, the affected links get `payment_transition_pending`, `pending_payment_keys` and `pending_payment_transitions` (`paid:<txn>` or `reversed:<txn>`) with one `payment_transition_pending` audit, written outside the failed transaction. `reconcile_cosigner_payment_state` replays the pending transition through `note_cosigner_paid` / `note_cosigner_reversed` with the amount and status from the stored payment row, so the same rules apply (`SETTLED_CHARGE_STATUSES`, `REVERSAL_KINDS`, exact `invoice_due_cents`, `needs_review` rows excluded) with the same lock and compare-and-set. It runs on the next paid or refund event for the booking and on the co-signer page read. A paid link whose stored rows include a refund or failure is reopened on page read even when the pending marker could not be written. The heal marks once, audits once, writes one `payment_transition_resolved` audit, and does not touch plan balances, `last_payment` fields or payment rows. `webhooks.py`, the receipt poller and `payment_log_claims` are unchanged.
 
 ### Tests
-- `tests/test_cosigner_link.py`: `test_paid_path_reconciles_a_mirror_that_differs_only_in_case_and_spacing`, `test_mirror_drift_blocks_paid_and_flags_review_once`, `test_ambiguous_mirror_blocks_paid_and_flags_review_once`, `test_two_open_packets_block_paid_and_flag_each_link_once`, `test_mirror_normalization_keeps_real_differences`, `test_alternating_blocked_transactions_audit_once_each`, `test_held_charge_that_is_not_the_down_payment_is_not_flagged`, `test_paid_keeps_the_hold_while_another_held_charge_remains`, `test_hold_audits_record_review_before_and_after`, `test_transient_paid_lock_failure_is_retried_inside_the_lock`, `test_persistent_paid_lock_failure_leaves_pending_then_heals_once`, `test_persistent_reversal_lock_failure_leaves_pending_then_reopens_once`.
+- `tests/test_cosigner_link.py`: `test_blocked_down_payment_is_flagged_without_a_pay_link_or_outbound_charge`, `test_paid_path_reconciles_a_mirror_that_differs_only_in_case_and_spacing`, `test_mirror_drift_blocks_paid_and_flags_review_once`, `test_ambiguous_mirror_blocks_paid_and_flags_review_once`, `test_two_open_packets_block_paid_and_flag_each_link_once`, `test_mirror_normalization_keeps_real_differences`, `test_alternating_blocked_transactions_audit_once_each`, `test_held_charge_that_is_not_the_down_payment_is_not_flagged`, `test_paid_keeps_the_hold_while_another_held_charge_remains`, `test_hold_audits_record_review_before_and_after`, `test_transient_paid_lock_failure_is_retried_inside_the_lock`, `test_persistent_paid_lock_failure_leaves_pending_then_heals_once`, `test_persistent_reversal_lock_failure_leaves_pending_then_reopens_once`.
 
 ## [Unreleased] — 2026-10-22 (co-signer email reads coindemnitor_email)
 

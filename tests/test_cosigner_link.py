@@ -597,6 +597,52 @@ def test_poa_number_change_keeps_the_cosigner_link(monkeypatch):
     assert bond["status"] == "active"
 
 
+def test_poa_number_change_keeps_the_link_and_docuseal_packet(monkeypatch, _no_live_sends):
+    """A POA reassignment leaves the co-signer link and the DocuSeal packet in place.
+
+    The case and its mirror both take the new POA, so this is not a mirror
+    disagreement. The packet's submission id and signer URL stay as issued.
+    DocuSeal is not called.
+    """
+    stores, client = _world(monkeypatch)
+    token = _token(client)
+    packet = stores["paperwork_packets"].docs[0]
+    link = stores["cosigner_links"].docs[0]
+    issued_url = packet["docuseal_sign_url"]
+    issued_submission = packet["docuseal_submission_id"]
+    _mirror_of(stores)
+    new_poa = "POA-TEST-COS-REASSIGNED"
+    stores["bond_cases"].docs[0]["poa_number"] = new_poa
+    stores["active_bonds"].docs[0]["poa_number"] = new_poa
+
+    state = client.get(f"/api/cosigner/{token}")
+    assert state.status_code == 200, state.text
+    assert state.json()["step"] == "scan"
+    assert state.json()["sign_url"] is None
+    page = client.get(f"/cosigner/{token}")
+    assert page.status_code == 200
+    assert "Link not found" not in page.text
+
+    uploaded = _upload(monkeypatch, client, token, {"full_name": NAME, "dl_state": "FL"})
+    assert uploaded.status_code == 200, uploaded.text
+    signing = client.get(f"/api/cosigner/{token}")
+    assert signing.status_code == 200, signing.text
+    assert signing.json()["step"] == "sign"
+    assert signing.json()["sign_url"] == issued_url
+
+    assert packet["packet_id"] == PACKET
+    assert packet["status"] == "draft"
+    assert packet["bond_case_id"] == CASE
+    assert packet["docuseal_submission_id"] == issued_submission
+    assert packet["docuseal_sign_url"] == issued_url
+    assert link["token"] == token
+    assert link.get("revoked") is not True
+    assert stores["bond_cases"].docs[0]["poa_number"] == new_poa
+    assert stores["active_bonds"].docs[0]["poa_number"] == new_poa
+    _no_live_sends["docuseal"].assert_not_called()
+    _no_live_sends["docuseal_http"].assert_not_called()
+
+
 def test_public_paths_stay_open_and_staff_create_stays_gated():
     assert "/cosigner/" in OPEN_PREFIXES
     assert "/api/cosigner/" in OPEN_PREFIXES
@@ -4852,6 +4898,49 @@ def _paid_mirror_world(monkeypatch, **mirror_changes):
 
 def _down_rows(db, txn):
     return [row for row in db["payments"].docs if row.get("transaction_id") == txn]
+
+
+def test_blocked_down_payment_is_flagged_without_a_pay_link_or_outbound_charge(
+    monkeypatch, _no_live_sends,
+):
+    """A blocked down payment is flagged. No pay link is returned and nothing is sent.
+
+    The public API and page refuse the drifted mirror, so they carry no pay
+    URL. The inbound webhook row is stored for staff review and is not a
+    charge sent to SwipeSimple, DocuSeal, or the signer.
+    """
+    stores, client, token, db = _paid_mirror_world(monkeypatch, surety_id="other-surety")
+    refused = client.get(f"/api/cosigner/{token}")
+    assert refused.status_code == 409
+    body = refused.json()
+    assert body == {"error": "bond_mirror_mismatch"}
+    assert "payment" not in body
+    assert _sign_hidden(refused.text)
+    page = client.get(f"/cosigner/{token}")
+    assert page.status_code == 409
+    assert page.text == "Link not found"
+    assert _swipe_link("down") not in page.text
+
+    recorded = _webhook(client, txn="TX-BLOCKED-ACCEPT", amount="500.00")
+    assert recorded.status_code == 200, recorded.text
+    link = stores["cosigner_links"].docs[0]
+    assert link["needs_review"] is True
+    assert link["needs_review_reason"] == "bond_mirror_mismatch"
+    assert link["paid_blocked_transaction_id"] == "TX-BLOCKED-ACCEPT"
+    assert not link.get("paid_transaction_id")
+    assert _audits(stores, "paid") == []
+    blocked = _audits(stores, "paid_blocked")
+    assert len(blocked) == 1
+    assert blocked[0]["reason"] == "bond_mirror_mismatch"
+    assert len(_down_rows(db, "TX-BLOCKED-ACCEPT")) == 1
+    still = client.get(f"/api/cosigner/{token}")
+    assert still.status_code == 409
+    assert still.json() == {"error": "bond_mirror_mismatch"}
+    for name in (
+        "swipe_http", "swipe_create", "swipe_dispatch", "swipe_reconcile",
+        "receipt", "sms", "email", "imessage", "imessage_direct", "docuseal",
+    ):
+        _no_live_sends[name].assert_not_called()
 
 
 def test_paid_path_reconciles_a_mirror_that_differs_only_in_case_and_spacing(monkeypatch):

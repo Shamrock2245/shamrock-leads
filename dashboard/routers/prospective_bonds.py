@@ -115,6 +115,7 @@ async def api_prospective_create(request: Request):
             "booking_number": booking_number,
             "defendant_name": data.get("defendant_name") or arrest_doc.get("full_name", "Unknown"),
             "county": data.get("county") or arrest_doc.get("county", ""),
+            "state": (data.get("state") or arrest_doc.get("state") or arrest_doc.get("State") or "").strip().upper(),
             "bond_amount": float(data.get("bond_amount") or arrest_doc.get("bond_amount", 0) or 0),
             "charges": data.get("charges") or arrest_doc.get("charges", ""),
             "lead_score": int(data.get("lead_score") or arrest_doc.get("lead_score", 0) or 0),
@@ -594,6 +595,14 @@ async def api_prospective_from_intake(request: Request):
                 or def_info.get("county")
                 or arrest_doc.get("county", "")
             ),
+            "state": (
+                data.get("state")
+                or intake_doc.get("defendant_state")
+                or def_info.get("state")
+                or arrest_doc.get("state")
+                or arrest_doc.get("State")
+                or ""
+            ).strip().upper(),
             "bond_amount": float(
                 data.get("bond_amount")
                 or def_info.get("bondAmount")
