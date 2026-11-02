@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-02 (Co-signer hold audits keep the prior review)
+
+### Fixed
+- **A payment hold no longer replaces a saved unrelated review, and the hold audit records that saved review.** When a co-signer link already has a non-payment `needs_review`, the first hold still stores it in `paid_block_prior_needs_review` and `paid_block_prior_review_reason`. A later hold does not overwrite those fields with the hold's own flag or reason. `paid_blocked`, `paid_hold_released`, and `paid_block_cleared` include the prior-review fields in `review_before` and `review_after`. Clearing the last hold restores the original review and appends the clear audit. Earlier audits are left in place. No pay link is returned while the hold stands. No DocuSeal send and no SwipeSimple charge.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_hold_audit_keeps_prior_review_and_a_second_flag_does_not_clobber`.
+
 ## [Unreleased] — 2026-10-29 (Wire BaseScraper.run() into MongoWriter.log_ingestion)
 
 ### Fixed

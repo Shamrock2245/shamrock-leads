@@ -2181,12 +2181,19 @@ def _prior_non_hold_review(doc: Optional[dict]) -> Optional[tuple[bool, str]]:
 
 
 def _review_view(doc: Optional[dict]) -> dict:
-    """The review values an audit records before and after a hold change."""
+    """The review values an audit records before and after a hold change.
+
+    ``paid_block_prior_*`` is the unrelated review saved when the first hold
+    landed. The clear audit has to show those fields being set and then
+    restored, so they belong in the same before/after snapshot.
+    """
     doc = doc or {}
     return {
         "needs_review": bool(doc.get("needs_review")),
         "needs_review_reason": str(doc.get("needs_review_reason") or ""),
         "held_transaction_ids": _active_holds(doc),
+        "paid_block_prior_needs_review": bool(doc.get("paid_block_prior_needs_review")),
+        "paid_block_prior_review_reason": str(doc.get("paid_block_prior_review_reason") or ""),
     }
 
 
@@ -2211,9 +2218,10 @@ async def _flag_paid_blocked(
     ``paid_blocked_transaction_ids`` and a ``paid_blocked_holds`` entry keeps
     its own reason. If the link already carried an unrelated ``needs_review``
     flag, that prior review state is preserved so clearing the payment hold
-    restores the original staff warning. One ``paid_blocked`` audit is written
-    per transaction, with the review values before and after, so a hold that
-    replaces another one leaves both in the history. The update is conditional
+    restores the original staff warning. A later hold does not replace those
+    saved values with this hold's own flag or reason. One ``paid_blocked``
+    audit is written per transaction, with the review values before and
+    after, including the preserved prior-review fields. The update is conditional
     on the transaction not being in the list and on ``paid_block_version``, so
     a replay does not audit again and a concurrent hold is not lost.
     Nothing is sent anywhere.
@@ -2243,15 +2251,15 @@ async def _flag_paid_blocked(
         curr_flag = bool(fresh.get("needs_review"))
         curr_reason = str(fresh.get("needs_review_reason") or "")
         if not _active_holds(fresh):
+            # The first hold snapshots an unrelated review. A hold that is
+            # already on the link must not replace that snapshot, including
+            # with this hold's own needs_review flag and reason.
             if curr_flag and curr_reason not in _PAID_BLOCK_REASONS:
                 set_fields["paid_block_prior_needs_review"] = True
                 set_fields["paid_block_prior_review_reason"] = curr_reason
             else:
                 set_fields["paid_block_prior_needs_review"] = False
                 set_fields["paid_block_prior_review_reason"] = ""
-        elif curr_flag and curr_reason not in _PAID_BLOCK_REASONS:
-            set_fields["paid_block_prior_needs_review"] = True
-            set_fields["paid_block_prior_review_reason"] = curr_reason
         result = await coll.update_one(
             {
                 "token": token,
@@ -2273,11 +2281,13 @@ async def _flag_paid_blocked(
         )
         if not getattr(result, "modified_count", 0):
             continue
-        after = {
-            "needs_review": True,
-            "needs_review_reason": code,
-            "held_transaction_ids": before["held_transaction_ids"] + [txn],
-        }
+        projected = dict(fresh)
+        projected.update(set_fields)
+        held_ids = [str(item) for item in (fresh.get("paid_blocked_transaction_ids") or [])]
+        if txn not in held_ids:
+            held_ids.append(txn)
+        projected["paid_blocked_transaction_ids"] = held_ids
+        after = _review_view(projected)
         state = _audit_state(fresh, packet)
         await _audit(
             "paid_blocked", fresh, now,
@@ -2358,11 +2368,13 @@ async def _clear_paid_block(
         )
         if not getattr(result, "modified_count", 0):
             continue
-        after = {
-            "needs_review": bool(fields.get("needs_review", before["needs_review"])),
-            "needs_review_reason": str(fields.get("needs_review_reason", before["needs_review_reason"])),
-            "held_transaction_ids": remaining,
-        }
+        projected = dict(fresh)
+        projected.update(fields)
+        released = [str(item) for item in (fresh.get("paid_block_released_transaction_ids") or [])]
+        if txn not in released:
+            released.append(txn)
+        projected["paid_block_released_transaction_ids"] = released
+        after = _review_view(projected)
         state = _audit_state(fresh, packet)
         await _audit(
             "paid_hold_released" if remaining else "paid_block_cleared",

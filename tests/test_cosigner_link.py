@@ -5028,9 +5028,13 @@ def test_mirror_drift_blocks_paid_and_flags_review_once(monkeypatch, changes):
     assert cleared[0]["review_before"] == {
         "needs_review": True, "needs_review_reason": "bond_mirror_mismatch",
         "held_transaction_ids": ["TX-MIRROR-DRIFT"],
+        "paid_block_prior_needs_review": False,
+        "paid_block_prior_review_reason": "",
     }
     assert cleared[0]["review_after"] == {
         "needs_review": False, "needs_review_reason": "", "held_transaction_ids": [],
+        "paid_block_prior_needs_review": False,
+        "paid_block_prior_review_reason": "",
     }
     assert cleared[0]["hold_kept"] is False
     again = _webhook(client, txn="TX-MIRROR-DRIFT", amount="500.00")
@@ -5164,10 +5168,14 @@ def test_paid_keeps_the_hold_while_another_held_charge_remains(monkeypatch):
     assert released[0]["review_before"] == {
         "needs_review": True, "needs_review_reason": "bond_mirror_mismatch",
         "held_transaction_ids": ["TX-HOLD-A", "TX-HOLD-B"],
+        "paid_block_prior_needs_review": False,
+        "paid_block_prior_review_reason": "",
     }
     assert released[0]["review_after"] == {
         "needs_review": True, "needs_review_reason": "bond_mirror_mismatch",
         "held_transaction_ids": ["TX-HOLD-A"],
+        "paid_block_prior_needs_review": False,
+        "paid_block_prior_review_reason": "",
     }
     # Replays do not release again, and the other charge still holds review.
     for txn in ("TX-HOLD-B", "TX-HOLD-A"):
@@ -5196,18 +5204,26 @@ def test_hold_audits_record_review_before_and_after(monkeypatch):
     blocked = {row["transaction_id"]: row for row in _audits(stores, "paid_blocked")}
     assert blocked["TX-HOLD-A"]["review_before"] == {
         "needs_review": False, "needs_review_reason": "", "held_transaction_ids": [],
+        "paid_block_prior_needs_review": False,
+        "paid_block_prior_review_reason": "",
     }
     assert blocked["TX-HOLD-A"]["review_after"] == {
         "needs_review": True, "needs_review_reason": "bond_mirror_mismatch",
         "held_transaction_ids": ["TX-HOLD-A"],
+        "paid_block_prior_needs_review": False,
+        "paid_block_prior_review_reason": "",
     }
     assert blocked["TX-HOLD-B"]["review_before"] == {
         "needs_review": True, "needs_review_reason": "bond_mirror_mismatch",
         "held_transaction_ids": ["TX-HOLD-A"],
+        "paid_block_prior_needs_review": False,
+        "paid_block_prior_review_reason": "",
     }
     assert blocked["TX-HOLD-B"]["review_after"] == {
         "needs_review": True, "needs_review_reason": "bond_ambiguous",
         "held_transaction_ids": ["TX-HOLD-A", "TX-HOLD-B"],
+        "paid_block_prior_needs_review": False,
+        "paid_block_prior_review_reason": "",
     }
     link = stores["cosigner_links"].docs[0]
     assert link["needs_review_reason"] == "bond_ambiguous"
@@ -6138,11 +6154,15 @@ def test_paid_hold_preserves_and_restores_preexisting_unrelated_review_flag(monk
         "needs_review": True,
         "needs_review_reason": "staff_manual_warning",
         "held_transaction_ids": [],
+        "paid_block_prior_needs_review": False,
+        "paid_block_prior_review_reason": "",
     }
     assert blocked["TX-HOLD-PRIOR-A"]["review_after"] == {
         "needs_review": True,
         "needs_review_reason": "bond_mirror_mismatch",
         "held_transaction_ids": ["TX-HOLD-PRIOR-A"],
+        "paid_block_prior_needs_review": True,
+        "paid_block_prior_review_reason": "staff_manual_warning",
     }
 
     # Fix mirror drift and replay first held transaction: second hold remains, then clear second hold.
@@ -6170,10 +6190,91 @@ def test_paid_hold_preserves_and_restores_preexisting_unrelated_review_flag(monk
         "needs_review": True,
         "needs_review_reason": "bond_mirror_mismatch",
         "held_transaction_ids": ["TX-HOLD-SINGLE"],
+        "paid_block_prior_needs_review": True,
+        "paid_block_prior_review_reason": "staff_manual_warning",
     }
     assert cleared[0]["review_after"] == {
         "needs_review": True,
         "needs_review_reason": "staff_manual_warning",
         "held_transaction_ids": [],
+        "paid_block_prior_needs_review": False,
+        "paid_block_prior_review_reason": "",
     }
+
+
+def test_hold_audit_keeps_prior_review_and_a_second_flag_does_not_clobber(monkeypatch):
+    """A hold keeps an unrelated review in the audit, and a second flag does not replace it.
+
+    Replaying the same charge is a no-op. A different charge does not overwrite
+    the saved prior review with the hold's own flag and reason. Clearing the
+    last hold restores that review and adds a clear audit. Earlier audits stay.
+    """
+    stores, client, token, _db = _paid_mirror_world(monkeypatch, surety_id="other-surety")
+    link = stores["cosigner_links"].docs[0]
+    link["needs_review"] = True
+    link["needs_review_reason"] = "staff_manual_warning"
+
+    held = client.get(f"/api/cosigner/{token}")
+    assert held.status_code == 409
+    assert held.json() == {"error": "bond_mirror_mismatch"}
+    assert "payment" not in held.json()
+
+    assert _webhook(client, txn="TX-PRIOR-KEEP", amount="500.00").status_code == 200
+    assert _webhook(client, txn="TX-PRIOR-KEEP", amount="500.00").status_code == 200
+    assert link["paid_block_prior_needs_review"] is True
+    assert link["paid_block_prior_review_reason"] == "staff_manual_warning"
+    assert link["needs_review_reason"] == "bond_mirror_mismatch"
+    assert not link.get("paid_transaction_id")
+    blocked = _audits(stores, "paid_blocked")
+    assert len(blocked) == 1
+    assert blocked[0]["review_before"]["paid_block_prior_needs_review"] is False
+    assert blocked[0]["review_before"]["paid_block_prior_review_reason"] == ""
+    assert blocked[0]["review_after"]["paid_block_prior_needs_review"] is True
+    assert blocked[0]["review_after"]["paid_block_prior_review_reason"] == "staff_manual_warning"
+    audits_after_first = len(stores["audit_events"].docs)
+
+    assert _webhook(client, txn="TX-PRIOR-NEXT", amount="500.00").status_code == 200
+    assert link["paid_block_prior_needs_review"] is True
+    assert link["paid_block_prior_review_reason"] == "staff_manual_warning"
+    assert link["paid_block_prior_review_reason"] != "bond_mirror_mismatch"
+    second = {row["transaction_id"]: row for row in _audits(stores, "paid_blocked")}
+    assert second["TX-PRIOR-NEXT"]["review_before"]["paid_block_prior_review_reason"] == "staff_manual_warning"
+    assert second["TX-PRIOR-NEXT"]["review_after"]["paid_block_prior_needs_review"] is True
+    assert second["TX-PRIOR-NEXT"]["review_after"]["paid_block_prior_review_reason"] == "staff_manual_warning"
+    assert len(stores["audit_events"].docs) == audits_after_first + 1
+
+    stores["active_bonds"].docs[0]["surety_id"] = stores["bond_cases"].docs[0].get("surety_id")
+    # One charge stamps. The other hold stays, so the unrelated review is not restored yet.
+    assert _webhook(client, txn="TX-PRIOR-KEEP", amount="500.00").status_code == 200
+    assert link["paid_transaction_id"] == "TX-PRIOR-KEEP"
+    assert link["paid_block_prior_review_reason"] == "staff_manual_warning"
+    assert _audits(stores, "paid_block_cleared") == []
+    assert len(_audits(stores, "paid_hold_released")) == 1
+
+    # The remaining hold is the last one only after it is the sole active hold.
+    # Dropping it here would skip the real clear. A one-hold link is cleared below.
+    stores2, client2, _token2, _db2 = _paid_mirror_world(monkeypatch, surety_id="other-surety")
+    link2 = stores2["cosigner_links"].docs[0]
+    link2["needs_review"] = True
+    link2["needs_review_reason"] = "staff_manual_warning"
+    assert _webhook(client2, txn="TX-PRIOR-CLEAR", amount="500.00").status_code == 200
+    assert _webhook(client2, txn="TX-PRIOR-CLEAR", amount="500.00").status_code == 200
+    before_clear = len(stores2["audit_events"].docs)
+    stores2["active_bonds"].docs[0]["surety_id"] = stores2["bond_cases"].docs[0].get("surety_id")
+    assert _webhook(client2, txn="TX-PRIOR-CLEAR", amount="500.00").status_code == 200
+    assert link2["needs_review"] is True
+    assert link2["needs_review_reason"] == "staff_manual_warning"
+    assert link2["paid_block_prior_needs_review"] is False
+    assert link2["paid_block_prior_review_reason"] == ""
+    assert len(_audits(stores2, "paid_blocked")) == 1
+    cleared = _audits(stores2, "paid_block_cleared")
+    assert len(cleared) == 1
+    assert cleared[0]["review_before"]["paid_block_prior_needs_review"] is True
+    assert cleared[0]["review_before"]["paid_block_prior_review_reason"] == "staff_manual_warning"
+    assert cleared[0]["review_after"]["needs_review"] is True
+    assert cleared[0]["review_after"]["needs_review_reason"] == "staff_manual_warning"
+    assert cleared[0]["review_after"]["paid_block_prior_needs_review"] is False
+    assert cleared[0]["review_after"]["paid_block_prior_review_reason"] == ""
+    assert len(stores2["audit_events"].docs) > before_clear
+    assert len(_audits(stores2, "paid")) == 1
 
