@@ -15,9 +15,12 @@ from dashboard.services.contact_discovery import (
     CandidateReviewError,
     ContactDiscoveryService,
     ContactsLegacyAmbiguous,
+    PLACE_PROBLEMS,
     canonical_place,
     contact_identity,
+    defendant_link_ok,
     find_contact_doc,
+    place_problem,
     review_candidate,
 )
 
@@ -42,6 +45,10 @@ async def discover_contacts(request: Request):
                 {"error": "booking_number_required"},
                 status_code=400,
             )
+        problem = place_problem(county, state)
+        if problem:
+            # Conflicting or unregistered county/state: refused, nothing queued.
+            return JSONResponse({"error": problem, "discovery_status": problem}, status_code=400)
 
         service = ContactDiscoveryService(get_db())
         result = await service.discover(
@@ -51,6 +58,9 @@ async def discover_contacts(request: Request):
             state=state,
             address=address,
         )
+        if result.get("discovery_status") in PLACE_PROBLEMS:
+            status = result["discovery_status"]
+            return JSONResponse({"error": status, "discovery_status": status}, status_code=400)
         if result.get("discovery_status") == "identity_ambiguous":
             return JSONResponse(
                 {"error": "county_and_state_required", "discovery_status": "identity_ambiguous"},
@@ -83,6 +93,9 @@ async def get_contacts(booking_number: str, county: Optional[str] = None, state:
         "discovery_status": "not_found",
         "status": "not_found",
     }
+    problem = place_problem(county, state)
+    if problem:
+        return JSONResponse({**empty, "error": problem, "discovery_status": problem}, status_code=400)
     try:
         contacts_col = get_collection("contacts")
         identity = contact_identity(state, county, booking_number)
@@ -115,7 +128,10 @@ async def get_contacts(booking_number: str, county: Optional[str] = None, state:
             doc = rows[0] if rows else None
         if not doc:
             return empty
-        contacts = list(doc.get("discovered_contacts") or [])
+        # A public-record row with no verified defendant link is never shown
+        # as a candidate (it cannot be approved or used for outreach either).
+        contacts = [c for c in (doc.get("discovered_contacts") or []) if defendant_link_ok(c)]
+        doc["discovered_contacts"] = contacts
         doc["contacts"] = contacts
         doc["candidates"] = contacts
         doc["discovery_status"] = doc.get("discovery_status") or "not_found"
@@ -167,6 +183,9 @@ async def review_contact_candidate(booking_number: str, candidate_id: str, reque
         data = {}
     if not isinstance(data, dict):
         data = {}
+    problem = place_problem(data.get("county"), data.get("state"))
+    if problem:
+        return JSONResponse({"error": problem}, status_code=400)
     identity = contact_identity(data.get("state"), data.get("county"), booking_number)
     if not identity:
         return JSONResponse({"error": "county_and_state_required"}, status_code=400)

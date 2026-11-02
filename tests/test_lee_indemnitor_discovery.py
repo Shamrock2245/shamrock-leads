@@ -478,6 +478,10 @@ async def test_enabled_http_uses_plain_request_and_keeps_anchor(monkeypatch):
         full_name="Casey Sample",
         county="Lee",
         state="FL",
+        # Codex 10/30 P1: a public-record person is only kept when tied to
+        # the defendant by the defendant's own published address + ZIP.
+        address="100 Test St",
+        zip_code="00000",
         force=True,
     )
     names = {row["name"] for row in result["contacts"]}
@@ -485,6 +489,7 @@ async def test_enabled_http_uses_plain_request_and_keeps_anchor(monkeypatch):
     prop = next(row for row in result["contacts"] if row["source"] == "lee_property_appraiser")
     assert "address_zip" in prop["matched_anchors"]
     assert prop["confidence"] == ANCHOR_WEIGHTS["address_zip"]
+    assert prop["defendant_link"] == "shared_address_zip"
 
 
 def test_sheriff_cooldown_does_not_call_the_origin(monkeypatch):
@@ -2854,3 +2859,199 @@ def test_same_name_provider_records_with_distinct_contacts_stay_separate():
     assert merged[1]["confidence"] == 0.30
 
 
+
+
+# ---------------------------------------------------------------------------
+# Codex 10/30 findings (PR #280)
+#   P1: public-record candidates need a verifiable link to the defendant.
+#   P2: conflicting county/state labels are refused with a typed reason.
+# Fixture people and addresses only; no real names, DOBs, or endpoints.
+# ---------------------------------------------------------------------------
+
+from dashboard.services.contact_discovery import (  # noqa: E402
+    DEFENDANT_LINK_SHARED_ADDRESS,
+    PLACE_CONFLICT,
+    PLACE_NOT_REGISTERED,
+    _html_candidates,
+    _merge_candidates,
+    defendant_link_ok,
+    place_problem,
+)
+from dashboard.services.place_identity import FL_COUNTIES, fl_county_registered  # noqa: E402
+
+# Two result rows: an unrelated owner with their own phone and address, then
+# a person at the defendant's address. The unrelated row is directly followed
+# by the linked row, so an unbounded 240-char window would borrow its address.
+_MULTI_RESULT_HTML = (
+    "<table>"
+    "<tr><td>STRANGER, PAT</td><td>(555) 010-0777</td><td>9 Far Rd 33999</td></tr>"
+    "<tr><td>LOOSE, ROBIN</td></tr>"
+    "<tr><td>SAMPLE, JORDAN</td><td>100 Test St 00000</td></tr>"
+    "</table>"
+)
+
+
+def _p1_booking(**over):
+    return {**_booking(), "full_name": "Casey Sample", **over}
+
+
+@pytest.mark.parametrize("source,relationship", [
+    ("lee_property_appraiser", "property_associate"),
+    ("lee_clerk_parties", "case_party"),
+])
+def test_codex_p1_public_record_rows_need_a_defendant_link(source, relationship):
+    rows = _html_candidates(_MULTI_RESULT_HTML, _p1_booking(), source, relationship)
+    names = [r["name"] for r in rows]
+    # The unrelated owner (own phone + own address) is not a candidate, and the
+    # name-only row cannot borrow the next row's address as a "link".
+    assert "STRANGER, PAT" not in names
+    assert "LOOSE, ROBIN" not in names
+    assert names == ["SAMPLE, JORDAN"]
+    assert rows[0]["defendant_link"] == DEFENDANT_LINK_SHARED_ADDRESS
+    assert defendant_link_ok(rows[0])
+
+
+def test_codex_p1_no_defendant_address_means_no_public_record_candidates():
+    for booking in (_p1_booking(address=""), _p1_booking(zip="", address="100 Test St")):
+        assert _html_candidates(_MULTI_RESULT_HTML, booking, "lee_property_appraiser", "property_associate") == []
+
+
+def test_codex_p1_a_different_house_or_zip_is_not_a_link():
+    html = "<td>SAMPLE, JORDAN</td><td>1000 Test St 00000</td><td>SAMPLE, ALEX</td><td>100 Test St 00001</td>"
+    assert _html_candidates(html, _p1_booking(), "lee_clerk_parties", "case_party") == []
+
+
+def test_codex_p1_merge_drops_unlinked_public_record_rows():
+    linked = make_candidate(booking_number="B-100", name="Jordan Sample", relationship="case_party",
+                            source="lee_clerk_parties", address="100 Test St 00000",
+                            anchors=["address_zip"], defendant_name="Casey Sample")
+    linked["defendant_link"] = DEFENDANT_LINK_SHARED_ADDRESS
+    unlinked_old = {**linked, "candidate_id": "old", "name": "Pat Stranger", "review_status": "approved"}
+    unlinked_old.pop("defendant_link")
+    unlinked_new = {**linked, "candidate_id": "new", "name": "Robin Loose"}
+    unlinked_new.pop("defendant_link")
+    other_source = {**unlinked_new, "candidate_id": "prior", "source": "prior_bond", "name": "Alex Sample"}
+    merged = _merge_candidates([unlinked_old], [linked, unlinked_new, other_source])
+    names = sorted(r["name"] for r in merged)
+    assert names == ["Alex Sample", "Jordan Sample"]
+
+
+@pytest.mark.asyncio
+async def test_codex_p1_unlinked_public_record_row_cannot_be_approved_or_texted(caplog):
+    from dashboard.services.outreach_sequencer import OutreachSequencer
+
+    db = _lee_db_with_indemnitor()
+    await _discover(db)
+    # Approved while linked-by-construction, then relabelled as an unlinked
+    # public-record row (e.g. a row stored before this fix).
+    await _approve_only_candidate(db)
+    row = db["contacts"].docs[0]["discovered_contacts"][0]
+    row["source"] = "lee_clerk_parties"
+    row.pop("defendant_link", None)
+    phone, origin = await OutreachSequencer(db)._resolve_phone(db["arrests"].docs[0])
+    assert origin != "contact_discovery"
+
+    row["review_status"] = "unreviewed"
+    before = copy.deepcopy(db["contacts"].docs)
+    with caplog.at_level(logging.INFO):
+        with pytest.raises(CandidateReviewError) as err:
+            await _approve_only_candidate(db)
+    assert err.value.code == "candidate_unlinked" and err.value.http_status == 409
+    assert db["contacts"].docs == before
+    # Rejecting it is still allowed.
+    assert (await _approve_only_candidate(db, decision="reject"))["review_status"] == "rejected"
+    for secret in _PII:
+        assert secret not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_codex_p1_get_route_hides_unlinked_public_record_rows(monkeypatch):
+    db = _lee_db_with_indemnitor()
+    await _discover(db)
+    row = db["contacts"].docs[0]["discovered_contacts"][0]
+    row["source"] = "lee_property_appraiser"
+    got = _review_client(monkeypatch, db, _STAFF).get("/api/contacts/B-100?county=Lee&state=FL").json()
+    assert got["discovered_contacts"] == []
+
+
+_CONFLICTS = [("Lee (GA)", "FL"), ("Lee County, GA", "FL"), ("Lee, Georgia", "FL"),
+              ("Lee (FL)", "GA"), ("Lee (ZZ)", "FL"), ("Lee, Nowhere", "FL")]
+_NOT_REGISTERED = [("Manatee Clerk", "FL"), ("Fakeville", "FL"), ("Fakeville (FL)", ""), ("Lee Clerk", "Florida")]
+_ACCEPTED = [("Lee", "FL"), ("Lee (FL)", "FL"), ("Lee County, FL", "FL"), ("Lee", "Florida"), ("Lee (FL)", ""),
+             ("DeSoto", "FL"), ("desoto", "fl"), ("Miami-Dade", "FL"), ("St. Lucie", "FL"), ("Lee", "GA")]
+
+
+@pytest.mark.parametrize("county,state", _CONFLICTS)
+def test_codex_p2_conflicting_county_state_labels_fail_closed(county, state):
+    assert place_problem(county, state) == PLACE_CONFLICT
+    assert canonical_place(county, state) == ("", "")
+    assert contact_identity(state, county, "B-100") is None
+
+
+@pytest.mark.parametrize("county,state", _NOT_REGISTERED)
+def test_codex_p2_fl_county_must_be_in_the_67_county_registry(county, state):
+    assert place_problem(county, state) == PLACE_NOT_REGISTERED
+    assert contact_identity(state, county, "B-100") is None
+
+
+@pytest.mark.parametrize("county,state", _ACCEPTED)
+def test_codex_p2_consistent_places_still_resolve(county, state):
+    assert place_problem(county, state) == ""
+    assert contact_identity(state, county, "B-100") is not None
+
+
+def test_codex_p2_fl_county_registry_matches_registered_counties():
+    from dashboard.extensions import NON_COUNTY_SOURCE_SCOPES, REGISTERED_COUNTIES
+
+    registered = {c[:-5] for c in REGISTERED_COUNTIES if c.endswith(" (FL)")}
+    registered -= {c[:-5] for c in NON_COUNTY_SOURCE_SCOPES}
+    assert len(FL_COUNTIES) == 67 == len(set(FL_COUNTIES))
+    assert set(FL_COUNTIES) == registered
+    assert not fl_county_registered("Manatee Clerk")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("county,state,code", [
+    ("Lee (GA)", "FL", PLACE_CONFLICT), ("Manatee Clerk", "FL", PLACE_NOT_REGISTERED),
+])
+async def test_codex_p2_run_discovery_refuses_without_any_write(county, state, code):
+    db = _lee_db_with_indemnitor()
+    result = await run_discovery(db, booking_number="B-100", full_name="Casey Sample",
+                                 county=county, state=state, force=True)
+    assert result["discovery_status"] == code
+    assert result["contacts"] == [] and result["providers_run"] == []
+    assert db["contacts"].docs == []
+
+
+@pytest.mark.asyncio
+async def test_codex_p2_run_discovery_refuses_a_conflicting_stored_arrest():
+    db = AsyncDB()
+    arrest = {**_booking(), "county": "Lee (GA)", "state": "FL"}
+    result = await run_discovery(db, booking_number="B-100", arrest=arrest, force=True)
+    assert result["discovery_status"] == PLACE_CONFLICT
+    assert db["contacts"].docs == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("county,state,code", [
+    ("Lee (GA)", "FL", PLACE_CONFLICT), ("Lee, Georgia", "FL", PLACE_CONFLICT),
+    ("Manatee Clerk", "FL", PLACE_NOT_REGISTERED),
+])
+async def test_codex_p2_routes_return_a_typed_400_and_write_nothing(monkeypatch, county, state, code):
+    from urllib.parse import urlencode
+
+    db = _lee_db_with_indemnitor()
+    await _discover(db)
+    before = copy.deepcopy(db["contacts"].docs)
+    cid = before[0]["discovered_contacts"][0]["candidate_id"]
+    client = _review_client(monkeypatch, db, _STAFF)
+    got = client.get("/api/contacts/B-100?" + urlencode({"county": county, "state": state}))
+    assert got.status_code == 400 and got.json()["error"] == code
+    disc = client.post("/api/contacts/discover", json={"booking_number": "B-100", "full_name": "Casey Sample",
+                                                       "county": county, "state": state})
+    assert disc.status_code == 400 and disc.json()["discovery_status"] == code
+    rev = client.post(_review_url(cid), json={"county": county, "state": state, "decision": "approve",
+                                               "rev": before[0]["discovery_rev"]})
+    assert rev.status_code == 400 and rev.json()["error"] == code
+    assert db["contacts"].docs == before
+    assert db["audit_events"].docs == []

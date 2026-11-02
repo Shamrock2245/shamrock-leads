@@ -161,6 +161,41 @@ class PriorReadFailed(Exception):
         super().__init__(f"{collection}:{error_type}")
 
 
+PLACE_CONFLICT = "county_state_conflict"
+PLACE_NOT_REGISTERED = "county_not_in_registry"
+PLACE_PROBLEMS = frozenset({PLACE_CONFLICT, PLACE_NOT_REGISTERED})
+
+
+def place_problem(county: Any, state: Any) -> str:
+    """Typed reason a county/state pair cannot name one place, or "".
+
+    * ``county_state_conflict``: the county carries its own state label
+      (``Lee (GA)``, ``Lee County, Georgia``) that differs from the separate
+      ``state``, or the label is not a state at all. Neither is guessed.
+    * ``county_not_in_registry``: the place is in Florida but the county is not
+      one of the 67 (``Manatee Clerk``, a typo).
+
+    Blank input is not a problem here; callers already require both parts.
+    """
+    from dashboard.services.place_identity import fl_county_registered, parse_place
+
+    raw = " ".join(str(county or "").split())
+    if not raw:
+        return ""
+    name, label_raw = parse_place(raw, "")
+    labeled = bool(re.search(r"\(\s*[A-Za-z]{2}\s*\)\s*$|,", raw))
+    label_st = _norm_state(label_raw) if label_raw else ""
+    if labeled and not re.fullmatch(r"[A-Z]{2}", label_st or ""):
+        return PLACE_CONFLICT
+    explicit = "" if _blank(state) else _norm_state(state)
+    if label_st and explicit and label_st != explicit:
+        return PLACE_CONFLICT
+    st = explicit or label_st
+    if st == "FL" and not fl_county_registered(name):
+        return PLACE_NOT_REGISTERED
+    return ""
+
+
 def canonical_place(county: Any, state: Any) -> tuple:
     """(County, ST) in one canonical spelling, or ("", "") parts when unknown.
 
@@ -172,6 +207,10 @@ def canonical_place(county: Any, state: Any) -> tuple:
     """
     from dashboard.services.place_identity import parse_place
 
+    if place_problem(county, state):
+        # Conflicting labels or a non-registry FL county: no place, so every
+        # caller (identity, scope match, arrest lookup) fails closed.
+        return "", ""
     st = _norm_state(state)
     name, parsed_st = parse_place(county, st if re.fullmatch(r"[A-Z]{2}", st or "") else "")
     st = st or _norm_state(parsed_st)
@@ -518,6 +557,50 @@ def _anchors_from(values: Sequence[str]) -> List[str]:
     return seen
 
 
+# Public-record pages (property appraiser owner search, clerk case search)
+# list many people. A name there is only a candidate when it is tied to this
+# defendant by the defendant's own published address: the same house number
+# and street and the same ZIP as the address on the booking. The candidate's
+# own phone or address is not evidence of a link. Rows from these sources
+# without that link are dropped, never stored, approved, or used for outreach.
+PUBLIC_RECORD_SOURCES = frozenset({"lee_property_appraiser", "lee_clerk_parties"})
+DEFENDANT_LINK_SHARED_ADDRESS = "shared_address_zip"
+DEFENDANT_LINKS = frozenset({DEFENDANT_LINK_SHARED_ADDRESS})
+
+
+def defendant_link_ok(row: Any) -> bool:
+    """False for a public-record row that carries no verified defendant link.
+    Rows from linked-by-construction sources (prior bonds, intakes, family
+    graph, skip-trace keyed on the defendant) are unaffected."""
+    if not isinstance(row, dict):
+        return False
+    if str(row.get("source") or "") not in PUBLIC_RECORD_SOURCES:
+        return True
+    return row.get("defendant_link") in DEFENDANT_LINKS
+
+
+def _street_line(address: Any) -> str:
+    """House number + street of an address, normalized; "" without a number."""
+    text = str(address or "").split(",")[0]
+    text = re.sub(r"\b\d{5}(?:-\d{4})?\s*$", "", text)
+    street = normalize_street(text)
+    return street if re.match(r"^\d+\s+\S+", street) else ""
+
+
+def shares_defendant_address(candidate_address: Any, candidate_zip: Any, booking: Dict[str, Any]) -> bool:
+    """True when the candidate's published address is the defendant's own:
+    same ZIP, and the candidate's street starts with the defendant's house
+    number and street. Missing defendant address or ZIP is never a link."""
+    def_addr = _first(booking, "address", "defendant_address")
+    def_zip = normalize_zip(_first(booking, "zip", "zip_code", "defendant_zip") or def_addr)
+    def_street = _street_line(def_addr)
+    cand_zip = normalize_zip(candidate_zip)
+    cand_street = _street_line(candidate_address)
+    if not (def_street and def_zip and cand_street and cand_zip) or def_zip != cand_zip:
+        return False
+    return cand_street == def_street or cand_street.startswith(def_street + " ")
+
+
 def make_candidate(
     *,
     booking_number: str,
@@ -684,10 +767,13 @@ def _merge_candidates(
         vals = _review_values(row)
         return (vals["phone"], vals["email"], vals["address"])
 
+    # A public-record row without a verified defendant link is never kept,
+    # whatever its review state (fail closed; see ``defendant_link_ok``).
+    existing = [row for row in existing if defendant_link_ok(row)]
     deduped_fresh: List[Dict[str, Any]] = []
     by_exact_key: Dict[tuple, Dict[str, Any]] = {}
     for raw_row in fresh:
-        if not isinstance(raw_row, dict):
+        if not isinstance(raw_row, dict) or not defendant_link_ok(raw_row):
             continue
         bkey = _base_key(raw_row)
         if not bkey[0]:
@@ -1425,16 +1511,25 @@ async def public_request_async(method: str, url: str):
 
 
 def _people_from_html(html: str, defendant: str) -> List[Dict[str, str]]:
-    """Pull other people only when the same snippet has a phone or an address+ZIP."""
+    """Pull other people only when the same snippet has a phone or an address+ZIP.
+
+    A person's snippet ends where the next ``Last, First`` name starts, so a
+    phone or address belonging to the next result row is never attributed to
+    this one.
+    """
     people: List[Dict[str, str]] = []
-    for match in re.finditer(
+    matches = list(re.finditer(
         r"([A-Za-z][A-Za-z' -]{1,40},\s+[A-Za-z][A-Za-z' -]{1,40})",
         html or "",
-    ):
+    ))
+    for pos, match in enumerate(matches):
         name = " ".join(match.group(1).split())
         if names_equal(name, defendant):
             continue
-        window = (html or "")[match.start():match.start() + 240]
+        end = match.start() + 240
+        if pos + 1 < len(matches):
+            end = min(end, matches[pos + 1].start())
+        window = (html or "")[match.start():end]
         phone = ""
         phone_match = re.search(r"(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}", window)
         if phone_match:
@@ -1455,7 +1550,12 @@ def _html_candidates(html: str, booking: Dict[str, Any], source: str, relationsh
     defendant = _first(booking, "full_name", "defendant_name")
     booking_number = _first(booking, "booking_number")
     found: List[Dict[str, Any]] = []
+    unlinked = 0
     for person in _people_from_html(html, defendant):
+        if not shares_defendant_address(person.get("address"), person.get("zip"), booking):
+            # No published tie to this defendant: dropped (fail closed).
+            unlinked += 1
+            continue
         anchors: List[str] = []
         if normalize_phone(person.get("phone")):
             anchors.append("phone")
@@ -1472,7 +1572,11 @@ def _html_candidates(html: str, booking: Dict[str, Any], source: str, relationsh
             defendant_name=defendant,
         )
         if candidate:
+            candidate["defendant_link"] = DEFENDANT_LINK_SHARED_ADDRESS
             found.append(candidate)
+    if unlinked:
+        log.info("[indemnitor_discovery] public-record rows dropped code=defendant_link_missing source=%s count=%s",
+                 source, unlinked)
     return found
 
 
@@ -1680,6 +1784,12 @@ async def run_discovery(
     booking_number = str(booking_number or "").strip()
     contacts = db["contacts"]
 
+    problem = place_problem(county, state)
+    if problem:
+        # Conflicting or unregistered place: no read, no write, no queue row.
+        log.warning("[indemnitor_discovery] discovery refused code=%s", problem)
+        return {"cached": False, "contacts": [], "discovery_status": problem, "providers_run": []}
+
     stored = dict(arrest or {})
     if not stored and booking_number and not (state and county):
         found = await _resolve_arrest(db, booking_number, county, state)
@@ -1708,6 +1818,10 @@ async def run_discovery(
     if state:
         stored["state"] = state
     stored["booking_number"] = booking_number or stored.get("booking_number") or ""
+    problem = place_problem(stored.get("county"), stored.get("state"))
+    if problem:
+        log.warning("[indemnitor_discovery] discovery refused code=%s", problem)
+        return {"cached": False, "contacts": [], "discovery_status": problem, "providers_run": []}
     identity = contact_identity(stored.get("state"), stored.get("county"), stored["booking_number"])
     if identity is None:
         return {
@@ -2053,7 +2167,7 @@ async def run_lee_discovery_batch(db: Any, *, limit: int = DISCOVERY_BATCH_LIMIT
                 error = str(result.get("discovery_error") or "providers_failed")
                 retrying = await _mark_retry_or_failed(arrests, arrest, marker, error, now)
                 summary["retry" if retrying else "failed"] += 1
-            elif outcome in {"identity_ambiguous", ContactsLegacyAmbiguous.code}:
+            elif outcome in {"identity_ambiguous", ContactsLegacyAmbiguous.code, *PLACE_PROBLEMS}:
                 # Cannot be resolved by retrying. Terminal, so a "running"
                 # marker is not re-claimed forever. Code only, no booking.
                 await _mark_terminal(arrests, arrest, str(outcome))
@@ -2321,6 +2435,8 @@ async def review_candidate(
         if index is None or not candidate_id:
             raise CandidateReviewError("candidate_not_found", 404)
         old_row = rows[index]
+        if new_status in REVIEWED_STATUSES and not defendant_link_ok(old_row):
+            raise CandidateReviewError("candidate_unlinked", 409)
         old_status = str(old_row.get("review_status") or "unreviewed")
         audit_id = f"contact-review:{doc_id}:{candidate_id}:{current_rev}"
         new_row = dict(old_row)

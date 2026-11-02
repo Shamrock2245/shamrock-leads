@@ -500,10 +500,12 @@ class OutreachSequencer:
         #    unreviewed discovery candidate is never a send target, whatever
         #    its confidence. The row's phone, email, address and anchors must
         #    still match what staff approved (review_pin); a row with no pin
-        #    or with changed contact data is skipped.
+        #    or with changed contact data is skipped, and so is a public-record
+        #    row with no verified link to the defendant (defendant_link_ok).
         try:
             from dashboard.services.contact_discovery import (
                 contact_identity,
+                defendant_link_ok,
                 is_reviewed,
                 review_pin_matches,
             )
@@ -517,7 +519,7 @@ class OutreachSequencer:
                 )
             if contact_doc:
                 for c in contact_doc.get("discovered_contacts", []):
-                    if not is_reviewed(c) or not review_pin_matches(c):
+                    if not is_reviewed(c) or not review_pin_matches(c) or not defendant_link_ok(c):
                         continue
                     p = c.get("phone", "")
                     if p and c.get("confidence", 0) >= 0.7:

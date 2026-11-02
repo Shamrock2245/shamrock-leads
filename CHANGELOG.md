@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-02 (Lee co-signer discovery: Codex 10/30 findings on #280)
+
+### Fixed
+- **P1: public-record candidates must be tied to the defendant (`dashboard/services/contact_discovery.py`).** A property-appraiser or clerk page can list many people. A person on it is kept only when their published address is the defendant's own: same house number and street, same ZIP as the booking address. The row then carries `defendant_link: "shared_address_zip"`. The candidate's own phone or address is no longer treated as a link. Without a defendant address and ZIP on the booking, these providers return no candidates. Each person's text window now ends where the next name starts, so a row can't borrow the next row's address. Unlinked public-record rows are fail-closed everywhere: they are dropped on merge (including rows stored before this fix), hidden from `GET /api/contacts/{booking}`, refused on approve with 409 `candidate_unlinked` (reject is still allowed), and skipped by outreach (`defendant_link_ok`). Drops are logged as a count and the code `defendant_link_missing` only.
+- **P2: conflicting or unregistered county/state labels are refused (`place_problem`).** A county label that names its own state (`Lee (GA)`, `Lee County, GA`, `Lee, Georgia`) and differs from the separate state, or a label that isn't a state, gives `county_state_conflict`. A Florida place whose county isn't one of the 67 (`Manatee Clerk`, a typo) gives `county_not_in_registry`. `canonical_place` returns no place, so `contact_identity` is `None`. `run_discovery` returns that `discovery_status` with no contacts read or write and no queue row. The contacts GET, discover and review routes return 400 with the code. The cron marks the booking terminal. The dashboard shows a message for each code. The 67-county list is a pure `FL_COUNTIES` tuple in `dashboard/services/place_identity.py`, tested against `REGISTERED_COUNTIES` minus `NON_COUNTY_SOURCE_SCOPES`. The Lee arrest write path is unchanged.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`, `test_codex_p1_*`: multi-result page with an unrelated owner and a name-only row; no defendant address; different house or ZIP; merge drops unlinked rows; an unlinked row can't be approved (409) or texted, and reject still works; GET hides it.
+- `test_codex_p2_*`: six conflict labels and four non-registry places fail closed through `place_problem`, `canonical_place` and `contact_identity`; ten consistent places still resolve; registry parity (67); `run_discovery` refuses with no write, for both arguments and a stored arrest; GET, discover and review return a typed 400 and write nothing.
+- `test_enabled_http_uses_plain_request_and_keeps_anchor` now gives the defendant address the fixture owner shares, and asserts `defendant_link`.
+- Against the `cb48dc8` sources, 24 of these tests fail (all except the registry-parity guard).
+
 ## [Unreleased] — 2026-10-30 (Lee co-signer discovery: merge main 2833a40 and prove Lee writes never stall on the queue, #280)
 
 ### Changed

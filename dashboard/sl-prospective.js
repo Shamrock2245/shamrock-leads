@@ -784,6 +784,9 @@ window.SLProspective = (function () {
     if (code === 'legacy_contacts_ambiguous') return action + ' not done: more than one stored contact record matches this booking. It needs manual review; nothing was saved.';
     if (code === 'stale_revision') return action + ' not done: the candidates changed since they were loaded. The list was reloaded; check it and try again.';
     if (code === 'audit_unavailable' || code === 'audit_failed') return action + ' not done: the audit record could not be saved, so the review was not applied. Try again shortly.';
+    if (code === 'county_state_conflict') return action + ' not done: the county label names a different state than the state field. Fix the county or state; nothing was saved.';
+    if (code === 'county_not_in_registry') return action + ' not done: that county is not one of the 67 Florida counties. Fix the county; nothing was saved.';
+    if (code === 'candidate_unlinked') return action + ' not done: this candidate has no verified link to the defendant, so it cannot be approved.';
     if (code === 'staff_session_required') return action + ' not done: sign in as staff first.';
     if (code === 'role_not_allowed') return action + ' not done: your role cannot review co-signer candidates.';
     if (status === 409) return action + ' not done: conflict (409). Nothing was saved.';
