@@ -432,8 +432,13 @@ def _raise_if_conflict(rows: list, *, cents: int, status: Any, booking: str) -> 
         )
 
 
-async def _read_rows(db, txn_key: str, session=None, kind: Optional[str] = None) -> list:
-    rows = await _docs(db["payments"], {"transaction_id": txn_key}, session)
+async def _read_rows(
+    db, txn_key: str, session=None, kind: Optional[str] = None,
+    query: Optional[dict] = None,
+) -> list:
+    """Rows for ``txn_key``. ``query`` adds filters (the co-signer tenant scope)."""
+    flt = {**(query or {}), "transaction_id": txn_key}
+    rows = await _docs(db["payments"], flt, session)
     if kind is None:
         return rows
     return [row for row in rows if row_kind(row) == kind]
