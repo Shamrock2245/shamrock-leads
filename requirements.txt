@@ -78,7 +78,7 @@ openpyxl>=3.1.5
 firebase-admin>=7.7.0
 
 # Court Intelligence (Juriscraper + CourtListener SE US pipeline)
-juriscraper>=2.8.4
+juriscraper>=4.0.2
 
 # Phonetic name matching (Metaphone, Soundex, Jaro-Winkler)
 jellyfish>=1.2.1
