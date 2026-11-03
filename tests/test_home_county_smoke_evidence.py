@@ -280,3 +280,58 @@ def test_relay_read_walk_meta_carries_column_names_only():
     _recs, meta = walk_roster(lambda url, pg: page, sleep=lambda s: None)
     assert meta["columns"] == headers
     assert "DOE" not in json.dumps(meta)
+
+
+def test_smoke_evidence_check_reports_manatee_clerk_internal_key_fields():
+    """The Manatee Clerk write-smoke `expect` is checkable from the aggregate alone.
+
+    Internal key shape and validity, the internal flag, case / OBTS presence and
+    booking == case number are counted; no key, case or OBTS value is printed.
+    """
+    from scrapers.counties.manatee_clerk import mc_case_key
+
+    spec = importlib.util.spec_from_file_location("sec", ROOT / "scripts" / "smoke_evidence_check.py")
+    sec = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sec)
+    # Synthetic case numbers (uniform FL case-number shape), not real filings.
+    k1, k2 = mc_case_key("2026CF009901AX"), mc_case_key("2026-MM-004402-AX")
+    docs = [
+        {"booking_number": k1, "booking_key_internal": True, "case_number": "2026CF009901AX",
+         "obts_number": "5800012345", "charges": "BATTERY", "bond_amount_raw": ""},
+        {"booking_number": k2, "booking_key_internal": True, "case_number": "2026-MM-004402-AX",
+         "charges": "TRESPASS", "bond_amount_raw": "0.00"},
+        # A regression the smoke must surface: the case number stored as the booking key.
+        {"booking_number": "2026-CF-009903-AX", "case_number": "2026CF009903AX", "charges": "DUI"},
+        # A malformed internal key is not counted as valid.
+        {"booking_number": "mc_case_v1:abc", "booking_key_internal": True, "case_number": "2026CF1AX"},
+    ]
+    out = sec.summarize(docs)
+    assert out["rows"] == 4
+    assert out["booking_number_blank"] == 0
+    assert out["booking_key_internal"] == 3
+    assert out["internal_key_valid"] == 2
+    assert out["with_case_number"] == 4
+    assert out["with_obts_number"] == 1
+    assert out["booking_equals_case_number"] == 1
+    assert out["booking_number_shapes"]["mc_case_v1:<sha256>"] == 2
+    assert out["with_charges"] == 3
+    blob = json.dumps(out)
+    for secret in (k1, k2, k1.split(":")[1][:16], "2026CF009901AX", "009903", "5800012345", "abc"):
+        assert secret not in blob
+    # Ordinary booking numbers are unchanged.
+    assert sec.key_shape("1033660") == "NNNNNNN"
+    assert sec.internal_key_family("1033660") == ""
+    assert "case_number" in sec.PROJECTION and "obts_number" in sec.PROJECTION
+    assert "full_name" not in sec.PROJECTION
+
+
+def test_manatee_clerk_smoke_row_names_the_checkable_fields():
+    rows = [r for r in json.loads(SMOKE.read_text())["records"] if r["label"] == "Manatee Clerk (FL)"]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["kind"] == "write_smoke" and row["status"] == "requested"
+    assert '--county "Manatee Clerk" --state FL' in row["command"]
+    for field in ("booking_key_internal", "internal_key_valid", "with_case_number",
+                  "booking_equals_case_number", "with_charges"):
+        assert field in row["expect"], field
+    assert "merged" in row["blocked_on"].lower() and "deploy" in row["blocked_on"].lower()

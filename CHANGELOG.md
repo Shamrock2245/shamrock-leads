@@ -3,6 +3,26 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-03 (Manatee Clerk write smoke: checkable aggregates)
+
+### Added
+- **`scripts/smoke_evidence_check.py` now reports what the Manatee Clerk write smoke expects.** It adds these PII-free counts: `booking_key_internal`, `internal_key_valid` (the exact `mc_case_v1` / `md_dedupe_v2` pattern from `core/booking_identity.py`), `with_case_number`, `with_obts_number` and `booking_equals_case_number`. A valid internal key appears in `booking_number_shapes` as `mc_case_v1:<sha256>` and the digest is never printed. The read-only projection adds `booking_key_internal`, `case_number` and `obts_number`. No name, DOB, key, case or OBTS value is printed, and the script still never writes. Before this change, the requested Manatee Clerk smoke could not be confirmed from the script's output.
+
+### Changed
+- **The Manatee Clerk (FL) smoke request (`docs/recon/smoke_evidence.json`) is updated.**
+  - `expect` now names the new counters.
+  - `blocked_on` now says the scraper is merged (#177 2026-10-14, #256 2026-10-16) and is waiting on a VPS deploy. Hetzner deploys are blocked by a full disk as of 2026-11-03.
+  - `COUNTY_SOURCE_CONTRACT_MATRIX.md` is regenerated.
+  - The status stays `requested`, and Health stays `unverified`. No county or source state changes, and no fail_closed scope is touched.
+- **`docs/recon/FL_MANATEE_CLERK_SCRAPER_2026-10-10.md` is updated.**
+  - `Status` is now documented as `""`, which matches #256 (it was `Unknown`).
+  - A new "Leads Ops write smoke" section gives the run commands and the expected aggregates.
+
+### Tests
+- `tests/test_home_county_smoke_evidence.py`:
+  - `test_smoke_evidence_check_reports_manatee_clerk_internal_key_fields`
+  - `test_manatee_clerk_smoke_row_names_the_checkable_fields`
+
 ## [Unreleased] — 2026-11-02 (Co-signer hold audits keep the prior review)
 
 ### Fixed

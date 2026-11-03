@@ -8,8 +8,11 @@ Run by Leads Ops wherever ``MONGODB_URI`` is set (the agent box has none):
 It reads ``arrests`` rows for that county written in the window and prints one
 JSON line: row count, booking-key shapes and uniqueness, how many rows have an
 empty, zero or positive bond, charges, booking date/time, release fields,
-mugshot, DOB and address. It never prints a name, DOB, address or booking
-number, and it never writes. Paste the JSON into the ``result`` of the
+mugshot, DOB and address. For internal-key scopes (Manatee Clerk, Miami-Dade)
+it also counts rows flagged ``booking_key_internal``, keys that match the
+scope's exact pattern, case / OBTS numbers present, and any row whose stored
+booking number equals its case number. It never prints a name, DOB, address,
+booking, case or OBTS number, and it never writes. Paste the JSON into the ``result`` of the
 matching ``docs/recon/smoke_evidence.json`` row (see
 docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md).
 """
@@ -22,12 +25,40 @@ import re
 import sys
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Iterable
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from core.booking_identity import MC_INTERNAL_KEY_RE, MD_INTERNAL_KEY_RE  # noqa: E402  (pure: re/typing only)
+
+_INTERNAL_KEY_RES = {"mc_case_v1": MC_INTERNAL_KEY_RE, "md_dedupe_v2": MD_INTERNAL_KEY_RE}
+
+
+def internal_key_family(value: Any) -> str:
+    """``mc_case_v1`` / ``md_dedupe_v2`` when the value is a valid internal key, else ""."""
+    text = str(value or "")
+    for family, pattern in _INTERNAL_KEY_RES.items():
+        if pattern.match(text):
+            return family
+    return ""
 
 
 def key_shape(value: Any) -> str:
-    """``1033660`` -> ``NNNNNNN``; ``GCSO26JBN000123`` -> ``AAAANNAAANNNNNN``."""
+    """``1033660`` -> ``NNNNNNN``; ``GCSO26JBN000123`` -> ``AAAANNAAANNNNNN``.
+
+    A valid internal key prints as ``mc_case_v1:<sha256>`` (one shape, no digest).
+    """
+    family = internal_key_family(value)
+    if family:
+        return f"{family}:<sha256>"
     return re.sub(r"\d", "N", re.sub(r"[A-Za-z]", "A", str(value or "")))
+
+
+def _case_token(value: Any) -> str:
+    return re.sub(r"[^0-9A-Z]", "", str(value or "").upper())
 
 
 def _blank(value: Any) -> bool:
@@ -76,6 +107,14 @@ def summarize(docs: Iterable[dict]) -> dict:
         "with_mugshot": sum(1 for d in rows if not _blank(d.get("mugshot_url"))),
         "with_dob": sum(1 for d in rows if not _blank(d.get("dob"))),
         "with_address": sum(1 for d in rows if not _blank(d.get("address"))),
+        "booking_key_internal": sum(1 for d in rows if d.get("booking_key_internal") is True),
+        "internal_key_valid": sum(1 for k in keys if internal_key_family(k)),
+        "with_case_number": sum(1 for d in rows if not _blank(d.get("case_number"))),
+        "with_obts_number": sum(1 for d in rows if not _blank(d.get("obts_number"))),
+        "booking_equals_case_number": sum(
+            1 for d in rows
+            if _case_token(d.get("case_number")) and _case_token(d.get("case_number")) == _case_token(d.get("booking_number"))
+        ),
         "first_scraped_at": scraped[0] if scraped else "",
         "last_scraped_at": scraped[-1] if scraped else "",
     }
@@ -107,6 +146,7 @@ PROJECTION = {
     "_id": 0, "booking_number": 1, "bond_amount": 1, "bond_amount_raw": 1, "bond_type": 1,
     "charges": 1, "booking_date": 1, "booking_time": 1, "status": 1, "release_date": 1,
     "mugshot_url": 1, "dob": 1, "address": 1, "scraped_at": 1, "updated_at": 1,
+    "booking_key_internal": 1, "case_number": 1, "obts_number": 1,
 }
 
 
