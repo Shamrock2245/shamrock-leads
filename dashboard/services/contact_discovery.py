@@ -103,6 +103,22 @@ REVIEW_DECISIONS = {"approve": "approved", "reject": REJECTED_STATUS}
 REVIEW_PIN_FIELDS = ("phone", "email", "address", "anchors")
 # Provider statuses that mean "try again later", not "nothing found".
 DEFERRABLE_STATUSES = frozenset({"lee_rate_limited", "discovery_http_gap"})
+# Public-provider statuses for a transient failure (timeout, connection error,
+# HTTP 5xx). The run is not complete: the booking goes to the bounded retry
+# (MAX_DISCOVERY_ATTEMPTS with backoff) with error PUBLIC_SOURCE_TRANSIENT,
+# and the provider's earlier rows are kept. Blocks (401/403/429, challenge,
+# TLS) and other HTTP 4xx are not in this set: they show in providers_run and
+# are never retried or worked around.
+SOURCE_TIMEOUT = "source_timeout"
+SOURCE_CONNECTION_ERROR = "source_connection_error"
+SOURCE_HTTP_5XX = "source_http_5xx"
+SOURCE_HTTP_4XX = "source_http_4xx"
+TRANSIENT_PROVIDER_STATUSES = frozenset({SOURCE_TIMEOUT, SOURCE_CONNECTION_ERROR, SOURCE_HTTP_5XX})
+PUBLIC_SOURCE_TRANSIENT = "public_source_transient"
+# A public provider that raised something unexpected is not "nothing found"
+# either: same bounded retry, error PUBLIC_SOURCE_FAILED.
+PUBLIC_SOURCE_FAILED = "public_source_failed"
+PUBLIC_PROVIDERS = frozenset({"lee_property_appraiser", "lee_clerk_parties", "skiptrace"})
 
 _TRUTHY = {"1", "true", "yes", "on"}
 _FALSY = {"0", "false", "no", "off"}
@@ -1277,56 +1293,74 @@ def _bond_prior_rows(rows: Sequence[Any], booking: Dict[str, Any]) -> List[Dict[
     return found
 
 
+# Rows read per collection for each clause group. Exact-booking clauses are
+# read on their own first, so a common name with many historical matches can
+# never crowd the booking-linked row out of the bounded name read.
+PRIOR_READ_LIMIT = 25
+
+
 async def _provider_prior(db: Any, booking: Dict[str, Any]) -> List[Dict[str, Any]]:
     defendant = _first(booking, "full_name", "defendant_name")
     booking_number = _first(booking, "booking_number")
     variants = exact_name_variants(defendant)
-    by_booking = [{"booking_number": booking_number}] if booking_number else []
-    bond_clauses = (
-        [{"booking_number": booking_number}, {"Booking_Number": booking_number}]
-        if booking_number else []
-    ) + (
-        [
-            {"defendant_name": {"$in": variants}},
-            {"full_name": {"$in": variants}},
-            {"defendant_snapshot.full_name": {"$in": variants}},
-            {"defendant_snapshot.defendant_name": {"$in": variants}},
-        ]
-        if variants else []
+
+    def by(*clauses: Dict[str, Any]) -> List[Dict[str, Any]]:
+        return list(clauses) if booking_number else []
+
+    def named(*clauses: Dict[str, Any]) -> List[Dict[str, Any]]:
+        return list(clauses) if variants else []
+
+    bond_booking = by({"booking_number": booking_number}, {"Booking_Number": booking_number})
+    bond_names = named(
+        {"defendant_name": {"$in": variants}},
+        {"full_name": {"$in": variants}},
+        {"defendant_snapshot.full_name": {"$in": variants}},
+        {"defendant_snapshot.defendant_name": {"$in": variants}},
     )
-    queries: List[tuple] = []
-    queries.append(("indemnitors", (
-        [{"booking_number": booking_number}, {"linked_bonds": booking_number}]
-        if booking_number else []
-    ) + (
-        [{"defendant_name": {"$in": variants}}, {"defendants_bonded": {"$in": variants}}] if variants else []
-    )))
-    queries.append(("intakes", by_booking + ([{"defendant_name": {"$in": variants}}] if variants else [])))
-    queries.append(("intake_queue", (
-        [{"defendant_booking_number": booking_number}, {"matched_booking_number": booking_number}]
-        if booking_number else []
-    ) + ([{"defendant_name": {"$in": variants}}] if variants else [])))
-    queries.append(("prospective_bonds", bond_clauses))
-    queries.append(("active_bonds", bond_clauses))
-    # Family rows are linked only by booking + arrest place (see _family_rows),
-    # so they are read by booking number only; name-only rows are not fetched.
-    queries.append(("family_graph", by_booking))
-    queries.append(("family_relationships", by_booking))
+    # (collection, exact-booking clauses, name clauses)
+    queries: List[tuple] = [
+        ("indemnitors",
+         by({"booking_number": booking_number}, {"linked_bonds": booking_number}),
+         named({"defendant_name": {"$in": variants}}, {"defendants_bonded": {"$in": variants}})),
+        ("intakes", by({"booking_number": booking_number}), named({"defendant_name": {"$in": variants}})),
+        ("intake_queue",
+         by({"defendant_booking_number": booking_number}, {"matched_booking_number": booking_number}),
+         named({"defendant_name": {"$in": variants}})),
+        ("prospective_bonds", bond_booking, bond_names),
+        ("active_bonds", bond_booking, bond_names),
+        # Family rows are linked only by booking + arrest place (see _family_rows),
+        # so they are read by booking number only; name-only rows are not fetched.
+        ("family_graph", by({"booking_number": booking_number}), []),
+        ("family_relationships", by({"booking_number": booking_number}), []),
+    ]
     found: List[Dict[str, Any]] = []
-    for collection_name, clauses in queries:
-        if not clauses:
+    for collection_name, booking_clauses, name_clauses in queries:
+        rows: List[Dict[str, Any]] = []
+        seen: set = set()
+        for clauses in (booking_clauses, name_clauses):
+            if not clauses:
+                continue
+            try:
+                batch = await _find_list(db[collection_name], {"$or": clauses}, limit=PRIOR_READ_LIMIT)
+            except Exception as exc:
+                # A partial read must not look like "nothing found": the provider
+                # fails, its prior rows are kept, and the booking is retried.
+                log.warning(
+                    "[indemnitor_discovery] prior read failed collection=%s error_type=%s",
+                    collection_name,
+                    type(exc).__name__,
+                )
+                raise PriorReadFailed(collection_name, type(exc).__name__) from exc
+            for row in batch:
+                key = row.get("_id") if isinstance(row, dict) else None
+                if key is not None:
+                    marker = repr(key)
+                    if marker in seen:
+                        continue
+                    seen.add(marker)
+                rows.append(row)
+        if not rows:
             continue
-        try:
-            rows = await _find_list(db[collection_name], {"$or": clauses}, limit=25)
-        except Exception as exc:
-            # A partial read must not look like "nothing found": the provider
-            # fails, its prior rows are kept, and the booking is retried.
-            log.warning(
-                "[indemnitor_discovery] prior read failed collection=%s error_type=%s",
-                collection_name,
-                type(exc).__name__,
-            )
-            raise PriorReadFailed(collection_name, type(exc).__name__) from exc
         if collection_name == "intake_queue":
             found.extend(_intake_queue_rows(rows, booking))
         elif collection_name in {"prospective_bonds", "active_bonds"}:
@@ -1580,6 +1614,60 @@ def _html_candidates(html: str, booking: Dict[str, Any], source: str, relationsh
     return found
 
 
+def _http_status_problem(response: Any) -> Optional[str]:
+    """Typed status for a non-2xx/3xx response that plain_http did not raise on
+    (block statuses already raised EgressBlocked)."""
+    code = getattr(response, "status_code", None)
+    if not isinstance(code, int):
+        return None
+    if code >= 500:
+        return SOURCE_HTTP_5XX
+    if code >= 400:
+        return SOURCE_HTTP_4XX
+    return None
+
+
+def _transient_request_status(exc: BaseException) -> Optional[str]:
+    """SOURCE_TIMEOUT / SOURCE_CONNECTION_ERROR for a transient network error, else None."""
+    import requests
+
+    chain: List[BaseException] = []
+    cur: Optional[BaseException] = exc
+    while cur is not None and cur not in chain and len(chain) < 8:
+        chain.append(cur)
+        cur = cur.__cause__ or cur.__context__
+    if any(isinstance(e, (requests.exceptions.Timeout, TimeoutError, asyncio.TimeoutError)) for e in chain):
+        return SOURCE_TIMEOUT
+    if any(isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError, ConnectionError)) for e in chain):
+        return SOURCE_CONNECTION_ERROR
+    return None
+
+
+def _provider_error(provider: str, exc: BaseException, label: str) -> Dict[str, Any]:
+    """Map a public-provider exception to a typed status. Code only is logged."""
+    from scrapers.plain_http import SourceTLSInvalid
+    from scrapers.scraper_resilience import EgressBlocked
+
+    if isinstance(exc, SourceTLSInvalid):
+        return {"provider": provider, "status": "tls_cert_invalid", "count": 0}
+    if isinstance(exc, EgressBlocked):
+        return {"provider": provider, "status": "egress_block", "count": 0}
+    transient = _transient_request_status(exc)
+    if transient:
+        log.warning("[indemnitor_discovery] %s provider transient code=%s", label, transient)
+        return {"provider": provider, "status": transient, "count": 0, "error_type": type(exc).__name__}
+    log.warning("[indemnitor_discovery] %s provider failed error_type=%s", label, type(exc).__name__)
+    return {"provider": provider, "status": "failed", "count": 0, "error_type": type(exc).__name__}
+
+
+def _response_problem(provider: str, response: Any, label: str) -> Optional[Dict[str, Any]]:
+    problem = _http_status_problem(response)
+    if not problem:
+        return None
+    log.warning("[indemnitor_discovery] %s provider http code=%s", label, problem)
+    return {"provider": provider, "status": problem, "count": 0}
+
+
 async def _provider_property(booking: Dict[str, Any]) -> Dict[str, Any]:
     if not discovery_http_enabled():
         return {"provider": "lee_property_appraiser", "status": "skipped_disabled", "count": 0}
@@ -1596,22 +1684,14 @@ async def _provider_property(booking: Dict[str, Any]) -> Dict[str, Any]:
     url = f"{base}?{urlencode({'mode': 'owner', 'OwnerName': search_name})}"
     try:
         response = await public_request_async("GET", url)
-        html = response.text or ""
     except DiscoveryHttpError as exc:
         return {"provider": "lee_property_appraiser", "status": exc.code, "count": 0}
     except Exception as exc:
-        from scrapers.plain_http import SourceTLSInvalid
-        from scrapers.scraper_resilience import EgressBlocked
-
-        if isinstance(exc, SourceTLSInvalid):
-            return {"provider": "lee_property_appraiser", "status": "tls_cert_invalid", "count": 0}
-        if isinstance(exc, EgressBlocked):
-            return {"provider": "lee_property_appraiser", "status": "egress_block", "count": 0}
-        log.warning(
-            "[indemnitor_discovery] property provider failed error_type=%s",
-            type(exc).__name__,
-        )
-        return {"provider": "lee_property_appraiser", "status": "failed", "count": 0, "error_type": type(exc).__name__}
+        return _provider_error("lee_property_appraiser", exc, "property")
+    problem = _response_problem("lee_property_appraiser", response, "property")
+    if problem:
+        return problem
+    html = response.text or ""
     candidates = _html_candidates(html, booking, "lee_property_appraiser", "property_associate")
     return {"provider": "lee_property_appraiser", "status": "ok", "count": len(candidates), "candidates": candidates}
 
@@ -1625,22 +1705,14 @@ async def _provider_clerk(booking: Dict[str, Any]) -> Dict[str, Any]:
     url = f"https://matrix.leeclerk.org/Home/Search?query={quote(case_number)}"
     try:
         response = await public_request_async("GET", url)
-        html = response.text or ""
     except DiscoveryHttpError as exc:
         return {"provider": "lee_clerk_parties", "status": exc.code, "count": 0}
     except Exception as exc:
-        from scrapers.plain_http import SourceTLSInvalid
-        from scrapers.scraper_resilience import EgressBlocked
-
-        if isinstance(exc, SourceTLSInvalid):
-            return {"provider": "lee_clerk_parties", "status": "tls_cert_invalid", "count": 0}
-        if isinstance(exc, EgressBlocked):
-            return {"provider": "lee_clerk_parties", "status": "egress_block", "count": 0}
-        log.warning(
-            "[indemnitor_discovery] clerk provider failed error_type=%s",
-            type(exc).__name__,
-        )
-        return {"provider": "lee_clerk_parties", "status": "failed", "count": 0, "error_type": type(exc).__name__}
+        return _provider_error("lee_clerk_parties", exc, "clerk")
+    problem = _response_problem("lee_clerk_parties", response, "clerk")
+    if problem:
+        return problem
+    html = response.text or ""
     if len(html) < 800:
         return {"provider": "lee_clerk_parties", "status": "skipped_unparsed", "count": 0}
     candidates = _html_candidates(html, booking, "lee_clerk_parties", "case_party")
@@ -1682,26 +1754,22 @@ async def _provider_skiptrace(booking: Dict[str, Any]) -> Dict[str, Any]:
         from scrapers.plain_http import make_session, request
 
         session = make_session({"Authorization": f"Bearer {key}", "Accept": "application/json"})
-        response = request(session, "POST", url, county="Lee", timeout=10, json=payload)
-        return response.json() if response.content else {}
+        return request(session, "POST", url, county="Lee", timeout=10, json=payload)
 
     try:
         await _await_http_gap()
-        body = await asyncio.to_thread(_call)
+        response = await asyncio.to_thread(_call)
     except DiscoveryHttpError as exc:
         return {"provider": "skiptrace", "status": exc.code, "count": 0}
     except Exception as exc:
-        from scrapers.plain_http import SourceTLSInvalid
-        from scrapers.scraper_resilience import EgressBlocked
-
-        if isinstance(exc, SourceTLSInvalid):
-            return {"provider": "skiptrace", "status": "tls_cert_invalid", "count": 0}
-        if isinstance(exc, EgressBlocked):
-            return {"provider": "skiptrace", "status": "egress_block", "count": 0}
-        log.warning(
-            "[indemnitor_discovery] skiptrace failed error_type=%s",
-            type(exc).__name__,
-        )
+        return _provider_error("skiptrace", exc, "skiptrace")
+    problem = _response_problem("skiptrace", response, "skiptrace")
+    if problem:
+        return problem
+    try:
+        body = response.json() if response.content else {}
+    except Exception as exc:
+        log.warning("[indemnitor_discovery] skiptrace failed error_type=%s", type(exc).__name__)
         return {"provider": "skiptrace", "status": "failed", "count": 0, "error_type": type(exc).__name__}
     found: List[Dict[str, Any]] = []
     rows = body.get("candidates") if isinstance(body, dict) else None
@@ -1733,6 +1801,40 @@ def _public_summary(result: Dict[str, Any]) -> Dict[str, Any]:
     if result.get("error_type"):
         summary["error_type"] = result["error_type"]
     return summary
+
+
+# Logged (with field names only) when caller input differs from the arrest.
+CALLER_IDENTITY_IGNORED = "caller_identity_ignored"
+# Identity fields and the arrest keys that already hold them.
+_IDENTITY_FIELDS = {
+    "full_name": ("full_name", "defendant_name"),
+    "address": ("address",),
+    "dob": ("dob",),
+    "zip": ("zip",),
+}
+
+
+def _fill_blank_identity(stored: Dict[str, Any], supplied: Dict[str, Any]) -> List[str]:
+    """Copy caller values only into identity fields the arrest leaves blank.
+
+    Returns the field names (never values) whose caller value was dropped
+    because the arrest already has a different one.
+    """
+    ignored: List[str] = []
+    for field, keys in _IDENTITY_FIELDS.items():
+        value = str(supplied.get(field) or "").strip()
+        if not value:
+            continue
+        current = _first(stored, *keys)
+        if not current:
+            stored[field] = value
+            continue
+        same = names_equal(value, current) if field == "full_name" else (
+            " ".join(value.lower().split()) == " ".join(str(current).lower().split())
+        )
+        if not same:
+            ignored.append(field)
+    return ignored
 
 
 async def _resolve_arrest(
@@ -1805,16 +1907,21 @@ async def run_discovery(
         found = await _resolve_arrest(db, booking_number, county, state)
         if isinstance(found, dict):
             stored = dict(found)
-    if full_name:
-        stored["full_name"] = full_name
+    # A resolved arrest's own identity fields win. Caller input (a drawer or
+    # manual request, possibly stale) only fills a field the arrest does not
+    # have, e.g. a MANUAL-* lead with no arrest row. A caller name never
+    # replaces the arrest's defendant name: the name drives the property,
+    # skip-trace and prior searches, and their rows are saved under this
+    # booking. Blank caller values never clear anything.
+    ignored = _fill_blank_identity(
+        stored,
+        {"full_name": full_name, "address": address, "dob": dob, "zip": zip_code},
+    )
+    if ignored:
+        log.info("[indemnitor_discovery] caller fields ignored code=%s fields=%s",
+                 CALLER_IDENTITY_IGNORED, ",".join(ignored))
     if county:
         stored["county"] = county
-    if address:
-        stored["address"] = address
-    if dob:
-        stored["dob"] = dob
-    if zip_code:
-        stored["zip"] = zip_code
     if state:
         stored["state"] = state
     stored["booking_number"] = booking_number or stored.get("booking_number") or ""
@@ -1877,12 +1984,16 @@ async def run_discovery(
         log.warning("[indemnitor_discovery] booking provider failed error_type=%s", type(exc).__name__)
         providers_run.append({"provider": "booking_fields", "status": "failed", "count": 0, "error_type": type(exc).__name__})
 
-    for runner in (_provider_property, _provider_clerk, _provider_skiptrace):
+    for name, runner in (
+        ("lee_property_appraiser", _provider_property),
+        ("lee_clerk_parties", _provider_clerk),
+        ("skiptrace", _provider_skiptrace),
+    ):
         try:
             result = await runner(stored)
         except Exception as exc:
             log.warning("[indemnitor_discovery] provider crashed error_type=%s", type(exc).__name__)
-            result = {"provider": getattr(runner, "__name__", "provider"), "status": "failed", "count": 0, "error_type": type(exc).__name__}
+            result = {"provider": name, "status": "failed", "count": 0, "error_type": type(exc).__name__}
         candidates.extend(result.get("candidates") or [])
         providers_run.append(_public_summary(result))
 
@@ -1897,12 +2008,26 @@ async def run_discovery(
     ]
     attempted = [row for row in providers_run if row.get("status") != "skipped_disabled"]
     deferred = [row for row in providers_run if row.get("status") in DEFERRABLE_STATUSES]
+    transient = [row for row in providers_run if row.get("status") in TRANSIENT_PROVIDER_STATUSES]
+    public_crashed = [
+        row for row in providers_run
+        if row.get("provider") in PUBLIC_PROVIDERS and row.get("status") == "failed"
+    ]
     error_code: Optional[str] = None
     if read_failed:
         status = "failed"
         error_code = "prior_read_failed"
     elif deferred:
         status = "deferred"
+    elif transient:
+        # A public source timed out, dropped the connection or answered 5xx.
+        # Zero rows from it is not "nothing found": the run is not complete,
+        # the cron's bounded retry picks it up, and its prior rows are kept.
+        status = "failed"
+        error_code = PUBLIC_SOURCE_TRANSIENT
+    elif public_crashed:
+        status = "failed"
+        error_code = PUBLIC_SOURCE_FAILED
     elif attempted and hard_failures and all(row.get("status") not in {"ok", "skipped", "skipped_unparsed"} for row in attempted):
         status = "failed"
         error_code = "providers_failed"

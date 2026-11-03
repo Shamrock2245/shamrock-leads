@@ -30,6 +30,14 @@ A person found on a property-appraiser or clerk page (`lee_property_appraiser`, 
 
 County and state must name one place. A county label with its own state that differs from `state` (`Lee (GA)` with `FL`) is `county_state_conflict`. A Florida county outside the 67 (`Manatee Clerk`) is `county_not_in_registry`. Either way discovery does not run and writes nothing, the contacts routes return 400 with the code, and the cron stops retrying the booking. Nothing is guessed.
 
+### Arrest identity, transient failures and prior reads (Codex 11/2)
+
+When county and state resolve a stored arrest, the arrest's own name, address, DOB and ZIP are used. Caller input only fills a blank field, for example a `MANUAL-*` lead with no arrest row. A differing caller value is ignored, and only the code `caller_identity_ignored` and the field names are logged. Blank caller values never clear a field.
+
+A public provider (property appraiser, clerk, skip-trace) reports `source_timeout`, `source_connection_error`, `source_http_5xx` or `source_http_4xx`. A timeout, connection error or 5xx makes the run `failed` with `public_source_transient`. An unexpected provider error gives `public_source_failed`. Either way the booking goes to the bounded retry (15/30 min, terminal after 3 attempts), keeps its earlier rows, and is not cached as complete. A 4xx, `egress_block` or `tls_cert_invalid` is shown in `providers_run` and is not retried.
+
+Prior-Shamrock collections are read in two bounded queries: exact-booking clauses first, then name clauses (`PRIOR_READ_LIMIT` = 25 each). A common name can't push the booking-linked co-signer out.
+
 ### Staff review
 
 `POST /api/contacts/{booking}/candidates/{candidate_id}/review` with `{county, state, decision, rev}` (`decision` is `approve` or `reject`; `rev` is the `discovery_rev` from `GET /api/contacts/{booking}`). It sits behind the dashboard auth (not an open prefix) and needs a staff cookie session (`god_admin`, `admin`, `staff`); otherwise 401/403. The write is guarded on `discovery_rev` like a refresh, so a stale `rev` gets 409 `stale_revision` and nothing changes. A decision stores `review_pin`: a SHA-256 digest per field of the normalized phone, email, address and anchors (no values). It appends `{audit_id, candidate_id, actor, actor_role, at, old_status, new_status, rev_before, rev_after}` to the doc's `review_log`. The contacts update and an immutable `audit_events` record (`event_type: contact_candidate_reviewed`, `_id` = `audit_id`, also stored on the row as `review_audit_id`) are written in one multi-document transaction, with the revision re-checked inside it. If the audit insert fails, the transaction aborts, the status is unchanged and the call returns 503 `audit_failed`. Without a replica set or Atlas it returns 503 `audit_unavailable` and writes nothing (fail closed). `actor` is `staff:` plus a hash of the session email. No names, phones or addresses are logged.

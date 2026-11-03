@@ -3,6 +3,24 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-03 (Lee co-signer discovery: Codex 11/2 findings on #280)
+
+### Changed
+- **Merged `origin/main` at `d9f3760` (#283 co-signer bond mirror fields and blocked down payment).** It is a merge commit with no rebase. The only conflict was this file, and both entries are kept.
+
+### Fixed
+- **P1: the resolved arrest's defendant name is kept (`run_discovery`, `_fill_blank_identity`).** When county and state resolve a stored arrest, the arrest's `full_name`/`defendant_name`, `address`, `dob` and `zip` win. A caller value (drawer, manual request, Add Lead) fills a field only when the arrest leaves it blank, for example a `MANUAL-*` lead with no arrest row. A blank caller value never clears anything. When a caller value differs, it is dropped and only the code `caller_identity_ignored` and the field names are logged, never values. The property, skip-trace and prior searches and the saved candidates therefore always belong to the arrest's own defendant. Address is included because the 10/30 `defendant_link` anchor is the booking address. County, state and booking handling is unchanged.
+- **P2: transient public-provider failures are retried, not marked complete.** The property appraiser, clerk and skip-trace providers now return typed statuses: `source_timeout`, `source_connection_error` and `source_http_5xx` (transient), and `source_http_4xx`. Before, a 5xx page was parsed as an empty result. When any provider is transient, the run is `failed` with error `public_source_transient`. A public provider that raised something unexpected gives `public_source_failed`. Both use the existing bounded retry: `status: retry` with 15/30 min backoff, then terminal `failed` after `MAX_DISCOVERY_ATTEMPTS` (3). Earlier rows from that provider are kept, and the contacts doc is not cached as complete, so a manual refresh runs again. Hard 4xx, `egress_block` (401/403/429 or a challenge page) and `tls_cert_invalid` stay visible in `providers_run`. They are not retried or worked around: there are no proxies, UA changes or CAPTCHA.
+- **P2: booking matches are read before the name-match limit (`_provider_prior`).** Each prior collection is read twice: first exact-booking clauses (`PRIOR_READ_LIMIT` = 25), then name clauses (25), de-duplicated by `_id`. A common name with more than 25 historical rows can no longer push the booking-linked co-signer out of the result. Family collections are still read by booking only. A failed read still raises `prior_read_failed`.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`, `test_codex_1102_*` (18 cases):
+  - **P1:** a caller name never replaces the arrest name (route, cron and direct); a caller address can't link a stranger; blank caller values never clear the arrest; a caller name is used only when no arrest exists.
+  - **P2 transient:** timeout, connection error and 503 give `retry`, not `complete`; retries are bounded and then terminal; transient-then-success completes; a manual refresh after a transient failure is not served from cache; 404 and 403 blocks are visible and not retried; an unexpected provider error is retried.
+  - **P2 prior:** a booking match survives 30 name-only rows in `indemnitors` and in `intakes`; booking reads run first and name reads stay bounded.
+- Against the `5963871` sources (with only the three new constant names shimmed in), 15 of the 18 fail on assertions. The 3 that pass are guards for behavior that was already correct: blank caller values, the `MANUAL-*` name, and the 403 block.
+- All Lee arrest-write stall and failure tests stay green.
+
 ## [Unreleased] — 2026-11-02 (Lee co-signer discovery: Codex 10/30 findings on #280)
 
 ### Fixed

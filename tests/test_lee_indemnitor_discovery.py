@@ -3055,3 +3055,317 @@ async def test_codex_p2_routes_return_a_typed_400_and_write_nothing(monkeypatch,
     assert rev.status_code == 400 and rev.json()["error"] == code
     assert db["contacts"].docs == before
     assert db["audit_events"].docs == []
+
+
+# ---------------------------------------------------------------------------
+# Codex 11/2 findings on #280. Synthetic fixtures only; no live endpoints.
+# ---------------------------------------------------------------------------
+
+
+def _public_http_on(monkeypatch):
+    monkeypatch.setenv("INDEMNITOR_DISCOVERY_HTTP", "1")
+    monkeypatch.setenv("INDEMNITOR_DISCOVERY_HTTP_GAP_S", "0")
+    monkeypatch.delenv("INDEMNITOR_SKIPTRACE_URL", raising=False)
+    monkeypatch.delenv("INDEMNITOR_SKIPTRACE_API_KEY", raising=False)
+    monkeypatch.setattr("dashboard.services.contact_discovery._last_http_monotonic", 0.0)
+
+
+class _Html:
+    def __init__(self, text="", status_code=200):
+        self.text = text
+        self.content = text.encode()
+        self.status_code = status_code
+        self.headers = {"content-type": "text/html"}
+
+
+def _arrest_db():
+    db = AsyncDB()
+    db.arrests = db["arrests"]
+    db["arrests"].docs.append(_booking())
+    return db
+
+
+@pytest.mark.asyncio
+async def test_codex_1102_p1_caller_name_never_replaces_the_resolved_arrest_name(monkeypatch, caplog):
+    _public_http_on(monkeypatch)
+    urls = []
+
+    def _capture(method, url):
+        urls.append(url)
+        return _Html("")
+
+    monkeypatch.setattr("dashboard.services.contact_discovery.public_request", _capture)
+    db = _arrest_db()
+    with caplog.at_level("INFO", logger="shamrock.contact_discovery"):
+        await run_discovery(db, booking_number="B-100", full_name="Stale Person",
+                            county="Lee", state="FL", force=True)
+    # The property search ran for the arrest's defendant, not the caller's name.
+    assert urls and all("stale" not in u.lower() for u in urls)
+    assert any("sample" in u.lower() for u in urls)
+    doc = db["contacts"].docs[0]
+    assert doc["defendant_name"] == "Casey Sample"
+    assert "caller_identity_ignored" in caplog.text and "full_name" in caplog.text
+    assert "Stale" not in caplog.text and "Casey" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_codex_1102_p1_cron_arrest_name_survives_a_caller_name(monkeypatch):
+    db = _lee_db_with_indemnitor()
+    arrest = db["arrests"].docs[0]
+    result = await run_discovery(db, booking_number="B-100", arrest=arrest,
+                                 full_name="Stale Person", force=True)
+    # The prior indemnitor tied to the real defendant is still found, and the
+    # doc is saved under the arrest's own name.
+    assert {row["name"] for row in result["contacts"]} == {"Jordan Sample"}
+    assert db["contacts"].docs[0]["defendant_name"] == "Casey Sample"
+
+
+@pytest.mark.asyncio
+async def test_codex_1102_p1_caller_address_cannot_link_a_stranger(monkeypatch):
+    _public_http_on(monkeypatch)
+    monkeypatch.setattr(
+        "dashboard.services.contact_discovery.public_request",
+        lambda method, url: _Html("Owner SAMPLE, JORDAN 999 Else Rd 11111"),
+    )
+    db = _arrest_db()
+    result = await run_discovery(db, booking_number="B-100", full_name="Casey Sample",
+                                 county="Lee", state="FL", address="999 Else Rd",
+                                 zip_code="11111", force=True)
+    # The arrest's own address (100 Test St 00000) is the link anchor; a
+    # stale caller address cannot tie an unrelated owner to this defendant.
+    assert not [row for row in result["contacts"] if row["source"] == "lee_property_appraiser"]
+
+
+@pytest.mark.asyncio
+async def test_codex_1102_p1_blank_caller_values_never_clear_the_arrest():
+    db = _lee_db_with_indemnitor()
+    result = await run_discovery(db, booking_number="B-100", full_name="", county="Lee",
+                                 state="FL", address="", dob="", zip_code="", force=True)
+    assert {row["name"] for row in result["contacts"]} == {"Jordan Sample"}
+    assert db["contacts"].docs[0]["defendant_name"] == "Casey Sample"
+
+
+@pytest.mark.asyncio
+async def test_codex_1102_p1_caller_name_is_used_only_when_no_arrest_exists():
+    db = AsyncDB()
+    await run_discovery(db, booking_number="MANUAL-1", full_name="Casey Sample",
+                        county="Lee", state="FL", force=True)
+    assert db["contacts"].docs[0]["defendant_name"] == "Casey Sample"
+
+
+@pytest.mark.asyncio
+async def test_codex_1102_p1_discover_route_keeps_the_arrest_name(monkeypatch):
+    db = _lee_db_with_indemnitor()
+    client = _review_client(monkeypatch, db, _STAFF)
+    got = client.post("/api/contacts/discover", json={
+        "booking_number": "B-100", "full_name": "Stale Person", "county": "Lee", "state": "FL",
+    })
+    assert got.status_code == 200
+    assert {row["name"] for row in got.json()["contacts"]} == {"Jordan Sample"}
+    assert db["contacts"].docs[0]["defendant_name"] == "Casey Sample"
+
+
+def _timeout(method, url):
+    import requests
+    raise requests.exceptions.ReadTimeout("read timed out")
+
+
+def _conn_error(method, url):
+    import requests
+    raise requests.exceptions.ConnectionError("connection refused")
+
+
+def _http_503(method, url):
+    return _Html("<html>busy</html>", status_code=503)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fake,code", [
+    (_timeout, "source_timeout"),
+    (_conn_error, "source_connection_error"),
+    (_http_503, "source_http_5xx"),
+])
+async def test_codex_1102_p2_transient_public_failure_is_retried_not_complete(monkeypatch, fake, code):
+    from dashboard.services import contact_discovery as cd
+
+    _public_http_on(monkeypatch)
+    monkeypatch.setattr(cd, "public_request", fake)
+    db = _arrest_db()
+    # A row the property provider found on an earlier run.
+    db["contacts"].docs.append({
+        "state": "FL", "county": "Lee", "booking_number": "B-100",
+        "discovered_contacts": [{
+            "name": "Prior Owner", "source": "lee_property_appraiser", "review_status": "unreviewed",
+            "defendant_link": "shared_address_zip", "matched_anchors": ["address_zip"],
+            "discovered_at": NOW.isoformat(),
+        }],
+    })
+    summary = await run_lee_discovery_batch(db, limit=5, now=NOW)
+    assert summary["completed"] == 0 and summary["retry"] == 1
+    marker = db["arrests"].docs[0]["indemnitor_discovery"]
+    assert marker["status"] == "retry"
+    assert marker["error"] == cd.PUBLIC_SOURCE_TRANSIENT
+    assert marker["attempts"] == 1 and marker["retry_after"] > NOW
+    doc = db["contacts"].docs[0]
+    assert doc["discovery_status"] == "failed"
+    assert doc["discovery_error"] == cd.PUBLIC_SOURCE_TRANSIENT
+    prop = next(r for r in doc["providers_run"] if r["provider"] == "lee_property_appraiser")
+    assert prop["status"] == code
+    # The source that did not finish keeps its earlier row.
+    assert "Prior Owner" in {row["name"] for row in doc["discovered_contacts"]}
+
+
+@pytest.mark.asyncio
+async def test_codex_1102_p2_transient_retries_are_bounded_then_terminal(monkeypatch, caplog):
+    from dashboard.services import contact_discovery as cd
+
+    _public_http_on(monkeypatch)
+    calls = []
+
+    def _always_timeout(method, url):
+        calls.append(url)
+        return _timeout(method, url)
+
+    monkeypatch.setattr(cd, "public_request", _always_timeout)
+    db = _arrest_db()
+    when = NOW
+    with caplog.at_level("WARNING", logger="shamrock.contact_discovery"):
+        for _ in range(cd.MAX_DISCOVERY_ATTEMPTS + 2):
+            await run_lee_discovery_batch(db, limit=5, now=when)
+            when = when + timedelta(days=1)
+    assert len(calls) == cd.MAX_DISCOVERY_ATTEMPTS
+    marker = db["arrests"].docs[0]["indemnitor_discovery"]
+    assert marker["status"] == "failed"
+    assert marker["error"] == cd.PUBLIC_SOURCE_TRANSIENT
+    assert "retry limit reached" in caplog.text
+    assert "B-100" not in caplog.text and "Casey" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_codex_1102_p2_transient_then_success_completes(monkeypatch):
+    from dashboard.services import contact_discovery as cd
+
+    _public_http_on(monkeypatch)
+    monkeypatch.setattr(cd, "public_request", _timeout)
+    db = _arrest_db()
+    await run_lee_discovery_batch(db, limit=5, now=NOW)
+    assert db["arrests"].docs[0]["indemnitor_discovery"]["status"] == "retry"
+    monkeypatch.setattr(cd, "public_request",
+                        lambda method, url: _Html("Owner SAMPLE, JORDAN 100 Test St 00000"))
+    later = await run_lee_discovery_batch(db, limit=5, now=NOW + timedelta(minutes=16))
+    assert later["completed"] == 1
+    assert db["arrests"].docs[0]["indemnitor_discovery"]["status"] == "complete"
+    sources = {row["source"] for row in db["contacts"].docs[0]["discovered_contacts"]}
+    assert "lee_property_appraiser" in sources
+
+
+@pytest.mark.asyncio
+async def test_codex_1102_p2_manual_refresh_after_transient_is_not_served_from_cache(monkeypatch):
+    from dashboard.services import contact_discovery as cd
+
+    _public_http_on(monkeypatch)
+    monkeypatch.setattr(cd, "public_request", _http_503)
+    db = _arrest_db()
+    first = await run_discovery(db, booking_number="B-100", county="Lee", state="FL")
+    assert first["discovery_status"] == "failed"
+    assert first["discovery_error"] == cd.PUBLIC_SOURCE_TRANSIENT
+    again = await run_discovery(db, booking_number="B-100", county="Lee", state="FL")
+    assert again["cached"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fake,code", [
+    (lambda method, url: _Html("<html>gone</html>", status_code=404), "source_http_4xx"),
+    (lambda method, url: (_ for _ in ()).throw(EgressBlocked("egress_block: Lee HTTP 403")), "egress_block"),
+])
+async def test_codex_1102_p2_hard_4xx_and_blocks_are_visible_and_not_retried(monkeypatch, fake, code):
+    from dashboard.services import contact_discovery as cd
+
+    _public_http_on(monkeypatch)
+    monkeypatch.setattr(cd, "public_request", fake)
+    db = _arrest_db()
+    summary = await run_lee_discovery_batch(db, limit=5, now=NOW)
+    assert summary["completed"] == 1 and summary["retry"] == 0
+    doc = db["contacts"].docs[0]
+    prop = next(r for r in doc["providers_run"] if r["provider"] == "lee_property_appraiser")
+    assert prop["status"] == code
+    assert not [row for row in doc["discovered_contacts"] if row["source"] == "lee_property_appraiser"]
+
+
+@pytest.mark.asyncio
+async def test_codex_1102_p2_unexpected_public_provider_error_is_retried(monkeypatch):
+    from dashboard.services import contact_discovery as cd
+
+    _public_http_on(monkeypatch)
+
+    async def _crash(booking):
+        raise ValueError("parser")
+
+    monkeypatch.setattr(cd, "_provider_clerk", _crash)
+    db = _arrest_db()
+    summary = await run_lee_discovery_batch(db, limit=5, now=NOW)
+    assert summary["retry"] == 1 and summary["completed"] == 0
+    marker = db["arrests"].docs[0]["indemnitor_discovery"]
+    assert marker["error"] == cd.PUBLIC_SOURCE_FAILED
+    row = next(r for r in db["contacts"].docs[0]["providers_run"] if r["provider"] == "lee_clerk_parties")
+    assert row["status"] == "failed"
+
+
+def _name_only_rows(collection_name, count):
+    rows = []
+    for idx in range(count):
+        rows.append({
+            "_id": f"{collection_name}-name-{idx}",
+            # Another booking for a defendant with the same common name.
+            "booking_number": f"OLD-{idx}", "defendant_county": "Lee", "defendant_state": "FL",
+            "defendant_name": "Sample, Casey",
+            "indemnitor_name": f"Name Match {idx}",
+        })
+    return rows
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("collection_name", ["indemnitors", "intakes"])
+async def test_codex_1102_p2_booking_match_is_not_crowded_out_by_name_matches(collection_name):
+    from dashboard.services import contact_discovery as cd
+
+    db = AsyncDB()
+    # More name-only rows than the read bound, stored before the booking row.
+    db[collection_name].docs.extend(_name_only_rows(collection_name, cd.PRIOR_READ_LIMIT + 10))
+    db[collection_name].docs.append({
+        "_id": f"{collection_name}-booking",
+        "booking_number": "B-100", "defendant_county": "Lee", "defendant_state": "FL",
+        "defendant_name": "Sample, Casey",
+        "indemnitor_name": "Jordan Sample", "indemnitor_phone": "5550100100",
+    })
+    result = await run_discovery(db, booking_number="B-100", arrest=_booking(), force=True)
+    assert "Jordan Sample" in {row["name"] for row in result["contacts"]}
+
+
+@pytest.mark.asyncio
+async def test_codex_1102_p2_booking_reads_run_first_and_name_reads_stay_bounded(monkeypatch):
+    from dashboard.services import contact_discovery as cd
+
+    calls = []
+    real = cd._find_list
+
+    async def _spy(collection, query, limit=25):
+        calls.append((query, limit))
+        return await real(collection, query, limit=limit)
+
+    monkeypatch.setattr(cd, "_find_list", _spy)
+    db = AsyncDB()
+    db["indemnitors"].docs.extend(_name_only_rows("indemnitors", 3))
+    # One row matches both the booking and the name: read once, used once.
+    db["indemnitors"].docs.append({
+        "_id": "both", "booking_number": "B-100", "defendant_county": "Lee", "defendant_state": "FL",
+        "defendant_name": "Sample, Casey", "indemnitor_name": "Jordan Sample", "indemnitor_phone": "5550100100",
+    })
+    result = await cd._provider_prior(db, _booking())
+    assert [row["name"] for row in result].count("Jordan Sample") == 1
+    prior = [(q, lim) for q, lim in calls if "$or" in q]
+    assert prior and all(lim == cd.PRIOR_READ_LIMIT for _, lim in prior)
+    first = prior[0][0]["$or"]
+    assert all("booking_number" in c or "linked_bonds" in c for c in first)
+    second = prior[1][0]["$or"]
+    assert all(not any("booking" in k for k in c) for c in second)
