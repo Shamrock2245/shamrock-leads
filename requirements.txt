@@ -37,7 +37,7 @@ playwright>=1.48.0  # stock Chromium on the Leads Ops relay (Charlotte, Manatee,
 # CAPTCHA OCR stack (see scrapers/captcha_ocr.py)
 # Core (light, always install):
 ddddocr>=1.4.0      # Captcha-specialized local OCR (JailTracker, etc.)
-Pillow>=10.0.0      # Preprocess variants for captcha_ocr
+Pillow>=13.0.0      # Preprocess variants for captcha_ocr
 # System: install tesseract-ocr binary (Dockerfile + brew) — used via CLI, no Python pkg
 # Optional heavy engines (do NOT add to slim Docker image unless volume allows):
 #   pip install 'paddlepaddle>=2.6.0' 'paddleocr>=2.7.0'   # production-grade
