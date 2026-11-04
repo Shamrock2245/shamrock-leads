@@ -33,6 +33,11 @@ Design
                     Skipped (premium_unconfirmed) until staff confirm.
                     Customer dispatch only when SWIPESIMPLE_DISPATCH_LIVE=1;
                     otherwise the invoice is staged and dispatch is a dry-run.
+     auto_send      text the staged invoice link once (behind
+                    SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING, default off, AND
+                    SWIPESIMPLE_DISPATCH_LIVE). Uses dispatch_invoice's
+                    one-send claim; any failure → needs_review, never retried.
+                    Not a required step: off means no stamp at all.
      court_sync     seed_court_calendar_for_bond
      slack          non-PII Slack post
 
@@ -100,6 +105,7 @@ STEP_BOND_CASES = "bond_cases"
 STEP_EVENT = "sse_event"
 STEP_LEGACY = "legacy_payment_link"
 STEP_SHARE = "share_invoice"
+STEP_AUTO_SEND = "auto_send"
 STEP_COURT = "court_sync"
 STEP_SLACK = "slack"
 
@@ -478,11 +484,14 @@ class _Run:
                 (STEP_EVENT, self.step_event),
                 (STEP_LEGACY, self.step_legacy_payment_link),
                 (STEP_SHARE, self.step_share_invoice),
+                (STEP_AUTO_SEND, self.step_auto_send),
                 (STEP_COURT, self.step_court),
                 (STEP_SLACK, self.step_slack),
             ):
                 if step != STEP_LEGACY and _is_terminal(self.doc, step):
                     continue
+                if step == STEP_AUTO_SEND and staff_test_packet:
+                    continue  # never a customer text for a staff test packet; no stamp
                 if staff_test_packet:
                     await self.stamp(step, "skipped", reason="staff_test_case")
                     continue
@@ -751,6 +760,71 @@ class _Run:
             logger.warning("%s payment_link auto-dispatch failed (non-fatal, not retried) packet=%s err_type=%s",
                            self.pfx, self.packet_id, type(exc).__name__)
             await self.stamp(STEP_LEGACY, "failed_no_retry", error_type=type(exc).__name__)
+
+    # ── (b2) auto-send the staged invoice link once (default OFF) ──────────
+    async def step_auto_send(self) -> None:
+        """Text the bond's staged invoice link once after signing.
+
+        Off unless SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING and
+        SWIPESIMPLE_DISPATCH_LIVE are both on; off writes nothing. Runs only
+        after share_invoice staged a real link (not a dry run). Stamped
+        ``started`` before the send, so it is attempted at most once; the
+        send goes through ``dispatch_invoice`` and its one-send claim. A
+        failure is held for review (``mark_dispatch_needs_review``), never
+        retried blindly.
+        """
+        from dashboard.services import swipesimple_invoice_service as _ss
+
+        if not _ss.auto_send_after_signing_enabled():
+            return
+        if _step(self.doc, STEP_AUTO_SEND):
+            return  # at-most-once: any stamp is final
+        if _completion(self.doc).get("preexisting_completion"):
+            return
+        share = _step(self.doc, STEP_SHARE)
+        bond_id = str(share.get("bond_id") or "").strip()
+        if share.get("state") != "done" or not share.get("ok") or share.get("dry_run") or not bond_id:
+            logger.info("%s auto_send waiting reason=share_not_staged packet=%s",
+                        self.pfx, self.packet_id)
+            return
+        if not _ss.dispatch_live_enabled():
+            logger.info(
+                "%s auto_send dry-run (SWIPESIMPLE_DISPATCH_LIVE off) bond_id=%s packet=%s",
+                self.pfx, bond_id, self.packet_id,
+            )
+            return
+        now_iso = _now().isoformat()
+        if not await self._update_owned(
+            {"$set": {
+                f"{_C}.steps.{STEP_AUTO_SEND}.state": "started",
+                f"{_C}.steps.{STEP_AUTO_SEND}.at": now_iso,
+                f"{_C}.steps.{STEP_AUTO_SEND}.source": self.source,
+                f"{_C}.steps.{STEP_AUTO_SEND}.bond_id": bond_id,
+            }},
+            extra={f"{_C}.steps.{STEP_AUTO_SEND}.state": None},
+        ):
+            return  # another run already started it
+        self.doc.setdefault(_C, {}).setdefault("steps", {})[STEP_AUTO_SEND] = {"state": "started"}
+        try:
+            result = await _ss.dispatch_invoice(bond_id, "imessage") or {}
+        except Exception as exc:
+            code = _ss._error_code(exc)
+            await _ss.mark_dispatch_needs_review(bond_id, code)
+            logger.warning("%s auto_send failed → needs_review bond_id=%s error_code=%s",
+                           self.pfx, bond_id, code)
+            await self.stamp(STEP_AUTO_SEND, "needs_review", bond_id=bond_id, error_code=code)
+            return
+        if result.get("sent"):
+            await self.stamp(STEP_AUTO_SEND, "done", bond_id=bond_id, dispatched=True)
+            return
+        if result.get("already_dispatched") or result.get("in_progress") or result.get("dry_run"):
+            reason = ("already_dispatched" if result.get("already_dispatched")
+                      else "in_progress" if result.get("in_progress") else "dry_run")
+            await self.stamp(STEP_AUTO_SEND, "skipped", bond_id=bond_id, reason=reason)
+            return
+        await _ss.mark_dispatch_needs_review(bond_id, "send_not_accepted")
+        logger.warning("%s auto_send not accepted → needs_review bond_id=%s", self.pfx, bond_id)
+        await self.stamp(STEP_AUTO_SEND, "needs_review", bond_id=bond_id, error_code="send_not_accepted")
 
     # ── (b) stage-only share invoice (PR #56 semantics) ─────────────────────
     async def step_share_invoice(self) -> None:

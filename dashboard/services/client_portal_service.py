@@ -25,17 +25,34 @@ logger = logging.getLogger(__name__)
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 DEFAULT_TOKEN_TTL_DAYS = int(os.getenv("PORTAL_TOKEN_TTL_DAYS", "90"))
-SWIPESIMPLE_PAYMENT_LINK = os.getenv(
-    "SWIPESIMPLE_PAYMENT_LINK",
-    "https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd",
-)
+# No static pay link here: a static SwipeSimple page carries no amount, so
+# the portal shows the bond's own verified invoice link or "Call (239)
+# 332-2245" (portal_invoice_service.portal_payment_view).
 
 
-def _payment_link_for_bond(bond: Optional[dict]) -> str:
-    """Case's own invoice link wins; else per-source link (payment_links.py)."""
-    from dashboard.services.payment_links import payment_link_for, source_of
+async def _portal_bond(booking_number: str) -> Optional[dict]:
+    """active_bonds row for the token's booking, else the bond_cases row.
 
-    return payment_link_for(source_of(bond), bond)
+    Exact ``booking_number`` first; then alias-aware (legacy
+    ``Booking_Number`` read-only, padded values). Two rows → BondAmbiguous.
+    """
+    from dashboard.services.bond_booking_lookup import BondAmbiguous, bonds_for_booking
+
+    bond = await get_collection("active_bonds").find_one(
+        {"booking_number": booking_number}, {"_id": 0}
+    )
+    if bond:
+        return bond
+    for name in ("active_bonds", "bond_cases"):
+        rows = await bonds_for_booking(booking_number, name, get_coll=lambda n: get_collection(n))
+        if len(rows) > 1:
+            raise BondAmbiguous(name)
+        if rows:
+            row = dict(rows[0])
+            row.pop("_id", None)
+            row.pop("_collection", None)
+            return row
+    return None
 
 
 PUBLIC_URL = os.getenv("DASHBOARD_PUBLIC_URL", "https://leads.shamrockbailbonds.biz")
@@ -177,11 +194,12 @@ async def get_portal_case_status(booking_number: str, role: str) -> dict:
     Defendants see: their own status, court dates, check-in requirements.
     Indemnitors see: defendant status, payment info, balance due.
     """
-    active_bonds = get_collection("active_bonds")
-    bond = await active_bonds.find_one(
-        {"booking_number": booking_number},
-        {"_id": 0}
-    )
+    from dashboard.services.bond_booking_lookup import BondAmbiguous
+
+    try:
+        bond = await _portal_bond(booking_number)
+    except BondAmbiguous:
+        return {"error": "bond_ambiguous"}
 
     if not bond:
         return {"error": "Case not found"}
@@ -224,11 +242,20 @@ async def get_portal_case_status(booking_number: str, role: str) -> dict:
         })
 
     elif role == "indemnitor":
-        # Indemnitors see: payment info, balance, premium details
+        # Indemnitors see: the confirmed amount due and the bond's own
+        # verified invoice link only. No estimate, no static link.
+        from dashboard.services.portal_invoice_service import portal_payment_view
+
+        view = await portal_payment_view(booking_number)
         status_data.update({
-            "premium": bond.get("premium", 0),
+            "premium": view.get("premium"),
+            "amount_due": view.get("amount_due"),
+            "premium_is_confirmed": bool(view.get("premium_is_confirmed")),
+            "paid": bool(view.get("paid")),
             "indemnitor_name": bond.get("indemnitor_name", ""),
-            "payment_link": _payment_link_for_bond(bond),
+            "payment_link": view.get("payment_link"),
+            "invoice_request_allowed": bool(view.get("invoice_request_allowed")),
+            "call_phone": view.get("call_phone"),
         })
 
         # Get payment plan info

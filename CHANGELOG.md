@@ -3,6 +3,29 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-04 (Indemnitor self-pay invoice link from the portal)
+
+### Added
+- **`POST /api/portal/{token}/invoice-link` (indemnitor self-pay, §2.2).** An indemnitor token gets the bond's own locked SwipeSimple invoice link. The amount comes only from the bond's confirmed premium (`premium_confirmed_amount`, or the confirmed down payment on a financed plan); anything in the body is ignored. An existing verified link (`/invoices/` path on swipesimple.com, bound to this bond, matching cents) is returned as is; otherwise one invoice is created through the existing one-invoice-per-bond claim. Errors are `{ok:false, error}` and never carry a URL: 401 `token_invalid_or_expired`, 403 `role_not_indemnitor`, 404 `bond_not_found`, 409 `bond_ambiguous` / `missing_booking_number` / `premium_unconfirmed` / `premium_estimate_unconfirmed` / `amount_mismatch` / `already_paid` / `needs_review` / `staff_test_case_invoice_disabled`, 202 `in_progress`, 503 `invoicing_unavailable` / `session_expired`, 429 `rate_limited` (5 per minute per token, `Retry-After: 60`). `send_copy` texts the link only when `SWIPESIMPLE_DISPATCH_LIVE` is on and otherwise logs a dry run.
+- **`PREMIUM_AUTO_CONFIRM` (default off).** When on, the invoice-link endpoint confirms an unconfirmed premium at max($100, 10% of the filed bond) with `premium_confirmed_by: "auto"`, paid in full, through the same transaction and audit as staff confirmation. It never overwrites a staff confirmation and is idempotent.
+- **`SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING` (default off).** New DocuSeal completion step `auto_send`: after signing and the share step, text the bond's invoice link once. It runs only when this switch and `SWIPESIMPLE_DISPATCH_LIVE` are both on, uses the existing one-send dispatch claim, and moves a failed send to `needs_review` (never retried automatically). `DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK` is unchanged and stays off.
+- **`premium_paid` from recorded payments.** When clean recorded charges minus refunds for a booking reach the single agreed confirmed premium, `premium_paid` is set on `bond_cases` and the `active_bonds` mirror (`premium_paid_at`, `premium_paid_source: "payments_total"`, `premium_paid_transaction_id`) inside the payment-log transaction, and the audit event records `premium_paid_change`. A refund that drops the total below the premium reopens it (`premium_paid_reopened_at`, `premium_paid_reopened_transaction_id`); a charge never clears a flag staff set. Audit history is kept.
+- **`scripts/installment_invoices_pause.py` (read only).** Reads the `installment_invoices` automation switch and counts due installments with `SHAMROCK_MONGO_RO_URI`, then prints the staff toggle (`POST /api/automation/toggle/installment_invoices`) that pauses or resumes installment invoices and texts. It writes nothing.
+
+### Changed
+- **The client portal never shows a static payment link.** `GET /api/portal/{token}/payment-link` and the portal status return only the bond's own verified invoice link with the confirmed amount due; with no link the portal shows "Call (239) 332-2245". The portal's Pay button calls the new invoice-link endpoint.
+- **Bond lookup by booking number is alias-aware.** `_load_bond_by_id` and the portal read `booking_number` and, only when it is blank, the legacy `Booking_Number` (read only, never written), match whitespace-padded values, dedupe by `_id`, and fail closed with `bond_ambiguous` on more than one match.
+- **The dispatch text quotes the invoice amount due**, and a dispatch held as `needs_review` is never re-claimed or resent (`dispatch_needs_review`).
+- **Payment-webhook receipt texts are dry runs unless `SWIPESIMPLE_DISPATCH_LIVE` is on.**
+
+### Security
+- **Staff portal routes need a staff session or machine key.** `POST /api/portal/generate`, `GET /api/portal/tokens/{booking}`, `POST /api/portal/revoke` and `POST /api/portal/send-link` answer `401 {"error": "staff_auth_required"}` otherwise (`pin_middleware` leaves `/api/portal` open for the token routes). Recovery sessions are refused. `created_by` comes from the session, never the body.
+
+### Tests
+- `tests/test_indemnitor_self_pay.py` (added to the CI list): lookup, link verification, every endpoint error, rate limit, create-once, auto-confirm, the auto-send step, staff auth, `premium_paid` set/reopen/idempotent, and the read-only pause script.
+- `tests/test_payment_log_claims.py`: receipt text is a dry run with `SWIPESIMPLE_DISPATCH_LIVE` off. `tests/test_swipesimple_locked_amount_e2e.py`: portal prefers the staged invoice and never falls back to a static link.
+- `tests/_fake_mongo.py`: `$regex`/`$options`, `sort`, `to_list`, and `insert_one(session=...)`.
+
 ## [Unreleased] — 2026-11-02 (Co-signer hold audits keep the prior review)
 
 ### Fixed

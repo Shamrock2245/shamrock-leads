@@ -695,6 +695,118 @@ async def _stamp_bonds(db, booking: str, group: list, payment_update: dict, sess
     return audits
 
 
+PREMIUM_PAID_SOURCE = "payments_total"
+
+
+def _confirmed_premium_cents(group: list) -> Optional[int]:
+    """The one staff/auto-confirmed full premium across the case, else None."""
+    from dashboard.services.premium_confirmation_service import (
+        PREMIUM_CONFIRMED_AMOUNT_FIELD,
+        confirmation_complete,
+        non_negative_cents,
+    )
+
+    values = set()
+    for _name, doc in group:
+        if confirmation_complete(doc):
+            values.add(non_negative_cents(doc.get(PREMIUM_CONFIRMED_AMOUNT_FIELD)))
+    if len(values) != 1:
+        return None
+    cents = values.pop()
+    return cents if isinstance(cents, int) and cents > 0 else None
+
+
+async def _net_collected_cents(db, booking: str, session) -> int:
+    """Clean charges minus refunds recorded for this booking (cents).
+
+    A charge held for review does not count. Every refund is subtracted.
+    Failures count for nothing.
+    """
+    net = 0
+    for row in await _docs(db["payments"], {"booking_number": booking}, session):
+        kind = row_kind(row)
+        cents = row.get("amount_cents")
+        if not isinstance(cents, int) or isinstance(cents, bool):
+            cents = _row_cents(row)
+        if cents is None:
+            continue
+        if kind == "charge" and not row.get("needs_review"):
+            net += abs(cents)
+        elif kind == "refund":
+            net -= abs(cents)
+    return net
+
+
+async def _refresh_premium_paid(db, booking: str, kind: str, txn_key: str, session) -> list:
+    """Set ``premium_paid`` once payments reach the full confirmed premium.
+
+    Writes ``bond_cases`` and the matching ``active_bonds`` mirror (one
+    logical case only; every write must match its document or the ones
+    already made are put back and nothing is reported). Idempotent: no
+    write when the flag already says the same thing. A refund that drops
+    the net below the premium reopens it; a charge never clears a flag
+    staff set. Returns one audit entry per document written.
+    """
+    if not booking:
+        return []
+    groups = _logical_bond_groups(await _matching_bonds(db, booking, session))
+    if len(groups) != 1:
+        return []
+    group = groups[0]
+    premium = _confirmed_premium_cents(group)
+    if premium is None:
+        return []
+    collected = await _net_collected_cents(db, booking, session)
+    paid = collected >= premium
+    now_iso = datetime.now(timezone.utc).isoformat()
+    changes = []
+    for name, doc in group:
+        current = doc.get("premium_paid") is True
+        if paid and not current:
+            update = {"$set": {
+                "premium_paid": True,
+                "premium_paid_at": now_iso,
+                "premium_paid_source": PREMIUM_PAID_SOURCE,
+                "premium_paid_transaction_id": txn_key,
+            }}
+        elif not paid and current and (
+            kind in REVERSAL_KINDS or doc.get("premium_paid_source") == PREMIUM_PAID_SOURCE
+        ):
+            update = {"$set": {
+                "premium_paid": False,
+                "premium_paid_reopened_at": now_iso,
+                "premium_paid_reopened_transaction_id": txn_key,
+            }}
+        else:
+            continue
+        changes.append((name, doc, update))
+    if not changes:
+        return []
+    done = []
+    for name, doc, update in changes:
+        result = await db[name].update_one(_bond_filter(booking, doc), update, **_sess(session))
+        if not _write_matched(result):
+            logger.warning("[payment_log] premium_paid write matched no document collection=%s", name)
+            for done_name, done_doc in done:
+                restore = {"$set": {"premium_paid": done_doc.get("premium_paid")}} \
+                    if "premium_paid" in done_doc else {"$unset": {"premium_paid": ""}}
+                await db[done_name].update_one(_bond_filter(booking, done_doc), restore, **_sess(session))
+            return []
+        done.append((name, doc))
+    return [
+        {
+            "collection": name,
+            "record_id": "" if doc.get("_id") is None else str(doc["_id"]),
+            "booking_number": booking,
+            "old_premium_paid": doc.get("premium_paid"),
+            "new_premium_paid": update["$set"]["premium_paid"],
+            "collected_cents": collected,
+            "premium_cents": premium,
+        }
+        for name, doc, update in changes
+    ]
+
+
 async def _enrich_blank_charge(
     db, *, row: dict, txn_key: str, amount: float, status: str, booking: str,
     source: str, extra: dict, session,
@@ -782,6 +894,9 @@ async def _enrich_blank_charge(
     }
     if len(stamp_audits) > 1:
         audit["stamped_bonds"] = stamp_audits
+    premium_paid_change = await _refresh_premium_paid(db, booking, "charge", txn_key, session)
+    if premium_paid_change:
+        audit["premium_paid_change"] = premium_paid_change
     try:
         await db["audit_events"].insert_one(audit, **_sess(session))
     except DuplicateKeyError:
@@ -979,6 +1094,13 @@ async def _apply(
     if plan_review:
         audit["plan_id"] = plan_review["plan_id"]
         audit["plan_review"] = plan_review
+    premium_paid_booking = booking if stamped else (flag_booking if bond_review else "")
+    if premium_paid_booking:
+        premium_paid_change = await _refresh_premium_paid(
+            db, premium_paid_booking, kind, txn_key, session,
+        )
+        if premium_paid_change:
+            audit["premium_paid_change"] = premium_paid_change
     try:
         await db["audit_events"].insert_one(audit, **_sess(session))
     except DuplicateKeyError:
