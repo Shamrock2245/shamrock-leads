@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-04 (Paperwork /done shows the pay step)
+
+### Added
+- **The paperwork completion page is no longer a dead end.** `/done` on paperwork.shamrockbailbonds.biz loads the packet and bond and shows what this role finished, which roles still need to sign (role only), and the next steps after release. Office contact stays on the page as a supplement: call (239) 332-2245, text (239) 955-0178, walk-in Mon-Fri 9-5, phones 24/7.
+- **The pay button uses the existing locked-amount SwipeSimple invoice.** It is rendered only when that role's signature is recorded, the signer is not voided or unverified, identity verification passes, and the payments-code invoice checks accept the stored link (amount, booking, bond id, host). The dollars shown are the confirmed down payment on the bond. Query-string amounts are ignored. A missing packet, a database error, or a bond lookup failure shows a generic message and no pay link. The page does not call SwipeSimple or send DocuSeal email or SMS.
+
+### Tests
+- `tests/test_paperwork_done.py`: pay step hidden when unsigned, unverified, or voided; shown with the server amount when allowed; pending co-signers listed by role; load-failure path. No SwipeSimple charge and no DocuSeal send.
+
 ## [Unreleased] — 2026-11-02 (Co-signer hold audits keep the prior review)
 
 ### Fixed

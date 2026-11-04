@@ -1522,9 +1522,23 @@ def _branded_sign_page(
     )
     from dashboard.services.paperwork_signers import normalize_role, ROLE_LABELS
 
+    from urllib.parse import urlencode
+
     copy = role_copy(role)
     origin = sign_origin()
-    cfg = embed_form_config(src=sign_url, name=party_name, role=role)
+    done_params = []
+    if kiosk:
+        done_params.append(("kiosk", "1"))
+    if str(packet_id or "").strip():
+        done_params.append(("packet_id", str(packet_id).strip()))
+        done_params.append(("role", normalize_role(role) or "indemnitor"))
+    completed_redirect = ("/done?" + urlencode(done_params)) if done_params else ""
+    cfg = embed_form_config(
+        src=sign_url,
+        name=party_name,
+        role=role,
+        completed_redirect_url=completed_redirect or None,
+    )
     label = ROLE_LABELS.get(normalize_role(role), "Signer")
     safe_who = html_lib.escape(copy["you_are"])
     safe_headline = html_lib.escape(copy["headline"])
@@ -1682,7 +1696,6 @@ def _branded_sign_page(
         }});
     </script>
 """
-    completed_redirect = "/done?kiosk=1" if kiosk else ""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1873,51 +1886,19 @@ async def get_portal_ui(request: Request):
         return FileResponse(_os.path.join(dashboard_dir, "index.html"))
 
     if path.endswith("/done"):
-        html_done = """<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="theme-color" content="#0b0f19">
-    <title>Shamrock Bail Bonds — Document Packet Complete</title>
-    <style>
-        :root { --bg: #0b0f19; --card: #151c2c; --accent: #22c55e; --text: #f8fafc; --muted: #94a3b8; }
-        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left)); text-align: center; min-height: 100dvh; }
-        .card { background: var(--card); border-radius: 16px; padding: 32px 24px; max-width: 480px; margin: 40px auto; border: 1px solid rgba(34,197,94,0.3); box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-        .icon { font-size: 48px; margin-bottom: 12px; }
-        h1 { font-size: 22px; margin-bottom: 8px; color: var(--accent); }
-        p { font-size: 15px; color: var(--muted); line-height: 1.6; }
-        .btn { display: inline-block; width: 100%; padding: 16px; background: var(--accent); color: #000; font-weight: 700; border-radius: 12px; text-decoration: none; margin-top: 16px; min-height: 48px; font-size: 16px; }
-        @media (min-width: 768px) { .card { max-width: 560px; padding: 40px 32px; } h1 { font-size: 26px; } }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <div class="icon">✅</div>
-        <h1>Paperwork Successfully Signed!</h1>
-        <p>Thank you. Your document packet has been securely signed and submitted. Our bond agents have been alerted and are processing your release.</p>
-        <p>A copy of your signed paperwork has been filed to Drive and sent to your email.</p>
-        <a href="tel:2393322245" class="btn">📞 Call Office: (239) 332-2245</a>
-        <a href="/" class="btn" style="background:transparent;color:var(--accent);border:1px solid rgba(34,197,94,0.4);margin-top:10px">Sign another packet</a>
-    </div>
-</body>
-</html>"""
+        from dashboard.services.paperwork_done import load_done_state, render_done_page
+
+        # Identity of the packet only. Amount, premium, and pay URL query
+        # values are ignored; the invoice is loaded from the bond.
+        packet_id = (request.query_params.get("packet_id") or "").strip()
+        role = (request.query_params.get("role") or "").strip()
         kiosk_done = (request.query_params.get("kiosk") or "").strip().lower() in ("1", "true", "yes")
-        if kiosk_done:
-            # In-office tablet: wipe and return to the neutral kiosk screen.
-            html_done = html_done.replace(
-                '<a href="/" class="btn" style="background:transparent;color:var(--accent);border:1px solid rgba(34,197,94,0.4);margin-top:10px">Sign another packet</a>',
-                '<p id="kioskResetNote">This screen resets for the next client in <strong id="kioskResetCount">20</strong> seconds.</p>'
-                '<a href="/kiosk" class="btn" style="background:transparent;color:var(--accent);border:1px solid rgba(34,197,94,0.4);margin-top:10px">Done — reset now</a>',
-            ).replace(
-                "</body>",
-                "<script>(function(){try{sessionStorage.clear();['sl_portal_phone','sl_indemnitor_scanned_profile','sl_portal_in_person'].forEach(function(k){localStorage.removeItem(k)})}catch(e){}"
-                "var n=20,c=document.getElementById('kioskResetCount');var t=setInterval(function(){n-=1;if(c)c.textContent=n;"
-                "if(n<=0){clearInterval(t);location.replace('/kiosk');}},1000);})();</script></body>",
-            )
+        try:
+            done_state = await load_done_state(packet_id, role)
+        except Exception:
+            logger.warning("[portal] done state failed closed")
+            done_state = {"loaded": False}
+        html_done = render_done_page(done_state, kiosk=kiosk_done)
         return HTMLResponse(content=html_done, headers={"Cache-Control": "no-store"})
     html = """<!DOCTYPE html>
 <html lang="en">
