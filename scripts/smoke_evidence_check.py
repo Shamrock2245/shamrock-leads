@@ -41,7 +41,7 @@ def internal_key_family(value: Any) -> str:
     """``mc_case_v1`` / ``md_dedupe_v2`` when the value is a valid internal key, else ""."""
     text = str(value or "")
     for family, pattern in _INTERNAL_KEY_RES.items():
-        if pattern.match(text):
+        if pattern.fullmatch(text):
             return family
     return ""
 

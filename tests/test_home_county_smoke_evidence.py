@@ -335,3 +335,24 @@ def test_manatee_clerk_smoke_row_names_the_checkable_fields():
                   "booking_equals_case_number", "with_charges"):
         assert field in row["expect"], field
     assert "merged" in row["blocked_on"].lower() and "deploy" in row["blocked_on"].lower()
+
+
+def test_smoke_evidence_check_internal_key_needs_a_full_match():
+    """Codex 11/3 on #308: a key with a trailing newline is not a valid internal key.
+
+    ``re.match`` with ``$`` accepts ``key + "\\n"``; the writer's
+    ``internal_natural_key()`` uses ``fullmatch`` and rejects it, so the smoke must too.
+    """
+    from scrapers.counties.manatee_clerk import mc_case_key
+
+    spec = importlib.util.spec_from_file_location("sec", ROOT / "scripts" / "smoke_evidence_check.py")
+    sec = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sec)
+    key = mc_case_key("2026CF009901AX")
+    assert sec.internal_key_family(key) == "mc_case_v1"
+    for bad in (key + "\n", key + " ", " " + key, key.upper()):
+        assert sec.internal_key_family(bad) == "", repr(bad[-2:])
+        assert sec.key_shape(bad) != "mc_case_v1:<sha256>"
+    out = sec.summarize([{"booking_number": key + "\n", "booking_key_internal": True}])
+    assert out["internal_key_valid"] == 0
+    assert "mc_case_v1:<sha256>" not in out["booking_number_shapes"]

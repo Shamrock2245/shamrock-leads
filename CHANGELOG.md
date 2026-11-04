@@ -18,9 +18,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `Status` is now documented as `""`, which matches #256 (it was `Unknown`).
   - A new "Leads Ops write smoke" section gives the run commands and the expected aggregates.
 
+### Fixed (Codex 11/3 on #308)
+- **The internal-key check now requires a full match.** `internal_key_valid` and the masked `<family>:<sha256>` shape now use `pattern.fullmatch()`, the same check as the writer's `internal_natural_key()`. Before, `re.match` with `$` accepted a key with a trailing newline and counted it as valid evidence.
+
 ### Tests
 - `tests/test_home_county_smoke_evidence.py`:
   - `test_smoke_evidence_check_reports_manatee_clerk_internal_key_fields`
+  - `test_smoke_evidence_check_internal_key_needs_a_full_match`
   - `test_manatee_clerk_smoke_row_names_the_checkable_fields`
 
 ## [Unreleased] — 2026-11-02 (Co-signer hold audits keep the prior review)
