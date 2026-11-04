@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-04 (Paperwork launch mode id-upload)
+
+### Added
+- **`mode=id-upload` on the paperwork launchpad opens only the ID upload step.** `paperwork.shamrockbailbonds.biz` (`dashboard/routers/pin_portal.py`) treats `mode=id-upload` as its own page. The page posts the photo to `POST /api/portal/id-upload`. It does not show the phone PIN, the signing-link box, the in-person signer, or a completion screen. `inperson`, `ipad`, and `kiosk` are unchanged. Any other `mode` still opens the normal flow.
+- **Each upload is inserted.** A verified portal session is required before the server runs OCR. A missing, unverified, expired, voided, or revoked session is refused, and so is a session whose packet is voided. The photo is read on the server. A JSON body is not a scan. The new row is appended to `id_scan_records` on the session and, when the packet is still active, on that packet. `id_scan`, `id_ocr`, `id_extracted`, `id_scan_history`, and other signers' scans are left as they were. An `id_upload_saved` audit row is inserted. Older audit rows are not removed. The packet is matched by `packet_id`. A POA number change does not void the link.
+- **This mode does not issue a signing URL or a pay link.** The page and the JSON response do not include a DocuSeal URL or a SwipeSimple URL. Client-supplied name or ID number fields are ignored. The stored row keeps the scanned name and issuing state only. No DocuSeal send and no SwipeSimple charge.
+
+### Tests
+- `tests/test_paperwork_id_upload.py` (on the CI list): id-upload shows only the ID step, a second upload appends, invalid and voided tokens are refused before OCR, no DocuSeal URL or pay link is returned, a POA change still accepts the upload, and an unknown mode falls back. Signer email is `admin@shamrockbailbonds.biz`. Records are `TEST-` prefixed.
+
 ## [Unreleased] — 2026-11-02 (Co-signer hold audits keep the prior review)
 
 ### Fixed
