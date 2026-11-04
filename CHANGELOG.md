@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-04 (Paperwork self-serve ID prefill)
+
+### Fixed
+- **In-person ID confirm can open the signer's packet.** On `paperwork.shamrockbailbonds.biz`, Step 1 stored the scan on the PIN session and Step 2 looked for a packet by phone. With no packet, the parsed ID never reached the indemnitor, co-indemnitor, or defendant, and the page stopped. `PAPERWORK_SELF_SERVE_PREFILL` (default off) keeps that behavior. When it is on, a confirmed scan reuses a BondCase for the same phone, name, and date of birth, or inserts one draft (`source=self_serve`, `status=pending_owner_review`, actor `auto`). Bond, premium, and POA stay empty unless they were already on the case. The packet is built with `DocuSealService.prefill_values_from_bond` and `create_submission` (`send_email` and `send_sms` false). A validated case that already has a POA, case number, and premium still uses `create_submission_for_packet`. If that build fails, the confirmed fields stay on the case and no signing URL is returned. `get_pending_id_prefill(case_id, role, person_id)` is the fallback read for the later auto-packet builder. The flag is not added to compose or deploy env files.
+
+### Tests
+- `tests/test_paperwork_id_prefill.py` (on the CI list). Signer email is `admin@shamrockbailbonds.biz`. Records are `TEST-` prefixed. No DocuSeal send and no SwipeSimple charge.
+
 ## [Unreleased] — 2026-11-04 (Paperwork launch mode id-upload)
 
 ### Added
