@@ -245,6 +245,8 @@ def test_endpoint_returns_existing_verified_link_without_create(monkeypatch):
     assert body["payment_url"] == LINK and body["amount_cents"] == 50000
     assert body["amount"] == "500.00" and body["idempotent"] is True
     assert body["dispatch"]["dispatched"] is False
+    assert body["confirmed_by"] == "staff"  # never the staff email
+    assert "office@example.invalid" not in res.text
     assert res.headers["cache-control"] == "no-store"
 
 

@@ -99,9 +99,11 @@ def confirmed_due_cents(case: Optional[dict], active: Optional[dict]) -> Optiona
 
 
 def confirmed_by(case: Optional[dict], active: Optional[dict]) -> str:
+    """``"auto"`` or ``"staff"`` (never the staff member's name or email), else ``""``."""
     for doc in (case, active):
         if confirmation_complete(doc):
-            return str(doc.get(PREMIUM_CONFIRMED_BY_FIELD) or "").strip()
+            who = str(doc.get(PREMIUM_CONFIRMED_BY_FIELD) or "").strip()
+            return "auto" if who == "auto" else "staff"
     return ""
 
 
