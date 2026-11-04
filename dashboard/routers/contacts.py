@@ -73,6 +73,16 @@ async def discover_contacts(request: Request):
                 {"error": "legacy_contacts_ambiguous", "discovery_status": ContactsLegacyAmbiguous.code},
                 status_code=409,
             )
+        if result.get("discovery_status") == "failed":
+            # Typed failure (e.g. ARREST_READ_FAILED, PUBLIC_SOURCE_TRANSIENT):
+            # nothing finished, so not a 200. Code only, no identity. Codex 11/4.
+            code = str(result.get("error") or "discovery_failed")
+            logger.warning("contact discover failed code=%s", code)
+            return JSONResponse(
+                {"error": code, "discovery_status": "failed", "discovery_error": code,
+                 "contacts": result.get("contacts") or []},
+                status_code=503,
+            )
         return result
     except Exception as exc:
         logger.warning("contact discover failed error_type=%s", type(exc).__name__)

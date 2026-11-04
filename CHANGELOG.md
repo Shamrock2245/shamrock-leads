@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-04 (Lee co-signer discovery: Codex 11/4 findings on #280)
+
+### Fixed
+- **Contact retention runs when discovery is off (P2).** `purge_unreviewed_candidates` was only called from the `lee_indemnitor_discovery` batch, so disabling that service stopped the purge and expired unreviewed/rejected rows on mixed docs (no doc-level TTL) kept PII. A new `contact_candidate_retention` cron (hourly) runs the purge on its own. It is `always_on` (a new `CronDef` field, default `False`) and is not gated by `automation_config` or `INDEMNITOR_DISCOVERY`. Every other cron keeps its gate. The batch still purges too (idempotent).
+- **Same-address provider matches the address before capping (P2).** The ZIP-only query was limited to 25 unsorted rows before the normalized-address check, so a household row outside the first 25 in a busy ZIP was missed. `_same_address_rows()` now scans the ZIP in `_id` order, keeps only rows whose `address_key` matches, and caps the matches at 25. The scan is bounded at 5,000 rows so a huge ZIP cannot stall the worker.
+- **The discover wrapper propagates a typed failure (P2).** `ContactDiscoveryService.discover()` always returned `success: true` and dropped `discovery_error`, so `POST /api/contacts/discover` answered 200 and the UI said "Discovery finished" when nothing ran. A `failed` run now returns `success: false`, `discovery_error` and `error` (the typed code, e.g. `ARREST_READ_FAILED`), and the route returns 503 with the code only. Both UIs already show an error when `error` is set. Complete runs are unchanged.
+
+### Tests
+- 9 `test_codex_1104_*` cases in `tests/test_lee_indemnitor_discovery.py` (already on the CI list). 7 fail on `e15d78b`; the 2 guards (gated crons still skip when disabled; a complete run stays `success: true`) pass on both.
+
 ## [Unreleased] — 2026-11-04 (Lee co-signer discovery: Codex 11/3 findings on #280)
 
 ### Fixed

@@ -54,12 +54,21 @@ class ContactDiscoveryService:
             state=state or "",
             force=True,
         )
-        return {
-            "success": True,
+        status = result.get("discovery_status") or "complete"
+        out = {
+            "success": status != "failed",
             "cached": bool(result.get("cached")),
             "contacts": result.get("contacts") or [],
-            "discovery_status": result.get("discovery_status") or "complete",
+            "discovery_status": status,
         }
+        if result.get("discovery_error"):
+            out["discovery_error"] = str(result["discovery_error"])
+        if status == "failed":
+            # Codex 11/4: a failed run (arrest read, transient provider, write
+            # conflict) is not "finished". The typed code reaches the caller;
+            # the UIs show an error when ``error`` is set.
+            out["error"] = out.get("discovery_error") or "discovery_failed"
+        return out
 
 
 # ── Lee indemnitor discovery (name + anchor, no outreach) ────────────────────
@@ -1380,6 +1389,34 @@ async def _provider_prior(db: Any, booking: Dict[str, Any]) -> List[Dict[str, An
     return found
 
 
+SAME_ADDRESS_MATCH_LIMIT = 25
+SAME_ADDRESS_SCAN_LIMIT = 5000
+
+
+async def _same_address_rows(collection: Any, query: Dict[str, Any], key: str) -> List[Dict[str, Any]]:
+    """ZIP rows whose normalized address equals ``key``, capped after matching.
+
+    The scan of the ZIP is bounded (SAME_ADDRESS_SCAN_LIMIT) so a huge ZIP
+    cannot stall the worker; the match cap applies only to matching rows.
+    """
+    cursor = collection.find(query)
+    if hasattr(cursor, "sort"):
+        cursor = cursor.sort("_id", 1)
+    if hasattr(cursor, "limit"):
+        cursor = cursor.limit(SAME_ADDRESS_SCAN_LIMIT)
+    matched: List[Dict[str, Any]] = []
+    scanned = 0
+    async for row in cursor:
+        scanned += 1
+        if isinstance(row, dict) and address_key(row.get("address"), row.get("zip")) == key:
+            matched.append(row)
+            if len(matched) >= SAME_ADDRESS_MATCH_LIMIT:
+                break
+        if scanned >= SAME_ADDRESS_SCAN_LIMIT:
+            break
+    return matched
+
+
 async def _provider_same_address(db: Any, booking: Dict[str, Any]) -> List[Dict[str, Any]]:
     defendant = _first(booking, "full_name", "defendant_name")
     booking_number = _first(booking, "booking_number")
@@ -1394,7 +1431,9 @@ async def _provider_same_address(db: Any, booking: Dict[str, Any]) -> List[Dict[
         ("active_bonds", ("defendant_name", "full_name")),
     ):
         try:
-            rows = await _find_list(db[collection_name], query, limit=25)
+            # Codex 11/4: match the normalized address first, then cap. A
+            # ZIP-only limit dropped household rows past Mongo's first 25.
+            rows = await _same_address_rows(db[collection_name], query, key)
         except Exception as exc:
             log.warning(
                 "[indemnitor_discovery] address read failed collection=%s error_type=%s",

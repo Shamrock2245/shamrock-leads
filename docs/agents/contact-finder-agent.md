@@ -38,6 +38,12 @@ A public provider (property appraiser, clerk, skip-trace) reports `source_timeou
 
 Prior-Shamrock collections are read in two bounded queries: exact-booking clauses first, then name clauses (`PRIOR_READ_LIMIT` = 25 each). A common name can't push the booking-linked co-signer out.
 
+### Retention, same-address cap and failure reporting (Codex 11/4)
+
+- **Retention is independent of discovery.** The `contact_candidate_retention` cron purges expired unreviewed, rejected and status-less candidate rows every hour. It is always on: switching off `lee_indemnitor_discovery` (Service Control or `INDEMNITOR_DISCOVERY`) does not stop it.
+- **Same-address matches first, then caps.** The provider scans the defendant's ZIP (bounded at 5,000 rows, `_id` order), keeps rows with the same normalized address, and stops at 25 matches.
+- **Failures are not "finished".** `POST /api/contacts/discover` returns 503 with `{"error": <code>, "discovery_status": "failed"}` when discovery fails (e.g. `ARREST_READ_FAILED`, a transient public source). The response and the log carry the code only.
+
 ### Failed arrest reads and legacy retention (Codex 11/3)
 
 - **A failed arrests read fails closed.** If the stored arrest cannot be read (the read raises), discovery returns `failed` with `discovery_error: ARREST_READ_FAILED`. No provider runs and nothing is written, and the log line carries only the code. Caller identity drives a run only when the read succeeds and finds no arrest (a `MANUAL-*` lead). The cron passes the claimed arrest itself, so the Lee queue never takes this path and Lee arrest writes are untouched.

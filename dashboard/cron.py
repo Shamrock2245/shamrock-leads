@@ -27,6 +27,9 @@ class CronDef:
     initial_delay: float               # Seconds before first run
     run: Callable[[], Awaitable[None]] # The actual work
     default_enabled: bool = True       # Default if missing from automation_config
+    # Not gated by automation_config: compliance jobs (PII retention) that must
+    # run even when staff switch the related feature off.
+    always_on: bool = False
     emoji: str = "☘️"
 
 
@@ -50,7 +53,7 @@ async def _cron_runner(cron: CronDef):
             try:
                 from dashboard.services.automation_config import should_run
                 from dashboard.extensions import get_db
-                if not await should_run(get_db(), cron.name, default=cron.default_enabled):
+                if not cron.always_on and not await should_run(get_db(), cron.name, default=cron.default_enabled):
                     logger.debug("[%s] Disabled — skipping", cron.label)
                     trigger.clear()
                     try:
@@ -769,6 +772,23 @@ async def _run_compliance_backfill():
         )
 
 
+async def _run_contact_candidate_retention():
+    """Purge expired unreviewed/rejected/status-less contact candidates.
+
+    Runs on its own, always on, so disabling ``lee_indemnitor_discovery``
+    never stops PII retention (Codex 11/4 on #280). Counts only in the log.
+    """
+    from dashboard.extensions import get_db
+    from dashboard.services.contact_discovery import purge_unreviewed_candidates
+
+    result = await purge_unreviewed_candidates(get_db())
+    logger.info(
+        "[ContactRetention] purged=%s docs=%s",
+        int(result.get("purged_candidates") or 0),
+        int(result.get("docs") or 0),
+    )
+
+
 async def _run_lee_indemnitor_discovery():
     """Queue drain for Lee (FL) co-signer candidates. Counts only in the log."""
     from dashboard.extensions import get_db
@@ -903,6 +923,8 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("matching_backlog",   "MatchingBacklog",    3600, 240, _run_matching_backlog, default_enabled=True),
     CronDef("lee_clerk_watch",    "LeeClerkWatch",      900, 180, _run_lee_clerk_watch, default_enabled=True),
     CronDef("lee_indemnitor_discovery", "IndemnitorDiscovery", 180, 45, _run_lee_indemnitor_discovery, default_enabled=True),
+    # PII retention for contacts candidates; independent of the discovery toggle.
+    CronDef("contact_candidate_retention", "ContactRetention", 3600, 120, _run_contact_candidate_retention, always_on=True),
     # Lee (FL) must never miss a lead: heartbeat every 5 min, alerts via #alerts.
     CronDef("lee_freshness",      "LeeFreshness",       300, 240, _run_lee_freshness, default_enabled=True),
 ]

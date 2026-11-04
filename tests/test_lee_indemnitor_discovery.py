@@ -3472,3 +3472,171 @@ def test_codex_1103_p2_status_less_rows_get_a_ttl_and_reviewed_never_do():
     assert cd._row_is_expired({"discovered_at": (NOW - timedelta(days=31)).isoformat()}, cutoff)
     assert not cd._row_is_expired({"review_status": "approved",
                                    "discovered_at": (NOW - timedelta(days=31)).isoformat()}, cutoff)
+
+
+# --- Codex 11/4 on #280: retention without discovery, match-then-cap, typed failure ---
+
+
+def test_codex_1104_a_contact_retention_cron_is_always_on():
+    from dashboard.cron import CRON_REGISTRY
+
+    by_name = {c.name: c for c in CRON_REGISTRY}
+    retention = by_name["contact_candidate_retention"]
+    assert retention.always_on is True
+    assert by_name["lee_indemnitor_discovery"].always_on is False
+    # Every other cron keeps its automation_config gate.
+    assert [c.name for c in CRON_REGISTRY if c.always_on] == ["contact_candidate_retention"]
+
+
+@pytest.mark.asyncio
+async def test_codex_1104_a_retention_runs_when_discovery_and_config_are_off(monkeypatch):
+    """Discovery disabled (env + automation_config): expired PII is still purged."""
+    import asyncio
+    import dashboard.cron as cron_mod
+    import dashboard.extensions as ext
+    import dashboard.services.automation_config as ac
+    from dashboard.services import contact_discovery as cd
+
+    monkeypatch.setattr(cd, "discovery_enabled", lambda: False)
+
+    async def _off(*a, **k):
+        return False
+    monkeypatch.setattr(ac, "should_run", _off)
+    db = AsyncDB()
+    old = (NOW - timedelta(days=45)).isoformat()
+    db["contacts"].docs.append({"_id": "mixed", "discovered_contacts": [
+        _row("Expired Unreviewed", "unreviewed", old),
+        _row("Kept Reviewed", "reviewed", old),
+    ]})
+    monkeypatch.setattr(ext, "get_db", lambda: db)
+    retention = next(c for c in cron_mod.CRON_REGISTRY if c.name == "contact_candidate_retention")
+    ran = asyncio.Event()
+
+    async def _run():
+        await retention.run()
+        ran.set()
+    job = cron_mod.CronDef(retention.name, retention.label, 3600, 0, _run, always_on=True)
+    task = asyncio.create_task(cron_mod._cron_runner(job))
+    try:
+        await asyncio.wait_for(ran.wait(), timeout=5)
+    finally:
+        task.cancel()
+    names = [r["name"] for r in db["contacts"].docs[0]["discovered_contacts"]]
+    assert names == ["Kept Reviewed"]
+
+
+@pytest.mark.asyncio
+async def test_codex_1104_a_gated_cron_still_skips_when_disabled(monkeypatch):
+    """Guard: always_on is opt-in; a normal cron stays gated by automation_config."""
+    import asyncio
+    import dashboard.cron as cron_mod
+    import dashboard.services.automation_config as ac
+
+    checked = asyncio.Event()
+
+    async def _off(*a, **k):
+        checked.set()
+        return False
+    monkeypatch.setattr(ac, "should_run", _off)
+    import dashboard.extensions as ext
+    monkeypatch.setattr(ext, "get_db", lambda: AsyncDB())
+    calls = []
+
+    async def _run():
+        calls.append(1)
+    task = asyncio.create_task(cron_mod._cron_runner(cron_mod.CronDef("x_gated", "X", 3600, 0, _run)))
+    try:
+        await asyncio.wait_for(checked.wait(), timeout=5)
+        await asyncio.sleep(0)
+    finally:
+        task.cancel()
+    assert calls == []
+
+
+def _zip_arrest(i, address):
+    return {"_id": f"z{i:04d}", "booking_number": f"Z-{i}", "full_name": f"Zip Person {i}",
+            "address": address, "zip": "00000", "county": "Lee", "state": "FL"}
+
+
+@pytest.mark.asyncio
+async def test_codex_1104_b_same_address_matches_before_the_cap():
+    """30 other ZIP rows come first; the household row is still found."""
+    from dashboard.services import contact_discovery as cd
+
+    db = AsyncDB()
+    for i in range(30):
+        db["arrests"].docs.append(_zip_arrest(i, f"{900 + i} Other Ave"))
+    db["arrests"].docs.append({"_id": "zz-house", "booking_number": "B-777", "full_name": "Jordan Household",
+                               "address": "100 Test St", "zip": "00000", "county": "Lee", "state": "FL"})
+    found = await cd._provider_same_address(db, _booking())
+    assert [c["name"] for c in found] == ["Jordan Household"]
+
+
+@pytest.mark.asyncio
+async def test_codex_1104_b_cap_applies_to_matches_only():
+    from dashboard.services import contact_discovery as cd
+
+    db = AsyncDB()
+    for i in range(40):
+        db["arrests"].docs.append(_zip_arrest(i, "100 Test St"))
+    rows = await cd._same_address_rows(db["arrests"], {"zip": "00000"},
+                                       cd.address_key("100 Test St", "00000"))
+    assert len(rows) == cd.SAME_ADDRESS_MATCH_LIMIT
+    assert all(cd.address_key(r["address"], r["zip"]) == cd.address_key("100 Test St", "00000") for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_codex_1104_b_zip_scan_is_bounded(monkeypatch):
+    """Guard: a huge ZIP cannot stall the worker; the scan stops at the bound."""
+    from dashboard.services import contact_discovery as cd
+
+    monkeypatch.setattr(cd, "SAME_ADDRESS_SCAN_LIMIT", 10)
+    db = AsyncDB()
+    for i in range(50):
+        db["arrests"].docs.append(_zip_arrest(i, f"{i} Other Ave"))
+    rows = await cd._same_address_rows(db["arrests"], {"zip": "00000"},
+                                       cd.address_key("100 Test St", "00000"))
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_codex_1104_c_wrapper_propagates_typed_failure():
+    from dashboard.services import contact_discovery as cd
+
+    db = AsyncDB()
+    db._cols["arrests"] = _ArrestsReadFails()
+    out = await cd.ContactDiscoveryService(db).discover(
+        booking_number="B-100", full_name="Stale Person", county="Lee", state="FL")
+    assert out["success"] is False
+    assert out["discovery_status"] == "failed"
+    assert out["discovery_error"] == cd.ARREST_READ_FAILED
+    assert out["error"] == cd.ARREST_READ_FAILED
+
+
+@pytest.mark.asyncio
+async def test_codex_1104_c_wrapper_success_stays_true_when_complete():
+    """Guard: a complete run still reports success with no error key."""
+    from dashboard.services import contact_discovery as cd
+
+    db = AsyncDB()
+    out = await cd.ContactDiscoveryService(db).discover(
+        booking_number="MANUAL-3", full_name="Casey Sample", county="Lee", state="FL")
+    assert out["discovery_status"] != "failed"
+    assert out["success"] is True and "error" not in out
+
+
+@pytest.mark.asyncio
+async def test_codex_1104_c_route_returns_non_success_with_code(monkeypatch, caplog):
+    db = _lee_db_with_indemnitor()
+    db._cols["arrests"] = _ArrestsReadFails()
+    client = _review_client(monkeypatch, db, _STAFF)
+    with caplog.at_level(logging.DEBUG):
+        got = client.post("/api/contacts/discover", json={
+            "booking_number": "B-100", "full_name": "Stale Person", "county": "Lee", "state": "FL",
+        })
+    assert got.status_code == 503
+    body = got.json()
+    assert body["error"] == "ARREST_READ_FAILED"
+    assert body["discovery_status"] == "failed"
+    assert "Stale" not in got.text and "Stale" not in caplog.text
+    assert db["contacts"].docs == []
