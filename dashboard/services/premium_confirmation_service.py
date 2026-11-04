@@ -32,7 +32,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 from dashboard.extensions import get_collection
 from dashboard.routers.payment_plans import _amount_cents
@@ -889,6 +889,45 @@ def _bond_amount_of(*docs: Optional[dict]) -> Any:
     return None
 
 
+def auto_bond_cents(*docs: Optional[dict]) -> Tuple[Optional[int], str]:
+    """The one bond amount (cents) every doc agrees on, or ``(None, reason)``.
+
+    Each doc contributes ``bond_amount`` (or ``amount`` when that is blank).
+    Reasons: ``bond_amount_unparseable`` (a non-blank value is not a plain
+    amount), ``bond_amount_ambiguous`` (docs disagree), ``bond_amount_missing``
+    (no value, or zero / negative).
+    """
+    values = set()
+    for doc in docs:
+        if not isinstance(doc, dict):
+            continue
+        raw = doc.get("bond_amount")
+        if _blank(raw):
+            raw = doc.get("amount")
+        if _blank(raw):
+            continue
+        if isinstance(raw, bool):
+            return None, "bond_amount_unparseable"
+        text = str(raw).strip().replace(",", "").replace("$", "")
+        try:
+            if Decimal(text) <= 0:
+                return None, "bond_amount_missing"
+        except Exception:
+            return None, "bond_amount_unparseable"
+        cents = non_negative_cents(raw)
+        if cents is None:
+            return None, "bond_amount_unparseable"
+        values.add(cents)
+    if len(values) > 1:
+        return None, "bond_amount_ambiguous"
+    if not values:
+        return None, "bond_amount_missing"
+    cents = values.pop()
+    if cents <= 0:
+        return None, "bond_amount_missing"
+    return cents, ""
+
+
 def _has_unconfirmed_staff_premium(*docs: Optional[dict]) -> bool:
     """A non-estimate premium a person entered (e.g. Write Bond ``premium_cents``)."""
     from dashboard.services.swipesimple_invoice_service import _bond_premium
@@ -904,13 +943,21 @@ async def auto_confirm_premium(
     booking: str,
     bond_case: Optional[dict] = None,
     active: Optional[dict] = None,
+    packet: Optional[dict] = None,
+    source: str = AUTO_REASON,
 ) -> dict:
     """Confirm the auto premium (paid in full) once, or report why not.
+
+    ``packet`` is the signed packet when the caller already holds it (DocuSeal
+    completion); otherwise the packet is looked up by booking number.
+    ``source`` is recorded on the audit (``auto_10pct`` from the portal,
+    ``auto_10pct_signing`` from completion); ``reason`` is always ``auto_10pct``.
 
     Returns ``{"ok": True, "idempotent": bool, ...}`` when an ``auto``
     confirmation exists afterwards, else ``{"ok": False, "skipped": code}``:
     ``switch_off``, ``already_confirmed`` (a staff confirmation exists; it is
-    never overwritten), ``bond_amount_missing``, or
+    never overwritten), ``bond_amount_missing``, ``bond_amount_unparseable``,
+    ``bond_amount_ambiguous`` (the docs disagree on the bond amount), or
     ``staff_premium_unconfirmed`` (a staff-entered premium is waiting for
     confirmation). Identity (#165) and split-case checks fail closed with
     ``PremiumConfirmationError``. Every write sits in one transaction and is
@@ -923,14 +970,14 @@ async def auto_confirm_premium(
     if not booking:
         raise PremiumConfirmationError("case_required", 400, "Send a booking number.")
 
-    packet = await _find_one("paperwork_packets", {"booking_number": booking})
+    if not isinstance(packet, dict):
+        packet = await _find_one("paperwork_packets", {"booking_number": booking})
     rows = [("paperwork_packets", packet), ("bond_cases", bond_case), ("active_bonds", active)]
     if not any(doc for _name, doc in rows):
         raise PremiumConfirmationError("case_not_found", 404, "No packet or bond matches that case.")
 
-    bond_amount = _bond_amount_of(active, bond_case, packet)
-    bond_cents = non_negative_cents(bond_amount)
-    premium = filed_floor_cents(bond_amount)
+    bond_cents, bond_problem = auto_bond_cents(active, bond_case, packet)
+    premium = filed_floor_cents(cents_to_amount(bond_cents) if bond_cents else None)
     fingerprint = _fingerprint(premium, premium, 0, 0, "")
 
     existing = next((doc for _name, doc in rows if confirmation_complete(doc)), None)
@@ -948,8 +995,8 @@ async def auto_confirm_premium(
             }
         return {"ok": False, "skipped": "already_confirmed", "premium_confirmed_by": by}
 
-    if bond_cents is None or bond_cents <= 0:
-        return {"ok": False, "skipped": "bond_amount_missing"}
+    if bond_problem or bond_cents is None or bond_cents <= 0:
+        return {"ok": False, "skipped": bond_problem or "bond_amount_missing"}
     if _has_unconfirmed_staff_premium(bond_case, active):
         return {"ok": False, "skipped": "staff_premium_unconfirmed"}
 
@@ -1025,10 +1072,10 @@ async def auto_confirm_premium(
             "agent_name": "PremiumConfirmation",
             "timestamp": now_iso,
             "reason": AUTO_REASON,
-            "source": AUTO_REASON,
+            "source": source or AUTO_REASON,
             "details": {
                 "auto": True,
-                "source": AUTO_REASON,
+                "source": source or AUTO_REASON,
                 "premium": cents_to_amount(premium),
                 "down": cents_to_amount(premium),
                 "financed": cents_to_amount(0),

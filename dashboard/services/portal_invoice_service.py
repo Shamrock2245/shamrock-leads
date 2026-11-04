@@ -359,6 +359,8 @@ async def request_invoice_link(token_data: Dict[str, Any], body: Any) -> Tuple[i
             return _err(409, "premium_unconfirmed")
         if not auto.get("ok"):
             logger.info("[portal_invoice] auto confirm skipped booking=%s reason=%s", booking, auto.get("skipped"))
+            if auto.get("skipped") in ("bond_amount_ambiguous", "bond_amount_unparseable"):
+                return _err(409, "needs_review")
         try:
             case, active = await resolve_bond_pair(booking)
         except BondAmbiguous:

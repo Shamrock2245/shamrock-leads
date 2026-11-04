@@ -383,6 +383,22 @@ def test_auto_confirm_switch_on_is_used_by_endpoint(monkeypatch):
     assert stores["bond_cases"].docs[0]["premium_confirmed_by"] == "auto"
 
 
+@pytest.mark.parametrize("skipped,code", [
+    ("bond_amount_ambiguous", "needs_review"),
+    ("bond_amount_unparseable", "needs_review"),
+    ("bond_amount_missing", "premium_unconfirmed"),
+    ("staff_premium_unconfirmed", "premium_unconfirmed"),
+])
+def test_endpoint_auto_confirm_skip_codes(monkeypatch, skipped, code):
+    stores = _world(monkeypatch, cases=[{"_id": 1, "booking_number": BOOKING, "bond_amount": 5000,
+                                         "bond_case_id": CASE_ID}])
+    monkeypatch.setenv("PREMIUM_AUTO_CONFIRM", "1")
+    monkeypatch.setattr(pis, "auto_confirm_premium", AsyncMock(return_value={"ok": False, "skipped": skipped}))
+    res = _post(monkeypatch)
+    assert res.status_code == 409 and res.json() == {"ok": False, "error": code}
+    assert stores["bond_cases"].updates == []
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # auto_confirm_premium (PREMIUM_AUTO_CONFIRM, default off)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -795,3 +811,235 @@ def test_installment_pause_script_is_read_only_and_counts():
     assert mod.action_for("pause", False)["needed"] is False
     assert mod.action_for("resume", False)["body"] == {"enabled": True}
     assert mod.main(["--plan", "pause", "--offline"]) == 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DocuSeal completion: auto_confirm at signing (PREMIUM_AUTO_CONFIRM)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _signing_world(monkeypatch, *, packet_extra=None, cases=None, actives=None, steps=None,
+                   preexisting=False):
+    from dashboard.services import docuseal_completion as dc
+    from dashboard.services import premium_confirmation_service as pcs
+
+    packet = {"_id": "p1", "packet_id": "PKT-1", "booking_number": BOOKING,
+              "bond_case_id": CASE_ID,
+              dc._C: {"claim_token": "tok", "steps": dict(steps or {}),
+                      "preexisting_completion": preexisting}}
+    packet.update(packet_extra or {})
+    if cases is None:
+        cases = [{"_id": 1, "bond_case_id": CASE_ID, "booking_number": BOOKING,
+                  "bond_amount": 5000}]
+    stores = {
+        "bond_cases": FakeCollection([dict(c) for c in cases]),
+        "active_bonds": FakeCollection([dict(a) for a in (actives or [])]),
+        "paperwork_packets": FakeCollection([packet]),
+        "audit_events": FakeCollection(),
+    }
+
+    def get(name):
+        stores.setdefault(name, FakeCollection())
+        return stores[name]
+
+    monkeypatch.setattr(pcs, "get_collection", get)
+    monkeypatch.setattr("dashboard.extensions.get_collection", get)
+
+    async def txn():
+        return _Txn(stores)
+
+    monkeypatch.setattr(pcs, "_transaction_client", txn)
+    monkeypatch.setattr(pcs, "_require_identity", AsyncMock(return_value=None))
+
+    def new_run():
+        return dc._Run(copy.deepcopy(stores["paperwork_packets"].docs[0]), get_col=get,
+                       source="test", submission_id="S1", event_type="submission.completed", cfg={})
+
+    return dc, pcs, stores, new_run
+
+
+def _ac_step(dc, stores):
+    return stores["paperwork_packets"].docs[0][dc._C]["steps"].get(dc.STEP_AUTO_CONFIRM)
+
+
+def test_signing_auto_confirm_off_writes_nothing(monkeypatch):
+    dc, pcs, stores, new_run = _signing_world(monkeypatch)
+    _run(new_run().step_auto_confirm())
+    assert _ac_step(dc, stores) is None
+    assert stores["bond_cases"].docs[0].get("premium_confirmed_by") is None
+    assert stores["audit_events"].docs == []
+
+
+@pytest.mark.parametrize("bond_amount,premium", [(500, "100.00"), (5000, "500.00"), ("25,000", "2500.00")])
+def test_signing_auto_confirm_confirms_paid_in_full(monkeypatch, bond_amount, premium):
+    monkeypatch.setenv("PREMIUM_AUTO_CONFIRM", "1")
+    dc, pcs, stores, new_run = _signing_world(
+        monkeypatch,
+        cases=[{"_id": 1, "bond_case_id": CASE_ID, "booking_number": BOOKING, "bond_amount": bond_amount}],
+    )
+    _run(new_run().step_auto_confirm())
+    step = _ac_step(dc, stores)
+    assert step["state"] == "done" and step["confirmed_by"] == "auto" and step["premium"] == premium
+    for doc in (stores["bond_cases"].docs[0], stores["paperwork_packets"].docs[0]):
+        assert doc["premium_confirmed_by"] == "auto"
+        assert doc["premium_confirmed_amount"] == premium
+        assert doc["down_payment_amount"] == premium
+        assert doc["financed_balance"] == "0.00"
+    audit = stores["audit_events"].docs[0]
+    assert audit["actor"] == "auto" and audit["reason"] == "auto_10pct"
+    assert audit["details"]["source"] == "auto_10pct_signing"
+
+
+def test_signing_auto_confirm_is_idempotent(monkeypatch):
+    monkeypatch.setenv("PREMIUM_AUTO_CONFIRM", "1")
+    dc, pcs, stores, new_run = _signing_world(monkeypatch)
+    _run(new_run().step_auto_confirm())
+    writes = len(stores["bond_cases"].updates)
+    _run(new_run().step_auto_confirm())  # final stamp: nothing runs
+    assert len(stores["bond_cases"].updates) == writes
+    assert len(stores["audit_events"].docs) == 1
+    # Lease lost after the write but before the stamp: the rerun is idempotent.
+    stores["paperwork_packets"].docs[0][dc._C]["steps"].pop(dc.STEP_AUTO_CONFIRM)
+    stores["paperwork_packets"].docs[0].pop("premium_confirmed_at")
+    _run(new_run().step_auto_confirm())
+    assert len(stores["audit_events"].docs) == 1
+
+
+def test_signing_auto_confirm_never_overwrites_staff(monkeypatch):
+    monkeypatch.setenv("PREMIUM_AUTO_CONFIRM", "1")
+    staff = {"premium_confirmed_amount": "1750.00", "premium_confirmed_at": "2026-11-03T12:00:00+00:00",
+             "premium_confirmed_by": "brendan@example.test"}
+    dc, pcs, stores, new_run = _signing_world(
+        monkeypatch,
+        cases=[{"_id": 1, "bond_case_id": CASE_ID, "booking_number": BOOKING, "bond_amount": 5000, **staff}],
+    )
+    _run(new_run().step_auto_confirm())
+    assert _ac_step(dc, stores) == {**_ac_step(dc, stores), "state": "skipped", "reason": "already_confirmed"}
+    assert stores["bond_cases"].docs[0]["premium_confirmed_by"] == "brendan@example.test"
+    assert stores["bond_cases"].updates == [] and stores["audit_events"].docs == []
+
+
+@pytest.mark.parametrize("label,kwargs,reason", [
+    ("bond unknown", {"cases": []}, "bond_not_found"),
+    ("bond ambiguous", {"cases": [
+        {"_id": 1, "bond_case_id": CASE_ID, "booking_number": BOOKING, "bond_amount": 5000},
+        {"_id": 2, "bond_case_id": CASE_ID, "booking_number": f" {BOOKING} ", "bond_amount": 5000}]},
+     "bond_ambiguous"),
+    ("packet names another bond", {"packet_extra": {"bond_case_id": "BC-OTHER"}}, "bond_mismatch"),
+    ("packet has no bond id", {"packet_extra": {"bond_case_id": None}}, "missing_bond_id"),
+    ("packet has no booking", {"packet_extra": {"booking_number": ""}}, "missing_booking_number"),
+    ("bond amount missing", {"cases": [{"_id": 1, "bond_case_id": CASE_ID, "booking_number": BOOKING}]},
+     "bond_amount_missing"),
+    ("bond amount zero", {"cases": [{"_id": 1, "bond_case_id": CASE_ID, "booking_number": BOOKING,
+                                     "bond_amount": 0}]}, "bond_amount_missing"),
+    ("bond amount negative", {"cases": [{"_id": 1, "bond_case_id": CASE_ID, "booking_number": BOOKING,
+                                         "bond_amount": "-5000"}]}, "bond_amount_missing"),
+    ("bond amount unparseable", {"cases": [{"_id": 1, "bond_case_id": CASE_ID, "booking_number": BOOKING,
+                                            "bond_amount": "five thousand"}]}, "bond_amount_unparseable"),
+    ("bond amounts disagree", {"actives": [{"_id": 9, "bond_case_id": CASE_ID, "booking_number": BOOKING,
+                                            "bond_amount": 7500}]}, "bond_amount_ambiguous"),
+    ("packet amount disagrees", {"packet_extra": {"bond_amount": 2500}}, "bond_amount_ambiguous"),
+    ("staff premium waiting", {"cases": [{"_id": 1, "bond_case_id": CASE_ID, "booking_number": BOOKING,
+                                          "bond_amount": 5000, "premium_cents": 175000}]},
+     "staff_premium_unconfirmed"),
+])
+def test_signing_auto_confirm_needs_review(monkeypatch, label, kwargs, reason):
+    monkeypatch.setenv("PREMIUM_AUTO_CONFIRM", "1")
+    dc, pcs, stores, new_run = _signing_world(monkeypatch, **kwargs)
+    _run(new_run().step_auto_confirm())
+    step = _ac_step(dc, stores)
+    assert step["state"] == "needs_review", label
+    assert step["reason"] == reason, label
+    assert stores["audit_events"].docs == []
+    for name in ("bond_cases", "active_bonds", "paperwork_packets"):
+        for doc in stores[name].docs:
+            assert not doc.get("premium_confirmed_at"), (label, name)
+    # Final: a rerun does not try again.
+    calls = AsyncMock(side_effect=AssertionError("no retry"))
+    monkeypatch.setattr(pcs, "auto_confirm_premium", calls)
+    _run(new_run().step_auto_confirm())
+
+
+def test_signing_needs_review_means_no_invoice_and_no_text(monkeypatch):
+    monkeypatch.setenv("PREMIUM_AUTO_CONFIRM", "1")
+    monkeypatch.setenv("SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING", "1")
+    monkeypatch.setenv("SWIPESIMPLE_DISPATCH_LIVE", "1")
+    dc, pcs, stores, new_run = _signing_world(
+        monkeypatch, cases=[{"_id": 1, "bond_case_id": CASE_ID, "booking_number": BOOKING}],
+    )
+    monkeypatch.setattr(ss, "maybe_issue_share_invoice_for_bond",
+                        AsyncMock(side_effect=AssertionError("no invoice")))
+    monkeypatch.setattr(ss, "dispatch_invoice", AsyncMock(side_effect=AssertionError("no text")))
+    run = new_run()
+    _run(run.step_auto_confirm())
+    _run(run.step_share_invoice())
+    _run(run.step_auto_send())
+    steps = stores["paperwork_packets"].docs[0][dc._C]["steps"]
+    assert steps[dc.STEP_AUTO_CONFIRM]["state"] == "needs_review"
+    assert steps[dc.STEP_SHARE] == {**steps[dc.STEP_SHARE], "state": "skipped",
+                                    "reason": "premium_unconfirmed"}
+    assert dc.STEP_AUTO_SEND not in steps
+
+
+def test_signing_auto_confirm_then_share_stages_the_auto_amount(monkeypatch):
+    monkeypatch.setenv("PREMIUM_AUTO_CONFIRM", "1")
+    dc, pcs, stores, new_run = _signing_world(monkeypatch)
+    issue = AsyncMock(return_value={"ok": True, "create": {"idempotent": False}})
+    monkeypatch.setattr(ss, "maybe_issue_share_invoice_for_bond", issue)
+    run = new_run()
+    _run(run.step_auto_confirm())
+    _run(run.step_share_invoice())
+    issue.assert_awaited_once()
+    assert issue.await_args.kwargs["dispatch"] is False
+    steps = stores["paperwork_packets"].docs[0][dc._C]["steps"]
+    assert steps[dc.STEP_SHARE]["state"] == "done" and steps[dc.STEP_SHARE]["ok"] is True
+
+
+def test_signing_auto_confirm_transient_error_retries_then_review(monkeypatch):
+    monkeypatch.setenv("PREMIUM_AUTO_CONFIRM", "1")
+    dc, pcs, stores, new_run = _signing_world(monkeypatch)
+    boom = AsyncMock(side_effect=pcs.PremiumConfirmationError("transactions_unavailable", 503))
+    monkeypatch.setattr(pcs, "auto_confirm_premium", boom)
+    issue = AsyncMock(side_effect=AssertionError("share must wait"))
+    monkeypatch.setattr(ss, "maybe_issue_share_invoice_for_bond", issue)
+    run = new_run()
+    _run(run.step_auto_confirm())
+    _run(run.step_share_invoice())  # waits, no stamp
+    steps = stores["paperwork_packets"].docs[0][dc._C]["steps"]
+    assert steps[dc.STEP_AUTO_CONFIRM]["state"] == "failed"
+    assert dc.STEP_SHARE not in steps
+    _run(new_run().step_auto_confirm())
+    assert _ac_step(dc, stores)["state"] == "failed"
+    _run(new_run().step_auto_confirm())
+    step = _ac_step(dc, stores)
+    assert step["state"] == "needs_review" and step["reason"] == "auto_confirm_unavailable"
+    assert boom.await_count == 3
+
+
+def test_signing_auto_confirm_identity_refusal_is_review(monkeypatch):
+    monkeypatch.setenv("PREMIUM_AUTO_CONFIRM", "1")
+    dc, pcs, stores, new_run = _signing_world(monkeypatch)
+    monkeypatch.setattr(pcs, "_require_identity",
+                        AsyncMock(side_effect=pcs.PremiumConfirmationError("identity_unverified", 409)))
+    _run(new_run().step_auto_confirm())
+    step = _ac_step(dc, stores)
+    assert step["state"] == "needs_review" and step["reason"] == "identity_unverified"
+    assert stores["audit_events"].docs == []
+
+
+def test_signing_auto_confirm_skips_preexisting_and_staff_test(monkeypatch):
+    monkeypatch.setenv("PREMIUM_AUTO_CONFIRM", "1")
+    dc, pcs, stores, new_run = _signing_world(monkeypatch, preexisting=True)
+    _run(new_run().step_auto_confirm())
+    assert _ac_step(dc, stores) is None
+    assert stores["audit_events"].docs == []
+
+
+def test_signing_auto_confirm_runs_before_share_and_is_not_required():
+    import inspect
+
+    from dashboard.services import docuseal_completion as dc
+
+    src = inspect.getsource(dc._Run.execute)
+    assert src.index("STEP_AUTO_CONFIRM, self.step_auto_confirm") < src.index("STEP_SHARE, self.step_share_invoice")
+    assert dc.STEP_AUTO_CONFIRM not in dc.REQUIRED_STEPS
+    assert "STEP_AUTO_CONFIRM, STEP_AUTO_SEND) and staff_test_packet" in src
