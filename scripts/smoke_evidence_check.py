@@ -120,6 +120,62 @@ def summarize(docs: Iterable[dict]) -> dict:
     }
 
 
+# Per-source identity gates (Codex 11/4 on #308). A source whose stored key
+# is internal (not a jail booking number) must prove it before a smoke can
+# pass. Keyed by the smoke_evidence.json label.
+_COUNTER_KEYS = (
+    "rows", "booking_number_blank", "booking_number_duplicates", "booking_key_internal",
+    "internal_key_valid", "with_case_number", "booking_equals_case_number",
+    "with_charges", "with_booking_date",
+)
+
+
+def _int(result: dict, key: str) -> int | None:
+    value = result.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def manatee_clerk_identity_problems(result: dict) -> list[str]:
+    """Pass criteria from FL_MANATEE_CLERK_SCRAPER_2026-10-10.md; [] means pass.
+
+    Missing or non-integer counters fail (fail closed).
+    """
+    if not isinstance(result, dict):
+        return ["result missing"]
+    vals = {k: _int(result, k) for k in _COUNTER_KEYS}
+    missing = [k for k, v in vals.items() if v is None]
+    if missing:
+        return [f"missing counter: {k}" for k in missing]
+    rows = vals["rows"]
+    problems = []
+    if rows < 1:
+        problems.append("rows < 1")
+    for key in ("booking_number_blank", "booking_number_duplicates", "booking_equals_case_number",
+                "with_booking_date"):
+        if vals[key] != 0:
+            problems.append(f"{key} != 0")
+    for key in ("booking_key_internal", "internal_key_valid", "with_case_number", "with_charges"):
+        if vals[key] != rows:
+            problems.append(f"{key} != rows")
+    buckets = result.get("status_buckets")
+    if not isinstance(buckets, dict) or set(buckets) - {""}:
+        problems.append("status not blank")
+    return problems
+
+
+IDENTITY_GATES = {
+    "Manatee Clerk (FL)": manatee_clerk_identity_problems,
+}
+
+
+def identity_gate(label: str, result: dict) -> list[str] | None:
+    """None when the label has no identity gate, else the problem list."""
+    gate = IDENTITY_GATES.get(label)
+    return None if gate is None else gate(result)
+
+
 def county_query(county: str, state: str, since: datetime) -> dict:
     """Same county/state rule as the lead list; Florida owns rows with no state."""
     name = re.escape(county.strip())
@@ -173,9 +229,18 @@ def main(argv: list[str] | None = None) -> int:
         "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         **summarize(docs),
     }
+    out["status_buckets"] = out["status"]
     out["result"] = "ok" if out["rows"] else "no_rows"
+    problems = identity_gate(out["label"], out) if out["rows"] else None
+    if problems is not None:
+        out["identity_gate"] = "fail" if problems else "pass"
+        out["identity_problems"] = problems
+        if problems:
+            out["result"] = "identity_failed"
     print(json.dumps(out, sort_keys=True))
-    return 0 if out["rows"] else 2
+    if not out["rows"]:
+        return 2
+    return 3 if problems else 0
 
 
 if __name__ == "__main__":

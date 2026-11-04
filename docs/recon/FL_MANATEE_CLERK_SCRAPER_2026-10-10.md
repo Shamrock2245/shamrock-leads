@@ -60,6 +60,8 @@ python scripts/smoke_evidence_check.py --county "Manatee Clerk" --state FL --hou
 - Bond is `empty`, or comes from the Bonds table.
 - `with_booking_date` is 0, and status is blank.
 
+These are enforced (Codex 11/4): for `--county "Manatee Clerk"` the check adds `identity_gate` (`pass`/`fail`) and `identity_problems` (counter names only), and a failed gate prints `result: identity_failed` and exits 3. `scripts/build_recon_matrix.py` applies the same gate (`IDENTITY_GATES` in `smoke_evidence_check.py`) to any `passed` Manatee Clerk write row, for both `prod_mongo_aggregate` and `one_shot_run`. A missing or non-integer counter, or a non-blank `status_buckets`, fails closed.
+
 Record the result as the `passed` (or `failed`) Manatee Clerk row in `docs/recon/smoke_evidence.json`.
 
 ## Live read (2026-10-10, from the agent box)
