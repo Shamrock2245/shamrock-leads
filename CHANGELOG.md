@@ -3,6 +3,22 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-04 (Lee co-signer discovery: Codex 11/3 findings on #280)
+
+### Fixed
+- **A failed arrests read no longer falls through to caller identity (P1).** `_resolve_arrest()` returned `None` for both "no arrest" and "the read failed", so a transient arrests read error on a real booking ran providers with the caller's name and address and stored them under that arrest. A failed read now raises `ArrestReadFailed`. `run_discovery` returns `failed` / `ARREST_READ_FAILED` with no provider run and no write, and the log carries the code only. The ambiguous no-county path previously returned terminal `identity_ambiguous` here; it now also returns retryable `failed`. A genuinely absent arrest (a `MANUAL-*` lead) still uses caller input. The Lee cron passes the claimed arrest, so arrest writes and the queue are unchanged.
+- **Status-less legacy candidate rows expire (P2).** `unreviewed_expire_at()`, `_expired_row_conditions()` and `_row_is_expired()` treated a row with no `review_status` as non-expiring, so pre-review rows could keep PII indefinitely. A missing, `null` or `""` status now counts as unreviewed. The `$pull` matches `review_status: {$in: [rejected, unreviewed, null, ""]}`, and Mongo's `null` also matches a missing field. Reviewed and approved rows are never purged. No migration and no data change outside the normal purge.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`:
+  - `test_codex_1103_p1_failed_arrest_read_fails_closed` (with county + state, county only, and no place)
+  - `test_codex_1103_p1_failed_arrest_read_logs_no_identity`
+  - `test_codex_1103_p1_route_with_failed_arrest_read_writes_nothing`
+  - `test_codex_1103_p1_absent_manual_arrest_still_uses_caller_identity` (guard)
+  - `test_codex_1103_p2_status_less_legacy_rows_expire`
+  - `test_codex_1103_p2_status_less_rows_get_a_ttl_and_reviewed_never_do`
+  - `test_purge_removes_only_expired_unreviewed_rows` is updated: it had asserted the old keep-status-less behavior.
+
 ## [Unreleased] — 2026-11-03 (Lee co-signer discovery: Codex 11/2 findings on #280)
 
 ### Changed

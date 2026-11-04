@@ -1945,13 +1945,14 @@ async def test_purge_removes_only_expired_unreviewed_rows():
         _row("No Status", None, old.isoformat()),
     ]})
     result = await purge_unreviewed_candidates(db, now=NOW)
-    assert result == {"purged_candidates": 3, "docs": 1}
+    # Codex 11/3: an old status-less (legacy, never reviewed) row expires too.
+    assert result == {"purged_candidates": 4, "docs": 1}
     names = [row["name"] for row in db["contacts"].docs[0]["discovered_contacts"]]
-    assert names == ["Fresh String", "Fresh Date", "Blank Stamp", "Garbled Stamp", "No Status"]
+    assert names == ["Fresh String", "Fresh Date", "Blank Stamp", "Garbled Stamp"]
     # The update is a $pull on the row condition, never a rewrite of the array.
     pull = contact_discovery_module()._expired_row_conditions(cutoff)
-    # Only unreviewed and rejected rows can match; reviewed/approved never.
-    assert all(cond["review_status"] == {"$in": ["rejected", "unreviewed"]} for cond in pull)
+    # Only unreviewed, rejected or status-less rows can match; reviewed/approved never.
+    assert all(cond["review_status"] == {"$in": ["rejected", "unreviewed", None, ""]} for cond in pull)
 
 
 def contact_discovery_module():
@@ -3369,3 +3370,105 @@ async def test_codex_1102_p2_booking_reads_run_first_and_name_reads_stay_bounded
     assert all("booking_number" in c or "linked_bonds" in c for c in first)
     second = prior[1][0]["$or"]
     assert all(not any("booking" in k for k in c) for c in second)
+
+
+# ── Codex 11/3 findings on #280 (review on 1d99189) ─────────────────────────
+class _ArrestsReadFails(AsyncCollection):
+    def find(self, query=None, projection=None):
+        raise RuntimeError("arrests read failed")
+
+    async def find_one(self, query, projection=None):
+        raise RuntimeError("arrests read failed")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("place", [{"county": "Lee", "state": "FL"}, {"county": "Lee"}, {}])
+async def test_codex_1103_p1_failed_arrest_read_fails_closed(monkeypatch, place):
+    """A failed arrests read is not a missing arrest: no caller identity, no provider, no write."""
+    from dashboard.services import contact_discovery as cd
+
+    called = []
+    for name in ("_provider_prior", "_provider_same_address", "_provider_property",
+                 "_provider_clerk", "_provider_skiptrace"):
+        async def _spy(*a, _n=name, **k):
+            called.append(_n)
+            return []
+        monkeypatch.setattr(cd, name, _spy)
+    db = AsyncDB()
+    db._cols["arrests"] = _ArrestsReadFails()
+    out = await run_discovery(db, booking_number="B-100", full_name="Stale Person",
+                              address="1 Stale St", force=True, **place)
+    assert out["discovery_status"] == "failed"
+    assert out["discovery_error"] == cd.ARREST_READ_FAILED
+    assert out["providers_run"] == [] and out["contacts"] == []
+    assert called == []
+    assert db["contacts"].docs == []
+
+
+@pytest.mark.asyncio
+async def test_codex_1103_p1_failed_arrest_read_logs_no_identity(caplog):
+    db = AsyncDB()
+    db._cols["arrests"] = _ArrestsReadFails()
+    with caplog.at_level(logging.DEBUG):
+        await run_discovery(db, booking_number="B-100", full_name="Stale Person",
+                            dob="01/02/1990", county="Lee", state="FL", force=True)
+    text = caplog.text
+    assert "ARREST_READ_FAILED" in text
+    for secret in ("Stale", "1990"):
+        assert secret not in text
+
+
+@pytest.mark.asyncio
+async def test_codex_1103_p1_absent_manual_arrest_still_uses_caller_identity():
+    """Guard: a genuinely absent arrest (read ok, zero rows) keeps the MANUAL-* path."""
+    db = AsyncDB()
+    out = await run_discovery(db, booking_number="MANUAL-2", full_name="Casey Sample",
+                              county="Lee", state="FL", force=True)
+    assert out["discovery_status"] != "failed" or out.get("discovery_error") != "ARREST_READ_FAILED"
+    assert db["contacts"].docs[0]["defendant_name"] == "Casey Sample"
+
+
+@pytest.mark.asyncio
+async def test_codex_1103_p1_route_with_failed_arrest_read_writes_nothing(monkeypatch):
+    db = _lee_db_with_indemnitor()
+    db._cols["arrests"] = _ArrestsReadFails()
+    client = _review_client(monkeypatch, db, _STAFF)
+    got = client.post("/api/contacts/discover", json={
+        "booking_number": "B-100", "full_name": "Stale Person", "county": "Lee", "state": "FL",
+    })
+    body = got.json()
+    assert "Stale" not in got.text
+    assert db["contacts"].docs == []
+    assert not body.get("contacts")
+
+
+@pytest.mark.asyncio
+async def test_codex_1103_p2_status_less_legacy_rows_expire():
+    db = AsyncDB()
+    old = (NOW - timedelta(days=31)).isoformat()
+    db["contacts"].docs.append({"_id": "c1", "discovered_contacts": [
+        _row("Legacy Missing", None, old),
+        {"name": "Legacy Absent", "source": "same_address", "discovered_at": old},
+        _row("Legacy Blank", "", old),
+        _row("Legacy Fresh", None, NOW.isoformat()),
+        _row("Kept Reviewed", "reviewed", old),
+        _row("Kept Approved", "approved", old),
+    ]})
+    result = await purge_unreviewed_candidates(db, now=NOW)
+    assert result["purged_candidates"] == 3
+    names = [row["name"] for row in db["contacts"].docs[0]["discovered_contacts"]]
+    assert names == ["Legacy Fresh", "Kept Reviewed", "Kept Approved"]
+
+
+def test_codex_1103_p2_status_less_rows_get_a_ttl_and_reviewed_never_do():
+    from dashboard.services.contact_discovery import unreviewed_expire_at
+
+    old = NOW - timedelta(days=5)
+    legacy = [{"discovered_at": old.isoformat()}, {"review_status": None, "discovered_at": old.isoformat()}]
+    assert unreviewed_expire_at(legacy, NOW) is not None
+    assert unreviewed_expire_at(legacy + [{"review_status": "reviewed"}], NOW) is None
+    cd = contact_discovery_module()
+    cutoff = NOW - timedelta(days=30)
+    assert cd._row_is_expired({"discovered_at": (NOW - timedelta(days=31)).isoformat()}, cutoff)
+    assert not cd._row_is_expired({"review_status": "approved",
+                                   "discovered_at": (NOW - timedelta(days=31)).isoformat()}, cutoff)

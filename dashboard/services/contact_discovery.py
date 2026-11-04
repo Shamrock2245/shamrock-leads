@@ -97,6 +97,14 @@ CARRIED_STATUSES = REVIEWED_STATUSES | {REJECTED_STATUS}
 # Rows in these statuses expire after UNREVIEWED_TTL_DAYS: a rejected
 # candidate's family PII is not kept any longer than an unreviewed one.
 EXPIRING_STATUSES = frozenset({"unreviewed", REJECTED_STATUS})
+# Legacy (pre-review) candidate rows carry no review_status; they were never
+# reviewed, so they expire like "unreviewed" (Codex 11/3 on #280). The review
+# path already reads a missing status as "unreviewed".
+LEGACY_UNREVIEWED_STATUSES = (None, "")
+
+
+def _expiring_status(value: Any) -> bool:
+    return value in EXPIRING_STATUSES or value in LEGACY_UNREVIEWED_STATUSES
 # Staff decision -> stored review_status.
 REVIEW_DECISIONS = {"approve": "approved", "reject": REJECTED_STATUS}
 # Contact data a review covers. Any change resets the row to unreviewed.
@@ -918,7 +926,7 @@ def unreviewed_expire_at(candidates: Sequence[Dict[str, Any]], now: datetime) ->
     """
     if not candidates:
         return None
-    if any(row.get("review_status") not in EXPIRING_STATUSES for row in candidates):
+    if any(not _expiring_status(row.get("review_status")) for row in candidates):
         return None
     # Mongo TTL deletes the whole document, so it may only expire once the
     # newest candidate has aged out. The oldest row would drop fresh rows.
@@ -1837,11 +1845,31 @@ def _fill_blank_identity(stored: Dict[str, Any], supplied: Dict[str, Any]) -> Li
     return ignored
 
 
+ARREST_READ_FAILED = "ARREST_READ_FAILED"
+
+
+class ArrestReadFailed(Exception):
+    """The arrests read failed; distinct from a missing arrest (no PII in it)."""
+
+
+def _arrest_read_failed_result() -> Dict[str, Any]:
+    # Fail closed: no provider runs and nothing is written. "failed" is the
+    # transient outcome the queue retries with backoff (bounded attempts).
+    return {
+        "cached": False,
+        "contacts": [],
+        "discovery_status": "failed",
+        "discovery_error": ARREST_READ_FAILED,
+        "providers_run": [],
+    }
+
+
 async def _resolve_arrest(
     db: Any, booking_number: str, county: str, state: str
 ) -> Optional[Dict[str, Any]]:
     """The one arrest for this booking. None when it is missing or ambiguous
-    (the same booking number in two counties and no county/state to pick)."""
+    (the same booking number in two counties and no county/state to pick).
+    Raises ``ArrestReadFailed`` when the read itself fails."""
     from dashboard.services.place_identity import mongo_place_clause, mongo_state_clause
 
     query: Dict[str, Any] = {"booking_number": booking_number}
@@ -1854,8 +1882,11 @@ async def _resolve_arrest(
     try:
         rows = await _find_list(db["arrests"], query, limit=2)
     except Exception as exc:
-        log.warning("[indemnitor_discovery] arrest read failed error_type=%s", type(exc).__name__)
-        return None
+        log.warning("[indemnitor_discovery] arrest read failed code=%s error_type=%s",
+                    ARREST_READ_FAILED, type(exc).__name__)
+        # Not "missing": a failed read must never fall through to the
+        # caller-identity (MANUAL-*) path. Codex 11/3 on #280.
+        raise ArrestReadFailed() from exc
     rows = [row for row in rows if isinstance(row, dict)]
     return rows[0] if len(rows) == 1 else None
 
@@ -1894,7 +1925,10 @@ async def run_discovery(
 
     stored = dict(arrest or {})
     if not stored and booking_number and not (state and county):
-        found = await _resolve_arrest(db, booking_number, county, state)
+        try:
+            found = await _resolve_arrest(db, booking_number, county, state)
+        except ArrestReadFailed:
+            return _arrest_read_failed_result()
         if found is None:
             return {
                 "cached": False,
@@ -1904,7 +1938,11 @@ async def run_discovery(
             }
         stored = dict(found)
     elif not stored and booking_number:
-        found = await _resolve_arrest(db, booking_number, county, state)
+        try:
+            found = await _resolve_arrest(db, booking_number, county, state)
+        except ArrestReadFailed:
+            # Only a genuinely absent arrest (MANUAL-* lead) uses caller identity.
+            return _arrest_read_failed_result()
         if isinstance(found, dict):
             stored = dict(found)
     # A resolved arrest's own identity fields win. Caller input (a drawer or
@@ -2323,8 +2361,10 @@ def _expired_row_conditions(cutoff: datetime) -> List[Dict[str, Any]]:
     """Per-row conditions for an unreviewed candidate discovered at or before
     ``cutoff``. ``discovered_at`` is a UTC ISO string (make_candidate); legacy
     rows may hold a BSON date, so both forms are matched. Reviewed rows never
-    match: ``review_status`` must be ``unreviewed`` or ``rejected``."""
-    statuses = {"$in": sorted(EXPIRING_STATUSES)}
+    match: ``review_status`` must be ``unreviewed``, ``rejected``, or missing /
+    null / "" (a legacy, never-reviewed row)."""
+    # ``$in`` with null matches a missing or null field: legacy rows expire too.
+    statuses = {"$in": [*sorted(EXPIRING_STATUSES), *LEGACY_UNREVIEWED_STATUSES]}
     return [
         {"review_status": statuses, "discovered_at": {"$regex": _ISO_DATE_PREFIX, "$lte": cutoff.isoformat()}},
         {"review_status": statuses, "discovered_at": {"$lte": cutoff}},
@@ -2340,7 +2380,7 @@ def _expired_unreviewed_query(cutoff: datetime) -> Dict[str, Any]:
 
 def _row_is_expired(row: Any, cutoff: datetime) -> bool:
     """Python mirror of :func:`_expired_row_conditions` (for counting only)."""
-    if not isinstance(row, dict) or row.get("review_status") not in EXPIRING_STATUSES:
+    if not isinstance(row, dict) or not _expiring_status(row.get("review_status")):
         return False
     stamp = row.get("discovered_at")
     if isinstance(stamp, str):

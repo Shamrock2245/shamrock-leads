@@ -38,6 +38,11 @@ A public provider (property appraiser, clerk, skip-trace) reports `source_timeou
 
 Prior-Shamrock collections are read in two bounded queries: exact-booking clauses first, then name clauses (`PRIOR_READ_LIMIT` = 25 each). A common name can't push the booking-linked co-signer out.
 
+### Failed arrest reads and legacy retention (Codex 11/3)
+
+- **A failed arrests read fails closed.** If the stored arrest cannot be read (the read raises), discovery returns `failed` with `discovery_error: ARREST_READ_FAILED`. No provider runs and nothing is written, and the log line carries only the code. Caller identity drives a run only when the read succeeds and finds no arrest (a `MANUAL-*` lead). The cron passes the claimed arrest itself, so the Lee queue never takes this path and Lee arrest writes are untouched.
+- **Legacy candidate rows without `review_status` expire.** A row with a missing, `null` or `""` status was never reviewed, so it is treated as `unreviewed`. It is purged 30 days after `discovered_at` and counts toward the TTL. Reviewed and approved rows are still never touched.
+
 ### Staff review
 
 `POST /api/contacts/{booking}/candidates/{candidate_id}/review` with `{county, state, decision, rev}` (`decision` is `approve` or `reject`; `rev` is the `discovery_rev` from `GET /api/contacts/{booking}`). It sits behind the dashboard auth (not an open prefix) and needs a staff cookie session (`god_admin`, `admin`, `staff`); otherwise 401/403. The write is guarded on `discovery_rev` like a refresh, so a stale `rev` gets 409 `stale_revision` and nothing changes. A decision stores `review_pin`: a SHA-256 digest per field of the normalized phone, email, address and anchors (no values). It appends `{audit_id, candidate_id, actor, actor_role, at, old_status, new_status, rev_before, rev_after}` to the doc's `review_log`. The contacts update and an immutable `audit_events` record (`event_type: contact_candidate_reviewed`, `_id` = `audit_id`, also stored on the row as `review_audit_id`) are written in one multi-document transaction, with the revision re-checked inside it. If the audit insert fails, the transaction aborts, the status is unchanged and the call returns 503 `audit_failed`. Without a replica set or Atlas it returns 503 `audit_unavailable` and writes nothing (fail closed). `actor` is `staff:` plus a hash of the session email. No names, phones or addresses are logged.
@@ -64,5 +69,5 @@ On refresh, a reviewed, approved or rejected row keeps its status only when the 
 - A name alone is never a match. Confidence comes only from phone, DOB, and address+ZIP weights
 - Public HTTP (`INDEMNITOR_DISCOVERY_HTTP`) and skip-trace (`INDEMNITOR_SKIPTRACE_URL` + `INDEMNITOR_SKIPTRACE_API_KEY`) default off
 - Logs store counts and error types, not names, phones, or addresses
-- Unreviewed and rejected candidates expire after 30 days. Reviewed and approved candidates are kept
+- Unreviewed, rejected and status-less (legacy) candidates expire after 30 days. Reviewed and approved candidates are kept
 - An approval holds only while the candidate's phone, email, address and anchors are unchanged
