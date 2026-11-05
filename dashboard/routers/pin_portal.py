@@ -1319,6 +1319,36 @@ def _id_upload_denied(reason: str) -> JSONResponse:
     return JSONResponse({"success": False, "error": reason}, status_code=status)
 
 
+def _id_upload_packet_closed(packet: Optional[dict]) -> bool:
+    """The co-signer lifecycle's closed-packet rule, including superseded."""
+    from dashboard.services.cosigner_link_service import _packet_closed
+
+    return _packet_closed(packet)
+
+
+def _id_upload_expiration_denial(raw: Any) -> str:
+    """A usable expiration is required. Missing or unparsable fails closed."""
+    if isinstance(raw, datetime):
+        expires_at = raw
+    else:
+        text = str(raw or "").strip()
+        if not text:
+            return "token_expired"
+        try:
+            expires_at = datetime.fromisoformat(text)
+        except ValueError:
+            return "token_expired"
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) > expires_at:
+        return "token_expired"
+    return ""
+
+
+def _scan_row_count(raw: Any) -> int:
+    return len(raw) if isinstance(raw, list) else 0
+
+
 def _id_upload_record(session: Dict[str, Any], extracted: Dict[str, Any], passed: bool) -> Dict[str, Any]:
     """One new scan row. Name and issuing state only — no ID number, photo, or address."""
     role = _normalize_client_role(session.get("role")) or "indemnitor"
@@ -1338,9 +1368,10 @@ def _id_upload_record(session: Dict[str, Any], extracted: Dict[str, Any], passed
 async def _id_upload_session(token: str) -> tuple[Optional[Dict[str, Any]], str]:
     """Resolve a portal session before any image is scanned.
 
-    A missing, unverified, expired, or voided token is refused. The packet
-    is found by ``packet_id`` only. A POA number is not part of the check,
-    so replacing the power on that packet does not revoke the link.
+    A missing, unverified, expired, voided, or unparsable session is refused.
+    A missing expiration is expired. The packet is found by ``packet_id``
+    only, and a superseded packet is closed. A POA number is not part of
+    the check, so replacing the power on that packet does not revoke the link.
     """
     token = (token or "").strip()
     if not token:
@@ -1359,42 +1390,46 @@ async def _id_upload_session(token: str) -> tuple[Optional[Dict[str, Any]], str]
         return None, "token_voided"
     if doc.get("verified") is not True:
         return None, "token_unverified"
-    expires_at_str = doc.get("expires_at")
-    if expires_at_str:
-        try:
-            expires_at = datetime.fromisoformat(str(expires_at_str))
-            if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
-            if datetime.now(timezone.utc) > expires_at:
-                return None, "token_expired"
-        except ValueError:
-            pass
+    expired = _id_upload_expiration_denial(doc.get("expires_at"))
+    if expired:
+        return None, expired
     packet_id = str(doc.get("packet_id") or "").strip()
     if packet_id:
         packet = await get_collection("paperwork_packets").find_one({"packet_id": packet_id})
-        if not isinstance(packet, dict) or _packet_voided(packet):
+        if not isinstance(packet, dict) or _id_upload_packet_closed(packet):
             return None, "token_voided"
     return doc, ""
 
 
 async def _insert_id_upload(session: Dict[str, Any], record: Dict[str, Any]) -> None:
-    """Append the scan. Existing scans and audit rows are not replaced or removed."""
+    """Append the scan. Existing scans and audit rows are not replaced or removed.
+
+    The audit stores the session row count and the packet row count separately.
+    A packet that already holds another signer's scans must not be described
+    with the fresh session's count.
+    """
     token = str(session.get("session_token") or "").strip()
-    prior = session.get("id_scan_records")
-    prior_count = len(prior) if isinstance(prior, list) else 0
+    session_before = _scan_row_count(session.get("id_scan_records"))
     stored = {**record, "extracted": dict(record.get("extracted") or {})}
     await get_collection("portal_pins").update_one(
         {"session_token": token},
         {"$push": {"id_scan_records": stored}},
     )
     packet_id = str(session.get("packet_id") or "").strip()
+    packet_before = 0
+    packet_after = 0
     if packet_id:
         packet = await get_collection("paperwork_packets").find_one({"packet_id": packet_id})
-        if isinstance(packet, dict) and not _packet_voided(packet):
-            await get_collection("paperwork_packets").update_one(
-                {"packet_id": packet_id},
-                {"$push": {"id_scan_records": {**stored, "extracted": dict(stored["extracted"])}}},
-            )
+        if isinstance(packet, dict):
+            packet_before = _scan_row_count(packet.get("id_scan_records"))
+            if not _id_upload_packet_closed(packet):
+                await get_collection("paperwork_packets").update_one(
+                    {"packet_id": packet_id},
+                    {"$push": {"id_scan_records": {**stored, "extracted": dict(stored["extracted"])}}},
+                )
+                packet_after = packet_before + 1
+            else:
+                packet_after = packet_before
     await get_collection("audit_events").insert_one({
         "event_id": str(uuid.uuid4()),
         "event_type": "id_upload_saved",
@@ -1404,10 +1439,18 @@ async def _insert_id_upload(session: Dict[str, Any], record: Dict[str, Any]) -> 
         "agent_name": "paperwork_id_upload",
         "created_at": stored["recorded_at"],
         "reason": "id_upload_inserted",
+        "session_id": str(session.get("_id") or ""),
         "packet_id": packet_id,
         "role": stored["role"],
-        "old_state": {"id_scan_records": prior_count},
-        "new_state": {"id_scan_records": prior_count + 1, "scan_id": stored["scan_id"]},
+        "old_state": {
+            "session_id_scan_records": session_before,
+            "packet_id_scan_records": packet_before,
+        },
+        "new_state": {
+            "session_id_scan_records": session_before + 1,
+            "packet_id_scan_records": packet_after,
+            "scan_id": stored["scan_id"],
+        },
     })
     logger.info("[id-upload] inserted scan_id=%s packet_id=%s", stored["scan_id"], packet_id or "")
 

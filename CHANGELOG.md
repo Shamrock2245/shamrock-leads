@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-05 (id-upload fails closed on bad sessions)
+
+### Fixed
+- **An id-upload session with a missing or unparsable `expires_at` is refused before OCR.** `POST /api/portal/id-upload` no longer treats a `ValueError` from `datetime.fromisoformat` as a still-valid bearer, and a session with no expiration is expired. Neither case runs OCR or appends a scan.
+- **A superseded packet is closed for id-upload.** The check uses the same closed-packet rule as the co-signer lifecycle (`superseded: true`, or `status` / `docuseal_status` / `packet_status` of `superseded`). OCR does not run, and the obsolete packet does not gain a scan. The packet is still matched by `packet_id`, so a POA number change does not void the link.
+- **The id-upload audit records the session count and the packet count separately.** `old_state` and `new_state` store `session_id_scan_records` and `packet_id_scan_records`. The event also stores `session_id` from the portal pin `_id`, not the bearer token. A packet that already has another signer's scan is not described as `0→1`. The audit row is inserted. Earlier audit rows are not removed.
+
+### Tests
+- `tests/test_paperwork_id_upload.py`: `test_garbage_or_missing_expiration_is_rejected_before_ocr`, `test_superseded_packet_is_rejected_before_ocr`, `test_audit_records_session_and_packet_scan_counts_separately`. No DocuSeal send and no SwipeSimple charge.
+
 ## [Unreleased] — 2026-11-04 (Paperwork launch mode id-upload)
 
 ### Added

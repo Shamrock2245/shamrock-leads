@@ -331,6 +331,90 @@ def test_poa_change_does_not_invalidate_the_upload_link(monkeypatch):
     assert packet["id_ocr"]["scan_id"] == "TEST-SCAN-IND"
 
 
+@pytest.mark.parametrize("expires_at", ["not-a-date", None])
+def test_garbage_or_missing_expiration_is_rejected_before_ocr(monkeypatch, expires_at):
+    session = _session()
+    if expires_at is None:
+        session.pop("expires_at", None)
+    else:
+        session["expires_at"] = expires_at
+    db = _world(monkeypatch, session=session)
+    calls = {"n": 0, "bytes": []}
+    _scanner(monkeypatch, calls)
+    packet_before = copy.deepcopy(db["paperwork_packets"].docs[0])
+    audits_before = copy.deepcopy(db["audit_events"].docs)
+
+    response = _upload(TOKEN, b"should-not-scan")
+    assert response.status_code == 401
+    assert response.json() == {"success": False, "error": "token_expired"}
+    assert calls["n"] == 0
+    assert db["paperwork_packets"].docs[0] == packet_before
+    assert "id_scan_records" not in db["portal_pins"].docs[0]
+    assert db["audit_events"].docs == audits_before
+
+
+@pytest.mark.parametrize(
+    "packet_extra",
+    [
+        {"superseded": True},
+        {"status": "superseded"},
+    ],
+)
+def test_superseded_packet_is_rejected_before_ocr(monkeypatch, packet_extra):
+    packet = _packet()
+    packet.update(packet_extra)
+    db = _world(monkeypatch, packet=packet)
+    calls = {"n": 0, "bytes": []}
+    _scanner(monkeypatch, calls)
+    packet_before = copy.deepcopy(db["paperwork_packets"].docs[0])
+    audits_before = copy.deepcopy(db["audit_events"].docs)
+
+    response = _upload(TOKEN, b"should-not-scan")
+    assert response.status_code == 403
+    assert response.json() == {"success": False, "error": "token_voided"}
+    assert calls["n"] == 0
+    assert db["paperwork_packets"].docs[0] == packet_before
+    assert "id_scan_records" not in db["portal_pins"].docs[0]
+    assert db["audit_events"].docs == audits_before
+
+
+def test_audit_records_session_and_packet_scan_counts_separately(monkeypatch):
+    session = _session()
+    session["_id"] = "TEST-PIN-1"
+    db = _world(monkeypatch, session=session)
+    calls = {"n": 0, "bytes": []}
+    _scanner(monkeypatch, calls)
+    _block_remote(monkeypatch)
+    kept = copy.deepcopy(db["audit_events"].docs[0])
+
+    first = _upload(TOKEN, b"mixed-count-photo")
+    assert first.status_code == 200, first.text
+    event = db["audit_events"].docs[-1]
+    assert event["session_id"] == "TEST-PIN-1"
+    assert event["packet_id"] == PACKET_ID
+    assert event["old_state"]["session_id_scan_records"] == 0
+    assert event["old_state"]["packet_id_scan_records"] == 1
+    assert event["new_state"]["session_id_scan_records"] == 1
+    assert event["new_state"]["packet_id_scan_records"] == 2
+    assert event["new_state"]["scan_id"] == first.json()["scan_id"]
+    assert "id_scan_records" not in event["old_state"]
+    assert TOKEN not in str(event)
+
+    second = _upload(TOKEN, b"mixed-count-photo-2")
+    assert second.status_code == 200, second.text
+    later = db["audit_events"].docs[-1]
+    assert later["old_state"]["session_id_scan_records"] == 1
+    assert later["old_state"]["packet_id_scan_records"] == 2
+    assert later["new_state"]["session_id_scan_records"] == 2
+    assert later["new_state"]["packet_id_scan_records"] == 3
+    assert db["audit_events"].docs[0] == kept
+    assert len(db["audit_events"].docs) == 3
+    packet = db["paperwork_packets"].docs[0]
+    assert packet["id_scan_records"][0]["scan_id"] == "TEST-SCAN-EXISTING"
+    assert packet["id_scan"]["scan_id"] == "TEST-SCAN-DEF"
+    assert packet["id_ocr"]["scan_id"] == "TEST-SCAN-IND"
+
+
 def test_unknown_mode_falls_back_to_the_normal_flow():
     html = _page("/api/portal/portal-ui?mode=banana").text
     root = _page("/?mode=not-a-real-mode").text
