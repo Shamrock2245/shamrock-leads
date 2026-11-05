@@ -447,7 +447,19 @@ async def payment_webhook(request: Request, booking_number: str = Query(default=
                     "[payment_webhook] cosigner reversal note skipped code=%s",
                     type(exc).__name__,
                 )
+    receipt_live = False
     if recorded_charge and indemnitor_phone:
+        from dashboard.services.swipesimple_invoice_service import dispatch_live_enabled
+
+        receipt_live = dispatch_live_enabled()
+        if not receipt_live:
+            # Customer texts follow the same switch as invoice dispatch.
+            # Dry-run: log only codes, never the phone number or message.
+            logger.info(
+                "[payment_webhook] receipt text dry_run (SWIPESIMPLE_DISPATCH_LIVE off) plan=%s",
+                bool(plan_handled),
+            )
+    if recorded_charge and indemnitor_phone and receipt_live:
         if plan_handled:
             from dashboard.services.bb_client import send_message_universal
 
