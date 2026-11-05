@@ -462,6 +462,32 @@ async def verify_portal_pin(req: VerifyPinRequest):
     }
 
 
+class HandoffConsumeRequest(BaseModel):
+    """Query hints from the portal. The signed token is authoritative."""
+
+    ht: str = ""
+    role: Optional[str] = None
+    case: Optional[str] = None
+    case_id: Optional[str] = None
+    mode: Optional[str] = None
+
+
+@pin_portal_router.post("/handoff/consume")
+async def consume_paperwork_handoff(req: HandoffConsumeRequest):
+    """Exchange ``?ht=`` for a portal session, or send the client back to the PIN.
+
+    Failure is always the same body: no session, no signing URL, no case data.
+    """
+    from dashboard.services.paperwork_handoff import consume_handoff
+
+    return await consume_handoff(
+        token=req.ht,
+        hint_role=req.role or "",
+        hint_case=(req.case or req.case_id or ""),
+        hint_mode=req.mode or "",
+    )
+
+
 # Client-writable DocuSeal keys only. Bond/POA/premium/charge fields stay staff-owned.
 _CLIENT_FIELD_ALLOWLIST = frozenset({
     "indemnitor_name", "IndemnitorName", "IndName", "FullName",
@@ -1267,6 +1293,31 @@ async def portal_id_ocr(request: Request):
         ocr_fields = client_fields_from_id_ocr(extracted, role, confirmed_name=confirmed_name)
         merged_fields = {**existing, **ocr_fields}
         pins_col = get_collection("portal_pins")
+        if session.get("auth_method") == "handoff":
+            from dashboard.services.paperwork_handoff import append_signer_scan
+
+            await append_signer_scan(
+                role=role,
+                person_id=str(session.get("person_id") or ""),
+                scan=extracted,
+            )
+            await pins_col.update_one(
+                {"session_token": session_token},
+                {"$set": {
+                    "id_extracted": extracted,
+                    "id_scanned_at": datetime.now(timezone.utc).isoformat(),
+                    "role": role,
+                    "client_fields": merged_fields,
+                }},
+            )
+            return JSONResponse({
+                "success": True,
+                "extracted": extracted,
+                "error": None,
+                "portrait_jpeg_b64": result.get("portrait_jpeg_b64") or "",
+                "pushed_to_docuseal": False,
+                "role": role,
+            })
         await pins_col.update_one(
             {"session_token": session_token},
             {"$set": {
@@ -1695,10 +1746,37 @@ async def portal_remaining_fields(req: RemainingFieldsRequest):
 
     fields = _sanitize_client_fields(req.fields)
     csz = _city_state_zip(fields)
-    if csz and role != "defendant":
+    if csz and role == "indemnitor":
         fields["indemnitor_city_state_zip"] = csz
 
     pins_col = get_collection("portal_pins")
+    if session.get("auth_method") == "handoff":
+        from dashboard.services.paperwork_handoff import save_handoff_fields
+
+        saved = await save_handoff_fields(session=session, fields=fields)
+        await pins_col.update_one(
+            {"session_token": req.session_token},
+            {"$set": {
+                "client_fields": saved.get("fields") or {},
+                "role": saved.get("role") or role,
+                "address_confirmed": True,
+                "staff_review_acknowledged": True,
+                "staff_review_acknowledged_at": datetime.now(timezone.utc).isoformat(),
+                "fields_saved": True,
+                "fields_saved_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+        return {
+            "success": True,
+            "saved": True,
+            "pushed_to_docuseal": bool(saved.get("pushed_to_docuseal")),
+            "field_count": len(saved.get("fields") or {}),
+            "role": saved.get("role") or role,
+            "has_packet": bool(saved.get("packet_id")),
+            "packet_id": saved.get("packet_id") or "",
+            "signing_link": saved.get("signing_link") or "",
+            "message": saved.get("message") or "",
+        }
     await pins_col.update_one(
         {"session_token": req.session_token},
         {"$set": {
@@ -2828,7 +2906,8 @@ async def get_portal_ui(request: Request):
         let inPerson = false;
         // Client data lives in page memory only — never localStorage (a shared
         // office tablet must not keep the last client's phone or ID).
-        const portalMem = { phone: '', sessionToken: '', pendingIdFile: null, signingLink: '', signingOpts: null, role: '' };
+        const portalMem = { phone: '', sessionToken: '', pendingIdFile: null, signingLink: '', signingOpts: null, role: '', mode: '', caseId: '' };
+        const portalHints = { role: '', caseId: '', mode: '' };
         try { ['sl_portal_phone', 'sl_indemnitor_scanned_profile', 'sl_portal_in_person'].forEach(k => localStorage.removeItem(k)); } catch (e) {}
 
         function isTabletOrTouch() {
@@ -3021,7 +3100,7 @@ async def get_portal_ui(request: Request):
         // Confirm order: name/address → phone → email.
         function renderPortalConfirm(ext, portrait) {
             const resEl = document.getElementById('portalIdResult');
-            const P = portalMem.role === 'defendant' ? 'defendant_' : 'indemnitor_';
+            const P = portalMem.role === 'defendant' ? 'defendant_' : (portalMem.role === 'coindemnitor' ? 'coindemnitor_' : 'indemnitor_');
             resEl.innerHTML = `
                 <form id="portalConfirm" class="id-extracted-card" autocomplete="off">
                     <div class="id-extracted-title">Check your details</div>
@@ -3060,6 +3139,7 @@ async def get_portal_ui(request: Request):
                 const fields = {};
                 fields[P + 'name'] = form.name.value.trim();
                 if (P === 'indemnitor_') fields.FullName = fields[P + 'name'];
+                if (P === 'coindemnitor_') fields.Ind2Name = fields[P + 'name'];
                 fields[P + 'address'] = form.address.value.trim();
                 fields[P + 'city'] = form.city.value.trim();
                 fields[P + 'state'] = form.state.value.trim();
@@ -3085,9 +3165,99 @@ async def get_portal_ui(request: Request):
             });
         }
 
+        function preselectHintsAfterPin() {
+            // role and case in the query do not set portalMem.role and do not open a case.
+            const mode = portalHints.mode;
+            if (mode === 'ipad' || mode === 'inperson' || mode === 'kiosk') toggleInPersonMode(true);
+            if (mode === 'add-cosigner' || mode === 'id-upload') showAuthTab('scan');
+        }
+
+        function showCoIndemnitorStep() {
+            showAuthTab('scan');
+            const heading = document.querySelector('#panel-scan-id h1');
+            if (heading) heading.textContent = 'Add a co-indemnitor';
+            const copy = document.querySelector('#panel-scan-id p');
+            if (copy) copy.textContent = 'Scan the co-indemnitor ID. It is saved on that signer only.';
+        }
+
+        function applyHandoffLanding(d) {
+            const mode = d.mode || '';
+            const route = d.route || '';
+            portalMem.role = d.role || '';
+            portalMem.mode = mode;
+            portalMem.caseId = d.case_id || '';
+            if (mode === 'ipad' || mode === 'inperson' || mode === 'kiosk') toggleInPersonMode(true);
+            if (route === 'add-cosigner') {
+                showCoIndemnitorStep();
+                return;
+            }
+            if (route === 'id-upload' || mode === 'id-upload') {
+                if (typeof window.SLPaperworkIdUpload === 'function') {
+                    window.SLPaperworkIdUpload({
+                        sessionToken: portalMem.sessionToken,
+                        role: portalMem.role,
+                        caseId: portalMem.caseId,
+                        mode: 'id-upload',
+                    });
+                    return;
+                }
+                showAuthTab('scan');
+                return;
+            }
+            if (d.signing_link) {
+                openDocuSealForm(d.signing_link, {
+                    fullscreen: inPerson || isTabletOrTouch(),
+                    role: d.role || '',
+                });
+                return;
+            }
+            showAuthTab('scan');
+        }
+
+        async function consumeHandoff(ht) {
+            const statusEl = document.getElementById('status');
+            if (statusEl) {
+                statusEl.className = 'status';
+                statusEl.textContent = 'Checking your secure link…';
+            }
+            try {
+                const r = await fetch('/api/portal/handoff/consume', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        ht: ht,
+                        role: portalHints.role,
+                        case: portalHints.caseId,
+                        mode: portalHints.mode,
+                    }),
+                });
+                const d = await r.json();
+                if (!d || !d.ok || !d.session_token) {
+                    if (statusEl) { statusEl.className = 'status'; statusEl.textContent = ''; }
+                    showAuthTab('pin');
+                    return;
+                }
+                portalMem.sessionToken = d.session_token;
+                applyHandoffLanding(d);
+                if (statusEl) { statusEl.className = 'status'; statusEl.textContent = ''; }
+            } catch (e) {
+                if (statusEl) { statusEl.className = 'status'; statusEl.textContent = ''; }
+                showAuthTab('pin');
+            }
+        }
+
         function checkUrlDirectLink() {
             const params = new URLSearchParams(window.location.search);
+            portalHints.role = params.get('role') || '';
+            portalHints.caseId = params.get('case') || params.get('case_id') || '';
+            portalHints.mode = (params.get('mode') || params.get('kiosk') || '').toLowerCase();
             const link = params.get('link') || params.get('s') || params.get('url') || params.get('src');
+            const mode = (params.get('mode') || params.get('kiosk') || '').toLowerCase();
+            const ht = params.get('ht') || '';
+            if (ht) {
+                consumeHandoff(ht);
+                return;
+            }
             const mode = (params.get('mode') || params.get('kiosk') || '').toLowerCase();
             if (mode === 'id-upload') {
                 showAuthTab('scan');
@@ -3280,6 +3450,7 @@ async def get_portal_ui(request: Request):
                             email: d.email || '',
                         });
                     } else {
+                        preselectHintsAfterPin();
                         statusEl.className = 'status error';
                         statusEl.textContent = d.message
                             || (d.has_packet

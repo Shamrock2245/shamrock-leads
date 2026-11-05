@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-04 (Paperwork handoff token skips the second PIN)
+
+### Added
+- **A verified indemnitor, co-indemnitor, or defendant can open paperwork with a single-use handoff token instead of a second PIN.** The portal opens `paperwork.shamrockbailbonds.biz/?role=&case=&mode=&ht=<token>`. `POST /api/portal/handoff/consume` checks the signature, the 15-minute window, the case, and the signer, then consumes the `jti` once. The signed claims are authoritative. A `role` or `case` query hint that disagrees falls back to the PIN and grants nothing. `mode=add-cosigner` opens the existing co-indemnitor ID step and does not revoke a co-signer link or a DocuSeal packet. `mode=id-upload` is passed through only when that handler is already present. Contract: `docs/contracts/paperwork-handoff-token.md`.
+- **The path is off unless `PAPERWORK_HANDOFF_ENABLED` is on.** The HMAC key is `PAPERWORK_HANDOFF_SECRET`. Neither value is added to compose, deploy, or `.env`. Minting stays `POST /api/portal/handoff-token` (`{case_id, role, person_id}` → `{token, expires_at}`) and is not implemented in this change. A POA number is not part of the token. Signer ID scans are insert-only. Handoff audits are insert-only and do not store a name, phone, email, or the token. No ID scan means no DocuSeal URL. A voided or unverified signer gets no session and no DocuSeal URL. This response never includes a pay link.
+
+### Tests
+- `tests/test_paperwork_handoff_token.py` (on the CI list): bad signature, expired, over-long lifetime, missing secret, flag off, replay, voided signer, unverified identity, unverified submitter, person mismatch, role hint mismatch, case hint mismatch, mode hint ignored, happy path for each role, no scan means no DocuSeal URL, POA change, add-cosigner routing, id-upload passthrough, OCR only after a consumed token, insert-only scans, audit retention, PIN fallback, and query params without `ht`.
+
 ## [Unreleased] — 2026-11-05 (id-upload attempt cap and persist gate)
 
 ### Fixed
