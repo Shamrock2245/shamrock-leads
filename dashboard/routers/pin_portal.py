@@ -76,6 +76,13 @@ _VOID_PACKET_STATUSES = frozenset({"voided", "cancelled", "canceled"})
 _DEAD_SIGNER_STATUSES = frozenset({
     "voided", "cancelled", "canceled", "declined", "unverified",
 })
+# Launch modes the paperwork host understands. Anything else, including a
+# typo, stays on the normal PIN / scan / signing-link flow.
+_ID_UPLOAD_MODE = "id-upload"
+_IN_PERSON_LAUNCH_MODES = frozenset({"kiosk", "ipad", "inperson", "1", "true"})
+_ID_UPLOAD_DEAD_STATUSES = frozenset({
+    "voided", "cancelled", "canceled", "declined", "revoked", "unverified", "expired",
+})
 
 
 def _packet_voided(doc: Optional[Dict[str, Any]]) -> bool:
@@ -453,6 +460,32 @@ async def verify_portal_pin(req: VerifyPinRequest):
         "role": meta.get("role") or "",
         "message": meta.get("message") or "",
     }
+
+
+class HandoffConsumeRequest(BaseModel):
+    """Query hints from the portal. The signed token is authoritative."""
+
+    ht: str = ""
+    role: Optional[str] = None
+    case: Optional[str] = None
+    case_id: Optional[str] = None
+    mode: Optional[str] = None
+
+
+@pin_portal_router.post("/handoff/consume")
+async def consume_paperwork_handoff(req: HandoffConsumeRequest):
+    """Exchange ``?ht=`` for a portal session, or send the client back to the PIN.
+
+    Failure is always the same body: no session, no signing URL, no case data.
+    """
+    from dashboard.services.paperwork_handoff import consume_handoff
+
+    return await consume_handoff(
+        token=req.ht,
+        hint_role=req.role or "",
+        hint_case=(req.case or req.case_id or ""),
+        hint_mode=req.mode or "",
+    )
 
 
 # Client-writable DocuSeal keys only. Bond/POA/premium/charge fields stay staff-owned.
@@ -1260,6 +1293,31 @@ async def portal_id_ocr(request: Request):
         ocr_fields = client_fields_from_id_ocr(extracted, role, confirmed_name=confirmed_name)
         merged_fields = {**existing, **ocr_fields}
         pins_col = get_collection("portal_pins")
+        if session.get("auth_method") == "handoff":
+            from dashboard.services.paperwork_handoff import append_signer_scan
+
+            await append_signer_scan(
+                role=role,
+                person_id=str(session.get("person_id") or ""),
+                scan=extracted,
+            )
+            await pins_col.update_one(
+                {"session_token": session_token},
+                {"$set": {
+                    "id_extracted": extracted,
+                    "id_scanned_at": datetime.now(timezone.utc).isoformat(),
+                    "role": role,
+                    "client_fields": merged_fields,
+                }},
+            )
+            return JSONResponse({
+                "success": True,
+                "extracted": extracted,
+                "error": None,
+                "portrait_jpeg_b64": result.get("portrait_jpeg_b64") or "",
+                "pushed_to_docuseal": False,
+                "role": role,
+            })
         await pins_col.update_one(
             {"session_token": session_token},
             {"$set": {
@@ -1283,6 +1341,363 @@ async def portal_id_ocr(request: Request):
         "portrait_jpeg_b64": result.get("portrait_jpeg_b64") or "",
         "pushed_to_docuseal": pushed,
         "role": _normalize_client_role(session.get("role")) or "indemnitor",
+    })
+
+
+def _launch_mode(request: Request) -> str:
+    return (request.query_params.get("mode") or request.query_params.get("kiosk") or "").strip().lower()
+
+
+def _in_person_launch(request: Request) -> bool:
+    """iPad / kiosk / in-person. id-upload is never an in-person signing launch."""
+    mode = _launch_mode(request)
+    if mode == _ID_UPLOAD_MODE:
+        return False
+    return mode in _IN_PERSON_LAUNCH_MODES or request.query_params.get("inperson") == "1"
+
+
+def _id_upload_query_token(request: Request) -> str:
+    return (
+        request.query_params.get("st")
+        or request.query_params.get("token")
+        or request.query_params.get("session_token")
+        or ""
+    ).strip()
+
+
+def _id_upload_denied(reason: str) -> JSONResponse:
+    status = 403 if reason == "token_voided" else 401
+    return JSONResponse({"success": False, "error": reason}, status_code=status)
+
+
+def _id_upload_packet_closed(packet: Optional[dict]) -> bool:
+    """The co-signer lifecycle's closed-packet rule, including superseded."""
+    from dashboard.services.cosigner_link_service import _packet_closed
+
+    return _packet_closed(packet)
+
+
+def _id_upload_expiration_denial(raw: Any) -> str:
+    """A usable expiration is required. Missing or unparsable fails closed."""
+    if isinstance(raw, datetime):
+        expires_at = raw
+    else:
+        text = str(raw or "").strip()
+        if not text:
+            return "token_expired"
+        try:
+            expires_at = datetime.fromisoformat(text)
+        except ValueError:
+            return "token_expired"
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) > expires_at:
+        return "token_expired"
+    return ""
+
+
+def _scan_row_count(raw: Any) -> int:
+    return len(raw) if isinstance(raw, list) else 0
+
+
+def _id_upload_record(session: Dict[str, Any], extracted: Dict[str, Any], passed: bool) -> Dict[str, Any]:
+    """One new scan row. Name and issuing state only — no ID number, photo, or address."""
+    role = _normalize_client_role(session.get("role")) or "indemnitor"
+    name = str(extracted.get("full_name") or "").strip()
+    state = str(extracted.get("dl_state") or extracted.get("issuing_state") or "").strip()
+    return {
+        "scan_id": uuid.uuid4().hex,
+        "role": role,
+        "source": _ID_UPLOAD_MODE,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "success": bool(passed and name),
+        "packet_id": str(session.get("packet_id") or "").strip(),
+        "extracted": {"full_name": name, "dl_state": state},
+    }
+
+
+async def _id_upload_session(token: str) -> tuple[Optional[Dict[str, Any]], str]:
+    """Resolve a portal session before any image is scanned.
+
+    A missing, unverified, expired, voided, or unparsable session is refused.
+    A missing expiration is expired. The packet is found by ``packet_id``
+    only, and a superseded packet is closed. A POA number is not part of
+    the check, so replacing the power on that packet does not revoke the link.
+    """
+    token = (token or "").strip()
+    if not token:
+        return None, "token_invalid"
+    doc = await get_collection("portal_pins").find_one({"session_token": token})
+    if not isinstance(doc, dict):
+        return None, "token_invalid"
+    if doc.get("voided") is True or doc.get("revoked") is True:
+        return None, "token_voided"
+    status = str(doc.get("status") or "").strip().lower()
+    if status in _ID_UPLOAD_DEAD_STATUSES:
+        if status == "expired":
+            return None, "token_expired"
+        if status == "unverified":
+            return None, "token_unverified"
+        return None, "token_voided"
+    if doc.get("verified") is not True:
+        return None, "token_unverified"
+    expired = _id_upload_expiration_denial(doc.get("expires_at"))
+    if expired:
+        return None, expired
+    packet_id = str(doc.get("packet_id") or "").strip()
+    if packet_id:
+        packet = await get_collection("paperwork_packets").find_one({"packet_id": packet_id})
+        if not isinstance(packet, dict) or _id_upload_packet_closed(packet):
+            return None, "token_voided"
+    return doc, ""
+
+
+def _id_upload_write_filter(token: str) -> Dict[str, Any]:
+    """Match only a session that is still verified, open, and unexpired."""
+    return {
+        "session_token": token,
+        "verified": True,
+        "voided": {"$ne": True},
+        "revoked": {"$ne": True},
+        "status": {"$nin": sorted(_ID_UPLOAD_DEAD_STATUSES)},
+        "expires_at": {"$gt": datetime.now(timezone.utc).isoformat()},
+    }
+
+
+def _id_upload_packet_push_filter(packet_id: str) -> Dict[str, Any]:
+    """Append by packet id. A closed or superseded packet does not match."""
+    closed = ["void", "voided", "cancelled", "canceled", "superseded"]
+    return {
+        "packet_id": packet_id,
+        "voided": {"$ne": True},
+        "superseded": {"$ne": True},
+        "status": {"$nin": closed},
+        "docuseal_status": {"$nin": closed},
+        "packet_status": {"$nin": closed},
+    }
+
+
+async def _reserve_id_upload_attempt(session: Dict[str, Any]) -> str:
+    """Count this upload before OCR, using the co-signer cap and cooldown.
+
+    The increment is one conditional update. A later OCR failure still counts.
+    A full cap or an active cooldown does not increment and does not scan.
+    Returns ``scan_attempt_cap``, ``scan_cooldown``, or ``""`` when reserved.
+    """
+    from dashboard.services.cosigner_link_service import SCAN_ATTEMPT_CAP, SCAN_COOLDOWN
+
+    token = str(session.get("session_token") or "").strip()
+    now = datetime.now(timezone.utc)
+    cutoff = now - SCAN_COOLDOWN
+    result = await get_collection("portal_pins").update_one(
+        {
+            "session_token": token,
+            "$and": [
+                {"$or": [
+                    {"scan_attempts": {"$exists": False}},
+                    {"scan_attempts": {"$lt": SCAN_ATTEMPT_CAP}},
+                ]},
+                {"$or": [
+                    {"scan_attempted_at": {"$exists": False}},
+                    {"scan_attempted_at": None},
+                    {"scan_attempted_at": ""},
+                    {"scan_attempted_at": {"$lte": cutoff}},
+                ]},
+            ],
+        },
+        {"$inc": {"scan_attempts": 1}, "$set": {"scan_attempted_at": now}},
+    )
+    matched = getattr(result, "matched_count", None)
+    if matched is None:
+        matched = getattr(result, "modified_count", 0)
+    if matched:
+        return ""
+    current = await get_collection("portal_pins").find_one({"session_token": token})
+    try:
+        attempts = int((current or {}).get("scan_attempts") or 0)
+    except (TypeError, ValueError):
+        attempts = SCAN_ATTEMPT_CAP
+    if attempts >= SCAN_ATTEMPT_CAP:
+        await get_collection("audit_events").insert_one({
+            "event_id": str(uuid.uuid4()),
+            "event_type": "id_upload_attempt_cap",
+            "entity_type": "portal_pin",
+            "entity_id": str(session.get("_id") or ""),
+            "actor": "id-upload",
+            "agent_name": "paperwork_id_upload",
+            "created_at": now.isoformat(),
+            "reason": "scan_attempt_cap",
+            "session_id": str(session.get("_id") or ""),
+            "packet_id": str(session.get("packet_id") or ""),
+            "old_state": {"scan_attempts": attempts},
+            "new_state": {"scan_attempts": attempts},
+        })
+        return "scan_attempt_cap"
+    return "scan_cooldown"
+
+
+def _rasterize_pdf_page(raw: bytes) -> bytes:
+    """First page of a PDF as PNG. Empty bytes means it could not be read."""
+    import fitz
+
+    doc = fitz.open(stream=raw, filetype="pdf")
+    try:
+        if doc.page_count < 1:
+            return b""
+        pix = doc[0].get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        return pix.tobytes("png") or b""
+    finally:
+        doc.close()
+
+
+def _prepare_id_upload_image(raw: bytes) -> tuple[bytes, str]:
+    """Hand the scanner an image. A PDF is rasterized; a failed read is not a scan."""
+    if not raw.startswith(b"%PDF"):
+        return raw, ""
+    try:
+        image = _rasterize_pdf_page(raw)
+    except Exception:
+        logger.warning("[id-upload] pdf rasterize failed", exc_info=True)
+        return b"", "scan_unreadable"
+    if not image or image.startswith(b"%PDF"):
+        return b"", "scan_unreadable"
+    return image, ""
+
+
+async def _insert_id_upload(session: Dict[str, Any], record: Dict[str, Any]) -> str:
+    """Append the scan. Existing scans and audit rows are not replaced or removed.
+
+    The session must still be verified when the row is written. Counts on the
+    audit come from the document returned by that update, so two overlapping
+    uploads cannot both record the same transition.
+    """
+    token = str(session.get("session_token") or "").strip()
+    stored = {**record, "extracted": dict(record.get("extracted") or {})}
+    updated = await get_collection("portal_pins").find_one_and_update(
+        _id_upload_write_filter(token),
+        {"$push": {"id_scan_records": stored}},
+    )
+    if not isinstance(updated, dict):
+        _current, denial = await _id_upload_session(token)
+        return denial or "token_voided"
+    session_after = _scan_row_count(updated.get("id_scan_records"))
+    session_before = max(session_after - 1, 0)
+    packet_id = str(session.get("packet_id") or "").strip()
+    packet_before = 0
+    packet_after = 0
+    if packet_id:
+        pushed = await get_collection("paperwork_packets").find_one_and_update(
+            _id_upload_packet_push_filter(packet_id),
+            {"$push": {"id_scan_records": {**stored, "extracted": dict(stored["extracted"])}}},
+        )
+        if isinstance(pushed, dict):
+            packet_after = _scan_row_count(pushed.get("id_scan_records"))
+            packet_before = max(packet_after - 1, 0)
+        else:
+            current = await get_collection("paperwork_packets").find_one({"packet_id": packet_id})
+            packet_after = _scan_row_count((current or {}).get("id_scan_records"))
+            packet_before = packet_after
+    await get_collection("audit_events").insert_one({
+        "event_id": str(uuid.uuid4()),
+        "event_type": "id_upload_saved",
+        "entity_type": "id_scan_record",
+        "entity_id": stored["scan_id"],
+        "actor": "id-upload",
+        "agent_name": "paperwork_id_upload",
+        "created_at": stored["recorded_at"],
+        "reason": "id_upload_inserted",
+        "session_id": str(updated.get("_id") or session.get("_id") or ""),
+        "packet_id": packet_id,
+        "role": stored["role"],
+        "old_state": {
+            "session_id_scan_records": session_before,
+            "packet_id_scan_records": packet_before,
+        },
+        "new_state": {
+            "session_id_scan_records": session_after,
+            "packet_id_scan_records": packet_after,
+            "scan_id": stored["scan_id"],
+        },
+    })
+    logger.info("[id-upload] inserted scan_id=%s packet_id=%s", stored["scan_id"], packet_id or "")
+    return ""
+
+
+async def _id_upload_file(form) -> tuple[bytes, str]:
+    upload = form.get("id_image") or form.get("file") or form.get("image") or form.get("id_photo")
+    if upload is None or not hasattr(upload, "read"):
+        return b"", ""
+    raw = await upload.read()
+    filename = os.path.basename(str(getattr(upload, "filename", "") or "").replace("\\", "/"))
+    if not filename or filename in {".", ".."}:
+        filename = "id_photo.jpg"
+    return raw or b"", filename
+
+
+@pin_portal_router.post("/id-upload")
+async def portal_id_upload(request: Request):
+    """Save an ID photo for a verified portal session. Nothing is signed or paid.
+
+    The session token is checked before OCR. The scanner runs on the server.
+    Each accepted photo is appended. Prior scans and audit rows stay in place.
+    The response never includes a signing URL or a pay link.
+    """
+    token = _id_upload_query_token(request)
+    if token:
+        session, denial = await _id_upload_session(token)
+        if denial:
+            return _id_upload_denied(denial)
+    else:
+        session = None
+    content_type = (request.headers.get("content-type") or "").lower()
+    if "multipart/form-data" not in content_type:
+        if session is None:
+            return _id_upload_denied("token_invalid")
+        return JSONResponse({"success": False, "error": "scan_image_required"}, status_code=400)
+    form = await request.form()
+    if session is None:
+        token = str(form.get("st") or form.get("token") or form.get("session_token") or "").strip()
+        session, denial = await _id_upload_session(token)
+        if denial or session is None:
+            return _id_upload_denied(denial or "token_invalid")
+    image_bytes, filename = await _id_upload_file(form)
+    if not image_bytes:
+        return JSONResponse({"success": False, "error": "scan_image_required"}, status_code=400)
+    limited = await _reserve_id_upload_attempt(session)
+    if limited:
+        return JSONResponse({"success": False, "saved": False, "error": limited}, status_code=429)
+    image_bytes, prepare_error = _prepare_id_upload_image(image_bytes)
+    if prepare_error:
+        return JSONResponse(
+            {"success": False, "saved": False, "error": prepare_error},
+            status_code=422,
+        )
+    if image_bytes.startswith(b"\x89PNG"):
+        filename = "id-page.png"
+
+    from dashboard.services.id_scanner_service import IDScannerService
+
+    try:
+        result = await IDScannerService.scan_id_image(image_bytes, filename=filename)
+    except Exception:
+        logger.warning("[id-upload] scanner failed", exc_info=True)
+        return JSONResponse({"success": False, "saved": False, "error": "scan_failed"}, status_code=422)
+    extracted = result.get("extracted") if isinstance(result, dict) and isinstance(result.get("extracted"), dict) else {}
+    passed = bool(isinstance(result, dict) and result.get("success") and extracted.get("full_name"))
+    if not passed:
+        return JSONResponse(
+            {"success": False, "saved": False, "error": "scan_unreadable"},
+            status_code=422,
+        )
+    record = _id_upload_record(session, extracted, passed)
+    denial = await _insert_id_upload(session, record)
+    if denial:
+        return _id_upload_denied(denial)
+    return JSONResponse({
+        "success": True,
+        "saved": True,
+        "inserted": True,
+        "scan_id": record["scan_id"],
     })
 
 
@@ -1331,10 +1746,37 @@ async def portal_remaining_fields(req: RemainingFieldsRequest):
 
     fields = _sanitize_client_fields(req.fields)
     csz = _city_state_zip(fields)
-    if csz and role != "defendant":
+    if csz and role == "indemnitor":
         fields["indemnitor_city_state_zip"] = csz
 
     pins_col = get_collection("portal_pins")
+    if session.get("auth_method") == "handoff":
+        from dashboard.services.paperwork_handoff import save_handoff_fields
+
+        saved = await save_handoff_fields(session=session, fields=fields)
+        await pins_col.update_one(
+            {"session_token": req.session_token},
+            {"$set": {
+                "client_fields": saved.get("fields") or {},
+                "role": saved.get("role") or role,
+                "address_confirmed": True,
+                "staff_review_acknowledged": True,
+                "staff_review_acknowledged_at": datetime.now(timezone.utc).isoformat(),
+                "fields_saved": True,
+                "fields_saved_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+        return {
+            "success": True,
+            "saved": True,
+            "pushed_to_docuseal": bool(saved.get("pushed_to_docuseal")),
+            "field_count": len(saved.get("fields") or {}),
+            "role": saved.get("role") or role,
+            "has_packet": bool(saved.get("packet_id")),
+            "packet_id": saved.get("packet_id") or "",
+            "signing_link": saved.get("signing_link") or "",
+            "message": saved.get("message") or "",
+        }
     await pins_col.update_one(
         {"session_token": req.session_token},
         {"$set": {
@@ -1838,13 +2280,117 @@ async def _redirect_to_party_sign(
     )
 
 
+# id-upload is a separate document so the normal portal (PIN, signing link,
+# DocuSeal embed) is not sent to the browser at all.
+ID_UPLOAD_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="robots" content="noindex, nofollow">
+    <meta name="theme-color" content="#0b0f19">
+    <title>Shamrock Bail Bonds — Upload ID</title>
+    <style>
+        :root { --bg:#0b0f19; --card:#151c2c; --accent:#22c55e; --text:#f8fafc; --muted:#94a3b8; }
+        * { box-sizing: border-box; }
+        body { margin:0; min-height:100dvh; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+            background:var(--bg); color:var(--text); padding:24px 16px; }
+        .card { max-width:440px; margin:24px auto; background:var(--card); border-radius:16px; padding:24px 20px;
+            border:1px solid rgba(255,255,255,.08); text-align:center; }
+        h1 { font-size:22px; margin:0 0 8px; }
+        p { color:var(--muted); line-height:1.5; margin:0 0 14px; }
+        label.drop { display:block; border:2px dashed #3b82f6; border-radius:12px; padding:26px 16px; cursor:pointer;
+            background:rgba(59,130,246,.06); }
+        input[type=file] { display:block; width:100%; margin-top:12px; color:var(--muted); }
+        button { width:100%; margin-top:14px; min-height:52px; border:0; border-radius:12px; background:var(--accent);
+            color:#052e16; font-weight:800; font-size:16px; cursor:pointer; }
+        button:disabled { opacity:.55; cursor:wait; }
+        .status { margin-top:14px; font-size:14px; line-height:1.45; }
+        .status.error { color:#f87171; }
+        .status.ok { color:var(--accent); }
+        a { color:var(--accent); }
+    </style>
+</head>
+<body>
+    <main class="card" id="id-upload-step" data-launch-mode="id-upload">
+        <h1>Upload your ID</h1>
+        <p>Photograph the front of your driver license, state ID, or passport. A PDF of that page is accepted. A file is saved only when a name can be read.</p>
+        <form id="idUploadForm">
+            <label class="drop">Choose a photo or PDF
+                <input id="idImage" name="id_image" type="file" accept="image/*,application/pdf" required>
+            </label>
+            <button type="submit" id="idUploadBtn">Upload ID</button>
+        </form>
+        <p id="idUploadStatus" class="status" role="status"></p>
+        <p><a href="tel:+12393322245">Call (239) 332-2245</a></p>
+    </main>
+    <script>
+        (function () {
+            var params = new URLSearchParams(window.location.search);
+            var token = params.get('st') || params.get('token') || params.get('session_token') || '';
+            var form = document.getElementById('idUploadForm');
+            var statusEl = document.getElementById('idUploadStatus');
+            var button = document.getElementById('idUploadBtn');
+            var input = document.getElementById('idImage');
+            function show(kind, text) {
+                statusEl.className = 'status ' + (kind || '');
+                statusEl.textContent = text;
+            }
+            if (!token) {
+                input.disabled = true;
+                button.disabled = true;
+                show('error', 'This link is missing a session. Call the office for a new link.');
+                return;
+            }
+            form.addEventListener('submit', async function (ev) {
+                ev.preventDefault();
+                var file = input.files && input.files[0];
+                if (!file) { show('error', 'Choose a photo first.'); return; }
+                button.disabled = true;
+                show('', 'Uploading…');
+                try {
+                    var body = new FormData();
+                    body.append('id_image', file);
+                    var response = await fetch('/api/portal/id-upload?st=' + encodeURIComponent(token), {
+                        method: 'POST',
+                        body: body
+                    });
+                    var data = {};
+                    try { data = await response.json(); } catch (e) { data = {}; }
+                    if (!response.ok || !data.saved) {
+                        var msg = 'That upload was not accepted. Call the office if this keeps happening.';
+                        if (data.error === 'scan_unreadable' || data.error === 'scan_failed') {
+                            msg = 'We could not read a name from that file. Upload a photo of the ID.';
+                        }
+                        show('error', msg);
+                        button.disabled = false;
+                        return;
+                    }
+                    input.value = '';
+                    show('ok', 'Saved. You can upload another photo if you have one.');
+                    button.disabled = false;
+                } catch (err) {
+                    show('error', 'Network error. Try again.');
+                    button.disabled = false;
+                }
+            });
+        })();
+    </script>
+</body>
+</html>"""
+
+
 @portal_page_router.get("/sign/{packet_id}")
 @portal_page_router.get("/sign/{packet_id}/{role}")
 async def public_sign_redirect(request: Request, packet_id: str, role: Optional[str] = None):
-    """Branded Shamrock embed of the party's /s/{slug}. ?raw=1 keeps a 302."""
+    """Branded Shamrock embed of the party's /s/{slug}. ?raw=1 keeps a 302.
+
+    mode=id-upload never looks up a signing URL.
+    """
+    if _launch_mode(request) == _ID_UPLOAD_MODE:
+        return HTMLResponse(content=ID_UPLOAD_HTML, headers={"Cache-Control": "no-store"})
     raw = (request.query_params.get("raw") or "").strip() in ("1", "true", "yes")
-    mode = (request.query_params.get("mode") or request.query_params.get("kiosk") or "").strip().lower()
-    kiosk = mode in ("kiosk", "ipad", "inperson", "1", "true") or request.query_params.get("inperson") == "1"
+    kiosk = _in_person_launch(request)
     return await _redirect_to_party_sign(packet_id, role, raw_redirect=raw, kiosk=kiosk)
 
 
@@ -1884,6 +2430,9 @@ async def get_portal_ui(request: Request):
         import os as _os
         dashboard_dir = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
         return FileResponse(_os.path.join(dashboard_dir, "index.html"))
+
+    if _launch_mode(request) == _ID_UPLOAD_MODE:
+        return HTMLResponse(content=ID_UPLOAD_HTML, headers={"Cache-Control": "no-store"})
 
     if path.endswith("/done"):
         from dashboard.services.paperwork_done import load_done_state, render_done_page
@@ -2338,7 +2887,8 @@ async def get_portal_ui(request: Request):
         let inPerson = false;
         // Client data lives in page memory only — never localStorage (a shared
         // office tablet must not keep the last client's phone or ID).
-        const portalMem = { phone: '', sessionToken: '', pendingIdFile: null, signingLink: '', signingOpts: null, role: '' };
+        const portalMem = { phone: '', sessionToken: '', pendingIdFile: null, signingLink: '', signingOpts: null, role: '', mode: '', caseId: '' };
+        const portalHints = { role: '', caseId: '', mode: '' };
         try { ['sl_portal_phone', 'sl_indemnitor_scanned_profile', 'sl_portal_in_person'].forEach(k => localStorage.removeItem(k)); } catch (e) {}
 
         function isTabletOrTouch() {
@@ -2531,7 +3081,7 @@ async def get_portal_ui(request: Request):
         // Confirm order: name/address → phone → email.
         function renderPortalConfirm(ext, portrait) {
             const resEl = document.getElementById('portalIdResult');
-            const P = portalMem.role === 'defendant' ? 'defendant_' : 'indemnitor_';
+            const P = portalMem.role === 'defendant' ? 'defendant_' : (portalMem.role === 'coindemnitor' ? 'coindemnitor_' : 'indemnitor_');
             resEl.innerHTML = `
                 <form id="portalConfirm" class="id-extracted-card" autocomplete="off">
                     <div class="id-extracted-title">Check your details</div>
@@ -2570,6 +3120,7 @@ async def get_portal_ui(request: Request):
                 const fields = {};
                 fields[P + 'name'] = form.name.value.trim();
                 if (P === 'indemnitor_') fields.FullName = fields[P + 'name'];
+                if (P === 'coindemnitor_') fields.Ind2Name = fields[P + 'name'];
                 fields[P + 'address'] = form.address.value.trim();
                 fields[P + 'city'] = form.city.value.trim();
                 fields[P + 'state'] = form.state.value.trim();
@@ -2595,10 +3146,110 @@ async def get_portal_ui(request: Request):
             });
         }
 
+        function preselectHintsAfterPin() {
+            // role and case in the query do not set portalMem.role and do not open a case.
+            const mode = portalHints.mode;
+            if (mode === 'ipad' || mode === 'inperson' || mode === 'kiosk') toggleInPersonMode(true);
+            if (mode === 'add-cosigner' || mode === 'id-upload') showAuthTab('scan');
+        }
+
+        function showCoIndemnitorStep() {
+            showAuthTab('scan');
+            const heading = document.querySelector('#panel-scan-id h1');
+            if (heading) heading.textContent = 'Add a co-indemnitor';
+            const copy = document.querySelector('#panel-scan-id p');
+            if (copy) copy.textContent = 'Scan the co-indemnitor ID. It is saved on that signer only.';
+        }
+
+        function applyHandoffLanding(d) {
+            const mode = d.mode || '';
+            const route = d.route || '';
+            portalMem.role = d.role || '';
+            portalMem.mode = mode;
+            portalMem.caseId = d.case_id || '';
+            if (mode === 'ipad' || mode === 'inperson' || mode === 'kiosk') toggleInPersonMode(true);
+            if (route === 'add-cosigner') {
+                showCoIndemnitorStep();
+                return;
+            }
+            if (route === 'id-upload' || mode === 'id-upload') {
+                if (typeof window.SLPaperworkIdUpload === 'function') {
+                    window.SLPaperworkIdUpload({
+                        sessionToken: portalMem.sessionToken,
+                        role: portalMem.role,
+                        caseId: portalMem.caseId,
+                        mode: 'id-upload',
+                    });
+                    return;
+                }
+                showAuthTab('scan');
+                return;
+            }
+            if (d.signing_link) {
+                openDocuSealForm(d.signing_link, {
+                    fullscreen: inPerson || isTabletOrTouch(),
+                    role: d.role || '',
+                });
+                return;
+            }
+            showAuthTab('scan');
+        }
+
+        async function consumeHandoff(ht) {
+            const statusEl = document.getElementById('status');
+            if (statusEl) {
+                statusEl.className = 'status';
+                statusEl.textContent = 'Checking your secure link…';
+            }
+            try {
+                const r = await fetch('/api/portal/handoff/consume', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        ht: ht,
+                        role: portalHints.role,
+                        case: portalHints.caseId,
+                        mode: portalHints.mode,
+                    }),
+                });
+                const d = await r.json();
+                if (!d || !d.ok || !d.session_token) {
+                    if (statusEl) { statusEl.className = 'status'; statusEl.textContent = ''; }
+                    showAuthTab('pin');
+                    return;
+                }
+                portalMem.sessionToken = d.session_token;
+                applyHandoffLanding(d);
+                if (statusEl) { statusEl.className = 'status'; statusEl.textContent = ''; }
+            } catch (e) {
+                if (statusEl) { statusEl.className = 'status'; statusEl.textContent = ''; }
+                showAuthTab('pin');
+            }
+        }
+
         function checkUrlDirectLink() {
             const params = new URLSearchParams(window.location.search);
+            portalHints.role = params.get('role') || '';
+            portalHints.caseId = params.get('case') || params.get('case_id') || '';
+            portalHints.mode = (params.get('mode') || params.get('kiosk') || '').toLowerCase();
             const link = params.get('link') || params.get('s') || params.get('url') || params.get('src');
-            const mode = params.get('mode') || params.get('kiosk') || '';
+            const mode = (params.get('mode') || params.get('kiosk') || '').toLowerCase();
+            const ht = params.get('ht') || '';
+            if (ht) {
+                consumeHandoff(ht);
+                return;
+            }
+            const mode = (params.get('mode') || params.get('kiosk') || '').toLowerCase();
+            if (mode === 'id-upload') {
+                showAuthTab('scan');
+                ['tabPin', 'tabLink', 'panel-pin', 'panel-link', 'esign-frame', 'btnInPerson'].forEach(function (id) {
+                    var el = document.getElementById(id);
+                    if (el) el.style.display = 'none';
+                });
+                var skip = document.querySelector('#panel-scan-id .btn-secondary');
+                if (skip) skip.style.display = 'none';
+                return;
+            }
             if (mode === 'ipad' || mode === 'inperson' || mode === 'kiosk' || params.get('inperson') === '1') {
                 toggleInPersonMode(true);
             } else {
@@ -2780,6 +3431,7 @@ async def get_portal_ui(request: Request):
                             email: d.email || '',
                         });
                     } else {
+                        preselectHintsAfterPin();
                         statusEl.className = 'status error';
                         statusEl.textContent = d.message
                             || (d.has_packet
@@ -2814,8 +3466,7 @@ async def get_portal_ui(request: Request):
     </script>
 </body>
 </html>"""
-    mode = (request.query_params.get("mode") or request.query_params.get("kiosk") or "").strip().lower()
-    if mode in ("kiosk", "ipad", "inperson", "1", "true") or request.query_params.get("inperson") == "1":
+    if _in_person_launch(request):
         # Shared office tablet: 3-minute idle reset back to /kiosk.
         html = html.replace("</body>", KIOSK_IDLE_SNIPPET + "\n</body>", 1)
     return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
