@@ -724,6 +724,14 @@ async def _net_collected_cents(db, booking: str, session) -> int:
     """
     net = 0
     for row in await _docs(db["payments"], {"booking_number": booking}, session):
+        # A plan installment is undone by rewriting that same row to
+        # ``reversed``. It is not a second refund row, so it counts as zero
+        # rather than a subtraction on top of a charge that no longer exists.
+        if (
+            str(row.get("type") or "").strip().lower() == "installment"
+            and str(row.get("status") or "").strip().lower() == "reversed"
+        ):
+            continue
         kind = row_kind(row)
         cents = row.get("amount_cents")
         if not isinstance(cents, int) or isinstance(cents, bool):
@@ -735,6 +743,71 @@ async def _net_collected_cents(db, booking: str, session) -> int:
         elif kind == "refund":
             net -= abs(cents)
     return net
+
+
+def _down_payment_invoice_reference(extra: dict, booking: str) -> str:
+    """The down-payment invoice reference when this charge settles that invoice.
+
+    The down-payment invoice number is the booking. An installment reference
+    (``{booking}-I{n}``) does not settle it. A blank reference is not guessed.
+    """
+    custom = extra.get("custom_fields") if isinstance(extra.get("custom_fields"), dict) else {}
+    raw = extra.get("raw_payload") if isinstance(extra.get("raw_payload"), dict) else {}
+    raw_custom = raw.get("custom_fields") if isinstance(raw.get("custom_fields"), dict) else {}
+    reference = str(
+        extra.get("reference_id")
+        or custom.get("reference_id")
+        or raw.get("reference_id")
+        or raw_custom.get("reference_id")
+        or ""
+    ).strip()
+    booking = str(booking or "").strip()
+    if not reference or not booking or reference != booking or "-I" in reference:
+        return ""
+    return reference
+
+
+_SETTLED_INVOICE_STATUSES = frozenset({
+    "paid", "collected", "complete", "completed", "approved", "received",
+})
+
+
+async def _reopen_settled_invoice(db, booking: str, txn_key: str, session) -> None:
+    """Mark the down-payment invoice unsettled when its charge is reversed.
+
+    Writes ``settled_invoice_status: reversed`` so a historical
+    ``last_payment_status`` no longer keeps that invoice hidden. Does nothing
+    when the bond's settlement transaction is a different id.
+    """
+    if not booking or not txn_key:
+        return
+    groups = _logical_bond_groups(await _matching_bonds(db, booking, session))
+    if len(groups) != 1:
+        return
+    for name, doc in groups[0]:
+        settled_txn = str(doc.get("settled_invoice_transaction_id") or "").strip()
+        last_txn = str(doc.get("last_transaction_id") or "").strip()
+        if settled_txn:
+            if settled_txn != txn_key:
+                continue
+        elif last_txn != txn_key:
+            continue
+        elif str(doc.get("last_payment_status") or "").strip().lower() not in _SETTLED_INVOICE_STATUSES:
+            continue
+        number = str(
+            doc.get("settled_invoice_number")
+            or doc.get("swipesimple_invoice_number")
+            or booking
+        ).strip()
+        await db[name].update_one(
+            _bond_filter(booking, doc),
+            {"$set": {
+                "settled_invoice_number": number,
+                "settled_invoice_status": "reversed",
+                "settled_invoice_transaction_id": txn_key,
+            }},
+            **_sess(session),
+        )
 
 
 async def _refresh_premium_paid(db, booking: str, kind: str, txn_key: str, session) -> list:
@@ -805,6 +878,17 @@ async def _refresh_premium_paid(db, booking: str, kind: str, txn_key: str, sessi
         }
         for name, doc, update in changes
     ]
+
+
+async def refresh_premium_paid(db, booking: str, kind: str, txn_key: str, session) -> list:
+    """Set or reopen ``premium_paid`` from collected payments.
+
+    Plan installment posting calls this inside its own transaction, after the
+    installment row is written. ``record_provider_payment`` calls the same
+    helper. A handled installment never reaches that recorder, so without
+    this call the last installment can leave ``premium_paid`` false.
+    """
+    return await _refresh_premium_paid(db, booking, kind, txn_key, session)
 
 
 async def _enrich_blank_charge(
@@ -997,6 +1081,14 @@ async def _apply(
                 "last_transaction_id": txn_key,
                 "last_payment_source": source,
             }
+            # The down-payment invoice number is the booking. Record that
+            # this reference settled, separate from premium_paid (a financed
+            # balance can still be open).
+            reference = _down_payment_invoice_reference(extra, booking)
+            if reference and event_kind(status, None) == "charge":
+                payment_update["settled_invoice_number"] = reference
+                payment_update["settled_invoice_status"] = str(status or "approved").strip().lower()
+                payment_update["settled_invoice_transaction_id"] = txn_key
             try:
                 stamp_all = await _stamp_bonds(
                     db, booking, _logical_bond_groups(bonds)[0], payment_update, session,
@@ -1052,6 +1144,7 @@ async def _apply(
             flag_booking = sibling_bookings[0]
         if flag_booking:
             bond_review = await _flag_bond(db, flag_booking, flag, session)
+            await _reopen_settled_invoice(db, flag_booking, txn_key, session)
         plan_id = _one_plan_id(siblings)
         if plan_id:
             plan_review = await _flag_plan(db, plan_id, flag, session)

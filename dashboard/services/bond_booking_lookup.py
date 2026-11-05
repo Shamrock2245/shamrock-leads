@@ -86,11 +86,44 @@ async def bonds_for_booking(booking: Any, collection: str, get_coll=None) -> Lis
     return out
 
 
+def case_id_values(doc: Any) -> set:
+    """Populated case ids on one document, both spellings.
+
+    ``bond_case_id`` is canonical. Legacy ``Bond_Case_ID`` is read only.
+    """
+    if not isinstance(doc, dict):
+        return set()
+    found = set()
+    for key in ("bond_case_id", "Bond_Case_ID"):
+        text = str(doc.get(key) or "").strip()
+        if text:
+            found.add(text)
+    return found
+
+
+def _reject_case_id_mismatch(case: Optional[dict], active: Optional[dict]) -> None:
+    """Fail closed when any populated case id disagrees.
+
+    A document that stores both spellings with different values is a mismatch
+    on its own. Across the pair, every populated id on either spelling must
+    be the same value. A side with no case id is not a guess and is allowed.
+    """
+    for doc in (case, active):
+        if len(case_id_values(doc)) > 1:
+            raise BondAmbiguous("bond_case_id_mismatch")
+    if case and active:
+        left, right = case_id_values(case), case_id_values(active)
+        if left and right and left != right:
+            raise BondAmbiguous("bond_case_id_mismatch")
+
+
 async def resolve_bond_pair(booking: Any, get_coll=None) -> Tuple[Optional[dict], Optional[dict]]:
     """``(bond_cases doc, active_bonds doc)`` for a booking; either may be None.
 
     Raises ``BondAmbiguous`` when a collection holds more than one distinct
-    document for the booking, or when both rows carry case ids that differ.
+    document for the booking, or when populated case ids disagree. Both
+    ``bond_case_id`` and legacy ``Bond_Case_ID`` count. ``Bond_Case_ID`` is
+    never written.
     """
     found: Dict[str, Optional[dict]] = {}
     for name in BOND_COLLECTIONS:
@@ -99,9 +132,5 @@ async def resolve_bond_pair(booking: Any, get_coll=None) -> Tuple[Optional[dict]
             raise BondAmbiguous(name)
         found[name] = rows[0] if rows else None
     case, active = found["bond_cases"], found["active_bonds"]
-    if case and active:
-        a = str(case.get("bond_case_id") or "").strip()
-        b = str(active.get("bond_case_id") or "").strip()
-        if a and b and a != b:
-            raise BondAmbiguous("bond_case_id_mismatch")
+    _reject_case_id_mismatch(case, active)
     return case, active

@@ -3,6 +3,20 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-05 (Indemnitor self-pay P1: recipient, case id, paid status)
+
+### Fixed
+- **`send_copy` texts only the validated indemnitor.** With `SWIPESIMPLE_DISPATCH_LIVE` on, `POST /api/portal/{token}/invoice-link` no longer falls back to `defendant_phone` or `defendant_email` when the indemnitor contact is missing. The recipient is the indemnitor phone or email on the bond (both spellings and the nested `indemnitor` map). Two different indemnitor values is `409 indemnitor_contact_mismatch`. None is `409 dispatch_missing_indemnitor`. Neither path sends. A dry run with the dispatch switch off is unchanged and still sends nothing.
+- **Legacy `Bond_Case_ID` mismatches fail closed.** Bond lookup reads `bond_case_id` and legacy `Bond_Case_ID` on each document. A populated disagreement, including one document that stores both spellings with different values, or `bond_cases` holding only `Bond_Case_ID: A` while `active_bonds` holds only `Bond_Case_ID: B`, is `bond_case_id_mismatch`. `Bond_Case_ID` is read only.
+- **A handled installment refreshes `premium_paid`.** Plan posting (`post_gateway_event` → `apply_plan_payment`) does not call `record_provider_payment`, so the last installment left `premium_paid` false. The plan-payment transaction now refreshes it after the installment row is written, and a plan refund refreshes it again. `premium_paid` is set only when clean collected cents reach the confirmed premium. A partial installment does not set it. A reversed installment row counts as zero (it is the same row, not a second refund).
+- **A settled down-payment invoice is not offered again.** After the down payment, `premium_paid` stays false and `payment_status` can stay `sent` while `last_payment_status` is `approved`. The portal no longer returns that invoice link, and it does not create another one for the same reference (`409 invoice_settled`). An unpaid invoice is still returned. A charge whose reference is the booking stamps `settled_invoice_number` / `settled_invoice_status` / `settled_invoice_transaction_id`. A reversal of that transaction marks the invoice `reversed`.
+
+### Security
+- **The one automatic pay-link text after signing stays.** Brendan O'Neal approved it on 2026-11-04. `SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING` and `SWIPESIMPLE_DISPATCH_LIVE` both default off. When both are on, DocuSeal completion texts the staged invoice link once through `dispatch_invoice`'s one-send claim. A failure is `needs_review` and is not retried. Documented in `AGENTS.md` (prime directive 6 and the env table) and on `step_auto_send`. It does not authorize any other automated client outreach.
+
+### Tests
+- `tests/test_indemnitor_self_pay.py`: legacy case-id mismatch, indemnitor-only `send_copy` (defendant never chosen; missing contact does not send), settled vs unpaid down-payment invoice, partial vs final installment `premium_paid`. No SwipeSimple session, no live send.
+
 ## [Unreleased] — 2026-11-04 (Indemnitor self-pay invoice link from the portal)
 
 ### Added

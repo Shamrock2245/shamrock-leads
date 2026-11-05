@@ -17,6 +17,12 @@
   shows "Call (239) 332-2245" instead.
 * ``send_copy`` texts the link only through ``dispatch_invoice`` (its
   one-send claim) and only when ``SWIPESIMPLE_DISPATCH_LIVE`` is on.
+  The recipient is the bond's indemnitor phone or email and no one else.
+  A missing indemnitor contact, or two that disagree, is an error and
+  does not send. The defendant is never the fallback.
+* A settled down-payment invoice (that reference, not the full premium)
+  is not returned and is not created again. ``premium_paid`` can stay
+  false while the financed balance is still open.
 * ``SWIPESIMPLE_LIVE`` off and no stored link: 503
   ``invoicing_unavailable``; nothing is created.
 """
@@ -111,6 +117,80 @@ def is_paid(case: Optional[dict], active: Optional[dict]) -> bool:
     return any(isinstance(doc, dict) and ss._is_paid(doc) for doc in (case, active))
 
 
+# A down-payment invoice is settled on its own. These statuses do not mean
+# the full premium is paid. ``payment_status`` of ``sent`` is not one of them.
+_SETTLED_INVOICE_STATUSES = frozenset({
+    "paid", "collected", "complete", "completed", "approved", "received",
+})
+
+
+def invoice_reference_settled(doc: Optional[dict], invoice_number: str, booking: str) -> bool:
+    """True when this invoice reference itself has been settled.
+
+    An explicit ``settled_invoice_number`` + paid ``settled_invoice_status``
+    wins. When that status is absent, a down-payment invoice (its number is
+    the booking, not ``{booking}-I{n}``) is settled by ``last_payment_status``
+    alone. ``payment_status`` may still be ``sent``, and ``premium_paid`` may
+    still be false: those do not keep this invoice payable.
+    """
+    if not isinstance(doc, dict):
+        return False
+    invoice_number = str(invoice_number or "").strip()
+    booking = str(booking or "").strip()
+    status = str(doc.get("settled_invoice_status") or "").strip().lower()
+    number = str(doc.get("settled_invoice_number") or "").strip()
+    if status:
+        return bool(invoice_number) and number == invoice_number and status in _SETTLED_INVOICE_STATUSES
+    if not invoice_number or invoice_number != booking or "-I" in invoice_number:
+        return False
+    last = str(doc.get("last_payment_status") or "").strip().lower()
+    return last in _SETTLED_INVOICE_STATUSES
+
+
+def stored_invoice_settled(
+    case: Optional[dict],
+    active: Optional[dict],
+    booking: str,
+) -> bool:
+    """True when a stored invoice link on this bond is already settled."""
+    booking = str(booking or "").strip()
+    for doc in (case, active):
+        if not isinstance(doc, dict) or not case_invoice_link(doc):
+            continue
+        number = str(doc.get("swipesimple_invoice_number") or "").strip()
+        if invoice_reference_settled(doc, number, booking):
+            return True
+    return False
+
+
+def exact_indemnitor_recipient(
+    case: Optional[dict],
+    active: Optional[dict],
+    channel: str,
+) -> Tuple[str, str]:
+    """``(recipient, error)``. Error is empty only for one indemnitor value.
+
+    Reads indemnitor phone or email on each document. Defendant fields are
+    not a recipient. Two different values, on one document or across the
+    pair, are ``indemnitor_contact_mismatch``. None at all is
+    ``dispatch_missing_indemnitor``.
+    """
+    found: list = []
+    for doc in (case, active):
+        if not isinstance(doc, dict):
+            continue
+        value, conflict = ss.indemnitor_contact(doc, channel)
+        if conflict:
+            return "", "indemnitor_contact_mismatch"
+        if value and value not in found:
+            found.append(value)
+    if len(found) > 1:
+        return "", "indemnitor_contact_mismatch"
+    if not found:
+        return "", "dispatch_missing_indemnitor"
+    return found[0], ""
+
+
 def _case_ids(*docs: Optional[dict]) -> set:
     ids = set()
     for doc in docs:
@@ -151,13 +231,22 @@ def verified_invoice_link(
 
     booking = str(booking or "").strip()
     ids = _case_ids(case, active)
+    settled_numbers = set()
+    for doc in (case, active):
+        if not isinstance(doc, dict):
+            continue
+        stored_number = str(doc.get("swipesimple_invoice_number") or "").strip()
+        if invoice_reference_settled(doc, stored_number, booking):
+            settled_numbers.add(stored_number)
     for doc in (case, active):
         link = case_invoice_link(doc)
         if not link:
             continue
+        number = str(doc.get("swipesimple_invoice_number") or "").strip()
+        if number in settled_numbers:
+            continue
         if due_cents is None or _invoice_amount_unproven(doc, due_cents):
             return None, "invoice_amount_unproven"
-        number = str(doc.get("swipesimple_invoice_number") or "").strip()
         stored_bond = str(doc.get("swipesimple_invoice_bond_id") or "").strip()
         if not booking or number != booking or not stored_bond or stored_bond not in ids:
             return None, "invoice_unbound"
@@ -194,6 +283,7 @@ async def portal_payment_view(booking: str) -> Dict[str, Any]:
         return view
     due = confirmed_due_cents(case, active)
     paid = is_paid(case, active)
+    settled = stored_invoice_settled(case, active, booking)
     view["paid"] = paid
     if due is not None:
         view["premium_is_confirmed"] = True
@@ -203,11 +293,14 @@ async def portal_payment_view(booking: str) -> Dict[str, Any]:
                 cents = non_negative_cents(doc.get(PREMIUM_CONFIRMED_AMOUNT_FIELD))
                 view["premium"] = cents_to_amount(cents) if cents is not None else None
                 break
-        if not paid:
+        if not paid and not settled:
             link, _err = verified_invoice_link(case, active, booking, due)
             view["payment_link"] = link
     view["invoice_request_allowed"] = bool(
-        not paid and not view["payment_link"] and (due is not None or auto_confirm_enabled())
+        not paid
+        and not settled
+        and not view["payment_link"]
+        and (due is not None or auto_confirm_enabled())
     )
     return view
 
@@ -298,15 +391,26 @@ def _create_bond_id(case: Optional[dict], active: Optional[dict]) -> str:
     return str(doc.get("_id") or "").strip()
 
 
-async def _dispatch_copy(bond_id: str, channel: str, requested: bool) -> Dict[str, Any]:
+async def _dispatch_copy(
+    bond_id: str,
+    channel: str,
+    requested: bool,
+    case: Optional[dict],
+    active: Optional[dict],
+) -> Dict[str, Any]:
     live = ss.dispatch_live_enabled()
     if not requested:
         return {"dispatched": False, "dry_run": not live, "requested": False}
     if not live:
         logger.info("[portal_invoice] send_copy dry-run bond_id=%s channel=%s", bond_id, channel)
         return {"dispatched": False, "dry_run": True, "requested": True}
+    _recipient, code = exact_indemnitor_recipient(case, active, channel)
+    if code:
+        # No defendant fallback and no send. The indemnitor value is not logged.
+        logger.warning("[portal_invoice] send_copy refused bond_id=%s error_code=%s", bond_id, code)
+        return {"dispatched": False, "dry_run": False, "requested": True, "error": code}
     try:
-        result = await ss.dispatch_invoice(bond_id, channel)  # one-send claim inside
+        result = await ss.dispatch_invoice(bond_id, channel, indemnitor_only=True)
     except Exception as exc:
         code = ss._error_code(exc)
         logger.warning("[portal_invoice] send_copy failed bond_id=%s error_code=%s", bond_id, code)
@@ -347,6 +451,8 @@ async def request_invoice_link(token_data: Dict[str, Any], body: Any) -> Tuple[i
         return _err(404, "bond_not_found")
     if is_paid(case, active):
         return _err(409, "already_paid")
+    if stored_invoice_settled(case, active, booking):
+        return _err(409, "invoice_settled")
 
     due = confirmed_due_cents(case, active)
     if due is None and not any(confirmation_complete(d) for d in (case, active)) and auto_confirm_enabled():
@@ -370,6 +476,8 @@ async def request_invoice_link(token_data: Dict[str, Any], body: Any) -> Tuple[i
         except Exception:
             return _err(503, "invoicing_unavailable")
         due = confirmed_due_cents(case, active)
+        if stored_invoice_settled(case, active, booking):
+            return _err(409, "invoice_settled")
     if due is None:
         if any(confirmation_complete(d) for d in (case, active)):
             return _err(409, "amount_mismatch")
@@ -377,6 +485,8 @@ async def request_invoice_link(token_data: Dict[str, Any], body: Any) -> Tuple[i
             return _err(409, "premium_estimate_unconfirmed")
         return _err(409, "premium_unconfirmed")
 
+    if stored_invoice_settled(case, active, booking):
+        return _err(409, "invoice_settled")
     link, code = verified_invoice_link(case, active, booking, due)
     if code == "invoice_amount_unproven":
         return _err(409, "amount_mismatch")
@@ -415,7 +525,9 @@ async def request_invoice_link(token_data: Dict[str, Any], body: Any) -> Tuple[i
         if not link:
             return _err(409, "needs_review")
 
-    dispatch = await _dispatch_copy(bond_id, channel, send_copy)
+    dispatch = await _dispatch_copy(bond_id, channel, send_copy, case, active)
+    if dispatch.get("error") in ("dispatch_missing_indemnitor", "indemnitor_contact_mismatch"):
+        return _err(409, str(dispatch["error"]))
     return 200, {
         "ok": True,
         "booking_number": booking,

@@ -1770,6 +1770,41 @@ async def create_locked_invoice(bond_id: str) -> Dict[str, Any]:
     }
 
 
+def indemnitor_contact(bond: Dict[str, Any], channel: str) -> Tuple[str, bool]:
+    """``(recipient, conflict)`` from indemnitor fields only.
+
+    Defendant phone and email are never read. Two different indemnitor values
+    on the same bond (top-level spellings or the nested ``indemnitor`` map)
+    are a conflict: the caller must not pick one. A blank field is ignored.
+    """
+    if not isinstance(bond, dict):
+        return "", False
+    nested = bond.get("indemnitor")
+    if not isinstance(nested, dict):
+        nested = bond.get("Indemnitor")
+    nested = nested if isinstance(nested, dict) else {}
+    if channel == "email":
+        raw = (
+            bond.get("indemnitor_email"),
+            bond.get("Indemnitor_Email"),
+            nested.get("email"),
+        )
+    else:
+        raw = (
+            bond.get("indemnitor_phone"),
+            bond.get("Indemnitor_Phone"),
+            nested.get("phone") or nested.get("cell"),
+        )
+    present: List[str] = []
+    for value in raw:
+        text = str(value or "").strip()
+        if text and text not in present:
+            present.append(text)
+    if len(present) > 1:
+        return "", True
+    return (present[0] if present else ""), False
+
+
 def build_dispatch_payload(
     bond: Dict[str, Any],
     *,
@@ -1777,23 +1812,36 @@ def build_dispatch_payload(
     booking_number: str,
     premium: Decimal,
     channel: Channel,
+    indemnitor_only: bool = False,
 ) -> Dict[str, Any]:
-    """Build BlueBubbles / email payload without sending (safe for dry-run / tests)."""
+    """Build BlueBubbles / email payload without sending (safe for dry-run / tests).
+
+    ``indemnitor_only`` never falls back to the defendant. A conflict leaves
+    that channel's recipient blank so nothing is sent.
+    """
     defendant = str(
         bond.get("defendant_name") or bond.get("Defendant_Name") or ""
     ).strip()
-    phone = str(
-        bond.get("indemnitor_phone")
-        or bond.get("Indemnitor_Phone")
-        or bond.get("defendant_phone")
-        or ""
-    ).strip()
-    email = str(
-        bond.get("indemnitor_email")
-        or bond.get("Indemnitor_Email")
-        or bond.get("defendant_email")
-        or ""
-    ).strip()
+    if indemnitor_only:
+        phone, phone_conflict = indemnitor_contact(bond, "imessage")
+        email, email_conflict = indemnitor_contact(bond, "email")
+        if phone_conflict:
+            phone = ""
+        if email_conflict:
+            email = ""
+    else:
+        phone = str(
+            bond.get("indemnitor_phone")
+            or bond.get("Indemnitor_Phone")
+            or bond.get("defendant_phone")
+            or ""
+        ).strip()
+        email = str(
+            bond.get("indemnitor_email")
+            or bond.get("Indemnitor_Email")
+            or bond.get("defendant_email")
+            or ""
+        ).strip()
     body = (
         f"Shamrock Bail Bonds — premium payment for {defendant or 'your bond'} "
         f"(booking {booking_number}). Amount due: ${premium:,.2f}.\n"
@@ -1817,6 +1865,8 @@ def build_dispatch_payload(
 async def dispatch_invoice(
     bond_id: str,
     channel: Channel = "imessage",
+    *,
+    indemnitor_only: bool = False,
 ) -> Dict[str, Any]:
     """
     Dispatch stored payment link via BlueBubbles (imessage) or email.
@@ -1825,6 +1875,11 @@ async def dispatch_invoice(
     Default: dry-run — builds payload, logs intent, does NOT send.
     Live send requires SWIPESIMPLE_DISPATCH_LIVE=1 (separate from HTTP LIVE).
     Prefer web payment link; no dual SwipeSimple SMS.
+
+    ``indemnitor_only`` (portal ``send_copy``) resolves the indemnitor
+    phone or email and no one else. A missing contact or two disagreeing
+    indemnitor values raises before any claim or send. The defendant is
+    never the recipient on that path.
     """
     if channel not in ("imessage", "email"):
         raise SwipeSimpleInvoiceError("invalid_channel")
@@ -1843,13 +1898,32 @@ async def dispatch_invoice(
     # payment when one is set, else the premium), never a different figure.
     amount_due = resolve_invoice_due(bond)
 
+    indemnitor_recipient = ""
+    if indemnitor_only:
+        indemnitor_recipient, conflict = indemnitor_contact(bond, channel)
+        if conflict:
+            raise SwipeSimpleInvoiceError("indemnitor_contact_mismatch")
+        if not indemnitor_recipient:
+            raise SwipeSimpleInvoiceError("dispatch_missing_indemnitor")
+
     payload = build_dispatch_payload(
         bond,
         payment_link=payment_link,
         booking_number=booking_number,
         premium=amount_due,
         channel=channel,
+        indemnitor_only=indemnitor_only,
     )
+    if indemnitor_only:
+        # The resolved indemnitor value is the only recipient. Drop the
+        # other channel so a defendant address on the bond cannot ride along.
+        if channel == "imessage":
+            payload["phone"] = indemnitor_recipient
+            payload["email"] = ""
+        else:
+            payload["email"] = indemnitor_recipient
+            payload["phone"] = ""
+        payload["has_recipient"] = True
 
     live = dispatch_live_enabled()
     logger.info(

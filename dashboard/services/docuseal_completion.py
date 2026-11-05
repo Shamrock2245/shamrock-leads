@@ -45,6 +45,10 @@ Design
                     SWIPESIMPLE_DISPATCH_LIVE). Uses dispatch_invoice's
                     one-send claim; any failure → needs_review, never retried.
                     Not a required step: off means no stamp at all.
+                    Owner exception (Brendan O'Neal, 2026-11-04): this one
+                    automatic pay-link text after signing is approved. It is
+                    not a license for chase, a second text, SMS fallback, or
+                    any other automated client outreach.
      court_sync     seed_court_calendar_for_bond
      slack          non-PII Slack post
 
@@ -898,6 +902,10 @@ class _Run:
         send goes through ``dispatch_invoice`` and its one-send claim. A
         failure is held for review (``mark_dispatch_needs_review``), never
         retried blindly.
+
+        Owner exception (Brendan O'Neal, 2026-11-04): one automatic pay-link
+        text after DocuSeal signing is approved when both switches are on.
+        It does not authorize any other automated client contact.
         """
         from dashboard.services import swipesimple_invoice_service as _ss
 

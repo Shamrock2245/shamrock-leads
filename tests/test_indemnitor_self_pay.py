@@ -120,6 +120,29 @@ def test_lookup_fails_closed_on_case_id_mismatch(monkeypatch):
         _run(bbl.resolve_bond_pair(BOOKING))
 
 
+def test_lookup_fails_closed_on_legacy_case_id_mismatch(monkeypatch):
+    """bond_cases Bond_Case_ID A must not pair with active_bonds Bond_Case_ID B."""
+    _world(monkeypatch, cases=[{"_id": 1, "booking_number": BOOKING, "Bond_Case_ID": "A"}],
+           actives=[{"_id": 2, "booking_number": BOOKING, "Bond_Case_ID": "B"}])
+    with pytest.raises(bbl.BondAmbiguous):
+        _run(bbl.resolve_bond_pair(BOOKING))
+
+
+def test_lookup_pairs_legacy_case_id_with_the_canonical_spelling(monkeypatch):
+    _world(monkeypatch, cases=[{"_id": 1, "booking_number": BOOKING, "bond_case_id": "A"}],
+           actives=[{"_id": 2, "booking_number": BOOKING, "Bond_Case_ID": "A"}])
+    case, active = _run(bbl.resolve_bond_pair(BOOKING))
+    assert case["_id"] == 1 and active["_id"] == 2
+
+
+def test_lookup_fails_when_one_document_case_spellings_disagree(monkeypatch):
+    _world(monkeypatch, cases=[{
+        "_id": 1, "booking_number": BOOKING, "bond_case_id": "A", "Bond_Case_ID": "B",
+    }], actives=[{"_id": 2, "booking_number": BOOKING, "bond_case_id": "A"}])
+    with pytest.raises(bbl.BondAmbiguous):
+        _run(bbl.resolve_bond_pair(BOOKING))
+
+
 def test_lookup_blank_booking_reads_nothing(monkeypatch):
     stores = _world(monkeypatch, cases=[{"_id": 1, "booking_number": ""}])
     assert _run(bbl.bonds_for_booking("  ", "bond_cases")) == []
@@ -144,6 +167,56 @@ def test_view_with_verified_invoice_returns_it(monkeypatch):
     view = _run(pis.portal_payment_view(BOOKING))
     assert view["payment_link"] == LINK
     assert view["invoice_request_allowed"] is False
+
+
+def _down_payment_invoice(**extra):
+    """Financed bond: due is the down payment, full premium is not paid."""
+    return _staged(
+        _id=1,
+        down_payment_amount="200.00",
+        swipesimple_invoice_amount_cents=20000,
+        payment_status="sent",
+        premium_paid=False,
+        **extra,
+    )
+
+
+def test_settled_down_payment_invoice_is_not_returned(monkeypatch):
+    _world(monkeypatch, cases=[_down_payment_invoice(last_payment_status="approved")])
+    view = _run(pis.portal_payment_view(BOOKING))
+    assert view["payment_link"] is None
+    assert view["paid"] is False
+    assert view["invoice_request_allowed"] is False
+    create = AsyncMock(side_effect=AssertionError("must not create"))
+    monkeypatch.setattr(ss, "create_locked_invoice", create)
+    res = _post(monkeypatch)
+    assert res.status_code == 409
+    assert res.json() == {"ok": False, "error": "invoice_settled"}
+    create.assert_not_called()
+
+
+def test_unpaid_down_payment_invoice_is_still_returned(monkeypatch):
+    _world(monkeypatch, cases=[_down_payment_invoice()])
+    view = _run(pis.portal_payment_view(BOOKING))
+    assert view["payment_link"] == LINK
+    assert view["paid"] is False
+    assert view["amount_due"] == "200.00"
+
+
+def test_explicit_settled_invoice_reference_hides_the_link(monkeypatch):
+    _world(monkeypatch, cases=[_down_payment_invoice(
+        settled_invoice_number=BOOKING,
+        settled_invoice_status="approved",
+    )])
+    view = _run(pis.portal_payment_view(BOOKING))
+    assert view["payment_link"] is None and view["paid"] is False
+    link, code = pis.verified_invoice_link(
+        _down_payment_invoice(settled_invoice_number=BOOKING, settled_invoice_status="approved"),
+        None,
+        BOOKING,
+        20000,
+    )
+    assert link is None and code is None
 
 
 @pytest.mark.parametrize("bad", [
@@ -351,14 +424,129 @@ def test_send_copy_is_dry_run_without_dispatch_live(monkeypatch):
     dispatch.assert_not_called()
 
 
+IND_PHONE = "2395550101"
+DEF_PHONE = "2395550199"
+
+
 def test_send_copy_uses_one_send_claim_when_live(monkeypatch):
-    _world(monkeypatch, cases=[_staged(_id=1)])
+    _world(monkeypatch, cases=[_staged(
+        _id=1, indemnitor_phone=IND_PHONE, defendant_phone=DEF_PHONE,
+    )])
     monkeypatch.setenv("SWIPESIMPLE_DISPATCH_LIVE", "1")
     dispatch = AsyncMock(return_value={"sent": True})
     monkeypatch.setattr(ss, "dispatch_invoice", dispatch)
     res = _post(monkeypatch, body={"send_copy": True, "channel": "imessage"})
     assert res.json()["dispatch"]["dispatched"] is True
-    dispatch.assert_awaited_once_with(CASE_ID, "imessage")
+    dispatch.assert_awaited_once_with(CASE_ID, "imessage", indemnitor_only=True)
+
+
+def test_send_copy_live_never_chooses_the_defendant(monkeypatch):
+    _world(monkeypatch, cases=[_staged(
+        _id=1, defendant_phone=DEF_PHONE, defendant_email="def@example.invalid",
+    )])
+    monkeypatch.setenv("SWIPESIMPLE_DISPATCH_LIVE", "1")
+    dispatch = AsyncMock(side_effect=AssertionError("must not dispatch"))
+    send = AsyncMock(side_effect=AssertionError("must not send"))
+    monkeypatch.setattr(ss, "dispatch_invoice", dispatch)
+    monkeypatch.setattr(ss, "_send_dispatch", send)
+    res = _post(monkeypatch, body={"send_copy": True, "channel": "imessage"})
+    assert res.status_code == 409
+    assert res.json() == {"ok": False, "error": "dispatch_missing_indemnitor"}
+    assert DEF_PHONE not in res.text
+    dispatch.assert_not_called()
+    send.assert_not_called()
+
+
+def test_send_copy_email_does_not_fall_back_to_defendant_email(monkeypatch):
+    _world(monkeypatch, cases=[_staged(
+        _id=1, indemnitor_phone=IND_PHONE, defendant_email="def@example.invalid",
+    )])
+    monkeypatch.setenv("SWIPESIMPLE_DISPATCH_LIVE", "1")
+    dispatch = AsyncMock(side_effect=AssertionError("must not dispatch"))
+    monkeypatch.setattr(ss, "dispatch_invoice", dispatch)
+    res = _post(monkeypatch, body={"send_copy": True, "channel": "email"})
+    assert res.status_code == 409
+    assert res.json()["error"] == "dispatch_missing_indemnitor"
+    dispatch.assert_not_called()
+
+
+def test_send_copy_refuses_disagreeing_indemnitor_phones(monkeypatch):
+    _world(
+        monkeypatch,
+        cases=[_staged(_id=1, indemnitor_phone=IND_PHONE)],
+        actives=[_staged(_id=2, indemnitor_phone="2395550102", defendant_phone=DEF_PHONE)],
+    )
+    monkeypatch.setenv("SWIPESIMPLE_DISPATCH_LIVE", "1")
+    dispatch = AsyncMock(side_effect=AssertionError("must not dispatch"))
+    monkeypatch.setattr(ss, "dispatch_invoice", dispatch)
+    res = _post(monkeypatch, body={"send_copy": True})
+    assert res.status_code == 409
+    assert res.json()["error"] == "indemnitor_contact_mismatch"
+    dispatch.assert_not_called()
+
+
+def test_indemnitor_only_payload_never_uses_the_defendant():
+    from decimal import Decimal
+
+    payload = ss.build_dispatch_payload(
+        {
+            "defendant_name": "Dee Fendant",
+            "defendant_phone": DEF_PHONE,
+            "defendant_email": "def@example.invalid",
+            "indemnitor_phone": IND_PHONE,
+        },
+        payment_link=LINK,
+        booking_number=BOOKING,
+        premium=Decimal("10.00"),
+        channel="imessage",
+        indemnitor_only=True,
+    )
+    assert payload["phone"] == IND_PHONE
+    assert DEF_PHONE not in payload["phone"]
+    assert DEF_PHONE not in payload["body"]
+    assert payload["email"] == ""
+    missing = ss.build_dispatch_payload(
+        {"defendant_phone": DEF_PHONE, "defendant_email": "def@example.invalid"},
+        payment_link=LINK,
+        booking_number=BOOKING,
+        premium=Decimal("10.00"),
+        channel="imessage",
+        indemnitor_only=True,
+    )
+    assert missing["phone"] == "" and missing["has_recipient"] is False
+    nested = ss.indemnitor_contact(
+        {"indemnitor": {"phone": IND_PHONE}, "defendant_phone": DEF_PHONE},
+        "imessage",
+    )
+    assert nested == (IND_PHONE, False)
+
+
+def test_dispatch_indemnitor_only_sends_the_indemnitor_phone(monkeypatch):
+    bond = _staged(indemnitor_phone=IND_PHONE, defendant_phone=DEF_PHONE,
+                   defendant_email="def@example.invalid")
+    monkeypatch.setenv("SWIPESIMPLE_DISPATCH_LIVE", "1")
+    monkeypatch.setattr(ss, "_load_bond_by_id", AsyncMock(return_value=bond))
+    monkeypatch.setattr(ss, "_claim_dispatch", AsyncMock(return_value=(True, None, "c1")))
+    monkeypatch.setattr(ss, "_finish_dispatch_claim", AsyncMock())
+    send = AsyncMock(return_value=True)
+    monkeypatch.setattr(ss, "_send_dispatch", send)
+    result = _run(ss.dispatch_invoice(CASE_ID, "imessage", indemnitor_only=True))
+    assert result["sent"] is True
+    payload = send.await_args.args[1]
+    assert payload["phone"] == IND_PHONE
+    assert payload["phone"] != DEF_PHONE
+    assert payload["email"] == ""
+
+
+def test_dispatch_indemnitor_only_missing_does_not_send(monkeypatch):
+    bond = _staged(defendant_phone=DEF_PHONE, defendant_email="def@example.invalid")
+    monkeypatch.setenv("SWIPESIMPLE_DISPATCH_LIVE", "1")
+    monkeypatch.setattr(ss, "_load_bond_by_id", AsyncMock(return_value=bond))
+    monkeypatch.setattr(ss, "_claim_dispatch", AsyncMock(side_effect=AssertionError("must not claim")))
+    monkeypatch.setattr(ss, "_send_dispatch", AsyncMock(side_effect=AssertionError("must not send")))
+    with pytest.raises(ss.SwipeSimpleInvoiceError) as err:
+        _run(ss.dispatch_invoice(CASE_ID, "imessage", indemnitor_only=True))
+    assert ss._error_code(err.value) == "dispatch_missing_indemnitor"
 
 
 def test_auto_confirm_switch_off_never_confirms(monkeypatch):
@@ -783,6 +971,111 @@ def test_premium_paid_not_cleared_by_a_charge_when_staff_set_it(db):
     _run(_record(db, txn="TX-PP-S", amount=50))
     assert db["bond_cases"].docs[0]["premium_paid"] is True
     assert db["active_bonds"].docs[0]["premium_paid"] is True
+
+
+def test_down_payment_reference_settles_that_invoice_only(db):
+    from dashboard.services import payment_log_claims as plc
+
+    _mirrored(
+        db,
+        payment_status="sent",
+        swipesimple_invoice_number="BK-1",
+        swipesimple_payment_link=LINK,
+        swipesimple_invoice_bond_id="case-1",
+        swipesimple_invoice_amount_cents=10000,
+        down_payment_amount="100.00",
+    )
+    _run(plc.record_provider_payment(
+        db,
+        source="swipesimple_webhook",
+        transaction_id="TX-DP-1",
+        amount=100,
+        status="approved",
+        booking_number="BK-1",
+        extra={
+            "event_type": "payment.completed",
+            "reference_id": "BK-1",
+            "custom_fields": {"booking_number": "BK-1", "reference_id": "BK-1"},
+        },
+    ))
+    for name in ("bond_cases", "active_bonds"):
+        doc = db[name].docs[0]
+        assert doc["settled_invoice_number"] == "BK-1"
+        assert doc["settled_invoice_status"] == "approved"
+        assert doc.get("premium_paid") is not True
+        assert "Booking_Number" not in doc
+
+
+def test_partial_installment_does_not_set_premium_paid_and_the_last_one_does(monkeypatch):
+    """Plan posting skips record_provider_payment. The last installment still pays the premium."""
+    from dashboard.routers import payment_plans as pp
+    from dashboard.services.plan_payment_poster import post_gateway_event
+    from tests.test_payment_plan_link_core import TxnClient
+    from tests.test_payment_plan_pay_dedupe import DB
+
+    booking = "BK-PLAN-1"
+    plan_id = "plan-pp-self"
+    store = DB()
+    trio = {
+        "premium_confirmed_amount": "500.00",
+        "premium_confirmed_at": "2026-11-04T12:00:00+00:00",
+        "premium_confirmed_by": "auto",
+        "booking_number": booking,
+        "bond_case_id": "case-plan-1",
+    }
+    store["bond_cases"].docs.append({"_id": "bc-plan", **trio})
+    store["active_bonds"].docs.append({"_id": "ab-plan", **trio})
+    store["payment_plans"].docs.append({
+        "plan_id": plan_id,
+        "booking_number": booking,
+        "status": "active",
+        "balance_remaining": 500.0,
+        "balance_remaining_cents": 50000,
+        "total_paid": 0.0,
+        "payments_made": 0,
+        "installments": [
+            {"n": 1, "amount": "250.00", "amount_cents": 25000, "status": "scheduled"},
+            {"n": 2, "amount": "250.00", "amount_cents": 25000, "status": "scheduled"},
+        ],
+    })
+    pp._inflight_txns.clear()
+    pp._txn_support_cache.clear()
+    pp._payment_claim_index_ready = False
+    client = TxnClient(store)
+
+    async def _txn():
+        return client
+
+    monkeypatch.setattr(pp, "get_collection", lambda name: store[name])
+    monkeypatch.setattr(pp, "_txn_client", _txn)
+    monkeypatch.setattr("dashboard.services.plan_payment_poster.get_collection", lambda name: store[name])
+
+    def _event(txn, n):
+        return {
+            "event_type": "payment.completed",
+            "status": "approved",
+            "transaction_id": txn,
+            "amount": "250.00",
+            "custom_fields": {
+                "booking_number": booking,
+                "reference_id": f"{booking}-I{n}",
+                "plan_id": plan_id,
+                "installment_n": n,
+            },
+        }
+
+    first = _run(post_gateway_event(_event("TX-I1", 1), actor="swipesimple_webhook"))
+    assert first.get("handled") is True
+    for name in ("bond_cases", "active_bonds"):
+        assert store[name].docs[0].get("premium_paid") is not True
+    second = _run(post_gateway_event(_event("TX-I2", 2), actor="swipesimple_webhook"))
+    assert second.get("handled") is True
+    for name in ("bond_cases", "active_bonds"):
+        doc = store[name].docs[0]
+        assert doc["premium_paid"] is True
+        assert doc["premium_paid_source"] == "payments_total"
+        assert doc["premium_paid_transaction_id"] == "TX-I2"
+    pp._inflight_txns.clear()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
