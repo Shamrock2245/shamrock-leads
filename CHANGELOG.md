@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-05 (Lee co-signer discovery: Codex 11/5 findings on #280)
+
+### Fixed
+- **Drawer scopes candidates to the selected arrest (P1).** When two pipeline bonds share a booking number across counties, `loadCandidates` used a booking-only `_data.find()`, so opening either card loaded and approved against the first bond's county/state. Cards now carry `data-county` / `data-state`; `openDetailFromCard` passes that identity into `_currentScope`. Bond lookup prefers the place match (`_findBondByIdentity`), candidate GETs include that county/state, and the scope cache is keyed by booking|county|state. Approval still posts the returned county/state, so it can no longer validate against the wrong contact doc. Lee arrest writes and the queue are unchanged.
+
+### Tests
+- `test_codex_1105_p1_drawer_scopes_candidates_to_selected_arrest` + `tests/js/candidate_scope_sim.js` (on the CI list via `test_lee_indemnitor_discovery.py`). Fails on `fa76e88`.
+
 ## [Unreleased] — 2026-11-04 (Lee co-signer discovery: Codex 11/4 findings on #280)
 
 ### Fixed

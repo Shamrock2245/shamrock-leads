@@ -38,6 +38,10 @@ A public provider (property appraiser, clerk, skip-trace) reports `source_timeou
 
 Prior-Shamrock collections are read in two bounded queries: exact-booking clauses first, then name clauses (`PRIOR_READ_LIMIT` = 25 each). A common name can't push the booking-linked co-signer out.
 
+### Drawer identity (Codex 11/5)
+
+- **The lead drawer carries the selected arrest's full identity.** Pipeline cards set `data-county` / `data-state`. Opening a card stores `{booking, county, state}` as `_currentScope` and candidate GETs / discovery refreshes / review posts use that place, not a booking-only lookup. Two bonds that share a booking across counties can no longer cross-load or approve each other's co-signers.
+
 ### Retention, same-address cap and failure reporting (Codex 11/4)
 
 - **Retention is independent of discovery.** The `contact_candidate_retention` cron purges expired unreviewed, rejected and status-less candidate rows every hour. It is always on: switching off `lee_indemnitor_discovery` (Service Control or `INDEMNITOR_DISCOVERY`) does not stop it.

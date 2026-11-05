@@ -29,6 +29,9 @@ window.SLProspective = (function () {
   let _stage = 'all';
   let _searchTimer = null;
   let _currentBk = null;
+  // Selected arrest identity for the open drawer. Booking alone is not enough
+  // when two bonds share a booking number across counties (Codex 11/5 on #280).
+  let _currentScope = null;
   let _currentIdx = null;
   let _autoReplyConfig = {};
   let _selectedBks = new Set();
@@ -228,9 +231,9 @@ window.SLProspective = (function () {
       ? '<button class="cqa-btn cqa-restore" title="Restore to Bond Desk" onclick="event.stopPropagation();SLProspective.restorePermanent(\'' + bk + '\')">♻️ Restore</button>'
       : '<button class="cqa-btn cqa-archive btn-perm-remove" title="Remove permanently from Bond Desk (soft-delete; data kept in MongoDB)" aria-label="Remove permanently from Bond Desk" onclick="event.stopPropagation();SLProspective.confirmPermanentRemove(\'' + bk + '\',this.closest(\'.pipeline-card\'))">🗑️</button>';
 
-    return '<div class="pipeline-card' + (hasNewReply ? ' has-new-reply' : '') + (isSelected ? ' card-selected' : '') + '" data-bk="' + bk + '" data-stage="' + b.stage + '">' +
+    return '<div class="pipeline-card' + (hasNewReply ? ' has-new-reply' : '') + (isSelected ? ' card-selected' : '') + '" data-bk="' + bk + '" data-county="' + escAttr(b.county || '') + '" data-state="' + escAttr(b.state || '') + '" data-stage="' + b.stage + '">' +
       '<div class="card-select-wrap"><input type="checkbox" class="card-checkbox"' + (isSelected ? ' checked' : '') + ' onchange="SLProspective.toggleSelect(\'' + bk + '\',this.checked)" onclick="event.stopPropagation()"></div>' +
-      '<div class="card-main" onclick="SLProspective.openDetail(\'' + bk + '\')">' +
+      '<div class="card-main" onclick="SLProspective.openDetailFromCard(this.closest(\'.pipeline-card\'))">' +
         '<div class="pipeline-card-header">' +
           '<span class="pipeline-card-name">' + (b.defendant_name || 'Unknown') + '</span>' +
           '<span style="display:inline-flex;align-items:center;gap:4px">' +
@@ -456,10 +459,24 @@ window.SLProspective = (function () {
     if (overlay) { overlay.classList.add('show'); overlay.classList.add('open'); }
   }
 
-  function openDetail(bk, extra) {
+  function openDetailFromCard(card) {
+    if (!card) return;
+    openDetail(card.getAttribute('data-bk'), null,
+               card.getAttribute('data-county') || '',
+               card.getAttribute('data-state') || '');
+  }
+
+  function openDetail(bk, extra, county, state) {
     if (!bk) { toast('No booking number on this record', 'error'); return; }
     _currentBk = bk;
-    _currentIdx = _data.findIndex(function(b) { return String(b.booking_number) === String(bk); });
+    var scopeCounty = (extra && extra.county) || county || '';
+    var scopeState = (extra && extra.state) || state || '';
+    _currentScope = { booking: bk, county: scopeCounty, state: scopeState };
+    _currentIdx = _bondIndexByIdentity(bk, scopeCounty, scopeState);
+    if (_currentIdx < 0) {
+      // Fall back to first booking match only when the card had no place.
+      _currentIdx = _data.findIndex(function(b) { return String(b.booking_number) === String(bk); });
+    }
     _detailExtra = extra || null;
     var titleEl = $('prospDetailTitle');
     if (titleEl) {
@@ -477,6 +494,7 @@ window.SLProspective = (function () {
 
   function closeDetail() {
     _currentBk = null;
+    _currentScope = null;
     _currentIdx = null;
     _detailExtra = null;
     var drawer = $('prospDetailPanel');
@@ -495,6 +513,11 @@ window.SLProspective = (function () {
     if (newIdx < 0 || newIdx >= _data.length) return;
     _currentIdx = newIdx;
     _currentBk = _data[newIdx].booking_number;
+    _currentScope = {
+      booking: _currentBk,
+      county: _data[newIdx].county || '',
+      state: _data[newIdx].state || '',
+    };
     _detailExtra = null;
     renderDetail(_currentBk);
     updateDrawerNav();
@@ -533,7 +556,12 @@ window.SLProspective = (function () {
   }
 
   async function resolveLeadContext(bk) {
-    var bond = _data.find(function(b) { return String(b.booking_number) === String(bk); }) || null;
+    var scope = _currentScope || {};
+    var bond = _findBondByIdentity(bk, scope.county, scope.state) || null;
+    if (!bond && _currentIdx !== null && _currentIdx >= 0 && _data[_currentIdx]
+        && String(_data[_currentIdx].booking_number) === String(bk)) {
+      bond = _data[_currentIdx];
+    }
     var lead = (window._leadMap && window._leadMap[bk]) || null;
     var jobs = [];
     jobs.push(fetchJsonSafe(API + '/api/leads/' + encodeURIComponent(bk)).then(function(d) {
@@ -546,8 +574,11 @@ window.SLProspective = (function () {
     if (!bond) {
       jobs.push(fetchJsonSafe(API + '/api/prospective-bonds?search=' + encodeURIComponent(bk)).then(function(d) {
         var bonds = (d && d.bonds) || [];
-        bond = bonds.find(function(b) { return String(b.booking_number) === String(bk); }) || null;
-        if (bond && !_data.some(function(b) { return String(b.booking_number) === String(bk); })) {
+        var scope = _currentScope || {};
+        bond = bonds.find(function(b) {
+          return String(b.booking_number) === String(bk) && _samePlaceBond(b, scope.county, scope.state);
+        }) || bonds.find(function(b) { return String(b.booking_number) === String(bk); }) || null;
+        if (bond && !_findBondByIdentity(bk, bond.county, bond.state)) {
           _data.push(bond);
         }
       }));
@@ -577,7 +608,11 @@ window.SLProspective = (function () {
       return;
     }
 
-    _currentIdx = _data.findIndex(function(b) { return String(b.booking_number) === String(bk); });
+    var scope = _currentScope || {};
+    _currentIdx = _bondIndexByIdentity(bk, (bond && bond.county) || scope.county, (bond && bond.state) || scope.state);
+    if (_currentIdx < 0) {
+      _currentIdx = _data.findIndex(function(b) { return String(b.booking_number) === String(bk); });
+    }
     updateDrawerNav();
 
     var name = pickLeadField(lead, bond, ['full_name', 'defendant_name'], bk);
@@ -715,12 +750,19 @@ window.SLProspective = (function () {
       bondAmt: bondAmt,
     });
 
+    _currentScope = {
+      booking: booking,
+      county: county || ((_currentScope && _currentScope.county) || ''),
+      state: state || ((_currentScope && _currentScope.state) || ''),
+      full_name: name || '',
+    };
+
     if (inPipeline) {
       var mount = $('ldPipelineMount');
       if (mount) mount.innerHTML = renderPipelineWorkspace(bk, bond);
       wireComposer(bk);
     }
-    loadCandidates(booking);
+    loadCandidates(booking, _currentScope.county, _currentScope.state);
     return;
   }
 
@@ -739,6 +781,48 @@ window.SLProspective = (function () {
   ];
   const _FL_COUNTY_KEYS = new Set(FL_REGISTRY_COUNTIES.map(function(c) { return c.toLowerCase(); }));
   let _candidateScope = {};
+
+  function _scopeKey(booking, county, state) {
+    return [String(booking || ''), String(county || '').trim().toLowerCase(),
+            String(state || '').trim().toUpperCase()].join('|');
+  }
+
+  function _samePlaceBond(bond, county, state) {
+    if (!bond) return false;
+    if (county && String(bond.county || '').trim().toLowerCase() !== String(county).trim().toLowerCase()) return false;
+    if (state) {
+      var bs = String(bond.state || '').trim().toUpperCase();
+      if (bs && bs !== String(state).trim().toUpperCase()) return false;
+    }
+    return true;
+  }
+
+  function _findBondByIdentity(bk, county, state) {
+    var rows = _data || [];
+    var i, b, exact = null, any = null;
+    for (i = 0; i < rows.length; i++) {
+      b = rows[i];
+      if (String(b.booking_number) !== String(bk)) continue;
+      if (!any) any = b;
+      if (_samePlaceBond(b, county, state)) { exact = b; break; }
+    }
+    // Prefer the place match. Fall back only when the caller had no place.
+    if (county || state) return exact;
+    return exact || any;
+  }
+
+  function _bondIndexByIdentity(bk, county, state) {
+    var rows = _data || [];
+    var i, b, any = -1;
+    for (i = 0; i < rows.length; i++) {
+      b = rows[i];
+      if (String(b.booking_number) !== String(bk)) continue;
+      if (any < 0) any = i;
+      if (_samePlaceBond(b, county, state)) return i;
+    }
+    return (county || state) ? -1 : any;
+  }
+
 
   function resolveLeadState(county, formState) {
     var st = String(formState || '').trim().toUpperCase();
@@ -820,7 +904,8 @@ window.SLProspective = (function () {
     } catch (e) {
       toast(action + ' failed: network error.', 'error');
     }
-    return loadCandidates(bk);
+    var scope = _currentScope || {};
+    return loadCandidates(bk, scope.county, scope.state);
   }
 
   function candidateStatusLine(status, count) {
@@ -831,17 +916,25 @@ window.SLProspective = (function () {
     return 'Discovery has not run for this booking yet.';
   }
 
-  async function loadCandidates(bk) {
+  async function loadCandidates(bk, county, state) {
     var seq = _detailSeq;
     var el = $('ldCandidateList');
     if (!el || !bk) return;
     try {
-      var cbond = (_data || []).find(function(b) { return String(b.booking_number) === String(bk); });
+      var scope = _currentScope || {};
+      var wantCounty = county || scope.county || '';
+      var wantState = state || scope.state || '';
+      var cbond = _findBondByIdentity(bk, wantCounty, wantState);
+      if (!cbond && _currentIdx !== null && _currentIdx >= 0 && _data[_currentIdx]
+          && String(_data[_currentIdx].booking_number) === String(bk)) {
+        cbond = _data[_currentIdx];
+      }
       var clead = (window._leadMap && window._leadMap[bk]) || {};
-      var cached = _candidateScope[String(bk)] || {};
+      var cached = _candidateScope[_scopeKey(bk, wantCounty, wantState)]
+        || _candidateScope[String(bk)] || {};
       var cq = new URLSearchParams();
-      var ccounty = (cbond && cbond.county) || clead.county || cached.county || '';
-      var cstate = resolveLeadState(ccounty, (cbond && cbond.state) || clead.state || cached.state || '');
+      var ccounty = wantCounty || (cbond && cbond.county) || clead.county || cached.county || '';
+      var cstate = resolveLeadState(ccounty, wantState || (cbond && cbond.state) || clead.state || cached.state || '');
       if (ccounty) cq.set('county', ccounty);
       if (cstate) cq.set('state', cstate);
       var r = await fetch(API + '/api/contacts/' + encodeURIComponent(bk) + (cq.toString() ? '?' + cq.toString() : ''));
@@ -855,11 +948,18 @@ window.SLProspective = (function () {
       var rstate = resolveLeadState(rcounty, d.state || cstate);
       var rname = (cbond && cbond.defendant_name) || clead.full_name || clead.defendant_name || cached.full_name || '';
       if (rcounty || rstate || rname) {
-        _candidateScope[String(bk)] = { county: rcounty, state: rstate, full_name: rname };
+        var sk = _scopeKey(bk, rcounty, rstate);
+        _candidateScope[sk] = { county: rcounty, state: rstate, full_name: rname };
+        // Keep the booking-only cache only when it already matched this place,
+        // so a second county with the same booking never overwrites it.
+        if (!_candidateScope[String(bk)] || _samePlaceBond({county: _candidateScope[String(bk)].county, state: _candidateScope[String(bk)].state}, rcounty, rstate)) {
+          _candidateScope[String(bk)] = _candidateScope[sk];
+        }
         if (cbond) {
           if (rcounty && !cbond.county) cbond.county = rcounty;
           if (rstate && !cbond.state) cbond.state = rstate;
         }
+        _currentScope = { booking: bk, county: rcounty, state: rstate, full_name: rname };
       }
       var rows = d.discovered_contacts || d.candidates || d.contacts || [];
       var status = d.discovery_status || d.status || '';
@@ -1139,13 +1239,19 @@ window.SLProspective = (function () {
   async function discoverContacts(bk) {
     toast('Running contact discovery…', 'info');
     try {
-      var bondObj = _data.find(function(b) { return String(b.booking_number) === String(bk); });
+      var scope = _currentScope || {};
+      var bondObj = _findBondByIdentity(bk, scope.county, scope.state);
+      if (!bondObj && _currentIdx !== null && _currentIdx >= 0 && _data[_currentIdx]
+          && String(_data[_currentIdx].booking_number) === String(bk)) {
+        bondObj = _data[_currentIdx];
+      }
       var bond = bondObj || {};
       var lead = (window._leadMap && window._leadMap[bk]) || {};
-      var cached = _candidateScope[String(bk)] || {};
-      var county = bond.county || lead.county || cached.county || '';
-      var state = resolveLeadState(county, bond.state || lead.state || cached.state || '');
-      var fullName = bond.defendant_name || lead.full_name || lead.defendant_name || cached.full_name || '';
+      var cached = _candidateScope[_scopeKey(bk, scope.county, scope.state)]
+        || _candidateScope[String(bk)] || {};
+      var county = scope.county || bond.county || lead.county || cached.county || '';
+      var state = resolveLeadState(county, scope.state || bond.state || lead.state || cached.state || '');
+      var fullName = bond.defendant_name || lead.full_name || lead.defendant_name || cached.full_name || scope.full_name || '';
       var r = await fetch(API + '/api/contacts/discover', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1160,16 +1266,21 @@ window.SLProspective = (function () {
       var rcounty = (d && d.county) || county;
       var rstate = resolveLeadState(rcounty, (d && d.state) || state);
       if (rcounty || rstate || fullName) {
-        _candidateScope[String(bk)] = { county: rcounty, state: rstate, full_name: fullName };
+        var sk = _scopeKey(bk, rcounty, rstate);
+        _candidateScope[sk] = { county: rcounty, state: rstate, full_name: fullName };
+        if (!_candidateScope[String(bk)] || _samePlaceBond({county: _candidateScope[String(bk)].county, state: _candidateScope[String(bk)].state}, rcounty, rstate)) {
+          _candidateScope[String(bk)] = _candidateScope[sk];
+        }
         if (bondObj) {
           if (rcounty && !bondObj.county) bondObj.county = rcounty;
           if (rstate && !bondObj.state) bondObj.state = rstate;
         }
+        _currentScope = { booking: bk, county: rcounty, state: rstate, full_name: fullName };
       }
       var count = (d.contacts || d.discovered_contacts || []).length;
       if (d.error) toast('Discovery failed', 'error');
       else toast('Discovery finished (' + count + ')', count ? 'success' : 'info');
-      loadCandidates(bk);
+      loadCandidates(bk, rcounty, rstate);
     } catch (e) { toast('Discovery failed', 'error'); }
   }
 
@@ -2051,7 +2162,8 @@ window.SLProspective = (function () {
 
   return {
     load: load, setStage: setStage, debounceSearch: debounceSearch, clearSearch: clearSearch,
-    openDetail: openDetail, closeDetail: closeDetail, navDetail: navDetail,
+    openDetail: openDetail, openDetailFromCard: openDetailFromCard, closeDetail: closeDetail, navDetail: navDetail,
+    _findBondByIdentity: _findBondByIdentity, _scopeKey: _scopeKey,
     openAddModal: openAddModal, closeAddModal: closeAddModal, switchAddSource: switchAddSource, submitAddLead: submitAddLead,
     searchArrests: searchArrests, addFromArrest: addFromArrest, searchIntake: searchIntake, addFromIntake: addFromIntake,
     toggleSelect: toggleSelect, clearSelection: clearSelection,

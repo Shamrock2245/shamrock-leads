@@ -3640,3 +3640,48 @@ async def test_codex_1104_c_route_returns_non_success_with_code(monkeypatch, cap
     assert body["discovery_status"] == "failed"
     assert "Stale" not in got.text and "Stale" not in caplog.text
     assert db["contacts"].docs == []
+
+
+
+def test_codex_1105_p1_drawer_scopes_candidates_to_selected_arrest():
+    """Codex 11/5 P1 on #280: two bonds sharing a booking must not cross-load candidates.
+
+    Opening the Collier card must GET /api/contacts/B-100?county=Collier&state=FL,
+    not the first (Lee) match. The card carries data-county/data-state and
+    openDetailFromCard passes that identity through the drawer.
+    """
+    import json as _json
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    js = root / "dashboard" / "sl-prospective.js"
+    src = js.read_text(encoding="utf-8")
+    assert "openDetailFromCard" in src
+    assert "data-county=" in src and "data-state=" in src
+    assert "_findBondByIdentity" in src and "_currentScope" in src
+    # The booking-only find that Codex flagged must not be the candidate path.
+    assert "async function loadCandidates(bk, county, state)" in src
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    r = subprocess.run(
+        [node, str(root / "tests/js/candidate_scope_sim.js"), str(js)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert r.returncode == 0, r.stderr[:400]
+    out = _json.loads(r.stdout.strip().splitlines()[-1])
+
+    assert out["collier_card"]["gets"] == [
+        {"booking": "B-100", "county": "Collier", "state": "FL"}
+    ]
+    assert out["collier_card"]["scope"]["county"] == "Collier"
+    assert out["lee_card"]["gets"] == [
+        {"booking": "B-100", "county": "Lee", "state": "FL"}
+    ]
+    assert out["card_contract"]["finds_collier"] is True
+    assert out["card_contract"]["finds_lee"] is True
+    # Guard: booking-only open still resolves the first match (Lee).
+    assert out["booking_only"]["gets"][0]["county"] == "Lee"
