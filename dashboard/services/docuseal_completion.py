@@ -43,7 +43,9 @@ Design
      auto_send      text the staged invoice link once (behind
                     SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING, default off, AND
                     SWIPESIMPLE_DISPATCH_LIVE). Uses dispatch_invoice's
-                    one-send claim; any failure → needs_review, never retried.
+                    one-send claim with indemnitor_only; any failure,
+                    including a missing or conflicting indemnitor contact,
+                    → needs_review, never retried, never the defendant.
                     Not a required step: off means no stamp at all.
                     Owner exception (Brendan O'Neal, 2026-11-04): this one
                     automatic pay-link text after signing is approved. It is
@@ -899,9 +901,11 @@ class _Run:
         SWIPESIMPLE_DISPATCH_LIVE are both on; off writes nothing. Runs only
         after share_invoice staged a real link (not a dry run). Stamped
         ``started`` before the send, so it is attempted at most once; the
-        send goes through ``dispatch_invoice`` and its one-send claim. A
-        failure is held for review (``mark_dispatch_needs_review``), never
-        retried blindly.
+        send goes through ``dispatch_invoice(..., indemnitor_only=True)``
+        and its one-send claim. The recipient is the indemnitor phone only.
+        A missing or conflicting indemnitor contact raises before any claim
+        or send and is held for review (``mark_dispatch_needs_review``).
+        The defendant is never the fallback. A failure is never retried.
 
         Owner exception (Brendan O'Neal, 2026-11-04): one automatic pay-link
         text after DocuSeal signing is approved when both switches are on.
@@ -940,7 +944,9 @@ class _Run:
             return  # another run already started it
         self.doc.setdefault(_C, {}).setdefault("steps", {})[STEP_AUTO_SEND] = {"state": "started"}
         try:
-            result = await _ss.dispatch_invoice(bond_id, "imessage") or {}
+            result = await _ss.dispatch_invoice(
+                bond_id, "imessage", indemnitor_only=True,
+            ) or {}
         except Exception as exc:
             code = _ss._error_code(exc)
             await _ss.mark_dispatch_needs_review(bond_id, code)
