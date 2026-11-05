@@ -280,3 +280,231 @@ def test_relay_read_walk_meta_carries_column_names_only():
     _recs, meta = walk_roster(lambda url, pg: page, sleep=lambda s: None)
     assert meta["columns"] == headers
     assert "DOE" not in json.dumps(meta)
+
+
+def test_smoke_evidence_check_reports_manatee_clerk_internal_key_fields():
+    """The Manatee Clerk write-smoke `expect` is checkable from the aggregate alone.
+
+    Internal key shape and validity, the internal flag, case / OBTS presence and
+    booking == case number are counted; no key, case or OBTS value is printed.
+    """
+    from scrapers.counties.manatee_clerk import mc_case_key
+
+    spec = importlib.util.spec_from_file_location("sec", ROOT / "scripts" / "smoke_evidence_check.py")
+    sec = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sec)
+    # Synthetic case numbers (uniform FL case-number shape), not real filings.
+    k1, k2 = mc_case_key("2026CF009901AX"), mc_case_key("2026-MM-004402-AX")
+    docs = [
+        {"booking_number": k1, "booking_key_internal": True, "case_number": "2026CF009901AX",
+         "obts_number": "5800012345", "charges": "BATTERY", "bond_amount_raw": ""},
+        {"booking_number": k2, "booking_key_internal": True, "case_number": "2026-MM-004402-AX",
+         "charges": "TRESPASS", "bond_amount_raw": "0.00"},
+        # A regression the smoke must surface: the case number stored as the booking key.
+        {"booking_number": "2026-CF-009903-AX", "case_number": "2026CF009903AX", "charges": "DUI"},
+        # A malformed internal key is not counted as valid.
+        {"booking_number": "mc_case_v1:abc", "booking_key_internal": True, "case_number": "2026CF1AX"},
+    ]
+    out = sec.summarize(docs)
+    assert out["rows"] == 4
+    assert out["booking_number_blank"] == 0
+    assert out["booking_key_internal"] == 3
+    assert out["internal_key_valid"] == 2
+    assert out["with_case_number"] == 4
+    assert out["with_obts_number"] == 1
+    assert out["booking_equals_case_number"] == 1
+    assert out["booking_number_shapes"]["mc_case_v1:<sha256>"] == 2
+    assert out["with_charges"] == 3
+    blob = json.dumps(out)
+    for secret in (k1, k2, k1.split(":")[1][:16], "2026CF009901AX", "009903", "5800012345", "abc"):
+        assert secret not in blob
+    # Ordinary booking numbers are unchanged.
+    assert sec.key_shape("1033660") == "NNNNNNN"
+    assert sec.internal_key_family("1033660") == ""
+    assert "case_number" in sec.PROJECTION and "obts_number" in sec.PROJECTION
+    assert "full_name" not in sec.PROJECTION
+
+
+def test_manatee_clerk_smoke_row_names_the_checkable_fields():
+    rows = [r for r in json.loads(SMOKE.read_text())["records"] if r["label"] == "Manatee Clerk (FL)"]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["kind"] == "write_smoke" and row["status"] == "requested"
+    assert '--county "Manatee Clerk" --state FL' in row["command"]
+    for field in ("booking_key_internal", "internal_key_valid", "with_case_number",
+                  "booking_equals_case_number", "with_charges"):
+        assert field in row["expect"], field
+    assert "merged" in row["blocked_on"].lower() and "deploy" in row["blocked_on"].lower()
+
+
+def test_smoke_evidence_check_internal_key_needs_a_full_match():
+    """Codex 11/3 on #308: a key with a trailing newline is not a valid internal key.
+
+    ``re.match`` with ``$`` accepts ``key + "\\n"``; the writer's
+    ``internal_natural_key()`` uses ``fullmatch`` and rejects it, so the smoke must too.
+    """
+    from scrapers.counties.manatee_clerk import mc_case_key
+
+    spec = importlib.util.spec_from_file_location("sec", ROOT / "scripts" / "smoke_evidence_check.py")
+    sec = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sec)
+    key = mc_case_key("2026CF009901AX")
+    assert sec.internal_key_family(key) == "mc_case_v1"
+    for bad in (key + "\n", key + " ", " " + key, key.upper()):
+        assert sec.internal_key_family(bad) == "", repr(bad[-2:])
+        assert sec.key_shape(bad) != "mc_case_v1:<sha256>"
+    out = sec.summarize([{"booking_number": key + "\n", "booking_key_internal": True}])
+    assert out["internal_key_valid"] == 0
+    assert "mc_case_v1:<sha256>" not in out["booking_number_shapes"]
+
+
+# --- Codex 11/4 on #308: Manatee Clerk identity counters gate a passed smoke ---
+
+
+def _sec():
+    spec = importlib.util.spec_from_file_location("sec_1104", ROOT / "scripts" / "smoke_evidence_check.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _mc_counters(**over):
+    res = {"status": "ok", "rows": 12, "window_hours": 24, "booking_number_blank": 0,
+           "booking_number_duplicates": 0, "booking_number_shapes": {"mc_case_v1:<sha256>": 12},
+           "booking_key_internal": 12, "internal_key_valid": 12, "with_case_number": 12,
+           "with_obts_number": 9, "booking_equals_case_number": 0, "with_charges": 12,
+           "with_booking_date": 0, "status_buckets": {"": 12}}
+    res.update(over)
+    return res
+
+
+def _mc_passed(method="prod_mongo_aggregate", **over):
+    res = _mc_counters(**over)
+    if method == "one_shot_run":
+        res.update({"new_records": 12, "updated_records": 0, "mongo_writer_results": 1})
+    return {**BASE, "label": "Manatee Clerk (FL)", "kind": "write_smoke", "status": "passed",
+            "run_on": "2026-10-09", "commit": "abc1234", "egress": "vps", "method": method, "result": res}
+
+
+@pytest.mark.parametrize("method", ["prod_mongo_aggregate", "one_shot_run"])
+def test_codex_1104_manatee_clerk_good_counters_pass(tmp_path, method):
+    text, _ = _build(_write(tmp_path, [_mc_passed(method)]))
+    assert "| Manatee Clerk (FL) |" in text and "| passed |" in text
+
+
+@pytest.mark.parametrize("method", ["prod_mongo_aggregate", "one_shot_run"])
+@pytest.mark.parametrize("over", [
+    # The exact case Codex named.
+    {"booking_key_internal": 0, "internal_key_valid": 0, "with_case_number": 0, "booking_equals_case_number": 1},
+    {"booking_key_internal": 11}, {"internal_key_valid": 11}, {"with_case_number": 11},
+    {"booking_equals_case_number": 1}, {"with_charges": 11}, {"with_booking_date": 1},
+    {"status_buckets": {"": 11, "IN CUSTODY": 1}}, {"booking_key_internal": None},
+    {"internal_key_valid": "12"}, {"booking_key_internal": True},
+])
+def test_codex_1104_manatee_clerk_bad_counters_fail_closed(tmp_path, method, over):
+    with pytest.raises(RuntimeError, match="identity gate failed for Manatee Clerk"):
+        _build(_write(tmp_path, [_mc_passed(method, **over)]))
+
+
+@pytest.mark.parametrize("key", ["booking_key_internal", "internal_key_valid", "with_case_number",
+                                 "booking_equals_case_number", "with_charges", "with_booking_date",
+                                 "status_buckets", "booking_number_shapes"])
+def test_codex_1104_manatee_clerk_missing_counter_fails(tmp_path, key):
+    rec = _mc_passed()
+    del rec["result"][key]
+    with pytest.raises(RuntimeError, match="identity gate failed"):
+        _build(_write(tmp_path, [rec]))
+
+
+def test_codex_1104_other_sources_have_no_identity_gate(tmp_path):
+    """Guard: Lee's documented aggregate still passes without Manatee counters."""
+    assert _sec().identity_gate("Lee (FL)", {"rows": 1}) is None
+    text, _ = _build(_write(tmp_path, [_prod_aggregate()]))
+    assert "| Lee (FL) |" in text
+
+
+def test_codex_1104_script_exits_nonzero_on_a_failed_gate(monkeypatch, capsys):
+    """The check itself fails (exit 3, result identity_failed) on bad counters; no PII printed."""
+    sec = _sec()
+    from scrapers.counties.manatee_clerk import mc_case_key
+
+    good = mc_case_key("2026CF009901AX")
+    docs = {"bad": [{"booking_number": "2026CF009901AX", "case_number": "2026CF009901AX", "charges": "X"}],
+            "good": [{"booking_number": good, "booking_key_internal": True, "case_number": "2026CF009901AX",
+                      "charges": "X", "status": ""}]}
+
+    class _Col:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def find(self, *a, **k):
+            return list(self.rows)
+
+    class _Client:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def get_database(self, _name):
+            return {"arrests": _Col(self.rows)}
+
+    import pymongo
+    for which, code, result in (("bad", 3, "identity_failed"), ("good", 0, "ok")):
+        monkeypatch.setenv("MONGODB_URI", "mongodb://test-only.invalid")
+        monkeypatch.setattr(pymongo, "MongoClient", lambda *a, _r=docs[which], **k: _Client(_r))
+        assert sec.main(["--county", "Manatee Clerk", "--state", "FL"]) == code
+        out = json.loads(capsys.readouterr().out)
+        assert out["result"] == result
+        assert out["identity_gate"] == ("fail" if code else "pass")
+        assert "2026CF009901AX" not in json.dumps(out)
+
+
+def test_codex_1104_manatee_clerk_row_documents_the_gate():
+    row = next(r for r in json.loads(SMOKE.read_text())["records"] if r["label"] == "Manatee Clerk (FL)")
+    assert row["status"] == "requested"
+    assert "identity_gate pass" in row["expect"]
+
+
+
+# --- Codex 11/5 on #308: Manatee family-only keys + blank status_buckets count ---
+
+
+@pytest.mark.parametrize("method", ["prod_mongo_aggregate", "one_shot_run"])
+@pytest.mark.parametrize("over", [
+    # Codex's exact case: every row is a valid Miami-Dade key.
+    {"booking_number_shapes": {"md_dedupe_v2:<sha256>": 12}, "internal_key_valid": 12},
+    {"booking_number_shapes": {"mc_case_v1:<sha256>": 11, "md_dedupe_v2:<sha256>": 1}},
+    {"booking_number_shapes": {"mc_case_v1:<sha256>": 11}},
+    {"booking_number_shapes": {"NNNNNNN": 12}},
+    {"booking_number_shapes": {}},
+    {"booking_number_shapes": {"mc_case_v1:<sha256>": "12"}},
+])
+def test_codex_1105_manatee_clerk_rejects_wrong_key_family(tmp_path, method, over):
+    with pytest.raises(RuntimeError, match="identity gate failed for Manatee Clerk"):
+        _build(_write(tmp_path, [_mc_passed(method, **over)]))
+
+
+@pytest.mark.parametrize("method", ["prod_mongo_aggregate", "one_shot_run"])
+@pytest.mark.parametrize("buckets", [
+    {},
+    {"": 0},
+    {"": "12"},
+    {"": 11},
+    {"": True},
+    {"IN CUSTODY": 12},
+    {"": 12, "OPEN": 0},
+])
+def test_codex_1105_manatee_clerk_requires_blank_status_count(tmp_path, method, buckets):
+    """Codex 11/5: status_buckets must be exactly {"": rows} with an integer count."""
+    with pytest.raises(RuntimeError, match="identity gate failed for Manatee Clerk"):
+        _build(_write(tmp_path, [_mc_passed(method, status_buckets=buckets)]))
+
+
+def test_codex_1105_manatee_clerk_gate_helpers_name_the_problems():
+    sec = _sec()
+    bad_family = _mc_counters(booking_number_shapes={"md_dedupe_v2:<sha256>": 12})
+    probs = sec.manatee_clerk_identity_problems(bad_family)
+    assert any("booking_number_shapes" in p for p in probs)
+    bad_status = _mc_counters(status_buckets={})
+    probs = sec.manatee_clerk_identity_problems(bad_status)
+    assert any("status_buckets" in p for p in probs)
+    assert sec.manatee_clerk_identity_problems(_mc_counters()) == []

@@ -8,8 +8,11 @@ Run by Leads Ops wherever ``MONGODB_URI`` is set (the agent box has none):
 It reads ``arrests`` rows for that county written in the window and prints one
 JSON line: row count, booking-key shapes and uniqueness, how many rows have an
 empty, zero or positive bond, charges, booking date/time, release fields,
-mugshot, DOB and address. It never prints a name, DOB, address or booking
-number, and it never writes. Paste the JSON into the ``result`` of the
+mugshot, DOB and address. For internal-key scopes (Manatee Clerk, Miami-Dade)
+it also counts rows flagged ``booking_key_internal``, keys that match the
+scope's exact pattern, case / OBTS numbers present, and any row whose stored
+booking number equals its case number. It never prints a name, DOB, address,
+booking, case or OBTS number, and it never writes. Paste the JSON into the ``result`` of the
 matching ``docs/recon/smoke_evidence.json`` row (see
 docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md).
 """
@@ -22,12 +25,40 @@ import re
 import sys
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Iterable
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from core.booking_identity import MC_INTERNAL_KEY_RE, MD_INTERNAL_KEY_RE  # noqa: E402  (pure: re/typing only)
+
+_INTERNAL_KEY_RES = {"mc_case_v1": MC_INTERNAL_KEY_RE, "md_dedupe_v2": MD_INTERNAL_KEY_RE}
+
+
+def internal_key_family(value: Any) -> str:
+    """``mc_case_v1`` / ``md_dedupe_v2`` when the value is a valid internal key, else ""."""
+    text = str(value or "")
+    for family, pattern in _INTERNAL_KEY_RES.items():
+        if pattern.fullmatch(text):
+            return family
+    return ""
 
 
 def key_shape(value: Any) -> str:
-    """``1033660`` -> ``NNNNNNN``; ``GCSO26JBN000123`` -> ``AAAANNAAANNNNNN``."""
+    """``1033660`` -> ``NNNNNNN``; ``GCSO26JBN000123`` -> ``AAAANNAAANNNNNN``.
+
+    A valid internal key prints as ``mc_case_v1:<sha256>`` (one shape, no digest).
+    """
+    family = internal_key_family(value)
+    if family:
+        return f"{family}:<sha256>"
     return re.sub(r"\d", "N", re.sub(r"[A-Za-z]", "A", str(value or "")))
+
+
+def _case_token(value: Any) -> str:
+    return re.sub(r"[^0-9A-Z]", "", str(value or "").upper())
 
 
 def _blank(value: Any) -> bool:
@@ -76,9 +107,87 @@ def summarize(docs: Iterable[dict]) -> dict:
         "with_mugshot": sum(1 for d in rows if not _blank(d.get("mugshot_url"))),
         "with_dob": sum(1 for d in rows if not _blank(d.get("dob"))),
         "with_address": sum(1 for d in rows if not _blank(d.get("address"))),
+        "booking_key_internal": sum(1 for d in rows if d.get("booking_key_internal") is True),
+        "internal_key_valid": sum(1 for k in keys if internal_key_family(k)),
+        "with_case_number": sum(1 for d in rows if not _blank(d.get("case_number"))),
+        "with_obts_number": sum(1 for d in rows if not _blank(d.get("obts_number"))),
+        "booking_equals_case_number": sum(
+            1 for d in rows
+            if _case_token(d.get("case_number")) and _case_token(d.get("case_number")) == _case_token(d.get("booking_number"))
+        ),
         "first_scraped_at": scraped[0] if scraped else "",
         "last_scraped_at": scraped[-1] if scraped else "",
     }
+
+
+# Per-source identity gates (Codex 11/4 on #308). A source whose stored key
+# is internal (not a jail booking number) must prove it before a smoke can
+# pass. Keyed by the smoke_evidence.json label.
+_COUNTER_KEYS = (
+    "rows", "booking_number_blank", "booking_number_duplicates", "booking_key_internal",
+    "internal_key_valid", "with_case_number", "booking_equals_case_number",
+    "with_charges", "with_booking_date",
+)
+
+
+def _int(result: dict, key: str) -> int | None:
+    value = result.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+MC_SHAPE = "mc_case_v1:<sha256>"
+
+
+def manatee_clerk_identity_problems(result: dict) -> list[str]:
+    """Pass criteria from FL_MANATEE_CLERK_SCRAPER_2026-10-10.md; [] means pass.
+
+    Missing or non-integer counters fail (fail closed). Manatee Clerk may only
+    use the ``mc_case_v1`` family (Codex 11/5): a valid Miami-Dade
+    ``md_dedupe_v2`` key must not certify this smoke. ``status_buckets`` must be
+    exactly ``{"": rows}`` with an integer count (Codex 11/5).
+    """
+    if not isinstance(result, dict):
+        return ["result missing"]
+    vals = {k: _int(result, k) for k in _COUNTER_KEYS}
+    missing = [k for k, v in vals.items() if v is None]
+    if missing:
+        return [f"missing counter: {k}" for k in missing]
+    rows = vals["rows"]
+    problems = []
+    if rows < 1:
+        problems.append("rows < 1")
+    for key in ("booking_number_blank", "booking_number_duplicates", "booking_equals_case_number",
+                "with_booking_date"):
+        if vals[key] != 0:
+            problems.append(f"{key} != 0")
+    for key in ("booking_key_internal", "internal_key_valid", "with_case_number", "with_charges"):
+        if vals[key] != rows:
+            problems.append(f"{key} != rows")
+    shapes = result.get("booking_number_shapes")
+    if not isinstance(shapes, dict) or set(shapes) != {MC_SHAPE} or _int(shapes, MC_SHAPE) != rows:
+        # Wrong family (e.g. md_dedupe_v2), mixed shapes, or count != rows.
+        problems.append(f"booking_number_shapes != {{{MC_SHAPE}: rows}}")
+    buckets = result.get("status_buckets")
+    if (
+        not isinstance(buckets, dict)
+        or set(buckets) != {""}
+        or _int(buckets, "") != rows
+    ):
+        problems.append('status_buckets != {"": rows}')
+    return problems
+
+
+IDENTITY_GATES = {
+    "Manatee Clerk (FL)": manatee_clerk_identity_problems,
+}
+
+
+def identity_gate(label: str, result: dict) -> list[str] | None:
+    """None when the label has no identity gate, else the problem list."""
+    gate = IDENTITY_GATES.get(label)
+    return None if gate is None else gate(result)
 
 
 def county_query(county: str, state: str, since: datetime) -> dict:
@@ -107,6 +216,7 @@ PROJECTION = {
     "_id": 0, "booking_number": 1, "bond_amount": 1, "bond_amount_raw": 1, "bond_type": 1,
     "charges": 1, "booking_date": 1, "booking_time": 1, "status": 1, "release_date": 1,
     "mugshot_url": 1, "dob": 1, "address": 1, "scraped_at": 1, "updated_at": 1,
+    "booking_key_internal": 1, "case_number": 1, "obts_number": 1,
 }
 
 
@@ -133,9 +243,18 @@ def main(argv: list[str] | None = None) -> int:
         "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         **summarize(docs),
     }
+    out["status_buckets"] = out["status"]
     out["result"] = "ok" if out["rows"] else "no_rows"
+    problems = identity_gate(out["label"], out) if out["rows"] else None
+    if problems is not None:
+        out["identity_gate"] = "fail" if problems else "pass"
+        out["identity_problems"] = problems
+        if problems:
+            out["result"] = "identity_failed"
     print(json.dumps(out, sort_keys=True))
-    return 0 if out["rows"] else 2
+    if not out["rows"]:
+        return 2
+    return 3 if problems else 0
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # ShamrockLeads — True Status
 
-> **Last verified:** 2026-10-05
+> **Last verified:** 2026-11-05
 > **VPS:** Hetzner **CCX33** (8 dedicated vCPU / 32 GB RAM) as of 2026-08-13 — compose ceilings raised (`docs/runbooks/vps-ccx33-resize.md`). Root disk was **not** grown with the type change (still ~38 GB); grow to 160–240 GB in the Cloud Console.
 > **Repo:** `Shamrock2245/shamrock-leads` · branch `main`  
 > **Product URL:** `https://leads.shamrockbailbonds.biz`  
@@ -15,6 +15,9 @@
 > **All hosts:** [`docs/SUBDOMAINS.md`](./docs/SUBDOMAINS.md) · `config/subdomains.py` · `python scripts/check_subdomains.py --live`
 
 ---
+
+## Codex 11/5 Manatee Clerk smoke (PR #308)
+- Write-smoke gate now requires Manatee-only `booking_number_shapes` (`mc_case_v1:<sha256>` only) and exact blank `status_buckets` `{"": rows}` with integer count. Miami-Dade keys and empty/zero/non-int blank buckets fail closed.
 
 ## Lee County HQ API requires a staff session (2026-10-28)
 
