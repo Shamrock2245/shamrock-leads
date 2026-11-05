@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-05 (Auto-send indemnitor only; ambiguous staff premium)
+
+### Fixed
+- **The automatic pay-link text after signing goes only to the indemnitor.** With both `SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING` and `SWIPESIMPLE_DISPATCH_LIVE` on, DocuSeal `auto_send` called `dispatch_invoice` without `indemnitor_only`, so a bond with no indemnitor phone and a `defendant_phone` texted the defendant. It now uses the same indemnitor-only path as portal `send_copy`. A missing or conflicting indemnitor contact is `needs_review` (`dispatch_missing_indemnitor` or `indemnitor_contact_mismatch`), nothing is claimed or sent, and the defendant is never the recipient. The 2026-11-04 owner exception is unchanged: one text, both switches default off, no retry.
+- **Auto-confirm does not overwrite ambiguous staff premium fields.** `PREMIUM_AUTO_CONFIRM` treated every `resolve_locked_premium` error as "no premium" because `_bond_premium` returns None. Differing `premium_cents` and `premium_amount` (or a non-numeric, fractional, zero, or negative staff amount) was then replaced by the auto 10%. Those cases now skip as `staff_premium_ambiguous`: nothing is confirmed, signing stamps `needs_review`, and the portal returns `409 needs_review`. A blank premium and an intake estimate still auto-confirm. One readable staff premium still waits as `staff_premium_unconfirmed`.
+
+### Tests
+- `tests/test_indemnitor_self_pay.py`: auto-send indemnitor-only (defendant not texted; conflict not texted), ambiguous and malformed staff premiums not auto-confirmed, estimate still auto-confirmed. No SwipeSimple session, no live send.
+
 ## [Unreleased] — 2026-11-05 (Indemnitor self-pay P1: recipient, case id, paid status)
 
 ### Fixed

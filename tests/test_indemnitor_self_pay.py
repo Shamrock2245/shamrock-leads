@@ -573,11 +573,33 @@ def test_auto_confirm_switch_on_is_used_by_endpoint(monkeypatch):
     assert stores["bond_cases"].docs[0]["premium_confirmed_by"] == "auto"
 
 
+def test_endpoint_ambiguous_staff_premium_is_needs_review(monkeypatch):
+    from dashboard.services import premium_confirmation_service as pcs
+
+    stores = _world(monkeypatch, cases=[{
+        "_id": 1, "bond_case_id": CASE_ID, "booking_number": BOOKING, "bond_amount": 5000,
+        "premium_cents": 175000, "premium_amount": "500.00",
+    }])
+    monkeypatch.setenv("PREMIUM_AUTO_CONFIRM", "1")
+    monkeypatch.setattr(pcs, "get_collection", lambda name: stores.setdefault(name, FakeCollection()))
+
+    async def txn():
+        return _Txn(stores)
+
+    monkeypatch.setattr(pcs, "_transaction_client", txn)
+    monkeypatch.setattr(pcs, "_require_identity", AsyncMock(return_value=None))
+    res = _post(monkeypatch)
+    assert res.status_code == 409 and res.json() == {"ok": False, "error": "needs_review"}
+    assert stores["bond_cases"].docs[0].get("premium_confirmed_by") is None
+    assert stores["bond_cases"].updates == []
+
+
 @pytest.mark.parametrize("skipped,code", [
     ("bond_amount_ambiguous", "needs_review"),
     ("bond_amount_unparseable", "needs_review"),
     ("bond_amount_missing", "premium_unconfirmed"),
     ("staff_premium_unconfirmed", "premium_unconfirmed"),
+    ("staff_premium_ambiguous", "needs_review"),
 ])
 def test_endpoint_auto_confirm_skip_codes(monkeypatch, skipped, code):
     stores = _world(monkeypatch, cases=[{"_id": 1, "booking_number": BOOKING, "bond_amount": 5000,
@@ -689,6 +711,40 @@ def test_auto_confirm_skips_staff_entered_unconfirmed_premium(monkeypatch):
     assert stores["bond_cases"].updates == []
 
 
+def test_auto_confirm_does_not_overwrite_ambiguous_staff_premium(monkeypatch):
+    monkeypatch.setenv("PREMIUM_AUTO_CONFIRM", "1")
+    pcs, stores = _auto_world(
+        monkeypatch, bond_amount=5000, premium_cents=175000, premium_amount="500.00",
+    )
+    case = stores["bond_cases"].docs[0]
+    out = _run(pcs.auto_confirm_premium(booking=BOOKING, bond_case=case))
+    assert out == {"ok": False, "skipped": "staff_premium_ambiguous"}
+    assert case.get("premium_confirmed_by") is None
+    assert case.get("premium_confirmed_amount") is None
+    assert case["premium_cents"] == 175000 and case["premium_amount"] == "500.00"
+    assert stores["bond_cases"].updates == []
+    assert stores["audit_events"].docs == []
+
+
+def test_auto_confirm_does_not_overwrite_malformed_staff_premium(monkeypatch):
+    monkeypatch.setenv("PREMIUM_AUTO_CONFIRM", "1")
+    pcs, stores = _auto_world(monkeypatch, bond_amount=5000, premium_cents="nope")
+    out = _run(pcs.auto_confirm_premium(booking=BOOKING, bond_case=stores["bond_cases"].docs[0]))
+    assert out == {"ok": False, "skipped": "staff_premium_ambiguous"}
+    assert stores["bond_cases"].docs[0].get("premium_confirmed_amount") is None
+    assert stores["audit_events"].docs == []
+
+
+def test_auto_confirm_still_replaces_an_intake_estimate(monkeypatch):
+    monkeypatch.setenv("PREMIUM_AUTO_CONFIRM", "1")
+    pcs, stores = _auto_world(
+        monkeypatch, bond_amount=5000, premium="1500.00", premium_is_estimate=True,
+    )
+    out = _run(pcs.auto_confirm_premium(booking=BOOKING, bond_case=stores["bond_cases"].docs[0]))
+    assert out["ok"] is True and out["premium_confirmed_amount"] == "500.00"
+    assert stores["bond_cases"].docs[0]["premium_confirmed_by"] == "auto"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Dispatch: needs_review is never re-claimed
 # ─────────────────────────────────────────────────────────────────────────────
@@ -775,7 +831,7 @@ def test_auto_send_sends_once(monkeypatch):
     dispatch = AsyncMock(return_value={"sent": True})
     monkeypatch.setattr(ss, "dispatch_invoice", dispatch)
     _run(run.step_auto_send())
-    dispatch.assert_awaited_once_with(CASE_ID, "imessage")
+    dispatch.assert_awaited_once_with(CASE_ID, "imessage", indemnitor_only=True)
     step = packets.docs[0][dc._C]["steps"][dc.STEP_AUTO_SEND]
     assert step["state"] == "done" and step["dispatched"] is True
     # A rerun (same packet, fresh run) never sends again.
@@ -810,6 +866,70 @@ def test_auto_send_skips_preexisting_completion(monkeypatch):
     monkeypatch.setattr(ss, "dispatch_invoice", AsyncMock(side_effect=AssertionError("no")))
     _run(run.step_auto_send())
     assert packets.updates == []
+
+
+def test_auto_send_does_not_text_the_defendant(monkeypatch):
+    dc, run, packets = _completion_run(share=dict(_SHARED))
+    monkeypatch.setenv("SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING", "1")
+    monkeypatch.setenv("SWIPESIMPLE_DISPATCH_LIVE", "1")
+    bond = _staged(defendant_phone=DEF_PHONE, defendant_email="def@example.invalid")
+    monkeypatch.setattr(ss, "_load_bond_by_id", AsyncMock(return_value=bond))
+    send = AsyncMock(side_effect=AssertionError("must not send"))
+    claim = AsyncMock(side_effect=AssertionError("must not claim"))
+    review = AsyncMock(return_value=True)
+    monkeypatch.setattr(ss, "_send_dispatch", send)
+    monkeypatch.setattr(ss, "_claim_dispatch", claim)
+    monkeypatch.setattr(ss, "mark_dispatch_needs_review", review)
+    _run(run.step_auto_send())
+    send.assert_not_called()
+    claim.assert_not_called()
+    review.assert_awaited_once_with(CASE_ID, "dispatch_missing_indemnitor")
+    step = packets.docs[0][dc._C]["steps"][dc.STEP_AUTO_SEND]
+    assert step["state"] == "needs_review"
+    assert step["error_code"] == "dispatch_missing_indemnitor"
+    assert DEF_PHONE not in repr(step)
+
+
+def test_auto_send_conflicting_indemnitor_phones_do_not_send(monkeypatch):
+    dc, run, packets = _completion_run(share=dict(_SHARED))
+    monkeypatch.setenv("SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING", "1")
+    monkeypatch.setenv("SWIPESIMPLE_DISPATCH_LIVE", "1")
+    bond = _staged(
+        indemnitor_phone=IND_PHONE,
+        Indemnitor_Phone="2395550102",
+        defendant_phone=DEF_PHONE,
+    )
+    monkeypatch.setattr(ss, "_load_bond_by_id", AsyncMock(return_value=bond))
+    send = AsyncMock(side_effect=AssertionError("must not send"))
+    monkeypatch.setattr(ss, "_send_dispatch", send)
+    monkeypatch.setattr(ss, "_claim_dispatch", AsyncMock(side_effect=AssertionError("must not claim")))
+    review = AsyncMock(return_value=True)
+    monkeypatch.setattr(ss, "mark_dispatch_needs_review", review)
+    _run(run.step_auto_send())
+    send.assert_not_called()
+    review.assert_awaited_once_with(CASE_ID, "indemnitor_contact_mismatch")
+    step = packets.docs[0][dc._C]["steps"][dc.STEP_AUTO_SEND]
+    assert step["state"] == "needs_review"
+    assert step["error_code"] == "indemnitor_contact_mismatch"
+
+
+def test_auto_send_texts_the_indemnitor_phone_not_the_defendant(monkeypatch):
+    dc, run, packets = _completion_run(share=dict(_SHARED))
+    monkeypatch.setenv("SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING", "1")
+    monkeypatch.setenv("SWIPESIMPLE_DISPATCH_LIVE", "1")
+    bond = _staged(indemnitor_phone=IND_PHONE, defendant_phone=DEF_PHONE)
+    monkeypatch.setattr(ss, "_load_bond_by_id", AsyncMock(return_value=bond))
+    monkeypatch.setattr(ss, "_claim_dispatch", AsyncMock(return_value=(True, None, "c1")))
+    monkeypatch.setattr(ss, "_finish_dispatch_claim", AsyncMock())
+    send = AsyncMock(return_value=True)
+    monkeypatch.setattr(ss, "_send_dispatch", send)
+    _run(run.step_auto_send())
+    payload = send.await_args.args[1]
+    assert payload["phone"] == IND_PHONE
+    assert payload["phone"] != DEF_PHONE
+    assert payload["email"] == ""
+    step = packets.docs[0][dc._C]["steps"][dc.STEP_AUTO_SEND]
+    assert step["state"] == "done" and step["dispatched"] is True
 
 
 def test_auto_send_is_not_a_required_step():
@@ -1236,6 +1356,10 @@ def test_signing_auto_confirm_never_overwrites_staff(monkeypatch):
     ("staff premium waiting", {"cases": [{"_id": 1, "bond_case_id": CASE_ID, "booking_number": BOOKING,
                                           "bond_amount": 5000, "premium_cents": 175000}]},
      "staff_premium_unconfirmed"),
+    ("staff premium fields disagree", {"cases": [{
+        "_id": 1, "bond_case_id": CASE_ID, "booking_number": BOOKING, "bond_amount": 5000,
+        "premium_cents": 175000, "premium_amount": "500.00"}]},
+     "staff_premium_ambiguous"),
 ])
 def test_signing_auto_confirm_needs_review(monkeypatch, label, kwargs, reason):
     monkeypatch.setenv("PREMIUM_AUTO_CONFIRM", "1")

@@ -928,14 +928,45 @@ def auto_bond_cents(*docs: Optional[dict]) -> Tuple[Optional[int], str]:
     return cents, ""
 
 
-def _has_unconfirmed_staff_premium(*docs: Optional[dict]) -> bool:
-    """A non-estimate premium a person entered (e.g. Write Bond ``premium_cents``)."""
-    from dashboard.services.swipesimple_invoice_service import _bond_premium
+# Resolver codes that mean "no staff premium to protect": nothing was entered,
+# or the only figure is the intake 10% estimate. Anything else the resolver
+# refuses (disagreeing fields, non-numeric, fractional cents, zero, negative)
+# is staff money we must not overwrite with the auto 10%.
+_ABSENT_OR_ESTIMATE_PREMIUM = frozenset({
+    "premium_missing_on_bondcase",
+    "premium_estimate_unconfirmed",
+})
+
+
+def _staff_premium_skip(*docs: Optional[dict]) -> str:
+    """Why auto-confirm must stop, or ``""`` when it may set the 10% floor.
+
+    A readable unconfirmed staff premium returns ``staff_premium_unconfirmed``.
+    Malformed or disagreeing staff money (``premium_cents`` vs
+    ``premium_amount``, a non-numeric value, fractional cents) returns
+    ``staff_premium_ambiguous``. ``_bond_premium`` collapses every resolver
+    error to None, which would look like "no premium" and let auto-confirm
+    stamp 10% over those fields. Absent and estimate-only bonds do not block.
+    """
+    from dashboard.services.swipesimple_invoice_service import (
+        SwipeSimpleInvoiceError,
+        _error_code,
+        resolve_locked_premium,
+    )
 
     for doc in docs:
-        if isinstance(doc, dict) and not confirmation_complete(doc) and _bond_premium(doc) is not None:
-            return True
-    return False
+        if not isinstance(doc, dict) or confirmation_complete(doc):
+            continue
+        try:
+            resolve_locked_premium(doc)
+        except SwipeSimpleInvoiceError as exc:
+            code = _error_code(exc)
+            if code in _ABSENT_OR_ESTIMATE_PREMIUM:
+                continue
+            logger.info("[premium_confirm] auto confirm refused staff money code=%s", code)
+            return "staff_premium_ambiguous"
+        return "staff_premium_unconfirmed"
+    return ""
 
 
 async def auto_confirm_premium(
@@ -957,9 +988,12 @@ async def auto_confirm_premium(
     confirmation exists afterwards, else ``{"ok": False, "skipped": code}``:
     ``switch_off``, ``already_confirmed`` (a staff confirmation exists; it is
     never overwritten), ``bond_amount_missing``, ``bond_amount_unparseable``,
-    ``bond_amount_ambiguous`` (the docs disagree on the bond amount), or
-    ``staff_premium_unconfirmed`` (a staff-entered premium is waiting for
-    confirmation). Identity (#165) and split-case checks fail closed with
+    ``bond_amount_ambiguous`` (the docs disagree on the bond amount),
+    ``staff_premium_unconfirmed`` (one staff-entered premium is waiting for
+    confirmation), or ``staff_premium_ambiguous`` (staff money fields are
+    missing a single exact value: they disagree, or one is not a plain
+    positive amount). An absent premium and an intake estimate do not block.
+    Identity (#165) and split-case checks fail closed with
     ``PremiumConfirmationError``. Every write sits in one transaction and is
     conditional on the row still being unconfirmed, so a concurrent staff
     confirmation wins and the auto write rolls back.
@@ -997,8 +1031,9 @@ async def auto_confirm_premium(
 
     if bond_problem or bond_cents is None or bond_cents <= 0:
         return {"ok": False, "skipped": bond_problem or "bond_amount_missing"}
-    if _has_unconfirmed_staff_premium(bond_case, active):
-        return {"ok": False, "skipped": "staff_premium_unconfirmed"}
+    staff_skip = _staff_premium_skip(bond_case, active)
+    if staff_skip:
+        return {"ok": False, "skipped": staff_skip}
 
     bond_case_id = ""
     for doc in (bond_case, active, packet):
