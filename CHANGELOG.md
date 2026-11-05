@@ -43,6 +43,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `tests/test_payment_log_claims.py`: receipt text is a dry run with `SWIPESIMPLE_DISPATCH_LIVE` off. `tests/test_swipesimple_locked_amount_e2e.py`: portal prefers the staged invoice and never falls back to a static link.
 - `tests/_fake_mongo.py`: `$regex`/`$options`, `sort`, `to_list`, and `insert_one(session=...)`.
 
+## [Unreleased] — 2026-11-04 (Paperwork handoff token skips the second PIN)
+
+### Added
+- **A verified indemnitor, co-indemnitor, or defendant can open paperwork with a single-use handoff token instead of a second PIN.** The portal opens `paperwork.shamrockbailbonds.biz/?role=&case=&mode=&ht=<token>`. `POST /api/portal/handoff/consume` checks the signature, the 15-minute window, the case, and the signer, then consumes the `jti` once. The signed claims are authoritative. A `role` or `case` query hint that disagrees falls back to the PIN and grants nothing. `mode=add-cosigner` opens the existing co-indemnitor ID step and does not revoke a co-signer link or a DocuSeal packet. `mode=id-upload` is passed through only when that handler is already present. Contract: `docs/contracts/paperwork-handoff-token.md`.
+- **The path is off unless `PAPERWORK_HANDOFF_ENABLED` is on.** The HMAC key is `PAPERWORK_HANDOFF_SECRET`. Neither value is added to compose, deploy, or `.env`. Minting stays `POST /api/portal/handoff-token` (`{case_id, role, person_id}` → `{token, expires_at}`) and is not implemented in this change. A POA number is not part of the token. Signer ID scans are insert-only. Handoff audits are insert-only and do not store a name, phone, email, or the token. No ID scan means no DocuSeal URL. A voided or unverified signer gets no session and no DocuSeal URL. This response never includes a pay link.
+
+### Tests
+- `tests/test_paperwork_handoff_token.py` (on the CI list): bad signature, expired, over-long lifetime, missing secret, flag off, replay, voided signer, unverified identity, unverified submitter, person mismatch, role hint mismatch, case hint mismatch, mode hint ignored, happy path for each role, no scan means no DocuSeal URL, POA change, add-cosigner routing, id-upload passthrough, OCR only after a consumed token, insert-only scans, audit retention, PIN fallback, and query params without `ht`.
+
+## [Unreleased] — 2026-11-05 (id-upload attempt cap and persist gate)
+
+### Fixed
+- **An id-upload that loses its session during OCR is not saved.** The scan row is written only when the portal pin is still verified, not voided, not revoked, and `expires_at` is still later than the write. A revocation or expiration while OCR is running appends nothing and returns no signing URL.
+- **Id-upload OCR uses the co-signer attempt cap and cooldown.** `SCAN_ATTEMPT_CAP` and `SCAN_COOLDOWN` are reserved with one conditional update before the scanner runs. The next try is `429` `scan_attempt_cap` or `scan_cooldown`, and that try does not call OCR. A read that finds no name still consumes the attempt and does not save a row.
+- **Audit counts come from the update that stored the row.** Each `id_upload_saved` event uses the array length returned by that update, so two overlapping uploads record `0→1` and `1→2` rather than two copies of `0→1`. Events are inserted. Earlier audit rows are not removed.
+- **A PDF is rasterized before OCR.** The first page is turned into a PNG with PyMuPDF, which this repo already depends on. A PDF that cannot be read, and any upload that yields no name, returns `scan_unreadable` with `saved: false` and does not append a scan. The page says to upload a photo of the ID.
+
+### Tests
+- `tests/test_paperwork_id_upload.py`: revocation and expiration during OCR, the attempt cap and the `429`, an unreadable scan that still counts, a PDF rasterized before OCR, and concurrent uploads whose audit transitions match the stored rows. No DocuSeal send and no SwipeSimple charge.
+
+## [Unreleased] — 2026-11-05 (id-upload fails closed on bad sessions)
+
+### Fixed
+- **An id-upload session with a missing or unparsable `expires_at` is refused before OCR.** `POST /api/portal/id-upload` no longer treats a `ValueError` from `datetime.fromisoformat` as a still-valid bearer, and a session with no expiration is expired. Neither case runs OCR or appends a scan.
+- **A superseded packet is closed for id-upload.** The check uses the same closed-packet rule as the co-signer lifecycle (`superseded: true`, or `status` / `docuseal_status` / `packet_status` of `superseded`). OCR does not run, and the obsolete packet does not gain a scan. The packet is still matched by `packet_id`, so a POA number change does not void the link.
+- **The id-upload audit records the session count and the packet count separately.** `old_state` and `new_state` store `session_id_scan_records` and `packet_id_scan_records`. The event also stores `session_id` from the portal pin `_id`, not the bearer token. A packet that already has another signer's scan is not described as `0→1`. The audit row is inserted. Earlier audit rows are not removed.
+
+### Tests
+- `tests/test_paperwork_id_upload.py`: `test_garbage_or_missing_expiration_is_rejected_before_ocr`, `test_superseded_packet_is_rejected_before_ocr`, `test_audit_records_session_and_packet_scan_counts_separately`. No DocuSeal send and no SwipeSimple charge.
+
+## [Unreleased] — 2026-11-04 (Paperwork launch mode id-upload)
+
+### Added
+- **`mode=id-upload` on the paperwork launchpad opens only the ID upload step.** `paperwork.shamrockbailbonds.biz` (`dashboard/routers/pin_portal.py`) treats `mode=id-upload` as its own page. The page posts the photo to `POST /api/portal/id-upload`. It does not show the phone PIN, the signing-link box, the in-person signer, or a completion screen. `inperson`, `ipad`, and `kiosk` are unchanged. Any other `mode` still opens the normal flow.
+- **Each upload is inserted.** A verified portal session is required before the server runs OCR. A missing, unverified, expired, voided, or revoked session is refused, and so is a session whose packet is voided. The photo is read on the server. A JSON body is not a scan. The new row is appended to `id_scan_records` on the session and, when the packet is still active, on that packet. `id_scan`, `id_ocr`, `id_extracted`, `id_scan_history`, and other signers' scans are left as they were. An `id_upload_saved` audit row is inserted. Older audit rows are not removed. The packet is matched by `packet_id`. A POA number change does not void the link.
+- **This mode does not issue a signing URL or a pay link.** The page and the JSON response do not include a DocuSeal URL or a SwipeSimple URL. Client-supplied name or ID number fields are ignored. The stored row keeps the scanned name and issuing state only. No DocuSeal send and no SwipeSimple charge.
+
+### Tests
+- `tests/test_paperwork_id_upload.py` (on the CI list): id-upload shows only the ID step, a second upload appends, invalid and voided tokens are refused before OCR, no DocuSeal URL or pay link is returned, a POA change still accepts the upload, and an unknown mode falls back. Signer email is `admin@shamrockbailbonds.biz`. Records are `TEST-` prefixed.
+
 ## [Unreleased] — 2026-11-02 (Co-signer hold audits keep the prior review)
 
 ### Fixed
