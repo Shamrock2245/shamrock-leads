@@ -137,10 +137,16 @@ def _int(result: dict, key: str) -> int | None:
     return value
 
 
+MC_SHAPE = "mc_case_v1:<sha256>"
+
+
 def manatee_clerk_identity_problems(result: dict) -> list[str]:
     """Pass criteria from FL_MANATEE_CLERK_SCRAPER_2026-10-10.md; [] means pass.
 
-    Missing or non-integer counters fail (fail closed).
+    Missing or non-integer counters fail (fail closed). Manatee Clerk may only
+    use the ``mc_case_v1`` family (Codex 11/5): a valid Miami-Dade
+    ``md_dedupe_v2`` key must not certify this smoke. ``status_buckets`` must be
+    exactly ``{"": rows}`` with an integer count (Codex 11/5).
     """
     if not isinstance(result, dict):
         return ["result missing"]
@@ -159,9 +165,17 @@ def manatee_clerk_identity_problems(result: dict) -> list[str]:
     for key in ("booking_key_internal", "internal_key_valid", "with_case_number", "with_charges"):
         if vals[key] != rows:
             problems.append(f"{key} != rows")
+    shapes = result.get("booking_number_shapes")
+    if not isinstance(shapes, dict) or set(shapes) != {MC_SHAPE} or _int(shapes, MC_SHAPE) != rows:
+        # Wrong family (e.g. md_dedupe_v2), mixed shapes, or count != rows.
+        problems.append(f"booking_number_shapes != {{{MC_SHAPE}: rows}}")
     buckets = result.get("status_buckets")
-    if not isinstance(buckets, dict) or set(buckets) - {""}:
-        problems.append("status not blank")
+    if (
+        not isinstance(buckets, dict)
+        or set(buckets) != {""}
+        or _int(buckets, "") != rows
+    ):
+        problems.append('status_buckets != {"": rows}')
     return problems
 
 

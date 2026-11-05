@@ -408,7 +408,7 @@ def test_codex_1104_manatee_clerk_bad_counters_fail_closed(tmp_path, method, ove
 
 @pytest.mark.parametrize("key", ["booking_key_internal", "internal_key_valid", "with_case_number",
                                  "booking_equals_case_number", "with_charges", "with_booking_date",
-                                 "status_buckets"])
+                                 "status_buckets", "booking_number_shapes"])
 def test_codex_1104_manatee_clerk_missing_counter_fails(tmp_path, key):
     rec = _mc_passed()
     del rec["result"][key]
@@ -462,3 +462,49 @@ def test_codex_1104_manatee_clerk_row_documents_the_gate():
     row = next(r for r in json.loads(SMOKE.read_text())["records"] if r["label"] == "Manatee Clerk (FL)")
     assert row["status"] == "requested"
     assert "identity_gate pass" in row["expect"]
+
+
+
+# --- Codex 11/5 on #308: Manatee family-only keys + blank status_buckets count ---
+
+
+@pytest.mark.parametrize("method", ["prod_mongo_aggregate", "one_shot_run"])
+@pytest.mark.parametrize("over", [
+    # Codex's exact case: every row is a valid Miami-Dade key.
+    {"booking_number_shapes": {"md_dedupe_v2:<sha256>": 12}, "internal_key_valid": 12},
+    {"booking_number_shapes": {"mc_case_v1:<sha256>": 11, "md_dedupe_v2:<sha256>": 1}},
+    {"booking_number_shapes": {"mc_case_v1:<sha256>": 11}},
+    {"booking_number_shapes": {"NNNNNNN": 12}},
+    {"booking_number_shapes": {}},
+    {"booking_number_shapes": {"mc_case_v1:<sha256>": "12"}},
+])
+def test_codex_1105_manatee_clerk_rejects_wrong_key_family(tmp_path, method, over):
+    with pytest.raises(RuntimeError, match="identity gate failed for Manatee Clerk"):
+        _build(_write(tmp_path, [_mc_passed(method, **over)]))
+
+
+@pytest.mark.parametrize("method", ["prod_mongo_aggregate", "one_shot_run"])
+@pytest.mark.parametrize("buckets", [
+    {},
+    {"": 0},
+    {"": "12"},
+    {"": 11},
+    {"": True},
+    {"IN CUSTODY": 12},
+    {"": 12, "OPEN": 0},
+])
+def test_codex_1105_manatee_clerk_requires_blank_status_count(tmp_path, method, buckets):
+    """Codex 11/5: status_buckets must be exactly {"": rows} with an integer count."""
+    with pytest.raises(RuntimeError, match="identity gate failed for Manatee Clerk"):
+        _build(_write(tmp_path, [_mc_passed(method, status_buckets=buckets)]))
+
+
+def test_codex_1105_manatee_clerk_gate_helpers_name_the_problems():
+    sec = _sec()
+    bad_family = _mc_counters(booking_number_shapes={"md_dedupe_v2:<sha256>": 12})
+    probs = sec.manatee_clerk_identity_problems(bad_family)
+    assert any("booking_number_shapes" in p for p in probs)
+    bad_status = _mc_counters(status_buckets={})
+    probs = sec.manatee_clerk_identity_problems(bad_status)
+    assert any("status_buckets" in p for p in probs)
+    assert sec.manatee_clerk_identity_problems(_mc_counters()) == []

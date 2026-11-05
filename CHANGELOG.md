@@ -18,6 +18,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   - `Status` is now documented as `""`, which matches #256 (it was `Unknown`).
   - A new "Leads Ops write smoke" section gives the run commands and the expected aggregates.
 
+### Fixed (Codex 11/5 on #308)
+- Tests: `test_codex_1105_*` in `tests/test_home_county_smoke_evidence.py` (wrong family, blank-status count, helper names). Fail on `e1dc403` for the cases the old gate accepted.
+- **Manatee Clerk smoke accepts only the Manatee key family (P2).** `internal_key_valid` counted any internal family, so a result with only valid Miami-Dade `md_dedupe_v2` keys still passed. The gate now requires `booking_number_shapes` to be exactly `{mc_case_v1:<sha256>: rows}`.
+- **Blank status evidence must count every row (P2).** `status_buckets: {}`, `{"": 0}` or `{"": "invalid"}` used to pass. The gate now requires exactly `{"": rows}` with an integer count.
+
 ### Fixed (Codex 11/4 on #308)
 - **Manatee Clerk identity counters are enforced (P2).** A `passed` Manatee Clerk row was accepted with `booking_key_internal: 0`, `internal_key_valid: 0`, no case numbers and `booking_equals_case_number: 1`, because `prod_mongo_aggregate` checked only rows and blank/duplicate keys and `one_shot_run` only writer stats. `smoke_evidence_check.py` now has `IDENTITY_GATES` with `manatee_clerk_identity_problems()`: rows >= 1; blank, duplicate, booking_equals_case_number and with_booking_date all 0; booking_key_internal, internal_key_valid, with_case_number and with_charges all == rows; `status_buckets` blank only. Missing or non-integer counters fail closed. The script prints `identity_gate` and `identity_problems` (counter names only) and exits 3 with `result: identity_failed`. `build_recon_matrix.py` applies the same gate to a passed Manatee Clerk write row for either method. Other sources are unchanged. The Manatee Clerk row stays `requested`; its `expect` and the recon doc name the gate.
 - Tests: `test_codex_1104_*` in `tests/test_home_county_smoke_evidence.py` (34 cases); 32 fail on `f5cac40`, and the 2 good-counter guards pass on both.
