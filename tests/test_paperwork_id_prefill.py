@@ -500,7 +500,6 @@ async def test_builder_failure_keeps_prefill_and_returns_no_url(monkeypatch):
     person_id = body["person_id"]
     case = db["bond_cases"].docs[0]
     case["poa_number"] = "TEST-POA-LATER"
-    import asyncio
     pending = await get_pending_id_prefill(case_id, "indemnitor", person_id)
     assert pending["fields"]["indemnitor_name"] == NAME
     assert pending["fields"]["indemnitor_dl"] == "TEST-DL-0000"
@@ -576,8 +575,356 @@ async def test_poa_change_does_not_drop_pending_prefill(monkeypatch):
     })
     _install(monkeypatch, db)
     db["bond_cases"].docs[0]["poa_number"] = "TEST-POA-2"
-    import asyncio
     pending = await get_pending_id_prefill("BC-TEST-1", "indemnitor", "IND-TEST-1")
     assert pending["fields"]["indemnitor_dl"] == "TEST-DL-0000"
     assert db["bond_cases"].docs[0]["poa_number"] == "TEST-POA-2"
     assert len(db["bond_cases"].docs[0]["pending_id_prefills"]) == 1
+
+
+def test_draft_packet_stays_pending_review_and_records_the_url(monkeypatch):
+    db = FakeDB()
+    db["portal_pins"].docs.append(_session())
+    db["audit_events"].docs.append({"event_id": "TEST-AUDIT-KEEP", "event_type": "earlier_review"})
+    _install(monkeypatch, db)
+    _scanner(monkeypatch)
+    calls = {"n": 0, "kwargs": {}}
+    _submission(monkeypatch, calls)
+    saved = _confirm(_ocr(db).json()["scan_id"], _indemnitor_fields())
+    assert saved.status_code == 200, saved.text
+    body = saved.json()
+    assert body["signing_link"].endswith("/s/TEST-SLUG")
+    assert "swipesimple" not in saved.text.lower()
+    assert "payment_link" not in body
+    packet = db["paperwork_packets"].docs[0]
+    assert packet["status"] == "pending_owner_review"
+    assert packet["self_serve_unvalidated_draft"] is True
+    assert packet["send_email"] is False
+    assert packet["send_sms"] is False
+    issued = [row for row in db["audit_events"].docs if row.get("event_type") == "self_serve_draft_signing_url"]
+    assert len(issued) == 1
+    assert issued[0]["actor"] == "auto"
+    assert issued[0]["reason"] == "signing_url_issued_for_unvalidated_draft"
+    assert issued[0]["new_state"]["signing_url_issued"] is True
+    assert "sign_url" not in issued[0]
+    assert db["audit_events"].docs[0]["event_id"] == "TEST-AUDIT-KEEP"
+
+
+def test_exact_packet_key_wins_over_a_later_role_match(monkeypatch):
+    db = FakeDB()
+    db["portal_pins"].docs.append(_session())
+    db["bond_cases"].docs.append({
+        "bond_case_id": "BC-TEST-1",
+        "indemnitor_id": "IND-TEST-1",
+        "indemnitor_phone": PHONE,
+        "indemnitor_name": NAME,
+        "indemnitor_dob": DOB,
+        "status": "active",
+        "source": "staff",
+    })
+    exact = {
+        "packet_id": "PKT-TEST-EXACT",
+        "bond_case_id": "BC-TEST-1",
+        "self_serve_packet_key": "BC-TEST-1|indemnitor|IND-TEST-1",
+        "person_id": "IND-TEST-1",
+        "voided": False,
+        "status": "pending_signature",
+        "docuseal_submitters": [{
+            "id": 11,
+            "role": "indemnitor",
+            "status": "pending",
+            "email": EMAIL,
+            "phone": "+1" + PHONE,
+            "sign_url": "https://sign.shamrockbailbonds.biz/s/TEST-EXACT",
+        }],
+    }
+    other = {
+        "packet_id": "PKT-TEST-OTHER",
+        "bond_case_id": "BC-TEST-1",
+        "person_id": "IND-TEST-OTHER",
+        "voided": False,
+        "status": "pending_signature",
+        "docuseal_submitters": [{
+            "id": 22,
+            "role": "indemnitor",
+            "status": "pending",
+            "email": "other@shamrockbailbonds.biz",
+            "sign_url": "https://sign.shamrockbailbonds.biz/s/TEST-OTHER",
+        }],
+    }
+    db["paperwork_packets"].docs.extend([exact, other])
+    _install(monkeypatch, db)
+    _scanner(monkeypatch)
+    calls = {"n": 0, "kwargs": {}}
+    updates = {"ids": []}
+
+    async def _update(self, submitter_id, **kwargs):
+        updates["ids"].append(submitter_id)
+        assert kwargs.get("send_email") is False
+        return {"id": submitter_id}
+
+    _submission(monkeypatch, calls)
+    monkeypatch.setattr("dashboard.services.docuseal_service.DocuSealService.update_submitter", _update)
+    saved = _confirm(_ocr(db).json()["scan_id"], _indemnitor_fields())
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["signing_link"].endswith("/s/TEST-EXACT")
+    assert "TEST-OTHER" not in saved.json()["signing_link"]
+    assert updates["ids"] == [11]
+    assert calls["n"] == 0
+    assert db["paperwork_packets"].docs[1]["docuseal_submitters"][0]["id"] == 22
+
+
+def test_unbound_packet_does_not_return_another_signers_url(monkeypatch):
+    db = FakeDB()
+    db["portal_pins"].docs.append(_session())
+    db["bond_cases"].docs.append({
+        "bond_case_id": "BC-TEST-1",
+        "indemnitor_id": "IND-TEST-1",
+        "indemnitor_phone": PHONE,
+        "indemnitor_name": NAME,
+        "indemnitor_dob": DOB,
+        "status": "active",
+        "source": "staff",
+    })
+    stale = {
+        "packet_id": "PKT-TEST-STALE",
+        "bond_case_id": "BC-TEST-1",
+        "person_id": "IND-TEST-STALE",
+        "voided": False,
+        "status": "pending_signature",
+        "sign_url": "https://sign.shamrockbailbonds.biz/s/TEST-STALE",
+        "docuseal_submitters": [{
+            "id": 77,
+            "role": "indemnitor",
+            "status": "pending",
+            "email": "other@shamrockbailbonds.biz",
+            "phone": "+12395550199",
+            "sign_url": "https://sign.shamrockbailbonds.biz/s/TEST-STALE",
+        }],
+    }
+    before = dict(stale)
+    db["paperwork_packets"].docs.append(stale)
+    _install(monkeypatch, db)
+    _scanner(monkeypatch)
+    calls = {"n": 0, "kwargs": {}}
+    _submission(monkeypatch, calls)
+    saved = _confirm(_ocr(db).json()["scan_id"], _indemnitor_fields())
+    assert saved.status_code == 200, saved.text
+    assert "TEST-STALE" not in saved.json()["signing_link"]
+    assert saved.json()["packet_id"] != "PKT-TEST-STALE"
+    assert db["paperwork_packets"].docs[0]["sign_url"] == before["sign_url"]
+    assert db["paperwork_packets"].docs[0]["person_id"] == "IND-TEST-STALE"
+    assert calls["n"] == 1
+
+
+def test_reused_case_writes_an_identity_audit(monkeypatch):
+    db = FakeDB()
+    db["portal_pins"].docs.append(_session())
+    db["bond_cases"].docs.append({
+        "bond_case_id": "BC-TEST-1",
+        "indemnitor_id": "IND-TEST-1",
+        "indemnitor_phone": PHONE,
+        "indemnitor_name": NAME,
+        "indemnitor_dob": DOB,
+        "indemnitor_address": "1 Old Lane",
+        "status": "active",
+        "source": "staff",
+    })
+    db["indemnitors"].docs.append({
+        "indemnitor_id": "IND-TEST-1",
+        "name": NAME,
+        "phone": PHONE,
+        "dob": DOB,
+        "address": "1 Old Lane",
+    })
+    db["audit_events"].docs.append({"event_id": "TEST-AUDIT-KEEP", "event_type": "earlier_review", "reason": "kept"})
+    _install(monkeypatch, db)
+    _scanner(monkeypatch)
+    calls = {"n": 0, "kwargs": {}}
+    _submission(monkeypatch, calls)
+    saved = _confirm(_ocr(db).json()["scan_id"], _indemnitor_fields(indemnitor_address="20 Test Lane"))
+    assert saved.status_code == 200, saved.text
+    audits = [row for row in db["audit_events"].docs if row.get("event_type") == "self_serve_identity_updated"]
+    assert len(audits) == 1
+    assert audits[0]["actor"] == "auto"
+    assert audits[0]["reason"] == "self_serve_identity_confirmed"
+    assert audits[0]["old_state"]["indemnitor_address"] == "1 Old Lane"
+    assert audits[0]["new_state"]["indemnitor_address"] == "20 Test Lane"
+    assert db["audit_events"].docs[0]["event_id"] == "TEST-AUDIT-KEEP"
+    assert len([row for row in db["audit_events"].docs if row.get("event_id") == "TEST-AUDIT-KEEP"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_same_person_in_another_role_opens_a_new_draft(monkeypatch):
+    from dashboard.services.staff_chain_service import ensure_self_serve_bondcase
+
+    db = FakeDB()
+    _install(monkeypatch, db)
+    db["bond_cases"].docs.append({
+        "bond_case_id": "BC-TEST-DEF",
+        "defendant_id": "DEF-TEST-1",
+        "defendant_phone": PHONE,
+        "defendant_name": NAME,
+        "defendant_dob": DOB,
+        "status": "active",
+        "source": "staff",
+    })
+    db["defendants"].docs.append({
+        "defendant_id": "DEF-TEST-1",
+        "name": NAME,
+        "phone": PHONE,
+        "dob": DOB,
+        "bond_case_id": "BC-TEST-DEF",
+    })
+    result = await ensure_self_serve_bondcase(
+        phone=PHONE,
+        name=NAME,
+        dob=DOB,
+        role="indemnitor",
+        email=EMAIL,
+        identity=role_fields_from_scan(OCR, "indemnitor"),
+        scan_blob={"scan_id": "SCAN-TEST-1", "full_name": NAME, "dl_state": "FL"},
+        actor="auto",
+    )
+    assert result["success"] is True
+    assert result["created"] is True
+    assert result["bond_case_id"] != "BC-TEST-DEF"
+    original = next(row for row in db["bond_cases"].docs if row["bond_case_id"] == "BC-TEST-DEF")
+    assert "indemnitor_name" not in original
+    assert original["defendant_name"] == NAME
+    assert len(db["bond_cases"].docs) == 2
+
+
+@pytest.mark.asyncio
+async def test_defendant_booking_does_not_override_primary_contact(monkeypatch):
+    from dashboard.services.staff_chain_service import ensure_self_serve_bondcase
+
+    db = FakeDB()
+    _install(monkeypatch, db)
+    seen = {}
+
+    async def _ensure(**kwargs):
+        seen.update(kwargs)
+        return {"success": False, "error": "arrest_missing", "status_code": 404}
+
+    monkeypatch.setattr("dashboard.services.staff_chain_service.ensure_match_bondcase", _ensure)
+    result = await ensure_self_serve_bondcase(
+        phone=PHONE,
+        name=NAME,
+        dob=DOB,
+        role="defendant",
+        email=EMAIL,
+        identity=role_fields_from_scan(OCR, "defendant"),
+        scan_blob={"scan_id": "SCAN-TEST-DEF", "full_name": NAME, "dl_state": "FL"},
+        booking_number="TEST-BOOK-1",
+        actor="auto",
+    )
+    assert result["success"] is True
+    assert "indemnitor_email" not in seen
+    assert "indemnitor_phone" not in seen
+    assert "indemnitor_name" not in seen
+    assert seen["booking_number"] == "TEST-BOOK-1"
+    case = db["bond_cases"].docs[0]
+    assert case.get("indemnitor_email", "") in ("", None)
+    assert case.get("indemnitor_phone", "") in ("", None)
+
+
+def test_signed_packet_is_replaced_not_edited(monkeypatch):
+    db = FakeDB()
+    db["portal_pins"].docs.append(_session())
+    db["bond_cases"].docs.append({
+        "bond_case_id": "BC-TEST-1",
+        "indemnitor_id": "IND-TEST-1",
+        "indemnitor_phone": PHONE,
+        "indemnitor_name": NAME,
+        "indemnitor_dob": DOB,
+        "status": "active",
+        "source": "staff",
+    })
+    signed = {
+        "packet_id": "PKT-TEST-SIGNED",
+        "bond_case_id": "BC-TEST-1",
+        "self_serve_packet_key": "BC-TEST-1|indemnitor|IND-TEST-1",
+        "person_id": "IND-TEST-1",
+        "voided": False,
+        "status": "signed",
+        "docuseal_status": "completed",
+        "sign_url": "https://sign.shamrockbailbonds.biz/s/TEST-SIGNED",
+        "client_fields": {"indemnitor_name": "Keep Signed"},
+        "docuseal_submitters": [{
+            "id": 90,
+            "role": "indemnitor",
+            "status": "completed",
+            "email": EMAIL,
+            "sign_url": "https://sign.shamrockbailbonds.biz/s/TEST-SIGNED",
+        }],
+    }
+    db["paperwork_packets"].docs.append(signed)
+    _install(monkeypatch, db)
+    _scanner(monkeypatch)
+    calls = {"n": 0, "kwargs": {}}
+    updates = {"n": 0}
+
+    async def _update(self, submitter_id, **kwargs):
+        updates["n"] += 1
+        return {"id": submitter_id}
+
+    _submission(monkeypatch, calls)
+    monkeypatch.setattr("dashboard.services.docuseal_service.DocuSealService.update_submitter", _update)
+    saved = _confirm(_ocr(db).json()["scan_id"], _indemnitor_fields())
+    assert saved.status_code == 200, saved.text
+    assert "TEST-SIGNED" not in saved.json()["signing_link"]
+    assert saved.json()["packet_id"] != "PKT-TEST-SIGNED"
+    assert updates["n"] == 0
+    assert db["paperwork_packets"].docs[0]["status"] == "signed"
+    assert db["paperwork_packets"].docs[0]["client_fields"]["indemnitor_name"] == "Keep Signed"
+    assert db["paperwork_packets"].docs[0]["docuseal_status"] == "completed"
+    replaced = [row for row in db["audit_events"].docs if row.get("event_type") == "self_serve_packet_replacement"]
+    assert len(replaced) == 1
+    assert replaced[0]["actor"] == "auto"
+    assert replaced[0]["reason"] == "prior_packet_finalized"
+    assert replaced[0]["old_state"]["packet_id"] == ["PKT-TEST-SIGNED"]
+    assert "swipesimple" not in saved.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_parallel_confirms_create_one_case_and_one_packet(monkeypatch):
+    import asyncio
+    from dashboard.services.paperwork_self_serve import accept_confirmed_id
+
+    db = FakeDB()
+    scan_id = "SCAN-TEST-PARALLEL"
+    session = _session()
+    session["id_scan_records"] = [{
+        "scan_id": scan_id,
+        "role": "indemnitor",
+        "success": True,
+        "extracted": {"full_name": NAME, "dl_state": "FL"},
+    }]
+    session["id_ocr_snapshots"] = [{
+        "scan_id": scan_id,
+        "role": "indemnitor",
+        "extracted": dict(OCR),
+    }]
+    db["portal_pins"].docs.append(session)
+    _install(monkeypatch, db)
+    calls = {"n": 0, "kwargs": {}}
+    _submission(monkeypatch, calls)
+
+    async def _once():
+        return await accept_confirmed_id(
+            session=session,
+            scan_id=scan_id,
+            role="indemnitor",
+            edits=_indemnitor_fields(),
+            email=EMAIL,
+            phone=PHONE,
+        )
+
+    first, second = await asyncio.gather(_once(), _once())
+    assert first["bond_case_id"] == second["bond_case_id"]
+    assert first["packet_id"] == second["packet_id"]
+    assert first["signing_link"]
+    assert len(db["bond_cases"].docs) == 1
+    assert len(db["paperwork_packets"].docs) == 1
+    assert calls["n"] == 1
+    assert len([row for row in db["audit_events"].docs if row.get("event_type") == "self_serve_draft_bondcase"]) == 1

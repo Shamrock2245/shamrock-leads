@@ -160,11 +160,16 @@ class FakeCollection:
             return _WriteResult(0)
         return _WriteResult(0)
 
-    async def find_one_and_update(self, flt, update, **kw):
+    async def find_one_and_update(self, flt, update, upsert=False, **kw):
         for d in self.docs:
             if matches(d, flt):
                 self._apply(d, update, inserting=False)
                 return copy.deepcopy(d)
+        if upsert:
+            d = {k: v for k, v in (flt or {}).items() if not str(k).startswith("$") and not isinstance(v, dict)}
+            self._apply(d, update, inserting=True)
+            self.docs.append(d)
+            return copy.deepcopy(d)
         return None
 
 

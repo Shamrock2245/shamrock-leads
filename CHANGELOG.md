@@ -8,6 +8,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 - **In-person ID confirm can open the signer's packet.** On `paperwork.shamrockbailbonds.biz`, Step 1 stored the scan on the PIN session and Step 2 looked for a packet by phone. With no packet, the parsed ID never reached the indemnitor, co-indemnitor, or defendant, and the page stopped. `PAPERWORK_SELF_SERVE_PREFILL` (default off) keeps that behavior. When it is on, a confirmed scan reuses a BondCase for the same phone, name, and date of birth, or inserts one draft (`source=self_serve`, `status=pending_owner_review`, actor `auto`). Bond, premium, and POA stay empty unless they were already on the case. The packet is built with `DocuSealService.prefill_values_from_bond` and `create_submission` (`send_email` and `send_sms` false). A validated case that already has a POA, case number, and premium still uses `create_submission_for_packet`. If that build fails, the confirmed fields stay on the case and no signing URL is returned. `get_pending_id_prefill(case_id, role, person_id)` is the fallback read for the later auto-packet builder. The flag is not added to compose or deploy env files.
 
+- **A self-serve draft still opens signing, and the packet is marked pending owner review.** The draft path is unchanged: no validated match, case number, or POA is required before the signing URL. The packet is stored as `pending_owner_review` with `self_serve_unvalidated_draft`, and an audit row records that a signing URL was issued. A voided or unverified signer, a missing scan, and a pay link still produce no URL.
+- **An existing packet is reused only for the same signer.** The exact `self_serve_packet_key` wins. Otherwise the packet must match the person id and, when those values are already on the packet, the phone and email. A role match alone does not return another person's URL.
+- **Reusing a BondCase writes an identity audit.** The event records the actor, the prior contact fields, and the reason. Older audit rows stay in place.
+- **A person is matched only in the role they are scanning as.** A defendant on one bond does not become the indemnitor on that bond when they later scan as an indemnitor.
+- **A signed or completed packet is not edited.** A new packet is inserted and the replacement is audited. The finalized packet is left as it was.
+- **A defendant or co-indemnitor scan does not overwrite the primary indemnitor's phone or email** when a booking is sent through `ensure_match_bondcase`.
+- **Two confirms for the same person resolve to one draft and one packet** without a new database index. A unique index on `self_serve_dedupe_key` is not added.
+
 ### Tests
 - `tests/test_paperwork_id_prefill.py` (on the CI list). Signer email is `admin@shamrockbailbonds.biz`. Records are `TEST-` prefixed. No DocuSeal send and no SwipeSimple charge.
 

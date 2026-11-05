@@ -22,18 +22,22 @@ number.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 _FLAG = "PAPERWORK_SELF_SERVE_PREFILL"
 _ROLES = ("indemnitor", "coindemnitor", "defendant")
 _VOID_STATUSES = frozenset({"voided", "cancelled", "canceled"})
+_FINAL_STATUSES = frozenset({"signed", "completed", "filed", "archived"})
 _DEAD_SIGNER = frozenset({"voided", "cancelled", "canceled", "declined", "unverified"})
+_PACKET_LOCKS: Dict[str, asyncio.Lock] = {}
+_PACKET_GUARD = asyncio.Lock()
 _HOLD_MESSAGE = (
     "We saved your information. A signing link is not available yet. "
     "Call (239) 332-2245."
@@ -260,6 +264,40 @@ def _packet_voided(doc: Optional[Dict[str, Any]]) -> bool:
     return _text(doc.get("status")).lower() in _VOID_STATUSES
 
 
+def _packet_finalized(doc: Optional[Dict[str, Any]]) -> bool:
+    """Signed, completed, filed, or archived packets are not edited in place."""
+    if not isinstance(doc, dict):
+        return False
+    status = _text(doc.get("status")).lower()
+    remote = _text(doc.get("docuseal_status")).lower()
+    return status in _FINAL_STATUSES or remote in _FINAL_STATUSES
+
+
+def _safe_sign_url(url: str) -> str:
+    """A signing URL only. A pay link is never returned."""
+    text = _text(url)
+    if not text.startswith("http"):
+        return ""
+    lowered = text.lower()
+    if "swipesimple" in lowered or "/pay" in lowered:
+        return ""
+    return text
+
+
+def _digits(value: Any) -> str:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    return digits[-10:] if len(digits) >= 10 else ""
+
+
+async def _packet_lock(key: str) -> asyncio.Lock:
+    async with _PACKET_GUARD:
+        lock = _PACKET_LOCKS.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _PACKET_LOCKS[key] = lock
+        return lock
+
+
 def _signer_blocked(party: Optional[Dict[str, Any]]) -> bool:
     if not isinstance(party, dict):
         return True
@@ -280,12 +318,39 @@ def _role_submitter(packet: Dict[str, Any], role: str) -> Optional[Dict[str, Any
 
 def _sign_url(packet: Dict[str, Any], role: str) -> str:
     party = _role_submitter(packet, role)
-    if _packet_voided(packet) or _signer_blocked(party):
+    if _packet_voided(packet) or _packet_finalized(packet) or _signer_blocked(party):
         return ""
-    url = _text((party or {}).get("sign_url"))
-    if url.startswith("http"):
-        return url
-    return ""
+    return _safe_sign_url((party or {}).get("sign_url") or packet.get("sign_url") or "")
+
+
+def _packet_signer_bound(
+    packet: Dict[str, Any],
+    role: str,
+    person_id: str,
+    phone: str,
+    email: str,
+) -> bool:
+    """True only when this packet is bound to this person, phone, and email."""
+    party = _role_submitter(packet, role)
+    if not isinstance(party, dict) or _signer_blocked(party):
+        return False
+    bound = False
+    packet_person = _text(packet.get("person_id"))
+    if packet_person:
+        if packet_person != _text(person_id):
+            return False
+        bound = True
+    party_phone = _digits(party.get("phone"))
+    if party_phone:
+        if party_phone != _digits(phone):
+            return False
+        bound = True
+    party_email = _text(party.get("email")).lower()
+    if party_email:
+        if not email or party_email != _text(email).lower():
+            return False
+        bound = True
+    return bound
 
 
 async def _rows(name: str, query: Dict[str, Any]) -> list:
@@ -433,19 +498,46 @@ def _overlay_role(values: Dict[str, Any], role: str, fields: Dict[str, str], ema
     return merged
 
 
-async def _existing_packet(case_id: str, role: str, person_id: str) -> Optional[Dict[str, Any]]:
-    key = f"{case_id}|{role}|{person_id}"
-    rows = await _rows("paperwork_packets", {"$or": [
+async def _case_packets(case_id: str, key: str) -> List[Dict[str, Any]]:
+    return await _rows("paperwork_packets", {"$or": [
         {"self_serve_packet_key": key},
         {"bond_case_id": case_id},
     ]})
-    chosen = None
-    for row in rows:
-        if _packet_voided(row):
-            continue
-        if _text(row.get("self_serve_packet_key")) == key or _role_submitter(row, role):
-            chosen = row
-    return chosen
+
+
+def _open_packets(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [row for row in rows if not _packet_voided(row) and not _packet_finalized(row)]
+
+
+async def _existing_packet(
+    case_id: str,
+    role: str,
+    person_id: str,
+    phone: str,
+    email: str,
+) -> Optional[Dict[str, Any]]:
+    """The open packet for this exact signer, or None.
+
+    An exact ``self_serve_packet_key`` wins. Any other row must match
+    person id and, where the packet has them, phone and email. A role
+    match alone is not enough. Several matches and no exact key means
+    no packet, so the caller does not return a URL.
+    """
+    key = f"{case_id}|{role}|{person_id}"
+    rows = _open_packets(await _case_packets(case_id, key))
+    exact = [row for row in rows if _text(row.get("self_serve_packet_key")) == key]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        exact.sort(key=lambda row: str(row.get("created_at") or ""))
+        return exact[0]
+    bound = [
+        row for row in rows
+        if _packet_signer_bound(row, role, person_id, phone, email)
+    ]
+    if len(bound) == 1:
+        return bound[0]
+    return None
 
 
 async def _apply_to_packet(
@@ -459,8 +551,15 @@ async def _apply_to_packet(
     from dashboard.services.docuseal_service import DocuSealService
     from dashboard.services.docuseal_signing_ux import IDENTITY_READONLY_FIELD_NAMES, submission_fields_from_values
 
+    key = f"{packet.get('bond_case_id')}|{role}|{person_id}"
+    exact_key = _text(packet.get("self_serve_packet_key")) == key
     party = _role_submitter(packet, role)
-    if _packet_voided(packet) or _signer_blocked(party):
+    if (
+        _packet_voided(packet)
+        or _packet_finalized(packet)
+        or _signer_blocked(party)
+        or not (exact_key or _packet_signer_bound(packet, role, person_id, phone, email))
+    ):
         return ""
     values = dict(fields)
     if email:
@@ -521,6 +620,7 @@ async def build_self_serve_packet(
     fields: Dict[str, str],
     email: str,
     phone: str,
+    scan_id: str = "",
 ) -> Dict[str, Any]:
     """Build or reuse one packet. Raises when DocuSeal or the identity gate refuses."""
     from dashboard.services.docuseal_service import (
@@ -533,20 +633,67 @@ async def build_self_serve_packet(
     )
     from dashboard.services.docuseal_signing_ux import submission_fields_from_values
 
+    if not _text(scan_id):
+        raise RuntimeError("scan_required")
     case_id = _text(case.get("bond_case_id"))
-    existing = await _existing_packet(case_id, role, person_id)
+    packet_key = f"{case_id}|{role}|{person_id}"
+    lock = await _packet_lock(packet_key)
+    async with lock:
+        return await _build_self_serve_packet_locked(
+            case=case,
+            role=role,
+            person_id=person_id,
+            fields=fields,
+            email=email,
+            phone=phone,
+            scan_id=_text(scan_id),
+            case_id=case_id,
+            packet_key=packet_key,
+            role_constants=(ROLE_BONDSMAN, ROLE_CO_INDEMNITOR, ROLE_DEFENDANT, ROLE_INDEMNITOR),
+            service_cls=DocuSealService,
+            resolve_template=resolve_template_id_for_surety,
+            submission_fields=submission_fields_from_values,
+        )
+
+
+async def _build_self_serve_packet_locked(
+    *,
+    case: Dict[str, Any],
+    role: str,
+    person_id: str,
+    fields: Dict[str, str],
+    email: str,
+    phone: str,
+    scan_id: str,
+    case_id: str,
+    packet_key: str,
+    role_constants: tuple,
+    service_cls: Any,
+    resolve_template: Any,
+    submission_fields: Any,
+) -> Dict[str, Any]:
+    role_bondsman, role_co, role_defendant, role_indemnitor = role_constants
+    existing = await _existing_packet(case_id, role, person_id, phone, email)
     if existing:
         url = await _apply_to_packet(existing, role, person_id, fields, email, phone)
         if not url:
             raise RuntimeError("existing_packet_not_signable")
         return {"packet_id": existing.get("packet_id") or "", "signing_link": url, "created": False}
 
+    prior_final = [
+        row for row in await _case_packets(case_id, packet_key)
+        if _packet_finalized(row) and (
+            _text(row.get("self_serve_packet_key")) == packet_key
+            or _packet_signer_bound(row, role, person_id, phone, email)
+        )
+    ]
     packet_id = "PKT-SS-" + uuid.uuid4().hex[:10].upper()
     await _identity_ok(case, role, fields, packet_id)
     bond_data = _bond_data_for_prefill(case, role, fields, email, phone)
-    svc = DocuSealService()
-    if _case_fully_bound(case):
-        template_id = resolve_template_id_for_surety(bond_data.get("surety_id"))
+    unvalidated = not _case_fully_bound(case)
+    svc = service_cls()
+    if not unvalidated:
+        template_id = resolve_template(bond_data.get("surety_id"))
         if not template_id:
             raise RuntimeError("template_unavailable")
         result = await svc.create_submission_for_packet(
@@ -558,21 +705,21 @@ async def build_self_serve_packet(
             staff_test_case=False,
         )
     else:
-        template_id = resolve_template_id_for_surety(bond_data.get("surety_id"))
+        template_id = resolve_template(bond_data.get("surety_id"))
         if not template_id:
             raise RuntimeError("template_unavailable")
         prefill = svc.prefill_values_from_bond(bond_data, template_id=template_id)
         values = _overlay_role(strip_unbacked_amounts(prefill, case), role, fields, email, phone)
-        role_name = {"defendant": ROLE_DEFENDANT, "coindemnitor": ROLE_CO_INDEMNITOR}.get(role, ROLE_INDEMNITOR)
+        role_name = {"defendant": role_defendant, "coindemnitor": role_co}.get(role, role_indemnitor)
         submitter_values = dict(values)
         if role == "coindemnitor":
             for key, value in list(fields.items()):
                 if key.startswith("coindemnitor_"):
                     submitter_values["indemnitor_" + key[len("coindemnitor_"):]] = value
-        fields_payload = submission_fields_from_values(submitter_values)
+        fields_payload = submission_fields(submitter_values)
         submitters = [
             svc.build_submitter(
-                role=ROLE_BONDSMAN,
+                role=role_bondsman,
                 email=os.getenv("BOND_AGENT_EMAIL", "admin@shamrockbailbonds.biz"),
                 name="Brendan O'Neal",
                 external_id=f"{packet_id}:bondsman",
@@ -607,16 +754,25 @@ async def build_self_serve_packet(
     signer = next((item for item in submitters if normalize_role((item or {}).get("role")) == want), None)
     if _signer_blocked(signer):
         raise RuntimeError("signer_not_verified")
-    url = _text((signer or {}).get("sign_url"))
-    if not url.startswith("http"):
+    url = _safe_sign_url((signer or {}).get("sign_url") or "")
+    if not url:
         raise RuntimeError("signing_link_missing")
+    again = await _existing_packet(case_id, role, person_id, phone, email)
+    if again:
+        url = await _apply_to_packet(again, role, person_id, fields, email, phone)
+        if not url:
+            raise RuntimeError("existing_packet_not_signable")
+        return {"packet_id": again.get("packet_id") or "", "signing_link": url, "created": False}
     packet_doc = {
         "packet_id": packet_id,
         "bond_case_id": case_id,
-        "self_serve_packet_key": f"{case_id}|{role}|{person_id}",
+        "self_serve_packet_key": packet_key,
         "person_id": person_id,
         "role": role,
-        "status": "pending_signature",
+        "scan_id": scan_id,
+        "status": "pending_owner_review" if unvalidated else "pending_signature",
+        "self_serve_unvalidated_draft": unvalidated,
+        "owner_review": "pending_owner_review" if unvalidated else "",
         "voided": False,
         "source": "self_serve",
         "surety_id": bond_data.get("surety_id") or "",
@@ -629,6 +785,47 @@ async def build_self_serve_packet(
         "created_at": result.get("created_at") or _now(),
     }
     await _col("paperwork_packets").insert_one(packet_doc)
+    if unvalidated:
+        await _col("audit_events").insert_one({
+            "event_id": str(uuid.uuid4()),
+            "event_type": "self_serve_draft_signing_url",
+            "action": "self_serve_draft_signing_url",
+            "entity_type": "paperwork_packet",
+            "entity_id": packet_id,
+            "packet_id": packet_id,
+            "bond_case_id": case_id,
+            "actor": "auto",
+            "agent_name": "paperwork_self_serve",
+            "role": role,
+            "person_id": person_id,
+            "scan_id": scan_id,
+            "reason": "signing_url_issued_for_unvalidated_draft",
+            "created_at": packet_doc["created_at"],
+            "old_state": {},
+            "new_state": {
+                "status": "pending_owner_review",
+                "self_serve_unvalidated_draft": True,
+                "signing_url_issued": True,
+            },
+        })
+    if prior_final:
+        await _col("audit_events").insert_one({
+            "event_id": str(uuid.uuid4()),
+            "event_type": "self_serve_packet_replacement",
+            "action": "self_serve_packet_replacement",
+            "entity_type": "paperwork_packet",
+            "entity_id": packet_id,
+            "packet_id": packet_id,
+            "bond_case_id": case_id,
+            "actor": "auto",
+            "agent_name": "paperwork_self_serve",
+            "role": role,
+            "person_id": person_id,
+            "reason": "prior_packet_finalized",
+            "created_at": packet_doc["created_at"],
+            "old_state": {"packet_id": [row.get("packet_id") for row in prior_final]},
+            "new_state": {"packet_id": packet_id, "status": packet_doc["status"]},
+        })
     return {"packet_id": packet_id, "signing_link": url, "created": True}
 
 
@@ -744,6 +941,7 @@ async def accept_confirmed_id(
             fields=fields,
             email=email,
             phone=phone,
+            scan_id=_text(scan_id),
         )
     except Exception as exc:
         logger.warning(
