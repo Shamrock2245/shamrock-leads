@@ -1401,35 +1401,151 @@ async def _id_upload_session(token: str) -> tuple[Optional[Dict[str, Any]], str]
     return doc, ""
 
 
-async def _insert_id_upload(session: Dict[str, Any], record: Dict[str, Any]) -> None:
+def _id_upload_write_filter(token: str) -> Dict[str, Any]:
+    """Match only a session that is still verified, open, and unexpired."""
+    return {
+        "session_token": token,
+        "verified": True,
+        "voided": {"$ne": True},
+        "revoked": {"$ne": True},
+        "status": {"$nin": sorted(_ID_UPLOAD_DEAD_STATUSES)},
+        "expires_at": {"$gt": datetime.now(timezone.utc).isoformat()},
+    }
+
+
+def _id_upload_packet_push_filter(packet_id: str) -> Dict[str, Any]:
+    """Append by packet id. A closed or superseded packet does not match."""
+    closed = ["void", "voided", "cancelled", "canceled", "superseded"]
+    return {
+        "packet_id": packet_id,
+        "voided": {"$ne": True},
+        "superseded": {"$ne": True},
+        "status": {"$nin": closed},
+        "docuseal_status": {"$nin": closed},
+        "packet_status": {"$nin": closed},
+    }
+
+
+async def _reserve_id_upload_attempt(session: Dict[str, Any]) -> str:
+    """Count this upload before OCR, using the co-signer cap and cooldown.
+
+    The increment is one conditional update. A later OCR failure still counts.
+    A full cap or an active cooldown does not increment and does not scan.
+    Returns ``scan_attempt_cap``, ``scan_cooldown``, or ``""`` when reserved.
+    """
+    from dashboard.services.cosigner_link_service import SCAN_ATTEMPT_CAP, SCAN_COOLDOWN
+
+    token = str(session.get("session_token") or "").strip()
+    now = datetime.now(timezone.utc)
+    cutoff = now - SCAN_COOLDOWN
+    result = await get_collection("portal_pins").update_one(
+        {
+            "session_token": token,
+            "$and": [
+                {"$or": [
+                    {"scan_attempts": {"$exists": False}},
+                    {"scan_attempts": {"$lt": SCAN_ATTEMPT_CAP}},
+                ]},
+                {"$or": [
+                    {"scan_attempted_at": {"$exists": False}},
+                    {"scan_attempted_at": None},
+                    {"scan_attempted_at": ""},
+                    {"scan_attempted_at": {"$lte": cutoff}},
+                ]},
+            ],
+        },
+        {"$inc": {"scan_attempts": 1}, "$set": {"scan_attempted_at": now}},
+    )
+    matched = getattr(result, "matched_count", None)
+    if matched is None:
+        matched = getattr(result, "modified_count", 0)
+    if matched:
+        return ""
+    current = await get_collection("portal_pins").find_one({"session_token": token})
+    try:
+        attempts = int((current or {}).get("scan_attempts") or 0)
+    except (TypeError, ValueError):
+        attempts = SCAN_ATTEMPT_CAP
+    if attempts >= SCAN_ATTEMPT_CAP:
+        await get_collection("audit_events").insert_one({
+            "event_id": str(uuid.uuid4()),
+            "event_type": "id_upload_attempt_cap",
+            "entity_type": "portal_pin",
+            "entity_id": str(session.get("_id") or ""),
+            "actor": "id-upload",
+            "agent_name": "paperwork_id_upload",
+            "created_at": now.isoformat(),
+            "reason": "scan_attempt_cap",
+            "session_id": str(session.get("_id") or ""),
+            "packet_id": str(session.get("packet_id") or ""),
+            "old_state": {"scan_attempts": attempts},
+            "new_state": {"scan_attempts": attempts},
+        })
+        return "scan_attempt_cap"
+    return "scan_cooldown"
+
+
+def _rasterize_pdf_page(raw: bytes) -> bytes:
+    """First page of a PDF as PNG. Empty bytes means it could not be read."""
+    import fitz
+
+    doc = fitz.open(stream=raw, filetype="pdf")
+    try:
+        if doc.page_count < 1:
+            return b""
+        pix = doc[0].get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        return pix.tobytes("png") or b""
+    finally:
+        doc.close()
+
+
+def _prepare_id_upload_image(raw: bytes) -> tuple[bytes, str]:
+    """Hand the scanner an image. A PDF is rasterized; a failed read is not a scan."""
+    if not raw.startswith(b"%PDF"):
+        return raw, ""
+    try:
+        image = _rasterize_pdf_page(raw)
+    except Exception:
+        logger.warning("[id-upload] pdf rasterize failed", exc_info=True)
+        return b"", "scan_unreadable"
+    if not image or image.startswith(b"%PDF"):
+        return b"", "scan_unreadable"
+    return image, ""
+
+
+async def _insert_id_upload(session: Dict[str, Any], record: Dict[str, Any]) -> str:
     """Append the scan. Existing scans and audit rows are not replaced or removed.
 
-    The audit stores the session row count and the packet row count separately.
-    A packet that already holds another signer's scans must not be described
-    with the fresh session's count.
+    The session must still be verified when the row is written. Counts on the
+    audit come from the document returned by that update, so two overlapping
+    uploads cannot both record the same transition.
     """
     token = str(session.get("session_token") or "").strip()
-    session_before = _scan_row_count(session.get("id_scan_records"))
     stored = {**record, "extracted": dict(record.get("extracted") or {})}
-    await get_collection("portal_pins").update_one(
-        {"session_token": token},
+    updated = await get_collection("portal_pins").find_one_and_update(
+        _id_upload_write_filter(token),
         {"$push": {"id_scan_records": stored}},
     )
+    if not isinstance(updated, dict):
+        _current, denial = await _id_upload_session(token)
+        return denial or "token_voided"
+    session_after = _scan_row_count(updated.get("id_scan_records"))
+    session_before = max(session_after - 1, 0)
     packet_id = str(session.get("packet_id") or "").strip()
     packet_before = 0
     packet_after = 0
     if packet_id:
-        packet = await get_collection("paperwork_packets").find_one({"packet_id": packet_id})
-        if isinstance(packet, dict):
-            packet_before = _scan_row_count(packet.get("id_scan_records"))
-            if not _id_upload_packet_closed(packet):
-                await get_collection("paperwork_packets").update_one(
-                    {"packet_id": packet_id},
-                    {"$push": {"id_scan_records": {**stored, "extracted": dict(stored["extracted"])}}},
-                )
-                packet_after = packet_before + 1
-            else:
-                packet_after = packet_before
+        pushed = await get_collection("paperwork_packets").find_one_and_update(
+            _id_upload_packet_push_filter(packet_id),
+            {"$push": {"id_scan_records": {**stored, "extracted": dict(stored["extracted"])}}},
+        )
+        if isinstance(pushed, dict):
+            packet_after = _scan_row_count(pushed.get("id_scan_records"))
+            packet_before = max(packet_after - 1, 0)
+        else:
+            current = await get_collection("paperwork_packets").find_one({"packet_id": packet_id})
+            packet_after = _scan_row_count((current or {}).get("id_scan_records"))
+            packet_before = packet_after
     await get_collection("audit_events").insert_one({
         "event_id": str(uuid.uuid4()),
         "event_type": "id_upload_saved",
@@ -1439,7 +1555,7 @@ async def _insert_id_upload(session: Dict[str, Any], record: Dict[str, Any]) -> 
         "agent_name": "paperwork_id_upload",
         "created_at": stored["recorded_at"],
         "reason": "id_upload_inserted",
-        "session_id": str(session.get("_id") or ""),
+        "session_id": str(updated.get("_id") or session.get("_id") or ""),
         "packet_id": packet_id,
         "role": stored["role"],
         "old_state": {
@@ -1447,12 +1563,13 @@ async def _insert_id_upload(session: Dict[str, Any], record: Dict[str, Any]) -> 
             "packet_id_scan_records": packet_before,
         },
         "new_state": {
-            "session_id_scan_records": session_before + 1,
+            "session_id_scan_records": session_after,
             "packet_id_scan_records": packet_after,
             "scan_id": stored["scan_id"],
         },
     })
     logger.info("[id-upload] inserted scan_id=%s packet_id=%s", stored["scan_id"], packet_id or "")
+    return ""
 
 
 async def _id_upload_file(form) -> tuple[bytes, str]:
@@ -1495,6 +1612,17 @@ async def portal_id_upload(request: Request):
     image_bytes, filename = await _id_upload_file(form)
     if not image_bytes:
         return JSONResponse({"success": False, "error": "scan_image_required"}, status_code=400)
+    limited = await _reserve_id_upload_attempt(session)
+    if limited:
+        return JSONResponse({"success": False, "saved": False, "error": limited}, status_code=429)
+    image_bytes, prepare_error = _prepare_id_upload_image(image_bytes)
+    if prepare_error:
+        return JSONResponse(
+            {"success": False, "saved": False, "error": prepare_error},
+            status_code=422,
+        )
+    if image_bytes.startswith(b"\x89PNG"):
+        filename = "id-page.png"
 
     from dashboard.services.id_scanner_service import IDScannerService
 
@@ -1502,11 +1630,18 @@ async def portal_id_upload(request: Request):
         result = await IDScannerService.scan_id_image(image_bytes, filename=filename)
     except Exception:
         logger.warning("[id-upload] scanner failed", exc_info=True)
-        return JSONResponse({"success": False, "error": "scan_failed"}, status_code=422)
+        return JSONResponse({"success": False, "saved": False, "error": "scan_failed"}, status_code=422)
     extracted = result.get("extracted") if isinstance(result, dict) and isinstance(result.get("extracted"), dict) else {}
     passed = bool(isinstance(result, dict) and result.get("success") and extracted.get("full_name"))
+    if not passed:
+        return JSONResponse(
+            {"success": False, "saved": False, "error": "scan_unreadable"},
+            status_code=422,
+        )
     record = _id_upload_record(session, extracted, passed)
-    await _insert_id_upload(session, record)
+    denial = await _insert_id_upload(session, record)
+    if denial:
+        return _id_upload_denied(denial)
     return JSONResponse({
         "success": True,
         "saved": True,
@@ -2088,9 +2223,9 @@ ID_UPLOAD_HTML = """<!DOCTYPE html>
 <body>
     <main class="card" id="id-upload-step" data-launch-mode="id-upload">
         <h1>Upload your ID</h1>
-        <p>Photograph the front of your driver license, state ID, or passport. Each photo is saved on its own. Staff review it.</p>
+        <p>Photograph the front of your driver license, state ID, or passport. A PDF of that page is accepted. A file is saved only when a name can be read.</p>
         <form id="idUploadForm">
-            <label class="drop">Choose a photo
+            <label class="drop">Choose a photo or PDF
                 <input id="idImage" name="id_image" type="file" accept="image/*,application/pdf" required>
             </label>
             <button type="submit" id="idUploadBtn">Upload ID</button>
@@ -2132,7 +2267,11 @@ ID_UPLOAD_HTML = """<!DOCTYPE html>
                     var data = {};
                     try { data = await response.json(); } catch (e) { data = {}; }
                     if (!response.ok || !data.saved) {
-                        show('error', 'That upload was not accepted. Call the office if this keeps happening.');
+                        var msg = 'That upload was not accepted. Call the office if this keeps happening.';
+                        if (data.error === 'scan_unreadable' || data.error === 'scan_failed') {
+                            msg = 'We could not read a name from that file. Upload a photo of the ID.';
+                        }
+                        show('error', msg);
                         button.disabled = false;
                         return;
                     }

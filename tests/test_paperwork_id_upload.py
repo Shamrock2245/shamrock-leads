@@ -132,6 +132,13 @@ def _block_remote(monkeypatch):
     monkeypatch.setattr("dashboard.services.payment_links.payment_link_for", _boom)
 
 
+def _release_attempt_cooldown(db):
+    """The co-signer cooldown is 30s. A later test upload has to look older."""
+    db["portal_pins"].docs[0]["scan_attempted_at"] = (
+        datetime.now(timezone.utc) - timedelta(minutes=2)
+    )
+
+
 def _upload(token, body, *, query=True):
     files = {"id_image": ("id.jpg", body, "image/jpeg")}
     data = {"full_name": "Not From The Server", "dl_number": "D000"}
@@ -177,6 +184,7 @@ def test_second_upload_does_not_overwrite_the_first_scan(monkeypatch, caplog):
     first = _upload(TOKEN, b"first-id-photo")
     assert first.status_code == 200, first.text
     first_id = first.json()["scan_id"]
+    _release_attempt_cooldown(db)
     second = _upload(TOKEN, b"second-id-photo")
     assert second.status_code == 200, second.text
     second_id = second.json()["scan_id"]
@@ -320,6 +328,7 @@ def test_poa_change_does_not_invalidate_the_upload_link(monkeypatch):
     assert first.status_code == 200, first.text
     first_id = first.json()["scan_id"]
     db["paperwork_packets"].docs[0]["poa_number"] = "TEST-POA-2"
+    _release_attempt_cooldown(db)
     second = _upload(TOKEN, b"after-poa-change")
     assert second.status_code == 200, second.text
     packet = db["paperwork_packets"].docs[0]
@@ -400,6 +409,7 @@ def test_audit_records_session_and_packet_scan_counts_separately(monkeypatch):
     assert "id_scan_records" not in event["old_state"]
     assert TOKEN not in str(event)
 
+    _release_attempt_cooldown(db)
     second = _upload(TOKEN, b"mixed-count-photo-2")
     assert second.status_code == 200, second.text
     later = db["audit_events"].docs[-1]
@@ -413,6 +423,207 @@ def test_audit_records_session_and_packet_scan_counts_separately(monkeypatch):
     assert packet["id_scan_records"][0]["scan_id"] == "TEST-SCAN-EXISTING"
     assert packet["id_scan"]["scan_id"] == "TEST-SCAN-DEF"
     assert packet["id_ocr"]["scan_id"] == "TEST-SCAN-IND"
+
+
+@pytest.mark.parametrize("mutate", ["revoked", "expired"])
+def test_session_revoked_during_ocr_stores_nothing(monkeypatch, mutate):
+    db = _world(monkeypatch)
+    calls = {"n": 0, "bytes": []}
+
+    async def _scan(image_bytes, filename=""):
+        calls["n"] += 1
+        pin = db["portal_pins"].docs[0]
+        if mutate == "revoked":
+            pin["revoked"] = True
+        else:
+            pin["expires_at"] = "2020-01-01T00:00:00+00:00"
+        return {
+            "success": True,
+            "extracted": {"full_name": "TEST Signer", "dl_state": "FL"},
+        }
+
+    monkeypatch.setattr(
+        "dashboard.services.id_scanner_service.IDScannerService.scan_id_image",
+        _scan,
+    )
+    _block_remote(monkeypatch)
+    kept_audits = copy.deepcopy(db["audit_events"].docs)
+    packet_before = copy.deepcopy(db["paperwork_packets"].docs[0])
+
+    response = _upload(TOKEN, b"in-flight-photo")
+    assert response.status_code == (403 if mutate == "revoked" else 401)
+    body = response.json()
+    assert body["success"] is False
+    assert body.get("saved") is not True
+    assert body["error"] == ("token_voided" if mutate == "revoked" else "token_expired")
+    assert calls["n"] == 1
+    assert "id_scan_records" not in db["portal_pins"].docs[0]
+    assert db["paperwork_packets"].docs[0] == packet_before
+    assert db["audit_events"].docs == kept_audits
+    text = response.text.lower()
+    assert "sign.shamrockbailbonds.biz" not in text
+    assert "docuseal" not in text
+    assert "swipesimple" not in text
+    assert TOKEN not in text
+
+
+def test_ocr_attempt_cap_returns_429_without_another_scan(monkeypatch):
+    from dashboard.services.cosigner_link_service import SCAN_ATTEMPT_CAP
+
+    session = _session()
+    session["scan_attempts"] = SCAN_ATTEMPT_CAP - 1
+    session["scan_attempted_at"] = datetime.now(timezone.utc) - timedelta(minutes=2)
+    db = _world(monkeypatch, session=session)
+    calls = {"n": 0, "bytes": []}
+    _scanner(monkeypatch, calls)
+    _block_remote(monkeypatch)
+
+    allowed = _upload(TOKEN, b"last-allowed")
+    assert allowed.status_code == 200, allowed.text
+    assert calls["n"] == 1
+    assert db["portal_pins"].docs[0]["scan_attempts"] == SCAN_ATTEMPT_CAP
+
+    _release_attempt_cooldown(db)
+    blocked = _upload(TOKEN, b"over-cap")
+    assert blocked.status_code == 429
+    assert blocked.json()["error"] == "scan_attempt_cap"
+    assert blocked.json().get("saved") is not True
+    assert calls["n"] == 1
+    assert db["portal_pins"].docs[0]["scan_attempts"] == SCAN_ATTEMPT_CAP
+    assert len(db["portal_pins"].docs[0]["id_scan_records"]) == 1
+    assert "sign.shamrockbailbonds.biz" not in blocked.text.lower()
+    assert db["audit_events"].docs[0]["event_id"] == "TEST-AUDIT-KEEP"
+    assert any(row.get("event_type") == "id_upload_attempt_cap" for row in db["audit_events"].docs)
+    assert TOKEN not in str(db["audit_events"].docs[-1])
+
+
+def test_unreadable_scan_counts_toward_the_cap_and_is_not_saved(monkeypatch):
+    from dashboard.services.cosigner_link_service import SCAN_ATTEMPT_CAP
+
+    session = _session()
+    session["scan_attempts"] = SCAN_ATTEMPT_CAP - 1
+    session["scan_attempted_at"] = datetime.now(timezone.utc) - timedelta(minutes=2)
+    db = _world(monkeypatch, session=session)
+    calls = {"n": 0, "bytes": []}
+
+    async def _blank(image_bytes, filename=""):
+        calls["n"] += 1
+        return {"success": False, "extracted": {}}
+
+    monkeypatch.setattr(
+        "dashboard.services.id_scanner_service.IDScannerService.scan_id_image",
+        _blank,
+    )
+    missed = _upload(TOKEN, b"no-name")
+    assert missed.status_code == 422
+    assert missed.json() == {"success": False, "saved": False, "error": "scan_unreadable"}
+    assert calls["n"] == 1
+    assert "id_scan_records" not in db["portal_pins"].docs[0]
+    assert db["portal_pins"].docs[0]["scan_attempts"] == SCAN_ATTEMPT_CAP
+    assert "sign.shamrockbailbonds.biz" not in missed.text.lower()
+
+    _release_attempt_cooldown(db)
+    blocked = _upload(TOKEN, b"after-unreadable")
+    assert blocked.status_code == 429
+    assert blocked.json()["error"] == "scan_attempt_cap"
+    assert calls["n"] == 1
+
+
+def test_pdf_upload_is_rasterized_before_ocr(monkeypatch):
+    import fitz
+
+    db = _world(monkeypatch)
+    calls = {"n": 0, "bytes": []}
+
+    async def _scan(image_bytes, filename=""):
+        calls["n"] += 1
+        calls["bytes"].append(bytes(image_bytes))
+        calls["filename"] = filename
+        return {
+            "success": True,
+            "extracted": {"full_name": "TEST Signer", "dl_state": "FL"},
+        }
+
+    monkeypatch.setattr(
+        "dashboard.services.id_scanner_service.IDScannerService.scan_id_image",
+        _scan,
+    )
+    doc = fitz.open()
+    doc.new_page()
+    pdf = doc.tobytes()
+    doc.close()
+    response = _upload(TOKEN, pdf)
+    assert response.status_code == 200, response.text
+    assert response.json()["saved"] is True
+    assert calls["n"] == 1
+    assert calls["bytes"][0].startswith(b"\x89PNG")
+    assert not calls["bytes"][0].startswith(b"%PDF")
+    assert calls["filename"] == "id-page.png"
+    assert len(db["portal_pins"].docs[0]["id_scan_records"]) == 1
+
+    _release_attempt_cooldown(db)
+    garbled = _upload(TOKEN, b"%PDF-1.4\nnot-a-real-pdf")
+    assert garbled.status_code == 422
+    assert garbled.json() == {"success": False, "saved": False, "error": "scan_unreadable"}
+    assert calls["n"] == 1
+    assert len(db["portal_pins"].docs[0]["id_scan_records"]) == 1
+    page = _page("/api/portal/portal-ui?mode=id-upload").text
+    assert "Upload a photo of the ID." in page
+
+
+def test_concurrent_uploads_record_the_stored_transitions(monkeypatch):
+    import asyncio
+
+    from httpx import ASGITransport, AsyncClient
+
+    monkeypatch.setattr(
+        "dashboard.services.cosigner_link_service.SCAN_COOLDOWN",
+        timedelta(0),
+    )
+    db = _world(monkeypatch)
+    calls = {"n": 0}
+
+    async def _scan(image_bytes, filename=""):
+        calls["n"] += 1
+        await asyncio.sleep(0.05)
+        return {
+            "success": True,
+            "extracted": {"full_name": "TEST Signer", "dl_state": "FL"},
+        }
+
+    monkeypatch.setattr(
+        "dashboard.services.id_scanner_service.IDScannerService.scan_id_image",
+        _scan,
+    )
+    kept = copy.deepcopy(db["audit_events"].docs[0])
+
+    async def _both():
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as async_client:
+            async def _post(body):
+                return await async_client.post(
+                    f"/api/portal/id-upload?st={TOKEN}",
+                    files={"id_image": ("id.jpg", body, "image/jpeg")},
+                )
+            return await asyncio.gather(_post(b"scan-a"), _post(b"scan-b"))
+
+    first, second = asyncio.run(_both())
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert calls["n"] == 2
+    assert len(db["portal_pins"].docs[0]["id_scan_records"]) == 2
+    assert len(db["paperwork_packets"].docs[0]["id_scan_records"]) == 3
+    events = [row for row in db["audit_events"].docs if row.get("event_type") == "id_upload_saved"]
+    assert sorted(
+        (row["old_state"]["session_id_scan_records"], row["new_state"]["session_id_scan_records"])
+        for row in events
+    ) == [(0, 1), (1, 2)]
+    assert sorted(
+        (row["old_state"]["packet_id_scan_records"], row["new_state"]["packet_id_scan_records"])
+        for row in events
+    ) == [(1, 2), (2, 3)]
+    assert db["audit_events"].docs[0] == kept
+    assert "sign.shamrockbailbonds.biz" not in (first.text + second.text).lower()
 
 
 def test_unknown_mode_falls_back_to_the_normal_flow():

@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-05 (id-upload attempt cap and persist gate)
+
+### Fixed
+- **An id-upload that loses its session during OCR is not saved.** The scan row is written only when the portal pin is still verified, not voided, not revoked, and `expires_at` is still later than the write. A revocation or expiration while OCR is running appends nothing and returns no signing URL.
+- **Id-upload OCR uses the co-signer attempt cap and cooldown.** `SCAN_ATTEMPT_CAP` and `SCAN_COOLDOWN` are reserved with one conditional update before the scanner runs. The next try is `429` `scan_attempt_cap` or `scan_cooldown`, and that try does not call OCR. A read that finds no name still consumes the attempt and does not save a row.
+- **Audit counts come from the update that stored the row.** Each `id_upload_saved` event uses the array length returned by that update, so two overlapping uploads record `0→1` and `1→2` rather than two copies of `0→1`. Events are inserted. Earlier audit rows are not removed.
+- **A PDF is rasterized before OCR.** The first page is turned into a PNG with PyMuPDF, which this repo already depends on. A PDF that cannot be read, and any upload that yields no name, returns `scan_unreadable` with `saved: false` and does not append a scan. The page says to upload a photo of the ID.
+
+### Tests
+- `tests/test_paperwork_id_upload.py`: revocation and expiration during OCR, the attempt cap and the `429`, an unreadable scan that still counts, a PDF rasterized before OCR, and concurrent uploads whose audit transitions match the stored rows. No DocuSeal send and no SwipeSimple charge.
+
 ## [Unreleased] — 2026-11-05 (id-upload fails closed on bad sessions)
 
 ### Fixed
