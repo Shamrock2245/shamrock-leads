@@ -6,7 +6,7 @@ fastapi>=0.115.0
 uvicorn[standard]>=0.54.0
 
 # MongoDB (async)
-motor>=3.3.0
+motor>=3.7.1
 pymongo[srv]>=4.6.0
 
 # OpenAI SDK (used for both GPT-4o and xAI Grok via base_url override)
