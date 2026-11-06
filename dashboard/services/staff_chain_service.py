@@ -729,7 +729,11 @@ _DEDUPE_GUARD = asyncio.Lock()
 
 
 async def _dedupe_lock(key: str) -> asyncio.Lock:
-    """In-process guard for one dedupe key. A unique index is not created here."""
+    """Same-process guard only. Two workers can still insert the same key.
+
+    A unique index on ``bond_cases.self_serve_dedupe_key`` would close that
+    race. No index is created here.
+    """
     async with _DEDUPE_GUARD:
         lock = _DEDUPE_LOCKS.get(key)
         if lock is None:
@@ -1147,7 +1151,14 @@ async def _attach_signer_to_case(
     from dashboard.services.identity_verification_service import names_match
 
     case_id = _case_id_of(case)
-    slot_id, _slot_phone, slot_name, slot_dob = _slot_identity(case, role)
+    slot_id, slot_phone, slot_name, slot_dob = _slot_identity(case, role)
+    if slot_phone and _digits_phone(slot_phone) != _digits_phone(phone):
+        return {
+            "success": False,
+            "error": "role_phone_mismatch",
+            "bond_case_id": case_id,
+            "case_created": False,
+        }
     if slot_name and not names_match(name, slot_name):
         return {"success": False, "error": "role_conflict", "bond_case_id": case_id, "case_created": False}
     if slot_dob and _normalize_dob(slot_dob) != dob:
@@ -1293,8 +1304,7 @@ async def _insert_self_serve_draft(
     defendant_id = person_id if role == "defendant" else ""
     indemnitor_id = person_id if role == "indemnitor" else ""
     co_id = person_id if role == "coindemnitor" else ""
-    # Preferred carrier for a draft that has no surety yet. Not a POA assignment.
-    surety_id = "osi"
+    # Surety stays unset until staff or an existing case selects one.
     patch = _identity_patch(role, identity, phone, email)
     doc: Dict[str, Any] = {
         "bond_case_id": bond_case_id,
@@ -1305,8 +1315,6 @@ async def _insert_self_serve_draft(
         "match_status": _SELF_SERVE_STATUS,
         "status": _SELF_SERVE_STATUS,
         "source": _SELF_SERVE_SOURCE,
-        "surety_id": surety_id,
-        "Surety_ID": surety_id,
         "defendant_id": defendant_id,
         "Defendant_ID": defendant_id,
         "indemnitor_id": indemnitor_id,

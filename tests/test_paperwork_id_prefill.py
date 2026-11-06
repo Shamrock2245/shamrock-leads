@@ -300,6 +300,7 @@ def test_dedupe_hit_reuses_the_case_and_keeps_amounts(monkeypatch):
         "poa_number": "TEST-POA-KEEP",
         "bond_amount": 5000,
         "premium": 500,
+        "surety_id": "palmetto",
         "status": "active",
         "source": "staff",
     })
@@ -329,7 +330,9 @@ def test_dedupe_hit_reuses_the_case_and_keeps_amounts(monkeypatch):
     assert case["poa_number"] == "TEST-POA-KEEP"
     assert case["bond_amount"] == 5000
     assert case["premium"] == 500
+    assert case["surety_id"] == "palmetto"
     assert case["status"] == "active"
+    assert db["paperwork_packets"].docs[0]["surety_id"] == "palmetto"
     assert case["indemnitor_address"] == "20 Test Lane"
     assert "defendant_name" not in case
     assert calls["kwargs"]["send_email"] is False
@@ -347,12 +350,17 @@ def test_dedupe_miss_creates_a_draft_and_an_audit(monkeypatch):
     scan_id = _ocr(db).json()["scan_id"]
     saved = _confirm(scan_id, _indemnitor_fields())
     assert saved.status_code == 200, saved.text
-    assert saved.json()["created_case"] is True
+    body = saved.json()
+    assert body["created_case"] is True
+    assert body["signing_link"] == ""
+    assert body["fallback"] is True
     assert len(db["bond_cases"].docs) == 1
+    assert db["paperwork_packets"].docs == []
     case = db["bond_cases"].docs[0]
     assert case["source"] == "self_serve"
     assert case["status"] == "pending_owner_review"
     assert case["created_by"] == "auto"
+    assert not case.get("surety_id")
     assert not case.get("bond_amount")
     assert not case.get("premium")
     assert not case.get("poa_number")
@@ -361,18 +369,11 @@ def test_dedupe_miss_creates_a_draft_and_an_audit(monkeypatch):
     assert audits[0]["actor"] == "auto"
     assert NAME not in str(audits[0])
     assert "TEST-DL-0000" not in str(audits[0])
-    values = calls["kwargs"]["submitters"][1]["values"]
-    assert values["indemnitor_name"] == NAME
-    assert values["indemnitor_dob"] == DOB
-    assert values["indemnitor_address"] == "10 Test Lane"
-    assert values["indemnitor_dl"] == "TEST-DL-0000"
-    assert values["indemnitor_dl_state"] == "FL"
-    assert values.get("bond_amount") in ("", None)
-    assert values.get("numeric_premium") in ("", None)
-    assert values.get("poa_number") in ("", None)
-    assert "100.00" not in str(values.get("numeric_premium") or "")
-    assert calls["kwargs"]["send_email"] is False
-    assert calls["kwargs"]["send_sms"] is False
+    assert calls["n"] == 0
+    pending = case["pending_id_prefills"][-1]["fields"]
+    assert pending["indemnitor_name"] == NAME
+    assert pending["indemnitor_dl"] == "TEST-DL-0000"
+    assert "swipesimple" not in saved.text.lower()
 
 
 def test_double_submit_creates_one_case_and_one_packet(monkeypatch):
@@ -387,11 +388,12 @@ def test_double_submit_creates_one_case_and_one_packet(monkeypatch):
     first = _confirm(scan_id, fields)
     second = _confirm(scan_id, fields)
     assert first.status_code == 200 and second.status_code == 200
-    assert first.json()["packet_id"] == second.json()["packet_id"]
+    assert first.json()["signing_link"] == ""
+    assert second.json()["signing_link"] == ""
     assert first.json()["bond_case_id"] == second.json()["bond_case_id"]
     assert len(db["bond_cases"].docs) == 1
-    assert len(db["paperwork_packets"].docs) == 1
-    assert calls["n"] == 1
+    assert db["paperwork_packets"].docs == []
+    assert calls["n"] == 0
     assert len(db["portal_pins"].docs[0]["id_confirmed_records"]) == 2
     stored = db["portal_pins"].docs[0]["id_scan_records"][0]["extracted"]
     assert stored == {"full_name": NAME, "dl_state": "FL"}
@@ -516,6 +518,7 @@ def test_voided_packet_url_is_not_returned(monkeypatch):
         "indemnitor_phone": PHONE,
         "indemnitor_name": NAME,
         "indemnitor_dob": DOB,
+        "surety_id": "palmetto",
         "status": "active",
         "source": "staff",
     })
@@ -547,6 +550,16 @@ def test_voided_packet_url_is_not_returned(monkeypatch):
 def test_unverified_signer_gets_no_url(monkeypatch):
     db = FakeDB()
     db["portal_pins"].docs.append(_session())
+    db["bond_cases"].docs.append({
+        "bond_case_id": "BC-TEST-1",
+        "indemnitor_id": "IND-TEST-1",
+        "indemnitor_phone": PHONE,
+        "indemnitor_name": NAME,
+        "indemnitor_dob": DOB,
+        "surety_id": "palmetto",
+        "status": "active",
+        "source": "staff",
+    })
     _install(monkeypatch, db)
     _scanner(monkeypatch)
     calls = {"n": 0, "kwargs": {}}
@@ -584,6 +597,17 @@ async def test_poa_change_does_not_drop_pending_prefill(monkeypatch):
 def test_draft_packet_stays_pending_review_and_records_the_url(monkeypatch):
     db = FakeDB()
     db["portal_pins"].docs.append(_session())
+    db["bond_cases"].docs.append({
+        "bond_case_id": "BC-TEST-1",
+        "indemnitor_id": "IND-TEST-1",
+        "indemnitor_phone": PHONE,
+        "indemnitor_name": NAME,
+        "indemnitor_dob": DOB,
+        "surety_id": "palmetto",
+        "match_status": "pending_owner_review",
+        "status": "pending_owner_review",
+        "source": "self_serve",
+    })
     db["audit_events"].docs.append({"event_id": "TEST-AUDIT-KEEP", "event_type": "earlier_review"})
     _install(monkeypatch, db)
     _scanner(monkeypatch)
@@ -600,6 +624,7 @@ def test_draft_packet_stays_pending_review_and_records_the_url(monkeypatch):
     assert packet["self_serve_unvalidated_draft"] is True
     assert packet["send_email"] is False
     assert packet["send_sms"] is False
+    assert packet["surety_id"] == "palmetto"
     issued = [row for row in db["audit_events"].docs if row.get("event_type") == "self_serve_draft_signing_url"]
     assert len(issued) == 1
     assert issued[0]["actor"] == "auto"
@@ -682,6 +707,7 @@ def test_unbound_packet_does_not_return_another_signers_url(monkeypatch):
         "indemnitor_phone": PHONE,
         "indemnitor_name": NAME,
         "indemnitor_dob": DOB,
+        "surety_id": "palmetto",
         "status": "active",
         "source": "staff",
     })
@@ -837,6 +863,7 @@ def test_signed_packet_is_replaced_not_edited(monkeypatch):
         "indemnitor_phone": PHONE,
         "indemnitor_name": NAME,
         "indemnitor_dob": DOB,
+        "surety_id": "palmetto",
         "status": "active",
         "source": "staff",
     })
@@ -922,9 +949,106 @@ async def test_parallel_confirms_create_one_case_and_one_packet(monkeypatch):
 
     first, second = await asyncio.gather(_once(), _once())
     assert first["bond_case_id"] == second["bond_case_id"]
-    assert first["packet_id"] == second["packet_id"]
-    assert first["signing_link"]
+    assert first["signing_link"] == ""
+    assert second["signing_link"] == ""
     assert len(db["bond_cases"].docs) == 1
-    assert len(db["paperwork_packets"].docs) == 1
-    assert calls["n"] == 1
+    assert db["paperwork_packets"].docs == []
+    assert calls["n"] == 0
     assert len([row for row in db["audit_events"].docs if row.get("event_type") == "self_serve_draft_bondcase"]) == 1
+
+
+def test_bound_path_requires_bond_and_premium_separately():
+    from dashboard.services.paperwork_self_serve import _case_fully_bound
+
+    base = {
+        "bond_case_id": "BC-TEST-1",
+        "match_id": "MATCH-TEST-1",
+        "match_status": "validated",
+        "defendant_id": "DEF-TEST-1",
+        "indemnitor_id": "IND-TEST-1",
+        "case_number": "TEST-CASE-1",
+        "poa_number": "TEST-POA-1",
+        "booking_number": "TEST-BOOK-1",
+        "surety_id": "palmetto",
+    }
+    assert _case_fully_bound(base) is False
+    assert _case_fully_bound({**base, "premium": 500}) is False
+    assert _case_fully_bound({**base, "bond_amount": 5000}) is False
+    assert _case_fully_bound({**base, "bond_amount": 5000, "premium": 500}) is True
+
+
+@pytest.mark.asyncio
+async def test_different_phone_does_not_overwrite_the_role(monkeypatch):
+    from dashboard.services.staff_chain_service import ensure_self_serve_bondcase
+
+    db = FakeDB()
+    _install(monkeypatch, db)
+    db["bond_cases"].docs.append({
+        "bond_case_id": "BC-TEST-DEF",
+        "defendant_id": "DEF-TEST-1",
+        "defendant_phone": "2395550199",
+        "defendant_name": NAME,
+        "defendant_dob": DOB,
+        "booking_number": "TEST-BOOK-1",
+        "status": "active",
+        "source": "staff",
+    })
+
+    async def _ensure(**kwargs):
+        return {"success": True, "bond_case_id": "BC-TEST-DEF"}
+
+    monkeypatch.setattr("dashboard.services.staff_chain_service.ensure_match_bondcase", _ensure)
+    before = dict(db["bond_cases"].docs[0])
+    result = await ensure_self_serve_bondcase(
+        phone=PHONE,
+        name=NAME,
+        dob=DOB,
+        role="defendant",
+        email=EMAIL,
+        identity=role_fields_from_scan(OCR, "defendant"),
+        scan_blob={"scan_id": "SCAN-TEST-OTHER", "full_name": NAME, "dl_state": "FL"},
+        booking_number="TEST-BOOK-1",
+        actor="auto",
+    )
+    assert result["success"] is False
+    assert result["error"] == "role_phone_mismatch"
+    assert db["bond_cases"].docs[0]["defendant_phone"] == before["defendant_phone"]
+    assert db["bond_cases"].docs[0]["defendant_name"] == NAME
+    assert "defendant_dl" not in db["bond_cases"].docs[0]
+    assert len(db["bond_cases"].docs) == 1
+
+
+def test_failed_scan_stays_and_a_later_success_can_verify(monkeypatch):
+    db = FakeDB()
+    db["portal_pins"].docs.append(_session())
+    db["bond_cases"].docs.append({
+        "bond_case_id": "BC-TEST-1",
+        "indemnitor_id": "IND-TEST-1",
+        "indemnitor_phone": PHONE,
+        "indemnitor_name": NAME,
+        "indemnitor_dob": DOB,
+        "surety_id": "palmetto",
+        "status": "active",
+        "source": "staff",
+    })
+    db["indemnitors"].docs.append({
+        "indemnitor_id": "IND-TEST-1",
+        "bond_case_id": "BC-TEST-1",
+        "name": NAME,
+        "phone": PHONE,
+        "dob": DOB,
+        "id_scan": {"success": False, "full_name": NAME, "dl_state": "FL", "role": "indemnitor"},
+    })
+    _install(monkeypatch, db)
+    _scanner(monkeypatch)
+    calls = {"n": 0, "kwargs": {}}
+    _submission(monkeypatch, calls)
+    saved = _confirm(_ocr(db).json()["scan_id"], _indemnitor_fields())
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["signing_link"].endswith("/s/TEST-SLUG")
+    person = db["indemnitors"].docs[0]
+    assert person["id_scan"]["success"] is False
+    assert person["id_scan_records"][-1]["success"] is True
+    assert person["id_scan_records"][-1]["extracted"] == {"full_name": NAME, "dl_state": "FL"}
+    assert calls["n"] == 1
+    assert "swipesimple" not in saved.text.lower()

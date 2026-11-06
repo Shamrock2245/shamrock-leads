@@ -251,7 +251,9 @@ def _case_fully_bound(case: Dict[str, Any]) -> bool:
         return False
     if not is_supported_surety(_text(case.get("surety_id"))):
         return False
-    if _backed(case, "bond_amount", "Bond_Amount") and not _backed(case, "premium", "premium_amount", "Premium"):
+    if not _backed(case, "bond_amount", "Bond_Amount"):
+        return False
+    if not _backed(case, "premium", "premium_amount", "Premium"):
         return False
     return True
 
@@ -424,7 +426,7 @@ def _bond_data_for_prefill(case: Dict[str, Any], role: str, fields: Dict[str, st
         "indemnitor_id": case.get("indemnitor_id") or "",
         "case_number": case.get("case_number") or "",
         "booking_number": case.get("booking_number") or "",
-        "surety_id": case.get("surety_id") or "osi",
+        "surety_id": _text(case.get("surety_id") or case.get("Surety_ID")),
         "in_person": True,
         "in_person_scan": True,
         "source": "self_serve",
@@ -689,7 +691,11 @@ async def _build_self_serve_packet_locked(
     ]
     packet_id = "PKT-SS-" + uuid.uuid4().hex[:10].upper()
     await _identity_ok(case, role, fields, packet_id)
+    from dashboard.services.surety_registry import is_supported_surety
+
     bond_data = _bond_data_for_prefill(case, role, fields, email, phone)
+    if not is_supported_surety(_text(bond_data.get("surety_id"))):
+        raise RuntimeError("surety_unassigned")
     unvalidated = not _case_fully_bound(case)
     svc = service_cls()
     if not unvalidated:
