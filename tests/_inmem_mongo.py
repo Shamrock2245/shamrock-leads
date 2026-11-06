@@ -131,6 +131,13 @@ class FakeCollection:
     def _apply(self, d, update, inserting):
         for k, v in (update.get("$set") or {}).items():
             _set_path(d, k, copy.deepcopy(v))
+        for k, v in (update.get("$inc") or {}).items():
+            current = _get(d, k)
+            try:
+                base = int(current or 0)
+            except (TypeError, ValueError):
+                base = 0
+            _set_path(d, k, base + int(v))
         for k, v in (update.get("$push") or {}).items():
             if "." in k:
                 bucket = _get(d, k)
