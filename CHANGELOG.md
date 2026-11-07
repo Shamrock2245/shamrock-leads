@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-07 (BB_CONFIG_API_KEY fail-closed contract test)
+
+### Security
+- No new credential and no fallback key. `0d5534a` already removed the hardcoded `BB_CONFIG_API_KEY`. `POST /api/config/bluebubbles-url` and `PATCH /api/bb-health/update-url` still require an admin session, machine auth (`GAS_API_KEY` / `LEADS_INTERNAL_TOKEN`), or an explicitly configured `BB_CONFIG_API_KEY` compared with `secrets.compare_digest`. A presented key when that setting is unset is `503`. A non-string `api_key` on the health route is the same denial (`503` when unset, `401` when a key is configured) instead of a `500`. An admin session or machine key still wins over a junk body key.
+
+### Tests
+- Added `tests/test_bb_config_key_fail_closed.py` to the CI contract list. It covers the unset-key `503`, a wrong key `401`, a matching configured key, machine auth, an admin session with no frontend key, and the absence of a fallback key in the dashboard script and URL-sync files.
+
 ## [Unreleased] — 2026-11-05 (Auto-send indemnitor only; ambiguous staff premium)
 
 ### Fixed
