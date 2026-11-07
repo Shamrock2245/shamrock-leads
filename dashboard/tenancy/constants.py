@@ -151,6 +151,7 @@ KNOWN_APP_COLLECTIONS = frozenset(
         "outreach_review_queue",
         "outreach_sequences",
         "paperwork_chase_log",
+        "paperwork_handoff_jti",
         "paperwork_packets",
         "paperwork_rules",
         "payment_dispatches",

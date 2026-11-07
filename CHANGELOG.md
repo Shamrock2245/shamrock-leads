@@ -3,13 +3,135 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased] — 2026-10-29 (Remove hardcoded BB_CONFIG_API_KEY fallback and fail closed)
+## [Unreleased] — 2026-11-07 (BB_CONFIG_API_KEY fail-closed contract test)
 
 ### Security
-- **Removed hardcoded `BB_CONFIG_API_KEY` fallback (`dashboard/extensions.py`, `dashboard/routers/legacy.py`, `dashboard/routers/bb_health_monitor.py`, `dashboard/sl-imessage.js`).** `POST /api/config/bluebubbles-url` and `PATCH /api/bb-health/update-url` now require either an authenticated admin session, valid machine auth (`GAS_API_KEY` / `LEADS_INTERNAL_TOKEN`), or an explicitly configured `BB_CONFIG_API_KEY` compared with `secrets.compare_digest`. When `BB_CONFIG_API_KEY` is unset and no admin/machine session is present, key-based requests fail closed (`503`). Removed the hardcoded key from `dashboard/sl-imessage.js`, `.env.example`, `scripts/bb-url-sync.sh`, `scripts/setup_bb_tunnel.sh`, and `docs/runbooks/bluebubbles-tunnel.md`.
+- No new credential and no fallback key. `0d5534a` already removed the hardcoded `BB_CONFIG_API_KEY`. `POST /api/config/bluebubbles-url` and `PATCH /api/bb-health/update-url` still require an admin session, machine auth (`GAS_API_KEY` / `LEADS_INTERNAL_TOKEN`), or an explicitly configured `BB_CONFIG_API_KEY` compared with `secrets.compare_digest`. A presented key when that setting is unset is `503`. A non-string `api_key` on the health route is the same denial (`503` when unset, `401` when a key is configured) instead of a `500`. An admin session or machine key still wins over a junk body key.
 
 ### Tests
-- Added `tests/test_bb_config_key_fail_closed.py` (wired into `.github/workflows/ci.yml`).
+- Added `tests/test_bb_config_key_fail_closed.py` to the CI contract list. It covers the unset-key `503`, a wrong key `401`, a matching configured key, machine auth, an admin session with no frontend key, and the absence of a fallback key in the dashboard script and URL-sync files.
+
+## [Unreleased] — 2026-11-05 (Auto-send indemnitor only; ambiguous staff premium)
+
+### Fixed
+- **The automatic pay-link text after signing goes only to the indemnitor.** With both `SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING` and `SWIPESIMPLE_DISPATCH_LIVE` on, DocuSeal `auto_send` called `dispatch_invoice` without `indemnitor_only`, so a bond with no indemnitor phone and a `defendant_phone` texted the defendant. It now uses the same indemnitor-only path as portal `send_copy`. A missing or conflicting indemnitor contact is `needs_review` (`dispatch_missing_indemnitor` or `indemnitor_contact_mismatch`), nothing is claimed or sent, and the defendant is never the recipient. The 2026-11-04 owner exception is unchanged: one text, both switches default off, no retry.
+- **Auto-confirm does not overwrite ambiguous staff premium fields.** `PREMIUM_AUTO_CONFIRM` treated every `resolve_locked_premium` error as "no premium" because `_bond_premium` returns None. Differing `premium_cents` and `premium_amount` (or a non-numeric, fractional, zero, or negative staff amount) was then replaced by the auto 10%. Those cases now skip as `staff_premium_ambiguous`: nothing is confirmed, signing stamps `needs_review`, and the portal returns `409 needs_review`. A blank premium and an intake estimate still auto-confirm. One readable staff premium still waits as `staff_premium_unconfirmed`.
+
+### Tests
+- `tests/test_indemnitor_self_pay.py`: auto-send indemnitor-only (defendant not texted; conflict not texted), ambiguous and malformed staff premiums not auto-confirmed, estimate still auto-confirmed. No SwipeSimple session, no live send.
+
+## [Unreleased] — 2026-11-05 (Indemnitor self-pay P1: recipient, case id, paid status)
+
+### Fixed
+- **`send_copy` texts only the validated indemnitor.** With `SWIPESIMPLE_DISPATCH_LIVE` on, `POST /api/portal/{token}/invoice-link` no longer falls back to `defendant_phone` or `defendant_email` when the indemnitor contact is missing. The recipient is the indemnitor phone or email on the bond (both spellings and the nested `indemnitor` map). Two different indemnitor values is `409 indemnitor_contact_mismatch`. None is `409 dispatch_missing_indemnitor`. Neither path sends. A dry run with the dispatch switch off is unchanged and still sends nothing.
+- **Legacy `Bond_Case_ID` mismatches fail closed.** Bond lookup reads `bond_case_id` and legacy `Bond_Case_ID` on each document. A populated disagreement, including one document that stores both spellings with different values, or `bond_cases` holding only `Bond_Case_ID: A` while `active_bonds` holds only `Bond_Case_ID: B`, is `bond_case_id_mismatch`. `Bond_Case_ID` is read only.
+- **A handled installment refreshes `premium_paid`.** Plan posting (`post_gateway_event` → `apply_plan_payment`) does not call `record_provider_payment`, so the last installment left `premium_paid` false. The plan-payment transaction now refreshes it after the installment row is written, and a plan refund refreshes it again. `premium_paid` is set only when clean collected cents reach the confirmed premium. A partial installment does not set it. A reversed installment row counts as zero (it is the same row, not a second refund).
+- **A settled down-payment invoice is not offered again.** After the down payment, `premium_paid` stays false and `payment_status` can stay `sent` while `last_payment_status` is `approved`. The portal no longer returns that invoice link, and it does not create another one for the same reference (`409 invoice_settled`). An unpaid invoice is still returned. A charge whose reference is the booking stamps `settled_invoice_number` / `settled_invoice_status` / `settled_invoice_transaction_id`. A reversal of that transaction marks the invoice `reversed`.
+
+### Security
+- **The one automatic pay-link text after signing stays.** Brendan O'Neal approved it on 2026-11-04. `SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING` and `SWIPESIMPLE_DISPATCH_LIVE` both default off. When both are on, DocuSeal completion texts the staged invoice link once through `dispatch_invoice`'s one-send claim. A failure is `needs_review` and is not retried. Documented in `AGENTS.md` (prime directive 6 and the env table) and on `step_auto_send`. It does not authorize any other automated client outreach.
+
+### Tests
+- `tests/test_indemnitor_self_pay.py`: legacy case-id mismatch, indemnitor-only `send_copy` (defendant never chosen; missing contact does not send), settled vs unpaid down-payment invoice, partial vs final installment `premium_paid`. No SwipeSimple session, no live send.
+
+## [Unreleased] — 2026-11-04 (Indemnitor self-pay invoice link from the portal)
+
+### Added
+- **`POST /api/portal/{token}/invoice-link` (indemnitor self-pay, §2.2).** An indemnitor token gets the bond's own locked SwipeSimple invoice link. The amount comes only from the bond's confirmed premium (`premium_confirmed_amount`, or the confirmed down payment on a financed plan); anything in the body is ignored. An existing verified link (`/invoices/` path on swipesimple.com, bound to this bond, matching cents) is returned as is; otherwise one invoice is created through the existing one-invoice-per-bond claim. Errors are `{ok:false, error}` and never carry a URL: 401 `token_invalid_or_expired`, 403 `role_not_indemnitor`, 404 `bond_not_found`, 409 `bond_ambiguous` / `missing_booking_number` / `premium_unconfirmed` / `premium_estimate_unconfirmed` / `amount_mismatch` / `already_paid` / `needs_review` / `staff_test_case_invoice_disabled`, 202 `in_progress`, 503 `invoicing_unavailable` / `session_expired`, 429 `rate_limited` (5 per minute per token, `Retry-After: 60`). `send_copy` texts the link only when `SWIPESIMPLE_DISPATCH_LIVE` is on and otherwise logs a dry run.
+- **`PREMIUM_AUTO_CONFIRM` (default off).** When on, the invoice-link endpoint confirms an unconfirmed premium at max($100, 10% of the filed bond) with `premium_confirmed_by: "auto"`, paid in full, through the same transaction and audit as staff confirmation. It never overwrites a staff confirmation and is idempotent.
+- **Auto-confirm at signing (same `PREMIUM_AUTO_CONFIRM` switch).** New DocuSeal completion step `auto_confirm`, run before `share_invoice`, confirms the same max($100, 10%) premium, paid in full (`confirmed_by: "auto"`, audit reason `auto_10pct`, audit source `auto_10pct_signing`). The after-signing link text therefore no longer depends on the portal being opened. It never overwrites a staff confirmation (`skipped` / `already_confirmed`) and is idempotent with the completion lease: guarded writes plus a lease-owned step stamp. If the bond is not found, ambiguous, or does not match the packet's bond id, or the bond amount is missing, zero or negative, unparseable, or disagrees across the bond case, active bond, and packet, the step is stamped `needs_review`. In that case the premium stays unconfirmed, so no invoice is staged and no text is sent. Transient write errors retry up to 3 times, and `share_invoice` waits for them, before the step goes to `needs_review`. With the switch off the step writes nothing. It is not a required step, and staff test packets and historical packets skip it.
+- **New auto-confirm skip codes** `bond_amount_unparseable` and `bond_amount_ambiguous`, for both the portal endpoint and signing. Before, an unparseable amount was treated as missing, and only the first non-blank amount was used. On the portal endpoint, either code now returns `409 needs_review` instead of `premium_unconfirmed`.
+- **`confirmed_by` in the invoice-link response is now `"auto"` or `"staff"`**, never the staff member's name or email.
+- **`SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING` (default off).** New DocuSeal completion step `auto_send`: after signing and the share step, text the bond's invoice link once. It runs only when this switch and `SWIPESIMPLE_DISPATCH_LIVE` are both on, uses the existing one-send dispatch claim, and moves a failed send to `needs_review` (never retried automatically). `DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK` is unchanged and stays off.
+- **`premium_paid` from recorded payments.** When clean recorded charges minus refunds for a booking reach the single agreed confirmed premium, `premium_paid` is set on `bond_cases` and the `active_bonds` mirror (`premium_paid_at`, `premium_paid_source: "payments_total"`, `premium_paid_transaction_id`) inside the payment-log transaction, and the audit event records `premium_paid_change`. A refund that drops the total below the premium reopens it (`premium_paid_reopened_at`, `premium_paid_reopened_transaction_id`); a charge never clears a flag staff set. Audit history is kept.
+- **`scripts/installment_invoices_pause.py` (read only).** Reads the `installment_invoices` automation switch and counts due installments with `SHAMROCK_MONGO_RO_URI`, then prints the staff toggle (`POST /api/automation/toggle/installment_invoices`) that pauses or resumes installment invoices and texts. It writes nothing.
+
+### Changed
+- **The client portal never shows a static payment link.** `GET /api/portal/{token}/payment-link` and the portal status return only the bond's own verified invoice link with the confirmed amount due; with no link the portal shows "Call (239) 332-2245". The portal's Pay button calls the new invoice-link endpoint.
+- **Bond lookup by booking number is alias-aware.** `_load_bond_by_id` and the portal read `booking_number` and, only when it is blank, the legacy `Booking_Number` (read only, never written), match whitespace-padded values, dedupe by `_id`, and fail closed with `bond_ambiguous` on more than one match.
+- **The dispatch text quotes the invoice amount due**, and a dispatch held as `needs_review` is never re-claimed or resent (`dispatch_needs_review`).
+- **Payment-webhook receipt texts are dry runs unless `SWIPESIMPLE_DISPATCH_LIVE` is on.**
+
+### Security
+- **Staff portal routes need a staff session or machine key.** `POST /api/portal/generate`, `GET /api/portal/tokens/{booking}`, `POST /api/portal/revoke` and `POST /api/portal/send-link` answer `401 {"error": "staff_auth_required"}` otherwise (`pin_middleware` leaves `/api/portal` open for the token routes). Recovery sessions are refused. `created_by` comes from the session, never the body.
+
+### Tests
+- `tests/test_indemnitor_self_pay.py` (added to the CI list): lookup, link verification, every endpoint error, rate limit, create-once, auto-confirm (portal and at signing: 10% and the $100 floor, never over staff, idempotent rerun, every needs_review path, transient retry, no invoice or text on review), the auto-send step, staff auth, `premium_paid` set/reopen/idempotent, and the read-only pause script.
+- `tests/test_payment_log_claims.py`: receipt text is a dry run with `SWIPESIMPLE_DISPATCH_LIVE` off. `tests/test_swipesimple_locked_amount_e2e.py`: portal prefers the staged invoice and never falls back to a static link.
+- `tests/_fake_mongo.py`: `$regex`/`$options`, `sort`, `to_list`, and `insert_one(session=...)`.
+
+## [Unreleased] — 2026-11-04 (Paperwork /done shows the pay step)
+
+### Added
+- **The paperwork completion page is no longer a dead end.** `/done` on paperwork.shamrockbailbonds.biz loads the packet and bond and shows what this role finished, which roles still need to sign (role only), and the next steps after release. Office contact stays on the page as a supplement: call (239) 332-2245, text (239) 955-0178, walk-in Mon-Fri 9-5, phones 24/7.
+- **The pay button uses the existing locked-amount SwipeSimple invoice.** It is rendered only when that role's signature is recorded, the signer is not voided or unverified, identity verification passes, and the payments-code invoice checks accept the stored link (amount, booking, bond id, host). The dollars shown are the confirmed down payment on the bond. Query-string amounts are ignored. A missing packet, a database error, or a bond lookup failure shows a generic message and no pay link. The page does not call SwipeSimple or send DocuSeal email or SMS.
+
+### Tests
+- `tests/test_paperwork_done.py`: pay step hidden when unsigned, unverified, or voided; shown with the server amount when allowed; pending co-signers listed by role; load-failure path. No SwipeSimple charge and no DocuSeal send.
+
+## [Unreleased] — 2026-11-04 (Paperwork handoff token skips the second PIN)
+
+### Added
+- **A verified indemnitor, co-indemnitor, or defendant can open paperwork with a single-use handoff token instead of a second PIN.** The portal opens `paperwork.shamrockbailbonds.biz/?role=&case=&mode=&ht=<token>`. `POST /api/portal/handoff/consume` checks the signature, the 15-minute window, the case, and the signer, then consumes the `jti` once. The signed claims are authoritative. A `role` or `case` query hint that disagrees falls back to the PIN and grants nothing. `mode=add-cosigner` opens the existing co-indemnitor ID step and does not revoke a co-signer link or a DocuSeal packet. `mode=id-upload` is passed through only when that handler is already present. Contract: `docs/contracts/paperwork-handoff-token.md`.
+- **The path is off unless `PAPERWORK_HANDOFF_ENABLED` is on.** The HMAC key is `PAPERWORK_HANDOFF_SECRET`. Neither value is added to compose, deploy, or `.env`. Minting stays `POST /api/portal/handoff-token` (`{case_id, role, person_id}` → `{token, expires_at}`) and is not implemented in this change. A POA number is not part of the token. Signer ID scans are insert-only. Handoff audits are insert-only and do not store a name, phone, email, or the token. No ID scan means no DocuSeal URL. A voided or unverified signer gets no session and no DocuSeal URL. This response never includes a pay link.
+
+### Tests
+- `tests/test_paperwork_handoff_token.py` (on the CI list): bad signature, expired, over-long lifetime, missing secret, flag off, replay, voided signer, unverified identity, unverified submitter, person mismatch, role hint mismatch, case hint mismatch, mode hint ignored, happy path for each role, no scan means no DocuSeal URL, POA change, add-cosigner routing, id-upload passthrough, OCR only after a consumed token, insert-only scans, audit retention, PIN fallback, and query params without `ht`.
+
+## [Unreleased] — 2026-11-05 (id-upload attempt cap and persist gate)
+
+### Fixed
+- **An id-upload that loses its session during OCR is not saved.** The scan row is written only when the portal pin is still verified, not voided, not revoked, and `expires_at` is still later than the write. A revocation or expiration while OCR is running appends nothing and returns no signing URL.
+- **Id-upload OCR uses the co-signer attempt cap and cooldown.** `SCAN_ATTEMPT_CAP` and `SCAN_COOLDOWN` are reserved with one conditional update before the scanner runs. The next try is `429` `scan_attempt_cap` or `scan_cooldown`, and that try does not call OCR. A read that finds no name still consumes the attempt and does not save a row.
+- **Audit counts come from the update that stored the row.** Each `id_upload_saved` event uses the array length returned by that update, so two overlapping uploads record `0→1` and `1→2` rather than two copies of `0→1`. Events are inserted. Earlier audit rows are not removed.
+- **A PDF is rasterized before OCR.** The first page is turned into a PNG with PyMuPDF, which this repo already depends on. A PDF that cannot be read, and any upload that yields no name, returns `scan_unreadable` with `saved: false` and does not append a scan. The page says to upload a photo of the ID.
+
+### Tests
+- `tests/test_paperwork_id_upload.py`: revocation and expiration during OCR, the attempt cap and the `429`, an unreadable scan that still counts, a PDF rasterized before OCR, and concurrent uploads whose audit transitions match the stored rows. No DocuSeal send and no SwipeSimple charge.
+
+## [Unreleased] — 2026-11-05 (id-upload fails closed on bad sessions)
+
+### Fixed
+- **An id-upload session with a missing or unparsable `expires_at` is refused before OCR.** `POST /api/portal/id-upload` no longer treats a `ValueError` from `datetime.fromisoformat` as a still-valid bearer, and a session with no expiration is expired. Neither case runs OCR or appends a scan.
+- **A superseded packet is closed for id-upload.** The check uses the same closed-packet rule as the co-signer lifecycle (`superseded: true`, or `status` / `docuseal_status` / `packet_status` of `superseded`). OCR does not run, and the obsolete packet does not gain a scan. The packet is still matched by `packet_id`, so a POA number change does not void the link.
+- **The id-upload audit records the session count and the packet count separately.** `old_state` and `new_state` store `session_id_scan_records` and `packet_id_scan_records`. The event also stores `session_id` from the portal pin `_id`, not the bearer token. A packet that already has another signer's scan is not described as `0→1`. The audit row is inserted. Earlier audit rows are not removed.
+
+### Tests
+- `tests/test_paperwork_id_upload.py`: `test_garbage_or_missing_expiration_is_rejected_before_ocr`, `test_superseded_packet_is_rejected_before_ocr`, `test_audit_records_session_and_packet_scan_counts_separately`. No DocuSeal send and no SwipeSimple charge.
+
+## [Unreleased] — 2026-11-04 (Paperwork launch mode id-upload)
+
+### Added
+- **`mode=id-upload` on the paperwork launchpad opens only the ID upload step.** `paperwork.shamrockbailbonds.biz` (`dashboard/routers/pin_portal.py`) treats `mode=id-upload` as its own page. The page posts the photo to `POST /api/portal/id-upload`. It does not show the phone PIN, the signing-link box, the in-person signer, or a completion screen. `inperson`, `ipad`, and `kiosk` are unchanged. Any other `mode` still opens the normal flow.
+- **Each upload is inserted.** A verified portal session is required before the server runs OCR. A missing, unverified, expired, voided, or revoked session is refused, and so is a session whose packet is voided. The photo is read on the server. A JSON body is not a scan. The new row is appended to `id_scan_records` on the session and, when the packet is still active, on that packet. `id_scan`, `id_ocr`, `id_extracted`, `id_scan_history`, and other signers' scans are left as they were. An `id_upload_saved` audit row is inserted. Older audit rows are not removed. The packet is matched by `packet_id`. A POA number change does not void the link.
+- **This mode does not issue a signing URL or a pay link.** The page and the JSON response do not include a DocuSeal URL or a SwipeSimple URL. Client-supplied name or ID number fields are ignored. The stored row keeps the scanned name and issuing state only. No DocuSeal send and no SwipeSimple charge.
+
+### Tests
+- `tests/test_paperwork_id_upload.py` (on the CI list): id-upload shows only the ID step, a second upload appends, invalid and voided tokens are refused before OCR, no DocuSeal URL or pay link is returned, a POA change still accepts the upload, and an unknown mode falls back. Signer email is `admin@shamrockbailbonds.biz`. Records are `TEST-` prefixed.
+
+## [Unreleased] — 2026-11-02 (Co-signer hold audits keep the prior review)
+
+### Fixed
+- **A payment hold no longer replaces a saved unrelated review, and the hold audit records that saved review.** When a co-signer link already has a non-payment `needs_review`, the first hold still stores it in `paid_block_prior_needs_review` and `paid_block_prior_review_reason`. A later hold does not overwrite those fields with the hold's own flag or reason. `paid_blocked`, `paid_hold_released`, and `paid_block_cleared` include the prior-review fields in `review_before` and `review_after`. Clearing the last hold restores the original review and appends the clear audit. Earlier audits are left in place. No pay link is returned while the hold stands. No DocuSeal send and no SwipeSimple charge.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_hold_audit_keeps_prior_review_and_a_second_flag_does_not_clobber`.
+
+## [Unreleased] — 2026-10-29 (Wire BaseScraper.run() into MongoWriter.log_ingestion)
+
+### Fixed
+- **Every scraper run now records an entry in `ingestion_log` (`scrapers/base_scraper.py`, `writers/mongo_writer.py`).** Previously `MongoWriter.log_ingestion` was defined on `writers/mongo_writer.py` (line 591) but never called from `BaseScraper.run()`, leaving `ingestion_log` at 0 documents in production. `BaseScraper.run()` now invokes `_log_ingestion_run` after persisting `scraper_status` on both normal completions (`ok`/`empty`/`write_failed`) and classified failures (`error`/`auto_disabled`), recording `source` (`scraper_id` or `County (ST)`), `count`, `error_class`, `duration`, `status`, `county`, `county_label`, and `state`. `SOURCE_CONTRACT_VALIDATED = False` fail-closed preflight runs remain untouched and do not write to `ingestion_log`.
+
+### Tests
+- Added `tests/test_ingestion_log_wiring.py` (wired into `.github/workflows/ci.yml`) covering `MongoWriter.log_ingestion`, `BaseScraper.run()` on `ok`, `empty`, and classified error runs (`parse_drift`), and verifying `fail_closed` scrapers do not write to `ingestion_log`.
+
+## [Unreleased] — 2026-10-29 (Co-signer payment holds preserve unrelated review warnings)
+
+### Fixed
+- **Adding and clearing a payment hold on a co-signer link preserves any unrelated staff review warning.** When a link already has `needs_review` set for a non-payment reason before `_flag_paid_blocked` adds a payment hold (`bond_mirror_mismatch`, `bond_ambiguous`, or `packet_ambiguous`), the prior non-payment review flag and reason are saved in `paid_block_prior_needs_review` and `paid_block_prior_review_reason`. When the final payment hold is released in `_clear_paid_block`, that prior review state is restored instead of clearing `needs_review` completely.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_paid_hold_preserves_and_restores_preexisting_unrelated_review_flag`.
 
 ## [Unreleased] — 2026-10-28 (Lee County HQ API needs a staff session)
 
@@ -41,6 +163,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_payment_log_claims.py` (on the CI list): `test_recorder_stamps_a_bond_under_either_booking_spelling` (lowercase and legacy), `test_payment_webhook_stamps_a_legacy_booking_bond`, `test_receipt_poller_stamps_a_legacy_booking_bond`, `test_bond_with_both_booking_spellings_counts_once`, `test_two_bonds_sharing_a_booking_across_spellings_fail_closed`, `test_legacy_mirror_pair_with_matching_case_ids_is_one_case`, `test_stale_legacy_booking_does_not_match_a_reassigned_bond`, `test_later_booking_enriches_blank_charge_on_a_legacy_bond`, `test_dual_spelling_bond_with_padded_lowercase_value_stamps`, `test_bond_stamp_that_matches_nothing_goes_to_review_not_stamped`, `test_mirror_stamp_miss_restores_the_first_document`, `test_enrichment_stamp_miss_writes_nothing`, `test_review_flag_that_matches_nothing_is_not_claimed_in_the_audit`, `test_padded_single_spelling_bond_matches_and_stamps` (legacy and lowercase), `test_padded_legacy_bond_and_a_lowercase_bond_fail_closed`, `test_padded_canonical_value_still_wins_over_a_stale_legacy_value`, `test_booking_regex_is_escaped`. All mocked: no SwipeSimple, Gmail, BlueBubbles, or Slack call.
 
+## [Unreleased] — 2026-10-28 (co-signer paid recovered without a pending marker)
+
+### Fixed
+- A co-signer down payment is no longer lost when every locked paid attempt fails **and** the out-of-transaction pending-marker write also raises (Codex review on #283, r4401127178). `_reconcile` (page read and booking heal) now has a no-marker charge fallback, matching the existing no-marker reversal fallback: for a link that is not paid, it reads the saved, tenant-scoped `payments` rows for the link's booking (`booking_number` or `Booking_Number`) and replays exactly one candidate charge through `note_cosigner_paid` (same lock, re-read rows, case/packet scope, exact down-payment amount, `_cas_mark_paid`).
+- A candidate is one settled charge on this booking with no refund or failure row, not `needs_review`, no pending paid key or paid hold on the link, not already another link's paid charge, saved after the link was issued, from an event the paid note would have taken (webhook reference equal to the booking, or a non-plan Gmail receipt), and an amount equal to the link's confirmed down payment. Anything else fails closed: amount mismatch, refund/failure, review hold, unsettled status, installment or missing reference, plan receipt, another source, a charge older than the link, another booking, another tenant, no tenant with the flag on, or more than one candidate charge.
+- A recovered stamp writes the normal `paid` audit once (the CAS) plus one `payment_transition_recovered` audit, owed on the link and inserted with `_id` = `audit_key` (one per link and charge), so a replay or a racing reconcile does not write it twice. No index or schema change; no audit history is removed.
+
+### Tests
+- Outage: three failed locked attempts plus a failed marker write leave the link unpaid with no marker; the next reconcile stamps it paid with one `paid` and one recovered audit, and a second reconcile/page read is a no-op. Also: two racing reconciles from a stale link, a legacy `Booking_Number` payment row, a recovered Gmail-receipt charge, fail-closed cases (low/high amount, refund, failure, review hold, unsettled, other booking, two charges, installment, no reference, plan receipt, other source, charge before the link, charge already on another link), and tenant isolation (own tenant pays, other tenant's row does not, no tenant does nothing).
+
+## [Unreleased] — 2026-10-28 (co-signer pending audits: atomic flag, one audit per key, own snapshots)
+
+### Fixed
+- **Resolving the last pending payment transition clears `payment_transition_pending` in the same update.** The update that removes a pending key also sets the flag from the keys that are left, as a compare-and-set on the keys it read. A failure after that update can no longer leave the flag true with nothing pending. A failure before it keeps the key and the flag.
+- **Concurrent owed-audit flushes write one audit.** The owed `payment_transition_pending` / `payment_transition_resolved` audit is inserted with `_id` set to its `audit_key`. A duplicate-key error means the audit is already written, so the flush counts it as written and pulls the marker. No new index is added. Audits written earlier with an auto `_id` are still found by their `audit_key` field and are not changed or removed.
+- **Each owed audit records its own transition's before/after.** The pending and resolved updates store that transition's `pending_before` and `pending_after` on the owed marker when it is created. The flush writes those values, so two transitions owed at once no longer contradict each other. Markers without a stored snapshot keep the previous derivation. No payment, plan balance, or SwipeSimple call is involved.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_resolution_clears_the_flag_even_when_the_next_step_fails`, `test_resolution_update_failure_keeps_the_key_and_the_flag`, `test_concurrent_owed_audit_flushes_write_one_audit`, `test_legacy_owed_audit_with_auto_id_is_not_rewritten`, `test_owed_audits_keep_each_transitions_own_snapshot`. The test store now rejects a duplicate `_id` like MongoDB does.
+
 ## [Unreleased] — 2026-10-28 (Indemnitor ID scan is kept)
 
 ### Fixed
@@ -65,6 +207,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `tests/test_packet_builder_service.py`: `test_coindemnitor_comes_only_from_this_bonded_case`, `test_coindemnitor_fails_closed_when_two_cases_share_the_booking`, `test_coindemnitor_not_taken_from_another_booking`.
 - `tests/test_palmetto_template_7.py` (on the CI list). Template 5 inventory and a 7-charge rejection, template 7 prefill and finalize for a 7-charge `TEST-` case, a fitting 6-charge join, 8 charges failing closed, and send flags left false. Schedule A prints a confirmed ledger or completed payment row, including a completed down-payment receipt and a completed installment, and leaves amount paid at `$0.00` with the full premium still due when the only figure is the write-time down payment. A cash receipt with `packet_id` and no booking number is included; another packet's cash is not. Another county's receipt under the same booking number is excluded. An evening UTC timestamp prints the Eastern calendar day. A third indemnitor fails closed on template 7 and stays in template 5's combined header. In-person packets lock the co-indemnitor name, phone, and email. Signer email is `admin@shamrockbailbonds.biz`. No DocuSeal submission is created against the live server.
 - A payment-source read that times out or raises stops packet generation (`DocuSealPacketValidationError`) and creates no DocuSeal submission. A successful read with no receipts still generates the packet at `$0.00` paid. County matching case-folds, collapses whitespace, and strips a trailing County or Co., so `Lee`, `Lee County`, and ` lee  county ` are the same county. `Lee` and `Collier` still conflict. `test_payment_read_failure_does_not_create_a_packet`, `test_empty_payment_read_still_creates_a_packet`, `test_schedule_a_matches_county_name_spellings`.
+
+## [Unreleased] — 2026-10-27 (co-signer paid: Booking_Number bonds, unreadable locked read, owed pending audits)
+
+### Fixed
+- **The paid step finds a bond stored with `Booking_Number` (#291).** `_one_case_id` matches `booking_number` or `Booking_Number`, and the link's drift check reads the bond's booking under either field. A booking that maps to more than one case under either field still returns no case, so nothing is stamped.
+- **A heal keeps its pending paid transition when the locked payment-row read fails (Codex P1).** An unreadable read inside `payment_txn_locks` now raises `PaymentRowsUnreadable` instead of counting as a refusal. The lock reports `LOCK_FAILED`, `note_cosigner_paid` returns False, and the pending key stays for the next read. An empty, readable row set is still a refusal.
+- **Pending state and its audit are no longer split (Codex P1).** `_record_pending_transition` and `_resolve_pending` push an owed-audit marker (`pending_payment_audits_owed`, `payment_audit_owed`) in the same document update as the pending-key change. The audit is then written with a stable `audit_key` and the marker is pulled. If the audit write fails, the marker stays and the next page read, heal or record writes it once. A retry that finds the `audit_key` already written only pulls the marker. No new index and no transaction are added.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_paid_finds_a_bond_stored_with_booking_number_alias`, `test_paid_fails_closed_when_the_alias_booking_is_two_cases`, `test_heal_keeps_pending_when_the_locked_row_read_fails`, `test_pending_state_and_its_audit_are_not_split`, `test_resolved_state_and_its_audit_are_not_split`, `test_owed_audit_is_not_written_twice_when_the_marker_pull_fails`.
 
 ## [Unreleased] — 2026-10-27 (signer emails must agree)
 
@@ -312,13 +464,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_cosigner_link.py`: `test_audit_outage_releases_the_verification_claim`.
 
+## [Unreleased] — 2026-10-23 (co-signer payment rows are tenant-scoped; pending audits show before/after)
+
+### Fixed
+- **The co-signer paid, reopen and heal steps read only this tenant's payment rows.** `_payment_rows` (and the heal step through `_stored_rows`) adds the active `tenant_id` when multi-tenancy is on, so a transaction id reused by another tenant cannot stamp or reopen this tenant's link. Flag on with no tenant: the rows count as unreadable and nothing is stamped. Flag off is unchanged. Closes #287.
+- **`payment_transition_pending` and `payment_transition_resolved` audits record the pending values before and after.** Each carries `pending_before` / `pending_after` with `payment_transition_pending`, `pending_payment_keys` and `pending_payment_transitions`. Closes #288.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_payment_rows_are_scoped_to_the_active_tenant`, `test_heal_does_not_replay_another_tenants_charge`, `test_pending_and_resolved_audits_record_before_and_after`.
+
 ## [Unreleased] — 2026-10-23 (co-signer revalidation reads Bond_Case_ID)
 
 ### Fixed
 - **A co-signer link stays valid when the case id is stored as `Bond_Case_ID` or `bond_case_id`.** Revalidation fails closed when neither field is the issued case. A POA number change does not revoke the link or the packet.
 
 ### Tests
-- `tests/test_cosigner_link.py`: `test_bond_case_id_alias_revalidates_and_rejects_a_mismatch`, `test_poa_number_change_keeps_the_cosigner_link`.
+- `tests/test_cosigner_link.py`: `test_bond_case_id_alias_revalidates_and_rejects_a_mismatch`, `test_poa_number_change_keeps_the_cosigner_link`, `test_poa_number_change_keeps_the_link_and_docuseal_packet`.
 
 ## [Unreleased] — 2026-10-22 (co-signer pay URL stays on SwipeSimple)
 
@@ -343,6 +504,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `tests/test_cosigner_link.py`: `test_bond_stored_as_bond_case_id_alias_issues_a_link`.
+
+## [Unreleased] — 2026-10-22 (co-signer down payment held by bond mirror drift is flagged)
+
+### Fixed
+- **Case and spacing are not mirror drift.** The `bond_cases` / `active_bonds` mirror check compares status, surety, booking, case number, POA, and match status trimmed and casefolded. Signer and defendant names compare without case, punctuation, or extra spaces (first and last name still decide). `match_id` compares trimmed only. A really different value still fails closed. The co-signer page and the paid path use the same check.
+- **A settled down payment that cannot mark the pay step is visible to staff.** When `note_cosigner_paid` is refused by `bond_mirror_mismatch`, `bond_ambiguous`, or two open packets on the case (`packet_ambiguous`), and the charge equals the packet's down payment, the link gets `needs_review` with `needs_review_reason`. The transaction is added to `paid_blocked_transaction_ids`. One `paid_blocked` audit event records the reason, transaction, and cents. A replay of the same transaction does not flag or audit again, even when it alternates with another held charge. A charge that is not the down payment is not flagged. Each hold is also kept in `paid_blocked_holds` with its own reason, and the `paid_blocked` audit records `review_before` and `review_after` (`needs_review`, `needs_review_reason`, held transactions), so a hold that replaces another one keeps both in history. Writes are conditional on `paid_block_version`, so concurrent holds are not lost. Nothing is sent. The payment row, the lock, and the compare-and-set stamp are unchanged.
+- **A paid stamp releases only its own hold.** When charge B marks paid, B is added to `paid_block_released_transaction_ids`. If another held charge (A) is still recorded on the link, `needs_review` stays set with A's reason and one `paid_hold_released` audit records the before/after review values with `hold_kept: true`. Only when no held charge is left is `needs_review` cleared, with one `paid_block_cleared` audit. A review reason that is not a paid hold is left alone.
+- **A failed co-signer paid or reopen write is retried and then healed from the payment rows.** `_with_payment_lock` retries a failed transaction up to three times inside the lock (not a co-signer refusal and not a server without transactions). If every attempt fails, the affected links get `payment_transition_pending`, `pending_payment_keys` and `pending_payment_transitions` (`paid:<txn>` or `reversed:<txn>`) with one `payment_transition_pending` audit, written outside the failed transaction. `reconcile_cosigner_payment_state` replays the pending transition through `note_cosigner_paid` / `note_cosigner_reversed` with the amount and status from the stored payment row, so the same rules apply (`SETTLED_CHARGE_STATUSES`, `REVERSAL_KINDS`, exact `invoice_due_cents`, `needs_review` rows excluded) with the same lock and compare-and-set. It runs on the next paid or refund event for the booking and on the co-signer page read. A paid link whose stored rows include a refund or failure is reopened on page read even when the pending marker could not be written. The heal marks once, audits once, writes one `payment_transition_resolved` audit, and does not touch plan balances, `last_payment` fields or payment rows. `webhooks.py`, the receipt poller and `payment_log_claims` are unchanged.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_blocked_down_payment_is_flagged_without_a_pay_link_or_outbound_charge`, `test_paid_path_reconciles_a_mirror_that_differs_only_in_case_and_spacing`, `test_mirror_drift_blocks_paid_and_flags_review_once`, `test_ambiguous_mirror_blocks_paid_and_flags_review_once`, `test_two_open_packets_block_paid_and_flag_each_link_once`, `test_mirror_normalization_keeps_real_differences`, `test_alternating_blocked_transactions_audit_once_each`, `test_held_charge_that_is_not_the_down_payment_is_not_flagged`, `test_paid_keeps_the_hold_while_another_held_charge_remains`, `test_hold_audits_record_review_before_and_after`, `test_transient_paid_lock_failure_is_retried_inside_the_lock`, `test_persistent_paid_lock_failure_leaves_pending_then_heals_once`, `test_persistent_reversal_lock_failure_leaves_pending_then_reopens_once`.
 
 ## [Unreleased] — 2026-10-22 (co-signer email reads coindemnitor_email)
 

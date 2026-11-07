@@ -84,18 +84,112 @@ def test_bb_health_update_url_allows_admin_session_without_frontend_api_key(monk
     monkeypatch.setattr("dashboard.extensions.BB_CONFIG_API_KEY", "")
 
     fake_bb = MagicMock()
-    fake_bb.ping = AsyncMock(return_value={"success": True})
+    fake_bb.server_info = AsyncMock(return_value={"success": True})
 
     client = _make_client()
     with patch("dashboard.auth.pin_middleware.session_is_admin", return_value=True), \
-         patch("dashboard.extensions.update_bb_url", return_value={"2399550178": {"url": "https://bb.example.com", "password": "pw", "label": "Primary"}}), \
+         patch("dashboard.extensions.update_bb_url", return_value={"2399550178": {"url": "https://bb.example.com", "password": "pw", "label": "Primary"}}) as update, \
          patch("dashboard.routers.bb_private_api.BlueBubblesClient", return_value=fake_bb):
         resp = client.patch(
             "/api/bb-health/update-url",
             json={"suffix": "0178", "url": "https://bb.example.com"},
         )
     assert resp.status_code == 200
-    assert resp.json()["success"] is True
+    body = resp.json()
+    assert body["success"] is True
+    assert body["connectivity"]["reachable"] is True
+    update.assert_called_once()
+
+
+def test_bb_config_url_allows_machine_auth_when_bb_key_unset(monkeypatch):
+    monkeypatch.delenv("BB_CONFIG_API_KEY", raising=False)
+    monkeypatch.setenv("GAS_API_KEY", "synthetic-gas-key-0000")
+    monkeypatch.delenv("LEADS_INTERNAL_TOKEN", raising=False)
+    monkeypatch.setattr("dashboard.extensions.BB_CONFIG_API_KEY", "")
+    monkeypatch.setattr("dashboard.routers.legacy.BB_CONFIG_API_KEY", "")
+
+    client = _make_client()
+    denied = client.post(
+        "/api/config/bluebubbles-url",
+        headers={"X-API-Key": "not-the-machine-key"},
+        json={"suffix": "0178", "url": "https://bb.example.com"},
+    )
+    assert denied.status_code == 503
+
+    with patch("dashboard.routers.legacy.update_bb_url", return_value={"2399550178": {"url": "https://bb.example.com", "label": "Primary"}}):
+        ok = client.post(
+            "/api/config/bluebubbles-url",
+            headers={"X-API-Key": "synthetic-gas-key-0000"},
+            json={"suffix": "0178", "url": "https://bb.example.com"},
+        )
+    assert ok.status_code == 200
+    assert ok.json()["success"] is True
+
+
+def test_bb_health_wrong_configured_key_is_unauthorized(monkeypatch):
+    monkeypatch.setenv("BB_CONFIG_API_KEY", "test-bb-sync-secret-9999")
+    monkeypatch.delenv("GAS_API_KEY", raising=False)
+    monkeypatch.delenv("LEADS_INTERNAL_TOKEN", raising=False)
+    monkeypatch.setattr("dashboard.extensions.BB_CONFIG_API_KEY", "test-bb-sync-secret-9999")
+
+    client = _make_client()
+    resp = client.patch(
+        "/api/bb-health/update-url",
+        json={"suffix": "0178", "url": "https://bb.example.com", "api_key": "wrong-key"},
+    )
+    assert resp.status_code == 401
+    assert resp.json()["success"] is False
+
+
+def test_bb_health_non_string_api_key_fails_closed(monkeypatch):
+    monkeypatch.delenv("BB_CONFIG_API_KEY", raising=False)
+    monkeypatch.delenv("GAS_API_KEY", raising=False)
+    monkeypatch.delenv("LEADS_INTERNAL_TOKEN", raising=False)
+    monkeypatch.setattr("dashboard.extensions.BB_CONFIG_API_KEY", "")
+
+    client = _make_client()
+    unconfigured = client.patch(
+        "/api/bb-health/update-url",
+        json={"suffix": "0178", "url": "https://bb.example.com", "api_key": 1},
+    )
+    assert unconfigured.status_code == 503
+
+    monkeypatch.setenv("BB_CONFIG_API_KEY", "test-bb-sync-secret-9999")
+    monkeypatch.setattr("dashboard.extensions.BB_CONFIG_API_KEY", "test-bb-sync-secret-9999")
+    denied = client.patch(
+        "/api/bb-health/update-url",
+        json={"suffix": "0178", "url": "https://bb.example.com", "api_key": True},
+    )
+    assert denied.status_code == 401
+    assert "bool" not in denied.text
+
+    fake_bb = MagicMock()
+    fake_bb.server_info = AsyncMock(return_value={"success": True})
+    with patch("dashboard.auth.pin_middleware.session_is_admin", return_value=True), \
+         patch("dashboard.extensions.update_bb_url", return_value={"2399550178": {"url": "https://bb.example.com", "password": "pw", "label": "Primary"}}), \
+         patch("dashboard.routers.bb_private_api.BlueBubblesClient", return_value=fake_bb):
+        admin = client.patch(
+            "/api/bb-health/update-url",
+            json={"suffix": "0178", "url": "https://bb.example.com", "api_key": 1},
+        )
+    assert admin.status_code == 200
+    assert admin.json()["success"] is True
+
+
+def test_blank_bb_config_key_fails_closed(monkeypatch):
+    monkeypatch.setenv("BB_CONFIG_API_KEY", "   ")
+    monkeypatch.delenv("GAS_API_KEY", raising=False)
+    monkeypatch.delenv("LEADS_INTERNAL_TOKEN", raising=False)
+    monkeypatch.setattr("dashboard.extensions.BB_CONFIG_API_KEY", "")
+    monkeypatch.setattr("dashboard.routers.legacy.BB_CONFIG_API_KEY", "")
+
+    client = _make_client()
+    resp = client.post(
+        "/api/config/bluebubbles-url",
+        json={"suffix": "0178", "url": "https://bb.example.com"},
+    )
+    assert resp.status_code == 503
+    assert resp.json()["error"] == "BB_CONFIG_API_KEY not configured"
 
 
 def test_frontend_js_does_not_embed_bb_config_key():
@@ -103,9 +197,21 @@ def test_frontend_js_does_not_embed_bb_config_key():
     assert "shamrock-bb-sync" not in src
 
 
-def test_bb_url_sync_script_sources_launchagent_env_file():
+def test_sync_files_have_no_fallback_key():
+    paths = [
+        "dashboard/extensions.py",
+        "dashboard/routers/legacy.py",
+        "dashboard/routers/bb_health_monitor.py",
+        "dashboard/sl-imessage.js",
+        "scripts/bb-url-sync.sh",
+        "scripts/setup_bb_tunnel.sh",
+        ".env.example",
+        "docs/runbooks/bluebubbles-tunnel.md",
+    ]
+    for rel in paths:
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        assert "shamrock-bb-sync-" not in text, rel
     script = (REPO_ROOT / "scripts" / "bb-url-sync.sh").read_text(encoding="utf-8")
     assert ".shamrock-bb-sync.env" in script
     assert "BB_CONFIG_API_KEY" in script
-    assert "shamrock-bb-sync-" not in script
 

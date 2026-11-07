@@ -32,7 +32,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 from dashboard.extensions import get_collection
 from dashboard.routers.payment_plans import _amount_cents
@@ -857,3 +857,293 @@ def _plan_has_collections(plan: dict) -> bool:
         if isinstance(row, dict) and str(row.get("status") or "") in {"paid", "applied"}:
             return True
     return False
+
+
+# ---------------------------------------------------------------------------
+# Auto 10% confirmation (PREMIUM_AUTO_CONFIRM, default off)
+# ---------------------------------------------------------------------------
+# Brendan's terms (Nov 4, 2026): the auto premium is paid in full at
+# max($100, 10% of the bond), confirmed by ``auto``. It never overwrites a
+# staff confirmation and runs only when no confirmation exists and the bond
+# amount is positive. Called only from the indemnitor portal invoice-link
+# endpoint.
+
+AUTO_CONFIRM_ENV = "PREMIUM_AUTO_CONFIRM"
+AUTO_ACTOR = "auto"
+AUTO_REASON = "auto_10pct"
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def auto_confirm_enabled() -> bool:
+    import os
+
+    return str(os.getenv(AUTO_CONFIRM_ENV, "") or "").strip().lower() in _TRUTHY
+
+
+def _bond_amount_of(*docs: Optional[dict]) -> Any:
+    for doc in docs:
+        if isinstance(doc, dict) and not _blank(doc.get("bond_amount")):
+            return doc.get("bond_amount")
+        if isinstance(doc, dict) and not _blank(doc.get("amount")):
+            return doc.get("amount")
+    return None
+
+
+def auto_bond_cents(*docs: Optional[dict]) -> Tuple[Optional[int], str]:
+    """The one bond amount (cents) every doc agrees on, or ``(None, reason)``.
+
+    Each doc contributes ``bond_amount`` (or ``amount`` when that is blank).
+    Reasons: ``bond_amount_unparseable`` (a non-blank value is not a plain
+    amount), ``bond_amount_ambiguous`` (docs disagree), ``bond_amount_missing``
+    (no value, or zero / negative).
+    """
+    values = set()
+    for doc in docs:
+        if not isinstance(doc, dict):
+            continue
+        raw = doc.get("bond_amount")
+        if _blank(raw):
+            raw = doc.get("amount")
+        if _blank(raw):
+            continue
+        if isinstance(raw, bool):
+            return None, "bond_amount_unparseable"
+        text = str(raw).strip().replace(",", "").replace("$", "")
+        try:
+            if Decimal(text) <= 0:
+                return None, "bond_amount_missing"
+        except Exception:
+            return None, "bond_amount_unparseable"
+        cents = non_negative_cents(raw)
+        if cents is None:
+            return None, "bond_amount_unparseable"
+        values.add(cents)
+    if len(values) > 1:
+        return None, "bond_amount_ambiguous"
+    if not values:
+        return None, "bond_amount_missing"
+    cents = values.pop()
+    if cents <= 0:
+        return None, "bond_amount_missing"
+    return cents, ""
+
+
+# Resolver codes that mean "no staff premium to protect": nothing was entered,
+# or the only figure is the intake 10% estimate. Anything else the resolver
+# refuses (disagreeing fields, non-numeric, fractional cents, zero, negative)
+# is staff money we must not overwrite with the auto 10%.
+_ABSENT_OR_ESTIMATE_PREMIUM = frozenset({
+    "premium_missing_on_bondcase",
+    "premium_estimate_unconfirmed",
+})
+
+
+def _staff_premium_skip(*docs: Optional[dict]) -> str:
+    """Why auto-confirm must stop, or ``""`` when it may set the 10% floor.
+
+    A readable unconfirmed staff premium returns ``staff_premium_unconfirmed``.
+    Malformed or disagreeing staff money (``premium_cents`` vs
+    ``premium_amount``, a non-numeric value, fractional cents) returns
+    ``staff_premium_ambiguous``. ``_bond_premium`` collapses every resolver
+    error to None, which would look like "no premium" and let auto-confirm
+    stamp 10% over those fields. Absent and estimate-only bonds do not block.
+    """
+    from dashboard.services.swipesimple_invoice_service import (
+        SwipeSimpleInvoiceError,
+        _error_code,
+        resolve_locked_premium,
+    )
+
+    for doc in docs:
+        if not isinstance(doc, dict) or confirmation_complete(doc):
+            continue
+        try:
+            resolve_locked_premium(doc)
+        except SwipeSimpleInvoiceError as exc:
+            code = _error_code(exc)
+            if code in _ABSENT_OR_ESTIMATE_PREMIUM:
+                continue
+            logger.info("[premium_confirm] auto confirm refused staff money code=%s", code)
+            return "staff_premium_ambiguous"
+        return "staff_premium_unconfirmed"
+    return ""
+
+
+async def auto_confirm_premium(
+    *,
+    booking: str,
+    bond_case: Optional[dict] = None,
+    active: Optional[dict] = None,
+    packet: Optional[dict] = None,
+    source: str = AUTO_REASON,
+) -> dict:
+    """Confirm the auto premium (paid in full) once, or report why not.
+
+    ``packet`` is the signed packet when the caller already holds it (DocuSeal
+    completion); otherwise the packet is looked up by booking number.
+    ``source`` is recorded on the audit (``auto_10pct`` from the portal,
+    ``auto_10pct_signing`` from completion); ``reason`` is always ``auto_10pct``.
+
+    Returns ``{"ok": True, "idempotent": bool, ...}`` when an ``auto``
+    confirmation exists afterwards, else ``{"ok": False, "skipped": code}``:
+    ``switch_off``, ``already_confirmed`` (a staff confirmation exists; it is
+    never overwritten), ``bond_amount_missing``, ``bond_amount_unparseable``,
+    ``bond_amount_ambiguous`` (the docs disagree on the bond amount),
+    ``staff_premium_unconfirmed`` (one staff-entered premium is waiting for
+    confirmation), or ``staff_premium_ambiguous`` (staff money fields are
+    missing a single exact value: they disagree, or one is not a plain
+    positive amount). An absent premium and an intake estimate do not block.
+    Identity (#165) and split-case checks fail closed with
+    ``PremiumConfirmationError``. Every write sits in one transaction and is
+    conditional on the row still being unconfirmed, so a concurrent staff
+    confirmation wins and the auto write rolls back.
+    """
+    if not auto_confirm_enabled():
+        return {"ok": False, "skipped": "switch_off"}
+    booking = str(booking or "").strip()
+    if not booking:
+        raise PremiumConfirmationError("case_required", 400, "Send a booking number.")
+
+    if not isinstance(packet, dict):
+        packet = await _find_one("paperwork_packets", {"booking_number": booking})
+    rows = [("paperwork_packets", packet), ("bond_cases", bond_case), ("active_bonds", active)]
+    if not any(doc for _name, doc in rows):
+        raise PremiumConfirmationError("case_not_found", 404, "No packet or bond matches that case.")
+
+    bond_cents, bond_problem = auto_bond_cents(active, bond_case, packet)
+    premium = filed_floor_cents(cents_to_amount(bond_cents) if bond_cents else None)
+    fingerprint = _fingerprint(premium, premium, 0, 0, "")
+
+    existing = next((doc for _name, doc in rows if confirmation_complete(doc)), None)
+    if existing is not None:
+        by = str(existing.get(PREMIUM_CONFIRMED_BY_FIELD) or "").strip()
+        if by == AUTO_ACTOR and str(existing.get(FINGERPRINT_FIELD) or "") == fingerprint:
+            return {
+                "ok": True,
+                "idempotent": True,
+                "premium_confirmed_amount": cents_to_amount(premium),
+                "down_payment_amount": cents_to_amount(premium),
+                "financed_balance": cents_to_amount(0),
+                "premium_confirmed_by": AUTO_ACTOR,
+                "booking_number": booking,
+            }
+        return {"ok": False, "skipped": "already_confirmed", "premium_confirmed_by": by}
+
+    if bond_problem or bond_cents is None or bond_cents <= 0:
+        return {"ok": False, "skipped": bond_problem or "bond_amount_missing"}
+    staff_skip = _staff_premium_skip(bond_case, active)
+    if staff_skip:
+        return {"ok": False, "skipped": staff_skip}
+
+    bond_case_id = ""
+    for doc in (bond_case, active, packet):
+        if isinstance(doc, dict):
+            bond_case_id = str(doc.get("bond_case_id") or doc.get("Bond_Case_ID") or "").strip()
+            if bond_case_id:
+                break
+    packet_id = str((packet or {}).get("packet_id") or "").strip()
+
+    _reject_split_case(
+        packet=packet,
+        bond_case=bond_case,
+        active=active,
+        booking=booking,
+        packet_id=packet_id,
+        bond_case_id=bond_case_id,
+    )
+    await _require_identity(
+        packet=packet,
+        bond_case=bond_case,
+        active=active,
+        booking=booking,
+        packet_id=packet_id,
+        bond_case_id=bond_case_id,
+    )
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    fields = {
+        PREMIUM_CONFIRMED_AMOUNT_FIELD: cents_to_amount(premium),
+        PREMIUM_CONFIRMED_AT_FIELD: now_iso,
+        PREMIUM_CONFIRMED_BY_FIELD: AUTO_ACTOR,
+        DOWN_FIELD: cents_to_amount(premium),
+        FINANCED_FIELD: cents_to_amount(0),
+        "premium_installments": 0,
+        "premium_frequency": "",
+        FINGERPRINT_FIELD: fingerprint,
+        "premium_is_estimate": False,
+    }
+
+    async def work(session):
+        for name, doc in rows:
+            if not isinstance(doc, dict):
+                continue
+            query = _identity_query(doc, booking=booking, packet_id=packet_id, bond_case_id=bond_case_id)
+            if not query:
+                continue
+            # Only while still unconfirmed: a staff confirmation that lands
+            # first is never overwritten (the whole transaction rolls back).
+            guarded = {"$and": [query, {PREMIUM_CONFIRMED_AT_FIELD: {"$in": [None, ""]}}]}
+            try:
+                result = await get_collection(name).update_one(
+                    _scope(guarded), {"$set": fields}, **_session_kwargs(session)
+                )
+            except PremiumConfirmationError:
+                raise
+            except Exception as exc:
+                logger.warning("[premium_confirm] auto update failed collection=%s err_type=%s",
+                               name, type(exc).__name__)
+                raise PremiumConfirmationError("confirmation_write_failed", 503) from exc
+            if int(getattr(result, "matched_count", 0) or 0) < 1:
+                raise PremiumConfirmationError(
+                    "confirmation_race", 409,
+                    "This case was confirmed or changed while the auto premium was being set. Nothing was saved.",
+                )
+        audit = {
+            "event_id": str(uuid.uuid4()),
+            "action": AUDIT_ACTION,
+            "entity_type": "bond",
+            "entity_id": booking,
+            "actor": AUTO_ACTOR,
+            "agent_name": "PremiumConfirmation",
+            "timestamp": now_iso,
+            "reason": AUTO_REASON,
+            "source": source or AUTO_REASON,
+            "details": {
+                "auto": True,
+                "source": source or AUTO_REASON,
+                "premium": cents_to_amount(premium),
+                "down": cents_to_amount(premium),
+                "financed": cents_to_amount(0),
+                "installments": 0,
+                "frequency": "",
+                "bond_amount": cents_to_amount(bond_cents),
+                "below_filed_rate": False,
+                "changed": False,
+                "packet_id": packet_id,
+                "bond_case_id": bond_case_id,
+            },
+        }
+        if multi_tenant_enabled():
+            audit["tenant_id"] = current_tenant_id()
+        try:
+            await get_collection("audit_events").insert_one(audit, **_session_kwargs(session))
+        except Exception as exc:
+            logger.warning("[premium_confirm] auto audit insert failed err_type=%s", type(exc).__name__)
+            raise PremiumConfirmationError("confirmation_audit_failed", 503) from exc
+        return True
+
+    await _run_confirmation_transaction(work)
+    for _name, doc in rows:
+        if isinstance(doc, dict):
+            doc.update(fields)
+    logger.info("[premium_confirm] auto confirmed booking=%s", booking)
+    return {
+        "ok": True,
+        "idempotent": False,
+        "premium_confirmed_amount": cents_to_amount(premium),
+        "premium_confirmed_at": now_iso,
+        "down_payment_amount": cents_to_amount(premium),
+        "financed_balance": cents_to_amount(0),
+        "premium_confirmed_by": AUTO_ACTOR,
+        "booking_number": booking,
+    }
