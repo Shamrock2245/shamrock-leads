@@ -244,6 +244,7 @@ jobs:
             tests/test_paperwork_id_prefill.py \
             tests/test_self_serve_multiprocess_claim.py \
             tests/test_self_serve_mongo_workers.py \
+            tests/test_self_serve_saga.py \
             tests/test_paperwork_handoff_token.py \
             tests/test_paperwork_done.py \
             tests/test_shannon_voice_paperwork.py \

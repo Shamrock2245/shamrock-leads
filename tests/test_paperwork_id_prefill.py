@@ -1120,11 +1120,18 @@ async def test_started_packet_claim_is_not_submitted_again(monkeypatch):
     async def _ok(**kwargs):
         return {"ok": True}
 
+    async def _list(self, **kwargs):
+        return {"data": []}
+
     monkeypatch.setattr(
         "dashboard.services.identity_verification_service.require_verified_indemnitors",
         _ok,
     )
-    with pytest.raises(RuntimeError, match="packet_incomplete"):
+    monkeypatch.setattr(
+        "dashboard.services.docuseal_service.DocuSealService.list_submitters",
+        _list,
+    )
+    with pytest.raises(RuntimeError, match="recovery_required"):
         await build_self_serve_packet(
             case={"bond_case_id": "BC-TEST-1", "indemnitor_id": "IND-TEST-1", "surety_id": "palmetto"},
             role="indemnitor",
@@ -1156,6 +1163,7 @@ async def test_unstarted_packet_shell_is_finished_once(monkeypatch):
         "person_id": "IND-TEST-1",
         "role": "indemnitor",
         "status": "building",
+        "saga_owned": True,
         "docuseal_started": False,
         "sign_url": "",
         "source": "self_serve",

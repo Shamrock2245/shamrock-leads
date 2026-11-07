@@ -1311,6 +1311,84 @@ async def _attach_signer_to_case(
     }
 
 
+async def compensate_owned_self_serve_case(case_id: str) -> bool:
+    """Mark one saga-created draft compensated. Do not delete it or its scans.
+
+    A preexisting or shared case does not match ``self_serve_saga_owned``.
+    A second call matches nothing and writes no second audit.
+    """
+    case_id = str(case_id or "").strip()
+    if not case_id:
+        return False
+    result = await get_collection("bond_cases").update_one(
+        {
+            "_id": case_id,
+            "source": _SELF_SERVE_SOURCE,
+            "self_serve_saga_owned": True,
+            "self_serve_saga_status": "open",
+        },
+        {"$set": {"self_serve_saga_status": "compensated", "updated_at": _now_iso()}},
+    )
+    if int(getattr(result, "matched_count", 0) or 0) != 1:
+        return False
+    audit_id = _stable_id(f"shamrock-self-serve-saga-compensate-v1:{case_id}")
+    await insert_new(get_collection("audit_events"), {
+        "_id": audit_id,
+        "event_id": audit_id,
+        "event_type": "self_serve_saga_compensated",
+        "action": "self_serve_saga_compensated",
+        "entity_type": "bond_case",
+        "entity_id": case_id,
+        "bond_case_id": case_id,
+        "actor": "auto",
+        "agent_name": "paperwork_self_serve",
+        "source": _SELF_SERVE_SOURCE,
+        "reason": "packet_aborted_before_provider",
+        "created_at": _now_iso(),
+        "timestamp": _now_iso(),
+        "old_state": {"self_serve_saga_status": "open"},
+        "new_state": {"self_serve_saga_status": "compensated"},
+    })
+    return True
+
+
+async def resume_owned_self_serve_case(case_id: str) -> bool:
+    """Open a compensated saga-owned draft again. Identity fields stay."""
+    case_id = str(case_id or "").strip()
+    if not case_id:
+        return False
+    result = await get_collection("bond_cases").update_one(
+        {
+            "_id": case_id,
+            "source": _SELF_SERVE_SOURCE,
+            "self_serve_saga_owned": True,
+            "self_serve_saga_status": "compensated",
+        },
+        {"$set": {"self_serve_saga_status": "open", "updated_at": _now_iso()}},
+    )
+    if int(getattr(result, "matched_count", 0) or 0) != 1:
+        return False
+    audit_id = _stable_id(f"shamrock-self-serve-saga-resume-v1:{case_id}")
+    await insert_new(get_collection("audit_events"), {
+        "_id": audit_id,
+        "event_id": audit_id,
+        "event_type": "self_serve_saga_resumed",
+        "action": "self_serve_saga_resumed",
+        "entity_type": "bond_case",
+        "entity_id": case_id,
+        "bond_case_id": case_id,
+        "actor": "auto",
+        "agent_name": "paperwork_self_serve",
+        "source": _SELF_SERVE_SOURCE,
+        "reason": "retry_after_local_compensation",
+        "created_at": _now_iso(),
+        "timestamp": _now_iso(),
+        "old_state": {"self_serve_saga_status": "compensated"},
+        "new_state": {"self_serve_saga_status": "open"},
+    })
+    return True
+
+
 async def _ensure_self_serve_match(
     case: Dict[str, Any],
     *,
@@ -1449,6 +1527,9 @@ async def _insert_self_serve_draft(
         "created_at": now_iso,
         "updated_at": now_iso,
         "created_by": actor or "auto",
+        "self_serve_saga_owned": True,
+        "self_serve_saga_status": "open",
+        "self_serve_saga_id": bond_case_id,
         **patch,
     }
     from dashboard.services.paperwork_self_serve import _WALK_IN_CHANNELS, _WALK_IN_SURETY

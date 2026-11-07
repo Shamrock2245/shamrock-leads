@@ -594,7 +594,12 @@ async def _existing_packet(
     no packet, so the caller does not return a URL.
     """
     key = f"{case_id}|{role}|{person_id}"
-    rows = _open_packets(await _case_packets(case_id, key))
+    rows = [
+        row for row in _open_packets(await _case_packets(case_id, key))
+        if _text(row.get("status")).lower() not in {
+            "building", "compensated", "recovery_required", "build_failed",
+        }
+    ]
     exact = [
         row for row in rows
         if _text(row.get("self_serve_packet_key")) == key and _sign_url(row, role)
@@ -685,27 +690,206 @@ async def _identity_ok(case: Dict[str, Any], role: str, fields: Dict[str, str], 
     return True
 
 
+async def _before_provider_dispatch(packet_id: str) -> None:
+    """Local checkpoint before DocuSeal. Tests inject a failure here."""
+    del packet_id
+
+
+async def _before_url_save(packet_id: str) -> None:
+    """Local checkpoint after a provider response and before the URL write."""
+    del packet_id
+
+
+def _listed_submitters(payload: Any) -> List[Dict[str, Any]]:
+    if isinstance(payload, dict):
+        data = payload.get("data")
+        if isinstance(data, list):
+            return [row for row in data if isinstance(row, dict)]
+        nested = payload.get("submitters")
+        if isinstance(nested, list):
+            return [row for row in nested if isinstance(row, dict)]
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+    return []
+
+
+async def _saga_audit(event_type: str, packet_id: str, case_id: str, reason: str, new_state: Dict[str, Any]) -> None:
+    audit_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"shamrock-self-serve-saga-v1:{event_type}:{packet_id}:{reason}"))
+    await insert_new(_col("audit_events"), {
+        "_id": audit_id,
+        "event_id": audit_id,
+        "event_type": event_type,
+        "action": event_type,
+        "entity_type": "paperwork_packet",
+        "entity_id": packet_id,
+        "packet_id": packet_id,
+        "bond_case_id": case_id,
+        "actor": "auto",
+        "agent_name": "paperwork_self_serve",
+        "reason": reason,
+        "created_at": _now(),
+        "old_state": {},
+        "new_state": new_state,
+    })
+
+
 async def _mark_packet_build_failed(packet_id: str) -> None:
     await _col("paperwork_packets").update_one(
-        {"_id": packet_id},
-        {"$set": {"status": "build_failed", "docuseal_started": True}},
+        {"_id": packet_id, "status": {"$nin": ["signed", "completed", "filed", "archived"]}},
+        {"$set": {"status": "build_failed", "docuseal_started": True, "saga_step": "build_failed"}},
     )
 
 
-async def _wait_for_claimed_packet(packet_id: str, role: str) -> Dict[str, Any]:
+async def _mark_recovery_required(packet_id: str, case_id: str, reason: str) -> None:
+    """The provider may already have the submission. Do not create another."""
+    await _col("paperwork_packets").update_one(
+        {"_id": packet_id, "status": {"$nin": ["signed", "completed", "filed", "archived", "compensated"]}},
+        {"$set": {
+            "status": "recovery_required",
+            "saga_step": "recovery_required",
+            "docuseal_started": True,
+            "recovery_reason": reason,
+        }},
+    )
+    await _saga_audit(
+        "self_serve_saga_recovery_required",
+        packet_id,
+        case_id,
+        reason,
+        {"status": "recovery_required", "recovery_reason": reason},
+    )
+
+
+async def _compensate_unsent_packet(packet_id: str, case_id: str) -> bool:
+    """Compensate a shell this saga inserted before any provider call.
+
+    The filter is the ownership check. A dispatched, signed, or shared row
+    does not match. The row is not deleted.
+    """
+    result = await _col("paperwork_packets").update_one(
+        {
+            "_id": packet_id,
+            "saga_owned": True,
+            "source": "self_serve",
+            "docuseal_started": {"$ne": True},
+            "status": "building",
+        },
+        {"$set": {"status": "compensated", "saga_step": "compensated", "compensated_at": _now()}},
+    )
+    if int(getattr(result, "matched_count", 0) or 0) != 1:
+        return False
+    await _saga_audit(
+        "self_serve_saga_compensated",
+        packet_id,
+        case_id,
+        "aborted_before_provider",
+        {"status": "compensated"},
+    )
+    from dashboard.services.staff_chain_service import compensate_owned_self_serve_case
+
+    await compensate_owned_self_serve_case(case_id)
+    return True
+
+
+async def _store_recovered_url(
+    packet_id: str,
+    case_id: str,
+    role: str,
+    signer: Dict[str, Any],
+    url: str,
+) -> Dict[str, Any]:
+    await _col("paperwork_packets").update_one(
+        {"_id": packet_id, "status": {"$nin": ["signed", "completed", "filed", "archived"]}},
+        {"$set": {
+            "status": "pending_owner_review",
+            "saga_step": "url_stored",
+            "sign_url": url,
+            "docuseal_started": True,
+            "docuseal_submitters": [signer],
+            "docuseal_submission_id": signer.get("submission_id") or "",
+            "send_email": False,
+            "send_sms": False,
+        }},
+    )
+    await _saga_audit(
+        "self_serve_saga_recovered",
+        packet_id,
+        case_id,
+        "existing_submitter",
+        {"status": "pending_owner_review", "signing_url_recovered": True},
+    )
+    return {"packet_id": packet_id, "signing_link": url, "created": False, "recovered": True}
+
+
+async def _reconcile_dispatched_packet(packet_id: str, case_id: str, role: str, svc: Any) -> Optional[Dict[str, Any]]:
+    """Find the submitter already created for this packet. Never create one.
+
+    Lookup is ``list_submitters(external_id=...)``, which this client already
+    exposes. Zero, many, or an error is ambiguous: the remote submission is
+    not archived and a second create is not attempted.
+    """
+    row = await _col("paperwork_packets").find_one({"_id": packet_id})
+    if isinstance(row, dict):
+        url = _sign_url(row, role)
+        if url and _safe_sign_url(_text(row.get("sign_url"))):
+            return {"packet_id": packet_id, "signing_link": url, "created": False, "recovered": True}
+        if url:
+            signer = _role_submitter(row, role) or {}
+            return await _store_recovered_url(packet_id, case_id, role, signer, url)
+        if _packet_finalized(row):
+            return None
+    external_id = ""
+    if isinstance(row, dict):
+        external_id = _text(row.get("provider_external_id"))
+    if not external_id:
+        external_id = f"{packet_id}:{role}"
+    try:
+        listed = await svc.list_submitters(external_id=external_id, limit=10)
+    except Exception:
+        await _mark_recovery_required(packet_id, case_id, "lookup_failed")
+        return None
+    matches = []
+    for item in _listed_submitters(listed):
+        if _text(item.get("external_id")) != external_id:
+            continue
+        normalized = svc.normalize_submitter_record(item)
+        if normalized:
+            matches.append(normalized)
+    if len(matches) != 1:
+        reason = "lookup_not_unique" if matches else "lookup_empty"
+        await _mark_recovery_required(packet_id, case_id, reason)
+        return None
+    signer = matches[0]
+    status = _text(signer.get("status")).lower()
+    if _signer_blocked(signer) or status in _FINAL_STATUSES:
+        await _mark_recovery_required(packet_id, case_id, "signer_not_open")
+        return None
+    url = _safe_sign_url(signer.get("sign_url") or "")
+    if not url:
+        await _mark_recovery_required(packet_id, case_id, "signing_link_missing")
+        return None
+    return await _store_recovered_url(packet_id, case_id, role, signer, url)
+
+
+async def _wait_for_claimed_packet(packet_id: str, case_id: str, role: str, svc: Any) -> Dict[str, Any]:
     """Another worker owns this packet id. Do not create a second submission."""
     for _ in range(40):
         row = await _col("paperwork_packets").find_one({"_id": packet_id})
         if isinstance(row, dict):
-            if row.get("status") == "build_failed":
-                raise RuntimeError("packet_incomplete")
-            url = _sign_url(row, role)
+            if row.get("status") in {"build_failed", "recovery_required", "compensated"}:
+                break
+            url = _safe_sign_url(_text(row.get("sign_url")))
             if url:
                 return {"packet_id": packet_id, "signing_link": url, "created": False}
         await asyncio.sleep(0.05)
     row = await _col("paperwork_packets").find_one({"_id": packet_id})
-    if isinstance(row, dict) and row.get("docuseal_started") and not _sign_url(row, role):
-        raise RuntimeError("packet_incomplete")
+    if isinstance(row, dict) and row.get("docuseal_started"):
+        recovered = await _reconcile_dispatched_packet(packet_id, case_id, role, svc)
+        if recovered:
+            return recovered
+        raise RuntimeError("recovery_required")
+    if isinstance(row, dict) and row.get("status") == "compensated":
+        raise RuntimeError("saga_compensated")
     raise RuntimeError("packet_in_progress")
 
 
@@ -796,6 +980,7 @@ async def _build_self_serve_packet_locked(
         raise RuntimeError("surety_unassigned")
     unvalidated = not _case_fully_bound(case)
     now = _now()
+    provider_external_id = f"{packet_id}:{role}"
     shell = {
         "_id": packet_id,
         "packet_id": packet_id,
@@ -805,7 +990,10 @@ async def _build_self_serve_packet_locked(
         "role": role,
         "scan_id": scan_id,
         "status": "building",
+        "saga_owned": True,
+        "saga_step": "shell",
         "docuseal_started": False,
+        "provider_external_id": provider_external_id,
         "sign_url": "",
         "voided": False,
         "source": "self_serve",
@@ -813,14 +1001,47 @@ async def _build_self_serve_packet_locked(
         "self_serve_unvalidated_draft": unvalidated,
         "created_at": now,
     }
-    await insert_new(_col("paperwork_packets"), shell)
+    inserted = await insert_new(_col("paperwork_packets"), shell)
+    if not inserted:
+        existing_shell = await _col("paperwork_packets").find_one({"_id": packet_id})
+        if isinstance(existing_shell, dict) and _safe_sign_url(_text(existing_shell.get("sign_url"))):
+            return {
+                "packet_id": packet_id,
+                "signing_link": _safe_sign_url(_text(existing_shell.get("sign_url"))),
+                "created": False,
+            }
+        if isinstance(existing_shell, dict) and existing_shell.get("status") == "compensated":
+            resumed = await _col("paperwork_packets").update_one(
+                {
+                    "_id": packet_id,
+                    "saga_owned": True,
+                    "status": "compensated",
+                    "docuseal_started": {"$ne": True},
+                },
+                {"$set": {"status": "building", "saga_step": "shell"}},
+            )
+            if int(getattr(resumed, "matched_count", 0) or 0) != 1:
+                raise RuntimeError("saga_compensated")
+            from dashboard.services.staff_chain_service import resume_owned_self_serve_case
+
+            await resume_owned_self_serve_case(case_id)
+    try:
+        await _before_provider_dispatch(packet_id)
+    except Exception:
+        await _compensate_unsent_packet(packet_id, case_id)
+        raise
+    svc = service_cls()
     claim = await _col("paperwork_packets").update_one(
-        {"_id": packet_id, "docuseal_started": {"$ne": True}},
-        {"$set": {"docuseal_started": True, "claimed_at": now}},
+        {"_id": packet_id, "saga_owned": True, "docuseal_started": {"$ne": True}, "status": "building"},
+        {"$set": {
+            "docuseal_started": True,
+            "saga_step": "provider_dispatched",
+            "provider_external_id": provider_external_id,
+            "claimed_at": now,
+        }},
     )
     if int(getattr(claim, "matched_count", 0) or 0) != 1:
-        return await _wait_for_claimed_packet(packet_id, role)
-    svc = service_cls()
+        return await _wait_for_claimed_packet(packet_id, case_id, role, svc)
     try:
         if not unvalidated:
             template_id = resolve_template(bond_data.get("surety_id"))
@@ -878,20 +1099,35 @@ async def _build_self_serve_packet_locked(
             )
             result = svc.normalize_create_response(raw)
     except Exception:
-        await _mark_packet_build_failed(packet_id)
-        raise
+        recovered = await _reconcile_dispatched_packet(packet_id, case_id, role, svc)
+        if recovered:
+            return recovered
+        raise RuntimeError("recovery_required") from None
     submitters = list(result.get("submitters") or [])
     from dashboard.services.paperwork_signers import normalize_role
 
     want = normalize_role(role)
     signer = next((item for item in submitters if normalize_role((item or {}).get("role")) == want), None)
+    await _col("paperwork_packets").update_one(
+        {"_id": packet_id},
+        {"$set": {
+            "saga_step": "provider_accepted",
+            "docuseal_submission_id": result.get("submission_id") or "",
+            "docuseal_submitters": submitters,
+        }},
+    )
     if _signer_blocked(signer):
         await _mark_packet_build_failed(packet_id)
         raise RuntimeError("signer_not_verified")
     url = _safe_sign_url((signer or {}).get("sign_url") or "")
     if not url:
-        await _mark_packet_build_failed(packet_id)
-        raise RuntimeError("signing_link_missing")
+        await _mark_recovery_required(packet_id, case_id, "signing_link_missing")
+        raise RuntimeError("recovery_required")
+    try:
+        await _before_url_save(packet_id)
+    except Exception:
+        await _mark_recovery_required(packet_id, case_id, "url_save_interrupted")
+        raise RuntimeError("recovery_required") from None
     packet_doc = {
         "packet_id": packet_id,
         "bond_case_id": case_id,

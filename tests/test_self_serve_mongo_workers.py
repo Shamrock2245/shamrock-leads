@@ -382,6 +382,72 @@ def test_two_processes_open_one_packet_and_one_provider_call():
         _drop(uri)
 
 
+def _compensate_worker(uri, start, slot, queue):
+    try:
+        while not os.path.exists(start):
+            time.sleep(0.01)
+        _install_motor(uri)
+        from dashboard.services.paperwork_self_serve import _compensate_unsent_packet
+
+        changed = asyncio.run(_compensate_unsent_packet("mongo-packet-claim", "mongo-case-claim"))
+        queue.put({"ok": True, "slot": slot, "changed": changed})
+    except Exception:
+        queue.put({"ok": False, "slot": slot, "trace": traceback.format_exc()})
+
+
+def test_two_processes_compensate_one_unsent_shell():
+    uri = _uri()
+    _drop(uri)
+    try:
+        client = _client(uri)
+        try:
+            client[DB_NAME]["bond_cases"].insert_one({
+                "_id": "mongo-case-claim",
+                "bond_case_id": "mongo-case-claim",
+                "source": "self_serve",
+                "self_serve_saga_owned": True,
+                "self_serve_saga_status": "open",
+                "surety_id": "palmetto",
+            })
+            client[DB_NAME]["paperwork_packets"].insert_one({
+                "_id": "mongo-packet-claim",
+                "packet_id": "mongo-packet-claim",
+                "bond_case_id": "mongo-case-claim",
+                "saga_owned": True,
+                "source": "self_serve",
+                "status": "building",
+                "docuseal_started": False,
+                "sign_url": "",
+            })
+            client[DB_NAME]["indemnitors"].insert_one({
+                "_id": "IND-TEST-MONGO",
+                "indemnitor_id": "IND-TEST-MONGO",
+                "id_scan_records": [{"scan_id": "SCAN-TEST-MONGO", "success": True}],
+            })
+        finally:
+            client.close()
+        results, codes = _run_pair(uri, _compensate_worker)
+        assert codes == [0, 0], results
+        assert sorted(item["changed"] for item in results) == [False, True]
+        client = _client(uri)
+        try:
+            packet = client[DB_NAME]["paperwork_packets"].find_one({"_id": "mongo-packet-claim"})
+            case = client[DB_NAME]["bond_cases"].find_one({"_id": "mongo-case-claim"})
+            person = client[DB_NAME]["indemnitors"].find_one({"_id": "IND-TEST-MONGO"})
+            assert packet["status"] == "compensated"
+            assert packet["docuseal_started"] is False
+            assert case["self_serve_saga_status"] == "compensated"
+            assert case["surety_id"] == "palmetto"
+            assert person["id_scan_records"][0]["scan_id"] == "SCAN-TEST-MONGO"
+            assert client[DB_NAME]["audit_events"].count_documents(
+                {"event_type": "self_serve_saga_compensated"}
+            ) == 2
+        finally:
+            client.close()
+    finally:
+        _drop(uri)
+
+
 def test_started_docuseal_claim_is_not_submitted_again():
     uri = _uri()
     _drop(uri)
@@ -429,9 +495,13 @@ def test_started_docuseal_claim_is_not_submitted_again():
                 scan_id="SCAN-TEST-MONGO",
             )
 
+        async def _list(self, **kwargs):
+            return {"data": []}
+
         identity.require_verified_indemnitors = _ok
         docuseal.DocuSealService.create_submission = _create
-        with pytest.raises(RuntimeError, match="packet_incomplete"):
+        docuseal.DocuSealService.list_submitters = _list
+        with pytest.raises(RuntimeError, match="recovery_required"):
             asyncio.run(_run())
         assert calls["n"] == 0
         client = _client(uri)
@@ -440,6 +510,10 @@ def test_started_docuseal_claim_is_not_submitted_again():
             stored = client[DB_NAME]["paperwork_packets"].find_one({})
             assert stored["sign_url"] == ""
             assert stored["docuseal_started"] is True
+            assert stored["status"] == "recovery_required"
+            assert client[DB_NAME]["audit_events"].count_documents(
+                {"event_type": "self_serve_saga_recovery_required"}
+            ) == 1
         finally:
             client.close()
     finally:
