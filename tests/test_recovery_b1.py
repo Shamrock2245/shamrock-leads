@@ -458,17 +458,19 @@ def test_recovery_login_and_document_roundtrip(client, db):
     bad = client.post("/login", json={"pin": PIN, "recovery_id": "REC-NOPE"})
     assert bad.status_code == 403
 
-    logged_in = client.post("/login", json={"pin": PIN, "recovery_id": "REC-44"})
-    assert logged_in.status_code == 200
-    assert logged_in.json()["role"] == "recovery"
-    assert "sl_session" in logged_in.cookies
-
     created = client.post(
         "/api/recovery/shares",
         cookies=staff,
         json={"booking_number": "BK-44110", "staff_notes": STAFF_NOTE, "recovery_agent_id": "REC-44"},
     )
+    assert created.status_code == 200, created.text
     share_id = created.json()["share_id"]
+
+    logged_in = client.post("/login", json={"pin": PIN, "recovery_id": "REC-44"})
+    assert logged_in.status_code == 200
+    assert logged_in.json()["role"] == "recovery"
+    assert "sl_session" in logged_in.cookies
+
     me = client.get("/api/session/me")
     assert me.status_code == 200
     assert me.json()["is_recovery"] is True

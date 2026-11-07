@@ -311,7 +311,7 @@ Implemented in `BaseScraper.run()`. Full runbook: [`docs/ops/SCRAPER_SELF_HEALIN
 3. **Score Everything** — No record enters the DB without a lead score.
 4. **Fail Loudly** — Every scraper error fires a Slack alert. Silent failures are unacceptable.
 5. **Self-Heal First** — BaseScraper retries transient network failures (2s/4s/8s), classifies errors, fails loud on parse drift, and auto-disables after 5 failures. Fix root causes; never retry into a cooldown or around a block.
-6. **Human-in-the-Loop for Outreach** — No automated client contact without human approval, except the narrowly documented initial DocuSeal notice in `docs/policies/signature-policy.md`. That exception is disabled by default and may send once only to an explicitly DocuSeal-bound signer with approved role-specific copy; it never authorizes chase, retry, SMS fallback, or outreach to any other contact.
+6. **Human-in-the-Loop for Outreach** — No automated client contact without human approval, except two narrow cases. The initial DocuSeal notice in `docs/policies/signature-policy.md` is disabled by default and may send once only to an explicitly DocuSeal-bound signer with approved role-specific copy; it never authorizes chase, retry, SMS fallback, or outreach to any other contact. **Pay-link text after signing (owner Brendan O'Neal, 2026-11-04):** when `SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING` and `SWIPESIMPLE_DISPATCH_LIVE` are both on, DocuSeal completion may text the staged invoice link once to the indemnitor only (`docuseal_completion.step_auto_send`, `dispatch_invoice(..., indemnitor_only=True)` and its one-send claim). Both switches default off. A missing or conflicting indemnitor contact is `needs_review` and sends nothing; the defendant is never the recipient. A failure is not retried. That exception does not authorize chase, a second text, SMS fallback, or any other automated client outreach.
 7. **PII is Sacred** — Never log PII to Slack or console in production.
 8. **Document Everything** — Every fix updates the relevant state registry and `docs/recon/COUNTY_SOURCE_CONTRACT_MATRIX.md`. No silent fixes.
 9. **Know Your Surety** — Every bond case carries a `Surety_ID`. POAs come from surety-specific inventory.
@@ -376,6 +376,8 @@ Escalate immediately if:
 | `SWIPESIMPLE_LINK_DEFAULT` | Optional | Pay-by-card link for every non-Telegram source. Legacy aliases: `SWIPESIMPLE_PAYMENT_LINK`, `SWIPESIMPLE_BOND_PAYMENT_LINK`, `PAYMENT_LINK` |
 | `SWIPESIMPLE_LINK_TELEGRAM` | Optional | Pay-by-card link for Telegram bot and mini-apps |
 | `SWIPESIMPLE_WEBHOOK_SECRET` | Payments | HMAC for `POST /api/webhooks/payment` |
+| `SWIPESIMPLE_DISPATCH_LIVE` | Optional | Live customer texts for invoice dispatch, receipts, and the post-signing pay link. Default off (dry run). |
+| `SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING` | Optional | Owner-approved 2026-11-04 (Brendan O'Neal): one automatic pay-link text after DocuSeal signing. Default off. Also requires `SWIPESIMPLE_DISPATCH_LIVE`. At most once. |
 | `BB_WEBHOOK_PUBLIC_URL` | BlueBubbles | Public CRM origin registered with the office server |
 | `BB_WEBHOOK_SECRET` | Optional | If set, a present `x-bb-signature` must match. BlueBubbles omits signatures by default |
 | `TWILIO_WEBHOOK_PUBLIC_URL` | Optional | Exact URL Twilio signed for `POST /api/webhooks/twilio` |

@@ -2389,6 +2389,7 @@ class DocuSealService:
         from dashboard.services.docuseal_signing_ux import (
             IDENTITY_READONLY_FIELD_NAMES,
             paperwork_done_url,
+            paperwork_done_url_for,
             submission_fields_from_values,
         )
 
@@ -2400,7 +2401,13 @@ class DocuSealService:
             template_field_names=explicit_names,
         )
         # Per-submitter redirect after that person finishes (not the whole packet).
-        party_done = completed_redirect_url or paperwork_done_url()
+        # Packet id and role only. The amount is loaded later from the bond.
+        def _done_for(role_token: str) -> str:
+            if completed_redirect_url:
+                return completed_redirect_url
+            if str(packet_id or "").strip():
+                return paperwork_done_url_for(packet_id, role_token)
+            return paperwork_done_url()
 
         # Optional Bondsman / agent role (template may require signature block)
         # Live OSI/Palmetto templates always define a bondsman submitter role (B5 smoke,
@@ -2429,7 +2436,7 @@ class DocuSealService:
                     metadata={"packet_id": packet_id, "party_role": "bondsman"},
                     send_email=send_email,
                     fields=signer_fields,
-                    completed_redirect_url=party_done,
+                    completed_redirect_url=_done_for(ROLE_BONDSMAN),
                 )
             )
 
@@ -2468,7 +2475,7 @@ class DocuSealService:
                     },
                     send_email=send_email,
                     fields=signer_fields,
-                    completed_redirect_url=party_done,
+                    completed_redirect_url=_done_for(party_role),
                 )
             )
 
@@ -2511,7 +2518,7 @@ class DocuSealService:
                     },
                     send_email=send_email,
                     fields=signer_fields,
-                    completed_redirect_url=party_done,
+                    completed_redirect_url=_done_for(ROLE_DEFENDANT),
                 )
             )
 
@@ -2529,7 +2536,10 @@ class DocuSealService:
             send_email = False
 
         portal = (os.getenv("PAPERWORK_PUBLIC_URL") or "").rstrip("/")
-        redirect = completed_redirect_url or (f"{portal}/done" if portal else None)
+        redirect = completed_redirect_url or (
+            paperwork_done_url_for(packet_id) if str(packet_id or "").strip()
+            else (f"{portal}/done" if portal else None)
+        )
 
         raw = await self.create_submission(
             template_id=template_id,

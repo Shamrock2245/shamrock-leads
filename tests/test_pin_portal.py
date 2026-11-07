@@ -154,8 +154,12 @@ def test_portal_ui_route():
 def test_done_landing_page():
     response = client.get("/api/portal/done", follow_redirects=True)
     assert response.status_code == 200
-    assert "Paperwork Successfully Signed!" in response.text
-    assert "Call Office" in response.text
+    assert "We could not open this case" in response.text
+    assert 'data-pay-step="ready"' not in response.text
+    assert "swipesimple.com" not in response.text
+    assert "(239) 332-2245" in response.text
+    assert "Mon-Fri 9-5" in response.text
+    assert "24/7" in response.text
 
 
 def test_verify_admin_pin_bypass():

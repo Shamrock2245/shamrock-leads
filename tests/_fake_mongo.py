@@ -5,12 +5,13 @@ Supports just what dashboard/services/docuseal_completion.py and the
 webhook / poller use: find_one, find(...).limit, update_one, insert_one,
 find_one_and_update (atomic under an asyncio.Lock), dotted paths, $set /
 $inc / $addToSet, and query operators $and / $or / $exists / $ne / $lt /
-$in / $nin with Mongo's "None matches missing" semantics. No network.
+$in / $nin / $regex with Mongo's "None matches missing" semantics. No network.
 """
 from __future__ import annotations
 
 import asyncio
 import copy
+import re
 from typing import Any, Dict, List, Optional
 
 _MISSING = object()
@@ -66,6 +67,11 @@ def _match_value(val: Any, cond: Any) -> bool:
             elif op == "$nin":
                 if any(_eq(val, a) for a in arg):
                     return False
+            elif op == "$regex":
+                if val is _MISSING or not isinstance(val, str) or re.search(str(arg), val) is None:
+                    return False
+            elif op == "$options":
+                continue
             else:
                 raise NotImplementedError(op)
         return True
@@ -115,6 +121,21 @@ class _Cursor:
     def __init__(self, docs: List[dict]):
         self._docs = docs
 
+    def sort(self, key: Any, direction: int = 1) -> "_Cursor":
+        if isinstance(key, list):
+            for k, d in reversed(key):
+                self.sort(k, d)
+            return self
+        self._docs = sorted(
+            self._docs,
+            key=lambda d: (_get(d, key) is _MISSING, str(_get(d, key))),
+            reverse=direction < 0,
+        )
+        return self
+
+    async def to_list(self, length: Optional[int] = None) -> List[dict]:
+        return list(self._docs[: length or None])
+
     def limit(self, n: int) -> "_Cursor":
         self._docs = self._docs[: n or None]
         return self
@@ -139,7 +160,7 @@ class FakeCollection:
         self._lock = asyncio.Lock()
         self._yield = yield_in_claim
 
-    async def insert_one(self, doc):
+    async def insert_one(self, doc, **_kw):
         self.inserts.append(copy.deepcopy(doc))
         self.docs.append(copy.deepcopy(doc))
 

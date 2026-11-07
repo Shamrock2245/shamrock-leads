@@ -92,6 +92,9 @@ CLAIM_NEEDS_REVIEW = "needs_review"  # outcome unknown / invoice may exist → m
 DISPATCH_SENDING = "sending"
 DISPATCH_SENT = "sent"
 DISPATCH_FAILED = "failed"
+# A send whose outcome is unknown or failed on the automatic after-signing
+# path: never re-claimed automatically (manual review only).
+DISPATCH_NEEDS_REVIEW = "needs_review"
 
 _claim_indexes_ready = False
 
@@ -147,6 +150,20 @@ def dispatch_live_enabled() -> bool:
     Set SWIPESIMPLE_DISPATCH_LIVE=1 only after Brendan go-ahead (separate from HTTP LIVE).
     """
     raw = (os.getenv("SWIPESIMPLE_DISPATCH_LIVE") or "").strip().lower()
+    return raw in _LIVE_TRUTHY
+
+
+AUTO_SEND_AFTER_SIGNING_ENV = "SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING"
+
+
+def auto_send_after_signing_enabled() -> bool:
+    """Owner switch: text the staged invoice link once after signing.
+
+    Default OFF. Sends only when SWIPESIMPLE_DISPATCH_LIVE is also on, and
+    only through ``dispatch_invoice`` (its one-send claim). Separate from
+    the legacy static-link switch, which stays off.
+    """
+    raw = (os.getenv(AUTO_SEND_AFTER_SIGNING_ENV) or "").strip().lower()
     return raw in _LIVE_TRUTHY
 
 
@@ -316,37 +333,75 @@ def validate_booking_number(booking_number: Any) -> str:
 
 async def _load_bond_by_id(bond_id: str) -> Optional[Dict[str, Any]]:
     """
-    Resolve BondCase / active bond by bond_case_id, bond_id, or ObjectId string.
-    Prefer bond_cases, fall back to active_bonds (production dual-collection reality).
+    Resolve BondCase / active bond by bond_case_id, bond_id, booking number,
+    or ObjectId string. Prefer bond_cases, fall back to active_bonds
+    (production dual-collection reality).
+
+    Booking lookup is alias-aware and read-only: ``booking_number`` is
+    canonical, the legacy ``Booking_Number`` counts only when
+    ``booking_number`` is blank, and a whitespace-padded stored value matches
+    through an anchored, escaped regex. Rows are deduped by ``_id``. More
+    than one distinct document in a collection fails closed with
+    ``bond_ambiguous`` (never a guess).
     """
+    from dashboard.services.bond_booking_lookup import (
+        _rows,
+        booking_query,
+        canonical_booking,
+        dedupe_by_id,
+    )
+
     bond_id = str(bond_id or "").strip()
     if not bond_id:
         return None
 
-    clauses: list[dict] = [
-        {"bond_case_id": bond_id},
-        {"bond_id": bond_id},
-        {"booking_number": bond_id},
-    ]
+    oid = None
     try:
         from bson import ObjectId
 
         if ObjectId.is_valid(bond_id):
-            clauses.append({"_id": ObjectId(bond_id)})
+            oid = ObjectId(bond_id)
     except Exception:
-        pass
+        oid = None
 
+    clauses: list[dict] = [
+        {"bond_case_id": bond_id},
+        {"bond_id": bond_id},
+        *booking_query(bond_id)["$or"],
+    ]
+    if oid is not None:
+        clauses.append({"_id": oid})
     query = {"$or": clauses}
+
+    def _qualifies(doc: Dict[str, Any]) -> bool:
+        if str(doc.get("bond_case_id") or "").strip() == bond_id:
+            return True
+        if str(doc.get("bond_id") or "").strip() == bond_id:
+            return True
+        if oid is not None and doc.get("_id") == oid:
+            return True
+        return canonical_booking(doc) == bond_id
+
     for coll_name in ("bond_cases", "active_bonds"):
         try:
-            doc = await get_collection(coll_name).find_one(query)
-            if doc:
-                doc["_collection"] = coll_name
-                return doc
+            rows = await _rows(get_collection(coll_name).find(query))
         except Exception as exc:
             logger.warning(
                 "[ss_invoice] %s lookup failed err_type=%s", coll_name, type(exc).__name__
             )
+            continue
+        rows = dedupe_by_id([r for r in rows if _qualifies(r)])
+        if len(rows) > 1:
+            logger.warning(
+                "[ss_invoice] bond lookup ambiguous collection=%s matches=%d — fail closed",
+                coll_name,
+                len(rows),
+            )
+            raise SwipeSimpleInvoiceError("bond_ambiguous")
+        if rows:
+            doc = rows[0]
+            doc["_collection"] = coll_name
+            return doc
     return None
 
 
@@ -486,6 +541,34 @@ def _bond_premium(bond: Dict[str, Any]) -> Optional[Decimal]:
         return None
 
 
+async def _active_mirror_for_cross_check(booking_number: str) -> Optional[Dict[str, Any]]:
+    """The ``active_bonds`` mirror for a booking, alias-aware and read-only.
+
+    The exact canonical ``booking_number`` match wins (unchanged behavior).
+    Without one, matches the legacy ``Booking_Number`` (exact or
+    whitespace-padded; legacy only when ``booking_number`` is blank), deduped
+    by ``_id``. Two distinct mirrors fail closed (``bond_ambiguous``); a
+    lookup error fails closed (``premium_cross_check_unavailable``).
+    """
+    from dashboard.services.bond_booking_lookup import bonds_for_booking
+
+    try:
+        exact = await get_collection("active_bonds").find_one({"booking_number": booking_number})
+        if isinstance(exact, dict):
+            return exact
+        # No canonical mirror: look for a legacy-spelling or padded one.
+        rows = await bonds_for_booking(booking_number, "active_bonds", get_collection)
+    except Exception as exc:
+        logger.warning(
+            "[ss_invoice] active_bonds cross-check failed err_type=%s — fail closed",
+            type(exc).__name__,
+        )
+        raise SwipeSimpleInvoiceError("premium_cross_check_unavailable") from None
+    if len(rows) > 1:
+        raise SwipeSimpleInvoiceError("bond_ambiguous")
+    return rows[0] if rows else None
+
+
 async def resolve_premium_across_collections(bond: Dict[str, Any], booking_number: str) -> Decimal:
     """
     ``resolve_locked_premium`` on the loaded bond, cross-checked against the
@@ -501,14 +584,7 @@ async def resolve_premium_across_collections(bond: Dict[str, Any], booking_numbe
     """
     premium = resolve_locked_premium(bond)
     if bond.get("_collection") == "bond_cases" and booking_number:
-        try:
-            active = await get_collection("active_bonds").find_one({"booking_number": booking_number})
-        except Exception as exc:
-            logger.warning(
-                "[ss_invoice] active_bonds cross-check failed err_type=%s — fail closed",
-                type(exc).__name__,
-            )
-            raise SwipeSimpleInvoiceError("premium_cross_check_unavailable") from None
+        active = await _active_mirror_for_cross_check(booking_number)
         if isinstance(active, dict):
             other = resolve_locked_premium(active)
             if other != premium:
@@ -524,14 +600,7 @@ async def resolve_invoice_due_across_collections(bond: Dict[str, Any], booking_n
     """
     due = resolve_invoice_due(bond)
     if bond.get("_collection") == "bond_cases" and booking_number:
-        try:
-            active = await get_collection("active_bonds").find_one({"booking_number": booking_number})
-        except Exception as exc:
-            logger.warning(
-                "[ss_invoice] active_bonds invoice-due cross-check failed err_type=%s — fail closed",
-                type(exc).__name__,
-            )
-            raise SwipeSimpleInvoiceError("premium_cross_check_unavailable") from None
+        active = await _active_mirror_for_cross_check(booking_number)
         if isinstance(active, dict) and resolve_invoice_due(active) != due:
             raise SwipeSimpleInvoiceError("premium_mismatch_across_collections")
     return due
@@ -1145,14 +1214,18 @@ async def _share_invoice_http(
 
 def _bond_update_filter(bond: Dict[str, Any], bond_id: str, booking_number: str) -> Dict[str, Any]:
     booking = _bond_booking(bond) or booking_number
-    return {
-        "$or": [
-            {"booking_number": booking},
-            {"bond_case_id": bond_id},
-            {"bond_id": bond_id},
-            {"swipesimple_invoice_number": booking_number},
-        ]
-    }
+    clauses: list = [
+        {"booking_number": booking},
+        {"bond_case_id": bond_id},
+        {"bond_id": bond_id},
+        {"swipesimple_invoice_number": booking_number},
+    ]
+    # A bond stored only under the legacy ``Booking_Number`` spelling has no
+    # ``booking_number`` to match: also match the loaded document by ``_id``.
+    # ``Booking_Number`` itself is never written.
+    if bond.get("_id") is not None:
+        clauses.append({"_id": bond.get("_id")})
+    return {"$or": clauses}
 
 
 async def _persist_invoice_fields(
@@ -1697,6 +1770,41 @@ async def create_locked_invoice(bond_id: str) -> Dict[str, Any]:
     }
 
 
+def indemnitor_contact(bond: Dict[str, Any], channel: str) -> Tuple[str, bool]:
+    """``(recipient, conflict)`` from indemnitor fields only.
+
+    Defendant phone and email are never read. Two different indemnitor values
+    on the same bond (top-level spellings or the nested ``indemnitor`` map)
+    are a conflict: the caller must not pick one. A blank field is ignored.
+    """
+    if not isinstance(bond, dict):
+        return "", False
+    nested = bond.get("indemnitor")
+    if not isinstance(nested, dict):
+        nested = bond.get("Indemnitor")
+    nested = nested if isinstance(nested, dict) else {}
+    if channel == "email":
+        raw = (
+            bond.get("indemnitor_email"),
+            bond.get("Indemnitor_Email"),
+            nested.get("email"),
+        )
+    else:
+        raw = (
+            bond.get("indemnitor_phone"),
+            bond.get("Indemnitor_Phone"),
+            nested.get("phone") or nested.get("cell"),
+        )
+    present: List[str] = []
+    for value in raw:
+        text = str(value or "").strip()
+        if text and text not in present:
+            present.append(text)
+    if len(present) > 1:
+        return "", True
+    return (present[0] if present else ""), False
+
+
 def build_dispatch_payload(
     bond: Dict[str, Any],
     *,
@@ -1704,23 +1812,36 @@ def build_dispatch_payload(
     booking_number: str,
     premium: Decimal,
     channel: Channel,
+    indemnitor_only: bool = False,
 ) -> Dict[str, Any]:
-    """Build BlueBubbles / email payload without sending (safe for dry-run / tests)."""
+    """Build BlueBubbles / email payload without sending (safe for dry-run / tests).
+
+    ``indemnitor_only`` never falls back to the defendant. A conflict leaves
+    that channel's recipient blank so nothing is sent.
+    """
     defendant = str(
         bond.get("defendant_name") or bond.get("Defendant_Name") or ""
     ).strip()
-    phone = str(
-        bond.get("indemnitor_phone")
-        or bond.get("Indemnitor_Phone")
-        or bond.get("defendant_phone")
-        or ""
-    ).strip()
-    email = str(
-        bond.get("indemnitor_email")
-        or bond.get("Indemnitor_Email")
-        or bond.get("defendant_email")
-        or ""
-    ).strip()
+    if indemnitor_only:
+        phone, phone_conflict = indemnitor_contact(bond, "imessage")
+        email, email_conflict = indemnitor_contact(bond, "email")
+        if phone_conflict:
+            phone = ""
+        if email_conflict:
+            email = ""
+    else:
+        phone = str(
+            bond.get("indemnitor_phone")
+            or bond.get("Indemnitor_Phone")
+            or bond.get("defendant_phone")
+            or ""
+        ).strip()
+        email = str(
+            bond.get("indemnitor_email")
+            or bond.get("Indemnitor_Email")
+            or bond.get("defendant_email")
+            or ""
+        ).strip()
     body = (
         f"Shamrock Bail Bonds — premium payment for {defendant or 'your bond'} "
         f"(booking {booking_number}). Amount due: ${premium:,.2f}.\n"
@@ -1744,6 +1865,8 @@ def build_dispatch_payload(
 async def dispatch_invoice(
     bond_id: str,
     channel: Channel = "imessage",
+    *,
+    indemnitor_only: bool = False,
 ) -> Dict[str, Any]:
     """
     Dispatch stored payment link via BlueBubbles (imessage) or email.
@@ -1752,6 +1875,11 @@ async def dispatch_invoice(
     Default: dry-run — builds payload, logs intent, does NOT send.
     Live send requires SWIPESIMPLE_DISPATCH_LIVE=1 (separate from HTTP LIVE).
     Prefer web payment link; no dual SwipeSimple SMS.
+
+    ``indemnitor_only`` (portal ``send_copy``) resolves the indemnitor
+    phone or email and no one else. A missing contact or two disagreeing
+    indemnitor values raises before any claim or send. The defendant is
+    never the recipient on that path.
     """
     if channel not in ("imessage", "email"):
         raise SwipeSimpleInvoiceError("invalid_channel")
@@ -1766,14 +1894,36 @@ async def dispatch_invoice(
 
     booking_number = validate_booking_number(_bond_booking(bond))
     premium = resolve_locked_premium(bond)
+    # The text quotes the amount the invoice charges now (the confirmed down
+    # payment when one is set, else the premium), never a different figure.
+    amount_due = resolve_invoice_due(bond)
+
+    indemnitor_recipient = ""
+    if indemnitor_only:
+        indemnitor_recipient, conflict = indemnitor_contact(bond, channel)
+        if conflict:
+            raise SwipeSimpleInvoiceError("indemnitor_contact_mismatch")
+        if not indemnitor_recipient:
+            raise SwipeSimpleInvoiceError("dispatch_missing_indemnitor")
 
     payload = build_dispatch_payload(
         bond,
         payment_link=payment_link,
         booking_number=booking_number,
-        premium=premium,
+        premium=amount_due,
         channel=channel,
+        indemnitor_only=indemnitor_only,
     )
+    if indemnitor_only:
+        # The resolved indemnitor value is the only recipient. Drop the
+        # other channel so a defendant address on the bond cannot ride along.
+        if channel == "imessage":
+            payload["phone"] = indemnitor_recipient
+            payload["email"] = ""
+        else:
+            payload["email"] = indemnitor_recipient
+            payload["phone"] = ""
+        payload["has_recipient"] = True
 
     live = dispatch_live_enabled()
     logger.info(
@@ -1828,6 +1978,11 @@ async def dispatch_invoice(
                 "channel": channel,
                 "bond_id": bond_id,
             }
+        if dstatus == DISPATCH_NEEDS_REVIEW:
+            logger.warning(
+                "[ss_invoice] dispatch held for review bond_id=%s — no send", claim_key
+            )
+            raise SwipeSimpleInvoiceError("dispatch_needs_review")
         if dstatus == DISPATCH_SENDING and _is_stale(existing.get("dispatch_claimed_at")):
             logger.warning(
                 "[ss_invoice] STALE dispatch claim bond_id=%s — NOT auto-resending; "
@@ -1895,6 +2050,53 @@ async def dispatch_invoice(
         "send_result_ok": bool(sent),
         "message": "dispatch live send attempted" if sent else "dispatch live send failed",
     }
+
+
+async def mark_dispatch_needs_review(bond_id: str, error_code: str) -> bool:
+    """Hold a bond's customer dispatch for manual review (no blind retry).
+
+    Moves the existing claim from not-sent (absent status or ``failed``) to
+    ``needs_review`` so ``_claim_dispatch`` never re-claims it. Never
+    upserts, never touches a sent claim, never sends. Returns True when a
+    claim was moved.
+    """
+    try:
+        bond = await _load_bond_by_id(bond_id)
+    except SwipeSimpleInvoiceError:
+        bond = None
+    claim_key = _claim_key(bond or {}, str(bond_id or "").strip())
+    if not claim_key:
+        return False
+    code = re.sub(r"[^a-z0-9_]", "", str(error_code or "").lower())[:80] or "dispatch_error"
+    try:
+        coll = await _claims_collection()
+        result = await coll.update_one(
+            {
+                "bond_id": claim_key,
+                "dispatched_at": None,
+                "dispatch_status": {"$in": [None, DISPATCH_FAILED]},
+            },
+            {"$set": {
+                "dispatch_status": DISPATCH_NEEDS_REVIEW,
+                "dispatch_error_code": code,
+                "dispatch_review_at": _utcnow(),
+            }},
+        )
+    except Exception as exc:
+        logger.warning(
+            "[ss_invoice] dispatch review mark failed bond_id=%s err_type=%s",
+            claim_key,
+            type(exc).__name__,
+        )
+        return False
+    moved = int(getattr(result, "matched_count", 0) or 0) > 0
+    logger.warning(
+        "[ss_invoice] dispatch held for review bond_id=%s error_code=%s moved=%s",
+        claim_key,
+        code,
+        moved,
+    )
+    return moved
 
 
 async def _send_dispatch(channel: Channel, payload: Dict[str, Any]) -> bool:
