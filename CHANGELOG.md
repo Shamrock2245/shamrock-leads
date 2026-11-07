@@ -24,6 +24,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_paperwork_id_prefill.py` (on the CI list). Signer email is `admin@shamrockbailbonds.biz`. Records are `TEST-` prefixed. No DocuSeal send and no SwipeSimple charge.
 - `tests/test_self_serve_multiprocess_claim.py` runs two OS processes. The shared store is SQLite `PRIMARY KEY` plus `BEGIN IMMEDIATE`, and the test records the duplicate-key conflict. It does not start mongod. The production path is the same ``_id`` insert.
+- `tests/test_self_serve_mongo_workers.py` runs the same production functions against an isolated loopback MongoDB when `SHAMROCK_TEST_MONGODB_URI` is set, and skips otherwise. It does not read `MONGODB_URI`.
+- `tests/test_self_serve_saga.py` covers compensation, recovery, and a second-submission block. No DocuSeal send.
+
+## [Unreleased] — 2026-11-07 (BB_CONFIG_API_KEY fail-closed contract test)
+
+### Security
+- No new credential and no fallback key. `0d5534a` already removed the hardcoded `BB_CONFIG_API_KEY`. `POST /api/config/bluebubbles-url` and `PATCH /api/bb-health/update-url` still require an admin session, machine auth (`GAS_API_KEY` / `LEADS_INTERNAL_TOKEN`), or an explicitly configured `BB_CONFIG_API_KEY` compared with `secrets.compare_digest`. A presented key when that setting is unset is `503`. A non-string `api_key` on the health route is the same denial (`503` when unset, `401` when a key is configured) instead of a `500`. An admin session or machine key still wins over a junk body key.
+
+### Tests
+- Added `tests/test_bb_config_key_fail_closed.py` to the CI contract list. It covers the unset-key `503`, a wrong key `401`, a matching configured key, machine auth, an admin session with no frontend key, and the absence of a fallback key in the dashboard script and URL-sync files.
 
 ## [Unreleased] — 2026-11-05 (Auto-send indemnitor only; ambiguous staff premium)
 
