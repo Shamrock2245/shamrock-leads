@@ -825,6 +825,9 @@ def _accept_recovered_submitter(
     want_phone = _digits(phone)
     if len(got_phone) != 10 or got_phone != want_phone:
         return "phone_mismatch"
+    # DocuSeal assigns submitter id and submission_id only after accept.
+    # Presence is not a match to a pre-dispatch value. Comparison, when a
+    # value was stored from that accept, happens in the caller.
     if item.get("id") in (None, "") or item.get("submission_id") in (None, ""):
         return "identity_incomplete"
     status = _text(item.get("status")).lower()
@@ -984,6 +987,33 @@ def _stored_open_signer(row: Dict[str, Any], role: str, origin: str) -> Optional
     return accepted[0]
 
 
+def _persisted_provider_id_mismatch(row: Dict[str, Any], item: Dict[str, Any]) -> str:
+    """Compare provider ids only when this packet already stored them.
+
+    Those ids do not exist before DocuSeal accepts the submission. A value
+    that is merely present on the lookup row is not an expected identity.
+    """
+    expected_submission = _text(row.get("docuseal_submission_id"))
+    if expected_submission and _text(item.get("submission_id")) != expected_submission:
+        return "submission_id_mismatch"
+    expected_submitter = ""
+    external_id = _text(row.get("provider_external_id"))
+    for stored in row.get("docuseal_submitters") or []:
+        if not isinstance(stored, dict):
+            continue
+        if external_id and _text(stored.get("external_id")) != external_id:
+            continue
+        found = _text(stored.get("id"))
+        if not found:
+            continue
+        if expected_submitter and found != expected_submitter:
+            return "submitter_id_mismatch"
+        expected_submitter = found
+    if expected_submitter and _text(item.get("id")) != expected_submitter:
+        return "submitter_id_mismatch"
+    return ""
+
+
 async def _reconcile_dispatched_packet(
     packet_id: str,
     case_id: str,
@@ -1034,8 +1064,14 @@ async def _reconcile_dispatched_packet(
         return None
     matches = []
     rejected = ""
+    saw_other_external_id = False
     for item in page:
         if _text(item.get("external_id")) != external_id:
+            saw_other_external_id = True
+            continue
+        persisted = _persisted_provider_id_mismatch(row, item)
+        if persisted:
+            rejected = persisted
             continue
         reason = _accept_recovered_submitter(
             item,
@@ -1058,6 +1094,8 @@ async def _reconcile_dispatched_packet(
             reason = "lookup_not_unique"
         elif not page:
             reason = "lookup_empty"
+        elif saw_other_external_id and not rejected:
+            reason = "external_id_mismatch"
         else:
             reason = rejected or "lookup_not_bound"
         await _mark_recovery_required(packet_id, case_id, reason)

@@ -386,6 +386,26 @@ async def _lost_response(monkeypatch, db, listed):
             _page([_open_row(embed_src="https://pay.swipesimple.com/s/TEST-SLUG")]),
             "sign_url_rejected",
         ),
+        (
+            _page([_open_row(embed_src="https://sign.shamrockbailbonds.biz/s/TEST-SLUG?next=1")]),
+            "sign_url_rejected",
+        ),
+        (
+            _page([_open_row(embed_src="https://sign.shamrockbailbonds.biz/s/TEST-SLUG#section")]),
+            "sign_url_rejected",
+        ),
+        (
+            _page([_open_row(embed_src="https://user:pass@sign.shamrockbailbonds.biz/s/TEST-SLUG")]),
+            "sign_url_rejected",
+        ),
+        (
+            _page([_open_row(embed_src="https://sign.shamrockbailbonds.biz/s/OTHER-SLUG")]),
+            "sign_url_rejected",
+        ),
+        (
+            _page([_open_row(external_id=f"{_packet_id()}:defendant")]),
+            "external_id_mismatch",
+        ),
     ],
 )
 async def test_recovery_rejects_unbound_or_unsafe_submitter(monkeypatch, listed, reason):
@@ -447,3 +467,76 @@ async def test_signed_packet_is_not_rewritten_during_reconciliation(monkeypatch)
     assert packet["docuseal_status"] == "completed"
     assert packet["sign_url"].endswith("/s/TEST-SIGNED")
     assert not any(row.get("event_type") == "self_serve_saga_recovered" for row in db["audit_events"].docs)
+
+
+@pytest.mark.asyncio
+async def test_unpersisted_provider_ids_are_not_a_pre_dispatch_identity(monkeypatch):
+    """DocuSeal assigns submission and submitter ids only after accept.
+
+    This lost response never stored those ids. Recovery uses the external id,
+    role, email, and phone saved before the call. The arbitrary ids on the
+    lookup row are not compared to an expected provider id.
+    """
+    db = FakeDB()
+    _install(monkeypatch, db)
+    db["bond_cases"].docs.append(_case())
+    seen = {}
+
+    async def _create(self, **kwargs):
+        raise RuntimeError("response_lost")
+
+    async def _list(self, **kwargs):
+        packet = db["paperwork_packets"].docs[0]
+        seen["submission_before"] = packet.get("docuseal_submission_id")
+        seen["submitters_before"] = list(packet.get("docuseal_submitters") or [])
+        return _page([_open_row(id=3, submission_id=999)])
+
+    monkeypatch.setattr("dashboard.services.docuseal_service.DocuSealService.create_submission", _create)
+    monkeypatch.setattr("dashboard.services.docuseal_service.DocuSealService.list_submitters", _list)
+    saved = await _build()
+    assert seen["submission_before"] in (None, "")
+    assert seen["submitters_before"] == []
+    assert saved["recovered"] is True
+    assert db["paperwork_packets"].docs[0]["docuseal_submission_id"] == 999
+
+
+@pytest.mark.asyncio
+async def test_persisted_provider_ids_reject_a_different_lookup_row(monkeypatch):
+    """After accept, the stored submission id is the expected provider id.
+
+    The create response has no slug, so the URL is not stored and the lookup
+    runs. A different submission id from that lookup does not replace it.
+    """
+    db = FakeDB()
+    _install(monkeypatch, db)
+    db["bond_cases"].docs.append(_case())
+    external_id = f"{_packet_id()}:indemnitor"
+
+    async def _create(self, **kwargs):
+        return {
+            "id": 77,
+            "submitters": [{
+                "id": 9,
+                "submission_id": 77,
+                "role": "indemnitor",
+                "email": EMAIL,
+                "phone": PHONE,
+                "status": "awaiting",
+                "external_id": external_id,
+            }],
+        }
+
+    async def _list(self, **kwargs):
+        return _page([_open_row(id=9, submission_id=78)])
+
+    monkeypatch.setattr("dashboard.services.docuseal_service.DocuSealService.create_submission", _create)
+    monkeypatch.setattr("dashboard.services.docuseal_service.DocuSealService.list_submitters", _list)
+    with pytest.raises(RuntimeError, match="recovery_required"):
+        await _build()
+    with pytest.raises(RuntimeError, match="recovery_required"):
+        await _build()
+    packet = db["paperwork_packets"].docs[0]
+    assert packet["recovery_reason"] == "submission_id_mismatch"
+    assert packet["docuseal_submission_id"] == 77
+    assert packet["sign_url"] == ""
+    assert packet["docuseal_submitters"][0]["id"] == 9
