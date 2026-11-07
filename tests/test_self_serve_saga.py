@@ -63,6 +63,26 @@ def _packet_id():
     return self_serve_packet_id(CASE_ID, "indemnitor", PERSON_ID, [])
 
 
+def _open_row(**overrides):
+    external_id = f"{_packet_id()}:indemnitor"
+    row = {
+        "id": 9,
+        "submission_id": 41,
+        "role": "indemnitor",
+        "slug": "TEST-SLUG",
+        "email": EMAIL,
+        "phone": PHONE,
+        "status": "awaiting",
+        "external_id": external_id,
+    }
+    row.update(overrides)
+    return row
+
+
+def _page(rows, *, count=None, nxt=None):
+    return {"data": rows, "pagination": {"count": len(rows) if count is None else count, "next": nxt}}
+
+
 async def _build():
     return await build_self_serve_packet(
         case=_case(),
@@ -193,15 +213,7 @@ async def test_provider_accept_without_url_recovers_one_submitter(monkeypatch):
 
     async def _list(self, **kwargs):
         assert kwargs["external_id"] == external_id
-        return {"data": [{
-            "id": 9,
-            "submission_id": 41,
-            "role": "indemnitor",
-            "slug": "TEST-SLUG",
-            "email": EMAIL,
-            "status": "pending",
-            "external_id": external_id,
-        }]}
+        return _page([_open_row()])
 
     monkeypatch.setattr("dashboard.services.docuseal_service.DocuSealService.create_submission", _create)
     monkeypatch.setattr("dashboard.services.docuseal_service.DocuSealService.list_submitters", _list)
@@ -228,7 +240,7 @@ async def test_ambiguous_provider_result_blocks_a_second_submission(monkeypatch)
 
     async def _list(self, **kwargs):
         calls["lists"] += 1
-        return {"data": []}
+        return _page([])
 
     monkeypatch.setattr("dashboard.services.docuseal_service.DocuSealService.create_submission", _create)
     monkeypatch.setattr("dashboard.services.docuseal_service.DocuSealService.list_submitters", _list)
@@ -263,7 +275,8 @@ async def test_crash_after_accept_and_before_url_save_can_be_reconciled(monkeypa
                 "role": "indemnitor",
                 "slug": "TEST-SLUG",
                 "email": EMAIL,
-                "status": "pending",
+                "phone": PHONE,
+                "status": "awaiting",
                 "external_id": external_id,
             }],
         }
@@ -272,15 +285,7 @@ async def test_crash_after_accept_and_before_url_save_can_be_reconciled(monkeypa
         raise RuntimeError("crashed_before_url")
 
     async def _list(self, **kwargs):
-        return {"data": [{
-            "id": 9,
-            "submission_id": 77,
-            "role": "indemnitor",
-            "slug": "TEST-SLUG",
-            "email": EMAIL,
-            "status": "pending",
-            "external_id": external_id,
-        }]}
+        return _page([_open_row(submission_id=77)])
 
     monkeypatch.setattr("dashboard.services.docuseal_service.DocuSealService.create_submission", _create)
     monkeypatch.setattr("dashboard.services.docuseal_service.DocuSealService.list_submitters", _list)
@@ -323,3 +328,122 @@ async def test_signed_packet_is_not_compensated(monkeypatch):
     assert changed is False
     assert db["paperwork_packets"].docs[0]["status"] == "signed"
     assert db["audit_events"].docs == []
+
+
+async def _lost_response(monkeypatch, db, listed):
+    _install(monkeypatch, db)
+    calls = {"n": 0}
+
+    async def _create(self, **kwargs):
+        calls["n"] += 1
+        raise RuntimeError("response_lost")
+
+    async def _list(self, **kwargs):
+        payload = listed() if callable(listed) else listed
+        return payload
+
+    monkeypatch.setattr("dashboard.services.docuseal_service.DocuSealService.create_submission", _create)
+    monkeypatch.setattr("dashboard.services.docuseal_service.DocuSealService.list_submitters", _list)
+    db["bond_cases"].docs.append(_case())
+    with pytest.raises(RuntimeError, match="recovery_required"):
+        await _build()
+    assert calls["n"] == 1
+    packet = db["paperwork_packets"].docs[0]
+    assert packet["status"] == "recovery_required"
+    assert packet["sign_url"] == ""
+    assert db["bond_cases"].docs[0]["self_serve_saga_status"] == "open"
+    assert db["indemnitors"].docs == []
+    return packet
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("listed", "reason"),
+    [
+        (_page([_open_row(role="defendant")]), "role_mismatch"),
+        (_page([_open_row(email="other@shamrockbailbonds.biz")]), "email_mismatch"),
+        (_page([_open_row(phone="2395550199")]), "phone_mismatch"),
+        (_page([_open_row(status="")]), "status_not_open"),
+        (_page([_open_row(status="pending")]), "status_not_open"),
+        (_page([_open_row(status="completed")]), "status_not_open"),
+        (_page([_open_row(status="declined")]), "status_not_open"),
+        (_page([_open_row(), _open_row(id=10)]), "lookup_not_unique"),
+        (_page([_open_row()], count=2, nxt=100), "lookup_truncated"),
+        ({"data": [_open_row()]}, "lookup_truncated"),
+        (
+            _page([_open_row(embed_src="https://evil.example/s/TEST-SLUG")]),
+            "sign_url_rejected",
+        ),
+        (
+            _page([_open_row(embed_src="http://sign.shamrockbailbonds.biz/s/TEST-SLUG")]),
+            "sign_url_rejected",
+        ),
+        (
+            _page([_open_row(embed_src="https://sign.shamrockbailbonds.biz/pay")]),
+            "sign_url_rejected",
+        ),
+        (
+            _page([_open_row(embed_src="https://pay.swipesimple.com/s/TEST-SLUG")]),
+            "sign_url_rejected",
+        ),
+    ],
+)
+async def test_recovery_rejects_unbound_or_unsafe_submitter(monkeypatch, listed, reason):
+    db = FakeDB()
+    packet = await _lost_response(monkeypatch, db, listed)
+    assert packet["recovery_reason"] == reason
+    assert not any(row.get("event_type") == "self_serve_saga_recovered" for row in db["audit_events"].docs)
+
+
+@pytest.mark.asyncio
+async def test_provider_lookup_error_does_not_create_another_submission(monkeypatch):
+    db = FakeDB()
+    _install(monkeypatch, db)
+    db["bond_cases"].docs.append(_case())
+    calls = {"n": 0}
+
+    async def _create(self, **kwargs):
+        calls["n"] += 1
+        raise RuntimeError("timeout_after_accept")
+
+    async def _list(self, **kwargs):
+        raise RuntimeError("provider_down")
+
+    monkeypatch.setattr("dashboard.services.docuseal_service.DocuSealService.create_submission", _create)
+    monkeypatch.setattr("dashboard.services.docuseal_service.DocuSealService.list_submitters", _list)
+    with pytest.raises(RuntimeError, match="recovery_required"):
+        await _build()
+    with pytest.raises(RuntimeError, match="recovery_required"):
+        await _build()
+    assert calls["n"] == 1
+    assert db["paperwork_packets"].docs[0]["recovery_reason"] == "lookup_failed"
+    assert db["paperwork_packets"].docs[0]["sign_url"] == ""
+
+
+@pytest.mark.asyncio
+async def test_signed_packet_is_not_rewritten_during_reconciliation(monkeypatch):
+    db = FakeDB()
+    _install(monkeypatch, db)
+    db["bond_cases"].docs.append(_case())
+    calls = {"n": 0}
+
+    async def _create(self, **kwargs):
+        calls["n"] += 1
+        raise RuntimeError("response_lost")
+
+    async def _list(self, **kwargs):
+        db["paperwork_packets"].docs[0]["status"] = "signed"
+        db["paperwork_packets"].docs[0]["docuseal_status"] = "completed"
+        db["paperwork_packets"].docs[0]["sign_url"] = "https://sign.shamrockbailbonds.biz/s/TEST-SIGNED"
+        return _page([_open_row()])
+
+    monkeypatch.setattr("dashboard.services.docuseal_service.DocuSealService.create_submission", _create)
+    monkeypatch.setattr("dashboard.services.docuseal_service.DocuSealService.list_submitters", _list)
+    with pytest.raises(RuntimeError, match="recovery_required"):
+        await _build()
+    packet = db["paperwork_packets"].docs[0]
+    assert calls["n"] == 1
+    assert packet["status"] == "signed"
+    assert packet["docuseal_status"] == "completed"
+    assert packet["sign_url"].endswith("/s/TEST-SIGNED")
+    assert not any(row.get("event_type") == "self_serve_saga_recovered" for row in db["audit_events"].docs)

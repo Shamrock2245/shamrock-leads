@@ -27,7 +27,8 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 from dashboard.services.exclusive_insert import insert_new
 
@@ -38,6 +39,9 @@ _ROLES = ("indemnitor", "coindemnitor", "defendant")
 _VOID_STATUSES = frozenset({"voided", "cancelled", "canceled"})
 _FINAL_STATUSES = frozenset({"signed", "completed", "filed", "archived"})
 _DEAD_SIGNER = frozenset({"voided", "cancelled", "canceled", "declined", "unverified"})
+# DocuSeal submitter statuses that can still sign. completed and declined are
+# not open. A missing or unknown status is not treated as open.
+_OPEN_SUBMITTER_STATUSES = frozenset({"awaiting", "sent", "opened"})
 # Explicit office launches only. "1", "true", and a bare inperson=1 query are
 # UI hints, not enough to choose a carrier. id-upload is not a walk-in.
 _WALK_IN_CHANNELS = frozenset({"inperson", "ipad", "kiosk"})
@@ -347,6 +351,56 @@ def _safe_sign_url(url: str) -> str:
         return ""
     lowered = text.lower()
     if "swipesimple" in lowered or "/pay" in lowered:
+        return ""
+    return text
+
+
+def _docuseal_origin() -> str:
+    from dashboard.services.docuseal_service import DEFAULT_DOCUSEAL_URL
+
+    return (os.getenv("DOCUSEAL_URL") or DEFAULT_DOCUSEAL_URL).strip().rstrip("/")
+
+
+def approved_docuseal_sign_url(url: str, *, slug: str = "", origin: str = "") -> str:
+    """The configured DocuSeal `/s/{slug}` URL, or empty.
+
+    The host is ``DOCUSEAL_URL`` (default ``https://sign.shamrockbailbonds.biz``).
+    ``http``, another host, a userinfo segment, a query, a fragment, or a
+    pay path does not pass.
+    """
+    text = _text(url)
+    slug = _text(slug)
+    base = _text(origin) or _docuseal_origin()
+    if not text or not base:
+        return ""
+    lowered = text.lower()
+    if "swipesimple" in lowered or "/pay" in lowered:
+        return ""
+    try:
+        parsed = urlparse(text)
+        expected = urlparse(base)
+    except ValueError:
+        return ""
+    if parsed.scheme != "https" or expected.scheme != "https":
+        return ""
+    if parsed.username or parsed.password or expected.username or expected.password:
+        return ""
+    host = (parsed.hostname or "").lower()
+    expected_host = (expected.hostname or "").lower()
+    if not host or host != expected_host:
+        return ""
+    expected_port = expected.port or 443
+    if (parsed.port or 443) != expected_port:
+        return ""
+    if parsed.query or parsed.fragment:
+        return ""
+    path = parsed.path or ""
+    if slug:
+        if "/" in slug or slug.startswith("."):
+            return ""
+        if path != f"/s/{slug}":
+            return ""
+    elif not path.startswith("/s/") or path.count("/") != 2 or not path[3:]:
         return ""
     return text
 
@@ -700,17 +754,85 @@ async def _before_url_save(packet_id: str) -> None:
     del packet_id
 
 
-def _listed_submitters(payload: Any) -> List[Dict[str, Any]]:
-    if isinstance(payload, dict):
-        data = payload.get("data")
-        if isinstance(data, list):
-            return [row for row in data if isinstance(row, dict)]
-        nested = payload.get("submitters")
-        if isinstance(nested, list):
-            return [row for row in nested if isinstance(row, dict)]
-    if isinstance(payload, list):
-        return [row for row in payload if isinstance(row, dict)]
-    return []
+def _complete_submitter_page(payload: Any) -> Tuple[List[Dict[str, Any]], str]:
+    """Return the page only when DocuSeal says this is the whole result.
+
+    ``pagination.count`` must equal ``len(data)`` and ``pagination.next`` must
+    be null. A missing pagination object, a next cursor, or a count that does
+    not match the page is truncated and cannot prove a unique submitter.
+    """
+    if not isinstance(payload, dict):
+        return [], "lookup_ambiguous"
+    data = payload.get("data")
+    if not isinstance(data, list) or any(not isinstance(row, dict) for row in data):
+        return [], "lookup_ambiguous"
+    page = payload.get("pagination")
+    if not isinstance(page, dict) or "count" not in page or "next" not in page:
+        return [], "lookup_truncated"
+    count = page.get("count")
+    if isinstance(count, bool) or not isinstance(count, int) or count != len(data):
+        return [], "lookup_truncated"
+    if page.get("next") is not None:
+        return [], "lookup_truncated"
+    return list(data), ""
+
+
+def _provider_sign_url(item: Dict[str, Any], origin: str) -> str:
+    """Use embed_src when DocuSeal sent one. Otherwise build it from the slug.
+
+    A present embed_src that is not the approved origin is rejected. It is
+    not replaced with a constructed URL.
+    """
+    embed = _text(item.get("embed_src"))
+    slug = _text(item.get("slug"))
+    if embed:
+        return approved_docuseal_sign_url(embed, slug=slug, origin=origin)
+    if not slug:
+        return ""
+    return approved_docuseal_sign_url(
+        f"{origin.rstrip('/')}/s/{slug}",
+        slug=slug,
+        origin=origin,
+    )
+
+
+def _accept_recovered_submitter(
+    item: Dict[str, Any],
+    *,
+    role: str,
+    email: str,
+    phone: str,
+    external_id: str,
+    origin: str,
+) -> str:
+    """Empty when this one submitter is the open signer we dispatched.
+
+    The returned string is the rejection reason. The caller stores the URL
+    only when the reason is empty.
+    """
+    from dashboard.services.paperwork_signers import normalize_role
+
+    raw_role = _text(item.get("role"))
+    if not raw_role or normalize_role(raw_role) != normalize_role(role):
+        return "role_mismatch"
+    if _text(item.get("external_id")) != _text(external_id):
+        return "external_id_mismatch"
+    got_email = _text(item.get("email")).lower()
+    want_email = _text(email).lower()
+    if not got_email or not want_email or got_email != want_email:
+        return "email_mismatch"
+    got_phone = _digits(item.get("phone"))
+    want_phone = _digits(phone)
+    if len(got_phone) != 10 or got_phone != want_phone:
+        return "phone_mismatch"
+    if item.get("id") in (None, "") or item.get("submission_id") in (None, ""):
+        return "identity_incomplete"
+    status = _text(item.get("status")).lower()
+    if status not in _OPEN_SUBMITTER_STATUSES:
+        return "status_not_open"
+    if not _provider_sign_url(item, origin):
+        return "sign_url_rejected"
+    return ""
 
 
 async def _saga_audit(event_type: str, packet_id: str, case_id: str, reason: str, new_state: Dict[str, Any]) -> None:
@@ -794,12 +916,21 @@ async def _compensate_unsent_packet(packet_id: str, case_id: str) -> bool:
 async def _store_recovered_url(
     packet_id: str,
     case_id: str,
-    role: str,
     signer: Dict[str, Any],
     url: str,
-) -> Dict[str, Any]:
-    await _col("paperwork_packets").update_one(
-        {"_id": packet_id, "status": {"$nin": ["signed", "completed", "filed", "archived"]}},
+) -> Optional[Dict[str, Any]]:
+    """Write the URL only while the packet is still unfinalized.
+
+    The filter is checked by the database, so a signed or completed write
+    that lands during the lookup does not match. A miss returns None and
+    leaves the packet as it is.
+    """
+    result = await _col("paperwork_packets").update_one(
+        {
+            "_id": packet_id,
+            "status": {"$nin": ["signed", "completed", "filed", "archived"]},
+            "docuseal_status": {"$nin": ["signed", "completed", "filed", "archived"]},
+        },
         {"$set": {
             "status": "pending_owner_review",
             "saga_step": "url_stored",
@@ -811,6 +942,11 @@ async def _store_recovered_url(
             "send_sms": False,
         }},
     )
+    if int(getattr(result, "matched_count", 0) or 0) != 1:
+        return None
+    fresh = await _col("paperwork_packets").find_one({"_id": packet_id})
+    if not isinstance(fresh, dict) or _packet_finalized(fresh) or fresh.get("sign_url") != url:
+        return None
     await _saga_audit(
         "self_serve_saga_recovered",
         packet_id,
@@ -821,54 +957,118 @@ async def _store_recovered_url(
     return {"packet_id": packet_id, "signing_link": url, "created": False, "recovered": True}
 
 
-async def _reconcile_dispatched_packet(packet_id: str, case_id: str, role: str, svc: Any) -> Optional[Dict[str, Any]]:
+def _stored_open_signer(row: Dict[str, Any], role: str, origin: str) -> Optional[Dict[str, Any]]:
+    """The one stored submitter that still matches the dispatched identity."""
+    external_id = _text(row.get("provider_external_id"))
+    email = _text(row.get("provider_signer_email"))
+    phone = _text(row.get("provider_signer_phone"))
+    if not external_id or not email or len(_digits(phone)) != 10:
+        return None
+    rows = [item for item in (row.get("docuseal_submitters") or []) if isinstance(item, dict)]
+    accepted = []
+    for item in rows:
+        if _accept_recovered_submitter(
+            item,
+            role=role,
+            email=email,
+            phone=phone,
+            external_id=external_id,
+            origin=origin,
+        ):
+            continue
+        url = _provider_sign_url(item, origin)
+        if url:
+            accepted.append({**item, "sign_url": url})
+    if len(accepted) != 1:
+        return None
+    return accepted[0]
+
+
+async def _reconcile_dispatched_packet(
+    packet_id: str,
+    case_id: str,
+    role: str,
+    svc: Any,
+) -> Optional[Dict[str, Any]]:
     """Find the submitter already created for this packet. Never create one.
 
-    Lookup is ``list_submitters(external_id=...)``, which this client already
-    exposes. Zero, many, or an error is ambiguous: the remote submission is
-    not archived and a second create is not attempted.
+    Lookup is ``list_submitters(external_id=...)``. The page is usable only
+    when its pagination says the result is complete. The one row must match
+    the role, email, phone, and external id stored before the provider call,
+    be an open DocuSeal status, and carry this server's `/s/{slug}` URL.
+    Anything else stays ``recovery_required``.
     """
     row = await _col("paperwork_packets").find_one({"_id": packet_id})
-    if isinstance(row, dict):
-        url = _sign_url(row, role)
-        if url and _safe_sign_url(_text(row.get("sign_url"))):
-            return {"packet_id": packet_id, "signing_link": url, "created": False, "recovered": True}
-        if url:
-            signer = _role_submitter(row, role) or {}
-            return await _store_recovered_url(packet_id, case_id, role, signer, url)
-        if _packet_finalized(row):
+    if not isinstance(row, dict) or _packet_finalized(row):
+        return None
+    origin = _text(getattr(svc, "public_url", "")) or _docuseal_origin()
+    stored = _stored_open_signer(row, role, origin)
+    if stored and not _safe_sign_url(_text(row.get("sign_url"))):
+        saved = await _store_recovered_url(packet_id, case_id, stored, stored["sign_url"])
+        if saved:
+            return saved
+        fresh = await _col("paperwork_packets").find_one({"_id": packet_id})
+        if not isinstance(fresh, dict) or _packet_finalized(fresh):
             return None
-    external_id = ""
-    if isinstance(row, dict):
-        external_id = _text(row.get("provider_external_id"))
-    if not external_id:
-        external_id = f"{packet_id}:{role}"
+    elif stored and approved_docuseal_sign_url(_text(row.get("sign_url")), origin=origin):
+        return {
+            "packet_id": packet_id,
+            "signing_link": approved_docuseal_sign_url(_text(row.get("sign_url")), origin=origin),
+            "created": False,
+            "recovered": True,
+        }
+    external_id = _text(row.get("provider_external_id"))
+    email = _text(row.get("provider_signer_email"))
+    phone = _text(row.get("provider_signer_phone"))
+    if not external_id or not email or len(_digits(phone)) != 10:
+        await _mark_recovery_required(packet_id, case_id, "identity_unbound")
+        return None
     try:
-        listed = await svc.list_submitters(external_id=external_id, limit=10)
+        listed = await svc.list_submitters(external_id=external_id, limit=100)
     except Exception:
         await _mark_recovery_required(packet_id, case_id, "lookup_failed")
         return None
+    page, page_reason = _complete_submitter_page(listed)
+    if page_reason:
+        await _mark_recovery_required(packet_id, case_id, page_reason)
+        return None
     matches = []
-    for item in _listed_submitters(listed):
+    rejected = ""
+    for item in page:
         if _text(item.get("external_id")) != external_id:
             continue
-        normalized = svc.normalize_submitter_record(item)
-        if normalized:
-            matches.append(normalized)
+        reason = _accept_recovered_submitter(
+            item,
+            role=role,
+            email=email,
+            phone=phone,
+            external_id=external_id,
+            origin=origin,
+        )
+        if reason:
+            rejected = reason
+            continue
+        url = _provider_sign_url(item, origin)
+        if not url:
+            rejected = "sign_url_rejected"
+            continue
+        matches.append({**item, "sign_url": url})
     if len(matches) != 1:
-        reason = "lookup_not_unique" if matches else "lookup_empty"
+        if len(matches) > 1:
+            reason = "lookup_not_unique"
+        elif not page:
+            reason = "lookup_empty"
+        else:
+            reason = rejected or "lookup_not_bound"
         await _mark_recovery_required(packet_id, case_id, reason)
         return None
-    signer = matches[0]
-    status = _text(signer.get("status")).lower()
-    if _signer_blocked(signer) or status in _FINAL_STATUSES:
-        await _mark_recovery_required(packet_id, case_id, "signer_not_open")
-        return None
-    url = _safe_sign_url(signer.get("sign_url") or "")
-    if not url:
-        await _mark_recovery_required(packet_id, case_id, "signing_link_missing")
-        return None
-    return await _store_recovered_url(packet_id, case_id, role, signer, url)
+    saved = await _store_recovered_url(packet_id, case_id, matches[0], matches[0]["sign_url"])
+    if saved:
+        return saved
+    fresh = await _col("paperwork_packets").find_one({"_id": packet_id})
+    if isinstance(fresh, dict) and not _packet_finalized(fresh):
+        await _mark_recovery_required(packet_id, case_id, "packet_not_writable")
+    return None
 
 
 async def _wait_for_claimed_packet(packet_id: str, case_id: str, role: str, svc: Any) -> Dict[str, Any]:
@@ -878,8 +1078,8 @@ async def _wait_for_claimed_packet(packet_id: str, case_id: str, role: str, svc:
         if isinstance(row, dict):
             if row.get("status") in {"build_failed", "recovery_required", "compensated"}:
                 break
-            url = _safe_sign_url(_text(row.get("sign_url")))
-            if url:
+            url = approved_docuseal_sign_url(_text(row.get("sign_url")))
+            if url and not _packet_finalized(row):
                 return {"packet_id": packet_id, "signing_link": url, "created": False}
         await asyncio.sleep(0.05)
     row = await _col("paperwork_packets").find_one({"_id": packet_id})
@@ -994,6 +1194,8 @@ async def _build_self_serve_packet_locked(
         "saga_step": "shell",
         "docuseal_started": False,
         "provider_external_id": provider_external_id,
+        "provider_signer_email": _text(email).lower(),
+        "provider_signer_phone": _digits(phone),
         "sign_url": "",
         "voided": False,
         "source": "self_serve",
@@ -1004,10 +1206,11 @@ async def _build_self_serve_packet_locked(
     inserted = await insert_new(_col("paperwork_packets"), shell)
     if not inserted:
         existing_shell = await _col("paperwork_packets").find_one({"_id": packet_id})
-        if isinstance(existing_shell, dict) and _safe_sign_url(_text(existing_shell.get("sign_url"))):
+        stored_url = approved_docuseal_sign_url(_text((existing_shell or {}).get("sign_url")))
+        if isinstance(existing_shell, dict) and stored_url and not _packet_finalized(existing_shell):
             return {
                 "packet_id": packet_id,
-                "signing_link": _safe_sign_url(_text(existing_shell.get("sign_url"))),
+                "signing_link": stored_url,
                 "created": False,
             }
         if isinstance(existing_shell, dict) and existing_shell.get("status") == "compensated":
@@ -1037,6 +1240,8 @@ async def _build_self_serve_packet_locked(
             "docuseal_started": True,
             "saga_step": "provider_dispatched",
             "provider_external_id": provider_external_id,
+            "provider_signer_email": _text(email).lower(),
+            "provider_signer_phone": _digits(phone),
             "claimed_at": now,
         }},
     )
