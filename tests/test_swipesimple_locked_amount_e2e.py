@@ -352,16 +352,32 @@ def test_indemnitor_payment_link_endpoint_never_estimates_or_writes():
 
 
 def test_client_portal_payment_link_prefers_staged_invoice():
+    """The portal shows only the case's own verified invoice, never a static link."""
     from dashboard.routers import client_portal
+    from dashboard.services import portal_invoice_service as pis
 
-    staged = _bond("telegram", premium_cents=150000, swipesimple_payment_link=PAY_LINK)
-    coll = MagicMock()
-    coll.find_one = AsyncMock(return_value=staged)
+    staged = _bond(
+        "telegram", premium_cents=150000, swipesimple_payment_link=PAY_LINK,
+        premium_confirmed_amount="1500.00", premium_confirmed_at="2026-11-04T00:00:00+00:00",
+        premium_confirmed_by="office@example.invalid",
+        swipesimple_invoice_amount_cents=150000,
+    )
+    staged["swipesimple_invoice_number"] = staged["booking_number"]
+    staged["swipesimple_invoice_bond_id"] = staged["bond_case_id"]
     token = {"booking_number": staged["booking_number"], "defendant_name": "T", "source": "telegram"}
     with patch.object(client_portal, "validate_token", AsyncMock(return_value=token)), \
-         patch.object(client_portal, "get_collection", lambda _n: coll):
+         patch.object(pis, "resolve_bond_pair", AsyncMock(return_value=(staged, None))):
         out = asyncio.run(client_portal.portal_payment_link("tok"))
     assert out["payment_link"] == PAY_LINK
+    assert out["amount_due"] == "1500.00"
+
+    # No staged invoice: no link at all (no static fallback), call us instead.
+    bare = {k: v for k, v in staged.items() if not k.startswith("swipesimple_")}
+    with patch.object(client_portal, "validate_token", AsyncMock(return_value=token)), \
+         patch.object(pis, "resolve_bond_pair", AsyncMock(return_value=(bare, None))):
+        out = asyncio.run(client_portal.portal_payment_link("tok"))
+    assert out["payment_link"] is None
+    assert out["call_phone"] == "(239) 332-2245"
 
 
 def test_staff_send_refuses_typed_amount_that_differs_from_locked_invoice():
