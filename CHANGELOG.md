@@ -14,7 +14,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **A person is matched only in the role they are scanning as.** A defendant on one bond does not become the indemnitor on that bond when they later scan as an indemnitor.
 - **A signed or completed packet is not edited.** A new packet is inserted and the replacement is audited. The finalized packet is left as it was.
 - **A defendant or co-indemnitor scan does not overwrite the primary indemnitor's phone or email** when a booking is sent through `ensure_match_bondcase`.
-- **Two confirms in one process share one draft.** An in-process lock and a re-read cover that process only. Two workers can still insert two rows for the same dedupe key. A unique index is not added. That limit is not fixed.
+- **Two workers share one draft and one packet.** The draft ``_id`` and the packet ``_id`` are deterministic. The second insert loses on the collection's existing unique ``_id`` index and finishes that row. No index is created. A legacy case is reused when the role lookup sees it. A DocuSeal submission that was started and never stored is not started again. Confirmed fields stay.
 - **A stored role phone that differs from the verified phone is not overwritten.** The case is left as it was and no signing URL is returned.
 - **A new draft does not pick OSI.** `surety_id` stays empty until the case already has one. Without a surety, the prefill is kept and no packet is opened.
 - **The fully bound packet path requires a positive bond amount and a positive premium separately.** A case that has the other binding ids but no bond amount stays on the owner-review path.
@@ -22,6 +22,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `tests/test_paperwork_id_prefill.py` (on the CI list). Signer email is `admin@shamrockbailbonds.biz`. Records are `TEST-` prefixed. No DocuSeal send and no SwipeSimple charge.
+- `tests/test_self_serve_multiprocess_claim.py` runs two OS processes. The shared store is SQLite `PRIMARY KEY` plus `BEGIN IMMEDIATE`, and the test records the duplicate-key conflict. It does not start mongod. The production path is the same ``_id`` insert.
 
 ## [Unreleased] — 2026-11-05 (Auto-send indemnitor only; ambiguous staff premium)
 

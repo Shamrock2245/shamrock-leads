@@ -29,6 +29,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from dashboard.services.exclusive_insert import insert_new
+
 logger = logging.getLogger(__name__)
 
 _FLAG = "PAPERWORK_SELF_SERVE_PREFILL"
@@ -36,8 +38,6 @@ _ROLES = ("indemnitor", "coindemnitor", "defendant")
 _VOID_STATUSES = frozenset({"voided", "cancelled", "canceled"})
 _FINAL_STATUSES = frozenset({"signed", "completed", "filed", "archived"})
 _DEAD_SIGNER = frozenset({"voided", "cancelled", "canceled", "declined", "unverified"})
-_PACKET_LOCKS: Dict[str, asyncio.Lock] = {}
-_PACKET_GUARD = asyncio.Lock()
 _HOLD_MESSAGE = (
     "We saved your information. A signing link is not available yet. "
     "Call (239) 332-2245."
@@ -291,13 +291,16 @@ def _digits(value: Any) -> str:
     return digits[-10:] if len(digits) >= 10 else ""
 
 
-async def _packet_lock(key: str) -> asyncio.Lock:
-    async with _PACKET_GUARD:
-        lock = _PACKET_LOCKS.get(key)
-        if lock is None:
-            lock = asyncio.Lock()
-            _PACKET_LOCKS[key] = lock
-        return lock
+def self_serve_packet_id(case_id: str, role: str, person_id: str, prior_ids: List[str]) -> str:
+    """One packet id per signer, plus a new id after a finalized packet.
+
+    Both workers compute the same id. The packet row is inserted with that
+    value as ``_id``, so the second insert conflicts on MongoDB's existing
+    unique ``_id`` index. No new index is created.
+    """
+    basis = ",".join(sorted({item for item in prior_ids if item}))
+    raw = f"shamrock-self-serve-packet-v1:{case_id}:{role}:{person_id}:{basis}"
+    return "PKT-SS-" + uuid.uuid5(uuid.NAMESPACE_URL, raw).hex
 
 
 def _signer_blocked(party: Optional[Dict[str, Any]]) -> bool:
@@ -527,7 +530,10 @@ async def _existing_packet(
     """
     key = f"{case_id}|{role}|{person_id}"
     rows = _open_packets(await _case_packets(case_id, key))
-    exact = [row for row in rows if _text(row.get("self_serve_packet_key")) == key]
+    exact = [
+        row for row in rows
+        if _text(row.get("self_serve_packet_key")) == key and _sign_url(row, role)
+    ]
     if len(exact) == 1:
         return exact[0]
     if len(exact) > 1:
@@ -535,7 +541,7 @@ async def _existing_packet(
         return exact[0]
     bound = [
         row for row in rows
-        if _packet_signer_bound(row, role, person_id, phone, email)
+        if _packet_signer_bound(row, role, person_id, phone, email) and _sign_url(row, role)
     ]
     if len(bound) == 1:
         return bound[0]
@@ -614,6 +620,30 @@ async def _identity_ok(case: Dict[str, Any], role: str, fields: Dict[str, str], 
     return True
 
 
+async def _mark_packet_build_failed(packet_id: str) -> None:
+    await _col("paperwork_packets").update_one(
+        {"_id": packet_id},
+        {"$set": {"status": "build_failed", "docuseal_started": True}},
+    )
+
+
+async def _wait_for_claimed_packet(packet_id: str, role: str) -> Dict[str, Any]:
+    """Another worker owns this packet id. Do not create a second submission."""
+    for _ in range(40):
+        row = await _col("paperwork_packets").find_one({"_id": packet_id})
+        if isinstance(row, dict):
+            if row.get("status") == "build_failed":
+                raise RuntimeError("packet_incomplete")
+            url = _sign_url(row, role)
+            if url:
+                return {"packet_id": packet_id, "signing_link": url, "created": False}
+        await asyncio.sleep(0.05)
+    row = await _col("paperwork_packets").find_one({"_id": packet_id})
+    if isinstance(row, dict) and row.get("docuseal_started") and not _sign_url(row, role):
+        raise RuntimeError("packet_incomplete")
+    raise RuntimeError("packet_in_progress")
+
+
 async def build_self_serve_packet(
     *,
     case: Dict[str, Any],
@@ -639,9 +669,7 @@ async def build_self_serve_packet(
         raise RuntimeError("scan_required")
     case_id = _text(case.get("bond_case_id"))
     packet_key = f"{case_id}|{role}|{person_id}"
-    lock = await _packet_lock(packet_key)
-    async with lock:
-        return await _build_self_serve_packet_locked(
+    return await _build_self_serve_packet_locked(
             case=case,
             role=role,
             person_id=person_id,
@@ -689,7 +717,12 @@ async def _build_self_serve_packet_locked(
             or _packet_signer_bound(row, role, person_id, phone, email)
         )
     ]
-    packet_id = "PKT-SS-" + uuid.uuid4().hex[:10].upper()
+    packet_id = self_serve_packet_id(
+        case_id,
+        role,
+        person_id,
+        [str(row.get("packet_id") or "") for row in prior_final],
+    )
     await _identity_ok(case, role, fields, packet_id)
     from dashboard.services.surety_registry import is_supported_surety
 
@@ -697,78 +730,103 @@ async def _build_self_serve_packet_locked(
     if not is_supported_surety(_text(bond_data.get("surety_id"))):
         raise RuntimeError("surety_unassigned")
     unvalidated = not _case_fully_bound(case)
+    now = _now()
+    shell = {
+        "_id": packet_id,
+        "packet_id": packet_id,
+        "bond_case_id": case_id,
+        "self_serve_packet_key": packet_key,
+        "person_id": person_id,
+        "role": role,
+        "scan_id": scan_id,
+        "status": "building",
+        "docuseal_started": False,
+        "sign_url": "",
+        "voided": False,
+        "source": "self_serve",
+        "surety_id": bond_data.get("surety_id") or "",
+        "self_serve_unvalidated_draft": unvalidated,
+        "created_at": now,
+    }
+    await insert_new(_col("paperwork_packets"), shell)
+    claim = await _col("paperwork_packets").update_one(
+        {"_id": packet_id, "docuseal_started": {"$ne": True}},
+        {"$set": {"docuseal_started": True, "claimed_at": now}},
+    )
+    if int(getattr(claim, "matched_count", 0) or 0) != 1:
+        return await _wait_for_claimed_packet(packet_id, role)
     svc = service_cls()
-    if not unvalidated:
-        template_id = resolve_template(bond_data.get("surety_id"))
-        if not template_id:
-            raise RuntimeError("template_unavailable")
-        result = await svc.create_submission_for_packet(
-            template_id=template_id,
-            packet_id=packet_id,
-            bond_data=bond_data,
-            send_email=False,
-            include_defendant=role == "defendant" or bool(_text(case.get("defendant_name"))),
-            staff_test_case=False,
-        )
-    else:
-        template_id = resolve_template(bond_data.get("surety_id"))
-        if not template_id:
-            raise RuntimeError("template_unavailable")
-        prefill = svc.prefill_values_from_bond(bond_data, template_id=template_id)
-        values = _overlay_role(strip_unbacked_amounts(prefill, case), role, fields, email, phone)
-        role_name = {"defendant": role_defendant, "coindemnitor": role_co}.get(role, role_indemnitor)
-        submitter_values = dict(values)
-        if role == "coindemnitor":
-            for key, value in list(fields.items()):
-                if key.startswith("coindemnitor_"):
-                    submitter_values["indemnitor_" + key[len("coindemnitor_"):]] = value
-        fields_payload = submission_fields(submitter_values)
-        submitters = [
-            svc.build_submitter(
-                role=role_bondsman,
-                email=os.getenv("BOND_AGENT_EMAIL", "admin@shamrockbailbonds.biz"),
-                name="Brendan O'Neal",
-                external_id=f"{packet_id}:bondsman",
-                values=submitter_values,
+    try:
+        if not unvalidated:
+            template_id = resolve_template(bond_data.get("surety_id"))
+            if not template_id:
+                raise RuntimeError("template_unavailable")
+            result = await svc.create_submission_for_packet(
+                template_id=template_id,
+                packet_id=packet_id,
+                bond_data=bond_data,
                 send_email=False,
-                fields=fields_payload,
-                metadata={"packet_id": packet_id, "party_role": "bondsman"},
-            ),
-            svc.build_submitter(
-                role=role_name,
-                email=email,
-                name=fields.get(_prefix(role) + "name") or "",
-                phone=phone,
-                external_id=f"{packet_id}:{role}",
-                values=submitter_values,
+                include_defendant=role == "defendant" or bool(_text(case.get("defendant_name"))),
+                staff_test_case=False,
+            )
+        else:
+            template_id = resolve_template(bond_data.get("surety_id"))
+            if not template_id:
+                raise RuntimeError("template_unavailable")
+            prefill = svc.prefill_values_from_bond(bond_data, template_id=template_id)
+            values = _overlay_role(strip_unbacked_amounts(prefill, case), role, fields, email, phone)
+            role_name = {"defendant": role_defendant, "coindemnitor": role_co}.get(role, role_indemnitor)
+            submitter_values = dict(values)
+            if role == "coindemnitor":
+                for key, value in list(fields.items()):
+                    if key.startswith("coindemnitor_"):
+                        submitter_values["indemnitor_" + key[len("coindemnitor_"):]] = value
+            fields_payload = submission_fields(submitter_values)
+            submitters = [
+                svc.build_submitter(
+                    role=role_bondsman,
+                    email=os.getenv("BOND_AGENT_EMAIL", "admin@shamrockbailbonds.biz"),
+                    name="Brendan O'Neal",
+                    external_id=f"{packet_id}:bondsman",
+                    values=submitter_values,
+                    send_email=False,
+                    fields=fields_payload,
+                    metadata={"packet_id": packet_id, "party_role": "bondsman"},
+                ),
+                svc.build_submitter(
+                    role=role_name,
+                    email=email,
+                    name=fields.get(_prefix(role) + "name") or "",
+                    phone=phone,
+                    external_id=f"{packet_id}:{role}",
+                    values=submitter_values,
+                    send_email=False,
+                    fields=fields_payload,
+                    metadata={"packet_id": packet_id, "party_role": role},
+                ),
+            ]
+            raw = await svc.create_submission(
+                template_id=template_id,
+                submitters=submitters,
                 send_email=False,
-                fields=fields_payload,
-                metadata={"packet_id": packet_id, "party_role": role},
-            ),
-        ]
-        raw = await svc.create_submission(
-            template_id=template_id,
-            submitters=submitters,
-            send_email=False,
-            send_sms=False,
-        )
-        result = svc.normalize_create_response(raw)
+                send_sms=False,
+            )
+            result = svc.normalize_create_response(raw)
+    except Exception:
+        await _mark_packet_build_failed(packet_id)
+        raise
     submitters = list(result.get("submitters") or [])
     from dashboard.services.paperwork_signers import normalize_role
 
     want = normalize_role(role)
     signer = next((item for item in submitters if normalize_role((item or {}).get("role")) == want), None)
     if _signer_blocked(signer):
+        await _mark_packet_build_failed(packet_id)
         raise RuntimeError("signer_not_verified")
     url = _safe_sign_url((signer or {}).get("sign_url") or "")
     if not url:
+        await _mark_packet_build_failed(packet_id)
         raise RuntimeError("signing_link_missing")
-    again = await _existing_packet(case_id, role, person_id, phone, email)
-    if again:
-        url = await _apply_to_packet(again, role, person_id, fields, email, phone)
-        if not url:
-            raise RuntimeError("existing_packet_not_signable")
-        return {"packet_id": again.get("packet_id") or "", "signing_link": url, "created": False}
     packet_doc = {
         "packet_id": packet_id,
         "bond_case_id": case_id,
@@ -790,10 +848,12 @@ async def _build_self_serve_packet_locked(
         "send_sms": False,
         "created_at": result.get("created_at") or _now(),
     }
-    await _col("paperwork_packets").insert_one(packet_doc)
+    await _col("paperwork_packets").update_one({"_id": packet_id}, {"$set": packet_doc})
     if unvalidated:
-        await _col("audit_events").insert_one({
-            "event_id": str(uuid.uuid4()),
+        audit_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"shamrock-self-serve-sign-audit-v1:{packet_id}"))
+        await insert_new(_col("audit_events"), {
+            "_id": audit_id,
+            "event_id": audit_id,
             "event_type": "self_serve_draft_signing_url",
             "action": "self_serve_draft_signing_url",
             "entity_type": "paperwork_packet",
@@ -815,8 +875,10 @@ async def _build_self_serve_packet_locked(
             },
         })
     if prior_final:
-        await _col("audit_events").insert_one({
-            "event_id": str(uuid.uuid4()),
+        repl_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"shamrock-self-serve-repl-audit-v1:{packet_id}"))
+        await insert_new(_col("audit_events"), {
+            "_id": repl_id,
+            "event_id": repl_id,
             "event_type": "self_serve_packet_replacement",
             "action": "self_serve_packet_replacement",
             "entity_type": "paperwork_packet",

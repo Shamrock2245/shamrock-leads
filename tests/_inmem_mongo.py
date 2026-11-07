@@ -111,7 +111,12 @@ class FakeCollection:
         self.docs: List[Dict[str, Any]] = []
 
     async def insert_one(self, doc):
-        self.docs.append(copy.deepcopy(doc))
+        stored = copy.deepcopy(doc)
+        if "_id" in stored and any(row.get("_id") == stored["_id"] for row in self.docs):
+            from dashboard.services.exclusive_insert import DuplicateKeyError
+
+            raise DuplicateKeyError("duplicate _id")
+        self.docs.append(stored)
 
     async def find_one(self, flt=None, projection=None, sort=None, **kwargs):
         hits = [d for d in self.docs if matches(d, flt or {})]

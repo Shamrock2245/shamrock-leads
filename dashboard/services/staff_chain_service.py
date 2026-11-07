@@ -16,13 +16,13 @@ Fails closed on missing CRM facts:
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from dashboard.extensions import get_collection
+from dashboard.services.exclusive_insert import insert_new
 from dashboard.services.surety_registry import normalize_surety, is_supported_surety
 
 logger = logging.getLogger(__name__)
@@ -717,6 +717,12 @@ async def ensure_match_bondcase(
 # A walk-in ID confirm has none of those. This helper dedupes on phone +
 # name + DOB and, on a miss, inserts one draft BondCase. It does not pull a
 # power and it does not calculate a premium.
+#
+# The draft's ``_id`` is a uuid5 of the dedupe key. MongoDB's existing unique
+# ``_id`` index makes the second insert fail with DuplicateKeyError. No new
+# index is created. A legacy case is reused only when the role-slot lookup
+# sees it. Two visible matches fail closed. Rows that already exist are not
+# deleted.
 
 _SELF_SERVE_SOURCE = "self_serve"
 _SELF_SERVE_STATUS = "pending_owner_review"
@@ -724,22 +730,18 @@ _HARD_CHAIN_ERRORS = frozenset({
     "poa_assigned_elsewhere",
     "indemnitor_contact_mismatch",
 })
-_DEDUPE_LOCKS: Dict[str, asyncio.Lock] = {}
-_DEDUPE_GUARD = asyncio.Lock()
 
 
-async def _dedupe_lock(key: str) -> asyncio.Lock:
-    """Same-process guard only. Two workers can still insert the same key.
+def _stable_id(label: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, label))
 
-    A unique index on ``bond_cases.self_serve_dedupe_key`` would close that
-    race. No index is created here.
-    """
-    async with _DEDUPE_GUARD:
-        lock = _DEDUPE_LOCKS.get(key)
-        if lock is None:
-            lock = asyncio.Lock()
-            _DEDUPE_LOCKS[key] = lock
-        return lock
+
+def self_serve_ids(dedupe_key: str, role: str) -> Dict[str, str]:
+    """Ids both workers can compute before either one reads the database."""
+    case_id = _stable_id("shamrock-self-serve-case-v1:" + dedupe_key)
+    person_id = _stable_id(f"shamrock-self-serve-person-v1:{case_id}:{role}")
+    match_id = _stable_id(f"shamrock-self-serve-match-v1:{case_id}:{role}")
+    return {"bond_case_id": case_id, "person_id": person_id, "match_id": match_id}
 
 
 def _digits_phone(raw: Any) -> str:
@@ -969,8 +971,14 @@ async def _write_party_identity(
             "dl_state": str(scan_blob.get("dl_state") or ""),
         },
     }
+    already = [
+        row for row in (existing.get("id_scan_records") or [])
+        if isinstance(row, dict) and row.get("scan_id") == scan_row["scan_id"]
+    ] if isinstance(existing, dict) else []
     if isinstance(existing, dict):
-        update: Dict[str, Any] = {"$set": party_fields, "$push": {"id_scan_records": scan_row}}
+        update: Dict[str, Any] = {"$set": party_fields}
+        if not already:
+            update["$push"] = {"id_scan_records": scan_row}
         if not isinstance(existing.get("id_scan"), dict) or not existing.get("id_scan"):
             update["$set"]["id_scan"] = {
                 "success": True,
@@ -983,6 +991,7 @@ async def _write_party_identity(
         await col.update_one(filt, update)
         return
     doc = {
+        "_id": person_id,
         id_field: person_id,
         "Indemnitor_ID" if role != "defendant" else "Defendant_ID": person_id,
         "created_at": now_iso,
@@ -996,7 +1005,23 @@ async def _write_party_identity(
         "id_scan_records": [scan_row],
         **party_fields,
     }
-    await col.insert_one(doc)
+    inserted = await insert_new(col, doc)
+    if inserted:
+        return
+    raced = await col.find_one({"_id": person_id})
+    if isinstance(raced, dict):
+        await _write_party_identity(
+            role=role,
+            person_id=person_id,
+            case_id=case_id,
+            identity=identity,
+            phone=phone,
+            email=email,
+            name=name,
+            dob=dob,
+            scan_blob=scan_blob,
+            now_iso=now_iso,
+        )
 
 
 async def ensure_self_serve_bondcase(
@@ -1038,20 +1063,18 @@ async def ensure_self_serve_bondcase(
     scan_blob = dict(scan_blob or {})
     dedupe_key = "|".join((phone_n, name_letters_key(name_n), dob_n, role))
     booking = str(booking_number or "").strip()
-    lock = await _dedupe_lock(dedupe_key)
-    async with lock:
-        return await _ensure_self_serve_locked(
-            phone=phone_n,
-            name=name_n,
-            dob=dob_n,
-            role=role,
-            email=email,
-            identity=identity,
-            scan_blob=scan_blob,
-            dedupe_key=dedupe_key,
-            booking=booking,
-            actor=actor or "auto",
-        )
+    return await _ensure_self_serve_locked(
+        phone=phone_n,
+        name=name_n,
+        dob=dob_n,
+        role=role,
+        email=email,
+        identity=identity,
+        scan_blob=scan_blob,
+        dedupe_key=dedupe_key,
+        booking=booking,
+        actor=actor or "auto",
+    )
 
 
 async def _ensure_self_serve_locked(
@@ -1235,6 +1258,21 @@ async def _attach_signer_to_case(
         scan_blob=scan_blob,
         now_iso=now_iso,
     )
+    if str(case.get("source") or "") == _SELF_SERVE_SOURCE or str(patch.get("source") or "") == _SELF_SERVE_SOURCE:
+        await _ensure_self_serve_match(
+            {**case, **patch},
+            role=role,
+            person_id=person_id,
+            actor=actor,
+            now_iso=now_iso,
+        )
+        await _ensure_draft_audit(
+            {**case, **patch},
+            role=role,
+            person_id=person_id,
+            actor=actor,
+            now_iso=now_iso,
+        )
     if old_state or new_state:
         await get_collection("audit_events").insert_one({
             "event_id": str(uuid.uuid4()),
@@ -1269,6 +1307,70 @@ async def _attach_signer_to_case(
     }
 
 
+async def _ensure_self_serve_match(
+    case: Dict[str, Any],
+    *,
+    role: str,
+    person_id: str,
+    actor: str,
+    now_iso: str,
+) -> str:
+    """One match row per draft. A second insert of the same ``_id`` is a no-op."""
+    case_id = _case_id_of(case)
+    match_id = _owner_token(case.get("match_id") or case.get("Match_ID")) or _stable_id(
+        f"shamrock-self-serve-match-v1:{case_id}:{role}"
+    )
+    defendant_id = _owner_token(case.get("defendant_id") or case.get("Defendant_ID"))
+    indemnitor_id = _owner_token(case.get("indemnitor_id") or case.get("Indemnitor_ID") or case.get("co_indemnitor_id"))
+    await insert_new(get_collection("matches"), {
+        "_id": match_id,
+        "match_id": match_id,
+        "Match_ID": match_id,
+        "bond_case_id": case_id,
+        "defendant_id": defendant_id,
+        "indemnitor_id": indemnitor_id,
+        "status": _SELF_SERVE_STATUS,
+        "Status": _SELF_SERVE_STATUS,
+        "source": _SELF_SERVE_SOURCE,
+        "confirmed_by": actor or "auto",
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    })
+    return match_id
+
+
+async def _ensure_draft_audit(
+    case: Dict[str, Any],
+    *,
+    role: str,
+    person_id: str,
+    actor: str,
+    now_iso: str,
+) -> None:
+    """Insert the creation audit once. A retry keeps the first row."""
+    case_id = _case_id_of(case)
+    audit_id = _stable_id(f"shamrock-self-serve-draft-audit-v1:{case_id}:{role}")
+    await insert_new(get_collection("audit_events"), {
+        "_id": audit_id,
+        "event_id": audit_id,
+        "event_type": "self_serve_draft_bondcase",
+        "action": "self_serve_draft_bondcase",
+        "entity_type": "bond_case",
+        "entity_id": case_id,
+        "bond_case_id": case_id,
+        "actor": actor or "auto",
+        "agent_name": "paperwork_self_serve",
+        "role": role,
+        "person_id": person_id,
+        "source": _SELF_SERVE_SOURCE,
+        "reason": "self_serve_draft_created",
+        "created_at": now_iso,
+        "timestamp": now_iso,
+        "old_state": {},
+        "new_state": {"status": _SELF_SERVE_STATUS, "source": _SELF_SERVE_SOURCE},
+    })
+
+
 async def _insert_self_serve_draft(
     *,
     role: str,
@@ -1282,7 +1384,12 @@ async def _insert_self_serve_draft(
     actor: str,
 ) -> Dict[str, Any]:
     now_iso = _now_iso()
-    existing = await get_collection("bond_cases").find_one({"self_serve_dedupe_key": dedupe_key})
+    ids = self_serve_ids(dedupe_key, role)
+    bond_case_id = ids["bond_case_id"]
+    person_id = ids["person_id"]
+    existing = await get_collection("bond_cases").find_one({"_id": bond_case_id})
+    if not isinstance(existing, dict):
+        existing = await get_collection("bond_cases").find_one({"self_serve_dedupe_key": dedupe_key})
     if isinstance(existing, dict):
         return await _attach_signer_to_case(
             existing,
@@ -1298,20 +1405,20 @@ async def _insert_self_serve_draft(
             reused=True,
             actor=actor,
         )
-    bond_case_id = str(uuid.uuid4())
-    person_id = str(uuid.uuid4())
-    match_id = str(uuid.uuid4())
     defendant_id = person_id if role == "defendant" else ""
     indemnitor_id = person_id if role == "indemnitor" else ""
     co_id = person_id if role == "coindemnitor" else ""
     # Surety stays unset until staff or an existing case selects one.
     patch = _identity_patch(role, identity, phone, email)
+    nested_key = {"defendant": "defendant", "coindemnitor": "coindemnitor"}.get(role, "indemnitor")
+    patch[nested_key] = {"name": name, "phone": phone, "dob": dob, "email": email}
     doc: Dict[str, Any] = {
+        "_id": bond_case_id,
         "bond_case_id": bond_case_id,
         "Bond_Case_ID": bond_case_id,
         "self_serve_dedupe_key": dedupe_key,
-        "match_id": match_id,
-        "Match_ID": match_id,
+        "match_id": ids["match_id"],
+        "Match_ID": ids["match_id"],
         "match_status": _SELF_SERVE_STATUS,
         "status": _SELF_SERVE_STATUS,
         "source": _SELF_SERVE_SOURCE,
@@ -1325,18 +1432,11 @@ async def _insert_self_serve_draft(
         "created_by": actor or "auto",
         **patch,
     }
-    await get_collection("bond_cases").find_one_and_update(
-        {"self_serve_dedupe_key": dedupe_key},
-        {"$setOnInsert": doc},
-        upsert=True,
-    )
-    rows = await _collect_docs("bond_cases", {"self_serve_dedupe_key": dedupe_key}, limit=10)
-    stored = _canonical_self_serve_case(rows)
-    if not isinstance(stored, dict):
-        return {"success": False, "error": "case_not_stored", "case_created": False}
-    # A concurrent insert can leave two rows when no unique index exists.
-    # Follow the earliest row and do not add another match or packet for the loser.
-    if _case_id_of(stored) != bond_case_id:
+    inserted = await insert_new(get_collection("bond_cases"), doc)
+    if not inserted:
+        stored = await get_collection("bond_cases").find_one({"_id": bond_case_id})
+        if not isinstance(stored, dict):
+            return {"success": False, "error": "case_not_stored", "case_created": False}
         return await _attach_signer_to_case(
             stored,
             role=role,
@@ -1351,64 +1451,18 @@ async def _insert_self_serve_draft(
             reused=True,
             actor=actor,
         )
-    prior_match = await get_collection("matches").find_one({"bond_case_id": bond_case_id})
-    if isinstance(prior_match, dict):
-        match_id = _owner_token(prior_match.get("match_id") or prior_match.get("Match_ID")) or match_id
-    else:
-        await get_collection("matches").insert_one({
-            "match_id": match_id,
-            "Match_ID": match_id,
-            "bond_case_id": bond_case_id,
-            "defendant_id": defendant_id,
-            "indemnitor_id": indemnitor_id or co_id,
-            "status": _SELF_SERVE_STATUS,
-            "Status": _SELF_SERVE_STATUS,
-            "source": _SELF_SERVE_SOURCE,
-            "confirmed_by": actor or "auto",
-            "created_at": now_iso,
-            "updated_at": now_iso,
-        })
-    await _write_party_identity(
+    logger.info("[self-serve] draft bond case %s role=%s", bond_case_id, role)
+    return await _attach_signer_to_case(
+        doc,
         role=role,
-        person_id=person_id,
-        case_id=bond_case_id,
-        identity=identity,
         phone=phone,
-        email=email,
         name=name,
         dob=dob,
+        email=email,
+        identity=identity,
         scan_blob=scan_blob,
-        now_iso=now_iso,
+        dedupe_key=dedupe_key,
+        created=True,
+        reused=False,
+        actor=actor,
     )
-    await get_collection("audit_events").insert_one({
-        "event_id": str(uuid.uuid4()),
-        "event_type": "self_serve_draft_bondcase",
-        "action": "self_serve_draft_bondcase",
-        "entity_type": "bond_case",
-        "entity_id": bond_case_id,
-        "bond_case_id": bond_case_id,
-        "actor": actor or "auto",
-        "agent_name": "paperwork_self_serve",
-        "role": role,
-        "person_id": person_id,
-        "source": _SELF_SERVE_SOURCE,
-        "reason": "self_serve_draft_created",
-        "created_at": now_iso,
-        "timestamp": now_iso,
-        "old_state": {},
-        "new_state": {"status": _SELF_SERVE_STATUS, "source": _SELF_SERVE_SOURCE},
-    })
-    logger.info("[self-serve] draft bond case %s role=%s", bond_case_id, role)
-    stored = await get_collection("bond_cases").find_one({"bond_case_id": bond_case_id}) or doc
-    return {
-        "success": True,
-        "created": True,
-        "reused": False,
-        "bond_case_id": bond_case_id,
-        "person_id": person_id,
-        "defendant_id": defendant_id,
-        "indemnitor_id": indemnitor_id,
-        "co_indemnitor_id": co_id,
-        "match_id": match_id,
-        "case": stored,
-    }

@@ -568,7 +568,12 @@ def test_unverified_signer_gets_no_url(monkeypatch):
     assert saved.status_code == 200, saved.text
     assert saved.json()["signing_link"] == ""
     assert saved.json()["fallback"] is True
-    assert db["paperwork_packets"].docs == []
+    assert calls["n"] == 1
+    assert len(db["paperwork_packets"].docs) == 1
+    shell = db["paperwork_packets"].docs[0]
+    assert shell["status"] == "build_failed"
+    assert shell["sign_url"] == ""
+    assert shell["docuseal_started"] is True
 
 
 @pytest.mark.asyncio
@@ -915,6 +920,7 @@ def test_signed_packet_is_replaced_not_edited(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_parallel_confirms_create_one_case_and_one_packet(monkeypatch):
+    """Same-process FakeDB only. Two processes are covered separately."""
     import asyncio
     from dashboard.services.paperwork_self_serve import accept_confirmed_id
 
@@ -1052,3 +1058,123 @@ def test_failed_scan_stays_and_a_later_success_can_verify(monkeypatch):
     assert person["id_scan_records"][-1]["extracted"] == {"full_name": NAME, "dl_state": "FL"}
     assert calls["n"] == 1
     assert "swipesimple" not in saved.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_retry_after_a_partial_draft_keeps_one_case(monkeypatch):
+    db = FakeDB()
+    _install(monkeypatch, db)
+    from dashboard.services.staff_chain_service import ensure_self_serve_bondcase
+
+    kwargs = dict(
+        phone=PHONE,
+        name=NAME,
+        dob=DOB,
+        role="indemnitor",
+        email=EMAIL,
+        identity=_indemnitor_fields(),
+        scan_blob={"scan_id": "SCAN-TEST-RETRY", "full_name": NAME, "dl_state": "FL"},
+        actor="auto",
+    )
+    first = await ensure_self_serve_bondcase(**kwargs)
+    assert first["success"] is True
+    assert db["bond_cases"].docs[0]["_id"] == first["bond_case_id"]
+    assert not db["bond_cases"].docs[0].get("surety_id")
+    db["matches"].docs.clear()
+    second = await ensure_self_serve_bondcase(**kwargs)
+    assert second["bond_case_id"] == first["bond_case_id"]
+    assert len(db["bond_cases"].docs) == 1
+    assert len(db["matches"].docs) == 1
+    drafts = [row for row in db["audit_events"].docs if row.get("event_type") == "self_serve_draft_bondcase"]
+    assert len(drafts) == 1
+    assert NAME not in str(drafts[0])
+
+
+@pytest.mark.asyncio
+async def test_started_packet_claim_is_not_submitted_again(monkeypatch):
+    from dashboard.services.paperwork_self_serve import build_self_serve_packet, self_serve_packet_id
+
+    db = FakeDB()
+    _install(monkeypatch, db)
+    calls = {"n": 0, "kwargs": {}}
+    _submission(monkeypatch, calls)
+    packet_id = self_serve_packet_id("BC-TEST-1", "indemnitor", "IND-TEST-1", [])
+    db["paperwork_packets"].docs.append({
+        "_id": packet_id,
+        "packet_id": packet_id,
+        "bond_case_id": "BC-TEST-1",
+        "self_serve_packet_key": "BC-TEST-1|indemnitor|IND-TEST-1",
+        "person_id": "IND-TEST-1",
+        "role": "indemnitor",
+        "status": "building",
+        "docuseal_started": True,
+        "sign_url": "",
+        "source": "self_serve",
+    })
+
+    async def _ok(**kwargs):
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        "dashboard.services.identity_verification_service.require_verified_indemnitors",
+        _ok,
+    )
+    with pytest.raises(RuntimeError, match="packet_incomplete"):
+        await build_self_serve_packet(
+            case={"bond_case_id": "BC-TEST-1", "indemnitor_id": "IND-TEST-1", "surety_id": "palmetto"},
+            role="indemnitor",
+            person_id="IND-TEST-1",
+            fields=_indemnitor_fields(),
+            email=EMAIL,
+            phone=PHONE,
+            scan_id="SCAN-TEST-1",
+        )
+    assert calls["n"] == 0
+    assert len(db["paperwork_packets"].docs) == 1
+    assert db["paperwork_packets"].docs[0]["sign_url"] == ""
+
+
+@pytest.mark.asyncio
+async def test_unstarted_packet_shell_is_finished_once(monkeypatch):
+    from dashboard.services.paperwork_self_serve import build_self_serve_packet, self_serve_packet_id
+
+    db = FakeDB()
+    _install(monkeypatch, db)
+    calls = {"n": 0, "kwargs": {}}
+    _submission(monkeypatch, calls)
+    packet_id = self_serve_packet_id("BC-TEST-1", "indemnitor", "IND-TEST-1", [])
+    db["paperwork_packets"].docs.append({
+        "_id": packet_id,
+        "packet_id": packet_id,
+        "bond_case_id": "BC-TEST-1",
+        "self_serve_packet_key": "BC-TEST-1|indemnitor|IND-TEST-1",
+        "person_id": "IND-TEST-1",
+        "role": "indemnitor",
+        "status": "building",
+        "docuseal_started": False,
+        "sign_url": "",
+        "source": "self_serve",
+        "voided": False,
+    })
+
+    async def _ok(**kwargs):
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        "dashboard.services.identity_verification_service.require_verified_indemnitors",
+        _ok,
+    )
+    built = await build_self_serve_packet(
+        case={"bond_case_id": "BC-TEST-1", "indemnitor_id": "IND-TEST-1", "surety_id": "palmetto"},
+        role="indemnitor",
+        person_id="IND-TEST-1",
+        fields=_indemnitor_fields(),
+        email=EMAIL,
+        phone=PHONE,
+        scan_id="SCAN-TEST-1",
+    )
+    assert built["signing_link"].endswith("/s/TEST-SLUG")
+    assert calls["n"] == 1
+    assert len(db["paperwork_packets"].docs) == 1
+    assert db["paperwork_packets"].docs[0]["docuseal_started"] is True
+    assert "swipesimple" not in built["signing_link"].lower()
