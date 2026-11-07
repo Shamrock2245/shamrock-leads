@@ -14,7 +14,8 @@ if (!src.includes('__seedDataForTest')) {
   );
 }
 
-function makeEnv() {
+function makeEnv(envOpts) {
+  envOpts = envOpts || {};
   const calls = [];
   const toasts = [];
   const els = {
@@ -36,13 +37,17 @@ function makeEnv() {
     prospDrawerNext: { disabled: false },
     ldPipelineMount: { innerHTML: '' },
   };
-  const fetchStub = async (url, opts) => {
-    const method = (opts && opts.method) || 'GET';
+  const fetchStub = async (url, reqOpts) => {
+    const method = (reqOpts && reqOpts.method) || 'GET';
     const u = String(url);
-    calls.push({ url: u, method, body: opts && opts.body ? JSON.parse(opts.body) : null });
+    calls.push({ url: u, method, body: reqOpts && reqOpts.body ? JSON.parse(reqOpts.body) : null });
     if (u.startsWith('/api/leads/')) {
       return { ok: true, status: 200, headers: { get: () => 'application/json' },
         json: async () => ({ error: 'not_found' }) };
+    }
+    if (u.includes('/api/prospective-bonds')) {
+      return { ok: true, status: 200, headers: { get: () => 'application/json' },
+        json: async () => ({ bonds: envOpts.searchBonds || [] }) };
     }
     if (u.includes('/api/contacts/') && method === 'GET') {
       const q = new URL(u, 'http://local');
@@ -97,7 +102,25 @@ function makeEnv() {
   sandbox.window.document = sandbox.document;
   vm.createContext(sandbox);
   vm.runInContext(src + '\n;this.SLProspective = window.SLProspective;', sandbox);
-  return { P: sandbox.SLProspective, calls, toasts };
+  return { P: sandbox.SLProspective, calls, toasts, els };
+}
+
+async function flush() {
+  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
+}
+
+function snap(env) {
+  return {
+    gets: contactGets(env.calls),
+    scope: env.P.__currentScopeForTest(),
+    title: env.els.prospDetailTitle.textContent,
+    showed_legacy_name: env.els.prospDetailBody.innerHTML.indexOf('Legacy Sample') >= 0
+      || env.els.prospDetailTitle.textContent.indexOf('Legacy Sample') >= 0,
+    showed_georgia_name: env.els.prospDetailBody.innerHTML.indexOf('Georgia Sample') >= 0
+      || env.els.prospDetailTitle.textContent.indexOf('Georgia Sample') >= 0,
+  };
 }
 
 function fakeCard(bk, county, state) {
@@ -185,6 +208,76 @@ function contactGets(calls) {
       finds_lee: !!(env.P._findBondByIdentity('B-100', 'Lee', 'FL') &&
         env.P._findBondByIdentity('B-100', 'Lee', 'FL').county === 'Lee'),
     };
+  }
+
+  // Codex 11/7 P2: a blank state is legacy Florida only for an FL-registry
+  // county. It must not satisfy an explicit other state (Lee, GA).
+  function bond(row) {
+    return JSON.parse(JSON.stringify(row));
+  }
+  const legacyLee = {
+    booking_number: 'B-100', county: 'Lee', state: '', defendant_name: 'Legacy Sample',
+    stage: 'contacted', bond_amount: 1000, communication_log: [], lead_score: 1,
+  };
+  const georgiaLee = {
+    booking_number: 'B-100', county: 'Lee', state: 'GA', defendant_name: 'Georgia Sample',
+    stage: 'contacted', bond_amount: 2000, communication_log: [], lead_score: 1,
+  };
+  const chathamBlank = {
+    booking_number: 'B-200', county: 'Chatham', state: '', defendant_name: 'Legacy Sample',
+    stage: 'contacted', bond_amount: 1000, communication_log: [], lead_score: 1,
+  };
+
+  {
+    const env = makeEnv();
+    env.P.__seedDataForTest([bond(legacyLee), bond(georgiaLee), bond(chathamBlank)]);
+    const leeFl = env.P._findBondByIdentity('B-100', 'Lee', 'FL');
+    const leeGa = env.P._findBondByIdentity('B-100', 'Lee', 'GA');
+    const chathamGa = env.P._findBondByIdentity('B-200', 'Chatham', 'GA');
+    const chathamFl = env.P._findBondByIdentity('B-200', 'Chatham', 'FL');
+    out.blank_state = {
+      lee_fl_name: leeFl && leeFl.defendant_name,
+      lee_ga_name: leeGa && leeGa.defendant_name,
+      chatham_ga: chathamGa && chathamGa.county,
+      chatham_fl: chathamFl && chathamFl.county,
+    };
+  }
+
+  // Explicit Lee, GA card must not open the state-less Lee row or use its name.
+  {
+    const env = makeEnv({ searchBonds: [bond(legacyLee)] });
+    env.P.__seedDataForTest([bond(legacyLee)]);
+    await env.P.openDetailFromCard(fakeCard('B-100', 'Lee', 'GA'));
+    await flush();
+    out.lee_ga_against_blank = snap(env);
+  }
+
+  // The same state-less Lee row still resolves for an explicit Florida scope.
+  {
+    const env = makeEnv();
+    env.P.__seedDataForTest([bond(legacyLee)]);
+    await env.P.openDetailFromCard(fakeCard('B-100', 'Lee', 'FL'));
+    await flush();
+    out.lee_fl_legacy = snap(env);
+  }
+
+  // When a real Lee, GA row exists, that row is the one opened.
+  {
+    const env = makeEnv();
+    env.P.__seedDataForTest([bond(legacyLee), bond(georgiaLee)]);
+    await env.P.openDetailFromCard(fakeCard('B-100', 'Lee', 'GA'));
+    await flush();
+    out.lee_ga_explicit = snap(env);
+  }
+
+  // Not in the pipeline list: a search result with a blank state must not
+  // satisfy an explicit Lee, GA scope.
+  {
+    const env = makeEnv({ searchBonds: [bond(legacyLee)] });
+    env.P.__seedDataForTest([]);
+    await env.P.openDetailFromCard(fakeCard('B-100', 'Lee', 'GA'));
+    await flush();
+    out.lee_ga_search_only = snap(env);
   }
 
   console.log(JSON.stringify(out));

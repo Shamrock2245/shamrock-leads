@@ -26,7 +26,7 @@ Contacts are keyed on state + county + booking, with county and state canonicali
 
 Since the 2026-10-30 merge of main `2833a40`, a Lee scrape does two things: the arrest upsert carries the marker, and `BaseScraper.run()` then logs the run to `ingestion_log` (#305). A queue failure of any kind is covered by tests: the hook raises, the import fails, a Mongo error, or a stall attempt. In each case the row is still written, and the run stays `ok` and is counted in `ingestion_log` (`test_arrest_write_survives_cosigner_queue_failure`, `test_arrest_write_survives_cosigner_queue_mongo_error`, `test_arrest_write_does_not_stall_on_cosigner_queue`, `test_lee_run_queues_cosigner_marker_and_logs_ingestion`).
 
-Drawer identity (Codex 11/5 on #280): pipeline cards carry `data-county` / `data-state`, and the lead drawer scopes candidate GET / review / refresh to that place so two bonds that share a booking across counties cannot cross-load co-signers.
+Drawer identity (Codex 11/5 on #280): pipeline cards carry `data-county` / `data-state`, and the lead drawer scopes candidate GET / review / refresh to that place so two bonds that share a booking across counties cannot cross-load co-signers. A bond with no state is the legacy Florida row only when its county is one of the 67 Florida counties, so an explicit Lee, GA card does not open it (Codex 11/7 on #280). The Lee clerk party lookup, when public HTTP is on, runs only for Lee, FL; other counties and states are skipped before any request.
 
 Lee stays `candidate_productive` in the matrix and `unverified` in Health. Tests: `tests/test_lee_indemnitor_discovery.py` (on `.github/workflows/ci.yml`).
 

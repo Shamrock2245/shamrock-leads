@@ -473,7 +473,7 @@ window.SLProspective = (function () {
     var scopeState = (extra && extra.state) || state || '';
     _currentScope = { booking: bk, county: scopeCounty, state: scopeState };
     _currentIdx = _bondIndexByIdentity(bk, scopeCounty, scopeState);
-    if (_currentIdx < 0) {
+    if (_currentIdx < 0 && !scopeCounty && !scopeState) {
       // Fall back to first booking match only when the card had no place.
       _currentIdx = _data.findIndex(function(b) { return String(b.booking_number) === String(bk); });
     }
@@ -559,7 +559,8 @@ window.SLProspective = (function () {
     var scope = _currentScope || {};
     var bond = _findBondByIdentity(bk, scope.county, scope.state) || null;
     if (!bond && _currentIdx !== null && _currentIdx >= 0 && _data[_currentIdx]
-        && String(_data[_currentIdx].booking_number) === String(bk)) {
+        && String(_data[_currentIdx].booking_number) === String(bk)
+        && _samePlaceBond(_data[_currentIdx], scope.county, scope.state)) {
       bond = _data[_currentIdx];
     }
     var lead = (window._leadMap && window._leadMap[bk]) || null;
@@ -575,9 +576,15 @@ window.SLProspective = (function () {
       jobs.push(fetchJsonSafe(API + '/api/prospective-bonds?search=' + encodeURIComponent(bk)).then(function(d) {
         var bonds = (d && d.bonds) || [];
         var scope = _currentScope || {};
-        bond = bonds.find(function(b) {
+        var matched = bonds.find(function(b) {
           return String(b.booking_number) === String(bk) && _samePlaceBond(b, scope.county, scope.state);
-        }) || bonds.find(function(b) { return String(b.booking_number) === String(bk); }) || null;
+        }) || null;
+        // A booking-only hit is allowed only when the caller gave no place.
+        // An explicit Lee, GA scope must not adopt a state-less Lee row.
+        if (!matched && !(scope.county || scope.state)) {
+          matched = bonds.find(function(b) { return String(b.booking_number) === String(bk); }) || null;
+        }
+        bond = matched;
         if (bond && !_findBondByIdentity(bk, bond.county, bond.state)) {
           _data.push(bond);
         }
@@ -610,7 +617,7 @@ window.SLProspective = (function () {
 
     var scope = _currentScope || {};
     _currentIdx = _bondIndexByIdentity(bk, (bond && bond.county) || scope.county, (bond && bond.state) || scope.state);
-    if (_currentIdx < 0) {
+    if (_currentIdx < 0 && !(scope.county || scope.state)) {
       _currentIdx = _data.findIndex(function(b) { return String(b.booking_number) === String(bk); });
     }
     updateDrawerNav();
@@ -787,14 +794,21 @@ window.SLProspective = (function () {
             String(state || '').trim().toUpperCase()].join('|');
   }
 
+  function _blankStateIsLegacyFlorida(bond) {
+    // Older Florida writers omitted state. That default is valid only when
+    // the bond's own county is one of the 67 Florida counties.
+    var key = String((bond && bond.county) || '').replace(/\s+county$/i, '').trim().toLowerCase();
+    return !!(key && _FL_COUNTY_KEYS.has(key));
+  }
+
   function _samePlaceBond(bond, county, state) {
     if (!bond) return false;
     if (county && String(bond.county || '').trim().toLowerCase() !== String(county).trim().toLowerCase()) return false;
-    if (state) {
-      var bs = String(bond.state || '').trim().toUpperCase();
-      if (bs && bs !== String(state).trim().toUpperCase()) return false;
-    }
-    return true;
+    var want = String(state || '').trim().toUpperCase();
+    if (!want) return true;
+    var bs = String(bond.state || '').trim().toUpperCase();
+    if (bs) return bs === want;
+    return want === 'FL' && _blankStateIsLegacyFlorida(bond);
   }
 
   function _findBondByIdentity(bk, county, state) {
@@ -926,7 +940,8 @@ window.SLProspective = (function () {
       var wantState = state || scope.state || '';
       var cbond = _findBondByIdentity(bk, wantCounty, wantState);
       if (!cbond && _currentIdx !== null && _currentIdx >= 0 && _data[_currentIdx]
-          && String(_data[_currentIdx].booking_number) === String(bk)) {
+          && String(_data[_currentIdx].booking_number) === String(bk)
+          && _samePlaceBond(_data[_currentIdx], wantCounty, wantState)) {
         cbond = _data[_currentIdx];
       }
       var clead = (window._leadMap && window._leadMap[bk]) || {};
@@ -955,7 +970,7 @@ window.SLProspective = (function () {
         if (!_candidateScope[String(bk)] || _samePlaceBond({county: _candidateScope[String(bk)].county, state: _candidateScope[String(bk)].state}, rcounty, rstate)) {
           _candidateScope[String(bk)] = _candidateScope[sk];
         }
-        if (cbond) {
+        if (cbond && _samePlaceBond(cbond, rcounty, rstate)) {
           if (rcounty && !cbond.county) cbond.county = rcounty;
           if (rstate && !cbond.state) cbond.state = rstate;
         }
@@ -1242,7 +1257,8 @@ window.SLProspective = (function () {
       var scope = _currentScope || {};
       var bondObj = _findBondByIdentity(bk, scope.county, scope.state);
       if (!bondObj && _currentIdx !== null && _currentIdx >= 0 && _data[_currentIdx]
-          && String(_data[_currentIdx].booking_number) === String(bk)) {
+          && String(_data[_currentIdx].booking_number) === String(bk)
+          && _samePlaceBond(_data[_currentIdx], scope.county, scope.state)) {
         bondObj = _data[_currentIdx];
       }
       var bond = bondObj || {};
@@ -1271,7 +1287,7 @@ window.SLProspective = (function () {
         if (!_candidateScope[String(bk)] || _samePlaceBond({county: _candidateScope[String(bk)].county, state: _candidateScope[String(bk)].state}, rcounty, rstate)) {
           _candidateScope[String(bk)] = _candidateScope[sk];
         }
-        if (bondObj) {
+        if (bondObj && _samePlaceBond(bondObj, rcounty, rstate)) {
           if (rcounty && !bondObj.county) bondObj.county = rcounty;
           if (rstate && !bondObj.state) bondObj.state = rstate;
         }

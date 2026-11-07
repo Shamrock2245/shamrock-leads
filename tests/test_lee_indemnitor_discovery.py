@@ -3685,3 +3685,159 @@ def test_codex_1105_p1_drawer_scopes_candidates_to_selected_arrest():
     assert out["card_contract"]["finds_lee"] is True
     # Guard: booking-only open still resolves the first match (Lee).
     assert out["booking_only"]["gets"][0]["county"] == "Lee"
+
+
+def test_codex_1107_p2_blank_state_is_florida_only_for_a_registry_county():
+    """Codex 11/7 P2 on #280: a blank bond state must not match an explicit other state.
+
+    A state-less Lee row is the legacy Florida default, so Lee, FL still
+    resolves it. Lee, GA does not, and the drawer must not use that row's
+    defendant name. A blank state on a county outside the Florida registry
+    (Chatham) matches no explicit state.
+    """
+    import json as _json
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    js = root / "dashboard" / "sl-prospective.js"
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    r = subprocess.run(
+        [node, str(root / "tests/js/candidate_scope_sim.js"), str(js)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert r.returncode == 0, r.stderr[:400]
+    out = _json.loads(r.stdout.strip().splitlines()[-1])
+    blank = out["blank_state"]
+    assert blank["lee_fl_name"] == "Legacy Sample"
+    assert blank["lee_ga_name"] == "Georgia Sample"
+    assert blank["chatham_ga"] is None
+    assert blank["chatham_fl"] is None
+
+    blocked = out["lee_ga_against_blank"]
+    assert blocked["showed_legacy_name"] is False
+    assert blocked["scope"]["county"] == "Lee"
+    assert blocked["scope"]["state"] == "GA"
+    assert blocked["gets"] == [] or blocked["gets"] == [
+        {"booking": "B-100", "county": "Lee", "state": "GA"}
+    ]
+
+    legacy = out["lee_fl_legacy"]
+    assert legacy["showed_legacy_name"] is True
+    assert legacy["gets"] == [{"booking": "B-100", "county": "Lee", "state": "FL"}]
+
+    explicit = out["lee_ga_explicit"]
+    assert explicit["showed_georgia_name"] is True
+    assert explicit["showed_legacy_name"] is False
+    assert explicit["gets"] == [{"booking": "B-100", "county": "Lee", "state": "GA"}]
+
+    search_only = out["lee_ga_search_only"]
+    assert search_only["showed_legacy_name"] is False
+    assert search_only["scope"]["state"] == "GA"
+
+
+_CLERK_PARTY_HTML = ("Party: SAMPLE, JORDAN 100 Test St 00000 " + ("." * 900))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("county,state", [
+    ("Collier", "FL"),
+    ("Lee", "GA"),
+    ("Lee", "SC"),
+])
+async def test_codex_1107_p2_clerk_provider_skips_non_lee_florida(monkeypatch, county, state):
+    """Codex 11/7 P2 on #280: the Lee clerk is not queried for another county or state.
+
+    Case numbers are not globally unique. A matching Lee case must not add
+    its parties to a non-Lee contact document.
+    """
+    from dashboard.services import contact_discovery as cd
+
+    _public_http_on(monkeypatch)
+    urls = []
+
+    def _capture(method, url):
+        urls.append(url)
+        return _Html(_CLERK_PARTY_HTML)
+
+    monkeypatch.setattr(cd, "public_request", _capture)
+    db = AsyncDB()
+    result = await run_discovery(
+        db,
+        booking_number="B-100",
+        full_name="Casey Sample",
+        county=county,
+        state=state,
+        address="100 Test St",
+        zip_code="00000",
+        force=True,
+        arrest={
+            "booking_number": "B-100",
+            "county": county,
+            "state": state,
+            "full_name": "Casey Sample",
+            "case_number": "26-CF-0001",
+            "address": "100 Test St",
+            "zip": "00000",
+        },
+    )
+    assert not any("leeclerk.org" in url for url in urls)
+    statuses = {row["provider"]: row["status"] for row in result["providers_run"]}
+    assert statuses["lee_clerk_parties"] == "skipped"
+    assert not any(row.get("source") == "lee_clerk_parties" for row in result["contacts"])
+    stored = db["contacts"].docs[0]["discovered_contacts"] if db["contacts"].docs else []
+    assert not any(row.get("source") == "lee_clerk_parties" for row in stored)
+
+
+@pytest.mark.asyncio
+async def test_codex_1107_p2_clerk_provider_still_queries_lee_florida(monkeypatch):
+    """Guard: Lee, FL (including a blank state, the legacy Florida default) still uses the clerk."""
+    from dashboard.services import contact_discovery as cd
+
+    _public_http_on(monkeypatch)
+    urls = []
+
+    def _capture(method, url):
+        urls.append(url)
+        return _Html(_CLERK_PARTY_HTML)
+
+    monkeypatch.setattr(cd, "public_request", _capture)
+    direct = await cd._provider_clerk({
+        "booking_number": "B-100",
+        "county": "Lee",
+        "state": "",
+        "full_name": "Casey Sample",
+        "case_number": "26-CF-0001",
+        "address": "100 Test St",
+        "zip": "00000",
+    })
+    assert direct["status"] == "ok"
+    assert direct["count"] == 1
+    assert any("leeclerk.org" in url for url in urls)
+
+    urls.clear()
+    db = AsyncDB()
+    result = await run_discovery(
+        db,
+        booking_number="B-100",
+        full_name="Casey Sample",
+        county="Lee",
+        state="FL",
+        address="100 Test St",
+        zip_code="00000",
+        force=True,
+        arrest={
+            "booking_number": "B-100",
+            "county": "Lee",
+            "state": "FL",
+            "full_name": "Casey Sample",
+            "case_number": "26-CF-0001",
+            "address": "100 Test St",
+            "zip": "00000",
+        },
+    )
+    assert any("matrix.leeclerk.org" in url for url in urls)
+    assert any(row.get("source") == "lee_clerk_parties" for row in result["contacts"])

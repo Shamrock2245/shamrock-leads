@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-07 (Lee co-signer discovery: Codex 11/7 findings on #280)
+
+### Fixed
+- **The Lee clerk provider stays on Lee, FL (P2).** With public HTTP on, `_provider_clerk` sent any arrest's case number to `matrix.leeclerk.org` without checking county or state. Case numbers are not unique, so a matching Lee case could add unrelated parties to a Collier or Lee (GA) contact document. The provider now uses the same Lee, FL guard as the property appraiser (`is_lee_florida`, blank state only as the legacy Florida default) and returns `skipped` before any request. Lee arrest writes and the queue are unchanged.
+- **A blank bond state is Florida only for a Florida county (P2).** `_samePlaceBond` treated a missing state as a match for every requested state, so an explicit Lee, GA card could open a state-less Lee row, show that defendant, and (for a manual booking with no arrest) use that name under the GA scope. A blank state now matches an explicit `FL` request only when the bond's county is one of the 67 Florida counties. Any other explicit state fails closed. Booking-only fallbacks in the drawer, the prospective-bond search, and discovery run only when the caller gave no place.
+
+### Tests
+- `test_codex_1107_p2_clerk_provider_skips_non_lee_florida` (Collier FL, Lee GA, Lee SC) and `test_codex_1107_p2_clerk_provider_still_queries_lee_florida` in `tests/test_lee_indemnitor_discovery.py`. The skip cases fail on `6a27f7f` (the clerk URL is requested). The Lee, FL guard passes on both.
+- `test_codex_1107_p2_blank_state_is_florida_only_for_a_registry_county` + `tests/js/candidate_scope_sim.js`. On `6a27f7f` a state-less Lee row resolves for Lee, GA (including a search result) and a state-less Chatham row resolves for GA and FL. After the fix, Lee, FL still opens the state-less Lee row and Lee, GA opens only an explicit GA row.
+
 ## [Unreleased] — 2026-11-07 (merge origin/main into #280)
 
 ### Changed

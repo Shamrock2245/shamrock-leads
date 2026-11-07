@@ -40,7 +40,8 @@ Prior-Shamrock collections are read in two bounded queries: exact-booking clause
 
 ### Drawer identity (Codex 11/5)
 
-- **The lead drawer carries the selected arrest's full identity.** Pipeline cards set `data-county` / `data-state`. Opening a card stores `{booking, county, state}` as `_currentScope` and candidate GETs / discovery refreshes / review posts use that place, not a booking-only lookup. Two bonds that share a booking across counties can no longer cross-load or approve each other's co-signers.
+- **The lead drawer carries the selected arrest's full identity.** Pipeline cards set `data-county` / `data-state`. Opening a card stores `{booking, county, state}` as `_currentScope` and candidate GETs / discovery refreshes / review posts use that place, not a booking-only lookup. Two bonds that share a booking across counties can no longer cross-load or approve each other's co-signers. A blank `state` matches an explicit Florida request only when the county is one of the 67 Florida counties. Lee, GA does not open a state-less Lee row, and the drawer does not use that row's defendant name for discovery.
+- **The Lee clerk lookup is Lee, FL only.** `lee_clerk_parties` uses the same place guard as `lee_property_appraiser`. A case number from another county or state is not sent to the Lee clerk. A blank state is the legacy Florida default. The provider returns `skipped` and stores no parties.
 
 ### Retention, same-address cap and failure reporting (Codex 11/4)
 

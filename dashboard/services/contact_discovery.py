@@ -1746,6 +1746,13 @@ async def _provider_property(booking: Dict[str, Any]) -> Dict[str, Any]:
 async def _provider_clerk(booking: Dict[str, Any]) -> Dict[str, Any]:
     if not discovery_http_enabled():
         return {"provider": "lee_clerk_parties", "status": "skipped_disabled", "count": 0}
+    from dashboard.services.place_identity import is_lee_florida
+
+    # This endpoint is the Lee (FL) clerk. Case numbers are not unique across
+    # counties, so a Collier or Lee (GA) case must not be sent here. Same
+    # scope as the property appraiser: blank state is the legacy Florida default.
+    if not is_lee_florida(booking.get("county"), booking.get("state") or "FL"):
+        return {"provider": "lee_clerk_parties", "status": "skipped", "count": 0}
     case_number = _first(booking, "case_number")
     if not case_number:
         return {"provider": "lee_clerk_parties", "status": "skipped", "count": 0}
