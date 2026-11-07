@@ -1035,6 +1035,7 @@ async def ensure_self_serve_bondcase(
     scan_blob: Optional[Dict[str, Any]] = None,
     booking_number: str = "",
     actor: str = "auto",
+    walk_in_channel: str = "",
 ) -> Dict[str, Any]:
     """Reuse one BondCase for this phone + name + DOB, or insert one draft.
 
@@ -1074,6 +1075,7 @@ async def ensure_self_serve_bondcase(
         dedupe_key=dedupe_key,
         booking=booking,
         actor=actor or "auto",
+        walk_in_channel=str(walk_in_channel or ""),
     )
 
 
@@ -1089,6 +1091,7 @@ async def _ensure_self_serve_locked(
     dedupe_key: str,
     booking: str,
     actor: str,
+    walk_in_channel: str = "",
 ) -> Dict[str, Any]:
     if booking:
         chain_kwargs: Dict[str, Any] = {
@@ -1153,6 +1156,7 @@ async def _ensure_self_serve_locked(
         scan_blob=scan_blob,
         dedupe_key=dedupe_key,
         actor=actor or "auto",
+        walk_in_channel=walk_in_channel,
     )
 
 
@@ -1367,7 +1371,20 @@ async def _ensure_draft_audit(
         "created_at": now_iso,
         "timestamp": now_iso,
         "old_state": {},
-        "new_state": {"status": _SELF_SERVE_STATUS, "source": _SELF_SERVE_SOURCE},
+        "new_state": {
+            "status": _SELF_SERVE_STATUS,
+            "source": _SELF_SERVE_SOURCE,
+            **(
+                {"surety_id": str(case.get("surety_id"))}
+                if str(case.get("surety_id") or "").strip()
+                else {}
+            ),
+            **(
+                {"intake_channel": str(case.get("intake_channel"))}
+                if str(case.get("intake_channel") or "").strip()
+                else {}
+            ),
+        },
     })
 
 
@@ -1382,6 +1399,7 @@ async def _insert_self_serve_draft(
     scan_blob: Dict[str, Any],
     dedupe_key: str,
     actor: str,
+    walk_in_channel: str = "",
 ) -> Dict[str, Any]:
     now_iso = _now_iso()
     ids = self_serve_ids(dedupe_key, role)
@@ -1408,7 +1426,8 @@ async def _insert_self_serve_draft(
     defendant_id = person_id if role == "defendant" else ""
     indemnitor_id = person_id if role == "indemnitor" else ""
     co_id = person_id if role == "coindemnitor" else ""
-    # Surety stays unset until staff or an existing case selects one.
+    # Surety stays unset unless this request is creating a walk-in draft.
+    # An existing case, including one with no surety, is not updated here.
     patch = _identity_patch(role, identity, phone, email)
     nested_key = {"defendant": "defendant", "coindemnitor": "coindemnitor"}.get(role, "indemnitor")
     patch[nested_key] = {"name": name, "phone": phone, "dob": dob, "email": email}
@@ -1432,6 +1451,13 @@ async def _insert_self_serve_draft(
         "created_by": actor or "auto",
         **patch,
     }
+    from dashboard.services.paperwork_self_serve import _WALK_IN_CHANNELS, _WALK_IN_SURETY
+
+    channel = str(walk_in_channel or "").strip().lower()
+    if channel in _WALK_IN_CHANNELS and not str(doc.get("surety_id") or "").strip():
+        doc["surety_id"] = _WALK_IN_SURETY
+        doc["Surety_ID"] = _WALK_IN_SURETY
+        doc["intake_channel"] = channel
     inserted = await insert_new(get_collection("bond_cases"), doc)
     if not inserted:
         stored = await get_collection("bond_cases").find_one({"_id": bond_case_id})

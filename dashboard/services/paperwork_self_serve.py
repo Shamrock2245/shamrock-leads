@@ -38,6 +38,12 @@ _ROLES = ("indemnitor", "coindemnitor", "defendant")
 _VOID_STATUSES = frozenset({"voided", "cancelled", "canceled"})
 _FINAL_STATUSES = frozenset({"signed", "completed", "filed", "archived"})
 _DEAD_SIGNER = frozenset({"voided", "cancelled", "canceled", "declined", "unverified"})
+# Explicit office launches only. "1", "true", and a bare inperson=1 query are
+# UI hints, not enough to choose a carrier. id-upload is not a walk-in.
+_WALK_IN_CHANNELS = frozenset({"inperson", "ipad", "kiosk"})
+_WALK_IN_SURETY = "osi"
+_WALK_IN_PROOF_SALT = "walk-in-intake-v1"
+_WALK_IN_PROOF_TTL = 15 * 60
 _HOLD_MESSAGE = (
     "We saved your information. A signing link is not available yet. "
     "Call (239) 332-2245."
@@ -69,6 +75,65 @@ _POA_KEYS = frozenset({
 
 def self_serve_prefill_enabled() -> bool:
     return str(os.getenv(_FLAG) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _walk_in_serializer():
+    from itsdangerous import URLSafeTimedSerializer
+    from dashboard.auth.pin_middleware import _get_serializer
+
+    base = _get_serializer()
+    return URLSafeTimedSerializer(base.secret_key, salt=_WALK_IN_PROOF_SALT)
+
+
+def issue_walk_in_proof(channel: str) -> str:
+    """Sign an explicit office launch. Any other channel returns an empty proof."""
+    channel = str(channel or "").strip().lower()
+    if channel not in _WALK_IN_CHANNELS:
+        return ""
+    try:
+        return _walk_in_serializer().dumps({"channel": channel})
+    except Exception:
+        logger.info("[self-serve] walk-in proof not issued")
+        return ""
+
+
+def consume_walk_in_proof(token: str) -> str:
+    """Return the signed channel, or empty when the proof is missing or invalid.
+
+    A raw channel string is not a proof. The caller stores only this result.
+    """
+    text = str(token or "").strip()
+    if not text or text in _WALK_IN_CHANNELS:
+        return ""
+    try:
+        data = _walk_in_serializer().loads(text, max_age=_WALK_IN_PROOF_TTL)
+    except Exception:
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    channel = str(data.get("channel") or "").strip().lower()
+    if channel not in _WALK_IN_CHANNELS:
+        return ""
+    return channel
+
+
+def trusted_walk_in_channel(session: Optional[Dict[str, Any]]) -> str:
+    """Server-recorded walk-in channel, or empty when the source is ambiguous.
+
+    ``intake_channel`` is written by the server after a signed launch proof.
+    A handoff session uses the mode the signed token stored. Client fields,
+    query hints, and the prefill ``in_person`` flag are not read.
+    """
+    if not isinstance(session, dict):
+        return ""
+    channel = str(session.get("intake_channel") or "").strip().lower()
+    if channel in _WALK_IN_CHANNELS:
+        return channel
+    if str(session.get("auth_method") or "").strip().lower() == "handoff":
+        mode = str(session.get("mode") or "").strip().lower()
+        if mode in _WALK_IN_CHANNELS:
+            return mode
+    return ""
 
 
 def _now() -> str:
@@ -962,6 +1027,7 @@ async def accept_confirmed_id(
     )
     from dashboard.services.staff_chain_service import ensure_self_serve_bondcase
 
+    walk_in_channel = trusted_walk_in_channel(session)
     ensured = await ensure_self_serve_bondcase(
         phone=phone,
         name=fields.get(_prefix(role) + "name") or _text(ocr.get("full_name")),
@@ -976,6 +1042,7 @@ async def accept_confirmed_id(
         },
         booking_number=_text(session.get("booking_number")),
         actor="auto",
+        walk_in_channel=walk_in_channel,
     )
     if not ensured.get("success"):
         logger.info("[self-serve] case not opened error=%s", ensured.get("error"))

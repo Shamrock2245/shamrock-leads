@@ -39,6 +39,7 @@ class SendPinRequest(BaseModel):
     booking_number: Optional[str] = None
     intake_id: Optional[str] = None
     role: Optional[str] = None
+    intake_proof: Optional[str] = None
 
 
 class VerifyPinRequest(BaseModel):
@@ -254,6 +255,8 @@ async def send_portal_pin(req: SendPinRequest):
     now = datetime.now(timezone.utc)
     expires_at = (now + timedelta(minutes=15)).isoformat()
 
+    from dashboard.services.paperwork_self_serve import consume_walk_in_proof
+
     pin_doc = {
         "phone": clean_phone,
         "pin": otp_pin,
@@ -263,6 +266,8 @@ async def send_portal_pin(req: SendPinRequest):
         "created_at": now.isoformat(),
         "expires_at": expires_at,
         "verified": False,
+        # Empty unless the server signed this launch. A raw channel is not stored.
+        "intake_channel": consume_walk_in_proof(req.intake_proof or ""),
     }
 
     await pins_col.update_one(
@@ -2993,6 +2998,7 @@ async def get_portal_ui(request: Request):
         // Client data lives in page memory only — never localStorage (a shared
         // office tablet must not keep the last client's phone or ID).
         const SELF_SERVE_PREFILL = false;
+        const WALK_IN_INTAKE_PROOF = "";
         const portalMem = { phone: '', sessionToken: '', pendingIdFile: null, signingLink: '', signingOpts: null, role: '', scanId: '', mode: '', caseId: '' };
         const portalHints = { role: '', caseId: '', mode: '' };
         try { ['sl_portal_phone', 'sl_indemnitor_scanned_profile', 'sl_portal_in_person'].forEach(k => localStorage.removeItem(k)); } catch (e) {}
@@ -3498,7 +3504,7 @@ async def get_portal_ui(request: Request):
                 const r = await fetch('/api/portal/send-pin', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({phone})
+                    body: JSON.stringify({phone: phone, intake_proof: WALK_IN_INTAKE_PROOF || ""})
                 });
                 const d = await r.json();
                 if (d.success) {
@@ -3600,4 +3606,15 @@ async def get_portal_ui(request: Request):
         html = html.replace("</body>", KIOSK_IDLE_SNIPPET + "\n</body>", 1)
     if _self_serve_flag():
         html = html.replace("const SELF_SERVE_PREFILL = false;", "const SELF_SERVE_PREFILL = true;", 1)
+    from dashboard.services.paperwork_self_serve import issue_walk_in_proof
+
+    launch = _launch_mode(request)
+    if launch in {"inperson", "ipad", "kiosk"}:
+        proof = issue_walk_in_proof(launch)
+        if proof:
+            html = html.replace(
+                'const WALK_IN_INTAKE_PROOF = "";',
+                "const WALK_IN_INTAKE_PROOF = " + json.dumps(proof) + ";",
+                1,
+            )
     return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})

@@ -71,16 +71,21 @@ def _bind(db):
     return get_collection
 
 
-def _install(monkeypatch, db):
+def _install(monkeypatch, db, *, real_templates=False):
     getter = _bind(db)
     monkeypatch.setattr("dashboard.routers.pin_portal.get_collection", getter)
     monkeypatch.setattr("dashboard.extensions.get_collection", getter)
     monkeypatch.setattr("dashboard.services.staff_chain_service.get_collection", getter)
     monkeypatch.setenv("PAPERWORK_SELF_SERVE_PREFILL", "1")
-    monkeypatch.setattr(
-        "dashboard.services.docuseal_service.resolve_template_id_for_surety",
-        lambda *_a, **_k: "5",
-    )
+    if real_templates:
+        monkeypatch.setenv("DOCUSEAL_TEMPLATE_ID_OSI", "101")
+        monkeypatch.setenv("DOCUSEAL_TEMPLATE_ID", "101")
+        monkeypatch.setenv("DOCUSEAL_TEMPLATE_ID_PALMETTO", "505")
+    else:
+        monkeypatch.setattr(
+            "dashboard.services.docuseal_service.resolve_template_id_for_surety",
+            lambda *_a, **_k: "5",
+        )
     return getter
 
 
@@ -1178,3 +1183,204 @@ async def test_unstarted_packet_shell_is_finished_once(monkeypatch):
     assert len(db["paperwork_packets"].docs) == 1
     assert db["paperwork_packets"].docs[0]["docuseal_started"] is True
     assert "swipesimple" not in built["signing_link"].lower()
+
+
+def _walk_in_session(**extra):
+    return _session(intake_channel="inperson", **extra)
+
+
+def test_new_walk_in_without_surety_opens_the_osi_packet(monkeypatch):
+    db = FakeDB()
+    db["portal_pins"].docs.append(_walk_in_session())
+    _install(monkeypatch, db, real_templates=True)
+    _scanner(monkeypatch)
+    calls = {"n": 0, "kwargs": {}}
+    _submission(monkeypatch, calls)
+    saved = _confirm(_ocr(db).json()["scan_id"], _indemnitor_fields())
+    assert saved.status_code == 200, saved.text
+    body = saved.json()
+    assert body["created_case"] is True
+    assert body["signing_link"].endswith("/s/TEST-SLUG")
+    assert "swipesimple" not in body["signing_link"].lower()
+    assert "/pay" not in body["signing_link"].lower()
+    case = db["bond_cases"].docs[0]
+    assert case["surety_id"] == "osi"
+    assert case["intake_channel"] == "inperson"
+    assert case["source"] == "self_serve"
+    assert not case.get("bond_amount")
+    assert not case.get("premium")
+    assert not case.get("poa_number")
+    assert not case.get("booking_number")
+    assert calls["n"] == 1
+    assert calls["kwargs"]["template_id"] == "101"
+    assert calls["kwargs"]["send_email"] is False
+    assert calls["kwargs"]["send_sms"] is False
+    assert db["paperwork_packets"].docs[0]["surety_id"] == "osi"
+    audits = [row for row in db["audit_events"].docs if row.get("event_type") == "self_serve_draft_bondcase"]
+    assert len(audits) == 1
+    assert audits[0]["new_state"]["surety_id"] == "osi"
+    assert NAME not in str(audits[0])
+
+
+def test_assigned_palmetto_and_osi_stay_on_a_walk_in_confirm(monkeypatch):
+    for surety, template in (("palmetto", "505"), ("osi", "101")):
+        db = FakeDB()
+        db["portal_pins"].docs.append(_walk_in_session())
+        db["bond_cases"].docs.append({
+            "bond_case_id": "BC-TEST-1",
+            "indemnitor_id": "IND-TEST-1",
+            "indemnitor_phone": PHONE,
+            "indemnitor_name": NAME,
+            "indemnitor_dob": DOB,
+            "surety_id": surety,
+            "status": "active",
+            "source": "staff",
+        })
+        db["indemnitors"].docs.append({
+            "indemnitor_id": "IND-TEST-1",
+            "name": NAME,
+            "phone": PHONE,
+            "dob": DOB,
+        })
+        _install(monkeypatch, db, real_templates=True)
+        _scanner(monkeypatch)
+        calls = {"n": 0, "kwargs": {}}
+        _submission(monkeypatch, calls)
+        saved = _confirm(_ocr(db).json()["scan_id"], _indemnitor_fields())
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["reused_case"] is True
+        assert saved.json()["signing_link"].endswith("/s/TEST-SLUG")
+        assert db["bond_cases"].docs[0]["surety_id"] == surety
+        assert calls["kwargs"]["template_id"] == template
+        assert len(db["bond_cases"].docs) == 1
+
+
+def test_existing_unassigned_case_is_not_given_osi(monkeypatch):
+    db = FakeDB()
+    db["portal_pins"].docs.append(_walk_in_session())
+    db["bond_cases"].docs.append({
+        "bond_case_id": "BC-TEST-1",
+        "indemnitor_id": "IND-TEST-1",
+        "indemnitor_phone": PHONE,
+        "indemnitor_name": NAME,
+        "indemnitor_dob": DOB,
+        "status": "active",
+        "source": "staff",
+    })
+    _install(monkeypatch, db, real_templates=True)
+    _scanner(monkeypatch)
+    calls = {"n": 0, "kwargs": {}}
+    _submission(monkeypatch, calls)
+    saved = _confirm(_ocr(db).json()["scan_id"], _indemnitor_fields())
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["signing_link"] == ""
+    assert saved.json()["fallback"] is True
+    assert "surety_id" not in db["bond_cases"].docs[0]
+    assert calls["n"] == 0
+    assert len(db["bond_cases"].docs) == 1
+
+
+def test_remote_session_without_a_channel_does_not_pick_osi(monkeypatch):
+    db = FakeDB()
+    session = _session(mode="inperson", intake_channel="1")
+    db["portal_pins"].docs.append(session)
+    _install(monkeypatch, db, real_templates=True)
+    _scanner(monkeypatch)
+    calls = {"n": 0, "kwargs": {}}
+    _submission(monkeypatch, calls)
+    saved = _confirm(_ocr(db).json()["scan_id"], _indemnitor_fields())
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["signing_link"] == ""
+    assert not db["bond_cases"].docs[0].get("surety_id")
+    assert calls["n"] == 0
+
+
+@pytest.mark.parametrize("surety", ["lexington", "not-a-carrier"])
+def test_explicit_invalid_carrier_is_not_replaced_with_osi(monkeypatch, surety):
+    db = FakeDB()
+    db["portal_pins"].docs.append(_walk_in_session())
+    db["bond_cases"].docs.append({
+        "bond_case_id": "BC-TEST-1",
+        "indemnitor_id": "IND-TEST-1",
+        "indemnitor_phone": PHONE,
+        "indemnitor_name": NAME,
+        "indemnitor_dob": DOB,
+        "surety_id": surety,
+        "status": "active",
+        "source": "staff",
+    })
+    _install(monkeypatch, db, real_templates=True)
+    _scanner(monkeypatch)
+    calls = {"n": 0, "kwargs": {}}
+    _submission(monkeypatch, calls)
+    saved = _confirm(_ocr(db).json()["scan_id"], _indemnitor_fields())
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["signing_link"] == ""
+    assert db["bond_cases"].docs[0]["surety_id"] == surety
+    assert calls["n"] == 0
+
+
+def test_walk_in_proof_rejects_a_raw_channel(monkeypatch):
+    monkeypatch.setenv("SECRET_KEY", "ci-not-a-real-secret")
+    from dashboard.services.paperwork_self_serve import consume_walk_in_proof, issue_walk_in_proof
+
+    assert issue_walk_in_proof("1") == ""
+    assert issue_walk_in_proof("true") == ""
+    assert consume_walk_in_proof("inperson") == ""
+    assert consume_walk_in_proof("kiosk") == ""
+    proof = issue_walk_in_proof("ipad")
+    assert proof
+    assert consume_walk_in_proof(proof) == "ipad"
+
+
+def test_send_pin_stores_the_signed_channel_only(monkeypatch):
+    db = FakeDB()
+    _install(monkeypatch, db)
+
+    async def _send(*_args, **_kwargs):
+        return {"success": True, "sent": True, "queued": False, "channel": "imessage"}
+
+    monkeypatch.setattr("dashboard.services.bb_client.send_message_universal", _send)
+    from dashboard.services.paperwork_self_serve import issue_walk_in_proof
+
+    proof = issue_walk_in_proof("kiosk")
+    accepted = client.post("/api/portal/send-pin", json={
+        "phone": PHONE,
+        "intake_proof": proof,
+        "intake_channel": "palmetto",
+    })
+    assert accepted.status_code == 200, accepted.text
+    assert db["portal_pins"].docs[-1]["intake_channel"] == "kiosk"
+    rejected = client.post("/api/portal/send-pin", json={
+        "phone": PHONE,
+        "intake_proof": "inperson",
+    })
+    assert rejected.status_code == 200, rejected.text
+    assert db["portal_pins"].docs[-1]["intake_channel"] == ""
+
+
+def test_portal_page_signs_only_an_explicit_walk_in_mode():
+    kiosk = client.get("/api/portal/portal-ui?mode=kiosk")
+    assert kiosk.status_code == 200
+    assert 'const WALK_IN_INTAKE_PROOF = "";' not in kiosk.text
+    ambiguous = client.get("/api/portal/portal-ui?mode=1")
+    assert 'const WALK_IN_INTAKE_PROOF = "";' in ambiguous.text
+    query = client.get("/api/portal/portal-ui?inperson=1")
+    assert 'const WALK_IN_INTAKE_PROOF = "";' in query.text
+
+
+@pytest.mark.asyncio
+async def test_unsigned_osi_packet_does_not_expose_a_pay_link(monkeypatch):
+    db = FakeDB()
+    db["portal_pins"].docs.append(_walk_in_session())
+    _install(monkeypatch, db, real_templates=True)
+    _scanner(monkeypatch)
+    calls = {"n": 0, "kwargs": {}}
+    _submission(monkeypatch, calls)
+    saved = _confirm(_ocr(db).json()["scan_id"], _indemnitor_fields())
+    packet_id = saved.json()["packet_id"]
+    from dashboard.services.paperwork_done import load_done_state
+
+    state = await load_done_state(packet_id, "indemnitor")
+    assert not state.get("pay_url")
+    assert not state.get("pay_amount")
