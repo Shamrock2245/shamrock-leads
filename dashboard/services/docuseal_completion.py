@@ -33,6 +33,24 @@ Design
                     Skipped (premium_unconfirmed) until staff confirm.
                     Customer dispatch only when SWIPESIMPLE_DISPATCH_LIVE=1;
                     otherwise the invoice is staged and dispatch is a dry-run.
+     auto_confirm   (before share_invoice) behind PREMIUM_AUTO_CONFIRM, default
+                    off: confirm premium = down = max($100, 10% of the bond),
+                    paid in full, confirmed_by "auto", audit auto_10pct. Never
+                    overwrites a staff confirmation. Unknown / ambiguous bond
+                    or bond amount → needs_review (no invoice, no text).
+                    Transient errors retry (cap 3) and hold share_invoice.
+                    Not a required step: off means no stamp at all.
+     auto_send      text the staged invoice link once (behind
+                    SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING, default off, AND
+                    SWIPESIMPLE_DISPATCH_LIVE). Uses dispatch_invoice's
+                    one-send claim with indemnitor_only; any failure,
+                    including a missing or conflicting indemnitor contact,
+                    → needs_review, never retried, never the defendant.
+                    Not a required step: off means no stamp at all.
+                    Owner exception (Brendan O'Neal, 2026-11-04): this one
+                    automatic pay-link text after signing is approved. It is
+                    not a license for chase, a second text, SMS fallback, or
+                    any other automated client outreach.
      court_sync     seed_court_calendar_for_bond
      slack          non-PII Slack post
 
@@ -100,6 +118,8 @@ STEP_BOND_CASES = "bond_cases"
 STEP_EVENT = "sse_event"
 STEP_LEGACY = "legacy_payment_link"
 STEP_SHARE = "share_invoice"
+STEP_AUTO_CONFIRM = "auto_confirm"
+STEP_AUTO_SEND = "auto_send"
 STEP_COURT = "court_sync"
 STEP_SLACK = "slack"
 
@@ -477,12 +497,16 @@ class _Run:
                 (STEP_BOND_CASES, self.step_bond_cases),
                 (STEP_EVENT, self.step_event),
                 (STEP_LEGACY, self.step_legacy_payment_link),
+                (STEP_AUTO_CONFIRM, self.step_auto_confirm),
                 (STEP_SHARE, self.step_share_invoice),
+                (STEP_AUTO_SEND, self.step_auto_send),
                 (STEP_COURT, self.step_court),
                 (STEP_SLACK, self.step_slack),
             ):
                 if step != STEP_LEGACY and _is_terminal(self.doc, step):
                     continue
+                if step in (STEP_AUTO_CONFIRM, STEP_AUTO_SEND) and staff_test_packet:
+                    continue  # never an auto premium or customer text for a staff test packet; no stamp
                 if staff_test_packet:
                     await self.stamp(step, "skipped", reason="staff_test_case")
                     continue
@@ -752,10 +776,207 @@ class _Run:
                            self.pfx, self.packet_id, type(exc).__name__)
             await self.stamp(STEP_LEGACY, "failed_no_retry", error_type=type(exc).__name__)
 
+    # ── (b1) auto-confirm the premium at signing (default OFF) ─────────────
+    AUTO_CONFIRM_MAX_ATTEMPTS = 3
+
+    async def _auto_confirm_review(self, reason: str, **info: Any) -> None:
+        logger.warning("%s auto_confirm needs_review reason=%s packet=%s",
+                       self.pfx, reason, self.packet_id)
+        await self.stamp(STEP_AUTO_CONFIRM, "needs_review", reason=reason, **info)
+
+    async def step_auto_confirm(self) -> None:
+        """Confirm the auto premium once when the packet is signed.
+
+        Off unless ``PREMIUM_AUTO_CONFIRM``; off writes nothing. A staff
+        confirmation (packet, bond case, or active bond) is never touched:
+        the step is stamped ``skipped`` / ``already_confirmed``. A bond that
+        is unknown, ambiguous, or does not match the packet's bond id, and a
+        bond amount that is missing, zero, unparseable, or disagrees across
+        docs, is stamped ``needs_review``: the premium stays unconfirmed, so
+        share_invoice stages nothing and auto_send texts nothing. Any stamp
+        but ``failed`` is final; the write itself is guarded and idempotent
+        (``auto_confirm_premium``), so a retry after a lost lease is safe.
+        """
+        from dashboard.services import premium_confirmation_service as _pcs
+
+        if not _pcs.auto_confirm_enabled():
+            return
+        prior = _step(self.doc, STEP_AUTO_CONFIRM)
+        if prior and prior.get("state") != "failed":
+            return  # at-most-once: any non-retryable stamp is final
+        if _completion(self.doc).get("preexisting_completion"):
+            return
+        if _pcs.confirmation_complete(self.doc) or _pcs.confirmation_complete(
+            await _pcs.confirmed_case_doc(self.doc)
+        ):
+            await self.stamp(STEP_AUTO_CONFIRM, "skipped", reason="already_confirmed")
+            return
+
+        from dashboard.services.bond_booking_lookup import (
+            BondAmbiguous,
+            canonical_booking,
+            resolve_bond_pair,
+        )
+        from dashboard.services.docuseal_share_invoice import resolve_share_invoice_bond_id
+
+        booking = canonical_booking(self.doc) or str(self.doc.get("defendant_booking_number") or "").strip()
+        if not booking:
+            await self._auto_confirm_review("missing_booking_number")
+            return
+        packet_bond_id, bond_skip = resolve_share_invoice_bond_id(self.doc)
+        if not packet_bond_id:
+            await self._auto_confirm_review(bond_skip)
+            return
+        try:
+            case, active = await resolve_bond_pair(booking)
+        except BondAmbiguous:
+            await self._auto_confirm_review("bond_ambiguous")
+            return
+        except Exception as exc:
+            await self._auto_confirm_retry(type(exc).__name__)
+            return
+        if not case and not active:
+            await self._auto_confirm_review("bond_not_found")
+            return
+        ids = set()
+        for doc in (case, active):
+            if isinstance(doc, dict):
+                for key in ("bond_case_id", "Bond_Case_ID", "bond_id"):
+                    val = str(doc.get(key) or "").strip()
+                    if val:
+                        ids.add(val)
+                if doc.get("_id") is not None:
+                    ids.add(str(doc.get("_id")))
+        if packet_bond_id not in ids:
+            await self._auto_confirm_review("bond_mismatch")
+            return
+
+        try:
+            result = await _pcs.auto_confirm_premium(
+                booking=booking,
+                bond_case=case,
+                active=active,
+                packet=self.doc,
+                source="auto_10pct_signing",
+            )
+        except _pcs.PremiumConfirmationError as exc:
+            if int(getattr(exc, "status", 0) or 0) >= 500:
+                await self._auto_confirm_retry(str(getattr(exc, "error", "") or "unavailable"))
+                return
+            await self._auto_confirm_review(str(getattr(exc, "error", "") or "confirmation_refused"))
+            return
+        if result.get("ok"):
+            await self.stamp(
+                STEP_AUTO_CONFIRM, "done",
+                premium=result.get(_pcs.PREMIUM_CONFIRMED_AMOUNT_FIELD),
+                confirmed_by=_pcs.AUTO_ACTOR,
+                idempotent=bool(result.get("idempotent")),
+            )
+            return
+        skipped = str(result.get("skipped") or "")
+        if skipped == "already_confirmed":
+            await self.stamp(STEP_AUTO_CONFIRM, "skipped", reason="already_confirmed")
+            return
+        if skipped == "switch_off":
+            return
+        await self._auto_confirm_review(skipped or "not_confirmed")
+
+    async def _auto_confirm_retry(self, error_type: str) -> None:
+        attempts = int(_step(self.doc, STEP_AUTO_CONFIRM).get("attempts") or 0) + 1
+        if attempts >= self.AUTO_CONFIRM_MAX_ATTEMPTS:
+            await self.stamp(STEP_AUTO_CONFIRM, "needs_review", count_attempt=True,
+                             reason="auto_confirm_unavailable", error_type=error_type)
+            logger.warning("%s auto_confirm gave up → needs_review packet=%s",
+                           self.pfx, self.packet_id)
+            return
+        await self.stamp(STEP_AUTO_CONFIRM, "failed", count_attempt=True, error_type=error_type)
+        logger.warning("%s auto_confirm failed (will retry) packet=%s attempt=%s err_type=%s",
+                       self.pfx, self.packet_id, attempts, error_type)
+
+    # ── (b2) auto-send the staged invoice link once (default OFF) ──────────
+    async def step_auto_send(self) -> None:
+        """Text the bond's staged invoice link once after signing.
+
+        Off unless SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING and
+        SWIPESIMPLE_DISPATCH_LIVE are both on; off writes nothing. Runs only
+        after share_invoice staged a real link (not a dry run). Stamped
+        ``started`` before the send, so it is attempted at most once; the
+        send goes through ``dispatch_invoice(..., indemnitor_only=True)``
+        and its one-send claim. The recipient is the indemnitor phone only.
+        A missing or conflicting indemnitor contact raises before any claim
+        or send and is held for review (``mark_dispatch_needs_review``).
+        The defendant is never the fallback. A failure is never retried.
+
+        Owner exception (Brendan O'Neal, 2026-11-04): one automatic pay-link
+        text after DocuSeal signing is approved when both switches are on.
+        It does not authorize any other automated client contact.
+        """
+        from dashboard.services import swipesimple_invoice_service as _ss
+
+        if not _ss.auto_send_after_signing_enabled():
+            return
+        if _step(self.doc, STEP_AUTO_SEND):
+            return  # at-most-once: any stamp is final
+        if _completion(self.doc).get("preexisting_completion"):
+            return
+        share = _step(self.doc, STEP_SHARE)
+        bond_id = str(share.get("bond_id") or "").strip()
+        if share.get("state") != "done" or not share.get("ok") or share.get("dry_run") or not bond_id:
+            logger.info("%s auto_send waiting reason=share_not_staged packet=%s",
+                        self.pfx, self.packet_id)
+            return
+        if not _ss.dispatch_live_enabled():
+            logger.info(
+                "%s auto_send dry-run (SWIPESIMPLE_DISPATCH_LIVE off) bond_id=%s packet=%s",
+                self.pfx, bond_id, self.packet_id,
+            )
+            return
+        now_iso = _now().isoformat()
+        if not await self._update_owned(
+            {"$set": {
+                f"{_C}.steps.{STEP_AUTO_SEND}.state": "started",
+                f"{_C}.steps.{STEP_AUTO_SEND}.at": now_iso,
+                f"{_C}.steps.{STEP_AUTO_SEND}.source": self.source,
+                f"{_C}.steps.{STEP_AUTO_SEND}.bond_id": bond_id,
+            }},
+            extra={f"{_C}.steps.{STEP_AUTO_SEND}.state": None},
+        ):
+            return  # another run already started it
+        self.doc.setdefault(_C, {}).setdefault("steps", {})[STEP_AUTO_SEND] = {"state": "started"}
+        try:
+            result = await _ss.dispatch_invoice(
+                bond_id, "imessage", indemnitor_only=True,
+            ) or {}
+        except Exception as exc:
+            code = _ss._error_code(exc)
+            await _ss.mark_dispatch_needs_review(bond_id, code)
+            logger.warning("%s auto_send failed → needs_review bond_id=%s error_code=%s",
+                           self.pfx, bond_id, code)
+            await self.stamp(STEP_AUTO_SEND, "needs_review", bond_id=bond_id, error_code=code)
+            return
+        if result.get("sent"):
+            await self.stamp(STEP_AUTO_SEND, "done", bond_id=bond_id, dispatched=True)
+            return
+        if result.get("already_dispatched") or result.get("in_progress") or result.get("dry_run"):
+            reason = ("already_dispatched" if result.get("already_dispatched")
+                      else "in_progress" if result.get("in_progress") else "dry_run")
+            await self.stamp(STEP_AUTO_SEND, "skipped", bond_id=bond_id, reason=reason)
+            return
+        await _ss.mark_dispatch_needs_review(bond_id, "send_not_accepted")
+        logger.warning("%s auto_send not accepted → needs_review bond_id=%s", self.pfx, bond_id)
+        await self.stamp(STEP_AUTO_SEND, "needs_review", bond_id=bond_id, error_code="send_not_accepted")
+
     # ── (b) stage-only share invoice (PR #56 semantics) ─────────────────────
     async def step_share_invoice(self) -> None:
         from dashboard.services.docuseal_share_invoice import resolve_share_invoice_bond_id
 
+        from dashboard.services.premium_confirmation_service import auto_confirm_enabled
+
+        if auto_confirm_enabled() and _step(self.doc, STEP_AUTO_CONFIRM).get("state") == "failed":
+            # Auto-confirm will retry; do not stamp share as premium_unconfirmed.
+            logger.info("%s share_invoice waiting reason=auto_confirm_retry packet=%s",
+                        self.pfx, self.packet_id)
+            return
         share_bond_id, share_skip = resolve_share_invoice_bond_id(self.doc)
         if not share_bond_id:
             # Never guess a bond (no booking # / packet_id fallback) — skip.

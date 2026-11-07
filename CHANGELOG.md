@@ -3,6 +3,110 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-07 (merge origin/main into #308)
+
+### Changed
+- **Merged `origin/main` at `1efc45d`.** Merge commit only (no rebase). The only conflict was this file. Every entry from both sides is kept.
+- **Manatee Clerk identity gate rechecked after the merge and left as-is.** `manatee_clerk_identity_problems` still requires `booking_number_shapes == {mc_case_v1:<sha256>: rows}` (full SHA shape only, no other family) and `status_buckets == {"": rows}` with an integer count. `{}`, `{"": 0}`, and `{"": "invalid"}` still fail. The row stays `requested`. No source status change.
+
+## [Unreleased] — 2026-11-05 (Auto-send indemnitor only; ambiguous staff premium)
+
+### Fixed
+- **The automatic pay-link text after signing goes only to the indemnitor.** With both `SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING` and `SWIPESIMPLE_DISPATCH_LIVE` on, DocuSeal `auto_send` called `dispatch_invoice` without `indemnitor_only`, so a bond with no indemnitor phone and a `defendant_phone` texted the defendant. It now uses the same indemnitor-only path as portal `send_copy`. A missing or conflicting indemnitor contact is `needs_review` (`dispatch_missing_indemnitor` or `indemnitor_contact_mismatch`), nothing is claimed or sent, and the defendant is never the recipient. The 2026-11-04 owner exception is unchanged: one text, both switches default off, no retry.
+- **Auto-confirm does not overwrite ambiguous staff premium fields.** `PREMIUM_AUTO_CONFIRM` treated every `resolve_locked_premium` error as "no premium" because `_bond_premium` returns None. Differing `premium_cents` and `premium_amount` (or a non-numeric, fractional, zero, or negative staff amount) was then replaced by the auto 10%. Those cases now skip as `staff_premium_ambiguous`: nothing is confirmed, signing stamps `needs_review`, and the portal returns `409 needs_review`. A blank premium and an intake estimate still auto-confirm. One readable staff premium still waits as `staff_premium_unconfirmed`.
+
+### Tests
+- `tests/test_indemnitor_self_pay.py`: auto-send indemnitor-only (defendant not texted; conflict not texted), ambiguous and malformed staff premiums not auto-confirmed, estimate still auto-confirmed. No SwipeSimple session, no live send.
+
+## [Unreleased] — 2026-11-05 (Indemnitor self-pay P1: recipient, case id, paid status)
+
+### Fixed
+- **`send_copy` texts only the validated indemnitor.** With `SWIPESIMPLE_DISPATCH_LIVE` on, `POST /api/portal/{token}/invoice-link` no longer falls back to `defendant_phone` or `defendant_email` when the indemnitor contact is missing. The recipient is the indemnitor phone or email on the bond (both spellings and the nested `indemnitor` map). Two different indemnitor values is `409 indemnitor_contact_mismatch`. None is `409 dispatch_missing_indemnitor`. Neither path sends. A dry run with the dispatch switch off is unchanged and still sends nothing.
+- **Legacy `Bond_Case_ID` mismatches fail closed.** Bond lookup reads `bond_case_id` and legacy `Bond_Case_ID` on each document. A populated disagreement, including one document that stores both spellings with different values, or `bond_cases` holding only `Bond_Case_ID: A` while `active_bonds` holds only `Bond_Case_ID: B`, is `bond_case_id_mismatch`. `Bond_Case_ID` is read only.
+- **A handled installment refreshes `premium_paid`.** Plan posting (`post_gateway_event` → `apply_plan_payment`) does not call `record_provider_payment`, so the last installment left `premium_paid` false. The plan-payment transaction now refreshes it after the installment row is written, and a plan refund refreshes it again. `premium_paid` is set only when clean collected cents reach the confirmed premium. A partial installment does not set it. A reversed installment row counts as zero (it is the same row, not a second refund).
+- **A settled down-payment invoice is not offered again.** After the down payment, `premium_paid` stays false and `payment_status` can stay `sent` while `last_payment_status` is `approved`. The portal no longer returns that invoice link, and it does not create another one for the same reference (`409 invoice_settled`). An unpaid invoice is still returned. A charge whose reference is the booking stamps `settled_invoice_number` / `settled_invoice_status` / `settled_invoice_transaction_id`. A reversal of that transaction marks the invoice `reversed`.
+
+### Security
+- **The one automatic pay-link text after signing stays.** Brendan O'Neal approved it on 2026-11-04. `SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING` and `SWIPESIMPLE_DISPATCH_LIVE` both default off. When both are on, DocuSeal completion texts the staged invoice link once through `dispatch_invoice`'s one-send claim. A failure is `needs_review` and is not retried. Documented in `AGENTS.md` (prime directive 6 and the env table) and on `step_auto_send`. It does not authorize any other automated client outreach.
+
+### Tests
+- `tests/test_indemnitor_self_pay.py`: legacy case-id mismatch, indemnitor-only `send_copy` (defendant never chosen; missing contact does not send), settled vs unpaid down-payment invoice, partial vs final installment `premium_paid`. No SwipeSimple session, no live send.
+
+## [Unreleased] — 2026-11-04 (Indemnitor self-pay invoice link from the portal)
+
+### Added
+- **`POST /api/portal/{token}/invoice-link` (indemnitor self-pay, §2.2).** An indemnitor token gets the bond's own locked SwipeSimple invoice link. The amount comes only from the bond's confirmed premium (`premium_confirmed_amount`, or the confirmed down payment on a financed plan); anything in the body is ignored. An existing verified link (`/invoices/` path on swipesimple.com, bound to this bond, matching cents) is returned as is; otherwise one invoice is created through the existing one-invoice-per-bond claim. Errors are `{ok:false, error}` and never carry a URL: 401 `token_invalid_or_expired`, 403 `role_not_indemnitor`, 404 `bond_not_found`, 409 `bond_ambiguous` / `missing_booking_number` / `premium_unconfirmed` / `premium_estimate_unconfirmed` / `amount_mismatch` / `already_paid` / `needs_review` / `staff_test_case_invoice_disabled`, 202 `in_progress`, 503 `invoicing_unavailable` / `session_expired`, 429 `rate_limited` (5 per minute per token, `Retry-After: 60`). `send_copy` texts the link only when `SWIPESIMPLE_DISPATCH_LIVE` is on and otherwise logs a dry run.
+- **`PREMIUM_AUTO_CONFIRM` (default off).** When on, the invoice-link endpoint confirms an unconfirmed premium at max($100, 10% of the filed bond) with `premium_confirmed_by: "auto"`, paid in full, through the same transaction and audit as staff confirmation. It never overwrites a staff confirmation and is idempotent.
+- **Auto-confirm at signing (same `PREMIUM_AUTO_CONFIRM` switch).** New DocuSeal completion step `auto_confirm`, run before `share_invoice`, confirms the same max($100, 10%) premium, paid in full (`confirmed_by: "auto"`, audit reason `auto_10pct`, audit source `auto_10pct_signing`). The after-signing link text therefore no longer depends on the portal being opened. It never overwrites a staff confirmation (`skipped` / `already_confirmed`) and is idempotent with the completion lease: guarded writes plus a lease-owned step stamp. If the bond is not found, ambiguous, or does not match the packet's bond id, or the bond amount is missing, zero or negative, unparseable, or disagrees across the bond case, active bond, and packet, the step is stamped `needs_review`. In that case the premium stays unconfirmed, so no invoice is staged and no text is sent. Transient write errors retry up to 3 times, and `share_invoice` waits for them, before the step goes to `needs_review`. With the switch off the step writes nothing. It is not a required step, and staff test packets and historical packets skip it.
+- **New auto-confirm skip codes** `bond_amount_unparseable` and `bond_amount_ambiguous`, for both the portal endpoint and signing. Before, an unparseable amount was treated as missing, and only the first non-blank amount was used. On the portal endpoint, either code now returns `409 needs_review` instead of `premium_unconfirmed`.
+- **`confirmed_by` in the invoice-link response is now `"auto"` or `"staff"`**, never the staff member's name or email.
+- **`SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING` (default off).** New DocuSeal completion step `auto_send`: after signing and the share step, text the bond's invoice link once. It runs only when this switch and `SWIPESIMPLE_DISPATCH_LIVE` are both on, uses the existing one-send dispatch claim, and moves a failed send to `needs_review` (never retried automatically). `DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK` is unchanged and stays off.
+- **`premium_paid` from recorded payments.** When clean recorded charges minus refunds for a booking reach the single agreed confirmed premium, `premium_paid` is set on `bond_cases` and the `active_bonds` mirror (`premium_paid_at`, `premium_paid_source: "payments_total"`, `premium_paid_transaction_id`) inside the payment-log transaction, and the audit event records `premium_paid_change`. A refund that drops the total below the premium reopens it (`premium_paid_reopened_at`, `premium_paid_reopened_transaction_id`); a charge never clears a flag staff set. Audit history is kept.
+- **`scripts/installment_invoices_pause.py` (read only).** Reads the `installment_invoices` automation switch and counts due installments with `SHAMROCK_MONGO_RO_URI`, then prints the staff toggle (`POST /api/automation/toggle/installment_invoices`) that pauses or resumes installment invoices and texts. It writes nothing.
+
+### Changed
+- **The client portal never shows a static payment link.** `GET /api/portal/{token}/payment-link` and the portal status return only the bond's own verified invoice link with the confirmed amount due; with no link the portal shows "Call (239) 332-2245". The portal's Pay button calls the new invoice-link endpoint.
+- **Bond lookup by booking number is alias-aware.** `_load_bond_by_id` and the portal read `booking_number` and, only when it is blank, the legacy `Booking_Number` (read only, never written), match whitespace-padded values, dedupe by `_id`, and fail closed with `bond_ambiguous` on more than one match.
+- **The dispatch text quotes the invoice amount due**, and a dispatch held as `needs_review` is never re-claimed or resent (`dispatch_needs_review`).
+- **Payment-webhook receipt texts are dry runs unless `SWIPESIMPLE_DISPATCH_LIVE` is on.**
+
+### Security
+- **Staff portal routes need a staff session or machine key.** `POST /api/portal/generate`, `GET /api/portal/tokens/{booking}`, `POST /api/portal/revoke` and `POST /api/portal/send-link` answer `401 {"error": "staff_auth_required"}` otherwise (`pin_middleware` leaves `/api/portal` open for the token routes). Recovery sessions are refused. `created_by` comes from the session, never the body.
+
+### Tests
+- `tests/test_indemnitor_self_pay.py` (added to the CI list): lookup, link verification, every endpoint error, rate limit, create-once, auto-confirm (portal and at signing: 10% and the $100 floor, never over staff, idempotent rerun, every needs_review path, transient retry, no invoice or text on review), the auto-send step, staff auth, `premium_paid` set/reopen/idempotent, and the read-only pause script.
+- `tests/test_payment_log_claims.py`: receipt text is a dry run with `SWIPESIMPLE_DISPATCH_LIVE` off. `tests/test_swipesimple_locked_amount_e2e.py`: portal prefers the staged invoice and never falls back to a static link.
+- `tests/_fake_mongo.py`: `$regex`/`$options`, `sort`, `to_list`, and `insert_one(session=...)`.
+
+## [Unreleased] — 2026-11-04 (Paperwork /done shows the pay step)
+
+### Added
+- **The paperwork completion page is no longer a dead end.** `/done` on paperwork.shamrockbailbonds.biz loads the packet and bond and shows what this role finished, which roles still need to sign (role only), and the next steps after release. Office contact stays on the page as a supplement: call (239) 332-2245, text (239) 955-0178, walk-in Mon-Fri 9-5, phones 24/7.
+- **The pay button uses the existing locked-amount SwipeSimple invoice.** It is rendered only when that role's signature is recorded, the signer is not voided or unverified, identity verification passes, and the payments-code invoice checks accept the stored link (amount, booking, bond id, host). The dollars shown are the confirmed down payment on the bond. Query-string amounts are ignored. A missing packet, a database error, or a bond lookup failure shows a generic message and no pay link. The page does not call SwipeSimple or send DocuSeal email or SMS.
+
+### Tests
+- `tests/test_paperwork_done.py`: pay step hidden when unsigned, unverified, or voided; shown with the server amount when allowed; pending co-signers listed by role; load-failure path. No SwipeSimple charge and no DocuSeal send.
+
+## [Unreleased] — 2026-11-04 (Paperwork handoff token skips the second PIN)
+
+### Added
+- **A verified indemnitor, co-indemnitor, or defendant can open paperwork with a single-use handoff token instead of a second PIN.** The portal opens `paperwork.shamrockbailbonds.biz/?role=&case=&mode=&ht=<token>`. `POST /api/portal/handoff/consume` checks the signature, the 15-minute window, the case, and the signer, then consumes the `jti` once. The signed claims are authoritative. A `role` or `case` query hint that disagrees falls back to the PIN and grants nothing. `mode=add-cosigner` opens the existing co-indemnitor ID step and does not revoke a co-signer link or a DocuSeal packet. `mode=id-upload` is passed through only when that handler is already present. Contract: `docs/contracts/paperwork-handoff-token.md`.
+- **The path is off unless `PAPERWORK_HANDOFF_ENABLED` is on.** The HMAC key is `PAPERWORK_HANDOFF_SECRET`. Neither value is added to compose, deploy, or `.env`. Minting stays `POST /api/portal/handoff-token` (`{case_id, role, person_id}` → `{token, expires_at}`) and is not implemented in this change. A POA number is not part of the token. Signer ID scans are insert-only. Handoff audits are insert-only and do not store a name, phone, email, or the token. No ID scan means no DocuSeal URL. A voided or unverified signer gets no session and no DocuSeal URL. This response never includes a pay link.
+
+### Tests
+- `tests/test_paperwork_handoff_token.py` (on the CI list): bad signature, expired, over-long lifetime, missing secret, flag off, replay, voided signer, unverified identity, unverified submitter, person mismatch, role hint mismatch, case hint mismatch, mode hint ignored, happy path for each role, no scan means no DocuSeal URL, POA change, add-cosigner routing, id-upload passthrough, OCR only after a consumed token, insert-only scans, audit retention, PIN fallback, and query params without `ht`.
+
+## [Unreleased] — 2026-11-05 (id-upload attempt cap and persist gate)
+
+### Fixed
+- **An id-upload that loses its session during OCR is not saved.** The scan row is written only when the portal pin is still verified, not voided, not revoked, and `expires_at` is still later than the write. A revocation or expiration while OCR is running appends nothing and returns no signing URL.
+- **Id-upload OCR uses the co-signer attempt cap and cooldown.** `SCAN_ATTEMPT_CAP` and `SCAN_COOLDOWN` are reserved with one conditional update before the scanner runs. The next try is `429` `scan_attempt_cap` or `scan_cooldown`, and that try does not call OCR. A read that finds no name still consumes the attempt and does not save a row.
+- **Audit counts come from the update that stored the row.** Each `id_upload_saved` event uses the array length returned by that update, so two overlapping uploads record `0→1` and `1→2` rather than two copies of `0→1`. Events are inserted. Earlier audit rows are not removed.
+- **A PDF is rasterized before OCR.** The first page is turned into a PNG with PyMuPDF, which this repo already depends on. A PDF that cannot be read, and any upload that yields no name, returns `scan_unreadable` with `saved: false` and does not append a scan. The page says to upload a photo of the ID.
+
+### Tests
+- `tests/test_paperwork_id_upload.py`: revocation and expiration during OCR, the attempt cap and the `429`, an unreadable scan that still counts, a PDF rasterized before OCR, and concurrent uploads whose audit transitions match the stored rows. No DocuSeal send and no SwipeSimple charge.
+
+## [Unreleased] — 2026-11-05 (id-upload fails closed on bad sessions)
+
+### Fixed
+- **An id-upload session with a missing or unparsable `expires_at` is refused before OCR.** `POST /api/portal/id-upload` no longer treats a `ValueError` from `datetime.fromisoformat` as a still-valid bearer, and a session with no expiration is expired. Neither case runs OCR or appends a scan.
+- **A superseded packet is closed for id-upload.** The check uses the same closed-packet rule as the co-signer lifecycle (`superseded: true`, or `status` / `docuseal_status` / `packet_status` of `superseded`). OCR does not run, and the obsolete packet does not gain a scan. The packet is still matched by `packet_id`, so a POA number change does not void the link.
+- **The id-upload audit records the session count and the packet count separately.** `old_state` and `new_state` store `session_id_scan_records` and `packet_id_scan_records`. The event also stores `session_id` from the portal pin `_id`, not the bearer token. A packet that already has another signer's scan is not described as `0→1`. The audit row is inserted. Earlier audit rows are not removed.
+
+### Tests
+- `tests/test_paperwork_id_upload.py`: `test_garbage_or_missing_expiration_is_rejected_before_ocr`, `test_superseded_packet_is_rejected_before_ocr`, `test_audit_records_session_and_packet_scan_counts_separately`. No DocuSeal send and no SwipeSimple charge.
+
+## [Unreleased] — 2026-11-04 (Paperwork launch mode id-upload)
+
+### Added
+- **`mode=id-upload` on the paperwork launchpad opens only the ID upload step.** `paperwork.shamrockbailbonds.biz` (`dashboard/routers/pin_portal.py`) treats `mode=id-upload` as its own page. The page posts the photo to `POST /api/portal/id-upload`. It does not show the phone PIN, the signing-link box, the in-person signer, or a completion screen. `inperson`, `ipad`, and `kiosk` are unchanged. Any other `mode` still opens the normal flow.
+- **Each upload is inserted.** A verified portal session is required before the server runs OCR. A missing, unverified, expired, voided, or revoked session is refused, and so is a session whose packet is voided. The photo is read on the server. A JSON body is not a scan. The new row is appended to `id_scan_records` on the session and, when the packet is still active, on that packet. `id_scan`, `id_ocr`, `id_extracted`, `id_scan_history`, and other signers' scans are left as they were. An `id_upload_saved` audit row is inserted. Older audit rows are not removed. The packet is matched by `packet_id`. A POA number change does not void the link.
+- **This mode does not issue a signing URL or a pay link.** The page and the JSON response do not include a DocuSeal URL or a SwipeSimple URL. Client-supplied name or ID number fields are ignored. The stored row keeps the scanned name and issuing state only. No DocuSeal send and no SwipeSimple charge.
+
+### Tests
+- `tests/test_paperwork_id_upload.py` (on the CI list): id-upload shows only the ID step, a second upload appends, invalid and voided tokens are refused before OCR, no DocuSeal URL or pay link is returned, a POA change still accepts the upload, and an unknown mode falls back. Signer email is `admin@shamrockbailbonds.biz`. Records are `TEST-` prefixed.
+
 ## [Unreleased] — 2026-11-03 (Manatee Clerk write smoke: checkable aggregates)
 
 ### Added

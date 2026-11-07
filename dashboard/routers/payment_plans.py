@@ -1675,9 +1675,35 @@ def _audit_id(plan_id: str, txn: str) -> str:
     return _scoped_audit_id("plan-pay", plan_id, txn)
 
 
+def _collection_db():
+    """Database view over ``get_collection`` so a plan transaction and the
+    premium refresh share one handle (tests patch ``get_collection``)."""
+
+    class _DB:
+        def __getitem__(self, name):
+            return get_collection(name)
+
+    return _DB()
+
+
+async def _refresh_plan_premium(plan, txn: str, kind: str, session) -> list:
+    """Set ``premium_paid`` when collected payments reach the confirmed premium.
+
+    Runs inside the plan-payment transaction, after the installment row is
+    written. A handled installment does not go through ``record_provider_payment``,
+    which is the other place this refresh runs.
+    """
+    booking = _booking((plan or {}).get("booking_number"))
+    if not booking or not txn:
+        return []
+    from dashboard.services.payment_log_claims import refresh_premium_paid
+
+    return await refresh_premium_paid(_collection_db(), booking, kind, txn, session)
+
+
 async def _audit(
     audit_col, actor: str, plan, plan_id: str, txn: str, amount, linked: bool,
-    before: dict, after: dict, session=None,
+    before: dict, after: dict, session=None, premium_paid_change=None,
 ) -> None:
     from pymongo.errors import DuplicateKeyError
 
@@ -1688,33 +1714,36 @@ async def _audit(
     if existing:
         return
     now = datetime.now(timezone.utc)
+    doc = {
+        # _id is unique on audit_events without adding an index on payments.
+        "_id": _audit_id(plan_id, txn),
+        "event_type": _AUDIT_EVENT,
+        "entity_type": "payment_plan",
+        "entity_id": plan_id,
+        "actor": actor,
+        "agent_name": actor,
+        "timestamp": now,
+        "created_at": now,
+        "booking_number": _booking(plan.get("booking_number")),
+        "transaction_id": txn,
+        "plan_id": plan_id,
+        "amount": amount,
+        "linked_existing_row": linked,
+        "reason": "plan payment applied",
+        "confidence": 1.0,
+        "old_state": {
+            "balance_remaining": before.get("balance_remaining"),
+            "status": before.get("status"),
+        },
+        "new_state": {
+            "balance_remaining": after.get("balance_remaining"),
+            "status": after.get("status"),
+        },
+    }
+    if premium_paid_change:
+        doc["premium_paid_change"] = premium_paid_change
     try:
-        await audit_col.insert_one({
-            # _id is unique on audit_events without adding an index on payments.
-            "_id": _audit_id(plan_id, txn),
-            "event_type": _AUDIT_EVENT,
-            "entity_type": "payment_plan",
-            "entity_id": plan_id,
-            "actor": actor,
-            "agent_name": actor,
-            "timestamp": now,
-            "created_at": now,
-            "booking_number": _booking(plan.get("booking_number")),
-            "transaction_id": txn,
-            "plan_id": plan_id,
-            "amount": amount,
-            "linked_existing_row": linked,
-            "reason": "plan payment applied",
-            "confidence": 1.0,
-            "old_state": {
-                "balance_remaining": before.get("balance_remaining"),
-                "status": before.get("status"),
-            },
-            "new_state": {
-                "balance_remaining": after.get("balance_remaining"),
-                "status": after.get("status"),
-            },
-        }, **_sess(session))
+        await audit_col.insert_one(doc, **_sess(session))
     except DuplicateKeyError:
         return
 
@@ -1761,8 +1790,10 @@ async def _apply_in_transaction(claims, payments_col, plans_col, audit_col, plan
         "balance_remaining": fresh.get("balance_remaining"),
         "status": fresh.get("status"),
     }
+    premium_paid_change = await _refresh_plan_premium(plan, txn, "charge", session)
     await _audit(
         audit_col, actor, plan, plan_id, txn, amount, linked, before, after, session,
+        premium_paid_change=premium_paid_change,
     )
     await _mark_applied(claims, plans_col, plan_id, txn, now, session)
 
@@ -2316,8 +2347,9 @@ async def reverse_plan_payment(plan_id, data, actor: str):
                 **_sess(session),
             )
             await _mark_installment_reversed(plans_col, plan_id, data, original, now, session)
+            premium_paid_change = await _refresh_plan_premium(before, refund_txn, "refund", session)
             fresh = await plans_col.find_one({"plan_id": plan_id}, **_sess(session)) or {}
-            await _insert_audit_once(audit_col, {
+            reversal_audit = {
                 "_id": _scoped_audit_id("plan-rev", plan_id, refund_txn),
                 "event_type": _REVERSED_AUDIT,
                 "entity_type": "payment_plan",
@@ -2341,7 +2373,10 @@ async def reverse_plan_payment(plan_id, data, actor: str):
                     "balance_remaining": fresh.get("balance_remaining"),
                     "status": fresh.get("status"),
                 },
-            }, session=session)
+            }
+            if premium_paid_change:
+                reversal_audit["premium_paid_change"] = premium_paid_change
+            await _insert_audit_once(audit_col, reversal_audit, session=session)
             await claims.update_one(
                 {"transaction_id": original, "plan_id": plan_id, "status": "applied"},
                 {"$set": {
