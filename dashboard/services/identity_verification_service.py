@@ -536,6 +536,22 @@ def scans_from_document(doc: Mapping[str, Any]) -> list[dict[str, str]]:
             row = _normalize_scan(blob, doc, role)
             if row:
                 found.append(row)
+    # A failed current pointer stays in place. The newest successful history
+    # row is still evidence. History is not read when there is no failed
+    # pointer, so an unfinished append is not a pass.
+    pointer = doc.get("id_scan")
+    pointer_failed = (
+        isinstance(pointer, Mapping)
+        and (pointer.get("success") is False or pointer.get("passed") is False)
+    )
+    history = doc.get("id_scan_records")
+    if pointer_failed and isinstance(history, list):
+        for blob in reversed(history):
+            if isinstance(blob, Mapping) and blob.get("success") is True:
+                row = _normalize_scan(blob, doc, role)
+                if row:
+                    found.append(row)
+                break
     for key in ("indemnitor", "coindemnitor", "co_indemnitor"):
         nested = doc.get(key)
         if isinstance(nested, Mapping):

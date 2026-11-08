@@ -3,6 +3,34 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-04 (Paperwork self-serve ID prefill)
+
+### Fixed
+- **In-person ID confirm can open the signer's packet.** On `paperwork.shamrockbailbonds.biz`, Step 1 stored the scan on the PIN session and Step 2 looked for a packet by phone. With no packet, the parsed ID never reached the indemnitor, co-indemnitor, or defendant, and the page stopped. `PAPERWORK_SELF_SERVE_PREFILL` (default off) keeps that behavior. When it is on, a confirmed scan reuses a BondCase for the same phone, name, and date of birth, or inserts one draft (`source=self_serve`, `status=pending_owner_review`, actor `auto`). Bond, premium, and POA stay empty unless they were already on the case. The packet is built with `DocuSealService.prefill_values_from_bond` and `create_submission` (`send_email` and `send_sms` false). A validated case that already has a POA, case number, and premium still uses `create_submission_for_packet`. If that build fails, the confirmed fields stay on the case and no signing URL is returned. `get_pending_id_prefill(case_id, role, person_id)` is the fallback read for the later auto-packet builder. The flag is not added to compose or deploy env files.
+
+- **A self-serve draft still opens signing, and the packet is marked pending owner review.** The draft path is unchanged: no validated match, case number, or POA is required before the signing URL. The packet is stored as `pending_owner_review` with `self_serve_unvalidated_draft`, and an audit row records that a signing URL was issued. A voided or unverified signer, a missing scan, and a pay link still produce no URL.
+- **An existing packet is reused only for the same signer.** The exact `self_serve_packet_key` wins. Otherwise the packet must match the person id and, when those values are already on the packet, the phone and email. A role match alone does not return another person's URL.
+- **Reusing a BondCase writes an identity audit.** The event records the actor, the prior contact fields, and the reason. Older audit rows stay in place.
+- **A person is matched only in the role they are scanning as.** A defendant on one bond does not become the indemnitor on that bond when they later scan as an indemnitor.
+- **A signed or completed packet is not edited.** A new packet is inserted and the replacement is audited. The finalized packet is left as it was.
+- **A defendant or co-indemnitor scan does not overwrite the primary indemnitor's phone or email** when a booking is sent through `ensure_match_bondcase`.
+- **Two workers share one draft and one packet.** The draft ``_id`` and the packet ``_id`` are deterministic. The second insert loses on the collection's existing unique ``_id`` index and finishes that row. No index is created. A legacy case is reused when the role lookup sees it. A DocuSeal submission that was started and never stored is not started again. Confirmed fields stay.
+- **A stored role phone that differs from the verified phone is not overwritten.** The case is left as it was and no signing URL is returned.
+- **The first DocuSeal response uses the same signing-URL rule as recovery.** A hostile `embed_src` is not kept or returned. The call already happened, so the packet stays `recovery_required` instead of being compensated or submitted again.
+- **A client booking is phone-checked before `ensure_match_bondcase`.** A different phone on that booking does not restamp the match, case source or status, or POA.
+- **A recovered signing URL is not granted from a provider id that merely exists.** Submitter id and submission id are compared only after this packet stored them from an accepted response. Before that, they are not a pre-dispatch identity. A lookup row with a different external id, or a signing URL with a query, fragment, userinfo, or a different `/s/{slug}` path, stays `recovery_required`.
+- **A recovered signing URL has to be one open, bound DocuSeal submitter.** Recovery uses `list_submitters(external_id=...)` only when `pagination.count` equals the page and `pagination.next` is null. The row must match the role, email, phone, and external id stored before the call, use status `awaiting`, `sent`, or `opened`, and use this server's `https` `/s/{slug}` URL. Anything else stays `recovery_required`. A packet that becomes signed or completed during the lookup is not rewritten.
+- **A failed self-serve handoff compensates only what that attempt created.** A packet shell is marked compensated before DocuSeal is called, and only a saga-owned draft case moves to compensated with an audit. Scans, audits, signed packets, and preexisting cases stay. After DocuSeal may have accepted a submission, the packet is `recovery_required` and is not submitted again. A later retry can store the signing URL only when `list_submitters` returns exactly one matching `external_id`. No message is sent and no payment is refunded.
+- **A new walk-in draft with no surety uses OSI.** The session channel has to be `inperson`, `ipad`, or `kiosk`, recorded by the server from a signed launch proof or a handoff token. An existing case is left alone, including an unassigned one and one already on Palmetto or OSI. An explicit invalid carrier is not replaced. A remote or ambiguous session still gets no surety and no packet. Bond, premium, POA, and booking stay empty.
+- **The fully bound packet path requires a positive bond amount and a positive premium separately.** A case that has the other binding ids but no bond amount stays on the owner-review path.
+- **A later successful ID scan is visible to the identity check.** The older failed `id_scan` stays. The new row is appended to `id_scan_records`, which the verifier now reads.
+
+### Tests
+- `tests/test_paperwork_id_prefill.py` (on the CI list). Signer email is `admin@shamrockbailbonds.biz`. Records are `TEST-` prefixed. No DocuSeal send and no SwipeSimple charge.
+- `tests/test_self_serve_multiprocess_claim.py` runs two OS processes. The shared store is SQLite `PRIMARY KEY` plus `BEGIN IMMEDIATE`, and the test records the duplicate-key conflict. It does not start mongod. The production path is the same ``_id`` insert.
+- `tests/test_self_serve_mongo_workers.py` runs the same production functions against an isolated loopback MongoDB when `SHAMROCK_TEST_MONGODB_URI` is set, and skips otherwise. It does not read `MONGODB_URI`.
+- `tests/test_self_serve_saga.py` covers compensation, recovery, and a second-submission block. No DocuSeal send.
+
 ## [Unreleased] — 2026-11-07 (BB_CONFIG_API_KEY fail-closed contract test)
 
 ### Security
